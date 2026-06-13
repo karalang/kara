@@ -1274,6 +1274,34 @@ fn main() {
         }
     }
 
+    #[test]
+    fn e2e_shared_enum_struct_variant_construct_and_match() {
+        // B-2026-06-13-8: a SHARED enum struct-variant (`shared enum T { Node {
+        // v: i64 } }`) must (a) construct as an RC heap box `{rc, tag, words}`
+        // reached by pointer — not the inline `{tag, words}` aggregate, which
+        // mismatched the by-pointer shared ABI — and (b) bind its named fields
+        // in a match (the via_ptr binder deferred enum struct-variants and the
+        // value-path Struct arm required a StructValue, so a pointer scrutinee
+        // missed both → "Undefined variable"). Distinct from B-13-7 (which was
+        // a PLAIN enum, unqualified-only). Covers qualified + unqualified +
+        // multi-field-with-String, all matching the interpreter.
+        if let Some(out) = run_program(
+            "shared enum T { Node { v: i64 }, Leaf }\n\
+             shared enum P { Pair { a: i64, s: String }, None }\n\
+             fn f(t: T) -> i64 { match t { T.Node { v } => v, Leaf => -1 } }\n\
+             fn g(t: T) -> i64 { match t { Node { v } => v, Leaf => -1 } }\n\
+             fn h(p: P) -> i64 { match p { Pair { a, s } => a + s.len(), None => 0 } }\n\
+             fn main() {\n\
+                 println(f(T.Node { v: 7 }));\n\
+                 println(f(T.Leaf));\n\
+                 println(g(T.Node { v: 9 }));\n\
+                 println(h(P.Pair { a: 3, s: \"hello\" }));\n\
+             }",
+        ) {
+            assert_eq!(out, "7\n-1\n9\n8\n");
+        }
+    }
+
     // ── String-literal `match` dispatch (selfhost-lexer-profile.md #1 lever) ──
 
     /// A `match` over ≥4 string literals lowers to the switch tree

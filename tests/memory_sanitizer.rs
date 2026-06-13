@@ -343,6 +343,40 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_shared_enum_struct_variant_no_leak_no_double_free() {
+        // B-2026-06-13-8: a shared enum struct-variant with a heap (String)
+        // payload field — construct the RC box, match-bind the field, drop. The
+        // box and its String buffer must be freed exactly once (the Linux-CI
+        // LSan job is the leak gate; mac catches double-free/UAF). Looped to
+        // make a per-iteration leak or double-free trip the sanitizer. (Uses
+        // the base-case-first variant order — recursive-variant-first is a
+        // separate pre-existing layout overflow, B-2026-06-13-9.)
+        assert_clean_asan_run(
+            r#"
+shared enum Msg { Empty, Text { body: String, code: i64 } }
+fn render(m: Msg) -> i64 {
+    match m {
+        Text { body, code } => body.len() + code,
+        Empty => 0,
+    }
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 50 {
+        let m: Msg = Msg.Text { body: f"line-{i}", code: i };
+        total = total + render(m);
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["1565"],
+            "shared_enum_struct_variant",
+        );
+    }
+
     // ── L5: NUL-safe print over heap + literal storage ────────────
     //
     // The print path uses `fwrite(data, 1, len, stdout)` so interior NUL

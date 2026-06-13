@@ -1622,6 +1622,55 @@ impl<'ctx> super::Codegen<'ctx> {
             .cloned()
             .unwrap_or_default();
         let i64_t = self.context.i64_type();
+
+        // Shared enum struct-variant: heap-allocate `{ i64 rc, i64 tag,
+        // <payload words> }` with a refcount header (B-2026-06-13-8). The
+        // named-field twin of `try_compile_enum_variant`'s shared tuple-variant
+        // path — tag at heap index 1, payload words at `start_word + j + 2`
+        // (+2 for {rc, tag}). Without this the constructor returned the inline
+        // `{tag, words}` aggregate for a shared enum too, so a `T.Node { v }`
+        // value passed where `T` is the by-pointer shared ABI mismatched (LLVM
+        // verifier: "Call parameter type does not match" / `expected
+        // PointerValue`).
+        if let Some(info) = self.shared_types.get(enum_name).cloned() {
+            let ptr = self.emit_rc_alloc(info.heap_type);
+            let tag_ptr = self
+                .builder
+                .build_struct_gep(info.heap_type, ptr, 1, "sh_tag")
+                .unwrap();
+            self.builder
+                .build_store(tag_ptr, i64_t.const_int(tag, false))
+                .unwrap();
+            for (i, fname) in field_names.iter().enumerate() {
+                let init = fields.iter().find(|f| &f.name == fname).ok_or_else(|| {
+                    format!("missing field `{fname}` in `{enum_name}.{variant}` construction")
+                })?;
+                let val = self.compile_expr(&init.value)?;
+                self.suppress_fstr_acc_if_moved_out(&init.value);
+                let val = self.maybe_defensive_copy_param_arg(&init.value, val);
+                let (start_word, num_words) = offsets.get(i).copied().unwrap_or((i, 1));
+                let words = self.coerce_to_payload_words(val, num_words)?;
+                for (j, w) in words.into_iter().enumerate() {
+                    let word_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            info.heap_type,
+                            ptr,
+                            (start_word + j + 2) as u32, // +2 for refcount + tag
+                            "sh_word",
+                        )
+                        .unwrap();
+                    self.builder.build_store(word_ptr, w).unwrap();
+                }
+                self.suppress_source_vec_cleanup_for_arg(&init.value);
+                if let ExprKind::Identifier(n) = &init.value.kind {
+                    let n = n.clone();
+                    self.suppress_map_cleanup_for_tail_identifier(&n);
+                }
+            }
+            return Ok(ptr.into());
+        }
+
         let mut agg = llvm_type.const_zero();
         agg = self
             .builder

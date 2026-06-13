@@ -587,24 +587,53 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let Some(decl_field_names) =
                         self.enum_variant_struct_field_names(&enum_name, &variant_name)
                     {
-                        if let BasicValueEnum::StructValue(sv) = scrut {
-                            let offsets: Vec<(usize, usize)> = self
-                                .enum_layouts
-                                .get(&enum_name)
-                                .and_then(|l| l.field_word_offsets.get(&variant_name).cloned())
-                                .unwrap_or_default();
-                            for field_pat in fields {
-                                let Some(pos) =
-                                    decl_field_names.iter().position(|n| n == &field_pat.name)
-                                else {
-                                    continue;
-                                };
-                                let (start_word, num_words) =
-                                    offsets.get(pos).copied().unwrap_or((pos, 1));
-                                let mut field_words: Vec<inkwell::values::IntValue<'ctx>> =
-                                    Vec::with_capacity(num_words);
-                                for j in 0..num_words {
-                                    let w = self
+                        let offsets: Vec<(usize, usize)> = self
+                            .enum_layouts
+                            .get(&enum_name)
+                            .and_then(|l| l.field_word_offsets.get(&variant_name).cloned())
+                            .unwrap_or_default();
+                        // A SHARED enum is an RC heap box `{ i64 rc, i64 tag,
+                        // <payload words> }` reached by pointer — its payload
+                        // words start at index `start_word + j + 2`. A plain
+                        // enum is an inline struct value with the tag at field 0,
+                        // so payload words are at `start_word + j + 1`. Mirrors
+                        // the TupleVariant arm's shared/non-shared split; without
+                        // the shared branch the pointer scrutinee missed both
+                        // arms and the fields stayed unbound (B-2026-06-13-8).
+                        let shared_heap =
+                            self.shared_types.get(&enum_name).map(|info| info.heap_type);
+                        for field_pat in fields {
+                            let Some(pos) =
+                                decl_field_names.iter().position(|n| n == &field_pat.name)
+                            else {
+                                continue;
+                            };
+                            let (start_word, num_words) =
+                                offsets.get(pos).copied().unwrap_or((pos, 1));
+                            let mut field_words: Vec<inkwell::values::IntValue<'ctx>> =
+                                Vec::with_capacity(num_words);
+                            for j in 0..num_words {
+                                let w = match (scrut, shared_heap) {
+                                    (BasicValueEnum::PointerValue(ptr), Some(heap_ty)) => {
+                                        let word_ptr = self
+                                            .builder
+                                            .build_struct_gep(
+                                                heap_ty,
+                                                ptr,
+                                                (start_word + j + 2) as u32, // {rc, tag} prefix
+                                                "sh_payload",
+                                            )
+                                            .unwrap();
+                                        self.builder
+                                            .build_load(
+                                                self.context.i64_type(),
+                                                word_ptr,
+                                                "payload",
+                                            )
+                                            .unwrap()
+                                            .into_int_value()
+                                    }
+                                    (BasicValueEnum::StructValue(sv), _) => self
                                         .builder
                                         .build_extract_value(
                                             sv,
@@ -612,22 +641,23 @@ impl<'ctx> super::Codegen<'ctx> {
                                             "payload",
                                         )
                                         .unwrap()
-                                        .into_int_value();
-                                    field_words.push(w);
-                                }
-                                if let Some(sub_pat) = &field_pat.pattern {
-                                    let bound =
-                                        self.reconstruct_payload_value(sub_pat, &field_words)?;
-                                    self.bind_pattern_values(sub_pat, bound)?;
-                                } else {
-                                    let synthetic = Pattern {
-                                        kind: PatternKind::Binding(field_pat.name.clone()),
-                                        span: field_pat.span.clone(),
-                                    };
-                                    let bound =
-                                        self.reconstruct_payload_value(&synthetic, &field_words)?;
-                                    self.bind_pattern_values(&synthetic, bound)?;
-                                }
+                                        .into_int_value(),
+                                    _ => continue,
+                                };
+                                field_words.push(w);
+                            }
+                            if let Some(sub_pat) = &field_pat.pattern {
+                                let bound =
+                                    self.reconstruct_payload_value(sub_pat, &field_words)?;
+                                self.bind_pattern_values(sub_pat, bound)?;
+                            } else {
+                                let synthetic = Pattern {
+                                    kind: PatternKind::Binding(field_pat.name.clone()),
+                                    span: field_pat.span.clone(),
+                                };
+                                let bound =
+                                    self.reconstruct_payload_value(&synthetic, &field_words)?;
+                                self.bind_pattern_values(&synthetic, bound)?;
                             }
                         }
                         return Ok(());
