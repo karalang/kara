@@ -120,10 +120,17 @@ picked up, **verify codegen has the projection-write fix too** — the
 shared-struct field-write bug below was fixed in the interpreter; the codegen
 path needs the same check.
 
-Two follow-ons tracked from this work: (1) writing through a *plain* value-type
-struct projection (`a.b.field = x` where `b` is a non-shared struct) still needs
-nested-place write-back — out of scope for the shared-struct fix; (2) the
-codegen counterpart of the projection-write fix (see above).
+Follow-ons from this work:
+1. **Fixed.** Writing through a *plain* value-type struct projection
+   (`o.inner.x = v`, depth ≥ 2; `v[i].field = v`) and compound assignment on
+   field/index targets (`o.count += 1`) were silently dropped in the
+   interpreter — a broad pre-existing miscompile, not Tangle-specific. Fixed in
+   `src/interpreter.rs` (`assign_to_place` write-back), commit `62a92b39`;
+   regression tests in `tests/interpreter.rs`.
+2. **Tracked.** The same miscompile exists in **codegen** — an open entry in
+   [`phase-7-codegen.md`](../../implementation_checklist/phase-7-codegen.md)
+   ("Codegen: nested-place + compound-field assignment write-back"), to be done
+   as a separate slice and verified under ASAN once the leak cluster settles.
 
 **Tooling gap surfaced *and fixed* by Tangle dogfooding.** The per-function
 query kinds (`ownership` / `effects` / `concurrency`) split their target with a
