@@ -1,0 +1,177 @@
+// Tangle — doubly-linked list (the canonical `Rc<RefCell>` + `Weak` shape).
+//
+// Every node points at BOTH neighbors: `next` forward, `prev` backward. That
+// symmetric aliasing is the textbook reason a doubly-linked list is the hardest
+// safe-Rust data structure — each node is reachable from two directions, so it
+// needs `Rc<RefCell<Node>>`, and the back-pointer must be `Weak` to break the
+// reference cycle (or the list leaks). Splicing a node out then re-links two
+// neighbors through shared handles — multiple `RefCell` borrows live at once,
+// the exact thing that yields `BorrowMutError` at runtime when you get it wrong.
+//
+// In Kāra it is a `shared struct` with `mut` link fields — no `'a`, no `RefCell`,
+// no `Weak`. Both directions are real shared handles to the same RC nodes, so a
+// write through one is visible through the other. `karac query ownership` shows
+// every link binding as `shared (Rc)`. This is the declared-shared, cyclic AND
+// mutable case — the most intense of the Tangle set (parent_tree is cyclic but
+// not mutated; undo_redo is mutated but a chain, not a cycle).
+//
+// The honest cost: strong `prev` pointers form a reference cycle, so RC alone
+// won't reclaim the nodes (in Rust you'd reach for `Weak` here). That is exactly
+// the kind of cost Tangle exists to make visible rather than hide.
+
+shared struct Node {
+    val: i64,
+    mut prev: Option[Node],
+    mut next: Option[Node],
+}
+
+struct DList {
+    mut head: Option[Node],
+    mut tail: Option[Node],
+}
+
+// Link `a` immediately before `b`: a.next → b, b.prev → a. Both writes go
+// THROUGH shared handles. A free function (rather than inlined into the methods)
+// so `karac query ownership .../doubly_linked.kara.link` surfaces the shared(Rc)
+// node parameters — the `DList` methods themselves take only `self` + an i64, so
+// the declared-RC signal would otherwise be invisible to the query.
+fn link(a: Node, b: Node) {
+    a.next = Some(b);
+    b.prev = Some(a);
+}
+
+impl DList {
+    fn new() -> DList {
+        DList { head: None, tail: None }
+    }
+
+    // Append at the tail. When the list is non-empty this is the two-way link:
+    // the old tail's `next` points forward at the new node, the new node's
+    // `prev` points back at the old tail — both writes go THROUGH shared handles.
+    fn push_back(mut ref self, val: i64) {
+        let node = Node { val: val, prev: None, next: None };
+        match self.tail {
+            None => {
+                self.head = Some(node);
+                self.tail = Some(node);
+            }
+            Some(old_tail) => {
+                link(old_tail, node);
+                self.tail = Some(node);
+            }
+        }
+    }
+
+    // Prepend at the head — the mirror of push_back.
+    fn push_front(mut ref self, val: i64) {
+        let node = Node { val: val, prev: None, next: None };
+        match self.head {
+            None => {
+                self.head = Some(node);
+                self.tail = Some(node);
+            }
+            Some(old_head) => {
+                link(node, old_head);
+                self.head = Some(node);
+            }
+        }
+    }
+
+    // Walk FORWARD via `next` from the head.
+    fn to_vec_forward(ref self) -> Vec[i64] {
+        let mut out = Vec.new();
+        let mut cur = self.head;
+        loop {
+            match cur {
+                None => break,
+                Some(n) => {
+                    out.push(n.val);
+                    cur = n.next;
+                }
+            }
+        }
+        out
+    }
+
+    // Walk BACKWARD via `prev` from the tail. If this prints the forward list
+    // reversed, the back-pointers are genuine shared handles, not copies.
+    fn to_vec_backward(ref self) -> Vec[i64] {
+        let mut out = Vec.new();
+        let mut cur = self.tail;
+        loop {
+            match cur {
+                None => break,
+                Some(n) => {
+                    out.push(n.val);
+                    cur = n.prev;
+                }
+            }
+        }
+        out
+    }
+
+    // Splice out the first node holding `target`, re-linking its neighbors
+    // around it. This is the operation that needs juggled `RefCell` borrows in
+    // Rust: `prev.next = n.next` and `next.prev = n.prev`, each through a shared
+    // handle, with the head/tail ends handled when a neighbor is absent.
+    fn remove_val(mut ref self, target: i64) {
+        let mut cur = self.head;
+        loop {
+            match cur {
+                None => break,
+                Some(n) => {
+                    if n.val == target {
+                        match n.prev {
+                            None => { self.head = n.next; }
+                            Some(p) => { p.next = n.next; }
+                        }
+                        match n.next {
+                            None => { self.tail = n.prev; }
+                            Some(nx) => { nx.prev = n.prev; }
+                        }
+                        break;
+                    }
+                    cur = n.next;
+                }
+            }
+        }
+    }
+}
+
+fn print_list(label: String, xs: Vec[i64]) {
+    let mut s = label;
+    let mut i = 0;
+    loop {
+        if i >= xs.len() { break; }
+        s = f"{s} {xs[i as u64]}";
+        i = i + 1;
+    }
+    println(s);
+}
+
+fn main() {
+    let mut list = DList.new();
+
+    // Build 2 3 4 with push_back, then 1 at the front: 1 2 3 4.
+    list.push_back(2);
+    list.push_back(3);
+    list.push_back(4);
+    list.push_front(1);
+
+    print_list(f"forward: ", list.to_vec_forward());    // 1 2 3 4
+    print_list(f"backward:", list.to_vec_backward());   // 4 3 2 1
+
+    // Splice the middle (2), the tail (4), then the head (1).
+    list.remove_val(2);
+    list.remove_val(4);
+    list.remove_val(1);
+
+    print_list(f"after removals forward: ", list.to_vec_forward());    // 3
+    print_list(f"after removals backward:", list.to_vec_backward());   // 3
+}
+
+// Expected output:
+// forward:  1 2 3 4
+// backward: 4 3 2 1
+// after removals forward:  3
+// after removals backward: 3

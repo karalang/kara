@@ -24,7 +24,7 @@ model is most likely to get wrong). The *organic at-scale* leg is **Chronicle**
 |---|---|---|---|
 | Parent-pointer tree | `src/parent_tree.kara` | up/down cycle without `Rc<RefCell>`+`Weak` | `representation:"shared (Rc)"` (declared RC) |
 | Cross-edge graph (diamond) | `src/cross_graph.kara` | shared descendant the checker can't linearize | `rc_values` + trigger line (RC fallback) |
-| Doubly-linked list | _planned_ | the classic `Rc<RefCell>` shape | TBD |
+| Doubly-linked list | `src/doubly_linked.kara` | both-way links + neighbor-relink splice, no `Weak` | `representation:"shared (Rc)"` (declared RC) |
 | Undo/redo over shared state | `src/undo_redo.kara` | shared **mutable** state, undo writes back through the shared handle | `representation:"shared (Rc)"` (declared RC) |
 | Tree-walking interpreter (shared env) | _planned_ | shared mutable environment | TBD |
 
@@ -40,6 +40,9 @@ karac query ownership examples/tangle/src/cross_graph.kara.build_diamond
 
 karac run   examples/tangle/src/undo_redo.kara
 karac query ownership examples/tangle/src/undo_redo.kara.Editor.set   # impl method
+
+karac run   examples/tangle/src/doubly_linked.kara
+karac query ownership examples/tangle/src/doubly_linked.kara.link   # shared(Rc) node params
 ```
 
 `parent_tree.kara` prints:
@@ -67,6 +70,28 @@ as `mut_ref` + `representation:"shared (Rc)"`.
 > interpreter's `set_field` only handled bare-identifier / `self` receivers.
 > Fixed in `src/interpreter.rs` (write through the projected Arc); regression
 > tests in `tests/interpreter.rs`. Dogfooding working as intended.
+
+`doubly_linked.kara` prints `forward: 1 2 3 4` / `backward: 4 3 2 1` (the
+backward walk reverses the forward list, proving the `prev` pointers are genuine
+shared handles, not copies), then after splicing out the middle / tail / head
+both directions print `3`. In Rust the doubly-linked list is the textbook
+`Rc<RefCell<Node>>` with a `Weak` back-pointer (strong `prev` would cycle-leak),
+and the splice juggles several `RefCell` borrows at once; in Kāra it is a
+`shared struct` with `mut prev` / `mut next` fields and no `Weak`. The honest
+cost — strong `prev` forms an RC cycle that plain RC won't reclaim — is the kind
+of thing Tangle exists to surface rather than hide.
+
+> **Bug found *and fixed* by this structure.** The `Vec.new()` + `push` + return
+> idiom inside `to_vec_forward` / `to_vec_backward` triggered a spurious
+> `expected 'Vec[i64]', found 'Vec[?T]'` type warning: `let mut out = Vec.new();`
+> records the binding as `Vec[?T]`, a later `out.push(x)` pins `?T` in the
+> substitution map but not in the local-scope snapshot, so the return-position
+> check compared the stale unresolved binding. Fixed in `src/typechecker.rs`
+> (`resolve_identifier_type` resolves a binding's typevars against the
+> substitution map at every use — genuinely-unresolved vars stay vars, so it
+> never over-resolves); regression tests in `tests/typechecker.rs`. This was a
+> general inference gap, not list-specific — any `Vec.new(); …push…; return v`
+> hit it.
 
 ## Reading `karac query ownership` (the demo's core artifact)
 
