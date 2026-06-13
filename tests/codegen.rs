@@ -15809,6 +15809,78 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_rc_fallback_binding_at_ref_arg_site() {
+        // B-2026-06-13-1: an RC-fallback-promoted binding passed at a
+        // `ref`/`mut ref` arg position (method *and* free fn). The previous
+        // `get_data_ptr` returned the binding's alloca slot — which, for an
+        // RC-promoted binding, holds a *pointer to the heap box* `{ i64 rc, T }`,
+        // not the value. The callee then read the refcount header as the
+        // struct's first field (observably wrong: `total=-1, read=-1`), and a
+        // field write-through could zero the box pointer → later `null+8`
+        // deref. The field-*read* path (`load_variable`) was already RC-aware;
+        // this guards the ref-*arg* path now that `get_data_ptr` is too.
+        //
+        // Shape: a non-Copy struct consumed in one branch (dominance-
+        // incomparable consume/use → RC fallback, not UseAfterMove), then
+        // passed by `ref` to a method and to a free fn. Must run with the
+        // ownership result threaded so `is_rc_fallback_binding` fires.
+        let out = run_program_with_ownership(
+            r#"
+struct Src { x: i64, y: i64 }
+struct Acc { total: i64 }
+fn consume_src(s: Src) { }
+fn read_ref(s: ref Src) -> i64 { s.x + s.y }
+impl Acc {
+    fn add(mut ref self, s: ref Src) { self.total = self.total + s.x + s.y; }
+}
+fn main() {
+    let cond: bool = false;
+    let mut a = Acc { total: 0 };
+    let s = Src { x: 3, y: 7 };
+    if cond { consume_src(s); }
+    a.add(s);
+    let r: i64 = read_ref(s);
+    println(a.total);
+    println(r);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "10\n10\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_rc_fallback_binding_at_mut_ref_arg_write() {
+        // B-2026-06-13-1, severe variant: an RC-fallback-promoted binding
+        // passed at a `mut ref` arg whose body *writes* a field. With the old
+        // `get_data_ptr` the callee received the box-pointer slot address, so
+        // `s.x = ...` wrote the new field value over the box pointer itself;
+        // the later `s.x` read then loaded a null box pointer and deref'd
+        // `null + 8` → segfault (or, as observed pre-fix, a silent `x=0, y=0`
+        // miscompile). With `get_data_ptr` RC-aware the write lands in the
+        // heap box's value at field 1, so the mutation and later read agree.
+        let out = run_program_with_ownership(
+            r#"
+struct Src { x: i64, y: i64 }
+fn consume_src(s: Src) { }
+fn bump(s: mut ref Src) { s.x = s.x + 100; }
+fn main() {
+    let cond: bool = false;
+    let mut s = Src { x: 3, y: 7 };
+    if cond { consume_src(s); }
+    bump(mut s);
+    println(s.x);
+    println(s.y);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "103\n7\n");
+        }
+    }
+
     // ── Atomic RC for par-block bindings ──────────────────────────
     //
     // The ownership pass produces `arc_values` (a per-function subset of

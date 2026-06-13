@@ -6567,6 +6567,30 @@ impl<'ctx> Codegen<'ctx> {
     /// Vec/Map/Set method-call paths to dispatch on a global like `TODOS`).
     fn get_data_ptr(&self, name: &str) -> Option<PointerValue<'ctx>> {
         if let Some(slot) = self.variables.get(name) {
+            // RC-fallback: the alloca holds a heap ptr → `{ i64 rc, T value }`;
+            // the data lives at field 1 (offset 8 past the refcount header).
+            // Mirror `load_variable`'s RC-aware read, but return the *pointer*
+            // to the value (the callee at a `ref`/`mut ref` arg site expects a
+            // place), not the loaded value. Without this, a `ref`-arg of a
+            // genuinely RC-promoted binding receives the box's header address
+            // (the refcount slot) instead of the value pointer — the callee
+            // then reads/writes the refcount or zeroes the box ptr through a
+            // field write, and a later use derefs `null + 8` (B-2026-06-13-1).
+            // Checked before `ref_params` to match `load_variable`'s ordering;
+            // an RC-promoted binding is owned, never itself a ref param.
+            if let Some(&heap_type) = self.rc_fallback_heap_types.get(name) {
+                let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                let heap_ptr = self
+                    .builder
+                    .build_load(ptr_ty, slot.ptr, &format!("{}.rcptr", name))
+                    .unwrap()
+                    .into_pointer_value();
+                let val_field = self
+                    .builder
+                    .build_struct_gep(heap_type, heap_ptr, 1, &format!("{}.rcdata", name))
+                    .unwrap();
+                return Some(val_field);
+            }
             if self.ref_params.contains_key(name) {
                 // Ref param: alloca holds a ptr → load it.
                 let ptr_ty = self.context.ptr_type(AddressSpace::default());
