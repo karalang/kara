@@ -8,6 +8,10 @@ identical work (token output bit-identical). Two new codegen levers filed in `ro
 two bugs filed (`B-2026-06-12-9` `?`-in-`main` miscompile, `B-2026-06-12-10` suspected
 per-iter leak). None of the three deferred SIMD-class levers (alias-scope / NT-stores /
 fusion) is the real-world answer — confirming their deferral. Full results below.
+**Follow-on (2026-06-12): lever #1 SHIPPED** — string-`match` dispatch now lowers to a
+length/first-byte `switch` tree; re-profiled **111.7 B → 66.9 B instructions (−40%), Rust
+gap 4.58× → 2.74×, `memcmp` 180 → 0 self-time samples**, and allocation is now the #1 leaf
+(lever #2 promoted). See the Decision section.
 Filed (scoped) 2026-06-12.
 **Decision this spike gates:** where to spend `karac` codegen-perf effort next. The
 kata corpus (leetcode) over-represents tiny allocation-bound algorithmic puzzles and
@@ -110,7 +114,15 @@ as tracked `roadmap.md` § Codegen Optimization entries:
    string literals (and `==`-against-literal chains) to something better than a linear
    `memcmp` cascade: length-bucket + first-byte switch, a jump table, or a perfect-hash /
    trie for the keyword set. General-purpose; biggest single win.
-2. **Allocation reduction on hot String/byte paths** (#2, 38%) — `substring` returns an
+   **✅ SHIPPED 2026-06-12** (the `match` half). Lowered to a length-bucket + first-byte
+   `switch` tree with residual `memcmp` (`src/codegen/control_flow_match.rs`). Re-profiled
+   on the same 441 KB input, token output still bit-identical: **111.7 B → 66.9 B
+   instructions retired (−40%); Rust gap 4.58× → 2.74×; `memcmp` fell from the #1 self-time
+   leaf (180 samples) to 0** — and **allocation (malloc/free) is now the #1 leaf**, i.e.
+   lever #2 below is promoted to the top spot. Remaining sub-levers tracked in
+   `roadmap.md`: the `==`-chain half, `Or`-pattern string arms, and a perfect-hash
+   escalation only if a re-profile shows residual `memcmp` still dominant.
+2. **Allocation reduction on hot String/byte paths** (#2, 38% → now #1) — `substring` returns an
    owned copy where a borrow/slice would do (the [[project-lexer-string-scan-shape]]
    zero-copy-slice lesson, here *inside* the lexer); the `for b in src.bytes()` Vec build
    in `Lexer.new` is a second copy of the whole input. Levers: slice-not-copy on

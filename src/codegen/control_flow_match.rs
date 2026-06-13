@@ -19,10 +19,27 @@
 
 use crate::ast::*;
 
+use inkwell::basic_block::BasicBlock;
 use inkwell::types::{BasicTypeEnum, StructType};
-use inkwell::values::{BasicValueEnum, PointerValue};
+use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
+
+/// A qualifying string-literal `match` selected for switch-tree dispatch
+/// (the #1 real-world codegen lever — `docs/spikes/selfhost-lexer-profile.md`).
+/// `arms` pairs each string-literal arm's keyword with its index into the
+/// match's arm list (hence into the parallel `arm_body_bbs`); `default_arm`
+/// is the index of the trailing `_` / binding catch-all if present. A String
+/// `match` is exhaustive only with a catch-all, so it almost always is.
+struct StringDispatchPlan {
+    arms: Vec<(String, usize)>,
+    default_arm: Option<usize>,
+}
+
+/// Below this many string-literal arms the linear `memcmp` cascade is already
+/// cheap and its IR is simpler; only larger keyword-table-shaped matches (the
+/// lexer's ~90-arm `keyword_or_ident`) are worth the switch tree.
+const STRING_DISPATCH_MIN_ARMS: usize = 4;
 
 impl<'ctx> super::Codegen<'ctx> {
     // ── Match ─────────────────────────────────────────────────────
@@ -97,11 +114,29 @@ impl<'ctx> super::Codegen<'ctx> {
         let fn_val = self.current_fn.unwrap();
         let merge_bb = self.context.append_basic_block(fn_val, "match.merge");
 
-        let mut arm_results: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
-            Vec::new();
+        let mut arm_results: Vec<(BasicValueEnum<'ctx>, BasicBlock<'ctx>)> = Vec::new();
 
-        let mut next_bb = self.context.append_basic_block(fn_val, "match.arm0");
-        self.builder.build_unconditional_branch(next_bb).unwrap();
+        // String-literal dispatch (#1 codegen lever — selfhost-lexer-profile.md):
+        // a `match s { "kw" => .., …, _ => .. }` over ≥4 string literals
+        // otherwise lowers to a linear `memcmp` cascade (one length-check +
+        // `memcmp` per arm — `keyword_or_ident`'s ~90 arms were 46% of the
+        // self-hosted lexer's self-time). When the arms qualify we keep every
+        // arm BODY block exactly as the cascade builds it (all the binding /
+        // drop / tail-move machinery below is untouched) and only replace the
+        // ENTRY path: a `len` switch → first-byte switch → residual `memcmp`
+        // tree that branches straight into the matching body. Skipping the
+        // per-arm condition is sound — a string-literal pattern binds nothing
+        // and has no side effects, and the default arm binds inside its body.
+        let dispatch_plan = self.analyze_string_dispatch(arms);
+        let entry_bb = self.builder.get_insert_block().unwrap();
+
+        let arm0_bb = self.context.append_basic_block(fn_val, "match.arm0");
+        // Entry branch is DEFERRED to after the loop: when `dispatch_plan` is
+        // Some we branch `entry_bb` through the switch tree instead of into the
+        // cascade. Collect each arm's body block as the loop builds it so the
+        // tree can target them.
+        let mut next_bb = arm0_bb;
+        let mut arm_body_bbs: Vec<BasicBlock<'ctx>> = Vec::with_capacity(arms.len());
 
         for (i, arm) in arms.iter().enumerate() {
             let arm_bb = next_bb;
@@ -142,6 +177,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let body_bb = self
                 .context
                 .append_basic_block(fn_val, &format!("match.body{}", i));
+            arm_body_bbs.push(body_bb);
 
             self.builder
                 .build_conditional_branch(cond.into_int_value(), body_bb, fail_bb)
@@ -296,6 +332,20 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // Wire the entry block. With a qualifying string-dispatch plan, branch
+        // `entry_bb` through the switch tree straight into the arm bodies;
+        // otherwise fall back to the linear cascade (entry → match.arm0). The
+        // cascade's test blocks stay in place either way — when dispatch is
+        // used they become unreachable and LLVM DCE drops them.
+        self.builder.position_at_end(entry_bb);
+        let used_dispatch = dispatch_plan
+            .as_ref()
+            .map(|plan| self.emit_string_dispatch(plan, scrut, &arm_body_bbs, fn_val))
+            .unwrap_or(false);
+        if !used_dispatch {
+            self.builder.build_unconditional_branch(arm0_bb).unwrap();
+        }
+
         // Terminate the last fail_bb (match.nofall) — exhaustive matches never
         // reach here; emit `unreachable` so LLVM doesn't require a phi entry.
         self.builder.position_at_end(next_bb);
@@ -330,6 +380,256 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    /// Decide whether a `match`'s arms are a pure string-literal dispatch the
+    /// switch tree can lower (see [`StringDispatchPlan`]). Conservative — any
+    /// shape it can't prove equivalent to the cascade returns `None` and the
+    /// cascade handles it:
+    /// - every non-last arm must be a bare `Literal::String` with no guard;
+    /// - the last arm may also be a string literal (no catch-all → the tree's
+    ///   default is `unreachable`, matching the cascade's `match.nofall`), or a
+    ///   `Wildcard` / plain `Binding` catch-all;
+    /// - duplicate literals bail (the cascade's first-match-wins could differ);
+    /// - `Or`-patterns, range/struct/variant patterns, and guards all bail.
+    fn analyze_string_dispatch(&self, arms: &[MatchArm]) -> Option<StringDispatchPlan> {
+        if arms.len() < STRING_DISPATCH_MIN_ARMS {
+            return None;
+        }
+        let last = arms.len() - 1;
+        let mut string_arms: Vec<(String, usize)> = Vec::new();
+        let mut default_arm: Option<usize> = None;
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for (i, arm) in arms.iter().enumerate() {
+            // A guard adds a runtime condition the switch tree can't express.
+            if arm.guard.is_some() {
+                return None;
+            }
+            match &arm.pattern.kind {
+                PatternKind::Literal(LiteralPattern::String(s)) => {
+                    if !seen.insert(s.as_str()) {
+                        return None;
+                    }
+                    string_arms.push((s.clone(), i));
+                }
+                // A trailing wildcard / plain binding is the catch-all. Only the
+                // LAST arm may be one; a non-string, non-last arm disqualifies.
+                PatternKind::Wildcard | PatternKind::Binding(_) if i == last => {
+                    // A `Binding` whose name is a unit enum variant is a tag
+                    // test, not a catch-all — bail. (Defensive: a String
+                    // scrutinee has no variants, but keep the analyzer honest.)
+                    if let PatternKind::Binding(name) = &arm.pattern.kind {
+                        let variant = name.rsplit('.').next().unwrap_or(name);
+                        if self.enum_tag_for_variant(variant).is_some() {
+                            return None;
+                        }
+                    }
+                    default_arm = Some(i);
+                }
+                _ => return None,
+            }
+        }
+        if string_arms.len() < STRING_DISPATCH_MIN_ARMS {
+            return None;
+        }
+        Some(StringDispatchPlan {
+            arms: string_arms,
+            default_arm,
+        })
+    }
+
+    /// Emit the string-dispatch switch tree at the current insert point (the
+    /// match's entry block). Branches the entry through `switch len → switch
+    /// first-byte → residual memcmp` straight into the arm body blocks the
+    /// cascade already built (`arm_body_bbs`). Returns `false` (caller falls
+    /// back to the cascade entry branch) only if `scrut` isn't the expected
+    /// String `{ ptr, len, cap }` struct value.
+    fn emit_string_dispatch(
+        &self,
+        plan: &StringDispatchPlan,
+        scrut: BasicValueEnum<'ctx>,
+        arm_body_bbs: &[BasicBlock<'ctx>],
+        fn_val: FunctionValue<'ctx>,
+    ) -> bool {
+        let BasicValueEnum::StructValue(sv) = scrut else {
+            return false;
+        };
+        let i64_t = self.context.i64_type();
+        let entry_bb = self.builder.get_insert_block().unwrap();
+
+        // Default target: the catch-all arm's body, or a fresh `unreachable`
+        // block (a String `match` with no catch-all is non-exhaustive — the
+        // typechecker rejects it — but stay defensive rather than assume).
+        let default_bb = match plan.default_arm {
+            Some(idx) => arm_body_bbs[idx],
+            None => {
+                let ub = self.context.append_basic_block(fn_val, "match.strdisp.ub");
+                self.builder.position_at_end(ub);
+                self.builder.build_unreachable().unwrap();
+                self.builder.position_at_end(entry_bb);
+                ub
+            }
+        };
+
+        let scrut_ptr = self
+            .builder
+            .build_extract_value(sv, 0, "sd.ptr")
+            .unwrap()
+            .into_pointer_value();
+        let scrut_len = self
+            .builder
+            .build_extract_value(sv, 1, "sd.len")
+            .unwrap()
+            .into_int_value();
+
+        // Group keyword arms by byte length (BTreeMap → deterministic IR).
+        let mut by_len: std::collections::BTreeMap<usize, Vec<(&str, usize)>> =
+            std::collections::BTreeMap::new();
+        for (kw, idx) in &plan.arms {
+            by_len
+                .entry(kw.len())
+                .or_default()
+                .push((kw.as_str(), *idx));
+        }
+
+        let mut len_cases: Vec<(IntValue<'ctx>, BasicBlock<'ctx>)> =
+            Vec::with_capacity(by_len.len());
+        for (len, kws) in &by_len {
+            let len_bb = self
+                .context
+                .append_basic_block(fn_val, &format!("match.strdisp.len{}", len));
+            len_cases.push((i64_t.const_int(*len as u64, false), len_bb));
+            self.builder.position_at_end(len_bb);
+            self.emit_len_bucket(*len, kws, scrut_ptr, default_bb, arm_body_bbs, fn_val);
+        }
+
+        self.builder.position_at_end(entry_bb);
+        self.builder
+            .build_switch(scrut_len, default_bb, &len_cases)
+            .unwrap();
+        true
+    }
+
+    /// One length bucket of the string-dispatch tree. All `kws` share `len`.
+    /// Builder is positioned at the bucket's block on entry. For `len == 0`
+    /// (only the empty string) or `len == 1` (first byte uniquely identifies
+    /// the arm) it branches directly; otherwise it switches on the first byte.
+    fn emit_len_bucket(
+        &self,
+        len: usize,
+        kws: &[(&str, usize)],
+        scrut_ptr: PointerValue<'ctx>,
+        default_bb: BasicBlock<'ctx>,
+        arm_body_bbs: &[BasicBlock<'ctx>],
+        fn_val: FunctionValue<'ctx>,
+    ) {
+        if len == 0 {
+            // Only the empty string lands here, so at most one keyword arm.
+            let target = kws
+                .first()
+                .map(|(_, idx)| arm_body_bbs[*idx])
+                .unwrap_or(default_bb);
+            self.builder.build_unconditional_branch(target).unwrap();
+            return;
+        }
+
+        let i8_t = self.context.i8_type();
+        let first_byte = self
+            .builder
+            .build_load(i8_t, scrut_ptr, "sd.fb")
+            .unwrap()
+            .into_int_value();
+
+        let mut by_byte: std::collections::BTreeMap<u8, Vec<(&str, usize)>> =
+            std::collections::BTreeMap::new();
+        for (kw, idx) in kws {
+            by_byte
+                .entry(kw.as_bytes()[0])
+                .or_default()
+                .push((*kw, *idx));
+        }
+
+        let len_bb = self.builder.get_insert_block().unwrap();
+        let mut byte_cases: Vec<(IntValue<'ctx>, BasicBlock<'ctx>)> =
+            Vec::with_capacity(by_byte.len());
+        for (byte, group) in &by_byte {
+            let byte_bb = self
+                .context
+                .append_basic_block(fn_val, &format!("match.strdisp.b{}", byte));
+            byte_cases.push((i8_t.const_int(u64::from(*byte), false), byte_bb));
+            self.builder.position_at_end(byte_bb);
+            self.emit_byte_group(len, group, scrut_ptr, default_bb, arm_body_bbs, fn_val);
+        }
+
+        self.builder.position_at_end(len_bb);
+        self.builder
+            .build_switch(first_byte, default_bb, &byte_cases)
+            .unwrap();
+    }
+
+    /// Residual confirmation for one `(len, first_byte)` group. We reached this
+    /// block via the length switch, so `scrut_len == len` exactly — `memcmp`
+    /// reads exactly `len` valid bytes from both operands (no length re-check,
+    /// no over-read). `len == 1` needs no `memcmp` (the byte switch already
+    /// confirmed the sole byte, and distinct len-1 keywords have distinct first
+    /// bytes → the group is a single arm). Otherwise chain `memcmp`-equals over
+    /// the candidates, falling through to `default_bb`.
+    fn emit_byte_group(
+        &self,
+        len: usize,
+        group: &[(&str, usize)],
+        scrut_ptr: PointerValue<'ctx>,
+        default_bb: BasicBlock<'ctx>,
+        arm_body_bbs: &[BasicBlock<'ctx>],
+        fn_val: FunctionValue<'ctx>,
+    ) {
+        if len == 1 {
+            let (_, idx) = group[0];
+            self.builder
+                .build_unconditional_branch(arm_body_bbs[idx])
+                .unwrap();
+            return;
+        }
+
+        let i32_t = self.context.i32_type();
+        let i64_t = self.context.i64_type();
+        let len_v = i64_t.const_int(len as u64, false);
+        for (n, (kw, idx)) in group.iter().enumerate() {
+            let body_bb = arm_body_bbs[*idx];
+            let is_last = n + 1 == group.len();
+            let kw_ptr = self
+                .builder
+                .build_global_string_ptr(kw, "sd.kw")
+                .unwrap()
+                .as_pointer_value();
+            let cmp = self
+                .builder
+                .build_call(
+                    self.memcmp_fn,
+                    &[scrut_ptr.into(), kw_ptr.into(), len_v.into()],
+                    "sd.memcmp",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value();
+            let eq = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, cmp, i32_t.const_int(0, false), "sd.eq")
+                .unwrap();
+            let next_bb = if is_last {
+                default_bb
+            } else {
+                self.context
+                    .append_basic_block(fn_val, "match.strdisp.next")
+            };
+            self.builder
+                .build_conditional_branch(eq, body_bb, next_bb)
+                .unwrap();
+            if !is_last {
+                self.builder.position_at_end(next_bb);
+            }
+        }
     }
 
     /// Whether an expression's syntactic tail value is an f-string. A bare

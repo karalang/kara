@@ -919,6 +919,93 @@ fn main() {
         }
     }
 
+    // ── String-literal `match` dispatch (selfhost-lexer-profile.md #1 lever) ──
+
+    /// A `match` over ≥4 string literals lowers to the switch tree
+    /// (`switch len → switch first-byte → residual memcmp`) instead of the
+    /// linear `memcmp` cascade. Pin the IR shape: the `match.strdisp.*` blocks
+    /// and a `switch i64` on the length must appear.
+    #[test]
+    fn test_string_match_lowers_to_dispatch_switch() {
+        let ir = ir_for(
+            "fn kw(s: String) -> i64 {\n\
+                 match s {\n\
+                     \"fn\" => 1,\n\
+                     \"for\" => 2,\n\
+                     \"struct\" => 3,\n\
+                     \"static\" => 4,\n\
+                     \"let\" => 5,\n\
+                     other => 0,\n\
+                 }\n\
+             }",
+        );
+        assert!(
+            ir.contains("match.strdisp.len"),
+            "≥4-arm string match must build the length-switch dispatch tree:\n{ir}"
+        );
+        assert!(
+            ir.contains("switch i64"),
+            "dispatch must switch on the scrutinee length:\n{ir}"
+        );
+    }
+
+    /// Below the threshold (here 2 arms) the linear cascade is already cheap
+    /// and its IR is simpler — the dispatch tree must NOT be built.
+    #[test]
+    fn test_small_string_match_keeps_cascade() {
+        let ir = ir_for(
+            "fn kw(s: String) -> i64 {\n\
+                 match s {\n\
+                     \"fn\" => 1,\n\
+                     other => 0,\n\
+                 }\n\
+             }",
+        );
+        assert!(
+            !ir.contains("match.strdisp"),
+            "a 2-arm string match must stay on the cascade, no dispatch tree:\n{ir}"
+        );
+    }
+
+    /// End-to-end behavioral equivalence: the switch tree must classify
+    /// exactly as the cascade would, across the tricky cases — two keywords
+    /// sharing length+first-byte (forces the residual `memcmp`), a length-1
+    /// keyword, the empty string, and several non-matching inputs routed to
+    /// the catch-all.
+    #[test]
+    fn e2e_string_match_dispatch_matches_cascade_semantics() {
+        if let Some(out) = run_program(
+            "fn classify(s: String) -> i64 {\n\
+                 match s {\n\
+                     \"fn\" => 1,\n\
+                     \"for\" => 2,\n\
+                     \"fun\" => 3,\n\
+                     \"struct\" => 4,\n\
+                     \"static\" => 5,\n\
+                     \"x\" => 6,\n\
+                     \"\" => 7,\n\
+                     other => 99,\n\
+                 }\n\
+             }\n\
+             fn check(s: String) { let r = classify(s); println(f\"{r}\"); }\n\
+             fn main() {\n\
+                 check(\"fn\");\n\
+                 check(\"for\");\n\
+                 check(\"fun\");\n\
+                 check(\"struct\");\n\
+                 check(\"static\");\n\
+                 check(\"x\");\n\
+                 check(\"\");\n\
+                 check(\"forge\");\n\
+                 check(\"fo\");\n\
+                 check(\"y\");\n\
+                 check(\"structs\");\n\
+             }",
+        ) {
+            assert_eq!(out, "1\n2\n3\n4\n5\n6\n7\n99\n99\n99\n99\n");
+        }
+    }
+
     // ── Binary-size floor: Vec must not re-anchor the heavy runtime cluster ──
 
     /// B-2026-06-11-8 regression guard. A `Vec`-using compute binary must
