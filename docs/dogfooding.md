@@ -410,7 +410,7 @@ fn aggregate(rows: NonEmpty[EnrichedRow]) -> Summary
 > `src/main.kara` running via `karac run` (tree-walk interpreter); see its
 > README for the run command + expected output. The build surfaced six
 > findings (GAP-W1…W6) — the dogfood's load-bearing job. **Fixed:**
-> `String.split` (interpreter + typechecker; codegen pending); the
+> `String.split` (interpreter + typechecker + codegen); the
 > missing-effect-declaration diagnostic, which had been suggesting an
 > un-parseable fix-it (`Add: allocates(Heap), panics()` — comma-separated,
 > empty-parens, undeclarable `Heap`); and (2026-06-13 follow-up) the
@@ -424,16 +424,23 @@ fn aggregate(rows: NonEmpty[EnrichedRow]) -> Summary
 > (a constructor-pattern binding shadowed by an in-scope unit-variant local);
 > and (2026-06-13 follow-up) **multi-module `karac run`** — `cmd_run` now merges
 > a project's sibling modules into a super-program before interpreting, so
-> cross-module calls work via `karac run`. **Tracked open gap** (entry below):
-> codegen `String.split`.
+> cross-module calls work via `karac run`; and (2026-06-13 follow-up) **codegen
+> `String.split`** — a runtime out-param helper (`karac_runtime_string_split`)
+> builds the `Vec[String]` so `karac build` (native) handles split too. All six
+> findings' actionable fixes have now landed; remaining Weave codegen is gated
+> only on unrelated codegen bugs others are fixing (struct-variant Display) +
+> wasm split.
 >
-> Open follow-ons, tracked here as the design record:
-> - [ ] **Codegen `String.split`** — interpreter + typechecker landed; the
->   `vec_method.rs` arm (returning a `Vec[String]` of `{ptr,len,cap}` structs)
->   is pending. Until then Weave runs interpreter-only. Blocks a Weave codegen
->   E2E + any AOT-built program that splits strings. → tracked in
->   [`phase-7-codegen.md`](implementation_checklist/phase-7-codegen.md)
->   ("Codegen `String.split`").
+> Resolved follow-ons (design record):
+> - [x] **Codegen `String.split` — ✓ RESOLVED 2026-06-13.** A runtime out-param
+>   helper `karac_runtime_string_split` (native, `cfg(not(wasm))`) does the split
+>   in Rust and writes the `Vec[String]` `{data,len,cap}` (libc::malloc'd buffers
+>   the binding frees) to out-pointers; the `vec_method.rs` `"split"` arm derives
+>   `(sep_ptr, sep_len)` from a char/String and calls it. Tests:
+>   `tests/codegen.rs::e2e_string_split_codegen` +
+>   `tests/memory_sanitizer.rs::asan_string_split_no_leak_no_double_free`. → closed
+>   in [`phase-7-codegen.md`](implementation_checklist/phase-7-codegen.md). Wasm
+>   split is a follow-up (no libc malloc on wasm).
 > - [x] **Multi-module `karac run` — ✓ RESOLVED 2026-06-13.** `cmd_run` now
 >   detects when the entry file belongs to a multi-module project, builds the
 >   module tree, and merges every module's items into a super-program (the

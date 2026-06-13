@@ -4142,6 +4142,125 @@ mod cstr_to_string_tests {
     }
 }
 
+// ── String.split codegen path (GAP-W2) ───────────────────────────────
+//
+// Backs compiled-mode `String.split(sep) -> Vec[String]`. The interpreter +
+// typechecker arms shipped earlier (`method_call_seq.rs` / `stdlib_seq.rs`);
+// this is the codegen leg. Out-param ABI (pointer args only — no struct
+// return) writes the Kāra-side `Vec[String]` `{data, len, cap}` aggregate:
+// `data` points at a libc::malloc-allocated array of `n` String structs
+// `{data, len, cap}`, each piece's bytes their own libc::malloc-allocated
+// buffer (cap == len). All buffers are freed Kāra-side via plain `free` (the
+// Vec buffer + each element String's buffer), matching the
+// `write_owned_bytes_into_out_params` convention used by the http-client FFI.
+// Empty pieces are `{null, 0, 0}` (cap 0 → the element drop's `cap > 0` guard
+// skips the free). Native-only — the wasm archives have no libc malloc; wasm
+// `String.split` codegen is a follow-up.
+#[cfg(not(target_family = "wasm"))]
+mod string_split_ffi {
+    extern "C" {
+        fn malloc(size: usize) -> *mut u8;
+    }
+
+    /// Kāra-side `String` / `Vec` header `{ data, len, cap }` (24 bytes on a
+    /// 64-bit target), matching codegen's `vec_struct_type`. `#[repr(C)]` pins
+    /// the field order so the element array codegen indexes is laid out
+    /// identically.
+    #[repr(C)]
+    struct KHeader {
+        data: *mut u8,
+        len: i64,
+        cap: i64,
+    }
+
+    /// Split `s[0..s_len]` on every non-overlapping occurrence of
+    /// `sep[0..sep_len]` (Rust `str::split` semantics — leading/trailing empty
+    /// pieces included), writing the resulting `Vec[String]` to the three
+    /// out-params. An empty separator yields a single piece (the whole string),
+    /// matching the interpreter. All output buffers are libc::malloc'd; the
+    /// Kāra side owns and frees them.
+    ///
+    /// # Safety
+    /// `s` / `sep` must be valid for `s_len` / `sep_len` bytes (or null when
+    /// the length is 0); the three out-pointers must be valid for one write.
+    #[no_mangle]
+    pub unsafe extern "C" fn karac_runtime_string_split(
+        s: *const u8,
+        s_len: usize,
+        sep: *const u8,
+        sep_len: usize,
+        out_data: *mut *mut u8,
+        out_len: *mut i64,
+        out_cap: *mut i64,
+    ) {
+        let hay: &[u8] = if s.is_null() || s_len == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(s, s_len)
+        };
+        let needle: &[u8] = if sep.is_null() || sep_len == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(sep, sep_len)
+        };
+
+        // Collect piece byte-ranges. Empty separator → the whole string as one
+        // piece (interpreter parity); otherwise a non-overlapping scan that
+        // keeps leading/trailing empties.
+        let pieces: Vec<&[u8]> = if needle.is_empty() {
+            vec![hay]
+        } else {
+            let mut v: Vec<&[u8]> = Vec::new();
+            let mut start = 0usize;
+            let mut i = 0usize;
+            while i + needle.len() <= hay.len() {
+                if &hay[i..i + needle.len()] == needle {
+                    v.push(&hay[start..i]);
+                    i += needle.len();
+                    start = i;
+                } else {
+                    i += 1;
+                }
+            }
+            v.push(&hay[start..]);
+            v
+        };
+
+        let n = pieces.len();
+        let elem_size = std::mem::size_of::<KHeader>();
+        let arr = malloc(n * elem_size) as *mut KHeader;
+        if arr.is_null() {
+            *out_data = std::ptr::null_mut();
+            *out_len = 0;
+            *out_cap = 0;
+            return;
+        }
+        for (k, p) in pieces.iter().enumerate() {
+            let header = if p.is_empty() {
+                // Empty piece → non-owning `{null, 0, 0}`; the element drop's
+                // `cap > 0` guard skips freeing it.
+                KHeader {
+                    data: std::ptr::null_mut(),
+                    len: 0,
+                    cap: 0,
+                }
+            } else {
+                let buf = malloc(p.len());
+                std::ptr::copy_nonoverlapping(p.as_ptr(), buf, p.len());
+                KHeader {
+                    data: buf,
+                    len: p.len() as i64,
+                    cap: p.len() as i64,
+                }
+            };
+            arr.add(k).write(header);
+        }
+        *out_data = arr as *mut u8;
+        *out_len = n as i64;
+        *out_cap = n as i64;
+    }
+}
+
 // ── std.http client codegen path (phase-8 line 17 slice 1) ────────────
 //
 // `karac_runtime_http_client_get` / `_post` back compiled-mode

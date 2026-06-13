@@ -27,10 +27,10 @@
 //           split, not a silent workaround.
 //
 //   GAP-W2  `String.split` was unimplemented (word_count.kara assumed it but
-//           it never existed). A CSV ETL needs it immediately. FIXED this
-//           slice in the interpreter + typechecker (split(sep) -> Vec[String],
-//           sep = char | String). Codegen arm still pending — this example
-//           runs via `karac run` (tree-walk interpreter).
+//           it never existed). A CSV ETL needs it immediately. FIXED across the
+//           interpreter, typechecker, AND codegen (split(sep) -> Vec[String],
+//           sep = char | String; codegen via the native
+//           `karac_runtime_string_split` out-param helper).
 //
 //   GAP-W3  `karac run <file>` is single-file only: it does not load sibling
 //           `src/*.kara` modules into the interpreter, so a multi-module

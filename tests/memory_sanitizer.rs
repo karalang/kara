@@ -477,6 +477,35 @@ fn main() {
         );
     }
 
+    // ── `String.split` — Vec[String] buffer + per-element String frees ──
+    //
+    // Each `split` returns a `Vec[String]` whose buffer and every element
+    // String are libc::malloc'd by `karac_runtime_string_split`; the binding's
+    // scope-exit drop must free each element's buffer AND the Vec buffer
+    // exactly once. Looped 1000× so the Linux-CI LSan gate catches a per-iter
+    // leak; local mac ASAN catches a double-free / UAF. GAP-W2.
+    #[test]
+    fn asan_string_split_no_leak_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 1000 {
+        let line = "a,bb,ccc,dddd";
+        let fields = line.split(',');
+        total = total + fields.len();
+        for f in fields { total = total + f.len(); }
+        i = i + 1;
+    }
+    println(f"{total}");
+}
+"#,
+            &["14000"],
+            "string_split_loop",
+        );
+    }
+
     // ── Inline index of a fn-returned `Vec` — temp drop + element clone ──
     //
     // `names()[i]` indexes a fresh owned `Vec[String]` temporary inline

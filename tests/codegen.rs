@@ -1895,6 +1895,38 @@ fn main() {
     }
 
     #[test]
+    fn e2e_string_split_codegen() {
+        // `String.split(sep) -> Vec[String]` (GAP-W2) — must match the
+        // interpreter (tests/interpreter.rs::test_string_split_interpreter):
+        // char separator, String separator, leading/trailing empty pieces, a
+        // separator-free string (single piece), `.len()`, indexing, iteration.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let csv: String = \"a,b,c\";\n\
+                 let parts = csv.split(',');\n\
+                 let n = parts.len();\n\
+                 println(f\"{n}\");\n\
+                 println(parts[0]);\n\
+                 println(parts[2]);\n\
+                 let path: String = \"x::y::z\";\n\
+                 let seg = path.split(\"::\");\n\
+                 let sn = seg.len();\n\
+                 println(f\"{sn}\");\n\
+                 let edges: String = \",lead,trail,\";\n\
+                 let en = edges.split(',').len();\n\
+                 println(f\"{en}\");\n\
+                 let whole: String = \"nosep\";\n\
+                 let one = whole.split(',');\n\
+                 let on = one.len();\n\
+                 println(f\"{on}\");\n\
+                 println(one[0]);\n\
+             }",
+        ) {
+            assert_eq!(out, "3\na\nc\n3\n4\n1\nnosep\n");
+        }
+    }
+
+    #[test]
     fn e2e_string_substring_two_arg_codegen() {
         // Two-arg `substring(start, end)` (byte range `[start, end)`): prefix /
         // suffix / empty-when-equal / inverted-bounds (end<start) / end-clamped /

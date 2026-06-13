@@ -41,8 +41,9 @@ failure class):
 summary: 3 rows, usd_total=94.48920000000001
 ```
 
-Runs via the tree-walk interpreter (`karac run`). A codegen path awaits
-`String.split` codegen — see GAP-W2.
+Runs via the tree-walk interpreter (`karac run`). `String.split` now also has a
+codegen path (GAP-W2); a full `karac build` of Weave additionally depends on
+unrelated codegen fixes for struct-variant-enum `impl Display` (others' area).
 
 ## Dogfooding findings
 
@@ -53,7 +54,7 @@ the header of [`src/main.kara`](src/main.kara); summary:
 | ID | Finding | Status |
 |---|---|---|
 | GAP-W1 | The canonical `ValidEmail = String where self.contains("@")` is **inexpressible** in v1 — the refinement constraint language admits only pure *zero-arg* methods; `contains` takes an argument. Structural "@"-check moved into `parse_row`'s body. | By design; roster sketch corrected |
-| GAP-W2 | `String.split` was unimplemented (`word_count.kara` assumed it). | **Fixed** (interpreter + typechecker); codegen arm pending |
+| GAP-W2 | `String.split` was unimplemented (`word_count.kara` assumed it). | **Fixed** — interpreter + typechecker + codegen (codegen via the `karac_runtime_string_split` out-param helper, native) |
 | GAP-W3 | `karac run <file>` is single-file only — it never loads sibling `src/*.kara` modules into the interpreter, so a multi-module layout fails at runtime despite resolving + typechecking. | Tracked; example kept single-file |
 | GAP-W4 | User types could not `impl Display` in v1 (operator traits were stdlib-only). | **Fixed** — gate lifted; `ParseError` now has a real `impl Display { fn to_string }` and `f"{err}"` dispatches to it (interpreter + codegen). Surfaced + fixed a pre-existing pattern-binding shadowing bug |
 | GAP-W5 | The roster sketch labels `parse_row` "pure", but effect inference shows it carries `panics` (from indexing). Honest signature: `with panics`. | By design; roster note added |

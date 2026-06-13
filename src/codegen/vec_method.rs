@@ -169,6 +169,127 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.free_fresh_owned_str_arg(&args[0].value, prefix_val);
                 Ok(result)
             }
+            // `String.split(sep) -> Vec[String]` (GAP-W2). Delegates to the
+            // runtime `karac_runtime_string_split`, which builds the
+            // `Vec[String]` `{data, len, cap}` with libc::malloc'd buffers (the
+            // Vec buffer + each element String's buffer) the binding's
+            // scope-exit drop frees. Out-param ABI (pointer args only — no
+            // struct return). `sep` is a `char` (UTF-8 encoded here) or a
+            // `String` (its `{data, len}`). Native-only (the runtime helper is
+            // `cfg(not(wasm))`); wasm `String.split` is a follow-up.
+            "split" => {
+                if args.is_empty() {
+                    return Err("String.split requires a separator argument".to_string());
+                }
+                // Receiver `{data, len}`.
+                let recv_data_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "spl.recv.ptr.p")
+                    .unwrap();
+                let recv_data = self
+                    .builder
+                    .build_load(ptr_ty, recv_data_ptr, "spl.recv.ptr")
+                    .unwrap()
+                    .into_pointer_value();
+                let recv_len_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "spl.recv.len.p")
+                    .unwrap();
+                let recv_len = self
+                    .builder
+                    .build_load(i64_t, recv_len_ptr, "spl.recv.len")
+                    .unwrap()
+                    .into_int_value();
+
+                // Separator (ptr, len): a `char` UTF-8-encodes to a stack buf;
+                // a `String` contributes its `{data, len}` directly.
+                let sep_val = self.compile_expr(&args[0].value)?;
+                let (sep_ptr, sep_len): (PointerValue<'ctx>, IntValue<'ctx>) = match sep_val {
+                    BasicValueEnum::IntValue(cp) => self.emit_codepoint_to_utf8(cp),
+                    BasicValueEnum::StructValue(sv) => {
+                        let d = self
+                            .builder
+                            .build_extract_value(sv, 0, "spl.sep.ptr")
+                            .unwrap()
+                            .into_pointer_value();
+                        let l = self
+                            .builder
+                            .build_extract_value(sv, 1, "spl.sep.len")
+                            .unwrap()
+                            .into_int_value();
+                        (d, l)
+                    }
+                    _ => return Err("String.split separator must be a char or String".to_string()),
+                };
+
+                let split_fn = match self.module.get_function("karac_runtime_string_split") {
+                    Some(f) => f,
+                    None => {
+                        let ft = self.context.void_type().fn_type(
+                            &[
+                                ptr_ty.into(), // s
+                                i64_t.into(),  // s_len
+                                ptr_ty.into(), // sep
+                                i64_t.into(),  // sep_len
+                                ptr_ty.into(), // out_data
+                                ptr_ty.into(), // out_len
+                                ptr_ty.into(), // out_cap
+                            ],
+                            false,
+                        );
+                        self.module.add_function(
+                            "karac_runtime_string_split",
+                            ft,
+                            Some(Linkage::External),
+                        )
+                    }
+                };
+
+                // Result Vec slot; pass pointers to its three fields as the
+                // out-params, then load the assembled `{data, len, cap}`.
+                let fn_val = self.current_fn.unwrap();
+                let result_slot = self.create_entry_alloca(fn_val, "spl.result", vec_ty.into());
+                let out_data = self
+                    .builder
+                    .build_struct_gep(vec_ty, result_slot, 0, "spl.out.data")
+                    .unwrap();
+                let out_len = self
+                    .builder
+                    .build_struct_gep(vec_ty, result_slot, 1, "spl.out.len")
+                    .unwrap();
+                let out_cap = self
+                    .builder
+                    .build_struct_gep(vec_ty, result_slot, 2, "spl.out.cap")
+                    .unwrap();
+                self.builder
+                    .build_call(
+                        split_fn,
+                        &[
+                            recv_data.into(),
+                            recv_len.into(),
+                            sep_ptr.into(),
+                            sep_len.into(),
+                            out_data.into(),
+                            out_len.into(),
+                            out_cap.into(),
+                        ],
+                        "",
+                    )
+                    .unwrap();
+
+                // Free a fresh-owned String separator temp (e.g. `s.split("::")`)
+                // — the runtime copied its bytes into the pieces. No-op for a
+                // char separator (no String to free).
+                if sep_val.is_struct_value() {
+                    self.free_fresh_owned_str_arg(&args[0].value, sep_val);
+                }
+
+                let result = self
+                    .builder
+                    .build_load(vec_ty, result_slot, "spl.load")
+                    .unwrap();
+                Ok(result)
+            }
             // `String.substring(start) -> String` — bytes from `start` to end.
             // `String.substring(start, end) -> String` — bytes in `[start, end)`.
             // Both indices are byte offsets (matching the `bytes()` view).
