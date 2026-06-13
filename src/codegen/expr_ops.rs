@@ -848,6 +848,50 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // Nested plain-struct field store: a projection receiver — `a.b.field
+        // = x` (depth >= 2) or `v[i].field = x` on plain-struct elements — that
+        // the bare-identifier and indexed-shared branches don't cover. Codegen
+        // is pointer-based: GEP to the parent place in-place via the field-chain
+        // walk, then GEP `field` and store. Without this the store fell through
+        // to the no-op tail and was silently dropped (interpreter sibling fixed
+        // in 62a92b39; see phase-7-codegen.md). Excludes ref/mut-ref-param-
+        // rooted chains: `field_chain_place_ptr` resolves a ref-param root to
+        // its slot (a pointer-to-struct) without the deref, so a ref-param
+        // nested store would target the wrong address — those bail to the
+        // existing no-op rather than miscompile (rare; tracked as a follow-on).
+        if matches!(
+            object.kind,
+            ExprKind::FieldAccess { .. } | ExprKind::Index { .. }
+        ) && !self.place_chain_root_is_ref_param(object)
+        {
+            if let (Some(base_ptr), Some(obj_ty)) = (
+                self.field_chain_place_ptr(object),
+                self.place_chain_type_name(object),
+            ) {
+                if let (Some(&st), Some(names)) = (
+                    self.struct_types.get(obj_ty.as_str()),
+                    self.struct_field_names.get(obj_ty.as_str()),
+                ) {
+                    if let Some(idx) = names.iter().position(|n| n == field) {
+                        let field_ptr = self
+                            .builder
+                            .build_struct_gep(
+                                st,
+                                base_ptr,
+                                idx as u32,
+                                &format!("nested_{}_ptr", field),
+                            )
+                            .unwrap();
+                        // Field-store width coercion — see
+                        // `coerce_to_struct_field_ty`.
+                        let new_val = self.coerce_to_struct_field_ty(st, idx as u32, new_val);
+                        self.builder.build_store(field_ptr, new_val).unwrap();
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
         // `self.field = …` parses as `FieldAccess { object: SelfValue, … }`,
         // and `self` is bound as a regular local named "self" — same lookup
         // path as a plain Identifier. Treat both shapes uniformly so
@@ -1011,6 +1055,23 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         Ok(())
+    }
+
+    /// True if the root binding of a place chain (`ident`, `ident.f.g`,
+    /// `vec[i].f`, `self.f`) is a `ref` / `mut ref` parameter. Such roots are
+    /// stored as a pointer-to-struct in their slot; `field_chain_place_ptr`
+    /// returns that slot without the deref, so the nested-field-store path skips
+    /// them to avoid targeting the wrong address (it falls back to the existing
+    /// no-op). Owned locals / `self`-by-value resolve correctly and are handled.
+    fn place_chain_root_is_ref_param(&self, expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Identifier(name) => self.ref_params.contains_key(name.as_str()),
+            ExprKind::SelfValue => self.ref_params.contains_key("self"),
+            ExprKind::FieldAccess { object, .. } | ExprKind::Index { object, .. } => {
+                self.place_chain_root_is_ref_param(object)
+            }
+            _ => false,
+        }
     }
 
     /// Inc the inner shared-T ref of a just-loaded `Option[shared T]`

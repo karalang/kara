@@ -3370,6 +3370,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 Ok(())
             }
             StmtKind::CompoundAssign { target, op, value } => {
+                let binop = match op {
+                    CompoundOp::Add => BinOp::Add,
+                    CompoundOp::Sub => BinOp::Sub,
+                    CompoundOp::Mul => BinOp::Mul,
+                    CompoundOp::Div => BinOp::Div,
+                    CompoundOp::Mod => BinOp::Mod,
+                    CompoundOp::BitAnd => BinOp::BitAnd,
+                    CompoundOp::BitOr => BinOp::BitOr,
+                    CompoundOp::BitXor => BinOp::BitXor,
+                    CompoundOp::Shl => BinOp::Shl,
+                    CompoundOp::Shr => BinOp::Shr,
+                };
                 if let ExprKind::Identifier(name) = &target.kind {
                     // Slice 9: module-binding compound-assign loads
                     // through the global pointer (not the local
@@ -3384,18 +3396,6 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.load_variable(name)?
                     };
                     let rhs = self.compile_expr(value)?;
-                    let binop = match op {
-                        CompoundOp::Add => BinOp::Add,
-                        CompoundOp::Sub => BinOp::Sub,
-                        CompoundOp::Mul => BinOp::Mul,
-                        CompoundOp::Div => BinOp::Div,
-                        CompoundOp::Mod => BinOp::Mod,
-                        CompoundOp::BitAnd => BinOp::BitAnd,
-                        CompoundOp::BitOr => BinOp::BitOr,
-                        CompoundOp::BitXor => BinOp::BitXor,
-                        CompoundOp::Shl => BinOp::Shl,
-                        CompoundOp::Shr => BinOp::Shr,
-                    };
                     let result = self.compile_binop(&binop, current, rhs)?;
                     // Slice 9: module-binding compound-assign — store
                     // the binop's result back through the global. The
@@ -3411,6 +3411,25 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let Some(slot) = self.variables.get(name).copied() {
                         self.builder.build_store(slot.ptr, result).unwrap();
                     }
+                    return Ok(());
+                }
+                // Field / index targets (`o.count += 1`, `o.inner.x += 1`,
+                // `v[i] += 1`): read the current place value, apply the op, and
+                // store the result back through the same place-store path as
+                // plain Assign. Previously only the `Identifier` target was
+                // handled, so compound assignment to a field / index was
+                // silently dropped.
+                let current = self.compile_expr(target)?;
+                let rhs = self.compile_expr(value)?;
+                let result = self.compile_binop(&binop, current, rhs)?;
+                match &target.kind {
+                    ExprKind::FieldAccess { object, field } => {
+                        self.compile_field_store(object, field, result, false)?;
+                    }
+                    ExprKind::Index { object, index } => {
+                        self.compile_index_store(object, index, result)?;
+                    }
+                    _ => {}
                 }
                 Ok(())
             }

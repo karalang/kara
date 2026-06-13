@@ -1901,7 +1901,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// owning slot — used by the #18 struct-field-enum match suppression to reach
     /// a (possibly deeply nested) enum field in its source, including an enum
     /// field of a Vec element whose buffer the Vec's own drop now frees.
-    fn field_chain_place_ptr(&mut self, expr: &Expr) -> Option<PointerValue<'ctx>> {
+    pub(super) fn field_chain_place_ptr(&mut self, expr: &Expr) -> Option<PointerValue<'ctx>> {
         match &expr.kind {
             ExprKind::Identifier(name) => self.variables.get(name.as_str()).map(|s| s.ptr),
             ExprKind::SelfValue => self.variables.get("self").map(|s| s.ptr),
@@ -1957,7 +1957,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Vec's element type, recursing through it for a `vec[i].f` chain. The shared
     /// resolver deliberately returns `None` for `Index` (12 callers rely on that),
     /// so this generalization stays local to the match-suppression path.
-    fn place_chain_type_name(&self, expr: &Expr) -> Option<String> {
+    pub(super) fn place_chain_type_name(&self, expr: &Expr) -> Option<String> {
         match &expr.kind {
             ExprKind::Index { object, .. } => {
                 let ExprKind::Identifier(v) = &object.kind else {

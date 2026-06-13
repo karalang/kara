@@ -919,6 +919,80 @@ fn main() {
         }
     }
 
+    // ── Nested-place + compound-field assignment write-back (codegen) ──
+    //
+    // Regression: assignment to a value-type struct field through a projection
+    // (`o.inner.x = v`, depth >= 2; `v[i].field = v` on plain-struct elements)
+    // and compound assignment on field/index targets (`o.count += 1`) were
+    // silently dropped — codegen's assignment lowering only stored back for a
+    // bare-identifier target. Interpreter sibling fixed in 62a92b39; this is the
+    // codegen half. Pre-existing; surfaced by the Tangle dogfooding project.
+
+    #[test]
+    fn e2e_nested_plain_struct_field_write() {
+        if let Some(out) = run_program(
+            "struct Inner { x: i64 }\n\
+             struct Outer { inner: Inner }\n\
+             fn main() {\n\
+                 let mut o = Outer { inner: Inner { x: 1 } };\n\
+                 o.inner.x = 99;\n\
+                 println(o.inner.x);\n\
+             }",
+        ) {
+            assert_eq!(out, "99\n");
+        }
+    }
+
+    #[test]
+    fn e2e_nested_plain_struct_field_write_three_levels() {
+        if let Some(out) = run_program(
+            "struct A { x: i64 }\n\
+             struct B { a: A }\n\
+             struct C { b: B }\n\
+             fn main() {\n\
+                 let mut c = C { b: B { a: A { x: 1 } } };\n\
+                 c.b.a.x = 42;\n\
+                 println(c.b.a.x);\n\
+             }",
+        ) {
+            assert_eq!(out, "42\n");
+        }
+    }
+
+    #[test]
+    fn e2e_plain_struct_field_write_through_vec_element() {
+        if let Some(out) = run_program(
+            "struct Item { v: i64 }\n\
+             fn main() {\n\
+                 let mut items = Vec.new();\n\
+                 items.push(Item { v: 10 });\n\
+                 items.push(Item { v: 20 });\n\
+                 items[1].v = 99;\n\
+                 println(items[0].v);\n\
+                 println(items[1].v);\n\
+             }",
+        ) {
+            assert_eq!(out, "10\n99\n");
+        }
+    }
+
+    #[test]
+    fn e2e_compound_assign_on_field_and_nested() {
+        if let Some(out) = run_program(
+            "struct Inner { x: i64 }\n\
+             struct Outer { mut count: i64, inner: Inner }\n\
+             fn main() {\n\
+                 let mut o = Outer { count: 0, inner: Inner { x: 5 } };\n\
+                 o.count += 10;\n\
+                 o.inner.x += 100;\n\
+                 println(o.count);\n\
+                 println(o.inner.x);\n\
+             }",
+        ) {
+            assert_eq!(out, "10\n105\n");
+        }
+    }
+
     // ── String-literal `match` dispatch (selfhost-lexer-profile.md #1 lever) ──
 
     /// A `match` over ≥4 string literals lowers to the switch tree
