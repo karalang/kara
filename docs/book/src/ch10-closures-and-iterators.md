@@ -7,13 +7,15 @@
 Anonymous functions that can capture variables from their environment:
 
 ```kara
-let add = |a, b| a + b;
+let add = |a: i64, b: i64| a + b;
 println(add(2, 3));    // 5
 
 let threshold = 10;
-let is_big = |n| n > threshold;    // captures `threshold`
+let is_big = |n: i64| n > threshold;    // captures `threshold`
 println(is_big(15));   // true
 ```
+
+Closure parameters take type annotations just like `fn` parameters. When a closure is passed straight into a combinator like `.map()`, the element type flows in and the annotation can be omitted (see *Iterators* below); a closure bound to a `let` with no other context needs the annotation.
 
 ### Closures as parameters
 

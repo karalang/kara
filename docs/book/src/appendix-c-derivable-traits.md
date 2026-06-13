@@ -4,11 +4,13 @@
 
 ```kara
 #[derive(PartialEq, Eq, Hash, Display)]
-struct Point {
-    x: f64,
-    y: f64,
+struct GridCell {
+    row: i64,
+    col: i64,
 }
 ```
+
+(Note the field types are integers. `Eq` and `Hash` require *every* field to be `Eq`/`Hash`, and `f64` is neither — `NaN != NaN` breaks reflexivity — so a struct with `f64` fields can derive `PartialEq`/`PartialOrd`/`Display` but **not** `Eq`/`Ord`/`Hash`. See the per-trait requirements below.)
 
 The compiler resolves derive dependencies automatically regardless of the order you list them. Writing `#[derive(Hash)]` when `PartialEq` and `Eq` are not yet derived causes the compiler to derive them first, in the correct order.
 
@@ -122,9 +124,8 @@ Marks a type as trivially copyable (bitwise copy semantics). Assignment and pass
 Available on `distinct` (newtype) types only. Generates `+`, `-`, `*`, `/`, `%` by forwarding to the underlying type's operations and wrapping the result back in the newtype. Without this derive, arithmetic between two values of the same distinct type is a type error (intentional: distinct types are supposed to be incompatible units).
 
 ```kara
-distinct type Metres = f64;
 #[derive(Arithmetic)]
-struct Metres; // now Metres + Metres → Metres
+distinct type Metres = f64;   // now Metres + Metres → Metres
 ```
 
 **Only valid on `distinct` types.**

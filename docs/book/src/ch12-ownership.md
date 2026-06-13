@@ -158,7 +158,7 @@ fn first_word(s: ref String) -> StringSlice {
 }
 
 let line: String = "hello world".to_string();
-let head = first_word(ref line);     // "hello", zero-copy view into `line`
+let head = first_word(line);     // "hello", zero-copy view into `line`
 ```
 
 The reason `StringSlice` exists alongside `ref String` is the same reason `Slice[T]` exists alongside `ref Vec[T]`: `ref String` can only point at a *whole* `String`, but most string operations want a **sub-range**. Splitting is the clearest case:

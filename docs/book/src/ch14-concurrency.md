@@ -28,21 +28,24 @@ This is possible *because* of the effect system. Without knowing which resources
 When you want to be explicit about parallelism:
 
 ```kara
-let (users, products) = par {
-    fetch_users(),
-    fetch_products(),
-};
+par {
+    let users = fetch_users();
+    let products = fetch_products();
+}
+// `users` and `products` were computed concurrently and are in scope here
 ```
 
-`par` runs its branches concurrently and waits for all to complete. It's structured concurrency — no dangling tasks, no fire-and-forget.
+The `let` bindings declared inside the `par` block are visible after it. `par` runs its branches concurrently and waits for all to complete before control falls through. It's structured concurrency — no dangling tasks, no fire-and-forget.
 
 ## spawn for background work
 
 ```kara
-let handle = spawn(long_computation());
+let handle = spawn(|| long_computation());
 // ... do other work ...
-let result = handle.await;
+let result = handle.join();
 ```
+
+`spawn` takes a thunk (a zero-argument closure) and returns a `TaskHandle[T]`. Call `.join()` to wait for the task and retrieve its result. Kāra has no `async`/`await` — suspension is tracked through the `suspends` effect rather than by colouring functions, so a spawned task is just a function call that happens elsewhere.
 
 ## Parallel failure
 

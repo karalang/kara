@@ -101,13 +101,13 @@ The `with` clause is a machine-checked description of what a function does. It c
 For common combinations, define groups:
 
 ```kara
-effect group IO = reads(FileSystem) + writes(FileSystem) + reads(Env);
+effect group io = reads(FileSystem) + writes(FileSystem) + reads(Env);
 ```
 
-Then use the group in declarations:
+Effect group names are Value-class (snake_case) — the same naming class as effect verbs and `let` bindings. Then use the group in declarations:
 
 ```kara
-pub fn process(path: String) -> Result[Data, Error] with IO {
+pub fn process(path: String) -> Result[Data, Error] with io {
     // can read and write files, read environment variables
 }
 ```

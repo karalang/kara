@@ -51,16 +51,16 @@ fn main() {
 }
 ```
 
-### Tuple structs
+### Newtype wrappers
 
-For lightweight wrappers:
+For a lightweight wrapper around a single existing type, use a `distinct type`:
 
 ```kara
-struct Meters(f64);
-struct Seconds(f64);
+distinct type Meters = f64;
+distinct type Seconds = f64;
 ```
 
-These are distinct types — you can't accidentally pass `Meters` where `Seconds` is expected.
+These are distinct types — you can't accidentally pass `Meters` where `Seconds` is expected, even though both wrap `f64`. (See [Appendix C](./appendix-c-derivable-traits.md) for `#[derive(Arithmetic)]`, which restores `+`/`-`/`*` on a `distinct type`.)
 
 ## Enums
 

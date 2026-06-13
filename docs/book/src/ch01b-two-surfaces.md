@@ -30,7 +30,7 @@ fn binary_search(haystack: ref Vec[i32], needle: i32) -> Option[usize] {
 
 fn main() {
     let nums = vec![1, 3, 5, 7, 9, 11, 13];
-    match binary_search(ref nums, 7) {
+    match binary_search(nums, 7) {
         Some(i) => println(f"found at index {i}"),
         None => println("not found"),
     }
@@ -76,7 +76,7 @@ karac> fn binary_search(haystack: ref Vec[i32], needle: i32) -> Option[usize] {
     ...     None
     ... }
 karac> let nums = vec![1, 3, 5, 7, 9, 11, 13];
-karac> binary_search(ref nums, 7)
+karac> binary_search(nums, 7)
 Some(3)
 ```
 
@@ -87,9 +87,9 @@ That last line — a bare expression with no `let` — is shown as a value. The 
 The `fn binary_search` declaration is a *pure-items cell*: it adds a function to the session. Later cells can call it without redefining it. Same for `let nums = …` — that binding stays in scope for every cell that follows.
 
 ```text
-karac> binary_search(ref nums, 100)
+karac> binary_search(nums, 100)
 None
-karac> binary_search(ref nums, 5)
+karac> binary_search(nums, 5)
 Some(2)
 ```
 
@@ -101,7 +101,7 @@ You don't have to invent new names for retries:
 
 ```text
 karac> let nums = vec![10, 20, 30, 40, 50];
-karac> binary_search(ref nums, 30)
+karac> binary_search(nums, 30)
 Some(2)
 ```
 
