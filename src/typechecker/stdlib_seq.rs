@@ -261,6 +261,43 @@ impl<'a> super::TypeChecker<'a> {
                     mutable: false,
                 }
             }
+            "split" => {
+                // split(sep: String | char) -> Vec[String]. Splits the
+                // receiver on every (non-overlapping) occurrence of the
+                // separator and returns the pieces, including leading/trailing
+                // empty pieces (Rust `str::split` semantics). An empty receiver
+                // yields a single empty piece; the separator may be a one-char
+                // literal (`line.split(',')`) or a String (`s.split("::")`).
+                // Surfaced by examples/weave (CSV ETL) — the canonical
+                // row-tokenizing primitive a real pipeline reaches for first;
+                // word_count.kara already assumed it existed.
+                if args.len() != 1 {
+                    self.type_error(
+                        format!("'split' expects 1 argument, found {}", args.len()),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    let arg_ty = self.infer_expr(&args[0].value);
+                    if !is_str_like(&arg_ty) && !matches!(arg_ty, Type::Char | Type::Error) {
+                        self.type_error(
+                            format!(
+                                "'split' expects a String or char separator, found '{}'",
+                                type_display(&arg_ty)
+                            ),
+                            args[0].value.span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    }
+                }
+                Type::Named {
+                    name: "Vec".to_string(),
+                    args: vec![Type::Str],
+                }
+            }
             "starts_with" => {
                 // starts_with(prefix: String) -> bool. Returns true iff
                 // the receiver's bytes begin with prefix's bytes.
@@ -439,6 +476,7 @@ impl<'a> super::TypeChecker<'a> {
                     "push_str",
                     "sorted",
                     "sorted_by",
+                    "split",
                     "starts_with",
                     "substring",
                 ],

@@ -1,0 +1,298 @@
+// Weave — Data Pipeline with Verifiable Invariants
+// =================================================
+// Dogfooding project (docs/dogfooding.md § Weave, Tier 2). It proves what no
+// other example in the corpus exercises *together*: refinement types +
+// contracts + effect inference, on a real multi-stage CSV ETL.
+//
+// The pipeline is four stages over an embedded CSV:
+//   parse_row   : raw text  -> ValidatedRow   (PURE; ensures positivity)
+//   enrich_row  : ValidatedRow -> EnrichedRow (reads(CurrencyDB); ensures qty
+//                                              unchanged via old(...))
+//   aggregate   : NonEmpty[EnrichedRow] -> Summary (PURE; requires/ensures)
+// Untyped text enters at the top; by the time data reaches `enrich`/`aggregate`
+// every invariant is a *type*, so the later stages never re-validate.
+//
+// ── DOGFOODING FINDINGS (surfaced while building this; see docs/dogfooding.md
+//    Weave appendix + bugs tracker for status) ─────────────────────────────
+//
+//   GAP-W1  The textbook refinement `type ValidEmail = String where
+//           self.contains("@")` — and this roster's own Weave sketch — is NOT
+//           expressible in Kāra v1. The refinement constraint language
+//           (design.md § "Refinement constraint language") admits only PURE
+//           ZERO-ARG method calls on self; `self.contains("@")` takes an
+//           argument and is rejected (E_INVALID_REFINEMENT_PREDICATE). So the
+//           argument-free invariant (bounded length) lives in the refinement
+//           `BoundedText`, while the "@"-structure check that needs an
+//           argument lives in `parse_row`'s body. Documented as a deliberate
+//           split, not a silent workaround.
+//
+//   GAP-W2  `String.split` was unimplemented (word_count.kara assumed it but
+//           it never existed). A CSV ETL needs it immediately. FIXED this
+//           slice in the interpreter + typechecker (split(sep) -> Vec[String],
+//           sep = char | String). Codegen arm still pending — this example
+//           runs via `karac run` (tree-walk interpreter).
+//
+//   GAP-W3  `karac run <file>` is single-file only: it does not load sibling
+//           `src/*.kara` modules into the interpreter, so a multi-module
+//           layout (the db_pipeline shape) fails at runtime even though it
+//           resolves and typechecks (cross-module free functions AND
+//           associated functions both fail). This example is therefore one
+//           self-contained file. Multi-module interpreter execution is a
+//           separate tracked gap.
+//
+//   GAP-W4  User types cannot `impl Display` in v1 — operator traits are
+//           stdlib-only (resolver rejects `impl Display for ParseError`). A
+//           program that prints its own error enum hand-writes a formatter
+//           (`parse_error_msg` below) instead. Friction, not a blocker.
+//
+//   GAP-W5  The roster sketch labels parse "pure", but effect inference shows
+//           `parse_row` carries `panics` (from `fields[i]` indexing). Public
+//           functions must declare inferred effects, so the honest signature
+//           is `with panics`. See the note at parse_row.
+//
+//   GAP-W6  FIXED this slice. The missing-effect-declaration diagnostic
+//           suggested an UN-PARSEABLE fix ("Add: allocates(Heap), panics()"):
+//           comma-separated verbs and `panics()` empty-parens both fail to
+//           parse, and `allocates(Heap)` is undeclarable (no resolver symbol).
+//           Fixed the fix-it to emit a valid `with` clause (space-separated,
+//           resourceless verbs bare). The remaining `allocates(Heap)`
+//           inconsistency — required-when-undeclared (effectchecker) yet
+//           default-permitted (design) yet unwritable (resolver) — is a
+//           three-way knot left to a design decision; tracked in the bugs
+//           tracker, not fixed here.
+
+// ── Refinement types ───────────────────────────────────────────────────────
+
+// Argument-free invariant only (GAP-W1): `self.len()` is a pure zero-arg
+// method and so is admissible; the "@" test is not.
+pub type BoundedText = String where self.len() >= 1 and self.len() <= 254;
+
+// Pure comparisons against constants — the simplest admissible predicates.
+pub type PositivePrice = f64 where self > 0.0;
+pub type PositiveQty = i64 where self > 0;
+
+// Generic refinement (design.md lists this exact shape as an example).
+pub type NonEmpty[T] = Vec[T] where self.len() > 0;
+
+// ── Domain rows: each field carries its proof in its type ────────────────────
+
+pub struct ValidatedRow {
+    email: BoundedText,
+    price: PositivePrice,
+    qty: PositiveQty,
+}
+
+// `usd_price` is a plain f64: the product of a PositivePrice and a positive
+// rate is positive, but v1 has no refinement-arithmetic to carry the proof
+// through `*`, so we widen to the base type (design.md § Refinement Types,
+// "reduces to its base type for arithmetic").
+pub struct EnrichedRow {
+    email: BoundedText,
+    usd_price: f64,
+    qty: PositiveQty,
+}
+
+// The struct invariant fires at every pub-method exit and at construction
+// (design.md § Contracts, Rule 3), so a Summary is never observable with a
+// negative row count.
+pub struct Summary {
+    row_count: i64,
+    total_usd: f64,
+
+    invariant self.row_count >= 0
+}
+
+// ── Stage 2's effectful seam: a provider-injected currency resource ──────────
+
+pub trait CurrencyProvider {
+    fn eur_to_usd(ref self) -> f64;
+}
+
+pub effect resource CurrencyDB: CurrencyProvider;
+
+pub struct FixedRates {
+    rate: f64,
+}
+
+impl FixedRates {
+    pub fn new(rate: f64) -> FixedRates {
+        FixedRates { rate: rate }
+    }
+}
+
+impl CurrencyProvider for FixedRates {
+    fn eur_to_usd(ref self) -> f64 {
+        self.rate
+    }
+}
+
+// ── Errors ───────────────────────────────────────────────────────────────
+
+pub enum ParseError {
+    WrongFieldCount { got: i64 },
+    EmptyEmail,
+    NoAtSign { value: String },
+    EmailTooLong { len: i64 },
+    BadPrice { value: String },
+    NonPositivePrice { value: f64 },
+    BadQty { value: String },
+    NonPositiveQty { value: i64 },
+}
+
+// GAP-W4: user types cannot `impl Display` in v1 — operator traits are
+// stdlib-only (resolver: "user-defined `impl Display for T` is not supported
+// in v1"). A real program that wants to print its own error enum therefore
+// hand-writes a formatter function instead of deriving/implementing Display.
+// Tracked as a friction point; not the feature under test.
+pub fn parse_error_msg(err: ref ParseError) -> String {
+    match err {
+        WrongFieldCount { got }    => f"expected 3 fields, got {got}",
+        EmptyEmail                 => "email is empty",
+        NoAtSign { value }         => f"email '{value}' has no '@'",
+        EmailTooLong { len }       => f"email too long ({len} bytes)",
+        BadPrice { value }         => f"price '{value}' is not a number",
+        NonPositivePrice { value } => f"price {value} is not > 0",
+        BadQty { value }           => f"qty '{value}' is not an integer",
+        NonPositiveQty { value }   => f"qty {value} is not > 0",
+    }
+}
+
+// ── Stage 1: parse + validate (PURE) ─────────────────────────────────────────
+
+// The `ensures` postcondition documents — and in debug builds checks — that a
+// successful parse yields strictly-positive price and qty. Refined fields
+// widen to their base type for the comparison (widening is implicit and free).
+//
+// GAP-W5: the roster's Weave sketch labels parse_row "// No effects — pure
+// transformation", but effect inference disagrees: the `fields[i]` indexing
+// carries `panics()` (the bounds check is invisible to the effect system even
+// though we guard `fields.len() == 3` first). A public function must DECLARE
+// its inferred effects (design.md: public effects are declared + verified), so
+// the honest signature carries `panics`. (Allocation from `split` is the
+// `allocates(Heap)` substrate effect, default-permitted and undeclarable — see
+// GAP-W6 for the buggy diagnostic that suggested declaring it anyway.)
+pub fn parse_row(raw: String) -> Result[ValidatedRow, ParseError]
+    with panics
+    ensures(result) match result {
+        Ok(row) => row.price > 0.0 and row.qty > 0,
+        Err(_)  => true,
+    }
+{
+    let fields = raw.split(',');
+    if fields.len() != 3 {
+        return Err(ParseError.WrongFieldCount { got: fields.len() });
+    }
+
+    // email: argument-bearing structure check here (GAP-W1), then narrow to
+    // the BoundedText refinement which carries the length invariant.
+    let email_raw = fields[0].clone();
+    if email_raw.is_empty() {
+        return Err(ParseError.EmptyEmail);
+    }
+    if not email_raw.contains("@") {
+        return Err(ParseError.NoAtSign { value: email_raw });
+    }
+    let email = match BoundedText.try_from(email_raw.clone()) {
+        Ok(e)  => e,
+        Err(_) => return Err(ParseError.EmailTooLong { len: email_raw.len() }),
+    };
+
+    // price: parse to f64, then narrow to PositivePrice.
+    let price = match f64.parse(fields[1]) {
+        None    => return Err(ParseError.BadPrice { value: fields[1].clone() }),
+        Some(p) => match PositivePrice.try_from(p) {
+            Ok(pp) => pp,
+            Err(_) => return Err(ParseError.NonPositivePrice { value: p }),
+        },
+    };
+
+    // qty: parse to i64, then narrow to PositiveQty.
+    let qty = match i64.parse(fields[2]) {
+        None    => return Err(ParseError.BadQty { value: fields[2].clone() }),
+        Some(q) => match PositiveQty.try_from(q) {
+            Ok(pq) => pq,
+            Err(_) => return Err(ParseError.NonPositiveQty { value: q }),
+        },
+    };
+
+    Ok(ValidatedRow { email: email, price: price, qty: qty })
+}
+
+// ── Stage 2: enrich (reads CurrencyDB) ───────────────────────────────────────
+
+// `enrich_row` consumes its `row`, so the postcondition cannot reference
+// `row.qty` directly (design.md § Contracts Rule 4) — it captures the
+// pre-state with `old(row.qty)` (Clone of an i64 = free). The contract states
+// the structural invariant: enrichment re-prices, it never changes quantity.
+pub fn enrich_row(row: ValidatedRow) -> EnrichedRow
+    with reads(CurrencyDB)
+    ensures(result) result.qty == old(row.qty)
+{
+    let rate = CurrencyDB.eur_to_usd();
+    let usd = row.price * rate;
+    EnrichedRow { email: row.email, usd_price: usd, qty: row.qty }
+}
+
+// ── Stage 3: aggregate (PURE) ────────────────────────────────────────────────
+
+// The parameter type `NonEmpty[EnrichedRow]` makes "at least one row" a
+// compile-boundary guarantee. The `requires` restates it as an executable
+// contract (redundant with the type, intentionally, to exercise both
+// surfaces); `ensures` ties the output count to the input length.
+pub fn aggregate(rows: NonEmpty[EnrichedRow]) -> Summary
+    requires rows.len() > 0
+    ensures(result) result.row_count == rows.len()
+{
+    let mut total = 0.0;
+    let mut n = 0;
+    for r in rows {
+        total = total + r.usd_price * (r.qty as f64);
+        n = n + 1;
+    }
+    Summary { row_count: n, total_usd: total }
+}
+
+// ── Driver ───────────────────────────────────────────────────────────────
+
+fn main() {
+    // email,price_eur,qty  — the last three rows are intentionally bad,
+    // one per failure class (empty email, no '@', non-positive price).
+    let csv = "alice@example.com,12.50,3
+bob@example.com,4.00,10
+carol@example.com,9.99,1
+,5.0,1
+bad-no-at,1.0,1
+dave@example.com,-2.0,4";
+
+    let lines = csv.split('\n');
+    let mut enriched: Vec[EnrichedRow] = Vec.new();
+
+    // Inject the FX provider for the whole enrichment pass (1 EUR = 1.08 USD).
+    with_provider[CurrencyDB](FixedRates.new(1.08), || {
+        for line in lines {
+            match parse_row(line) {
+                Ok(row) => {
+                    let e = enrich_row(row);
+                    println(f"  ok    {e.email}  usd={e.usd_price}  x{e.qty}");
+                    enriched.push(e);
+                },
+                Err(err) => {
+                    println(f"  skip  {parse_error_msg(ref err)}");
+                },
+            }
+        }
+    });
+
+    // Narrow the collected Vec to NonEmpty before aggregating. If every row
+    // was rejected the batch is empty and `aggregate` is never called — the
+    // type system makes that path unrepresentable.
+    match NonEmpty.try_from(enriched) {
+        Ok(rows) => {
+            let summary = aggregate(rows);
+            println(f"summary: {summary.row_count} rows, usd_total={summary.total_usd}");
+        },
+        Err(_) => {
+            println("summary: no valid rows");
+        },
+    }
+}

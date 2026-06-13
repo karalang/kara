@@ -123,6 +123,36 @@ impl<'a> super::Interpreter<'a> {
                 }
                 return None;
             }
+            "split" => {
+                // `String.split(sep) -> Vec[String]` — split the receiver on
+                // every non-overlapping occurrence of `sep` (a String or a
+                // single char), returning the pieces incl. leading/trailing
+                // empties (Rust `str::split` semantics). Used by the Weave CSV
+                // ETL (examples/weave) to tokenize rows. Typechecker arm in
+                // `stdlib_seq.rs::infer_str_method`; codegen arm in
+                // `vec_method.rs`.
+                if let Value::String(s) = &obj {
+                    if let [a] = args {
+                        let sep = match self.eval_expr_inner(&a.value) {
+                            Value::String(sep) => sep,
+                            Value::Char(c) => c.to_string(),
+                            _ => return None,
+                        };
+                        let pieces: Vec<Value> = if sep.is_empty() {
+                            // Empty separator: Rust yields "" between every char
+                            // plus bookends; keep it simple and total — return
+                            // the whole string as a single piece.
+                            vec![Value::String(s.clone())]
+                        } else {
+                            s.split(sep.as_str())
+                                .map(|piece| Value::String(piece.to_string()))
+                                .collect()
+                        };
+                        return Some(Value::Array(Arc::new(std::sync::RwLock::new(pieces))));
+                    }
+                }
+                return None;
+            }
             "substring" => {
                 // `String.substring(start) -> String` — bytes from `start` to end.
                 // `String.substring(start, end) -> String` — bytes in `[start, end)`.

@@ -1227,6 +1227,67 @@ fn test_public_fn_with_index_must_declare_panics() {
 // ── Diagnostics: Fix Suggestion Content ────────────────────────
 
 #[test]
+fn test_missing_effect_fixit_is_parseable_with_clause() {
+    // examples/weave GAP-W6 regression: the fix-it must suggest a *parseable*
+    // `with` clause. Execution / resourceless verbs render bare (`panics`, not
+    // `panics()` — empty parens do not parse), and the suggestion is prefixed
+    // `with` so it can be pasted onto the signature verbatim.
+    let errors = effectcheck_errors(
+        "pub fn boom(a: Vec[i64]) -> i64 {\n\
+             a[0]\n\
+         }",
+    );
+    let msg = errors
+        .iter()
+        .find(|e| e.kind == EffectErrorKind::MissingEffectDeclaration)
+        .map(|e| e.message.clone())
+        .unwrap_or_default();
+    assert!(
+        msg.contains("Add: with "),
+        "fix-it must prefix `with`: {msg}"
+    );
+    assert!(msg.contains("panics"), "fix-it must mention panics: {msg}");
+    assert!(
+        !msg.contains("panics()"),
+        "resourceless verb must render bare, not `panics()`: {msg}"
+    );
+}
+
+#[test]
+fn test_missing_effect_fixit_joins_verbs_with_spaces() {
+    // Multiple distinct verbs must be space-separated in the fix-it, never
+    // comma-separated — `with reads(D), writes(D)` is rejected by the parser
+    // (commas separate resources *within* a verb, not verbs). GAP-W6.
+    let errors = effectcheck_errors(
+        "effect resource D;\n\
+         fn rw() reads(D) writes(D) { }\n\
+         pub fn api() {\n\
+             rw();\n\
+         }",
+    );
+    let msg = errors
+        .iter()
+        .find(|e| e.kind == EffectErrorKind::MissingEffectDeclaration)
+        .map(|e| e.message.clone())
+        .unwrap_or_default();
+    // The fix-it segment (after "Add: ") must contain the two verbs joined by
+    // a space, with no comma between them.
+    if let Some(fixit) = msg.split("Add: ").nth(1) {
+        let fixit = fixit.split(" to the").next().unwrap_or(fixit);
+        assert!(
+            !fixit.contains(", "),
+            "fix-it verbs must be space-joined, not comma-joined: {fixit:?}"
+        );
+        assert!(
+            fixit.contains("reads(D)") && fixit.contains("writes(D)"),
+            "fix-it must list both verbs: {fixit:?}"
+        );
+    } else {
+        panic!("expected an `Add: ` fix-it in: {msg}");
+    }
+}
+
+#[test]
 fn test_diagnostic_includes_originating_function() {
     // Error message should trace back to the callee that introduced the effect
     let errors = effectcheck_errors(

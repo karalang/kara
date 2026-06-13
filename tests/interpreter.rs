@@ -9258,6 +9258,37 @@ fn test_string_starts_with_interpreter() {
 }
 
 #[test]
+fn test_string_split_interpreter() {
+    // `String.split(sep) -> Vec[String]`. Surfaced by examples/weave (CSV
+    // ETL). Covers: char separator, String separator, leading/trailing empty
+    // pieces, a separator-free string (single piece), and indexing the result.
+    let output = run(r#"fn main() {
+            let csv = "a,b,c";
+            let parts = csv.split(',');
+            let n = parts.len();
+            println(f"{n}");
+            println(parts[0]);
+            println(parts[2]);
+
+            let path = "x::y::z";
+            let seg = path.split("::");
+            let sn = seg.len();
+            println(f"{sn}");
+
+            let edges = ",lead,trail,";
+            let en = edges.split(',').len();
+            println(f"{en}");
+
+            let whole = "nosep";
+            let one = whole.split(',');
+            let on = one.len();
+            println(f"{on}");
+            println(one[0]);
+        }"#);
+    assert_eq!(output, "3\na\nc\n3\n4\n1\nnosep\n");
+}
+
+#[test]
 fn test_string_substring_interpreter() {
     // Mirrors `/tmp/kara-probes/substring_probe.kara`:
     // in-range / start-zero / out-of-range / negative / empty-receiver.

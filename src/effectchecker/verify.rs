@@ -250,23 +250,40 @@ impl<'a> super::EffectChecker<'a> {
                                 .filter(|e| !self.is_synthetic_modbind_resource(&e.effect.resource))
                                 .collect();
                             if !non_transparent.is_empty() {
+                                // Render each effect in *source* form: resource
+                                // verbs as `verb(Resource)`, but execution /
+                                // resourceless verbs (`panics`, `blocks`,
+                                // `suspends`) bare — `panics()` with empty
+                                // parens does not parse. The fix-it then joins
+                                // verbs with spaces inside a single `with`
+                                // clause (`with reads(D) writes(D) panics`),
+                                // because the effect-clause grammar is
+                                // space-separated; a comma-joined suggestion
+                                // (`reads(D), writes(D)`) is rejected by the
+                                // parser. See examples/weave GAP-W6 — the
+                                // pre-fix message suggested `allocates(Heap),
+                                // panics()`, which compiled to neither.
                                 let effects_list: Vec<String> = non_transparent
                                     .iter()
                                     .map(|e| {
-                                        format!(
-                                            "{}({})",
-                                            verb_name(&e.effect.verb),
-                                            e.effect.resource
-                                        )
+                                        if e.effect.resource.is_empty() {
+                                            verb_name(&e.effect.verb).to_string()
+                                        } else {
+                                            format!(
+                                                "{}({})",
+                                                verb_name(&e.effect.verb),
+                                                e.effect.resource
+                                            )
+                                        }
                                     })
                                     .collect();
                                 self.errors.push(EffectError {
                                     message: format!(
                                         "public function '{}' performs effects [{}] but has no \
-                                         effect declaration. Add: {} to the function signature",
+                                         effect declaration. Add: with {} to the function signature",
                                         name,
                                         effects_list.join(", "),
-                                        effects_list.join(", "),
+                                        effects_list.join(" "),
                                     ),
                                     span: span.clone(),
                                     kind: EffectErrorKind::MissingEffectDeclaration,

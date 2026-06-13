@@ -54,7 +54,7 @@ per-project sections below hold the design. Status legend: ✅ shipped ·
 | **Slipstream** | Auto-concurrency + SoA layout + one source on CPU/GPU | ⬜ planned | Phase 11 (CPU) · Phase 10 (GPU) | 1 |
 | **Cartographer** | Effect graph as a live architecture artifact | ⬜ planned | `karac query` effect/concurrency surface | 2 |
 | **Husk** | `kernel` profile — no heap/panic/std, MMIO, ISRs | ⬜ planned | v8 hardware gaps (`#[repr]`, `#[interrupt]`, asm) | 2 |
-| **Weave** | Refinement types + contracts + effects together | ⬜ planned | refinement+contracts (CSV) · `Pool[T]`+TLS+tracing (service) | 2 |
+| **Weave** | Refinement types + contracts + effects together | ✅ shipped (CSV cut) | refinement+contracts (CSV) · `Pool[T]`+TLS+tracing (service) | 2 |
 | **Tangle** | No `'a` at the cases that force `Rc<RefCell>`/arenas elsewhere — graphs, back-pointers, undo/redo; every RC escalation surfaced | ✅ shipped | ownership + `karac query ownership` (done) | 2 |
 | **Chronicle** | Self-hosting; Kāra's own tooling explains Kāra — *and* the ownership model holds across the whole compiler, zero lifetime annotations | ⬜ planned | Phase 10/12 self-hosting | 2 |
 | **Relay** | Effect-driven event-loop networking (no `async fn`) | ⬜ planned | Phase 6 v1.1 network event loop | 3 |
@@ -379,26 +379,65 @@ by the effect system.
 
 ```kara
 // Refinement types: the type system enforces that invalid data can't
-// reach downstream stages.
-type ValidEmail    = String where self.contains("@") && self.len() < 255
+// reach downstream stages. NOTE the constraint language admits only PURE
+// ZERO-ARG methods on self — `self.contains("@")` (an argument-bearing call)
+// is NOT expressible (GAP-W1), so the bounded-length invariant lives in the
+// refinement and the "@"-structure check lives in parse_row's body.
+type BoundedText   = String where self.len() >= 1 and self.len() <= 254
 type PositivePrice = f64   where self > 0.0
 type NonEmpty[T]   = Vec[T] where self.len() > 0
 
+// Effect inference makes parse_row carry `panics` (from `fields[i]` indexing),
+// so the honest public signature declares it (GAP-W5) — not "pure".
 fn parse_row(raw: String) -> Result[ValidatedRow, ParseError]
-    // No effects — pure transformation
+    with panics
     ensures(result) match result {
-        Ok(row) => row.email is ValidEmail && row.price is PositivePrice,
+        Ok(row) => row.price > 0.0 and row.qty > 0,
         Err(_)  => true,
     }
 
-fn enrich_prices(rows: NonEmpty[ValidatedRow]) -> NonEmpty[EnrichedRow]
-    with reads(CurrencyDB)    // needs live exchange rates
-    requires rows.all(|r| r.price is PositivePrice)
-    ensures(result) result.len() == rows.len()  // no rows dropped
+fn enrich_row(row: ValidatedRow) -> EnrichedRow
+    with reads(CurrencyDB)                 // needs live exchange rates
+    ensures(result) result.qty == old(row.qty)  // re-prices, never drops qty
 
 fn aggregate(rows: NonEmpty[EnrichedRow]) -> Summary
-    // Pure — no I/O, no side effects
+    requires rows.len() > 0
+    ensures(result) result.row_count == rows.len()
 ```
+
+> **Built (CSV cut) — 2026-06-13.** Shipped at
+> [`examples/weave/`](../examples/weave/) as a single self-contained
+> `src/main.kara` running via `karac run` (tree-walk interpreter); see its
+> README for the run command + expected output. The build surfaced six
+> findings (GAP-W1…W6) — the dogfood's load-bearing job. **Fixed in the same
+> slice:** `String.split` (interpreter + typechecker; codegen pending) and the
+> missing-effect-declaration diagnostic, which had been suggesting an
+> un-parseable fix-it (`Add: allocates(Heap), panics()` — comma-separated,
+> empty-parens, undeclarable `Heap`). **Tracked open gaps** (each its own
+> entry below): codegen `String.split`; multi-module `karac run`; user
+> `impl Display`; and the `allocates(Heap)` declarability knot.
+>
+> Open follow-ons, tracked here as the design record:
+> - [ ] **Codegen `String.split`** — interpreter + typechecker landed; the
+>   `vec_method.rs` arm (returning a `Vec[String]` of `{ptr,len,cap}` structs)
+>   is pending. Until then Weave runs interpreter-only. Blocks a Weave codegen
+>   E2E + any AOT-built program that splits strings.
+> - [ ] **Multi-module `karac run`** — the interpreter only registers the entry
+>   file's items; sibling `src/*.kara` modules resolve + typecheck but their
+>   functions/impls are absent at runtime (cross-module free *and* associated
+>   calls fail). Forces single-file examples for interpreter runs. Blocks the
+>   db_pipeline-shaped multi-module Weave service cut from running via `run`.
+> - [ ] **User `impl Display`** — operator traits are stdlib-only in v1, so user
+>   error enums can't implement `Display`; programs hand-write a formatter.
+>   Decide whether v1 admits user `Display`/`Debug` impls or documents the
+>   limitation as intended.
+> - [ ] **`allocates(Heap)` declarability knot** — three components disagree:
+>   the effectchecker *requires* it declared on an undeclared pub fn (tests
+>   `test_try_push_companion_requires_allocates_declaration`), `design.md`
+>   says it is default-permitted and *need not* be declared, and the resolver
+>   *rejects* writing it (`undefined effect resource 'Heap'`). Pick one model
+>   (add a `Heap` resolver symbol, OR fully exempt it from the must-declare
+>   set + update the try_* tests) — a designer decision, not a mechanical fix.
 
 **What the demo shows:**
 1. Run the pipeline on a dataset with intentionally bad rows. Show parse errors
@@ -707,7 +746,7 @@ the "Ready when" column notes the compiler capability each is gated on.
 | 2 | **Parallax** | Auto-par codegen + HTTP FFI (done) | Broadest appeal. Every backend engineer relates to fan-out + join. |
 | 3 | **Cartographer** | `karac query` effect/concurrency surface | Teaches the effect system visually. Reduces onboarding friction for new users. |
 | 4 | **Tangle** | Now (ownership inference + `karac query ownership` exist) | Proves the no-`'a` safety claim at the hard shapes. Cheap, pure Kāra, backs the README ownership section directly. |
-| 5 | **Weave** | Refinement types + contracts (CSV cut); `Pool[T]` + TLS + tracing (service cut) | Correctness story for data engineers. Complements the concurrency story. |
+| 5 | **Weave** | ✅ CSV cut built 2026-06-13 (`examples/weave/`, interpreter path). Service cut still gated on `Pool[T]` + TLS + tracing | Correctness story for data engineers. Complements the concurrency story. |
 | 6 | **Chronicle** | Self-hosting (Phase 10/12) | Self-hosting milestone. Marks Kāra as "a real language." |
 | 7 | **Slipstream** | CPU path after Phase 11 (long-tail stdlib + FFI); GPU path added later with no Kāra-source change | Visually striking, instantly explainable. |
 | 8 | **Husk** | Hardware gaps from v8 (`#[repr]`, `#[interrupt]`, inline asm, `no_std`) | Systems credibility. Validates the `kernel` profile. |
