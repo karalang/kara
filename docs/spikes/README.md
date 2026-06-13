@@ -17,6 +17,7 @@ Legend: ✅ done · 🟡 partial · ⬜ open
 | spike | status |
 |---|---|
 | [windows-iocp-eventloop.md](windows-iocp-eventloop.md) | Groundwork / scoping done on macOS (2026-06-07). Runtime impl + validation need a Windows box — tracks phase-6 Slice 10 (IOCP integration) + cancel-sweep. |
+| [small-string-optimization.md](small-string-optimization.md) | 🟡 **SCOPED 2026-06-12 — campaign teed up, not started.** The corpus-wide allocation lever: inline short strings in the `{ptr,len,cap}` struct → no `malloc` for short lexemes (`malloc` is the #1 self-time leaf after the string-match dispatch lever shipped, Rust gap now 2.74×). Central constraint: String shares `vec_struct_type` with Vec → in-struct tag, don't split the type. Highest blast radius in the String subsystem; staged for a **fresh dedicated session** (layout → accessors → inline construction → runtime/FFI decode). Full cold-start handoff in the spike. |
 
 ## 🟡 Partial
 
