@@ -975,6 +975,35 @@ fn main() {
         }
     }
 
+    #[test]
+    fn e2e_unannotated_enum_struct_variant_let_method_and_display() {
+        // B-2026-06-13-9: an UNANNOTATED `let a = E.A { .. }` constructing an
+        // enum struct-variant must register `a` as the ENUM in `var_type_names`
+        // so later `a.method()` / Display dispatch finds a receiver type.
+        // Pre-fix, `type_name_of` returned the VARIANT (`path.last()` = "A"),
+        // which is no known type, so the type-hint-present recording path stored
+        // `var_type_names[a] = "A"` and method dispatch fell through:
+        // "codegen failed: no handler for method 'code' on variable 'a'".
+        // The annotated `let a: E = E.A { .. }`, a fn param `E`, and the tuple
+        // variant `E.A(..)` all worked, isolating the unannotated-struct-variant
+        // shape. Covers both halves: a user method and a user `impl Display`
+        // round-trip (`.to_string()` / `f"{a}"` / `println(a)`).
+        if let Some(out) = run_program(
+            "enum E { A { n: i64 }, B }\n\
+             impl E { fn code(ref self) -> i64 { match self { A { n } => n, B => 0 } } }\n\
+             impl Display for E { fn to_string(ref self) -> String { match self { A { n } => f\"A:{n}\", B => \"B\" } } }\n\
+             fn main() {\n\
+                 let a = E.A { n: 3 };\n\
+                 println(f\"{a.code()}\");\n\
+                 println(a.to_string());\n\
+                 println(f\"{a}\");\n\
+                 println(a);\n\
+             }",
+        ) {
+            assert_eq!(out, "3\nA:3\nA:3\nA:3\n");
+        }
+    }
+
     // ── User `impl Display` dispatch (codegen) ──
 
     #[test]
@@ -12338,9 +12367,10 @@ fn main() {
         // value-driven `emit_enum_display_fn` as `Variant(f0, f1)` /
         // `Variant { name: v }`, including a heap (String) payload rendered
         // read-only (no move/free) — the `IoError.Other(String)` shape. Matches
-        // the interpreter byte-for-byte. (Struct-variant bindings are annotated
-        // — the unannotated `let b = E.S { .. }` registration is a tracked
-        // follow-on; tuple variants work unannotated.)
+        // the interpreter byte-for-byte. (`let b = E.S { .. }` is now
+        // UNANNOTATED — B-2026-06-13-9 fixed: `type_name_of` resolves an enum
+        // struct-variant construction to the ENUM, so the binding registers in
+        // `var_type_names` and the f-string / println Display routing finds it.)
         if let Some(out) = run_program(
             r#"
 #[derive(Display)]
@@ -12349,7 +12379,7 @@ enum Shape { Circle(i64), Rect { w: i64, h: i64 }, Dot }
 enum Msg { Text(String), Code(i64) }
 fn main() {
     let a = Shape.Circle(5);
-    let b: Shape = Shape.Rect { w: 3, h: 4 };
+    let b = Shape.Rect { w: 3, h: 4 };
     let c = Shape.Dot;
     println(a);
     println(b);

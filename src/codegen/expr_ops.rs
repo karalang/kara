@@ -1686,7 +1686,27 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn type_name_of(&self, expr: &Expr) -> Option<String> {
         match &expr.kind {
             ExprKind::Identifier(n) => self.var_type_names.get(n.as_str()).cloned(),
-            ExprKind::StructLiteral { path, .. } => path.last().cloned(),
+            // A plain struct literal names its type via `path.last()`. But
+            // enum struct-variant construction `Enum.Variant { .. }` parses
+            // as a StructLiteral whose `path.last()` is the VARIANT (not a
+            // type) and `path[len-2]` is the enum. Returning the variant name
+            // here makes an unannotated `let a = E.A { .. }` record
+            // `var_type_names[a] = "A"`, which is no known type, so a later
+            // `a.method()` / Display dispatch finds no receiver type and falls
+            // through to "no handler". Resolve to the ENUM instead — mirrors
+            // the `type_hint.is_none()` enum arm in `stmts.rs`. (B-2026-06-13-9)
+            ExprKind::StructLiteral { path, .. } => {
+                let last = path.last().cloned();
+                if let Some(name) = &last {
+                    if !self.struct_types.contains_key(name.as_str()) && path.len() >= 2 {
+                        let enum_name = &path[path.len() - 2];
+                        if self.enum_layouts.contains_key(enum_name) {
+                            return Some(enum_name.clone());
+                        }
+                    }
+                }
+                last
+            }
             // `let x = vec_of_chars[i]` — recover the element type's name
             // from `var_elem_type_exprs` so downstream consumers (notably
             // `expr_is_char` for the print/f-string glyph rendering)
