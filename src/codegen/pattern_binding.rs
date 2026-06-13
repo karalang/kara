@@ -269,15 +269,36 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `s.contains(x)` on a match-arm-bound Map/Set dispatches
                     // like a let-bound one. Mirrors the Vec/Slice arm above,
                     // but routes through the shared `register_var_from_type_expr`
-                    // helper (which extracts K/V/elem). Dispatch only: the
-                    // moved-in handle's scope-exit free is the binding owner's
-                    // concern, and a match-bound Map/Set is left un-tracked for
-                    // cleanup (a benign leak, never a double-free — tracked as a
-                    // deferred remainder in phase-6-runtime.md), so no
-                    // `track_map_var` here.
+                    // helper (which extracts K/V/elem).
+                    //
+                    // AND register the handle's scope-exit free
+                    // (`track_map_var`) so the binding OWNS and frees the moved-
+                    // out Map/Set at end-of-arm — closes the deferred match-bound-
+                    // Map leak (B-2026-06-12-6 cluster 4): `match make() {
+                    // Some(m) => println(m.len()) }` over an `Option[Map]` leaked
+                    // the whole handle (the source's `FreeInlineOptionMapPayload`
+                    // is suppressed → tag set to `None` → on the consuming arm by
+                    // `suppress_inline_option_map_payload_cleanup`, and a fresh-
+                    // temp scrutinee was never tracked at all). The bound name now
+                    // takes over the free; the source suppression (named source)
+                    // or the absence of source tracking (fresh temp) prevents a
+                    // double-free. Gated on `!pattern_binding_is_borrow` exactly
+                    // like the Vec arm below — a borrow-returning scrutinee
+                    // (`Map.get` → `Option[ref V]`) aliases the container's
+                    // storage, which frees it itself. The `match opt { Some(m) =>
+                    // m }` return-the-map shape is balanced by the arm-tail
+                    // `suppress_map_cleanup_for_tail_identifier` in `compile_match`
+                    // (the Map sibling of the Vec tail-move suppression).
                     if matches!(type_name.as_str(), "Map" | "Set") {
                         if let Some(full_te) = self.pattern_binding_inner_types.get(&key).cloned() {
                             self.register_var_from_type_expr(name, &full_te);
+                            if !self.pattern_binding_is_borrow {
+                                let (key_is_vec, val_is_vec, key_shared, val_shared) =
+                                    self.map_temp_cleanup_parts(&full_te);
+                                self.track_map_var(
+                                    alloca, key_is_vec, val_is_vec, val_shared, key_shared,
+                                );
+                            }
                         }
                     }
                     self.record_var_type_name(name.clone(), type_name);

@@ -289,6 +289,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 // tail-return is the canonical Option-unwrap shape
                 // `match opt { Some(v) => v, None => default() }`.
                 self.suppress_source_vec_cleanup_for_arg(&arm.body);
+                // Move-aware, Map/Set variant: `match opt { Some(m) => m }`
+                // returns the bound Map/Set by identity into the match result
+                // (the caller now owns the handle). Retract the binding's
+                // `FreeMapHandle` (queued by the match-bind `track_map_var` in
+                // `bind_pattern_values`) so the per-arm drain doesn't free a
+                // handle the result owner will free — the Map sibling of the
+                // Vec `cap`-zeroing above (B-2026-06-12-6 cluster 4). Direct-
+                // Identifier arm tail only, matching the Vec suppressor's gate.
+                if let ExprKind::Identifier(nm) = &arm.body.kind {
+                    let nm = nm.clone();
+                    self.suppress_map_cleanup_for_tail_identifier(&nm);
+                }
                 // Move-aware, f-string variant: when the arm's tail
                 // expression is an f-string (`Some(name) => f"[{name}]"`),
                 // `arm_val` is the loaded `{data, len, cap}` of the freshly
@@ -2379,7 +2391,37 @@ impl<'ctx> super::Codegen<'ctx> {
             let alloca =
                 self.create_entry_alloca(fn_val, "__freshtemp_boxed_scrut", llvm_ty.into());
             let _ = self.builder.build_store(alloca, sv);
-            self.track_boxed_enum_var(&enum_name, alloca, &enum_name, &variant, None);
+            // Inner-struct drop: when the boxed payload is bound WHOLE to a
+            // non-shared user struct that owns heap (`Some(h)` where `h: H`,
+            // `H` has a `Vec`/`String` field), the box drop must free that
+            // inner heap too — the bound `h` is an unboxed COPY that aliases
+            // the box's inner buffers but registers no struct drop of its own
+            // (match-bound structs are tracked only for the seeded HTTP types,
+            // pattern_binding.rs), so without this the inner `Vec` buffer leaks
+            // once per call (B-2026-06-12-6 cluster 4,
+            // `freshtemp_boxed_option_match_move_out`; the box itself was freed
+            // fine — a no-heap boxed struct is clean). Box-only (`None`) stays
+            // for a struct-DESTRUCTURE payload (`Some(H { v, .. })`) whose
+            // fields are individually bound + tracked, and for non-heap / shared
+            // payloads (`emit_struct_drop_synthesis` returns `None`). Mirrors
+            // the named-let box drop, which carries the inner struct name from
+            // the typed binding.
+            let inner_struct_name: Option<String> = match &payload.kind {
+                PatternKind::Binding(_) => {
+                    let pkey = (payload.span.offset, payload.span.length);
+                    self.pattern_binding_types.get(&pkey).cloned().filter(|n| {
+                        self.struct_types.contains_key(n) && !self.shared_types.contains_key(n)
+                    })
+                }
+                _ => None,
+            };
+            self.track_boxed_enum_var(
+                &enum_name,
+                alloca,
+                &enum_name,
+                &variant,
+                inner_struct_name.as_deref(),
+            );
             return;
         }
     }
