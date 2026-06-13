@@ -21,10 +21,13 @@
 //!
 //! Lives in a sibling `impl<'a> super::TypeChecker<'a>` block.
 
+use std::collections::HashMap;
+
 use crate::ast::*;
 use crate::resolver::SpanKey;
 use crate::token::Span;
 
+use super::inference::resolve_type_vars;
 use super::types::{
     is_integer, is_numeric, is_prelude_type_or_module_name, is_string_concat_operand,
     strip_refinement, type_display, types_compatible, ConstArg, DimArg, Type, UIntSize,
@@ -220,9 +223,23 @@ impl<'a> super::TypeChecker<'a> {
     // ── Identifier Resolution ───────────────────────────────────
 
     pub(super) fn resolve_identifier_type(&mut self, name: &str, span: &Span) -> Type {
-        // Check local scope first
-        if let Some(ty) = self.local_scope.lookup(name) {
-            return ty.clone();
+        // Check local scope first. Resolve inference vars against the current
+        // substitution map before returning: a binding recorded as `Vec[?T]` at
+        // `let` time (`let mut out = Vec.new();`) has its element var pinned
+        // later by `out.push(x)`, which updates `env.substitutions` but NOT the
+        // snapshot stored in `local_scope`. Returning the stale `Vec[?T]` makes a
+        // downstream return-position / assignment check compare against an
+        // unresolved var and emit a spurious `expected 'Vec[i64]', found
+        // 'Vec[?T]'`. Genuinely-unresolved vars stay vars (empty id_to_name), so
+        // this never over-resolves. Surfaced by examples/tangle/doubly_linked.kara.
+        if let Some(ty) = self.local_scope.lookup(name).cloned() {
+            return resolve_type_vars(
+                &ty,
+                &self.env.substitutions,
+                &HashMap::new(),
+                &self.env.const_substitutions,
+                &HashMap::new(),
+            );
         }
         // Check functions
         if let Some((params, return_type)) = self

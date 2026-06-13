@@ -1374,6 +1374,62 @@ fn test_reachability_clean_match_no_warnings() {
     );
 }
 
+// ── Inference: element typevar pinned by a later `push` resolves at use ──
+//
+// `let mut out = Vec.new();` records the binding as `Vec[?T]`; a subsequent
+// `out.push(x)` pins `?T` to `typeof(x)` in `env.substitutions` but does NOT
+// rewrite the local-scope snapshot. Returning / re-checking `out` must resolve
+// the binding's typevars against the substitution map, else it compares the
+// stale `Vec[?T]` against the declared `Vec[i64]` and emits a spurious
+// `expected 'Vec[i64]', found 'Vec[?T]'`. Surfaced by the Tangle dogfooding
+// project (examples/tangle/doubly_linked.kara) — fixed in resolve_identifier_type.
+
+#[test]
+fn test_vec_new_push_then_return_no_spurious_mismatch() {
+    let result = typecheck_ok(
+        "fn build() -> Vec[i64] {\n\
+             let mut out = Vec.new();\n\
+             out.push(1);\n\
+             out\n\
+         }\n\
+         fn main() {\n\
+             let v = build();\n\
+             println(f\"{v.len()}\");\n\
+         }",
+    );
+    assert!(
+        result.warnings.is_empty(),
+        "Vec.new()+push+return should infer the element type with no warning, got: {:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn test_vec_new_push_in_loop_then_return_no_spurious_mismatch() {
+    // The element var is pinned by a `push` inside a loop body; the return-tail
+    // resolve must still see it (the original doubly_linked.kara shape).
+    let result = typecheck_ok(
+        "fn build() -> Vec[i64] {\n\
+             let mut out = Vec.new();\n\
+             let mut i = 0;\n\
+             loop {\n\
+                 if i >= 3 { break; }\n\
+                 out.push(i);\n\
+                 i = i + 1;\n\
+             }\n\
+             out\n\
+         }\n\
+         fn main() {\n\
+             println(f\"{build().len()}\");\n\
+         }",
+    );
+    assert!(
+        result.warnings.is_empty(),
+        "Vec.new()+push-in-loop+return should infer cleanly, got: {:?}",
+        result.warnings
+    );
+}
+
 // ── Lint-level slice 7 — lint_name on TypeError carry-through ──
 //
 // Every warning emitted by the compiler must record the lint name in
