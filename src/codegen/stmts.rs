@@ -1999,7 +1999,25 @@ impl<'ctx> super::Codegen<'ctx> {
                             ExprKind::StructLiteral { path, .. } => path
                                 .last()
                                 .filter(|n| self.struct_types.contains_key(n.as_str()))
-                                .cloned(),
+                                .cloned()
+                                .or_else(|| {
+                                    // Enum struct-variant construction
+                                    // `Enum.Variant { ... }` (parsed as a
+                                    // StructLiteral whose `path[len-2]` is the
+                                    // enum and `path.last()` is the variant):
+                                    // bind the let as the ENUM, not the variant
+                                    // (which is not a `struct_types` key). Lets
+                                    // `expr_user_enum_name`/`_any` dispatch
+                                    // Display + method calls on an unannotated
+                                    // `let b = Shape.Rect { .. }` binding.
+                                    if path.len() >= 2 {
+                                        let enum_name = &path[path.len() - 2];
+                                        if self.enum_layouts.contains_key(enum_name) {
+                                            return Some(enum_name.clone());
+                                        }
+                                    }
+                                    None
+                                }),
                             _ => None,
                         };
                         if let Some(name) = ast_hint {

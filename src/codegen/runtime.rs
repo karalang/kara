@@ -4695,6 +4695,27 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(ename) = self.expr_user_enum_name(e) {
             return self.compile_unit_enum_display(e, &ename);
         }
+        // Payload-bearing user enum interpolation part → render via its
+        // value-driven Display fn. Scope-track the rendered buffer so it
+        // survives the outer f-string's memcpy and is freed once at scope exit
+        // (mirrors the collection arm below).
+        if let Some(ename) = self.expr_user_enum_name_any(e) {
+            let (acc, sval) = self.render_user_enum_display(e, &ename)?;
+            let u8_ty: inkwell::types::BasicTypeEnum<'ctx> = self.context.i8_type().into();
+            self.track_vec_var(acc, Some(u8_ty));
+            let s = sval.into_struct_value();
+            let data = self
+                .builder
+                .build_extract_value(s, 0, "fstr.e.data")
+                .unwrap()
+                .into_pointer_value();
+            let len = self
+                .builder
+                .build_extract_value(s, 1, "fstr.e.len")
+                .unwrap()
+                .into_int_value();
+            return Ok((data, len));
+        }
         // Collection (Vec/Map/Set) interpolation part → render via its Display
         // fn. Must precede the compile_fstr_part_to_cstr fallback: a Vec value
         // shares String's `{ptr,len,cap}` layout, so the fallback would

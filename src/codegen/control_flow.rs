@@ -548,6 +548,15 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(zero.into());
         }
 
+        // Payload-bearing user enum arm — render via its value-driven Display
+        // fn (`Variant` / `Variant(f0, f1)` / `Variant { name: v }`), then
+        // print + free the owning buffer.
+        if let Some(ename) = self.expr_user_enum_name_any(&args[0].value) {
+            let (_acc, sval) = self.render_user_enum_display(&args[0].value, &ename)?;
+            self.emit_print_and_free_string(sval, nl);
+            return Ok(zero.into());
+        }
+
         // User-struct arm — `#[derive(Display)]` / `impl Display` structs
         // render as `TypeName { field: value, … }` in declaration order
         // (matching the interpreter). Render to an owning String via the

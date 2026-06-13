@@ -887,6 +887,15 @@ impl<'ctx> super::Codegen<'ctx> {
                         return self.emit_set_display_fn(&elem_te);
                     }
                 }
+                // User enum (possibly payload-bearing) — value-driven Display
+                // fn (the all-unit `compile_unit_enum_display` is select-chain
+                // and expr-driven; this path is the buffer-append, by-pointer
+                // form needed for nested/recursive field rendering).
+                if let Some(seg) = p.segments.last() {
+                    if self.enum_layouts.contains_key(seg) {
+                        return self.emit_enum_display_fn(seg);
+                    }
+                }
                 // Primitive (or unsupported path) — fall through to by-name.
                 let llvm_ty = self.llvm_type_for_type_expr(te);
                 self.emit_display_fn_for_type(&type_name, llvm_ty)
@@ -1314,6 +1323,272 @@ impl<'ctx> super::Codegen<'ctx> {
             });
         }
         acc.ok_or_else(|| format!("Display: enum '{enum_name}' has no variants"))
+    }
+
+    /// Emit (or reuse) a value-driven, buffer-append Display function for a
+    /// user enum that may carry payload variants (tuple or struct) — the
+    /// payload-enum extension of `compile_unit_enum_display` (which is
+    /// all-unit-only and select-chain-based). Signature
+    /// `void karac_display_<enum>(ptr val_ptr, ptr acc)`: load the tag, switch
+    /// per variant, append the variant name, and for payload variants
+    /// reconstruct each field READ-ONLY from the unified payload words (via
+    /// `EnumLayout.field_word_offsets` — the same extraction
+    /// `bind_pattern_values` uses) and recurse through
+    /// `emit_display_fn_for_type_expr`. Read-only is load-bearing: Display must
+    /// not move/free a heap payload (e.g. `IoError.Other(String)`) — we render
+    /// the borrowed buffer and never register a drop, mirroring how
+    /// `emit_vec_display_body` reads elements without consuming. Format matches
+    /// the interpreter's `Value::EnumVariant` Display: `Variant` /
+    /// `Variant(f0, f1)` / `Variant { name: v }`.
+    pub(super) fn emit_enum_display_fn(&mut self, enum_name: &str) -> FunctionValue<'ctx> {
+        let cache_key = enum_name.to_string();
+        if let Some(&f) = self.display_fn_cache.get(&cache_key) {
+            return f;
+        }
+        let fn_name = format!("karac_display_{enum_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.display_fn_cache.insert(cache_key, f);
+            return f;
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+
+        // Snapshot the enum's variant shapes (name + VariantKind) from the
+        // program AST and its layout (tags + per-field word offsets) up front,
+        // so the per-variant emission below can borrow `self` mutably.
+        let variants: Vec<(String, VariantKind)> = self
+            .program_snapshot
+            .as_ref()
+            .map(|p| {
+                p.items
+                    .iter()
+                    .find_map(|it| match it {
+                        Item::EnumDef(e) if e.name == enum_name => Some(
+                            e.variants
+                                .iter()
+                                .map(|v| (v.name.clone(), v.kind.clone()))
+                                .collect::<Vec<_>>(),
+                        ),
+                        _ => None,
+                    })
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+        let layout = self
+            .enum_layouts
+            .get(enum_name)
+            .expect("emit_enum_display_fn: enum has no layout");
+        let llvm_ty = layout.llvm_type;
+        let tags = layout.tags.clone();
+        let field_offsets = layout.field_word_offsets.clone();
+
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+
+        let display_fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let display_fn = self
+            .module
+            .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
+        self.display_fn_cache
+            .insert(enum_name.to_string(), display_fn);
+
+        let entry_bb = self.context.append_basic_block(display_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        self.current_fn = Some(display_fn);
+        let val_ptr = display_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let acc = display_fn.get_nth_param(1).unwrap().into_pointer_value();
+
+        // Load the whole enum aggregate so payload words extract by index
+        // (field 0 = tag, fields 1.. = payload words) — same shape the
+        // pattern-binding path reads.
+        let agg = self
+            .builder
+            .build_load(llvm_ty, val_ptr, "enum.agg")
+            .unwrap()
+            .into_struct_value();
+        let tag = self
+            .builder
+            .build_extract_value(agg, 0, "enum.tag")
+            .unwrap()
+            .into_int_value();
+
+        let exit_bb = self.context.append_basic_block(display_fn, "enum.exit");
+        let default_bb = self.context.append_basic_block(display_fn, "enum.default");
+
+        // One block per variant, dispatched by a switch on the tag.
+        let mut cases: Vec<(
+            inkwell::values::IntValue<'ctx>,
+            inkwell::basic_block::BasicBlock<'ctx>,
+        )> = Vec::with_capacity(variants.len());
+        let mut variant_blocks: Vec<inkwell::basic_block::BasicBlock<'ctx>> = Vec::new();
+        for (vname, _) in &variants {
+            let bb = self
+                .context
+                .append_basic_block(display_fn, &format!("enum.v.{vname}"));
+            variant_blocks.push(bb);
+            let tagval = tags.get(vname).copied().unwrap_or(0);
+            cases.push((i64_t.const_int(tagval, false), bb));
+        }
+        self.builder.build_switch(tag, default_bb, &cases).unwrap();
+
+        // Exhaustive over the declared variants — the tag is always one of them.
+        self.builder.position_at_end(default_bb);
+        self.builder.build_unreachable().unwrap();
+
+        for (idx, (vname, kind)) in variants.iter().enumerate() {
+            self.builder.position_at_end(variant_blocks[idx]);
+            self.disp_append_lit(acc, vname);
+            let offsets = field_offsets.get(vname).cloned().unwrap_or_default();
+            match kind {
+                VariantKind::Unit => {}
+                VariantKind::Tuple(field_tes) => {
+                    self.disp_append_lit(acc, "(");
+                    for (i, field_te) in field_tes.iter().enumerate() {
+                        if i > 0 {
+                            self.disp_append_lit(acc, ", ");
+                        }
+                        self.emit_enum_field_display(agg, &offsets, i, field_te, acc, display_fn);
+                    }
+                    self.disp_append_lit(acc, ")");
+                }
+                VariantKind::Struct(fields) => {
+                    self.disp_append_lit(acc, " { ");
+                    for (i, sf) in fields.iter().enumerate() {
+                        if i > 0 {
+                            self.disp_append_lit(acc, ", ");
+                        }
+                        self.disp_append_lit(acc, &format!("{}: ", sf.name));
+                        self.emit_enum_field_display(agg, &offsets, i, &sf.ty, acc, display_fn);
+                    }
+                    self.disp_append_lit(acc, " }");
+                }
+            }
+            // An append may have split the current block (buffer grow); branch
+            // to exit from wherever we ended up.
+            self.builder.build_unconditional_branch(exit_bb).unwrap();
+        }
+
+        self.builder.position_at_end(exit_bb);
+        self.builder.build_return(None).unwrap();
+
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        display_fn
+    }
+
+    /// Render one enum payload field (declaration index `i`) into `acc`:
+    /// extract its READ-ONLY payload words from the loaded enum aggregate
+    /// `agg` using `offsets[i] = (start_word, num_words)`, rebuild the
+    /// source-typed field value (no copy / no drop registration), spill it to
+    /// a stack slot, and call the field type's append-form Display fn. Helper
+    /// for `emit_enum_display_fn`.
+    fn emit_enum_field_display(
+        &mut self,
+        agg: inkwell::values::StructValue<'ctx>,
+        offsets: &[(usize, usize)],
+        i: usize,
+        field_te: &TypeExpr,
+        acc: PointerValue<'ctx>,
+        display_fn: FunctionValue<'ctx>,
+    ) {
+        let i64_t = self.context.i64_type();
+        let zero = i64_t.const_zero();
+        let (start, num) = offsets.get(i).copied().unwrap_or((i, 1));
+        let word = |s: &Self, j: usize| -> inkwell::values::IntValue<'ctx> {
+            if j < num {
+                s.builder
+                    .build_extract_value(agg, (start + j + 1) as u32, "enum.fw")
+                    .unwrap()
+                    .into_int_value()
+            } else {
+                zero
+            }
+        };
+        let w0 = word(self, 0);
+        let w1 = word(self, 1);
+        let w2 = word(self, 2);
+        let field_ty = self.llvm_type_for_type_expr(field_te);
+        let field_val = self
+            .rebuild_value_from_payload_words(field_ty, w0, w1, w2)
+            .unwrap_or_else(|_| w0.into());
+        let slot = self.create_entry_alloca(display_fn, "enum.field", field_val.get_type());
+        self.builder.build_store(slot, field_val).unwrap();
+        let field_disp = self.emit_display_fn_for_type_expr(field_te);
+        self.builder
+            .build_call(field_disp, &[slot.into(), acc.into()], "enum.fd")
+            .unwrap();
+    }
+
+    /// If `expr` statically denotes a value of a user enum that
+    /// `emit_enum_display_fn` can render — any declared enum with a layout
+    /// EXCEPT the bespoke-Display built-ins (`Option`/`Result` are generic +
+    /// have dedicated handling; other seeded enums route through their own
+    /// paths) — return that enum's name. The payload-bearing sibling of
+    /// `expr_user_enum_name` (which is all-unit-only). Same place-expression
+    /// coverage (identifier / field access).
+    pub(super) fn expr_user_enum_name_any(&self, expr: &Expr) -> Option<String> {
+        let tn = match &expr.kind {
+            ExprKind::Identifier(n) => self.var_type_names.get(n.as_str()).cloned(),
+            ExprKind::FieldAccess { object, field } => {
+                let outer = self.expr_user_struct_name(object)?;
+                let tes = self.struct_field_type_exprs.get(&outer)?;
+                let names = self.struct_field_names.get(&outer)?;
+                let idx = names.iter().position(|f| f == field)?;
+                if let crate::ast::TypeKind::Path(p) = &tes.get(idx)?.kind {
+                    p.segments.last().cloned()
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }?;
+        if self.enum_layouts.contains_key(&tn)
+            && !self.seeded_enum_names.contains(&tn)
+            && tn != "Option"
+            && tn != "Result"
+        {
+            Some(tn)
+        } else {
+            None
+        }
+    }
+
+    /// Render a user-enum value `expr` via its value-driven Display fn
+    /// (`emit_enum_display_fn`) into a fresh String accumulator; return
+    /// `(acc_alloca, loaded String value)` — the same shape
+    /// `render_via_display_fn` returns for collections. Resolves the enum
+    /// value's address: a bound identifier uses its alloca directly (read-only,
+    /// no copy — Display never consumes the value); any other expression is
+    /// compiled and spilled to a stack slot. Used by the f-string / `println` /
+    /// `to_string` enum dispatch and the `main() -> Result` Err exit.
+    pub(super) fn render_user_enum_display(
+        &mut self,
+        expr: &Expr,
+        enum_name: &str,
+    ) -> Result<(PointerValue<'ctx>, BasicValueEnum<'ctx>), String> {
+        let disp = self.emit_enum_display_fn(enum_name);
+        let val_ptr = if let ExprKind::Identifier(n) = &expr.kind {
+            self.variables.get(n.as_str()).map(|s| s.ptr)
+        } else {
+            None
+        };
+        let val_ptr = match val_ptr {
+            Some(p) => p,
+            None => {
+                let val = self.compile_expr(expr)?;
+                let fn_val = self.current_fn.unwrap();
+                let slot = self.create_entry_alloca(fn_val, "enum.disp.tmp", val.get_type());
+                self.builder.build_store(slot, val).unwrap();
+                slot
+            }
+        };
+        Ok(self.render_via_display_fn(disp, val_ptr))
     }
 
     /// Render `value_ptr` via the append-form display fn `disp` into a fresh

@@ -16,7 +16,7 @@ use crate::resolver::SpanKey;
 use crate::token::Span;
 use crate::typechecker::type_display;
 
-use super::value::Value;
+use super::value::{EnumData, Value};
 use super::{dbg_json_escape, DbgOutputMode};
 
 impl<'a> super::Interpreter<'a> {
@@ -124,6 +124,51 @@ impl<'a> super::Interpreter<'a> {
                     .join(", ");
                 format!("{{{}}}", body)
             }
+            // Enum variants render `Variant` / `Variant(f0, f1)` /
+            // `Variant { name: v }`, recursing so nested payloads format the
+            // same way (and struct-variant fields in DECLARATION order, from
+            // `enum_info`, not the payload `HashMap`'s hash order). This is the
+            // enum sibling of the `Value::Struct` declaration-order fix above
+            // and must match codegen's `emit_enum_display_fn` byte-for-byte.
+            Value::EnumVariant {
+                enum_name,
+                variant,
+                data,
+            } => match data {
+                EnumData::Unit => variant.clone(),
+                EnumData::Tuple(vals) => {
+                    let body = vals
+                        .iter()
+                        .map(|x| self.display_render(x))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{}({})", variant, body)
+                }
+                EnumData::Struct(fields) => {
+                    let order: Vec<String> = self
+                        .typecheck_result
+                        .enum_info
+                        .get(enum_name)
+                        .and_then(|ei| ei.variants.iter().find(|(n, _)| n == variant))
+                        .and_then(|(_, vt)| match vt {
+                            crate::typechecker::VariantTypeInfo::Struct(fs) => {
+                                Some(fs.iter().map(|(n, _)| n.clone()).collect())
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| fields.keys().cloned().collect());
+                    let body = order
+                        .iter()
+                        .filter_map(|fname| {
+                            fields
+                                .get(fname)
+                                .map(|fv| format!("{}: {}", fname, self.display_render(fv)))
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{} {{ {} }}", variant, body)
+                }
+            },
             other => format!("{}", other),
         }
     }

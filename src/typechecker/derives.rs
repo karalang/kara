@@ -794,45 +794,18 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
-    /// `#[derive(Display)]` on enums only works for all-unit-variant enums.
-    /// Reject any enum that has a tuple or struct variant.
-    pub(super) fn validate_derive_display_on_enums(&mut self) {
-        let display_enums: Vec<_> = self
-            .env
-            .enums
-            .iter()
-            .filter(|(_, info)| info.derived_traits.contains("Display"))
-            .map(|(name, info)| (name.clone(), info.clone()))
-            .collect();
-
-        for (name, info) in display_enums {
-            let enum_span = self.program.items.iter().find_map(|item| {
-                if let Item::EnumDef(e) = item {
-                    if e.name == name {
-                        return Some(e.span.clone());
-                    }
-                }
-                None
-            });
-            let Some(span) = enum_span else {
-                continue;
-            };
-            for (variant_name, variant_info) in &info.variants {
-                if !matches!(variant_info, VariantTypeInfo::Unit) {
-                    self.type_error(
-                        format!(
-                            "enum '{}' derives Display but variant '{}' is not a unit variant; \
-                             #[derive(Display)] only works on all-unit-variant enums — \
-                             implement Display manually for enums with data variants",
-                            name, variant_name
-                        ),
-                        span.clone(),
-                        TypeErrorKind::TypeMismatch,
-                    );
-                }
-            }
-        }
-    }
+    /// `#[derive(Display)]` on enums.
+    ///
+    /// Previously restricted to all-unit-variant enums. As of the payload-enum
+    /// Display slice (phase-8 `main()` entry-point work, Slice A) both backends
+    /// render payload variants — the interpreter via `Value::EnumVariant`
+    /// Display and codegen via `emit_enum_display_fn` (value-driven, read-only
+    /// payload rendering), both matching the same `Variant` / `Variant(f0, f1)`
+    /// / `Variant { name: v }` format. So `#[derive(Display)]` is now accepted
+    /// on tuple/struct-variant enums too. The function is retained as the
+    /// hook point for any future per-variant derive validation (and so the
+    /// call site stays stable); it currently has nothing to reject.
+    pub(super) fn validate_derive_display_on_enums(&mut self) {}
 
     /// Validate `#[derive(Arithmetic)]` usage:
     /// - Reject on struct/enum (must use manual impls).

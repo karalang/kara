@@ -9443,23 +9443,16 @@ fn test_derive_display_unit_enum_ok() {
 }
 
 #[test]
-fn test_derive_display_tuple_variant_rejected() {
-    // Enum with a tuple variant rejects #[derive(Display)].
-    let errors = typecheck_errors(
+fn test_derive_display_payload_variant_accepted() {
+    // As of the payload-enum Display slice (phase-8 main()-entry-point work),
+    // #[derive(Display)] is accepted on enums with tuple/struct variants — both
+    // backends render them (interp `Value::EnumVariant` Display; codegen
+    // `emit_enum_display_fn`) as `Variant(f0, f1)` / `Variant { name: v }`.
+    // (Was previously rejected with "only works on all-unit-variant enums".)
+    typecheck_ok(
         "#[derive(Display)]\n\
-         enum Wrapper { Value(i64), Empty }\n\
+         enum Wrapper { Value(i64), Pair { a: i64, b: i64 }, Empty }\n\
          fn main() {}",
-    );
-    assert!(
-        !errors.is_empty(),
-        "derive(Display) on enum with tuple variant should produce an error"
-    );
-    assert!(
-        errors.iter().any(|e| e.message.contains("Wrapper")
-            && e.message.contains("Value")
-            && e.message.contains("unit variant")),
-        "error should name the enum and offending variant, got: {:?}",
-        errors
     );
 }
 

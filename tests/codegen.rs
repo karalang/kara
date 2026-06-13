@@ -11995,6 +11995,43 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_enum_display_payload_variants() {
+        // Payload-bearing `#[derive(Display)]` enum (phase-8 main()-entry-point
+        // prerequisite, Slice A): tuple + struct variants render via the
+        // value-driven `emit_enum_display_fn` as `Variant(f0, f1)` /
+        // `Variant { name: v }`, including a heap (String) payload rendered
+        // read-only (no move/free) — the `IoError.Other(String)` shape. Matches
+        // the interpreter byte-for-byte. (Struct-variant bindings are annotated
+        // — the unannotated `let b = E.S { .. }` registration is a tracked
+        // follow-on; tuple variants work unannotated.)
+        if let Some(out) = run_program(
+            r#"
+#[derive(Display)]
+enum Shape { Circle(i64), Rect { w: i64, h: i64 }, Dot }
+#[derive(Display)]
+enum Msg { Text(String), Code(i64) }
+fn main() {
+    let a = Shape.Circle(5);
+    let b: Shape = Shape.Rect { w: 3, h: 4 };
+    let c = Shape.Dot;
+    println(a);
+    println(b);
+    println(c);
+    println(f"x={a} y={b} z={c}");
+    let m = Msg.Text("hi".to_string());
+    println(m);
+    println(f"m={m}");
+}
+"#,
+        ) {
+            assert_eq!(
+                out,
+                "Circle(5)\nRect { w: 3, h: 4 }\nDot\nx=Circle(5) y=Rect { w: 3, h: 4 } z=Dot\nText(hi)\nm=Text(hi)\n"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_let_bound_enum_heap_payload_moved_out() {
         // #9 (phase-12 self-hosting): a bare `let`-bound enum with a heap
         // payload, moved out by `return`, must reach the consumer intact (the
