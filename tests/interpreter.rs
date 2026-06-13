@@ -2508,6 +2508,78 @@ fn test_shared_struct_field_write_through_index_projection() {
 }
 
 #[test]
+fn test_plain_nested_struct_field_write() {
+    // Regression: assigning to a *plain* (value-type) struct field through a
+    // projection (`o.inner.x = v`, depth >= 2) was silently dropped — the
+    // statement dispatch and `set_field` only handled bare-identifier targets,
+    // so the write no-op'd. Now the parent copy is updated and written back up
+    // the place chain. (Pre-existing; surfaced by Tangle dogfooding.)
+    assert_eq!(
+        run("struct Inner { x: i64 }\n\
+             struct Outer { inner: Inner }\n\
+             fn main() {\n\
+                 let mut o = Outer { inner: Inner { x: 1 } };\n\
+                 o.inner.x = 99;\n\
+                 println(o.inner.x);\n\
+             }"),
+        "99\n"
+    );
+}
+
+#[test]
+fn test_plain_nested_struct_field_write_three_levels() {
+    // Write-back composes to arbitrary depth.
+    assert_eq!(
+        run("struct A { x: i64 }\n\
+             struct B { a: A }\n\
+             struct C { b: B }\n\
+             fn main() {\n\
+                 let mut c = C { b: B { a: A { x: 1 } } };\n\
+                 c.b.a.x = 42;\n\
+                 println(c.b.a.x);\n\
+             }"),
+        "42\n"
+    );
+}
+
+#[test]
+fn test_plain_struct_field_write_through_vec_element() {
+    // `v[i].field = x` on plain-struct elements: update the element copy and
+    // write it back into the Vec's shared storage; siblings untouched.
+    assert_eq!(
+        run("struct Item { v: i64 }\n\
+             fn main() {\n\
+                 let mut items = Vec.new();\n\
+                 items.push(Item { v: 10 });\n\
+                 items.push(Item { v: 20 });\n\
+                 items[1].v = 99;\n\
+                 println(items[0].v);\n\
+                 println(items[1].v);\n\
+             }"),
+        "10\n99\n"
+    );
+}
+
+#[test]
+fn test_compound_assign_on_field_and_nested() {
+    // Compound assignment (`+=`) previously only handled bare-identifier
+    // targets; field and nested-field targets were silently dropped. Now it
+    // routes through the same place-assignment path.
+    assert_eq!(
+        run("struct Inner { x: i64 }\n\
+             struct Outer { mut count: i64, inner: Inner }\n\
+             fn main() {\n\
+                 let mut o = Outer { count: 0, inner: Inner { x: 5 } };\n\
+                 o.count += 10;\n\
+                 o.inner.x += 100;\n\
+                 println(o.count);\n\
+                 println(o.inner.x);\n\
+             }"),
+        "10\n105\n"
+    );
+}
+
+#[test]
 fn test_shared_struct_per_field_independence() {
     // Per design.md § Part 5: \"mutating `node.left` does not conflict
     // with reading `node.right`\". Per-field tracking is the entire

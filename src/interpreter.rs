@@ -1853,15 +1853,66 @@ impl<'a> Interpreter<'a> {
             }
             return;
         }
-        // Projection receiver (`a.b.field = x`, `v[i].field = x`). A shared
-        // struct reached through a projection is a clone of the same Arc, so
-        // writing through it lands on the shared allocation regardless of how
-        // the place was reached. (A projection that yields a *plain* value-type
-        // struct cannot be written through here — that nested place needs
-        // write-back up the chain, tracked separately; shared structs are the
-        // reference-semantics case the spec guarantees aliasing for.)
-        if let Value::SharedStruct(inner) = self.eval_expr_inner(object) {
-            self.write_shared_struct_field(&inner, field, val, &object.span);
+        // Projection receiver (`a.b.field = x`, `v[i].field = x`, deeper
+        // chains). Evaluate the receiver place once:
+        //  - a `shared struct` is reference-semantic — a clone of the same Arc —
+        //    so writing through it lands on the shared allocation directly.
+        //  - a plain (value-type) struct is a *copy*; mutate the copy's field
+        //    and write the whole updated struct back up the place chain via
+        //    `assign_to_place`. Without this, nested writes (`o.inner.x = v`)
+        //    were silently dropped.
+        match self.eval_expr_inner(object) {
+            Value::SharedStruct(inner) => {
+                self.write_shared_struct_field(&inner, field, val, &object.span);
+            }
+            Value::Struct {
+                name: sn,
+                mut fields,
+            } => {
+                fields.insert(field.to_string(), val);
+                self.assign_to_place(object, Value::Struct { name: sn, fields });
+            }
+            _ => {}
+        }
+    }
+
+    /// Store `new_val` into the place denoted by `place`, recursing through
+    /// `set_field` / `set_index` so nested places (`a.b.c = x`,
+    /// `v[i].field = x`) write back up the whole chain. Handles every
+    /// assignable place form (binding, `self`, field projection, index,
+    /// `*deref`). Returns `false` if `place` is not an assignable form, so the
+    /// statement-level caller can flag the should-never-happen case while
+    /// recursive callers (always valid field/index places) ignore it.
+    fn assign_to_place(&mut self, place: &Expr, new_val: Value) -> bool {
+        match &place.kind {
+            ExprKind::Identifier(name) => {
+                self.env.set(name, new_val);
+                true
+            }
+            ExprKind::SelfValue => {
+                self.env.set("self", new_val);
+                true
+            }
+            ExprKind::FieldAccess { object, field } => {
+                self.set_field(object, field, new_val);
+                true
+            }
+            ExprKind::Index { object, index } => {
+                self.set_index(object, index, new_val);
+                true
+            }
+            ExprKind::Unary {
+                op: crate::ast::UnaryOp::Deref,
+                operand,
+            } => {
+                // `*r = v` — rebind `r` in the current scope (mut-ref params are
+                // local bindings written back at the call site, CICO).
+                if let ExprKind::Identifier(name) = &operand.kind {
+                    self.env.set(name, new_val);
+                }
+                true
+            }
+            _ => false,
         }
     }
 

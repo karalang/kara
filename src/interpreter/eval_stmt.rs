@@ -791,31 +791,11 @@ impl<'a> super::Interpreter<'a> {
             }
             StmtKind::Assign { target, value } => {
                 let val = self.eval_expr_inner(value);
-                match &target.kind {
-                    ExprKind::Identifier(name) => {
-                        self.env.set(name, val);
-                    }
-                    ExprKind::FieldAccess { object, field } => {
-                        self.set_field(object, field, val);
-                    }
-                    ExprKind::Index { object, index } => {
-                        self.set_index(object, index, val);
-                    }
-                    // `*r = v` — rebind `r` to `v` in the current scope.
-                    // In the tree-walk interpreter, mut-ref params are local
-                    // bindings; the call site writes back after the call (CICO).
-                    ExprKind::Unary {
-                        op: crate::ast::UnaryOp::Deref,
-                        operand,
-                    } => {
-                        if let ExprKind::Identifier(name) = &operand.kind {
-                            self.env.set(name, val);
-                        }
-                    }
-                    _ => unreachable!(
+                if !self.assign_to_place(target, val) {
+                    unreachable!(
                         "unsupported assignment target at {}:{}; should be caught by parser/typechecker",
                         stmt.span.line, stmt.span.column
-                    ),
+                    );
                 }
             }
             StmtKind::CompoundAssign { target, op, value } => {
@@ -834,8 +814,16 @@ impl<'a> super::Interpreter<'a> {
                     CompoundOp::Shr => BinOp::Shr,
                 };
                 let result = self.eval_binary(&bin_op, current, rhs, &stmt.span);
-                if let ExprKind::Identifier(name) = &target.kind {
-                    self.env.set(name, result);
+                // Route through `assign_to_place` so compound assignment works
+                // on field / index / nested targets (`o.count += 1`,
+                // `v[i].x += 1`), not just bare bindings. Previously only the
+                // `Identifier` target was handled — field/index compound
+                // assigns were silently dropped.
+                if !self.assign_to_place(target, result) {
+                    unreachable!(
+                        "unsupported compound-assignment target at {}:{}; should be caught by parser/typechecker",
+                        stmt.span.line, stmt.span.column
+                    );
                 }
             }
             StmtKind::Expr(expr) => {
