@@ -110,8 +110,8 @@ both are declared `shared` with no `Box`, no `RefCell`, no `'a`.
 interpreter and codegen (it compiles and runs as a native binary).
 
 > **Findings from this structure** (the recursive interpreter exercised more cold
-> surface than any other Tangle program — four fixed, one tracked, plus one
-> tracked codegen follow-on):
+> surface than any other Tangle program — five fixed, plus one tracked codegen
+> follow-on, the direct-recursion backend feature):
 >
 > 1. **`Vec.new()` + `push` + return inference gap** — *fixed* (see the
 >    doubly-linked note above; same fix, surfaced again here in `scope_get`).
@@ -154,19 +154,20 @@ interpreter and codegen (it compiles and runs as a native binary).
 >    and the invalid escaped-quote case gets a clear lex error instead of silent
 >    wrong output. The plain-quote form (`f"{ get("x") }"`) still works.
 >    See [`phase-1-lexer.md`](../../implementation_checklist/phase-1-lexer.md).
-> 6. **RC-fallback false positive on sibling match arms** *(tracked)*. A pattern
+> 6. **RC-fallback false positive on sibling match arms** *(FIXED)*. A pattern
 >    binding reused under the same name in two `match` arms (the `Var`/`Assign`
->    arms of `eval` both bind `name`) is given one binding identity, so a consume
->    in one arm and a use in the sibling arm pair as dominance-incomparable and
->    spuriously fire the RC predicate — even though the arms never both execute.
->    Soundness-safe (conservative over-escalation), but it RC-boxes a movable
->    value and makes `karac query` report a cross-arm `direct_reuse_after_consume`.
->    Tracked in
->    [`phase-7-codegen.md`](../../implementation_checklist/phase-7-codegen.md)
->    with a minimal repro; the fix mirrors the existing per-site alpha-rename
->    used for defer-body inner locals. (A user `shared struct Env` also collides
->    with the built-in ambient `Env` resource — renamed to `Scope` here; a
->    clearer "reserved resource name" diagnostic would help but isn't blocking.)
+>    arms of `eval` both bind `name`) was given one binding identity, so a consume
+>    in one arm and a use in the sibling arm paired as dominance-incomparable and
+>    spuriously fired the RC predicate — even though the arms never both execute,
+>    RC-boxing a movable value and reporting a misleading cross-arm
+>    `direct_reuse_after_consume`. Now fixed: each arm's pattern bindings are
+>    alpha-renamed per arm in `cfg.rs` (an `@armN` sibling of the cleanup-rename
+>    device), so no cross-arm pair can form; genuine intra-arm reuse still fires.
+>    `eval` now reports `rc_values:[]`. See
+>    [`phase-7-codegen.md`](../../implementation_checklist/phase-7-codegen.md).
+>    (A user `shared struct Env` also collides with the built-in ambient `Env`
+>    resource — renamed to `Scope` here; a clearer "reserved resource name"
+>    diagnostic would help but isn't blocking.)
 
 ## Reading `karac query ownership` (the demo's core artifact)
 

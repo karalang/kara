@@ -1650,6 +1650,11 @@ impl<'a> OwnershipChecker<'a> {
                 ConsumeOrigin::ClosureCapture => RcTrigger::ClosureCaptureWithOuterUse,
                 ConsumeOrigin::ContainerStore => RcTrigger::ContainerStoreWithSubsequentUse,
             };
+            // Strip the CFG builder's internal rename suffix (`@armN` / `@cuN`)
+            // before the name reaches `rc_values` — codegen looks up RC-boxing
+            // decisions by the *original* binding name, and `binding_type_names`
+            // is keyed by it too, so this is correctness, not just display.
+            let binding = demangle_binding(&binding).to_string();
             let type_name = self.binding_type_names.get(&binding).cloned();
             let entry = RcEntry {
                 binding: binding.clone(),
@@ -1672,6 +1677,10 @@ impl<'a> OwnershipChecker<'a> {
         // dominance-comparable C, U), so no de-duplication needed.
         let uam_witnesses = direct_uam_candidates(&cfg, &dom);
         for (binding, w) in uam_witnesses {
+            // Strip the internal rename suffix for the user-facing message
+            // (a within-arm sequential consume+use is dominance-comparable and
+            // surfaces here; the arm rename must not leak into the diagnostic).
+            let binding = demangle_binding(&binding);
             self.errors.push(OwnershipError {
                 message: format!(
                     "value '{}' moved here, used again here (moved at line {}:{})",
@@ -2362,6 +2371,17 @@ fn type_expr_head(te: &TypeExpr) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// Strip the CFG builder's internal rename-frame suffix (`@cuN` for cleanup
+/// bodies, `@armN` for match arms) from a binding name before it reaches any
+/// user-facing diagnostic or the public `rc_values` map. Those suffixes keep
+/// per-site bindings distinct during the dominance dataflow (so duplicate
+/// Consume sites don't spuriously pair); they are an internal device and must
+/// never surface. Kāra identifiers cannot contain `@`, so splitting on the
+/// first `@` recovers the original name exactly.
+fn demangle_binding(name: &str) -> &str {
+    name.split('@').next().unwrap_or(name)
 }
 
 /// Extract the owned type name from a Type (returns None for ref/weak/primitive).

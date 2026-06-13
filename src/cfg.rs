@@ -330,6 +330,25 @@ impl<'a> CfgBuilder<'a> {
         });
     }
 
+    /// Per-match-arm rename frame. Same device as the cleanup-body frame,
+    /// with an `@armN` suffix. Sibling arms that bind the **same name**
+    /// (`A(s)` / `B(s)`) are mutually exclusive but the CFG would otherwise
+    /// give them one binding identity, so a Consume in one arm and a use in
+    /// the sibling arm pair as dominance-incomparable and spuriously fire the
+    /// formal RC predicate. Renaming each arm's pattern bindings per arm makes
+    /// the cross-arm pair impossible; genuine *intra-arm* reuse keeps one
+    /// identity and still fires. The `@armN` suffix is stripped before the
+    /// binding name reaches any user-facing diagnostic or `rc_values` key
+    /// (`ownership.rs::demangle_binding`).
+    fn push_arm_rename_frame(&mut self) {
+        let id = self.next_cleanup_id;
+        self.next_cleanup_id += 1;
+        self.cleanup_rename_stack.push(CleanupRenameFrame {
+            suffix: format!("@arm{id}"),
+            bindings: HashSet::new(),
+        });
+    }
+
     fn pop_cleanup_rename_frame(&mut self) {
         self.cleanup_rename_stack.pop();
     }
@@ -802,10 +821,20 @@ impl<'a> CfgBuilder<'a> {
                         let arm_entry = self.new_block();
                         self.add_edge(after_scrut, arm_entry);
                         let mut arm_cur = arm_entry;
+                        // Alpha-rename this arm's pattern bindings so a
+                        // same-named binding in a sibling arm can't pair across
+                        // arms in the RC predicate (see push_arm_rename_frame).
+                        // The guard is lowered inside the frame too — it can
+                        // reference the arm's bindings.
+                        self.push_arm_rename_frame();
+                        for name in pattern_bindings(&arm.pattern) {
+                            self.note_local_introduced(&name);
+                        }
                         if let Some(guard) = &arm.guard {
                             arm_cur = self.lower_expr(guard, arm_cur, exit, loops);
                         }
                         let arm_exit = self.lower_expr(&arm.body, arm_cur, exit, loops);
+                        self.pop_cleanup_rename_frame();
                         self.add_edge(arm_exit, merge);
                     }
                 }
@@ -1215,6 +1244,44 @@ mod tests {
             .filter(|n| matches!(*n, "x" | "y"))
             .collect();
         assert_eq!(user_names, vec!["x", "x", "y"]);
+    }
+
+    #[test]
+    fn sibling_match_arms_get_distinct_arm_renamed_bindings() {
+        // Each arm's pattern bindings are alpha-renamed with a per-arm suffix,
+        // so a same-named binding in sibling arms (`A(s)` / `B(s)`) becomes two
+        // distinct internal names — no cross-arm pair can form in the RC
+        // predicate. The bare `s` must not survive as a recorded use; instead
+        // two distinct `s@armN` names appear.
+        let cfg = cfg_of(
+            "shared enum E { A(String), B(String) }\n\
+             fn consume(s: String) -> i64 { s.len() as i64 }\n\
+             fn main() {\n\
+                 let e = A(\"x\");\n\
+                 match e {\n\
+                     A(s) => { consume(s); }\n\
+                     B(s) => { consume(s); }\n\
+                 }\n\
+             }",
+        );
+        let binding_names: std::collections::HashSet<&str> = (0..cfg.num_blocks())
+            .flat_map(|i| cfg.block(i).uses.iter())
+            .map(|u| u.binding.as_str())
+            .filter(|n| n.starts_with('s'))
+            .collect();
+        assert!(
+            !binding_names.contains("s"),
+            "the bare arm binding `s` must be renamed, got: {binding_names:?}"
+        );
+        let arm_renamed: Vec<&str> = binding_names
+            .iter()
+            .copied()
+            .filter(|n| n.starts_with("s@arm"))
+            .collect();
+        assert!(
+            arm_renamed.len() >= 2,
+            "sibling arms must yield ≥2 distinct `s@armN` names, got: {binding_names:?}"
+        );
     }
 
     #[test]

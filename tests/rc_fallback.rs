@@ -81,6 +81,62 @@ fn trigger1_match_arm_consume_then_outer_use() {
     assert_eq!(entry.trigger, RcTrigger::DirectReuseAfterConsume);
 }
 
+// ── Sibling match-arm same-name bindings (cross-arm FP) ─────────
+
+#[test]
+fn sibling_match_arms_same_name_no_spurious_rc() {
+    // `A(s)` and `B(s)` are mutually exclusive arms — a consume in one and a
+    // use in the other must NOT pair in the RC predicate. Previously the CFG
+    // gave both `s` one identity, so they paired (dominance-incomparable) and
+    // spuriously RC-escalated `s`. Per-arm alpha-renaming makes the cross-arm
+    // pair impossible.
+    let src = "fn consume(s: String) -> i64 { s.len() as i64 }\n\
+               shared enum E { A(String), B(String) }\n\
+               fn f(e: E) -> i64 {\n\
+                   match e {\n\
+                       A(s) => consume(s),\n\
+                       B(s) => consume(s),\n\
+                   }\n\
+               }";
+    let result = run(src);
+    assert!(
+        result.errors.is_empty(),
+        "expected no errors, got {:?}",
+        result.errors
+    );
+    assert!(
+        result.rc_values.get("f").is_none_or(|m| m.is_empty()),
+        "sibling-arm same-name bindings must not RC-escalate, got: {:?}",
+        result.rc_values.get("f")
+    );
+}
+
+#[test]
+fn intra_arm_incomparable_consume_still_fires_rc() {
+    // The fix must not over-suppress: a binding consumed in two
+    // dominance-incomparable branches *within a single arm* is a genuine RC
+    // fallback and must still fire — reported under its original name `s`, not
+    // the internal `s@armN` rename.
+    let src = "fn consume(s: String) -> i64 { s.len() as i64 }\n\
+               shared enum E { A(String), B(String) }\n\
+               fn h(e: E, cond: bool) -> i64 {\n\
+                   match e {\n\
+                       A(s) => {\n\
+                           if cond { consume(s) } else { consume(s) }\n\
+                       }\n\
+                       B(x) => consume(x),\n\
+                   }\n\
+               }";
+    let result = run(src);
+    assert!(
+        result.errors.is_empty(),
+        "expected no errors, got {:?}",
+        result.errors
+    );
+    let entry = rc_entry(&result, "h", "s");
+    assert_eq!(entry.trigger, RcTrigger::DirectReuseAfterConsume);
+}
+
 // ── Trigger 2: closure capture + outer use ─────────────────────
 
 #[test]
