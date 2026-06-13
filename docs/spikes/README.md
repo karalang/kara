@@ -16,7 +16,6 @@ Legend: ✅ done · 🟡 partial · ⬜ open
 
 | spike | status |
 |---|---|
-| [selfhost-lexer-profile.md](selfhost-lexer-profile.md) | Scoped, **not yet run** (filed 2026-06-12). Profile the self-hosted lexer (real Kāra systems code we already have) to find where real-world codegen perf goes — hypothesis: allocation/String-build bound, not compute. Replaces the leetcode corpus as the perf oracle; follow-on to the resolved noalias/autovec spike. |
 | [windows-iocp-eventloop.md](windows-iocp-eventloop.md) | Groundwork / scoping done on macOS (2026-06-07). Runtime impl + validation need a Windows box — tracks phase-6 Slice 10 (IOCP integration) + cancel-sweep. |
 
 ## 🟡 Partial
@@ -37,3 +36,4 @@ Legend: ✅ done · 🟡 partial · ⬜ open
 | [self-hosting-llvm-c-proof.md](self-hosting-llvm-c-proof.md) | ✅ Runs green — `exit=42` (2026-06-11). A Kāra program drives `libLLVM-18` to build/verify/emit a working Mach-O object under the stage-0 Rust `karac`. |
 | [self-hosting-llvm-c-surface.md](self-hosting-llvm-c-surface.md) | Done — initial pass (2026-06-10). Resolves sub-question 1 (surface scope) of the FFI spike. |
 | [independence-noalias-ilp.md](independence-noalias-ilp.md) | ✅ **RAN — resolved 2026-06-12. Tier-0 *aliasing* = v1.x, not P0.** The autovec enabler was non-trapping arithmetic (`wrapping_*`, shipped), not alias info; the aliasing half measured ≈0 (Kāra at Rust parity, memory-bound). Alias-scope metadata filed deferred in `roadmap.md`; real-world-lever follow-on → [selfhost-lexer-profile.md](selfhost-lexer-profile.md). |
+| [selfhost-lexer-profile.md](selfhost-lexer-profile.md) | ✅ **RAN — resolved 2026-06-12.** Profiled the self-hosted lexer on 441 KB of real Kāra. **#1 hotspot = string-literal `match` dispatch lowered to a linear `memcmp` chain (46% self-time)** — a surprise; allocation was a strong #2 (38%). Self-host lexer = **4.6× the Rust lexer's instruction count** (token output bit-identical). Filed two real codegen levers (string-match dispatch + allocation reduction) at the top of `roadmap.md` § Codegen Optimization; **confirmed the three SIMD-class levers (alias-scope / NT-stores / fusion) are *not* the real-world answer** and stay deferred. Surfaced `B-2026-06-12-9` (`?`-in-`main` miscompile) + `B-2026-06-12-10` (suspected leak). |
