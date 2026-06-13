@@ -409,13 +409,16 @@ fn aggregate(rows: NonEmpty[EnrichedRow]) -> Summary
 > [`examples/weave/`](../examples/weave/) as a single self-contained
 > `src/main.kara` running via `karac run` (tree-walk interpreter); see its
 > README for the run command + expected output. The build surfaced six
-> findings (GAP-W1…W6) — the dogfood's load-bearing job. **Fixed in the same
-> slice:** `String.split` (interpreter + typechecker; codegen pending) and the
+> findings (GAP-W1…W6) — the dogfood's load-bearing job. **Fixed:**
+> `String.split` (interpreter + typechecker; codegen pending); the
 > missing-effect-declaration diagnostic, which had been suggesting an
 > un-parseable fix-it (`Add: allocates(Heap), panics()` — comma-separated,
-> empty-parens, undeclarable `Heap`). **Tracked open gaps** (each its own
-> entry below): codegen `String.split`; multi-module `karac run`; user
-> `impl Display`; and the `allocates(Heap)` declarability knot.
+> empty-parens, undeclarable `Heap`); and (2026-06-13 follow-up) the
+> `allocates(Heap)` declarability knot — resolved spec-conformantly by
+> exempting the substrate effect from the must-declare set, so an allocating
+> pub fn needs no `with` clause (design.md § Effect Substrate). **Tracked open
+> gaps** (each its own entry below): codegen `String.split`; multi-module
+> `karac run`; user `impl Display`.
 >
 > Open follow-ons, tracked here as the design record:
 > - [ ] **Codegen `String.split`** — interpreter + typechecker landed; the
@@ -436,16 +439,17 @@ fn aggregate(rows: NonEmpty[EnrichedRow]) -> Summary
 >   Decide whether v1 admits user `Display`/`Debug` impls or documents the
 >   limitation as intended. (Design question — left here as the design record;
 >   no phase-tracker impl entry until the decision is made.)
-> - [ ] **`allocates(Heap)` declarability knot** — three components disagree:
->   the effectchecker *requires* it declared on an undeclared pub fn (tests
->   `test_try_push_companion_requires_allocates_declaration`), `design.md`
->   says it is default-permitted and *need not* be declared, and the resolver
->   *rejects* writing it (`undefined effect resource 'Heap'`). Pick one model
->   (add a `Heap` resolver symbol, OR fully exempt it from the must-declare
->   set + update the try_* tests) — a designer decision, not a mechanical fix. →
->   tracked in [`phase-3-effect-checker.md`](implementation_checklist/phase-3-effect-checker.md)
->   ("Resolve the `allocates(Heap)` declarability inconsistency") + defect
->   triage `bugs.md` B-2026-06-13-4.
+> - [x] **`allocates(Heap)` declarability knot — ✓ RESOLVED 2026-06-13.**
+>   design.md § Effect Substrate was decisive (heap is substrate; declaring it
+>   would be noise; absence ≠ denial), so the spec-conformant fix was to exempt
+>   the substrate effect from the must-declare set (`is_default_permitted_effect`
+>   filter in `src/effectchecker/verify.rs`) rather than make `Heap` a writable
+>   resource. An allocating pub fn now needs no `with` clause; inference is
+>   unchanged; `embedded`/`isr` rejection (heap-as-scoped) untouched. Four
+>   spec-violating tests rewritten + two added. → closed in
+>   [`phase-3-effect-checker.md`](implementation_checklist/phase-3-effect-checker.md)
+>   ("Resolve the `allocates(Heap)` declarability inconsistency"); was
+>   `bugs.md` B-2026-06-13-4.
 
 **What the demo shows:**
 1. Run the pipeline on a dataset with intentionally bad rows. Show parse errors

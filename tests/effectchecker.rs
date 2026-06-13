@@ -3948,14 +3948,22 @@ fn test_receiver_recv_infers_suspends() {
 }
 
 #[test]
-fn test_pub_fn_calling_vec_new_must_declare_allocates_heap() {
-    // A public function that calls Vec.new() must declare allocates(Heap).
-    // Under the default Declared policy, omitting the declaration is an error.
-    let errors = effectcheck_errors("pub fn make_vec() { let v: Vec[i64] = Vec.new(); }");
+fn test_pub_fn_calling_vec_new_infers_allocates_but_needs_no_declaration() {
+    // `allocates(Heap)` is the v1 SUBSTRATE effect (design.md § Effect
+    // Substrate): inferred on any allocating function, but default-permitted
+    // under the standard profile, so a pub fn calling Vec.new() compiles with
+    // no `with` clause — requiring the declaration would be noise. GAP-W6.
+    let result = effectcheck_ok("pub fn make_vec() { let v: Vec[i64] = Vec.new(); }");
+    let inferred = result
+        .inferred_effects
+        .get("make_vec")
+        .expect("make_vec has an inferred effect set");
     assert!(
-        errors.iter().any(|e| e.message.contains("allocates")),
-        "Expected undeclared-allocates error for pub fn calling Vec.new(), got: {:?}",
-        errors
+        inferred
+            .effects
+            .iter()
+            .any(|te| te.effect.verb == EffectVerbKind::Allocates && te.effect.resource == "Heap"),
+        "Vec.new() should INFER allocates(Heap); got: {inferred:?}"
     );
 }
 
@@ -4193,18 +4201,25 @@ fn test_map_index_infers_panics() {
 }
 
 #[test]
-fn test_pub_fn_returning_map_must_declare_allocates_heap() {
-    // Building and returning a Map demands the declared effect on a pub fn.
-    let errors = effectcheck_errors(
+fn test_pub_fn_returning_map_infers_allocates_but_needs_no_declaration() {
+    // Same substrate rule as Vec.new(): building/returning a Map infers
+    // allocates(Heap) but needs no declaration under the standard profile. GAP-W6.
+    let result = effectcheck_ok(
         "pub fn build_map() -> Map[String, i64] {
              let m: Map[String, i64] = Map.new();
              m
          }",
     );
+    let inferred = result
+        .inferred_effects
+        .get("build_map")
+        .expect("build_map has an inferred effect set");
     assert!(
-        errors.iter().any(|e| e.message.contains("allocates")),
-        "Expected undeclared-allocates error for pub fn returning a Map, got: {:?}",
-        errors
+        inferred
+            .effects
+            .iter()
+            .any(|te| te.effect.verb == EffectVerbKind::Allocates && te.effect.resource == "Heap"),
+        "Map.new() should INFER allocates(Heap); got: {inferred:?}"
     );
 }
 
@@ -8281,17 +8296,29 @@ fn extern_c_export_panicking_body_has_no_panics_requirement() {
 // (phase-8-stdlib-floor item 2) — same effect as their panicking counterparts.
 // A borrowed `mut ref Vec` param isolates the companion's contribution (no
 // allocating constructor in the body to confound the inference).
+//
+// `allocates(Heap)` is the v1 SUBSTRATE effect (design.md § Effect Substrate):
+// it is *inferred* on any allocating function, but under the Default profile it
+// is default-permitted and need NOT be declared — requiring it would be noise.
+// So the assertions below check the inference is correct AND that no
+// MissingEffectDeclaration fires for an undeclared allocating pub fn. (Earlier
+// these tests asserted the opposite — that allocates(Heap) was *required* — which
+// contradicted design.md; corrected with the substrate exemption, examples/weave
+// GAP-W6 / bugs B-2026-06-13-4.)
 
 #[test]
-fn test_try_push_companion_requires_allocates_declaration() {
-    let errors = effectcheck_errors("pub fn fill(v: mut ref Vec[i64]) { v.try_push(1_i64); }");
+fn test_try_push_companion_infers_allocates_but_does_not_require_declaration() {
+    let result = effectcheck_ok("pub fn fill(v: mut ref Vec[i64]) { v.try_push(1_i64); }");
+    let inferred = result
+        .inferred_effects
+        .get("fill")
+        .expect("fill has an inferred effect set");
     assert!(
-        errors
+        inferred
+            .effects
             .iter()
-            .any(|e| e.kind == EffectErrorKind::MissingEffectDeclaration
-                && e.message.contains("allocates(Heap)")),
-        "try_push should infer allocates(Heap); got: {:?}",
-        errors
+            .any(|te| te.effect.verb == EffectVerbKind::Allocates && te.effect.resource == "Heap"),
+        "try_push should INFER allocates(Heap); got: {inferred:?}"
     );
 }
 
@@ -8301,16 +8328,44 @@ fn test_try_push_companion_allocates_declared_ok() {
 }
 
 #[test]
-fn test_try_insert_companion_requires_allocates_declaration() {
-    let errors = effectcheck_errors(
-        "pub fn put(m: mut ref Map[String, i64]) { m.try_insert(\"k\", 1_i64); }",
-    );
+fn test_try_insert_companion_infers_allocates_but_does_not_require_declaration() {
+    let result =
+        effectcheck_ok("pub fn put(m: mut ref Map[String, i64]) { m.try_insert(\"k\", 1_i64); }");
+    let inferred = result
+        .inferred_effects
+        .get("put")
+        .expect("put has an inferred effect set");
     assert!(
-        errors
+        inferred
+            .effects
             .iter()
-            .any(|e| e.kind == EffectErrorKind::MissingEffectDeclaration
-                && e.message.contains("allocates(Heap)")),
-        "try_insert should infer allocates(Heap); got: {:?}",
-        errors
+            .any(|te| te.effect.verb == EffectVerbKind::Allocates && te.effect.resource == "Heap"),
+        "try_insert should INFER allocates(Heap); got: {inferred:?}"
+    );
+}
+
+#[test]
+fn test_pub_fn_allocating_only_needs_no_declaration() {
+    // A public function whose only effect is the substrate allocates(Heap)
+    // compiles with no `with` clause (design.md § Effect Substrate — substrate
+    // effects flip the declare-then-permit default). GAP-W6.
+    effectcheck_ok("pub fn make() -> Vec[i64] { Vec.new() }");
+}
+
+#[test]
+fn test_missing_effect_fixit_omits_substrate_allocates() {
+    // A pub fn that allocates AND panics must declare only `panics`; the
+    // substrate allocates(Heap) is neither required nor offered in the fix-it.
+    let errors =
+        effectcheck_errors("pub fn p(a: Vec[i64]) -> i64 { let _v: Vec[i64] = Vec.new(); a[0] }");
+    let msg = errors
+        .iter()
+        .find(|e| e.kind == EffectErrorKind::MissingEffectDeclaration)
+        .map(|e| e.message.clone())
+        .unwrap_or_default();
+    assert!(msg.contains("panics"), "must still require panics: {msg}");
+    assert!(
+        !msg.contains("allocates(Heap)"),
+        "substrate allocates(Heap) must not appear in the diagnostic: {msg}"
     );
 }

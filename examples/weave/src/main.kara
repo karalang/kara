@@ -50,16 +50,21 @@
 //           functions must declare inferred effects, so the honest signature
 //           is `with panics`. See the note at parse_row.
 //
-//   GAP-W6  FIXED this slice. The missing-effect-declaration diagnostic
-//           suggested an UN-PARSEABLE fix ("Add: allocates(Heap), panics()"):
-//           comma-separated verbs and `panics()` empty-parens both fail to
-//           parse, and `allocates(Heap)` is undeclarable (no resolver symbol).
-//           Fixed the fix-it to emit a valid `with` clause (space-separated,
-//           resourceless verbs bare). The remaining `allocates(Heap)`
-//           inconsistency — required-when-undeclared (effectchecker) yet
-//           default-permitted (design) yet unwritable (resolver) — is a
-//           three-way knot left to a design decision; tracked in the bugs
-//           tracker, not fixed here.
+//   GAP-W6  FIXED. The missing-effect-declaration diagnostic suggested an
+//           UN-PARSEABLE fix ("Add: allocates(Heap), panics()"): comma-separated
+//           verbs and `panics()` empty-parens both fail to parse, and
+//           `allocates(Heap)` is undeclarable (no resolver symbol). Fixed the
+//           fix-it to emit a valid `with` clause (space-separated, resourceless
+//           verbs bare). The deeper `allocates(Heap)` inconsistency —
+//           required-when-undeclared (effectchecker) yet default-permitted
+//           (design) yet unwritable (resolver) — was ALSO resolved (2026-06-13
+//           follow-up): design.md § Effect Substrate is decisive (heap is
+//           substrate, declaring it is noise, absence ≠ denial), so the
+//           effectchecker now exempts the substrate `allocates(Heap)` from the
+//           must-declare set. An allocating pub fn needs no `with` clause; that
+//           is why `parse_row` below declares only `with panics` and not
+//           allocation. (`embedded`/`isr`, where heap is scoped, still surface
+//           it via the profile-compat path.)
 
 // ── Refinement types ───────────────────────────────────────────────────────
 

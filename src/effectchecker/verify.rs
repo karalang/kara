@@ -248,6 +248,21 @@ impl<'a> super::EffectChecker<'a> {
                                 .iter()
                                 .filter(|e| !self.is_transparent_verb(&e.effect.verb))
                                 .filter(|e| !self.is_synthetic_modbind_resource(&e.effect.resource))
+                                // `allocates(Heap)` is the v1 *substrate* effect
+                                // (design.md § Effect Substrate, Principle 2):
+                                // default-permitted under the standard profile,
+                                // exercised ambiently by ~90% of functions, so
+                                // requiring its declaration would be pure noise.
+                                // Absence-of-declaration is NOT denial for a
+                                // substrate effect. Exempt it from the
+                                // must-declare set (and thus from the fix-it) so
+                                // a pub fn whose only effect is allocation needs
+                                // no `with` clause. `is_default_permitted_effect`
+                                // is Default-profile-only, so `embedded`/`isr`
+                                // (where heap is scoped) are unaffected — their
+                                // rejection is owned by `check_profile_compat`.
+                                // See examples/weave GAP-W6 / bugs B-2026-06-13-4.
+                                .filter(|e| !self.is_default_permitted_effect(&e.effect))
                                 .collect();
                             if !non_transparent.is_empty() {
                                 // Render each effect in *source* form: resource

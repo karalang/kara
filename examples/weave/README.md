@@ -57,8 +57,10 @@ the header of [`src/main.kara`](src/main.kara); summary:
 | GAP-W3 | `karac run <file>` is single-file only — it never loads sibling `src/*.kara` modules into the interpreter, so a multi-module layout fails at runtime despite resolving + typechecking. | Tracked; example kept single-file |
 | GAP-W4 | User types cannot `impl Display` in v1 (operator traits are stdlib-only). Error printing uses a hand-written formatter. | Known v1 limitation; tracked |
 | GAP-W5 | The roster sketch labels `parse_row` "pure", but effect inference shows it carries `panics` (from indexing). Honest signature: `with panics`. | By design; roster note added |
-| GAP-W6 | The missing-effect diagnostic suggested an **un-parseable** fix (`Add: allocates(Heap), panics()` — comma-separated + empty-parens + undeclarable `Heap`). | **Fixed** the fix-it format; `allocates(Heap)` three-way inconsistency tracked separately |
+| GAP-W6 | The missing-effect diagnostic suggested an **un-parseable** fix (`Add: allocates(Heap), panics()` — comma-separated + empty-parens + undeclarable `Heap`), and `allocates(Heap)` was a three-way knot (required-when-undeclared vs default-permitted vs unwritable). | **Fixed** — fix-it now emits a valid `with` clause, and the substrate `allocates(Heap)` is exempt from the must-declare set per design.md § Effect Substrate (an allocating pub fn needs no `with` clause) |
 
 GAP-W2 and GAP-W6 fixes ship with regression tests
 (`tests/interpreter.rs::test_string_split_interpreter`,
-`tests/effectchecker.rs::test_missing_effect_fixit_*`).
+`tests/effectchecker.rs::{test_missing_effect_fixit_*,
+test_pub_fn_allocating_only_needs_no_declaration,
+test_*_companion_infers_allocates_but_does_not_require_declaration}`).
