@@ -561,8 +561,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     // net +1 for the caller; control-flow shapes re-arm the
                     // context for their branch finals; fresh sources
                     // (calls, `Some(...)` ctors — which inc shared
-                    // payloads, `None`) compile plain. The FieldAccess
-                    // companion after compile covers `return node.next;`
+                    // payloads, `None`) compile plain. `compile_tail_final_expr`'s
+                    // FieldAccess arm covers `return node.next;`
                     // (the niche field load is a bare ptr read — no inc —
                     // and the source field stays owned by the object, so
                     // the returned alias needs its own +1). Before this,
@@ -586,9 +586,25 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.compiling_ref_return_let_rhs = prev;
                         v?
                     } else if ret_opt_inner.is_some() {
-                        let v = self.compile_tail_final_expr(e, ret_opt_inner)?;
-                        self.share_option_shared_field_ref_for_arg(e, v);
-                        v
+                        // `compile_tail_final_expr` performs the FULL
+                        // `Option[shared]` return compensation for every shape:
+                        // its Identifier arm incs a bare binding
+                        // (`share_option_shared_ref_for_arg`), its FieldAccess
+                        // arm incs a `node.next` alias
+                        // (`share_option_shared_field_ref_for_arg`, gated on
+                        // !structural_transfer), and its control-flow arms re-arm
+                        // `tail_ret_inner` so branch leaves compensate themselves.
+                        // It is the SAME entry the tail-position path
+                        // (`fn f() -> Option[T] { node.next }`) uses, so an
+                        // explicit `return node.next;` nets exactly +1. A second
+                        // `share_option_shared_field_ref_for_arg(e, v)` here
+                        // double-inc'd the field alias to +2 — the returned
+                        // tail's head never reached rc 0 and the whole chain
+                        // leaked 9 nodes/call (B-2026-06-12-6 cluster 5,
+                        // `ret_field`); the tail-position sibling was single-inc
+                        // and clean, which is why ONLY the explicit-return shape
+                        // leaked. Removed 2026-06-12.
+                        self.compile_tail_final_expr(e, ret_opt_inner)?
                     } else {
                         self.compile_expr(e)?
                     };
