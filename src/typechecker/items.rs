@@ -1246,6 +1246,85 @@ impl<'a> super::TypeChecker<'a> {
         )
     }
 
+    /// Whether `ty` is the unit type for entry-point purposes — the `()`
+    /// spelling (`Type::Unit`) or the bare `Unit` identifier spelling
+    /// (`Type::Named { name: "Unit" }`), per the Slice C note that "`Unit`
+    /// spelled `Unit` must count as `()`".
+    fn is_entry_unit(ty: &Type) -> bool {
+        matches!(ty, Type::Unit)
+            || matches!(ty, Type::Named { name, args } if name == "Unit" && args.is_empty())
+    }
+
+    /// Phase-8 entry-point contract Slice C (design.md § Entry Point): the
+    /// program's `main()` must return exactly one of `()` / `Unit`,
+    /// `Result[(), E]` with `E: Display`, or `ExitCode`. Emits
+    /// `E_MAIN_RETURN_TYPE` for any other shape and `E_MAIN_ERR_NOT_DISPLAY`
+    /// for a conforming `Result` whose error type lacks `Display` (the
+    /// runtime renders `Err(e)` as `Error: {e}` via that `Display`).
+    fn check_main_entry_return_type(&mut self, return_type: &Type, f: &Function) {
+        // Anchor diagnostics at the return-type annotation when present,
+        // else at the function signature.
+        let span = f
+            .return_type
+            .as_ref()
+            .map(|t| t.span.clone())
+            .unwrap_or_else(|| f.span.clone());
+
+        // A return type that already carries an error elsewhere (e.g. an
+        // undefined error-type name the resolver already flagged) must not
+        // pile a second diagnostic on the same signature.
+        if matches!(return_type, Type::Error) {
+            return;
+        }
+
+        // `()` / `Unit`.
+        if Self::is_entry_unit(return_type) {
+            return;
+        }
+        // `ExitCode`.
+        if matches!(return_type, Type::Named { name, args } if name == "ExitCode" && args.is_empty())
+        {
+            return;
+        }
+        // `Result[(), E]` — Ok arm must be unit; E must be `Display`.
+        if let Type::Named { name, args } = return_type {
+            if name == "Result" && args.len() == 2 && Self::is_entry_unit(&args[0]) {
+                let err_ty = &args[1];
+                // Don't double-report when the error type is itself an
+                // already-flagged error.
+                if !matches!(err_ty, Type::Error) && !self.type_supports_display(err_ty) {
+                    let err_name = match err_ty {
+                        Type::Named { name, .. } => name.clone(),
+                        other => format!("{other:?}"),
+                    };
+                    self.type_error(
+                        format!(
+                            "error[E_MAIN_ERR_NOT_DISPLAY]: `main()` returns \
+                             `Result[(), {err_name}]`, but `{err_name}` does not \
+                             implement `Display` — the runtime prints a returned \
+                             `Err(e)` as `Error: {{e}}` using its `Display` impl. \
+                             help: add `#[derive(Display)]` to `{err_name}` (or \
+                             write `impl Display for {err_name}`)"
+                        ),
+                        span,
+                        TypeErrorKind::MainErrNotDisplay,
+                    );
+                }
+                return;
+            }
+        }
+
+        // Anything else is not a legal entry-point return type.
+        self.type_error(
+            "error[E_MAIN_RETURN_TYPE]: `main()` must return `()`, \
+             `Result[(), E]` (with `E: Display`), or `ExitCode` \
+             (design.md § Entry Point)"
+                .to_string(),
+            span,
+            TypeErrorKind::MainReturnType,
+        );
+    }
+
     fn check_function(
         &mut self,
         f: &Function,
@@ -1298,6 +1377,15 @@ impl<'a> super::TypeChecker<'a> {
             .map(|t| self.lower_type_expr(t, &gp))
             .unwrap_or(Type::Unit);
         self.current_return_type = Some(return_type.clone());
+
+        // Phase-8 entry-point contract Slice C: the top-level `fn main`
+        // must return exactly `()` / `Unit`, `Result[(), E: Display]`, or
+        // `ExitCode` (design.md § Entry Point). Gated on a free function
+        // named `main` — `self_type` / `self_param` exclude methods named
+        // `main`, which are not entry points.
+        if f.name == "main" && self_type.is_none() && f.self_param.is_none() {
+            self.check_main_entry_return_type(&return_type, f);
+        }
 
         // Contract clauses (design.md § Contracts): `requires` / `ensures`
         // predicates must be `bool`; an `ensures(result) …` binding types

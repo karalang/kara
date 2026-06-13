@@ -636,6 +636,16 @@ pub enum TypeErrorKind {
     /// where <pred>` declaration site by `env_add_type_alias`.
     /// `E_INVALID_REFINEMENT_PREDICATE` (phase-9 line 25, step 1).
     InvalidRefinementPredicate,
+    /// `fn main()` declares a return type outside the three the entry-point
+    /// contract permits — `()` / `Unit`, `Result[(), E]`, or `ExitCode`
+    /// (design.md § Entry Point). `E_MAIN_RETURN_TYPE` (phase-8 entry-point
+    /// contract Slice C).
+    MainReturnType,
+    /// `fn main() -> Result[(), E]` where `E` does not implement `Display`.
+    /// The runtime prints `Error: {e}` via `E`'s `Display` on the `Err`
+    /// exit path, so the bound is checked at the entry-point boundary with
+    /// an `impl Display for E` fix-it. `E_MAIN_ERR_NOT_DISPLAY` (Slice C).
+    MainErrNotDisplay,
 }
 
 /// Map a `TypeErrorKind` to its broad-category `DiagnosticClass`
@@ -717,6 +727,8 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::RangePatternBoundNotConst
         | TypeErrorKind::PanickingAllocRejected
         | TypeErrorKind::DeriveCloneAllocates
+        | TypeErrorKind::MainReturnType
+        | TypeErrorKind::MainErrNotDisplay
         | TypeErrorKind::CrossTaskUnsafeCapture => None,
     }
 }

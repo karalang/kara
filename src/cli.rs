@@ -2875,6 +2875,12 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // synthesized clone may panic on allocation failure under
                 // `panic_on_alloc_failure = false`.
                 crate::typechecker::TypeErrorKind::DeriveCloneAllocates => "E0265",
+                // Phase-8 entry-point contract Slice C — `main()` declares a
+                // return type outside `()` / `Result[(), E: Display]` /
+                // `ExitCode` (design.md § Entry Point).
+                crate::typechecker::TypeErrorKind::MainReturnType => "E0266",
+                // Slice C — `main() -> Result[(), E]` where `E` lacks `Display`.
+                crate::typechecker::TypeErrorKind::MainErrNotDisplay => "E0267",
             };
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),

@@ -2,7 +2,15 @@
 //
 // CR-202 slice 6.1j. Error type returned by I/O standard library
 // functions. Lives in the prelude so it does not need an import.
+//
+// `#[derive(Display)]` (phase-8 entry-point contract Slice C): renders
+// each variant by name (`NotFound`, `Other(<msg>)`, …) via the
+// payload-enum Display path landed in Slice A. Required so a
+// `fn main() -> Result[(), IoError]` (e.g. `examples/word_count.kara`)
+// satisfies the entry-point `E: Display` bound and the runtime can
+// print a returned `Err(e)` as `Error: {e}`.
 
+#[derive(Display)]
 enum IoError {
     NotFound,
     PermissionDenied,

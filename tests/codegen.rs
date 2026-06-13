@@ -3340,6 +3340,7 @@ fn main() {
         // (a) `?` success path — body continues, `Ok(())` tail exits 0.
         let ok = run_program_capturing(
             r#"
+#[derive(Display)]
 enum MyErr { Bad }
 fn helper(x: i64) -> Result[i64, MyErr] {
     if x < 0 { return Err(MyErr.Bad); }
@@ -3366,6 +3367,7 @@ fn main() -> Result[(), MyErr] {
         // on stderr (a unit enum renders as its bare variant name).
         let q_err = run_program_capturing(
             r#"
+#[derive(Display)]
 enum MyErr { Bad }
 fn helper(x: i64) -> Result[i64, MyErr] {
     if x < 0 { return Err(MyErr.Bad); }
@@ -3403,6 +3405,7 @@ fn main() -> Result[(), MyErr] {
         // still observable.
         let ret_err = run_program_capturing(
             r#"
+#[derive(Display)]
 struct IoError { code: i64 }
 fn main() -> Result[(), IoError] {
     println("before");
@@ -27648,9 +27651,9 @@ fn main() {
             "effect resource Network;
              pub fn fetch() with sends(Network) receives(Network) {}
              fn driver() -> i64 with sends(Network) receives(Network) { fetch(); 0 }
-             fn main() -> i64 { driver() }",
+             fn app_main() -> i64 { driver() }",
         );
-        let main_body = extract_fn_ir(&ir, "main");
+        let main_body = extract_fn_ir(&ir, "app_main");
         // Load from the terminal field with named GEP.
         assert!(
             main_body.contains("%kara.return.field_ptr"),
@@ -31285,7 +31288,7 @@ fn main() {
     fn test_ir_ref_param_with_int_literal_rvalue() {
         let ir = ir_for(
             "fn take(n: ref i32) -> i32 { *n }\n\
-             fn main() -> i32 { take(42i32) }",
+             fn app_main() -> i32 { take(42i32) }",
         );
         // Callee declares ref i32 → first param is ptr.
         assert!(
@@ -31333,7 +31336,7 @@ fn main() {
     fn test_ir_ref_param_with_arithmetic_rvalue() {
         let ir = ir_for(
             "fn use_it(n: ref i32) -> i32 { *n }\n\
-             fn main() -> i32 { use_it(7i32 + 35i32) }",
+             fn app_main() -> i32 { use_it(7i32 + 35i32) }",
         );
         // The arithmetic result is the rvalue; the materialization
         // pattern is the same as for a bare literal.
@@ -31355,7 +31358,7 @@ fn main() {
         // two `if is_ref` branches inside `compile_call`.
         let ir = ir_for(
             "fn take(n: ref i32) -> i32 { *n }\n\
-             fn main() -> i32 { let x: i32 = 99i32; take(x) }",
+             fn app_main() -> i32 { let x: i32 = 99i32; take(x) }",
         );
         assert!(
             !ir.contains("%ref_rvalue_arg0"),
@@ -31465,7 +31468,7 @@ fn main() {
         // registration call.
         let ir = ir_for(
             "fn take(n: ref i32) -> i32 { *n }\n\
-             fn main() -> i32 { take(42i32) }",
+             fn app_main() -> i32 { take(42i32) }",
         );
         // A scalar temp's alloca prints as `alloca i32`; if the
         // codegen mistakenly routed it through track_vec_var, the

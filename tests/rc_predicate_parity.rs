@@ -1115,17 +1115,20 @@ fn parity_errdefer_on_question_error_path_predicate_fires_uam() {
                fn use_d(d: ref Data) { }\n\
                fn drop_d(d: Data) { }\n\
                fn try_op() -> Result[T, E] { Ok(T { v: 0 }) }\n\
-               fn main() -> Result[T, E] {\n\
+               fn app_main() -> Result[T, E] {\n\
                    let d = Data { value: 0 };\n\
                    errdefer { use_d(d); }\n\
                    drop_d(d);\n\
                    let _y = try_op()?;\n\
                    Ok(T { v: 0 })\n\
                }";
+    // Non-entry name: this scaffold returns `Result[T, E]` (non-unit Ok,
+    // non-Display E) only to exercise the errdefer/`?` UAM predicate; the
+    // `fn main` entry-point return-type contract is orthogonal here.
     let run = run(src);
     assert!(
-        predicate_uam_has(&run, "main", "d"),
+        predicate_uam_has(&run, "app_main", "d"),
         "consume before ? with errdefer reading the consumed binding must fire UAM; got {:?}",
-        run.predicate_uam.get("main")
+        run.predicate_uam.get("app_main")
     );
 }

@@ -1064,6 +1064,70 @@ fn test_exitcode_constants_type_as_exitcode() {
     typecheck_ok("fn main() -> ExitCode { ExitCode.from(42) }");
 }
 
+// ── main() entry-point return-type contract (Slice C) ──────────
+
+#[test]
+fn test_main_entry_accepts_the_three_legal_shapes() {
+    // `()` (implicit + explicit), `Result[(), E: Display]`, and `ExitCode`.
+    typecheck_ok("fn main() { }");
+    typecheck_ok("fn main() -> () { }");
+    typecheck_ok("fn main() -> Result[(), String] { Ok(()) }");
+    typecheck_ok("fn main() -> ExitCode { ExitCode.SUCCESS }");
+    // Prelude error enums now derive Display (Slice C / C2).
+    typecheck_ok("fn main() -> Result[(), IoError] { Ok(()) }");
+    typecheck_ok("fn main() -> Result[(), VarError] { Ok(()) }");
+}
+
+#[test]
+fn test_main_entry_rejects_disallowed_return_type() {
+    for (src, what) in [
+        ("fn main() -> i64 { 0 }", "i64"),
+        ("fn main() -> bool { true }", "bool"),
+        ("fn main() -> Option[i64] { None }", "Option"),
+        ("fn main() -> Result[i64, String] { Ok(0) }", "non-unit Ok"),
+    ] {
+        let errors = typecheck_errors(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.kind == TypeErrorKind::MainReturnType),
+            "expected E_MAIN_RETURN_TYPE for {what}, got: {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn test_main_entry_rejects_non_display_error_type() {
+    // A conforming `Result[(), E]` shape but `E` lacks `Display`.
+    let errors = typecheck_errors(
+        "struct AppErr { code: i64 }\n\
+         fn main() -> Result[(), AppErr] { Ok(()) }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::MainErrNotDisplay),
+        "expected E_MAIN_ERR_NOT_DISPLAY, got: {errors:?}"
+    );
+    // Adding `#[derive(Display)]` discharges the bound.
+    typecheck_ok(
+        "#[derive(Display)]\n\
+         struct AppErr { code: i64 }\n\
+         fn main() -> Result[(), AppErr] { Ok(()) }",
+    );
+}
+
+#[test]
+fn test_main_return_contract_does_not_bind_non_entry_functions() {
+    // A free function merely *named* differently, or a method named `main`,
+    // is not the entry point and is unconstrained.
+    typecheck_ok("fn app_main() -> i64 { 0 }");
+    typecheck_ok(
+        "struct S { }\n\
+         impl S { fn main(self) -> i64 { 0 } }",
+    );
+}
+
 // ── Range-pattern exhaustiveness (Maranget interval splitting, slice 6) ──
 //
 // Before this slice, range patterns lowered to `Pat::Wildcard`, so a lone
@@ -5260,7 +5324,7 @@ fn test_question_outside_defer_allowed() {
     // ? outside defer should still work
     typecheck_ok(
         "fn foo() -> Result[i64, String] { Ok(1) }\n\
-         fn main() -> Result[i64, String] {\n\
+         fn app_main() -> Result[i64, String] {\n\
              let x = foo()?;\n\
              Ok(x)\n\
          }",
@@ -5291,7 +5355,7 @@ fn test_option_result_unwrap_or_types_as_inner() {
 fn test_question_unwraps_result_ok_payload() {
     typecheck_ok(
         "fn produce() -> Result[i64, String] { Ok(7) }\n\
-         fn main() -> Result[i64, String] {\n\
+         fn app_main() -> Result[i64, String] {\n\
              let x: i64 = produce()?;\n\
              Ok(x)\n\
          }",
@@ -5302,7 +5366,7 @@ fn test_question_unwraps_result_ok_payload() {
 fn test_question_unwraps_option_some_payload() {
     typecheck_ok(
         "fn produce() -> Option[i64] { Some(7) }\n\
-         fn main() -> Option[i64] {\n\
+         fn app_main() -> Option[i64] {\n\
              let x: i64 = produce()?;\n\
              Some(x)\n\
          }",
@@ -5313,7 +5377,7 @@ fn test_question_unwraps_option_some_payload() {
 fn test_question_on_non_result_rejected() {
     let errors = typecheck_errors(
         "fn produce() -> i64 { 1 }\n\
-         fn main() -> Result[i64, String] {\n\
+         fn app_main() -> Result[i64, String] {\n\
              let x = produce()?;\n\
              Ok(x)\n\
          }",
@@ -5327,7 +5391,7 @@ fn test_question_on_non_result_rejected() {
 fn test_question_in_non_result_function_rejected() {
     let errors = typecheck_errors(
         "fn produce() -> Result[i64, String] { Ok(1) }\n\
-         fn main() -> i64 {\n\
+         fn app_main() -> i64 {\n\
              let x = produce()?;\n\
              x\n\
          }",
@@ -5341,7 +5405,7 @@ fn test_question_in_non_result_function_rejected() {
 fn test_question_mixing_result_and_option_rejected() {
     let errors = typecheck_errors(
         "fn produce() -> Option[i64] { Some(1) }\n\
-         fn main() -> Result[i64, String] {\n\
+         fn app_main() -> Result[i64, String] {\n\
              let x = produce()?;\n\
              Ok(x)\n\
          }",
@@ -5358,7 +5422,7 @@ fn test_question_cross_error_with_from_impl() {
              fn from(e: ParseError) -> AppError { AppError { msg: e.msg } }\n\
          }\n\
          fn produce() -> Result[i64, ParseError] { Ok(7) }\n\
-         fn main() -> Result[i64, AppError] {\n\
+         fn app_main() -> Result[i64, AppError] {\n\
              let x: i64 = produce()?;\n\
              Ok(x)\n\
          }",
@@ -5371,7 +5435,7 @@ fn test_question_cross_error_without_from_impl_rejected() {
         "struct ParseError { msg: String }\n\
          struct AppError { msg: String }\n\
          fn produce() -> Result[i64, ParseError] { Ok(7) }\n\
-         fn main() -> Result[i64, AppError] {\n\
+         fn app_main() -> Result[i64, AppError] {\n\
              let x: i64 = produce()?;\n\
              Ok(x)\n\
          }",
@@ -10578,7 +10642,7 @@ fn test_vec_sort_by_key_rejects_wrong_arity_closure() {
 #[test]
 fn test_vec_sorted_by_key_returns_vec() {
     let result = typecheck_ok(
-        r#"fn main() -> Vec[i64] { let mut xs: Vec[i64] = Vec.new(); xs.push(1i64); xs.sorted_by_key(|x| x) }"#,
+        r#"fn app_main() -> Vec[i64] { let mut xs: Vec[i64] = Vec.new(); xs.push(1i64); xs.sorted_by_key(|x| x) }"#,
     );
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
 }
@@ -16153,7 +16217,7 @@ fn test_gat_slice8a_projection_bound_accepted_when_resolved_rhs_satisfies() {
          struct V {}\n\
          impl Functor for V { type Mapped[U] = Vec[U]; }\n\
          fn use_it[F: Functor](_f: F) -> i64 where F.Mapped[i64]: Collector { 0 }\n\
-         fn main() -> i64 { use_it(V {}) }",
+         fn app_main() -> i64 { use_it(V {}) }",
     );
 }
 
@@ -16169,7 +16233,7 @@ fn test_gat_slice8a_projection_bound_rejected_when_resolved_rhs_misses() {
          struct V {}\n\
          impl Functor for V { type Mapped[U] = Bar; }\n\
          fn use_it[F: Functor](_f: F) -> i64 where F.Mapped[i64]: Collector { 0 }\n\
-         fn main() -> i64 { use_it(V {}) }",
+         fn app_main() -> i64 { use_it(V {}) }",
     );
     assert!(
         errors.iter().any(|e| e
@@ -16232,7 +16296,7 @@ fn test_gat_slice8a_projection_bound_with_generic_args_on_trait() {
          struct V {}\n\
          impl Functor for V { type Mapped[U] = Vec[U]; }\n\
          fn collect[F: Functor](_f: F) -> i64 where F.Mapped[i64]: FromIterator[i64] { 0 }\n\
-         fn main() -> i64 { collect(V {}) }",
+         fn app_main() -> i64 { collect(V {}) }",
     );
 }
 
@@ -16250,7 +16314,7 @@ fn test_gat_slice8a_non_generic_projection_bound_accepted() {
          struct C {}\n\
          impl Container for C { type Item = Foo; }\n\
          fn use_it[T: Container](_t: T) -> i64 where T.Item: Collector { 0 }\n\
-         fn main() -> i64 { use_it(C {}) }",
+         fn app_main() -> i64 { use_it(C {}) }",
     );
 }
 
@@ -16269,7 +16333,7 @@ fn test_gat_slice8a_multiple_projection_bounds_all_discharge() {
          struct V {}\n\
          impl Functor for V { type Mapped[U] = Vec[U]; }\n\
          fn use_it[F: Functor](_f: F) -> i64 where F.Mapped[i64]: Collector + Show { 0 }\n\
-         fn main() -> i64 { use_it(V {}) }",
+         fn app_main() -> i64 { use_it(V {}) }",
     );
 }
 
@@ -16286,7 +16350,7 @@ fn test_gat_slice8a_multiple_projection_bounds_one_misses() {
          struct V {}\n\
          impl Functor for V { type Mapped[U] = Vec[U]; }\n\
          fn use_it[F: Functor](_f: F) -> i64 where F.Mapped[i64]: Collector + Show { 0 }\n\
-         fn main() -> i64 { use_it(V {}) }",
+         fn app_main() -> i64 { use_it(V {}) }",
     );
     assert!(
         errors.iter().any(|e| e
@@ -16412,7 +16476,7 @@ fn test_gat_slice8b_c_inline_bound_on_gat_param_rejected_via_where_clause() {
          struct V {}\n\
          impl Functor for V { type Mapped[U] = NoShow; }\n\
          fn use_it[F: Functor](_f: F) -> i64 where F.Mapped[NoShow]: Sink { 0 }\n\
-         fn main() -> i64 { use_it(V {}) }",
+         fn app_main() -> i64 { use_it(V {}) }",
     );
     assert!(
         errors
@@ -16439,7 +16503,7 @@ fn test_gat_slice8b_c_inline_bound_on_gat_param_accepted_when_arg_satisfies() {
          struct V {}\n\
          impl Functor for V { type Mapped[U] = Foo; }\n\
          fn use_it[F: Functor](_f: F) -> i64 where F.Mapped[Foo]: Sink { 0 }\n\
-         fn main() -> i64 { use_it(V {}) }",
+         fn app_main() -> i64 { use_it(V {}) }",
     );
 }
 
@@ -16459,7 +16523,7 @@ fn test_gat_slice8b_b_where_clause_on_gat_decl_rejected_when_arg_misses() {
          struct V {}\n\
          impl Functor for V { type Mapped[U] = NoShow; }\n\
          fn use_it[F: Functor](_f: F) -> i64 where F.Mapped[NoShow]: Sink { 0 }\n\
-         fn main() -> i64 { use_it(V {}) }",
+         fn app_main() -> i64 { use_it(V {}) }",
     );
     assert!(
         errors
@@ -16486,7 +16550,7 @@ fn test_gat_slice8b_b_where_clause_on_gat_decl_accepted_when_arg_satisfies() {
          struct V {}\n\
          impl Functor for V { type Mapped[U] = Foo; }\n\
          fn use_it[F: Functor](_f: F) -> i64 where F.Mapped[Foo]: Sink { 0 }\n\
-         fn main() -> i64 { use_it(V {}) }",
+         fn app_main() -> i64 { use_it(V {}) }",
     );
 }
 
@@ -16504,7 +16568,7 @@ fn test_gat_slice8b_slices_4_through_8a_still_pass_regression() {
          struct V {}\n\
          impl Functor for V { type Mapped[U] = Vec[U]; }\n\
          fn use_it[F: Functor](_f: F) -> i64 where F.Mapped[i64]: Collector { 0 }\n\
-         fn main() -> i64 { use_it(V {}) }",
+         fn app_main() -> i64 { use_it(V {}) }",
     );
 }
 
@@ -16546,7 +16610,7 @@ fn test_gat_slice8c_types_compatible_one_sided_projection_vs_concrete_rejected()
          struct V {}\n\
          impl Functor for V { type Mapped[U] = Bar; }\n\
          fn produce[F: Functor](_f: F) -> F.Mapped[i64] { Bar {} }\n\
-         fn main() -> i64 {\n\
+         fn app_main() -> i64 {\n\
              let x: i64 = produce(V {});\n\
              0\n\
          }",
@@ -16574,7 +16638,7 @@ fn test_gat_slice8c_types_compatible_projection_resolves_through_impl_table() {
          struct V {}\n\
          impl Functor for V { type Mapped[U] = Vec[U]; }\n\
          fn produce[F: Functor](_f: F) -> F.Mapped[i64] { Vec { x: 0 } }\n\
-         fn main() -> i64 {\n\
+         fn app_main() -> i64 {\n\
              let _x: Vec[i64] = produce(V {});\n\
              0\n\
          }",
@@ -16596,7 +16660,7 @@ fn test_gat_slice8c_types_compatible_structurally_identical_projections_match() 
              if cond { produce(f) } else { produce(f) }\n\
          }\n\
          fn produce[F: Functor](_f: F) -> F.Mapped[i64] { 0 }\n\
-         fn main() -> i64 { pick(V {}, true) }",
+         fn app_main() -> i64 { pick(V {}, true) }",
     );
 }
 
@@ -16621,7 +16685,7 @@ fn test_gat_slice8c_implicit_param_position_projection_fires_inline_bound() {
          struct V {}\n\
          impl Functor for V { type Mapped[U] = i64; }\n\
          fn use_it[F: Functor](_f: F, _x: F.Mapped[NoShow]) -> i64 { 0 }\n\
-         fn main() -> i64 { use_it(V {}, 0) }",
+         fn app_main() -> i64 { use_it(V {}, 0) }",
     );
     assert!(
         errors
@@ -16646,7 +16710,7 @@ fn test_gat_slice8c_implicit_param_position_projection_accepted_when_arg_satisfi
          struct V {}\n\
          impl Functor for V { type Mapped[U] = i64; }\n\
          fn use_it[F: Functor](_f: F, _x: F.Mapped[Foo]) -> i64 { 0 }\n\
-         fn main() -> i64 { use_it(V {}, 0) }",
+         fn app_main() -> i64 { use_it(V {}, 0) }",
     );
 }
 
@@ -16667,7 +16731,7 @@ fn test_gat_slice8c_implicit_return_position_projection_fires_where_clause() {
          struct V {}\n\
          impl Functor for V { type Mapped[U] = i64; }\n\
          fn produce[F: Functor](_f: F) -> F.Mapped[NoShow] { 0 }\n\
-         fn main() -> i64 { produce(V {}) }",
+         fn app_main() -> i64 { produce(V {}) }",
     );
     assert!(
         errors
@@ -16693,7 +16757,7 @@ fn test_gat_slice8c_implicit_walker_recurses_into_nested_projections() {
          struct V {}\n\
          impl Functor for V { type Mapped[U] = i64; }\n\
          fn use_it[F: Functor](_f: F, _x: Vec[F.Mapped[NoShow]]) -> i64 { 0 }\n\
-         fn main() -> i64 { use_it(V {}, Vec { x: 0 }) }",
+         fn app_main() -> i64 { use_it(V {}, Vec { x: 0 }) }",
     );
     assert!(
         errors
@@ -16739,7 +16803,7 @@ fn test_gat_slice8c_slices_4_through_8b_still_pass_regression() {
          struct V {}\n\
          impl Functor for V { type Mapped[U] = Vec[U]; }\n\
          fn use_it[F: Functor](_f: F) -> i64 where F.Mapped[i64]: Collector { 0 }\n\
-         fn main() -> i64 { use_it(V {}) }",
+         fn app_main() -> i64 { use_it(V {}) }",
     );
 }
 

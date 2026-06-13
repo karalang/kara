@@ -39,8 +39,12 @@ fn fn_body_final<'a>(program: &'a karac::ast::Program, name: &str) -> &'a Expr {
 
 #[test]
 fn test_lower_int_add_to_call_path() {
-    let program = lower_program("fn main() -> i64 { 1 + 2 }");
-    let body = fn_body_final(&program, "main");
+    // Non-entry function name (`app_main`): `fn main` is bound by the
+    // entry-point return-type contract (must be `()`/`Result[(),E]`/`ExitCode`),
+    // and this lowering scaffold returns `i64` only to exercise the
+    // operator-to-call-path lowering.
+    let program = lower_program("fn app_main() -> i64 { 1 + 2 }");
+    let body = fn_body_final(&program, "app_main");
     match &body.kind {
         ExprKind::Call { callee, args } => {
             assert_eq!(args.len(), 2);

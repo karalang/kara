@@ -6,7 +6,12 @@
 // forward-compatible if we ever add reasons (e.g. permission
 // errors), but no payload today: Kāra's strict-UTF-8 `String` rules
 // out a Rust-style `NotUnicode(OsString)` carrier.
+//
+// `#[derive(Display)]` (phase-8 entry-point contract Slice C) so a
+// `fn main() -> Result[(), VarError]` satisfies the entry-point
+// `E: Display` bound. All-unit variants — rendered by name.
 
+#[derive(Display)]
 enum VarError {
     NotPresent,
     NotUnicode,
