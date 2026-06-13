@@ -164,6 +164,46 @@ jobs:
       - name: Codegen E2E + interpreter + typechecker + self-host oracle
         run: cargo test --features llvm --lib --test codegen --test interpreter --test typechecker --test selfhost_lexer
 
+  # Tier 2 of the CI test-coverage tiers (docs/spikes/ci-test-coverage.md): the
+  # `--features llvm` memory-sanitizer suite — ASAN catches use-after-free /
+  # double-free, and on Linux `-fsanitize=address` ALSO runs LeakSanitizer,
+  # which is unsupported on macOS — so this leg adds leak coverage the local
+  # mac runs structurally cannot. Same LLVM-18 + native-archive setup as
+  # `codegen-e2e`; the test self-skips if the runner has no ASAN-capable `cc`
+  # (ubuntu-latest's gcc does). Deliberately a SEPARATE, NON-required job
+  # (not in branch protection) until it has a green streak — if a Linux-only
+  # leak surfaces (the whole point), it shouldn't block the required gates.
+  memory-sanitizer:
+    name: Memory sanitizer (ASAN + LeakSanitizer)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM 18
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-18 llvm-18-dev
+          echo "LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$(llvm-config-18 --libdir)" >> "$GITHUB_ENV"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: memsan
+
+      - name: Build runtime staticlib archives (lean → full)
+        run: |
+          cargo rustc -p karac-runtime --release --no-default-features --features net --crate-type staticlib
+          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_min.a
+          cargo rustc -p karac-runtime --release --crate-type staticlib
+
+      - name: Memory sanitizer (UAF / double-free + Linux leaks)
+        run: cargo test --features llvm --test memory_sanitizer
+
   cross:
     name: Cross-compile (${{ matrix.target }})
     runs-on: ubuntu-latest
