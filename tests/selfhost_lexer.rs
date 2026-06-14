@@ -42,7 +42,7 @@
 
 #![cfg(feature = "llvm")]
 
-use karac::token::{InterpolationPart, SpannedToken, Token};
+use karac::token::{FloatSuffix, IntSuffix, InterpolationPart, SpannedToken, Token};
 use std::path::PathBuf;
 
 /// Inputs exercising the slice-A token set. Plain ASCII, no quotes /
@@ -136,6 +136,15 @@ const CORPUS: &[&str] = &[
     "let n = 42 + 0xa * 2",
     "0 1 12 999 1000000",
     "5f64",
+    // L4: suffix-KIND capture. The lexer now stores the suffix on the token (not
+    // just consuming its span), so the oracle renders it (` i32` / ` f64` …) and
+    // diffs it. Covers the suffixes the lines above miss (i16/i128/u16/u128),
+    // radix literals with a suffix, an exponent + suffix, and an unsuffixed
+    // sanity case (must render bare `INT`/`FLOAT`, no trailing token).
+    "1i16 2i128 3u16 4u128",
+    "0xffu8 0b1010i32 0o17u64 0xdeadi128",
+    "1_000i64 1.5e3f64 2e10f32",
+    "7 3.14",
     // Slice D: string / multi-string / char / byte literals (+ simple escapes).
     // Raw Rust strings so the entry IS the verbatim lexer input (incl. `"`/`\`).
     r#""hello""#,
@@ -399,11 +408,18 @@ fn render_rust(t: &SpannedToken) -> String {
         Token::GreaterGreaterEqual => "OP >>=",
         // Literals / special.
         Token::Identifier { name, .. } => return body_with(s, &format!("IDENT {name}")),
-        Token::Integer(v, _) => return body_with(s, &format!("INT {v}")),
+        // The type suffix (L4) renders as a trailing ` i32` / ` f64` etc., or
+        // nothing when absent. The seed carries `Option<IntSuffix>`; the port
+        // stores the verbatim suffix lexeme String (karac v1 forbids a
+        // nested-enum payload — see `selfhost/src/main.kara`), but both render to
+        // the SAME ` i32` text, so the oracle now diffs suffix capture, not just
+        // the numeric value.
+        Token::Integer(v, sfx) => return body_with(s, &format!("INT {v}{}", int_suffix_str(*sfx))),
         // Display for f64 matches Kāra's f64.to_string (both use Rust's
-        // formatter): 100.0→"100", 1.0e-5→"0.00001", etc. The suffix is
-        // ignored on both sides (the port consumes but does not yet store it).
-        Token::Float(v, _) => return body_with(s, &format!("FLOAT {v}")),
+        // formatter): 100.0→"100", 1.0e-5→"0.00001", etc.
+        Token::Float(v, sfx) => {
+            return body_with(s, &format!("FLOAT {v}{}", float_suffix_str(*sfx)))
+        }
         // String / char values go through escape_for_render (shared with the
         // Kāra `render`) so control chars don't break the line-based compare.
         Token::StringLiteral(v) => return body_with(s, &format!("STR {}", escape_for_render(v))),
@@ -464,6 +480,34 @@ fn render_rust(t: &SpannedToken) -> String {
 /// Prefix the span coordinates onto a rendered token body.
 fn body_with(s: &karac::token::Span, body: &str) -> String {
     format!("{} {} {} {} {}", s.offset, s.length, s.line, s.column, body)
+}
+
+/// Integer type suffix → ` lexeme` (leading space) or `""`. MUST agree with the
+/// port's `int_suffix_lexeme` (the port appends the lexeme after a space, so the
+/// rendered lines match byte-for-byte).
+fn int_suffix_str(s: Option<IntSuffix>) -> &'static str {
+    match s {
+        None => "",
+        Some(IntSuffix::I8) => " i8",
+        Some(IntSuffix::I16) => " i16",
+        Some(IntSuffix::I32) => " i32",
+        Some(IntSuffix::I64) => " i64",
+        Some(IntSuffix::I128) => " i128",
+        Some(IntSuffix::U8) => " u8",
+        Some(IntSuffix::U16) => " u16",
+        Some(IntSuffix::U32) => " u32",
+        Some(IntSuffix::U64) => " u64",
+        Some(IntSuffix::U128) => " u128",
+    }
+}
+
+/// Float type suffix → ` lexeme` or `""`. Peer of `int_suffix_str`.
+fn float_suffix_str(s: Option<FloatSuffix>) -> &'static str {
+    match s {
+        None => "",
+        Some(FloatSuffix::F32) => " f32",
+        Some(FloatSuffix::F64) => " f64",
+    }
 }
 
 /// Escape a string/char value to a single-line, unambiguous form. MUST stay

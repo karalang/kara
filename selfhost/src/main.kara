@@ -65,6 +65,14 @@ struct CStr {
     source_len: i64,
 }
 
+// Numeric-literal type suffix (L4). `src/lexer.rs` stores `Option<IntSuffix>` /
+// `Option<FloatSuffix>` on the number token, but karac v1 forbids a nested-enum
+// payload (`E_ENUM_NESTED_ENUM_PAYLOAD` — an enum variant may not carry another
+// enum), so the port stores the suffix as its verbatim lexeme String instead
+// (`"i32"` / `"f64"` / …; `""` = no suffix). The lexer consumes the suffix bytes
+// for span fidelity AND records the lexeme so the parser stage can type the
+// literal (`5i32` vs `5u8`); the differential oracle renders the stored lexeme to
+// diff capture against the seed's `Option<IntSuffix>`.
 enum Token {
     // Keywords — declarations
     Fn,
@@ -224,8 +232,8 @@ enum Token {
 
     // Literals / special
     Identifier(String),
-    Integer(i64),
-    Float(f64),
+    Integer(i64, String),
+    Float(f64, String),
     StringLiteral(String),
     MultiStringLiteral(String),
     InterpolatedStringLiteral(Vec[InterpPart]),
@@ -693,17 +701,20 @@ impl Lexer {
             }
         }
         if is_float {
+            // Capture the digit text BEFORE consuming the suffix (so `text`
+            // excludes it), then record the suffix kind; `make_spanned` runs
+            // after suffix consumption so the span still covers it.
             let text = strip_underscores(self.src.substring(self.start, self.current));
-            self.try_float_suffix();
+            let sfx = self.try_float_suffix();
             match f64.parse(text) {
-                Some(v) => self.make_spanned(Token.Float(v)),
+                Some(v) => self.make_spanned(Token.Float(v, sfx)),
                 None => self.make_spanned(Token.Error("Invalid float literal".to_string())),
             }
         } else {
             let text = strip_underscores(self.src.substring(self.start, self.current));
-            self.try_int_suffix();
+            let sfx = self.try_int_suffix();
             match i64.parse(text) {
-                Some(v) => self.make_spanned(Token.Integer(v)),
+                Some(v) => self.make_spanned(Token.Integer(v, sfx)),
                 None => self.make_spanned(Token.Error("Invalid integer literal".to_string())),
             }
         }
@@ -718,17 +729,17 @@ impl Lexer {
             self.advance();
         }
         let text = strip_underscores(self.src.substring(self.start + 2, self.current));
-        self.try_int_suffix();
+        let sfx = self.try_int_suffix();
         match i64.from_str_radix(text, radix) {
-            Some(v) => self.make_spanned(Token.Integer(v)),
+            Some(v) => self.make_spanned(Token.Integer(v, sfx)),
             None => self.make_spanned(Token.Error("Invalid radix literal".to_string())),
         }
     }
 
     // Consume `pat` at `current` iff it is present AND not followed by an
     // identifier char (so `i32x` is not read as the `i32` suffix). Returns
-    // whether it consumed. Slice C captures suffixes for span-fidelity but does
-    // not yet STORE the suffix kind in the token (deferred to the parser slice).
+    // whether it consumed. `try_int_suffix` / `try_float_suffix` map the matched
+    // pattern to its suffix kind (L4); a non-match leaves the cursor untouched.
     fn try_consume_suffix(mut ref self, pat: String) -> bool {
         let mut pb: Vec[u8] = Vec.new();
         for b in pat.bytes() {
@@ -754,46 +765,50 @@ impl Lexer {
         true
     }
 
-    fn try_int_suffix(mut ref self) {
+    // Longest-match first (`i128` before `i64`, etc.), mirroring the seed's
+    // candidate ordering. Returns the consumed suffix lexeme, or `""` if none.
+    fn try_int_suffix(mut ref self) -> String {
         if self.try_consume_suffix("i128") {
-            return;
+            return "i128".to_string();
         }
         if self.try_consume_suffix("i64") {
-            return;
+            return "i64".to_string();
         }
         if self.try_consume_suffix("i32") {
-            return;
+            return "i32".to_string();
         }
         if self.try_consume_suffix("i16") {
-            return;
+            return "i16".to_string();
         }
         if self.try_consume_suffix("i8") {
-            return;
+            return "i8".to_string();
         }
         if self.try_consume_suffix("u128") {
-            return;
+            return "u128".to_string();
         }
         if self.try_consume_suffix("u64") {
-            return;
+            return "u64".to_string();
         }
         if self.try_consume_suffix("u32") {
-            return;
+            return "u32".to_string();
         }
         if self.try_consume_suffix("u16") {
-            return;
+            return "u16".to_string();
         }
         if self.try_consume_suffix("u8") {
-            return;
+            return "u8".to_string();
         }
+        "".to_string()
     }
 
-    fn try_float_suffix(mut ref self) {
+    fn try_float_suffix(mut ref self) -> String {
         if self.try_consume_suffix("f64") {
-            return;
+            return "f64".to_string();
         }
         if self.try_consume_suffix("f32") {
-            return;
+            return "f32".to_string();
         }
+        "".to_string()
     }
 
     // `"..."` string literal. The opening `"` is consumed. Literal runs are
@@ -1863,13 +1878,21 @@ fn render(tok: SpannedToken) -> String {
             line.push_str("IDENT ");
             line.push_str(name);
         }
-        Integer(v) => {
+        Integer(v, sfx) => {
             line.push_str("INT ");
             line.push_str(v.to_string());
+            if sfx.len() > 0 {
+                line.push_str(" ");
+                line.push_str(sfx);
+            }
         }
-        Float(v) => {
+        Float(v, sfx) => {
             line.push_str("FLOAT ");
             line.push_str(v.to_string());
+            if sfx.len() > 0 {
+                line.push_str(" ");
+                line.push_str(sfx);
+            }
         }
         StringLiteral(v) => {
             line.push_str("STR ");
