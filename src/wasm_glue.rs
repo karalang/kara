@@ -1027,8 +1027,14 @@ function makeWasiPolyfill(getMemory, env = []) {
         const base = iovsPtr + i * 8;
         const ptr = dv.getUint32(base, true);
         const len = dv.getUint32(base + 4, true);
+        // `.slice()` copies into a fresh non-shared ArrayBuffer: on the
+        // threaded build `getMemory().buffer` is a SharedArrayBuffer, and
+        // TextDecoder.decode rejects a shared-backed view ("The provided
+        // ArrayBufferView value must not be shared."). Any stdout/stderr
+        // write from a threaded browser program — a print, a panic, the
+        // alloc-error abort path — hit this without the copy (B-2026-06-14-22).
         text += new TextDecoder("utf-8").decode(
-          new Uint8Array(getMemory().buffer, ptr, len),
+          new Uint8Array(getMemory().buffer, ptr, len).slice(),
         );
         written += len;
       }
@@ -1065,9 +1071,12 @@ function makeWasiPolyfill(getMemory, env = []) {
       return 0;
     },
     random_get(ptr, len) {
-      globalThis.crypto.getRandomValues(
-        new Uint8Array(getMemory().buffer, ptr, len),
-      );
+      // crypto.getRandomValues also rejects a SharedArrayBuffer-backed
+      // view (threaded build), so fill a fresh non-shared buffer and copy
+      // the bytes into linear memory.
+      const tmp = new Uint8Array(len);
+      globalThis.crypto.getRandomValues(tmp);
+      new Uint8Array(getMemory().buffer, ptr, len).set(tmp);
       return 0;
     },
     args_sizes_get(argcPtr, argvBufSizePtr) {
@@ -2059,6 +2068,10 @@ mod tests {
             "spawnCtl = new SharedArrayBuffer(SPAWN_CTL_BYTES);",
             "requestMainThreadSpawn(spawnCtl, newTid, arg);",
             "if (spawnService) await spawnService.stop();",
+            // B-2026-06-14-22: shared-memory I/O must copy out of the SAB
+            // before TextDecoder / crypto (which reject shared-backed views).
+            "new Uint8Array(getMemory().buffer, ptr, len).slice()",
+            "globalThis.crypto.getRandomValues(tmp);",
         ] {
             assert!(glue.contains(needle), "missing in threaded glue: {needle}");
         }
