@@ -8976,6 +8976,46 @@ fn main() {
     }
 
     #[test]
+    fn asan_push_str_borrowed_slice_no_uaf() {
+        // `push_str(src[a..b])` borrows a zero-copy view into `src` instead of
+        // allocating a temp String (the 30× #405 fix). The view points into
+        // `src`'s buffer; `out` grows repeatedly (the destination buffer is
+        // freed/reallocated each grow). ASAN confirms the borrowed source —
+        // which is `hexd`/`words[k]`, NOT `out` — stays valid across `out`'s
+        // grows (no use-after-free), and that nothing leaks (the cap-0 view is
+        // never freed; no temp is allocated to leak). Literal- and
+        // heap-element-sourced slices both exercise the path.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let hexd: String = "0123456789abcdef";
+    let mut out: String = "";
+    let mut k = 0i64;
+    while k < 2000 {
+        let d = k & 0xfi64;
+        out.push_str(hexd[d..d + 1i64]);   // literal-sourced borrow, out grows
+        k = k + 1i64;
+    }
+    println(out.bytes().len());
+
+    let mut words: Vec[String] = Vec.new();
+    let mut i = 0i64;
+    while i < 8 { words.push(f"token-{i}-payload"); i = i + 1i64; }
+    let mut joined: String = "";
+    let mut j = 0i64;
+    while j < 500 {
+        joined.push_str(words[j & 7i64][0..5i64]);   // heap-element-sourced borrow + grow
+        j = j + 1i64;
+    }
+    println(joined.bytes().len());
+}
+"#,
+            &["2000", "2500"],
+            "push_str_borrowed_slice_no_uaf",
+        );
+    }
+
+    #[test]
     fn asan_try_clone_vec_string_deep_independent_free() {
         // phase-8-stdlib-floor item 8: `Vec[String].try_clone()` deep-clones
         // every element into a fresh buffer. Source and clone own independent

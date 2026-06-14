@@ -1670,7 +1670,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 if args.is_empty() {
                     return Err("push_str requires an argument".to_string());
                 }
-                let src_val = self.compile_expr(&args[0].value)?;
+                // A string-slice argument (`s[a..b]`) is BORROWED, not copied:
+                // `push_str` only reads the bytes into the destination, so the
+                // allocating slice (`karac_string_slice`, which malloc's an
+                // n+1-byte copy) is pure waste — it allocated *and* freed a temp
+                // String on every call. The borrowed view `{ptr, len, cap: 0}`
+                // points into the source, which is live for the synchronous copy
+                // below; the cap-0 view is non-owning and never freed. This was
+                // ~28M wasted temp allocs in the #405 hex-render kata (and is the
+                // self-hosted lexer's token-text `push_str(src[a..b])` hot path)
+                // — measured 30× on a slice-push microbench.
+                let (src_val, src_borrowed) =
+                    match self.try_compile_borrowed_string_slice(&args[0].value)? {
+                        Some(view) => (view, true),
+                        None => (self.compile_expr(&args[0].value)?, false),
+                    };
                 // Extract src string's ptr and len.
                 let src_ptr = self
                     .builder
@@ -1729,6 +1743,59 @@ impl<'ctx> super::Codegen<'ctx> {
 
                 // Grow: new_cap = max(new_len, max(4, cap * 2))
                 self.builder.position_at_end(grow_bb);
+                // Aliasing guard — borrowed-source only. A borrowed slice arg
+                // (`out.push_str(src[a..b])`) points INTO `src`'s buffer; if that
+                // buffer is the destination's own (`s.push_str(s[a..b])`), the
+                // `free(data)` below would dangle the source before the copy.
+                // Detect the overlap and panic with a clear message, matching
+                // `Vec.extend_from_slice`'s policy. The common case (distinct
+                // source) never overlaps, so this is a cold, grow-only check; an
+                // owned-temp source is a fresh copy that can't alias, so the
+                // guard is emitted only for the borrowed path.
+                if src_borrowed {
+                    let src_int = self
+                        .builder
+                        .build_ptr_to_int(src_ptr, i64_t, "pstr.src.int")
+                        .unwrap();
+                    let data_int = self
+                        .builder
+                        .build_ptr_to_int(data, i64_t, "pstr.data.int")
+                        .unwrap();
+                    let data_end = self
+                        .builder
+                        .build_int_add(data_int, cap, "pstr.data.end")
+                        .unwrap();
+                    let ge = self
+                        .builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::UGE,
+                            src_int,
+                            data_int,
+                            "pstr.alias.ge",
+                        )
+                        .unwrap();
+                    let lt = self
+                        .builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::ULT,
+                            src_int,
+                            data_end,
+                            "pstr.alias.lt",
+                        )
+                        .unwrap();
+                    let overlap = self.builder.build_and(ge, lt, "pstr.alias").unwrap();
+                    let panic_bb = self.context.append_basic_block(fn_val, "pstr.alias.panic");
+                    let ok_bb = self.context.append_basic_block(fn_val, "pstr.alias.ok");
+                    self.builder
+                        .build_conditional_branch(overlap, panic_bb, ok_bb)
+                        .unwrap();
+                    self.builder.position_at_end(panic_bb);
+                    self.emit_panic(
+                        "String.push_str: source slice aliases destination buffer (use a distinct source when grow is required)",
+                    );
+                    self.builder.build_unreachable().unwrap();
+                    self.builder.position_at_end(ok_bb);
+                }
                 let two = i64_t.const_int(2, false);
                 let four = i64_t.const_int(4, false);
                 let doubled = self.builder.build_int_mul(cap, two, "doubled").unwrap();
@@ -1822,8 +1889,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 // materialize_owned_temp) keeps a hot loop from accumulating
                 // temps until function exit. The insert point is already at the
                 // post-copy block, so every read of the source dominates the
-                // free.
-                self.free_fresh_owned_str_arg(&args[0].value, src_val);
+                // free. A borrowed slice arg (`src_borrowed`) is a cap-0 view
+                // that owns nothing — skip the free entirely (it never allocated
+                // a temp), instead of emitting a runtime cap-0 guard that always
+                // falls through.
+                if !src_borrowed {
+                    self.free_fresh_owned_str_arg(&args[0].value, src_val);
+                }
 
                 Ok(self.context.i64_type().const_int(0, false).into())
             }

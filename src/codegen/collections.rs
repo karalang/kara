@@ -1327,7 +1327,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (`get`/`contains_key`/`remove`/`get_or`) hash+compare and discard it,
     /// and `Map.insert` over the borrowed-str path (`karac_map_insert_borrowed_str_old`)
     /// deep-copies the bytes on a fresh insertion — so the borrowed pointer
-    /// never outlives the source. Used only via `try_compile_borrowed_string_key`.
+    /// never outlives the source. Used only via `try_compile_borrowed_string_slice`.
     pub(super) fn compile_string_slice_borrowed(
         &mut self,
         object: &Expr,
@@ -1418,8 +1418,8 @@ impl<'ctx> super::Codegen<'ctx> {
     /// compile it as a borrowed view (no allocation) and return it; otherwise
     /// `Ok(None)`. The String-ness of the sliced object is the typechecker's
     /// per-expression `string_typed_exprs` flag (same gate `compile_index`
-    /// uses to route String slicing). Drives the allocation-free map-key path.
-    pub(super) fn try_compile_borrowed_string_key(
+    /// uses to route String slicing). Drives the allocation-free path for read-only String-slice consumers — `push_str` and map-key lookups (`get`/`contains_key`/…) — that only read the bytes.
+    pub(super) fn try_compile_borrowed_string_slice(
         &mut self,
         arg: &Expr,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {

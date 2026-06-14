@@ -731,7 +731,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // (the common case in counter/window maps). Sound because the
                 // map owns its copy; the borrowed pointer is never stored. The
                 // slice is a temporary, so there is no key source to suppress.
-                let borrowed_key = self.try_compile_borrowed_string_key(&args[0].value)?;
+                let borrowed_key = self.try_compile_borrowed_string_slice(&args[0].value)?;
                 // Preserve key-before-val compile order on the owned path
                 // (the borrowed path already compiled the sliced object above).
                 let key_val = if borrowed_key.is_none() {
@@ -903,7 +903,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Allocation-free String-slice key: a borrowed `{ptr,len,cap=0}`
                 // view into the source. `get` only hashes/compares and never
                 // retains the key, so the borrow is sound.
-                let key_val = match self.try_compile_borrowed_string_key(&args[0].value)? {
+                let key_val = match self.try_compile_borrowed_string_slice(&args[0].value)? {
                     Some(v) => v,
                     None => self.compile_expr(&args[0].value)?,
                 };
@@ -1024,7 +1024,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Err("Map.remove requires a key argument".to_string());
                 }
                 // Borrowed String-slice key (lookup-only, no retain — sound).
-                let key_val = match self.try_compile_borrowed_string_key(&args[0].value)? {
+                let key_val = match self.try_compile_borrowed_string_slice(&args[0].value)? {
                     Some(v) => v,
                     None => self.compile_expr(&args[0].value)?,
                 };
@@ -1076,7 +1076,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Err("Map.contains_key requires a key argument".to_string());
                 }
                 // Borrowed String-slice key (lookup-only, no retain — sound).
-                let key_val = match self.try_compile_borrowed_string_key(&args[0].value)? {
+                let key_val = match self.try_compile_borrowed_string_slice(&args[0].value)? {
                     Some(v) => v,
                     None => self.compile_expr(&args[0].value)?,
                 };

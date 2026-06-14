@@ -4715,7 +4715,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// and without it leaks once per call — unbounded in a loop (B-2026-06-12-5:
     /// `buffer.push_str(src[a..b])`, the lexer's zero-copy token-text shape passed
     /// to a copying sink). `string_typed_exprs` membership of the *object* is the
-    /// same gate `try_compile_borrowed_string_key` / `compile_index` use to route
+    /// same gate `try_compile_borrowed_string_slice` / `compile_index` use to route
     /// String slicing, so a `Vec[T]` index (`v[i]`, a place/element copy) is never
     /// matched here. The `cap > 0` guard at the free site is the backstop: were
     /// this ever lowered to the borrowed (cap == 0) view, the free no-ops.
