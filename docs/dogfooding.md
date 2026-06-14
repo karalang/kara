@@ -852,8 +852,9 @@ worker-pool parallelism + SIMD-128 already ship on wasm-threads.
 > **Built (non-interactive cut) — 2026-06-14.** Shipped at
 > [`examples/fathom/`](../examples/fathom/): a parallel Mandelbrot explorer that
 > compiles to `--target=wasm_browser --features wasm-threads` and renders across
-> the Web Worker pool at ~60fps (measured ~58fps under node's 4-worker pool;
-> more cores in a real browser). The render loop is a plain blocking
+> the Web Worker pool (measured ~58fps under node's 4-worker pool; see the
+> real-browser-verification note below for actual browser numbers). The
+> render loop is a plain blocking
 > `loop { frames.recv(); render_frame(); }`; each frame's rows fan out via
 > `TaskGroup.spawn` and the framebuffer is blitted through one `put_pixels` host
 > fn. This is the first front-end-track demo and the first consumer of the
@@ -877,11 +878,34 @@ worker-pool parallelism + SIMD-128 already ship on wasm-threads.
 > `tests/codegen.rs::{e2e_taskhandle_join_returns_nonscalar_vec,
 > e2e_for_loop_binding_name_collision_no_false_rc, test_vec_as_ptr_loads_data_field}`.
 >
-> **Follow-ups (own gates):** the inner kernel is currently **scalar f64** — the
-> `Vector[f64, 2]` SIMD-128 lowering (needs the comparison→mask→select path
-> verified end-to-end) is not yet wired; and the **interactive pan/zoom** cut
-> waits on event-data channels (`Channel[T]` for `T != ()`, the harder
-> event-stream slice). The shipped cut auto-zooms, no input.
+> **Real-browser verification (2026-06-14).** The node "~58fps" cut above
+> deadlocked / leaked / crashed in an actual browser until three more
+> browser-only `karac` bugs were fixed: the pthread-spawn deadlock
+> (B-2026-06-14-17 — nested workers can't load while their creator is blocked,
+> so every `TaskGroup.spawn` hung), a general for-over-collection body leak
+> that OOM'd the wasm heap after ~550 frames (B-2026-06-14-21 — not
+> wasm-specific), and shared-buffer-rejecting `fd_write`/`random_get` in the
+> WASI polyfill that turned any stderr write into a fatal TypeError
+> (B-2026-06-14-22). It now renders in headless Chrome (driven over CDP) at
+> ~120fps across 18 cores and soaks 1750+ frames with no OOM. None of the
+> three were reproducible under the node E2E.
+>
+> **Follow-ups (own `[ ]` slices):**
+>
+> - [ ] **Fathom SIMD inner kernel** — rewrite the scalar-f64 escape loop as
+>   `Vector[f64, 2]` (two complex points per WASM SIMD-128 lane), exercising
+>   the comparison→mask→select escape test. **No compiler work pending** — the
+>   `Vector[f64, 2]` → WASM SIMD-128 lowering already shipped
+>   ([`design.md`](design.md) § Vector lowering, 2026-06-07); this is a
+>   demo-source rewrite + a perf measurement (scalar vs SIMD-128, same source).
+> - [ ] **Fathom interactive pan/zoom** — replace the auto-zoom with
+>   drag-to-pan + wheel-to-zoom. Depends on **`events.wheel`** (the remaining
+>   `events.*` slice — see
+>   [`phase-10-targets.md`](implementation_checklist/phase-10-targets.md) §
+>   event-stream wrappers, "REMAINING (mechanical follow-ups)", which already
+>   names "`events.wheel` is what Plume/Fathom's pan-zoom cut needs next").
+>   Pointer input (`events.pointer_moves`) already shipped; the shipped Fathom
+>   cut auto-zooms with no input.
 
 **Primary capability:** The same browser spine reduced to its essence —
 multi-core pixel compute via framebuffer-blit, with zero domain code. The
