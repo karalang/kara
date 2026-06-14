@@ -2577,12 +2577,24 @@ impl<'ctx> Codegen<'ctx> {
         let printf_type = i32_type.fn_type(&[BasicMetadataTypeEnum::from(ptr_type)], true);
         let printf_fn = module.add_function("printf", printf_type, None);
 
+        // `size_t` is i32 on wasm32 (wasi-libc) and i64 natively. Used by the
+        // size-bearing libc decls below (`snprintf`, `fwrite`, `malloc`). Even
+        // though `snprintf` is varargs, its FIXED `size_t n` param must match
+        // libc's width exactly or wasm-ld replaces the call with a trapping
+        // `signature_mismatch:snprintf` stub (B-2026-06-14-15: numeric f-strings
+        // aborted on every wasm target — `i64` here mismatched wasi-libc's i32).
+        let size_t_type = if crate::target::active_target_is_wasm() {
+            i32_type
+        } else {
+            i64_type
+        };
+
         // `int snprintf(char* buf, size_t n, const char* fmt, ...)` for f-string
         // integer/float → string conversion.
         let snprintf_type = i32_type.fn_type(
             &[
                 BasicMetadataTypeEnum::from(ptr_type),
-                BasicMetadataTypeEnum::from(i64_type),
+                BasicMetadataTypeEnum::from(size_t_type),
                 BasicMetadataTypeEnum::from(ptr_type),
             ],
             true,
@@ -2597,12 +2609,8 @@ impl<'ctx> Codegen<'ctx> {
         // the call (`signature_mismatch:fwrite`): `size_t` is i32 on wasm32
         // (wasi-libc) and i64 natively — `emit_nul_safe_write` normalizes the
         // length to this width at every call site. (Same size_t-width concern
-        // the `malloc` shim comment below addresses.)
-        let size_t_type = if crate::target::active_target_is_wasm() {
-            i32_type
-        } else {
-            i64_type
-        };
+        // the `malloc` shim comment below addresses; `size_t_type` is computed
+        // above with the `snprintf` decl.)
         let fwrite_type = size_t_type.fn_type(
             &[
                 BasicMetadataTypeEnum::from(ptr_type),

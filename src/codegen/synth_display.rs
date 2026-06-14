@@ -78,7 +78,13 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_pointer_cast(buf, ptr_ty, "dbufp")
             .unwrap();
-        let size = i64_t.const_int(64, false);
+        // snprintf's `size_t n` FIXED param is i32 on wasm32 / i64 natively;
+        // match that width or the call mismatches the decl (B-2026-06-14-15).
+        let size = if crate::target::active_target_is_wasm() {
+            self.context.i32_type().const_int(64, false)
+        } else {
+            i64_t.const_int(64, false)
+        };
         let fmt_g = self.builder.build_global_string_ptr(fmt, "dfmt").unwrap();
         let written = self
             .builder

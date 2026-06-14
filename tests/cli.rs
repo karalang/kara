@@ -11794,6 +11794,100 @@ fn main() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// Regression (B-2026-06-14-15): numeric (int/float) f-string interpolation
+/// and `int.to_string()` on the wasm target. These route through `snprintf`,
+/// whose `size_t n` param codegen declared as `i64` — correct natively but
+/// wrong on wasm32 (size_t = i32), so wasm-ld replaced the call with a
+/// trapping `signature_mismatch:snprintf` stub and any numeric f-string
+/// aborted with `unreachable`. (Bare `println(<int>)` uses a printf path with
+/// no size_t param, so the existing wasm E2E above never caught this.) Fixed
+/// by declaring + calling `snprintf` with a pointer-width `size_t`. Asserts the
+/// wasm output is byte-identical to the native semantics, incl. a negative int
+/// (varargs widening) and a float.
+#[test]
+fn wasm_numeric_fstring_build_and_run_e2e() {
+    let tmp = wasm_test_dir("numfstr");
+    let path = tmp.join("numfstr.kara");
+    std::fs::write(
+        &path,
+        r#"
+fn main() {
+    let x = 42;
+    let y = -7;
+    let f = 2.5;
+    println(f"i {x} n {y} f {f}");
+    let n = 100;
+    println(n.to_string());
+}
+"#,
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_wasi",
+            "--bindings=none",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_numeric_fstring_build_and_run_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "wasm build failed: {stderr}");
+    let wasm_path = tmp.join("numfstr.wasm");
+    assert!(wasm_path.exists(), "expected numfstr.wasm");
+    // The trapping stub must NOT be present (its presence is the bug).
+    let wasm_bytes = std::fs::read(&wasm_path).unwrap();
+    assert!(
+        !wasm_bytes
+            .windows(b"signature_mismatch:snprintf".len())
+            .any(|w| w == b"signature_mismatch:snprintf"),
+        "wasm must not contain a trapping signature_mismatch:snprintf stub",
+    );
+
+    let runner = tmp.join("run_wasi.mjs");
+    std::fs::write(
+        &runner,
+        "import { readFile } from 'node:fs/promises';\n\
+         import { WASI } from 'node:wasi';\n\
+         import { argv, exit } from 'node:process';\n\
+         const wasi = new WASI({ version: 'preview1', args: [], env: {} });\n\
+         const wasm = await WebAssembly.compile(await readFile(argv[2]));\n\
+         const instance = await WebAssembly.instantiate(wasm, wasi.getImportObject());\n\
+         exit(wasi.start(instance));\n",
+    )
+    .unwrap();
+    let node = std::process::Command::new("node")
+        .arg(&runner)
+        .arg(&wasm_path)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: wasm_numeric_fstring_build_and_run_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let node_stdout = String::from_utf8_lossy(&node_out.stdout);
+    let node_stderr = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success(),
+        "numeric f-string wasm module failed under node:wasi (was the snprintf \
+         trap): stdout={node_stdout} stderr={node_stderr}",
+    );
+    assert_eq!(
+        node_stdout, "i 42 n -7 f 2.5\n100\n",
+        "numeric f-string + to_string must match native semantics; stderr={node_stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// Full build-path E2E for `String.split` on the wasm target (Weave
 /// dogfood follow-up). The split FFI (`karac_runtime_string_split`)
 /// allocates the `Vec[String]` from the unified wasi-libc heap
