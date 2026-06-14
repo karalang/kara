@@ -803,6 +803,19 @@ impl<'ctx> super::Codegen<'ctx> {
                         .get(enum_name)
                         .filter(|l| l.tags.contains_key(name))
                         .map(|_| enum_name.clone())
+                } else if !self.struct_types.contains_key(name) {
+                    // Unqualified struct-variant construction `Variant { ... }`:
+                    // the single-segment path carries only the bare variant
+                    // name. When it doesn't name a struct, find the enum whose
+                    // layout declares the variant (the typechecker already
+                    // validated the reference, so a well-typed program yields a
+                    // unique match — variant names are globally unique once the
+                    // resolver has bound them). Mirrors the typechecker's
+                    // `unqualified_enum_struct_variant` routing.
+                    self.enum_layouts
+                        .iter()
+                        .find(|(_, l)| l.tags.contains_key(name))
+                        .map(|(enum_name, _)| enum_name.clone())
                 } else {
                     None
                 };

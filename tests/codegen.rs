@@ -1004,6 +1004,32 @@ fn main() {
         }
     }
 
+    #[test]
+    fn e2e_unannotated_unqualified_enum_struct_variant_let_method_and_display() {
+        // B-2026-06-13-12 (the unqualified peer of B-13-9): an UNANNOTATED
+        // `let a = A { .. }` — no `E.` qualifier — must also register `a` as the
+        // ENUM. The B-13-9 fix to `type_name_of` only resolved the qualified
+        // `path[len-2]` form; the single-segment variant name still returned
+        // itself, so an unannotated unqualified binding stored
+        // `var_type_names[a] = "A"` and method/Display dispatch fell through.
+        // `type_name_of` now also searches `enum_layouts` for the variant when
+        // the single-segment name isn't a struct.
+        if let Some(out) = run_program(
+            "enum E { A { n: i64 }, B }\n\
+             impl E { fn code(ref self) -> i64 { match self { A { n } => n, B => 0 } } }\n\
+             impl Display for E { fn to_string(ref self) -> String { match self { A { n } => f\"A:{n}\", B => \"B\" } } }\n\
+             fn main() {\n\
+                 let a = A { n: 3 };\n\
+                 println(f\"{a.code()}\");\n\
+                 println(a.to_string());\n\
+                 println(f\"{a}\");\n\
+                 println(a);\n\
+             }",
+        ) {
+            assert_eq!(out, "3\nA:3\nA:3\nA:3\n");
+        }
+    }
+
     // ── User `impl Display` dispatch (codegen) ──
 
     #[test]
@@ -1356,6 +1382,60 @@ fn main() {
              }",
         ) {
             assert_eq!(out, "7\n-1\n9\n8\n");
+        }
+    }
+
+    #[test]
+    fn e2e_unqualified_struct_variant_construction() {
+        // B-2026-06-13-12 (codegen twin): an UNQUALIFIED struct-variant
+        // *construction* `Variant { .. }` must build, not just typecheck.
+        // Pre-fix the codegen `StructLiteral` dispatch only recognized the
+        // qualified `Enum.Variant { .. }` form (path.len() >= 2); an unqualified
+        // `Circle { r: 2 }` fell through to `compile_struct_init`, treating the
+        // variant name as a struct — the constructed value was a bare field
+        // scalar, so passing it to `area(Shape)` failed module verification
+        // ("Call parameter type does not match function signature"). The
+        // dispatch now finds the parent enum from `enum_layouts`. Plain enum.
+        if let Some(out) = run_program(
+            "enum Shape { Circle { r: i64 }, Rect { w: i64, h: i64 } }\n\
+             fn area(s: Shape) -> i64 {\n\
+                 match s {\n\
+                     Circle { r } => r * r * 3,\n\
+                     Rect { w, h } => w * h,\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let a: Shape = Circle { r: 2 };\n\
+                 let b: Shape = Rect { w: 3, h: 4 };\n\
+                 println(f\"{area(a)}\");\n\
+                 println(f\"{area(b)}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "12\n12\n");
+        }
+    }
+
+    #[test]
+    fn e2e_shared_unqualified_struct_variant_construction() {
+        // B-2026-06-13-12 (codegen twin, shared): unqualified construction of a
+        // `shared enum` struct-variant, including the nested recursive-AST shape
+        // (`Bin { l: Num { .. }, r: Num { .. } }`) that surfaced the bug. The
+        // RC-heap-box construction path must fire for the unqualified form too
+        // (pre-fix it `compile_struct_init`'d and segfaulted at run).
+        if let Some(out) = run_program(
+            "shared enum Expr { Num { n: i64 }, Bin { l: Expr, r: Expr } }\n\
+             fn eval(e: Expr) -> i64 {\n\
+                 match e {\n\
+                     Num { n } => n,\n\
+                     Bin { l, r } => eval(l) + eval(r),\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let t: Expr = Bin { l: Num { n: 3 }, r: Num { n: 4 } };\n\
+                 println(f\"{eval(t)}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "7\n");
         }
     }
 

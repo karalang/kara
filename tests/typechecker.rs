@@ -26771,3 +26771,34 @@ fn wrapping_arith_rejects_narrow_width() {
         "i32.wrapping_add must not type-check yet (narrow widths deferred)"
     );
 }
+
+#[test]
+fn unqualified_struct_variant_construction_typechecks() {
+    // B-2026-06-13-12: an UNQUALIFIED struct-variant construction
+    // `Variant { .. }` (no `Enum.` qualifier) must typecheck. Pre-fix the
+    // single-segment `StructLiteral` path fell through to `infer_struct_literal`,
+    // which looked the bare variant name up as a struct and rejected
+    // "'Rect' is not a struct" / "'Circle' is not a struct". The dispatcher now
+    // recovers the parent enum from the resolver's binding of the variant name.
+    // The qualified form (`Shape.Rect { .. }`) already typechecked.
+    typecheck_ok(
+        "enum Shape { Circle { r: i64 }, Rect { w: i64, h: i64 } }\n\
+         fn main() {\n\
+             let a: Shape = Circle { r: 2 };\n\
+             let b: Shape = Rect { w: 3, h: 4 };\n\
+         }",
+    );
+}
+
+#[test]
+fn unqualified_shared_struct_variant_construction_typechecks() {
+    // B-2026-06-13-12 companion: the same fix must cover `shared enum`, including
+    // nested unqualified construction (`Bin { l: Num { .. }, r: Num { .. } }`)
+    // — the recursive-AST shape that surfaced the bug.
+    typecheck_ok(
+        "shared enum Expr { Num { n: i64 }, Bin { l: Expr, r: Expr } }\n\
+         fn main() {\n\
+             let t: Expr = Bin { l: Num { n: 3 }, r: Num { n: 4 } };\n\
+         }",
+    );
+}

@@ -2535,6 +2535,32 @@ impl<'a> super::TypeChecker<'a> {
                         );
                     }
                 }
+                // Unqualified struct-variant construction `Variant { ... }`:
+                // the parser produces a single-segment `StructLiteral` path
+                // identical to a plain struct literal, so `target_name` is the
+                // bare variant name. The resolver has already bound it to its
+                // `EnumVariant` symbol; recover the parent enum from that
+                // resolution and route to enum-variant inference (otherwise
+                // `infer_struct_literal` looks `Variant` up as a struct and
+                // rejects "not a struct"). Mirrors the qualified arm above and
+                // the unqualified pattern-binding path. See
+                // `unqualified_enum_struct_variant`.
+                if path.len() == 1 {
+                    if let Some((enum_name, decl_fields)) =
+                        self.unqualified_enum_struct_variant(&expr.span, &target_name)
+                    {
+                        if let Some(ref spread_expr) = spread {
+                            self.infer_expr(spread_expr);
+                        }
+                        return self.infer_enum_struct_variant_literal(
+                            &enum_name,
+                            &target_name,
+                            &decl_fields,
+                            fields,
+                            &expr.span,
+                        );
+                    }
+                }
                 if let Some(ref spread_expr) = spread {
                     self.infer_expr(spread_expr);
                 }

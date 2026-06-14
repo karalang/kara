@@ -16190,3 +16190,28 @@ fn main() {
     );
     assert_eq!(out, "7\n7\n");
 }
+
+#[test]
+fn unqualified_struct_variant_construction_method_dispatch() {
+    // B-2026-06-13-12 (interpreter twin): an UNQUALIFIED struct-variant
+    // construction `Variant { .. }` must build a `Value::EnumVariant` carrying
+    // the *enum* name, not fall through to a `Value::Struct` named after the
+    // variant. Pre-fix, `value_type_name` reported the variant ("A"), so a
+    // method call on the binding failed with "method 'code' not found on type
+    // 'A'" — even with an explicit `let a: E = ...` annotation (the interpreter
+    // ignores it). The qualified form (`E.A { .. }`) already worked. Covers the
+    // annotation-present and annotation-absent shapes.
+    let out = run_no_errors(
+        r#"
+enum E { A { n: i64 }, B }
+impl E { fn code(ref self) -> i64 { match self { A { n } => n, B => 0 } } }
+fn main() {
+    let a = A { n: 7 };
+    let b: E = A { n: 9 };
+    println(a.code());
+    println(b.code());
+}
+"#,
+    );
+    assert_eq!(out, "7\n9\n");
+}

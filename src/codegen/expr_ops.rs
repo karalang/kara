@@ -1698,10 +1698,27 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::StructLiteral { path, .. } => {
                 let last = path.last().cloned();
                 if let Some(name) = &last {
-                    if !self.struct_types.contains_key(name.as_str()) && path.len() >= 2 {
-                        let enum_name = &path[path.len() - 2];
-                        if self.enum_layouts.contains_key(enum_name) {
-                            return Some(enum_name.clone());
+                    if !self.struct_types.contains_key(name.as_str()) {
+                        if path.len() >= 2 {
+                            let enum_name = &path[path.len() - 2];
+                            if self.enum_layouts.contains_key(enum_name) {
+                                return Some(enum_name.clone());
+                            }
+                        } else {
+                            // Unqualified variant construction `Variant { .. }`:
+                            // the single-segment name is the bare variant. Find
+                            // the enum whose layout declares it so an unannotated
+                            // `let a = Variant { .. }` records the ENUM, not the
+                            // variant. Companion to the qualified arm above and
+                            // the unqualified routing in `compile_expr`'s
+                            // `StructLiteral` dispatch. (B-2026-06-13-12)
+                            if let Some((enum_name, _)) = self
+                                .enum_layouts
+                                .iter()
+                                .find(|(_, l)| l.tags.contains_key(name.as_str()))
+                            {
+                                return Some(enum_name.clone());
+                            }
                         }
                     }
                 }

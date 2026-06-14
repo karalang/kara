@@ -1761,6 +1761,34 @@ impl<'a> Interpreter<'a> {
                 };
             }
         }
+        // Unqualified struct-variant construction `Variant { field: val, ... }`:
+        // the single-segment path carries only the bare variant name. When it
+        // isn't a struct, find the enum that declares it (variant names are
+        // globally unique once the resolver has bound them) and build a
+        // `Value::EnumVariant` — otherwise the value falls through to a
+        // `Value::Struct { name: "Variant" }`, whose `value_type_name` is the
+        // variant, not the enum, so method dispatch on the binding reports
+        // "method not found on type 'Variant'" even when annotated. Mirrors the
+        // qualified branch above and the typechecker's unqualified routing
+        // (B-2026-06-13-12).
+        if path.len() == 1 && self.find_struct_def(&name).is_none() {
+            if let Some(enum_name) = self.find_enum_for_variant(&name) {
+                if let Some(order) =
+                    self.qualified_enum_struct_variant_field_order(&enum_name, &name)
+                {
+                    let mut data_fields: HashMap<String, Value> = HashMap::new();
+                    for fname in order {
+                        let v = field_vals.remove(&fname).unwrap_or(Value::Unit);
+                        data_fields.insert(fname, v);
+                    }
+                    return Value::EnumVariant {
+                        enum_name,
+                        variant: name,
+                        data: EnumData::Struct(data_fields),
+                    };
+                }
+            }
+        }
         if let Some(def) = self.find_struct_def(&name) {
             // `par struct` is reference-semantic like `shared struct` (both are
             // RC/Arc-backed in codegen), so it must be a `SharedStruct` in the

@@ -594,6 +594,43 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// Resolve an *unqualified* struct-variant construction `Variant { ... }`
+    /// to its `(enum_name, declared_fields)` via the resolver. The resolver
+    /// already binds the bare `Variant` segment of a `StructLiteral` to its
+    /// `EnumVariant` symbol (handling scoping, imports, and ambiguity); we read
+    /// that resolution back here so the typechecker can route to
+    /// `infer_enum_struct_variant_literal` instead of rejecting `Variant` as a
+    /// missing struct. The resolution is keyed by the literal's own span (see
+    /// `resolve_block.rs`'s `StructLiteral` arm, which records the head segment
+    /// against `expr.span`). Returns `None` when the span resolves to anything
+    /// but a struct-shaped enum variant (a plain struct path, a unit/tuple
+    /// variant, or an unresolved name). The qualified form `Enum.Variant { ... }`
+    /// is handled separately by the `path[len-2]` dispatch and never reaches here.
+    pub(super) fn unqualified_enum_struct_variant(
+        &self,
+        literal_span: &Span,
+        variant: &str,
+    ) -> Option<(String, Vec<(String, Type)>)> {
+        use crate::resolver::{SpanKey, SymbolKind};
+        let sym_id = self
+            .resolve_result
+            .resolutions
+            .get(&SpanKey::from_span(literal_span))
+            .copied()?;
+        let sym = self.resolve_result.symbol_table.get_symbol(sym_id);
+        let SymbolKind::EnumVariant { parent_enum, .. } = sym.kind else {
+            return None;
+        };
+        let enum_name = self
+            .resolve_result
+            .symbol_table
+            .get_symbol(parent_enum)
+            .name
+            .clone();
+        let fields = self.enum_struct_variant_fields(&enum_name, variant)?;
+        Some((enum_name, fields))
+    }
+
     /// Type-check an `Enum.Variant { ... }` literal against the variant's
     /// declared struct fields and return the enum type. Mirrors
     /// `infer_struct_literal`'s missing/extra/field-type checks; like it,
