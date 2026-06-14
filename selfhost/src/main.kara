@@ -885,8 +885,9 @@ impl Lexer {
 
     // `'c'` character literal. The opening `'` is consumed. ASCII / simple
     // escapes + `\0` (NUL) + `\u{…}` (Unicode-codepoint → `char` via
-    // `char.try_from`). Multi-byte non-escape bodies (`'λ'`) are still deferred
-    // (L2). `\u{…}` source is all-ASCII so spans are unaffected.
+    // `char.try_from`) + multi-byte non-escape bodies (`'λ'`, read as one
+    // codepoint via `consume_codepoint` — L2). `\u{…}` source is all-ASCII so
+    // spans are unaffected.
     fn char_literal(mut ref self) -> SpannedToken {
         if self.is_at_end() {
             return self.make_spanned(Token.Error("Unterminated character literal".to_string()));
@@ -930,9 +931,7 @@ impl Lexer {
                 return self.make_spanned(Token.Error("Unknown escape sequence in character literal".to_string()));
             }
         } else {
-            let cp_start = self.current;
-            self.advance();
-            ch = first_char(self.src.substring(cp_start, self.current));
+            ch = self.consume_codepoint();
         }
         if self.is_at_end() or self.peek() != b'\'' {
             return self.make_spanned(Token.Error("Unterminated character literal".to_string()));
@@ -1147,7 +1146,7 @@ impl Lexer {
     // `c"…"` C-string literal. The opening `c"` is consumed. Accumulates a byte
     // sequence (ASCII verbatim; `\n \t \r \\ \"`, `\xHH`, and `\u{…}` →
     // UTF-8-byte escapes; interior NUL rejected — incl. `\0` / `\x00` / `\u{0}`).
-    // Multi-byte *non-escape* bodies (`c"λ"`) are still deferred (L2).
+    // Multi-byte *non-escape* bodies (`c"λ"`) encode to their UTF-8 bytes (L2).
     fn c_string(mut ref self) -> SpannedToken {
         let body_start = self.current;
         let mut bytes: Vec[u8] = Vec.new();
@@ -1216,12 +1215,14 @@ impl Lexer {
                     return self.make_spanned(Token.Error("Unknown escape sequence in C-string".to_string()));
                 }
             } else {
-                let b = self.peek();
-                if b >= 0x80 {
-                    return self.make_spanned(Token.Error("multi-byte C-string bodies are deferred".to_string()));
+                // ASCII copies through verbatim; a multi-byte codepoint encodes
+                // as its UTF-8 bytes (L2 — mirrors `src/lexer.rs::c_string`).
+                let c = self.consume_codepoint();
+                let mut tmp = "".to_string();
+                tmp.push(c);
+                for tb in tmp.bytes() {
+                    bytes.push(tb);
                 }
-                bytes.push(b);
-                self.advance();
             }
         }
         if self.is_at_end() {
@@ -1233,8 +1234,27 @@ impl Lexer {
     }
 
     fn identifier(mut ref self) -> SpannedToken {
-        while is_alpha(self.peek()) or is_digit(self.peek()) {
-            self.advance();
+        // Fold ASCII-alnum and non-ASCII ident-continue codepoints. A non-ASCII
+        // codepoint anywhere in the run makes the whole token a (deferred)
+        // non-ASCII identifier Error spanning the full run — mirrors
+        // `src/lexer.rs::identifier` (#29, gated on #13's classifier). Pure-ASCII
+        // identifiers (the common case) take the same path as before: the
+        // non-ASCII probe returns false immediately on an ASCII lead byte.
+        let mut non_ascii_seen = false;
+        let mut folding = true;
+        while folding {
+            let mut progressed = false;
+            if is_alpha(self.peek()) or is_digit(self.peek()) {
+                self.advance();
+                progressed = true;
+            } else if self.try_consume_non_ascii_ident_continue() {
+                non_ascii_seen = true;
+                progressed = true;
+            }
+            folding = progressed;
+        }
+        if non_ascii_seen {
+            return self.make_spanned(Token.Error("non-ASCII identifier is deferred to a future edition".to_string()));
         }
         let text = self.src.substring(self.start, self.current);
         // Natural form (#14 FIXED): the by-value aggregate param `token` is
@@ -1339,6 +1359,63 @@ impl Lexer {
     // non-ASCII *identifier* recovery (a run of Unicode letters folded into one
     // error) is deferred pending a Unicode `char.is_alphabetic` in karac
     // (blocker #13); for any isolated non-ASCII byte sequence this is exact.
+    // Consume the codepoint (1–4 UTF-8 bytes) at `current` and return it as one
+    // `char`. ASCII advances via the normal path (column +1); a multi-byte
+    // sequence advances `current` by its UTF-8 byte length but `column` by
+    // exactly one — mirrors `src/lexer.rs::consume_codepoint`, so non-ASCII
+    // literal bodies place one `char` (not mis-split bytes) and `column` stays
+    // codepoint-based for the tokens that follow.
+    fn consume_codepoint(mut ref self) -> char {
+        let lead = self.peek();
+        if lead < 0x80 {
+            let one_start = self.current;
+            self.advance();
+            return first_char(self.src.substring(one_start, self.current));
+        }
+        let len = utf8_byte_len(lead);
+        let mut end = self.current + len;
+        if end > self.bytes.len() {
+            end = self.bytes.len();
+        }
+        let cp_str = self.src.substring(self.current, end);
+        self.current = end;
+        self.column = self.column + 1;
+        first_char(cp_str)
+    }
+
+    // If the byte at `current` starts a UTF-8 sequence whose codepoint is
+    // identifier-continue (Unicode letter / numeric / `_`), consume the whole
+    // sequence (advancing `column` by one, not per byte) and return true;
+    // otherwise leave the cursor untouched and return false. Mirrors
+    // `src/lexer.rs::try_consume_non_ascii_ident_continue` (the seed returns the
+    // codepoint for its error message; the port needs only the boolean, since the
+    // oracle renders Error tokens as a bare `ERROR`).
+    fn try_consume_non_ascii_ident_continue(mut ref self) -> bool {
+        let lead = self.peek();
+        if lead < 0x80 {
+            return false;
+        }
+        let len = utf8_byte_len(lead);
+        if self.current + len > self.bytes.len() {
+            return false;
+        }
+        let c = first_char(self.src.substring(self.current, self.current + len));
+        if c.is_alphabetic() or c.is_numeric() or c == '_' {
+            self.current = self.current + len;
+            self.column = self.column + 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    // A non-ASCII lead byte. Consume the full UTF-8 codepoint, then dispatch on
+    // its class (mirrors `src/lexer.rs::non_ascii_at_lead`): a letter-class
+    // codepoint (or `_`, never reached for non-ASCII) opens would-be non-ASCII
+    // *identifier* recovery — fold the RUN of ASCII-alnum + non-ASCII
+    // ident-continue codepoints into ONE Error token spanning the whole run; any
+    // other codepoint becomes a single-codepoint "unexpected character" Error.
+    // The fold gates on the #13 `char.is_alphabetic` / `is_numeric` classifier.
     fn non_ascii_at_lead(mut ref self, lead: u8) -> SpannedToken {
         let len = utf8_byte_len(lead);
         let mut i = 1;
@@ -1348,7 +1425,23 @@ impl Lexer {
             }
             i = i + 1;
         }
-        self.make_spanned(Token.Error("unexpected non-ASCII character".to_string()))
+        let cp = first_char(self.src.substring(self.start, self.current));
+        if cp.is_alphabetic() or cp == '_' {
+            let mut folding = true;
+            while folding {
+                let mut progressed = false;
+                if is_alpha(self.peek()) or is_digit(self.peek()) {
+                    self.advance();
+                    progressed = true;
+                } else if self.try_consume_non_ascii_ident_continue() {
+                    progressed = true;
+                }
+                folding = progressed;
+            }
+            self.make_spanned(Token.Error("non-ASCII identifier is deferred to a future edition".to_string()))
+        } else {
+            self.make_spanned(Token.Error("unexpected non-ASCII character".to_string()))
+        }
     }
 }
 

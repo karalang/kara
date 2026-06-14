@@ -229,6 +229,35 @@ const CORPUS: &[&str] = &[
     "x € y",
     "1 + π",
     "λ + 1",
+    // Slice L2 + #29: multi-byte (non-ASCII) char / c-string literal BODIES, and
+    // multi-codepoint non-ASCII *identifier* recovery. The char / c-string body
+    // lexers now read a full UTF-8 codepoint via `consume_codepoint` (so `'λ'`
+    // carries the scalar, not a mis-split byte, and a c-string body encodes the
+    // codepoint's UTF-8 bytes); `non_ascii_at_lead` / `identifier` fold a RUN of
+    // Unicode letter/digit continuation codepoints into ONE Error token (gated on
+    // #13's `char.is_alphabetic` / `is_numeric` classifier). Error tokens render
+    // bare `ERROR`, so the folded-identifier cases assert SPAN parity.
+    // 2-/3-/4-byte char-literal bodies.
+    r#"'λ' '€' '🦀'"#,
+    r#"'é' 'Ω' '中'"#,
+    // Multi-byte c-string bodies (encode to their UTF-8 bytes; mixed with ASCII
+    // and escapes to check byte ordering + source_len).
+    r#"c"héllo""#,
+    r#"c"αβ""#,
+    r#"c"a λ\tb""#,
+    // Multi-codepoint non-ASCII identifier recovery → ONE Error (folded run).
+    "αβγ",
+    "λλλ",
+    // ASCII lead + non-ASCII tail folds into the one identifier-Error token.
+    "xβ",
+    "café",
+    "αx1",
+    // A non-letter non-ASCII codepoint does NOT fold: `·` (U+00B7) is its own
+    // single-codepoint Error and the following ASCII number lexes separately
+    // (two tokens, not one).
+    "·5",
+    // A letter-led non-ASCII run DOES fold a trailing ASCII digit (one Error).
+    "α5",
 ];
 
 /// Render one Rust `SpannedToken` in the Kāra lexer's canonical one-line
