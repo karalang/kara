@@ -11610,6 +11610,97 @@ fn main() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// Full build-path E2E for `String.split` on the wasm target (Weave
+/// dogfood follow-up). The split FFI (`karac_runtime_string_split`)
+/// allocates the `Vec[String]` from the unified wasi-libc heap
+/// (`runtime/src/wasm_alloc.rs`) that codegen's `free` reclaims from, and
+/// its size params are i64-width `u64` so the call matches codegen's i64
+/// size ABI (the `signature_mismatch:karac_runtime_string_split` trap class
+/// — same root as `__karac_malloc64`/B-2026-06-12-1). Exercises a
+/// String-separator split with leading/trailing/interior empty pieces and
+/// asserts the wasm output is byte-identical to the native semantics. Skips
+/// gracefully when the wasm archive, a wasm linker, the wasi sysroot, or
+/// node are absent.
+#[test]
+fn wasm_string_split_build_and_run_e2e() {
+    let tmp = wasm_test_dir("split");
+    let path = tmp.join("split_wasm.kara");
+    std::fs::write(
+        &path,
+        r#"
+fn main() {
+    // Interior empty piece (",,") plus a single-char and multi-char piece.
+    let s: String = "a,bb,,ccc";
+    let parts: Vec[String] = s.split(",");
+    println(parts.len());
+    for p in parts {
+        println(p);
+    }
+}
+"#,
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_wasi",
+            "--bindings=none",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_string_split_build_and_run_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "wasm build failed: {stderr}");
+    let wasm_path = tmp.join("split_wasm.wasm");
+    assert!(
+        wasm_path.exists(),
+        "expected split_wasm.wasm next to the build cwd",
+    );
+
+    let runner = tmp.join("run_wasi.mjs");
+    std::fs::write(
+        &runner,
+        "import { readFile } from 'node:fs/promises';\n\
+         import { WASI } from 'node:wasi';\n\
+         import { argv, exit } from 'node:process';\n\
+         const wasi = new WASI({ version: 'preview1', args: [], env: {} });\n\
+         const wasm = await WebAssembly.compile(await readFile(argv[2]));\n\
+         const instance = await WebAssembly.instantiate(wasm, wasi.getImportObject());\n\
+         exit(wasi.start(instance));\n",
+    )
+    .unwrap();
+    let node = std::process::Command::new("node")
+        .arg(&runner)
+        .arg(&wasm_path)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: wasm_string_split_build_and_run_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let node_stdout = String::from_utf8_lossy(&node_out.stdout);
+    let node_stderr = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success(),
+        "wasm split module failed under node:wasi: stdout={node_stdout} stderr={node_stderr}",
+    );
+    // 4 pieces: "a", "bb", "" (interior), "ccc" — byte-identical to native.
+    assert_eq!(
+        node_stdout, "4\na\nbb\n\nccc\n",
+        "wasm String.split output must match native semantics; stderr={node_stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// phase-10 "WASM entry-point discovery" (sub-slice A): a `pub fn`
 /// positively tagged `#[target(wasm_wasi)]` becomes a wasm module export
 /// (`--export=add`), callable from JS alongside `_start`. Built

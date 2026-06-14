@@ -432,7 +432,8 @@ fn aggregate(rows: NonEmpty[EnrichedRow]) -> Summary
 > to `karac run` — the first dogfood to drive refinement types + contracts +
 > effects + provider injection + struct-variant `impl Display` through the full
 > codegen path. Getting there surfaced and fixed **seven** distinct codegen bugs
-> (see the codegen-build entry below). Wasm split is the only open follow-up.
+> (see the codegen-build entry below). **All Weave follow-ups are now closed** —
+> the last open one, wasm `String.split`, landed 2026-06-13 (B-2026-06-13-16).
 >
 > Resolved follow-ons (design record):
 > - [x] **Weave `karac build` (full codegen path) — ✓ RESOLVED 2026-06-13.**
@@ -462,15 +463,24 @@ fn aggregate(rows: NonEmpty[EnrichedRow]) -> Summary
 >   `String.split` on a non-identifier receiver and a call-result `.method()`
 >   chain both still fall through codegen dispatch (sidestepped in Weave by
 >   binding to a local) — minor, tracked in phase-7.
-> - [x] **Codegen `String.split` — ✓ RESOLVED 2026-06-13.** A runtime out-param
->   helper `karac_runtime_string_split` (native, `cfg(not(wasm))`) does the split
->   in Rust and writes the `Vec[String]` `{data,len,cap}` (libc::malloc'd buffers
+> - [x] **Codegen `String.split` — ✓ RESOLVED 2026-06-13 (native + wasm).** A
+>   runtime out-param helper `karac_runtime_string_split` (all targets) does the
+>   split in Rust and writes the `Vec[String]` `{data,len,cap}` (malloc'd buffers
 >   the binding frees) to out-pointers; the `vec_method.rs` `"split"` arm derives
 >   `(sep_ptr, sep_len)` from a char/String and calls it. Tests:
 >   `tests/codegen.rs::e2e_string_split_codegen` +
->   `tests/memory_sanitizer.rs::asan_string_split_no_leak_no_double_free`. → closed
->   in [`phase-7-codegen.md`](implementation_checklist/phase-7-codegen.md). Wasm
->   split is a follow-up (no libc malloc on wasm).
+>   `tests/memory_sanitizer.rs::asan_string_split_no_leak_no_double_free` +
+>   `tests/cli.rs::wasm_string_split_build_and_run_e2e` (node:wasi, output
+>   byte-identical to native). → closed in
+>   [`phase-7-codegen.md`](implementation_checklist/phase-7-codegen.md). **Wasm
+>   split — ✓ CLOSED 2026-06-13 (B-2026-06-13-16):** the `cfg(not(wasm))` gate
+>   assumed "no libc malloc on wasm," but `wasm_alloc.rs` makes wasi-libc
+>   `malloc`/`free` the global allocator (one unified heap); the real blocker was
+>   a latent ABI bug — the FFI's size params were `usize` (i32 on wasm32) vs
+>   codegen's i64, trapping `signature_mismatch:karac_runtime_string_split` —
+>   fixed by retyping them `u64`. See
+>   [`phase-10-targets.md`](implementation_checklist/phase-10-targets.md)
+>   ("`String.split` on wasm").
 > - [x] **Multi-module `karac run` — ✓ RESOLVED 2026-06-13.** `cmd_run` now
 >   detects when the entry file belongs to a multi-module project, builds the
 >   module tree, and merges every module's items into a super-program (the

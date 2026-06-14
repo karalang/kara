@@ -171,12 +171,13 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             // `String.split(sep) -> Vec[String]` (GAP-W2). Delegates to the
             // runtime `karac_runtime_string_split`, which builds the
-            // `Vec[String]` `{data, len, cap}` with libc::malloc'd buffers (the
+            // `Vec[String]` `{data, len, cap}` with malloc'd buffers (the
             // Vec buffer + each element String's buffer) the binding's
             // scope-exit drop frees. Out-param ABI (pointer args only — no
             // struct return). `sep` is a `char` (UTF-8 encoded here) or a
-            // `String` (its `{data, len}`). Native-only (the runtime helper is
-            // `cfg(not(wasm))`); wasm `String.split` is a follow-up.
+            // `String` (its `{data, len}`). All targets: on wasm the runtime
+            // helper allocates from the unified wasi-libc heap (`wasm_alloc.rs`)
+            // that codegen's `free` reclaims from.
             "split" => {
                 if args.is_empty() {
                     return Err("String.split requires a separator argument".to_string());

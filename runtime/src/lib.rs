@@ -4154,9 +4154,18 @@ mod cstr_to_string_tests {
 // Vec buffer + each element String's buffer), matching the
 // `write_owned_bytes_into_out_params` convention used by the http-client FFI.
 // Empty pieces are `{null, 0, 0}` (cap 0 → the element drop's `cap > 0` guard
-// skips the free). Native-only — the wasm archives have no libc malloc; wasm
-// `String.split` codegen is a follow-up.
-#[cfg(not(target_family = "wasm"))]
+// skips the free).
+//
+// All-targets — including the wasm archives. On `wasm32-wasip1` `wasm_alloc.rs`
+// registers wasi-libc's `malloc`/`free` as Rust's global allocator, so the
+// `malloc` extern below hits the *same single heap* that codegen-emitted `free`
+// reclaims from (codegen drops these buffers via plain `free`, which lowers to
+// wasi-libc `free`). wasm32's `usize` is i32, matching wasi-libc `malloc`'s
+// native signature — the i64 `__karac_malloc64` shim is only needed for
+// karac-emitted IR (which declares the allocator with an i64 size), not for
+// this runtime-internal Rust call. The `fn malloc(size: usize) -> *mut u8`
+// signature matches `wasm_alloc.rs`'s decl exactly, so no
+// `clashing_extern_declarations` on the `-D warnings` wasm clippy gate.
 mod string_split_ffi {
     extern "C" {
         fn malloc(size: usize) -> *mut u8;
@@ -4183,16 +4192,29 @@ mod string_split_ffi {
     /// # Safety
     /// `s` / `sep` must be valid for `s_len` / `sep_len` bytes (or null when
     /// the length is 0); the three out-pointers must be valid for one write.
+    ///
+    /// Size params are `u64`, not `usize`: codegen declares this symbol with an
+    /// i64 size ABI (correct for `size_t` on every 64-bit native target) and
+    /// passes i64 byte counts. wasm32's `usize` is i32, and wasm traps
+    /// signature-mismatched calls (`signature_mismatch:karac_runtime_string_split`),
+    /// so the params must be the i64-width `u64` on every target and narrow to
+    /// `usize` internally — the same fix class as `__karac_malloc64`
+    /// (B-2026-06-12-1), but applied to our own symbol's signature rather than
+    /// via a shim. A length is a real in-memory byte count, so it always fits
+    /// `usize` (wasm32 linear memory is < 4 GiB); the saturating narrow is
+    /// belt-and-suspenders.
     #[no_mangle]
     pub unsafe extern "C" fn karac_runtime_string_split(
         s: *const u8,
-        s_len: usize,
+        s_len: u64,
         sep: *const u8,
-        sep_len: usize,
+        sep_len: u64,
         out_data: *mut *mut u8,
         out_len: *mut i64,
         out_cap: *mut i64,
     ) {
+        let s_len = usize::try_from(s_len).unwrap_or(usize::MAX);
+        let sep_len = usize::try_from(sep_len).unwrap_or(usize::MAX);
         let hay: &[u8] = if s.is_null() || s_len == 0 {
             &[]
         } else {
