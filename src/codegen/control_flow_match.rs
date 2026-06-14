@@ -378,6 +378,14 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(self.context.i64_type().const_int(0, false).into());
         }
 
+        // Reconcile narrow-int arm widths before the phi: arms that went
+        // through narrow-int arithmetic (or are suffixless literals) carry i64
+        // beside narrow-typed siblings of the SAME Kāra type. Truncate the wide
+        // ones down so the all-same-type check below holds and the phi is built
+        // rather than falling through to the const-0 placeholder. See
+        // `unify_int_branch_widths` for the value-preservation invariant.
+        self.unify_int_match_arm_widths(&mut arm_results);
+
         // Build phi if all (live) arms produce a value of the same type. A
         // single live arm (the rest diverging) yields a one-incoming phi,
         // which is valid and dominates the merge — so

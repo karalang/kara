@@ -1788,6 +1788,54 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_narrow_int_arith_branch_phi_width() {
+        // Regression for the narrow-int-arithmetic sibling of #7's literal case
+        // (kata #125 valid-palindrome's `to_lower` / ASCII case-fold surface).
+        // `compile_narrow_int_binop` range-checks `b + 32u8` to the declared u8
+        // width but leaves the VALUE at the i64 it computes at (boundary
+        // coercion narrows it later). When that wide branch sits beside a bare
+        // narrow branch in a value `if`/`match`/`if let`, the phi-merge saw
+        // mismatched widths (i64 vs i8) and fell through to the const-0
+        // placeholder — the WHOLE construct returned 0. The earlier
+        // `is_const()`-gated width fix only handled the literal case; this asserts
+        // the runtime-wide branch is truncated in its predecessor too, across all
+        // three merge sites.
+        if let Some(out) = run_program(
+            // if/else: arith then-branch, plain else-branch (and the mirror)
+            "fn to_lower(b: u8) -> u8 {\n\
+                 if b >= b'A' and b <= b'Z' { b + (b'a' - b'A') } else { b }\n\
+             }\n\
+             fn to_upper(b: u8) -> u8 {\n\
+                 if b >= b'a' and b <= b'z' { b } else { b - 0u8 }\n\
+             }\n\
+             // match: mixed arith / plain / arith arms\n\
+             fn fold_match(b: u8) -> u8 {\n\
+                 match b {\n\
+                     b'A' => b + 32u8,\n\
+                     b'B' => b,\n\
+                     _ => b + 1u8,\n\
+                 }\n\
+             }\n\
+             // if let: arith Some-arm, literal None-arm\n\
+             fn opt_fold(o: Option[u8]) -> u8 {\n\
+                 if let Some(x) = o { x + 10u8 } else { 0u8 }\n\
+             }\n\
+             fn main() {\n\
+                 println(to_lower(b'A').to_string()); // 97  (was 0)\n\
+                 println(to_lower(b'e').to_string()); // 101 (was 0, else branch)\n\
+                 println(to_upper(b'b').to_string()); // 98\n\
+                 println(fold_match(b'A').to_string()); // 97 (was 0)\n\
+                 println(fold_match(b'B').to_string()); // 66 (plain arm)\n\
+                 println(fold_match(b'z').to_string()); // 123 (wildcard arm)\n\
+                 println(opt_fold(Some(5u8)).to_string()); // 15 (was 0)\n\
+                 println(opt_fold(None).to_string());      // 0\n\
+             }",
+        ) {
+            assert_eq!(out, "97\n101\n98\n97\n66\n123\n15\n0\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_diverging_branch_in_value_position() {
         // Regression for self-hosting #12: a tail-less block whose body
         // diverges (`{ return e; }`) now types as `Never` rather than

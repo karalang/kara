@@ -18,8 +18,9 @@
 
 use crate::ast::*;
 
-use inkwell::types::BasicTypeEnum;
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum};
+use inkwell::basic_block::BasicBlock;
+use inkwell::types::{BasicTypeEnum, IntType};
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, IntValue};
 
 use super::state::LoopFrame;
 
@@ -143,8 +144,8 @@ impl<'ctx> super::Codegen<'ctx> {
             (false, true) => Ok(then_val.unwrap_or(placeholder)),
             (false, false) => {
                 if let (Some(tv), Some(ev)) = (then_val, else_val) {
-                    // Same suffixless-literal width reconciliation as `compile_if`.
-                    let (tv, ev) = self.unify_int_branch_widths(tv, ev);
+                    // Same narrow-int width reconciliation as `compile_if`.
+                    let (tv, ev) = self.unify_int_branch_widths(tv, then_end, ev, else_end);
                     if tv.get_type() == ev.get_type() {
                         let phi = self.builder.build_phi(tv.get_type(), "ifletval").unwrap();
                         phi.add_incoming(&[(&tv, then_end), (&ev, else_end)]);
@@ -894,7 +895,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // back to the const-0 placeholder.
             (false, false) => {
                 if let (Some(tv), Some(ev)) = (then_val, else_val) {
-                    let (tv, ev) = self.unify_int_branch_widths(tv, ev);
+                    let (tv, ev) = self.unify_int_branch_widths(tv, then_end_bb, ev, else_end_bb);
                     if tv.get_type() == ev.get_type() {
                         let phi = self.builder.build_phi(tv.get_type(), "ifval").unwrap();
                         phi.add_incoming(&[(&tv, then_end_bb), (&ev, else_end_bb)]);
@@ -907,46 +908,127 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// Reconcile the LLVM int widths of an `if`/`if let`'s two branch values
-    /// before the phi. A suffixless integer literal (`0`) lowers at the
-    /// default `i64` width — `const_int_for_suffix` keys off the suffix only,
-    /// ignoring the typechecker's inferred type — so a branch that is just
-    /// `{ 0 }` produces an `i64` while the sibling branch carries its real
-    /// narrower type (`u8`, …). The typechecker has ALREADY unified both
-    /// branches to one type, so the only width mismatch reachable here is this
-    /// default-`i64`-literal-vs-narrower case, and the wider side is therefore
-    /// a compile-time constant the checker verified fits. Truncate it to the
-    /// narrower width so the phi's operands agree.
+    /// before the phi. The typechecker has ALREADY unified both branches to one
+    /// Kāra type, so any LLVM width mismatch reachable here is a codegen
+    /// representation artifact of that single type — never two genuinely
+    /// different types. Two such artifacts both surface as a wide branch beside
+    /// a narrow one:
+    ///
+    /// - a suffixless integer literal (`0`) lowers at the default `i64` width
+    ///   (`const_int_for_suffix` keys off the suffix only), while the sibling
+    ///   carries its real narrower type (`u8`, …) — `{ 0 } else { byte }`;
+    /// - a narrow-int arithmetic expr keeps the i64 it is computed at
+    ///   (`compile_narrow_int_binop` range-checks to the declared width but
+    ///   leaves the value wide for boundary coercion — see its doc), while the
+    ///   sibling is the bare narrow value — `if upper { b + 32 } else { b }`,
+    ///   the ASCII case-fold surface.
+    ///
+    /// Either way the wider side's meaningful bits fit the narrower width (same
+    /// Kāra type), so truncating it down is value-preserving and makes the phi's
+    /// operands agree. The truncate is emitted in the *wider branch's
+    /// predecessor* (before its terminating branch to the merge block) so the
+    /// phi operand dominates its incoming edge; a const folds with no
+    /// instruction, so its position is immaterial. The builder is restored to
+    /// the caller's insert block (the merge).
     ///
     /// Without this, the merge falls through to the const-`0` placeholder and
-    /// the WHOLE `if` evaluates to `0` (self-hosting #7: the lexer's
-    /// `fn peek(ref self) -> u8 { if … { 0 } else { self.bytes[self.current] } }`
-    /// always returned 0, so every scan loop exited immediately). Gated on
-    /// `is_const()` so a (typechecker-impossible) non-constant wide branch is
-    /// left untouched rather than lossily truncated — that case falls through
-    /// to the existing placeholder path, preserving prior behavior.
+    /// the WHOLE construct evaluates to `0` — originally self-hosting #7 (the
+    /// lexer's `fn peek(ref self) -> u8 { if … { 0 } else { … } }` always
+    /// returned 0, so every scan loop exited immediately); then the
+    /// arithmetic-branch case (`to_lower` / case-fold), which the earlier
+    /// `is_const()`-gated version still mis-lowered because it assumed a
+    /// non-constant wide branch was typechecker-impossible — narrow-int
+    /// arithmetic makes it routine.
     fn unify_int_branch_widths(
         &self,
         a: BasicValueEnum<'ctx>,
+        a_pred: BasicBlock<'ctx>,
         b: BasicValueEnum<'ctx>,
+        b_pred: BasicBlock<'ctx>,
     ) -> (BasicValueEnum<'ctx>, BasicValueEnum<'ctx>) {
         let (BasicValueEnum::IntValue(av), BasicValueEnum::IntValue(bv)) = (a, b) else {
             return (a, b);
         };
         let (aw, bw) = (av.get_type().get_bit_width(), bv.get_type().get_bit_width());
-        if aw > bw && av.is_const() {
-            let t = self
-                .builder
-                .build_int_truncate(av, bv.get_type(), "ifw.trunc")
-                .unwrap();
-            (t.into(), b)
-        } else if bw > aw && bv.is_const() {
-            let t = self
-                .builder
-                .build_int_truncate(bv, av.get_type(), "ifw.trunc")
-                .unwrap();
-            (a, t.into())
+        if aw > bw {
+            (
+                self.truncate_branch_value_in_pred(av, bv.get_type(), a_pred),
+                b,
+            )
+        } else if bw > aw {
+            (
+                a,
+                self.truncate_branch_value_in_pred(bv, av.get_type(), b_pred),
+            )
         } else {
             (a, b)
+        }
+    }
+
+    /// Truncate a phi-bound integer branch value down to `target`, emitting the
+    /// `trunc` at the END of its predecessor block (before that block's
+    /// terminating branch to the merge) so the result dominates the phi's
+    /// incoming edge — a `trunc` in the merge block itself would not. A
+    /// compile-time constant folds with no instruction emitted, so the
+    /// repositioning is a harmless no-op for it. The builder's insert position
+    /// is saved and restored, so the caller (positioned at the merge block)
+    /// sees no change. Shared by the `if` / `if let` two-arm merge and the
+    /// `match` N-arm merge (`unify_int_match_arm_widths`).
+    fn truncate_branch_value_in_pred(
+        &self,
+        v: IntValue<'ctx>,
+        target: IntType<'ctx>,
+        pred: BasicBlock<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        let resume = self.builder.get_insert_block();
+        match pred.get_terminator() {
+            Some(term) => self.builder.position_before(&term),
+            None => self.builder.position_at_end(pred),
+        }
+        let t = self
+            .builder
+            .build_int_truncate(v, target, "ifw.trunc")
+            .unwrap();
+        if let Some(bb) = resume {
+            self.builder.position_at_end(bb);
+        }
+        t.into()
+    }
+
+    /// Harmonize the LLVM int widths of a `match`'s arm values before the phi —
+    /// the N-arm analog of [`unify_int_branch_widths`]. Same invariant (the
+    /// typechecker unified every arm to one Kāra type) and same artifact
+    /// (suffixless literals / narrow-int arithmetic leave some arms i64 beside
+    /// narrow siblings). Truncates every arm value wider than the narrowest to
+    /// that narrowest width, each in its own predecessor block. Arms that are
+    /// not integers, or already share the minimum width, pass through untouched.
+    pub(super) fn unify_int_match_arm_widths(
+        &self,
+        arms: &mut [(BasicValueEnum<'ctx>, BasicBlock<'ctx>)],
+    ) {
+        let min_width = arms
+            .iter()
+            .filter_map(|(v, _)| match v {
+                BasicValueEnum::IntValue(iv) => Some(iv.get_type().get_bit_width()),
+                _ => None,
+            })
+            .min();
+        let Some(min_width) = min_width else {
+            return;
+        };
+        let target = match min_width {
+            8 => self.context.i8_type(),
+            16 => self.context.i16_type(),
+            32 => self.context.i32_type(),
+            128 => self.context.i128_type(),
+            _ => self.context.i64_type(),
+        };
+        for (v, bb) in arms.iter_mut() {
+            if let BasicValueEnum::IntValue(iv) = v {
+                if iv.get_type().get_bit_width() > min_width {
+                    *v = self.truncate_branch_value_in_pred(*iv, target, *bb);
+                }
+            }
         }
     }
 
