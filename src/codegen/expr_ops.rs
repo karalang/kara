@@ -1678,19 +1678,31 @@ impl<'ctx> super::Codegen<'ctx> {
                 let field_ty_names = self.struct_field_type_names.get(obj_ty.as_str())?;
                 field_ty_names.get(idx).and_then(|n| n.clone())
             }
-            // Struct field through a tuple element (`t.1.name`): resolve the
-            // element's struct type from the tuple binding's recorded element
-            // type names (B-2026-06-11-6). Only an Identifier-rooted tuple is
-            // covered — a deeper-nested base (`a.b.1`) isn't recorded.
+            // Struct type of a tuple element. #25/#26 (B-2026-06-14-4): a
+            // FieldAccess/TupleIndex-rooted tuple (`h.ps.0`) must resolve the
+            // element's struct type via the tuple's element `TypeExpr`s — the
+            // same deep-chain walk the match-suppression path uses
+            // (`place_chain_tuple_tes`). Without it the FieldAccess read path
+            // (`h.ps.0.n` / `h.ps.0.tok`) can't find the element struct's field
+            // layout (`field_index_for` → `type_name_of_expr` is None), so it
+            // returns the `i64 0` placeholder for a scalar field and mis-binds
+            // an enum field's match scrutinee. For an Identifier-rooted tuple
+            // var (`t.1.name`) the element TEs aren't recorded, so fall back to
+            // the per-element type-name table (B-2026-06-11-6).
             ExprKind::TupleIndex { object, index } => {
+                if let Some(elems) = self.place_chain_tuple_tes(object) {
+                    if let Some(TypeKind::Path(p)) = elems.get(*index as usize).map(|t| &t.kind) {
+                        return p.segments.last().cloned();
+                    }
+                }
                 if let ExprKind::Identifier(t) = &object.kind {
-                    self.tuple_var_elem_type_names
+                    return self
+                        .tuple_var_elem_type_names
                         .get(t.as_str())
                         .and_then(|names| names.get(*index as usize))
-                        .and_then(|n| n.clone())
-                } else {
-                    None
+                        .and_then(|n| n.clone());
                 }
+                None
             }
             _ => None,
         }

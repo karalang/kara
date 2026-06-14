@@ -13130,6 +13130,52 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_deep_tuple_index_field_read_and_match() {
+        // #25 (phase-12 self-hosting, B-2026-06-14-4) — reading a struct field
+        // through a `<struct>.tuplefield.0.<field>` place chain. The element-0
+        // struct's type wasn't resolved by `type_name_of_expr`'s `TupleIndex`
+        // arm (Identifier-rooted only), so `field_index_for` found no field and
+        // `compile_field_access` returned the `i64 0` placeholder — a scalar
+        // field `h.ps.0.n` read 0 instead of 42, and an enum field
+        // `match h.ps.0.tok { Id(s) => s.len() }` build-failed because the
+        // scrutinee never resolved to its enum (so the arm binding `s` got no
+        // String dispatch — "no handler for method 'len' on variable 's'"). Fix:
+        // resolve the element struct type via the deep-chain walk
+        // (`place_chain_tuple_tes`) for a non-Identifier-rooted tuple. The
+        // match-arm payload consume is guardmalloc-clean (the existing #21
+        // tuple-index match suppression cap-zeros the source); see
+        // `asan_deep_tuple_index_match_no_double_free`. Element 1 (`h.ps.1`, a
+        // scalar) always read correctly — only element-0-as-aggregate was broken.
+        if let Some(out) = run_program(
+            r#"
+enum Tok { Id(String), Num(i64) }
+struct Inner { tok: Tok, n: i64 }
+struct Hs { ps: (Inner, i64) }
+fn main() {
+    let h = Hs { ps: (Inner { tok: Tok.Id("hello".to_string()), n: 42 }, 7) };
+    // Scalar field through the tuple chain (was 0).
+    println(h.ps.0.n.to_string());
+    // Scalar second element (always worked — regression guard).
+    println(h.ps.1.to_string());
+    // Enum field as a match scrutinee — the arm binding dispatch (was build-fail).
+    match h.ps.0.tok {
+        Id(s) => { println(s.len().to_string()); }
+        Num(n) => { println(n.to_string()); }
+    }
+    // Borrow arm (prints the payload directly).
+    let h2 = Hs { ps: (Inner { tok: Tok.Id("world".to_string()), n: 1 }, 2) };
+    match h2.ps.0.tok {
+        Id(s) => { println(s); }
+        Num(n) => { println(n.to_string()); }
+    }
+}
+"#,
+        ) {
+            assert_eq!(out, "42\n7\n5\nworld\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_call_result_tuple_var_drop() {
         // #24 (phase-12 self-hosting) — a let-bound tuple VAR sourced from a CALL
         // (`let p = ret_tuple(i)`, RHS a `Call`, not a tuple literal, no annotation)

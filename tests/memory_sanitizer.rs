@@ -3696,6 +3696,55 @@ fn main() {
     }
 
     #[test]
+    fn asan_deep_tuple_index_match_no_double_free() {
+        // #25 (phase-12 self-hosting, B-2026-06-14-4) — the read-path fix that
+        // lets `match h.ps.0.tok { Id(s) => … }` (a `<struct>.tuplefield.0.<enum
+        // field>` scrutinee) compile must not introduce a double-free: the arm
+        // CONSUMES the enum payload (`s`) that the owning `h`'s tuple drop also
+        // frees. The #21 tuple-index match suppression
+        // (`suppress_destructured_struct_field_enum_cleanup` via the
+        // `place_chain_type_name` TupleIndex hop) cap-zeros the source, so `s`
+        // is the sole owner. Loop-stressed over consume (`s.len()`), borrow
+        // (`println(s)`), and the scalar second element (`h.ps.1`, regression).
+        // f-string payloads keep the heap non-foldable so Linux LSan sees a real
+        // leak if the suppression mis-fires. The heap `let`-binding form
+        // (`let inr = h.ps.0`) is a SEPARATE pre-existing move-out double-free
+        // (tracker #27) and is deliberately not exercised here.
+        assert_clean_asan_run(
+            r#"
+enum Tok { Id(String), Num(i64) }
+struct Inner { tok: Tok, n: i64 }
+struct Hs { ps: (Inner, i64) }
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 8 {
+        let h = Hs { ps: (Inner { tok: Tok.Id(f"id-{i}"), n: i }, i) };
+        // Consume arm — `s` owns the payload; h's tuple drop must skip it.
+        match h.ps.0.tok {
+            Id(s) => { acc = acc + s.len(); }
+            Num(n) => { acc = acc + n; }
+        }
+        // Borrow arm over a fresh value.
+        let h2 = Hs { ps: (Inner { tok: Tok.Id(f"v-{i}"), n: i }, i) };
+        match h2.ps.0.tok {
+            Id(s) => { acc = acc + s.len(); }
+            Num(n) => { acc = acc + n; }
+        }
+        // Scalar second element (regression guard).
+        acc = acc + h.ps.1;
+        i = i + 1;
+    }
+    if acc > 999999 { println("never"); }
+    println("done");
+}
+"#,
+            &["done"],
+            "deep_tuple_index_match_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_call_result_tuple_var_no_leak() {
         // #24 (phase-12 self-hosting) — a let-bound tuple VAR sourced from a CALL
         // (`let p = ret_tuple(i)`) whose only heap is an enum / Map leaf leaked: the
