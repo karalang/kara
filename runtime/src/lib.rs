@@ -885,20 +885,95 @@ impl Drop for FrameGuard {
 // while the OUTER branch's capture is still installed, so inner output folds
 // into the outer capture and defers to the outer flush.
 
+// Panic-free libc allocator hooks for `OutputCapture`'s buffers. Declared
+// locally (not via the `libc` crate) to keep the runtime's dep surface
+// unchanged. Using these instead of Rust `Vec` is LOAD-BEARING for binary size:
+// `Vec::push`/`extend_from_slice` carry a capacity-overflow PANIC path, and
+// `write_console` is force-kept on the `println` hot path, so that panic would
+// anchor std's panic/backtrace symbolizer (~57 KB, `__Unwind_Backtrace`) into
+// EVERY `println`-using binary — blowing the lean binary-size floor
+// (B-2026-06-14-20; the B-2026-06-11-8 class). `realloc`/`free` + `abort`-on-OOM
+// is panic-free, so the symbolizer stays DCE-strippable for a no-`par` binary.
+extern "C" {
+    fn realloc(ptr: *mut c_void, size: usize) -> *mut c_void;
+    fn free(ptr: *mut c_void);
+    fn abort() -> !;
+}
+
+/// One captured write: `len` bytes destined for `stream` (stdout/stderr FILE*).
+#[derive(Clone, Copy)]
+struct Seg {
+    len: usize,
+    stream: *mut c_void,
+}
+
 /// A parallel branch's deferred console output: a flat byte buffer plus one
-/// `(len, stream)` segment per `write_console` call, so the replay preserves
-/// both within-branch ordering and per-stream (stdout vs stderr) routing.
+/// `Seg` per `write_console` call, so the replay preserves both within-branch
+/// ordering and per-stream (stdout vs stderr) routing. Backed by panic-free
+/// `realloc` buffers (see the allocator note above), NOT `Vec`.
 struct OutputCapture {
-    data: Vec<u8>,
-    segs: Vec<(usize, *mut c_void)>,
+    data: *mut u8,
+    data_len: usize,
+    data_cap: usize,
+    segs: *mut Seg,
+    segs_len: usize,
+    segs_cap: usize,
 }
 
 impl OutputCapture {
     const fn new() -> Self {
         OutputCapture {
-            data: Vec::new(),
-            segs: Vec::new(),
+            data: ptr::null_mut(),
+            data_len: 0,
+            data_cap: 0,
+            segs: ptr::null_mut(),
+            segs_len: 0,
+            segs_cap: 0,
         }
+    }
+
+    /// Append `n` bytes from `src` to the data buffer (panic-free growth;
+    /// `abort` on OOM). Length arithmetic is unchecked — release builds wrap
+    /// rather than panic, and realistic console output never nears `usize::MAX`.
+    unsafe fn push_bytes(&mut self, src: *const u8, n: usize) {
+        if self.data_len + n > self.data_cap {
+            let mut newcap = if self.data_cap == 0 {
+                64
+            } else {
+                self.data_cap * 2
+            };
+            while newcap < self.data_len + n {
+                newcap *= 2;
+            }
+            let p = realloc(self.data as *mut c_void, newcap) as *mut u8;
+            if p.is_null() {
+                abort();
+            }
+            self.data = p;
+            self.data_cap = newcap;
+        }
+        ptr::copy_nonoverlapping(src, self.data.add(self.data_len), n);
+        self.data_len += n;
+    }
+
+    /// Record one `(len, stream)` segment (panic-free growth; `abort` on OOM).
+    unsafe fn push_seg(&mut self, len: usize, stream: *mut c_void) {
+        if self.segs_len == self.segs_cap {
+            let newcap = if self.segs_cap == 0 {
+                8
+            } else {
+                self.segs_cap * 2
+            };
+            let bytes = newcap * core::mem::size_of::<Seg>();
+            let p = realloc(self.segs as *mut c_void, bytes) as *mut Seg;
+            if p.is_null() {
+                abort();
+            }
+            self.segs = p;
+            self.segs_cap = newcap;
+        }
+        *self.segs.add(self.segs_len) = Seg { len, stream };
+        self.segs_len += 1;
     }
 
     /// Replay every segment through the console chokepoint, in capture order.
@@ -913,9 +988,23 @@ impl OutputCapture {
     /// `stdout`/`stderr` globals outlive any `par` region).
     unsafe fn replay(&self) {
         let mut off = 0usize;
-        for &(len, stream) in &self.segs {
-            karac_runtime_write_console(self.data.as_ptr().add(off), len, stream);
-            off += len;
+        for i in 0..self.segs_len {
+            let seg = *self.segs.add(i);
+            karac_runtime_write_console(self.data.add(off), seg.len, seg.stream);
+            off += seg.len;
+        }
+    }
+}
+
+impl Drop for OutputCapture {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.data.is_null() {
+                free(self.data as *mut c_void);
+            }
+            if !self.segs.is_null() {
+                free(self.segs as *mut c_void);
+            }
         }
     }
 }
@@ -968,7 +1057,15 @@ pub unsafe extern "C" fn karac_runtime_write_console(
     len: usize,
     stream: *mut c_void,
 ) {
-    let redir = OUTPUT_REDIRECT.with(|c| c.get());
+    // `try_with`, not `with`: `LocalKey::with` statically references its
+    // `.expect("cannot access a TLS value during destruction")` panic, which
+    // would anchor the panic/backtrace symbolizer into every `println`-using
+    // binary (the lean-floor regression, B-2026-06-14-20). `try_with` is
+    // panic-free — a TLS-destruction access yields `Err`, treated as "no
+    // capture installed" (write straight to the fd).
+    let redir = OUTPUT_REDIRECT
+        .try_with(|c| c.get())
+        .unwrap_or(ptr::null_mut());
     if redir.is_null() {
         // Declared locally (not via the `libc` crate) to keep the runtime's
         // dependency surface unchanged; `size_t`-width args match codegen's
@@ -978,10 +1075,12 @@ pub unsafe extern "C" fn karac_runtime_write_console(
         }
         fwrite(data as *const c_void, 1, len, stream);
     } else {
+        // Panic-free buffer append (see `OutputCapture` allocator note) — using
+        // `Vec` here would re-anchor the symbolizer via its capacity-overflow
+        // panic path.
         let cap = &mut *redir;
-        cap.data
-            .extend_from_slice(std::slice::from_raw_parts(data, len));
-        cap.segs.push((len, stream));
+        cap.push_bytes(data, len);
+        cap.push_seg(len, stream);
     }
 }
 

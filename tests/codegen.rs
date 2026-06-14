@@ -25179,20 +25179,22 @@ fn main() {
             );
         }
         // Sanity: the IR should print "disk full" through the proper
-        // String-payload destructure, not via an integer mis-read. The
-        // String path lowers to a NUL-safe `@fwrite` (L5); the wrong path
-        // (mis-typing the payload as i64) would lower `println(msg)` to a
-        // `printf("%lld\n")`. The discriminator is the `%lld\0A` format
-        // (with newline) — the module also carries `%lld\00` (no newline)
-        // f-string integer-format globals unconditionally, so a bare `%lld`
-        // check would false-positive; the `\0A`-terminated form is the
-        // `println`-of-integer fingerprint.
+        // String-payload destructure, not via an integer mis-read. The String
+        // path lowers to the NUL-safe console chokepoint `@karac_runtime_write_console`
+        // (the auto-par ordered-output primitive, B-2026-06-14-20; it replaced
+        // the direct `@fwrite` of the pre-ordered-output path — the runtime fn
+        // is what now funnels to libc `fwrite`); the wrong path (mis-typing the
+        // payload as i64) would lower `println(msg)` to a `printf("%lld\n")`.
+        // The discriminator is the `%lld\0A` format (with newline) — the module
+        // also carries `%lld\00` (no newline) f-string integer-format globals
+        // unconditionally, so a bare `%lld` check would false-positive; the
+        // `\0A`-terminated form is the `println`-of-integer fingerprint.
         assert!(
-            first.contains("@fwrite") && !first.contains("%lld\\0A"),
-            "expected IR to emit a length-prefixed string `fwrite` for \
-             `Other(msg) => println(msg)` with no `println`-of-integer \
-             format string; got the `%lld\\n` integer path (the \
-             wrong-enum-layout symptom)"
+            first.contains("@karac_runtime_write_console") && !first.contains("%lld\\0A"),
+            "expected IR to emit the length-prefixed string console write \
+             (`@karac_runtime_write_console`) for `Other(msg) => println(msg)` \
+             with no `println`-of-integer format string; got the `%lld\\n` \
+             integer path (the wrong-enum-layout symptom)"
         );
     }
 
