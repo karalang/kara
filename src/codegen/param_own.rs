@@ -634,6 +634,72 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// #27 (B-2026-06-14-8) — `let tk = h.ps.0.tok`: an enum field moved OUT of
+    /// a struct that is itself nested in a TUPLE element. The source `value` is a
+    /// `FieldAccess` whose OBJECT is a deeper place (`h.ps.0`, a `TupleIndex`),
+    /// which [`Self::suppress_struct_field_move_into_literal`] (Identifier/`self`
+    /// object only) can't reach. Resolve the field via the place-chain machinery
+    /// ([`Self::field_chain_place_ptr`] / [`Self::place_chain_type_name`]) and
+    /// cap-zero the enum payload in the owning struct's slot, so its drop skips
+    /// the buffer the moved-out `tk` now owns (else double-free). Self-gates to a
+    /// non-Identifier/`self` object (the shallow forms keep their dedicated
+    /// suppressor), a non-owned-param root, and a non-shared user enum field.
+    pub(super) fn suppress_place_field_enum_move_source(&mut self, value: &Expr) {
+        let ExprKind::FieldAccess { object, field } = &value.kind else {
+            return;
+        };
+        // Shallow forms (`obj.field` / `self.field`) are handled by
+        // `suppress_struct_field_move_into_literal`; only a DEEPER place here.
+        if matches!(object.kind, ExprKind::Identifier(_) | ExprKind::SelfValue) {
+            return;
+        }
+        match Self::place_root_ident(value) {
+            Some(root) if self.owned_struct_params.contains(root) => return,
+            Some(_) => {}
+            None => return,
+        }
+        let Some(obj_ty) = self.place_chain_type_name(object) else {
+            return;
+        };
+        let Some(idx) = self
+            .struct_field_names
+            .get(obj_ty.as_str())
+            .and_then(|names| names.iter().position(|n| n == field))
+        else {
+            return;
+        };
+        // The moved-out field must be a non-shared user enum (the only case that
+        // double-frees through the owning struct's drop; Vec/String/struct fields
+        // through a tuple element are a separate follow-on, not yet observed).
+        let Some(ename) = self
+            .struct_field_type_names
+            .get(obj_ty.as_str())
+            .and_then(|tns| tns.get(idx))
+            .and_then(|n| n.clone())
+        else {
+            return;
+        };
+        let Some(layout) = self.enum_layouts.get(ename.as_str()).cloned() else {
+            return;
+        };
+        if layout.is_shared {
+            return;
+        }
+        let Some(st) = self.struct_types.get(obj_ty.as_str()).copied() else {
+            return;
+        };
+        let Some(base_ptr) = self.field_chain_place_ptr(object) else {
+            return;
+        };
+        let Ok(field_ptr) = self
+            .builder
+            .build_struct_gep(st, base_ptr, idx as u32, "p27.encap.p")
+        else {
+            return;
+        };
+        self.zero_enum_payload_caps(field_ptr, &layout);
+    }
+
     fn load_enum_word(
         &self,
         enum_ty: StructType<'ctx>,

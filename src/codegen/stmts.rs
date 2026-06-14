@@ -2615,6 +2615,12 @@ impl<'ctx> super::Codegen<'ctx> {
                                     self.suppress_struct_field_move_into_literal(value);
                                 }
                             }
+                            // #27 — `let tk = h.ps.0.tok`: the enum field's OBJECT
+                            // is a deeper place (`h.ps.0`, a tuple element), which
+                            // the Identifier/`self`-gated suppressor above can't
+                            // reach. Cap-zero the enum payload via the place-chain
+                            // machinery so the owning struct's drop skips it.
+                            self.suppress_place_field_enum_move_source(value);
                         }
                         // #21 — `let x = h.pe.0`: an enum moved out of a struct's
                         // TUPLE field. Cap-zero that tuple element in the source so
@@ -2877,6 +2883,21 @@ impl<'ctx> super::Codegen<'ctx> {
                                     shared_info.is_none(),
                                 );
                             }
+                        }
+                        // #27 (B-2026-06-14-8) — `let inr = h.ps.0`: a heap-bearing
+                        // STRUCT moved OUT of a tuple element. `inr` is tracked
+                        // (`track_struct_var` below, registered as its struct type
+                        // by the typechecker/lowering annotation) and now owns the
+                        // buffers; cap-zero the SOURCE tuple element in the owning
+                        // struct's slot so its `NestedTuple` drop skips them — else
+                        // both `inr`'s `__karac_drop_struct_<Inner>` and `h`'s
+                        // `__karac_drop_struct_<Hs>` free the same buffer
+                        // (double-free). The struct sibling of the enum-path
+                        // `suppress_tuple_index_move_source` call (#21 P4);
+                        // `zero_tuple_elem_cap_at` routes a struct element through
+                        // `zero_struct_move_caps` (recurses into the enum/Vec leaf).
+                        if matches!(&value.kind, ExprKind::TupleIndex { .. }) {
+                            self.suppress_tuple_index_move_source(value);
                         }
                         if let Some(slot) = self.variables.get(var_name.as_str()) {
                             let alloca = slot.ptr;

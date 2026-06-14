@@ -3788,6 +3788,57 @@ fn main() {
     }
 
     #[test]
+    fn asan_tuple_elem_bind_move_out_no_double_free() {
+        // #27 (phase-12 self-hosting, B-2026-06-14-8) — binding a heap-bearing
+        // value OUT of a tuple element double-freed at scope exit: the binding's
+        // drop AND the owning struct's `NestedTuple` tuple drop both freed the
+        // shared buffer. `let inr = h.ps.0` (heap struct moved out — suppressed via
+        // `suppress_tuple_index_move_source` → `zero_struct_move_caps`) and
+        // `let tk = h.ps.0.tok` (enum field moved out through the tuple element —
+        // suppressed via `suppress_place_field_enum_move_source` → place-chain GEP +
+        // `zero_enum_payload_caps`). Loop-stressed over drop-only, field-read, and
+        // match-consume of both forms; f-string payloads keep the heap non-foldable
+        // so Linux LSan catches an over-suppression leak (if the source cap-zero
+        // also orphaned a still-owned buffer) and ASAN catches the double-free.
+        assert_clean_asan_run(
+            r#"
+enum Tok { Id(String), Num(i64) }
+struct Inner { tok: Tok, n: i64 }
+struct Hs { ps: (Inner, i64) }
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 8 {
+        // Struct element moved out, dropped unused (the headline double-free).
+        let ha = Hs { ps: (Inner { tok: Tok.Id(f"a{i}"), n: i }, 7) };
+        let inr = ha.ps.0;
+
+        // Struct element moved out, enum field CONSUMED via match.
+        let hb = Hs { ps: (Inner { tok: Tok.Id(f"b{i}"), n: i }, 7) };
+        let inr2 = hb.ps.0;
+        match inr2.tok { Id(s) => { acc = acc + s.len(); } Num(n) => { acc = acc + n; } }
+
+        // Enum field moved out THROUGH the tuple element, dropped unused.
+        let hc = Hs { ps: (Inner { tok: Tok.Id(f"c{i}"), n: i }, 7) };
+        let tk = hc.ps.0.tok;
+
+        // Enum field moved out through the tuple element, CONSUMED.
+        let hd = Hs { ps: (Inner { tok: Tok.Id(f"d{i}"), n: i }, 7) };
+        let tk2 = hd.ps.0.tok;
+        match tk2 { Id(s) => { acc = acc + s.len(); } Num(n) => { acc = acc + n; } }
+
+        i = i + 1;
+    }
+    if acc > 999999 { println("never"); }
+    println("done");
+}
+"#,
+            &["done"],
+            "tuple_elem_bind_move_out_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_call_result_tuple_var_no_leak() {
         // #24 (phase-12 self-hosting) — a let-bound tuple VAR sourced from a CALL
         // (`let p = ret_tuple(i)`) whose only heap is an enum / Map leaf leaked: the

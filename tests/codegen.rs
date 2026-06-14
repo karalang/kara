@@ -13226,6 +13226,53 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_tuple_elem_bind_move_out() {
+        // #27 (phase-12 self-hosting, B-2026-06-14-8) — binding a heap-bearing
+        // value OUT of a tuple element. `let inr = h.ps.0` (a heap-bearing struct
+        // moved out of a tuple element) and `let tk = h.ps.0.tok` (an enum field
+        // moved out of a tuple-element struct) each registered the binding's drop
+        // but did NOT suppress the SOURCE — so both the binding's drop and the
+        // owning `h`'s `NestedTuple` tuple drop freed the same buffer
+        // (double-free). Fix: call `suppress_tuple_index_move_source` in the
+        // struct-binding path (cap-zeros the struct element via
+        // `zero_struct_move_caps`), and add `suppress_place_field_enum_move_source`
+        // for the `<tupleindex>.field` enum form (place-chain GEP +
+        // `zero_enum_payload_caps`). Correctness here is the moved-out value
+        // surviving + reading right (consume + read forms); the double-free is in
+        // `asan_tuple_elem_bind_move_out_no_double_free`. A heapless tuple element
+        // (`Plain`) is the regression guard.
+        if let Some(out) = run_program(
+            r#"
+enum Tok { Id(String), Num(i64) }
+struct Inner { tok: Tok, n: i64 }
+struct Hs { ps: (Inner, i64) }
+struct Plain { a: i64, b: i64 }
+struct Hp { ps: (Plain, i64) }
+fn main() {
+    // Struct element moved out, then read a field.
+    let h1 = Hs { ps: (Inner { tok: Tok.Id("alpha".to_string()), n: 42 }, 7) };
+    let inr = h1.ps.0;
+    println(inr.n.to_string());                 // 42
+    // Struct element moved out, then CONSUME its enum field via match.
+    let h2 = Hs { ps: (Inner { tok: Tok.Id("beta".to_string()), n: 1 }, 2) };
+    let inr2 = h2.ps.0;
+    match inr2.tok { Id(s) => { println(s); } Num(n) => { println(n.to_string()); } }  // beta
+    // Enum field moved out THROUGH the tuple element, then consumed.
+    let h3 = Hs { ps: (Inner { tok: Tok.Id("gamma".to_string()), n: 9 }, 3) };
+    let tk = h3.ps.0.tok;
+    match tk { Id(s) => { println(s); } Num(n) => { println(n.to_string()); } }        // gamma
+    // Heapless tuple element — regression guard (reads the right field).
+    let hp = Hp { ps: (Plain { a: 5, b: 6 }, 7) };
+    let p = hp.ps.0;
+    println(p.a.to_string());                   // 5
+}
+"#,
+        ) {
+            assert_eq!(out, "42\nbeta\ngamma\n5\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_call_result_tuple_var_drop() {
         // #24 (phase-12 self-hosting) — a let-bound tuple VAR sourced from a CALL
         // (`let p = ret_tuple(i)`, RHS a `Call`, not a tuple literal, no annotation)
