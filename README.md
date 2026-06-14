@@ -396,15 +396,13 @@ See [docs/roadmap.md](docs/roadmap.md) for current progress and [docs/design.md]
 
 ## Why I Built Kāra
 
-Allow me to share some words before we go all technical. Before AI happened i used spend most of my time learning new proramming language/features. Coding feels like solving puzzles for me. Once AI happened I was kinda cluelsess for sometime. I thought of taking some time off and learn real spoken languages. While doing the research I started noticing the strengths and weakness of different languages because they were all organically developed over centuries. What if i can engineer a new language learning from all the issues and weakness. Evnetually i strted translating that in to a programming language and that's how Kara was born. Kara in sanskrit means worker. You express your intent and worker does the work. I am an artist and i consider this one of my finest art yet.
+Allow me to share some words. Before AI happened I used to spend most of my time learning new programming languages/features. Coding feels like solving puzzles for me. Once AI happened I was kinda clueless for some time. I thought of taking some time off and learning real spoken languages. While doing the research I started noticing the strengths and weaknesses of different languages because they were all organically developed over centuries. What if I can engineer a new language learning from all the issues and weaknesses. Eventually I started translating that into a programming language and that's how Kara was born. Kara in Sanskrit means worker. You express your intent and worker does the work. I am an artist and I consider this one of my finest art yet.
 
-I see some skepticism on the AI usage everywhere, I think this is going to be new normal or this already is. We need to find a balance between passion and building usable product within reasonable time to market. Kara fits right in.
+I see some skepticism on the AI usage everywhere, I think this is going to be the new normal or this already is. We need to find a balance between passion and building usable product within reasonable time to market. Kara fits right in.
 
-I have over 70 brainstorming docs with 1000's of lines of details and choices documented. Written by ai but i read each line of it and made the decision. I enjoyed engienering the syntax that i like. A language I would want to use and at the same time meaningful for the AI era. 
+I have over 70 brainstorming docs with 1000's of lines of details and choices documented. Written by AI but I read each line of it and made the decision. I enjoyed engineering the syntax that I like. A language I would want to use and at the same time meaningful for the AI era. 
 
-There could be some spelling and grammer mistakes in the narration and I left it unpolished. mistakes is what makes us humans. 
-
-AI was my assistent, not the language author
+AI was my assistant, not the language author
 
 ## License
 
