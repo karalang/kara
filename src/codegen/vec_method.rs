@@ -56,6 +56,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 let len = self.builder.build_load(i64_t, len_ptr, "vec.len").unwrap();
                 Ok(len)
             }
+            // `Vec[T].as_ptr()` / `.as_mut_ptr()` — raw element-0 pointer of
+            // the heap buffer, the FFI handoff (mirrors `Array.as_ptr` /
+            // `CStr.as_ptr`; typed `*const T` / `*mut T` by the `as_ptr` arm
+            // in `infer_method_call`). Field 0 of the `{ptr, len, cap}` header
+            // IS the data buffer pointer — load + hand it out (both spellings
+            // lower to the same LLVM `ptr`). The buffer must outlive the call;
+            // a *synchronous* host fn (a framebuffer blit reads the bytes
+            // before returning) satisfies that, so the pointer never dangles
+            // while in use. The pointer carries no lifetime — the unsafe
+            // contract is the programmer's (design.md § FFI).
+            "as_ptr" | "as_mut_ptr" => {
+                let buf_ptr_field = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "vec.asptr.p")
+                    .unwrap();
+                let buf = self
+                    .builder
+                    .build_load(ptr_ty, buf_ptr_field, "vec.asptr")
+                    .unwrap();
+                Ok(buf)
+            }
             // `String.starts_with(prefix: String) -> bool`. The typechecker
             // arm in `stdlib_seq.rs::infer_str_method` accepts this only on
             // `Type::Str` receivers, but the codegen lives here because

@@ -554,28 +554,31 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(th.into())
     }
 
-    /// Recover the LLVM lowering of T for a `TaskHandle[T].join()`
-    /// call. v1 returns `i64` unconditionally — the typechecker
-    /// limitation surfaced in slice 1 means T is inferred from LHS
-    /// annotation at the type-check site, but `expr_types` isn't
-    /// threaded into codegen today. A follow-on slice can walk the
-    /// enclosing function's `let v: T = h.join()` AST for `call_span`
-    /// to recover the concrete T.
+    /// Recover the LLVM lowering of `T` for a `TaskHandle[T].join()` call.
+    /// The typechecker records `T` for every join site in
+    /// `task_join_return_types` (keyed by the join MethodCall span); this
+    /// looks it up and lowers it, so a non-scalar return (a `Vec`/`String`/
+    /// struct from `spawn`) is sized correctly. Falls back to `i64` only when
+    /// the site wasn't recorded — e.g. the canonical accept-loop pattern
+    /// (`tg.spawn(|| handle_client(conn))`) discards the handle with no
+    /// `.join()` call at all, so the default is never observed there.
     ///
-    /// **Implication for non-`i64` returns.** A `let v: String = h.join()`
-    /// site reads `i64`-shaped bytes from the runtime-allocated result
-    /// buffer instead of the actual `{ptr, i64, i64}` String header. v1
-    /// programs that exercise non-`i64` join returns observe truncated
-    /// reads. Slice 4 ships the `i64`-default minimum because (i) the
-    /// canonical accept-loop pattern (`tg.spawn(|| handle_client(conn))`)
-    /// discards the TaskHandle inline — no `.join()` call exists, so the
-    /// default is unobserved; (ii) slice 5's TaskGroup.drop joins
-    /// children without reading their results.
-    #[allow(unused_variables)]
+    /// History: this returned `i64` unconditionally at slice 4 (a documented
+    /// limitation), which made `join()` on a heap return read `i64`-shaped
+    /// bytes off the result buffer — the value came back as garbage and
+    /// trapped. Fixed by threading the typechecker's recorded `T` through
+    /// `task_join_return_types` (surfaced by the Fathom dogfood — a parallel
+    /// Mandelbrot whose row-bands return `Vec[u8]`).
     pub(super) fn recover_task_handle_join_return_ty(
         &self,
         call_span: &crate::token::Span,
     ) -> BasicTypeEnum<'ctx> {
+        if let Some(te) = self
+            .task_join_return_types
+            .get(&(call_span.offset, call_span.length))
+        {
+            return self.llvm_type_for_type_expr(te);
+        }
         self.context.i64_type().into()
     }
 

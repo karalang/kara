@@ -545,6 +545,40 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // Record the result type `T` of a `TaskHandle[T].join()` so codegen
+        // sizes the cross-task result transfer for a NON-scalar `T` (a
+        // `Vec`/`String`/struct spawn return). Without this the join lowering
+        // reads `i64`-shaped bytes from the runtime result buffer, so a heap
+        // return comes back as garbage and traps. `infer_expr(object)` is
+        // idempotent for an already-typechecked receiver (re-asserts its
+        // expr_types entry), so this read has no downstream side effect; the
+        // normal generic-impl dispatch below still computes the call's type.
+        // Mirrors the `spawn` intercept above and the channel-elem recording
+        // in `stdlib_io.rs`.
+        if method == "join" && args.is_empty() {
+            let recv_ty = self.infer_expr(object);
+            let handle_inner = match &recv_ty {
+                Type::Named { name, args: targs } if name == "TaskHandle" && targs.len() == 1 => {
+                    Some(targs[0].clone())
+                }
+                Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                    Type::Named { name, args: targs }
+                        if name == "TaskHandle" && targs.len() == 1 =>
+                    {
+                        Some(targs[0].clone())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(t) = handle_inner {
+                let resolved = resolve_type_var_top(&t, &self.env.substitutions);
+                let te = Self::type_to_type_expr(&resolved);
+                self.task_join_return_types
+                    .insert(SpanKey::from_span(span), te);
+            }
+        }
+
         // SIMD static constructors — `Vector[T, N].splat(x)` and
         // `Vector[T, N].from_array([..])` (design.md § Portable SIMD). The
         // receiver is the bare vector type-path (`Path { segments: ["Vector"],
@@ -1234,20 +1268,32 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
-        // `Array[T, N].as_ptr()` / `.as_mut_ptr()` — raw element-0 pointer
-        // producers (the language's FFI handoff; mirrors `CStr.as_ptr`).
-        // `as_ptr -> *const T`, `as_mut_ptr -> *mut T`. The codegen handler
-        // in `compile_method_call` GEPs to element 0 of the array storage.
-        // Without a precise arm here the call falls through to the
-        // permissive array-method path and binds `Type::Error`, losing the
-        // pointer type for downstream FFI / deref. Handles owned arrays and
-        // their `ref` / `mut ref` borrows.
+        // `Array[T, N].as_ptr()` / `.as_mut_ptr()` and `Vec[T].as_ptr()` /
+        // `.as_mut_ptr()` — raw element-0 pointer producers (the language's
+        // FFI handoff; mirrors `CStr.as_ptr`). `as_ptr -> *const T`,
+        // `as_mut_ptr -> *mut T`. The codegen handler GEPs element 0 of the
+        // array storage / loads the `Vec` header's data field. Without a
+        // precise arm here the call falls through to the permissive
+        // array/vec-method path and binds `Type::Error`, losing the pointer
+        // type for downstream FFI / deref. Handles owned arrays + `Vec[T]`
+        // and their `ref` / `mut ref` borrows. The `Vec` arm is what feeds a
+        // heap buffer (e.g. a framebuffer) to a `host fn` blit — an
+        // `Array[u8, N]` of framebuffer size would overflow the wasm stack.
         if (method == "as_ptr" || method == "as_mut_ptr") && args.is_empty() {
+            let vec_elem = |t: &Type| -> Option<Type> {
+                match t {
+                    Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
+                        Some(args[0].clone())
+                    }
+                    _ => None,
+                }
+            };
             let elem = match &obj_ty {
                 Type::Array { element, .. } => Some(*element.clone()),
+                Type::Named { .. } => vec_elem(&obj_ty),
                 Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
                     Type::Array { element, .. } => Some(*element.clone()),
-                    _ => None,
+                    other => vec_elem(other),
                 },
                 _ => None,
             };

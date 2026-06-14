@@ -919,6 +919,68 @@ fn main() {
         }
     }
 
+    /// Regression: `TaskHandle[T].join()` for a NON-scalar `T` (`Vec[i64]`)
+    /// returns the spawned task's heap value intact. `recover_task_handle_
+    /// join_return_ty` used to return `i64` unconditionally, so a `Vec`/
+    /// `String`/struct spawn return was read as `i64`-shaped bytes off the
+    /// result buffer — `.len()` came back as garbage and the program trapped.
+    /// The typechecker now records each join's `T` in `task_join_return_types`
+    /// and codegen sizes the cross-task transfer + out-slot for it. Surfaced
+    /// by the Fathom dogfood (parallel Mandelbrot row-bands return `Vec[u8]`).
+    /// NB: the spawn binding (`t`) and the join loop binding (`h`) are
+    /// deliberately distinct — a shared name deadlocks (bug-ledger
+    /// B-2026-06-14-13), a separate pre-existing codegen scoping bug.
+    #[test]
+    fn e2e_taskhandle_join_returns_nonscalar_vec() {
+        if let Some(out) = run_program(
+            "fn band(n: i64) -> Vec[i64] {\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 let mut i = 0;\n\
+                 while i < n { v.push(i); i = i + 1; }\n\
+                 v\n\
+             }\n\
+             fn main() {\n\
+                 let mut pool: TaskGroup = TaskGroup.new();\n\
+                 let mut handles: Vec[TaskHandle[Vec[i64]]] = Vec.new();\n\
+                 let mut k = 0;\n\
+                 while k < 3 {\n\
+                     let t: TaskHandle[Vec[i64]] = pool.spawn(|| band(k + 2));\n\
+                     handles.push(t);\n\
+                     k = k + 1;\n\
+                 }\n\
+                 let mut total = 0;\n\
+                 for h in handles { let c: Vec[i64] = h.join(); total = total + c.len(); }\n\
+                 println(f\"{total}\");\n\
+             }",
+        ) {
+            // bands of length 2, 3, 4 → 9 elements total (was garbage/trap before the fix)
+            assert_eq!(out, "9\n");
+        }
+    }
+
+    /// `Vec[u8].as_ptr()` lowers to a load of the `{ptr,len,cap}` header's
+    /// data field (field 0) — the heap-buffer FFI handoff a `host fn` blit
+    /// consumes (added for the Fathom framebuffer; previously only `Array`/
+    /// `CStr` had `as_ptr`). IR-level: the call site GEPs field 0 and loads a
+    /// `ptr`, and the result feeds the (raw-pointer) `sink` call.
+    #[test]
+    fn test_vec_as_ptr_loads_data_field() {
+        let src = r#"
+            fn driver() -> i64 {
+                let mut v: Vec[u8] = Vec.new();
+                v.push(7);
+                let _p = v.as_ptr();
+                v.len()
+            }
+        "#;
+        let ir = ir_for(src);
+        let body = function_body(&ir, "driver").expect("driver fn must lower");
+        assert!(
+            body.contains("vec.asptr"),
+            "Vec.as_ptr() should emit the data-field load (vec.asptr); body:\n{body}"
+        );
+    }
+
     #[test]
     fn e2e_unqualified_struct_variant_pattern_binds_fields() {
         // B-2026-06-13-7: an UNQUALIFIED struct-variant pattern (`A { n }`, no

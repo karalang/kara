@@ -1740,6 +1740,11 @@ pub(super) struct Codegen<'ctx> {
     /// `compile_method_call` lowers `T` to its LLVM shape to size the
     /// `karac_runtime_channel_*` transfer and shape the recv out slot.
     pub(crate) channel_elem_types: HashMap<(usize, usize), TypeExpr>,
+    /// `TaskHandle[T].join()` MethodCall span → result type `T`, from
+    /// `Program.task_join_return_types`. The join arm of `compile_method_call`
+    /// lowers `T` to its LLVM shape so the cross-task result transfer (and the
+    /// join out-slot) is sized for a non-scalar return; absent ⇒ `i64` default.
+    pub(crate) task_join_return_types: HashMap<(usize, usize), TypeExpr>,
     /// Inner type of every borrow-typed (`ref T`) expression, keyed by span
     /// — populated from `Program.ref_return_inner_types`. Lets the `let` arm
     /// recognise that a method-call RHS (`let n = u.name()`) returns a
@@ -4688,6 +4693,7 @@ impl<'ctx> Codegen<'ctx> {
             call_effect_subs: crate::ast::CallEffectSubsTable::new(),
             method_unwrap_inner_types: HashMap::new(),
             channel_elem_types: HashMap::new(),
+            task_join_return_types: HashMap::new(),
             ref_return_inner_types: HashMap::new(),
             user_ref_method_names: std::collections::HashSet::new(),
             string_typed_exprs: HashSet::new(),
@@ -5584,6 +5590,7 @@ impl<'ctx> Codegen<'ctx> {
         // to know how to reconstitute the payload back to a value of T.
         self.method_unwrap_inner_types = program.method_unwrap_inner_types.clone();
         self.channel_elem_types = program.channel_elem_types.clone();
+        self.task_join_return_types = program.task_join_return_types.clone();
         self.ref_return_inner_types = program.ref_return_inner_types.clone();
         // Bare names of user impl methods that return a borrow — gates the
         // method-ref caller path away from builtin ref-returning methods.

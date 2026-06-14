@@ -266,6 +266,13 @@ pub type MethodUnwrapInnerTypesTable = std::collections::HashMap<(usize, usize),
 /// channel handle.
 pub type ChannelElemTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
 
+/// `TaskHandle[T].join()` MethodCall span → the result type `T`. Lets codegen
+/// size the join out-slot and the cross-task result memcpy for a non-scalar
+/// `T` (a `Vec`/`String`/struct return from `spawn`); without it the join
+/// defaults to reading `i64`-shaped bytes and a heap return comes back as
+/// garbage. Same `(offset, length)` keying as [`ChannelElemTypesTable`].
+pub type TaskJoinReturnTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
+
 /// Side-table populated by the lowering pass from `TypeCheckResult.expr_types`:
 /// for every expression whose Kāra type is a borrow (`ref T` / `mut ref T`),
 /// the inner `T` as a `TypeExpr`. Lets codegen learn that a call result
@@ -502,6 +509,10 @@ pub struct Program {
     /// empty otherwise. Channel-op element types for codegen's
     /// `karac_runtime_channel_*` lowering.
     pub channel_elem_types: ChannelElemTypesTable,
+    /// Set by the lowering pass from `TypeCheckResult.task_join_return_types`;
+    /// empty otherwise. `TaskHandle[T].join()` result types for codegen's
+    /// cross-task result-transfer sizing (non-scalar spawn returns).
+    pub task_join_return_types: TaskJoinReturnTypesTable,
     /// Set by the lowering pass from `TypeCheckResult.expr_types`: inner
     /// type of every borrow-typed (`ref T`) expression, keyed by span. Lets
     /// codegen bind a borrow-returning method-call result as a ref-local.

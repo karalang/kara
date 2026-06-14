@@ -468,7 +468,12 @@ impl<'a> super::TypeChecker<'a> {
         // so it travels per call site.
         if matches!(
             method,
-            "send" | "recv" | "try_recv" | "clone" | "__schedule_after"
+            "send"
+                | "recv"
+                | "try_recv"
+                | "clone"
+                | "__schedule_after"
+                | "__schedule_animation_frames"
         ) {
             let resolved = resolve_type_var_top(&elem, &self.env.substitutions);
             let te = Self::type_to_type_expr(&resolved);
@@ -588,6 +593,25 @@ impl<'a> super::TypeChecker<'a> {
                             &Type::Int(IntSize::I64),
                             &at,
                             args[0].value.span.clone(),
+                        );
+                    }
+                    Type::Unit
+                }
+                // Internal compiler builtin backing `std.web.time.
+                // animation_frames` (phase-10 host-async frame loop). Borrows
+                // `self`, takes no argument, returns Unit. Codegen clones the
+                // sender's channel reference and hands it to a host
+                // requestAnimationFrame loop that feeds the channel once per
+                // frame; the surviving clone keeps the channel open for the
+                // loop's life. Like `__schedule_after`, kept out of ordinary
+                // reach by the `__` prefix + the `writes(Timer)` gating on the
+                // `animation_frames` wrapper.
+                "__schedule_animation_frames" => {
+                    if !args.is_empty() {
+                        self.type_error(
+                            "Sender.__schedule_animation_frames takes no arguments".to_string(),
+                            span.clone(),
+                            TypeErrorKind::WrongNumberOfArgs,
                         );
                     }
                     Type::Unit

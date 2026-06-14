@@ -15376,6 +15376,110 @@ console.log("TIMER_OK elapsed=" + elapsed.toFixed(1) + "ms");
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// Headline E2E for the multi-shot host-async producer (phase-10
+/// `std.web.time.animation_frames`): a `loop { frames.recv(); … }` parks the
+/// primary worker, and a MAIN-THREAD self-re-arming `requestAnimationFrame`
+/// loop (here the node setTimeout(~16ms) fallback) feeds one `()` per frame
+/// through the service instance — proving the *multi-shot* spine (the cloned
+/// sender survives across frames, the channel is never closed) on top of the
+/// same cross-instance wake path the `after` test proves once.
+///
+/// Load-immune: receiving 3 frames before `_start` returns means the worker
+/// parked in `recv` three times and was woken three times. A non-blocking
+/// `recv` (the sequential floor) would spin the loop to completion in ~0ms;
+/// an elapsed ≳ a couple of frame intervals is positive evidence of the
+/// park→feed→wake round-trip repeating, and of the producer re-arming.
+#[test]
+fn wasm_threads_animation_frames_recv_e2e() {
+    let tmp = wasm_test_dir("wtraf");
+    let path = tmp.join("raf.kara");
+    std::fs::write(
+        &path,
+        "import std.web.time.{animation_frames};\n\n\
+         fn main() {\n    \
+             println(\"before\");\n    \
+             let frames = animation_frames();\n    \
+             let mut n = 0;\n    \
+             loop {\n        \
+                 frames.recv();\n        \
+                 n = n + 1;\n        \
+                 if n >= 3 {\n            \
+                     break;\n        \
+                 }\n    \
+             }\n    \
+             println(\"after\");\n}\n",
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--features=wasm-threads",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_threads_animation_frames_recv_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        out.status.success(),
+        "animation_frames wasm-threads build failed: {stderr}"
+    );
+    assert!(tmp.join("raf.threads.wasm").exists());
+
+    let harness = tmp.join("harness.mjs");
+    std::fs::write(
+        &harness,
+        r#"import { run } from "./raf.js";
+const t0 = performance.now();
+const h = await run({});
+const elapsed = performance.now() - t0;
+if (h.threaded !== true) { console.error("FAIL: expected threaded pick"); process.exit(1); }
+// 3 frames at the ~16ms node fallback cadence ≈ ≥40ms; a non-blocking recv
+// would finish in ~0ms. Assert a couple of frame intervals elapsed.
+if (elapsed < 25) {
+  console.error("FAIL: frame loop did not block per frame, elapsed=" + elapsed.toFixed(1) + "ms");
+  process.exit(1);
+}
+console.log("RAF_OK elapsed=" + elapsed.toFixed(1) + "ms");
+"#,
+    )
+    .unwrap();
+    let node = std::process::Command::new("node")
+        .arg(&harness)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: wasm_threads_animation_frames_recv_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let node_stdout = String::from_utf8_lossy(&node_out.stdout);
+    let node_stderr = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success(),
+        "raf harness failed under node: stdout={node_stdout} stderr={node_stderr}",
+    );
+    assert!(
+        node_stdout.contains("RAF_OK"),
+        "missing RAF_OK (per-frame recv blocked then woke): stdout={node_stdout} stderr={node_stderr}",
+    );
+    let before = node_stdout.find("before");
+    let after = node_stdout.find("after");
+    assert!(
+        matches!((before, after), (Some(b), Some(a)) if b < a),
+        "guest must print before→after (frame loop ran to break): stdout={node_stdout}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// The sequential-target gate: the same host-async producer built WITHOUT
 /// `--features wasm-threads` is a hard compile error (codegen, pre-link),
 /// pointing at the flag — never a silent zero-value `recv`. Fires during

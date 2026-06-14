@@ -331,6 +331,24 @@ pub unsafe extern "C" fn karac_runtime_channel_try_recv(
     }
 }
 
+/// `karac_runtime_channel_pending(ch) -> u64` — number of queued, not-yet-
+/// received blobs. Used by the host-async `animation_frames` producer to
+/// coalesce: the requestAnimationFrame callback only feeds a fresh `()` tick
+/// when the worker has drained the previous one, so a slow consumer (per-frame
+/// compute over the frame budget) cannot grow an unbounded backlog of frame
+/// tokens — the channel holds at most one pending tick. Read under the queue
+/// lock; never parks.
+///
+/// # Safety
+/// `ch` must be live (or null, which reports 0).
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_channel_pending(ch: *mut KaracChannel) -> u64 {
+    if ch.is_null() {
+        return 0;
+    }
+    (*ch).inner.lock().unwrap().queue.len() as u64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

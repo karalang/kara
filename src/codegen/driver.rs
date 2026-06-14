@@ -199,6 +199,11 @@ pub fn link_wasm_executable_threaded(
         // never use timers — the symbols are already linked from the archive.
         "--export=karac_runtime_channel_send",
         "--export=karac_runtime_channel_drop_sender",
+        // `animation_frames` backpressure: the rAF service callback probes the
+        // channel depth so it feeds at most one un-drained `()` tick per loop
+        // (a slow consumer drops backlog instead of accumulating frame lag).
+        // Service-instance-only, so surface it explicitly like the two above.
+        "--export=karac_runtime_channel_pending",
         // The service instance never runs `_start`/`wasi_thread_start`, so
         // its `__stack_pointer` still aliases the primary worker's stack.
         // The glue retargets it to a dedicated scratch buffer (top from

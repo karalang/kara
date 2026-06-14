@@ -33,6 +33,9 @@ impl<'ctx> super::Codegen<'ctx> {
             "try_recv" => self.compile_channel_try_recv(object, call_span),
             "clone" => self.compile_channel_clone(object),
             "__schedule_after" => self.compile_channel_schedule_after(object, args),
+            "__schedule_animation_frames" => {
+                self.compile_channel_schedule_animation_frames(object, args)
+            }
             // The dispatch gate in `compile_method_call` only routes the
             // methods above here.
             _ => unreachable!("compile_channel_method: unexpected method `{method}`"),
@@ -271,6 +274,87 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         // Unit return (the i64-zero unit value).
         Ok(self.context.i64_type().const_zero().into())
+    }
+
+    /// `tx.__schedule_animation_frames()` — the compiler builtin backing
+    /// `std.web.time.animation_frames`. Like `__schedule_after` but
+    /// *multi-shot*: it hands the host a `requestAnimationFrame` loop that
+    /// re-arms itself and feeds `()` on the channel once per frame, so a
+    /// `loop { frames.recv(); … }` over the result is a render loop. The host
+    /// owns the surviving cloned sender for the lifetime of the loop and never
+    /// drops it (the channel stays open across frames). Takes no argument; the
+    /// frame cadence is the host's display refresh. Same `--features
+    /// wasm-threads` gate as `__schedule_after` (a sequential build has no
+    /// thread to park in `recv` while the rAF callback runs).
+    fn compile_channel_schedule_animation_frames(
+        &mut self,
+        object: &Expr,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if !args.is_empty() {
+            return Err("Sender.__schedule_animation_frames expects no arguments".to_string());
+        }
+        if crate::target::active_target_is_wasm() && !crate::target::wasm_threads_enabled() {
+            return Err(
+                "std.web.time.animation_frames (host-async frame loop) requires `--features \
+                 wasm-threads` on this target: a sequential WASM build has no thread to block in \
+                 `recv` while the host event loop runs requestAnimationFrame, so the channel \
+                 could never be fed. Rebuild with `--target=wasm_browser --features wasm-threads` \
+                 (design.md § Scheduler contract on WASM — Realization status)."
+                    .to_string(),
+            );
+        }
+        // Clone first — the surviving reference keeps the channel open across
+        // every frame (the local `tx` in `animation_frames` drops at return).
+        let ch = self.compile_expr(object)?.into_pointer_value();
+        let clone_fn = self
+            .module
+            .get_function("karac_runtime_channel_clone")
+            .expect("karac_runtime_channel_clone declared in Codegen::new");
+        let cloned = self
+            .builder
+            .build_call(clone_fn, &[ch.into()], "raf.chan.clone")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let i64_ty = self.context.i64_type();
+        let ch_i64 = self
+            .builder
+            .build_ptr_to_int(cloned, i64_ty, "raf.chan.i64")
+            .unwrap();
+
+        let host_fn = self.get_or_declare_animation_frames_import();
+        self.builder
+            .build_call(host_fn, &[ch_i64.into()], "raf.schedule")
+            .unwrap();
+        Ok(self.context.i64_type().const_zero().into())
+    }
+
+    /// Get-or-declare the `kara_host.__kara_animation_frames(i64) -> ()` wasm
+    /// import (compiler-emitted, sibling of `__kara_timer_after`; the channel
+    /// handle crosses the boundary as an `i64`).
+    fn get_or_declare_animation_frames_import(&self) -> inkwell::values::FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("__kara_animation_frames") {
+            return f;
+        }
+        use inkwell::attributes::AttributeLoc;
+        let i64_ty = self.context.i64_type();
+        let fn_ty = self.context.void_type().fn_type(&[i64_ty.into()], false);
+        let f = self
+            .module
+            .add_function("__kara_animation_frames", fn_ty, None);
+        f.add_attribute(
+            AttributeLoc::Function,
+            self.context
+                .create_string_attribute("wasm-import-module", "kara_host"),
+        );
+        f.add_attribute(
+            AttributeLoc::Function,
+            self.context
+                .create_string_attribute("wasm-import-name", "__kara_animation_frames"),
+        );
+        f
     }
 
     /// Get-or-declare the `kara_host.__kara_timer_after(i64, i64) -> ()` wasm

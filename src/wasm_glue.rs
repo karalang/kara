@@ -478,14 +478,18 @@ pub fn render_glue(
     // sequential WASM target can't host them (the codegen gate rejects the
     // producer pre-link), and a native/sequential build never wires a
     // service instance. `__kara_timer_after(chPtr: i64, ms: i64) -> ()`
-    // backs `std.web.time.after`.
+    // backs `std.web.time.after`; `__kara_animation_frames(chPtr: i64) -> ()`
+    // backs `std.web.time.animation_frames` (a multi-shot rAF loop).
     let builtin_sigs: &[&str] = if threads.is_some() {
-        &["{ name: \"__kara_timer_after\", params: [\"bigint\", \"bigint\"], ret: \"void\" }"]
+        &[
+            "{ name: \"__kara_timer_after\", params: [\"bigint\", \"bigint\"], ret: \"void\" }",
+            "{ name: \"__kara_animation_frames\", params: [\"bigint\"], ret: \"void\" }",
+        ]
     } else {
         &[]
     };
     let builtin_names: &[&str] = if threads.is_some() {
-        &["\"__kara_timer_after\""]
+        &["\"__kara_timer_after\"", "\"__kara_animation_frames\""]
     } else {
         &[]
     };
@@ -1497,6 +1501,28 @@ async function runThreaded(hostImpls = {}) {
         serviceInstance.exports.karac_runtime_channel_drop_sender(ptr);
       }, Number(ms));
     };
+    // __kara_animation_frames(chPtr: i64 [BigInt]) -> (): a MULTI-SHOT
+    // requestAnimationFrame loop. Each frame, if the worker has drained the
+    // previous tick (channel_pending == 0n), feed a fresh `()`; then re-arm.
+    // The pending probe coalesces — the channel holds at most one un-consumed
+    // frame token — so a slow consumer drops backlog rather than growing
+    // unbounded lag. The cloned sender is owned by this loop for its lifetime
+    // (never dropped: the render loop lives as long as the page). Outside a
+    // browser (node tests) there is no requestAnimationFrame, so fall back to
+    // a ~16ms setTimeout cadence — the channel semantics are identical.
+    builtinHostImpls["__kara_animation_frames"] = (chPtr) => {
+      const ptr = Number(chPtr);
+      const raf = globalThis.requestAnimationFrame
+        ? globalThis.requestAnimationFrame.bind(globalThis)
+        : (cb) => setTimeout(cb, 16);
+      const tick = () => {
+        if (Number(serviceInstance.exports.karac_runtime_channel_pending(ptr)) === 0) {
+          serviceInstance.exports.karac_runtime_channel_send(ptr, 0, 0n);
+        }
+        raf(tick);
+      };
+      raf(tick);
+    };
   }
   // host fns: stand up the worker→main proxy (shared control block + the
   // main-thread service loop). Needed when the program declares user host
@@ -1908,12 +1934,15 @@ mod tests {
         assert!(glue.contains(
             "const HOST_FN_SIGS = [{ name: \"report\", params: [\"bigint\"], ret: \"bigint\" }, \
              { name: \"log_str\", params: [\"number\", \"bigint\"], ret: \"void\" }, \
-             { name: \"__kara_timer_after\", params: [\"bigint\", \"bigint\"], ret: \"void\" }];"
+             { name: \"__kara_timer_after\", params: [\"bigint\", \"bigint\"], ret: \"void\" }, \
+             { name: \"__kara_animation_frames\", params: [\"bigint\"], ret: \"void\" }];"
         ));
-        // The builtin is registered as a builtin, and excluded from the
+        // The builtins are registered as builtins, and excluded from the
         // user contract (DECLARED_IMPORTS drives the missing-impl check and
         // the d.ts).
-        assert!(glue.contains("const BUILTIN_HOST_FNS = [\"__kara_timer_after\"];"));
+        assert!(glue.contains(
+            "const BUILTIN_HOST_FNS = [\"__kara_timer_after\", \"__kara_animation_frames\"];"
+        ));
         assert!(glue.contains("const DECLARED_IMPORTS = [\"report\", \"log_str\"];"));
         // Both halves of the proxy plus the worker-side wiring.
         for needle in [
@@ -1928,6 +1957,9 @@ mod tests {
             "serviceInstance.exports.karac_runtime_service_stack_top()",
             "builtinHostImpls[\"__kara_timer_after\"] = (chPtr, ms) =>",
             "serviceInstance.exports.karac_runtime_channel_send(ptr, 0, 0n);",
+            // Multi-shot rAF producer + its coalescing pending-probe.
+            "builtinHostImpls[\"__kara_animation_frames\"] = (chPtr) =>",
+            "Number(serviceInstance.exports.karac_runtime_channel_pending(ptr)) === 0",
         ] {
             assert!(glue.contains(needle), "missing proxy machinery: {needle}");
         }
@@ -1936,7 +1968,7 @@ mod tests {
         // The builtin must NOT leak into the user-facing TypeScript surface.
         let dts = render_dts(&fns, &[], "app.wasm", true);
         assert!(
-            !dts.contains("__kara_timer_after"),
+            !dts.contains("__kara_timer_after") && !dts.contains("__kara_animation_frames"),
             "builtin leaked into d.ts"
         );
     }

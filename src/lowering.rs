@@ -66,6 +66,14 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
         .iter()
         .map(|(k, v)| ((k.0, k.1), v.clone()))
         .collect();
+    // Forward the `TaskHandle[T].join()` result-type table so codegen sizes
+    // the cross-task result transfer for a non-scalar `T` (a `Vec`/`String`/
+    // struct spawn return). Sibling to `channel_elem_types`; same keying.
+    program.task_join_return_types = tc
+        .task_join_return_types
+        .iter()
+        .map(|(k, v)| ((k.0, k.1), v.clone()))
+        .collect();
     // Inner type of every borrow-typed (`ref T` / `mut ref T`) expression,
     // keyed by span. A method call shares its receiver's span and the
     // call's *result* type is the last write at that key, so a borrow-

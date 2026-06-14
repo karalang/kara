@@ -70,3 +70,29 @@ pub fn after(duration: Duration) -> Receiver[()] with writes(Timer) {
     tx.__schedule_after(duration.as_ms());
     rx
 }
+
+// A render-loop frame clock: send `()` once per browser animation frame
+// (`requestAnimationFrame`), indefinitely. Returns the receiving half; the
+// waiting side writes a plain blocking loop —
+//
+//     let frames = animation_frames();
+//     loop { frames.recv(); render(); }
+//
+// — no `await`, no callback ceremony (design.md § Async Host APIs on WASM).
+// Unlike `after` (one-shot), this is *multi-shot*: the host re-arms
+// `requestAnimationFrame` each frame and never drops its sender, so the
+// channel stays open for the life of the loop. The host coalesces — it feeds
+// a fresh tick only once the previous one is drained — so a frame whose
+// compute overruns the display budget drops the backlog instead of
+// accumulating unbounded lag.
+//
+// Mechanism: `Sender.__schedule_animation_frames` (a compiler builtin) clones
+// the sender's channel reference and hands the clone to the host's rAF loop,
+// which owns it for the loop's lifetime. Same `--features wasm-threads`
+// requirement as `after` (a sequential build has no thread to park in `recv`
+// while the host event loop runs).
+pub fn animation_frames() -> Receiver[()] with writes(Timer) {
+    let (tx, rx): (Sender[()], Receiver[()]) = Channel.new();
+    tx.__schedule_animation_frames();
+    rx
+}
