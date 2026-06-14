@@ -147,6 +147,15 @@ fn test_abs_float() {
 }
 
 #[test]
+fn test_sqrt_float() {
+    assert_eq!(run("fn main() { println((16.0f64).sqrt()); }"), "4\n");
+    assert_eq!(
+        run("fn main() { println((2.0f64).sqrt()); }"),
+        "1.4142135623730951\n"
+    );
+}
+
+#[test]
 fn test_abs_int_min_traps() {
     // `iN::MIN.abs()` has no representable result and traps as integer
     // overflow, matching the checked-neg arm — not a panic/ICE.

@@ -60,7 +60,7 @@ per-project sections below hold the design. Status legend: ✅ shipped ·
 | **Relay** | Effect-driven event-loop networking (no `async fn`) | ⬜ planned | Phase 6 v1.1 network event loop | 3 |
 | **Forge** | `embedded` profile firmware on a real MCU | ⬜ planned | v8 hardware gaps | 3 |
 | **Iris** | One source → native + WASM, no port | ⬜ planned | Phase 10 WASM target | 3 |
-| **Plume** | Parallel browser compute driven by event streams — no `async`/coloring | ⬜ planned | Phase 10 event-stream surface (`animation_frames` + event-data channels) + framebuffer-blit host fn | 3 |
+| **Plume** | Parallel browser compute driven by event streams — no `async`/coloring | ✅ shipped | `animation_frames` + event-data `pointer_moves` channel + `put_pixels` blit — all built (`examples/plume/`) | 3 |
 | **Fathom** | Browser × multi-core pixel compute, one source | ✅ shipped (non-interactive cut) | `animation_frames` + `Vec.as_ptr` blit host fn (built) · SIMD kernel + interactive pan/zoom (event-data channels) = follow-ups | 3 |
 
 ---
@@ -789,6 +789,30 @@ glue, canvas rendering) and keeping the native / WASM comparison honest.
 
 ### Plume — Particle Flow Field (Browser)
 
+> **Built — 2026-06-14.** Shipped at [`examples/plume/`](../examples/plume/): a
+> pointer-steered flow field compiling to `--target=wasm_browser --features
+> wasm-threads`. The render loop is a plain blocking `loop { frames.recv();
+> match moves.try_recv() { … }; render_frame() }` — frame clock **and** live
+> pointer input both as channels, no `await`; each frame's rows fan out via
+> `TaskGroup.spawn` and the framebuffer is blitted through one `put_pixels`
+> host fn. This is the **first consumer of the event-data channel surface**:
+> `std.web.events.pointer_moves()` delivers a `Channel[PointerEvent]` (the
+> `Channel[T]`-for-`T != ()` slice), drained with `try_recv` so input never
+> stalls the render. The dogfood drove two `karac` additions: the event-data
+> producer itself (see `phase-10-targets.md`) and **`f64.sqrt()`** (first piece
+> of a numeric math surface — `llvm.sqrt`/`f64.sqrt`, used to normalize the flow
+> velocity; sin/cos/atan2 remain a tracked gap, so the field is built from
+> rational vortices). Honest cut vs the sketch below: the shipped visual is a
+> **line-integral-convolution flow field** (each pixel integrates a noise
+> texture upstream along the velocity field, so streaks ride the streamlines)
+> rather than tens of thousands of *stateful* tracer particles — the field is
+> the star and the pointer bends it in real time, which is the headline; stateful
+> tracers (cross-frame particle arrays + scatter compositing) are a richer
+> follow-up. Verified by `tests/cli.rs::plume_example_pointer_steered_flow_e2e`
+> (node: frames render, framebuffer non-uniform, the cursor's warm-tint region
+> tracks a fed pointer position — near-cursor R ≫ far corner). Build/serve via
+> `examples/plume/build.sh`.
+
 **Primary capability:** The wasm-threads front-end spine — a continuous render
 loop driven by *host event streams* (`animation_frames`, pointer/slider events)
 feeding channels, with the per-frame compute fanned out across a real Web Worker
@@ -924,8 +948,12 @@ spine + the full LBM kernel). Each forces the next slice of the event-stream
 surface, so the track doubles as the consumer that justifies building it.
 **Fathom's non-interactive cut is built (2026-06-14)** — it drove
 `animation_frames` + the `Vec.as_ptr` blit handoff (the first event-stream
-producer + the framebuffer host fn), so Plume now only needs the event-data
-(`Channel[T]`, `T != ()`) slice on top of the proven spine.
+producer + the framebuffer host fn). **Plume is built (2026-06-14)** — it drove
+the event-data (`Channel[T]`, `T != ()`) slice (`std.web.events.pointer_moves`)
++ `f64.sqrt`, completing the interactive spine on top of Fathom's. So
+**Slipstream's wasm edition** is now unblocked on the front-end surface (it
+reuses the same `animation_frames` + event-data-channel + blit spine; its
+remaining gates are the LBM kernel + SIMD-128, not the event-stream wiring).
 
 ---
 

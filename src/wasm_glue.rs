@@ -1561,8 +1561,10 @@ async function runThreaded(hostImpls = {}, opts = {}) {
         // Re-derive the view each event: a shared Memory's `.buffer` may be
         // replaced on grow, so a cached DataView could go stale.
         const dv = new DataView(memory.buffer, scratch, 16);
-        dv.setFloat64(0, e.clientX ?? 0, true);
-        dv.setFloat64(8, e.clientY ?? 0, true);
+        // Prefer element-relative coordinates (what a canvas listener wants)
+        // and fall back to viewport-relative when a synthetic event omits them.
+        dv.setFloat64(0, e.offsetX ?? e.clientX ?? 0, true);
+        dv.setFloat64(8, e.offsetY ?? e.clientY ?? 0, true);
         serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 16n);
       };
       target.addEventListener("pointermove", onMove, { passive: true });

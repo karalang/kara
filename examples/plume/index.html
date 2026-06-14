@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Plume — a pointer-steered flow field, one Kāra source across every core</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; background: #07090f; color: #d7e0f0;
+    font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    display: flex; flex-direction: column; align-items: center; gap: 14px;
+    padding: 22px;
+  }
+  h1 { font-size: 18px; font-weight: 600; margin: 0; letter-spacing: .02em; }
+  p.sub { margin: 0; opacity: .65; max-width: 560px; text-align: center; }
+  #stage { position: relative; }
+  canvas {
+    border: 1px solid #1d2740; border-radius: 6px; background: #000;
+    cursor: crosshair; touch-action: none;
+  }
+  #overlay {
+    position: absolute; top: 10px; left: 10px;
+    background: rgba(8, 11, 20, .72); border: 1px solid #233052;
+    border-radius: 6px; padding: 8px 11px; pointer-events: none;
+    white-space: pre; font-size: 13px;
+  }
+  #overlay b { color: #6fd3ff; font-weight: 600; }
+  #note { opacity: .55; max-width: 580px; text-align: center; font-size: 12px; }
+  code { color: #9ad0ff; }
+</style>
+</head>
+<body>
+  <h1>Plume</h1>
+  <p class="sub">A particle-flow field in one Kāra source — the per-frame
+    compute fans out across every CPU core, in a browser tab, with no
+    <code>async</code> and no threading code. <b>Move the mouse over the
+    canvas</b> to steer the flow.</p>
+  <div id="stage">
+    <canvas id="screen" width="520" height="340"></canvas>
+    <div id="overlay">starting…</div>
+  </div>
+  <p id="note">The pointer arrives as a typed channel —
+    <code>Channel[PointerEvent]</code> — drained each frame with a plain
+    <code>try_recv</code>; no <code>addEventListener</code> callback in the Kāra
+    source. The render loop is a blocking
+    <code>loop { frames.recv(); … }</code>; each frame's rows split across a Web
+    Worker pool by <code>TaskGroup.spawn</code>.</p>
+
+<script type="module">
+  import { run } from "./plume.js";
+
+  const canvas = document.getElementById("screen");
+  const ctx2d = canvas.getContext("2d");
+  const overlay = document.getElementById("overlay");
+  const W = canvas.width, H = canvas.height;
+  // Match the canvas's on-screen (CSS) size to its pixel size 1:1, so the
+  // pointer's offsetX/offsetY map straight onto framebuffer pixels.
+  canvas.style.width = W + "px";
+  canvas.style.height = H + "px";
+
+  // A reusable ImageData; shared-memory bytes are copied in each frame (a view
+  // over a SharedArrayBuffer can't be handed to putImageData directly).
+  const img = ctx2d.createImageData(W, H);
+
+  let frames = 0, lastT = performance.now(), fps = 0;
+  const workers = (globalThis.navigator && navigator.hardwareConcurrency) || 4;
+
+  function paintOverlay() {
+    overlay.innerHTML =
+      `FPS:     <b>${fps.toFixed(0)}</b>\n` +
+      `workers: <b>${workers}</b>\n` +
+      `frames:  <b>${frames}</b>\n` +
+      `steer:   <b>move mouse</b>`;
+  }
+  paintOverlay();
+
+  // Host side of `host fn put_pixels(ptr, len, w, h)`. The proxy passes the
+  // marshalled scalars, then a ctx carrying the (shared) wasm memory.
+  function put_pixels(ptr, len, w, h, ctx) {
+    const view = new Uint8ClampedArray(ctx.memory.buffer, Number(ptr), Number(len));
+    img.data.set(view);
+    ctx2d.putImageData(img, 0, 0);
+    frames++;
+    const now = performance.now();
+    if (now - lastT >= 500) {
+      fps = (frames - (paintOverlay._last || 0)) * 1000 / (now - lastT);
+      paintOverlay._last = frames;
+      lastT = now;
+      paintOverlay();
+    }
+  }
+
+  // `pointerTarget` is where std.web.events.pointer_moves() registers its
+  // listener — the canvas, so the guest receives canvas-relative coordinates.
+  run({ put_pixels }, { pointerTarget: canvas }).catch((e) => {
+    // main() loops forever, so run() never resolves on success; a rejection
+    // is a real failure (no SharedArrayBuffer / not cross-origin isolated).
+    overlay.textContent = "error: " + (e && e.message ? e.message : e);
+    console.error(e);
+  });
+</script>
+</body>
+</html>

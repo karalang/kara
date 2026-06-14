@@ -1335,6 +1335,28 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // Built-in `sqrt` on float primitives (typed in expr_method_call.rs):
+        // `x.sqrt() -> Self`, lowered to the overloaded `llvm.sqrt` intrinsic —
+        // a single `f64.sqrt` instruction on wasm (and `sqrtsd` on x86), no
+        // libm dependency. Float-only; other receivers fall through.
+        if method == "sqrt" && args.is_empty() {
+            let v = self.compile_expr(object)?;
+            if let BasicValueEnum::FloatValue(fv) = v {
+                let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.sqrt")
+                    .expect("llvm.sqrt intrinsic must exist");
+                let decl = intrinsic
+                    .get_declaration(&self.module, &[fv.get_type().into()])
+                    .expect("llvm.sqrt declaration for float type");
+                let r = self
+                    .builder
+                    .build_call(decl, &[fv.into()], "fsqrt")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic();
+                return Ok(r);
+            }
+        }
+
         // Wrapping integer arithmetic (typed in expr_method_call.rs):
         // `wrapping_add` / `wrapping_sub` / `wrapping_mul`, the non-trapping
         // sibling of the checked `+`/`-`/`*` path. Lowers to a bare

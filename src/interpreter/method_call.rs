@@ -957,6 +957,15 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // Built-in `sqrt` on float primitives (typed in expr_method_call.rs):
+        // `x.sqrt() -> Self`, IEEE `f64::sqrt` (NaN for negative input, as in
+        // codegen's `llvm.sqrt`). Float-only; integer receivers fall through.
+        if method == "sqrt" && args.is_empty() {
+            if let Value::Float(f) = &obj {
+                return Value::Float(f.sqrt());
+            }
+        }
+
         // Wrapping integer arithmetic (typed in expr_method_call.rs): the
         // non-trapping sibling of `+`/`-`/`*` — two's-complement wraparound,
         // never `record_integer_overflow`. The typechecker restricts the

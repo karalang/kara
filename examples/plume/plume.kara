@@ -1,0 +1,207 @@
+// Plume — a browser particle-flow field, one Kāra source, compiled to
+// `--target=wasm_browser --features wasm-threads`.
+//
+// The front-end story end to end, with live input: a plain blocking render
+// loop drives the screen, each frame's pixels fan out across a real Web
+// Worker pool with no `async`/`await` and no callback coloring, the finished
+// framebuffer is blitted through one host fn — and the pointer steers the
+// flow, arriving as a typed channel the loop drains with a plain `try_recv`.
+//
+//   * `animation_frames()` (std.web.time) yields once per requestAnimationFrame;
+//     `frames.recv()` parks the worker until the host fires the next frame —
+//     no `await` (design.md § Async Host APIs on WASM).
+//   * `pointer_moves()` (std.web.events) is a `Channel[PointerEvent]` — the
+//     mouse position crosses host→wasm as a real struct payload. The loop
+//     drains the latest with a NON-blocking `try_recv` each frame, so input
+//     never stalls the render.
+//   * `TaskGroup.spawn` splits the rows of each frame across the pool. Halve
+//     the pool and the framerate visibly halves — the parallelism is real.
+//   * `put_pixels` hands the framebuffer to JS for the `ctx.putImageData`
+//     blit; `Vec[u8].as_ptr()` is the FFI handoff.
+//
+// The flow is a line-integral convolution: each pixel walks *upstream* through
+// a velocity field (a rightward drift + fixed background vortices + the
+// pointer's steerable vortex) and averages a noise texture along the path, so
+// bright streaks ride the streamlines. Pure f64 + `sqrt` — no trig, no GPU.
+//
+// Build:  karac build plume.kara --target=wasm_browser --features wasm-threads
+// Serve:  ./build.sh  (needs COOP/COEP headers for SharedArrayBuffer).
+
+import std.web.time.{animation_frames};
+import std.web.events.{pointer_moves, PointerEvent};
+
+// The canvas this program paints — a host capability reached via `put_pixels`.
+effect resource Display;
+
+// The framebuffer blit. JS provides the body (see index.html): it reads `len`
+// bytes of RGBA at `ptr` out of shared wasm memory and `ctx.putImageData`s
+// them. The call is synchronous, so the buffer never dangles while in use.
+host fn put_pixels(ptr: *const u8, len: i64, w: i64, h: i64) with writes(Display);
+
+// Frame geometry. Internal size == the canvas CSS size (1:1), so the pointer's
+// element-relative coordinates map straight onto pixels.
+fn fb_width() -> i64 { 520 }
+fn fb_height() -> i64 { 340 }
+
+struct V2 { x: f64, y: f64 }
+
+// One bounded vortex at normalized centre (cu,cv): velocity perpendicular to
+// the radius, magnitude ~ str/r² near the core, decaying with distance.
+// `spin` = +1 ccw / -1 cw.
+fn vortex(u: f64, v: f64, cu: f64, cv: f64, str: f64, soft: f64, spin: f64) -> V2 {
+    let du = u - cu;
+    let dv = v - cv;
+    let d2 = du * du + dv * dv + soft;
+    let s = str / d2 * spin;
+    V2 { x: -dv * s, y: du * s }
+}
+
+// Flow velocity at normalized (u,v) ∈ [0,1]²: a rightward drift so the whole
+// field streams, three fixed background vortices that give the frame curl
+// everywhere, and the pointer's strong, tight, steerable vortex (pu,pv).
+fn field_at(u: f64, v: f64, pu: f64, pv: f64) -> V2 {
+    let mut vx = 0.16;
+    let mut vy = 0.0;
+    let a = vortex(u, v, 0.25, 0.32, 0.013, 0.022, 1.0);
+    let b = vortex(u, v, 0.74, 0.66, 0.015, 0.024, -1.0);
+    let c = vortex(u, v, 0.50, 0.85, 0.011, 0.020, 1.0);
+    vx = vx + a.x + b.x + c.x;
+    vy = vy + a.y + b.y + c.y;
+    let p = vortex(u, v, pu, pv, 0.024, 0.006, 1.0);
+    vx = vx + p.x;
+    vy = vy + p.y;
+    V2 { x: vx, y: vy }
+}
+
+// Hash a noise cell to [0,1) — a cheap value-noise lattice. Wrapping mul so
+// it never traps; the `%` is sign-corrected for negative cells near edges.
+fn hash01(ix: i64, iy: i64) -> f64 {
+    let mut h = (ix.wrapping_mul(73856093)).wrapping_add(iy.wrapping_mul(19349663));
+    h = h.wrapping_mul(h).wrapping_add(h.wrapping_mul(2654435761));
+    let m = h % 4096;
+    let mm = if m < 0 { m + 4096 } else { m };
+    (mm as f64) / 4096.0
+}
+
+// Line-integral convolution: walk *against* the flow from the pixel, averaging
+// the noise texture along the path. Streamlines threading the same cells
+// correlate into bright streaks aligned with the flow. Animate by sliding the
+// noise sample upstream with `t` (the drift carries the streaks along).
+fn brightness(u: f64, v: f64, pu: f64, pv: f64, t: f64) -> f64 {
+    let mut fu = u;
+    let mut fv = v;
+    let mut acc = 0.0;
+    let steps = 18;
+    let mut s = 0;
+    while s < steps {
+        let vel = field_at(fu, fv, pu, pv);
+        let mag = (vel.x * vel.x + vel.y * vel.y).sqrt() + 0.00001;
+        fu = fu - vel.x / mag * 0.013;
+        fv = fv - vel.y / mag * 0.013;
+        let ix = ((fu - t) * 80.0).trunc_to_i64();
+        let iy = (fv * 80.0).trunc_to_i64();
+        acc = acc + hash01(ix, iy);
+        s = s + 1;
+    }
+    let b = acc / (steps as f64);
+    let c = (b - 0.34) * 2.4;
+    if c < 0.0 { return 0.0; }
+    if c > 1.0 { return 1.0; }
+    c
+}
+
+// Clamp a 0..255-ish float to a byte.
+fn to_byte(x: f64) -> u8 {
+    if x < 0.0 { return 0u8; }
+    if x > 255.0 { return 255u8; }
+    (x.trunc_to_i64()) as u8
+}
+
+// Render rows [y0, y1) into a fresh RGBA buffer. Per-task unit: each worker
+// owns its chunk's output and hands it back at join — no shared mutable buffer.
+fn render_rows(y0: i64, y1: i64, pu: f64, pv: f64, t: f64) -> Vec[u8] {
+    let w = fb_width();
+    let h = fb_height();
+    let fw = w as f64;
+    let fh = h as f64;
+    let mut out: Vec[u8] = Vec.new();
+    for y in y0..y1 {
+        let v = (y as f64) / fh;
+        for x in 0..w {
+            let u = (x as f64) / fw;
+            let c = brightness(u, v, pu, pv, t);
+            // Blue→cyan→white streaks on a deep-blue floor; the pointer's
+            // neighbourhood warms toward amber so the cursor's pull is visible.
+            let du = u - pu;
+            let dv = v - pv;
+            let warm = 0.05 / (du * du + dv * dv + 0.05);
+            out.push(to_byte(c * 255.0 * 1.25 - 60.0 + warm * 200.0 * c));
+            out.push(to_byte(c * 220.0 + warm * 90.0 * c));
+            out.push(to_byte(40.0 + c * 215.0));
+            out.push(255u8);
+        }
+    }
+    out
+}
+
+// Compute one full frame across the worker pool, then blit. Rows split into
+// `workers` contiguous bands; each band is a spawned task; the TaskGroup joins
+// them in order and the bands concatenate into one framebuffer.
+fn render_frame(pu: f64, pv: f64, t: f64, workers: i64) with writes(Display) {
+    let w = fb_width();
+    let h = fb_height();
+    let band = (h + workers - 1) / workers;
+
+    let mut pool: TaskGroup = TaskGroup.new();
+    let mut handles: Vec[TaskHandle[Vec[u8]]] = Vec.new();
+    let mut k = 0;
+    while k < workers {
+        let y0 = k * band;
+        let mut y1 = y0 + band;
+        if y1 > h { y1 = h; }
+        if y0 < y1 {
+            let handle: TaskHandle[Vec[u8]] = pool.spawn(|| render_rows(y0, y1, pu, pv, t));
+            handles.push(handle);
+        }
+        k = k + 1;
+    }
+
+    let mut frame: Vec[u8] = Vec.new();
+    for handle in handles {
+        let chunk: Vec[u8] = handle.join();
+        for byte in chunk {
+            frame.push(byte);
+        }
+    }
+
+    put_pixels(frame.as_ptr(), frame.len(), w, h);
+}
+
+// The render loop. A plain blocking loop over the frame clock — no `await`.
+// Each tick: pick up the latest pointer position (non-blocking), recompute the
+// frame in parallel, blit, advance the animation phase. Private `fn main` (the
+// `_start` entry) — effects are inferred.
+fn main() {
+    let workers = 8;
+    let frames = animation_frames();
+    let moves = pointer_moves();
+
+    // Pointer position in normalized coords; starts at screen centre.
+    let mut pu = 0.5;
+    let mut pv = 0.5;
+    let mut t = 0.0;
+    loop {
+        frames.recv();
+        // Drain the latest steer (coalesced, non-blocking) — the loop never
+        // stalls waiting on input.
+        match moves.try_recv() {
+            Some(p) => {
+                pu = p.x() / (fb_width() as f64);
+                pv = p.y() / (fb_height() as f64);
+            }
+            None => {}
+        }
+        render_frame(pu, pv, t, workers);
+        t = t + 0.004;
+    }
+}

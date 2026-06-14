@@ -958,6 +958,28 @@ fn main() {
         }
     }
 
+    /// Built-in `f64.sqrt()` — lowers to the `llvm.sqrt` intrinsic (a single
+    /// `f64.sqrt` on wasm, `sqrtsd` on x86; no libm). Added for the Plume
+    /// flow-field dogfood's velocity normalization (`examples/plume/`); the
+    /// first piece of a numeric math surface (sin/cos/atan2 remain a gap).
+    /// Output matches the interpreter (`16.sqrt()=4`, `2.sqrt()` to full
+    /// f64 precision).
+    #[test]
+    fn e2e_float_sqrt() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let a = (16.0).sqrt();\n\
+                 let b = (2.0).sqrt();\n\
+                 let h = (3.0 * 3.0 + 4.0 * 4.0).sqrt();\n\
+                 println(f\"{a}\");\n\
+                 println(f\"{b}\");\n\
+                 println(f\"{h}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "4\n1.4142135623730951\n5\n");
+        }
+    }
+
     /// Regression (B-2026-06-14-13): a `for <name> in xs` loop binding that
     /// SHARES A NAME with an earlier same-function `let <name>` must not be
     /// conflated with it by the ownership RC analysis. Here the spawn result

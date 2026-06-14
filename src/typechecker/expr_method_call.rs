@@ -2159,6 +2159,16 @@ impl<'a> super::TypeChecker<'a> {
         {
             return receiver_for_lookup.clone();
         }
+        // Built-in `sqrt` on float primitives — `x.sqrt() -> Self`. Float-only
+        // (no integer square root); lowers to the `llvm.sqrt` intrinsic in
+        // codegen (a single `f64.sqrt` instruction on wasm — no libm) and
+        // `f64::sqrt` in the interpreter. The first piece of a numeric math
+        // surface, driven by Plume's flow field needing vector normalization
+        // (`docs/dogfooding.md`); sin/cos/atan2 remain a tracked gap. Backends:
+        // interpreter `method_call.rs`, codegen `method_call.rs`.
+        if method == "sqrt" && args.is_empty() && matches!(&receiver_for_lookup, Type::Float(_)) {
+            return receiver_for_lookup.clone();
+        }
         // Float→int conversion families (phase-8 § "Saturating float→int",
         // slice 2): `f.{saturating,wrapping,checked,trunc}_to_<intN>()` on
         // `f32`/`f64`. `checked_*` returns `Option[intN]` (None on

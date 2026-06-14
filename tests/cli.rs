@@ -15741,6 +15741,120 @@ fn wasm_pointer_moves_sequential_target_rejected() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// Full-demo E2E for the Plume flow-field dogfood (`examples/plume/`): builds
+/// the shipped `plume.kara` for `wasm_browser --features wasm-threads` and runs
+/// it under node, exercising the whole front-end spine together — the blocking
+/// `loop { frames.recv(); … }` render loop, `TaskGroup.spawn` row-band
+/// parallelism, the `put_pixels` blit, AND the new `pointer_moves`
+/// `Channel[PointerEvent]` drained with `try_recv`. Asserts:
+///   1. frames actually render (put_pixels called repeatedly — the parallel
+///      join + blit round-trip works), and the framebuffer is non-uniform
+///      (real flow content, not a blank/constant buffer);
+///   2. pointer steering reaches the kernel: the cursor's warm-tint region
+///      (R channel boosted near `pu,pv` in `render_rows`) is measurably
+///      brighter around the fed pointer position than in a far corner — a
+///      deterministic signal independent of the flow noise.
+///
+/// Doubles as a bit-rot guard on the example source (built from the committed
+/// file, not an inline copy).
+#[test]
+fn plume_example_pointer_steered_flow_e2e() {
+    let tmp = wasm_test_dir("plume");
+    let path = tmp.join("plume.kara");
+    std::fs::write(&path, include_str!("../examples/plume/plume.kara")).unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--features=wasm-threads",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: plume_example_pointer_steered_flow_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "plume build failed: {stderr}");
+    assert!(tmp.join("plume.threads.wasm").exists());
+
+    let harness = tmp.join("harness.mjs");
+    std::fs::write(
+        &harness,
+        r#"import { run } from "./plume.js";
+const W = 520, H = 340;
+// Feed the pointer at a fixed canvas position; the warm tint should brighten
+// the R channel around it. Synthetic events set clientX/Y (glue falls back to
+// them when offsetX/Y are absent).
+const PX = 300, PY = 200;
+class PM extends Event {
+  constructor(x, y) { super("pointermove"); this.clientX = x; this.clientY = y; }
+}
+const target = new EventTarget();
+const iv = setInterval(() => target.dispatchEvent(new PM(PX, PY)), 10);
+const bail = setTimeout(() => { console.error("FAIL: too few frames rendered"); process.exit(2); }, 12000);
+
+let frameCount = 0;
+function avgR(view, cx, cy) {
+  let sum = 0, n = 0;
+  for (let dy = -10; dy <= 10; dy++) {
+    for (let dx = -10; dx <= 10; dx++) {
+      const x = cx + dx, y = cy + dy;
+      if (x < 0 || x >= W || y < 0 || y >= H) continue;
+      sum += view[(y * W + x) * 4]; n++;
+    }
+  }
+  return sum / n;
+}
+function put_pixels(ptr, len, w, h, ctx) {
+  frameCount++;
+  // Assert on a settled frame (pointer events have been picked up by then).
+  if (frameCount === 8) {
+    const view = new Uint8Array(ctx.memory.buffer, Number(ptr), Number(len));
+    // Non-uniformity: the frame has real structure, not one constant value.
+    let mn = 255, mx = 0;
+    for (let i = 0; i < view.length; i += 4) { const r = view[i]; if (r < mn) mn = r; if (r > mx) mx = r; }
+    if (mx - mn < 20) { console.error("FAIL: framebuffer too uniform (mn=" + mn + " mx=" + mx + ")"); process.exit(3); }
+    const near = avgR(view, PX, PY);
+    const far = avgR(view, 40, 40);
+    console.log("PLUME frames=" + frameCount + " mn=" + mn + " mx=" + mx +
+                " nearR=" + near.toFixed(1) + " farR=" + far.toFixed(1));
+    if (near <= far + 15) { console.error("FAIL: pointer warm-tint not steering (near=" + near.toFixed(1) + " far=" + far.toFixed(1) + ")"); process.exit(4); }
+    clearInterval(iv); clearTimeout(bail);
+    console.log("PLUME_OK");
+    process.exit(0);
+  }
+}
+run({ put_pixels }, { pointerTarget: target }).catch((e) => {
+  console.error("run failed: " + (e && e.message ? e.message : e));
+  process.exit(1);
+});
+"#,
+    )
+    .unwrap();
+    let node = std::process::Command::new("node")
+        .arg(&harness)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: plume_example_pointer_steered_flow_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let so = String::from_utf8_lossy(&node_out.stdout);
+    let se = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success() && so.contains("PLUME_OK"),
+        "plume harness failed under node: stdout={so} stderr={se}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// The sequential-target gate: the same host-async producer built WITHOUT
 /// `--features wasm-threads` is a hard compile error (codegen, pre-link),
 /// pointing at the flag — never a silent zero-value `recv`. Fires during
