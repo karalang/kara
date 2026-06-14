@@ -1813,7 +1813,7 @@ B-tree–backed ordered set. All operations are O(log n). Because `T: Ord` (not 
 | `starts_with` | `fn starts_with(ref self, pat: ref String) -> bool` | Prefix test |
 | `ends_with` | `fn ends_with(ref self, pat: ref String) -> bool` | Suffix test |
 | `trim` | `fn trim(ref self) -> String` | Strips leading/trailing whitespace |
-| `split` | `fn split(ref self, sep: ref String) -> Vec[String]` | Split by separator |
+| `split` | `fn split(ref self, sep: ref String) -> Vec[String]` | Split by separator (v1: owned copies; zero-copy `StringSlice` views are v2 — see § StringSlice) |
 | `replace` | `fn replace(ref self, from: ref String, to: ref String) -> String` | Replace all occurrences |
 | `to_uppercase` | `fn to_uppercase(ref self) -> String` | Unicode uppercasing |
 | `to_lowercase` | `fn to_lowercase(ref self) -> String` | Unicode lowercasing |
@@ -4489,7 +4489,9 @@ fn greeting(name: String) -> String {
 
 Owned, mutable, heap-allocated for long strings. UTF-8 encoded. For strings ≤ 23 bytes, stored inline in the struct with no heap allocation (SSO — Small String Optimization). This is an internal detail; the programmer never sees it.
 
-**`StringSlice` — zero-copy views.**
+**`StringSlice` — zero-copy views.** *(Planned for v2 — not yet implemented.)*
+
+> **v1 status.** `StringSlice` is **not built in v1**: the escapable borrowed-view form needs lifetime inference inside the no-annotation borrow checker — the highest-soundness-risk piece of "ownership without lifetimes" — and has no live v1 consumer (borrowed substrings as `Map` keys are already solved). In **v1**, `String.split` returns **owned `Vec[String]`** (the table above), not views; the `split` → views form and the `first_word`/`slice` examples below are the **v2** design. The "ownership without lifetimes" story ships in v1 via the returned-borrow forms that *are* built (field/forward, `if`/`match`, method accessors, chained, borrowed-struct, `Option[ref T]` — see Feature 4 Part 3). Graduates to v1 only if a demo/kata demands it.
 
 `StringSlice` is a borrowed view: a pointer, offset, and length into an existing `String`. No allocation. Used for parsing and splitting without copying:
 
