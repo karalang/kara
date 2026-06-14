@@ -41,9 +41,15 @@ failure class):
 summary: 3 rows, usd_total=94.48920000000001
 ```
 
-Runs via the tree-walk interpreter (`karac run`). `String.split` now also has a
-codegen path (GAP-W2); a full `karac build` of Weave additionally depends on
-unrelated codegen fixes for struct-variant-enum `impl Display` (others' area).
+Runs both ways with byte-identical output: under the tree-walk interpreter
+(`karac run`, above) **and** as a native binary via `karac build
+examples/weave/src/main.kara` (drops `./main` in the CWD). Weave is the first
+dogfood to drive the full refinement-types + contracts + effects + provider-
+injection + struct-variant `impl Display` surface through codegen; getting there
+fixed seven distinct codegen bugs (see `docs/dogfooding.md` § Weave and
+`docs/implementation_checklist/phase-7-codegen.md`). The native build links the
+runtime archives (`target/release/libkarac_runtime*.a`; see CLAUDE.md if a fresh
+checkout lacks them).
 
 ## Dogfooding findings
 
