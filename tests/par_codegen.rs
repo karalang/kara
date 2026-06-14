@@ -909,6 +909,48 @@ fn main() {
         }
     }
 
+    /// Auto-par ordered output (phase-6-runtime.md "Auto-par ordered output").
+    /// Three independent `fetch_*` calls reading disjoint resources auto-
+    /// parallelize into one group — each prints two trace lines AND an int.
+    /// The runtime captures each branch's console output and replays it in
+    /// branch (= source) order at the join, so the observable stdout is
+    /// byte-identical to sequential execution: every branch's lines stay
+    /// together and in source-fn order, with the post-join total last. This is
+    /// the property that lets the analyzer parallelize logging-bearing work
+    /// (reversing B-2026-06-13-18's blanket suppression). Covers the string
+    /// path AND the int `println` primitive (both now route through the
+    /// `karac_runtime_write_console` capture chokepoint).
+    #[test]
+    fn test_e2e_auto_par_ordered_output_preserves_source_order() {
+        let out = run_program(
+            r#"
+effect resource DbA;
+effect resource DbB;
+effect resource DbC;
+fn fetch_a() -> i64 reads(DbA) { println("A: start"); println("A: done"); 100_i64 }
+fn fetch_b() -> i64 reads(DbB) { println("B: start"); println(2_i64); 200_i64 }
+fn fetch_c() -> i64 reads(DbC) { println("C: start"); println("C: done"); 300_i64 }
+fn dashboard() -> i64 reads(DbA) reads(DbB) reads(DbC) {
+    let a = fetch_a();
+    let b = fetch_b();
+    let c = fetch_c();
+    a + b + c
+}
+fn main() {
+    let total = dashboard();
+    println(total);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "A: start\nA: done\nB: start\n2\nC: start\nC: done\n600\n",
+                "parallelized branches' output must replay in source order, \
+                 byte-identical to sequential; got {out:?}"
+            );
+        }
+    }
+
     /// Slice 1b (Phase 7 — Par codegen: cancellation and error
     /// propagation, 2026-05-20). A par-block with Result-typed
     /// branches AND a join expression emits a parent-side err-walk

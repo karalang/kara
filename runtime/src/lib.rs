@@ -167,13 +167,15 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         karac_vec_sort_by,
         karac_vec_reverse,
     );
-    // par-block + reduce, error-return trace, test-runner outcome bridge.
+    // par-block + reduce, error-return trace, test-runner outcome bridge,
+    // ordered-output console chokepoint (auto-par ordered-output).
     keep!(
         karac_par_run,
         karac_par_reduce,
         karac_error_trace_push,
         karac_error_trace_clear,
         karac_test_record_failure,
+        karac_runtime_write_console,
     );
     // Ambient built-in resource methods lowered by codegen
     // (`src/codegen/method_call.rs::compile_ambient_resource_method`).
@@ -865,6 +867,124 @@ impl Drop for FrameGuard {
     }
 }
 
+// ── Ordered output capture under `par` (auto-par ordered-output) ────────────
+//
+// Console output (`println` / `print` / `eprintln`, Display, …) lowers to
+// `karac_runtime_write_console(data, len, stream)`. At the top level the
+// stream is written directly via libc `fwrite` (sharing libc's stdio buffer
+// with the panic `printf` path, so mixed output stays ordered). Inside a
+// parallel branch a per-branch `OutputCapture` is installed in
+// `OUTPUT_REDIRECT` (save/restore, RAII) and every write is recorded as a
+// `(len, stream)` segment over a flat byte buffer instead of hitting the fd.
+// After the join barrier `karac_par_run` replays the captures in branch
+// (= source) order, so a parallelized group's observable output is
+// byte-identical to its sequential execution — the property that lets the
+// analyzer parallelize logging-bearing independent work (phase-6-runtime.md
+// "Auto-par ordered output"). Replaying THROUGH the same chokepoint (not a raw
+// fd write) is what makes NESTED `par` correct: an inner region's flush runs
+// while the OUTER branch's capture is still installed, so inner output folds
+// into the outer capture and defers to the outer flush.
+
+/// A parallel branch's deferred console output: a flat byte buffer plus one
+/// `(len, stream)` segment per `write_console` call, so the replay preserves
+/// both within-branch ordering and per-stream (stdout vs stderr) routing.
+struct OutputCapture {
+    data: Vec<u8>,
+    segs: Vec<(usize, *mut c_void)>,
+}
+
+impl OutputCapture {
+    const fn new() -> Self {
+        OutputCapture {
+            data: Vec::new(),
+            segs: Vec::new(),
+        }
+    }
+
+    /// Replay every segment through the console chokepoint, in capture order.
+    /// Called by the flushing `par_run` once the join barrier has established
+    /// happens-before with every branch's writes; at that point
+    /// `OUTPUT_REDIRECT` holds the ENCLOSING context (null at the top level →
+    /// bytes reach the fd; an outer branch's capture when nested → bytes fold
+    /// into it and defer to the outer flush).
+    ///
+    /// # Safety
+    /// Each segment's `stream` must still be a live `FILE*` (it is — codegen's
+    /// `stdout`/`stderr` globals outlive any `par` region).
+    unsafe fn replay(&self) {
+        let mut off = 0usize;
+        for &(len, stream) in &self.segs {
+            karac_runtime_write_console(self.data.as_ptr().add(off), len, stream);
+            off += len;
+        }
+    }
+}
+
+thread_local! {
+    /// The capture buffer for the parallel branch currently running on this
+    /// thread, or null when output should hit the fd directly. Save/restore
+    /// discipline (via `OutputRedirectGuard`) nests correctly across inner
+    /// `par` regions and survives the pooled path's work-helping — a worker
+    /// that runs branch B installs this for B's duration only.
+    static OUTPUT_REDIRECT: Cell<*mut OutputCapture> = const { Cell::new(ptr::null_mut()) };
+}
+
+/// RAII install of a branch's `OutputCapture` into `OUTPUT_REDIRECT`,
+/// restoring the PREVIOUS value on drop — so redirection unwinds cleanly even
+/// if the branch panics (mirrors `FrameGuard`), and nested `par` regions
+/// restore to their enclosing branch's capture rather than to null.
+struct OutputRedirectGuard {
+    prev: *mut OutputCapture,
+}
+
+impl OutputRedirectGuard {
+    fn new(cap: *mut OutputCapture) -> Self {
+        let prev = OUTPUT_REDIRECT.with(|c| c.replace(cap));
+        OutputRedirectGuard { prev }
+    }
+}
+
+impl Drop for OutputRedirectGuard {
+    fn drop(&mut self) {
+        OUTPUT_REDIRECT.with(|c| c.set(self.prev));
+    }
+}
+
+/// The console-write chokepoint every codegen print path funnels through
+/// (`emit_nul_safe_write` + the `compile_print` primitive arms). With no
+/// branch capture installed, writes `len` bytes of `data` to `stream` (an
+/// opaque libc `FILE*`) via `fwrite` — byte-for-byte the old inline path,
+/// still sharing libc's stdio buffer with the panic `printf`. Inside a
+/// parallel branch, records the bytes as a `(len, stream)` segment for ordered
+/// replay at the join instead of writing now.
+///
+/// # Safety
+/// `data` must point to `len` valid bytes; `stream` must be a live `FILE*`
+/// (codegen passes the loaded `stdout`/`stderr` global). `len` is `size_t`-
+/// width (pointer width), matching codegen's declared parameter.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_write_console(
+    data: *const u8,
+    len: usize,
+    stream: *mut c_void,
+) {
+    let redir = OUTPUT_REDIRECT.with(|c| c.get());
+    if redir.is_null() {
+        // Declared locally (not via the `libc` crate) to keep the runtime's
+        // dependency surface unchanged; `size_t`-width args match codegen's
+        // `fwrite` decl exactly (i32 on wasm32, i64 native).
+        extern "C" {
+            fn fwrite(ptr: *const c_void, size: usize, nmemb: usize, stream: *mut c_void) -> usize;
+        }
+        fwrite(data as *const c_void, 1, len, stream);
+    } else {
+        let cap = &mut *redir;
+        cap.data
+            .extend_from_slice(std::slice::from_raw_parts(data, len));
+        cap.segs.push((len, stream));
+    }
+}
+
 // ── Long-lived worker pool for `karac_par_run` ─────────────────────────────
 //
 // One global pool of N = `resolve_pool_workers()` worker threads,
@@ -1201,10 +1321,17 @@ unsafe fn karac_par_run_pooled(
         track_frames,
     });
 
+    // One deferred-output capture per branch (auto-par ordered-output). Built
+    // up front so its element addresses are stable for the lifetime of the
+    // tasks; never pushed-to after, so no realloc moves a live capture. Each
+    // task writes only its own element (through `OUTPUT_REDIRECT`); the parent
+    // reads them only after the join barrier, which establishes happens-before.
+    let mut captures: Vec<OutputCapture> = (0..count).map(|_| OutputCapture::new()).collect();
+
     let p = pool();
     {
         let mut q = p.queue.lock().unwrap_or_else(|e| e.into_inner());
-        for i in 0..count {
+        for (i, cap) in captures.iter_mut().enumerate() {
             let b = &*branches.add(i);
             // Round-trip the pointers through `usize` so the closure is
             // `Send` without an unsafe impl on the raw FFI types. Slice
@@ -1214,10 +1341,16 @@ unsafe fn karac_par_run_pooled(
             // shape with a 5-arg closure).
             let func = b.func;
             let ctx_addr = b.ctx as usize;
+            let cap_addr = (cap as *mut OutputCapture) as usize;
             q.push_back(Task {
                 call: Arc::clone(&call),
                 branch_idx: i as u32,
                 run: Box::new(move |cancel: &AtomicBool| unsafe {
+                    // Redirect this branch's console output into its capture
+                    // for the branch's whole extent (transitive prints from
+                    // called fns included). RAII-restored on return OR unwind,
+                    // and to the PREVIOUS value so a nested `par` branch nests.
+                    let _redir = OutputRedirectGuard::new(cap_addr as *mut OutputCapture);
                     func(ctx_addr as *mut c_void, cancel as *const AtomicBool);
                 }),
             });
@@ -1228,6 +1361,14 @@ unsafe fn karac_par_run_pooled(
     // Wait for all tasks to complete, work-helping while we wait and
     // propagating an enclosing cancellation inward (see `par_join_wait`).
     par_join_wait(&call, p, parent_cancel);
+
+    // Join passed → every branch's capture writes happen-before here. Replay
+    // in branch (= source) order through the console chokepoint: at the top
+    // level this reaches the fd in deterministic order; nested inside an outer
+    // branch it folds into that branch's still-installed capture.
+    for cap in &captures {
+        cap.replay();
+    }
 }
 
 /// Sequential `par {}` execution — the WASM-default lowering (phase-10
@@ -1279,12 +1420,19 @@ pub(crate) unsafe fn seq_par_run(
     };
 
     let cancel = AtomicBool::new(false);
-    for i in 0..count {
+    // One deferred-output capture per branch (auto-par ordered-output); see the
+    // pooled path. Stable addresses (no push after build), one writer per
+    // element, read only after the (here implicit, source-order) join.
+    let mut captures: Vec<OutputCapture> = (0..count).map(|_| OutputCapture::new()).collect();
+    for (i, cap) in captures.iter_mut().enumerate() {
         // Cascade an enclosing cancellation inward before each branch.
         if !parent_cancel.is_null() && (*parent_cancel).load(Ordering::Relaxed) {
             cancel.store(true, Ordering::Relaxed);
         }
         let b = &*branches.add(i);
+        // Redirect this branch's console output into its capture (RAII-restored
+        // to the enclosing context at iteration end, so a nested `par` nests).
+        let _redir = OutputRedirectGuard::new(cap as *mut OutputCapture);
         if track_frames {
             let frame = KaracFrame {
                 parent: parent_addr as *const KaracFrame,
@@ -1297,6 +1445,12 @@ pub(crate) unsafe fn seq_par_run(
         } else {
             (b.func)(b.ctx, &cancel as *const AtomicBool);
         }
+    }
+    // Implicit join passed (the loop ran every branch on this thread). Replay
+    // in source order through the chokepoint; redirect is now the enclosing
+    // context (null at top level, or an outer branch's capture when nested).
+    for cap in &captures {
+        cap.replay();
     }
 }
 

@@ -128,15 +128,20 @@ fn test_effect_conflict_serializes() {
     );
 }
 
-// ── console output forces serialization (B-2026-06-13-18) ──────
+// ── console output parallelizes with ordered-output capture ────
+// (was B-2026-06-13-18 "output forces serialization"; the blanket
+// suppression is reversed now that the runtime captures each branch's output
+// and replays it in source order at the join — phase-6-runtime.md "Auto-par
+// ordered output". Observable output stays byte-identical to sequential.)
 
 #[test]
-fn test_direct_println_serializes() {
-    // Regression for B-2026-06-13-18: the print builtins carry no resource
-    // effect, so the effect-conflict gate saw two `println`s as independent and
-    // fanned them into `__par_branch` workers that raced on the shared stdout
-    // buffer, reordering output nondeterministically. Output ops must never be
-    // auto-parallelized.
+fn test_direct_println_parallelizes_with_ordered_output() {
+    // Previously (B-2026-06-13-18) consecutive `println`s were forced serial to
+    // avoid racing the shared stdout buffer. With ordered-output capture they
+    // are independent effect-free statements again and form one parallel group;
+    // `karac_par_run` buffers each branch and flushes in source order, so the
+    // printed sequence is unchanged. (Codegen may still decline a trivial group
+    // via the cost model — that's a separate, downstream decision.)
     let analysis = analyze(
         r#"
         fn main() {
@@ -148,20 +153,20 @@ fn test_direct_println_serializes() {
     );
 
     let main_fc = get_function(&analysis, "main");
-    assert!(
-        main_fc.parallel_groups.is_empty(),
-        "Expected no parallel groups — consecutive `println`s must stay ordered, got {:?}",
+    assert_eq!(
+        main_fc.parallel_groups.len(),
+        1,
+        "consecutive `println`s should now group (ordered-output capture preserves order), got {:?}",
         main_fc.parallel_groups
     );
 }
 
 #[test]
-fn test_transitive_println_serializes() {
-    // The output property must propagate across the call graph: a fn that
-    // prints AND carries a real (non-conflicting) effect would otherwise be
-    // fanned out at its call sites (effects on different resources don't
-    // conflict), reordering the prints buried inside it. The `output_fns`
-    // fixpoint catches this — a call to a transitively-printing fn serializes.
+fn test_transitive_println_parallelizes_with_ordered_output() {
+    // A fn that prints AND carries a real (non-conflicting) effect is fanned out
+    // at its call sites again — effects on different resources don't conflict,
+    // and the prints buried inside each branch are captured and replayed in
+    // branch order. No transitive-output suppression remains.
     let analysis = analyze(
         r#"
         effect resource A;
@@ -178,19 +183,18 @@ fn test_transitive_println_serializes() {
     );
 
     let main_fc = get_function(&analysis, "main");
-    assert!(
-        main_fc.parallel_groups.is_empty(),
-        "Expected no parallel groups — calls to fns that transitively print must stay ordered, got {:?}",
+    assert_eq!(
+        main_fc.parallel_groups.len(),
+        1,
+        "calls to transitively-printing fns on disjoint resources should now group, got {:?}",
         main_fc.parallel_groups
     );
 }
 
 #[test]
 fn test_pure_compute_still_parallelizes_alongside_output_guard() {
-    // Guard against over-correction: the output guard must not suppress genuine
-    // compute parallelism. Two side-effect-free user calls with no output still
-    // form a group (mirrors `test_pure_independent_calls`, asserted here so a
-    // future broadening of the output guard can't silently kill it).
+    // Guard against over-correction: two side-effect-free user calls with no
+    // output still form a group (mirrors `test_pure_independent_calls`).
     let analysis = analyze(
         r#"
         fn a() -> i32 { 1 }

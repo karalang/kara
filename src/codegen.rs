@@ -1149,7 +1149,14 @@ pub(super) struct Codegen<'ctx> {
     /// stops at the first interior NUL even with a precision, `fwrite` writes
     /// exactly `len` bytes. It shares libc's stdio buffer with the `printf`
     /// int/bool paths, so output ordering across mixed prints is preserved.
-    pub(crate) fwrite_fn: FunctionValue<'ctx>,
+    /// `void karac_runtime_write_console(ptr data, size_t len, ptr stream)` —
+    /// the runtime console-write chokepoint every print path funnels through
+    /// (auto-par ordered-output). At the top level it `fwrite`s to `stream`
+    /// (byte-for-byte the old inline path); inside a parallel branch it records
+    /// the bytes for ordered replay at the join so parallelized logging-bearing
+    /// work keeps sequential output order. `size_t`-width `len` (i32 wasm32 /
+    /// i64 native) matches the runtime's `usize` parameter.
+    pub(crate) write_console_fn: FunctionValue<'ctx>,
     /// The libc `FILE*` globals for stdout / stderr, used as the `fwrite`
     /// stream argument. The symbol name is platform-specific (`__stdoutp` /
     /// `__stderrp` on Apple, `stdout` / `stderr` elsewhere, incl. wasi-libc).
@@ -2610,26 +2617,27 @@ impl<'ctx> Codegen<'ctx> {
         );
         let snprintf_fn = module.add_function("snprintf", snprintf_type, Some(Linkage::External));
 
-        // `size_t fwrite(const void* ptr, size_t size, size_t nmemb, FILE* stream)`
-        // — the NUL-safe print primitive (L5). `printf("%.*s")` truncates a
-        // length-prefixed String at an interior NUL; `fwrite` writes exactly
-        // `len` bytes. `FILE*` is opaque, so it lowers to `ptr`. `fwrite` is
-        // NOT varargs, so its signature must match libc EXACTLY or wasm traps
-        // the call (`signature_mismatch:fwrite`): `size_t` is i32 on wasm32
-        // (wasi-libc) and i64 natively — `emit_nul_safe_write` normalizes the
-        // length to this width at every call site. (Same size_t-width concern
-        // the `malloc` shim comment below addresses; `size_t_type` is computed
-        // above with the `snprintf` decl.)
-        let fwrite_type = size_t_type.fn_type(
+        // `void karac_runtime_write_console(ptr data, size_t len, ptr stream)`
+        // — the auto-par ordered-output console chokepoint (runtime/src/lib.rs),
+        // the sole console-write primitive emitted now (it replaced the inline
+        // `fwrite`/`printf` calls so a capture can intercept every print). `len`
+        // is `size_t`-width to match the runtime's `usize` param (i32 on wasm32,
+        // i64 native), the same width discipline `snprintf` above uses; a
+        // mismatch traps on wasm. `stream` is the loaded `stdout`/`stderr`
+        // `FILE*` global, forwarded so the no-capture path can `fwrite` to it.
+        let write_console_type = context.void_type().fn_type(
             &[
                 BasicMetadataTypeEnum::from(ptr_type),
-                BasicMetadataTypeEnum::from(size_t_type),
                 BasicMetadataTypeEnum::from(size_t_type),
                 BasicMetadataTypeEnum::from(ptr_type),
             ],
             false,
         );
-        let fwrite_fn = module.add_function("fwrite", fwrite_type, Some(Linkage::External));
+        let write_console_fn = module.add_function(
+            "karac_runtime_write_console",
+            write_console_type,
+            Some(Linkage::External),
+        );
 
         // The libc `FILE*` globals for stdout / stderr, used as the `fwrite`
         // stream. The symbol differs by platform: `__stdoutp` / `__stderrp` on
@@ -4634,7 +4642,7 @@ impl<'ctx> Codegen<'ctx> {
             current_fn: None,
             printf_fn,
             snprintf_fn,
-            fwrite_fn,
+            write_console_fn,
             stdout_global,
             stderr_global,
             struct_types: HashMap::new(),

@@ -363,7 +363,6 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             self.context.i64_type()
         };
-        let one = size_t.const_int(1, false);
         // Normalize the byte length to size_t (truncate a wider i64 on wasm,
         // widen a narrower count like the char-codepoint path's byte count).
         let len_st = {
@@ -390,16 +389,20 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_load(ptr_t, file_glob.as_pointer_value(), "fw.stream")
             .unwrap();
+        // Route through the runtime console chokepoint (auto-par ordered-
+        // output): at the top level it `fwrite`s `len` bytes to `stream` (the
+        // old inline behavior); inside a parallel branch it captures the bytes
+        // for ordered replay at the join. `write_console` folds in the `1`
+        // element-size, so only (data, len, stream) cross the call boundary.
         self.builder
             .build_call(
-                self.fwrite_fn,
+                self.write_console_fn,
                 &[
                     BasicMetadataValueEnum::from(data),
-                    BasicMetadataValueEnum::from(one),
                     BasicMetadataValueEnum::from(len_st),
                     BasicMetadataValueEnum::from(stream),
                 ],
-                "fw",
+                "wc",
             )
             .unwrap();
         if !nl.is_empty() {
@@ -411,14 +414,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap();
             self.builder
                 .build_call(
-                    self.fwrite_fn,
+                    self.write_console_fn,
                     &[
                         BasicMetadataValueEnum::from(nl_g.as_pointer_value()),
-                        BasicMetadataValueEnum::from(one),
                         BasicMetadataValueEnum::from(nl_len),
                         BasicMetadataValueEnum::from(stream2),
                     ],
-                    "fw.nl.call",
+                    "wc.nl.call",
                 )
                 .unwrap();
         }
@@ -498,14 +500,15 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let zero = self.context.i64_type().const_int(0, false);
         if args.is_empty() {
-            let fmt = self.builder.build_global_string_ptr("\n", "nl").unwrap();
-            self.builder
-                .build_call(
-                    self.printf_fn,
-                    &[BasicMetadataValueEnum::from(fmt.as_pointer_value())],
-                    "printf",
-                )
-                .unwrap();
+            // Route through the console chokepoint (not `printf`) so a bare
+            // `println()` inside a parallel branch is captured + ordered too.
+            let nl_g = self.builder.build_global_string_ptr("\n", "nl").unwrap();
+            self.emit_nul_safe_write(
+                nl_g.as_pointer_value(),
+                self.context.i64_type().const_int(1, false),
+                "",
+                false,
+            );
             return Ok(zero.into());
         }
 
@@ -646,15 +649,13 @@ impl<'ctx> super::Codegen<'ctx> {
         if val.is_int_value() {
             let bits = val.into_int_value().get_type().get_bit_width();
             if bits == 1 {
-                let true_s = self
-                    .builder
-                    .build_global_string_ptr(&format!("true{nl}"), "ts")
-                    .unwrap();
-                let false_s = self
-                    .builder
-                    .build_global_string_ptr(&format!("false{nl}"), "fs")
-                    .unwrap();
-                let sel = self
+                // Select the literal + its length, then route through the
+                // console chokepoint (capture-aware) instead of `printf` — `nl`
+                // is appended by `emit_nul_safe_write`, not baked into the text.
+                let true_s = self.builder.build_global_string_ptr("true", "ts").unwrap();
+                let false_s = self.builder.build_global_string_ptr("false", "fs").unwrap();
+                let i64_t = self.context.i64_type();
+                let sel_ptr = self
                     .builder
                     .build_select(
                         val.into_int_value(),
@@ -662,14 +663,19 @@ impl<'ctx> super::Codegen<'ctx> {
                         false_s.as_pointer_value(),
                         "bstr",
                     )
-                    .unwrap();
-                self.builder
-                    .build_call(
-                        self.printf_fn,
-                        &[BasicMetadataValueEnum::from(sel.into_pointer_value())],
-                        "printf",
+                    .unwrap()
+                    .into_pointer_value();
+                let sel_len = self
+                    .builder
+                    .build_select(
+                        val.into_int_value(),
+                        i64_t.const_int(4, false),
+                        i64_t.const_int(5, false),
+                        "blen",
                     )
-                    .unwrap();
+                    .unwrap()
+                    .into_int_value();
+                self.emit_nul_safe_write(sel_ptr, sel_len, nl, false);
             } else {
                 // Widen narrower ints to i64 before printf's varargs slot —
                 // sign-extend for signed types so a negative `i32` prints as
@@ -698,21 +704,46 @@ impl<'ctx> super::Codegen<'ctx> {
                 } else {
                     int_val
                 };
+                // Render into a stack buffer via `snprintf`, then route the
+                // exact bytes through the console chokepoint (capture-aware)
+                // instead of `printf` — so an int `println` inside a parallel
+                // branch is captured + flushed in order. 32 bytes covers any
+                // i64 (≤20 digits + sign + NUL). `nl` is appended by the write.
                 let spec = if is_unsigned { "%llu" } else { "%lld" };
-                let fmt = self
+                let fmt = self.builder.build_global_string_ptr(spec, "fi").unwrap();
+                let ptr_t = self.context.ptr_type(inkwell::AddressSpace::default());
+                let size_t = if crate::target::active_target_is_wasm() {
+                    self.context.i32_type()
+                } else {
+                    self.context.i64_type()
+                };
+                let fn_val = self.current_fn.unwrap();
+                let buf = self.create_entry_alloca(
+                    fn_val,
+                    "ibuf",
+                    self.context.i8_type().array_type(32).into(),
+                );
+                let buf_ptr = self
                     .builder
-                    .build_global_string_ptr(&format!("{spec}{nl}"), "fi")
+                    .build_pointer_cast(buf, ptr_t, "ibufp")
                     .unwrap();
-                self.builder
+                let written = self
+                    .builder
                     .build_call(
-                        self.printf_fn,
+                        self.snprintf_fn,
                         &[
-                            BasicMetadataValueEnum::from(fmt.as_pointer_value()),
-                            BasicMetadataValueEnum::from(widened),
+                            buf_ptr.into(),
+                            size_t.const_int(32, false).into(),
+                            fmt.as_pointer_value().into(),
+                            widened.into(),
                         ],
-                        "printf",
+                        "iwritten",
                     )
-                    .unwrap();
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                self.emit_nul_safe_write(buf_ptr, written, nl, false);
             }
         } else if val.is_struct_value() {
             // A user struct that reached here is a `println(StructLiteral{…})`
@@ -770,21 +801,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.free_fresh_owned_str_arg(&args[0].value, val);
             }
         } else if val.is_pointer_value() {
-            // Raw pointer (shared types, etc.) — pass directly to %s.
-            let fmt = self
+            // Raw pointer treated as a NUL-terminated C string (shared types,
+            // etc.): measure with `strlen`, then route the bytes through the
+            // console chokepoint (capture-aware) instead of `printf("%s")` —
+            // `nl` is appended by the write.
+            let strlen_fn = self
+                .module
+                .get_function("strlen")
+                .expect("strlen declared in Codegen::new");
+            let slen = self
                 .builder
-                .build_global_string_ptr(&format!("%s{nl}"), "fsp")
-                .unwrap();
-            self.builder
-                .build_call(
-                    self.printf_fn,
-                    &[
-                        BasicMetadataValueEnum::from(fmt.as_pointer_value()),
-                        BasicMetadataValueEnum::from(val.into_pointer_value()),
-                    ],
-                    "printf",
-                )
-                .unwrap();
+                .build_call(strlen_fn, &[val.into_pointer_value().into()], "p.slen")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value();
+            self.emit_nul_safe_write(val.into_pointer_value(), slen, nl, false);
         } else if val.is_float_value() {
             // Render with Rust's shortest-round-trip `{}` formatting (via the
             // runtime `karac_runtime_f64_to_str`) so AOT output matches
