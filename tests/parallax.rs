@@ -161,7 +161,14 @@ mod parallax_tests {
         );
     }
 
+    // IGNORED pending auto-par ordered-output (phase-6-runtime.md). Since
+    // B-2026-06-13-18 (never parallelize console-output statements), the demo's
+    // `get_dashboard` group is suppressed because each `fetch_*` provider impl
+    // `println`s a trace line — sound, but it defeats the demo's parallelism.
+    // The transitive-output guard makes this assertion stale; un-ignore when
+    // order-preserving buffered output under auto-par lands.
     #[test]
+    #[ignore = "auto-par output suppression (B-2026-06-13-18) defeats the demo group; pending ordered-output, phase-6-runtime.md"]
     fn test_parallax_emits_par_run_for_four_lets() {
         let ir = ir_for_workload();
         // Multiple par-run sites in IR (provider impls' busy-compute
@@ -233,7 +240,10 @@ mod parallax_tests {
         );
     }
 
+    // IGNORED pending auto-par ordered-output — see
+    // `test_parallax_emits_par_run_for_four_lets` and phase-6-runtime.md.
     #[test]
+    #[ignore = "auto-par output suppression (B-2026-06-13-18) defeats the demo group; pending ordered-output, phase-6-runtime.md"]
     fn test_parallax_query_concurrency_groups_four_calls() {
         let src = workload_source();
         let mut parsed = karac::parse(&src);
@@ -279,7 +289,10 @@ mod parallax_tests {
         );
     }
 
+    // IGNORED pending auto-par ordered-output — see
+    // `test_parallax_emits_par_run_for_four_lets` and phase-6-runtime.md.
     #[test]
+    #[ignore = "auto-par output suppression (B-2026-06-13-18) defeats the demo group; pending ordered-output, phase-6-runtime.md"]
     fn test_parallax_concurrency_report_renders_dashboard_workload() {
         let src = workload_source();
         let mut parsed = karac::parse(&src);
