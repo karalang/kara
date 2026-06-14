@@ -137,8 +137,14 @@ to wait for.
 
 **Bugs surfaced** (filed in `bugs.md`, gitignored): `B-2026-06-12-9` — `?` inside
 `main() -> Result[..]` miscompiles (`ret {i64,i64}` vs `i32`); `B-2026-06-12-10` —
-suspected per-iteration leak (~0.9 MB / 441 KB lexed, linear RSS growth; **macOS-measured,
-verify under Linux/LSan before trusting**).
+per-iteration leak (~0.9 MB / 441 KB lexed, linear RSS growth). **RESOLVED
+2026-06-13 (`ecfa867a`):** verified real (`leaks --atExit` at O0, not a macOS RSS
+artifact) and root-caused — NOT the hypothesized `Lexer` src/bytes drop but an
+inline enum-variant-constructor temp passed by value as a call arg
+(`make_spanned(Token.StringLiteral(value))`) whose caller-side drop was missing.
+Fixed; rich-lex-loop leak 883 KB → 115 KB (−87%). The 115 KB residual is a
+distinct composite-payload enum-drop gap (c-string `CStr{Vec[u8]}` + f-string
+`Vec[InterpPart]`), re-filed as `B-2026-06-13-13`.
 
 ## Caveats
 
