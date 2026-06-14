@@ -1820,7 +1820,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // String / Vec / user-struct payloads.
         if let Some(layout) = self.enum_layouts.get(type_name) {
             if layout.tags.contains_key(method) {
-                if let Some(v) = self.try_compile_enum_variant(method, _args)? {
+                if let Some(v) = self.try_compile_enum_variant(method, Some(type_name), _args)? {
                     return Ok(v);
                 }
             }

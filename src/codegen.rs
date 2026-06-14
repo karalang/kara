@@ -1310,6 +1310,15 @@ pub(super) struct Codegen<'ctx> {
     /// dispatch — surfaced 2026-05-25 by the codegen suite's
     /// intermittent hang investigation.
     pub(crate) seeded_enum_names: HashSet<String>,
+    /// Names of seeded baked-stdlib enums that carry `#[derive(Display)]`
+    /// (`IoError`, `VarError`) and so must render through the generic
+    /// value-driven Display path (`emit_enum_display_fn`) like a user enum —
+    /// the f-string / `println` / `to_string` dispatch in
+    /// `expr_user_enum_name_any` excludes `seeded_enum_names` (the other
+    /// seeded enums route through bespoke paths), so this set re-admits the
+    /// Display-deriving ones. Populated once from `STDLIB_PROGRAMS` in
+    /// `seed_builtin_enum_layouts`.
+    pub(crate) baked_display_enum_names: HashSet<String>,
     /// Nested loop stack — innermost frame is last.
     pub(crate) loop_stack: Vec<LoopFrame<'ctx>>,
     // ── Generic monomorphization ──────────────────────────────────
@@ -4643,6 +4652,7 @@ impl<'ctx> Codegen<'ctx> {
             enum_layouts: HashMap::new(),
             enum_unit_variants: HashMap::new(),
             seeded_enum_names: HashSet::new(),
+            baked_display_enum_names: HashSet::new(),
             loop_stack: Vec::new(),
             generic_fns: HashMap::new(),
             generated_monos: HashSet::new(),

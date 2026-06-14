@@ -3267,6 +3267,20 @@ impl<'ctx> super::Codegen<'ctx> {
     /// the prelude AST (e.g. Option[T]) so that variant construction/matching
     /// and methods like `first`/`last`/`get` can produce properly typed LLVM.
     pub(super) fn seed_builtin_enum_layouts(&mut self) {
+        // Record which baked-stdlib enums derive `Display` so the f-string /
+        // `println` dispatch (`expr_user_enum_name_any`) re-admits them despite
+        // their seeded status. Done once here, before the seeds below register
+        // them in `seeded_enum_names`.
+        for (_, p) in crate::prelude::STDLIB_PROGRAMS.iter() {
+            for item in &p.items {
+                if let crate::ast::Item::EnumDef(e) = item {
+                    if crate::typechecker::extract_derived_traits(&e.attributes).contains("Display")
+                    {
+                        self.baked_display_enum_names.insert(e.name.clone());
+                    }
+                }
+            }
+        }
         let i64_t: BasicTypeEnum<'ctx> = self.context.i64_type().into();
         // Option[T]: { i64 tag, i64 w0, i64 w1, i64 w2 } — payload widened
         // to 3 i64 words (from the original 1) so tuple `(i64, i64)`
@@ -3491,6 +3505,63 @@ impl<'ctx> super::Codegen<'ctx> {
                 },
             );
             self.seeded_enum_names.insert("VarError".to_string());
+        }
+
+        // Stdlib `IoError` enum (`runtime/stdlib/io_error.kara`) — the `Err`
+        // payload of every I/O API (`FileSystem.read_to_string`, `env.args`,
+        // `examples/word_count.kara`'s `main() -> Result[(), IoError]`, …).
+        // Reaches the typechecker via `STDLIB_PROGRAMS` but, like the seeds
+        // above, never reaches codegen's `declare_enums` (which walks only the
+        // user's `program.items`). Without this seed a user-written
+        // `IoError.Other("…")` construction has no layout and falls through to
+        // the `i64 0` placeholder — so the value prints `0`, a payload-variant
+        // `match` can't bind `m` ("Undefined variable"), and the
+        // `#[derive(Display)]` path renders garbage. The `file.rs` FileSystem
+        // path builds its `Result[T, IoError]` aggregate inline (it does NOT
+        // consult this layout), but uses the same convention — `IoError` tag =
+        // `error_kind - 1`, i.e. declaration order `NotFound = 0` — so a
+        // FileSystem-returned `IoError` later matched / displayed by user code
+        // agrees with this layout. Widest variant is `Other(String)` (3 payload
+        // words), so the struct is 4 i64 words; the six byte-error variants are
+        // unit. Tags in stdlib declaration order: NotFound = 0 … Other = 6.
+        if !self.enum_layouts.contains_key("IoError") {
+            let io_error_type = self
+                .context
+                .struct_type(&[i64_t, i64_t, i64_t, i64_t], false);
+            let unit_variants = [
+                "NotFound",
+                "PermissionDenied",
+                "AlreadyExists",
+                "UnexpectedEof",
+                "InvalidUtf8",
+                "Interrupted",
+            ];
+            let mut tags = HashMap::new();
+            let mut field_counts = HashMap::new();
+            let mut field_word_offsets = HashMap::new();
+            let mut field_drop_kinds = HashMap::new();
+            for (i, v) in unit_variants.iter().enumerate() {
+                tags.insert((*v).to_string(), i as u64);
+                field_counts.insert((*v).to_string(), 0usize);
+                field_word_offsets.insert((*v).to_string(), Vec::new());
+                field_drop_kinds.insert((*v).to_string(), Vec::new());
+            }
+            tags.insert("Other".to_string(), 6u64);
+            field_counts.insert("Other".to_string(), 1usize);
+            field_word_offsets.insert("Other".to_string(), vec![(0, 3usize)]);
+            field_drop_kinds.insert("Other".to_string(), vec![EnumDropKind::VecOrString]);
+            self.enum_layouts.insert(
+                "IoError".to_string(),
+                EnumLayout {
+                    llvm_type: io_error_type,
+                    tags,
+                    field_counts,
+                    field_word_offsets,
+                    field_drop_kinds,
+                    is_shared: false,
+                },
+            );
+            self.seeded_enum_names.insert("IoError".to_string());
         }
 
         // Stdlib `Utf8Error` enum (`runtime/stdlib/utf8_error.kara`) — returned

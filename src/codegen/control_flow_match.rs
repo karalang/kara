@@ -781,7 +781,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 // The parser produces Binding("Color.Red") or Binding("Red") for
                 // unit variants in match arms; detect and compare tags.
                 let variant_name = name.rsplit('.').next().unwrap_or(name);
-                if let Some(tag) = self.enum_tag_for_variant(variant_name) {
+                // Prefer the qualified `Enum.Variant` tag (honors the `IoError`
+                // in `IoError.PermissionDenied`) — `enum_tag_for_variant` is
+                // bare-name and ambiguous when the variant collides across
+                // seeded enums (`PermissionDenied` is in both `IoError` and
+                // `TlsError`). Falls back to the bare lookup for unqualified
+                // variants. B-2026-06-14 baked-enum companion bug.
+                if let Some(tag) = self
+                    .variant_pattern_enum_and_tag(pattern)
+                    .map(|(_, t)| t)
+                    .or_else(|| self.enum_tag_for_variant(variant_name))
+                {
                     let actual_tag = self.extract_enum_tag(scrut, variant_name)?;
                     let expected_tag = self.context.i64_type().const_int(tag, false);
                     return Ok(self
@@ -904,7 +914,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // `Result.Err(E.A(c))`) — see `and_in_nested_variant_conditions`.
             PatternKind::TupleVariant { path, patterns } => {
                 let variant_name = path.last().map(|s| s.as_str()).unwrap_or("");
-                if let Some(tag) = self.enum_tag_for_variant(variant_name) {
+                // Prefer the qualified `Enum.Variant` tag (see the `Binding`
+                // arm above) — the bare `enum_tag_for_variant` mis-resolves
+                // `IoError.Other` to a colliding seeded `Other`. B-2026-06-14.
+                if let Some(tag) = self
+                    .variant_pattern_enum_and_tag(pattern)
+                    .map(|(_, t)| t)
+                    .or_else(|| self.enum_tag_for_variant(variant_name))
+                {
                     let actual_tag = self.extract_enum_tag(scrut, variant_name)?;
                     let expected_tag = self.context.i64_type().const_int(tag, false);
                     let cond = self
@@ -929,7 +946,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         .is_some() =>
             {
                 let variant_name = path.last().map(|s| s.as_str()).unwrap_or("");
-                if let Some(tag) = self.enum_tag_for_variant(variant_name) {
+                // Qualified-preferring tag (see the `Binding` / `TupleVariant`
+                // arms) so a struct-variant `Enum.V { .. }` resolves against
+                // its own layout. B-2026-06-14.
+                if let Some(tag) = self
+                    .variant_pattern_enum_and_tag(pattern)
+                    .map(|(_, t)| t)
+                    .or_else(|| self.enum_tag_for_variant(variant_name))
+                {
                     let actual_tag = self.extract_enum_tag(scrut, variant_name)?;
                     let expected_tag = self.context.i64_type().const_int(tag, false);
                     return Ok(self

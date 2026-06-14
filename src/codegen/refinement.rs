@@ -187,7 +187,7 @@ impl<'ctx> super::Codegen<'ctx> {
             span: span.clone(),
         };
         let ok_val = self
-            .try_compile_enum_variant("Ok", std::slice::from_ref(&ok_arg))?
+            .try_compile_enum_variant("Ok", Some("Result"), std::slice::from_ref(&ok_arg))?
             .ok_or_else(|| "failed to build Ok(...) for refinement try_from".to_string())?;
         // `try_from` CONSUMES its argument: on the Ok path the heap buffer
         // (`Vec`/`String`) now lives in the `Ok` payload, so the source
@@ -213,7 +213,7 @@ impl<'ctx> super::Codegen<'ctx> {
             span: span.clone(),
         };
         let err_val = self
-            .try_compile_enum_variant("Err", std::slice::from_ref(&err_arg))?
+            .try_compile_enum_variant("Err", Some("Result"), std::slice::from_ref(&err_arg))?
             .ok_or_else(|| "failed to build Err(...) for refinement try_from".to_string())?;
         let err_end = self.builder.get_insert_block().unwrap();
         self.builder.build_unconditional_branch(cont_bb).unwrap();

@@ -1386,22 +1386,31 @@ impl<'ctx> super::Codegen<'ctx> {
         // Snapshot the enum's variant shapes (name + VariantKind) from the
         // program AST and its layout (tags + per-field word offsets) up front,
         // so the per-variant emission below can borrow `self` mutably.
+        let collect_variants = |items: &[Item]| -> Option<Vec<(String, VariantKind)>> {
+            items.iter().find_map(|it| match it {
+                Item::EnumDef(e) if e.name == enum_name => Some(
+                    e.variants
+                        .iter()
+                        .map(|v| (v.name.clone(), v.kind.clone()))
+                        .collect::<Vec<_>>(),
+                ),
+                _ => None,
+            })
+        };
         let variants: Vec<(String, VariantKind)> = self
             .program_snapshot
             .as_ref()
-            .map(|p| {
-                p.items
+            .and_then(|p| collect_variants(&p.items))
+            // A baked-stdlib enum (`IoError`, `VarError`) is never in the user
+            // `program_snapshot` — its variant shapes live only in
+            // `STDLIB_PROGRAMS`. Without this fallback the variant set is empty,
+            // the switch gets zero cases, and `#[derive(Display)]` renders the
+            // tag (or nothing) instead of the variant. The seeded layout above
+            // supplies the tags/offsets; this supplies the names + kinds.
+            .or_else(|| {
+                crate::prelude::STDLIB_PROGRAMS
                     .iter()
-                    .find_map(|it| match it {
-                        Item::EnumDef(e) if e.name == enum_name => Some(
-                            e.variants
-                                .iter()
-                                .map(|v| (v.name.clone(), v.kind.clone()))
-                                .collect::<Vec<_>>(),
-                        ),
-                        _ => None,
-                    })
-                    .unwrap_or_default()
+                    .find_map(|(_, p)| collect_variants(&p.items))
             })
             .unwrap_or_default();
         let layout = self
@@ -1578,7 +1587,8 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => None,
         }?;
         if self.enum_layouts.contains_key(&tn)
-            && !self.seeded_enum_names.contains(&tn)
+            && (!self.seeded_enum_names.contains(&tn)
+                || self.baked_display_enum_names.contains(&tn))
             && tn != "Option"
             && tn != "Result"
         {

@@ -4146,6 +4146,75 @@ fn main() -> Result[(), i64] {
     }
 
     #[test]
+    fn e2e_baked_stdlib_enum_display_and_qualified_match() {
+        // B-2026-06-14 — `#[derive(Display)]` on a baked-stdlib enum
+        // (`IoError`, `VarError`) renders correctly in the interpreter but, in
+        // AOT, the enum had no codegen layout (never seeded, never in the user
+        // `program_snapshot`): construction fell to an `i64 0` placeholder
+        // (display printed `0`), a payload-variant `match` couldn't bind the
+        // payload, and `main() -> Result[(), IoError]` printed `Error: 0`.
+        // Companion: the bare-variant `Other` collides across
+        // IoError/Utf8Error/TcpError/TlsError, so qualified construction/match
+        // picked a wrong tag by HashMap order. Fix: seed the IoError layout +
+        // STDLIB_PROGRAMS variant fallback in `emit_enum_display_fn` + honor the
+        // qualified `Enum.Variant` path in construction and match.
+
+        // (a) f-string / println Display of a payload + a unit variant.
+        let disp = run_program(
+            "fn main() {\n\
+             \x20   let e = IoError.Other(\"disk full\");\n\
+             \x20   println(f\"{e}\");\n\
+             \x20   let n = IoError.NotFound;\n\
+             \x20   println(f\"{n}\");\n\
+             \x20   let v = VarError.NotPresent;\n\
+             \x20   println(f\"{v}\");\n\
+             }\n",
+        );
+        if let Some(out) = disp {
+            assert_eq!(out, "Other(disk full)\nNotFound\nNotPresent\n");
+        }
+
+        // (b) qualified match — unit, payload (binds `m`), collision-prone
+        // `PermissionDenied` (shared with TlsError), and a wildcard tail.
+        let matched = run_program(
+            "fn classify(e: IoError) -> String {\n\
+             \x20   match e {\n\
+             \x20       IoError.NotFound => { \"nf\" }\n\
+             \x20       IoError.PermissionDenied => { \"pd\" }\n\
+             \x20       IoError.Other(m) => { f\"other:{m}\" }\n\
+             \x20       _ => { \"rest\" }\n\
+             \x20   }\n\
+             }\n\
+             fn main() {\n\
+             \x20   println(classify(IoError.NotFound));\n\
+             \x20   println(classify(IoError.PermissionDenied));\n\
+             \x20   println(classify(IoError.Other(\"disk full\")));\n\
+             \x20   println(classify(IoError.Interrupted));\n\
+             }\n",
+        );
+        if let Some(out) = matched {
+            assert_eq!(out, "nf\npd\nother:disk full\nrest\n");
+        }
+
+        // (c) `main() -> Result[(), IoError]` returning a payload Err — the
+        // runtime prints `Error: {e}` on stderr (rendered, not `Error: 0`) and
+        // exits 1.
+        let main_err = run_program_capturing(
+            "fn main() -> Result[(), IoError] {\n\
+             \x20   Err(IoError.Other(\"disk full\"))\n\
+             }\n",
+        );
+        if let Some(cap) = main_err {
+            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            assert!(
+                cap.stderr.contains("Error: Other(disk full)"),
+                "expected rendered baked-enum Err on stderr, got: {:?}",
+                cap.stderr
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_stdout_print_and_flush() {
         // `Stdout.print` (no newline) + `Stdout.flush()` + `Stdout.println`.
         // flush lowers to `fflush(NULL)` and must run without crashing; the

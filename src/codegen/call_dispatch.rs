@@ -465,7 +465,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         // Check if this is an enum variant constructor (tuple variant)
-        if let Some(enum_val) = self.try_compile_enum_variant(&name, args)? {
+        if let Some(enum_val) = self.try_compile_enum_variant(&name, None, args)? {
             return Ok(enum_val);
         }
 
@@ -1427,37 +1427,54 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn try_compile_enum_variant(
         &mut self,
         name: &str,
+        enum_name_override: Option<&str>,
         args: &[CallArg],
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-        // Find which enum this variant belongs to. Prefer
-        // user-declared enums over the seeded built-ins (`Option`,
-        // `Result`, `Json`, `TcpError`, …) when a variant name
-        // collides — without this preference, HashMap iteration order
-        // non-deterministically picks a seeded layout for a
-        // user-defined variant with the same name (e.g.
-        // `MyIoErr.Other` vs the seeded `TcpError.Other`), producing
-        // a wrong-shape value at the constructor site and emitting
-        // `unreachable` for downstream dispatch. The 2026-05-25
-        // codegen-suite hang investigation surfaced the original
-        // hard-coded `Option`/`Result` workaround missing the newer
-        // `Json` and `TcpError` seeds — replaced with the
-        // `seeded_enum_names` set so any future seeded enum is
-        // classified correctly without per-name maintenance.
-        // Symmetric to the destructure disambiguation in
-        // `bind_pattern_values`.
-        let enum_name = {
-            let mut user_match: Option<String> = None;
-            let mut seed_match: Option<String> = None;
-            for (en, layout) in &self.enum_layouts {
-                if layout.tags.contains_key(name) {
-                    if self.seeded_enum_names.contains(en) {
-                        seed_match.get_or_insert_with(|| en.clone());
-                    } else {
-                        user_match.get_or_insert_with(|| en.clone());
+        // Find which enum this variant belongs to. When the caller already
+        // knows the enum (the qualified `Enum.Variant(args)` form in
+        // `compile_assoc_call`), `enum_name_override` carries it — use it
+        // verbatim rather than re-resolving by bare variant name, which is
+        // ambiguous when the name collides across enums (`Other` is shared by
+        // the seeded `IoError` / `Utf8Error` / `TcpError` / `TlsError`, so the
+        // bare-name resolution below would pick one by HashMap order and write
+        // the wrong tag — the B-2026-06-14 baked-enum companion bug).
+        //
+        // For the bare-name path (`Variant(args)` from `compile_call`): prefer
+        // user-declared enums over the seeded built-ins (`Option`, `Result`,
+        // `Json`, `TcpError`, …) when a variant name collides — without this
+        // preference, HashMap iteration order non-deterministically picks a
+        // seeded layout for a user-defined variant with the same name (e.g.
+        // `MyIoErr.Other` vs the seeded `TcpError.Other`), producing a
+        // wrong-shape value at the constructor site and emitting `unreachable`
+        // for downstream dispatch. The 2026-05-25 codegen-suite hang
+        // investigation surfaced the original hard-coded `Option`/`Result`
+        // workaround missing the newer `Json` and `TcpError` seeds — replaced
+        // with the `seeded_enum_names` set so any future seeded enum is
+        // classified correctly without per-name maintenance. Symmetric to the
+        // destructure disambiguation in `bind_pattern_values`.
+        let enum_name = match enum_name_override {
+            Some(en)
+                if self
+                    .enum_layouts
+                    .get(en)
+                    .is_some_and(|l| l.tags.contains_key(name)) =>
+            {
+                Some(en.to_string())
+            }
+            _ => {
+                let mut user_match: Option<String> = None;
+                let mut seed_match: Option<String> = None;
+                for (en, layout) in &self.enum_layouts {
+                    if layout.tags.contains_key(name) {
+                        if self.seeded_enum_names.contains(en) {
+                            seed_match.get_or_insert_with(|| en.clone());
+                        } else {
+                            user_match.get_or_insert_with(|| en.clone());
+                        }
                     }
                 }
+                user_match.or(seed_match)
             }
-            user_match.or(seed_match)
         };
 
         let enum_name = match enum_name {
