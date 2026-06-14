@@ -1,0 +1,122 @@
+// Cartographer — the subject program.
+//
+// A small "dashboard" API service whose internals exercise the whole
+// effect surface Cartographer renders: pure functions (green), reads
+// on several distinct resources (blue), a write (orange), a fan-out
+// that the compiler parallelizes, and a same-resource double-write the
+// compiler is forced to keep sequential.
+//
+// Cartographer does NOT read this source. It reads the compiler's
+// answer about this source:
+//
+//     karac query effects     src/service.kara   →  nodes + call edges
+//     karac query concurrency src/service.kara   →  parallel bands
+//
+// The effect graph is the compiler's, not a hand-drawn diagram — that
+// is the whole point. Run `./cartograph.sh` to regenerate the graph and
+// open `viewer.html`.
+
+// ── Three read resources (the fan-out) ──────────────────────────────────────
+
+pub trait UserStore  { fn name_of(ref self, id: i64) -> String; }
+pub trait OrderStore { fn count_for(ref self, id: i64) -> i64; }
+pub trait NotifStore { fn count_for(ref self, id: i64) -> i64; }
+
+pub effect resource UserDB:  UserStore;
+pub effect resource OrderDB: OrderStore;
+pub effect resource NotifDB: NotifStore;
+
+// ── One write resource (the orange node + the sequential contrast) ───────────
+
+pub trait AuditSink { fn record(mut ref self, id: i64); }
+pub effect resource AuditLog: AuditSink;
+
+// ── Fixed in-memory providers ────────────────────────────────────────────────
+
+pub struct Users {}
+impl Users { pub fn new() -> Users { Users {} } }
+impl UserStore for Users {
+    fn name_of(ref self, id: i64) -> String { f"user-{id}" }
+}
+
+pub struct Orders {}
+impl Orders { pub fn new() -> Orders { Orders {} } }
+impl OrderStore for Orders {
+    fn count_for(ref self, id: i64) -> i64 { id * 2 }
+}
+
+pub struct Notifs {}
+impl Notifs { pub fn new() -> Notifs { Notifs {} } }
+impl NotifStore for Notifs {
+    fn count_for(ref self, id: i64) -> i64 { id + 1 }
+}
+
+pub struct Auditor {}
+impl Auditor { pub fn new() -> Auditor { Auditor {} } }
+impl AuditSink for Auditor {
+    fn record(mut ref self, id: i64) { println(f"  [audit] access by {id}"); }
+}
+
+// ── Leaf reads — one resource each (blue nodes) ──────────────────────────────
+
+pub fn fetch_profile(id: i64) -> String with reads(UserDB) {
+    UserDB.name_of(id)
+}
+
+pub fn fetch_orders(id: i64) -> i64 with reads(OrderDB) {
+    OrderDB.count_for(id)
+}
+
+pub fn fetch_notifications(id: i64) -> i64 with reads(NotifDB) {
+    NotifDB.count_for(id)
+}
+
+// ── Pure assembly — no effects (green node) ──────────────────────────────────
+
+pub fn build_dashboard(name: String, orders: i64, notifs: i64) -> String {
+    f"{name}: {orders} orders, {notifs} notifications"
+}
+
+// ── A write (orange node) ────────────────────────────────────────────────────
+
+pub fn record_access(id: i64) with writes(AuditLog) {
+    AuditLog.record(id);
+}
+
+// ── The fan-out: three INDEPENDENT reads on three DIFFERENT resources.
+// No data dependency between them and reads never conflict with reads,
+// so the compiler runs the three fetches as one parallel band — the
+// `get_dashboard` story with no `async`, no `par {}`, no annotation. ──────────
+
+pub fn get_dashboard(id: i64) -> String with reads(UserDB, OrderDB, NotifDB) {
+    let name   = fetch_profile(id);
+    let orders = fetch_orders(id);
+    let notifs = fetch_notifications(id);
+    build_dashboard(name, orders, notifs)
+}
+
+// ── The contrast: two writes to the SAME resource. Write/write on one
+// resource conflicts, so the compiler keeps them sequential — there is
+// no parallel band here, and the concurrency report says why. ────────────────
+
+pub fn double_audit(id: i64) with writes(AuditLog) {
+    record_access(id);
+    record_access(id);
+}
+
+// ── Driver ───────────────────────────────────────────────────────────────────
+
+fn main() {
+    with_provider[UserDB](Users.new(), || {
+        with_provider[OrderDB](Orders.new(), || {
+            with_provider[NotifDB](Notifs.new(), || {
+                let dash = get_dashboard(42);
+                println(dash);
+            });
+        });
+    });
+
+    with_provider[AuditLog](Auditor.new(), || {
+        double_audit(42);
+    });
+}

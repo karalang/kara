@@ -52,7 +52,7 @@ per-project sections below hold the design. Status legend: ✅ shipped ·
 | **Parallax** | Auto-concurrency without `async`/coloring (fan-out + join) | ✅ shipped | auto-par codegen + HTTP FFI | 1 |
 | **Mend** | AI-first: structured compiler output as a machine fix-loop | ✅ shipped | `karac … --output=json` + `karac fix` | 1 |
 | **Slipstream** | Auto-concurrency + SoA layout + one source on CPU/GPU | ⬜ planned | Phase 11 (CPU) · Phase 10 (GPU) | 1 |
-| **Cartographer** | Effect graph as a live architecture artifact | ⬜ planned | `karac query` effect/concurrency surface | 2 |
+| **Cartographer** | Effect graph as a live architecture artifact | ✅ shipped (compiler half) | whole-program `karac query effects`/`concurrency` (done) · D3/Monaco/WASM frontend deferred | 2 |
 | **Husk** | `kernel` profile — no heap/panic/std, MMIO, ISRs | ⬜ planned | v8 hardware gaps (`#[repr]`, `#[interrupt]`, asm) | 2 |
 | **Weave** | Refinement types + contracts + effects together | ✅ shipped (CSV cut) | refinement+contracts (CSV) · `Pool[T]`+TLS+tracing (service) | 2 |
 | **Tangle** | No `'a` at the cases that force `Rc<RefCell>`/arenas elsewhere — graphs, back-pointers, undo/redo; every RC escalation surfaced | ✅ shipped | ownership + `karac query ownership` (done) | 2 |
@@ -296,6 +296,24 @@ architecture documentation.
 **What it is:** A web-based visualization of a program's effect graph. Feed
 it any Kāra project; it renders an interactive graph showing every function,
 its effects, and which functions can run concurrently vs must serialize.
+
+> **Built (compiler half) — 2026-06-14.** Shipped at
+> [`examples/cartographer/`](../examples/cartographer/). The dogfood drove the
+> real compiler gap: `karac query effects` / `karac query concurrency` only took
+> a per-function target, so there was no way to ask for the whole graph. Both
+> now accept a bare `<file>.kara` target and emit a whole-program envelope —
+> `effects` gives `{functions:[{function, line, is_test, inferred_effects,
+> declared_effects}], calls:[{caller, callee}]}` (effect-colored nodes **plus**
+> the call-graph edges, which previously only `affected-by` exposed and only as
+> reach-from-one-node), `concurrency` gives every analyzed function's parallel
+> bands. Keys join 1:1 across both envelopes and `affected-by`. The example
+> ships a runnable subject service (`src/service.kara`), a `cartograph.sh` that
+> regenerates the graph from the compiler, and a self-contained static SVG
+> `viewer.html` (no D3/Monaco/WASM) as the proof renderer. Regression tests:
+> `tests/cli.rs::test_query_effects_whole_program_emits_nodes_and_call_edges`,
+> `tests/concurrency.rs::test_cli_query_concurrency_whole_program`. **Deferred
+> (frontend half):** D3 force layout, embedded Monaco live-edit, compile-to-WASM
+> — all consume this same JSON, none touch the compiler.
 
 **What the demo shows:**
 1. Load a medium-sized Kāra project (say, a 500-line HTTP service).
@@ -819,7 +837,7 @@ the "Ready when" column notes the compiler capability each is gated on.
 |---|---|---|---|
 | 1 | **Mend** | Now (structured JSON output exists) | Cheapest to build. Makes the AI-first thesis real. Sets the tone. |
 | 2 | **Parallax** | Auto-par codegen + HTTP FFI (done) | Broadest appeal. Every backend engineer relates to fan-out + join. |
-| 3 | **Cartographer** | `karac query` effect/concurrency surface | Teaches the effect system visually. Reduces onboarding friction for new users. |
+| 3 | **Cartographer** | ✅ compiler half built 2026-06-14 (`examples/cartographer/`) — whole-program `karac query effects`/`concurrency` + static SVG viewer; D3/Monaco/WASM frontend deferred | Teaches the effect system visually. Reduces onboarding friction for new users. |
 | 4 | **Tangle** | Now (ownership inference + `karac query ownership` exist) | Proves the no-`'a` safety claim at the hard shapes. Cheap, pure Kāra, backs the README ownership section directly. |
 | 5 | **Weave** | ✅ CSV cut built 2026-06-13 (`examples/weave/`) — runs under `karac run` (interpreter) **and** `karac build`s to a native binary, output byte-identical. Service cut still gated on `Pool[T]` + TLS + tracing | Correctness story for data engineers. Complements the concurrency story. |
 | 6 | **Chronicle** | Self-hosting (Phase 10/12) | Self-hosting milestone. Marks Kāra as "a real language." |

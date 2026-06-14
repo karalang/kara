@@ -1472,7 +1472,7 @@ fn parse_query_command(args: &[String]) -> Command {
             "Usage: karac query <effects|ownership|concurrency|cost-summary|attributes|queries|monomorphization|affected-by> [flags] <target>"
         );
         eprintln!("       <target> is `<file>.<function>` for the per-function kinds,");
-        eprintln!("                or `<file>` for cost-summary, attributes, queries, and monomorphization,");
+        eprintln!("                or `<file>` for effects, concurrency (whole-program), cost-summary, attributes, queries, and monomorphization,");
         eprintln!("                or `<file>[:<line>|<line>-<line>|<fn>]` for affected-by.");
         eprintln!("       attributes accepts `--tool=PREFIX` to filter by first-segment match.");
         eprintln!(
@@ -1586,6 +1586,16 @@ fn parse_query_command(args: &[String]) -> Command {
         | QueryKind::Queries
         | QueryKind::Monomorphization => (target.clone(), String::new()),
         QueryKind::AffectedBy { .. } => unreachable!("affected-by returned via dedicated branch"),
+        // Effects and Concurrency accept BOTH a per-function target
+        // (`<file>.kara.<function>`) and a whole-program target (a bare
+        // `<file>.kara` with no trailing `.function`). The latter — an
+        // empty function key — emits every function's effects/parallel
+        // bands plus the call graph, the Cartographer effect-graph
+        // artifact. A target with a trailing function still splits as
+        // before. Ownership remains per-function only.
+        QueryKind::Effects | QueryKind::Concurrency if target.ends_with(".kara") => {
+            (target.clone(), String::new())
+        }
         _ => split_query_function_target(target),
     };
     Command::Query {

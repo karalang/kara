@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cartographer — effect graph</title>
+<style>
+  :root { --bg:#0f1419; --panel:#171c24; --ink:#e6edf3; --muted:#8b98a5;
+          --pure:#3fb950; --read:#58a6ff; --write:#f0883e; --edge:#48515c; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--ink);
+               font:14px/1.5 -apple-system, "SF Pro Text", Segoe UI, Roboto, sans-serif; }
+  #app { display:flex; height:100%; }
+  #graph { flex:1; overflow:auto; }
+  #side { width:320px; flex:none; background:var(--panel); border-left:1px solid #222;
+          padding:18px 20px; overflow:auto; }
+  h1 { font-size:15px; margin:0 0 2px; letter-spacing:.3px; }
+  .sub { color:var(--muted); font-size:12px; margin:0 0 16px; }
+  .legend { display:flex; flex-wrap:wrap; gap:10px 16px; margin-bottom:16px; font-size:12px; }
+  .legend span { display:inline-flex; align-items:center; gap:6px; }
+  .dot { width:11px; height:11px; border-radius:3px; display:inline-block; }
+  .node rect { stroke:#0b0e12; stroke-width:1; cursor:pointer; }
+  .node text { fill:#0b0e12; font-weight:600; font-size:12px; pointer-events:none; }
+  .node.par rect { stroke:#e3b341; stroke-width:2.5; stroke-dasharray:5 3; }
+  .node.sel rect { stroke:#fff; stroke-width:2.5; stroke-dasharray:none; }
+  .edge { fill:none; stroke:var(--edge); stroke-width:1.5; }
+  #detail h2 { font-size:14px; margin:18px 0 4px; }
+  #detail .key { font-family:ui-monospace, SFMono-Regular, Menlo, monospace;
+                 font-size:13px; color:var(--ink); word-break:break-all; }
+  .eff { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px;
+         margin:3px 4px 0 0; font-family:ui-monospace, Menlo, monospace; }
+  .eff.read { background:rgba(88,166,255,.18); color:var(--read); }
+  .eff.write { background:rgba(240,136,62,.18); color:var(--write); }
+  .eff.other { background:rgba(139,152,165,.18); color:var(--muted); }
+  .band { background:rgba(227,179,65,.14); border:1px solid rgba(227,179,65,.4);
+          border-radius:6px; padding:8px 10px; margin-top:8px; font-size:12px; }
+  .band b { color:#e3b341; }
+  .empty { color:var(--muted); font-style:italic; }
+  code { background:#0b0e12; padding:1px 5px; border-radius:4px; font-size:12px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="graph"></div>
+  <div id="side">
+    <h1>Cartographer</h1>
+    <p class="sub">The effect graph is the <b>compiler's</b> answer about
+      <code>src/service.kara</code> — every node, edge and parallel band comes
+      from <code>karac query</code>, not a hand-drawn diagram.</p>
+    <div class="legend">
+      <span><i class="dot" style="background:var(--pure)"></i>pure</span>
+      <span><i class="dot" style="background:var(--read)"></i>reads</span>
+      <span><i class="dot" style="background:var(--write)"></i>writes</span>
+      <span><i class="dot" style="background:transparent;border:2px dashed #e3b341"></i>parallel band</span>
+    </div>
+    <div id="detail"><p class="empty">Click a function to inspect its effects
+      and concurrency decision.</p></div>
+  </div>
+</div>
+
+<script src="graph.js"></script>
+<script>
+(function () {
+  const G = window.GRAPH;
+  if (!G) { document.getElementById("graph").innerHTML =
+    "<p style='padding:24px'>No graph.js — run <code>./cartograph.sh</code> first.</p>"; return; }
+
+  // ── Index the compiler's answer ────────────────────────────────────────────
+  const fns = G.effects.functions;
+  const byKey = new Map(fns.map(f => [f.function, f]));
+  const conc = new Map((G.concurrency.functions || []).map(f => [f.function, f]));
+
+  // Effect class drives the node colour: strongest external-resource effect wins.
+  function klass(f) {
+    const v = new Set((f.inferred_effects || []).map(e => e.verb));
+    if (v.has("writes") || v.has("sends")) return "write";
+    if (v.has("reads") || v.has("receives")) return "read";
+    return "pure";
+  }
+  const COLOR = { pure: getCss("--pure"), read: getCss("--read"), write: getCss("--write") };
+  function getCss(n){ return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+
+  // Edges restricted to nodes that are real graph nodes (drops calls into
+  // resource providers, which are not free functions).
+  const edges = (G.effects.calls || []).filter(c => byKey.has(c.caller) && byKey.has(c.callee));
+
+  // ── Layered layout: longest-path depth from the call sources ────────────────
+  const succ = new Map(), preds = new Map();
+  fns.forEach(f => { succ.set(f.function, []); preds.set(f.function, []); });
+  edges.forEach(e => { succ.get(e.caller).push(e.callee); preds.get(e.callee).push(e.caller); });
+
+  const layer = new Map();
+  function depth(k, seen) {
+    if (layer.has(k)) return layer.get(k);
+    if (seen.has(k)) return 0;            // break cycles defensively
+    seen.add(k);
+    const ps = preds.get(k);
+    const d = ps.length ? Math.max(...ps.map(p => depth(p, seen) + 1)) : 0;
+    layer.set(k, d); return d;
+  }
+  fns.forEach(f => depth(f.function, new Set()));
+
+  const rows = new Map();
+  [...byKey.keys()].sort().forEach(k => {
+    const L = layer.get(k);
+    if (!rows.has(L)) rows.set(L, []);
+    rows.get(L).push(k);
+  });
+
+  // ── Geometry ────────────────────────────────────────────────────────────────
+  const NW = 168, NH = 40, GX = 34, GY = 78, PAD = 40;
+  const pos = new Map();
+  let maxCols = 0;
+  [...rows.keys()].sort((a,b)=>a-b).forEach(L => {
+    const row = rows.get(L);
+    maxCols = Math.max(maxCols, row.length);
+    row.forEach((k, i) => pos.set(k, { x: PAD + i*(NW+GX), y: PAD + L*(NH+GY) }));
+  });
+  const W = PAD*2 + maxCols*(NW+GX) - GX;
+  const H = PAD*2 + rows.size*(NH+GY) - GY;
+
+  // ── Render ────────────────────────────────────────────────────────────────────
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = el("svg", { viewBox:`0 0 ${W} ${H}`, width:W, height:H });
+  svg.appendChild(arrowMarker());
+
+  edges.forEach(e => {
+    const a = pos.get(e.caller), b = pos.get(e.callee);
+    const x1 = a.x + NW/2, y1 = a.y + NH, x2 = b.x + NW/2, y2 = b.y;
+    const my = (y1 + y2) / 2;
+    svg.appendChild(el("path", {
+      class:"edge", "marker-end":"url(#arrow)",
+      d:`M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2-8}`
+    }));
+  });
+
+  byKey.forEach((f, k) => {
+    const p = pos.get(k), c = conc.get(k);
+    const par = c && c.parallel_groups && c.parallel_groups.length > 0;
+    const g = el("g", { class:"node" + (par ? " par" : ""), transform:`translate(${p.x},${p.y})` });
+    g.appendChild(el("rect", { width:NW, height:NH, rx:8, fill:COLOR[klass(f)] }));
+    const t = el("text", { x:NW/2, y:NH/2+4, "text-anchor":"middle" });
+    t.textContent = k.length > 22 ? k.slice(0,21)+"…" : k;
+    g.appendChild(t);
+    g.addEventListener("click", () => select(k, g));
+    svg.appendChild(g);
+  });
+
+  document.getElementById("graph").appendChild(svg);
+
+  // ── Detail panel ────────────────────────────────────────────────────────────
+  let selected = null;
+  function select(k, g) {
+    if (selected) selected.classList.remove("sel");
+    g.classList.add("sel"); selected = g;
+    const f = byKey.get(k), c = conc.get(k);
+    const d = document.getElementById("detail");
+    d.innerHTML = `<h2>${esc(k)}</h2><div class="key">line ${f.line}${f.is_test?" · test":""}</div>`;
+
+    d.innerHTML += `<h2>Effects</h2>` + effList(f.inferred_effects, "inferred");
+    if (f.declared_effects && f.declared_effects !== null && Array.isArray(f.declared_effects))
+      d.innerHTML += effList(f.declared_effects, "declared");
+
+    d.innerHTML += `<h2>Concurrency</h2>`;
+    if (c && c.parallel_groups && c.parallel_groups.length) {
+      c.parallel_groups.forEach(grp => {
+        d.innerHTML += `<div class="band"><b>∥ parallel band</b> — statements `
+          + grp.statements.join(", ") + `<br><span style="color:var(--muted)">`
+          + esc(grp.reason) + `</span></div>`;
+      });
+    } else {
+      d.innerHTML += `<p class="empty">No parallel band — runs sequentially`
+        + (c ? ` (${c.total_statements} statements).` : `.`) + `</p>`;
+    }
+  }
+  function effList(arr, label) {
+    if (!arr || !arr.length) return `<p class="empty">${label}: none (pure)</p>`;
+    return `<div style="color:var(--muted);font-size:11px">${label}</div>` +
+      arr.map(e => {
+        const cls = (e.verb==="writes"||e.verb==="sends") ? "write"
+                  : (e.verb==="reads"||e.verb==="receives") ? "read" : "other";
+        return `<span class="eff ${cls}">${esc(e.verb)}${e.resource?`(${esc(e.resource)})`:""}</span>`;
+      }).join("");
+  }
+
+  // ── tiny helpers ──────────────────────────────────────────────────────────────
+  function el(tag, attrs) {
+    const n = document.createElementNS(NS, tag);
+    for (const a in attrs) n.setAttribute(a, attrs[a]);
+    return n;
+  }
+  function arrowMarker() {
+    const defs = el("defs", {});
+    const m = el("marker", { id:"arrow", viewBox:"0 0 10 10", refX:8, refY:5,
+      markerWidth:7, markerHeight:7, orient:"auto-start-reverse" });
+    m.appendChild(el("path", { d:"M0,0 L10,5 L0,10 z", fill:getCss("--edge") }));
+    defs.appendChild(m); return defs;
+  }
+  function esc(s){ return String(s).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+})();
+</script>
+</body>
+</html>

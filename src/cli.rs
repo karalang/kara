@@ -8192,7 +8192,7 @@ fn cmd_query(kind: QueryKind, filename: &str, function: &str) {
             pipeline.typecheck();
             pipeline.lower();
             pipeline.effectcheck();
-            query_effects(&pipeline, function);
+            query_effects(&pipeline, function, filename);
         }
         QueryKind::Ownership => {
             pipeline.typecheck();
@@ -8209,7 +8209,7 @@ fn cmd_query(kind: QueryKind, filename: &str, function: &str) {
             pipeline.lower();
             pipeline.effectcheck();
             pipeline.concurrencycheck();
-            query_concurrency(&pipeline, function);
+            query_concurrency(&pipeline, function, filename);
         }
         QueryKind::CostSummary => {
             // cost-summary draws from the ownership pass for `rc_ops` and
@@ -8732,8 +8732,50 @@ fn render_cost_summary_json(s: &crate::cost_summary::CostSummary, filename: &str
     )
 }
 
-fn query_effects(pipeline: &Pipeline, function: &str) {
+/// Render an `EffectSet` as a JSON array of `{"verb","resource"}` objects.
+/// Shared by the per-function and whole-program effect-query emitters.
+fn effect_set_json(set: &crate::effectchecker::EffectSet) -> String {
+    let list: Vec<String> = set
+        .effects
+        .iter()
+        .map(|te| {
+            format!(
+                "{{\"verb\":{},\"resource\":{}}}",
+                json_string(effect_verb_str(&te.effect.verb)),
+                json_string(&te.effect.resource),
+            )
+        })
+        .collect();
+    format!("[{}]", list.join(","))
+}
+
+/// Render a function's `declared_effects` JSON value: `null` (none /
+/// absent), `"polymorphic"`, an explicit array, or the
+/// polymorphic-with-fixed object.
+fn declared_effects_json(declared: Option<&DeclaredEffects>) -> String {
+    match declared {
+        Some(DeclaredEffects::Explicit(set)) => effect_set_json(set),
+        Some(DeclaredEffects::Polymorphic) => "\"polymorphic\"".to_string(),
+        Some(DeclaredEffects::PolymorphicWithFixed(set)) => {
+            format!(
+                "{{\"polymorphic\":true,\"fixed\":{}}}",
+                effect_set_json(set)
+            )
+        }
+        Some(DeclaredEffects::None) | None => "null".to_string(),
+    }
+}
+
+fn query_effects(pipeline: &Pipeline, function: &str, filename: &str) {
     let effects = pipeline.effects.as_ref().unwrap();
+
+    // Whole-program mode: an empty `function` (a bare `<file>.kara`
+    // target) emits every function's effects plus the call-graph edges
+    // — the effect-graph artifact Cartographer consumes.
+    if function.is_empty() {
+        query_effects_whole_program(pipeline, effects, filename);
+        return;
+    }
 
     let inferred = effects.inferred_effects.get(function);
     let declared = effects.declared_effects.get(function);
@@ -8743,49 +8785,64 @@ fn query_effects(pipeline: &Pipeline, function: &str) {
         process::exit(1);
     }
 
-    let mut inferred_list: Vec<String> = Vec::new();
-    if let Some(set) = inferred {
-        for te in &set.effects {
-            inferred_list.push(format!(
-                "{{\"verb\":{},\"resource\":{}}}",
-                json_string(effect_verb_str(&te.effect.verb)),
-                json_string(&te.effect.resource),
+    let inferred_str = inferred
+        .map(effect_set_json)
+        .unwrap_or_else(|| "[]".to_string());
+
+    println!(
+        "{{\"function\":{},\"inferred_effects\":{},\"declared_effects\":{}}}",
+        json_string(function),
+        inferred_str,
+        declared_effects_json(declared),
+    );
+}
+
+/// Whole-program effect graph: one node per source-defined function
+/// (free fn, impl method, trait default method) carrying its inferred +
+/// declared effects, plus the directed call-graph edges between them.
+/// Node keys join 1:1 with `karac query affected-by` / per-function
+/// effect queries. Output is deterministic — the call graph stores nodes
+/// and edges in sorted maps.
+fn query_effects_whole_program(pipeline: &Pipeline, effects: &EffectCheckResult, filename: &str) {
+    let is_test_file = filename.ends_with("_test.kara");
+    let graph = crate::call_graph::build(&pipeline.parsed.program, filename, is_test_file);
+
+    let fn_entries: Vec<String> = graph
+        .nodes
+        .iter()
+        .map(|(key, node)| {
+            let inferred_str = effects
+                .inferred_effects
+                .get(key)
+                .map(effect_set_json)
+                .unwrap_or_else(|| "[]".to_string());
+            format!(
+                "{{\"function\":{},\"line\":{},\"is_test\":{},\"inferred_effects\":{},\"declared_effects\":{}}}",
+                json_string(key),
+                node.line,
+                node.is_test,
+                inferred_str,
+                declared_effects_json(effects.declared_effects.get(key)),
+            )
+        })
+        .collect();
+
+    let mut edges: Vec<String> = Vec::new();
+    for (caller, callees) in &graph.forward {
+        for callee in callees {
+            edges.push(format!(
+                "{{\"caller\":{},\"callee\":{}}}",
+                json_string(caller),
+                json_string(callee),
             ));
         }
     }
 
-    let declared_str = match declared {
-        Some(DeclaredEffects::Explicit(set)) => {
-            let mut list: Vec<String> = Vec::new();
-            for te in &set.effects {
-                list.push(format!(
-                    "{{\"verb\":{},\"resource\":{}}}",
-                    json_string(effect_verb_str(&te.effect.verb)),
-                    json_string(&te.effect.resource),
-                ));
-            }
-            format!("[{}]", list.join(","))
-        }
-        Some(DeclaredEffects::Polymorphic) => "\"polymorphic\"".to_string(),
-        Some(DeclaredEffects::PolymorphicWithFixed(set)) => {
-            let mut list: Vec<String> = Vec::new();
-            for te in &set.effects {
-                list.push(format!(
-                    "{{\"verb\":{},\"resource\":{}}}",
-                    json_string(effect_verb_str(&te.effect.verb)),
-                    json_string(&te.effect.resource),
-                ));
-            }
-            format!("{{\"polymorphic\":true,\"fixed\":[{}]}}", list.join(","))
-        }
-        Some(DeclaredEffects::None) | None => "null".to_string(),
-    };
-
     println!(
-        "{{\"function\":{},\"inferred_effects\":[{}],\"declared_effects\":{}}}",
-        json_string(function),
-        inferred_list.join(","),
-        declared_str,
+        "{{\"scope\":{},\"functions\":[{}],\"calls\":[{}]}}",
+        json_string(filename),
+        fn_entries.join(","),
+        edges.join(","),
     );
 }
 
@@ -8920,29 +8977,43 @@ fn rc_trigger_str(t: &crate::ownership::RcTrigger) -> &'static str {
     }
 }
 
-fn query_concurrency(pipeline: &Pipeline, function: &str) {
+/// Render a function's `parallel_groups` as a JSON array of
+/// `{"statements":[…],"reason":…}` objects. Shared by the per-function
+/// and whole-program concurrency-query emitters.
+fn parallel_groups_json(fc: &crate::concurrency::FunctionConcurrency) -> String {
+    let group_entries: Vec<String> = fc
+        .parallel_groups
+        .iter()
+        .map(|g| {
+            let indices: Vec<String> = g.statement_indices.iter().map(|i| i.to_string()).collect();
+            format!(
+                "{{\"statements\":[{}],\"reason\":{}}}",
+                indices.join(","),
+                json_string(&g.reason),
+            )
+        })
+        .collect();
+    format!("[{}]", group_entries.join(","))
+}
+
+fn query_concurrency(pipeline: &Pipeline, function: &str, filename: &str) {
     let analysis = pipeline.concurrency.as_ref().unwrap();
+
+    // Whole-program mode: an empty `function` (a bare `<file>.kara`
+    // target) emits the parallel-band decision for every analyzed
+    // function — the concurrency layer of Cartographer's effect graph.
+    if function.is_empty() {
+        query_concurrency_whole_program(pipeline, analysis, filename);
+        return;
+    }
 
     match analysis.function_decisions.get(function) {
         Some(fc) => {
-            let group_entries: Vec<String> = fc
-                .parallel_groups
-                .iter()
-                .map(|g| {
-                    let indices: Vec<String> =
-                        g.statement_indices.iter().map(|i| i.to_string()).collect();
-                    format!(
-                        "{{\"statements\":[{}],\"reason\":{}}}",
-                        indices.join(","),
-                        json_string(&g.reason),
-                    )
-                })
-                .collect();
             println!(
-                "{{\"function\":{},\"total_statements\":{},\"parallel_groups\":[{}]}}",
+                "{{\"function\":{},\"total_statements\":{},\"parallel_groups\":{}}}",
                 json_string(function),
                 fc.total_statements,
-                group_entries.join(","),
+                parallel_groups_json(fc),
             );
         }
         None => {
@@ -8950,6 +9021,42 @@ fn query_concurrency(pipeline: &Pipeline, function: &str) {
             process::exit(1);
         }
     }
+}
+
+/// Whole-program concurrency report: one entry per analyzed source
+/// function (in call-graph key order), carrying its statement count and
+/// parallel groups. Function keys join with the effect-graph nodes from
+/// `query effects <file>`, so a consumer can overlay parallel bands onto
+/// the effect graph.
+fn query_concurrency_whole_program(
+    pipeline: &Pipeline,
+    analysis: &ConcurrencyAnalysis,
+    filename: &str,
+) {
+    let is_test_file = filename.ends_with("_test.kara");
+    let graph = crate::call_graph::build(&pipeline.parsed.program, filename, is_test_file);
+
+    let fn_entries: Vec<String> = graph
+        .nodes
+        .iter()
+        .filter_map(|(key, node)| {
+            analysis.function_decisions.get(key).map(|fc| {
+                format!(
+                    "{{\"function\":{},\"line\":{},\"total_statements\":{},\"parallel_groups\":{}}}",
+                    json_string(key),
+                    node.line,
+                    fc.total_statements,
+                    parallel_groups_json(fc),
+                )
+            })
+        })
+        .collect();
+
+    println!(
+        "{{\"scope\":{},\"functions\":[{}]}}",
+        json_string(filename),
+        fn_entries.join(","),
+    );
 }
 
 fn cmd_fmt(filename: &str) {

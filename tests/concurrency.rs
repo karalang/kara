@@ -1023,6 +1023,64 @@ fn main() {{
     let _ = std::fs::remove_file(&file_path);
 }
 
+#[test]
+fn test_cli_query_concurrency_whole_program() {
+    use std::io::Write;
+    use std::process::Command;
+
+    // A bare `<file>.kara` target (no trailing `.function`) emits the
+    // whole-program concurrency report: every analyzed function's
+    // parallel bands, keyed identically to `query effects <file>` so a
+    // consumer can overlay the bands on the effect graph.
+    let dir = std::env::temp_dir();
+    let file_path = dir.join("test_concurrency_query_whole.kara");
+    {
+        let mut f = std::fs::File::create(&file_path).unwrap();
+        writeln!(
+            f,
+            r#"
+fn a() -> i32 {{ 1 }}
+fn b() -> i32 {{ 2 }}
+fn main() {{
+    let x = a();
+    let y = b();
+}}
+"#
+        )
+        .unwrap();
+    }
+
+    let karac_bin = env!("CARGO_BIN_EXE_karac");
+    let output = Command::new(karac_bin)
+        .args(["query", "concurrency", file_path.to_str().unwrap()])
+        .output()
+        .expect("failed to run karac");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "karac query concurrency (whole-program) failed: {}{}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(stdout.contains("\"scope\":"), "stdout: {}", stdout);
+    assert!(stdout.contains("\"functions\":["), "stdout: {}", stdout);
+    assert!(
+        stdout.contains("\"function\":\"main\""),
+        "stdout: {}",
+        stdout
+    );
+    // `main`'s two independent pure lets form a parallel band.
+    assert!(
+        stdout.contains("\"parallel_groups\":[{"),
+        "main should carry a parallel group; stdout: {}",
+        stdout
+    );
+    assert!(stdout.contains("\"line\":"), "stdout: {}", stdout);
+
+    let _ = std::fs::remove_file(&file_path);
+}
+
 // ── Assign-target dependencies ─────────────────────────────────
 
 #[test]

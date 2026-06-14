@@ -407,13 +407,23 @@ USAGE:
     karac query <kind> [flags] <target>
         <target> = <file.kara>.<function>      for per-function kinds
                  = <file.kara>.<Type>.<method> for an impl method
-                 = <file.kara>                 for cost-summary, attributes,
-                                               queries, monomorphization
+                 = <file.kara>                 whole-program for effects,
+                                               concurrency, cost-summary,
+                                               attributes, queries,
+                                               monomorphization
 
 KINDS:
-    effects            Inferred and declared effects
+    effects            Inferred and declared effects. With a bare
+                       <file.kara> target, emits the whole-program
+                       effect graph: one node per function (effects +
+                       source line) plus the `calls` edge list — the
+                       Cartographer effect-graph artifact.
     ownership          Parameter modes (own / ref / mut ref)
-    concurrency        Parallelization opportunities
+    concurrency        Parallelization opportunities. With a bare
+                       <file.kara> target, emits every analyzed
+                       function's parallel bands (the concurrency
+                       layer of the effect graph; keys join with
+                       `query effects <file.kara>`).
     cost-summary       Whole-file static counts of every silent
                        runtime cost the compiler emitted: RC ops
                        (Rc/Arc), Arc-provider wraps, borrow-flag

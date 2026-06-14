@@ -885,6 +885,55 @@ fn test_query_effects_resolves_instance_method_network_effect() {
 }
 
 #[test]
+fn test_query_effects_whole_program_emits_nodes_and_call_edges() {
+    // A bare `<file>.kara` target (no trailing `.function`) emits the
+    // whole-program effect graph: a `functions` array with one node per
+    // source function (effects + source line) plus a `calls` array of
+    // directed call-graph edges. This is the Cartographer artifact.
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-query-effects-whole-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("graph.kara");
+    // `leaf` is pure; `root` calls it twice (a call edge) and reads a
+    // user resource through an instance method so a node carries a
+    // non-empty effect.
+    let src = "fn leaf() -> i64 { 0 }\n\
+               fn root() -> i64 {\n\
+               \x20   let a = leaf();\n\
+               \x20   let b = leaf();\n\
+               \x20   a + b\n\
+               }\n";
+    std::fs::write(&path, src).unwrap();
+
+    let out = karac_bin()
+        .args(["query", "effects", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("\"scope\":"),
+        "whole-program envelope; got: {stdout}"
+    );
+    assert!(stdout.contains("\"functions\":["));
+    assert!(stdout.contains("\"function\":\"leaf\""));
+    assert!(stdout.contains("\"function\":\"root\""));
+    assert!(stdout.contains("\"line\":"));
+    assert!(
+        stdout.contains("\"caller\":\"root\",\"callee\":\"leaf\""),
+        "call edge root->leaf should appear in `calls`; got: {stdout}",
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
 fn test_query_ownership() {
     let out = karac_bin()
         .args(["query", "ownership", "tests/snapshots/type_error.kara.add"])
