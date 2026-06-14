@@ -361,6 +361,12 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_block(&mut self, block: &mut Block) {
+        // Loop-bound collection pre-sizing (phase-7-codegen.md § 7.3 lever #1)
+        // runs here, before this block's operators are lowered, so it sees raw
+        // `Binary` loop conditions / increments. Operates only on this block's
+        // statement sequence; nested blocks are pre-sized by their own
+        // `lower_block` calls during the recursion below.
+        crate::presize::presize_block(block);
         for stmt in &mut block.stmts {
             self.lower_stmt(stmt);
         }

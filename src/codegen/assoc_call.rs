@@ -1912,7 +1912,13 @@ impl<'ctx> super::Codegen<'ctx> {
                      `let v: {type_name}[T] = ...` annotation"
                 )
             })?;
-            let n = self.compile_expr(&args[0].value)?.into_int_value();
+            // Normalize the count to i64: on wasm32 a `.len()`-derived capacity
+            // arrives as i32, but the byte-size multiply, the `cap` field, and
+            // the allocator param are all i64 — an un-widened i32 trips an LLVM
+            // type mismatch. Surfaced when pre-sizing (`presize.rs`) began
+            // injecting `with_capacity(<i32 bound>)` on wasm targets.
+            let n_val = self.compile_expr(&args[0].value)?;
+            let n = self.coerce_to_i64(n_val)?;
             let elem_size = elem_ty.size_of().unwrap();
             let alloc_bytes = self
                 .builder
@@ -1968,7 +1974,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     args.len()
                 ));
             }
-            let n = self.compile_expr(&args[0].value)?.into_int_value();
+            // Normalize the count to i64 (wasm32 `.len()` bounds are i32) — same
+            // width fix as the Vec arm above; the `cap` field and the allocator
+            // param are i64.
+            let n_val = self.compile_expr(&args[0].value)?;
+            let n = self.coerce_to_i64(n_val)?;
             // Byte element → cap bytes == n; reserve via the panicking
             // allocator (matches the panicking `Vec.with_capacity` policy).
             let buf = self
