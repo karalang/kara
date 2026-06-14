@@ -79,12 +79,42 @@ layers, colors each node by its strongest external-resource effect, rings the
 functions that carry a parallel band in dashed gold, and shows a clicked
 function's inferred/declared effects and concurrency decision in a side panel.
 
+## The live studio (`studio.html`)
+
+The full frontend: **edit Kāra and watch the effect graph redraw on every
+keystroke**, with the compiler running *in the browser tab* as WASM — no server
+round-trip, no local `karac` process.
+
+```bash
+./studio.sh        # builds the WASM, serves http://localhost:8000/studio.html
+```
+
+- **Compiler-in-the-browser.** `studio.sh` builds the `karac-playground` WASM
+  crate, which exports `cartograph(source)` — the same whole-program analysis
+  the CLI runs (parse → resolve → typecheck → effect-check → concurrency),
+  compiled to `wasm32`. The library entry point is `karac::effect_graph::cartograph_json`;
+  the CLI and the studio share its JSON builders, so the graph is byte-identical
+  across surfaces (pinned by `tests/cli.rs::test_cartograph_json_matches_cli_query_output`).
+- **Monaco editor** (left) with Kāra syntax highlighting and **live compiler
+  squiggles** — the type/effect errors the compiler finds are drawn as editor
+  markers as you type.
+- **D3 force-directed graph** (right): nodes colored by effect class, parallel-band
+  functions ringed in dashed gold, draggable, click for a detail panel (effects,
+  concurrency decision, call edges, and a serialization note for `writes` nodes).
+- A static file server is required only because browsers won't fetch a `.wasm`
+  module over `file://` — it is **not** a `karac` backend; all analysis is client-side.
+
 ## Scope
 
-- **Built here (compiler half):** whole-program `query effects`/`query
-  concurrency` emission in `karac`; a runnable subject service; a static SVG
-  viewer reading the emitted JSON.
-- **Deferred (frontend half):** D3 force-directed layout, an embedded Monaco
-  editor with live re-query on edit, and compiling the viewer itself to WASM so
-  it runs without any local `karac`. None of these change the compiler; they
-  consume the JSON this cut already emits.
+- **Built (compiler half):** whole-program `query effects`/`query concurrency`
+  emission in `karac`; a runnable subject service; a static SVG viewer.
+- **Built (frontend half):** the live `studio.html` — D3 force-directed graph,
+  embedded Monaco editor with live re-query + diagnostic squiggles, and the
+  whole analysis pipeline compiled to WASM (via `karac-playground`) so it runs
+  with no local `karac`.
+- **Still deferred:** precise *reverse* blocking attribution — "exactly which
+  callers fail to parallelize *because of this specific callee's effect*." The
+  studio shows the honest property today (a `writes(R)` node serializes callers
+  that also touch `R`), but pinpointing the blocked caller pairs needs the
+  concurrency pass to attribute a non-grouping to a specific callee — a compiler
+  feature, not frontend work.

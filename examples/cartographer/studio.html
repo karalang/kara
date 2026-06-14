@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cartographer Studio — live effect graph</title>
+<style>
+  :root { --bg:#0f1419; --panel:#171c24; --ink:#e6edf3; --muted:#8b98a5;
+          --pure:#3fb950; --read:#58a6ff; --write:#f0883e; --edge:#48515c;
+          --err:#f85149; --warn:#e3b341; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--ink);
+              font:13px/1.5 -apple-system,"SF Pro Text",Segoe UI,Roboto,sans-serif; overflow:hidden; }
+  #top { height:46px; display:flex; align-items:center; gap:14px; padding:0 16px;
+         border-bottom:1px solid #222; background:var(--panel); }
+  #top h1 { font-size:14px; margin:0; letter-spacing:.3px; font-weight:600; }
+  #top .tag { color:var(--muted); font-size:12px; }
+  #status { margin-left:auto; font-size:12px; font-family:ui-monospace,Menlo,monospace; }
+  #status.ok { color:var(--pure); } #status.bad { color:var(--err); }
+  #main { display:flex; height:calc(100% - 46px); }
+  #editor { width:46%; min-width:300px; height:100%; border-right:1px solid #222; }
+  #right { flex:1; display:flex; flex-direction:column; min-width:0; }
+  #graph { flex:1; overflow:hidden; position:relative; }
+  #graph svg { width:100%; height:100%; display:block; }
+  #side { height:230px; border-top:1px solid #222; background:var(--panel);
+          padding:12px 16px; overflow:auto; }
+  .legend { position:absolute; top:10px; left:12px; display:flex; gap:12px;
+            font-size:11px; background:rgba(15,20,25,.7); padding:6px 10px; border-radius:8px; }
+  .legend span { display:inline-flex; align-items:center; gap:5px; }
+  .dot { width:10px; height:10px; border-radius:3px; display:inline-block; }
+  .node circle { cursor:pointer; stroke:#0b0e12; stroke-width:1.5; }
+  .node.par circle { stroke:var(--warn); stroke-width:3; stroke-dasharray:4 3; }
+  .node.sel circle { stroke:#fff; stroke-width:3; stroke-dasharray:none; }
+  .node text { fill:var(--ink); font-size:11px; pointer-events:none; }
+  .link { stroke:var(--edge); stroke-width:1.5; fill:none; }
+  #side h2 { font-size:13px; margin:0 0 4px; }
+  #side .key { font-family:ui-monospace,Menlo,monospace; color:var(--ink); }
+  #side .muted { color:var(--muted); }
+  .eff { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px;
+         margin:3px 4px 0 0; font-family:ui-monospace,Menlo,monospace; }
+  .eff.read { background:rgba(88,166,255,.18); color:var(--read); }
+  .eff.write { background:rgba(240,136,62,.18); color:var(--write); }
+  .eff.other { background:rgba(139,152,165,.18); color:var(--muted); }
+  .band { background:rgba(227,179,65,.13); border:1px solid rgba(227,179,65,.4);
+          border-radius:6px; padding:6px 9px; margin-top:6px; }
+  .band b { color:var(--warn); }
+  #diag { font-size:12px; }
+  #diag .d { color:var(--err); font-family:ui-monospace,Menlo,monospace; }
+  code { background:#0b0e12; padding:1px 5px; border-radius:4px; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
+</head>
+<body>
+<div id="top">
+  <h1>Cartographer Studio</h1>
+  <span class="tag">edit Kāra · the compiler re-draws its effect graph live (running in this tab via WASM)</span>
+  <span id="status">…</span>
+</div>
+<div id="main">
+  <div id="editor"></div>
+  <div id="right">
+    <div id="graph">
+      <div class="legend">
+        <span><i class="dot" style="background:var(--pure)"></i>pure</span>
+        <span><i class="dot" style="background:var(--read)"></i>reads</span>
+        <span><i class="dot" style="background:var(--write)"></i>writes</span>
+        <span><i class="dot" style="border:2px dashed var(--warn)"></i>parallel band</span>
+      </div>
+    </div>
+    <div id="side"><p class="muted">Click a function node to inspect its effects,
+      concurrency decision, and call edges. Edit the code on the left and the graph
+      updates — every node, edge, and band is the compiler's answer, not a drawing.</p></div>
+  </div>
+</div>
+
+<script type="module">
+import init, { cartograph } from './pkg/karac_playground.js';
+
+const DEFAULT_SRC = `// Edit me — the effect graph on the right is recomputed by the
+// Kāra compiler (running in this tab as WASM) on every keystroke.
+// Try: add a 4th fetch to get_dashboard, or make two fns write the
+// same resource and watch a parallel band disappear.
+
+pub trait UserStore  { fn name_of(ref self, id: i64) -> String; }
+pub trait OrderStore { fn count_for(ref self, id: i64) -> i64; }
+pub effect resource UserDB:  UserStore;
+pub effect resource OrderDB: OrderStore;
+
+pub fn fetch_profile(id: i64) -> String with reads(UserDB) { UserDB.name_of(id) }
+pub fn fetch_orders(id: i64) -> i64 with reads(OrderDB) { OrderDB.count_for(id) }
+
+pub fn build_dashboard(name: String, orders: i64) -> String {
+    f"{name}: {orders} orders"
+}
+
+// Two independent reads on two different resources — the compiler runs
+// them as one parallel band, no async / par {} / annotation.
+pub fn get_dashboard(id: i64) -> String with reads(UserDB, OrderDB) {
+    let name   = fetch_profile(id);
+    let orders = fetch_orders(id);
+    build_dashboard(name, orders)
+}
+`;
+
+const CSS = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const COLOR = { pure: CSS('--pure'), read: CSS('--read'), write: CSS('--write') };
+
+function klass(effs) {
+  const v = new Set((effs || []).map(e => e.verb));
+  if (v.has('writes') || v.has('sends')) return 'write';
+  if (v.has('reads') || v.has('receives')) return 'read';
+  return 'pure';
+}
+function esc(s){ return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+// ── D3 force graph — persists the simulation across edits, re-binding data ──
+let sim, svg, gLink, gNode, monaco_, editor, lastGraph = null, selectedKey = null;
+let nodePos = new Map();   // remember positions across edits so the graph doesn't jump
+
+function initSvg() {
+  const el = document.getElementById('graph');
+  svg = d3.select(el).append('svg');
+  const defs = svg.append('defs');
+  defs.append('marker').attr('id','arrow').attr('viewBox','0 0 10 10')
+    .attr('refX',20).attr('refY',5).attr('markerWidth',7).attr('markerHeight',7)
+    .attr('orient','auto-start-reverse')
+    .append('path').attr('d','M0,0 L10,5 L0,10 z').attr('fill', CSS('--edge'));
+  gLink = svg.append('g');
+  gNode = svg.append('g');
+  sim = d3.forceSimulation()
+    .force('charge', d3.forceManyBody().strength(-420))
+    .force('link', d3.forceLink().id(d => d.id).distance(95))
+    .force('x', d3.forceX().strength(0.06))
+    .force('y', d3.forceY().strength(0.06))
+    .force('collide', d3.forceCollide(34))
+    .on('tick', ticked);
+  window.addEventListener('resize', sizeSvg);
+  sizeSvg();
+}
+function sizeSvg() {
+  const el = document.getElementById('graph');
+  const w = el.clientWidth, h = el.clientHeight;
+  svg.attr('viewBox', [-w/2, -h/2, w, h]);
+  sim.force('center', d3.forceCenter(0, 0)).alpha(0.3).restart();
+}
+
+function render(effects, concurrency) {
+  const concByFn = new Map((concurrency.functions || []).map(f => [f.function, f]));
+  const nodes = effects.functions.map(f => {
+    const prev = nodePos.get(f.function);
+    return {
+      id: f.function, line: f.line, effs: f.inferred_effects, decl: f.declared_effects,
+      conc: concByFn.get(f.function),
+      x: prev ? prev.x : undefined, y: prev ? prev.y : undefined,
+    };
+  });
+  const ids = new Set(nodes.map(n => n.id));
+  const links = (effects.calls || []).filter(c => ids.has(c.caller) && ids.has(c.callee))
+    .map(c => ({ source: c.caller, target: c.callee }));
+  lastGraph = { nodes, links, concByFn };
+
+  // links
+  const link = gLink.selectAll('path.link').data(links, d =>
+    (d.source.id||d.source) + '->' + (d.target.id||d.target));
+  link.exit().remove();
+  link.enter().append('path').attr('class','link').attr('marker-end','url(#arrow)');
+
+  // nodes
+  const node = gNode.selectAll('g.node').data(nodes, d => d.id);
+  node.exit().remove();
+  const enter = node.enter().append('g')
+    .attr('class','node')
+    .call(d3.drag()
+      .on('start', (ev,d) => { if(!ev.active) sim.alphaTarget(0.3).restart(); d.fx=d.x; d.fy=d.y; })
+      .on('drag',  (ev,d) => { d.fx=ev.x; d.fy=ev.y; })
+      .on('end',   (ev,d) => { if(!ev.active) sim.alphaTarget(0); d.fx=null; d.fy=null; }))
+    .on('click', (ev,d) => selectNode(d.id));
+  enter.append('circle').attr('r', 13);
+  enter.append('text').attr('x', 16).attr('y', 4);
+  const merged = enter.merge(node);
+  merged.attr('class', d => 'node'
+    + (d.conc && d.conc.parallel_groups && d.conc.parallel_groups.length ? ' par' : '')
+    + (d.id === selectedKey ? ' sel' : ''));
+  merged.select('circle').attr('fill', d => COLOR[klass(d.effs)]);
+  merged.select('text').text(d => d.id);
+
+  sim.nodes(nodes);
+  sim.force('link').links(links);
+  sim.alpha(0.6).restart();
+
+  if (selectedKey && ids.has(selectedKey)) selectNode(selectedKey);
+}
+
+function ticked() {
+  gLink.selectAll('path.link').attr('d', d => {
+    const x1=d.source.x, y1=d.source.y, x2=d.target.x, y2=d.target.y;
+    return `M${x1},${y1} L${x2},${y2}`;
+  });
+  gNode.selectAll('g.node').attr('transform', d => {
+    nodePos.set(d.id, {x:d.x, y:d.y});
+    return `translate(${d.x},${d.y})`;
+  });
+}
+
+function effChips(arr, label) {
+  if (!arr || !arr.length) return `<div class="muted">${label}: none (pure)</div>`;
+  return `<div class="muted" style="font-size:11px">${label}</div>` + arr.map(e => {
+    const c = (e.verb==='writes'||e.verb==='sends') ? 'write'
+            : (e.verb==='reads'||e.verb==='receives') ? 'read' : 'other';
+    return `<span class="eff ${c}">${esc(e.verb)}${e.resource?`(${esc(e.resource)})`:''}</span>`;
+  }).join('');
+}
+
+function selectNode(key) {
+  selectedKey = key;
+  gNode.selectAll('g.node').classed('sel', d => d.id === key);
+  const n = lastGraph.nodes.find(d => d.id === key);
+  if (!n) return;
+  const callers = lastGraph.links.filter(l => (l.target.id||l.target) === key).map(l => l.source.id||l.source);
+  const callees = lastGraph.links.filter(l => (l.source.id||l.source) === key).map(l => l.target.id||l.target);
+  const d = document.getElementById('side');
+  let h = `<h2 class="key">${esc(key)}</h2><div class="muted">line ${n.line}</div>`;
+  h += `<h2>Effects</h2>` + effChips(n.effs, 'inferred');
+  if (Array.isArray(n.decl)) h += effChips(n.decl, 'declared');
+
+  h += `<h2>Concurrency</h2>`;
+  const c = n.conc;
+  if (c && c.parallel_groups && c.parallel_groups.length) {
+    c.parallel_groups.forEach(g => {
+      h += `<div class="band"><b>∥ parallel band</b> — statements ${g.statements.join(', ')}`
+         + `<br><span class="muted">${esc(g.reason)}</span></div>`;
+    });
+  } else {
+    h += `<div class="muted">no parallel band — runs sequentially`
+       + (c ? ` (${c.total_statements} statements)` : '') + `.</div>`;
+  }
+  // Honest serialization note: a write is a barrier on its resource.
+  const writes = (n.effs||[]).filter(e => e.verb==='writes' || e.verb==='sends');
+  if (writes.length) {
+    h += `<div class="muted" style="margin-top:6px">⚠ serializes callers that also touch `
+       + writes.map(e => `<code>${esc(e.resource||e.verb)}</code>`).join(', ')
+       + ` — write/write and read/write on one resource can't run in parallel.</div>`;
+  }
+  h += `<h2>Call edges</h2><div class="muted">callers: ${callers.length?callers.map(esc).join(', '):'—'}`
+     + `<br>callees: ${callees.length?callees.map(esc).join(', '):'—'}</div>`;
+  d.innerHTML = h;
+}
+
+function setStatus(ok, msg) {
+  const s = document.getElementById('status');
+  s.className = ok ? 'ok' : 'bad';
+  s.textContent = msg;
+}
+
+function recompute() {
+  const src = editor.getValue();
+  let res;
+  try { res = cartograph(src); }
+  catch (e) { setStatus(false, 'wasm error: ' + e); return; }
+
+  // Editor squiggles from the compiler's diagnostics.
+  const markers = (res.diagnostics || []).map(d => ({
+    severity: monaco_.MarkerSeverity.Error,
+    message: `[${d.phase}] ${d.message}`,
+    startLineNumber: d.line, startColumn: d.column,
+    endLineNumber: d.line, endColumn: d.column + Math.max(1, d.length),
+  }));
+  monaco_.editor.setModelMarkers(editor.getModel(), 'kara', markers);
+
+  if (res.ok) {
+    render(JSON.parse(res.effects), JSON.parse(res.concurrency));
+    const errs = res.diagnostics.length;
+    setStatus(errs === 0, errs === 0 ? '✓ graph live' : `graph live · ${errs} diagnostic(s)`);
+  } else {
+    // Fatal parse/resolve error: keep the last good graph, flag it.
+    setStatus(false, `✗ ${res.diagnostics.length} error(s) — graph frozen at last valid edit`);
+  }
+}
+
+// ── Minimal Kāra syntax highlighting for Monaco ──
+function registerKara(m) {
+  m.languages.register({ id: 'kara' });
+  m.languages.setMonarchTokensProvider('kara', {
+    keywords: ['fn','pub','let','mut','ref','self','struct','enum','trait','impl','for',
+      'effect','resource','with','reads','writes','sends','receives','allocates','panics',
+      'blocks','suspends','match','if','else','while','loop','return','requires','ensures',
+      'old','type','where','and','or','not','par','seq','true','false','with_provider'],
+    tokenizer: {
+      root: [
+        [/\/\/.*$/, 'comment'],
+        [/f?"/, { token:'string', next:'@string' }],
+        [/\b[0-9]+(\.[0-9]+)?\b/, 'number'],
+        [/[A-Z][A-Za-z0-9_]*/, 'type'],
+        [/[a-z_][A-Za-z0-9_]*/, { cases: { '@keywords':'keyword', '@default':'identifier' } }],
+      ],
+      string: [ [/[^"{}]+/, 'string'], [/\{[^}]*\}/, 'variable'], [/"/, { token:'string', next:'@pop' }] ],
+    },
+  });
+}
+
+(async function main() {
+  await init();                       // load the karac WASM
+  await new Promise(resolve => {
+    window.require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' }});
+    window.require(['vs/editor/editor.main'], () => resolve());
+  });
+  monaco_ = window.monaco;
+  registerKara(monaco_);
+  editor = monaco_.editor.create(document.getElementById('editor'), {
+    value: DEFAULT_SRC, language: 'kara', theme: 'vs-dark',
+    minimap: { enabled:false }, fontSize: 13, automaticLayout: true, scrollBeyondLastLine: false,
+  });
+  initSvg();
+  let t;
+  editor.onDidChangeModelContent(() => { clearTimeout(t); t = setTimeout(recompute, 350); });
+  recompute();
+})();
+</script>
+</body>
+</html>

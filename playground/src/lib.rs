@@ -77,3 +77,57 @@ pub fn run(source: &str) -> Result<JsValue, JsValue> {
     };
     serde_wasm_bindgen::to_value(&envelope).map_err(|e| JsValue::from_str(&e.to_string()))
 }
+
+#[derive(Serialize)]
+struct JsCartographDiagnostic {
+    phase: &'static str,
+    message: String,
+    line: usize,
+    column: usize,
+    offset: usize,
+    length: usize,
+}
+
+#[derive(Serialize)]
+struct JsCartograph {
+    ok: bool,
+    /// Whole-program effect-graph JSON envelope (nodes + call edges),
+    /// byte-identical to `karac query effects <file>`. Empty string on a
+    /// fatal parse/resolve error. The JS shell `JSON.parse`s it.
+    effects: String,
+    /// Whole-program concurrency JSON envelope (parallel bands),
+    /// byte-identical to `karac query concurrency <file>`.
+    concurrency: String,
+    diagnostics: Vec<JsCartographDiagnostic>,
+}
+
+/// Build the whole-program effect graph for `source` in the browser —
+/// the Cartographer studio's live re-query entry point. Returns the two
+/// JSON envelopes (effects + concurrency) the CLI `query` commands emit,
+/// plus diagnostics for editor decoration. Never throws (modulo a host
+/// panic, routed to `console.error` by the panic hook); a fatal
+/// parse/resolve error comes back as `ok:false` with empty envelopes and
+/// populated `diagnostics`.
+#[wasm_bindgen]
+pub fn cartograph(source: &str) -> Result<JsValue, JsValue> {
+    install_panic_hook();
+    let result = karac::effect_graph::cartograph_json(source, "studio.kara");
+    let envelope = JsCartograph {
+        ok: result.ok,
+        effects: result.effects_json,
+        concurrency: result.concurrency_json,
+        diagnostics: result
+            .diagnostics
+            .into_iter()
+            .map(|d| JsCartographDiagnostic {
+                phase: d.phase,
+                message: d.message,
+                line: d.line,
+                column: d.column,
+                offset: d.offset,
+                length: d.length,
+            })
+            .collect(),
+    };
+    serde_wasm_bindgen::to_value(&envelope).map_err(|e| JsValue::from_str(&e.to_string()))
+}

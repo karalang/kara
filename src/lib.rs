@@ -34,6 +34,7 @@ pub mod diagnostic_class;
 pub mod doc;
 pub mod dominator;
 pub mod edit_distance;
+pub mod effect_graph;
 pub mod effectchecker;
 pub mod exhaustive;
 pub mod fallible_alloc;

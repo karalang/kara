@@ -8732,40 +8732,6 @@ fn render_cost_summary_json(s: &crate::cost_summary::CostSummary, filename: &str
     )
 }
 
-/// Render an `EffectSet` as a JSON array of `{"verb","resource"}` objects.
-/// Shared by the per-function and whole-program effect-query emitters.
-fn effect_set_json(set: &crate::effectchecker::EffectSet) -> String {
-    let list: Vec<String> = set
-        .effects
-        .iter()
-        .map(|te| {
-            format!(
-                "{{\"verb\":{},\"resource\":{}}}",
-                json_string(effect_verb_str(&te.effect.verb)),
-                json_string(&te.effect.resource),
-            )
-        })
-        .collect();
-    format!("[{}]", list.join(","))
-}
-
-/// Render a function's `declared_effects` JSON value: `null` (none /
-/// absent), `"polymorphic"`, an explicit array, or the
-/// polymorphic-with-fixed object.
-fn declared_effects_json(declared: Option<&DeclaredEffects>) -> String {
-    match declared {
-        Some(DeclaredEffects::Explicit(set)) => effect_set_json(set),
-        Some(DeclaredEffects::Polymorphic) => "\"polymorphic\"".to_string(),
-        Some(DeclaredEffects::PolymorphicWithFixed(set)) => {
-            format!(
-                "{{\"polymorphic\":true,\"fixed\":{}}}",
-                effect_set_json(set)
-            )
-        }
-        Some(DeclaredEffects::None) | None => "null".to_string(),
-    }
-}
-
 fn query_effects(pipeline: &Pipeline, function: &str, filename: &str) {
     let effects = pipeline.effects.as_ref().unwrap();
 
@@ -8786,63 +8752,28 @@ fn query_effects(pipeline: &Pipeline, function: &str, filename: &str) {
     }
 
     let inferred_str = inferred
-        .map(effect_set_json)
+        .map(crate::effect_graph::effect_set_json)
         .unwrap_or_else(|| "[]".to_string());
 
     println!(
         "{{\"function\":{},\"inferred_effects\":{},\"declared_effects\":{}}}",
         json_string(function),
         inferred_str,
-        declared_effects_json(declared),
+        crate::effect_graph::declared_effects_json(declared),
     );
 }
 
 /// Whole-program effect graph: one node per source-defined function
 /// (free fn, impl method, trait default method) carrying its inferred +
 /// declared effects, plus the directed call-graph edges between them.
-/// Node keys join 1:1 with `karac query affected-by` / per-function
-/// effect queries. Output is deterministic — the call graph stores nodes
-/// and edges in sorted maps.
+/// Delegates to the wasm-safe [`crate::effect_graph`] builder so the CLI
+/// and the browser studio emit a byte-identical graph.
 fn query_effects_whole_program(pipeline: &Pipeline, effects: &EffectCheckResult, filename: &str) {
     let is_test_file = filename.ends_with("_test.kara");
     let graph = crate::call_graph::build(&pipeline.parsed.program, filename, is_test_file);
-
-    let fn_entries: Vec<String> = graph
-        .nodes
-        .iter()
-        .map(|(key, node)| {
-            let inferred_str = effects
-                .inferred_effects
-                .get(key)
-                .map(effect_set_json)
-                .unwrap_or_else(|| "[]".to_string());
-            format!(
-                "{{\"function\":{},\"line\":{},\"is_test\":{},\"inferred_effects\":{},\"declared_effects\":{}}}",
-                json_string(key),
-                node.line,
-                node.is_test,
-                inferred_str,
-                declared_effects_json(effects.declared_effects.get(key)),
-            )
-        })
-        .collect();
-
-    let mut edges: Vec<String> = Vec::new();
-    for (caller, callees) in &graph.forward {
-        for callee in callees {
-            edges.push(format!(
-                "{{\"caller\":{},\"callee\":{}}}",
-                json_string(caller),
-                json_string(callee),
-            ));
-        }
-    }
-
     println!(
-        "{{\"scope\":{},\"functions\":[{}],\"calls\":[{}]}}",
-        json_string(filename),
-        fn_entries.join(","),
-        edges.join(","),
+        "{}",
+        crate::effect_graph::build_effect_graph_json(effects, &graph, filename)
     );
 }
 
@@ -8977,25 +8908,6 @@ fn rc_trigger_str(t: &crate::ownership::RcTrigger) -> &'static str {
     }
 }
 
-/// Render a function's `parallel_groups` as a JSON array of
-/// `{"statements":[…],"reason":…}` objects. Shared by the per-function
-/// and whole-program concurrency-query emitters.
-fn parallel_groups_json(fc: &crate::concurrency::FunctionConcurrency) -> String {
-    let group_entries: Vec<String> = fc
-        .parallel_groups
-        .iter()
-        .map(|g| {
-            let indices: Vec<String> = g.statement_indices.iter().map(|i| i.to_string()).collect();
-            format!(
-                "{{\"statements\":[{}],\"reason\":{}}}",
-                indices.join(","),
-                json_string(&g.reason),
-            )
-        })
-        .collect();
-    format!("[{}]", group_entries.join(","))
-}
-
 fn query_concurrency(pipeline: &Pipeline, function: &str, filename: &str) {
     let analysis = pipeline.concurrency.as_ref().unwrap();
 
@@ -9013,7 +8925,7 @@ fn query_concurrency(pipeline: &Pipeline, function: &str, filename: &str) {
                 "{{\"function\":{},\"total_statements\":{},\"parallel_groups\":{}}}",
                 json_string(function),
                 fc.total_statements,
-                parallel_groups_json(fc),
+                crate::effect_graph::parallel_groups_json(fc),
             );
         }
         None => {
@@ -9035,27 +8947,9 @@ fn query_concurrency_whole_program(
 ) {
     let is_test_file = filename.ends_with("_test.kara");
     let graph = crate::call_graph::build(&pipeline.parsed.program, filename, is_test_file);
-
-    let fn_entries: Vec<String> = graph
-        .nodes
-        .iter()
-        .filter_map(|(key, node)| {
-            analysis.function_decisions.get(key).map(|fc| {
-                format!(
-                    "{{\"function\":{},\"line\":{},\"total_statements\":{},\"parallel_groups\":{}}}",
-                    json_string(key),
-                    node.line,
-                    fc.total_statements,
-                    parallel_groups_json(fc),
-                )
-            })
-        })
-        .collect();
-
     println!(
-        "{{\"scope\":{},\"functions\":[{}]}}",
-        json_string(filename),
-        fn_entries.join(","),
+        "{}",
+        crate::effect_graph::build_concurrency_graph_json(analysis, &graph, filename)
     );
 }
 

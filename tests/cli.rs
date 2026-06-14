@@ -934,6 +934,70 @@ fn test_query_effects_whole_program_emits_nodes_and_call_edges() {
 }
 
 #[test]
+fn test_cartograph_json_matches_cli_query_output() {
+    // The browser-studio library entry point `karac::effect_graph::cartograph_json`
+    // and the CLI `query effects`/`query concurrency` whole-program
+    // emitters share the same Pipeline + JSON builders, so the graph must
+    // be byte-identical across the two surfaces (the studio can't drift
+    // from the CLI). Also pins the result envelope contract.
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cartograph-json-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("svc.kara");
+    let src = "fn leaf() -> i64 { 0 }\n\
+               fn root() -> i64 {\n\
+               \x20   let a = leaf();\n\
+               \x20   let b = leaf();\n\
+               \x20   a + b\n\
+               }\n";
+    std::fs::write(&path, src).unwrap();
+    let target = path.to_str().unwrap();
+
+    let result = karac::effect_graph::cartograph_json(src, target);
+    assert!(result.ok, "clean program should produce a graph");
+    assert!(result.diagnostics.is_empty());
+    assert!(result
+        .effects_json
+        .contains("\"caller\":\"root\",\"callee\":\"leaf\""));
+    assert!(result.concurrency_json.contains("\"function\":\"root\""));
+
+    // Byte-identical to the CLI emitters.
+    let cli_effects = karac_bin()
+        .args(["query", "effects", target])
+        .output()
+        .unwrap();
+    let cli_conc = karac_bin()
+        .args(["query", "concurrency", target])
+        .output()
+        .unwrap();
+    assert_eq!(
+        result.effects_json,
+        String::from_utf8_lossy(&cli_effects.stdout).trim_end(),
+        "cartograph_json effects must match `query effects` byte-for-byte",
+    );
+    assert_eq!(
+        result.concurrency_json,
+        String::from_utf8_lossy(&cli_conc.stdout).trim_end(),
+        "cartograph_json concurrency must match `query concurrency` byte-for-byte",
+    );
+
+    // Fatal parse error → no graph, diagnostics populated.
+    let bad = karac::effect_graph::cartograph_json("fn main( {", "bad.kara");
+    assert!(!bad.ok);
+    assert!(bad.effects_json.is_empty());
+    assert!(!bad.diagnostics.is_empty());
+    assert_eq!(bad.diagnostics[0].phase, "parse");
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
 fn test_query_whole_program_generic_receiver_method_joins_keys() {
     // B-2026-06-14-3 regression. The whole-program emitters look effects /
     // concurrency up by the call-graph node key, but the call graph keyed
