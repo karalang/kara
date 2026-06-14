@@ -15449,6 +15449,11 @@ if (elapsed < 25) {
   process.exit(1);
 }
 console.log("RAF_OK elapsed=" + elapsed.toFixed(1) + "ms");
+// `animation_frames` is MULTI-SHOT: the host rAF loop re-arms forever (correct
+// for a browser — the page runs until closed), so node's event loop never
+// drains on its own. Force-exit now that the assertions passed, else this
+// harness hangs and the test's `node` subprocess never returns.
+process.exit(0);
 "#,
     )
     .unwrap();
