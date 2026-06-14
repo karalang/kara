@@ -277,6 +277,10 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         karac_runtime_parse_i64_radix,
         karac_runtime_parse_f64,
         karac_runtime_cstr_to_string,
+        karac_runtime_char_is_alphabetic,
+        karac_runtime_char_is_numeric,
+        karac_runtime_char_is_alphanumeric,
+        karac_runtime_char_is_whitespace,
     );
     // The serve loops themselves need the tokio/hyper substrate (`net`);
     // the request/response accessors above are plain FFI-struct reads and
@@ -3938,6 +3942,36 @@ pub unsafe extern "C" fn karac_runtime_parse_i64(data: *const u8, len: usize, ou
         }
         Err(_) => 0,
     }
+}
+
+/// Unicode classification predicates backing `char.is_alphabetic()` /
+/// `is_numeric()` / `is_alphanumeric()` / `is_whitespace()` (phase-12 #13,
+/// B-2026-06-14-10). The Kāra `char` lowers to an `i32` Unicode scalar value
+/// (passed verbatim as the `cp` bits); a value that is not a valid `char` (out
+/// of range or a surrogate) classifies as `false`. Returns `1` for true, `0`
+/// for false. These need Rust's Unicode tables, so — unlike the inlined ASCII
+/// byte predicates (`u8.is_ascii_*`) — they go through a runtime extern.
+#[no_mangle]
+pub extern "C" fn karac_runtime_char_is_alphabetic(cp: u32) -> u8 {
+    char::from_u32(cp).is_some_and(|c| c.is_alphabetic()) as u8
+}
+
+/// See [`karac_runtime_char_is_alphabetic`]. Backs `char.is_numeric()`.
+#[no_mangle]
+pub extern "C" fn karac_runtime_char_is_numeric(cp: u32) -> u8 {
+    char::from_u32(cp).is_some_and(|c| c.is_numeric()) as u8
+}
+
+/// See [`karac_runtime_char_is_alphabetic`]. Backs `char.is_alphanumeric()`.
+#[no_mangle]
+pub extern "C" fn karac_runtime_char_is_alphanumeric(cp: u32) -> u8 {
+    char::from_u32(cp).is_some_and(|c| c.is_alphanumeric()) as u8
+}
+
+/// See [`karac_runtime_char_is_alphabetic`]. Backs `char.is_whitespace()`.
+#[no_mangle]
+pub extern "C" fn karac_runtime_char_is_whitespace(cp: u32) -> u8 {
+    char::from_u32(cp).is_some_and(|c| c.is_whitespace()) as u8
 }
 
 /// Parse a UTF-8 byte slice as a signed 64-bit integer in the given

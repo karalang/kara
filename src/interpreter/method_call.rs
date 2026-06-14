@@ -1001,6 +1001,26 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // Unicode `char` classification predicates (phase-12 #13):
+        // `char.is_alphabetic()` / `is_numeric()` / `is_alphanumeric()` /
+        // `is_whitespace()` → bool. The Unicode-aware companions of the ASCII
+        // byte predicates above (codegen routes these through the
+        // `karac_runtime_char_is_*` externs; interp uses Rust's `char` directly).
+        if args.is_empty() {
+            if let Value::Char(c) = &obj {
+                let r = match method {
+                    "is_alphabetic" => Some(c.is_alphabetic()),
+                    "is_numeric" => Some(c.is_numeric()),
+                    "is_alphanumeric" => Some(c.is_alphanumeric()),
+                    "is_whitespace" => Some(c.is_whitespace()),
+                    _ => None,
+                };
+                if let Some(r) = r {
+                    return Value::Bool(r);
+                }
+            }
+        }
+
         // Float→int conversion families (phase-8 § "Saturating float→int",
         // slice 2; typed in expr_method_call.rs):
         // `f.{saturating,wrapping,checked,trunc}_to_<intN>()`. Semantics live in

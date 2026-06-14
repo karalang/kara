@@ -3170,6 +3170,22 @@ impl<'ctx> Codegen<'ctx> {
             parse_i64_type,
             Some(Linkage::External),
         );
+        // Unicode `char` classification predicates (phase-12 #13): `char`
+        // lowers to `i32`, so each takes the codepoint as `i32` and returns
+        // `i8` (0/1). Backs `char.is_alphabetic()` / `is_numeric()` /
+        // `is_alphanumeric()` / `is_whitespace()` — the Unicode-aware companions
+        // of the inlined `u8.is_ascii_*` byte predicates.
+        let char_pred_type = context
+            .i8_type()
+            .fn_type(&[context.i32_type().into()], false);
+        for name in [
+            "karac_runtime_char_is_alphabetic",
+            "karac_runtime_char_is_numeric",
+            "karac_runtime_char_is_alphanumeric",
+            "karac_runtime_char_is_whitespace",
+        ] {
+            module.add_function(name, char_pred_type, Some(Linkage::External));
+        }
         // `karac_runtime_parse_i64_radix(data: *const u8, len: usize,
         //  radix: u32, out: *mut i64) -> u8`. Backs `i64.from_str_radix(s,
         //  radix)` — the self-hosting lexer's hex/binary/octal literal path.

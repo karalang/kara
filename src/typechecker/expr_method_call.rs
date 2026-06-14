@@ -2248,6 +2248,21 @@ impl<'a> super::TypeChecker<'a> {
                 return Type::Str;
             }
         }
+        // Unicode `char` classification predicates (phase-12 #13):
+        // `char.is_alphabetic()` / `is_numeric()` / `is_alphanumeric()` /
+        // `is_whitespace()` → bool. The Unicode-aware companions of the
+        // `u8.is_ascii_*` byte predicates; backed by interp (`char` methods) and
+        // codegen (`karac_runtime_char_is_*` externs). Restricted to a `char`
+        // receiver — the ASCII predicates stay on the byte/integer scalars.
+        if args.is_empty()
+            && matches!(&receiver_for_lookup, Type::Char)
+            && matches!(
+                method,
+                "is_alphabetic" | "is_numeric" | "is_alphanumeric" | "is_whitespace"
+            )
+        {
+            return Type::Bool;
+        }
         // `to_string()` on `String` (identity copy), on any `#[derive(Display)]`
         // / `impl Display` **struct**, and on an all-unit `#[derive(Display)]`
         // **enum** → `String`. The `Display` trait provides

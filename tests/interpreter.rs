@@ -9448,6 +9448,36 @@ fn test_u8_ascii_predicates_interpreter() {
 }
 
 #[test]
+fn test_char_unicode_predicates_interpreter() {
+    // #13 (phase-12 self-hosting) — Unicode `char` classification predicates:
+    // is_alphabetic / is_numeric / is_alphanumeric / is_whitespace. The
+    // Unicode-aware companions of the `u8.is_ascii_*` byte predicates above.
+    // Greek alpha (U+03B1) is_alphabetic and a Devanagari digit (U+096B)
+    // is_numeric — the cases a byte-level ASCII check would miss. The interp
+    // backend must agree with codegen's `karac_runtime_char_is_*` externs
+    // (`test_e2e_char_unicode_predicates`).
+    let output = run(r#"fn main() {
+            println(f"{'a'.is_alphabetic()} {'5'.is_numeric()} {'5'.is_alphabetic()}");
+            println(f"{' '.is_whitespace()} {'_'.is_alphanumeric()} {'z'.is_alphanumeric()}");
+            match char.try_from(945) {
+                Ok(g) => { println(f"{g.is_alphabetic()} {g.is_numeric()}"); }
+                Err(e) => { println("err"); }
+            }
+            match char.try_from(2411) {
+                Ok(d) => { println(f"{d.is_numeric()} {d.is_alphabetic()}"); }
+                Err(e) => { println("err"); }
+            }
+        }"#);
+    assert_eq!(
+        output,
+        "true true false\n\
+         true false true\n\
+         true false\n\
+         true false\n"
+    );
+}
+
+#[test]
 fn test_i64_parse_interpreter() {
     // Five cases mirror `/tmp/kara-probes/i64_parse_full_probe.kara`:
     // numeric / non-numeric / negative / whitespace-padded / empty.

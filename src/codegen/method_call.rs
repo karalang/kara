@@ -1416,6 +1416,64 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // Unicode `char` classification predicates (phase-12 #13): `is_alphabetic`
+        // / `is_numeric` / `is_alphanumeric` / `is_whitespace` → bool (i1). The
+        // typechecker admits these only on a `char` receiver (lowered to i32), so
+        // a method-name match suffices. Unlike the inlined ASCII byte predicates
+        // above, Unicode classification needs the runtime's Unicode tables, so
+        // route through the `karac_runtime_char_is_*` externs (declared in
+        // `Codegen::new`). The extern returns i8 (0/1) → compare `!= 0` for i1.
+        if args.is_empty()
+            && matches!(
+                method,
+                "is_alphabetic" | "is_numeric" | "is_alphanumeric" | "is_whitespace"
+            )
+        {
+            let v = self.compile_expr(object)?;
+            if let BasicValueEnum::IntValue(iv) = v {
+                let i32_t = self.context.i32_type();
+                let cp = match iv.get_type().get_bit_width() {
+                    32 => iv,
+                    w if w < 32 => self
+                        .builder
+                        .build_int_z_extend(iv, i32_t, "char.cp.z")
+                        .unwrap(),
+                    _ => self
+                        .builder
+                        .build_int_truncate(iv, i32_t, "char.cp.t")
+                        .unwrap(),
+                };
+                let fname = match method {
+                    "is_alphabetic" => "karac_runtime_char_is_alphabetic",
+                    "is_numeric" => "karac_runtime_char_is_numeric",
+                    "is_alphanumeric" => "karac_runtime_char_is_alphanumeric",
+                    "is_whitespace" => "karac_runtime_char_is_whitespace",
+                    _ => unreachable!(),
+                };
+                let f = self
+                    .module
+                    .get_function(fname)
+                    .expect("char predicate extern declared in Codegen::new");
+                let ret = self
+                    .builder
+                    .build_call(f, &[cp.into()], "char.pred")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let b = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::NE,
+                        ret,
+                        self.context.i8_type().const_zero(),
+                        "char.pred.b",
+                    )
+                    .unwrap();
+                return Ok(b.into());
+            }
+        }
+
         if method == "cmp" && args.len() == 1 {
             let lhs = self.compile_expr(object)?;
             let rhs = self.compile_expr(&args[0].value)?;

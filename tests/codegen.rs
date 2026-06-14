@@ -15569,6 +15569,40 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_char_unicode_predicates() {
+        // #13 (phase-12 self-hosting, B-2026-06-14-10) — Unicode `char`
+        // classification predicates: `is_alphabetic` / `is_numeric` /
+        // `is_alphanumeric` / `is_whitespace`. Codegen routes these through the
+        // `karac_runtime_char_is_*` externs (the Unicode tables can't be inlined
+        // like the ASCII byte predicates). The Unicode cases are the point:
+        // Greek alpha (U+03B1) is_alphabetic AND a Devanagari digit (U+096B)
+        // is_numeric — both FALSE under a byte-level ASCII check. Built via
+        // `char.try_from(cp)` since char literals are ASCII-only.
+        let out = run_program(
+            r#"
+fn main() {
+    println(f"{'a'.is_alphabetic()} {'5'.is_numeric()} {'5'.is_alphabetic()}");
+    println(f"{' '.is_whitespace()} {'_'.is_alphanumeric()} {'z'.is_alphanumeric()}");
+    match char.try_from(945) {
+        Ok(g) => { println(f"{g.is_alphabetic()} {g.is_numeric()}"); }
+        Err(e) => { println("err"); }
+    }
+    match char.try_from(2411) {
+        Ok(d) => { println(f"{d.is_numeric()} {d.is_alphabetic()}"); }
+        Err(e) => { println("err"); }
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out,
+                "true true false\ntrue false true\ntrue false\ntrue false\n"
+            );
+        }
+    }
+
     // ── ref parameter semantics ───────────────────────────────────
 
     #[test]
