@@ -859,12 +859,12 @@ impl Lexer {
                     return self.make_spanned(Token.Error("Unknown escape sequence".to_string()));
                 }
                 run_start = self.current;
-            } else {
-                if self.peek() == b'\n' {
-                    self.line = self.line + 1;
-                    self.column = 0;
-                }
+            } else if self.peek() == b'\n' {
+                self.line = self.line + 1;
+                self.column = 0;
                 self.advance();
+            } else {
+                self.advance_codepoint();
             }
         }
         if self.is_at_end() {
@@ -893,8 +893,10 @@ impl Lexer {
             if self.peek() == b'\n' {
                 self.line = self.line + 1;
                 self.column = 0;
+                self.advance();
+            } else {
+                self.advance_codepoint();
             }
-            self.advance();
         }
     }
 
@@ -1086,7 +1088,10 @@ impl Lexer {
                         self.line = self.line + 1;
                         self.column = 0;
                     }
-                    self.advance();
+                    // Codepoint-aware so non-ASCII inside the `{…}` expr advances
+                    // `column` once, not per byte (#30); `{`/`}`/`\n` are ASCII so
+                    // the depth + newline bookkeeping above is unaffected.
+                    self.advance_codepoint();
                 }
                 let raw = self.src.substring(expr_start, self.current);
                 self.advance();
@@ -1139,12 +1144,12 @@ impl Lexer {
                     return self.make_spanned(Token.Error("Unknown escape sequence".to_string()));
                 }
                 run_start = self.current;
-            } else {
-                if self.peek() == b'\n' {
-                    self.line = self.line + 1;
-                    self.column = 0;
-                }
+            } else if self.peek() == b'\n' {
+                self.line = self.line + 1;
+                self.column = 0;
                 self.advance();
+            } else {
+                self.advance_codepoint();
             }
         }
         if self.is_at_end() {
@@ -1396,6 +1401,29 @@ impl Lexer {
         self.current = end;
         self.column = self.column + 1;
         first_char(cp_str)
+    }
+
+    // Advance the cursor over the codepoint at `current` WITHOUT decoding it:
+    // `current` by the UTF-8 byte length, `column` by exactly one. The string /
+    // multi-string / f-string body scanners capture the codepoint's bytes
+    // verbatim via the substring run, so they need only the cursor moved —
+    // `column` must stay codepoint-based (not per byte) so a token AFTER a
+    // non-ASCII codepoint on the same line gets the right start column (#30).
+    // ASCII falls back to the normal per-byte `advance`. Newlines are handled by
+    // the callers (line++/column=0) BEFORE this is reached.
+    fn advance_codepoint(mut ref self) {
+        let lead = self.peek();
+        if lead < 0x80 {
+            self.advance();
+        } else {
+            let len = utf8_byte_len(lead);
+            let mut end = self.current + len;
+            if end > self.bytes.len() {
+                end = self.bytes.len();
+            }
+            self.current = end;
+            self.column = self.column + 1;
+        }
     }
 
     // If the byte at `current` starts a UTF-8 sequence whose codepoint is

@@ -267,6 +267,22 @@ const CORPUS: &[&str] = &[
     "·5",
     // A letter-led non-ASCII run DOES fold a trailing ASCII digit (one Error).
     "α5",
+    // #30: non-ASCII `column` in regular / multi-line / f-string BODIES. The body
+    // scanners advance `column` per codepoint (not per byte) for non-ASCII, so a
+    // token AFTER a non-ASCII codepoint on the same line gets the right start
+    // column. Each literal's OWN span is byte-based (so unchanged); the divergence
+    // shows on the FOLLOWING token (and on an f-string Expr's `column`), hence the
+    // trailing token in each case. Regular string body + trailing token.
+    r#""héllo" tail"#,
+    r#""a λ b" z"#,
+    // Multi-line string body (single physical line here — the column reset on a
+    // real `\n` is already covered by L3; this isolates the non-ASCII advance).
+    "\"\"\"αβ\"\"\" z",
+    // f-string text run BEFORE a hole — the hole's `column` reflects the preceding
+    // non-ASCII text, so the FSTR Expr render catches it directly.
+    r#"f"é{x}" z"#,
+    // Non-ASCII INSIDE the `{…}` expr scan — caught by the token after the f-string.
+    r#"f"{αβ} y" z"#,
 ];
 
 /// Render one Rust `SpannedToken` in the Kāra lexer's canonical one-line
