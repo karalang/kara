@@ -89,9 +89,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **74 surfaced · 7 open · 67 fixed** (2026-05-20 → 2026-06-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **74 surfaced · 6 open · 68 fixed** (2026-05-20 → 2026-06-14). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -100,12 +100,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **74 surfaced �
 | B-2026-06-13-21 | 2026-06-13 | codegen | med | Reading a heap-handle leaf through a struct.tuplefield.0 place chain (h.m.0.len() where m:(Map,i64)) returns a GARBAGE handle; scalar element 1 reads fine. Read-path bug, distinct from #23's drop fix (guardmalloc-clean) and #25's match-dispatch build-fail. Tracked as phase-12 #26 | phase-12-self-hosting.md |
 | B-2026-06-14-5 | 2026-06-14 | codegen | high | phase-12 #27: binding a heap-bearing tuple element via let inr = h.ps.0 (Inner bears a heap enum) double-frees at scope exit - inr shallow-copies the struct sharing the String ptr, and both inr's drop and the owning h's NestedTuple tuple drop free it; let tk = h.ps.0.tok (enum move through chain) is the same. PRE-EXISTING (reproduced before any #25 change), the deep-tuple-chain sibling of the #21/#19 move-out family - needs source-element cap-zero. Surfaced fixing #25 | phase-12-self-hosting.md |
 | B-2026-06-14-7 | 2026-06-14 | codegen | med | phase-12 #28: a Map/Set bound to a LOCAL from a place source (let mm = s.m / let mm = h.m.0) build-fails 'no handler for method len on variable mm' - the let-binding copies the handle but doesn't register mm in map_key_types/map_val_types/set_elem_types, so mm.len() falls through. Distinct from #26 (inline receiver via synth id). Fix: register_var_from_type_expr(mm, te) at the let site for a FieldAccess/TupleIndex Map source, without a second FreeMapHandle (caller-retains alias). Surfaced fixing #26 | phase-12-self-hosting.md |
-| B-2026-06-14-12 | 2026-06-14 | codegen | high | `let w = v[i]` for a heap-bearing ENUM or STRUCT Vec element (e.g. Vec[E] where E.Tag(String), or Vec[struct{name:String}]) double-frees at scope exit — same shallow-element-aliases-buffer root as B-2026-06-14-11, but enum/struct elements take a different binding path (their own layout via enum_name_for_binding, not the 3-word vec-struct that the B-11 fix's clone_owned_vec_index_element gate matches). Codegen-only (interp clones, build SIGABRTs). Surfaced verifying the B-11 fix scope | phase-12-self-hosting.md |
 | B-2026-06-14-13 | 2026-06-14 | codegen | high | for-loop binding sharing a name with an earlier let mis-resolves in codegen -> TaskHandle.join deadlock | phase-7-codegen.md |
 
-### Fixed (67)
+### Fixed (68)
 
-<details><summary>67 fixed — the regression test is the durable artifact; prose lives in each owning phase tracker</summary>
+<details><summary>68 fixed — the regression test is the durable artifact; prose lives in each owning phase tracker</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -176,6 +175,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **74 surfaced �
 | B-2026-06-14-9 | codegen | med | phase-12 #28: a Map/Set bound to a LOCAL from a place source (let mm = s.m / let mm = h.m.0) build-failed 'no handler for method len on variable mm' - the let-stmt's unannotated-RHS fallback had Vec/VecDeque/String arms but none for Map/Set, so mm got var_type_names but never the K/V dispatch side-tables. Fix: a Map/Set arm registers them via register_var_from_type_expr keyed off the typechecker's pattern_binding_inner_types. Dispatch-only (no FreeMapHandle) - track_map_var is gated on a fresh-handle RHS, so mm stays a caller-retains alias and the owner is the sole freer (no double-free). Annotated form already worked. Surfaced fixing #26 | 253b7335 |
 | B-2026-06-14-10 | other | low | phase-12 #13: no Unicode char classifier - Kara shipped only u8.is_ascii_* byte predicates. Added char.is_alphabetic/is_numeric/is_alphanumeric/is_whitespace end-to-end: typecheck (char receiver -> Bool, rejected on non-char), interp (Value::Char arm via Rust char methods), codegen (karac_runtime_char_is_* externs - Unicode tables can't be inlined; char lowers to i32, extern returns i8), runtime (char::from_u32(cp).is_some_and). Verified interp==codegen incl Unicode (Greek alpha U+03B1 is_alphabetic, Devanagari digit U+096B is_numeric). Unblocks the lexer multi-codepoint non-ASCII recovery (#29) | 173ff36b |
 | B-2026-06-14-11 | codegen | high | `let w = v[i]` for a heap-owned Vec[String]/Vec[Vec] (cap>0) element double-freed at scope exit: compile_index returns a SHALLOW element struct sharing the buffer, so both w's drop and v's element-drop free it. Codegen-only (karac check/run fine, only build SIGABRTs); masked for literal cap-0 elements (#171). Vec-index sibling of the move-out family (B-2026-06-14-5/8). Fix: deep-clone at the let bind (clone_owned_vec_index_element, matching interp's clone — v[i] stays valid), via the per-type clone fn. Scoped to String/Vec; enum/struct Vec elements -> B-2026-06-14-12 | 8555f44a |
+| B-2026-06-14-12 | codegen | high | Reading a heap-bearing ENUM or STRUCT Vec element (Vec[E] where E.Tag(String), or Vec[struct{name:String}]) shallow-aliases the container buffer — same root as B-2026-06-14-11 but enum/struct elements fell through clone_owned_vec_index_element's vec-struct gate AND emit_clone_fn_for_type_expr shallow-cloned user enum/struct (no #[derive(Clone)] analog). Codegen-only (interp clones, build SIGABRTs/ASAN double-free). Fix has 3 parts: (1) emit_struct_clone_fn + emit_enum_clone_fn synthesize deep clones (struct mirrors emit_tuple_clone_fn; enum mirrors emit_enum_drop_switch's tag-switch + per-variant word-region field clone), wired into emit_clone_fn_for_type_expr's Path branch; (2) broadened clone_owned_vec_index_element's gate (dropped the llvm_ty_is_vec_struct restriction) so enum/struct/tuple `let w = v[i]` route to the new clones; (3) clone the scrut at the `match v[i] {V(s)=>}` compile site (so the arm extractvalue reads the clone) + materialize_freshtemp_enum_scrutinee now drop-tracks a heap Vec-index scrutinee (expr_is_heap_vec_index) so a no-bind arm frees the clone. ASAN regression: asan_let_bound_vec_enum_struct_element_no_double_free | — |
 
 </details>
 
