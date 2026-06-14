@@ -1220,13 +1220,39 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.build_store(slot, val).unwrap();
                 self.track_tuple_var(slot, agg_ty);
             }
-        } else if self.aggregate_has_heap_field(agg_ty) {
-            if let ExprKind::StructLiteral { path, .. } = &arg.kind {
-                if path
-                    .last()
-                    .is_some_and(|n| self.struct_types.contains_key(n.as_str()))
-                {
-                    let name = path.last().unwrap().clone();
+        } else if let ExprKind::StructLiteral { path, .. } = &arg.kind {
+            if let Some(name) = path
+                .last()
+                .filter(|n| self.struct_types.contains_key(n.as_str()))
+                .cloned()
+            {
+                // Register the caller-temp's struct drop when the struct carries
+                // heap. A DIRECT Vec/String field is LLVM-visible
+                // (`aggregate_has_heap_field`) and registered on the proven path —
+                // unconditionally, since whenever its drop frees a buffer the
+                // callee either entry-copies (independent) or caller-retains
+                // (shares, never frees). But an ENUM / nested-struct leaf is
+                // INVISIBLE to that check — the payload is all-i64 words, no
+                // `vec_struct_type` field — so an enum-leaf struct
+                // (`W { tok: Tok }`) constructed inline at the call site slipped
+                // through and leaked its enum payload once per call (#22, the #19
+                // fresh-temp tail). Add a SOURCE-level gate for that case,
+                // restricted to copy-supported structs: the callee then provably
+                // entry-copies (`make_aggregate_param_callee_owned`), so this
+                // caller temp is an INDEPENDENT buffer and its drop frees a
+                // distinct heap — never the callee's. A not-copy-supported struct
+                // (Map / shared / Option leaf) stays caller-retains in the callee
+                // and could be consumed internally, so registering a caller drop
+                // would risk a double-free; leave it a (safe) leak, matching the
+                // param-copy policy ("better to leak than double-free").
+                let llvm_heap = self.aggregate_has_heap_field(agg_ty);
+                let src_heap_copyable = !llvm_heap
+                    && self.aggregate_param_copy_supported_struct(&name, &mut Vec::new())
+                    && self
+                        .struct_field_type_exprs
+                        .get(&name)
+                        .is_some_and(|ftes| ftes.iter().any(|f| self.type_expr_has_drop_heap(f)));
+                if llvm_heap || src_heap_copyable {
                     let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
                     self.builder.build_store(slot, val).unwrap();
                     self.track_struct_var(&name, slot);

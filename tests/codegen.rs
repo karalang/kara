@@ -12996,6 +12996,46 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_inline_enum_field_struct_arg() {
+        // #22 (phase-12 self-hosting) — the #19 fresh-temp tail. An enum-field
+        // struct constructed INLINE as a call argument (`consume(W { tok: Tok.Id(..) })`,
+        // no caller binding) whose callee consumes the enum internally entry-copies
+        // the param; the inline temp's original payload had no caller owner and
+        // leaked. Correctness here is the payloads round-tripping through the bare
+        // arg (free fn + method site), an enum leaf nested one struct deeper, and a
+        // direct-Vec struct arg (regression). The leak is covered by
+        // `asan_inline_enum_field_struct_arg_no_leak`.
+        if let Some(out) = run_program(
+            r#"
+enum Tok { Id(String), Int(i64) }
+struct W { tok: Tok, n: i64 }
+struct Inner { tok: Tok, k: i64 }
+struct Outer { inner: Inner, n: i64 }
+struct V { xs: Vec[i64], n: i64 }
+struct Sink { total: i64 }
+fn consume(w: W) -> String { match w.tok { Id(s) => s, Int(z) => z.to_string() } }
+fn consume_outer(o: Outer) -> String { match o.inner.tok { Id(s) => s, Int(z) => z.to_string() } }
+fn consume_vec(v: V) -> i64 { v.xs.len() }
+fn mkv(n: i64) -> Vec[i64] { let mut a: Vec[i64] = Vec.new(); a.push(n); a.push(n + 1); a }
+impl Sink {
+    fn take(mut ref self, w: W) -> String { match w.tok { Id(s) => s, Int(z) => z.to_string() } }
+}
+fn main() {
+    println(consume(W { tok: Tok.Id("alpha".to_string()), n: 1 }));
+    let mut sk = Sink { total: 0 };
+    println(sk.take(W { tok: Tok.Id("mike".to_string()), n: 2 }));
+    println(consume_outer(Outer { inner: Inner { tok: Tok.Id("oscar".to_string()), k: 3 }, n: 3 }));
+    println(consume_vec(V { xs: mkv(10), n: 4 }).to_string());
+    println(consume(W { tok: Tok.Int(7_i64), n: 5 }));
+    println("ok");
+}
+"#,
+        ) {
+            assert_eq!(out, "alpha\nmike\noscar\n2\n7\nok\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_enum_field_struct_field_move_out_loop() {
         // #19 FIXED 2026-06-12 — the bootstrap lexer's `render()` shape: iterate a
         // `Vec[SpannedToken]` and pass each element BY VALUE to a fn that moves the

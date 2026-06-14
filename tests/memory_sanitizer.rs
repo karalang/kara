@@ -3513,6 +3513,67 @@ fn main() {
     }
 
     #[test]
+    fn asan_inline_enum_field_struct_arg_no_leak() {
+        // #22 (phase-12 self-hosting) — the #19 fresh-temp tail. An enum-field
+        // struct constructed INLINE at a call site (`consume(W { tok: Tok.Id(..) })`,
+        // no caller binding) whose callee CONSUMES the enum internally (`match
+        // w.tok`) triggers the callee's entry-copy (`make_aggregate_param_callee_
+        // owned`): the callee deep-copies the enum payload at entry and frees only
+        // its own copy, leaving the inline temp's original heap for the caller. A
+        // let-bound arg gets that caller drop at its binding site, but the inline
+        // temp had no owner and leaked once per call. The enum payload is invisible
+        // to the LLVM-type `aggregate_has_heap_field` gate (all-i64 words), so
+        // `track_inline_owned_aggregate_arg` skipped the struct-literal arm; the fix
+        // adds a SOURCE-level drop-heap gate, restricted to copy-supported structs
+        // (an independent copy provably exists → distinct buffers, never a
+        // double-free). Stresses: the bare enum-leaf struct arg (free fn + method
+        // site), an enum leaf nested one struct deeper, and a direct-Vec struct arg
+        // (regression — already worked via the LLVM gate, must stay clean). f-string
+        // payloads keep the heap non-foldable; numeric arms guard behind `> 99999`.
+        assert_clean_asan_run(
+            r#"
+enum Tok { Id(String), Int(i64) }
+struct W { tok: Tok, n: i64 }
+struct Inner { tok: Tok, k: i64 }
+struct Outer { inner: Inner, n: i64 }
+struct V { xs: Vec[i64], n: i64 }
+struct Sink { total: i64 }
+fn consume(w: W) -> i64 { match w.tok { Id(s) => s.len(), Int(z) => { if z > 99999 { 1 } else { 0 } } } }
+fn consume_outer(o: Outer) -> i64 { match o.inner.tok { Id(s) => s.len(), Int(z) => { if z > 99999 { 1 } else { 0 } } } }
+fn consume_vec(v: V) -> i64 { v.xs.len() }
+fn mkv(n: i64) -> Vec[i64] { let mut a: Vec[i64] = Vec.new(); a.push(n); a.push(n + 1); a }
+impl Sink {
+    fn take(mut ref self, w: W) -> i64 { match w.tok { Id(s) => s.len(), Int(z) => { if z > 99999 { 1 } else { 0 } } } }
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    let mut sk = Sink { total: 0 };
+    while i < 8 {
+        // Bare enum-leaf struct, constructed inline as a free-fn arg (the #22 leak).
+        acc = acc + consume(W { tok: Tok.Id(f"a-{i}"), n: i });
+
+        // Same shape at a METHOD call site (shared arg-lowering path).
+        acc = acc + sk.take(W { tok: Tok.Id(f"m-{i}"), n: i });
+
+        // Enum leaf nested one struct deeper, inline.
+        acc = acc + consume_outer(Outer { inner: Inner { tok: Tok.Id(f"o-{i}"), k: i }, n: i });
+
+        // Direct-Vec struct arg, inline (regression — must stay clean).
+        acc = acc + consume_vec(V { xs: mkv(i), n: i });
+
+        i = i + 1;
+    }
+    if acc > 999999 { println("never"); }
+    println("done");
+}
+"#,
+            &["done"],
+            "inline_enum_field_struct_arg_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_enum_field_struct_transfer_destructure_no_double_free() {
         // #19 (phase-12 self-hosting): a by-value TRANSFER of an enum-field struct
         // (`let b = wrap(a)`, `wrap(s: Span) -> Span { s }`) followed by a
