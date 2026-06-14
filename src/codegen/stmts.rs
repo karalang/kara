@@ -1395,6 +1395,31 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .insert(var_name.clone(), self.context.i8_type().into());
                                 self.string_vars.insert(var_name.clone());
                                 detected = true;
+                            } else if surface == "Map" || surface == "Set" {
+                                // #28 (B-2026-06-14-9) — a Map/Set bound to a
+                                // LOCAL from a PLACE source (`let mm = s.m` /
+                                // `let mm = h.m.0`) with no annotation. The
+                                // explicit-annotation path (`extract_map_kv_types`)
+                                // is skipped, and this fallback otherwise registers
+                                // only `var_type_names` — never the Map/Set dispatch
+                                // side-tables (`map_key_types` / `map_val_types` /
+                                // `set_elem_types`) — so `mm.len()` / `mm.get(k)`
+                                // fell through method dispatch. Register them from
+                                // the typechecker's recorded collection `TypeExpr`
+                                // (`pattern_binding_inner_types`, the full
+                                // `Map[K,V]` / `Set[T]`). DISPATCH-only:
+                                // `register_var_from_type_expr` queues NO
+                                // `FreeMapHandle`, and the let path's `track_map_var`
+                                // is gated on a fresh-handle RHS (clone/union/…) —
+                                // which a place source is not — so `mm` stays a
+                                // caller-retains alias and the source/owner is the
+                                // sole freer (no double-free).
+                                if let Some(coll_te) =
+                                    self.pattern_binding_inner_types.get(&key).cloned()
+                                {
+                                    self.register_var_from_type_expr(var_name, &coll_te);
+                                    detected = true;
+                                }
                             }
                             // Mirror bind_pattern_values's `var_type_names`
                             // write so let-bound shared-struct handles

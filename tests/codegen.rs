@@ -13226,6 +13226,52 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_map_set_local_bind_from_place() {
+        // #28 (phase-12 self-hosting, B-2026-06-14-9) — a Map/Set bound to a
+        // LOCAL from a PLACE source with no annotation (`let mm = s.m` /
+        // `let mm = h.m.0`). The let-binding's unannotated fallback registered
+        // only `var_type_names` (not the Map/Set dispatch side-tables), so
+        // `mm.len()` build-failed (`no handler for method 'len' on variable
+        // 'mm'`). Fix: a Map/Set arm in the fallback registers the side-tables
+        // from the typechecker's `pattern_binding_inner_types`. `mm` aliases the
+        // source handle (caller-retains — no second `FreeMapHandle`), so the
+        // owner is the sole freer; an in-place mutation through `mm` mutates the
+        // shared map. The annotated form (`let mm: Map[..] = s.m`) already worked.
+        if let Some(out) = run_program(
+            r#"
+struct S { m: Map[i64, i64] }
+struct Hz { z: Set[i64] }
+struct Ht { t: (Map[i64, i64], i64) }
+fn mkm() -> Map[i64, i64] { let mut m: Map[i64, i64] = Map.new(); m.insert(1, 10); m.insert(2, 20); return m; }
+fn mks() -> Set[i64] { let mut s: Set[i64] = Set.new(); s.insert(3); s.insert(4); return s; }
+fn main() {
+    // Map field bound to a local, no annotation.
+    let s = S { m: mkm() };
+    let mm = s.m;
+    println(mm.len().to_string());                  // 2
+    println(mm.get(1).unwrap_or(0).to_string());    // 10
+    // Mutation through the bound local (mutates the shared handle).
+    let s2 = S { m: mkm() };
+    let mut mm2 = s2.m;
+    mm2.insert(9, 90);
+    println(mm2.len().to_string());                 // 3
+    // Set field bound to a local.
+    let z = Hz { z: mks() };
+    let ss = z.z;
+    println(ss.len().to_string());                  // 2
+    println(ss.contains(3).to_string());            // true
+    // Map TUPLE element bound to a local.
+    let h = Ht { t: (mkm(), 7) };
+    let tm = h.t.0;
+    println(tm.len().to_string());                  // 2
+}
+"#,
+        ) {
+            assert_eq!(out, "2\n10\n3\n2\ntrue\n2\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_tuple_elem_bind_move_out() {
         // #27 (phase-12 self-hosting, B-2026-06-14-8) — binding a heap-bearing
         // value OUT of a tuple element. `let inr = h.ps.0` (a heap-bearing struct

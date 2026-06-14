@@ -3788,6 +3788,49 @@ fn main() {
     }
 
     #[test]
+    fn asan_map_local_bind_from_place_no_double_free() {
+        // #28 (phase-12 self-hosting, B-2026-06-14-9) — a Map bound to a LOCAL
+        // from a place source (`let mm = s.m`) now registers its dispatch
+        // side-tables. The binding ALIASES the source handle (Maps are
+        // caller-retains), so `mm` must NOT register a second `FreeMapHandle`:
+        // the owning `s` is the sole freer. The fix only populates the dispatch
+        // tables (`register_var_from_type_expr`), and the let path's
+        // `track_map_var` is gated on a fresh-handle RHS (clone/union/…) which a
+        // place source is not — so no second cleanup is queued. Loop-stressed with
+        // String keys (heap, non-foldable) so Linux LSan catches a leak if the
+        // owner's free were suppressed, and ASAN catches a double-free if `mm`
+        // wrongly took a cleanup. Includes an in-place mutation through `mm`.
+        assert_clean_asan_run(
+            r#"
+struct S { m: Map[String, i64] }
+fn mkm(i: i64) -> Map[String, i64] {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert(f"k{i}", i); m.insert(f"j{i}", i);
+    return m;
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 8 {
+        let s = S { m: mkm(i) };
+        let mut mm = s.m;
+        acc = acc + mm.len();
+        if mm.contains_key(f"k{i}") { acc = acc + 1; }
+        // In-place mutation through the bound local (mutates the shared handle).
+        mm.insert(f"x{i}", i);
+        acc = acc + mm.len();
+        i = i + 1;
+    }
+    if acc > 999999 { println("never"); }
+    println("done");
+}
+"#,
+            &["done"],
+            "map_local_bind_from_place_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_tuple_elem_bind_move_out_no_double_free() {
         // #27 (phase-12 self-hosting, B-2026-06-14-8) — binding a heap-bearing
         // value OUT of a tuple element double-freed at scope exit: the binding's
