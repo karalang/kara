@@ -603,6 +603,86 @@ fn test_json_suggestion_in_hints() {
     assert!(stdout.contains("\"hints\":[{\"description\":"));
 }
 
+// ── RC-fallback note reaches the default text surface (B-2026-06-13-3) ──
+
+/// Regression: the RC-fallback perf note must render in the default
+/// `karac check` *text* output, not only in `--output=json`/LSP.
+/// `render_text_diagnostics` (src/cli.rs) once iterated only `o.errors`
+/// and silently dropped `o.notes`, so `karac build`/`check` in a terminal
+/// said nothing about RC fallback — breaking design.md § Part 4's "the
+/// note fires by default" guarantee (the "RC overhead is visible" pillar).
+/// Trigger shape mirrors `tests/rc_fallback.rs::trigger1`: a value consumed
+/// on one branch and re-consumed after the branch → RC fallback, not error.
+#[test]
+fn test_rc_fallback_note_renders_in_text_and_json() {
+    let tmp_dir = std::env::temp_dir();
+    let fixture = tmp_dir.join("karac_test_rc_fallback_note.kara");
+    let src = "struct Data { value: i64 }\n\
+               fn consume(d: Data) { }\n\
+               fn use_d(d: Data) -> i64 { d.value }\n\
+               fn process(cond: bool, d: Data) -> i64 {\n\
+               \x20   if cond { consume(d); }\n\
+               \x20   use_d(d)\n\
+               }\n\
+               fn main() {\n\
+               \x20   let d = Data { value: 7 };\n\
+               \x20   println(f\"{process(false, d)}\");\n\
+               }\n";
+    std::fs::write(&fixture, src).expect("write fixture");
+
+    // Default text surface — the regression target. RC fallback is a perf
+    // note, not an error, so the check still succeeds.
+    let text = karac_bin()
+        .args(["check", fixture.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let text_out = String::from_utf8_lossy(&text.stdout);
+    let text_err = String::from_utf8_lossy(&text.stderr);
+    let combined = format!("{text_out}{text_err}");
+    assert!(
+        combined.contains("perf[rc-fallback]:") && combined.contains("RC fallback inserted for 'd'"),
+        "text output must surface the RC-fallback note; got stdout=[{text_out}] stderr=[{text_err}]"
+    );
+    assert!(
+        combined.contains("help: restructure to a single ownership path"),
+        "text output must include the RC-fallback help line; got [{combined}]"
+    );
+
+    // JSON surface must still carry it (severity note, code N0503).
+    let json = karac_bin()
+        .args(["check", fixture.to_str().unwrap(), "--output=json"])
+        .output()
+        .unwrap();
+    let json_out = String::from_utf8_lossy(&json.stdout);
+    assert!(
+        json_out.contains("\"code\":\"N0503\"") && json_out.contains("\"severity\":\"note\""),
+        "JSON output must still carry the N0503 RC-fallback note; got: {json_out}"
+    );
+
+    // `#[allow(rc_fallback)]` suppresses the note at every surface
+    // (suppression is applied upstream in `emit_rc_fallback_notes`).
+    let allow_src = src.replace(
+        "fn process(cond: bool, d: Data) -> i64 {",
+        "#[allow(rc_fallback)]\nfn process(cond: bool, d: Data) -> i64 {",
+    );
+    std::fs::write(&fixture, &allow_src).expect("rewrite fixture");
+    let allowed = karac_bin()
+        .args(["check", fixture.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let allowed_combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&allowed.stdout),
+        String::from_utf8_lossy(&allowed.stderr)
+    );
+    assert!(
+        !allowed_combined.contains("perf[rc-fallback]:"),
+        "#[allow(rc_fallback)] must suppress the note; got [{allowed_combined}]"
+    );
+
+    let _ = std::fs::remove_file(&fixture);
+}
+
 // ── Signature-from-call-site stub diagnostic (line 633 slice 3) ────
 
 #[test]

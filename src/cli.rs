@@ -1224,6 +1224,32 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
                 filename, err.span.line, err.span.column, err.message
             ));
         }
+        // RC-fallback (and other ownership) notes must reach the terminal too.
+        // The ownership pass records every RC insertion as a `RcFallbackNote`
+        // in `o.notes` (design.md § Part 4 *Note policy*: the note "fires by
+        // default" so RC overhead — a silent heap-box + refcount — is visible
+        // at the default build surface). The JSON/LSP path renders these
+        // (`collect_diagnostics`); without this loop the human text renderer
+        // iterated only `o.errors`, leaving `karac build` silent about RC
+        // fallback. `RcFallbackNote` uses the design's Tier-1 `perf[rc-fallback]`
+        // label; other note kinds (e.g. the unused-`mut`-capture note) render as
+        // `note[ownership]`. Suppression (`#[allow(rc_fallback)]`) is already
+        // applied upstream in `emit_rc_fallback_notes`, so whatever survives
+        // into `o.notes` is meant to be shown.
+        for note in &o.notes {
+            let label = match note.kind {
+                crate::ownership::OwnershipErrorKind::RcFallbackNote => "perf[rc-fallback]",
+                _ => "note[ownership]",
+            };
+            let mut block = format!(
+                "{}: {}:{}:{}: {}",
+                label, filename, note.span.line, note.span.column, note.message
+            );
+            if let Some(ref s) = note.suggestion {
+                write!(block, "\n  help: {s}").unwrap();
+            }
+            out.push(block);
+        }
     }
     if let Some(ref esc) = pipeline.provider_escape {
         for err in esc {
