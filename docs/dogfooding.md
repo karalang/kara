@@ -61,7 +61,7 @@ per-project sections below hold the design. Status legend: ✅ shipped ·
 | **Forge** | `embedded` profile firmware on a real MCU | ⬜ planned | v8 hardware gaps | 3 |
 | **Iris** | One source → native + WASM, no port | ⬜ planned | Phase 10 WASM target | 3 |
 | **Plume** | Parallel browser compute driven by event streams — no `async`/coloring | ⬜ planned | Phase 10 event-stream surface (`animation_frames` + event-data channels) + framebuffer-blit host fn | 3 |
-| **Fathom** | Browser × multi-core + SIMD pixel compute, one source | ⬜ planned | framebuffer-blit host fn (+ `animation_frames`; event-data channels only for the interactive cut) | 3 |
+| **Fathom** | Browser × multi-core pixel compute, one source | ✅ shipped (non-interactive cut) | `animation_frames` + `Vec.as_ptr` blit host fn (built) · SIMD kernel + interactive pan/zoom (event-data channels) = follow-ups | 3 |
 
 ---
 
@@ -825,10 +825,42 @@ worker-pool parallelism + SIMD-128 already ship on wasm-threads.
 
 ### Fathom — Fractal Explorer (Browser)
 
+> **Built (non-interactive cut) — 2026-06-14.** Shipped at
+> [`examples/fathom/`](../examples/fathom/): a parallel Mandelbrot explorer that
+> compiles to `--target=wasm_browser --features wasm-threads` and renders across
+> the Web Worker pool at ~60fps (measured ~58fps under node's 4-worker pool;
+> more cores in a real browser). The render loop is a plain blocking
+> `loop { frames.recv(); render_frame(); }`; each frame's rows fan out via
+> `TaskGroup.spawn` and the framebuffer is blitted through one `put_pixels` host
+> fn. This is the first front-end-track demo and the first consumer of the
+> Phase-10 event-stream surface.
+>
+> The dogfood drove three real `karac` gaps (all closed): (1)
+> **`std.web.time.animation_frames()`** — a multi-shot host-async `requestAnimation
+> Frame` channel producer (sibling of `after`, coalesced to one un-drained tick);
+> (2) **`Vec[u8].as_ptr()` / `.as_mut_ptr()`** — the heap-buffer FFI handoff a
+> `host fn` blit consumes (an `Array[u8, N]` framebuffer would overflow the wasm
+> stack); (3) **`TaskHandle[T].join()` for a non-scalar `T`** — `join` had
+> returned `i64` unconditionally, so a `spawn` returning `Vec[u8]` came back as
+> garbage and trapped (B-2026-06-14-12, fixed native + wasm). It also surfaced an
+> *open* codegen scoping bug — a `for x in …` loop binding sharing a name with an
+> earlier same-function `let x` deadlocks `join` on a stale handle
+> (B-2026-06-14-13); the demo sidesteps it with distinct names. Regression
+> tests: `tests/cli.rs::wasm_threads_animation_frames_recv_e2e`,
+> `tests/codegen.rs::{e2e_taskhandle_join_returns_nonscalar_vec,
+> test_vec_as_ptr_loads_data_field}`.
+>
+> **Follow-ups (own gates):** the inner kernel is currently **scalar f64** — the
+> `Vector[f64, 2]` SIMD-128 lowering (needs the comparison→mask→select path
+> verified end-to-end) is not yet wired; and the **interactive pan/zoom** cut
+> waits on event-data channels (`Channel[T]` for `T != ()`, the harder
+> event-stream slice). The shipped cut auto-zooms, no input.
+
 **Primary capability:** The same browser spine reduced to its essence —
-multi-core + SIMD pixel compute via framebuffer-blit, with zero domain code. The
+multi-core pixel compute via framebuffer-blit, with zero domain code. The
 fastest path to a clickable "all your cores, in a browser tab, from one source"
-proof.
+proof. (SIMD-128 is the design target for the inner kernel; the shipped cut is
+scalar — see the Built note.)
 
 **What it is:** An in-browser Mandelbrot/Julia explorer — pan and wheel-zoom into
 the fractal, each frame computed in parallel across the worker pool and blitted
@@ -887,6 +919,10 @@ track: **Fathom** (spine warm-up, zero domain code) → **Plume** (interactive,
 exercises event-data channels) → **Slipstream wasm edition** (the flagship, same
 spine + the full LBM kernel). Each forces the next slice of the event-stream
 surface, so the track doubles as the consumer that justifies building it.
+**Fathom's non-interactive cut is built (2026-06-14)** — it drove
+`animation_frames` + the `Vec.as_ptr` blit handoff (the first event-stream
+producer + the framebuffer host fn), so Plume now only needs the event-data
+(`Channel[T]`, `T != ()`) slice on top of the proven spine.
 
 ---
 
