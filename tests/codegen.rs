@@ -13176,6 +13176,56 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_tuple_index_map_set_receiver_method() {
+        // #26 (phase-12 self-hosting, B-2026-06-14-6) — a method on a Map/Set
+        // TUPLE element (`h.m.0.len()`). `Map`/`Set` lower to an opaque `ptr`
+        // handle, and their runtime methods (`karac_map_*`) resolve the handle
+        // via a NAMED slot (`compile_map_method` → `get_data_ptr`) — so only an
+        // identifier receiver dispatched correctly. A tuple-index receiver fell
+        // through to a generic path and read a GARBAGE handle (`h.m.0.len()`
+        // printed e.g. `6132656048`); the FieldAccess peer `s.m.len()` already
+        // worked. Fix: a `TupleIndex` sibling of `try_compile_field_receiver_method`
+        // that GEPs to the element handle slot (`field_chain_place_ptr`) and
+        // re-dispatches through a synth identifier — so len/get/contains_key/
+        // is_empty AND in-place insert all resolve. Vec/scalar tuple elements are
+        // unaffected (they already work via value extraction). The scalar second
+        // element (`h.m.1`) is the regression guard.
+        if let Some(out) = run_program(
+            r#"
+struct H { m: (Map[i64, i64], i64) }
+struct Hs { s: (Set[i64], i64) }
+fn mkm() -> Map[i64, i64] {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1, 10); m.insert(2, 20);
+    return m;
+}
+fn mks() -> Set[i64] {
+    let mut s: Set[i64] = Set.new();
+    s.insert(3); s.insert(4);
+    return s;
+}
+fn main() {
+    let mut h = H { m: (mkm(), 7) };
+    println(h.m.0.len().to_string());                 // 2
+    println(h.m.0.get(1).unwrap_or(0).to_string());   // 10
+    println(h.m.0.contains_key(2).to_string());       // true
+    println(h.m.1.to_string());                       // 7 (scalar elem regression)
+    // In-place mutation through the tuple element.
+    h.m.0.insert(9, 90);
+    println(h.m.0.len().to_string());                 // 3
+    println(h.m.0.get(9).unwrap_or(0).to_string());   // 90
+    // Set element methods.
+    let hs = Hs { s: (mks(), 1) };
+    println(hs.s.0.len().to_string());                // 2
+    println(hs.s.0.contains(3).to_string());          // true
+}
+"#,
+        ) {
+            assert_eq!(out, "2\n10\ntrue\n7\n3\n90\n2\ntrue\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_call_result_tuple_var_drop() {
         // #24 (phase-12 self-hosting) — a let-bound tuple VAR sourced from a CALL
         // (`let p = ret_tuple(i)`, RHS a `Call`, not a tuple literal, no annotation)

@@ -455,6 +455,89 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return Ok(None);
         };
+        self.compile_method_via_synth_elem_ptr(
+            field_ptr,
+            field_ll_ty,
+            &field_te,
+            method,
+            args,
+            call_span,
+            &inner.span,
+        )
+        .map(Some)
+    }
+
+    /// `h.m.0.len()` — a method on a Map/Set tuple ELEMENT (`#26`,
+    /// `B-2026-06-14-6`). Vec/String/scalar/struct tuple elements already
+    /// dispatch via the value-extraction fall-through (`compile_tuple_index`
+    /// → `build_extract_value`), but a `Map`/`Set` lowers to an opaque `ptr`
+    /// handle whose runtime methods (`karac_map_*`) need a NAMED handle slot
+    /// (`compile_map_method` → `get_data_ptr`), which only an identifier
+    /// receiver provides — so a tuple-index Map receiver fell through to a
+    /// generic path and read a garbage handle. The `FieldAccess` peer
+    /// (`s.m.len()`) already works via [`Self::try_compile_field_receiver_method`];
+    /// this is the `TupleIndex` sibling. GEP to the element handle slot
+    /// (`field_chain_place_ptr`, which walks a tuple-index hop) and re-dispatch
+    /// through a synth identifier. Returns `None` (fall through) for a non-Map/Set
+    /// element or any shape that doesn't resolve, so the working Vec/scalar/struct
+    /// paths are untouched.
+    pub(super) fn try_compile_tuple_index_receiver_method(
+        &mut self,
+        recv: &Expr,
+        method: &str,
+        args: &[CallArg],
+        call_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let ExprKind::TupleIndex { object, index } = &recv.kind else {
+            return Ok(None);
+        };
+        let idx = *index as usize;
+        let Some(elem_tes) = self.place_chain_tuple_tes(object) else {
+            return Ok(None);
+        };
+        let Some(elem_te) = elem_tes.get(idx).cloned() else {
+            return Ok(None);
+        };
+        // Only Map/Set (opaque ptr-handle) elements need the synth-pointer
+        // dispatch; everything else already works via value extraction.
+        if self.extract_map_kv_types(&elem_te).is_none()
+            && self.extract_set_elem_type(&elem_te).is_none()
+        {
+            return Ok(None);
+        }
+        let Some(elem_ptr) = self.field_chain_place_ptr(recv) else {
+            return Ok(None);
+        };
+        let Some(tuple_ty) = self.place_chain_aggregate_llvm_type(object) else {
+            return Ok(None);
+        };
+        let Some(elem_ll_ty) = tuple_ty.get_field_type_at_index(idx as u32) else {
+            return Ok(None);
+        };
+        self.compile_method_via_synth_elem_ptr(
+            elem_ptr, elem_ll_ty, &elem_te, method, args, call_span, &recv.span,
+        )
+        .map(Some)
+    }
+
+    /// Shared core of the field-/tuple-index-receiver method dispatch: given a
+    /// POINTER to an inline collection/struct element, its LLVM type, and its
+    /// `TypeExpr`, mint a synthetic identifier bound to that pointer with the
+    /// element's per-binding side tables populated, then re-dispatch the method
+    /// through the regular identifier-keyed flow (so `compile_map_method` etc.
+    /// resolve the handle via `get_data_ptr`). Cleans up the synth registrations
+    /// before returning.
+    #[allow(clippy::too_many_arguments)]
+    fn compile_method_via_synth_elem_ptr(
+        &mut self,
+        elem_ptr: PointerValue<'ctx>,
+        elem_ll_ty: BasicTypeEnum<'ctx>,
+        elem_te: &TypeExpr,
+        method: &str,
+        args: &[CallArg],
+        call_span: &crate::token::Span,
+        span: &crate::token::Span,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
         // Mint a fresh synth identifier and populate its registries so
         // the recursive dispatch sees a regular Identifier-receiver flow.
         let synth = format!("__field_elem_{}", self.indexed_elem_counter);
@@ -462,14 +545,14 @@ impl<'ctx> super::Codegen<'ctx> {
         self.variables.insert(
             synth.clone(),
             VarSlot {
-                ptr: field_ptr,
-                ty: field_ll_ty,
+                ptr: elem_ptr,
+                ty: elem_ll_ty,
             },
         );
-        self.register_var_from_type_expr(&synth, &field_te);
+        self.register_var_from_type_expr(&synth, elem_te);
         // User-struct field: also populate `var_type_names` so the
         // impl-block dispatch path resolves `Type.method`.
-        if let TypeKind::Path(path) = &field_te.kind {
+        if let TypeKind::Path(path) = &elem_te.kind {
             if let Some(seg) = path.segments.first() {
                 if self.struct_types.contains_key(seg.as_str())
                     || self.shared_types.contains_key(seg.as_str())
@@ -481,7 +564,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let synth_expr = Expr {
             kind: ExprKind::Identifier(synth.clone()),
-            span: inner.span.clone(),
+            span: span.clone(),
         };
         let result = self.compile_method_call(&synth_expr, method, args, call_span);
 
@@ -500,7 +583,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.set_elem_type_names.remove(&synth);
         self.set_elem_type_exprs.remove(&synth);
 
-        result.map(Some)
+        result
     }
 
     /// Nested indexed read codegen (`a[i][j]`) — sibling to

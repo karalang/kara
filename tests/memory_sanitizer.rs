@@ -3745,6 +3745,49 @@ fn main() {
     }
 
     #[test]
+    fn asan_tuple_index_map_receiver_no_leak() {
+        // #26 (phase-12 self-hosting, B-2026-06-14-6) — methods on a Map TUPLE
+        // element (`h.m.0.len()` / `.get` / `.insert`) route through a synth
+        // identifier aliasing the owning struct's handle slot (the tuple element
+        // is GEP'd in place via `field_chain_place_ptr`). The synth must NOT take
+        // ownership: the owning `h` is the sole freer of the Map, and reads (len/
+        // get/contains_key) borrow the handle while an in-place insert mutates it.
+        // Loop-stressed with String keys (heap, non-foldable via f-strings) so
+        // Linux LSan catches a leak if the synth mis-registers a second freer, and
+        // an in-place insert each iteration so a copy-instead-of-alias would drop
+        // the mutation (and leak/UAF the copy).
+        assert_clean_asan_run(
+            r#"
+struct H { m: (Map[String, i64], i64) }
+fn mkm(i: i64) -> Map[String, i64] {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert(f"k{i}", i); m.insert(f"j{i}", i);
+    return m;
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 8 {
+        let mut h = H { m: (mkm(i), i) };
+        // Read methods through the tuple element (borrow the handle).
+        acc = acc + h.m.0.len();
+        if h.m.0.contains_key(f"k{i}") { acc = acc + 1; }
+        // In-place mutation through the tuple element.
+        h.m.0.insert(f"x{i}", i);
+        acc = acc + h.m.0.len();
+        acc = acc + h.m.1;
+        i = i + 1;
+    }
+    if acc > 999999 { println("never"); }
+    println("done");
+}
+"#,
+            &["done"],
+            "tuple_index_map_receiver_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_call_result_tuple_var_no_leak() {
         // #24 (phase-12 self-hosting) — a let-bound tuple VAR sourced from a CALL
         // (`let p = ret_tuple(i)`) whose only heap is an enum / Map leaf leaked: the

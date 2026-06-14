@@ -1060,6 +1060,19 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // `h.m.0.method()` — a method on a Map/Set TUPLE element (#26). The
+        // `FieldAccess` arm above handles `s.m.method()`; this is the
+        // tuple-index sibling. Returns `Some` only for a Map/Set element (the
+        // ptr-handle case that needs a named handle slot); Vec/scalar/struct
+        // tuple elements fall through to the value-extraction path below.
+        if matches!(object.kind, ExprKind::TupleIndex { .. }) {
+            if let Some(value) =
+                self.try_compile_tuple_index_receiver_method(object, method, args, call_span)?
+            {
+                return Ok(value);
+            }
+        }
+
         // Trailing-method dispatch on an entry-chain receiver — e.g.
         // `bucket.entry(p).or_insert(Vec.new()).push(j)`. The chain
         // produces a slot pointer (`*mut V`); the synth-identifier
