@@ -93,7 +93,7 @@ Building Fathom surfaced and closed real `karac` gaps (the dogfood's job — cf.
 2. **`Vec[u8].as_ptr()` / `.as_mut_ptr()`** — the heap-buffer FFI handoff to a
    `host fn` (the framebuffer blit). Previously only `Array`/`CStr` had it; an
    `Array[u8, N]` of framebuffer size would overflow the wasm stack.
-3. **`TaskHandle[T].join()` for non-scalar `T`** (B-2026-06-14-12) — `join` had
+3. **`TaskHandle[T].join()` for non-scalar `T`** (B-2026-06-14-14) — `join` had
    returned `i64` unconditionally, so a `spawn` returning a `Vec`/`String`/struct
    came back as garbage and trapped. The typechecker now records each join's `T`
    and codegen sizes the cross-task transfer correctly.

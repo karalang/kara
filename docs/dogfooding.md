@@ -842,7 +842,7 @@ worker-pool parallelism + SIMD-128 already ship on wasm-threads.
 > `host fn` blit consumes (an `Array[u8, N]` framebuffer would overflow the wasm
 > stack); (3) **`TaskHandle[T].join()` for a non-scalar `T`** — `join` had
 > returned `i64` unconditionally, so a `spawn` returning `Vec[u8]` came back as
-> garbage and trapped (B-2026-06-14-12, fixed native + wasm); and (4) a `for x in
+> garbage and trapped (B-2026-06-14-14, fixed native + wasm); and (4) a `for x in
 > xs` loop binding sharing a name with an earlier same-function `let x` (here
 > `for handle in handles` after `let handle = spawn(...)`) was conflated by the
 > ownership RC analysis into a spurious RC fallback → codegen RC-boxed it and
