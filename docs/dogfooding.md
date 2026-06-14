@@ -61,7 +61,7 @@ per-project sections below hold the design. Status legend: ✅ shipped ·
 | **Forge** | `embedded` profile firmware on a real MCU | ⬜ planned | v8 hardware gaps | 3 |
 | **Iris** | One source → native + WASM, no port | ⬜ planned | Phase 10 WASM target | 3 |
 | **Plume** | Parallel browser compute driven by event streams — no `async`/coloring | ✅ shipped | `animation_frames` + event-data `pointer_moves` channel + `put_pixels` blit — all built (`examples/plume/`) | 3 |
-| **Fathom** | Browser × multi-core pixel compute, one source | ✅ shipped (non-interactive cut) | `animation_frames` + `Vec.as_ptr` blit host fn (built) · SIMD kernel + interactive pan/zoom (event-data channels) = follow-ups | 3 |
+| **Fathom** | Browser × multi-core pixel compute, one source | ✅ shipped (non-interactive cut) | `animation_frames` + `Vec.as_ptr` blit host fn + `Vector[f64,2]` SIMD-128 inner kernel (1.47× fewer instrs, byte-identical) — all built · interactive pan/zoom (needs `events.wheel`) = follow-up | 3 |
 
 ---
 
@@ -892,12 +892,20 @@ worker-pool parallelism + SIMD-128 already ship on wasm-threads.
 >
 > **Follow-ups (own `[ ]` slices):**
 >
-> - [ ] **Fathom SIMD inner kernel** — rewrite the scalar-f64 escape loop as
->   `Vector[f64, 2]` (two complex points per WASM SIMD-128 lane), exercising
->   the comparison→mask→select escape test. **No compiler work pending** — the
+> - [x] **Fathom SIMD inner kernel — DONE 2026-06-14.** The escape-time loop
+>   (`escape2`) now iterates two horizontally-adjacent pixels per
+>   `Vector[f64, 2]` lane pair; the `z = z^2 + c` arithmetic, the `|z|^2 <= 4`
+>   escape test, and the per-lane count update each lower to a single WASM
+>   SIMD-128 op (`f64x2.mul`/`add`/`sub`/`le`, `v128.bitselect`,
+>   `i64x2.add`/`extract_lane` — confirmed in the emitted module). The
+>   comparison→mask→select (`mag <= four` → `active.select(one, zero)`) freezes
+>   each lane's count the instant it escapes, so output is **byte-identical** to
+>   the scalar loop (frame-1 checksum match). Native single-thread A/B: **~1.47×
+>   fewer instructions retired** for identical output (in-browser the win is CPU
+>   headroom — frame rate is rAF/vsync-capped). No compiler work needed — the
 >   `Vector[f64, 2]` → WASM SIMD-128 lowering already shipped
->   ([`design.md`](design.md) § Vector lowering, 2026-06-07); this is a
->   demo-source rewrite + a perf measurement (scalar vs SIMD-128, same source).
+>   ([`design.md`](design.md) § Vector lowering, 2026-06-07); pure demo-source
+>   rewrite (`examples/fathom/mandelbrot.kara`).
 > - [ ] **Fathom interactive pan/zoom** — replace the auto-zoom with
 >   drag-to-pan + wheel-to-zoom. Depends on **`events.wheel`** (the remaining
 >   `events.*` slice — see

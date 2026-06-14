@@ -40,22 +40,44 @@ fn max_iter() -> i64 { 200 }
 
 // Escape-time iteration count for the point (cr, ci): how many steps of
 // z = z^2 + c before |z|^2 exceeds 4, capped at `max`. The classic Mandelbrot
-// kernel — pure f64, no allocation.
-fn escape(cr: f64, ci: f64, max: i64) -> i64 {
-    let mut zr = 0.0;
-    let mut zi = 0.0;
+// kernel — now **two pixels at a time** in one `Vector[f64, 2]` lane pair.
+//
+// `escape2(cr0, cr1, ci, max)` iterates the two horizontally-adjacent points
+// (cr0, ci) and (cr1, ci) together: every `zr`/`zi` is a `Vector[f64, 2]`, so
+// the squares, the magnitude, and the `z = z^2 + c` step are each ONE WASM
+// SIMD-128 (`v128`) instruction covering both pixels — same source, no flag
+// (the lowering ships by default on wasm_browser). The escape test is a
+// comparison→mask→select: `mag <= 4` yields a `Vector[bool, 2]` of lanes still
+// inside the disc, and `mask.select(1, 0)` increments only those lanes' counts,
+// so each lane's count freezes the instant it escapes — lane-for-lane
+// identical to the scalar loop this replaces. The loop runs until BOTH lanes
+// have escaped (no `.all()` on a bool vector yet, so the termination test
+// extracts the two lanes) or `max`.
+fn escape2(cr0: f64, cr1: f64, ci: f64, max: i64) -> (i64, i64) {
+    let cr = Vector[f64, 2](cr0, cr1);
+    let civ = Vector[f64, 2].splat(ci);
+    let four = Vector[f64, 2].splat(4.0);
+    let two = Vector[f64, 2].splat(2.0);
+    let one = Vector[i64, 2].splat(1);
+    let zero = Vector[i64, 2].splat(0);
+    let mut zr = Vector[f64, 2].splat(0.0);
+    let mut zi = Vector[f64, 2].splat(0.0);
+    let mut counts = Vector[i64, 2].splat(0);
     let mut n = 0;
     while n < max {
         let zr2 = zr * zr;
         let zi2 = zi * zi;
-        if zr2 + zi2 > 4.0 {
-            return n;
+        let mag = zr2 + zi2;
+        let active = mag <= four; // Vector[bool, 2]: lanes still inside the disc
+        if not active[0] and not active[1] {
+            return (counts[0], counts[1]);
         }
-        zi = 2.0 * zr * zi + ci;
+        counts = counts + active.select(one, zero); // +1 only for inside lanes
+        zi = two * zr * zi + civ;
         zr = zr2 - zi2 + cr;
         n = n + 1;
     }
-    max
+    (counts[0], counts[1])
 }
 
 // Map an escape count to an RGBA byte quad. Points in the set (n == max)
@@ -85,13 +107,22 @@ fn render_rows(y0: i64, y1: i64, cx: f64, cy: f64, scale: f64) -> Vec[u8] {
     let mut out: Vec[u8] = Vec.new();
     for y in y0..y1 {
         let ci = cy + ((y as f64) - half_h) * scale;
-        for x in 0..w {
-            let cr = cx + ((x as f64) - half_w) * scale;
-            let n = escape(cr, ci, mx);
-            out.push(color_r(n, mx));
-            out.push(color_g(n, mx));
-            out.push(color_b(n, mx));
+        // Two pixels per step — fb_width() is even, so each SIMD pair covers a
+        // full (x, x+1) column couple with no scalar remainder.
+        let mut x = 0;
+        while x < w {
+            let cr0 = cx + ((x as f64) - half_w) * scale;
+            let cr1 = cx + (((x + 1) as f64) - half_w) * scale;
+            let (n0, n1) = escape2(cr0, cr1, ci, mx);
+            out.push(color_r(n0, mx));
+            out.push(color_g(n0, mx));
+            out.push(color_b(n0, mx));
             out.push(255u8);
+            out.push(color_r(n1, mx));
+            out.push(color_g(n1, mx));
+            out.push(color_b(n1, mx));
+            out.push(255u8);
+            x = x + 2;
         }
     }
     out

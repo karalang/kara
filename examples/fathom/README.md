@@ -44,6 +44,22 @@ the same spine — see [`docs/dogfooding.md`](../../docs/dogfooding.md).)
   put_pixels(frame.as_ptr(), frame.len(), w, h);   // Vec[u8].as_ptr() FFI handoff
   ```
 
+- The inner escape-time kernel (`escape2`) computes **two pixels at once** in one
+  `Vector[f64, 2]` lane pair. The `z = z^2 + c` arithmetic, the `|z|^2 <= 4`
+  escape test, and the per-lane count update each lower to a single WASM SIMD-128
+  (`v128`) instruction — same source, no flag:
+
+  ```kara
+  let active = mag <= four;                     // f64x2.le → Vector[bool, 2] mask
+  counts = counts + active.select(one, zero);   // v128.bitselect — +1 per inside lane
+  ```
+
+  (Confirmed in the emitted module: `f64x2.mul`/`add`/`sub`/`splat`/`le`,
+  `v128.bitselect`, `i64x2.add`/`extract_lane`.) Native single-thread A/B against
+  the scalar loop: **~1.47× fewer instructions retired** for byte-identical
+  output. In a browser the win is CPU headroom, not higher FPS — the frame rate
+  is `requestAnimationFrame`/vsync-capped.
+
 The view auto-zooms into the seahorse valley and resets when `f64` runs out of
 precision — no input needed.
 
