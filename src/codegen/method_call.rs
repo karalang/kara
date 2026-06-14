@@ -2377,6 +2377,22 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // Last-resort before the dispatch-fail error: a String collection
+        // method (`split`, `contains`, …) on a **non-identifier** receiver
+        // (`"a,b,c".split(",")`, `make_csv().split(",")`). The collection
+        // dispatch above is identifier-keyed (it looks the receiver up by name
+        // in `vec_elem_types`), so a literal / call-result receiver falls
+        // through. Materialize it into a synthetic local and re-route through
+        // `compile_vec_method`.
+        if let Some(result) = self.try_compile_nonident_collection_method(
+            object,
+            method,
+            args,
+            dispatch_key.as_deref(),
+        )? {
+            return Ok(result);
+        }
+
         let receiver_desc = match &object.kind {
             ExprKind::Identifier(name) => format!("variable '{}'", name),
             _ => "non-identifier receiver".to_string(),
@@ -2387,6 +2403,97 @@ impl<'ctx> super::Codegen<'ctx> {
              or mark the test `#[ignore]` if the method is genuinely deferred)",
             method, receiver_desc
         ))
+    }
+
+    /// Materialize a **non-identifier String** method receiver into a synthetic
+    /// local, then route through the identifier-keyed collection dispatch
+    /// (`compile_vec_method`). Closes the Weave non-identifier-receiver gap for
+    /// String collection methods like `"a,b,c".split(",")` /
+    /// `make_csv().split(",")` — the receiver-shape-keyed dispatch in
+    /// `compile_method_call` only fires for `Identifier` receivers, so a literal
+    /// or call-result String receiver fell through to "no handler". (The
+    /// call-result `.to_string()` case already works via the receiver-shape-
+    /// agnostic `String.to_string` arm.) Returns `Ok(None)` when the receiver
+    /// isn't a String — the caller falls through to its diagnostic, so this is a
+    /// pure addition that can't change existing cases.
+    ///
+    /// Scoped to String deliberately: the receiver type is resolved from the
+    /// `Type.method` callee key's receiver segment (span-independent — robust),
+    /// and String needs no element type. A non-identifier **Vec** receiver
+    /// (`make_vec().contains(x)`) additionally needs the element type, which is
+    /// only available span-keyed in `owned_temp_drops` — and a `Call` receiver's
+    /// `object.span` is the callee-name span, not the call-expr span those
+    /// tables use, so it doesn't resolve. That's a separate follow-on (tracked
+    /// in phase-7-codegen.md "non-identifier receiver"); it errors loudly today
+    /// exactly as before, no regression.
+    ///
+    /// Drop: the receiver temp's free is owned by the existing statement-level
+    /// owned-temp machinery (the RHS sub-expression's `owned_temp_drops` entry
+    /// queues it), so the synth slot is NOT separately drop-tracked — tracking
+    /// it too double-frees a heap receiver like `make_csv().split(",")` (proven:
+    /// a tracked variant SIGABRT'd at scope exit; the untracked one is leak- and
+    /// double-free-clean under `leaks` + ASAN). IR parity with the one-line
+    /// `let s = <recv>; s.split(",")` workaround.
+    fn try_compile_nonident_collection_method(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+        dispatch_key: Option<&str>,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        // Identifier / self receivers already route through the main dispatch.
+        if matches!(&object.kind, ExprKind::Identifier(_) | ExprKind::SelfValue) {
+            return Ok(None);
+        }
+        let span_key = (object.span.offset, object.span.length);
+
+        // Receiver must be a String. Prefer the `Type.method` callee key's
+        // receiver segment (span-independent); fall back to the
+        // String-typed-expr span set.
+        let recv_is_string = dispatch_key
+            .and_then(|k| k.rsplit_once('.'))
+            .map(|(t, _)| t == "String")
+            .unwrap_or(false)
+            || self.string_typed_exprs.contains(&span_key);
+        if !recv_is_string {
+            return Ok(None);
+        }
+
+        let cur_fn = self
+            .current_fn
+            .ok_or_else(|| "method receiver materialization outside fn".to_string())?;
+        let val = self.compile_expr(object)?;
+
+        // Store the receiver value into a synthetic slot for dispatch. NOT
+        // drop-tracked — see the doc comment (the statement-level owned-temp
+        // machinery owns the free; double-tracking double-frees).
+        let slot = self.create_entry_alloca(cur_fn, "__recv_tmp", val.get_type());
+        self.builder.build_store(slot, val).unwrap();
+
+        let synth = format!("__recv_tmp_{}", self.indexed_elem_counter);
+        self.indexed_elem_counter += 1;
+        let i8t = self.context.i8_type().into();
+        self.variables.insert(
+            synth.clone(),
+            super::VarSlot {
+                ptr: slot,
+                ty: val.get_type(),
+            },
+        );
+        self.vec_elem_types.insert(synth.clone(), i8t);
+        self.string_vars.insert(synth.clone());
+        self.var_type_names
+            .insert(synth.clone(), "String".to_string());
+
+        let result = self.compile_vec_method(&synth, slot, method, args);
+
+        // Drop the dispatch-only registrations (unique synth name).
+        self.variables.remove(&synth);
+        self.var_type_names.remove(&synth);
+        self.vec_elem_types.remove(&synth);
+        self.string_vars.remove(&synth);
+
+        result.map(Some)
     }
 
     /// Lower a `CStr` borrowed-surface method (design.md § C-String

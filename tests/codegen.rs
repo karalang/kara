@@ -2266,6 +2266,34 @@ fn main() {
     }
 
     #[test]
+    fn e2e_string_method_nonident_receiver_codegen() {
+        // String collection methods on a NON-identifier receiver — a string
+        // literal (`"a,b,c".split(...)`) and a call-result (`make().split(...)`).
+        // The identifier-keyed collection dispatch fell through for these; the
+        // `try_compile_nonident_collection_method` shim materializes the receiver
+        // into a synth local and re-routes through `compile_vec_method`. The
+        // call-result receiver is the double-free-prone case (its heap buffer is
+        // freed by the statement-level owned-temp machinery — the shim must NOT
+        // double-track it); see `asan_string_method_nonident_receiver_*`. Output
+        // must match the interpreter oracle.
+        if let Some(out) = run_program(
+            "fn make_csv() -> String { return \"a,bb,,ccc\"; }\n\
+             fn main() {\n\
+                 let a = \"x,y,z\".split(',');\n\
+                 println(f\"{a.len()}\");\n\
+                 println(a[1]);\n\
+                 let lit_has = \"hello world\".contains(\"wor\");\n\
+                 println(f\"{lit_has}\");\n\
+                 let c = make_csv().split(',');\n\
+                 println(f\"{c.len()}\");\n\
+                 println(c[3]);\n\
+             }",
+        ) {
+            assert_eq!(out, "3\ny\ntrue\n4\nccc\n");
+        }
+    }
+
+    #[test]
     fn e2e_string_substring_two_arg_codegen() {
         // Two-arg `substring(start, end)` (byte range `[start, end)`): prefix /
         // suffix / empty-when-equal / inverted-bounds (end<start) / end-clamped /

@@ -585,6 +585,41 @@ fn main() {
         );
     }
 
+    // ── `String.split` on a NON-identifier receiver — temp drop ownership ──
+    //
+    // `make_csv().split(',')` — a String method on a CALL-RESULT receiver. The
+    // `try_compile_nonident_collection_method` shim materializes the receiver
+    // into a synth local and routes through `compile_vec_method`. The receiver's
+    // heap buffer (`make_csv()`'s String) is freed by the statement-level
+    // owned-temp machinery; the shim must NOT separately drop-track its slot, or
+    // the buffer double-frees (a tracked variant SIGABRT'd at scope exit). Plus
+    // a string-LITERAL receiver (`"...".split`) whose rodata buffer must not be
+    // freed at all. Looped 1000× — LSan catches a per-iter leak of the receiver
+    // temp, local ASAN catches the double-free. (phase-7 non-identifier receiver)
+    #[test]
+    fn asan_string_method_nonident_receiver_no_leak_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+fn make_csv() -> String { return "a,bb,ccc,dddd"; }
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 1000 {
+        let call_fields = make_csv().split(',');
+        total = total + call_fields.len();
+        for f in call_fields { total = total + f.len(); }
+        let lit_fields = "p,qq,rrr".split(',');
+        total = total + lit_fields.len();
+        i = i + 1;
+    }
+    println(f"{total}");
+}
+"#,
+            &["17000"],
+            "string_split_nonident_recv_loop",
+        );
+    }
+
     // ── Inline index of a fn-returned `Vec` — temp drop + element clone ──
     //
     // `names()[i]` indexes a fresh owned `Vec[String]` temporary inline
