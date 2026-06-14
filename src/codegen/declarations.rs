@@ -4098,12 +4098,104 @@ impl<'ctx> super::Codegen<'ctx> {
     /// all return `None`. Tuples and nested user enums are also `None`
     /// at v1 — the DP1–DP5 design locks scope cleanup to top-level
     /// String/Vec payloads, which is what the regression gates exercise.
+    /// Whether every field of `struct_name` (recursively through nested structs
+    /// and tuples) is 8-byte-granular — i.e. the struct's native LLVM layout
+    /// places each field at the same byte offset the enum payload's
+    /// one-word-per-field layout does (`payload_word_count_for_type_expr` gives
+    /// every field a full i64 word). A sub-8-byte primitive field (`i32`,
+    /// `bool`, `char`, …) can be packed more tightly natively than its full
+    /// i64-word slot, shifting a later heap field's native offset off its word
+    /// offset; the native `__karac_drop_struct_<S>`, invoked on the enum's word
+    /// region, would then free a bogus pointer. Gates `NestedStruct`
+    /// classification (B-2026-06-13-13) so a misaligned struct stays `None` (a
+    /// bounded leak, never corruption). Conservative: any sub-8-byte or
+    /// unknown-shape field → reject.
+    fn struct_payload_word_aligned(&self, struct_name: &str, stack: &mut Vec<String>) -> bool {
+        if stack.iter().any(|s| s == struct_name) {
+            return true; // self-referential — sized via heap pointer, not inline
+        }
+        let Some(ftes) = self.struct_field_type_exprs.get(struct_name).cloned() else {
+            return false; // unknown field shape → conservative reject
+        };
+        stack.push(struct_name.to_string());
+        let ok = ftes
+            .iter()
+            .all(|fte| self.type_expr_word_aligned(fte, stack));
+        stack.pop();
+        ok
+    }
+
+    /// Field-type predicate for [`Self::struct_payload_word_aligned`]: true iff
+    /// the type occupies a whole number of 8-byte words at 8-byte alignment.
+    fn type_expr_word_aligned(&self, te: &TypeExpr, stack: &mut Vec<String>) -> bool {
+        match &te.kind {
+            TypeKind::Tuple(elems) => elems.iter().all(|e| self.type_expr_word_aligned(e, stack)),
+            // A borrow is a single 8-byte pointer; owns no inline heap to misplace.
+            TypeKind::Ref(_) | TypeKind::MutRef(_) | TypeKind::MutSlice(_) => true,
+            TypeKind::Path(p) => {
+                let name = p.segments.first().map(String::as_str).unwrap_or("");
+                // Sub-8-byte primitives pack natively → reject.
+                if matches!(
+                    name,
+                    "i8" | "i16" | "i32" | "u8" | "u16" | "u32" | "f32" | "bool" | "char"
+                ) {
+                    return false;
+                }
+                // Nested non-shared user struct → recurse.
+                if self.struct_types.contains_key(name) && !self.shared_types.contains_key(name) {
+                    return self.struct_payload_word_aligned(name, stack);
+                }
+                // 8-byte primitives, aggregate handles (String/Vec/Slice/Map/Set →
+                // 8-byte-granular {ptr,…}), shared RC pointers, and inline user
+                // enums (laid out as all-i64 words) are all word-aligned.
+                true
+            }
+            // Array[T, N] can pack sub-8-byte elements; any other shape is
+            // unknown — conservative reject.
+            _ => false,
+        }
+    }
+
     pub(super) fn enum_drop_kind_for_type_expr(&self, ty: &TypeExpr) -> EnumDropKind {
         match &ty.kind {
             TypeKind::Path(path) => {
                 let name = path.segments.first().map(|s| s.as_str()).unwrap_or("");
                 match name {
                     "String" | "Vec" => EnumDropKind::VecOrString,
+                    // B-2026-06-13-13: a named non-shared user struct laid out
+                    // inline in the variant payload (e.g. the lexer's
+                    // `CStringLiteral(CStr{Vec[u8]})`). Its own
+                    // `__karac_drop_struct_<S>` frees the nested heap; without
+                    // this it classified `None` and leaked. Structs are all in
+                    // `struct_types` here (`declare_structs` runs before
+                    // `declare_enums`); shared structs use RC, not value-drop.
+                    //
+                    // GUARD: only when the struct is fully outer-buffer
+                    // copy-supported — the deep-copy-on-entry
+                    // (`deep_copy_struct_heap_fields_in_place`) duplicates only
+                    // Vec/String/nested-struct/enum/tuple heap, NOT Map/Set or
+                    // Option/Result payloads. If the struct carries heap the
+                    // entry-copy can't duplicate, classify `None` (status-quo
+                    // leak) rather than `NestedStruct` — otherwise the drop frees
+                    // a buffer the callee-owned copy still shallow-aliases
+                    // → double-free. This keeps drop and deep-copy symmetric.
+                    //
+                    // Probe `struct_field_type_exprs` (AST metadata), NOT
+                    // `struct_types` (LLVM types): this classifier runs inside
+                    // `declare_enums`, which builds enum layouts BEFORE struct
+                    // LLVM types (the struct↔enum field cycle-break — see
+                    // `payload_word_count_for_type_expr`), so `struct_types` is
+                    // still empty here. The AST field-type map is registered
+                    // early by `register_struct_metadata`.
+                    other
+                        if self.struct_field_type_exprs.contains_key(other)
+                            && !self.shared_types.contains_key(other)
+                            && self
+                                .aggregate_param_copy_supported_struct(other, &mut Vec::new())
+                            && self.struct_payload_word_aligned(other, &mut Vec::new()) =>
+                    {
+                        EnumDropKind::NestedStruct
+                    }
                     _ => EnumDropKind::None,
                 }
             }

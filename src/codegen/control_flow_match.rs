@@ -2172,24 +2172,28 @@ impl<'ctx> super::Codegen<'ctx> {
             // binding claims part of it — the inner cleanup will free
             // the whole composite, so the outer source's drop must
             // still be skipped.
-            if !pattern_consumes_field(sub_pat) || *kind != super::state::EnumDropKind::VecOrString
-            {
+            if !pattern_consumes_field(sub_pat) || !kind.is_heap_bearing() {
                 continue;
             }
-            // Cap word for a 3-word Vec/String payload (data, len, cap)
-            // is at LLVM struct index `1 (tag) + start_word + num_words - 1`
-            // = `start_word + num_words`. The DP1 lock pins `num_words == 3`
-            // for `VecOrString`, but we compute from `num_words` rather
-            // than hard-coding 3 so the helper stays correct if the
-            // layout ever grows additional words.
-            let cap_index = (start_word + num_words) as u32;
-            if let Ok(cap_ptr) = self.builder.build_struct_gep(
-                layout.llvm_type,
-                slot_ptr,
-                cap_index,
-                "match.dest.cap.suppress.p",
-            ) {
-                let _ = self.builder.build_store(cap_ptr, zero);
+            // Zero EVERY payload word of the moved-out field, not just the
+            // Vec/String cap. For `VecOrString` the cap word (LLVM index
+            // `start_word + num_words`) is what the drop's `cap > 0` guard
+            // reads; zeroing data/len too is harmless. For a `NestedStruct`
+            // payload (B-2026-06-13-13) there is no single cap — its drop fn
+            // reads caps/tags at various inner offsets — so zero the whole
+            // word region: every inner `cap > 0` guard then skips and the
+            // tag-dispatch lands on an all-zero variant, making the nested
+            // drop a no-op. The bound binding's own cleanup frees it once.
+            for w in 0..*num_words {
+                let word_index = (start_word + 1 + w) as u32;
+                if let Ok(word_ptr) = self.builder.build_struct_gep(
+                    layout.llvm_type,
+                    slot_ptr,
+                    word_index,
+                    "match.dest.suppress.wp",
+                ) {
+                    let _ = self.builder.build_store(word_ptr, zero);
+                }
             }
         }
     }

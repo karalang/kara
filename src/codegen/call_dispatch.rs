@@ -1958,17 +1958,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 continue;
             };
             for (kind, (start_word, num_words)) in kinds.iter().zip(offsets.iter()) {
-                if *kind != super::state::EnumDropKind::VecOrString {
+                if !kind.is_heap_bearing() {
                     continue;
                 }
-                let cap_index = (start_word + num_words) as u32;
-                if let Ok(cap_ptr) = self.builder.build_struct_gep(
-                    layout.llvm_type,
-                    base_ptr,
-                    cap_index,
-                    "move.enum.cap.p",
-                ) {
-                    let _ = self.builder.build_store(cap_ptr, zero);
+                // Zero every payload word of the moved-out field (not just the
+                // Vec/String cap) so a `NestedStruct` payload's inner caps/tag
+                // all go to 0 and its drop fn no-ops — see the matching loop in
+                // `suppress_destructured_enum_payload_cleanup_at`
+                // (B-2026-06-13-13).
+                for w in 0..*num_words {
+                    let word_index = (start_word + 1 + w) as u32;
+                    if let Ok(word_ptr) = self.builder.build_struct_gep(
+                        layout.llvm_type,
+                        base_ptr,
+                        word_index,
+                        "move.enum.suppress.wp",
+                    ) {
+                        let _ = self.builder.build_store(word_ptr, zero);
+                    }
                 }
             }
         }

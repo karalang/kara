@@ -5272,6 +5272,49 @@ fn main() {
     }
 
     #[test]
+    fn asan_enum_nested_struct_payload_inplace_drop_no_leak() {
+        // B-2026-06-13-13 part 1: an enum variant whose payload is a nested
+        // non-shared user struct that carries heap (`Wrap(Inner { data: Vec, … })`
+        // — the lexer's `CStringLiteral(CStr { bytes: Vec[u8], … })` shape). The
+        // enum drop now recurses into the nested struct's `__karac_drop_struct_<S>`
+        // (it previously classified the payload `None` and leaked the inner Vec).
+        // Exercises the WHOLE-VALUE in-place drop path — the one the lexer hits
+        // when it drops a `Vec[SpannedToken]` wholesale — via a non-consuming
+        // wildcard match so the enum is dropped, not moved out. On Linux CI this
+        // faults under LeakSanitizer if the nested-struct drop regresses; on macOS
+        // (no LSan) it is the double-free gate — the deep-copy-on-entry keeps the
+        // callee copy and caller original independent, so re-dropping would fault.
+        assert_clean_asan_run(
+            r#"
+struct Inner { data: Vec[i64], tag: i64 }
+enum E { Wrap(Inner), Empty }
+fn mkvec(x: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(x);
+    v.push(x + 1);
+    return v;
+}
+fn main() {
+    let mut sum: i64 = 0;
+    let mut i = 0;
+    while i < 50 {
+        let e = E.Wrap(Inner { data: mkvec(i), tag: i });
+        let k = match e {
+            Wrap(_) => 1,
+            Empty => 0,
+        };
+        sum = sum + k;
+        i = i + 1;
+    }
+    println(sum);
+}
+"#,
+            &["50"],
+            "enum_nested_struct_payload_inplace_drop_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_inline_enum_ctor_call_arg_no_leak_no_double_free() {
         // B-2026-06-12-10: an inline enum-variant constructor passed by value as
         // a call argument (`wrap(Tok.V(mk()))`) — and the method form

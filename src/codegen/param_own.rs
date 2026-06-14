@@ -105,12 +105,12 @@ impl<'ctx> super::Codegen<'ctx> {
             if layout.is_shared || type_name == "Option" || type_name == "Result" {
                 return false;
             }
-            // Only meaningful when some variant carries a VecOrString payload —
+            // Only meaningful when some variant carries a heap payload —
             // otherwise the drop is a no-op and there's nothing to copy.
             let any_heap = layout
                 .field_drop_kinds
                 .values()
-                .any(|ks| ks.contains(&EnumDropKind::VecOrString));
+                .any(|ks| ks.iter().any(|k| k.is_heap_bearing()));
             if !any_heap {
                 return false;
             }
@@ -124,7 +124,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Recursively decide whether a struct's heap content can be soundly
     /// outer-buffer-copied to mirror its drop. `stack` guards against
     /// self-referential owned structs (which would recurse forever — bail).
-    fn aggregate_param_copy_supported_struct(
+    pub(super) fn aggregate_param_copy_supported_struct(
         &self,
         struct_name: &str,
         stack: &mut Vec<String>,
@@ -350,7 +350,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let has_heap = layout
                 .field_drop_kinds
                 .get(name)
-                .map(|ks| ks.contains(&EnumDropKind::VecOrString))
+                .map(|ks| ks.iter().any(|k| k.is_heap_bearing()))
                 .unwrap_or(false);
             if !has_heap {
                 continue;
@@ -373,6 +373,32 @@ impl<'ctx> super::Codegen<'ctx> {
                 for (fi, (kind, (start_word, _num_words))) in
                     kinds.iter().zip(offsets.iter()).enumerate()
                 {
+                    // B-2026-06-13-13: a nested-struct payload is deep-copied by
+                    // recursing into the struct's own heap fields in place — the
+                    // symmetric peer of the enum drop's `NestedStruct` arm, so the
+                    // callee copy and caller temp own independent buffers (no
+                    // double-free). The struct's words start at `start_word + 1`.
+                    if *kind == EnumDropKind::NestedStruct {
+                        let sname =
+                            variant_tes
+                                .get(name)
+                                .and_then(|tes| tes.get(fi))
+                                .and_then(|te| match &te.kind {
+                                    TypeKind::Path(p) => p.segments.first().cloned(),
+                                    _ => None,
+                                });
+                        if let Some(sname) = sname {
+                            if let Ok(field_ptr) = self.builder.build_struct_gep(
+                                enum_ty,
+                                base_ptr,
+                                (*start_word + 1) as u32,
+                                "p14e.nstruct.p",
+                            ) {
+                                self.deep_copy_struct_heap_fields_in_place(field_ptr, &sname);
+                            }
+                        }
+                        continue;
+                    }
                     if *kind != EnumDropKind::VecOrString {
                         continue;
                     }

@@ -3086,17 +3086,18 @@ impl<'ctx> super::Codegen<'ctx> {
         user.or(seed)
     }
 
-    /// Does any variant of `enum_name` carry a heap (`String`/`Vec`) payload
-    /// field? Such enums need the variant-aware `compile_enum_eq` (a raw word
-    /// compare of a `String` payload compares pointers, not content); pure
-    /// unit/scalar enums use the cheaper word-wise path, which is sound after
-    /// zero-init construction.
+    /// Does any variant of `enum_name` carry a heap (`String`/`Vec`/nested
+    /// heap-bearing struct) payload field? Such enums need the variant-aware
+    /// `compile_enum_eq` (a raw word compare of a heap payload compares
+    /// pointers, not content), need a drop fn, and need their inline-temp call
+    /// args tracked for caller-side drop; pure unit/scalar enums use the
+    /// cheaper word-wise path, which is sound after zero-init construction.
     pub(super) fn enum_has_heap_payload(&self, enum_name: &str) -> bool {
         self.enum_layouts.get(enum_name).is_some_and(|l| {
             l.field_drop_kinds
                 .values()
                 .flatten()
-                .any(|k| matches!(k, super::state::EnumDropKind::VecOrString))
+                .any(|k| k.is_heap_bearing())
         })
     }
 
@@ -3399,10 +3400,8 @@ impl<'ctx> super::Codegen<'ctx> {
             .flat_map(|(_, _, tys)| tys.iter())
             .any(|t| {
                 let resolved = Self::subst_type_params(t, &subst);
-                matches!(
-                    self.enum_drop_kind_for_type_expr(&resolved),
-                    super::state::EnumDropKind::VecOrString
-                )
+                self.enum_drop_kind_for_type_expr(&resolved)
+                    .is_heap_bearing()
             })
     }
 

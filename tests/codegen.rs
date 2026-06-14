@@ -14451,8 +14451,11 @@ fn make() -> Holder {
     fn test_ir_iflet_freshtemp_enum_bound_field_suppressed() {
         // `if let Full(v, n) = make()` — the Vec is MOVED into `v`. The
         // materialized temp gets an EnumDrop, but the suppression must zero the
-        // moved field's cap (`match.dest.cap.suppress.p` ← 0) so the drop walk
-        // skips it — `v`'s own cleanup frees it exactly once (no double-free).
+        // moved field's payload words (`match.dest.suppress.wp` ← 0) so the drop
+        // walk skips it — `v`'s own cleanup frees it exactly once (no
+        // double-free). (B-2026-06-13-13 generalized the suppression from
+        // cap-only to all payload words, so nested-struct payloads' inner caps
+        // are zeroed too; the label changed from `match.dest.cap.suppress.p`.)
         let src = format!(
             "{B_ENUM_PRELUDE}\nfn main() {{ if let Holder.Full(v, n) = make() {{ println(v.len() + n); }} }}\n"
         );
@@ -14462,9 +14465,9 @@ fn make() -> Holder {
             "expected the fresh-temp enum scrutinee materialized; got:\n{ir}"
         );
         assert!(
-            ir.contains("match.dest.cap.suppress.p"),
-            "expected the moved Vec field's cap zeroed (suppression) to avoid a \
-             double-free against the enum drop walk; got:\n{ir}"
+            ir.contains("match.dest.suppress.wp"),
+            "expected the moved Vec field's payload words zeroed (suppression) to \
+             avoid a double-free against the enum drop walk; got:\n{ir}"
         );
     }
 

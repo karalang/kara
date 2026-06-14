@@ -145,21 +145,52 @@ pub(crate) struct NicheAbi {
 /// Per-payload-field drop classification recorded at `declare_enums`
 /// time (Phase 7.2 Slice DP — Compound-payload enum follow-up: drop-path
 /// implementation, 2026-05-09). Drives `emit_enum_drop_switch`'s per-
-/// variant cleanup-BB body: for each `EnumDropKind::VecOrString` field
-/// the drop function emits the same `cap > 0 ? free(data)` shape that
-/// `CleanupAction::FreeVecBuffer` uses for top-level Vec/String bindings.
-/// `None` is the no-op variant (primitives, slices, RC-pointer payloads,
-/// nested user-struct payloads — the last one is the v1 carve-out, see
-/// the slice's *Out of scope* paragraph and the optional test 7).
+/// variant cleanup-BB body: for each heap-bearing field the drop function
+/// emits the matching cleanup (the `cap > 0 ? free(data)` shape that
+/// `CleanupAction::FreeVecBuffer` uses for top-level Vec/String bindings,
+/// or a recursive call to a nested struct/enum drop fn).
+///
+/// The drop classification is kept **symmetric** with the
+/// deep-copy-on-entry (`param_own.rs`) and the move-suppression
+/// (`control_flow_match.rs` / `zero_enum_payload_caps`): each must account
+/// for exactly the same heap, or a by-value param copy / a pattern-move-out
+/// double-frees or leaks. See [`Self::is_heap_bearing`].
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EnumDropKind {
-    /// No cleanup — primitive, slice (no ownership), RC-pointer (handled
-    /// by the shared-type RC machinery), or v1-carved-out nested struct.
+    /// No cleanup — primitive, slice (no ownership), or RC-pointer (handled
+    /// by the shared-type RC machinery).
     None,
     /// Three-word `String` / `Vec[T]` payload — payload words at
     /// `(start, start+1, start+2)` are `(data, len, cap)`. Free with
-    /// `karac_runtime_free(data)` when `cap > 0`.
+    /// `karac_runtime_free(data)` when `cap > 0`. For a `Vec[heap-element]`
+    /// only the OUTER buffer is freed — per-element heap is a bounded leak,
+    /// symmetric with the outer-buffer-only deep-copy-on-entry
+    /// (B-2026-06-13-13 part 2 / `param_own.rs` "bounded leak on both sides,
+    /// never corruption"; a deliberate v1 design position).
     VecOrString,
+    /// B-2026-06-13-13: payload field is a named non-shared user **struct**
+    /// laid out inline in the variant's payload words. Dropped by calling that
+    /// struct's `__karac_drop_struct_<S>` on the field's word-region pointer
+    /// (`emit_enum_drop_switch`), mirroring the struct-drop `NestedStruct`
+    /// (#18) arm. The type name is recovered at emit time from
+    /// `enum_variant_field_type_exprs`. The struct's own drop fn transitively
+    /// frees its Vec/String, enum, and Map fields, so this one kind covers an
+    /// arbitrarily-nested struct payload (e.g. the lexer's
+    /// `CStringLiteral(CStr { bytes: Vec[u8], … })`). A *directly*-inline
+    /// nested enum payload (`enum Outer { V(Inner) }`) is a rarer remaining
+    /// gap — its classification needs an all-enum-names pre-pass (sibling
+    /// enums aren't in `enum_layouts` yet at `declare_enums` time) — tracked
+    /// separately, not in this slice.
+    NestedStruct,
+}
+
+impl EnumDropKind {
+    /// Whether this kind owns heap the variant cleanup must free — and that
+    /// the deep-copy-on-entry must duplicate and the move-suppression must
+    /// neutralize. Every kind except `None` is heap-bearing.
+    pub(crate) fn is_heap_bearing(self) -> bool {
+        self != EnumDropKind::None
+    }
 }
 
 /// Tracks how an enum is laid out in LLVM IR as a tagged union.

@@ -136,82 +136,133 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_switch(tag_val, exit_bb, &switch_cases)
             .unwrap();
 
-        // Per-variant cleanup BBs — for each heap-bearing payload field
-        // (`EnumDropKind::VecOrString`), reload the (data, len, cap)
-        // payload words and free the data pointer when cap > 0.
+        // Per-variant field TypeExprs — needed to recover the struct name for a
+        // `NestedStruct` payload (B-2026-06-13-13). Built once; small N.
+        let variant_field_tes: Vec<(String, Vec<TypeExpr>)> = self
+            .enum_variant_field_type_exprs(enum_name)
+            .into_iter()
+            .map(|(_tag, name, tes)| (name, tes))
+            .collect();
+
+        // Per-variant cleanup BBs. For each heap-bearing payload field:
+        //   * `VecOrString` — reload (data, len, cap) and free the data ptr
+        //     when cap > 0 (outer buffer only; see `EnumDropKind`);
+        //   * `NestedStruct` — call the nested struct's own
+        //     `__karac_drop_struct_<S>` on the field's inline word region,
+        //     which recursively frees its Vec/String/enum/Map heap
+        //     (B-2026-06-13-13, mirroring the struct-drop `NestedStruct` arm).
         for (variant_name, _tag, bb) in &case_bbs {
             self.builder.position_at_end(*bb);
-            if let Some(kinds) = layout.field_drop_kinds.get(variant_name) {
-                if let Some(offsets) = layout.field_word_offsets.get(variant_name) {
-                    for (kind, (start_word, _num_words)) in kinds.iter().zip(offsets.iter()) {
-                        if *kind != EnumDropKind::VecOrString {
-                            continue;
+            if let (Some(kinds), Some(offsets)) = (
+                layout.field_drop_kinds.get(variant_name),
+                layout.field_word_offsets.get(variant_name),
+            ) {
+                for (fi, (kind, (start_word, _num_words))) in
+                    kinds.iter().zip(offsets.iter()).enumerate()
+                {
+                    match kind {
+                        EnumDropKind::None => {}
+                        EnumDropKind::VecOrString => {
+                            // Field index in `llvm_type` is `start_word + 1`
+                            // for the data ptr (tag is field 0); +2 for len;
+                            // +3 for cap. Match the insert-side at
+                            // `try_compile_enum_variant`.
+                            let data_idx = (*start_word + 1) as u32;
+                            let cap_idx = (*start_word + 3) as u32;
+
+                            let cap_ptr = self
+                                .builder
+                                .build_struct_gep(layout.llvm_type, p_arg, cap_idx, "drop.cap.p")
+                                .unwrap();
+                            let cap_val = self
+                                .builder
+                                .build_load(i64_t, cap_ptr, "drop.cap")
+                                .unwrap()
+                                .into_int_value();
+                            let zero = i64_t.const_int(0, false);
+                            let is_heap = self
+                                .builder
+                                .build_int_compare(IntPredicate::UGT, cap_val, zero, "drop.is_heap")
+                                .unwrap();
+                            let free_bb = self.context.append_basic_block(drop_fn, "drop.free");
+                            let skip_bb = self.context.append_basic_block(drop_fn, "drop.skip");
+                            self.builder
+                                .build_conditional_branch(is_heap, free_bb, skip_bb)
+                                .unwrap();
+
+                            self.builder.position_at_end(free_bb);
+                            // Payload words are stored as i64 at the start_word
+                            // slot — for VecOrString that's the data pointer
+                            // bit-cast to i64. Load it and convert back to
+                            // a pointer for the free call.
+                            let data_word_ptr = self
+                                .builder
+                                .build_struct_gep(layout.llvm_type, p_arg, data_idx, "drop.data.wp")
+                                .unwrap();
+                            let data_word = self
+                                .builder
+                                .build_load(i64_t, data_word_ptr, "drop.data.w")
+                                .unwrap()
+                                .into_int_value();
+                            let data_ptr = self
+                                .builder
+                                .build_int_to_ptr(data_word, ptr_ty, "drop.data.p")
+                                .unwrap();
+                            self.builder
+                                .build_call(self.free_fn, &[data_ptr.into()], "")
+                                .unwrap();
+                            // After freeing, zero the cap word so a
+                            // re-entrant invocation (via aliased binding,
+                            // unusual in v1 but defensive) becomes a no-op
+                            // through the cap > 0 guard. Mirrors the
+                            // FreeVecBuffer semantics implicitly carried by
+                            // the runtime's own grow/clear paths.
+                            self.builder.build_store(cap_ptr, zero).unwrap();
+                            self.builder.build_unconditional_branch(skip_bb).unwrap();
+
+                            self.builder.position_at_end(skip_bb);
                         }
-                        // Field index in `llvm_type` is `start_word + 1`
-                        // for the data ptr (tag is field 0); +2 for len;
-                        // +3 for cap. Match the insert-side at
-                        // `try_compile_enum_variant`.
-                        let data_idx = (*start_word + 1) as u32;
-                        let cap_idx = (*start_word + 3) as u32;
-
-                        let cap_ptr = self
-                            .builder
-                            .build_struct_gep(layout.llvm_type, p_arg, cap_idx, "drop.cap.p")
-                            .unwrap();
-                        let cap_val = self
-                            .builder
-                            .build_load(i64_t, cap_ptr, "drop.cap")
-                            .unwrap()
-                            .into_int_value();
-                        let zero = i64_t.const_int(0, false);
-                        let is_heap = self
-                            .builder
-                            .build_int_compare(IntPredicate::UGT, cap_val, zero, "drop.is_heap")
-                            .unwrap();
-                        let free_bb = self.context.append_basic_block(drop_fn, "drop.free");
-                        let skip_bb = self.context.append_basic_block(drop_fn, "drop.skip");
-                        self.builder
-                            .build_conditional_branch(is_heap, free_bb, skip_bb)
-                            .unwrap();
-
-                        self.builder.position_at_end(free_bb);
-                        // Payload words are stored as i64 at the start_word
-                        // slot — for VecOrString that's the data pointer
-                        // bit-cast to i64. Load it and convert back to
-                        // a pointer for the free call.
-                        let data_word_ptr = self
-                            .builder
-                            .build_struct_gep(layout.llvm_type, p_arg, data_idx, "drop.data.wp")
-                            .unwrap();
-                        let data_word = self
-                            .builder
-                            .build_load(i64_t, data_word_ptr, "drop.data.w")
-                            .unwrap()
-                            .into_int_value();
-                        let data_ptr = self
-                            .builder
-                            .build_int_to_ptr(data_word, ptr_ty, "drop.data.p")
-                            .unwrap();
-                        self.builder
-                            .build_call(self.free_fn, &[data_ptr.into()], "")
-                            .unwrap();
-                        // After freeing, zero the cap word so a
-                        // re-entrant invocation (via aliased binding,
-                        // unusual in v1 but defensive) becomes a no-op
-                        // through the cap > 0 guard. Mirrors the
-                        // FreeVecBuffer semantics implicitly carried by
-                        // the runtime's own grow/clear paths.
-                        self.builder.build_store(cap_ptr, zero).unwrap();
-                        self.builder.build_unconditional_branch(skip_bb).unwrap();
-
-                        self.builder.position_at_end(skip_bb);
+                        EnumDropKind::NestedStruct => {
+                            // The inline struct payload starts at word
+                            // `start_word`; its first LLVM field index is
+                            // `start_word + 1` (tag is field 0). Pass that
+                            // word-region pointer to the struct's drop fn —
+                            // its fields are 8-byte words at the same offsets
+                            // the enum payload uses, so the layouts coincide.
+                            let struct_name = variant_field_tes
+                                .iter()
+                                .find(|(n, _)| n == variant_name)
+                                .and_then(|(_, tes)| tes.get(fi))
+                                .and_then(|te| match &te.kind {
+                                    crate::ast::TypeKind::Path(p) => p.segments.first().cloned(),
+                                    _ => None,
+                                });
+                            if let Some(sname) = struct_name {
+                                let field_idx = (*start_word + 1) as u32;
+                                let field_ptr = self
+                                    .builder
+                                    .build_struct_gep(
+                                        layout.llvm_type,
+                                        p_arg,
+                                        field_idx,
+                                        "drop.nstruct.p",
+                                    )
+                                    .unwrap();
+                                // Memoized; saves/restores the builder block,
+                                // so we resume in this drop fn's BB. `None`
+                                // when the nested struct needs no drop.
+                                if let Some(drop_fn) = self.emit_struct_drop_synthesis(&sname) {
+                                    self.builder
+                                        .build_call(drop_fn, &[field_ptr.into()], "")
+                                        .unwrap();
+                                }
+                            }
+                        }
                     }
                 }
             }
-            // Reference the vec_ty so the unused-binding lint stays
-            // quiet on builds that don't enter the inner loop with
-            // VecOrString fields. (Most do, but the suppress here keeps
-            // the helper robust to future drop-kind additions.)
+            // Reference the vec_ty so the unused-binding lint stays quiet on
+            // builds whose variants never enter the VecOrString arm.
             let _ = vec_ty;
             self.builder.build_unconditional_branch(exit_bb).unwrap();
         }
