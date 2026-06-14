@@ -5211,6 +5211,62 @@ fn main() {
     }
 
     #[test]
+    fn asan_inline_enum_ctor_call_arg_no_leak_no_double_free() {
+        // B-2026-06-12-10: an inline enum-variant constructor passed by value as
+        // a call argument (`wrap(Tok.V(mk()))`) — and the method form
+        // (`m.wrap(Tok.V(mk()))`, the shape the self-hosted lexer hits via
+        // `self.make_spanned(Token.StringLiteral(value))`) — is a fresh owned
+        // temp the callee owns by deep-copy. The caller still owns the temp and
+        // must drop it; that caller-side drop was missing, leaking the variant's
+        // String payload once per call (the dominant self-hosted-lexer leak).
+        // The let-bound form (`let t = Tok.V(mk()); wrap(t)`) was already clean,
+        // so this guards the now-symmetric inline path. On Linux CI this faults
+        // under LeakSanitizer if the drop regresses; on macOS (no LSan) it is the
+        // double-free gate — re-dropping the callee-owned copy would fault here.
+        // Loops so any per-iteration imbalance accumulates into a fault.
+        assert_clean_asan_run(
+            r#"
+enum Tok { V(String), Empty }
+struct Wrap { t: Tok, n: i64 }
+struct Maker { id: i64 }
+fn mk() -> String {
+    let mut s = "".to_string();
+    s.push_str("inline_enum_ctor_arg_payload");
+    s
+}
+fn wrap_free(t: Tok) -> Wrap {
+    Wrap { t: t, n: 1 }
+}
+impl Maker {
+    fn wrap(ref self, t: Tok) -> Wrap {
+        Wrap { t: t, n: self.id }
+    }
+}
+fn tlen(w: Wrap) -> i64 {
+    match w.t {
+        V(s) => s.len(),
+        Empty => 0,
+    }
+}
+fn main() {
+    let m = Maker { id: 1 };
+    let mut total: i64 = 0;
+    let mut i = 0;
+    while i < 50 {
+        let a = wrap_free(Tok.V(mk()));
+        let b = m.wrap(Tok.V(mk()));
+        total = total + tlen(a) + tlen(b);
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["2800"],
+            "inline_enum_ctor_call_arg_no_leak_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_struct_destructure_bound_and_unbound_no_double_free() {
         // B follow-up #3: an owned struct destructure of a fresh temp where
         // one heap field is bound (`a`, freed via its binding) and another is

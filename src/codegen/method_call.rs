@@ -2073,6 +2073,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     // pre-existing on the conventional ABI).
                     self.share_option_shared_ref_for_arg(&a.value);
                     self.share_option_shared_field_ref_for_arg(&a.value, val);
+                    // B-2026-06-12-10: register the caller-side drop for an inline
+                    // owned-aggregate arg (enum-variant constructor / tuple /
+                    // struct literal) — the lexer's `self.make_spanned(Token.V(…))`
+                    // reaches here, not the free-fn `compile_call` path. Shared
+                    // helper keeps both arg loops in lockstep.
+                    self.track_inline_owned_aggregate_arg(val, &a.value);
                     compiled_args.push(val.into());
                 }
                 // Niche-ABI pack/unpack at the `obj.method(...)` boundary

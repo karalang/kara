@@ -1098,43 +1098,10 @@ impl<'ctx> super::Codegen<'ctx> {
             if is_block_arg || is_fresh_heap_call_arg {
                 self.materialize_owned_temp(val, (a.value.span.offset, a.value.span.length));
             }
-            // B-2026-06-11-4 part b: an aggregate LITERAL call argument
-            // (`show((2, f"z"))` / `show(S { name: f"z" })`) is a fresh temp
-            // with NO consuming binding, so its String/Vec field had no owner
-            // and leaked. A let-bound aggregate is owned by its binding's drop
-            // (`track_tuple_var` / `track_struct_var`); give the literal arg the
-            // same caller-side ownership by spilling it to a temp alloca and
-            // registering that drop. By-value aggregate params are caller-freed
-            // (the callee gets a value copy and frees nothing), so this temp is
-            // the single owner.
-            if let inkwell::types::BasicTypeEnum::StructType(agg_ty) = val.get_type() {
-                if agg_ty != self.vec_struct_type()
-                    && self.aggregate_has_heap_field(agg_ty)
-                    && self.current_fn.is_some()
-                {
-                    let cur_fn = self.current_fn.unwrap();
-                    match &a.value.kind {
-                        ExprKind::Tuple(_) => {
-                            let slot =
-                                self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
-                            self.builder.build_store(slot, val).unwrap();
-                            self.track_tuple_var(slot, agg_ty);
-                        }
-                        ExprKind::StructLiteral { path, .. }
-                            if path
-                                .last()
-                                .is_some_and(|n| self.struct_types.contains_key(n.as_str())) =>
-                        {
-                            let name = path.last().unwrap().clone();
-                            let slot =
-                                self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
-                            self.builder.build_store(slot, val).unwrap();
-                            self.track_struct_var(&name, slot);
-                        }
-                        _ => {}
-                    }
-                }
-            }
+            // Register the caller-side drop for an inline owned-aggregate arg
+            // (tuple/struct literal — B-2026-06-11-4 part b; enum-variant
+            // constructor — B-2026-06-12-10). Shared with the method-call path.
+            self.track_inline_owned_aggregate_arg(val, &a.value);
         }
 
         // Niche-ABI arg pack — see `pack_niche_abi_args`. Runs AFTER the
@@ -1174,6 +1141,76 @@ impl<'ctx> super::Codegen<'ctx> {
             Ok(self.context.i64_type().const_int(0, false).into())
         } else {
             Ok(self.unpack_niche_abi_ret(&name, basic_val.unwrap_basic()))
+        }
+    }
+
+    /// Register the caller-side drop for an inline owned-**aggregate** call
+    /// argument — a fresh temp with no consuming binding that the callee owns
+    /// by deep-copy (`make_aggregate_param_callee_owned`, the #14 model: the
+    /// callee copies the heap payload at entry and frees only its own copy, so
+    /// the caller still owns the argument temp and must drop it). A let-bound
+    /// aggregate gets this drop at its binding site; an inline temp had no
+    /// owner and leaked its heap payload. Shared by the free-function
+    /// (`compile_call`) and method (`compile_method_call`) arg loops.
+    ///
+    /// Two shapes:
+    ///   * **enum-variant constructor** (`f(Tok.V(mk()))`,
+    ///     `make_spanned(Token.StringLiteral(value))`) — B-2026-06-12-10, the
+    ///     dominant self-hosted-lexer leak (every `Token.<StringVariant>(…)`
+    ///     plus the nested `InterpolatedStringLiteral(Vec[InterpPart])`). Enums
+    ///     lower to flat `iN` words, so the LLVM-type `aggregate_has_heap_field`
+    ///     check can't see the String/Vec payload — gate on the SOURCE-level
+    ///     `enum_has_heap_payload`. Restricted to a `Call` (a fresh variant
+    ///     constructor): an enum *identifier* arg is an existing tracked binding
+    ///     and re-tracking it would double-free. `enum_name_of_expr` returns
+    ///     `Some` only for a real variant constructor (a plain enum-returning fn
+    ///     call → `None`), and `track_enum_var` self-filters shared (RC) enums —
+    ///     so this neither double-frees a callee-balanced RC enum nor bloats a
+    ///     unit-variant arg.
+    ///   * **tuple / named-struct literal** (`show((2, f"z"))`,
+    ///     `show(S { name: f"z" })`) — B-2026-06-11-4 part b; these keep their
+    ///     heap fields as recognizable Vec/String LLVM types, so the
+    ///     `aggregate_has_heap_field` gate applies.
+    pub(super) fn track_inline_owned_aggregate_arg(
+        &mut self,
+        val: BasicValueEnum<'ctx>,
+        arg: &Expr,
+    ) {
+        let inkwell::types::BasicTypeEnum::StructType(agg_ty) = val.get_type() else {
+            return;
+        };
+        if agg_ty == self.vec_struct_type() || self.current_fn.is_none() {
+            return;
+        }
+        let cur_fn = self.current_fn.unwrap();
+        if matches!(&arg.kind, ExprKind::Call { .. }) {
+            if let Some(enum_name) = self
+                .enum_name_of_expr(arg)
+                .filter(|n| self.enum_has_heap_payload(n))
+            {
+                let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
+                self.builder.build_store(slot, val).unwrap();
+                self.track_enum_var(&enum_name, slot);
+            }
+        } else if self.aggregate_has_heap_field(agg_ty) {
+            match &arg.kind {
+                ExprKind::Tuple(_) => {
+                    let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
+                    self.builder.build_store(slot, val).unwrap();
+                    self.track_tuple_var(slot, agg_ty);
+                }
+                ExprKind::StructLiteral { path, .. }
+                    if path
+                        .last()
+                        .is_some_and(|n| self.struct_types.contains_key(n.as_str())) =>
+                {
+                    let name = path.last().unwrap().clone();
+                    let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
+                    self.builder.build_store(slot, val).unwrap();
+                    self.track_struct_var(&name, slot);
+                }
+                _ => {}
+            }
         }
     }
 
