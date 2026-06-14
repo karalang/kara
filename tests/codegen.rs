@@ -927,9 +927,9 @@ fn main() {
     /// The typechecker now records each join's `T` in `task_join_return_types`
     /// and codegen sizes the cross-task transfer + out-slot for it. Surfaced
     /// by the Fathom dogfood (parallel Mandelbrot row-bands return `Vec[u8]`).
-    /// NB: the spawn binding (`t`) and the join loop binding (`h`) are
-    /// deliberately distinct — a shared name deadlocks (bug-ledger
-    /// B-2026-06-14-13), a separate pre-existing codegen scoping bug.
+    /// The colliding-name variant (`for handle in handles` where `handle` is
+    /// also the spawn-binding name) is exercised separately below
+    /// (`e2e_for_loop_binding_name_collision_no_false_rc`).
     #[test]
     fn e2e_taskhandle_join_returns_nonscalar_vec() {
         if let Some(out) = run_program(
@@ -954,6 +954,47 @@ fn main() {
              }",
         ) {
             // bands of length 2, 3, 4 → 9 elements total (was garbage/trap before the fix)
+            assert_eq!(out, "9\n");
+        }
+    }
+
+    /// Regression (B-2026-06-14-13): a `for <name> in xs` loop binding that
+    /// SHARES A NAME with an earlier same-function `let <name>` must not be
+    /// conflated with it by the ownership RC analysis. Here the spawn result
+    /// is bound to `handle` (consumed by `push`), then `for handle in handles`
+    /// reuses the name. Before the fix, the RC predicate paired the `push`
+    /// consume with the loop body's `handle.join()` use (dominance-incomparable
+    /// across the loop boundary) and inserted a spurious RC fallback on the
+    /// shared name; codegen then RC-boxed the binding and mis-lowered the plain
+    /// `{i64}` loop element as an Rc pointer → segfault (native) / `join`
+    /// deadlock (wasm-threads). Fixed by scoping the for-loop binding to a
+    /// per-loop `@forN` rename frame in the CFG (`src/cfg.rs`), like match
+    /// arms. Same workload as the distinct-name test above; only the names
+    /// collide — so a regression reappears as a crash/hang here, not a wrong
+    /// number.
+    #[test]
+    fn e2e_for_loop_binding_name_collision_no_false_rc() {
+        if let Some(out) = run_program(
+            "fn band(n: i64) -> Vec[i64] {\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 let mut i = 0;\n\
+                 while i < n { v.push(i); i = i + 1; }\n\
+                 v\n\
+             }\n\
+             fn main() {\n\
+                 let mut pool: TaskGroup = TaskGroup.new();\n\
+                 let mut handles: Vec[TaskHandle[Vec[i64]]] = Vec.new();\n\
+                 let mut k = 0;\n\
+                 while k < 3 {\n\
+                     let handle: TaskHandle[Vec[i64]] = pool.spawn(|| band(k + 2));\n\
+                     handles.push(handle);\n\
+                     k = k + 1;\n\
+                 }\n\
+                 let mut total = 0;\n\
+                 for handle in handles { let c: Vec[i64] = handle.join(); total = total + c.len(); }\n\
+                 println(f\"{total}\");\n\
+             }",
+        ) {
             assert_eq!(out, "9\n");
         }
     }

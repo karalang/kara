@@ -114,12 +114,8 @@ fn render_frame(cx: f64, cy: f64, scale: f64, workers: i64) with writes(Display)
         let mut y1 = y0 + band;
         if y1 > h { y1 = h; }
         if y0 < y1 {
-            // NB: bind the spawn result to `task`, not `handle` — a `let
-            // handle = …` here that shares the name of the `for handle in
-            // handles` join binding below mis-resolves in codegen and the
-            // join deadlocks on a stale handle (bug-ledger B-2026-06-14-13).
-            let task: TaskHandle[Vec[u8]] = pool.spawn(|| render_rows(y0, y1, cx, cy, scale));
-            handles.push(task);
+            let handle: TaskHandle[Vec[u8]] = pool.spawn(|| render_rows(y0, y1, cx, cy, scale));
+            handles.push(handle);
         }
         k = k + 1;
     }

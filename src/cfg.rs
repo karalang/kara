@@ -349,6 +349,24 @@ impl<'a> CfgBuilder<'a> {
         });
     }
 
+    /// Per-`for`-loop rename frame (`@forN`). Same device as the match-arm
+    /// frame: the loop variable is a fresh binding distinct from any outer
+    /// binding of the same name. Without scoping it, a binding consumed
+    /// BEFORE the loop whose name is reused as the loop variable pairs (as a
+    /// dominance-incomparable Consume/use) with the loop body's uses of the
+    /// loop var and spuriously fires the formal RC predicate — codegen then
+    /// RC-boxes the shared name and mis-lowers the plain loop element as an
+    /// Rc pointer (B-2026-06-14-13). The suffix is stripped by
+    /// `demangle_binding` before any `rc_values` key / diagnostic.
+    fn push_for_rename_frame(&mut self) {
+        let id = self.next_cleanup_id;
+        self.next_cleanup_id += 1;
+        self.cleanup_rename_stack.push(CleanupRenameFrame {
+            suffix: format!("@for{id}"),
+            bindings: HashSet::new(),
+        });
+    }
+
     fn pop_cleanup_rename_frame(&mut self) {
         self.cleanup_rename_stack.pop();
     }
@@ -892,7 +910,7 @@ impl<'a> CfgBuilder<'a> {
             }
             ExprKind::For {
                 label,
-                pattern: _,
+                pattern,
                 iterable,
                 body,
                 ..
@@ -906,6 +924,35 @@ impl<'a> CfgBuilder<'a> {
                 let merge = self.new_block();
                 self.add_edge(header, merge);
 
+                // Scope the loop variable to a per-loop rename frame (`@forN`),
+                // exactly like match arms (`@armN`). The loop var is a fresh
+                // binding distinct from any outer binding of the same name;
+                // without scoping it, a binding consumed BEFORE the loop (e.g.
+                // moved into the Vec being iterated) whose name is REUSED as
+                // the loop variable pairs (as a dominance-incomparable
+                // Consume/use) with the loop body's uses of the loop var and
+                // spuriously fires the formal RC predicate. Codegen then
+                // RC-boxes the shared name and mis-lowers the plain loop
+                // element as an Rc pointer (B-2026-06-14-13: `TaskHandle.join`
+                // deadlock / segfault on `for handle in handles` after
+                // `let handle = spawn(); push(handle)`). The frame also records
+                // a `Define` for the loop var (fresh each iteration, before the
+                // body's uses, as `StmtKind::Let` does) and marks it
+                // loop-local so consuming it inside the body stays safe.
+                self.push_for_rename_frame();
+                for name in pattern_bindings(pattern) {
+                    self.note_local_introduced(&name);
+                    self.record_use(
+                        body_entry,
+                        UseSite {
+                            binding: name.clone(),
+                            kind: UseKind::Define,
+                            span: pattern.span.clone(),
+                            consume_origin: ConsumeOrigin::Direct,
+                        },
+                    );
+                }
+
                 let frame = LoopFrame {
                     label: label.clone(),
                     break_target: merge,
@@ -916,6 +963,7 @@ impl<'a> CfgBuilder<'a> {
                 new_loops.push(frame);
                 let body_exit = self.lower_block(body, body_entry, exit, &new_loops);
                 self.add_edge(body_exit, header);
+                self.pop_cleanup_rename_frame();
                 merge
             }
             ExprKind::Loop { label, body, .. } => {

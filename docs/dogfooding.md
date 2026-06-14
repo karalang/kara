@@ -835,20 +835,23 @@ worker-pool parallelism + SIMD-128 already ship on wasm-threads.
 > fn. This is the first front-end-track demo and the first consumer of the
 > Phase-10 event-stream surface.
 >
-> The dogfood drove three real `karac` gaps (all closed): (1)
+> The dogfood drove four real `karac` gaps (all closed): (1)
 > **`std.web.time.animation_frames()`** — a multi-shot host-async `requestAnimation
 > Frame` channel producer (sibling of `after`, coalesced to one un-drained tick);
 > (2) **`Vec[u8].as_ptr()` / `.as_mut_ptr()`** — the heap-buffer FFI handoff a
 > `host fn` blit consumes (an `Array[u8, N]` framebuffer would overflow the wasm
 > stack); (3) **`TaskHandle[T].join()` for a non-scalar `T`** — `join` had
 > returned `i64` unconditionally, so a `spawn` returning `Vec[u8]` came back as
-> garbage and trapped (B-2026-06-14-12, fixed native + wasm). It also surfaced an
-> *open* codegen scoping bug — a `for x in …` loop binding sharing a name with an
-> earlier same-function `let x` deadlocks `join` on a stale handle
-> (B-2026-06-14-13); the demo sidesteps it with distinct names. Regression
-> tests: `tests/cli.rs::wasm_threads_animation_frames_recv_e2e`,
+> garbage and trapped (B-2026-06-14-12, fixed native + wasm); and (4) a `for x in
+> xs` loop binding sharing a name with an earlier same-function `let x` (here
+> `for handle in handles` after `let handle = spawn(...)`) was conflated by the
+> ownership RC analysis into a spurious RC fallback → codegen RC-boxed it and
+> mis-lowered the plain loop element as an Rc pointer → segfault / `join`
+> deadlock (B-2026-06-14-13, fixed by scoping the for-loop binding to a per-loop
+> `@forN` CFG rename frame like match arms). Regression tests:
+> `tests/cli.rs::wasm_threads_animation_frames_recv_e2e`,
 > `tests/codegen.rs::{e2e_taskhandle_join_returns_nonscalar_vec,
-> test_vec_as_ptr_loads_data_field}`.
+> e2e_for_loop_binding_name_collision_no_false_rc, test_vec_as_ptr_loads_data_field}`.
 >
 > **Follow-ups (own gates):** the inner kernel is currently **scalar f64** — the
 > `Vector[f64, 2]` SIMD-128 lowering (needs the comparison→mask→select path

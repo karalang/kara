@@ -93,13 +93,15 @@ Building Fathom surfaced and closed real `karac` gaps (the dogfood's job — cf.
 2. **`Vec[u8].as_ptr()` / `.as_mut_ptr()`** — the heap-buffer FFI handoff to a
    `host fn` (the framebuffer blit). Previously only `Array`/`CStr` had it; an
    `Array[u8, N]` of framebuffer size would overflow the wasm stack.
-3. **`TaskHandle[T].join()` for non-scalar `T`** — `join` had returned `i64`
-   unconditionally, so a `spawn` returning a `Vec`/`String`/struct came back as
-   garbage and trapped. The typechecker now records each join's `T` and codegen
-   sizes the cross-task transfer correctly.
-
-It also surfaced a still-open codegen bug — a `for x in …` loop binding that
-shares a name with an earlier same-function `let x` mis-resolves and
-`TaskHandle.join` deadlocks on a stale handle (bug-ledger **B-2026-06-14-13**).
-Fathom sidesteps it by binding the spawn result to `task` (distinct from the
-`for handle in handles` join binding); see the comment in `mandelbrot.kara`.
+3. **`TaskHandle[T].join()` for non-scalar `T`** (B-2026-06-14-12) — `join` had
+   returned `i64` unconditionally, so a `spawn` returning a `Vec`/`String`/struct
+   came back as garbage and trapped. The typechecker now records each join's `T`
+   and codegen sizes the cross-task transfer correctly.
+4. **`for x in xs` loop-binding name collision** (B-2026-06-14-13) — a loop
+   binding sharing a name with an earlier same-function `let x` (here `for handle
+   in handles` after `let handle = spawn(...)`) was conflated by the ownership
+   RC analysis, which inserted a spurious RC fallback; codegen then RC-boxed the
+   binding and mis-lowered the plain loop element as an Rc pointer → segfault
+   (native) / `join` deadlock (wasm-threads). Fixed by scoping the for-loop
+   binding to a per-loop `@forN` rename frame in the CFG (`src/cfg.rs`), like
+   match arms — so `render_frame` reuses the natural name in both places.
