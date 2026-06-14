@@ -10584,6 +10584,112 @@ fn main() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// The abort tier for *value-corrupting type errors* (B-2026-06-13-15).
+/// A cast the typechecker rejects (`E_INT_AS_CHAR` here) has no defined
+/// `as` lowering, so the interpreter would substitute a placeholder and
+/// emit silently wrong output at exit 0 — the run-leniency footgun kata
+/// #67/#415 surfaced. `karac run` must abort with `error[typecheck]` (not
+/// downgrade to a warning), matching `karac check` / `karac build`. Pairs
+/// with `run_noncast_type_error_warns_and_executes` below, which pins that
+/// the partition stays narrow — soft type errors keep their leniency.
+#[test]
+fn run_value_corrupting_cast_aborts() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-run-vcast-abort-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("vcast.kara");
+    // `b as char` is rejected (E_INT_AS_CHAR). Before the fix, `karac run`
+    // downgraded it to a warning and printed a placeholder for `c`.
+    let src = "fn main() {\n    let b: u8 = 65u8;\n    let c = b as char;\n    println(c);\n    println(\"unreachable past the cast\");\n}\n";
+    std::fs::write(&path, src).unwrap();
+
+    let out = karac_bin()
+        .args(["run", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "a value-corrupting cast must abort `karac run`; stdout={stdout} stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("error[typecheck]") && stderr.contains("E_INT_AS_CHAR"),
+        "expected a hard error[typecheck]/E_INT_AS_CHAR, not a warning: {stderr}",
+    );
+    assert!(
+        !stderr.contains("warning[typecheck]"),
+        "the cast must NOT downgrade to warning[typecheck]: {stderr}",
+    );
+    // The program must not execute — no placeholder output, nothing past
+    // the cast.
+    assert!(
+        !stdout.contains("unreachable past the cast"),
+        "program executed past the rejected cast: {stdout}",
+    );
+
+    // Symmetry: `karac check` rejects the same program (it always did —
+    // this pins that `run` now agrees rather than silently diverging).
+    let out = karac_bin()
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "`karac check` must also reject the value-corrupting cast",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Guard that the run-fatal partition stays *narrow*: a genuinely soft
+/// type error (here a too-many-arguments arity mismatch) must keep the
+/// phase-10 leniency — downgrade to `warning[typecheck]` and execute to
+/// exit 0. Without this, a future widening of `TypeErrorKind::is_run_fatal`
+/// that swept in ordinary type errors would silently break the script
+/// path's fast-iteration ethos. The complement of
+/// `run_value_corrupting_cast_aborts`.
+#[test]
+fn run_noncast_type_error_warns_and_executes() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-run-softtype-warn-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("softtype.kara");
+    let src = "fn add(a: i32, b: i32) -> i32 { a + b }\nfn main() {\n    let _x = add(1i32, 2i32, 3i32);\n    println(\"ran anyway\");\n}\n";
+    std::fs::write(&path, src).unwrap();
+
+    let out = karac_bin()
+        .args(["run", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "a soft type error must NOT abort `karac run`; stdout={stdout} stderr={stderr}",
+    );
+    assert!(
+        stdout.contains("ran anyway"),
+        "program should execute past the soft type error: {stdout}",
+    );
+    assert!(
+        stderr.contains("warning[typecheck]"),
+        "the arity mismatch should surface as warning[typecheck]: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// The abort tier of the same decision: RAII-across-yield violations
 /// break execution-soundness/teardown guarantees (like provider escape),
 /// so they abort `karac run` rather than warn. This gate existed in

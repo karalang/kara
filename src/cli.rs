@@ -4025,14 +4025,58 @@ fn cmd_run(
     // of *static contracts* (typecheck, effects — including E0411
     // target-gate findings) downgrade to warnings and the program
     // still executes; only violations that break *execution-soundness/
-    // teardown guarantees* (provider escape, RAII-across-yield below)
-    // abort. Running the pass here is also load-bearing for two
+    // teardown guarantees* (provider escape, RAII-across-yield below) —
+    // plus the value-corrupting type errors gated immediately after this
+    // pass — abort. Running the pass here is also load-bearing for two
     // consumers that read its outputs on this path: `raii_check`
     // (keys off `Program.state_struct_layouts` / `yield_points`,
     // populated by `Pipeline::effectcheck` — without this call the
     // run-path RAII gate below was vacuously green) and the
     // `missing_track_caller` lint (reads `pipeline.effects`).
     pipeline.effectcheck();
+
+    // Value-corrupting type errors are run-fatal even on the lenient
+    // script path. The run-leniency decision downgrades most static-contract
+    // violations to warnings and executes anyway — but an *invalid cast*
+    // the typechecker rejected (`TypeErrorKind::is_run_fatal`) has no
+    // defined `as` lowering, so the interpreter would substitute a
+    // placeholder (empty `String` / unchanged int) and emit silent wrong
+    // output at exit 0. `karac check` / `karac build` already reject these;
+    // this brings `run` into line for exactly that class while genuinely
+    // soft type errors (mismatch, arity, exhaustiveness) keep downgrading
+    // to the `warning[typecheck]` block below. Mirrors the provider_escape /
+    // RAII gates: an execution-soundness violation aborts rather than warns.
+    // (B-2026-06-13-15.)
+    if let Some(ref t) = pipeline.typed {
+        let run_fatal: Vec<&crate::typechecker::TypeError> =
+            t.errors.iter().filter(|e| e.kind.is_run_fatal()).collect();
+        if !run_fatal.is_empty() {
+            match output {
+                OutputMode::Text => {
+                    for err in &run_fatal {
+                        eprintln!(
+                            "error[typecheck]: {}:{}:{}: {}",
+                            filename, err.span.line, err.span.column, err.message
+                        );
+                    }
+                }
+                OutputMode::Json => emit_json_output(&pipeline),
+                OutputMode::Jsonl => {
+                    for err in &run_fatal {
+                        emit_jsonl_event(
+                            "diagnostic",
+                            &format!(
+                                "\"severity\":\"error\",\"phase\":\"typecheck\",{},\"message\":{}",
+                                span_to_json(&err.span, filename),
+                                json_string(&err.message),
+                            ),
+                        );
+                    }
+                }
+            }
+            process::exit(1);
+        }
+    }
 
     if output == OutputMode::Text {
         // Print type warnings to stderr

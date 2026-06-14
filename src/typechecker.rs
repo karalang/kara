@@ -648,6 +648,36 @@ pub enum TypeErrorKind {
     MainErrNotDisplay,
 }
 
+impl TypeErrorKind {
+    /// Whether a type error of this kind is **run-fatal** — fatal even on
+    /// `karac run`'s lenient script path, which otherwise downgrades hard
+    /// type errors to `warning[typecheck]` and executes anyway (the
+    /// phase-10 run-leniency decision, 2026-06-06; see the gate in
+    /// `cli::cmd_run`).
+    ///
+    /// A run-fatal error is one with **no defined runtime semantics**: the
+    /// interpreter/codegen would have to substitute a placeholder value
+    /// (empty `String`, unchanged/zero int) and the program would emit
+    /// silently wrong output at exit 0 — the worst failure mode, and the
+    /// one the self-hosting dual-oracle agreement check is structurally
+    /// blind to (B-2026-06-13-15). `karac check` / `karac build` already
+    /// reject these; this brings `run` into line for exactly that class.
+    ///
+    /// Currently the **invalid-cast family** (`TypeErrorKind::InvalidCast`):
+    /// `iN/uN → char` (`E_INT_AS_CHAR`), `iN/uN → bool` (`E_INT_AS_BOOL`),
+    /// `f → bool` (`E_FLOAT_AS_BOOL`), `char → narrow int`
+    /// (`E_CHAR_AS_NARROW_INT`), the pointer-provenance casts, and the
+    /// refinement source mismatch — every cast the checker rejects has no
+    /// well-defined `as` lowering, so running it is unsound. Genuinely soft
+    /// type errors (mismatches, arity, exhaustiveness) keep downgrading so
+    /// a script author can still iterate. The partition is intentionally
+    /// narrow and additive: widen it only for kinds that *corrupt the run*,
+    /// never for ones worth iterating through.
+    pub fn is_run_fatal(&self) -> bool {
+        matches!(self, TypeErrorKind::InvalidCast)
+    }
+}
+
 /// Map a `TypeErrorKind` to its broad-category `DiagnosticClass`
 /// for `karac explain --format=json` output. Returns `None` for
 /// kinds whose class hasn't been individually settled — the JSON
