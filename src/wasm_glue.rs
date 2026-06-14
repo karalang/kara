@@ -1210,6 +1210,99 @@ function spawnKaraWorkerSync(data, opts = {}) {
   return w;
 }
 
+// ── pthread-spawn worker→main proxy (browser only) ──
+//
+// In browsers, a nested dedicated worker's module script is fetched on its
+// CREATING agent's event loop. A wasm pthread that spawns a sibling then
+// immediately blocks (`memory.atomic.wait32` in `join`/`recv`) never turns
+// its loop again, so the sibling's script never loads — it deadlocks. The
+// fix mirrors Emscripten's PROXY_TO_PTHREAD: every worker routes
+// `thread-spawn` to the MAIN thread (the only always-live agent), which
+// creates the Worker. `thread-spawn` still returns the new tid
+// synchronously (the wasi-threads ABI requires it); only the Worker
+// construction is deferred to the main thread. node's worker_threads has
+// no such constraint, so it keeps spawning siblings directly.
+const SP_LOCK = 0; // i32: mutex over the ring write side
+const SP_SEQ = 1; // i32: doorbell — bumped per enqueue
+const SP_WRITE = 2; // i32: ring write cursor (producer, under SP_LOCK)
+const SP_RING_OFF = 8; // i32 index where the (tid,startArg) ring begins
+const SP_RING_CAP = 1024; // max in-flight spawn requests (pairs)
+const SPAWN_CTL_INTS = SP_RING_OFF + SP_RING_CAP * 2;
+const SPAWN_CTL_BYTES = SPAWN_CTL_INTS * 4;
+
+/** Worker side: enqueue a {tid, startArg} spawn request for the main
+ * thread and ring its doorbell. Never blocks on the spawn completing —
+ * the new thread runs `wasi_thread_start(tid, startArg)` once the main
+ * thread has created its Worker. */
+function requestMainThreadSpawn(spawnCtl, tid, startArg) {
+  const c = new Int32Array(spawnCtl);
+  while (Atomics.compareExchange(c, SP_LOCK, 0, 1) !== 0) {
+    Atomics.wait(c, SP_LOCK, 1);
+  }
+  try {
+    const wcur = Atomics.load(c, SP_WRITE);
+    const slot = SP_RING_OFF + wcur * 2;
+    Atomics.store(c, slot, tid | 0);
+    Atomics.store(c, slot + 1, startArg | 0);
+    Atomics.store(c, SP_WRITE, (wcur + 1) % SP_RING_CAP);
+    Atomics.add(c, SP_SEQ, 1);
+    Atomics.notify(c, SP_SEQ);
+  } finally {
+    Atomics.store(c, SP_LOCK, 0);
+    Atomics.notify(c, SP_LOCK, 1);
+  }
+}
+
+/** Main side: drain spawn requests and create each pthread Worker on the
+ * main thread's (always-live) event loop. `baseData` is the primary's
+ * protocol record; each spawn overrides role/tid/startArg. Returns a
+ * handle whose stop() ends the loop. */
+function startSpawnService(spawnCtl, baseData) {
+  const c = new Int32Array(spawnCtl);
+  let read = 0;
+  let last = Atomics.load(c, SP_SEQ);
+  let running = true;
+  const hasWaitAsync = typeof Atomics.waitAsync === "function";
+  function drain() {
+    const write = Atomics.load(c, SP_WRITE);
+    while (read !== write) {
+      const slot = SP_RING_OFF + read * 2;
+      const tid = Atomics.load(c, slot);
+      const startArg = Atomics.load(c, slot + 1) >>> 0;
+      read = (read + 1) % SP_RING_CAP;
+      spawnKaraWorkerSync(
+        { ...baseData, role: "pthread", tid, startArg },
+        { unref: true },
+      );
+    }
+  }
+  const done = (async () => {
+    for (;;) {
+      let cur = Atomics.load(c, SP_SEQ);
+      if (cur === last) {
+        if (hasWaitAsync) {
+          const w = Atomics.waitAsync(c, SP_SEQ, last);
+          if (w.async) await w.value;
+        } else {
+          await new Promise((r) => setTimeout(r, 0));
+        }
+        cur = Atomics.load(c, SP_SEQ);
+      }
+      if (!running) break;
+      last = cur;
+      drain();
+    }
+  })();
+  return {
+    stop() {
+      running = false;
+      Atomics.add(c, SP_SEQ, 1);
+      Atomics.notify(c, SP_SEQ);
+      return done;
+    },
+  };
+}
+
 // ── host-fn worker→main proxy (threaded builds with host fns) ──
 //
 // The program runs in a worker (PROXY_TO_PTHREAD), but `host fn`
@@ -1351,17 +1444,26 @@ function startHostService(hostCtl, memory, hostImpls) {
 /** Worker-side protocol: instantiate the shared-memory module and
  * either run `_start` (primary) or `wasi_thread_start` (pthread). */
 async function karaThreadWorkerMain(data, postMessageFn) {
-  const { role, module, memory, tidCounter, env, tid, startArg, hostCtl } =
+  const { role, module, memory, tidCounter, env, tid, startArg, hostCtl, spawnCtl } =
     data;
   const imports = {
     env: { memory },
     wasi: {
       "thread-spawn": (arg) => {
         const newTid = Atomics.add(new Int32Array(tidCounter), 0, 1);
-        spawnKaraWorkerSync(
-          { ...data, role: "pthread", tid: newTid, startArg: arg },
-          { unref: true },
-        );
+        if (nodeWorkerThreads) {
+          // node: nested worker_threads start independently of the
+          // (blocked) parent — spawn the sibling directly.
+          spawnKaraWorkerSync(
+            { ...data, role: "pthread", tid: newTid, startArg: arg },
+            { unref: true },
+          );
+        } else {
+          // browser: defer Worker construction to the main thread, which
+          // is the only agent whose event loop is guaranteed live (this
+          // worker is about to block in `join`/`recv`).
+          requestMainThreadSpawn(spawnCtl, newTid, arg);
+        }
         return newTid;
       },
     },
@@ -1589,6 +1691,14 @@ async function runThreaded(hostImpls = {}, opts = {}) {
     (globalThis.navigator && navigator.hardwareConcurrency) ??
     4;
   const env = ["KARAC_PAR_WORKERS=" + poolSize];
+  // Browser: pthread Workers are created on the main thread (the only
+  // always-live agent) via a shared spawn-request ring — a blocked
+  // worker cannot load nested workers. node spawns siblings directly.
+  let spawnCtl = null;
+  let spawnService = null;
+  if (!isNode) {
+    spawnCtl = new SharedArrayBuffer(SPAWN_CTL_BYTES);
+  }
   const data = {
     __karaThreads: true,
     role: "primary",
@@ -1599,7 +1709,9 @@ async function runThreaded(hostImpls = {}, opts = {}) {
     tid: 0,
     startArg: 0,
     hostCtl,
+    spawnCtl,
   };
+  if (spawnCtl) spawnService = startSpawnService(spawnCtl, data);
   try {
     const code = await new Promise((resolve, reject) => {
       const w = spawnKaraWorkerSync(data);
@@ -1622,6 +1734,7 @@ async function runThreaded(hostImpls = {}, opts = {}) {
     return { memory, threaded: true };
   } finally {
     if (hostService) await hostService.stop();
+    if (spawnService) await spawnService.stop();
   }
 }
 
@@ -1938,9 +2051,19 @@ mod tests {
             "#kara-thread-worker",
             "KARAC_PAR_WORKERS=",
             "forceSequential",
+            // pthread-spawn → main-thread proxy: browsers can't load a
+            // nested worker while its creator is blocked, so Worker
+            // construction is routed to the always-live main thread.
+            "function requestMainThreadSpawn(spawnCtl, tid, startArg)",
+            "function startSpawnService(spawnCtl, baseData)",
+            "spawnCtl = new SharedArrayBuffer(SPAWN_CTL_BYTES);",
+            "requestMainThreadSpawn(spawnCtl, newTid, arg);",
+            "if (spawnService) await spawnService.stop();",
         ] {
             assert!(glue.contains(needle), "missing in threaded glue: {needle}");
         }
+        // node keeps spawning siblings directly (no proxy hop).
+        assert!(glue.contains("if (nodeWorkerThreads) {"));
         // Sequential-only build renders the constants inert (the static
         // body references them unconditionally).
         let seq = render_glue(&[], &[], "app.wasm", None);
