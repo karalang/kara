@@ -3696,6 +3696,74 @@ fn main() {
     }
 
     #[test]
+    fn asan_call_result_tuple_var_no_leak() {
+        // #24 (phase-12 self-hosting) — a let-bound tuple VAR sourced from a CALL
+        // (`let p = ret_tuple(i)`) whose only heap is an enum / Map leaf leaked: the
+        // call-result source missed the annotation/literal arms of
+        // `tuple_binding_elem_tes`, so no `TypeExpr`-driven drop was registered and
+        // `track_tuple_var`'s LLVM walk is enum/Map-blind. The fix recovers the
+        // element TEs from the callee's return type (`fn_return_type_exprs`). The
+        // coupled fix (`B-2026-06-14-1`) makes the drop-fn memoization key
+        // (`type_expr_sig`) generic-args-aware, so `Map[i64,i64]` and
+        // `Map[String,i64]` no longer alias one drop fn — a scalar-first program had
+        // leaked a later `Map[String,_]`'s keys; a String-first program ran a
+        // `drop_key=1` over a scalar map (the #23 garbage-free class).
+        //
+        // Loop-stressed: call-sourced enum-leaf tuple UNUSED (the leak), the same
+        // destructured + consumed (no double-free), call-sourced scalar-map and
+        // String-key-map tuples (both UNUSED — the generic-args memo key), and both
+        // map shapes used in one loop body so the memo collision would fire. The
+        // f-string payloads/keys keep each iteration's heap non-foldable so Linux
+        // LSan sees a real leak if any leaf's drop is missing or mis-keyed.
+        assert_clean_asan_run(
+            r#"
+enum Tok { Id(String), Num(i64) }
+fn ret_tuple(i: i64) -> (Tok, i64) { return (Tok.Id(f"id{i}"), i); }
+fn ret_imap(i: i64) -> (Map[i64, i64], i64) {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(i, i);
+    return (m, i);
+}
+fn ret_smap(i: i64) -> (Map[String, i64], i64) {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert(f"k{i}", i); m.insert(f"j{i}", i);
+    return (m, i);
+}
+fn use_tok(t: Tok) -> i64 {
+    match t { Id(s) => s.len(), Num(n) => n }
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 8 {
+        // Call-sourced enum-leaf tuple var, UNUSED (the #24 leak).
+        let p = ret_tuple(i);
+
+        // Call-sourced enum-leaf tuple var, destructured + consumed (no double-free).
+        let q = ret_tuple(i + 50);
+        let (t, n) = q;
+        acc = acc + use_tok(t) + n;
+
+        // Call-sourced scalar-map tuple var, UNUSED (memo key (0,0) flags).
+        let im = ret_imap(i);
+
+        // Call-sourced String-key-map tuple var, UNUSED (memo key (1,0) flags) —
+        // in the SAME loop body as the scalar map so the old shared memo key would
+        // drop this with (0,0) and leak the f-string keys.
+        let sm = ret_smap(i);
+
+        i = i + 1;
+    }
+    if acc > 999999 { println("never"); }
+    println("done");
+}
+"#,
+            &["done"],
+            "call_result_tuple_var_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_enum_field_struct_transfer_destructure_no_double_free() {
         // #19 (phase-12 self-hosting): a by-value TRANSFER of an enum-field struct
         // (`let b = wrap(a)`, `wrap(s: Span) -> Span { s }`) followed by a

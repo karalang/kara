@@ -13130,6 +13130,61 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_call_result_tuple_var_drop() {
+        // #24 (phase-12 self-hosting) — a let-bound tuple VAR sourced from a CALL
+        // (`let p = ret_tuple(i)`, RHS a `Call`, not a tuple literal, no annotation)
+        // whose only heap is an enum / Map leaf. `track_tuple_var` is enum/Map-blind
+        // (the leaf is all-i64 words), and the call-result source missed the
+        // annotation/literal arms of `tuple_binding_elem_tes`, so NO drop was
+        // registered and the leaf leaked. The fix recovers the element `TypeExpr`s
+        // from the callee's recorded return type (`fn_return_type_exprs`) so the
+        // `TypeExpr`-driven tuple drop runs. Coupled (`B-2026-06-14-1`): the drop-fn
+        // memoization key (`type_expr_sig`) now folds in generic args, so
+        // `Map[i64,i64]` ((0,0) flags) and `Map[String,i64]` ((1,0) flags) get
+        // distinct drop fns rather than aliasing (a scalar-first program had leaked
+        // a later `Map[String,_]`'s keys). Correctness is the call-sourced tuple
+        // still round-tripping when later consumed, across enum / scalar-map /
+        // String-key-map leaves; the leak fix itself is in
+        // `asan_call_result_tuple_var_no_leak`.
+        if let Some(out) = run_program(
+            r#"
+enum Tok { Id(String), Num(i64) }
+fn ret_tuple(i: i64) -> (Tok, i64) { return (Tok.Id(f"id{i}"), i); }
+fn ret_imap(i: i64) -> (Map[i64, i64], i64) {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(i, i * 10);
+    return (m, i);
+}
+fn ret_smap(i: i64) -> (Map[String, i64], i64) {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert(f"k{i}", i);
+    return (m, i);
+}
+fn use_tok(t: Tok) -> String {
+    match t { Id(s) => s, Num(n) => n.to_string() }
+}
+fn main() {
+    // Call-sourced enum-leaf tuple var, then destructure + consume.
+    let p = ret_tuple(2);
+    let (t, n) = p;
+    println(f"{use_tok(t)}-{n}");
+    // Call-sourced scalar-map tuple var, consumed by-value.
+    let q = ret_imap(4);
+    let (m1, a) = q;
+    println(f"{m1.len()}-{a}");
+    // Call-sourced String-key-map tuple var (distinct memo key from scalar map).
+    let r = ret_smap(6);
+    let (m2, b) = r;
+    println(f"{m2.len()}-{b}");
+    println("ok");
+}
+"#,
+        ) {
+            assert_eq!(out, "id2-2\n1-4\n1-6\nok\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_enum_field_struct_field_move_out_loop() {
         // #19 FIXED 2026-06-12 — the bootstrap lexer's `render()` shape: iterate a
         // `Vec[SpannedToken]` and pass each element BY VALUE to a fn that moves the

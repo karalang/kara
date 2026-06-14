@@ -583,13 +583,40 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     fn type_expr_sig(te: &crate::ast::TypeExpr) -> String {
-        use crate::ast::TypeKind;
+        use crate::ast::{GenericArg, TypeKind};
         match &te.kind {
-            TypeKind::Path(p) => p
-                .segments
-                .last()
-                .cloned()
-                .unwrap_or_else(|| "x".to_string()),
+            TypeKind::Path(p) => {
+                let base = p
+                    .segments
+                    .last()
+                    .cloned()
+                    .unwrap_or_else(|| "x".to_string());
+                // B-2026-06-14-1: the memoization key MUST fold in the generic
+                // args. `Map[i64,i64]` and `Map[String,i64]` share the base
+                // segment `Map` (and the LLVM type `{i64,i64}`), but
+                // `emit_tuple_elem_drops` frees them with DIFFERENT
+                // `map_drop_flags` ((0,0) vs (1,0)) — keying on the base alone
+                // aliased the two drop fns, so whichever map shape was
+                // synthesized first silently dropped the other's heap keys/vals
+                // (a scalar-first program leaked a later `Map[String,_]`'s keys;
+                // a String-first program ran drop_key=1 over a scalar map — the
+                // #23 garbage-free). Recurse into the args so the sig is
+                // shape-exact.
+                match &p.generic_args {
+                    Some(args) if !args.is_empty() => {
+                        let inner = args
+                            .iter()
+                            .map(|a| match a {
+                                GenericArg::Type(t) => Self::type_expr_sig(t),
+                                _ => "x".to_string(),
+                            })
+                            .collect::<Vec<_>>()
+                            .join("_");
+                        format!("{base}_g{inner}g")
+                    }
+                    _ => base,
+                }
+            }
             TypeKind::Tuple(e) => format!("t{}t", Self::tuple_te_sig(e)),
             _ => "x".to_string(),
         }

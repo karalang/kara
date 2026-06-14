@@ -4147,6 +4147,27 @@ impl<'ctx> super::Codegen<'ctx> {
         if let ExprKind::Tuple(elems) = &value.kind {
             return Some(elems.iter().map(|e| self.infer_arg_elem_te(e)).collect());
         }
+        // #24 (B-2026-06-14-2) — the call-result source with no annotation
+        // (`let p = ret_tuple(i)` where `ret_tuple -> (Tok, i64)`). The RHS is a
+        // `Call`, not a tuple
+        // literal, so the two arms above miss it and the enum/Map/Set leaf
+        // leaked (`track_tuple_var` is enum-blind). Recover the element TEs from
+        // the callee's recorded return type (`fn_return_type_exprs`) — the same
+        // free-function-Call recovery `untyped_let_boxed_enum_te` does for boxed
+        // enums. A method-call RHS (`let p = obj.split()`) is the deferred narrow
+        // tail (methods aren't keyed in `fn_return_type_exprs`); it leaks but
+        // never double-frees, matching the boxed-enum spike's method-call defer.
+        if let ExprKind::Call { callee, .. } = &value.kind {
+            if let ExprKind::Identifier(name) = &callee.kind {
+                if let Some(TypeExpr {
+                    kind: TypeKind::Tuple(elems),
+                    ..
+                }) = self.fn_return_type_exprs.get(name)
+                {
+                    return Some(elems.clone());
+                }
+            }
+        }
         None
     }
 
