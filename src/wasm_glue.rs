@@ -479,17 +479,25 @@ pub fn render_glue(
     // producer pre-link), and a native/sequential build never wires a
     // service instance. `__kara_timer_after(chPtr: i64, ms: i64) -> ()`
     // backs `std.web.time.after`; `__kara_animation_frames(chPtr: i64) -> ()`
-    // backs `std.web.time.animation_frames` (a multi-shot rAF loop).
+    // backs `std.web.time.animation_frames` (a multi-shot rAF loop);
+    // `__kara_pointer_moves(chPtr: i64) -> ()` backs
+    // `std.web.events.pointer_moves` — the first non-unit producer: it sends a
+    // `PointerEvent` payload (not a `()` tick) across the service instance.
     let builtin_sigs: &[&str] = if threads.is_some() {
         &[
             "{ name: \"__kara_timer_after\", params: [\"bigint\", \"bigint\"], ret: \"void\" }",
             "{ name: \"__kara_animation_frames\", params: [\"bigint\"], ret: \"void\" }",
+            "{ name: \"__kara_pointer_moves\", params: [\"bigint\"], ret: \"void\" }",
         ]
     } else {
         &[]
     };
     let builtin_names: &[&str] = if threads.is_some() {
-        &["\"__kara_timer_after\"", "\"__kara_animation_frames\""]
+        &[
+            "\"__kara_timer_after\"",
+            "\"__kara_animation_frames\"",
+            "\"__kara_pointer_moves\"",
+        ]
     } else {
         &[]
     };
@@ -1423,7 +1431,7 @@ await karaMaybeRunAsThreadWorker();
 /** Main-thread side of the threaded run: compile the threaded module,
  * create the shared memory (limits mirror the module's import
  * declaration exactly), spawn the primary worker, await its exit. */
-async function runThreaded(hostImpls = {}) {
+async function runThreaded(hostImpls = {}, opts = {}) {
   // host fn implementations are main-thread closures bridged into the
   // worker via the synchronous proxy below — validate them up front, the
   // same contract the sequential `buildImports` enforces.
@@ -1522,6 +1530,42 @@ async function runThreaded(hostImpls = {}) {
         raf(tick);
       };
       raf(tick);
+    };
+    // __kara_pointer_moves(chPtr: i64 [BigInt]) -> (): a MULTI-SHOT pointer
+    // input stream — the first NON-UNIT host-async producer. Registers a
+    // "pointermove" listener; each event marshals (clientX, clientY) as two
+    // little-endian f64s into the service instance's reusable event-scratch
+    // buffer in shared memory, then channel_send copies the 16-byte
+    // PointerEvent payload into the queue (vs the 0-byte `()` a timer/frame
+    // producer sends — `val_ptr=scratch, elem_size=16n`). Coalesces like
+    // animation_frames: feed a fresh position only once the worker has drained
+    // the previous one (channel_pending == 0n), so a burst of moves collapses
+    // to a sample rather than growing unbounded backlog. The cloned sender is
+    // owned by the listener for its lifetime (never dropped; the listener
+    // lives as long as the page). Event source: `opts.pointerTarget` (a
+    // browser passes the canvas element; a node test passes an EventTarget it
+    // dispatches synthetic moves on), else `globalThis` if it can
+    // addEventListener. No source → no-op (the channel never fills; recv
+    // blocks, exactly as a tab receiving no pointer input).
+    builtinHostImpls["__kara_pointer_moves"] = (chPtr) => {
+      const ptr = Number(chPtr);
+      const target =
+        (opts && opts.pointerTarget) ||
+        (typeof globalThis.addEventListener === "function" ? globalThis : null);
+      if (target === null) return;
+      // PointerEvent layout: { x: f64 @ 0, y: f64 @ 8 } = 16 bytes — kept in
+      // sync with runtime/stdlib/web_events.kara.
+      const scratch = serviceInstance.exports.karac_runtime_event_scratch();
+      const onMove = (e) => {
+        if (Number(serviceInstance.exports.karac_runtime_channel_pending(ptr)) !== 0) return;
+        // Re-derive the view each event: a shared Memory's `.buffer` may be
+        // replaced on grow, so a cached DataView could go stale.
+        const dv = new DataView(memory.buffer, scratch, 16);
+        dv.setFloat64(0, e.clientX ?? 0, true);
+        dv.setFloat64(8, e.clientY ?? 0, true);
+        serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 16n);
+      };
+      target.addEventListener("pointermove", onMove, { passive: true });
     };
   }
   // host fns: stand up the worker→main proxy (shared control block + the
@@ -1629,7 +1673,7 @@ export async function instantiate(hostImpls = {}, opts = {}) {
 export async function run(hostImpls = {}, opts = {}) {
   if (WASM_THREADS_FILENAME !== null && !opts.forceSequential) {
     if (threadsSupported()) {
-      return await runThreaded(hostImpls);
+      return await runThreaded(hostImpls, opts);
     }
     if (THREADS_NO_FALLBACK) {
       throw new Error(
@@ -1935,13 +1979,15 @@ mod tests {
             "const HOST_FN_SIGS = [{ name: \"report\", params: [\"bigint\"], ret: \"bigint\" }, \
              { name: \"log_str\", params: [\"number\", \"bigint\"], ret: \"void\" }, \
              { name: \"__kara_timer_after\", params: [\"bigint\", \"bigint\"], ret: \"void\" }, \
-             { name: \"__kara_animation_frames\", params: [\"bigint\"], ret: \"void\" }];"
+             { name: \"__kara_animation_frames\", params: [\"bigint\"], ret: \"void\" }, \
+             { name: \"__kara_pointer_moves\", params: [\"bigint\"], ret: \"void\" }];"
         ));
         // The builtins are registered as builtins, and excluded from the
         // user contract (DECLARED_IMPORTS drives the missing-impl check and
         // the d.ts).
         assert!(glue.contains(
-            "const BUILTIN_HOST_FNS = [\"__kara_timer_after\", \"__kara_animation_frames\"];"
+            "const BUILTIN_HOST_FNS = [\"__kara_timer_after\", \"__kara_animation_frames\", \
+             \"__kara_pointer_moves\"];"
         ));
         assert!(glue.contains("const DECLARED_IMPORTS = [\"report\", \"log_str\"];"));
         // Both halves of the proxy plus the worker-side wiring.
@@ -1951,7 +1997,7 @@ mod tests {
             "imports.kara_host = makeHostProxy(hostCtl);",
             "Atomics.waitAsync",
             "Atomics.compareExchange(c, HC_LOCK",
-            "return await runThreaded(hostImpls);",
+            "return await runThreaded(hostImpls, opts);",
             // Host-async service instance + builtin timer impl.
             "serviceInstance = await WebAssembly.instantiate(module, serviceImports);",
             "serviceInstance.exports.karac_runtime_service_stack_top()",
@@ -1960,6 +2006,11 @@ mod tests {
             // Multi-shot rAF producer + its coalescing pending-probe.
             "builtinHostImpls[\"__kara_animation_frames\"] = (chPtr) =>",
             "Number(serviceInstance.exports.karac_runtime_channel_pending(ptr)) === 0",
+            // Non-unit event-data producer: marshals a PointerEvent payload
+            // into the event-scratch buffer and sends 16 bytes.
+            "builtinHostImpls[\"__kara_pointer_moves\"] = (chPtr) =>",
+            "serviceInstance.exports.karac_runtime_event_scratch()",
+            "serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 16n);",
         ] {
             assert!(glue.contains(needle), "missing proxy machinery: {needle}");
         }
@@ -1968,7 +2019,9 @@ mod tests {
         // The builtin must NOT leak into the user-facing TypeScript surface.
         let dts = render_dts(&fns, &[], "app.wasm", true);
         assert!(
-            !dts.contains("__kara_timer_after") && !dts.contains("__kara_animation_frames"),
+            !dts.contains("__kara_timer_after")
+                && !dts.contains("__kara_animation_frames")
+                && !dts.contains("__kara_pointer_moves"),
             "builtin leaked into d.ts"
         );
     }

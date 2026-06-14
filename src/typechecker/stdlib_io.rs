@@ -474,6 +474,7 @@ impl<'a> super::TypeChecker<'a> {
                 | "clone"
                 | "__schedule_after"
                 | "__schedule_animation_frames"
+                | "__schedule_pointer_moves"
         ) {
             let resolved = resolve_type_var_top(&elem, &self.env.substitutions);
             let te = Self::type_to_type_expr(&resolved);
@@ -610,6 +611,27 @@ impl<'a> super::TypeChecker<'a> {
                     if !args.is_empty() {
                         self.type_error(
                             "Sender.__schedule_animation_frames takes no arguments".to_string(),
+                            span.clone(),
+                            TypeErrorKind::WrongNumberOfArgs,
+                        );
+                    }
+                    Type::Unit
+                }
+                // Internal compiler builtin backing `std.web.events.
+                // pointer_moves` (phase-10 host-async event-data producer —
+                // the `Channel[T]`, `T != ()` slice). Borrows `self`, takes
+                // no argument, returns Unit. Codegen clones the sender's
+                // channel reference and hands it to a host pointer listener
+                // that marshals each move's coordinates into shared memory
+                // and `channel_send`s the `PointerEvent` payload; the
+                // surviving clone keeps the channel open for the listener's
+                // life. Like the timer/frame builtins, kept out of ordinary
+                // reach by the `__` prefix + the `writes(Input)` gating on
+                // the `pointer_moves` wrapper.
+                "__schedule_pointer_moves" => {
+                    if !args.is_empty() {
+                        self.type_error(
+                            "Sender.__schedule_pointer_moves takes no arguments".to_string(),
                             span.clone(),
                             TypeErrorKind::WrongNumberOfArgs,
                         );

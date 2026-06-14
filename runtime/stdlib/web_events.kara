@@ -1,0 +1,86 @@
+// `std.web.events` — DOM input events as channel producers (phase-10
+// "event-stream wrappers", the `Channel[T]` for `T != ()` slice).
+//
+// GATED MODULE — like `std.web` / `std.web.time`, this file is NOT in the
+// prelude (`GATED_STDLIB_SOURCES` in `src/prelude.rs`). It enters scope
+// only via an explicit `import std.web.events.{pointer_moves, PointerEvent};`.
+//
+// Where `std.web.time` turns *clocks* into channel producers (a `()` tick
+// per frame), `std.web.events` turns *input* into channel producers that
+// carry a structured payload. `pointer_moves()` returns the receiving half
+// of a `Channel[PointerEvent]`; the waiting side drains it with a plain
+// blocking `recv()` / `for ev in …` — no `await`, no `addEventListener`
+// callback ceremony (design.md § Async Host APIs on WASM). This is the
+// first non-unit host-async producer: the host marshals each event's
+// fields into shared memory and `channel_send`s the payload across the
+// service instance (vs the zero-byte `()` a timer/frame producer sends).
+//
+// **Target reality (design.md § Scheduler contract on WASM, Realization
+// status).** Same constraint as `std.web.time`: the producer's channel is
+// fed by a host event-loop callback, which can only wake a *blocked* `recv`
+// on a target that has a thread to block — `--features wasm-threads`. On
+// the sequential default the channel could never be fed, so calling a
+// host-async producer there is a hard compile error pointing at
+// `--features wasm-threads`. `writes(Input)` additionally target-gates the
+// module off native / `wasm_wasi` (only `wasm_browser` provides the
+// `Input` resource — `src/target.rs`).
+
+// Host input capability — the resource `wasm_browser` provides for DOM
+// event sources (`src/target.rs` resource table). Declared here so the
+// module is self-contained for an `import std.web.events.{...};` that does
+// not also pull in `std.web`; the producer's referenced-resource
+// auto-splice (`src/prelude.rs`) brings it into scope automatically.
+effect resource Input;
+
+// A pointer (mouse / touch / pen) position, in CSS pixels relative to the
+// listening element. Transparent two-field `f64` struct: its physical
+// layout (`x` at byte 0, `y` at byte 8; 16 bytes total) is the contract the
+// host glue marshals each `pointermove` into before `channel_send` — keep
+// the field order and types in sync with `src/wasm_glue.rs`
+// (`__kara_pointer_moves`).
+pub struct PointerEvent {
+    x: f64,
+    y: f64,
+}
+
+impl PointerEvent {
+    fn x(ref self) -> f64 {
+        self.x
+    }
+
+    fn y(ref self) -> f64 {
+        self.y
+    }
+}
+
+// Stream pointer-move positions on a fresh channel, indefinitely. Returns
+// the receiving half; the waiting side writes a plain blocking loop —
+//
+//     let moves = pointer_moves();
+//     loop {
+//         let p = moves.recv();
+//         steer_flow(p.x(), p.y());
+//     }
+//
+// — no `await`, no callback ceremony. Multi-shot, like `animation_frames`:
+// the host keeps the listener registered and never drops its sender, so the
+// channel stays open for the life of the loop. The host coalesces — it
+// feeds a fresh position only once the previous one is drained — so a burst
+// of moves between two `recv`s collapses to a sample rather than
+// accumulating unbounded backlog (a per-frame consumer sees the latest
+// settled position, not every intermediate pixel).
+//
+// Mechanism: `Sender.__schedule_pointer_moves` (a compiler builtin) clones
+// the sender's channel reference and hands the clone to the host's pointer
+// listener, which owns it for the listener's lifetime. Same
+// `--features wasm-threads` requirement as `std.web.time` producers.
+pub fn pointer_moves() -> Receiver[PointerEvent] with writes(Input) {
+    // Annotate the destructure so the channel element type is `PointerEvent`.
+    // `pointer_moves` never performs a `send`/`recv` itself (the host fires
+    // the send), so there is no downstream channel op to infer the element
+    // from — and an unannotated `Channel.new()` only type-checks under the
+    // interpreter, not `karac build` (typechecker exprs.rs check-mode path).
+    let (tx, rx): (Sender[PointerEvent], Receiver[PointerEvent]) = Channel.new();
+    tx.__schedule_pointer_moves();
+    rx
+}

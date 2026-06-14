@@ -15579,6 +15579,168 @@ process.exit(0);
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// Headline E2E for the first NON-UNIT host-async producer (phase-10
+/// `std.web.events.pointer_moves` — the `Channel[T]`, `T != ()` slice that
+/// Plume drives). A `moves.recv()` parks the primary worker; a MAIN-THREAD
+/// `pointermove` listener marshals each event's `(clientX, clientY)` into the
+/// service instance's `karac_runtime_event_scratch` buffer and `channel_send`s
+/// a 16-byte `PointerEvent` payload — vs the 0-byte `()` a timer/frame
+/// producer sends. The guest asserts the *exact* f64 coordinates round-tripped
+/// (300.0, 400.0): a unit/zero channel would zero-fill the payload and the
+/// guest would print `PTR_FAIL`, so `PTR_OK` is positive evidence the
+/// structured payload crossed host→wasm intact, not just that recv woke.
+///
+/// Node has no DOM, so the harness injects an `EventTarget` via
+/// `opts.pointerTarget` and dispatches synthetic moves on it — the same seam a
+/// browser fills with the canvas element. Load-immune: the guest can only
+/// print `PTR_OK` if the worker parked, the host fed a real payload, and the
+/// worker woke and read the correct bytes.
+#[test]
+fn wasm_threads_pointer_moves_payload_recv_e2e() {
+    let tmp = wasm_test_dir("wtptr");
+    let path = tmp.join("ptr.kara");
+    std::fs::write(
+        &path,
+        "import std.web.events.{pointer_moves, PointerEvent};\n\n\
+         fn main() {\n    \
+             println(\"before\");\n    \
+             let moves = pointer_moves();\n    \
+             let p = moves.recv();\n    \
+             if p.x() == 300.0 and p.y() == 400.0 {\n        \
+                 println(\"PTR_OK\");\n    \
+             } else {\n        \
+                 println(\"PTR_FAIL\");\n    \
+             }\n    \
+             println(\"after\");\n}\n",
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--features=wasm-threads",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_threads_pointer_moves_payload_recv_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        out.status.success(),
+        "pointer_moves wasm-threads build failed: {stderr}"
+    );
+    assert!(tmp.join("ptr.threads.wasm").exists());
+
+    let harness = tmp.join("harness.mjs");
+    std::fs::write(
+        &harness,
+        r#"import { run } from "./ptr.js";
+// A node EventTarget stands in for the canvas; synthetic pointermove events
+// carry fixed coordinates the guest checks exactly.
+class PM extends Event {
+  constructor(x, y) { super("pointermove"); this.clientX = x; this.clientY = y; }
+}
+const target = new EventTarget();
+let dispatched = 0;
+// Multi-shot: keep dispatching until the worker parks in recv and the listener
+// is registered; the coalescing producer feeds the next event after each drain.
+const iv = setInterval(() => { dispatched++; target.dispatchEvent(new PM(300, 400)); }, 12);
+// Self-kill if recv never wakes (would otherwise hang the test's node child).
+const bail = setTimeout(() => { console.error("FAIL: recv never woke, dispatched=" + dispatched); process.exit(2); }, 8000);
+const h = await run({}, { pointerTarget: target });
+clearInterval(iv);
+clearTimeout(bail);
+if (h.threaded !== true) { console.error("FAIL: expected threaded pick"); process.exit(1); }
+console.log("PTR_HARNESS_OK dispatched=" + dispatched);
+process.exit(0);
+"#,
+    )
+    .unwrap();
+    let node = std::process::Command::new("node")
+        .arg(&harness)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: wasm_threads_pointer_moves_payload_recv_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let node_stdout = String::from_utf8_lossy(&node_out.stdout);
+    let node_stderr = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success(),
+        "pointer harness failed under node: stdout={node_stdout} stderr={node_stderr}",
+    );
+    assert!(
+        node_stdout.contains("PTR_HARNESS_OK"),
+        "harness did not complete (recv woke): stdout={node_stdout} stderr={node_stderr}",
+    );
+    // The structured payload crossed intact — a zero-filled unit floor would
+    // have printed PTR_FAIL.
+    assert!(
+        node_stdout.contains("PTR_OK") && !node_stdout.contains("PTR_FAIL"),
+        "exact (300.0, 400.0) PointerEvent payload must round-trip host→wasm: stdout={node_stdout}",
+    );
+    let before = node_stdout.find("before");
+    let after = node_stdout.find("after");
+    assert!(
+        matches!((before, after), (Some(b), Some(a)) if b < a),
+        "guest must print before→after (recv blocked then woke): stdout={node_stdout}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The sequential-target gate for the event-data producer: `pointer_moves`
+/// built WITHOUT `--features wasm-threads` is a hard compile error (codegen,
+/// pre-link) naming the flag — never a silent never-filling channel. Sibling
+/// of `wasm_time_after_sequential_target_rejected`; same no-`llvm` skip.
+#[test]
+fn wasm_pointer_moves_sequential_target_rejected() {
+    let tmp = wasm_test_dir("wtptrgate");
+    let path = tmp.join("ptr.kara");
+    std::fs::write(
+        &path,
+        "import std.web.events.{pointer_moves, PointerEvent};\n\n\
+         fn main() {\n    \
+             let moves = pointer_moves();\n    \
+             moves.recv();\n}\n",
+    )
+    .unwrap();
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--bindings=none",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_pointer_moves_sequential_target_rejected — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        !out.status.success(),
+        "sequential wasm event-data producer must be rejected, but build succeeded: {stderr}"
+    );
+    assert!(
+        stderr.contains("requires `--features wasm-threads`"),
+        "gate must name the flag: {stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// The sequential-target gate: the same host-async producer built WITHOUT
 /// `--features wasm-threads` is a hard compile error (codegen, pre-link),
 /// pointing at the flag — never a silent zero-value `recv`. Fires during

@@ -36,6 +36,7 @@ impl<'ctx> super::Codegen<'ctx> {
             "__schedule_animation_frames" => {
                 self.compile_channel_schedule_animation_frames(object, args)
             }
+            "__schedule_pointer_moves" => self.compile_channel_schedule_pointer_moves(object, args),
             // The dispatch gate in `compile_method_call` only routes the
             // methods above here.
             _ => unreachable!("compile_channel_method: unexpected method `{method}`"),
@@ -329,6 +330,92 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_call(host_fn, &[ch_i64.into()], "raf.schedule")
             .unwrap();
         Ok(self.context.i64_type().const_zero().into())
+    }
+
+    /// `tx.__schedule_pointer_moves()` — the compiler builtin backing
+    /// `std.web.events.pointer_moves`. Like `__schedule_animation_frames`
+    /// (multi-shot, host owns the surviving cloned sender for the listener's
+    /// life), but the host feeds a *non-unit* payload: it marshals each
+    /// `pointermove`'s coordinates into the service instance's
+    /// `karac_runtime_event_scratch()` buffer and `channel_send`s a
+    /// `PointerEvent` ({ x: f64, y: f64 }, 16 bytes) — vs the zero-byte `()`
+    /// a timer/frame producer sends. This is the first `Channel[T]`, `T != ()`
+    /// host-async producer; the cross-instance payload allocation/copy is the
+    /// surface the unit-channel slice deliberately sidestepped. Takes no
+    /// argument. Same `--features wasm-threads` gate as the timer/frame
+    /// builtins (a sequential build has no thread to park in `recv` while the
+    /// host event loop dispatches pointer events).
+    fn compile_channel_schedule_pointer_moves(
+        &mut self,
+        object: &Expr,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if !args.is_empty() {
+            return Err("Sender.__schedule_pointer_moves expects no arguments".to_string());
+        }
+        if crate::target::active_target_is_wasm() && !crate::target::wasm_threads_enabled() {
+            return Err(
+                "std.web.events.pointer_moves (host-async input stream) requires `--features \
+                 wasm-threads` on this target: a sequential WASM build has no thread to block in \
+                 `recv` while the host event loop dispatches pointer events, so the channel could \
+                 never be fed. Rebuild with `--target=wasm_browser --features wasm-threads` \
+                 (design.md § Scheduler contract on WASM — Realization status)."
+                    .to_string(),
+            );
+        }
+        // Clone first — the surviving reference keeps the channel open across
+        // every event (the local `tx` in `pointer_moves` drops at return).
+        let ch = self.compile_expr(object)?.into_pointer_value();
+        let clone_fn = self
+            .module
+            .get_function("karac_runtime_channel_clone")
+            .expect("karac_runtime_channel_clone declared in Codegen::new");
+        let cloned = self
+            .builder
+            .build_call(clone_fn, &[ch.into()], "ptr.chan.clone")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let i64_ty = self.context.i64_type();
+        let ch_i64 = self
+            .builder
+            .build_ptr_to_int(cloned, i64_ty, "ptr.chan.i64")
+            .unwrap();
+
+        let host_fn = self.get_or_declare_pointer_moves_import();
+        self.builder
+            .build_call(host_fn, &[ch_i64.into()], "ptr.schedule")
+            .unwrap();
+        Ok(self.context.i64_type().const_zero().into())
+    }
+
+    /// Get-or-declare the `kara_host.__kara_pointer_moves(i64) -> ()` wasm
+    /// import (compiler-emitted, sibling of `__kara_animation_frames`; the
+    /// channel handle crosses the boundary as an `i64`). The element layout
+    /// (`PointerEvent` = two `f64`s) is fixed and known to the glue, so it is
+    /// not passed across — the glue hardcodes the marshalling + size.
+    fn get_or_declare_pointer_moves_import(&self) -> inkwell::values::FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("__kara_pointer_moves") {
+            return f;
+        }
+        use inkwell::attributes::AttributeLoc;
+        let i64_ty = self.context.i64_type();
+        let fn_ty = self.context.void_type().fn_type(&[i64_ty.into()], false);
+        let f = self
+            .module
+            .add_function("__kara_pointer_moves", fn_ty, None);
+        f.add_attribute(
+            AttributeLoc::Function,
+            self.context
+                .create_string_attribute("wasm-import-module", "kara_host"),
+        );
+        f.add_attribute(
+            AttributeLoc::Function,
+            self.context
+                .create_string_attribute("wasm-import-name", "__kara_pointer_moves"),
+        );
+        f
     }
 
     /// Get-or-declare the `kara_host.__kara_animation_frames(i64) -> ()` wasm

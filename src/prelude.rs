@@ -832,6 +832,10 @@ pub const GATED_STDLIB_SOURCES: &[(&[&str], &str)] = &[
         include_str!("../runtime/stdlib/web_time.kara"),
     ),
     (
+        &["std", "web", "events"],
+        include_str!("../runtime/stdlib/web_events.kara"),
+    ),
+    (
         &["std", "wasi"],
         include_str!("../runtime/stdlib/wasi.kara"),
     ),

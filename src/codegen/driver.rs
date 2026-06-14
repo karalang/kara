@@ -212,6 +212,14 @@ pub fn link_wasm_executable_threaded(
         // live frames. Both must be exported for the glue to reach them.
         "--export=__stack_pointer",
         "--export=karac_runtime_service_stack_top",
+        // Non-unit event-data producers (`std.web.events.*`, `Channel[T]` for
+        // `T != ()`): the service callback marshals an event payload into this
+        // scratch buffer in shared memory before `channel_send` copies it onto
+        // the queue. Service-instance-only (JS reaches it, no wasm caller), so
+        // — like the channel/stack externs above — wasm-ld would dead-strip it
+        // without an explicit `--export`. Harmless for programs that use no
+        // event-data producer; the symbol is already linked from the archive.
+        "--export=karac_runtime_event_scratch",
     ]);
     // Phase-10 WASM entry-point discovery — same per-target `pub fn`
     // exports as the sequential path (see [`link_wasm_executable`]).

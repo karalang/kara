@@ -551,6 +551,38 @@ mod exports {
         let base = (&raw const KARAC_SERVICE_STACK) as *const u8 as usize;
         ((base + 65536) & !15) as u32
     }
+
+    /// 16-aligned scratch buffer in shared linear memory for host-async
+    /// *event-data* producers (phase-10 `Channel[T]`, `T != ()` — e.g.
+    /// `std.web.events.pointer_moves` → `Channel[PointerEvent]`).
+    ///
+    /// Unit-payload producers (`after`/`animation_frames`) send 0 bytes, so
+    /// `channel_send(ch, 0, 0)` needs no source buffer. A structured event
+    /// payload must instead live somewhere in linear memory before
+    /// `channel_send` copies it into the queue. The glue's main-thread event
+    /// callback marshals the event fields here (single writer — the main
+    /// thread) then calls `channel_send(ch, scratch, size)`, which copies the
+    /// bytes out *immediately* under the channel lock; so one reused buffer
+    /// suffices and there is never concurrent access (the parked worker reads
+    /// its own `recv` out-slot, never this buffer). 64 bytes covers every v1
+    /// event struct. Like [`KARAC_SERVICE_STACK`] it lives in BSS, so its
+    /// address is a link-time constant valid the moment memory exists.
+    // Only the buffer's *address* is ever used (handed to JS, which writes it
+    // through the shared `WebAssembly.Memory`); its bytes are never
+    // read/written by Rust — hence `dead_code` on the field.
+    #[repr(align(16))]
+    struct EventScratch(#[allow(dead_code)] [u8; 64]);
+    static mut KARAC_EVENT_SCRATCH: EventScratch = EventScratch([0u8; 64]);
+
+    /// Address of [`KARAC_EVENT_SCRATCH`] — where the glue marshals a host
+    /// event payload before `channel_send`. A constant-returning leaf (reads
+    /// no memory, uses no shadow stack), so the glue may call it on the
+    /// shared default stack just like [`karac_runtime_service_stack_top`].
+    /// `u32` (wasm32 address); JS reads it as a number.
+    #[no_mangle]
+    pub extern "C" fn karac_runtime_event_scratch() -> u32 {
+        (&raw const KARAC_EVENT_SCRATCH) as *const u8 as usize as u32
+    }
 }
 
 #[cfg(test)]
