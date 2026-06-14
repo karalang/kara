@@ -1717,6 +1717,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 let val = self.compile_expr(value)?;
                 self.pending_let_elem_type = saved_pending_let_elem;
                 self.pending_let_tensor_info = saved_pending_let_tensor;
+                // `let w = v[i]` over a heap-element `Vec` — deep-clone the shallow
+                // element so the binding owns a distinct buffer; without it both
+                // the binding's drop and `v`'s element-drop free the same buffer
+                // (double-free, B-2026-06-14-11). No-op for every other RHS shape.
+                let val = self.clone_owned_vec_index_element(value, val)?;
                 // Owned String/Vec PARAM moved into a local binding
                 // (`let mut work = lists;` where `lists` is a bare
                 // by-value param): under the owned-param ABI the CALLER

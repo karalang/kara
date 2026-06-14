@@ -9016,6 +9016,38 @@ fn main() {
     }
 
     #[test]
+    fn asan_let_bound_heap_vec_element_no_double_free() {
+        // `let w = v[i]` where v: Vec[String] with heap-owned (f-string) elements
+        // — the index returns a SHALLOW element struct aliasing v's buffer.
+        // Binding it owned must DEEP-CLONE (B-2026-06-14-11): both w's drop and
+        // v's element-drop run at scope exit, so without the clone they free the
+        // same buffer (double-free). The element stays in v (interp clones), so v[i]
+        // is reused afterward to confirm it wasn't consumed/corrupted. Loops so the
+        // clone path runs many times (each w dropped per-iteration).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    let mut i = 0i64;
+    while i < 8 { v.push(f"token-{i}-payload"); i = i + 1i64; }
+    let mut total = 0i64;
+    let mut j = 0i64;
+    while j < 4000 {
+        let w = v[j & 7i64];          // deep-clone bind; v[j&7] stays valid
+        total = total + w.bytes().len();
+        j = j + 1i64;
+    }
+    println(total);
+    println(v[0i64]);                 // v still intact after 4000 binds
+    println(v.len());
+}
+"#,
+            &["60000", "token-0-payload", "8"],
+            "let_bound_heap_vec_element_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_try_clone_vec_string_deep_independent_free() {
         // phase-8-stdlib-floor item 8: `Vec[String].try_clone()` deep-clones
         // every element into a fresh buffer. Source and clone own independent

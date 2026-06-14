@@ -1214,6 +1214,69 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(result)
     }
 
+    /// `let w = v[i]` where `v: Vec[T]` and `T` is a heap type (String / Vec /
+    /// heap struct / enum): `compile_index` returns a **shallow** copy of the
+    /// element `{ptr, len, cap}` struct, whose inner `data` pointer aliases `v`'s
+    /// element buffer. Binding it owned arms the new binding's scope-exit drop on
+    /// that shared buffer, and `v`'s own element-drop frees it too — a double-free
+    /// at scope exit (B-2026-06-14-11, the Vec-index sibling of the move-out-of-
+    /// container family). Indexing does NOT consume the element (the interpreter,
+    /// the oracle, leaves `v[i]` valid and clones), so the fix is a deep clone:
+    /// the binding gets its own buffer, `v[i]` is untouched. Returns `val`
+    /// unchanged for a non-Vec index, a String range slice (already a fresh owned
+    /// buffer), or a trivially-Copy element. Same clone path
+    /// `compile_inline_temp_vec_index` uses for temp-Vec elements.
+    pub(super) fn clone_owned_vec_index_element(
+        &mut self,
+        value: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let ExprKind::Index { object, index } = &value.kind else {
+            return Ok(val);
+        };
+        // A String *range* slice (`s[a..b]`) already returns a freshly-allocated
+        // owned buffer — only a plain element index (`v[i]`) shallow-aliases.
+        if matches!(&index.kind, ExprKind::Range { .. }) {
+            return Ok(val);
+        }
+        // Scope: the result is a heap `{ptr, len, cap}` struct (String / Vec
+        // elements). A heap-bearing ENUM or STRUCT element shares a buffer too
+        // and is the same bug, but it takes a different binding path (its own
+        // layout, `enum_name_for_binding` routing) — tracked as a sibling
+        // follow-up of B-2026-06-14-11, not handled here. A Copy element
+        // (`Vec[i64]`'s `i64`) is a standalone scalar (not a vec-struct).
+        if !self.llvm_ty_is_vec_struct(val.get_type()) {
+            return Ok(val);
+        }
+        // Element TypeExpr of the indexed object. Named-Vec var only: `v[i]`,
+        // not `self.field[i]` / `matrix[i][j]` (those keep the prior behaviour;
+        // the named-binding case is the common — and reported — one).
+        let ExprKind::Identifier(name) = &object.kind else {
+            return Ok(val);
+        };
+        let Some(elem_te) = self.var_elem_type_exprs.get(name.as_str()).cloned() else {
+            return Ok(val);
+        };
+        if super::vec_method::is_trivially_copyable_te(&elem_te) {
+            return Ok(val);
+        }
+        // Deep-clone via the per-type clone fn (src/dst slots), exactly as
+        // `compile_inline_temp_vec_index`.
+        let fn_val = self.current_fn.unwrap();
+        let elem_ll = val.get_type();
+        let src = self.create_entry_alloca(fn_val, "vidx.elem.src", elem_ll);
+        self.builder.build_store(src, val).unwrap();
+        let dst = self.create_entry_alloca(fn_val, "vidx.elem.clone", elem_ll);
+        let clone_fn = self.emit_clone_fn_for_type_expr(&elem_te);
+        self.builder
+            .build_call(clone_fn, &[src.into(), dst.into()], "")
+            .unwrap();
+        Ok(self
+            .builder
+            .build_load(elem_ll, dst, "vidx.elem.cloned")
+            .unwrap())
+    }
+
     /// String slicing `s[a..b]` -> a fresh `String` (phase-8 line 737).
     /// Extracts the `{ptr, len, cap}` aggregate, resolves the byte bounds
     /// (`a..` -> end = len; `..b` -> start = 0; `a..=b` includes byte `b`),
