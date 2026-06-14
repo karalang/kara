@@ -1660,6 +1660,41 @@ fn test_integer_overflow_traps() {
 }
 
 #[test]
+fn test_illtyped_binop_records_runtime_error_not_panic() {
+    // B-2026-06-12-4: `String * Int` is a hard typecheck error, but `karac run`
+    // executes despite typecheck errors (it demotes them to warnings). The
+    // interpreter's binary-op fallthrough used to `unreachable!()`-panic on the
+    // illegal operand that slipped through; it must now surface a graceful
+    // runtime error instead. (Reaching this test at all — rather than aborting
+    // the process — is the regression guard.)
+    let errors = runtime_errors(r#"fn main() { let x = "ab" * 3; }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("not defined for operands")
+                && e.message.contains("String")),
+        "expected a graceful 'operator not defined' runtime error for String * Int, got {:?}",
+        errors
+    );
+}
+
+#[test]
+fn test_illtyped_unary_records_runtime_error_not_panic() {
+    // Sibling of the binop case (B-2026-06-12-4): unary `-` on a String is a
+    // hard typecheck error; under `karac run` it reaches the interpreter, whose
+    // unary fallthrough must record a runtime error rather than `unreachable!()`.
+    let errors = runtime_errors(r#"fn main() { let x = -"ab"; }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("not defined for an operand")
+                && e.message.contains("String")),
+        "expected a graceful 'operator not defined' runtime error for -String, got {:?}",
+        errors
+    );
+}
+
+#[test]
 fn test_division_by_zero_records_runtime_error() {
     let errors = runtime_errors("fn main() { let x = 10; let y = 0; let z = x / y; }");
     assert!(

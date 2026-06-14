@@ -58,11 +58,19 @@ impl<'a> super::Interpreter<'a> {
             // In the tree-walk interpreter references are passed by value; `*r` is
             // a semantic no-op that returns the underlying value unchanged.
             (UnaryOp::Deref, v) => v,
-            _ => unreachable!(
-                "unexpected operand for unary {:?} at {}:{}: got Value::{}; \
-                 either an interpreter codepath produced the wrong variant \
-                 (e.g. a no-op cast) or the typechecker accepted an illegal shape",
-                op, span.line, span.column, operand_variant
+            // As with `eval_binary`'s fallthrough: only reachable via `karac
+            // run`, which executes despite typecheck errors. An illegal operand
+            // (e.g. unary `-` on a String) becomes a graceful runtime error
+            // rather than an interpreter `unreachable!()` panic.
+            _ => self.record_runtime_error(
+                format!(
+                    "unary operator '{:?}' is not defined for an operand of type '{}' \
+                     (this is a type error the typechecker reports as a hard error; \
+                     it reached the interpreter only because `karac run` executes despite \
+                     typecheck errors)",
+                    op, operand_variant
+                ),
+                span,
             ),
         }
     }
@@ -294,12 +302,21 @@ impl<'a> super::Interpreter<'a> {
                 Value::Bool(l != r)
             }
 
-            _ => unreachable!(
-                "binary {:?} at {}:{} on lhs=Value::{}, rhs=Value::{}; \
-                 either an interpreter codepath produced the wrong variant \
-                 (e.g. a no-op cast left a Char where the typechecker blessed an i32) \
-                 or the typechecker accepted an illegal operand combination",
-                op, span.line, span.column, left_variant, right_variant
+            // No valid program reaches here — the typechecker rejects every
+            // ill-typed operand combination as a hard error. The one way in is
+            // `karac run`, which deliberately demotes typecheck errors to
+            // warnings and executes anyway (see `run_program`). On that path an
+            // illegal operand (e.g. `String * Int`) must surface as a graceful
+            // runtime error, NOT an interpreter `unreachable!()` panic.
+            _ => self.record_runtime_error(
+                format!(
+                    "operator '{:?}' is not defined for operands of type '{}' and '{}' \
+                     (this is a type error the typechecker reports as a hard error; \
+                     it reached the interpreter only because `karac run` executes despite \
+                     typecheck errors)",
+                    op, left_variant, right_variant
+                ),
+                span,
             ),
         }
     }
