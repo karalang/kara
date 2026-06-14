@@ -721,8 +721,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 if let Some(path) = path_for_type_name {
                     if let Some(type_name) = path.segments.first() {
-                        self.var_type_names
-                            .insert(param_name.clone(), type_name.clone());
+                        // Route through `record_var_type_name` so a refinement-
+                        // typed param (`rows: NonEmpty[EnrichedRow]`) records its
+                        // *base* name (`Vec`), not the alias — a raw insert here
+                        // would clobber the correct base recorded by
+                        // `register_var_from_type_expr` above and break field/
+                        // method lookups on refinement-over-struct/-collection
+                        // params.
+                        self.record_var_type_name(param_name.clone(), type_name.clone());
                         // Owned (bare, non-ref Path) struct param whose struct
                         // has a heap (`Vec`/`String`) field — the field-move-out
                         // double-free set (B-2026-06-10-2). A `ref Struct` param
@@ -957,6 +963,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // (the tail return below + every explicit `return`).
             self.capture_contract_old_snapshots(&func.ensures)?;
             self.current_contract_ensures = func.ensures.clone();
+            // Return type for the `result` binding in `emit_ensures_checks`
+            // (so `result.field` resolves its struct field index).
+            self.current_contract_result_type = func.return_type.clone();
 
             // Struct/impl `invariant` setup (rule 3): resolve the receiver
             // type's invariants for this method and stash them so
@@ -1281,6 +1290,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.scope_cleanup_actions.clear();
         self.current_contract_ensures.clear();
+        self.current_contract_result_type = None;
         self.contract_old_snapshots.clear();
         self.current_method_invariants.clear();
         self.constructor_invariant_self_type = None;

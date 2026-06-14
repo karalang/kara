@@ -414,6 +414,85 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_plain_enum_struct_variant_string_payload_no_double_free() {
+        // The Weave `ParseError` class: a NON-shared enum struct-variant with a
+        // heap (String) payload. A real (cap>0) String local moved into the
+        // payload and then CONSUMED — matched both externally and through a
+        // `Display(ref self)` impl — must free its buffer exactly once.
+        // Pre-fix, three sites each double-freed: construction (no source
+        // move-suppression), external match destructuring (struct-variant arm
+        // skipped by the cap-suppression), and the `ref self` match (borrowed
+        // scrutinee bindings tracked as owned). Looped so any per-iteration
+        // double-free trips ASAN. The `cap==0` literal payload masked it before.
+        assert_clean_asan_run(
+            r#"
+enum E { Empty, NoAt { value: String } }
+impl Display for E {
+    fn to_string(ref self) -> String {
+        match self { Empty => "empty", NoAt { value } => f"no-at '{value}'" }
+    }
+}
+fn make(raw: String) -> E {
+    let v = raw.clone();
+    if not v.contains("@") { return E.NoAt { value: v }; }
+    E.Empty
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut count: i64 = 0;
+    while i < 50 {
+        let raw = f"bad-no-at-{i}";
+        let e = make(raw);
+        // Render through Display(ref self) — borrowed-scrutinee match ...
+        let s = e.to_string();
+        if s.len() > 0 { count = count + 1; }
+        // ... then destructure externally — owned-scrutinee match.
+        match e {
+            NoAt { value } => { if value.len() > 0 { count = count + 1; } },
+            Empty          => count = count + 0,
+        }
+        i = i + 1;
+    }
+    println(count);
+}
+"#,
+            &["100"],
+            "plain_enum_struct_variant_string_payload",
+        );
+    }
+
+    #[test]
+    fn asan_refinement_try_from_vec_no_double_free() {
+        // `Refined.try_from(v)` over a collection base (`type NonEmptyV =
+        // Vec[String] where ...`) consumes `v`: on the Ok path the buffer lives
+        // in the `Ok` payload, so the source must not free it again. Looped so
+        // a per-iteration double-free trips ASAN. The Weave
+        // `NonEmpty.try_from(enriched)` class.
+        assert_clean_asan_run(
+            r#"
+type NonEmptyV = Vec[String] where self.len() > 0;
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 50 {
+        let mut v: Vec[String] = Vec.new();
+        v.push(f"a-{i}");
+        v.push(f"b-{i}");
+        match NonEmptyV.try_from(v) {
+            Ok(rows) => total = total + rows.len(),
+            Err(_)   => total = total + 0,
+        }
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["100"],
+            "refinement_try_from_vec",
+        );
+    }
+
     // ── L5: NUL-safe print over heap + literal storage ────────────
     //
     // The print path uses `fwrite(data, 1, len, stdout)` so interior NUL

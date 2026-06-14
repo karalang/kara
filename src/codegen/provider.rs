@@ -884,6 +884,29 @@ impl<'ctx> super::Codegen<'ctx> {
         match &expr.kind {
             ExprKind::Identifier(n) => self.var_type_names.get(n.as_str()).cloned(),
             ExprKind::StructLiteral { path, .. } => path.last().cloned(),
+            // Constructor / associated-function / free-fn call returning a
+            // provider: the provider's concrete type is the call's return
+            // type. An uppercase head roots a 2-segment `Path` callee
+            // (`FixedRates.new(1.08)` → `Path(["FixedRates","new"])`); a free
+            // fn is a bare `Identifier`. The impl fn registers under the
+            // qualified `Type.method` name (`make_impl_method_function`), so
+            // `fn_return_type_names["FixedRates.new"]` yields `"FixedRates"`.
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Identifier(fn_name) => self.fn_return_type_names.get(fn_name).cloned(),
+                ExprKind::Path { segments, .. } if segments.len() == 2 => {
+                    let qualified = format!("{}.{}", segments[0], segments[1]);
+                    self.fn_return_type_names.get(&qualified).cloned()
+                }
+                _ => None,
+            },
+            // Value-method call returning a provider (`registry.build()`): the
+            // receiver's static type qualifies the method whose return type is
+            // the provider type.
+            ExprKind::MethodCall { object, method, .. } => {
+                let recv_ty = self.inferred_receiver_type(object)?;
+                let qualified = format!("{}.{}", recv_ty, method);
+                self.fn_return_type_names.get(&qualified).cloned()
+            }
             _ => None,
         }
     }

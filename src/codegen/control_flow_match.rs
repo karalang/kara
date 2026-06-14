@@ -110,7 +110,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // would double-free against the `karac_map_free_with_val_drop_vec`
         // path at function exit.
         let saved_borrow_flag = self.pattern_binding_is_borrow;
-        self.pattern_binding_is_borrow = self.scrutinee_is_borrow_call(scrutinee);
+        self.pattern_binding_is_borrow = self.scrutinee_is_borrow_call(scrutinee)
+            || self.scrutinee_is_borrowed_binding(scrutinee);
         // B-2026-06-13-13 residual A: when the scrutinee is the type-erased
         // `Option`/`Result`, its payload is owned by the dedicated inline/boxed
         // cleanup, not a per-field `EnumDrop` — so the pattern-binding struct
@@ -258,7 +259,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // `suppress_source_vec_cleanup_for_arg`. Ref-scrutinee
             // matches don't need this — the source isn't owned by the
             // match, no double-free risk.
-            if scrut_ref_ptr.is_none() {
+            if scrut_ref_ptr.is_none() && !self.pattern_binding_is_borrow {
                 if let Some((alloca, enum_name)) = &freshtemp_enum {
                     // Fresh-temp scrutinee: suppress against the materialized
                     // alloca (no identifier to resolve). The source EnumDrop
@@ -714,6 +715,23 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `HttpError.message` buffer (B-2026-06-10-3 — the name-only heuristic
     /// regressed these). Every other `.get()` keeps the conservative borrow
     /// classification, so the `Map.get` double-free protection is unchanged.
+    /// True when the scrutinee is a borrowed binding — a `ref`/`mut ref` param,
+    /// including `ref self` (the `Display::to_string(ref self)` case). Matching
+    /// a borrow transfers no ownership, so a payload-field binding must alias
+    /// the source storage rather than register its own `FreeVecBuffer` cleanup
+    /// — otherwise it double-frees the heap payload against the owner's drop
+    /// (the Weave dogfood's `ParseError` Display, matching a struct-variant
+    /// `String` payload through `ref self`). The receiver-side counterpart of
+    /// `scrutinee_is_borrow_call` (borrow-RETURNING accessors like `Map.get`).
+    pub(super) fn scrutinee_is_borrowed_binding(&self, scrutinee: &Expr) -> bool {
+        let name = match &scrutinee.kind {
+            ExprKind::SelfValue => "self",
+            ExprKind::Identifier(n) => n.as_str(),
+            _ => return false,
+        };
+        self.ref_params.contains_key(name)
+    }
+
     pub(super) fn scrutinee_is_borrow_call(&self, scrutinee: &Expr) -> bool {
         let ExprKind::MethodCall { object, method, .. } = &scrutinee.kind else {
             return false;
@@ -2152,13 +2170,17 @@ impl<'ctx> super::Codegen<'ctx> {
         if layout.is_shared {
             return;
         }
-        let (path, sub_patterns) = match &pattern.kind {
-            PatternKind::TupleVariant { path, patterns } => (path, patterns),
+        // Both tuple-variant (`V(x)`) and struct-variant (`V { f }`) patterns
+        // move payload fields into bindings. The variant name is the path's
+        // last segment for either shape.
+        let variant_name = match &pattern.kind {
+            PatternKind::TupleVariant { path, .. } | PatternKind::Struct { path, .. } => {
+                match path.last() {
+                    Some(n) => n.as_str(),
+                    None => return,
+                }
+            }
             _ => return,
-        };
-        let variant_name = match path.last() {
-            Some(n) => n.as_str(),
-            None => return,
         };
         let drop_kinds = match layout.field_drop_kinds.get(variant_name) {
             Some(k) => k,
@@ -2168,24 +2190,54 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(o) => o,
             None => return,
         };
+        // Declared-position indices of the payload fields this pattern
+        // *consumes* (moves into a binding). Tuple-variant fields are
+        // positional; struct-variant fields are named, so each named field is
+        // mapped to its declared position via `enum_variant_struct_field_names`
+        // — the same field order `field_drop_kinds` / `field_word_offsets` and
+        // the struct-variant constructor are keyed on. A field is consumed when
+        // its sub-pattern binds (directly or via a nested destructure); a
+        // `Wildcard`/literal sub-pattern doesn't claim ownership, so the
+        // source's drop must still fire (suppressing it would leak). A
+        // struct-variant shorthand field (`{ value }`, `pattern: None`) is a
+        // direct binding and always consumes.
+        let consumed_positions: Vec<usize> = match &pattern.kind {
+            PatternKind::TupleVariant { patterns, .. } => patterns
+                .iter()
+                .enumerate()
+                .filter(|(_, sub)| pattern_consumes_field(sub))
+                .map(|(i, _)| i)
+                .collect(),
+            PatternKind::Struct { fields, .. } => {
+                let field_names =
+                    match self.enum_variant_struct_field_names(enum_name, variant_name) {
+                        Some(n) => n,
+                        None => return,
+                    };
+                fields
+                    .iter()
+                    .filter(|fp| fp.pattern.as_ref().is_none_or(pattern_consumes_field))
+                    .filter_map(|fp| field_names.iter().position(|n| n == &fp.name))
+                    .collect()
+            }
+            _ => return,
+        };
         let i64_t = self.context.i64_type();
         let zero = i64_t.const_int(0, false);
-        for ((sub_pat, kind), (start_word, num_words)) in sub_patterns
-            .iter()
-            .zip(drop_kinds.iter())
-            .zip(offsets.iter())
-        {
-            // Suppression only fires when the sub-pattern *consumes*
-            // the payload field — i.e. binds it to a name (directly or
-            // via a nested destructure). A `Wildcard` or literal
-            // pattern doesn't claim ownership, so the source's drop
-            // *should* fire to free the payload; suppressing those
-            // would leak. Nested `Tuple` patterns inside a payload
-            // (e.g. `V((xs, s, n))`) consume the field when any inner
-            // binding claims part of it — the inner cleanup will free
-            // the whole composite, so the outer source's drop must
-            // still be skipped.
-            if !pattern_consumes_field(sub_pat) || !kind.is_heap_bearing() {
+        for &pos in &consumed_positions {
+            let kind = match drop_kinds.get(pos) {
+                Some(k) => k,
+                None => continue,
+            };
+            let (start_word, num_words) = match offsets.get(pos) {
+                Some(o) => *o,
+                None => continue,
+            };
+            // `consumed_positions` already filtered to the fields this pattern
+            // *moves* into a binding (a `Wildcard`/literal sub-pattern doesn't
+            // claim ownership, so its field's drop must still fire to free the
+            // payload). Only heap-bearing kinds need their source drop skipped.
+            if !kind.is_heap_bearing() {
                 continue;
             }
             // Zero EVERY payload word of the moved-out field, not just the
@@ -2197,7 +2249,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // word region: every inner `cap > 0` guard then skips and the
             // tag-dispatch lands on an all-zero variant, making the nested
             // drop a no-op. The bound binding's own cleanup frees it once.
-            for w in 0..*num_words {
+            for w in 0..num_words {
                 let word_index = (start_word + 1 + w) as u32;
                 if let Ok(word_ptr) = self.builder.build_struct_gep(
                     layout.llvm_type,

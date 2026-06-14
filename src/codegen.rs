@@ -971,6 +971,16 @@ pub(super) struct Codegen<'ctx> {
     /// layout-identical to its base (no runtime tag), so this is a pure
     /// alias resolution.
     pub(crate) refinement_bases: HashMap<String, crate::ast::TypeExpr>,
+    /// Refinement type alias name → the ordered names of its generic
+    /// parameters (`type NonEmpty[T] = Vec[T] where …` → `["T"]`). Parallel
+    /// to `refinement_bases`, which stores only the *uninstantiated* base
+    /// (`Vec[T]`). When a refinement alias is used at a concrete arity
+    /// (`NonEmpty[EnrichedRow]`), `resolve_refinement_alias_te` zips these
+    /// param names against the use-site generic args and substitutes them
+    /// into the base so the binding registers as `Vec[EnrichedRow]` (correct
+    /// element type), not `Vec[T]` (which would mis-size the element as the
+    /// `i64` unknown-name fall-through). Empty for non-generic refinements.
+    pub(crate) refinement_generic_params: HashMap<String, Vec<String>>,
     /// Distinct-type name → its base `TypeExpr` (`distinct type UserId = i64`
     /// → the `i64` type expression). A distinct type is layout-identical to
     /// its base (zero-cost wrapper, no runtime tag), so codegen lowers it to
@@ -992,6 +1002,15 @@ pub(super) struct Codegen<'ctx> {
     /// exit; consumed by `emit_ensures_checks`, which is emitted inline
     /// before each `ret` (the tail return + every explicit `return`).
     pub(crate) current_contract_ensures: Vec<crate::ast::EnsuresClause>,
+    /// The return `TypeExpr` of the function currently being compiled, set
+    /// alongside `current_contract_ensures`. `emit_ensures_checks` uses it to
+    /// register the `result` binding's type (via `register_var_from_type_expr`)
+    /// so a `result.field` access inside an `ensures` clause resolves the
+    /// struct field index — without it, field access on `result` can't find
+    /// the struct name and reads the wrong slot (the `ensures(result)
+    /// result.q == old(...)` codegen bug surfaced by the Weave dogfood).
+    /// `None` for a `()`-returning function or when contracts are stripped.
+    pub(crate) current_contract_result_type: Option<crate::ast::TypeExpr>,
     /// `old(arg)` pre-state snapshots for the current function, captured at
     /// entry and keyed by the arg expression's span. Read back by the
     /// `old(...)` interception in `compile_call` when emitting the
@@ -4558,9 +4577,11 @@ impl<'ctx> Codegen<'ctx> {
             inline_result_payload_vars: std::collections::HashSet::new(),
             inline_option_map_payload_vars: std::collections::HashSet::new(),
             refinement_bases: HashMap::new(),
+            refinement_generic_params: HashMap::new(),
             distinct_bases: HashMap::new(),
             refinement_predicates: HashMap::new(),
             current_contract_ensures: Vec::new(),
+            current_contract_result_type: None,
             contract_old_snapshots: HashMap::new(),
             current_method_invariants: Vec::new(),
             constructor_invariant_self_type: None,
@@ -5253,6 +5274,79 @@ impl<'ctx> Codegen<'ctx> {
 
     // ── Program / function compilation ───────────────────────────
 
+    /// Populate the refinement-alias and distinct-type base maps from the
+    /// user program (plus baked-stdlib distinct types). Called early in
+    /// `compile_program`, *before* struct/enum layouts are built, so a field
+    /// whose type names a refinement (`type Email = String where …`) or a
+    /// distinct type resolves to the base's layout while the aggregate is
+    /// lowered — not after, where the name would hit the `i64` unknown-name
+    /// fall-through and mis-size the field.
+    fn populate_type_alias_bases(&mut self, program: &Program) {
+        // Refinement type aliases (`type Email = String where …`): record
+        // each one's base `TypeExpr` so type lowering resolves the
+        // refinement to its base's layout (phase-9 step 4). A refinement
+        // carries no runtime tag — it is layout-identical to its base.
+        for item in &program.items {
+            if let Item::TypeAlias(t) = item {
+                if let Some(pred) = &t.refinement {
+                    self.refinement_bases.insert(t.name.clone(), t.ty.clone());
+                    self.refinement_predicates
+                        .insert(t.name.clone(), pred.clone());
+                    // Generic refinement (`type NonEmpty[T] = Vec[T] where …`):
+                    // remember the param names so a use at concrete arity
+                    // substitutes the right element type into the base.
+                    if let Some(gp) = &t.generic_params {
+                        self.refinement_generic_params.insert(
+                            t.name.clone(),
+                            gp.params.iter().map(|p| p.name.clone()).collect(),
+                        );
+                    }
+                }
+            }
+        }
+
+        // Distinct types (`distinct type UserId = i64`): record each one's
+        // base `TypeExpr` so type lowering resolves the distinct type to its
+        // base's layout (zero-cost wrapper, no runtime tag). Unlike a
+        // refinement, this base is consulted only for layout — a distinct
+        // type keeps its own name for value-level dispatch. design.md
+        // § Distinct Types (Newtypes).
+        for item in &program.items {
+            if let Item::DistinctType(d) = item {
+                self.distinct_bases
+                    .insert(d.name.clone(), d.base_type.clone());
+                // Combined `distinct type T = Base where pred`: register the
+                // predicate so the `T(value)` constructor emits the runtime
+                // assertion via `emit_refinement_assert`. Keyed by the
+                // distinct name, parallel to refinements.
+                if let Some(pred) = &d.refinement {
+                    self.refinement_predicates
+                        .insert(d.name.clone(), pred.clone());
+                }
+            }
+        }
+        // Baked-stdlib `distinct type`s (e.g. `ExitCode` — Phase-8
+        // entry-point contract Slice B). The user `program` carries only
+        // user items, so a stdlib distinct type's `T(value)` constructor
+        // (`ExitCode(code)`) and its bare-name layout (`-> ExitCode`
+        // lowering to its i32 base) would otherwise be unrecognized. User
+        // entries win on collision (registered first; `entry().or_insert`).
+        for (_, sp) in crate::prelude::STDLIB_PROGRAMS.iter() {
+            for item in &sp.items {
+                if let Item::DistinctType(d) = item {
+                    self.distinct_bases
+                        .entry(d.name.clone())
+                        .or_insert_with(|| d.base_type.clone());
+                    if let Some(pred) = &d.refinement {
+                        self.refinement_predicates
+                            .entry(d.name.clone())
+                            .or_insert_with(|| pred.clone());
+                    }
+                }
+            }
+        }
+    }
+
     fn compile_program(&mut self, program: &Program) -> Result<(), String> {
         // Decide whether `emit_panic` needs the runtime fault-category prefix
         // before ANY function compiles — the first panic site bakes the
@@ -5285,6 +5379,16 @@ impl<'ctx> Codegen<'ctx> {
         // program with `struct Response { ... }` (unlikely but legal)
         // can override the seeded shape.
         self.seed_builtin_struct_types();
+        // Refinement-alias / distinct-type base maps MUST be populated before
+        // struct + enum layouts are built: a field whose type names a
+        // refinement (`email: BoundedText`) or distinct type lowers via
+        // `llvm_type_for_type_expr`, which consults `refinement_bases` /
+        // `distinct_bases` to reach the base's real layout. Run too late and
+        // those names hit the `i64` unknown-name fall-through, mis-sizing
+        // every refinement-typed field (the construction-vs-layout type
+        // mismatch surfaced by the Weave dogfood: `{i64,i64,i64}` slots fed a
+        // `String`/`f64`/`i64` row).
+        self.populate_type_alias_bases(program);
         // Two-pass struct declaration with `declare_enums` interleaved, so a
         // struct field that names a user enum lowers at the enum's real
         // tagged-union shape instead of collapsing to the `i64` fall-through
@@ -5518,60 +5622,12 @@ impl<'ctx> Codegen<'ctx> {
             }
         }
 
-        // Refinement type aliases (`type Email = String where …`): record
-        // each one's base `TypeExpr` so type lowering resolves the
-        // refinement to its base's layout (phase-9 step 4). A refinement
-        // carries no runtime tag — it is layout-identical to its base.
-        for item in &program.items {
-            if let Item::TypeAlias(t) = item {
-                if let Some(pred) = &t.refinement {
-                    self.refinement_bases.insert(t.name.clone(), t.ty.clone());
-                    self.refinement_predicates
-                        .insert(t.name.clone(), pred.clone());
-                }
-            }
-        }
-
-        // Distinct types (`distinct type UserId = i64`): record each one's
-        // base `TypeExpr` so type lowering resolves the distinct type to its
-        // base's layout (zero-cost wrapper, no runtime tag). Unlike a
-        // refinement, this base is consulted only for layout — a distinct
-        // type keeps its own name for value-level dispatch. design.md
-        // § Distinct Types (Newtypes).
-        for item in &program.items {
-            if let Item::DistinctType(d) = item {
-                self.distinct_bases
-                    .insert(d.name.clone(), d.base_type.clone());
-                // Combined `distinct type T = Base where pred`: register the
-                // predicate so the `T(value)` constructor emits the runtime
-                // assertion via `emit_refinement_assert`. Keyed by the
-                // distinct name, parallel to refinements.
-                if let Some(pred) = &d.refinement {
-                    self.refinement_predicates
-                        .insert(d.name.clone(), pred.clone());
-                }
-            }
-        }
-        // Baked-stdlib `distinct type`s (e.g. `ExitCode` — Phase-8
-        // entry-point contract Slice B). The user `program` carries only
-        // user items, so a stdlib distinct type's `T(value)` constructor
-        // (`ExitCode(code)`) and its bare-name layout (`-> ExitCode`
-        // lowering to its i32 base) would otherwise be unrecognized. User
-        // entries win on collision (registered first; `entry().or_insert`).
-        for (_, sp) in crate::prelude::STDLIB_PROGRAMS.iter() {
-            for item in &sp.items {
-                if let Item::DistinctType(d) = item {
-                    self.distinct_bases
-                        .entry(d.name.clone())
-                        .or_insert_with(|| d.base_type.clone());
-                    if let Some(pred) = &d.refinement {
-                        self.refinement_predicates
-                            .entry(d.name.clone())
-                            .or_insert_with(|| pred.clone());
-                    }
-                }
-            }
-        }
+        // NOTE: refinement-alias / distinct-type base population was moved
+        // up to before `build_struct_types` (right after
+        // `seed_builtin_struct_types`) — a struct/enum field whose type names
+        // a refinement (`email: BoundedText`) or distinct type must resolve
+        // to the base's layout *while the aggregate is being lowered*, not
+        // after. See `populate_type_alias_bases`.
 
         // Slice 9 of phase-8 module-let work — emit one LLVM global per
         // `Item::ModuleBinding`. Must precede function compilation so

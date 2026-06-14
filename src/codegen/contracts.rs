@@ -141,18 +141,46 @@ impl<'ctx> super::Codegen<'ctx> {
                             ty: rv.get_type(),
                         },
                     );
-                    Some((param.clone(), prev))
+                    // Record the binding's static type NAME so a `result.field`
+                    // access inside the predicate resolves the struct field
+                    // index. Without this the field access can't find the
+                    // struct name and reads the wrong slot. Only the type name
+                    // is recorded (via `record_var_type_name`, which normalizes
+                    // a refinement return to its base) — NOT the full
+                    // collection/heap-tracking registration, which would mark
+                    // the borrowed `result` for a drop and double-free its heap
+                    // fields. The saved/removed entry is restored below
+                    // alongside the `variables` slot.
+                    let prev_type_name = self.var_type_names.remove(param);
+                    if let Some(crate::ast::TypeKind::Path(p)) = self
+                        .current_contract_result_type
+                        .as_ref()
+                        .map(|te| &te.kind)
+                    {
+                        if let Some(seg) = p.segments.first().cloned() {
+                            self.record_var_type_name(param.clone(), seg);
+                        }
+                    }
+                    Some((param.clone(), prev, prev_type_name))
                 }
                 _ => None,
             };
             self.emit_contract_assert(&ens.body, "contract violated: ensures clause")?;
-            if let Some((param, prev)) = saved {
+            if let Some((param, prev, prev_type_name)) = saved {
                 match prev {
                     Some(p) => {
-                        self.variables.insert(param, p);
+                        self.variables.insert(param.clone(), p);
                     }
                     None => {
                         self.variables.remove(&param);
+                    }
+                }
+                match prev_type_name {
+                    Some(tn) => {
+                        self.var_type_names.insert(param, tn);
+                    }
+                    None => {
+                        self.var_type_names.remove(&param);
                     }
                 }
             }

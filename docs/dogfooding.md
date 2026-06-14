@@ -427,11 +427,41 @@ fn aggregate(rows: NonEmpty[EnrichedRow]) -> Summary
 > cross-module calls work via `karac run`; and (2026-06-13 follow-up) **codegen
 > `String.split`** — a runtime out-param helper (`karac_runtime_string_split`)
 > builds the `Vec[String]` so `karac build` (native) handles split too. All six
-> findings' actionable fixes have now landed; remaining Weave codegen is gated
-> only on unrelated codegen bugs others are fixing (struct-variant Display) +
-> wasm split.
+> findings' actionable fixes have now landed; and (2026-06-13 follow-up)
+> **Weave now `karac build`s to a native binary** whose output is byte-identical
+> to `karac run` — the first dogfood to drive refinement types + contracts +
+> effects + provider injection + struct-variant `impl Display` through the full
+> codegen path. Getting there surfaced and fixed **seven** distinct codegen bugs
+> (see the codegen-build entry below). Wasm split is the only open follow-up.
 >
 > Resolved follow-ons (design record):
+> - [x] **Weave `karac build` (full codegen path) — ✓ RESOLVED 2026-06-13.**
+>   Building Weave (not just `karac run`) drove the refinement + contract +
+>   effect + provider + struct-variant-Display surface through codegen and
+>   surfaced **seven** distinct codegen bugs, all now fixed with regression tests
+>   (`tests/codegen.rs::e2e_refinement_*` / `e2e_contract_ensures_result_field_access`
+>   / `e2e_struct_variant_string_payload_*` / `e2e_with_provider_constructor_call_provider`;
+>   `tests/memory_sanitizer.rs::asan_plain_enum_struct_variant_string_payload_no_double_free`
+>   / `asan_refinement_try_from_vec_no_double_free`):
+>   (1) a refinement alias of a collection (`NonEmpty[T] = Vec[T]`) used as a
+>   param type didn't dispatch `.len()` / `for` — `register_var_from_type_expr`
+>   now resolves the alias to its *instantiated* base with generic-arg
+>   substitution; (2) struct fields naming a refinement/distinct alias mis-sized
+>   to `i64` — the alias-base maps are now populated *before* `build_struct_types`;
+>   (3) `with_provider[R](Type.new(..), ..)` couldn't infer the provider type from
+>   a constructor call — `infer_provider_type_name` now reads the call's return
+>   type; (4) `ensures(result) result.field == …` read the wrong slot — the
+>   `result` binding now records its struct type name; (5/6/7) three
+>   heap-payload double-frees: a String moved into a struct-variant payload (no
+>   construction-side move-suppression), a struct-variant *match* (the
+>   cap-suppression skipped struct patterns, and a `ref self` Display match
+>   tracked its borrowed bindings as owned), and refinement `try_from` over a
+>   `Vec` (the consumed source wasn't suppressed on the Ok branch). The built
+>   binary's output is byte-identical to the interpreter. → recorded in
+>   [`phase-7-codegen.md`](implementation_checklist/phase-7-codegen.md). Open:
+>   `String.split` on a non-identifier receiver and a call-result `.method()`
+>   chain both still fall through codegen dispatch (sidestepped in Weave by
+>   binding to a local) — minor, tracked in phase-7.
 > - [x] **Codegen `String.split` — ✓ RESOLVED 2026-06-13.** A runtime out-param
 >   helper `karac_runtime_string_split` (native, `cfg(not(wasm))`) does the split
 >   in Rust and writes the `Vec[String]` `{data,len,cap}` (libc::malloc'd buffers

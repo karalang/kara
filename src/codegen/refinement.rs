@@ -189,6 +189,15 @@ impl<'ctx> super::Codegen<'ctx> {
         let ok_val = self
             .try_compile_enum_variant("Ok", std::slice::from_ref(&ok_arg))?
             .ok_or_else(|| "failed to build Ok(...) for refinement try_from".to_string())?;
+        // `try_from` CONSUMES its argument: on the Ok path the heap buffer
+        // (`Vec`/`String`) now lives in the `Ok` payload, so the source
+        // binding (`enriched` / `v`) must NOT free it again at scope exit —
+        // else a double-free against the `Ok` payload's drop (the Weave
+        // dogfood's `NonEmpty.try_from(enriched)`). The suppression emits a
+        // `store cap = 0` at the current insert point, so placing it in the OK
+        // block makes it branch-local: on the Err path the value is discarded
+        // and the source's own cleanup (cap intact) correctly frees it.
+        self.suppress_source_vec_cleanup_for_arg(arg);
         let ok_end = self.builder.get_insert_block().unwrap();
         self.builder.build_unconditional_branch(cont_bb).unwrap();
 

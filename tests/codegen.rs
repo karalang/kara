@@ -1060,6 +1060,160 @@ fn main() {
         }
     }
 
+    // ── Refinement types + contracts + struct-variant heap payloads (codegen) ──
+    //
+    // Regression cluster surfaced by the `examples/weave` dogfood when first
+    // built (not just `karac run`) via codegen. Each test pins one fix.
+
+    #[test]
+    fn e2e_refinement_alias_collection_method_and_iteration() {
+        // A refinement alias of a collection (`type NonEmpty[T] = Vec[T] where
+        // self.len() > 0`) used as a parameter type must dispatch collection
+        // methods (`.len()`) and `for` iteration on the binding — codegen has to
+        // resolve the alias to its *instantiated* base `Vec[EnrichedRow]` (with
+        // the generic arg substituted) so `vec_elem_types` is registered.
+        // Pre-fix: "no handler for method 'len' on variable 'rows'".
+        if let Some(out) = run_program(
+            "pub type NonEmpty[T] = Vec[T] where self.len() > 0;\n\
+             pub struct Row { v: i64 }\n\
+             pub fn total(rows: NonEmpty[Row]) -> i64 {\n\
+                 let mut n = 0;\n\
+                 for r in rows { n = n + r.v; }\n\
+                 n\n\
+             }\n\
+             fn main() {\n\
+                 let mut xs: Vec[Row] = Vec.new();\n\
+                 xs.push(Row { v: 10 });\n\
+                 xs.push(Row { v: 32 });\n\
+                 println(f\"len={xs.len()} total={total(xs)}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "len=2 total=42\n");
+        }
+    }
+
+    #[test]
+    fn e2e_refinement_typed_struct_fields_layout() {
+        // A struct whose fields name refinement aliases (`email: BoundedText`
+        // where `BoundedText = String`, `price: PositivePrice` where `= f64`)
+        // must size those fields at the BASE layout, not the `i64` unknown-name
+        // fall-through. The refinement-base maps are now populated before
+        // `build_struct_types`; pre-fix the field collapsed to `i64` and
+        // construction tripped LLVM verification ("Invalid InsertValueInst").
+        if let Some(out) = run_program(
+            "pub type BoundedText = String where self.len() >= 1;\n\
+             pub type PositivePrice = f64 where self > 0.0;\n\
+             pub type PositiveQty = i64 where self > 0;\n\
+             pub struct Row { name: BoundedText, price: PositivePrice, qty: PositiveQty }\n\
+             fn main() {\n\
+                 let r = Row { name: \"widget\", price: 2.5, qty: 3 };\n\
+                 println(f\"{r.name} {r.price} x{r.qty}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "widget 2.5 x3\n");
+        }
+    }
+
+    #[test]
+    fn e2e_contract_ensures_result_field_access() {
+        // `ensures(result) result.field == ...` must read the right field of the
+        // returned struct. The `result` binding now records its static type
+        // name so field access resolves the struct field index; pre-fix it read
+        // the wrong slot and the contract spuriously failed at runtime.
+        if let Some(out) = run_program(
+            "pub struct In { q: i64 }\n\
+             pub struct Out { q: i64, doubled: i64 }\n\
+             pub fn f(x: In) -> Out\n\
+                 ensures(result) result.q == old(x.q)\n\
+             {\n\
+                 Out { q: x.q, doubled: x.q * 2 }\n\
+             }\n\
+             fn main() {\n\
+                 let o = f(In { q: 21 });\n\
+                 println(f\"{o.q} {o.doubled}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "21 42\n");
+        }
+    }
+
+    #[test]
+    fn e2e_struct_variant_string_payload_construct_and_consume() {
+        // A heap (`String`) local moved into an enum struct-variant payload and
+        // then CONSUMED (matched / Display'd) must not double-free: construction
+        // suppresses the source's cleanup, and the match-binding side treats a
+        // borrowed (`ref self`) scrutinee's field bindings as borrows. Covers
+        // the clone→struct-variant→`impl Display(ref self)` path that crashed
+        // the Weave `ParseError` at cleanup (a real cap>0 buffer).
+        if let Some(out) = run_program(
+            "pub enum E { Empty, NoAt { value: String } }\n\
+             impl Display for E {\n\
+                 fn to_string(ref self) -> String {\n\
+                     match self { Empty => \"empty\", NoAt { value } => f\"no-at '{value}'\" }\n\
+                 }\n\
+             }\n\
+             pub fn make(raw: String) -> E {\n\
+                 let v = raw.clone();\n\
+                 if not v.contains(\"@\") { return E.NoAt { value: v }; }\n\
+                 E.Empty\n\
+             }\n\
+             fn main() {\n\
+                 let data = \"a@b.com,bad-no-at\";\n\
+                 let inputs = data.split(',');\n\
+                 for s in inputs { let e = make(s); println(f\"{e}\"); }\n\
+             }",
+        ) {
+            assert_eq!(out, "empty\nno-at 'bad-no-at'\n");
+        }
+    }
+
+    #[test]
+    fn e2e_refinement_try_from_vec_no_double_free() {
+        // `Refined.try_from(v)` consumes `v`: on the Ok path the heap buffer
+        // lives in the `Ok` payload, so the source binding must not free it
+        // again. The suppression is emitted branch-locally in the Ok block (the
+        // Err path still frees the discarded value). Pre-fix this double-freed a
+        // `Vec[String]` at cleanup — the Weave `NonEmpty.try_from(enriched)`.
+        if let Some(out) = run_program(
+            "pub type NonEmptyV = Vec[String] where self.len() > 0;\n\
+             fn main() {\n\
+                 let mut v: Vec[String] = Vec.new();\n\
+                 v.push(\"a\".to_string());\n\
+                 v.push(\"b\".to_string());\n\
+                 match NonEmptyV.try_from(v) {\n\
+                     Ok(rows) => println(f\"got {rows.len()} rows\"),\n\
+                     Err(_)   => println(\"empty\"),\n\
+                 }\n\
+             }",
+        ) {
+            assert_eq!(out, "got 2 rows\n");
+        }
+    }
+
+    #[test]
+    fn e2e_with_provider_constructor_call_provider() {
+        // `with_provider[R](Type.new(args), || ...)` — the provider expression
+        // is a constructor (associated-function) call, not a bare identifier or
+        // struct literal. Codegen infers the concrete provider type from the
+        // call's return type (`fn_return_type_names`). Pre-fix: "cannot infer
+        // concrete provider type at codegen". The `examples/weave` FX provider.
+        if let Some(out) = run_program(
+            "pub trait Rate { fn factor(ref self) -> i64; }\n\
+             pub effect resource Fx: Rate;\n\
+             pub struct Fixed { f: i64 }\n\
+             impl Fixed { pub fn new(f: i64) -> Fixed { Fixed { f: f } } }\n\
+             impl Rate for Fixed { fn factor(ref self) -> i64 { self.f } }\n\
+             pub fn scale(x: i64) -> i64 with reads(Fx) { x * Fx.factor() }\n\
+             fn main() {\n\
+                 with_provider[Fx](Fixed.new(3), || {\n\
+                     println(f\"{scale(14)}\");\n\
+                 });\n\
+             }",
+        ) {
+            assert_eq!(out, "42\n");
+        }
+    }
+
     // ── Nested-place + compound-field assignment write-back (codegen) ──
     //
     // Regression: assignment to a value-type struct field through a projection

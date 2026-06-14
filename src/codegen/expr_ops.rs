@@ -3325,7 +3325,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (`Vec[T]`) recurses into its args; tuples / refs recurse structurally.
     /// Anything unmatched is returned unchanged — so for the concrete path
     /// (empty `subst`) this is the identity.
-    fn subst_type_params(
+    pub(super) fn subst_type_params(
         ty: &TypeExpr,
         subst: &std::collections::HashMap<String, TypeExpr>,
     ) -> TypeExpr {

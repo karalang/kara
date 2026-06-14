@@ -911,7 +911,47 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `var_elem_type_exprs` / `map_key_type_exprs` / `set_elem_types` /
     /// `set_elem_type_names` / `set_elem_type_exprs` matches the `TypeExpr`
     /// shape; primitives (and other shapes we don't track) are no-ops.
+    /// If `te` names a refinement alias (`type NonEmpty[T] = Vec[T] where …`),
+    /// resolve it to its *instantiated* base `TypeExpr` — substituting the
+    /// alias's generic params with the use-site's generic args
+    /// (`NonEmpty[EnrichedRow]` → `Vec[EnrichedRow]`). A refinement carries no
+    /// runtime identity, so a binding must register against its base for
+    /// collection method dispatch (`.len()`, `for x in`, indexing) and field
+    /// access to see the real `Vec`/`String`/`Map`/struct. Returns `None` for
+    /// every non-refinement type; callers recurse to peel nested aliases.
+    pub(super) fn resolve_refinement_alias_te(&self, te: &TypeExpr) -> Option<TypeExpr> {
+        let TypeKind::Path(path) = &te.kind else {
+            return None;
+        };
+        let name = path.segments.first()?;
+        let base = self.refinement_bases.get(name)?.clone();
+        // Build the param→arg substitution from the alias's declared param
+        // names (parallel `refinement_generic_params`) zipped against the
+        // use-site type args. Non-`Type` args (const/shape) and arity
+        // mismatches simply don't contribute — the base is returned with as
+        // much substituted as is well-formed.
+        let mut subst = std::collections::HashMap::new();
+        if let (Some(params), Some(args)) = (
+            self.refinement_generic_params.get(name),
+            path.generic_args.as_ref(),
+        ) {
+            for (pname, arg) in params.iter().zip(args.iter()) {
+                if let GenericArg::Type(t) = arg {
+                    subst.insert(pname.clone(), t.clone());
+                }
+            }
+        }
+        Some(Self::subst_type_params(&base, &subst))
+    }
+
     pub(super) fn register_var_from_type_expr(&mut self, var_name: &str, te: &TypeExpr) {
+        // Refinement alias: register against the instantiated base type so the
+        // binding dispatches as its real `Vec`/`String`/struct everywhere. The
+        // recursion peels nested aliases (`type A = B`, `type B = Vec[T]`).
+        if let Some(base) = self.resolve_refinement_alias_te(te) {
+            self.register_var_from_type_expr(var_name, &base);
+            return;
+        }
         // Atomic[T] — transparent wrapper type registered with
         // `var_type_names = "Atomic"` so downstream `.load(ord)` /
         // `.store(v, ord)` method-call dispatch (the Atomic arm in

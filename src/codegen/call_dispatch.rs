@@ -1719,6 +1719,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 format!("missing field `{fname}` in `{enum_name}.{variant}` construction")
             })?;
             let val = self.compile_expr(&init.value)?;
+            // F-string payload moves in — disarm the staged accumulator
+            // cleanup so it isn't freed again at scope end.
+            self.suppress_fstr_acc_if_moved_out(&init.value);
             // Owned String/Vec param captured into a payload field is deep-copied
             // (the caller retains the buffer free under the by-value ABI) — mirrors
             // the struct-literal / tuple-variant constructor paths.
@@ -1731,6 +1734,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_insert_value(agg, w, (start_word + j + 1) as u32, "word")
                     .unwrap()
                     .into_struct_value();
+            }
+            // Move-suppression: a String/Vec/Map local moved into this payload
+            // field must NOT be dropped again at scope end. Mirror of the
+            // shared-enum struct-variant branch above and the tuple-variant /
+            // struct-literal paths — its absence here double-freed a local
+            // String moved into a struct-variant payload (`E.NoAt { value:
+            // email }`), the Weave dogfood's `ParseError` corruption.
+            self.suppress_source_vec_cleanup_for_arg(&init.value);
+            if let ExprKind::Identifier(n) = &init.value.kind {
+                let n = n.clone();
+                self.suppress_map_cleanup_for_tail_identifier(&n);
             }
         }
         Ok(agg.into())
