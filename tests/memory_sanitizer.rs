@@ -3414,6 +3414,105 @@ fn main() {
     }
 
     #[test]
+    fn asan_struct_tuple_enum_leaf_no_leak_no_double_free() {
+        // #21 (phase-12 self-hosting): a struct field that is an anonymous TUPLE
+        // whose only heap is inside an enum leaf — `struct H { pe: (Tok, i64) }`
+        // with heap enum `Tok`. The struct drop's `NestedTuple` path now frees
+        // the tuple's enum leaf (the bounded leak #21 reported), paired with
+        // cap-zero suppression at every move-out site and entry-copy of
+        // heap-bearing tuple params (the cross-function P6 case). This stresses
+        // the whole move-out matrix in one loop: undestructured drop (the leak),
+        // full-tuple destructure + consume, direct tuple-index match, tuple-index
+        // let-move, whole-tuple let + cross-fn consume, whole-tuple arg, enum
+        // arg, whole-struct move, nested struct/tuple, and a tuple-literal arg —
+        // each clean on main; with the partial #21 fix the consume shapes
+        // double-freed. Every numeric arm is guarded behind an impossible
+        // `> 99999` so no `to_string` temp is materialized (keeps Linux LSan
+        // green vs the separate println-temp leak).
+        assert_clean_asan_run(
+            r#"
+enum Tok { Id(String), Int(i64) }
+struct Inner { tok: Tok, k: i64 }
+struct H { pe: (Tok, i64), tag: i64 }
+struct Hn { pn: ((Tok, i64), i64), tag: i64 }
+struct Hs { ps: (Inner, i64), tag: i64 }
+struct Hv { pv: (Vec[i64], i64), tag: i64 }
+fn mk(n: i64) -> H { H { pe: (Tok.Id(f"e-{n}"), n), tag: n } }
+fn mkn(n: i64) -> Hn { Hn { pn: ((Tok.Id(f"n-{n}"), n), n), tag: n } }
+fn mks(n: i64) -> Hs { Hs { ps: (Inner { tok: Tok.Id(f"s-{n}"), k: n }, n), tag: n } }
+fn mkv(n: i64) -> Hv { let mut v: Vec[i64] = Vec.new(); v.push(n); Hv { pv: (v, n), tag: n } }
+fn sink(s: String) -> i64 { s.len() }
+fn sinkv(v: Vec[i64]) -> i64 { v.len() }
+fn sinkt(p: (Tok, i64)) -> i64 { match p.0 { Id(s) => s.len(), Int(z) => { if z > 99999 { 1 } else { 0 } } } }
+fn sinke(t: Tok) -> i64 { match t { Id(s) => s.len(), Int(z) => { if z > 99999 { 1 } else { 0 } } } }
+fn sinki(p: (Inner, i64)) -> i64 { match p.0.tok { Id(s) => s.len(), Int(z) => { if z > 99999 { 1 } else { 0 } } } }
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 8 {
+        // P0 — undestructured drop (the #21 leak target).
+        let a = mk(i);
+        if a.tag > 99999 { println("never"); }
+
+        // P1 — full-tuple destructure then consume the enum leaf via match.
+        let b = mk(i);
+        let (t, n) = b.pe;
+        match t { Id(s) => { acc = acc + sink(s); } Int(z) => { if z > 99999 { println("never"); } } }
+        acc = acc + n;
+
+        // P3 — direct tuple-index match scrutinee.
+        let c = mk(i);
+        match c.pe.0 { Id(s) => { acc = acc + sink(s); } Int(z) => { if z > 99999 { println("never"); } } }
+
+        // P4 — tuple-index let-move into an enum binding, then consume.
+        let d = mk(i);
+        let x = d.pe.0;
+        match x { Id(s) => { acc = acc + sink(s); } Int(z) => { if z > 99999 { println("never"); } } }
+
+        // P5 / P6 — whole-tuple by value to a fn that matches an element
+        // internally (cross-boundary; needs entry-copy of the tuple param).
+        let e = mk(i);
+        let pp = e.pe;
+        acc = acc + sinkt(pp);
+        let f = mk(i);
+        acc = acc + sinkt(f.pe);
+
+        // P7 — enum arg extracted from a tuple field (caller-retained).
+        let g = mk(i);
+        acc = acc + sinke(g.pe.0);
+
+        // P8 — whole-struct move then drop undestructured.
+        let h = mk(i);
+        let h2 = h;
+        if h2.tag > 99999 { println("never"); }
+
+        // Tuple-literal arg with an enum element (caller-temp + entry-copy).
+        acc = acc + sinkt((Tok.Id(f"L-{i}"), i));
+
+        // Nested tuple / nested struct in a tuple, undestructured + consumed.
+        let nt = mkn(i);
+        if nt.tag > 99999 { println("never"); }
+        match nt.pn.0.0 { Id(s) => { acc = acc + sink(s); } Int(z) => { if z > 99999 { println("never"); } } }
+        let ns = mks(i);
+        acc = acc + sinki(ns.ps);
+
+        // Direct-Vec tuple regression (must stay clean).
+        let v = mkv(i);
+        let (vv, vn) = v.pv;
+        acc = acc + sinkv(vv) + vn;
+
+        i = i + 1;
+    }
+    if acc > 999999 { println("never"); }
+    println("done");
+}
+"#,
+            &["done"],
+            "struct_tuple_enum_leaf_no_leak_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_enum_field_struct_transfer_destructure_no_double_free() {
         // #19 (phase-12 self-hosting): a by-value TRANSFER of an enum-field struct
         // (`let b = wrap(a)`, `wrap(s: Span) -> Span { s }`) followed by a

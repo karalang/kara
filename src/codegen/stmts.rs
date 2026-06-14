@@ -2616,6 +2616,12 @@ impl<'ctx> super::Codegen<'ctx> {
                                 }
                             }
                         }
+                        // #21 — `let x = h.pe.0`: an enum moved out of a struct's
+                        // TUPLE field. Cap-zero that tuple element in the source so
+                        // the owning struct's `NestedTuple` drop skips the buffer
+                        // `x` (tracked just above) now owns. Tuple-index peer of the
+                        // #19 FieldAccess move-out above (P4).
+                        self.suppress_tuple_index_move_source(value);
                     }
                 }
                 // B-2026-06-11-4 part a: a let-bound TUPLE with heap fields
@@ -3829,10 +3835,74 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(());
         };
         if !self.expr_yields_fresh_owned_temp(value) {
+            // #21 — a PLACE source (`let (t, n) = h.pe`): the source struct's
+            // `NestedTuple` drop now frees the tuple's enum / nested-struct
+            // leaves. The fresh-temp path below tracks ALL leaves; here we touch
+            // ONLY those newly-freed leaf kinds — register + track each (so an
+            // UNUSED leaf frees itself, not leaks) and cap-zero that element in
+            // the SOURCE (so a CONSUMED leaf's binding/match is the sole owner).
+            // Vec/String/i64 leaves keep the proven source-owns model untouched.
+            self.finish_place_source_tuple_destructure(pats, value);
             return Ok(());
         }
         self.track_tuple_destructure_leaf_cleanups(pats, sv);
         Ok(())
+    }
+
+    /// #21 — the place-source half of [`Self::finish_owned_tuple_destructure`]
+    /// (`let (t, n) = h.pe` where `h` is an owned local/callee-owned struct).
+    /// For each leaf whose element type is a non-shared user ENUM or nested
+    /// STRUCT — the kinds the owning struct's `NestedTuple` drop newly frees —
+    /// register + track the leaf and cap-zero that element in the source so the
+    /// struct drop skips it. Bails on a caller-retains root (`owned_struct_params`,
+    /// whose deep-copy owns the buffer) or an unresolvable source.
+    fn finish_place_source_tuple_destructure(&mut self, pats: &[Pattern], value: &Expr) {
+        match Self::place_root_ident(value) {
+            Some(root) if self.owned_struct_params.contains(root) => return,
+            Some(_) => {}
+            None => return,
+        }
+        let Some(elems) = self.place_chain_tuple_tes(value) else {
+            return;
+        };
+        let Some(base_ptr) = self.field_chain_place_ptr(value) else {
+            return;
+        };
+        let Some(tuple_ty) = self.place_chain_aggregate_llvm_type(value) else {
+            return;
+        };
+        for (idx, pat) in pats.iter().enumerate() {
+            let PatternKind::Binding(name) = &pat.kind else {
+                continue;
+            };
+            let Some(te) = elems.get(idx).cloned() else {
+                continue;
+            };
+            // Only ENUM / nested-STRUCT leaves are newly freed by `NestedTuple`;
+            // Vec/String leaves keep the existing source-owns behavior.
+            let TypeKind::Path(p) = &te.kind else {
+                continue;
+            };
+            let Some(leaf_name) = p.segments.last().map(|s| s.as_str()) else {
+                continue;
+            };
+            let is_enum = leaf_name != "Option"
+                && leaf_name != "Result"
+                && self
+                    .enum_layouts
+                    .get(leaf_name)
+                    .is_some_and(|l| !l.is_shared);
+            let is_struct = self.struct_types.contains_key(leaf_name)
+                && !self.shared_types.contains_key(leaf_name);
+            if !is_enum && !is_struct {
+                continue;
+            }
+            self.register_var_from_type_expr(name, &te);
+            if let Some(slot) = self.variables.get(name.as_str()).copied() {
+                self.track_destructure_leaf_cleanup(name, slot.ptr);
+            }
+            self.zero_tuple_elem_cap_at(base_ptr, tuple_ty, idx as u32, &te);
+        }
     }
 
     /// Per-element cleanup for an owned (already-fresh-checked) tuple
@@ -3929,6 +3999,17 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         }
         if let Some(tn) = self.var_type_names.get(name).cloned() {
+            // #21 — a non-shared user-enum leaf (`let (t, n) = h.pe` with `t: Tok`):
+            // track its `EnumDrop` so an unused leaf frees its payload (a consumed
+            // leaf's `match` suppresses this drop). Without this the leaf was
+            // untracked and relied on the source struct's drop — which now
+            // (NestedTuple) the destructure cap-zeros, so the leaf must own.
+            if let Some(layout) = self.enum_layouts.get(&tn) {
+                if !layout.is_shared {
+                    self.track_enum_var(&tn, alloca);
+                    return;
+                }
+            }
             if self.struct_types.contains_key(&tn) && !self.shared_types.contains_key(&tn) {
                 self.track_struct_var(&tn, alloca);
             }

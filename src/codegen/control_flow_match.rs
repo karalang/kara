@@ -1935,9 +1935,15 @@ impl<'ctx> super::Codegen<'ctx> {
         scrutinee: &Expr,
         pattern: &Pattern,
     ) {
-        let ExprKind::FieldAccess { .. } = &scrutinee.kind else {
+        // #15/#18 reach a named struct field (`s.tok`, `w.sp.tok`); #21 adds the
+        // tuple-index scrutinee (`match h.pe.0`) — both resolve through the
+        // place-chain walkers below, which now handle a `TupleIndex` hop.
+        if !matches!(
+            &scrutinee.kind,
+            ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. }
+        ) {
             return;
-        };
+        }
         // The leaf field's declared type must be a (non-shared) user enum — the
         // only kind `emit_struct_drop_synthesis` frees as a struct field.
         // `place_chain_type_name` (not the shared `type_name_of_expr`) so a
@@ -2110,8 +2116,131 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_struct_gep(st, base_ptr, idx, "match.chain.enum.p")
                     .ok()
             }
+            // #21 — a tuple-index hop (`<place>.field.N`, the `match h.pe.0`
+            // scrutinee). GEP element `index` of the tuple at `object` in place.
+            ExprKind::TupleIndex { object, index } => {
+                let base_ptr = self.field_chain_place_ptr(object)?;
+                let tuple_ty = self.place_chain_aggregate_llvm_type(object)?;
+                self.builder
+                    .build_struct_gep(tuple_ty, base_ptr, *index as u32, "match.chain.tupidx.p")
+                    .ok()
+            }
             _ => None,
         }
+    }
+
+    /// LLVM aggregate (struct/tuple) type of a place expression — used by the
+    /// tuple-index arm of [`Self::field_chain_place_ptr`] to GEP a tuple element.
+    /// `&self` — pure type lookup, no IR.
+    pub(super) fn place_chain_aggregate_llvm_type(&self, expr: &Expr) -> Option<StructType<'ctx>> {
+        match &expr.kind {
+            ExprKind::Identifier(n) => match self.variables.get(n.as_str())?.ty {
+                BasicTypeEnum::StructType(t) => Some(t),
+                _ => None,
+            },
+            ExprKind::SelfValue => match self.variables.get("self")?.ty {
+                BasicTypeEnum::StructType(t) => Some(t),
+                _ => None,
+            },
+            ExprKind::FieldAccess { object, field } => {
+                let obj_ty = self.place_chain_type_name(object)?;
+                let st = *self.struct_types.get(obj_ty.as_str())?;
+                let idx = self
+                    .struct_field_names
+                    .get(obj_ty.as_str())?
+                    .iter()
+                    .position(|n| n == field)? as u32;
+                match st.get_field_type_at_index(idx)? {
+                    BasicTypeEnum::StructType(t) => Some(t),
+                    _ => None,
+                }
+            }
+            ExprKind::TupleIndex { object, index } => {
+                let outer = self.place_chain_aggregate_llvm_type(object)?;
+                match outer.get_field_type_at_index(*index as u32)? {
+                    BasicTypeEnum::StructType(t) => Some(t),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// The element `TypeExpr`s of a tuple-typed place expression (`<struct>.f`
+    /// where `f` is declared a tuple, or a tuple-index thereof). `&self`.
+    pub(super) fn place_chain_tuple_tes(&self, expr: &Expr) -> Option<Vec<TypeExpr>> {
+        match &expr.kind {
+            ExprKind::FieldAccess { object, field } => {
+                let obj_ty = self.place_chain_type_name(object)?;
+                let idx = self
+                    .struct_field_names
+                    .get(obj_ty.as_str())?
+                    .iter()
+                    .position(|n| n == field)?;
+                match &self
+                    .struct_field_type_exprs
+                    .get(obj_ty.as_str())?
+                    .get(idx)?
+                    .kind
+                {
+                    TypeKind::Tuple(elems) => Some(elems.clone()),
+                    _ => None,
+                }
+            }
+            ExprKind::TupleIndex { object, index } => {
+                let outer = self.place_chain_tuple_tes(object)?;
+                match &outer.get(*index as usize)?.kind {
+                    TypeKind::Tuple(elems) => Some(elems.clone()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Root identifier of a place chain (`h.pe.0` → `h`, `self.f` → `self`).
+    /// `None` for a non-place root (call result, literal). Used to gate
+    /// move-out suppression on whether the root is owned vs caller-retains.
+    pub(super) fn place_root_ident(expr: &Expr) -> Option<&str> {
+        match &expr.kind {
+            ExprKind::Identifier(n) => Some(n.as_str()),
+            ExprKind::SelfValue => Some("self"),
+            ExprKind::FieldAccess { object, .. }
+            | ExprKind::TupleIndex { object, .. }
+            | ExprKind::Index { object, .. } => Self::place_root_ident(object),
+            _ => None,
+        }
+    }
+
+    /// #21 — `let x = <place>.N` moving a heap tuple ELEMENT out of an owned
+    /// struct/tuple. Cap-zero that element in the SOURCE so the owning struct's
+    /// `NestedTuple` drop no-ops on the buffer the new binding now owns — the
+    /// tuple-index peer of `suppress_struct_field_move_into_literal` (#19's enum
+    /// field move-out, which handles only a named `FieldAccess` source). Bails on
+    /// a caller-retains (`owned_struct_params`) root — its deep-copy owns the
+    /// buffer, there is no value drop to suppress — and on a non-place root.
+    pub(super) fn suppress_tuple_index_move_source(&mut self, value: &Expr) {
+        let ExprKind::TupleIndex { object, index } = &value.kind else {
+            return;
+        };
+        match Self::place_root_ident(value) {
+            Some(root) if self.owned_struct_params.contains(root) => return,
+            Some(_) => {}
+            None => return,
+        }
+        let Some(elems) = self.place_chain_tuple_tes(object) else {
+            return;
+        };
+        let Some(te) = elems.get(*index as usize).cloned() else {
+            return;
+        };
+        let Some(base_ptr) = self.field_chain_place_ptr(object) else {
+            return;
+        };
+        let Some(tuple_ty) = self.place_chain_aggregate_llvm_type(object) else {
+            return;
+        };
+        self.zero_tuple_elem_cap_at(base_ptr, tuple_ty, *index as u32, &te);
     }
 
     /// Type name of a place-expression root for [`Self::field_chain_place_ptr`]'s
@@ -2142,6 +2271,25 @@ impl<'ctx> super::Codegen<'ctx> {
                     .get(obj_ty.as_str())?
                     .get(idx)?
                     .clone()
+            }
+            // #21 — `<struct>.tuplefield.N`: the element's declared type name
+            // (e.g. `h.pe.0` → the enum `Tok`). Tuples carry no field-name table,
+            // so resolve via the element `TypeExpr`s; for a tuple VAR / param root
+            // (`p.0`), fall back to the recorded per-element type names.
+            ExprKind::TupleIndex { object, index } => {
+                if let Some(elems) = self.place_chain_tuple_tes(object) {
+                    if let Some(TypeKind::Path(p)) = elems.get(*index as usize).map(|t| &t.kind) {
+                        return p.segments.last().cloned();
+                    }
+                }
+                if let ExprKind::Identifier(v) = &object.kind {
+                    return self
+                        .tuple_var_elem_type_names
+                        .get(v.as_str())?
+                        .get(*index as usize)?
+                        .clone();
+                }
+                None
             }
             _ => self.type_name_of_expr(expr),
         }

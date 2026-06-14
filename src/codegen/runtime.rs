@@ -530,6 +530,71 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(drop_fn)
     }
 
+    /// #21 — the `TypeExpr`-driven sibling of [`Self::synthesize_aggregate_drop_fn`]:
+    /// a drop fn that frees a tuple's heap via [`Self::emit_tuple_elem_drops`], so
+    /// enum / nested-struct leaves are reached (the LLVM-type-driven aggregate
+    /// drop above is enum-blind). Used to give a callee-owned tuple PARAM (#21
+    /// entry-copy) a scope-exit drop that mirrors the owning struct's `NestedTuple`
+    /// drop. Memoized by an element-type signature (NOT by `agg_ty` alone:
+    /// `(Tok, i64)` and `(Other, i64)` share the LLVM type `{i64, i64}` but free
+    /// different leaves). `None` when the tuple owns no drop-bearing heap.
+    pub(super) fn synthesize_tuple_drop_fn_te(
+        &mut self,
+        agg_ty: StructType<'ctx>,
+        elem_tes: &[crate::ast::TypeExpr],
+    ) -> Option<FunctionValue<'ctx>> {
+        if !elem_tes.iter().any(|e| self.type_expr_has_drop_heap(e)) {
+            return None;
+        }
+        let fn_name = format!("__karac_drop_tuple_te_{}", Self::tuple_te_sig(elem_tes));
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let drop_fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        let drop_fn = self.module.add_function(
+            &fn_name,
+            drop_fn_ty,
+            Some(inkwell::module::Linkage::Internal),
+        );
+        self.current_fn = Some(drop_fn);
+        let entry = self.context.append_basic_block(drop_fn, "entry");
+        self.builder.position_at_end(entry);
+        let p = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+        self.emit_tuple_elem_drops(p, agg_ty, elem_tes);
+        self.builder.build_return(None).unwrap();
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Some(drop_fn)
+    }
+
+    /// A stable, LLVM-name-safe signature of a tuple's element types, keying the
+    /// memoization of [`Self::synthesize_tuple_drop_fn_te`].
+    fn tuple_te_sig(elems: &[crate::ast::TypeExpr]) -> String {
+        elems
+            .iter()
+            .map(Self::type_expr_sig)
+            .collect::<Vec<_>>()
+            .join("_")
+    }
+
+    fn type_expr_sig(te: &crate::ast::TypeExpr) -> String {
+        use crate::ast::TypeKind;
+        match &te.kind {
+            TypeKind::Path(p) => p
+                .segments
+                .last()
+                .cloned()
+                .unwrap_or_else(|| "x".to_string()),
+            TypeKind::Tuple(e) => format!("t{}t", Self::tuple_te_sig(e)),
+            _ => "x".to_string(),
+        }
+    }
+
     /// Queue a scope-exit heap-field drop for an owned tuple binding
     /// (`let t = (i, f"x")`). The named-struct `track_struct_var` can't cover a
     /// tuple (no type name), so a let-bound tuple's String/Vec field had no

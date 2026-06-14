@@ -121,6 +121,53 @@ impl<'ctx> super::Codegen<'ctx> {
         false
     }
 
+    /// #21 — the tuple-param analog of [`Self::make_aggregate_param_callee_owned`].
+    /// A bare (non-ref) by-value TUPLE param with an enum / nested-struct heap
+    /// leaf (`fn f(p: (Tok, i64))`) is, without this, a shallow copy SHARING the
+    /// caller's heap pointer. When the callee consumes a leaf internally
+    /// (`match p.0`) while the caller's owning struct drop (`NestedTuple`) also
+    /// frees that buffer, both free it → double-free (#21 P5/P6, which cross the
+    /// call boundary so no caller-side suppression resolves them). Deep-copy the
+    /// tuple's heap leaves at entry (`deep_copy_one_aggregate_field`, which
+    /// already recurses through tuple / enum / nested-struct elements) and
+    /// register a `TypeExpr`-driven scope-exit drop (`synthesize_tuple_drop_fn_te`)
+    /// so the param owns an INDEPENDENT copy — caller and callee free distinct
+    /// buffers. Bails (caller-retains status quo) when any leaf is not
+    /// copy-supported (`Map` / shared / `Option` / `Result`), matching the
+    /// struct-param policy. Returns whether entry-copy engaged.
+    pub(super) fn make_tuple_param_callee_owned(
+        &mut self,
+        elems: &[TypeExpr],
+        agg_ty: StructType<'ctx>,
+        slot: PointerValue<'ctx>,
+    ) -> bool {
+        if !elems.iter().any(|e| self.type_expr_has_drop_heap(e)) {
+            return false;
+        }
+        let mut stack = Vec::new();
+        if !elems
+            .iter()
+            .all(|e| self.field_copy_supported(e, &mut stack))
+        {
+            return false;
+        }
+        for (j, ete) in elems.iter().enumerate() {
+            self.deep_copy_one_aggregate_field(slot, agg_ty, j as u32, ete);
+        }
+        match self.synthesize_tuple_drop_fn_te(agg_ty, elems) {
+            Some(drop_fn) => {
+                if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                    frame.push(super::state::CleanupAction::StructDrop {
+                        struct_alloca: slot,
+                        drop_fn,
+                    });
+                }
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Recursively decide whether a struct's heap content can be soundly
     /// outer-buffer-copied to mirror its drop. `stack` guards against
     /// self-referential owned structs (which would recurse forever — bail).

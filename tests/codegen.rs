@@ -12950,6 +12950,52 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_struct_tuple_enum_leaf_heap_payload() {
+        // #21 (phase-12 self-hosting): a struct field that is an anonymous TUPLE
+        // whose only heap is inside an enum leaf — `struct H { pe: (Tok, i64) }`
+        // with heap enum `Tok`. The struct drop's `NestedTuple` path frees the
+        // enum leaf; paired cap-zero suppression at the destructure / tuple-index
+        // match / tuple-index let sites and entry-copy of heap-bearing tuple
+        // params keep every CONSUME shape single-free. Correctness here is the
+        // payloads round-tripping through: a full-tuple destructure + match
+        // (`let (t, n) = h.pe; match t`), a direct tuple-index match
+        // (`match h.pe.0`), a tuple-index let-move (`let x = h.pe.0`), and a
+        // whole-tuple by-value arg whose callee matches an element internally
+        // (`sinkt(h.pe)` — the cross-boundary case the param entry-copy closes).
+        // The leak + double-free are covered by
+        // `asan_struct_tuple_enum_leaf_no_leak_no_double_free`.
+        if let Some(out) = run_program(
+            r#"
+enum Tok { Id(String), Int(i64) }
+struct H { pe: (Tok, i64), tag: i64 }
+fn sinkt(p: (Tok, i64)) -> String { match p.0 { Id(s) => s, Int(n) => n.to_string() } }
+fn main() {
+    let a = H { pe: (Tok.Id("alpha".to_string()), 1), tag: 1 };
+    let (t, n) = a.pe;
+    match t { Id(s) => println(s), Int(x) => println(x.to_string()) }
+    println(n.to_string());
+
+    let b = H { pe: (Tok.Id("beta".to_string()), 2), tag: 2 };
+    match b.pe.0 { Id(s) => println(s), Int(x) => println(x.to_string()) }
+
+    let c = H { pe: (Tok.Id("gamma".to_string()), 3), tag: 3 };
+    let x = c.pe.0;
+    match x { Id(s) => println(s), Int(z) => println(z.to_string()) }
+
+    let d = H { pe: (Tok.Id("delta".to_string()), 4), tag: 4 };
+    println(sinkt(d.pe));
+
+    let e = H { pe: (Tok.Int(5_i64), 5), tag: 5 };
+    match e.pe.0 { Id(s) => println(s), Int(z) => println(z.to_string()) }
+    println("ok");
+}
+"#,
+        ) {
+            assert_eq!(out, "alpha\n1\nbeta\ngamma\ndelta\n5\nok\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_enum_field_struct_field_move_out_loop() {
         // #19 FIXED 2026-06-12 — the bootstrap lexer's `render()` shape: iterate a
         // `Vec[SpannedToken]` and pass each element BY VALUE to a fn that moves the

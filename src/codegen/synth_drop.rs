@@ -342,7 +342,26 @@ impl<'ctx> super::Codegen<'ctx> {
             /// aggregates, cap-guarding each Vec/String free). *Named* nested
             /// struct fields take the `NestedStruct` path instead — the
             /// type-driven recursion here is enum- and Map-blind.
+            ///
+            /// NOTE: superseded for any tuple field carrying a recorded
+            /// `TypeExpr` by `NestedTuple` below; survives only as the fallback
+            /// when no tuple `TypeExpr` is on record.
             NestedAggregate,
+            /// #21 — a nested *anonymous tuple* field whose heap is reachable
+            /// through an enum / nested-struct leaf (or a mix with direct
+            /// Vec/String). The LLVM-type-driven `NestedAggregate` path above is
+            /// enum-blind (an enum's payload is all-i64 words, never the
+            /// `vec_struct_type` it looks for), so `(Tok, i64)` with a heap enum
+            /// `Tok` reads as no-heap and leaks. This path consults the tuple's
+            /// source element `TypeExpr`s (`struct_field_type_exprs`) and routes
+            /// each enum leaf through its own `__karac_drop_<E>`, each named
+            /// nested struct through `__karac_drop_struct_<S>`, direct Vec/String
+            /// through a cap-guarded free, and a nested tuple via recursion.
+            /// Paired with `zero_tuple_elem_caps` at every tuple-element move-out
+            /// site (the cap-zero dual) and with entry-copy of heap-bearing tuple
+            /// params (so a caller-retained shared copy can't double-free) — see
+            /// phase-12 #21.
+            NestedTuple,
             /// #18 — a field whose declared type is a *named* non-shared user
             /// struct. Routed through that struct's own
             /// `__karac_drop_struct_<S>` (synthesized on demand) rather than
@@ -421,9 +440,30 @@ impl<'ctx> super::Codegen<'ctx> {
                         continue;
                     }
                 }
-                // Anonymous tuple (no declared type name) with direct heap.
-                if self.aggregate_has_heap_field(fst) {
-                    *k = FieldDrop::NestedAggregate;
+                // Anonymous tuple (no declared type name). #21 — prefer the
+                // source-`TypeExpr`-driven classification so an enum / nested
+                // struct leaf is seen; the LLVM-type-driven
+                // `aggregate_has_heap_field` is enum-blind. Fall back to the
+                // type-driven check only when no tuple `TypeExpr` is recorded.
+                let tuple_needs_drop = match self
+                    .struct_field_type_exprs
+                    .get(struct_name)
+                    .and_then(|v| v.get(idx))
+                    .map(|te| &te.kind)
+                {
+                    Some(TypeKind::Tuple(elems)) => {
+                        Some(elems.iter().any(|e| self.type_expr_has_drop_heap(e)))
+                    }
+                    _ => None,
+                };
+                match tuple_needs_drop {
+                    Some(true) => *k = FieldDrop::NestedTuple,
+                    Some(false) => {}
+                    None => {
+                        if self.aggregate_has_heap_field(fst) {
+                            *k = FieldDrop::NestedAggregate;
+                        }
+                    }
                 }
             }
             // Phase 2: synthesize each named nested struct's drop fn; mark
@@ -745,6 +785,39 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.emit_aggregate_heap_field_frees(field_ptr, fst);
                     self.current_fn = saved_fn;
                 }
+                FieldDrop::NestedTuple => {
+                    // #21 — drive tuple element drops off the source `TypeExpr`s
+                    // so enum / nested-struct leaves are reached. Clone the
+                    // element `TypeExpr`s: the emit walk below takes `&mut self`
+                    // (synthesizes nested drop fns), which can't coexist with an
+                    // immutable borrow of `struct_field_type_exprs`.
+                    let elem_tes: Vec<TypeExpr> = match self
+                        .struct_field_type_exprs
+                        .get(struct_name)
+                        .and_then(|v| v.get(field_idx))
+                        .map(|te| &te.kind)
+                    {
+                        Some(TypeKind::Tuple(elems)) => elems.clone(),
+                        _ => continue,
+                    };
+                    let fst = match st.get_field_type_at_index(field_idx as u32) {
+                        Some(inkwell::types::BasicTypeEnum::StructType(t)) => t,
+                        _ => continue,
+                    };
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            st,
+                            p_arg,
+                            field_idx as u32,
+                            &format!("drop.field{field_idx}.tuple.p"),
+                        )
+                        .unwrap();
+                    let saved_fn = self.current_fn;
+                    self.current_fn = Some(drop_fn);
+                    self.emit_tuple_elem_drops(field_ptr, fst, &elem_tes);
+                    self.current_fn = saved_fn;
+                }
                 FieldDrop::NestedStruct => {
                     // #18 — route the nested struct field through its own
                     // `__karac_drop_struct_<S>` (synthesized during
@@ -813,6 +886,237 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         Some(drop_fn)
+    }
+
+    /// #21 — does a (tuple-element or nested) `TypeExpr` carry heap a synthesized
+    /// drop must free? Drives classification of an anonymous tuple struct field:
+    /// the LLVM-type-driven `aggregate_has_heap_field` is enum-blind, so a tuple
+    /// whose only heap lives inside an enum leaf — `(Tok, i64)` — reads as
+    /// no-heap and leaks; consulting the source `TypeExpr` sees the leaf. `&self`,
+    /// pure lookup. `Option`/`Result` are no-drop (their inline payloads are
+    /// freed by the let-binding machinery); shared (RC) leaves are skipped.
+    pub(super) fn type_expr_has_drop_heap(&self, te: &TypeExpr) -> bool {
+        match &te.kind {
+            TypeKind::Tuple(elems) => elems.iter().any(|e| self.type_expr_has_drop_heap(e)),
+            TypeKind::Path(p) => {
+                let Some(name) = p.segments.last() else {
+                    return false;
+                };
+                match name.as_str() {
+                    "Vec" | "VecDeque" | "String" | "Map" | "HashMap" | "Set" | "HashSet" => true,
+                    "Option" | "Result" => false,
+                    _ => {
+                        if self.shared_types.contains_key(name) {
+                            return false;
+                        }
+                        if let Some(layout) = self.enum_layouts.get(name) {
+                            return !layout.is_shared
+                                && layout
+                                    .field_drop_kinds
+                                    .values()
+                                    .any(|ks| ks.iter().any(|dk| *dk != EnumDropKind::None));
+                        }
+                        if self.struct_types.contains_key(name) {
+                            if let Some(fields) = self.struct_field_type_exprs.get(name) {
+                                return fields.iter().any(|f| self.type_expr_has_drop_heap(f));
+                            }
+                        }
+                        false
+                    }
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// #21 — free the heap reachable through an anonymous tuple struct field,
+    /// driven by the tuple's source element `TypeExpr`s: Vec/String → cap-guarded
+    /// free; Map/Set → handle free; named non-shared enum → `emit_enum_drop_switch`;
+    /// named non-shared struct → `__karac_drop_struct_<S>`; nested tuple →
+    /// recurse. Reaches the enum leaves `emit_aggregate_heap_field_frees` misses.
+    /// Appends cap-guard blocks to `current_fn` (the caller points it at the drop
+    /// fn). Shared / `Option` / `Result` leaves are skipped.
+    pub(super) fn emit_tuple_elem_drops(
+        &mut self,
+        base_ptr: PointerValue<'ctx>,
+        tuple_ty: StructType<'ctx>,
+        elem_tes: &[TypeExpr],
+    ) {
+        let vec_ty = self.vec_struct_type();
+        let i64_t = self.context.i64_type();
+        let i32_t = self.context.i32_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        for (i, te) in elem_tes.iter().enumerate() {
+            let idx = i as u32;
+            let Some(llvm_field) = tuple_ty.get_field_type_at_index(idx) else {
+                continue;
+            };
+            match &te.kind {
+                TypeKind::Tuple(inner) => {
+                    if let inkwell::types::BasicTypeEnum::StructType(fst) = llvm_field {
+                        let field_ptr = self
+                            .builder
+                            .build_struct_gep(tuple_ty, base_ptr, idx, "drop.tup.nested.p")
+                            .unwrap();
+                        self.emit_tuple_elem_drops(field_ptr, fst, inner);
+                    }
+                }
+                TypeKind::Path(p) => {
+                    let Some(name) = p.segments.last().cloned() else {
+                        continue;
+                    };
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(tuple_ty, base_ptr, idx, "drop.tup.elem.p")
+                        .unwrap();
+                    match name.as_str() {
+                        "Vec" | "VecDeque" | "String" => {
+                            if matches!(llvm_field, inkwell::types::BasicTypeEnum::StructType(st) if st == vec_ty)
+                            {
+                                let data_pp = self
+                                    .builder
+                                    .build_struct_gep(vec_ty, field_ptr, 0, "drop.tup.data.pp")
+                                    .unwrap();
+                                let data = self
+                                    .builder
+                                    .build_load(ptr_ty, data_pp, "drop.tup.data")
+                                    .unwrap()
+                                    .into_pointer_value();
+                                let cap_pp = self
+                                    .builder
+                                    .build_struct_gep(vec_ty, field_ptr, 2, "drop.tup.cap.pp")
+                                    .unwrap();
+                                let cap = self
+                                    .builder
+                                    .build_load(i64_t, cap_pp, "drop.tup.cap")
+                                    .unwrap()
+                                    .into_int_value();
+                                self.emit_free_if_cap_positive(data, cap);
+                            }
+                        }
+                        "Map" | "HashMap" | "Set" | "HashSet" => {
+                            let handle = self
+                                .builder
+                                .build_load(ptr_ty, field_ptr, "drop.tup.map.handle")
+                                .unwrap()
+                                .into_pointer_value();
+                            let one = i32_t.const_int(1, false);
+                            self.builder
+                                .build_call(
+                                    self.karac_map_free_with_drop_vec_fn,
+                                    &[handle.into(), one.into(), one.into()],
+                                    "",
+                                )
+                                .unwrap();
+                        }
+                        "Option" | "Result" => {}
+                        _ => {
+                            if self.shared_types.contains_key(&name) {
+                                // RC leaf — cleanup is the rc machinery's job.
+                            } else if self.enum_layouts.contains_key(&name) {
+                                if let Some(enum_drop_fn) = self.emit_enum_drop_switch(&name) {
+                                    self.builder
+                                        .build_call(enum_drop_fn, &[field_ptr.into()], "")
+                                        .unwrap();
+                                }
+                            } else if self.struct_types.contains_key(&name) {
+                                if let Some(nested_drop_fn) = self.emit_struct_drop_synthesis(&name)
+                                {
+                                    self.builder
+                                        .build_call(nested_drop_fn, &[field_ptr.into()], "")
+                                        .unwrap();
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// #21 — the cap-zero DUAL of [`Self::emit_tuple_elem_drops`]: zero the
+    /// move-suppression caps of every heap leaf reachable through a tuple, so the
+    /// owning struct's `NestedTuple` drop no-ops on a moved-out tuple. Called at
+    /// every site that moves a whole tuple out of a struct it owns. `&self` —
+    /// pure stores, no new blocks.
+    pub(super) fn zero_tuple_elem_caps(
+        &self,
+        base_ptr: PointerValue<'ctx>,
+        tuple_ty: StructType<'ctx>,
+        elem_tes: &[TypeExpr],
+    ) {
+        for (i, te) in elem_tes.iter().enumerate() {
+            self.zero_tuple_elem_cap_at(base_ptr, tuple_ty, i as u32, te);
+        }
+    }
+
+    /// Cap-zero a SINGLE tuple element's heap (the per-element core of
+    /// [`Self::zero_tuple_elem_caps`]). Used at a single-element move-out —
+    /// `let x = t.0` — where only element `idx` is consumed and the tuple's
+    /// other elements stay owned by the source.
+    pub(super) fn zero_tuple_elem_cap_at(
+        &self,
+        base_ptr: PointerValue<'ctx>,
+        tuple_ty: StructType<'ctx>,
+        idx: u32,
+        te: &TypeExpr,
+    ) {
+        let vec_ty = self.vec_struct_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let zero = self.context.i64_type().const_int(0, false);
+        let Some(llvm_field) = tuple_ty.get_field_type_at_index(idx) else {
+            return;
+        };
+        let Ok(field_ptr) = self
+            .builder
+            .build_struct_gep(tuple_ty, base_ptr, idx, "ztup.elem.p")
+        else {
+            return;
+        };
+        match &te.kind {
+            TypeKind::Tuple(inner) => {
+                if let inkwell::types::BasicTypeEnum::StructType(fst) = llvm_field {
+                    self.zero_tuple_elem_caps(field_ptr, fst, inner);
+                }
+            }
+            TypeKind::Path(p) => {
+                let Some(name) = p.segments.last().map(|s| s.as_str()) else {
+                    return;
+                };
+                match name {
+                    "Vec" | "VecDeque" | "String" => {
+                        if matches!(llvm_field, inkwell::types::BasicTypeEnum::StructType(st) if st == vec_ty)
+                        {
+                            if let Ok(cap_ptr) =
+                                self.builder
+                                    .build_struct_gep(vec_ty, field_ptr, 2, "ztup.cap.p")
+                            {
+                                let _ = self.builder.build_store(cap_ptr, zero);
+                            }
+                        }
+                    }
+                    "Map" | "HashMap" | "Set" | "HashSet" => {
+                        let _ = self.builder.build_store(field_ptr, ptr_ty.const_null());
+                    }
+                    "Option" | "Result" => {}
+                    _ => {
+                        if self.shared_types.contains_key(name) {
+                            // RC leaf — not freed by the tuple drop walk.
+                        } else if let Some(layout) = self.enum_layouts.get(name).cloned() {
+                            if !layout.is_shared {
+                                self.zero_enum_payload_caps(field_ptr, &layout);
+                            }
+                        } else if self.struct_types.contains_key(name)
+                            && !self.shared_types.contains_key(name)
+                        {
+                            self.zero_struct_move_caps(field_ptr, name);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Synthesize (or reuse) the per-shared-struct recursive drop fn

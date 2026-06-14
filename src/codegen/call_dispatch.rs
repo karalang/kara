@@ -1192,25 +1192,74 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.build_store(slot, val).unwrap();
                 self.track_enum_var(&enum_name, slot);
             }
-        } else if self.aggregate_has_heap_field(agg_ty) {
-            match &arg.kind {
-                ExprKind::Tuple(_) => {
-                    let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
-                    self.builder.build_store(slot, val).unwrap();
-                    self.track_tuple_var(slot, agg_ty);
+        } else if let ExprKind::Tuple(tuple_elems) = &arg.kind {
+            // #21 — a tuple LITERAL arg. The callee now entry-copies a
+            // heap-bearing tuple param (`make_tuple_param_callee_owned`), so this
+            // caller temp is an INDEPENDENT buffer that must free its own heap.
+            // The LLVM-type `track_tuple_var` is enum-blind, so derive the
+            // element `TypeExpr`s from the literal and register a `TypeExpr`-driven
+            // drop when any leaf is an enum / nested struct; fall back to the
+            // enum-blind path for a pure Vec/String tuple (its layout is visible).
+            let elem_tes: Vec<TypeExpr> = tuple_elems
+                .iter()
+                .map(|e| self.infer_arg_elem_te(e))
+                .collect();
+            if elem_tes.iter().any(|e| self.type_expr_has_drop_heap(e)) {
+                let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
+                self.builder.build_store(slot, val).unwrap();
+                if let Some(drop_fn) = self.synthesize_tuple_drop_fn_te(agg_ty, &elem_tes) {
+                    if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                        frame.push(super::state::CleanupAction::StructDrop {
+                            struct_alloca: slot,
+                            drop_fn,
+                        });
+                    }
                 }
-                ExprKind::StructLiteral { path, .. }
-                    if path
-                        .last()
-                        .is_some_and(|n| self.struct_types.contains_key(n.as_str())) =>
+            } else if self.aggregate_has_heap_field(agg_ty) {
+                let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
+                self.builder.build_store(slot, val).unwrap();
+                self.track_tuple_var(slot, agg_ty);
+            }
+        } else if self.aggregate_has_heap_field(agg_ty) {
+            if let ExprKind::StructLiteral { path, .. } = &arg.kind {
+                if path
+                    .last()
+                    .is_some_and(|n| self.struct_types.contains_key(n.as_str()))
                 {
                     let name = path.last().unwrap().clone();
                     let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
                     self.builder.build_store(slot, val).unwrap();
                     self.track_struct_var(&name, slot);
                 }
-                _ => {}
             }
+        }
+    }
+
+    /// #21 — best-effort `TypeExpr` for a tuple-literal arg ELEMENT, so its
+    /// caller-temp gets an enum-aware drop (the LLVM type is enum-blind). A
+    /// nested tuple recurses; otherwise infer the element's type NAME
+    /// (enum-constructor / value type) and wrap it in a single-segment Path.
+    /// An unresolved name yields an empty Path, which `type_expr_has_drop_heap`
+    /// treats as no-drop — safe (worst case a missed free degrades to the
+    /// pre-existing enum-blind leak, never a double-free).
+    fn infer_arg_elem_te(&self, e: &Expr) -> TypeExpr {
+        if let ExprKind::Tuple(inner) = &e.kind {
+            return TypeExpr {
+                kind: TypeKind::Tuple(inner.iter().map(|x| self.infer_arg_elem_te(x)).collect()),
+                span: e.span.clone(),
+            };
+        }
+        let name = self
+            .enum_name_of_expr(e)
+            .or_else(|| self.type_name_of(e))
+            .unwrap_or_default();
+        TypeExpr {
+            kind: TypeKind::Path(crate::ast::PathExpr {
+                segments: vec![name],
+                generic_args: None,
+                span: e.span.clone(),
+            }),
+            span: e.span.clone(),
         }
     }
 
@@ -2014,6 +2063,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(field_names) = self.struct_field_type_names.get(struct_name).cloned() else {
             return;
         };
+        let field_tes = self.struct_field_type_exprs.get(struct_name).cloned();
         let vec_ty = self.vec_struct_type();
         let zero = self.context.i64_type().const_int(0, false);
         for (i, opt_name) in field_names.iter().enumerate() {
@@ -2040,6 +2090,22 @@ impl<'ctx> super::Codegen<'ctx> {
                     && !self.shared_types.contains_key(fname)
                 {
                     self.zero_struct_move_caps(field_ptr, fname);
+                } else if let Some(crate::ast::TypeKind::Tuple(elems)) = field_tes
+                    .as_ref()
+                    .and_then(|tes| tes.get(i))
+                    .map(|t| &t.kind)
+                {
+                    // #21 — a TUPLE field (no declared type name, so the
+                    // name-based arms above all miss it) whose drop now frees
+                    // enum / nested-struct leaves (`NestedTuple`). Cap-zero those
+                    // leaves so the moved-out struct's drop no-ops on them — the
+                    // tuple analog of the enum/struct arms above (was the P8
+                    // `let g = h` double-free).
+                    if let Some(inkwell::types::BasicTypeEnum::StructType(fst)) =
+                        st.get_field_type_at_index(i as u32)
+                    {
+                        self.zero_tuple_elem_caps(field_ptr, fst, elems);
+                    }
                 }
             }
         }

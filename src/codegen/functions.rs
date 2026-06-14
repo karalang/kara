@@ -787,6 +787,32 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // #21 — a bare (non-ref) by-value TUPLE param carrying an enum /
+                // nested-struct heap leaf: deep-copy it at entry so it is
+                // callee-owned (independent of the caller's tuple), closing the
+                // cross-boundary P5/P6 double-free where the callee consumes a
+                // leaf internally while the caller's `NestedTuple` struct drop
+                // frees the same shared buffer. Mirrors the named-aggregate
+                // entry-copy above; copy-unsupported leaves (Map/shared) bail to
+                // caller-retains.
+                if let TypeKind::Tuple(elems) = &param.ty.kind {
+                    // Record per-element type names so a `match p.0` on the param
+                    // resolves the element's enum (the tuple-var arm of
+                    // `place_chain_type_name`) — needed for the in-callee match
+                    // suppression once the param is callee-owned below.
+                    let elem_names: Vec<Option<String>> = elems
+                        .iter()
+                        .map(|e| match &e.kind {
+                            TypeKind::Path(p) => p.segments.first().cloned(),
+                            _ => None,
+                        })
+                        .collect();
+                    self.tuple_var_elem_type_names
+                        .insert(param_name.clone(), elem_names);
+                    if let BasicTypeEnum::StructType(agg_ty) = param_val.get_type() {
+                        self.make_tuple_param_callee_owned(elems, agg_ty, alloca);
+                    }
+                }
                 // `Option[shared T]` parameter registration. The
                 // param receives the caller's +1 ref by transfer:
                 //   - Identifier-arg caller binding (`shadow(chain)`)
