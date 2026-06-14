@@ -520,6 +520,35 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_string_slice_no_double_free() {
+        // StringSlice v1: a borrowed view (`{ptr,len,cap=0}`) aliases the
+        // source String's buffer. Its `cap == 0` must keep the scope-exit drop's
+        // `cap > 0` guard a no-op, so the view never frees the source's buffer —
+        // only the owned source frees it (once), and each `.to_string()` owned
+        // copy frees its own. A view returned from `first_word` into the
+        // caller's String is the escaping case. A spurious free of the cap=0
+        // view (double-free vs the source) would trip ASAN here.
+        assert_clean_asan_run(
+            r#"
+fn first_word(s: ref String) -> StringSlice {
+    let sp = s.find(' ');
+    let end = sp.unwrap_or(s.len());
+    s.slice(0, end)
+}
+fn main() {
+    let s = "hello world".to_string();
+    let w = s.slice(0, 5);
+    println(w.to_string());
+    let fw = first_word(s);
+    println(fw.to_string());
+}
+"#,
+            &["hello", "hello"],
+            "string_slice_no_double_free",
+        );
+    }
+
     // ── `collect_all_vec` gather (phase-6 slice 1b) ───────────────
     //
     // Lowers a runtime Vec of closures into parallel `karac_par_run`

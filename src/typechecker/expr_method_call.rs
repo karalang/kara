@@ -1834,6 +1834,30 @@ impl<'a> super::TypeChecker<'a> {
             return self.infer_str_method(method, args, span);
         }
 
+        // `ref String` / `mut ref String` also route to the stdlib String
+        // surface. Previously only a bare String did, and a borrowed receiver
+        // took the impl-block deref path — which resolves the impl-style
+        // methods but does NOT type the stdlib-only ones (`find` / `slice` /
+        // `sorted` / …), so e.g. `s.find(' ')` on a `ref String` param degraded
+        // to `Type::Error` (typecheck-permissive) and the `unwrap_or` inner-type
+        // side-table never recorded → codegen fell through. String has no user
+        // impl block, so `infer_str_method` is the complete surface for it; the
+        // impl-style read-methods (`len`/`contains`/`is_empty`) it already
+        // enumerates keep working.
+        if matches!(&obj_ty, Type::Ref(i) | Type::MutRef(i) if **i == Type::Str) {
+            return self.infer_str_method(method, args, span);
+        }
+
+        // `StringSlice` (a borrowed view over a `String`'s UTF-8 bytes, same
+        // `{ptr,len,cap}` layout with `cap == 0`) shares String's read-method
+        // surface — `len`/`is_empty`/`contains`/`split`/`find`/`slice`/
+        // `to_string`/… — so route it (and `ref StringSlice`) through the same
+        // stdlib dispatch (design.md § StringSlice). No impl block exists for
+        // it, so unlike `ref String` the derefed form routes here too.
+        if matches!(&obj_ty_for_named, Type::Named { name, .. } if name == "StringSlice") {
+            return self.infer_str_method(method, args, span);
+        }
+
         // `to_string()` on a Display-able collection (`Vec`/`VecDeque`/`Map`/
         // `Set`) → `String`. Must precede the per-collection method dispatch
         // below: those (`infer_map_method` / `infer_set_method`) return

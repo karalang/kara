@@ -5358,6 +5358,44 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_string_slice_v1() {
+        // StringSlice v1 graduation (B-2026-06-07-5 → StringSlice slice).
+        // `String.slice(a,b) -> StringSlice` (a zero-copy `{ptr,len,cap=0}`
+        // borrowed view), `String.find(needle) -> Option[i64]`, the borrowed
+        // view's `len()` / `to_string()` (the owned-copy escape hatch), and a
+        // `first_word(s: ref String) -> StringSlice` that returns a view into a
+        // `ref` parameter (source-pinned). Mirrors the interpreter (clone
+        // semantics) — `karac run` renders identically.
+        let src = r#"
+fn first_word(s: ref String) -> StringSlice {
+    let sp = s.find(' ');
+    let end = sp.unwrap_or(s.len());
+    s.slice(0, end)
+}
+fn main() {
+    let s = "hello world".to_string();
+    let w = s.slice(0, 5);
+    println(w.to_string());
+    println(w.len().to_string());
+    match s.find('o') {
+        Some(i) => println(i.to_string()),
+        None => println("none"),
+    }
+    match s.find("zz") {
+        Some(_) => println("found"),
+        None => println("nf"),
+    }
+    let fw = first_word(s);
+    println(fw.to_string());
+}
+"#;
+        let out = run_program(src);
+        if let Some(out) = out {
+            assert_eq!(out, "hello\n5\n4\nnf\nhello\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_cstr_as_ptr_feeds_libc_puts() {
         // The design's flagship FFI example (§ C-String Literals "FFI
         // handoff"): pass a `c"..."` literal's pointer to libc `puts`

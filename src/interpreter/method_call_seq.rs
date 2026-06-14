@@ -190,6 +190,61 @@ impl<'a> super::Interpreter<'a> {
                 }
                 return None;
             }
+            "find" => {
+                // `String.find(needle) -> Option[i64]` — byte offset of the
+                // first occurrence of `needle` (String or char), else `None`.
+                // Rust `str::find` returns the byte index, matching our
+                // byte-offset contract (peer of `bytes()` / `substring`).
+                if let Value::String(s) = &obj {
+                    if let [a] = args {
+                        let needle = match self.eval_expr_inner(&a.value) {
+                            Value::String(n) => n,
+                            Value::Char(c) => c.to_string(),
+                            _ => return None,
+                        };
+                        return Some(match s.find(&needle) {
+                            Some(b) => Value::EnumVariant {
+                                enum_name: "Option".to_string(),
+                                variant: "Some".to_string(),
+                                data: EnumData::Tuple(vec![Value::Int(b as i64)]),
+                            },
+                            None => Value::EnumVariant {
+                                enum_name: "Option".to_string(),
+                                variant: "None".to_string(),
+                                data: EnumData::Unit,
+                            },
+                        });
+                    }
+                }
+                return None;
+            }
+            "slice" => {
+                // `String.slice(start, end) -> StringSlice` — a borrowed view
+                // over the half-open byte range `[start, end)`. In the
+                // tree-walk interpreter a borrowed view is modeled as an owned
+                // `String` copy of the range (clone semantics — reads are
+                // byte-identical to the codegen borrow; same parity approach the
+                // `Option[ref T]` accessors use). Bounds saturate like
+                // `substring`: negative/past-end start → empty.
+                if let Value::String(s) = &obj {
+                    if let [a, b] = args {
+                        let sa = self.eval_expr_inner(&a.value);
+                        let sb = self.eval_expr_inner(&b.value);
+                        if let (Value::Int(start), Value::Int(end)) = (sa, sb) {
+                            let len = s.len() as i64;
+                            if start < 0 || start > len {
+                                return Some(Value::String(String::new()));
+                            }
+                            let end = end.clamp(start, len);
+                            let bytes = &s.as_bytes()[start as usize..end as usize];
+                            return Some(Value::String(
+                                String::from_utf8_lossy(bytes).into_owned(),
+                            ));
+                        }
+                    }
+                }
+                return None;
+            }
             "repeat" => {
                 // `String.repeat(n) -> String` — receiver concatenated `n`
                 // times; `n <= 0` yields empty. Mirrors Rust's `str::repeat`

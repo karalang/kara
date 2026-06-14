@@ -24,7 +24,12 @@ use super::TypeErrorKind;
 fn is_str_like(ty: &Type) -> bool {
     match ty {
         Type::Str | Type::Error => true,
-        Type::Ref(inner) | Type::MutRef(inner) => matches!(**inner, Type::Str | Type::Error),
+        // `StringSlice` is a borrowed view over a `String`'s UTF-8 bytes
+        // (same `{ptr,len,cap}` layout, `cap == 0`), so it is accepted
+        // anywhere a String substring/separator argument is — `contains`,
+        // `split`, `starts_with`, `find` (design.md § StringSlice).
+        Type::Named { name, .. } if name == "StringSlice" => true,
+        Type::Ref(inner) | Type::MutRef(inner) => is_str_like(inner),
         _ => false,
     }
 }
@@ -455,10 +460,81 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Unit
             }
+            "find" => {
+                // find(needle: String | char) -> Option[i64] — byte offset of
+                // the first occurrence of `needle`, or `None`. The companion of
+                // `slice` for the canonical `first_word` shape (design.md §
+                // StringSlice). Same separator-arg shape as `split` (String or
+                // one-char literal). Codegen + interp search the UTF-8 bytes.
+                if args.len() != 1 {
+                    self.type_error(
+                        format!("'find' expects 1 argument, found {}", args.len()),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    let arg_ty = self.infer_expr(&args[0].value);
+                    if !is_str_like(&arg_ty) && !matches!(arg_ty, Type::Char | Type::Error) {
+                        self.type_error(
+                            format!(
+                                "'find' expects a String or char needle, found '{}'",
+                                type_display(&arg_ty)
+                            ),
+                            args[0].value.span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    }
+                }
+                Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![Type::Int(IntSize::I64)],
+                }
+            }
+            "slice" => {
+                // slice(start: i64, end: i64) -> StringSlice — a zero-copy
+                // borrowed view over the half-open byte range `[start, end)`
+                // of the receiver, pointing into its buffer (no allocation).
+                // The v1 `StringSlice` producer (design.md § StringSlice). The
+                // returned view borrows from the receiver; source pinning
+                // (ownership) ensures it can't outlive it. Distinct from
+                // `substring`, which copies into an owned `String`.
+                if args.len() != 2 {
+                    self.type_error(
+                        format!("'slice' expects 2 arguments, found {}", args.len()),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    for arg in args {
+                        let arg_ty = self.infer_expr(&arg.value);
+                        if !matches!(arg_ty, Type::Int(_) | Type::Error) {
+                            self.type_error(
+                                format!(
+                                    "'slice' expects integer byte indices, found '{}'",
+                                    type_display(&arg_ty)
+                                ),
+                                arg.value.span.clone(),
+                                TypeErrorKind::TypeMismatch,
+                            );
+                        }
+                    }
+                }
+                Type::Named {
+                    name: "StringSlice".to_string(),
+                    args: Vec::new(),
+                }
+            }
             // Unknown string method — typo-suggestion diagnostic if close to
             // a known name. `len` / `is_empty` / `contains` joined the
             // enumerated list 2026-05-22; `push_str` joined 2026-05-23;
-            // `push` joined 2026-05-25 (kata 71 follow-up).
+            // `push` joined 2026-05-25 (kata 71 follow-up); `find` / `slice`
+            // joined 2026-06-14 (StringSlice v1).
             // Further runtime-only surface (e.g. `to_uppercase`, `split`)
             // still falls through to the typo-suggestion path until
             // per-method typechecker arms land — design.md § Method
@@ -470,10 +546,12 @@ impl<'a> super::TypeChecker<'a> {
                     "bytes",
                     "chars",
                     "contains",
+                    "find",
                     "is_empty",
                     "len",
                     "push",
                     "push_str",
+                    "slice",
                     "sorted",
                     "sorted_by",
                     "split",

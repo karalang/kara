@@ -1175,12 +1175,17 @@ impl<'ctx> super::Codegen<'ctx> {
         // the receiver to its `{data,len,cap}` value and copy the bytes into a
         // fresh heap String, so it works for any receiver form (identifier,
         // literal, expression) and the result owns its buffer.
+        //
+        // `StringSlice.to_string()` is the borrowed-view escape hatch (design.md
+        // § StringSlice: "To store a slice beyond the borrow, call .to_string()")
+        // — the same copy: a `StringSlice` is `{ptr,len,cap=0}`, so copying its
+        // `len` bytes yields an independent owned `String`.
         if method == "to_string"
             && args.is_empty()
             && dispatch_key
                 .as_deref()
                 .and_then(|k| k.rsplit_once('.'))
-                .map(|(t, _)| t == "String")
+                .map(|(t, _)| t == "String" || t == "StringSlice")
                 .unwrap_or(false)
         {
             let v = self.compile_expr(object)?.into_struct_value();

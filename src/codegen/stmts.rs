@@ -1377,7 +1377,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                     self.var_elem_type_exprs.insert(var_name.clone(), elem_te);
                                     detected = true;
                                 }
-                            } else if surface == "String" {
+                            } else if surface == "String" || surface == "StringSlice" {
                                 // Inferred-String bindings (`let r = lcp(strs);`,
                                 // `let r = strs[0];` where the element is String)
                                 // must register the same i8-elem Vec surface +
@@ -1391,6 +1391,13 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // bindings via `bind_pattern_types`; without
                                 // wiring it here, only annotated String bindings
                                 // got the dispatch maps.
+                                //
+                                // `StringSlice` (`let w = s.slice(0, n)`) shares
+                                // String's `{ptr,len,cap}` layout with `cap == 0`,
+                                // so its read-methods dispatch identically; the
+                                // borrow (`cap == 0`) means any scope-exit free is
+                                // `cap > 0`-guarded to a no-op (design.md §
+                                // StringSlice).
                                 self.vec_elem_types
                                     .insert(var_name.clone(), self.context.i8_type().into());
                                 self.string_vars.insert(var_name.clone());

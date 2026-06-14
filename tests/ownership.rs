@@ -7431,6 +7431,48 @@ fn test_borrow_return_dangling_local_errors() {
 }
 
 #[test]
+fn test_string_slice_return_from_ref_param_ok() {
+    // StringSlice v1: a `-> StringSlice` view sliced from a `ref` parameter
+    // (or a slice-local that traces to one) is source-pinned (design.md §
+    // StringSlice: "follows the same borrow rules as `ref T`").
+    ownership_ok(
+        "fn first_word(s: ref String) -> StringSlice {\n\
+        \x20   let sp = s.find(' ');\n\
+        \x20   let end = sp.unwrap_or(s.len());\n\
+        \x20   s.slice(0, end)\n\
+         }\n\
+         fn via_local(s: ref String) -> StringSlice {\n\
+        \x20   let w = s.slice(0, 1);\n\
+        \x20   w\n\
+         }\n\
+         fn fwd(s: StringSlice) -> StringSlice { s }\n",
+    );
+}
+
+#[test]
+fn test_string_slice_return_from_owned_local_dangling_errors() {
+    // A view sliced from an OWNED local dangles: the local's buffer drops at
+    // return, leaving the returned view pointing at freed memory. Must be a
+    // source-pinning error, not a silent use-after-free.
+    let errors = ownership_errors(
+        "fn dangling() -> StringSlice {\n\
+        \x20   let local = \"temp\".to_string();\n\
+        \x20   local.slice(0, 2)\n\
+         }\n",
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            e.kind,
+            OwnershipErrorKind::BorrowReturnNotSourcePinned {
+                shape: BorrowReturnShape::DanglingSource
+            }
+        )),
+        "expected a dangling source-pinning error for a view into an owned local, got: {:?}",
+        errors.iter().map(|e| &e.kind).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn test_borrow_return_scalar_match_ok() {
     // Scalar-selector `match` of ref params is supported (sibling of the
     // `if` tier): every arm forwards a `ref` param, so source-pinning

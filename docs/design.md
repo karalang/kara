@@ -4489,30 +4489,26 @@ fn greeting(name: String) -> String {
 
 Owned, mutable, heap-allocated for long strings. UTF-8 encoded. For strings ≤ 23 bytes, stored inline in the struct with no heap allocation (SSO — Small String Optimization). This is an internal detail; the programmer never sees it.
 
-**`StringSlice` — zero-copy views.** *(Planned for v2 — not yet implemented.)*
+**`StringSlice` — zero-copy views.**
 
-> **v1 status.** `StringSlice` is **not built in v1**: the escapable borrowed-view form needs lifetime inference inside the no-annotation borrow checker — the highest-soundness-risk piece of "ownership without lifetimes" — and has no live v1 consumer (borrowed substrings as `Map` keys are already solved). In **v1**, `String.split` returns **owned `Vec[String]`** (the table above), not views; the `split` → views form and the `first_word`/`slice` examples below are the **v2** design. The "ownership without lifetimes" story ships in v1 via the returned-borrow forms that *are* built (field/forward, `if`/`match`, method accessors, chained, borrowed-struct, `Option[ref T]` — see Feature 4 Part 3). Graduates to v1 only if a demo/kata demands it.
-
-`StringSlice` is a borrowed view: a pointer, offset, and length into an existing `String`. No allocation. Used for parsing and splitting without copying:
+`StringSlice` is a borrowed view over an existing `String`'s UTF-8 bytes (a pointer + length; no allocation), implicitly `Copy`. It is returned **by value** — the slice header *is* the borrow handle, so a `StringSlice` return is itself source-pinned (no `ref StringSlice`). Produce one with `.slice(start, end)` and locate a cut point with `.find(needle)`:
 
 ```
-fn first_word(s: ref String) -> ref StringSlice {
+fn first_word(s: ref String) -> StringSlice {
     let end = s.find(' ').unwrap_or(s.len());
     s.slice(0, end)    // no allocation — points into s's buffer
 }
-
-fn parse_csv_row(line: ref String) -> Vec[StringSlice] {
-    line.split(',')    // returns views into line, not copies
-}
 ```
 
-`StringSlice` follows the same borrow rules as `ref T` — it cannot outlive the `String` it came from. Since `first_word` has a single `ref` parameter, the compiler knows the return borrows from `s` without annotation. To store a slice beyond the borrow, call `.to_string()`:
+`StringSlice` follows the same borrow rules as `ref T` — it cannot outlive the `String` it came from. Since `first_word` has a single `ref` parameter, the compiler knows the return borrows from `s` without annotation; a view sliced from an *owned local* is rejected (it would dangle). To store a slice beyond the borrow, call `.to_string()` for an owned copy:
 
 ```
 let line = "alice,30,engineer";
-let fields = parse_csv_row(ref line);   // Vec[StringSlice] — borrows from line
-let name: String = fields[0].to_string();  // owned copy when you need to keep it
+let s = first_word(ref line);     // StringSlice — borrows from line
+let owned: String = s.to_string();  // owned copy when you need to keep it
 ```
+
+> **v1 vs v2.** The `slice` / `find` borrowed-view surface above is **v1** (source-pinned `-> StringSlice` returns, `.to_string()` / `.len()`, borrowed substrings as `Map` keys). The **zero-copy split** form — `fn parse_csv_row(line: ref String) -> Vec[StringSlice] { line.split(',') }` returning *views* into `line` — is **v2**: in v1, `String.split` returns **owned `Vec[String]`** (the table above), which copies. The v2 work is split-yielding-views (a borrow flowing through a collection), not the core view type.
 
 No COW. No hidden memory retention. The programmer always knows whether they have a view or a copy.
 

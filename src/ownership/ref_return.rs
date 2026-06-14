@@ -38,9 +38,17 @@ impl<'a> super::OwnershipChecker<'a> {
         let Some(ret) = &f.return_type else {
             return;
         };
-        if !matches!(ret.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)) {
-            // Tier-1: plain `ref T` / `mut ref T` returns only. Borrows
-            // nested in generic wrappers (`Option[ref T]`) are a follow-on.
+        let is_ref_ret = matches!(ret.kind, TypeKind::Ref(_) | TypeKind::MutRef(_));
+        // A `-> StringSlice` return is a borrow return too: the view points
+        // into a `String`'s buffer, so it must trace to a borrowable source or
+        // it dangles when that source drops at return (design.md § StringSlice:
+        // "follows the same borrow rules as `ref T`"). Without this, a view
+        // sliced from an owned local would be a silent use-after-free.
+        let is_slice_ret = type_expr_is_string_slice(ret);
+        if !is_ref_ret && !is_slice_ret {
+            // Tier-1: plain `ref T` / `mut ref T` (+ `StringSlice`) returns
+            // only. Borrows nested in generic wrappers (`Option[ref T]`) are a
+            // follow-on.
             return;
         }
 
@@ -59,9 +67,24 @@ impl<'a> super::OwnershipChecker<'a> {
         if matches!(f.self_param, Some(SelfParam::Ref) | Some(SelfParam::MutRef)) {
             ref_params.insert("self".to_string());
         }
+        // A by-value `StringSlice` parameter is itself a borrow handle (its
+        // source is the caller's String), so it is a valid source for a
+        // returned view (`fn f(s: StringSlice) -> StringSlice { s }`).
+        for p in &f.params {
+            if type_expr_is_string_slice(&p.ty) {
+                ref_params.extend(p.pattern.binding_names());
+            }
+        }
         let ref_returning_fns = self.ref_returning_fn_names();
         let mut ref_locals: HashSet<String> = HashSet::new();
         collect_ref_locals(&f.body, &ref_returning_fns, &mut ref_locals);
+        // StringSlice-locals: `let w = <borrowable>.slice(a, b)` whose receiver
+        // root is itself a borrowable source — `w` then carries that borrow and
+        // may be returned (`let w = s.slice(0, n); … w`).
+        let mut slice_locals: HashSet<String> = HashSet::new();
+        if is_slice_ret {
+            collect_string_slice_locals(&f.body, &ref_params, &ref_locals, &mut slice_locals);
+        }
 
         // Every return site: explicit `return e;` anywhere in the body,
         // plus the body's tail expression.
@@ -79,7 +102,12 @@ impl<'a> super::OwnershipChecker<'a> {
             // nested in an `if`/`match` arm still falls through to
             // `classify_borrow_return` (→ `UnsupportedForm`), keeping 3a in
             // lockstep with codegen (which only lowers a top-level call tail).
-            let shape = if matches!(&e.kind, ExprKind::Call { .. }) {
+            let shape = if is_slice_ret {
+                // `-> StringSlice`: the view must trace to a borrowable source
+                // (`ref` param / `ref self` / a `StringSlice` param / ref-local
+                // / slice-local). A view sliced from an owned local dangles.
+                classify_string_slice_return(e, &ref_params, &ref_locals, &slice_locals)
+            } else if matches!(&e.kind, ExprKind::Call { .. }) {
                 self.classify_borrow_return_call(e, &ref_params, &ref_locals)
             } else if matches!(&e.kind, ExprKind::StructLiteral { .. }) {
                 // Borrowed-struct return (`Parser { source: s, position: 0 }`
@@ -449,6 +477,148 @@ fn combine_borrow_shapes(
         (Some(BorrowReturnShape::DanglingSource), _)
         | (_, Some(BorrowReturnShape::DanglingSource)) => Some(BorrowReturnShape::DanglingSource),
         _ => Some(BorrowReturnShape::UnsupportedForm),
+    }
+}
+
+/// A `StringSlice` type-expr — a `Path` whose head segment is `StringSlice`.
+fn type_expr_is_string_slice(te: &TypeExpr) -> bool {
+    matches!(
+        &te.kind,
+        TypeKind::Path(p) if p.segments.first().map(|s| s.as_str()) == Some("StringSlice")
+    )
+}
+
+/// Source-pinning classification for a `-> StringSlice` return expression. A
+/// returned view must trace to a borrowable source — a `ref` parameter /
+/// `ref self`, a by-value `StringSlice` parameter, a ref-local, or a
+/// slice-local (`let w = s.slice(..)`). A view sliced from an owned local /
+/// temporary dangles (`DanglingSource`). Forms beyond the direct
+/// `recv.slice(..)` / identifier / simple-`if` shapes are reported
+/// `UnsupportedForm` (sound — a clean error, never a miscompile). Returns
+/// `None` to accept. Mirrors `classify_borrow_return`'s structure for `ref T`.
+fn classify_string_slice_return(
+    e: &Expr,
+    ref_params: &HashSet<String>,
+    ref_locals: &HashSet<String>,
+    slice_locals: &HashSet<String>,
+) -> Option<BorrowReturnShape> {
+    match &e.kind {
+        // `recv.slice(a, b)` — the view borrows from `recv`'s root.
+        ExprKind::MethodCall { object, method, .. } if method == "slice" => {
+            classify_slice_receiver_root(object, ref_params, ref_locals, slice_locals)
+        }
+        // A `StringSlice` identifier: a by-value StringSlice param (in
+        // `ref_params`) or a slice-local is a valid source; an owned local view
+        // returned after its source dropped would dangle.
+        ExprKind::Identifier(n) => {
+            if ref_params.contains(n) || slice_locals.contains(n) {
+                None
+            } else {
+                Some(BorrowReturnShape::DanglingSource)
+            }
+        }
+        ExprKind::SelfValue => {
+            if ref_params.contains("self") {
+                None
+            } else {
+                Some(BorrowReturnShape::DanglingSource)
+            }
+        }
+        ExprKind::If {
+            then_block,
+            else_branch,
+            ..
+        } => {
+            let Some(else_e) = else_branch.as_deref() else {
+                return Some(BorrowReturnShape::UnsupportedForm);
+            };
+            combine_borrow_shapes(
+                classify_string_slice_block(then_block, ref_params, ref_locals, slice_locals),
+                classify_string_slice_return(else_e, ref_params, ref_locals, slice_locals),
+            )
+        }
+        ExprKind::Block(b) => classify_string_slice_block(b, ref_params, ref_locals, slice_locals),
+        // `match`, chained calls returning a view, etc. — sound follow-ons.
+        _ => Some(BorrowReturnShape::UnsupportedForm),
+    }
+}
+
+/// A statement-free block's tail, classified as a StringSlice source (a block
+/// with preceding statements is `UnsupportedForm`, never miscompiled).
+fn classify_string_slice_block(
+    b: &Block,
+    ref_params: &HashSet<String>,
+    ref_locals: &HashSet<String>,
+    slice_locals: &HashSet<String>,
+) -> Option<BorrowReturnShape> {
+    if !b.stmts.is_empty() {
+        return Some(BorrowReturnShape::UnsupportedForm);
+    }
+    match &b.final_expr {
+        Some(e) => classify_string_slice_return(e, ref_params, ref_locals, slice_locals),
+        None => Some(BorrowReturnShape::UnsupportedForm),
+    }
+}
+
+/// Classify the receiver root of a `recv.slice(..)` view: a borrowable source
+/// → `None` (accept); an owned identifier / `self` → `DanglingSource`; a
+/// non-identifier receiver (chained) → `UnsupportedForm`.
+fn classify_slice_receiver_root(
+    object: &Expr,
+    ref_params: &HashSet<String>,
+    ref_locals: &HashSet<String>,
+    slice_locals: &HashSet<String>,
+) -> Option<BorrowReturnShape> {
+    match &object.kind {
+        ExprKind::Identifier(n)
+            if ref_params.contains(n) || ref_locals.contains(n) || slice_locals.contains(n) =>
+        {
+            None
+        }
+        ExprKind::SelfValue if ref_params.contains("self") => None,
+        ExprKind::Identifier(_) | ExprKind::SelfValue => Some(BorrowReturnShape::DanglingSource),
+        _ => Some(BorrowReturnShape::UnsupportedForm),
+    }
+}
+
+/// Whether a `recv` in `recv.slice(..)` is a borrowable view source.
+fn slice_receiver_is_borrowable(
+    object: &Expr,
+    ref_params: &HashSet<String>,
+    ref_locals: &HashSet<String>,
+    slice_locals: &HashSet<String>,
+) -> bool {
+    match &object.kind {
+        ExprKind::Identifier(n) => {
+            ref_params.contains(n) || ref_locals.contains(n) || slice_locals.contains(n)
+        }
+        ExprKind::SelfValue => ref_params.contains("self"),
+        _ => false,
+    }
+}
+
+/// Top-level `let w = <borrowable>.slice(a, b)` bindings — `w` carries the
+/// receiver's borrow and is itself a valid view source. Conservative: only the
+/// function body's direct statements are scanned (a missed nested binding at
+/// worst yields a false `UnsupportedForm`, never an unsound accept).
+fn collect_string_slice_locals(
+    block: &Block,
+    ref_params: &HashSet<String>,
+    ref_locals: &HashSet<String>,
+    out: &mut HashSet<String>,
+) {
+    for stmt in &block.stmts {
+        if let StmtKind::Let { pattern, value, .. } = &stmt.kind {
+            if let PatternKind::Binding(name) = &pattern.kind {
+                if let ExprKind::MethodCall { object, method, .. } = &value.kind {
+                    if method == "slice"
+                        && slice_receiver_is_borrowable(object, ref_params, ref_locals, out)
+                    {
+                        out.insert(name.clone());
+                    }
+                }
+            }
+        }
     }
 }
 

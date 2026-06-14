@@ -312,6 +312,296 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 Ok(result)
             }
+            "slice" => {
+                // `String.slice(start, end) -> StringSlice` — a zero-copy
+                // borrowed view over the half-open byte range `[start, end)`:
+                // the aggregate `{recv_data + start, end - start, cap = 0}`. No
+                // allocation, no memcpy (unlike `substring`, which copies into
+                // an owned String). `cap == 0` marks it a non-owning borrow, so
+                // the scope-exit drop's `cap > 0` guard no-ops — the view never
+                // frees the source's buffer (design.md § StringSlice). Bounds
+                // saturate like `substring`: a negative / past-end `start`, or
+                // an empty range, yields the empty view `{null, 0, 0}`.
+                if args.len() != 2 {
+                    return Err("String.slice requires start and end index arguments".to_string());
+                }
+                let str_ty = self.vec_struct_type();
+                let recv_data_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "sl.recv.ptr.p")
+                    .unwrap();
+                let recv_data = self
+                    .builder
+                    .build_load(ptr_ty, recv_data_ptr, "sl.recv.ptr")
+                    .unwrap()
+                    .into_pointer_value();
+                let recv_len_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "sl.recv.len.p")
+                    .unwrap();
+                let recv_len = self
+                    .builder
+                    .build_load(i64_t, recv_len_ptr, "sl.recv.len")
+                    .unwrap()
+                    .into_int_value();
+
+                let start = self.compile_expr(&args[0].value)?.into_int_value();
+                let end_raw = self.compile_expr(&args[1].value)?.into_int_value();
+                let zero64 = i64_t.const_zero();
+                // end = max(min(end_raw, len), start) — clamp into [start, len].
+                let e_lt = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SLT, end_raw, recv_len, "sl.e.lt")
+                    .unwrap();
+                let e_min = self
+                    .builder
+                    .build_select(e_lt, end_raw, recv_len, "sl.e.min")
+                    .unwrap()
+                    .into_int_value();
+                let e_gt = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SGT, e_min, start, "sl.e.gt")
+                    .unwrap();
+                let end = self
+                    .builder
+                    .build_select(e_gt, e_min, start, "sl.e")
+                    .unwrap()
+                    .into_int_value();
+
+                // empty = (start < 0) || (start > len) || (end == start)
+                let s_lt0 = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SLT, start, zero64, "sl.s.lt0")
+                    .unwrap();
+                let s_gt = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SGT, start, recv_len, "sl.s.gtlen")
+                    .unwrap();
+                let empty_rng = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::EQ, end, start, "sl.empty.cmp")
+                    .unwrap();
+                let oob = self.builder.build_or(s_lt0, s_gt, "sl.oob").unwrap();
+                let out_of_range = self.builder.build_or(oob, empty_rng, "sl.empty").unwrap();
+
+                let fn_val = self.current_fn.unwrap();
+                let view_bb = self.context.append_basic_block(fn_val, "sl.view");
+                let empty_bb = self.context.append_basic_block(fn_val, "sl.empty");
+                let cont_bb = self.context.append_basic_block(fn_val, "sl.cont");
+                let result_slot = self.create_entry_alloca(fn_val, "sl.result", str_ty.into());
+                self.builder
+                    .build_conditional_branch(out_of_range, empty_bb, view_bb)
+                    .unwrap();
+
+                // Empty: {null, 0, 0}.
+                self.builder.position_at_end(empty_bb);
+                let null = ptr_ty.const_null();
+                let mut empty_agg = str_ty.get_undef();
+                empty_agg = self
+                    .builder
+                    .build_insert_value(empty_agg, null, 0, "sl.empty.ptr")
+                    .unwrap()
+                    .into_struct_value();
+                empty_agg = self
+                    .builder
+                    .build_insert_value(empty_agg, zero64, 1, "sl.empty.len")
+                    .unwrap()
+                    .into_struct_value();
+                empty_agg = self
+                    .builder
+                    .build_insert_value(empty_agg, zero64, 2, "sl.empty.cap")
+                    .unwrap()
+                    .into_struct_value();
+                self.builder.build_store(result_slot, empty_agg).unwrap();
+                self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+                // View: {recv_data + start, end - start, cap = 0}. No alloc.
+                self.builder.position_at_end(view_bb);
+                let view_ptr = unsafe {
+                    self.builder
+                        .build_gep(self.context.i8_type(), recv_data, &[start], "sl.view.ptr")
+                        .unwrap()
+                };
+                let view_len = self
+                    .builder
+                    .build_int_nsw_sub(end, start, "sl.view.len")
+                    .unwrap();
+                let mut view_agg = str_ty.get_undef();
+                view_agg = self
+                    .builder
+                    .build_insert_value(view_agg, view_ptr, 0, "sl.view.f0")
+                    .unwrap()
+                    .into_struct_value();
+                view_agg = self
+                    .builder
+                    .build_insert_value(view_agg, view_len, 1, "sl.view.f1")
+                    .unwrap()
+                    .into_struct_value();
+                view_agg = self
+                    .builder
+                    .build_insert_value(view_agg, zero64, 2, "sl.view.f2")
+                    .unwrap()
+                    .into_struct_value();
+                self.builder.build_store(result_slot, view_agg).unwrap();
+                self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+                self.builder.position_at_end(cont_bb);
+                let result = self
+                    .builder
+                    .build_load(str_ty, result_slot, "sl.load")
+                    .unwrap();
+                Ok(result)
+            }
+            "find" => {
+                // `String.find(needle) -> Option[i64]` — byte offset of the
+                // first occurrence of `needle` (a `char` or `String`), else
+                // `None`. Inline scan mirroring `contains`'s `memcmp` window
+                // loop, but the result is `Some(i)` (the match offset) rather
+                // than a bool. The needle's `{ptr,len}`: a `char` UTF-8-encodes
+                // to a stack buffer; a `String` contributes its bytes directly
+                // (same as `split`). Empty needle → `Some(0)` (memcmp of 0
+                // bytes matches at i=0), matching Rust `str::find`.
+                if args.len() != 1 {
+                    return Err("String.find requires a needle argument".to_string());
+                }
+                let i8_t = self.context.i8_type();
+                let i32_t = self.context.i32_type();
+                let recv_data_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "fd.recv.ptr.p")
+                    .unwrap();
+                let recv_data = self
+                    .builder
+                    .build_load(ptr_ty, recv_data_ptr, "fd.recv.ptr")
+                    .unwrap()
+                    .into_pointer_value();
+                let recv_len_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "fd.recv.len.p")
+                    .unwrap();
+                let recv_len = self
+                    .builder
+                    .build_load(i64_t, recv_len_ptr, "fd.recv.len")
+                    .unwrap()
+                    .into_int_value();
+
+                let needle_val = self.compile_expr(&args[0].value)?;
+                let (needle_data, needle_len): (PointerValue<'ctx>, IntValue<'ctx>) =
+                    match needle_val {
+                        BasicValueEnum::IntValue(cp) => self.emit_codepoint_to_utf8(cp),
+                        BasicValueEnum::StructValue(sv) => {
+                            let d = self
+                                .builder
+                                .build_extract_value(sv, 0, "fd.needle.ptr")
+                                .unwrap()
+                                .into_pointer_value();
+                            let l = self
+                                .builder
+                                .build_extract_value(sv, 1, "fd.needle.len")
+                                .unwrap()
+                                .into_int_value();
+                            (d, l)
+                        }
+                        _ => return Err("String.find needle must be a char or String".to_string()),
+                    };
+
+                let fn_val = self.current_fn.unwrap();
+                let head_bb = self.context.append_basic_block(fn_val, "fd.head");
+                let body_bb = self.context.append_basic_block(fn_val, "fd.body");
+                let found_bb = self.context.append_basic_block(fn_val, "fd.found");
+                let next_bb = self.context.append_basic_block(fn_val, "fd.next");
+                let none_bb = self.context.append_basic_block(fn_val, "fd.none");
+                let merge_bb = self.context.append_basic_block(fn_val, "fd.merge");
+
+                let i_slot = self.create_entry_alloca(fn_val, "fd.i", i64_t.into());
+                self.builder
+                    .build_store(i_slot, i64_t.const_zero())
+                    .unwrap();
+                self.builder.build_unconditional_branch(head_bb).unwrap();
+
+                // head: continue while `i + needle_len <= recv_len`.
+                self.builder.position_at_end(head_bb);
+                let i = self
+                    .builder
+                    .build_load(i64_t, i_slot, "fd.i.load")
+                    .unwrap()
+                    .into_int_value();
+                let i_end = self
+                    .builder
+                    .build_int_add(i, needle_len, "fd.i_end")
+                    .unwrap();
+                let in_range = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::ULE, i_end, recv_len, "fd.in_range")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(in_range, body_bb, none_bb)
+                    .unwrap();
+
+                // body: memcmp(recv_data + i, needle_data, needle_len) == 0?
+                self.builder.position_at_end(body_bb);
+                let window = unsafe {
+                    self.builder
+                        .build_gep(i8_t, recv_data, &[i], "fd.window")
+                        .unwrap()
+                };
+                let cmp = self
+                    .builder
+                    .build_call(
+                        self.memcmp_fn,
+                        &[window.into(), needle_data.into(), needle_len.into()],
+                        "fd.memcmp",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let is_match = self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::EQ,
+                        cmp,
+                        i32_t.const_zero(),
+                        "fd.match",
+                    )
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(is_match, found_bb, next_bb)
+                    .unwrap();
+
+                // found: carry `i` (the match offset) into the Some phi.
+                self.builder.position_at_end(found_bb);
+                let found_off = self
+                    .builder
+                    .build_load(i64_t, i_slot, "fd.found.off")
+                    .unwrap()
+                    .into_int_value();
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                // next: i++, loop.
+                self.builder.position_at_end(next_bb);
+                let i_next = self
+                    .builder
+                    .build_int_add(i, i64_t.const_int(1, false), "fd.i.next")
+                    .unwrap();
+                self.builder.build_store(i_slot, i_next).unwrap();
+                self.builder.build_unconditional_branch(head_bb).unwrap();
+
+                // none: not found.
+                self.builder.position_at_end(none_bb);
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                // merge: Some(found_off) from `found_bb`, None from `none_bb`.
+                self.builder.position_at_end(merge_bb);
+                let agg =
+                    self.build_option_some_via_phis(&[found_off], found_bb, none_bb, "fd.opt");
+                // Free a fresh-owned String needle temp (`s.find("foo")`); a
+                // char needle used a stack buffer (no free). The scan is done.
+                if needle_val.is_struct_value() {
+                    self.free_fresh_owned_str_arg(&args[0].value, needle_val);
+                }
+                Ok(agg)
+            }
             // `String.substring(start) -> String` — bytes from `start` to end.
             // `String.substring(start, end) -> String` — bytes in `[start, end)`.
             // Both indices are byte offsets (matching the `bytes()` view).

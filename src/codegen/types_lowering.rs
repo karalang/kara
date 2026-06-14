@@ -741,6 +741,17 @@ impl<'ctx> super::Codegen<'ctx> {
         Some((ok_elem, err_elem))
     }
 
+    /// `StringSlice` borrowed-view type — a `Path` whose head segment is
+    /// `StringSlice`. Kept separate from [`is_string_type_expr`] so the
+    /// owned-String drop/copy/move consumers of that predicate don't treat a
+    /// borrow as owned (design.md § StringSlice).
+    pub(super) fn is_string_slice_type_expr(te: &TypeExpr) -> bool {
+        matches!(
+            &te.kind,
+            TypeKind::Path(p) if p.segments.first().map(|s| s.as_str()) == Some("StringSlice")
+        )
+    }
+
     pub(super) fn is_string_type_expr(&self, te: &TypeExpr) -> bool {
         if let TypeKind::Path(path) = &te.kind {
             // "str" is the typechecker-internal spelling (`Type::Str` →
@@ -1001,6 +1012,20 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         }
         if self.is_string_type_expr(te) {
+            self.vec_elem_types
+                .insert(var_name.to_string(), self.context.i8_type().into());
+            self.string_vars.insert(var_name.to_string());
+            return;
+        }
+        // `StringSlice` — a borrowed view sharing String's `{ptr,len,cap}`
+        // layout with `cap == 0`. Register it as a string-like var so its
+        // read-methods (`len`/`to_string`/`slice`/`find`/…) route through
+        // `compile_vec_method`, but deliberately NOT via `is_string_type_expr`
+        // (whose other consumers drive owned-String drop / defensive-copy /
+        // move-suppression — a borrow needs none of that). The `cap == 0`
+        // borrow means any scope-exit free that fires is `cap > 0`-guarded to
+        // a no-op, so no buffer is freed for the view (design.md § StringSlice).
+        if Self::is_string_slice_type_expr(te) {
             self.vec_elem_types
                 .insert(var_name.to_string(), self.context.i8_type().into());
             self.string_vars.insert(var_name.to_string());
@@ -1276,7 +1301,12 @@ impl<'ctx> super::Codegen<'ctx> {
             // codegen's perspective (baked stdlib items aren't fed in),
             // so calls that reach `llvm_type_for_name` directly without
             // generic args would otherwise fall to the i64 default.
-            "String" | "str" | "VecDeque" | "Vec" => self.vec_struct_type().into(),
+            // `StringSlice` is a borrowed view over a `String`'s UTF-8 bytes
+            // and shares its `{ptr, len, cap}` layout — represented with
+            // `cap == 0` (a non-owning borrow, so scope-exit drop's `cap > 0`
+            // guard no-ops). design.md § StringSlice. Reusing the String shape
+            // lets every String read-method lower unchanged on a StringSlice.
+            "String" | "str" | "StringSlice" | "VecDeque" | "Vec" => self.vec_struct_type().into(),
             // Slice 8z: `pattern_binding_types` records the canonical
             // `"Slice"` surface name for `Type::Slice` parameters /
             // bindings (typechecker `record_pattern_inner_type` arm). The
