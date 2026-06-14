@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Fathom — Mandelbrot, one Kāra source across every core</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; background: #07090f; color: #d7e0f0;
+    font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    display: flex; flex-direction: column; align-items: center; gap: 14px;
+    padding: 22px;
+  }
+  h1 { font-size: 18px; font-weight: 600; margin: 0; letter-spacing: .02em; }
+  p.sub { margin: 0; opacity: .65; max-width: 540px; text-align: center; }
+  #stage { position: relative; }
+  canvas {
+    image-rendering: pixelated; border: 1px solid #1d2740; border-radius: 6px;
+    width: 720px; height: 480px; background: #000;
+  }
+  #overlay {
+    position: absolute; top: 10px; left: 10px;
+    background: rgba(8, 11, 20, .72); border: 1px solid #233052;
+    border-radius: 6px; padding: 8px 11px; pointer-events: none;
+    white-space: pre; font-size: 13px;
+  }
+  #overlay b { color: #6fd3ff; font-weight: 600; }
+  #note { opacity: .55; max-width: 560px; text-align: center; font-size: 12px; }
+  code { color: #9ad0ff; }
+</style>
+</head>
+<body>
+  <h1>Fathom</h1>
+  <p class="sub">A Mandelbrot explorer in one Kāra source — the per-frame
+    compute fans out across every CPU core, in a browser tab, with no
+    <code>async</code> and no threading code.</p>
+  <div id="stage">
+    <canvas id="screen" width="480" height="320"></canvas>
+    <div id="overlay">starting…</div>
+  </div>
+  <p id="note">Where is the threading code? There isn't any — the compiler
+    found it. The render loop is a plain blocking
+    <code>loop { frames.recv(); render_frame(); }</code>; each frame's rows
+    are split across a Web Worker pool by <code>TaskGroup.spawn</code>.</p>
+
+<script type="module">
+  import { run } from "./mandelbrot.js";
+
+  const canvas = document.getElementById("screen");
+  const ctx2d = canvas.getContext("2d");
+  const overlay = document.getElementById("overlay");
+  const W = canvas.width, H = canvas.height;
+  // A reusable ImageData; we copy shared-memory bytes into it each frame
+  // (a view backed by a SharedArrayBuffer can't be handed to putImageData
+  // directly, so .set() copies into this owned buffer first).
+  const img = ctx2d.createImageData(W, H);
+
+  // FPS bookkeeping, updated from inside the blit callback.
+  let frames = 0, lastT = performance.now(), fps = 0;
+  const workers = (globalThis.navigator && navigator.hardwareConcurrency) || 4;
+
+  function paintOverlay() {
+    overlay.innerHTML =
+      `FPS:     <b>${fps.toFixed(0)}</b>\n` +
+      `workers: <b>${workers}</b>\n` +
+      `frames:  <b>${frames}</b>`;
+  }
+  paintOverlay();
+
+  // The host side of `host fn put_pixels(ptr, len, w, h)`. The proxy passes
+  // the marshalled scalar args, then a ctx with the (shared) wasm memory.
+  function put_pixels(ptr, len, w, h, ctx) {
+    const view = new Uint8ClampedArray(ctx.memory.buffer, Number(ptr), Number(len));
+    img.data.set(view);
+    ctx2d.putImageData(img, 0, 0);
+    frames++;
+    const now = performance.now();
+    if (now - lastT >= 500) {
+      fps = (frames - (paintOverlay._last || 0)) * 1000 / (now - lastT);
+      paintOverlay._last = frames;
+      lastT = now;
+      paintOverlay();
+    }
+  }
+
+  run({ put_pixels }).catch((e) => {
+    // main() loops forever, so run() never resolves on success; a rejection
+    // is a real failure (no SharedArrayBuffer / not cross-origin isolated).
+    overlay.textContent = "error: " + (e && e.message ? e.message : e);
+    console.error(e);
+  });
+</script>
+</body>
+</html>

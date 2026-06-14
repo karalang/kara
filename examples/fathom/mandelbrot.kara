@@ -1,0 +1,160 @@
+// Fathom — a browser Mandelbrot explorer, one Kāra source, compiled to
+// `--target=wasm_browser --features wasm-threads`.
+//
+// The whole front-end story in one loop: a plain blocking render loop drives
+// the screen, the per-frame pixel compute fans out across a real Web Worker
+// pool with no `async`/`await` and no callback coloring, and the finished
+// framebuffer is blitted to a `<canvas>` through a single host fn.
+//
+//   * `animation_frames()` (std.web.time) is a channel that yields once per
+//     `requestAnimationFrame`. `frames.recv()` blocks the worker until the
+//     host fires the next frame — there is no `await`; the worker parks and
+//     the host wakes it (design.md § Async Host APIs on WASM).
+//   * `TaskGroup.spawn` splits the rows of each frame across the pool. Halve
+//     the pool (fewer workers) and the framerate visibly halves — the
+//     parallelism is real, measurable, in a browser tab.
+//   * `put_pixels` hands the framebuffer's bytes to JS, which does the
+//     `ctx.putImageData` blit. `Vec[u8].as_ptr()` is the FFI handoff.
+//
+// Build:  karac build mandelbrot.kara --target=wasm_browser --features wasm-threads
+// Serve:  see README.md (needs COOP/COEP headers for SharedArrayBuffer).
+
+import std.web.time.{animation_frames};
+
+// The canvas this program paints. A user-defined host capability — like
+// `Dom` in examples/ssr_counter — reached through the `put_pixels` host fn.
+effect resource Display;
+
+// The framebuffer blit. The browser provides the body in JS (see index.html):
+// it reads `len` bytes of RGBA starting at `ptr` out of the shared wasm
+// memory and `ctx.putImageData`s them onto the canvas. The pointer comes
+// from `Vec[u8].as_ptr()`; the call is synchronous (the worker blocks until
+// JS has read the bytes), so the buffer never dangles while in use.
+host fn put_pixels(ptr: *const u8, len: i64, w: i64, h: i64) with writes(Display);
+
+// Frame geometry. Kept modest so a single worker still renders smoothly —
+// the pool then multiplies the framerate rather than rescuing it.
+fn fb_width() -> i64 { 480 }
+fn fb_height() -> i64 { 320 }
+fn max_iter() -> i64 { 200 }
+
+// Escape-time iteration count for the point (cr, ci): how many steps of
+// z = z^2 + c before |z|^2 exceeds 4, capped at `max`. The classic Mandelbrot
+// kernel — pure f64, no allocation.
+fn escape(cr: f64, ci: f64, max: i64) -> i64 {
+    let mut zr = 0.0;
+    let mut zi = 0.0;
+    let mut n = 0;
+    while n < max {
+        let zr2 = zr * zr;
+        let zi2 = zi * zi;
+        if zr2 + zi2 > 4.0 {
+            return n;
+        }
+        zi = 2.0 * zr * zi + ci;
+        zr = zr2 - zi2 + cr;
+        n = n + 1;
+    }
+    max
+}
+
+// Map an escape count to an RGBA byte quad. Points in the set (n == max)
+// are black; escaping points get a smooth blue→cyan→white ramp by depth.
+fn color_r(n: i64, max: i64) -> u8 {
+    if n >= max { return 0u8; }
+    ((n * 5) % 256) as u8
+}
+fn color_g(n: i64, max: i64) -> u8 {
+    if n >= max { return 0u8; }
+    ((n * 7) % 256) as u8
+}
+fn color_b(n: i64, max: i64) -> u8 {
+    if n >= max { return 0u8; }
+    (128 + ((n * 3) % 128)) as u8
+}
+
+// Render rows [y0, y1) of the frame into a fresh RGBA buffer and return it.
+// This is the per-task unit: each spawned worker owns its chunk's output and
+// hands it back at join — no shared mutable buffer, so no aliasing question.
+fn render_rows(y0: i64, y1: i64, cx: f64, cy: f64, scale: f64) -> Vec[u8] {
+    let w = fb_width();
+    let h = fb_height();
+    let mx = max_iter();
+    let half_w = (w as f64) / 2.0;
+    let half_h = (h as f64) / 2.0;
+    let mut out: Vec[u8] = Vec.new();
+    for y in y0..y1 {
+        let ci = cy + ((y as f64) - half_h) * scale;
+        for x in 0..w {
+            let cr = cx + ((x as f64) - half_w) * scale;
+            let n = escape(cr, ci, mx);
+            out.push(color_r(n, mx));
+            out.push(color_g(n, mx));
+            out.push(color_b(n, mx));
+            out.push(255u8);
+        }
+    }
+    out
+}
+
+// Compute one full frame across the worker pool, then blit it. The rows are
+// split into `workers` contiguous bands; each band is a spawned task. The
+// `TaskGroup` joins them in order at the end of the function, and the bands
+// are concatenated into one framebuffer for the single `put_pixels` call.
+fn render_frame(cx: f64, cy: f64, scale: f64, workers: i64) with writes(Display) {
+    let w = fb_width();
+    let h = fb_height();
+    let band = (h + workers - 1) / workers;
+
+    let mut pool: TaskGroup = TaskGroup.new();
+    let mut handles: Vec[TaskHandle[Vec[u8]]] = Vec.new();
+    let mut k = 0;
+    while k < workers {
+        let y0 = k * band;
+        let mut y1 = y0 + band;
+        if y1 > h { y1 = h; }
+        if y0 < y1 {
+            // NB: bind the spawn result to `task`, not `handle` — a `let
+            // handle = …` here that shares the name of the `for handle in
+            // handles` join binding below mis-resolves in codegen and the
+            // join deadlocks on a stale handle (bug-ledger B-2026-06-14-13).
+            let task: TaskHandle[Vec[u8]] = pool.spawn(|| render_rows(y0, y1, cx, cy, scale));
+            handles.push(task);
+        }
+        k = k + 1;
+    }
+
+    // Join every band in order and concatenate into one RGBA framebuffer.
+    let mut frame: Vec[u8] = Vec.new();
+    for handle in handles {
+        let chunk: Vec[u8] = handle.join();
+        for byte in chunk {
+            frame.push(byte);
+        }
+    }
+
+    put_pixels(frame.as_ptr(), frame.len(), w, h);
+}
+
+// The render loop. A plain blocking loop over the frame clock — no `await`.
+// Each tick: zoom a little further into the seahorse valley, recompute the
+// frame in parallel, blit. When the zoom gets too deep for f64 to resolve,
+// reset to the full view and dive again. Private `fn main` (the `_start`
+// entry the host's `run()` invokes) — effects are inferred, so it needs no
+// `with` clause for the `writes(Timer)` / `suspends` of the frame clock.
+fn main() {
+    let target_x = -0.743643887037151;
+    let target_y = 0.13182590420533;
+    let workers = 8;
+
+    let frames = animation_frames();
+    let mut scale = 0.012;
+    loop {
+        frames.recv();
+        render_frame(target_x, target_y, scale, workers);
+        scale = scale * 0.97;
+        if scale < 0.0000002 {
+            scale = 0.012;
+        }
+    }
+}
