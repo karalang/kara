@@ -154,11 +154,25 @@ fn make_node(key: &str, span: &Span, filename: &str, is_test: bool) -> NodeInfo 
     }
 }
 
-/// Render the impl-target type as a key prefix (`Point`, `Vec[i64]`, ...).
-/// Mirrors `catalog::receiver_label` — these strings are stable enough
-/// to use as graph keys.
+/// Key an impl method by the receiver's BARE base-type name (`Point`,
+/// `Vec`, `Box` — *not* `Vec[i64]` / `Box[T]`).
+///
+/// This MUST match how `EffectCheckResult` (`src/effectchecker.rs`) and
+/// `ConcurrencyAnalysis` (`src/concurrency.rs`) key their per-function
+/// maps — both use `p.segments.last()`, the bare base name. The node
+/// `key` is the join column those consumers index by (see [`NodeInfo`]),
+/// so a divergent key here silently breaks the join: a generic-receiver
+/// method (`impl[T] Box[T] { fn f }`) keyed `Box[T].f` would never match
+/// the analyses' `Box.f`, making the whole-program `query effects` report
+/// it with no effects and the whole-program `query concurrency` drop it
+/// entirely. Rendering the full generic form here was exactly that bug.
+///
+/// Non-`Path` impl targets (rare) fall back to the rendered form.
 fn render_target_type(ty: &TypeExpr) -> String {
-    crate::formatter::render_type_expr(ty)
+    match &ty.kind {
+        TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
+        _ => crate::formatter::render_type_expr(ty),
+    }
 }
 
 // ── Call collection (AST walk) ──────────────────────────────────

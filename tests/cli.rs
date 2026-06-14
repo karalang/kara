@@ -934,6 +934,77 @@ fn test_query_effects_whole_program_emits_nodes_and_call_edges() {
 }
 
 #[test]
+fn test_query_whole_program_generic_receiver_method_joins_keys() {
+    // B-2026-06-14-3 regression. The whole-program emitters look effects /
+    // concurrency up by the call-graph node key, but the call graph keyed
+    // an impl method by the rendered receiver (`Box[T].sizes`) while the
+    // effect checker and concurrency analysis key by the bare base name
+    // (`Box.sizes`). For a GENERIC receiver the keys diverged, so the
+    // method's effects came back empty under `query effects` and the
+    // method vanished entirely from `query concurrency`. Both must now
+    // join: the node is keyed `Box.sizes`, carries its `allocates(Heap)`
+    // effect, and appears in the concurrency report.
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-query-generic-join-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("gen.kara");
+    let src = "struct Box[T] { value: T }\n\
+               impl[T] Box[T] {\n\
+               \x20   fn sizes(ref self) -> i64 {\n\
+               \x20       let a: Vec[i64] = Vec.new();\n\
+               \x20       let b: Vec[i64] = Vec.new();\n\
+               \x20       a.len() + b.len()\n\
+               \x20   }\n\
+               }\n\
+               fn main() {\n\
+               \x20   let bx = Box { value: 5 };\n\
+               \x20   println(f\"{bx.sizes()}\");\n\
+               }\n";
+    std::fs::write(&path, src).unwrap();
+    let target = path.to_str().unwrap();
+
+    let eff = karac_bin()
+        .args(["query", "effects", target])
+        .output()
+        .unwrap();
+    assert!(eff.status.success());
+    let eff_out = String::from_utf8_lossy(&eff.stdout);
+    // Bare base-name key, not the rendered generic form.
+    assert!(
+        eff_out.contains("\"function\":\"Box.sizes\""),
+        "node should key by bare base name `Box.sizes`; got: {eff_out}",
+    );
+    assert!(
+        !eff_out.contains("Box[T].sizes"),
+        "node must not key by the rendered generic form; got: {eff_out}",
+    );
+    // Effect lookup must join — the method allocates, so the node is not pure.
+    assert!(
+        eff_out.contains("\"verb\":\"allocates\",\"resource\":\"Heap\""),
+        "generic-receiver method's effect should join, not report empty; got: {eff_out}",
+    );
+
+    let conc = karac_bin()
+        .args(["query", "concurrency", target])
+        .output()
+        .unwrap();
+    assert!(conc.status.success());
+    let conc_out = String::from_utf8_lossy(&conc.stdout);
+    assert!(
+        conc_out.contains("\"function\":\"Box.sizes\""),
+        "generic-receiver method must appear in the concurrency report, not be dropped; got: {conc_out}",
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
 fn test_query_ownership() {
     let out = karac_bin()
         .args(["query", "ownership", "tests/snapshots/type_error.kara.add"])
