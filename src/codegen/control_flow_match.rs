@@ -274,6 +274,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // both neutralize only the scrutinee copy, never the enum field
                 // in the SOURCE struct, which the owning struct's drop now frees.
                 self.suppress_destructured_struct_field_enum_cleanup(scrutinee, &arm.pattern);
+                // #16: a plain struct-pattern destructure (`match v { S { s } =>
+                // … }`) of an owned local struct. Cap-zero each consumed field in
+                // the source slot so the scrutinee's struct drop skips the buffer
+                // the new binding now owns.
+                self.suppress_destructured_struct_pattern_cleanup(scrutinee, &arm.pattern);
             }
 
             let arm_val = self.compile_tail_final_expr(&arm.body, tail)?;
@@ -1916,6 +1921,107 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         self.suppress_destructured_enum_payload_cleanup_at(field_ptr, &enum_name, pattern);
+    }
+
+    /// #16: a plain struct-pattern match destructure of an OWNED local struct
+    /// (`match v { S { a, b: _ } => … }`). Each *consumed* field's heap payload
+    /// is moved by value into the new binding (extracted via `build_extract_value`
+    /// in `bind_pattern_values`), whose per-arm cleanup frees it; the source
+    /// struct's `__karac_drop_<S>` (queued by `track_struct_var` at the let-site)
+    /// would re-free the SAME buffer at the outer scope's drain → double-free.
+    /// Cap-zero each consumed field's heap caps in the source slot so the struct
+    /// drop's `cap > 0` guard skips it — the struct-pattern twin of
+    /// [`Self::suppress_destructured_enum_payload_cleanup_at`] (which fires only
+    /// for enum `TupleVariant` patterns) and the destructure dual of #14/#19's
+    /// `suppress_struct_field_move_into_literal` (the `let m = v.s` field-move-out
+    /// path). Unconsumed (`_` / `..`-elided) fields keep their cap and are freed
+    /// by the drop walk.
+    ///
+    /// A consumed field is suppressed only when the field pattern moves the WHOLE
+    /// field into a single binding (shorthand `field`, or `field: name`): then the
+    /// binding owns the field's entire heap subtree, so zeroing all of its caps
+    /// transitively (`zero_enum_payload_caps` / `zero_struct_move_caps`, mirroring
+    /// the per-field arms of `zero_struct_move_caps`) is exactly right. A NESTED
+    /// destructure (`field: Inner { x }`, `field: (a, _)`) or an `@`-binding is
+    /// left to the status quo (no suppression): it consumes only part of the
+    /// field, so transitively zeroing the whole field would orphan the unbound
+    /// remainder into a leak — bailing keeps the pre-existing behavior (the
+    /// nested partial-move is rare and never the bootstrap shape, which binds flat
+    /// `.field`s). Bails entirely (status quo, never a regression) on a
+    /// ref-scrutinee (caller handles via `scrut_ref_ptr.is_none()` gate),
+    /// a non-place scrutinee, an enum struct-variant pattern (its payload is bound
+    /// via the word-extract path, not field GEP — the resolved name is the enum,
+    /// absent from `struct_field_type_names`), or a shared (RC) struct.
+    pub(super) fn suppress_destructured_struct_pattern_cleanup(
+        &mut self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+    ) {
+        let PatternKind::Struct { fields, .. } = &pattern.kind else {
+            return;
+        };
+        let Some(struct_name) = self.place_chain_type_name(scrutinee) else {
+            return;
+        };
+        if self.shared_types.contains_key(&struct_name) {
+            return;
+        }
+        let Some(field_type_names) = self.struct_field_type_names.get(&struct_name).cloned() else {
+            return;
+        };
+        let Some(field_names) = self.struct_field_names.get(&struct_name).cloned() else {
+            return;
+        };
+        let Some(&st) = self.struct_types.get(struct_name.as_str()) else {
+            return;
+        };
+        let Some(base_ptr) = self.field_chain_place_ptr(scrutinee) else {
+            return;
+        };
+        let vec_ty = self.vec_struct_type();
+        let zero = self.context.i64_type().const_int(0, false);
+        for field_pat in fields {
+            // Only a whole-field move into one binding is safely suppressible —
+            // see the doc comment. A nested destructure / `@`-binding bails.
+            let whole_move = match &field_pat.pattern {
+                None => true,
+                Some(p) => matches!(p.kind, PatternKind::Binding(_)),
+            };
+            if !whole_move {
+                continue;
+            }
+            let Some(idx) = field_names.iter().position(|n| n == &field_pat.name) else {
+                continue;
+            };
+            let fname = field_type_names
+                .get(idx)
+                .and_then(|o| o.as_deref())
+                .unwrap_or("");
+            let Ok(field_ptr) =
+                self.builder
+                    .build_struct_gep(st, base_ptr, idx as u32, "p16.fld.p")
+            else {
+                continue;
+            };
+            if matches!(fname, "Vec" | "VecDeque" | "String") {
+                if let Ok(cap_ptr) =
+                    self.builder
+                        .build_struct_gep(vec_ty, field_ptr, 2, "p16.fld.cap")
+                {
+                    let _ = self.builder.build_store(cap_ptr, zero);
+                }
+            } else if fname != "Option" && fname != "Result" {
+                if let Some(layout) = self.enum_layouts.get(fname).cloned() {
+                    if !layout.is_shared {
+                        self.zero_enum_payload_caps(field_ptr, &layout);
+                    }
+                } else if self.struct_types.contains_key(fname)
+                    && !self.shared_types.contains_key(fname)
+                {
+                    self.zero_struct_move_caps(field_ptr, fname);
+                }
+            }
+        }
     }
 
     /// Compute the in-place pointer to a place expression rooted at a local

@@ -3435,6 +3435,67 @@ fn main() {
     }
 
     #[test]
+    fn asan_struct_pattern_destructure_no_double_free() {
+        // #16 (phase-12 self-hosting): a plain struct-pattern match destructure of
+        // an OWNED local struct (`match v { S { a, b: _ } => … }`) moves each
+        // CONSUMED field's heap payload into the new binding; without
+        // `suppress_destructured_struct_pattern_cleanup` the source struct's
+        // `__karac_drop_<S>` re-frees the same buffer at scope exit → double-free
+        // (exit 134 under guardmalloc). Exercises: flat String fields fully bound,
+        // a partial bind (`b: _` — the unconsumed field must STILL be freed by the
+        // source drop, so a too-eager suppression would leak it — Linux LSan
+        // guards that), a nested-struct field moved whole (transitive cap-zero via
+        // `zero_struct_move_caps`), and an enum field moved whole (`zero_enum_
+        // payload_caps`). Looped so a per-iteration leak accumulates for LSan.
+        assert_clean_asan_run(
+            r#"
+struct Inner { s: String }
+enum Tok { Id(String), Eof }
+struct S { a: String, b: String, inner: Inner, tok: Tok, n: i64 }
+fn mk(i: i64) -> S {
+    let mut x: String = String.new();
+    x.push_str("a");
+    x.push_str(i.to_string());
+    let mut y: String = String.new();
+    y.push_str("b");
+    y.push_str(i.to_string());
+    S { a: x, b: y, inner: Inner { s: "deep".to_string() }, tok: Tok.Id("id".to_string()), n: i }
+}
+fn main() {
+    let mut i: i64 = 0;
+    while i < 4 {
+        let v = mk(i);
+        match v {
+            S { a, b: _, inner, tok, n } => {
+                let Inner { s } = inner;
+                let mut line: String = String.new();
+                line.push_str(a);
+                line.push_str("|");
+                line.push_str(s);
+                line.push_str("|");
+                match tok { Id(t) => line.push_str(t), Eof => line.push_str("eof") }
+                line.push_str("|");
+                line.push_str(n.to_string());
+                println(line);
+            }
+        }
+        i = i + 1;
+    }
+    println("done");
+}
+"#,
+            &[
+                "a0|deep|id|0",
+                "a1|deep|id|1",
+                "a2|deep|id|2",
+                "a3|deep|id|3",
+                "done",
+            ],
+            "struct_pattern_destructure_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_vec_clone_repeat_stresses_scope_cleanup() {
         // Clone in a fresh scope across multiple loop iterations —
         // verifies the scope-exit free fires for each loop-local clone

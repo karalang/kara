@@ -11229,6 +11229,48 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_struct_pattern_destructure_heap_field() {
+        // #16 (phase-12 self-hosting): a plain struct-pattern match destructure of
+        // an OWNED local struct (`match v { S { a, b: _ } => … }`) moves each
+        // consumed field's heap payload into the new binding. Without
+        // `suppress_destructured_struct_pattern_cleanup` the source struct's drop
+        // re-frees the moved buffer (double-free; exit 134 under guardmalloc / ASAN
+        // — see `tests/memory_sanitizer.rs::asan_struct_pattern_destructure_no_
+        // double_free`). Output correctness is the codegen-lane guard: the
+        // partial-bind field (`b: _`) is left to the source drop, the bound fields
+        // (including a nested-struct field and an enum field moved whole) read back
+        // intact.
+        let out = run_program(
+            r#"
+struct Inner { s: String }
+enum Tok { Id(String), Eof }
+struct S { a: String, b: String, inner: Inner, tok: Tok, n: i64 }
+fn main() {
+    let v = S {
+        a: "aa".to_string(),
+        b: "bb".to_string(),
+        inner: Inner { s: "deep".to_string() },
+        tok: Tok.Id("tok".to_string()),
+        n: 7,
+    };
+    match v {
+        S { a, b: _, inner, tok, n } => {
+            let Inner { s } = inner;
+            println(a);
+            println(s);
+            match tok { Id(t) => println(t), Eof => println("eof") }
+            println(n.to_string());
+        }
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "aa\ndeep\ntok\n7");
+        }
+    }
+
+    #[test]
     fn test_e2e_let_rebind_move_no_double_free() {
         // `let outer = inner;` where `inner` is a tracked Vec /
         // String is a move — both slots end up holding the same
