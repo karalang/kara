@@ -717,6 +717,18 @@ pub(super) fn c_alloc_fallible_symbol() -> &'static str {
     }
 }
 
+/// Symbol for the panicking reallocation wrapper — the grow-path counterpart of
+/// [`c_alloc_or_panic_symbol`]. Native: `karac_realloc_or_panic`. wasm: the
+/// `__karac_realloc_or_panic64` i64-size shim (same size_t-width rationale as
+/// the alloc symbols; B-2026-06-12-1).
+pub(super) fn c_realloc_or_panic_symbol() -> &'static str {
+    if crate::target::active_target_is_wasm() {
+        "__karac_realloc_or_panic64"
+    } else {
+        "karac_realloc_or_panic"
+    }
+}
+
 /// Dispatch on the active compilation target (phase-10 `--target`).
 /// `Codegen::new` routes the module's triple + datalayout through this,
 /// so swapping the target machine here re-points the whole emission

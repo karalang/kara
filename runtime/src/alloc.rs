@@ -21,6 +21,7 @@
 
 extern "C" {
     fn malloc(size: usize) -> *mut u8;
+    fn realloc(ptr: *mut u8, size: usize) -> *mut u8;
 }
 
 /// Fallible allocation — non-null on success, null on failure (OOM).
@@ -47,6 +48,30 @@ pub extern "C" fn karac_alloc_or_panic(size: usize) -> *mut u8 {
         // Lean raw-`write(2)` diagnostic (see `fatal` / B-2026-06-11-8) — NOT
         // `std::io::stderr()`, which would anchor ~250 KB of std-IO onto every
         // Vec-using binary through this force-kept, hot-path symbol.
+        crate::fatal::write_stderr(b"panic: out of memory\n");
+        std::process::abort();
+    }
+    p
+}
+
+/// Panicking reallocation — the grow-path counterpart of
+/// [`karac_alloc_or_panic`]. Resizes a buffer to `size` bytes, letting the
+/// system allocator extend it in place where it can (avoiding the
+/// malloc-new + memcpy + free-old churn — and the transient old+new 2× peak —
+/// the collection grow paths used to emit). `ptr` may be null, in which case
+/// this is exactly `karac_alloc_or_panic(size)` (C guarantees
+/// `realloc(NULL, n) == malloc(n)`); the grow codegen relies on that for the
+/// first growth of an empty buffer. On OOM the original buffer is left intact
+/// (per C), but since the panicking contract aborts there is no recovery path
+/// to observe it — the same lean raw-`write(2)` diagnostic + abort as
+/// `karac_alloc_or_panic`. **Never** call this on a non-heap pointer (a string
+/// literal's rodata view); the String grow path guards that with a `cap > 0`
+/// check and takes a fresh malloc+copy for the `cap == 0` static/null case.
+#[no_mangle]
+pub extern "C" fn karac_realloc_or_panic(ptr: *mut u8, size: usize) -> *mut u8 {
+    let n = if size == 0 { 1 } else { size };
+    let p = unsafe { realloc(ptr, n) };
+    if p.is_null() {
         crate::fatal::write_stderr(b"panic: out of memory\n");
         std::process::abort();
     }

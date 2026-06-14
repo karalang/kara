@@ -26,15 +26,16 @@ use std::alloc::{GlobalAlloc, Layout};
 use std::ffi::c_void;
 
 extern "C" {
-    // `*mut u8` (not `*mut c_void`) to match the `malloc` extern declared in
-    // `alloc.rs` / `lib.rs` — both are compiled on wasm, and a return-type
-    // mismatch trips the `clashing_extern_declarations` lint (the `-D warnings`
-    // wasm clippy gate, B-2026-06-11-9). `*mut u8` is the majority form (2 of 3
-    // decls); aligning this outlier removes the clash. ABI-identical regardless.
+    // `*mut u8` (not `*mut c_void`) on `malloc`/`realloc` to match the externs
+    // declared in `alloc.rs` / `lib.rs` — all are compiled on wasm, and a
+    // signature mismatch trips the `clashing_extern_declarations` lint (the
+    // `-D warnings` wasm clippy gate, B-2026-06-11-9). `*mut u8` is the majority
+    // form; aligning these outliers removes the clash. ABI-identical regardless
+    // (the `cabi_realloc` call site casts `c_void` ↔ `u8`, like `malloc` does).
     fn malloc(size: usize) -> *mut u8;
     fn calloc(nmemb: usize, size: usize) -> *mut c_void;
     fn aligned_alloc(alignment: usize, size: usize) -> *mut c_void;
-    fn realloc(ptr: *mut c_void, size: usize) -> *mut c_void;
+    fn realloc(ptr: *mut u8, size: usize) -> *mut u8;
     fn free(ptr: *mut c_void);
 }
 
@@ -120,6 +121,18 @@ pub extern "C" fn __karac_alloc_fallible64(size: u64) -> *mut u8 {
     crate::alloc::karac_alloc_fallible(size)
 }
 
+/// 64-bit-size shim for the panicking reallocation wrapper — the grow-path
+/// twin of [`__karac_alloc_or_panic64`], same B-2026-06-12-1 size_t-width
+/// rationale: codegen passes an i64 byte count at every grow site, but
+/// `karac_realloc_or_panic` takes `usize` (i32 on wasm32). `ptr` stays
+/// pointer-width (i32 on wasm32, no narrowing); only the size is narrowed
+/// (saturating so a >4 GiB request fails cleanly via the wrapper's OOM path).
+#[no_mangle]
+pub extern "C" fn __karac_realloc_or_panic64(ptr: *mut u8, size: u64) -> *mut u8 {
+    let size = usize::try_from(size).unwrap_or(usize::MAX);
+    crate::alloc::karac_realloc_or_panic(ptr, size)
+}
+
 /// Component Model **Canonical ABI** reallocation entry point (phase-10
 /// "WASM entry-point discovery", rich-type exports). `wasm-tools
 /// component new` wires the lifted component to call this exported
@@ -158,7 +171,7 @@ pub extern "C" fn cabi_realloc(
                 aligned_alloc(align, size)
             }
         } else if align <= MALLOC_ALIGN {
-            realloc(old_ptr, new_size)
+            realloc(old_ptr as *mut u8, new_size) as *mut c_void
         } else {
             // Over-aligned grow: realloc can't preserve >malloc alignment,
             // so allocate fresh, copy the old bytes, free the old block.

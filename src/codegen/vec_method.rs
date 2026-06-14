@@ -20,6 +20,116 @@ use inkwell::AddressSpace;
 use super::state::VarSlot;
 
 impl<'ctx> super::Codegen<'ctx> {
+    /// Get-or-declare the panicking reallocation wrapper
+    /// (`ptr karac_realloc_or_panic(ptr, i64)`, or the `__karac_realloc_or_panic64`
+    /// i64-size shim on wasm). The grow paths call this to extend a heap buffer
+    /// in place where the allocator can — avoiding the malloc-new + memcpy +
+    /// free-old churn and the transient old+new 2× peak. `realloc(null, n)` is
+    /// `malloc(n)`, so it is a clean drop-in for any buffer that is null-or-heap
+    /// (Vec data always is); a String's static-literal `cap == 0` rodata view is
+    /// the one buffer it must NOT touch — those grow paths guard with `cap > 0`.
+    pub(super) fn realloc_or_panic_fn_decl(&self) -> inkwell::values::FunctionValue<'ctx> {
+        let sym = crate::codegen::driver::c_realloc_or_panic_symbol();
+        self.module.get_function(sym).unwrap_or_else(|| {
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+            let i64_t = self.context.i64_type();
+            let ty = ptr_ty.fn_type(&[ptr_ty.into(), i64_t.into()], false);
+            self.module.add_function(sym, ty, Some(Linkage::External))
+        })
+    }
+
+    /// Grow a String's byte buffer to `new_cap` bytes, preserving the first
+    /// `len` bytes, and return the new data pointer (builder left positioned at
+    /// the merge block, ready for the `data`/`cap` stores). A heap buffer
+    /// (`cap > 0`) is `realloc`'d so the allocator can extend it in place; a
+    /// static-literal / empty buffer (`cap == 0` — its pointer is in the
+    /// read-only string pool, or null) is **not** realloc'd or freed, taking a
+    /// fresh malloc + copy instead. Shared by `String.push` and
+    /// `String.push_str`; `prefix` namespaces the emitted basic blocks/values.
+    pub(super) fn emit_string_buffer_grow(
+        &self,
+        fn_val: inkwell::values::FunctionValue<'ctx>,
+        data: inkwell::values::PointerValue<'ctx>,
+        cap: inkwell::values::IntValue<'ctx>,
+        len: inkwell::values::IntValue<'ctx>,
+        new_cap: inkwell::values::IntValue<'ctx>,
+        prefix: &str,
+    ) -> inkwell::values::PointerValue<'ctx> {
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let zero_val = i64_t.const_int(0, false);
+        let was_heap = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::UGT,
+                cap,
+                zero_val,
+                &format!("{prefix}.was_heap"),
+            )
+            .unwrap();
+        let realloc_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{prefix}.realloc"));
+        let fresh_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{prefix}.fresh"));
+        let grow_done_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{prefix}.grow_done"));
+        self.builder
+            .build_conditional_branch(was_heap, realloc_bb, fresh_bb)
+            .unwrap();
+
+        // Heap path: realloc(data, new_cap) — extend in place where possible
+        // (realloc preserves the first `len` bytes, so no separate memcpy).
+        self.builder.position_at_end(realloc_bb);
+        let realloc_fn = self.realloc_or_panic_fn_decl();
+        let re_data = self
+            .builder
+            .build_call(
+                realloc_fn,
+                &[data.into(), new_cap.into()],
+                &format!("{prefix}.re_data"),
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        self.builder
+            .build_unconditional_branch(grow_done_bb)
+            .unwrap();
+        let realloc_pred = self.builder.get_insert_block().unwrap();
+
+        // Static/null path: fresh malloc + copy the old `len` bytes; the old
+        // buffer is rodata or null, so it is neither freed nor moved.
+        self.builder.position_at_end(fresh_bb);
+        let fr_data = self
+            .builder
+            .build_call(
+                self.alloc_or_panic_fn,
+                &[new_cap.into()],
+                &format!("{prefix}.fr_data"),
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        self.builder.build_memcpy(fr_data, 1, data, 1, len).unwrap();
+        self.builder
+            .build_unconditional_branch(grow_done_bb)
+            .unwrap();
+        let fresh_pred = self.builder.get_insert_block().unwrap();
+
+        // Merge: pick the grown buffer pointer.
+        self.builder.position_at_end(grow_done_bb);
+        let new_data_phi = self
+            .builder
+            .build_phi(ptr_ty, &format!("{prefix}.new_data"))
+            .unwrap();
+        new_data_phi.add_incoming(&[(&re_data, realloc_pred), (&fr_data, fresh_pred)]);
+        new_data_phi.as_basic_value().into_pointer_value()
+    }
+
     /// Build `Result.Err(AllocError.OutOfMemory{requested_bytes})` — the OOM
     /// arm every fallible `try_*` collection method returns when
     /// `karac_alloc_fallible` yields null (phase-8-stdlib-floor item 8).
@@ -1051,38 +1161,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_select(cmp2, new_len, growth_min, "spush.new_cap")
                     .unwrap()
                     .into_int_value();
-                let new_data = self
-                    .builder
-                    .build_call(self.alloc_or_panic_fn, &[new_cap.into()], "spush.new_data")
-                    .unwrap()
-                    .try_as_basic_value()
-                    .unwrap_basic()
-                    .into_pointer_value();
-                // Copy old data (`len` bytes).
-                self.builder
-                    .build_memcpy(new_data, 1, data, 1, len)
-                    .unwrap();
-                // Free old heap buffer if any (`cap > 0` guard mirrors
-                // push_str — static-literal Strings have cap == 0 and
-                // their ptr is in the read-only string pool).
-                let zero_val = i64_t.const_int(0, false);
-                let was_heap = self
-                    .builder
-                    .build_int_compare(inkwell::IntPredicate::UGT, cap, zero_val, "spush.was_heap")
-                    .unwrap();
-                let free_bb = self.context.append_basic_block(fn_val, "spush.free");
-                let after_free_bb = self.context.append_basic_block(fn_val, "spush.after_free");
-                self.builder
-                    .build_conditional_branch(was_heap, free_bb, after_free_bb)
-                    .unwrap();
-                self.builder.position_at_end(free_bb);
-                self.builder
-                    .build_call(self.free_fn, &[data.into()], "")
-                    .unwrap();
-                self.builder
-                    .build_unconditional_branch(after_free_bb)
-                    .unwrap();
-                self.builder.position_at_end(after_free_bb);
+                // Grow via realloc where the buffer is heap (cap > 0); a
+                // static-literal / empty buffer takes a fresh malloc + copy.
+                let new_data =
+                    self.emit_string_buffer_grow(fn_val, data, cap, len, new_cap, "spush");
 
                 self.builder.build_store(data_ptr_ptr, new_data).unwrap();
                 self.builder.build_store(cap_ptr, new_cap).unwrap();
@@ -1227,27 +1309,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_int_mul(new_cap, elem_size, "alloc_bytes")
                     .unwrap();
+                // Grow via realloc: the allocator extends in place where it can,
+                // avoiding the malloc-new + memcpy + free-old churn (and the
+                // transient old+new 2× peak). Vec data is always null (cap 0) or
+                // heap, and realloc(null, n) == malloc(n), so this is a clean
+                // drop-in — no static-buffer hazard (unlike String literals).
+                let realloc_fn = self.realloc_or_panic_fn_decl();
                 let new_data = self
                     .builder
-                    .build_call(self.alloc_or_panic_fn, &[alloc_bytes.into()], "new_data")
+                    .build_call(realloc_fn, &[data.into(), alloc_bytes.into()], "new_data")
                     .unwrap()
                     .try_as_basic_value()
                     .unwrap_basic()
                     .into_pointer_value();
-
-                // memcpy old data if non-null.
-                let old_bytes = self
-                    .builder
-                    .build_int_mul(len, elem_size, "old_bytes")
-                    .unwrap();
-                self.builder
-                    .build_memcpy(new_data, 8, data, 8, old_bytes)
-                    .unwrap();
-
-                // Free old buffer (free(null) is a no-op per C spec).
-                self.builder
-                    .build_call(self.free_fn, &[data.into()], "")
-                    .unwrap();
 
                 // Update vec fields.
                 self.builder.build_store(data_ptr_ptr, new_data).unwrap();
@@ -2129,36 +2203,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap()
                     .into_int_value();
 
-                let new_data = self
-                    .builder
-                    .build_call(self.alloc_or_panic_fn, &[new_cap.into()], "new_data")
-                    .unwrap()
-                    .try_as_basic_value()
-                    .unwrap_basic()
-                    .into_pointer_value();
-                // Copy old data.
-                self.builder
-                    .build_memcpy(new_data, 1, data, 1, len)
-                    .unwrap();
-                // Free old if cap > 0 (heap-allocated).
-                let zero_val = i64_t.const_int(0, false);
-                let was_heap = self
-                    .builder
-                    .build_int_compare(inkwell::IntPredicate::UGT, cap, zero_val, "was_heap")
-                    .unwrap();
-                let free_bb = self.context.append_basic_block(fn_val, "pstr.free");
-                let after_free_bb = self.context.append_basic_block(fn_val, "pstr.after_free");
-                self.builder
-                    .build_conditional_branch(was_heap, free_bb, after_free_bb)
-                    .unwrap();
-                self.builder.position_at_end(free_bb);
-                self.builder
-                    .build_call(self.free_fn, &[data.into()], "")
-                    .unwrap();
-                self.builder
-                    .build_unconditional_branch(after_free_bb)
-                    .unwrap();
-                self.builder.position_at_end(after_free_bb);
+                // Grow via realloc where the buffer is heap (cap > 0) — the
+                // allocator extends in place where it can, avoiding the malloc-
+                // new + memcpy + free-old churn and the transient old+new 2×
+                // peak (dominant when a large output buffer doubles). A static-
+                // literal / empty buffer (cap == 0) takes a fresh malloc + copy.
+                let new_data =
+                    self.emit_string_buffer_grow(fn_val, data, cap, len, new_cap, "pstr");
 
                 self.builder.build_store(data_ptr_ptr, new_data).unwrap();
                 self.builder.build_store(cap_ptr, new_cap).unwrap();
