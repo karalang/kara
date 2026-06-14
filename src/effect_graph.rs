@@ -112,6 +112,30 @@ pub(crate) fn parallel_groups_json(fc: &FunctionConcurrency) -> String {
     format!("[{}]", group_entries.join(","))
 }
 
+/// Render a function's `serialization_points` as a JSON array of
+/// `{"statements":[…],"reason":…,"resource":…,"blocking_callees":[…]}`
+/// objects — the inverse of `parallel_groups`. Inverting `blocking_callees`
+/// across functions yields the "which callers does this function block"
+/// attribution view.
+pub(crate) fn serialization_points_json(fc: &FunctionConcurrency) -> String {
+    let entries: Vec<String> = fc
+        .serialization_points
+        .iter()
+        .map(|sp| {
+            let indices: Vec<String> = sp.statement_indices.iter().map(|i| i.to_string()).collect();
+            let callees: Vec<String> = sp.blocking_callees.iter().map(|c| json_string(c)).collect();
+            format!(
+                "{{\"statements\":[{}],\"reason\":{},\"resource\":{},\"blocking_callees\":[{}]}}",
+                indices.join(","),
+                json_string(&sp.reason),
+                json_string(&sp.resource),
+                callees.join(","),
+            )
+        })
+        .collect();
+    format!("[{}]", entries.join(","))
+}
+
 /// Build the whole-program effect-graph JSON envelope: effect-annotated
 /// nodes (one per source function) plus the directed call-graph edges.
 pub(crate) fn build_effect_graph_json(
@@ -172,11 +196,12 @@ pub(crate) fn build_concurrency_graph_json(
         .filter_map(|(key, node)| {
             analysis.function_decisions.get(key).map(|fc| {
                 format!(
-                    "{{\"function\":{},\"line\":{},\"total_statements\":{},\"parallel_groups\":{}}}",
+                    "{{\"function\":{},\"line\":{},\"total_statements\":{},\"parallel_groups\":{},\"serialization_points\":{}}}",
                     json_string(key),
                     node.line,
                     fc.total_statements,
                     parallel_groups_json(fc),
+                    serialization_points_json(fc),
                 )
             })
         })

@@ -234,13 +234,37 @@ function selectNode(key) {
     h += `<div class="muted">no parallel band — runs sequentially`
        + (c ? ` (${c.total_statements} statements)` : '') + `.</div>`;
   }
-  // Honest serialization note: a write is a barrier on its resource.
-  const writes = (n.effs||[]).filter(e => e.verb==='writes' || e.verb==='sends');
-  if (writes.length) {
-    h += `<div class="muted" style="margin-top:6px">⚠ serializes callers that also touch `
-       + writes.map(e => `<code>${esc(e.resource||e.verb)}</code>`).join(', ')
-       + ` — write/write and read/write on one resource can't run in parallel.</div>`;
+  // Why THIS function isn't fully parallel (its own serialization points).
+  const sps = (c && c.serialization_points) || [];
+  if (sps.length) {
+    h += `<h2>Serialized here</h2>`;
+    sps.forEach(sp => {
+      h += `<div class="muted">statements ${sp.statements.join(', ')} — ${esc(sp.reason)}`
+         + (sp.blocking_callees && sp.blocking_callees.length
+              ? ` <span class="muted">(via ${sp.blocking_callees.map(c=>`<code>${esc(c)}</code>`).join(', ')})</span>` : '')
+         + `</div>`;
+    });
   }
+
+  // Inverted attribution: which callers does THIS function block, and on
+  // what resource — the compiler's per-callee blame, not a heuristic.
+  const blocks = [];
+  lastGraph.concByFn.forEach((fc, fnName) => {
+    (fc.serialization_points || []).forEach(sp => {
+      if ((sp.blocking_callees || []).includes(key)) {
+        blocks.push({ fn: fnName, statements: sp.statements, resource: sp.resource });
+      }
+    });
+  });
+  if (blocks.length) {
+    h += `<h2>Blocks parallelism in</h2>`;
+    blocks.forEach(b => {
+      h += `<div class="band"><b>${esc(b.fn)}</b> — statements ${b.statements.join(', ')}`
+         + (b.resource ? ` can't parallelize on <code>${esc(b.resource)}</code>` : '')
+         + `<br><span class="muted">because this function's effect on <code>${esc(b.resource)}</code> conflicts there.</span></div>`;
+    });
+  }
+
   h += `<h2>Call edges</h2><div class="muted">callers: ${callers.length?callers.map(esc).join(', '):'—'}`
      + `<br>callees: ${callees.length?callees.map(esc).join(', '):'—'}</div>`;
   d.innerHTML = h;

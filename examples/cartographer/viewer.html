@@ -171,6 +171,31 @@
       d.innerHTML += `<p class="empty">No parallel band — runs sequentially`
         + (c ? ` (${c.total_statements} statements).` : `.`) + `</p>`;
     }
+
+    // Why this function isn't fully parallel (its own serialization points).
+    const sps = (c && c.serialization_points) || [];
+    if (sps.length) {
+      d.innerHTML += `<h2>Serialized here</h2>`;
+      sps.forEach(sp => {
+        d.innerHTML += `<p class="empty">statements ${sp.statements.join(", ")} — ${esc(sp.reason)}`
+          + (sp.blocking_callees && sp.blocking_callees.length
+               ? ` (via ${sp.blocking_callees.map(esc).join(", ")})` : ``) + `</p>`;
+      });
+    }
+
+    // Inverted attribution: which callers does THIS function block?
+    const blocks = [];
+    conc.forEach((fc, fnName) => (fc.serialization_points || []).forEach(sp => {
+      if ((sp.blocking_callees || []).includes(k))
+        blocks.push({ fn: fnName, statements: sp.statements, resource: sp.resource });
+    }));
+    if (blocks.length) {
+      d.innerHTML += `<h2>Blocks parallelism in</h2>`;
+      blocks.forEach(b => {
+        d.innerHTML += `<div class="band"><b>${esc(b.fn)}</b> — statements ${b.statements.join(", ")}`
+          + (b.resource ? ` can't parallelize on <code>${esc(b.resource)}</code>` : ``) + `</div>`;
+      });
+    }
   }
   function effList(arr, label) {
     if (!arr || !arr.length) return `<p class="empty">${label}: none (pure)</p>`;

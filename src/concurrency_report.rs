@@ -378,6 +378,7 @@ mod tests {
                 }],
                 total_statements: 2,
                 loop_reductions: Vec::new(),
+                serialization_points: Vec::new(),
             },
         );
         let analysis = ConcurrencyAnalysis {

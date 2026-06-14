@@ -99,10 +99,34 @@ round-trip, no local `karac` process.
   squiggles** — the type/effect errors the compiler finds are drawn as editor
   markers as you type.
 - **D3 force-directed graph** (right): nodes colored by effect class, parallel-band
-  functions ringed in dashed gold, draggable, click for a detail panel (effects,
-  concurrency decision, call edges, and a serialization note for `writes` nodes).
+  functions ringed in dashed gold, draggable, click for a detail panel — effects,
+  the function's parallel bands, **why it's serialized where it is**, **which
+  callers it blocks** (see below), and call edges.
 - A static file server is required only because browsers won't fetch a `.wasm`
   module over `file://` — it is **not** a `karac` backend; all analysis is client-side.
+
+## Blocking attribution — the inverse of auto-concurrency
+
+The compiler doesn't just parallelize for free; it can say *exactly why it
+couldn't parallelize more, and whose fault it is*. The concurrency analysis now
+emits **serialization points** alongside the parallel bands: for every pair of
+statements that can't run together, the cause, the resource at issue, and — for
+an effect conflict — the **specific callee** whose effect forced it
+(`blocking_callees`). `karac query concurrency <file>` surfaces them:
+
+```json
+{ "function": "double_audit", "parallel_groups": [],
+  "serialization_points": [
+    { "statements": [0,1], "reason": "writes(AuditLog) conflicts with writes(AuditLog)",
+      "resource": "AuditLog", "blocking_callees": ["record_access"] } ] }
+```
+
+Inverting `blocking_callees` across the program answers the design question
+directly — **"which callers does function `f` block?"** Click `record_access`
+in the studio (or static viewer) and the panel reads: *blocks parallelism in
+`double_audit` (statements 0,1) on `AuditLog`*. A pure/`reads` function blocks
+nothing. (Pinned by
+`tests/concurrency.rs::test_cli_query_concurrency_serialization_points_attribute_blocking_callee`.)
 
 ## Scope
 
@@ -112,9 +136,7 @@ round-trip, no local `karac` process.
   embedded Monaco editor with live re-query + diagnostic squiggles, and the
   whole analysis pipeline compiled to WASM (via `karac-playground`) so it runs
   with no local `karac`.
-- **Still deferred:** precise *reverse* blocking attribution — "exactly which
-  callers fail to parallelize *because of this specific callee's effect*." The
-  studio shows the honest property today (a `writes(R)` node serializes callers
-  that also touch `R`), but pinpointing the blocked caller pairs needs the
-  concurrency pass to attribute a non-grouping to a specific callee — a compiler
-  feature, not frontend work.
+- **Built (blocking attribution):** per-callee serialization-point attribution in
+  the concurrency analysis, surfaced in `query concurrency` and inverted in both
+  viewers to "which callers does this function block." Cartographer's design
+  points are now all covered.

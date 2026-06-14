@@ -52,7 +52,7 @@ per-project sections below hold the design. Status legend: ✅ shipped ·
 | **Parallax** | Auto-concurrency without `async`/coloring (fan-out + join) | ✅ shipped | auto-par codegen + HTTP FFI | 1 |
 | **Mend** | AI-first: structured compiler output as a machine fix-loop | ✅ shipped | `karac … --output=json` + `karac fix` | 1 |
 | **Slipstream** | Auto-concurrency + SoA layout + one source on CPU/GPU | ⬜ planned | Phase 11 (CPU) · Phase 10 (GPU) | 1 |
-| **Cartographer** | Effect graph as a live architecture artifact | ✅ shipped | whole-program query + live WASM studio (D3 + Monaco) done · reverse-blocking attribution deferred | 2 |
+| **Cartographer** | Effect graph as a live architecture artifact | ✅ shipped | whole-program query + live WASM studio (D3 + Monaco) + per-callee blocking attribution — all design points covered | 2 |
 | **Husk** | `kernel` profile — no heap/panic/std, MMIO, ISRs | ⬜ planned | v8 hardware gaps (`#[repr]`, `#[interrupt]`, asm) | 2 |
 | **Weave** | Refinement types + contracts + effects together | ✅ shipped (CSV cut) | refinement+contracts (CSV) · `Pool[T]`+TLS+tracing (service) | 2 |
 | **Tangle** | No `'a` at the cases that force `Rc<RefCell>`/arenas elsewhere — graphs, back-pointers, undo/redo; every RC escalation surfaced | ✅ shipped | ownership + `karac query ownership` (done) | 2 |
@@ -326,11 +326,20 @@ its effects, and which functions can run concurrently vs must serialize.
 > draggable, click-for-detail) driven by it. `studio.sh` builds the wasm + serves
 > it. This is the **Iris cross-target story applied to a real tool** — the same
 > analysis source runs native (CLI) and wasm (browser); building it surfaced no
-> wasm bugs (the frontend analysis pipeline is wasm-clean). **Still deferred:**
-> precise reverse-blocking attribution (which callers fail to parallelize because
-> of a specific callee's effect) — a compiler feature, not frontend work; the
-> studio shows the honest property (a `writes(R)` node serializes callers
-> touching `R`) today.
+> wasm bugs (the frontend analysis pipeline is wasm-clean).
+>
+> **Built (blocking attribution) — 2026-06-14.** Closes the last design point.
+> The concurrency analysis now emits **serialization points** (the inverse of
+> parallel bands): for every statement pair that can't parallelize, the cause,
+> the resource, and — for an effect conflict — the **specific callee** whose
+> effect forced it (`StmtEffect` gained a `source_callee` back-link;
+> `conflict_detail` attributes each conflict). `karac query concurrency <file>`
+> emits `serialization_points:[{statements, reason, resource, blocking_callees}]`;
+> inverting `blocking_callees` across functions answers "which callers does `f`
+> block" — surfaced in both viewers' detail panels (`record_access` blocks
+> `double_audit` on `AuditLog`; a `reads`/pure fn blocks nothing). Regression:
+> `tests/concurrency.rs::test_cli_query_concurrency_serialization_points_attribute_blocking_callee`.
+> **Cartographer's design points are now all covered.**
 
 **What the demo shows:**
 1. Load a medium-sized Kāra project (say, a 500-line HTTP service).
@@ -854,7 +863,7 @@ the "Ready when" column notes the compiler capability each is gated on.
 |---|---|---|---|
 | 1 | **Mend** | Now (structured JSON output exists) | Cheapest to build. Makes the AI-first thesis real. Sets the tone. |
 | 2 | **Parallax** | Auto-par codegen + HTTP FFI (done) | Broadest appeal. Every backend engineer relates to fan-out + join. |
-| 3 | **Cartographer** | ✅ built 2026-06-14 (`examples/cartographer/`) — whole-program `karac query effects`/`concurrency` + static SVG viewer + live WASM studio (D3 + Monaco, compiler-in-browser); reverse-blocking attribution deferred | Teaches the effect system visually. Reduces onboarding friction for new users. |
+| 3 | **Cartographer** | ✅ built 2026-06-14 (`examples/cartographer/`) — whole-program `karac query effects`/`concurrency` + static SVG viewer + live WASM studio (D3 + Monaco, compiler-in-browser) + per-callee blocking attribution; all design points covered | Teaches the effect system visually. Reduces onboarding friction for new users. |
 | 4 | **Tangle** | Now (ownership inference + `karac query ownership` exist) | Proves the no-`'a` safety claim at the hard shapes. Cheap, pure Kāra, backs the README ownership section directly. |
 | 5 | **Weave** | ✅ CSV cut built 2026-06-13 (`examples/weave/`) — runs under `karac run` (interpreter) **and** `karac build`s to a native binary, output byte-identical. Service cut still gated on `Pool[T]` + TLS + tracing | Correctness story for data engineers. Complements the concurrency story. |
 | 6 | **Chronicle** | Self-hosting (Phase 10/12) | Self-hosting milestone. Marks Kāra as "a real language." |

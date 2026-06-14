@@ -1077,6 +1077,79 @@ fn main() {{
         stdout
     );
     assert!(stdout.contains("\"line\":"), "stdout: {}", stdout);
+    // Independent statements parallelize, so they carry no serialization points.
+    assert!(
+        stdout.contains("\"serialization_points\":[]"),
+        "independent fns should have empty serialization_points; stdout: {}",
+        stdout
+    );
+
+    let _ = std::fs::remove_file(&file_path);
+}
+
+#[test]
+fn test_cli_query_concurrency_serialization_points_attribute_blocking_callee() {
+    use std::io::Write;
+    use std::process::Command;
+
+    // The whole-program concurrency report names, for every pair of
+    // statements that can't parallelize, the cause + the callee whose
+    // effect is to blame. Here `twice` calls `emit` (writes Log) twice;
+    // the two calls conflict write/write on Log, and the serialization
+    // point must attribute that to `emit`. Inverting `blocking_callees`
+    // across functions is the Cartographer "which callers does this
+    // function block" view.
+    let dir = std::env::temp_dir();
+    let file_path = dir.join("test_concurrency_serialization_attr.kara");
+    {
+        let mut f = std::fs::File::create(&file_path).unwrap();
+        writeln!(
+            f,
+            r#"
+pub trait Sink {{ fn put(mut ref self); }}
+pub effect resource Log: Sink;
+pub struct Mem {{}}
+impl Mem {{ pub fn new() -> Mem {{ Mem {{}} }} }}
+impl Sink for Mem {{ fn put(mut ref self) {{ }} }}
+
+pub fn emit() with writes(Log) {{ Log.put(); }}
+
+pub fn twice() with writes(Log) {{
+    emit();
+    emit();
+}}
+"#
+        )
+        .unwrap();
+    }
+
+    let karac_bin = env!("CARGO_BIN_EXE_karac");
+    let output = Command::new(karac_bin)
+        .args(["query", "concurrency", file_path.to_str().unwrap()])
+        .output()
+        .expect("failed to run karac");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // `twice`'s two calls to `emit` conflict write/write on Log; the
+    // serialization point names the cause, the resource, and `emit` as
+    // the blocking callee.
+    assert!(
+        stdout.contains("\"function\":\"twice\""),
+        "stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"reason\":\"writes(Log) conflicts with writes(Log)\""),
+        "serialization reason names verb+resource; stdout: {stdout}",
+    );
+    assert!(
+        stdout.contains("\"resource\":\"Log\",\"blocking_callees\":[\"emit\"]"),
+        "serialization point attributes the conflict to callee `emit` on Log; stdout: {stdout}",
+    );
 
     let _ = std::fs::remove_file(&file_path);
 }

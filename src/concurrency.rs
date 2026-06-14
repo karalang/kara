@@ -441,6 +441,35 @@ pub struct FunctionConcurrency {
     /// See `docs/implementation_checklist/phase-7-codegen.md` — "Auto-par
     /// reduction recognition" — for the policy and slicing plan.
     pub loop_reductions: Vec<LoopReduction>,
+    /// The statement pairs that *can't* run in parallel, and why — the
+    /// inverse of `parallel_groups`. Each records the conflicting
+    /// statement indices, a human reason, the resource at issue (empty
+    /// for a data/ordering conflict), and — for an effect conflict — the
+    /// callees whose effect on that resource forced the serialization
+    /// (`blocking_callees`). Inverting `blocking_callees` across all
+    /// functions answers "which callers does function `f` block, and on
+    /// what resource" — the Cartographer attribution view.
+    pub serialization_points: Vec<SerializationPoint>,
+}
+
+/// One reason two statements in a function body can't run in parallel —
+/// the inverse of a [`ParallelGroup`]. See
+/// [`FunctionConcurrency::serialization_points`].
+#[derive(Debug, Clone)]
+pub struct SerializationPoint {
+    /// The two conflicting statement indices, ascending.
+    pub statement_indices: Vec<usize>,
+    /// Human-readable cause, e.g. `"writes(AuditLog) conflicts with
+    /// writes(AuditLog)"`, `"data dependency on `x`"`, `"explicit seq
+    /// ordering"`.
+    pub reason: String,
+    /// The resource at issue for an effect conflict (e.g. `"AuditLog"`);
+    /// empty for a data-dependency / write-write / ordering conflict.
+    pub resource: String,
+    /// For an effect conflict: the callee keys (`fn` / `Type.method`)
+    /// whose effect on `resource` caused the conflict. Empty for
+    /// non-effect conflicts. Sorted + deduped.
+    pub blocking_callees: Vec<String>,
 }
 
 /// An associative + commutative reduction operator recognized at v1.
@@ -630,11 +659,32 @@ struct StmtInfo {
     is_constant_init: bool,
 }
 
+/// Human label for an effect verb, used in serialization-point reasons.
+fn effect_verb_label(v: &EffectVerbKind) -> &str {
+    match v {
+        EffectVerbKind::Reads => "reads",
+        EffectVerbKind::Writes => "writes",
+        EffectVerbKind::Sends => "sends",
+        EffectVerbKind::Receives => "receives",
+        EffectVerbKind::Allocates => "allocates",
+        EffectVerbKind::Panics => "panics",
+        EffectVerbKind::Blocks => "blocks",
+        EffectVerbKind::Suspends => "suspends",
+        EffectVerbKind::UserDefined(s) => s.as_str(),
+    }
+}
+
 /// An effect associated with a statement.
 #[derive(Debug, Clone)]
 struct StmtEffect {
     verb: EffectVerbKind,
     resource: String,
+    /// The callee whose effect this is — the function/method key
+    /// (`fn` name or `Type.method`) that contributed this effect to the
+    /// statement, or `None` for an effect the statement performs
+    /// directly. Used to attribute a serialization point to the specific
+    /// callee responsible (`SerializationPoint::blocking_callees`).
+    source_callee: Option<String>,
 }
 
 /// True iff a statement's effect set marks it as a **coroutine network-boundary
@@ -897,6 +947,7 @@ impl<'a> ConcurrencyChecker<'a> {
                 parallel_groups: Vec::new(),
                 total_statements: 0,
                 loop_reductions: Vec::new(),
+                serialization_points: Vec::new(),
             };
         }
 
@@ -906,12 +957,19 @@ impl<'a> ConcurrencyChecker<'a> {
         // Step 2: Build dependency graph (adjacency list of conflicts)
         // dep_edges[i] contains all j where i depends on j (or they must serialize)
         let mut has_edge = vec![vec![false; total_statements]; total_statements];
+        // The inverse of the parallel groups: for every conflicting pair,
+        // *why* they can't parallelize + which callee's effect is to blame.
+        let mut serialization_points: Vec<SerializationPoint> = Vec::new();
 
         for i in 0..total_statements {
             for j in 0..i {
                 if self.statements_conflict(&stmt_infos[j], &stmt_infos[i]) {
                     has_edge[i][j] = true;
                     has_edge[j][i] = true;
+                    if let Some(mut sp) = self.conflict_detail(&stmt_infos[j], &stmt_infos[i]) {
+                        sp.statement_indices = vec![j, i];
+                        serialization_points.push(sp);
+                    }
                 }
             }
         }
@@ -931,7 +989,109 @@ impl<'a> ConcurrencyChecker<'a> {
             parallel_groups,
             total_statements,
             loop_reductions,
+            serialization_points,
         }
+    }
+
+    /// Explain a single conflicting statement pair: the cause, the
+    /// resource at issue, and (for an effect conflict) the callees whose
+    /// effect on that resource forced the serialization. Mirrors the
+    /// decision order of [`Self::statements_conflict`] and returns the
+    /// first cause found. `statement_indices` is filled in by the caller.
+    fn conflict_detail(&self, a: &StmtInfo, b: &StmtInfo) -> Option<SerializationPoint> {
+        let mk = |reason: String, resource: String, blocking_callees: Vec<String>| {
+            Some(SerializationPoint {
+                statement_indices: Vec::new(),
+                reason,
+                resource,
+                blocking_callees,
+            })
+        };
+
+        if a.is_seq || b.is_seq {
+            return mk(
+                "explicit seq ordering".to_string(),
+                String::new(),
+                Vec::new(),
+            );
+        }
+
+        // Data dependency: one reads a binding the other defines.
+        let mut dep: Vec<&String> = a.defines.intersection(&b.reads).collect();
+        dep.extend(b.defines.intersection(&a.reads));
+        if !dep.is_empty() {
+            dep.sort();
+            dep.dedup();
+            let names = dep
+                .iter()
+                .map(|s| format!("`{s}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return mk(
+                format!("data dependency on {names}"),
+                String::new(),
+                Vec::new(),
+            );
+        }
+
+        // Write-write on the same binding.
+        let mut ww: Vec<&String> = a.defines.intersection(&b.defines).collect();
+        if !ww.is_empty() {
+            ww.sort();
+            let names = ww
+                .iter()
+                .map(|s| format!("`{s}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return mk(format!("both assign {names}"), String::new(), Vec::new());
+        }
+
+        // Polymorphic call: effects unknown at analysis time.
+        if (a.calls_polymorphic && (b.calls_polymorphic || !b.effects.is_empty()))
+            || (b.calls_polymorphic && !a.effects.is_empty())
+        {
+            return mk(
+                "polymorphic-effect call — effects unknown at analysis time".to_string(),
+                String::new(),
+                Vec::new(),
+            );
+        }
+
+        // Effect conflict: find the conflicting effect pairs and attribute
+        // them to the callees that contributed them.
+        let mut resource = String::new();
+        let mut verbs: Option<(EffectVerbKind, EffectVerbKind)> = None;
+        let mut callees: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for ae in &a.effects {
+            for be in &b.effects {
+                if self.two_effects_conflict(ae, be) {
+                    if verbs.is_none() {
+                        resource = ae.resource.clone();
+                        verbs = Some((ae.verb.clone(), be.verb.clone()));
+                    }
+                    if ae.resource == be.resource && ae.resource == resource {
+                        if let Some(c) = &ae.source_callee {
+                            callees.insert(c.clone());
+                        }
+                        if let Some(c) = &be.source_callee {
+                            callees.insert(c.clone());
+                        }
+                    }
+                }
+            }
+        }
+        if let Some((va, vb)) = verbs {
+            let reason = format!(
+                "{}({}) conflicts with {}({})",
+                effect_verb_label(&va),
+                resource,
+                effect_verb_label(&vb),
+                resource,
+            );
+            return mk(reason, resource, callees.into_iter().collect());
+        }
+
+        None
     }
 
     /// Walk top-level statements in `func.body`; for each loop expression
@@ -2558,6 +2718,7 @@ impl<'a> ConcurrencyChecker<'a> {
                 info.effects.push(StmtEffect {
                     verb: te.effect.verb.clone(),
                     resource: te.effect.resource.clone(),
+                    source_callee: Some(name.to_string()),
                 });
             }
         }
