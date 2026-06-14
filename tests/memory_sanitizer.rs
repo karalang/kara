@@ -381,6 +381,47 @@ fn main() {
     }
 
     #[test]
+    fn asan_for_over_collection_body_local_no_leak() {
+        // B-2026-06-14-21: a body-local owned heap `let` inside a
+        // for-over-COLLECTION loop (Vec/Slice/Map/Set/String/array — NOT
+        // for-over-range, which already had per-iteration cleanup) leaked
+        // every iteration but the last. The binding's `FreeVecBuffer` was
+        // registered in the enclosing FUNCTION frame (the collection
+        // for-variants called `compile_block(body)` with no per-iteration
+        // cleanup frame), so only the final iteration's value was freed at
+        // the function tail — N-1 iterations leaked (surfaced as a browser
+        // OOM in the Fathom dogfood: `for handle in handles { let chunk =
+        // handle.join(); … }` leaked the joined Vec every frame). The fix
+        // wraps each collection for-variant's body in
+        // `compile_loop_body_with_cleanup`. Looping over a Vec-of-keys with
+        // a per-iteration `let row = build(…)` makes the leak visible to the
+        // Linux-CI LSan gate (mac checks no double-free / UAF).
+        assert_clean_asan_run(
+            r#"
+fn build(n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n { v.push(i); i = i + 1; }
+    v
+}
+fn main() {
+    let mut keys: Vec[i64] = Vec.new();
+    let mut k = 0;
+    while k < 200 { keys.push(k); k = k + 1; }
+    let mut total: i64 = 0;
+    for key in keys {
+        let row: Vec[i64] = build(64);
+        total = total + (row.len() as i64) + key;
+    }
+    println(total);
+}
+"#,
+            &["32700"],
+            "for_over_collection_body_local_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_shared_enum_struct_variant_no_leak_no_double_free() {
         // B-2026-06-13-8: a shared enum struct-variant with a heap (String)
         // payload field — construct the RC box, match-bind the field, drop. The

@@ -600,6 +600,44 @@ impl<'ctx> super::Codegen<'ctx> {
         result.map(Some)
     }
 
+    /// Compile a loop body inside a fresh per-iteration cleanup frame, then
+    /// (on a normal fall-through) drop the owned heap locals declared in the
+    /// body and branch to `continue_bb`.
+    ///
+    /// Without this, every for-over-collection variant leaked: body-local
+    /// `let v = <owned Vec/String/…>` bindings registered their
+    /// `FreeVecBuffer`/drop in the *enclosing* (function) frame, so only the
+    /// final iteration's value was freed at the function tail — N-1
+    /// iterations' worth leaked (B-2026-06-14-21; `for-over-range` already
+    /// had this via its own push/drain, which is why only the collection
+    /// variants leaked). A body terminator (break/continue/return) routes
+    /// cleanup through the `loop_stack` `cleanup_depth` walk instead, so on
+    /// that path the frame is popped WITHOUT emitting (it was already
+    /// drained) and no trailing branch is added.
+    pub(super) fn compile_loop_body_with_cleanup(
+        &mut self,
+        body: &Block,
+        continue_bb: inkwell::basic_block::BasicBlock<'ctx>,
+    ) -> Result<(), String> {
+        self.scope_cleanup_actions.push(Vec::new());
+        self.compile_block(body)?;
+        if self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_terminator()
+            .is_none()
+        {
+            self.drain_top_frame_with_emit();
+            self.builder
+                .build_unconditional_branch(continue_bb)
+                .unwrap();
+        } else {
+            self.scope_cleanup_actions.pop();
+        }
+        Ok(())
+    }
+
     pub(super) fn compile_for_range(
         &mut self,
         label: Option<&str>,
@@ -855,16 +893,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.bind_pattern(pattern, elem_val)?;
         self.register_for_loop_bindings(pattern, var_name);
-        self.compile_block(body)?;
-        if self
-            .builder
-            .get_insert_block()
-            .unwrap()
-            .get_terminator()
-            .is_none()
-        {
-            self.builder.build_unconditional_branch(incr_bb).unwrap();
-        }
+        self.compile_loop_body_with_cleanup(body, incr_bb)?;
 
         self.builder.position_at_end(incr_bb);
         let cur = self
@@ -969,16 +998,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.bind_pattern(pattern, elem_val)?;
         self.register_for_loop_bindings(pattern, var_name);
-        self.compile_block(body)?;
-        if self
-            .builder
-            .get_insert_block()
-            .unwrap()
-            .get_terminator()
-            .is_none()
-        {
-            self.builder.build_unconditional_branch(incr_bb).unwrap();
-        }
+        self.compile_loop_body_with_cleanup(body, incr_bb)?;
 
         // Increment
         self.builder.position_at_end(incr_bb);
@@ -1138,6 +1158,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.var_type_names
                 .insert(bind_name.clone(), "char".to_string());
         }
+        self.scope_cleanup_actions.push(Vec::new());
         self.compile_block(body)?;
         if self
             .builder
@@ -1146,12 +1167,17 @@ impl<'ctx> super::Codegen<'ctx> {
             .get_terminator()
             .is_none()
         {
-            // Stash new_off in the offset alloca so the incr block picks
-            // it up. Written here at body-tail rather than at the call
-            // site so a mid-body `break` doesn't corrupt the offset
-            // (the break path skips this store and exits via exit_bb).
+            // Per-iteration cleanup of body-local owned heap values
+            // (B-2026-06-14-21), then stash new_off in the offset alloca
+            // so the incr block picks it up. Written here at body-tail
+            // rather than at the call site so a mid-body `break` doesn't
+            // corrupt the offset (the break path skips this store and
+            // exits via exit_bb).
+            self.drain_top_frame_with_emit();
             self.builder.build_store(byte_offset, new_off).unwrap();
             self.builder.build_unconditional_branch(incr_bb).unwrap();
+        } else {
+            self.scope_cleanup_actions.pop();
         }
 
         // Increment: no-op — body already wrote the new offset. Kept as
@@ -1246,16 +1272,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.var_type_names
                 .insert(bind_name.clone(), "u8".to_string());
         }
-        self.compile_block(body)?;
-        if self
-            .builder
-            .get_insert_block()
-            .unwrap()
-            .get_terminator()
-            .is_none()
-        {
-            self.builder.build_unconditional_branch(incr_bb).unwrap();
-        }
+        self.compile_loop_body_with_cleanup(body, incr_bb)?;
 
         // Increment: idx += 1, branch back to cond.
         self.builder.position_at_end(incr_bb);
@@ -1387,16 +1404,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_struct_value();
         self.bind_pattern(pattern, kv.into())?;
         self.register_for_loop_bindings(pattern, var_name);
-        self.compile_block(body)?;
-        if self
-            .builder
-            .get_insert_block()
-            .unwrap()
-            .get_terminator()
-            .is_none()
-        {
-            self.builder.build_unconditional_branch(loop_bb).unwrap();
-        }
+        self.compile_loop_body_with_cleanup(body, loop_bb)?;
 
         self.loop_stack.pop();
 
@@ -1507,16 +1515,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.register_var_from_type_expr(elem_name, &elem_te);
             }
         }
-        self.compile_block(body)?;
-        if self
-            .builder
-            .get_insert_block()
-            .unwrap()
-            .get_terminator()
-            .is_none()
-        {
-            self.builder.build_unconditional_branch(loop_bb).unwrap();
-        }
+        self.compile_loop_body_with_cleanup(body, loop_bb)?;
 
         self.loop_stack.pop();
 
@@ -1600,16 +1599,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(elem_ty, elem_ptr, "for.elem")
             .unwrap();
         self.bind_pattern(pattern, elem_val)?;
-        self.compile_block(body)?;
-        if self
-            .builder
-            .get_insert_block()
-            .unwrap()
-            .get_terminator()
-            .is_none()
-        {
-            self.builder.build_unconditional_branch(incr_bb).unwrap();
-        }
+        self.compile_loop_body_with_cleanup(body, incr_bb)?;
 
         // Increment
         self.builder.position_at_end(incr_bb);
@@ -1645,7 +1635,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 break;
             }
             self.bind_pattern(pattern, elem)?;
+            // Per-iteration cleanup of body-local owned heap values
+            // (B-2026-06-14-21). Unrolled straight-line bodies fall
+            // through to the next element, so drain-emit in place with no
+            // branch; a body terminator pops without emitting (the
+            // early-exit cleanup walk already drained it).
+            self.scope_cleanup_actions.push(Vec::new());
             self.compile_block(body)?;
+            if self
+                .builder
+                .get_insert_block()
+                .unwrap()
+                .get_terminator()
+                .is_none()
+            {
+                self.drain_top_frame_with_emit();
+            } else {
+                self.scope_cleanup_actions.pop();
+            }
         }
         Ok(self.context.i64_type().const_int(0, false).into())
     }
