@@ -1609,6 +1609,14 @@ pub(super) struct Codegen<'ctx> {
     /// aliases the container's storage and the container's own cleanup
     /// already covers the buffer.
     pub(crate) pattern_binding_is_borrow: bool,
+    /// Set by `compile_match` when the scrutinee enum is the type-erased
+    /// `Option` / `Result` (B-2026-06-13-13 residual A). Their inline / boxed
+    /// payloads are owned by the dedicated `FreeInlineOptionPayload` /
+    /// boxed-scrutinee cleanup, NOT a per-field `EnumDrop`, so a pattern-bound
+    /// struct payload (`Some(h)`) must NOT get a `track_struct_var` — that would
+    /// double-free against the Option's own free. Gates the user-struct arm of
+    /// the pattern-binding struct-drop registration.
+    pub(crate) pattern_binding_scrutinee_is_option_result: bool,
     /// Phase 7.2 Slice DP — per-enum drop function cache (enum name →
     /// `__karac_drop_<EnumName>` `FunctionValue`). Lazily populated by
     /// `emit_enum_drop_switch` on first registration of a value-type
@@ -4632,6 +4640,7 @@ impl<'ctx> Codegen<'ctx> {
             current_fn_returns_ref: false,
             compiling_ref_return_let_rhs: false,
             pattern_binding_is_borrow: false,
+            pattern_binding_scrutinee_is_option_result: false,
             enum_drop_fns: HashMap::new(),
             struct_drop_fns: HashMap::new(),
             user_drop_wrapper_fns: HashMap::new(),

@@ -5315,6 +5315,77 @@ fn main() {
     }
 
     #[test]
+    fn asan_enum_nested_struct_payload_moved_out_no_leak_no_double_free() {
+        // B-2026-06-13-13 residual A: a nested-struct enum payload MOVED OUT of
+        // the enum — bound by a `match` (`Wrap(inner)`), passed by value into a
+        // fn that binds it out, returned as the arm tail, and re-used after a
+        // consuming call. Each path now registers the moved-out struct binding
+        // for `StructDrop` (pattern_binding.rs), kept symmetric with the source
+        // move-suppression so it frees exactly once. On Linux CI this faults
+        // under LeakSanitizer if the binding drop regresses (a leak); on macOS it
+        // is the double-free gate — the copy-supported deep-copy keeps the caller
+        // original valid after the callee frees its copy (the `sink+reuse` arm),
+        // so a missed-suppression double-free or a stale-alias use-after-free
+        // faults here. `Inner` is copy-supported (Vec + i64), so the binding IS
+        // tracked; an `Option`/`Result` or Map-bearing payload is excluded
+        // (covered by `asan_freshtemp_boxed_option_match_move_out_no_double_free`).
+        assert_clean_asan_run(
+            r#"
+struct Inner { data: Vec[i64], n: i64 }
+enum E { Wrap(Inner), Empty }
+fn mk(x: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(x);
+    v.push(x + 1);
+    return v;
+}
+fn sink(e: E) -> i64 {
+    match e {
+        Wrap(inner) => inner.n,
+        Empty => 0,
+    }
+}
+fn unwrap_or(e: E) -> Inner {
+    match e {
+        Wrap(inner) => inner,
+        Empty => Inner { data: mk(0), n: 0 },
+    }
+}
+fn main() {
+    let mut t: i64 = 0;
+    let mut i = 0;
+    while i < 20 {
+        // match-bind move-out into a local, then consume
+        let e1 = E.Wrap(Inner { data: mk(i), n: 1 });
+        let r1 = match e1 {
+            Wrap(inner) => inner.data.len() + inner.n,
+            Empty => 0,
+        };
+        // by-value pass into a fn that binds the payload out
+        let e2 = E.Wrap(Inner { data: mk(i), n: 2 });
+        let r2 = sink(e2);
+        // tail-return the moved-out struct binding
+        let e3 = E.Wrap(Inner { data: mk(i), n: 3 });
+        let got = unwrap_or(e3);
+        // consuming call, then re-use the (copy-supported, callee-owned) original
+        let e4 = E.Wrap(Inner { data: mk(i), n: 4 });
+        let a = sink(e4);
+        let b = match e4 {
+            Wrap(inner) => inner.n,
+            Empty => 0,
+        };
+        t = t + r1 + r2 + got.n + a + b;
+        i = i + 1;
+    }
+    println(t);
+}
+"#,
+            &["320"],
+            "enum_nested_struct_payload_moved_out_no_leak_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_inline_enum_ctor_call_arg_no_leak_no_double_free() {
         // B-2026-06-12-10: an inline enum-variant constructor passed by value as
         // a call argument (`wrap(Tok.V(mk()))`) — and the method form

@@ -111,6 +111,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // path at function exit.
         let saved_borrow_flag = self.pattern_binding_is_borrow;
         self.pattern_binding_is_borrow = self.scrutinee_is_borrow_call(scrutinee);
+        // B-2026-06-13-13 residual A: when the scrutinee is the type-erased
+        // `Option`/`Result`, its payload is owned by the dedicated inline/boxed
+        // cleanup, not a per-field `EnumDrop` — so the pattern-binding struct
+        // track must skip a bound struct payload to avoid double-freeing. Same
+        // enum for every arm, so resolved once from any variant arm.
+        let saved_opt_res_flag = self.pattern_binding_scrutinee_is_option_result;
+        self.pattern_binding_scrutinee_is_option_result = arms.iter().any(|a| {
+            matches!(
+                self.variant_pattern_enum_name(&a.pattern).as_deref(),
+                Some("Option") | Some("Result")
+            )
+        });
         let fn_val = self.current_fn.unwrap();
         let merge_bb = self.context.append_basic_block(fn_val, "match.merge");
 
@@ -372,6 +384,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(merge_bb);
         self.pattern_binding_is_borrow = saved_borrow_flag;
+        self.pattern_binding_scrutinee_is_option_result = saved_opt_res_flag;
 
         // Every arm diverged (`return` / `unreachable()` / `todo()` in all of
         // them): no arm branched to `merge_bb`, so it has no predecessors.

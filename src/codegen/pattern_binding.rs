@@ -336,31 +336,65 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.track_vec_var(alloca, Some(elem_ty));
                     }
                 }
-                // Phase-8 line 39 follow-up — register scope-exit Drop for a
-                // pattern-bound HTTP `Response` / `HttpError`. The eager
-                // client path binds these via `Ok(resp)` / `Err(e)`
-                // destructure (pattern bindings), which don't flow through
-                // the let-binding `track_struct_var` site in `stmts.rs`, so
-                // wire them here: `Response` frees its `body` String + the
-                // `headers` side-table handle; `HttpError` frees its
-                // runtime-malloc'd `message` String. `track_struct_var`
-                // no-ops when the type has no synthesized drop fn, and
-                // move-suppression across every exit path comes from
-                // `suppress_source_vec_cleanup_for_arg` (which zeros the
-                // String caps + the headers handle on move). Targeted to the
-                // seeded HTTP structs by name so unrelated struct
-                // destructures keep their current (untracked) behavior.
-                // Gated on `!pattern_binding_is_borrow` for the same
-                // reason as the File and Vec/String sites: a borrow-mode
-                // bind (`Map.get` scrutinee / `ref x @` by_ref) aliases a
-                // `Response`/`HttpError` owned by the source, so its drop
-                // fires there — a second `track_struct_var` here would
-                // double-free the body String + headers handle.
+                // Register scope-exit Drop for a pattern-bound owned user
+                // STRUCT — `match e { Wrap(inner) => … }` binding a nested-struct
+                // enum payload out (B-2026-06-13-13 residual A), the eager HTTP
+                // client's `Ok(resp)` / `Err(e)` destructure, and any
+                // `match v { S { inner: t } => … }` that moves a struct field
+                // into `t`. These don't flow through the let-binding
+                // `track_struct_var` site in `stmts.rs`, so the moved-out struct
+                // had no owner and leaked its heap (the enum-payload case was the
+                // last self-hosted-lexer residual; the HTTP structs were the
+                // earlier Phase-8 case). `track_struct_var` no-ops when the type
+                // has no synthesized drop fn (no heap), so non-heap struct
+                // bindings keep their current free behavior.
+                //
+                // Symmetry (no double-free): every MOVE-OUT path that lets this
+                // binding outlive — or co-own with — its source already zeros the
+                // source so its drop no-ops: the enum-payload-on-bind suppression
+                // (`suppress_destructured_enum_payload_cleanup_at`, generalized to
+                // all payload words), the struct-pattern destructure suppression
+                // (`suppress_destructured_struct_pattern_cleanup`, #16), and the
+                // tail-return / pass-as-arg suppression
+                // (`suppress_source_vec_cleanup_for_arg` → `zero_struct_move_caps`).
+                // Gated on `!pattern_binding_is_borrow` — a borrow-mode bind
+                // (`Map.get` scrutinee, `ref x @`) ALIASES a struct owned by the
+                // source, whose own drop frees it; a second `track_struct_var`
+                // here would double-free. Same gate the Vec/String `track_vec_var`
+                // site above uses, which is the proven precedent that this gate is
+                // symmetric with the suppression set.
+                //
+                // COPY-SUPPORTED gate on the user-struct arm: only track a struct
+                // whose heap is fully outer-buffer duplicable (no Map/Set/Option
+                // payload). That is EXACTLY when its enum/struct source is
+                // callee-OWNED (`make_aggregate_param_callee_owned` deep-copies it
+                // on entry) or a local — both of which the move-suppression above
+                // neutralizes. A non-copy-supported struct payload makes the source
+                // *caller-retains* (no deep-copy); freeing the binding there would
+                // turn a status-quo leak into a use-after-free on `sink(e);
+                // use(e)`. Vec/String never need this gate (always copy-supported),
+                // which is why `track_vec_var` above is unconditional — only struct
+                // payloads can carry non-duplicable heap. `Response`/`HttpError` are
+                // intentionally exempt (kept by name): they are NOT copy-supported
+                // (side-table handle), but their move-suppression
+                // (`suppress_source_vec_cleanup_for_arg` → handle-zero) covers them.
                 let bound_type = self.var_type_names.get(name.as_str()).cloned();
-                if !self.pattern_binding_is_borrow
-                    && matches!(bound_type.as_deref(), Some("Response" | "HttpError"))
-                {
-                    self.track_struct_var(bound_type.as_deref().unwrap(), alloca);
+                if !self.pattern_binding_is_borrow {
+                    if let Some(tn) = bound_type.as_deref() {
+                        // The user-struct arm is skipped for an `Option`/`Result`
+                        // scrutinee: a `Some(h)` / `Ok(h)` struct payload is owned
+                        // by the Option's inline/boxed cleanup, so tracking it here
+                        // would double-free. `Response`/`HttpError` keep their
+                        // by-name handling (their own move-suppression covers them).
+                        let is_copy_supported_user_struct = !self
+                            .pattern_binding_scrutinee_is_option_result
+                            && self.struct_types.contains_key(tn)
+                            && !self.shared_types.contains_key(tn)
+                            && self.aggregate_param_copy_supported_struct(tn, &mut Vec::new());
+                        if matches!(tn, "Response" | "HttpError") || is_copy_supported_user_struct {
+                            self.track_struct_var(tn, alloca);
+                        }
+                    }
                 }
                 // Slice 3a (ref-scrutinee leaf binding ABI parity):
                 // when the typechecker tagged this binding with a borrow
