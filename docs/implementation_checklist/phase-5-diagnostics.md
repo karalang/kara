@@ -692,6 +692,32 @@
 
   **v1 follow-ups intentionally left for incremental backfill** (not load-bearing — the JSONL contract is stable; precision widens later): (a) **Multi-module project mode** — the v1 surface takes a single file path; the multi-module flow lands alongside `module::ProgramTree` so cross-file affected-by can answer "what tests in `crate/tests/` reach `src/sort.kara:42`?". The JSONL envelope schema absorbs the change unchanged. (b) **Per-monomorphization call graphs** — generic functions today summarize across all instantiations (union of every monomorph's reach). A future `--monomorph=T1,T2,...` flag could parameterize the query by type-arg tuple when a concrete use case emerges. (c) **Method-call precision via typechecker reuse** — `MethodCall` resolution today links to every impl method with a matching name (conservative-by-design). Once the call graph can read `TypeCheckResult.method_callee_types`, the precision tightens for typed call sites while staying conservative for untyped ones (e.g. inside generic fn bodies). (d) **`extern fn` leaf nodes** — `extern` boundaries are currently absent from the graph (leaf nodes per design.md). Surfacing them as terminal nodes with a `kind: "extern"` discriminator is a contained extension; consumers that want to follow effect-propagation through extern-boundary edges can opt in. Full design in [`docs/deferred.md` § P1 § karac query affected-by](deferred.md#karac-query-affected-by--call-graph-reach-query).
 
+- [x] **Whole-program `karac query effects` / `karac query concurrency`** —
+  shipped 2026-06-14 (Cartographer dogfood compiler half, `examples/cartographer/`,
+  [`docs/dogfooding.md`](../dogfooding.md)). Both per-function queries now also
+  accept a bare `<file>.kara` target and emit a whole-program envelope: `effects`
+  → `{scope, functions:[{function, line, is_test, inferred_effects,
+  declared_effects}], calls:[{caller, callee}]}` (effect-annotated nodes **plus**
+  the full call-graph edge list, reusing `call_graph::build` — the only
+  whole-graph edge surface; `affected-by` only exposed reach-from-one-node);
+  `concurrency` → `{scope, functions:[{function, line, total_statements,
+  parallel_groups}]}`. Per-function targets unchanged. Note this is still
+  **per-function analysis, emitted in bulk** — it does NOT build one giant
+  whole-program `analyze_function`, so the O(n²)-per-body concurrency cliff
+  tracked above is unaffected (that promotion trigger has *not* fired).
+  - [x] **B-2026-06-14-3 — generic-receiver key-join.** The emitters index the
+    effect/concurrency maps by the call-graph node key, but
+    `call_graph::render_target_type` keyed impl methods by the rendered receiver
+    (`Box[T].m` via `render_type_expr`) while the effect checker and concurrency
+    analysis key by the bare base name (`Box.m` via `segments.last()`). The keys
+    agreed for plain receivers but diverged for **generic** ones, so a method on
+    `impl[T] Box[T]` reported empty effects under `query effects` and was dropped
+    entirely from `query concurrency` (silent data loss). Fixed in `34bcd728` —
+    `render_target_type` now extracts the bare base name, matching `NodeInfo`'s
+    documented join contract (and fixing `Type.assoc()` edges to generic types
+    along the way). Regression:
+    `tests/cli.rs::test_query_whole_program_generic_receiver_method_joins_keys`.
+
 ### 5.4: Interactive REPL and Jupyter Kernel
 
 First-class interactive surface. **v0 → v1 transition:** the MVP REPL shipped 2026-04-28 on top of the tree-walk interpreter; the v62 lock (2026-05-06) moved the runtime backend to **always-JIT via LLJIT** for v1, with tree-walk retained only as a dev/debug tool. See `design.md § Execution Model and Compilation Targets` and the LLJIT integration entry in `phase-7-codegen.md` for the migration work; the user-facing surface (meta-commands, session model, cross-cell semantics) is unchanged by the backend swap. **Delivery split:** the REPL binary and the browser playground are P0 delivery — both optimize the frictionless first-try path that drives adoption. The Jupyter kernel is P0 priority (committed, designed, scoped) but P1 delivery — timed to ship once the stdlib is stable enough that a first-time notebook user does not hit "function not found" on common types. Semantics (cell scope, ownership across cells, effect display) are now specified in `docs/design.md § Interactive Evaluation Model`.
