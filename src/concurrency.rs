@@ -280,6 +280,138 @@ fn expr_has_channel_op(expr: &Expr) -> bool {
     }
 }
 
+/// `true` iff this statement performs a console-output operation — a call to a
+/// stdout/stderr write builtin (`print` / `println` / `eprint` / `eprintln` /
+/// `dbg`) or an ambient `Stdout` / `Stderr` write method (`.print` / `.println`
+/// / `.flush`) anywhere in its expression tree. Used by `find_parallel_groups`
+/// to keep output-bearing statements out of auto-par groups.
+///
+/// Console output is an externally observable, order-sensitive side effect, but
+/// the print builtins are compiler-side I/O functions (`prelude::PRELUDE
+/// _FUNCTIONS`) that carry **no resource effect** — making `println` a full
+/// `writes(Stdout)` effect would force every public fn that prints to *declare*
+/// it (design.md § Effects: public effects are declared+verified), a surface
+/// break the language deliberately avoids. So to the effect-conflict gate two
+/// `println`s look effect-free and independent, and it fans them into separate
+/// `__par_branch` workers that race on the one shared stdout buffer —
+/// reordering the program's output nondeterministically (B-2026-06-13-18).
+/// Auto-par is a compute optimization; it must never reorder observable I/O.
+/// This AST-level guard is the exact analogue of `stmt_has_channel_op` — an
+/// ordering-sensitive op the resource-effect system doesn't model. The
+/// transitive case (a *user* fn that prints, called from `main`) is already
+/// safe: a user-function call is conservatively serialized by auto-par
+/// regardless, so only the direct builtin call needs this guard.
+fn stmt_has_output_op(stmt: &Stmt) -> bool {
+    match &stmt.kind {
+        StmtKind::Let { value, .. }
+        | StmtKind::Assign { value, .. }
+        | StmtKind::CompoundAssign { value, .. }
+        | StmtKind::Expr(value) => expr_has_output_op(value),
+        StmtKind::LetElse {
+            value, else_block, ..
+        } => expr_has_output_op(value) || block_has_output_op(else_block),
+        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => block_has_output_op(body),
+        StmtKind::LetUninit { .. } => false,
+    }
+}
+
+fn block_has_output_op(block: &Block) -> bool {
+    block.stmts.iter().any(stmt_has_output_op)
+        || block
+            .final_expr
+            .as_ref()
+            .is_some_and(|e| expr_has_output_op(e))
+}
+
+/// The bare-identifier output builtins (`prelude::PRELUDE_FUNCTIONS`): direct
+/// stdout/stderr writes with no resource effect. `dbg` is debug-only (elided in
+/// release) but still writes stderr when present, so it serializes too.
+fn is_output_builtin_name(name: &str) -> bool {
+    matches!(name, "print" | "println" | "eprint" | "eprintln" | "dbg")
+}
+
+fn expr_has_output_op(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Call { callee, args } => {
+            // Free builtin `println(..)` (bare identifier) or the ambient
+            // `Stdout.println(..)` / `Stderr.print(..)` 2-segment path call.
+            let is_output_call = match &callee.kind {
+                ExprKind::Identifier(name) => is_output_builtin_name(name),
+                ExprKind::Path { segments, .. } => {
+                    segments.len() == 2
+                        && matches!(segments[0].as_str(), "Stdout" | "Stderr")
+                        && matches!(segments[1].as_str(), "print" | "println" | "flush")
+                }
+                _ => false,
+            };
+            is_output_call
+                || expr_has_output_op(callee)
+                || args.iter().any(|a| expr_has_output_op(&a.value))
+        }
+        // `Stdout.println(..)` / `stderr.flush()` in method-call shape — match
+        // only when the receiver is the `Stdout` / `Stderr` ambient, so a user
+        // type's own `print`/`flush` method isn't needlessly excluded.
+        ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } => {
+            let recv_is_std = matches!(
+                &object.kind,
+                ExprKind::Identifier(name) if matches!(name.as_str(), "Stdout" | "Stderr")
+            );
+            (recv_is_std && matches!(method.as_str(), "print" | "println" | "flush"))
+                || expr_has_output_op(object)
+                || args.iter().any(|a| expr_has_output_op(&a.value))
+        }
+        ExprKind::Block(b) => block_has_output_op(b),
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            expr_has_output_op(condition)
+                || block_has_output_op(then_block)
+                || else_branch.as_ref().is_some_and(|e| expr_has_output_op(e))
+        }
+        ExprKind::IfLet {
+            value,
+            then_block,
+            else_branch,
+            ..
+        } => {
+            expr_has_output_op(value)
+                || block_has_output_op(then_block)
+                || else_branch.as_ref().is_some_and(|e| expr_has_output_op(e))
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            expr_has_output_op(scrutinee) || arms.iter().any(|a| expr_has_output_op(&a.body))
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => expr_has_output_op(condition) || block_has_output_op(body),
+        ExprKind::For { iterable, body, .. } => {
+            expr_has_output_op(iterable) || block_has_output_op(body)
+        }
+        ExprKind::Loop { body, .. } => block_has_output_op(body),
+        ExprKind::Binary { left, right, .. }
+        | ExprKind::Pipe { left, right }
+        | ExprKind::NilCoalesce { left, right } => {
+            expr_has_output_op(left) || expr_has_output_op(right)
+        }
+        ExprKind::Unary { operand, .. } => expr_has_output_op(operand),
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            expr_has_output_op(object)
+        }
+        ExprKind::Index { object, index } => {
+            expr_has_output_op(object) || expr_has_output_op(index)
+        }
+        ExprKind::Tuple(elems) => elems.iter().any(expr_has_output_op),
+        _ => false,
+    }
+}
+
 // ── Result Types ───────────────────────────────────────────────
 
 /// The full result of concurrency analysis across all functions.
@@ -420,7 +552,7 @@ pub struct ParallelGroup {
 // ── Internal: Per-statement metadata ───────────────────────────
 
 /// Metadata extracted from a single statement for dependency analysis.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct StmtInfo {
     /// Variables defined (written) by this statement.
     defines: HashSet<String>,
@@ -433,6 +565,13 @@ struct StmtInfo {
     let_introduced: HashSet<String>,
     /// Variables read by this statement.
     reads: HashSet<String>,
+    /// Names of functions / methods called directly by this statement (free-fn
+    /// identifiers, path last-segments + 2-segment joins, and bare method
+    /// names). Used to propagate the console-output property across the call
+    /// graph: a statement calling a function in `ConcurrencyChecker::output_fns`
+    /// transitively performs output and must not be auto-parallelized
+    /// (B-2026-06-13-18). Populated by `collect_expr_effects`.
+    referenced_callees: HashSet<String>,
     /// Effects produced by this statement (from called functions).
     effects: Vec<StmtEffect>,
     /// Whether this statement (transitively) calls a function with polymorphic
@@ -455,6 +594,17 @@ struct StmtInfo {
     /// communication primitives whose ordering auto-par must not disturb.
     /// See `stmt_has_channel_op` and the `find_parallel_groups` guards.
     has_channel_op: bool,
+    /// Whether this statement *directly* performs a console-output op
+    /// (`println` / `print` / `eprintln` or a `Stdout` / `Stderr` write method
+    /// appears in its own expression tree). The transitive case — a call to a
+    /// user fn that itself prints — is covered separately via
+    /// `referenced_callees` ∩ `output_fns`. Either way the statement is kept
+    /// out of auto-par groups: output ordering is externally observable and the
+    /// print builtins carry no resource effect, so the effect-conflict gate
+    /// would otherwise fan two prints into workers that race on stdout
+    /// (B-2026-06-13-18). See `stmt_has_output_op`, `output_fns`, and the
+    /// `find_parallel_groups` guards.
+    has_direct_output_op: bool,
     /// Whether this statement is a direct, pure `sleep_ms(...)` timer-park
     /// call — the ONLY `suspends` form the auto-parallelizer overlaps (A2b).
     /// `suspends` is an execution verb (placement, not conflict — design.md
@@ -578,6 +728,19 @@ pub struct ConcurrencyChecker<'a> {
     function_bodies: HashMap<String, &'a Function>,
     /// Impl method bodies: "TypeName.method" -> &Function.
     method_bodies: HashMap<String, &'a Function>,
+    /// Names of functions / methods that **transitively perform console output**
+    /// — their body (directly or through a callee) reaches a `println` / `print`
+    /// / `eprintln` or a `Stdout` / `Stderr` write. The print builtins carry no
+    /// resource effect (making `println` a `writes(Stdout)` effect would force
+    /// every public fn that prints to declare it — a surface break the language
+    /// avoids), so the effect-conflict gate can't see that two calls to such a
+    /// function must stay ordered. `find_parallel_groups` consults this set to
+    /// keep their call sites out of auto-par groups, preventing the workers
+    /// from racing on the shared stdout buffer (B-2026-06-13-18). Method keys
+    /// are stored under both `"Type.method"` and the bare `method` name so a
+    /// bare-name method call resolves. Computed once in `new` as a call-graph
+    /// fixpoint seeded by `block_has_output_op`.
+    output_fns: HashSet<String>,
 }
 
 impl<'a> ConcurrencyChecker<'a> {
@@ -587,9 +750,80 @@ impl<'a> ConcurrencyChecker<'a> {
             effects,
             function_bodies: HashMap::new(),
             method_bodies: HashMap::new(),
+            output_fns: HashSet::new(),
         };
         checker.collect_functions();
+        checker.compute_output_fns();
         checker
+    }
+
+    /// Build the transitive set of functions / methods that perform console
+    /// output, as a call-graph fixpoint (see the `output_fns` field doc).
+    ///
+    /// Seed: every fn/method whose body *directly* contains an output op
+    /// (`block_has_output_op`). Then iterate: a fn joins the set once any name
+    /// it calls is already in the set. Matching is by name (free-fn name, path
+    /// segment, or bare method name) — an over-approximation when two functions
+    /// share a name, which only ever forfeits a compute optimization, exactly
+    /// the trade `stmt_has_channel_op`'s bare-method match already makes.
+    fn compute_output_fns(&mut self) {
+        // Pass 1: per fn-key, gather (direct-output flag, set of names it calls).
+        // Build the row list while only *reading* self, then fold into the maps.
+        let mut rows: Vec<(Vec<String>, bool, HashSet<String>)> = Vec::new();
+        for (name, f) in &self.function_bodies {
+            let mut cs = StmtInfo::default();
+            self.collect_block_effects(&f.body, &mut cs);
+            rows.push((
+                vec![name.clone()],
+                block_has_output_op(&f.body),
+                cs.referenced_callees,
+            ));
+        }
+        for (key, m) in &self.method_bodies {
+            let mut cs = StmtInfo::default();
+            self.collect_block_effects(&m.body, &mut cs);
+            // Register under both the full `Type.method` key and the bare method
+            // name, so a bare-name method call resolves against this set.
+            let bare = key.rsplit('.').next().unwrap_or(key).to_string();
+            rows.push((
+                vec![key.clone(), bare],
+                block_has_output_op(&m.body),
+                cs.referenced_callees,
+            ));
+        }
+
+        let mut direct: HashSet<String> = HashSet::new();
+        let mut callees: HashMap<String, HashSet<String>> = HashMap::new();
+        for (keys, has_out, cs) in rows {
+            for k in &keys {
+                callees
+                    .entry(k.clone())
+                    .or_default()
+                    .extend(cs.iter().cloned());
+                if has_out {
+                    direct.insert(k.clone());
+                }
+            }
+        }
+
+        // Fixpoint: a fn performs output if it directly does, or calls one that does.
+        let mut output = direct;
+        let mut changed = true;
+        while changed {
+            changed = false;
+            let mut newly: Vec<String> = Vec::new();
+            for (key, cs) in &callees {
+                if !output.contains(key) && cs.iter().any(|c| output.contains(c)) {
+                    newly.push(key.clone());
+                }
+            }
+            for k in newly {
+                if output.insert(k) {
+                    changed = true;
+                }
+            }
+        }
+        self.output_fns = output;
     }
 
     fn collect_functions(&mut self) {
@@ -1138,11 +1372,13 @@ impl<'a> ConcurrencyChecker<'a> {
             defines: HashSet::new(),
             let_introduced: HashSet::new(),
             reads: HashSet::new(),
+            referenced_callees: HashSet::new(),
             effects: Vec::new(),
             calls_polymorphic: false,
             is_seq,
             has_early_exit: stmt_has_early_exit(stmt),
             has_channel_op: stmt_has_channel_op(stmt),
+            has_direct_output_op: stmt_has_output_op(stmt),
             is_timer_suspend: stmt_is_timer_suspend(stmt),
             is_constant_init: stmt_is_constant_init(stmt),
         };
@@ -1214,6 +1450,15 @@ impl<'a> ConcurrencyChecker<'a> {
     }
 
     /// Check if two statements conflict (have a dependency requiring serialization).
+    /// `true` iff this statement performs console output — directly (a
+    /// `println` / `print` / `eprintln` / `Stdout`-write in its own expression
+    /// tree) or transitively (it calls a function in `output_fns`). Such a
+    /// statement is kept out of auto-par groups so its output stays in program
+    /// order (B-2026-06-13-18).
+    fn stmt_emits_output(&self, info: &StmtInfo) -> bool {
+        info.has_direct_output_op || !info.referenced_callees.is_disjoint(&self.output_fns)
+    }
+
     fn statements_conflict(&self, a: &StmtInfo, b: &StmtInfo) -> bool {
         // If either is in a seq block, force serialization
         if a.is_seq || b.is_seq {
@@ -1396,6 +1641,20 @@ impl<'a> ConcurrencyChecker<'a> {
                 continue;
             }
 
+            // A console-output statement (`println` / `print` / `eprintln` / a
+            // `Stdout`/`Stderr` write) is never auto-parallelized — its output
+            // is observable in program order, but the print builtins carry no
+            // resource effect, so the effect-conflict gate sees two `println`s
+            // as independent and would fan them into `__par_branch` workers that
+            // race on the shared stdout buffer, reordering output
+            // nondeterministically (B-2026-06-13-18). Mirrors the channel-op /
+            // early-exit / coroutine-boundary seed guards. See
+            // `stmt_has_output_op` / `output_fns`.
+            if self.stmt_emits_output(&infos[start]) {
+                assigned[start] = true;
+                continue;
+            }
+
             let mut group_indices = vec![start];
             assigned[start] = true;
 
@@ -1438,6 +1697,13 @@ impl<'a> ConcurrencyChecker<'a> {
                 // A channel-op statement ends the group at its sibling
                 // boundary too (seed-side guard's candidate mirror).
                 if infos[candidate].has_channel_op {
+                    break;
+                }
+
+                // A console-output statement ends the group at its sibling
+                // boundary too (seed-side guard's candidate mirror) — output
+                // order is observable and must stay in program order.
+                if self.stmt_emits_output(&infos[candidate]) {
                     break;
                 }
 
@@ -2037,6 +2303,9 @@ impl<'a> ConcurrencyChecker<'a> {
                 // Look up callee effects
                 if let Some(name) = self.extract_callee_name(callee) {
                     self.add_function_effects(&name, info);
+                    // Record the callee name so the transitive-output closure
+                    // (`output_fns`) can see whether this stmt reaches a print.
+                    info.referenced_callees.insert(name);
                 }
                 self.collect_expr_effects(callee, info);
                 for arg in args {
@@ -2068,6 +2337,8 @@ impl<'a> ConcurrencyChecker<'a> {
                 }
                 // Also try bare method name (matches free-function shape).
                 self.add_function_effects(method, info);
+                // Record the bare method name for the transitive-output closure.
+                info.referenced_callees.insert(method.clone());
                 self.collect_expr_effects(object, info);
                 for arg in args {
                     self.collect_expr_effects(&arg.value, info);

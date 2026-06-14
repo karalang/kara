@@ -128,6 +128,89 @@ fn test_effect_conflict_serializes() {
     );
 }
 
+// ── console output forces serialization (B-2026-06-13-18) ──────
+
+#[test]
+fn test_direct_println_serializes() {
+    // Regression for B-2026-06-13-18: the print builtins carry no resource
+    // effect, so the effect-conflict gate saw two `println`s as independent and
+    // fanned them into `__par_branch` workers that raced on the shared stdout
+    // buffer, reordering output nondeterministically. Output ops must never be
+    // auto-parallelized.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            println(1);
+            println(2);
+            println(3);
+        }
+        "#,
+    );
+
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc.parallel_groups.is_empty(),
+        "Expected no parallel groups — consecutive `println`s must stay ordered, got {:?}",
+        main_fc.parallel_groups
+    );
+}
+
+#[test]
+fn test_transitive_println_serializes() {
+    // The output property must propagate across the call graph: a fn that
+    // prints AND carries a real (non-conflicting) effect would otherwise be
+    // fanned out at its call sites (effects on different resources don't
+    // conflict), reordering the prints buried inside it. The `output_fns`
+    // fixpoint catches this — a call to a transitively-printing fn serializes.
+    let analysis = analyze(
+        r#"
+        effect resource A;
+        effect resource B;
+        fn touch_a() writes(A) {}
+        fn touch_b() writes(B) {}
+        fn work_a() -> i32 writes(A) { println(1); touch_a(); 10 }
+        fn work_b() -> i32 writes(B) { println(2); touch_b(); 20 }
+        fn main() {
+            let a = work_a();
+            let b = work_b();
+        }
+        "#,
+    );
+
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc.parallel_groups.is_empty(),
+        "Expected no parallel groups — calls to fns that transitively print must stay ordered, got {:?}",
+        main_fc.parallel_groups
+    );
+}
+
+#[test]
+fn test_pure_compute_still_parallelizes_alongside_output_guard() {
+    // Guard against over-correction: the output guard must not suppress genuine
+    // compute parallelism. Two side-effect-free user calls with no output still
+    // form a group (mirrors `test_pure_independent_calls`, asserted here so a
+    // future broadening of the output guard can't silently kill it).
+    let analysis = analyze(
+        r#"
+        fn a() -> i32 { 1 }
+        fn b() -> i32 { 2 }
+        fn main() {
+            let x = a();
+            let y = b();
+        }
+        "#,
+    );
+
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(
+        main_fc.parallel_groups.len(),
+        1,
+        "Pure independent calls should still group, got {:?}",
+        main_fc.parallel_groups
+    );
+}
+
 // ── self-mutation forces serialization (self-hosting #8) ───────
 
 #[test]
