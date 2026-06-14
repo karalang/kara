@@ -56,6 +56,20 @@ impl<'ctx> super::Codegen<'ctx> {
             let v = self.compile_expr(elem_expr)?;
             self.suppress_fstr_acc_if_moved_out(elem_expr);
             self.suppress_source_vec_cleanup_for_arg(elem_expr);
+            // (c) #23 — a Map/Set element folded into the tuple transfers
+            //     ownership of its handle to the tuple. Maps are caller-retains
+            //     with no in-slot cap sentinel (the Vec arm above can't reach
+            //     them), so drop the source binding's `FreeMapHandle` from the
+            //     cleanup queue here: the tuple's owner — a let-bound tuple's
+            //     `TypeExpr`-driven drop, or the owning struct's `NestedTuple`
+            //     (#21) drop — is now the sole freer. Without this, a local
+            //     `Map` folded into a tuple-in-struct-field double-frees: the
+            //     source binding's `FreeMapHandle` AND the struct's NestedTuple
+            //     Map drop both release the same handle. No-op for non-Map
+            //     identifiers (no matching queue action).
+            if let ExprKind::Identifier(name) = &elem_expr.kind {
+                self.suppress_map_cleanup_for_tail_identifier(name);
+            }
             vals.push(v);
         }
         let types: Vec<BasicTypeEnum<'ctx>> = vals.iter().map(|v| v.get_type()).collect();

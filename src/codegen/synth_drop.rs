@@ -699,11 +699,28 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                         self.current_fn = saved_fn;
                     }
-                    let one = i32_t.const_int(1, false);
+                    // #23 — drop flags must reflect the K/V types: flag a side
+                    // only when it lowers to the Vec/String 24-byte struct, so
+                    // the runtime frees its per-entry `data` buffer. The old
+                    // hardcoded `(1, 1)` made the runtime read offset-16 of an
+                    // 8-byte scalar key as a bogus `cap` and free the key VALUE
+                    // as a pointer — corruption on any occupied `Map[i64, i64]`
+                    // field (B-2026-06-13-19), not the "conservative no-op" the
+                    // prior comment assumed.
+                    let (dk, dv) = self
+                        .struct_field_type_exprs
+                        .get(struct_name)
+                        .and_then(|v| v.get(field_idx))
+                        .map(|fte| self.map_drop_flags(fte))
+                        .unwrap_or((0, 0));
                     self.builder
                         .build_call(
                             self.karac_map_free_with_drop_vec_fn,
-                            &[handle.into(), one.into(), one.into()],
+                            &[
+                                handle.into(),
+                                i32_t.const_int(dk, false).into(),
+                                i32_t.const_int(dv, false).into(),
+                            ],
                             "",
                         )
                         .unwrap();
@@ -929,6 +946,38 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// #23 — `(drop_key, drop_val)` flags for `karac_map_free_with_drop_vec`,
+    /// derived from a `Map[K,V]` / `Set[T]` `TypeExpr`. A side is flagged 1
+    /// **only** when its type lowers to the Vec/String 24-byte struct, so the
+    /// runtime frees that side's per-entry `data` buffer; scalar sides (i64,
+    /// bool, …) and pointer-handle sides (nested Map/Set/shared) get 0.
+    ///
+    /// The old call sites hardcoded `(1, 1)` on the (now-known-false) assumption
+    /// that the runtime no-ops a non-heap side via its `cap == 0` guard. For a
+    /// tightly-packed scalar map that is WRONG: with `drop_key = 1` the runtime
+    /// reads offset-16 of an 8-byte key (the *next* slot's key, or OOB) as the
+    /// "cap"; when that garbage is non-zero it frees offset-0 — the key VALUE —
+    /// as a pointer, corrupting the heap on any occupied `Map[i64, i64]` (the
+    /// `pointer being freed was not allocated` abort). Computing the flags from
+    /// the K/V types is the fix.
+    ///
+    /// `(0, 0)` when the `TypeExpr` carries no generic args (e.g. a reconstructed
+    /// single-segment `Path` from `infer_arg_elem_te`): correct for a scalar map;
+    /// a heap-K/V map degrades to a leaked inner buffer, never corruption.
+    pub(super) fn map_drop_flags(&self, te: &TypeExpr) -> (u64, u64) {
+        if let Some((k_te, v_te)) = super::helpers::map_kv_type_exprs(te) {
+            let k = self.llvm_ty_is_vec_struct(self.llvm_type_for_type_expr(&k_te)) as u64;
+            let v = self.llvm_ty_is_vec_struct(self.llvm_type_for_type_expr(&v_te)) as u64;
+            (k, v)
+        } else if let Some(elem_te) = super::helpers::set_inner_type_expr(te) {
+            // `Set[T]` lowers to `Map[T, ()]`; the element occupies the key half.
+            let k = self.llvm_ty_is_vec_struct(self.llvm_type_for_type_expr(&elem_te)) as u64;
+            (k, 0)
+        } else {
+            (0, 0)
+        }
+    }
+
     /// #21 — free the heap reachable through an anonymous tuple struct field,
     /// driven by the tuple's source element `TypeExpr`s: Vec/String → cap-guarded
     /// free; Map/Set → handle free; named non-shared enum → `emit_enum_drop_switch`;
@@ -1000,11 +1049,17 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .build_load(ptr_ty, field_ptr, "drop.tup.map.handle")
                                 .unwrap()
                                 .into_pointer_value();
-                            let one = i32_t.const_int(1, false);
+                            // #23 — flags from the K/V types (see `map_drop_flags`);
+                            // the old `(1, 1)` garbage-freed an occupied scalar map.
+                            let (dk, dv) = self.map_drop_flags(te);
                             self.builder
                                 .build_call(
                                     self.karac_map_free_with_drop_vec_fn,
-                                    &[handle.into(), one.into(), one.into()],
+                                    &[
+                                        handle.into(),
+                                        i32_t.const_int(dk, false).into(),
+                                        i32_t.const_int(dv, false).into(),
+                                    ],
                                     "",
                                 )
                                 .unwrap();

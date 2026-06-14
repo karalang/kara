@@ -2649,16 +2649,54 @@ impl<'ctx> super::Codegen<'ctx> {
                     if !named_aggregate {
                         if let Some(slot) = self.variables.get(var_name.as_str()).copied() {
                             if let BasicTypeEnum::StructType(agg_ty) = slot.ty {
-                                if agg_ty != self.vec_struct_type()
-                                    && self.aggregate_has_heap_field(agg_ty)
-                                {
-                                    self.track_tuple_var(slot.ptr, agg_ty);
-                                    // `let u = t` tuple-to-tuple move: both slots
-                                    // alias the same buffers; zero the source's
-                                    // field caps so its drop no-ops and `u` owns
-                                    // (no-op for a fresh tuple-literal RHS, which
-                                    // isn't an Identifier).
-                                    self.suppress_source_vec_cleanup_for_arg(value);
+                                if agg_ty != self.vec_struct_type() {
+                                    if self.aggregate_has_heap_field(agg_ty) {
+                                        // Proven LLVM-type path: a tuple whose heap
+                                        // is a directly-visible Vec/String field
+                                        // (or nested Vec aggregate). The aggregate
+                                        // drop walk frees it.
+                                        self.track_tuple_var(slot.ptr, agg_ty);
+                                        // `let u = t` tuple-to-tuple move: both slots
+                                        // alias the same buffers; zero the source's
+                                        // field caps so its drop no-ops and `u` owns
+                                        // (no-op for a fresh tuple-literal RHS, which
+                                        // isn't an Identifier).
+                                        self.suppress_source_vec_cleanup_for_arg(value);
+                                    } else if let Some(elem_tes) =
+                                        self.tuple_binding_elem_tes(ty.as_ref(), value)
+                                    {
+                                        // #23/#24 — a tuple whose only heap is an
+                                        // enum / Map / Set leaf is INVISIBLE to
+                                        // `aggregate_has_heap_field` (all-i64 payload
+                                        // words, no `vec_struct` field), so the LLVM
+                                        // path above registers no drop. The leaf then
+                                        // leaked — or, once the source binding's free
+                                        // is suppressed (Part B for a Map element) and
+                                        // the owning struct's #21 NestedTuple drop
+                                        // exists, double-freed. Register the
+                                        // `TypeExpr`-driven tuple drop
+                                        // (`emit_tuple_elem_drops`, which frees
+                                        // enum/Map/struct leaves) keyed on element
+                                        // types from the annotation or the RHS literal.
+                                        if elem_tes.iter().any(|e| self.type_expr_has_drop_heap(e))
+                                        {
+                                            if let Some(drop_fn) =
+                                                self.synthesize_tuple_drop_fn_te(agg_ty, &elem_tes)
+                                            {
+                                                if let Some(frame) =
+                                                    self.scope_cleanup_actions.last_mut()
+                                                {
+                                                    frame.push(
+                                                        super::state::CleanupAction::StructDrop {
+                                                            struct_alloca: slot.ptr,
+                                                            drop_fn,
+                                                        },
+                                                    );
+                                                }
+                                            }
+                                            self.suppress_source_vec_cleanup_for_arg(value);
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -4088,6 +4126,28 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         false
+    }
+
+    /// #23 — derive the element `TypeExpr`s of a let-bound tuple, for the
+    /// `TypeExpr`-driven drop registration of a tuple var whose only heap is an
+    /// enum / Map / Set leaf (invisible to `aggregate_has_heap_field`). Prefers
+    /// the explicit annotation (`let t: (Map[K,V], i64) = …`); else infers from
+    /// the RHS tuple literal's elements via `infer_arg_elem_te` (enum-ctor /
+    /// value type → single-segment `Path`). Returns `None` when neither source
+    /// is a tuple shape (e.g. a call-result RHS with no annotation — that tail
+    /// stays with #24), so the caller falls through to the LLVM-type path.
+    fn tuple_binding_elem_tes(&self, ty: Option<&TypeExpr>, value: &Expr) -> Option<Vec<TypeExpr>> {
+        if let Some(TypeExpr {
+            kind: TypeKind::Tuple(elems),
+            ..
+        }) = ty
+        {
+            return Some(elems.clone());
+        }
+        if let ExprKind::Tuple(elems) = &value.kind {
+            return Some(elems.iter().map(|e| self.infer_arg_elem_te(e)).collect());
+        }
+        None
     }
 
     /// Queue the right scope-exit `CleanupAction` for an owned destructured

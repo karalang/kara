@@ -3609,6 +3609,93 @@ fn main() {
     }
 
     #[test]
+    fn asan_struct_tuple_map_leaf_no_double_free() {
+        // #23 (phase-12 self-hosting) — a `Map` leaf inside a tuple inside a struct
+        // field, the one corruption-class residual of #21. `Map`s are caller-retains
+        // (the origin binding frees; the callee never does), so #21's `NestedTuple`
+        // struct drop added a SECOND freer for a Map tuple leaf and a local `Map`
+        // folded into a tuple-in-struct-field double-freed (origin binding's
+        // `FreeMapHandle` + the struct drop). The fix transfers the handle to the
+        // tuple's owner at construction (drop the origin's `FreeMapHandle` — Part B),
+        // gives a Map-owning tuple VAR a `TypeExpr`-driven drop (Part A) and
+        // suppresses it when moved into a struct field (Part C1), so the struct's
+        // drop is the sole freer. Coupled fix: the Map drop's
+        // `karac_map_free_with_drop_vec` K/V flags are now derived from the element
+        // types — the old hardcoded `(1, 1)` read offset-16 of an 8-byte scalar key
+        // as a bogus `cap` and freed the key VALUE as a pointer (corruption on any
+        // OCCUPIED `Map[i64, i64]`; `B-2026-06-13-18`, which also fixed the same bug
+        // in the regular struct-field Map drop — covered here by the `Sp` field).
+        //
+        // Loop-stressed matrix: scalar tuple-Map field (origin-suppress + flag fix),
+        // by-value consume (caller-retains, no second free), String-key field
+        // (drop_key=1, leak if mis-flagged), Vec-value field (drop_val=1), a tuple
+        // var moved into a struct field, a bare tuple var owning a Map (Part A drop),
+        // and a plain `Map[String, i64]` struct field (regular drop path). The
+        // f-string keys keep each entry's heap non-foldable so Linux LSan sees a real
+        // leak if any flag/transfer is wrong; the inserts make the scalar maps
+        // occupied so the old `(1, 1)` flags would abort here.
+        assert_clean_asan_run(
+            r#"
+struct Hi { m: (Map[i64, i64], i64) }
+struct Hs { m: (Map[String, i64], i64) }
+struct Hv { m: (Map[i64, Vec[i64]], i64) }
+struct Sp { m: Map[String, i64] }
+fn ci(p: (Map[i64, i64], i64)) -> i64 { let (mm, n) = p; mm.len() + n }
+fn main() {
+    let mut i: i64 = 0;
+    let mut acc: i64 = 0;
+    while i < 8 {
+        // Scalar tuple-Map field, local source, dropped undestructured
+        // (#23 double-free + the occupied-scalar (1,1)-flag corruption).
+        let mut a: Map[i64, i64] = Map.new();
+        a.insert(i, i); a.insert(i + 100, i);
+        let hi = Hi { m: (a, i) };
+
+        // Same, but consumed by value (caller-retains; struct drop is sole freer).
+        let mut a2: Map[i64, i64] = Map.new();
+        a2.insert(i, i);
+        let hi2 = Hi { m: (a2, i) };
+        acc = acc + ci(hi2.m);
+
+        // String-key tuple-Map field (drop_key=1 — free the key buffers, no leak).
+        let mut s: Map[String, i64] = Map.new();
+        s.insert(f"k-{i}", i); s.insert(f"j-{i}", i);
+        let hs = Hs { m: (s, i) };
+
+        // Vec-value tuple-Map field (drop_val=1 — free the value buffers).
+        let mut v: Map[i64, Vec[i64]] = Map.new();
+        let mut vv: Vec[i64] = Vec.new(); vv.push(i);
+        v.insert(i, vv);
+        let hv = Hv { m: (v, i) };
+
+        // Tuple VAR moved into a struct field (Part A drop + Part C1 suppression).
+        let mut b: Map[i64, i64] = Map.new();
+        b.insert(i, i);
+        let pair = (b, i);
+        let hi3 = Hi { m: pair };
+
+        // Bare tuple var owning a Map, dropped undestructured (Part A drop).
+        let mut d: Map[i64, i64] = Map.new();
+        d.insert(i, i);
+        let t = (d, i);
+
+        // Plain Map[String,i64] struct field — the regular MapOrSet drop + flag fix.
+        let mut c: Map[String, i64] = Map.new();
+        c.insert(f"c-{i}", i);
+        let sp = Sp { m: c };
+
+        i = i + 1;
+    }
+    if acc > 999999 { println("never"); }
+    println("done");
+}
+"#,
+            &["done"],
+            "struct_tuple_map_leaf_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_enum_field_struct_transfer_destructure_no_double_free() {
         // #19 (phase-12 self-hosting): a by-value TRANSFER of an enum-field struct
         // (`let b = wrap(a)`, `wrap(s: Span) -> Span { s }`) followed by a

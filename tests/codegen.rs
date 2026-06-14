@@ -13064,6 +13064,72 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_struct_tuple_map_leaf_drop_flags() {
+        // #23 (phase-12 self-hosting) — a `Map` leaf inside a tuple inside a struct
+        // field. Two coupled fixes land here: (1) a `Map` folded into a tuple
+        // transfers its handle to the tuple's owner — the source binding's
+        // `FreeMapHandle` is dropped at tuple construction (Part B) and a Map-owning
+        // tuple VAR gets a `TypeExpr`-driven drop (Part A) / is suppressed when moved
+        // into a struct field (Part C1) — so the owning struct's #21 `NestedTuple`
+        // drop is the SOLE freer (was a double-free against the caller-retains source
+        // binding that still freed); (2) the `NestedTuple` Map drop AND the regular
+        // struct-field Map drop now compute the `karac_map_free_with_drop_vec` K/V
+        // flags from the element types instead of hardcoding `(1, 1)` — the old flags
+        // read offset-16 of an 8-byte scalar key as a bogus `cap` and freed the key
+        // VALUE as a pointer, corrupting any occupied `Map[i64, i64]`
+        // (`B-2026-06-13-18`). Correctness here is the map contents round-tripping
+        // for scalar / String-key / Vec-value maps (read via the whole-tuple by-value
+        // path, which is sound — `struct.tuple.0` element reads are a separate
+        // pre-existing place-chain gap, see #25), a tuple var moved into a struct
+        // field, and a plain `Map` struct field (the regular drop path). The leak +
+        // double-free are covered by `asan_struct_tuple_map_leaf_no_double_free`.
+        if let Some(out) = run_program(
+            r#"
+struct Hi { m: (Map[i64, i64], i64) }
+struct Hs { m: (Map[String, i64], i64) }
+struct Hv { m: (Map[i64, Vec[i64]], i64) }
+struct Sp { m: Map[i64, i64] }
+fn ci(p: (Map[i64, i64], i64)) -> i64 { let (mm, n) = p; mm.len() + n }
+fn cs(p: (Map[String, i64], i64)) -> i64 { let (mm, n) = p; mm.len() + n }
+fn cv(p: (Map[i64, Vec[i64]], i64)) -> i64 { let (mm, n) = p; mm.len() + n }
+fn main() {
+    // Scalar tuple-Map field, local source (the #23 double-free shape) + by-value consume.
+    let mut a: Map[i64, i64] = Map.new();
+    a.insert(1, 10); a.insert(2, 20);
+    let hi = Hi { m: (a, 3) };
+    println(ci(hi.m).to_string());
+    // String-key tuple-Map field (drop_key must be 1 — free the key buffers).
+    let mut s: Map[String, i64] = Map.new();
+    s.insert("alpha".to_string(), 1); s.insert("beta".to_string(), 2);
+    let hs = Hs { m: (s, 7) };
+    println(cs(hs.m).to_string());
+    // Vec-value tuple-Map field (drop_val must be 1 — free the value buffers).
+    let mut v: Map[i64, Vec[i64]] = Map.new();
+    let mut vv: Vec[i64] = Vec.new(); vv.push(9);
+    v.insert(5, vv);
+    let hv = Hv { m: (v, 0) };
+    println(cv(hv.m).to_string());
+    // Tuple VAR moved into a struct field (Part A registers its drop, Part C1
+    // suppresses it on the move so only the struct's NestedTuple drop frees).
+    let mut b: Map[i64, i64] = Map.new();
+    b.insert(4, 40);
+    let pair = (b, 8);
+    let hi2 = Hi { m: pair };
+    println(ci(hi2.m).to_string());
+    // Plain Map[i64,i64] struct field — the regular MapOrSet drop path + flag fix.
+    let mut c: Map[i64, i64] = Map.new();
+    c.insert(6, 60);
+    let sp = Sp { m: c };
+    println(sp.m.len().to_string());
+    println("ok");
+}
+"#,
+        ) {
+            assert_eq!(out, "5\n9\n1\n9\n1\nok\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_enum_field_struct_field_move_out_loop() {
         // #19 FIXED 2026-06-12 — the bootstrap lexer's `render()` shape: iterate a
         // `Vec[SpannedToken]` and pass each element BY VALUE to a fn that moves the

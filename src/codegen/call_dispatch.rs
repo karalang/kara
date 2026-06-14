@@ -1268,7 +1268,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// An unresolved name yields an empty Path, which `type_expr_has_drop_heap`
     /// treats as no-drop — safe (worst case a missed free degrades to the
     /// pre-existing enum-blind leak, never a double-free).
-    fn infer_arg_elem_te(&self, e: &Expr) -> TypeExpr {
+    pub(super) fn infer_arg_elem_te(&self, e: &Expr) -> TypeExpr {
         if let ExprKind::Tuple(inner) = &e.kind {
             return TypeExpr {
                 kind: TypeKind::Tuple(inner.iter().map(|x| self.infer_arg_elem_te(x)).collect()),
@@ -2348,10 +2348,55 @@ impl<'ctx> super::Codegen<'ctx> {
                 .var_type_names
                 .get(var_name)
                 .is_some_and(|n| self.struct_types.contains_key(n.as_str()));
-            if !named && agg_ty != vec_ty && self.aggregate_has_heap_field(agg_ty) {
-                self.zero_aggregate_field_caps(slot.ptr, agg_ty);
+            if !named && agg_ty != vec_ty {
+                if self.aggregate_has_heap_field(agg_ty) {
+                    // A directly-visible Vec/String field — the reliable
+                    // LLVM-type walk (zeroes each `cap`). Kept FIRST so the
+                    // proven Vec/String tuple-move suppression is unchanged; the
+                    // name-reconstructed `TypeExpr`s below can't always re-derive
+                    // `String`/`Vec` (an f-string element's inferred type name may
+                    // differ), so routing this case through them regressed the
+                    // by-value-tuple double-free guard.
+                    self.zero_aggregate_field_caps(slot.ptr, agg_ty);
+                } else if let Some(elem_tes) = self.tuple_var_elem_tes(var_name) {
+                    // #23 — a Map/Set/enum-only tuple is INVISIBLE to the LLVM
+                    // walk (all-i64 words, no `vec_struct` field). A tuple var
+                    // owning a Map leaf (its scope-exit drop is the Part-A
+                    // `synthesize_tuple_drop_fn_te`) moved into a struct literal
+                    // field MUST null that handle, or both the tuple var's drop
+                    // AND the owning struct's NestedTuple (#21) drop free the same
+                    // handle (double-free). `zero_tuple_elem_caps` nulls Map
+                    // handles / zeroes enum payload caps via the `TypeExpr`s
+                    // reconstructed from the recorded per-element type names.
+                    self.zero_tuple_elem_caps(slot.ptr, agg_ty, &elem_tes);
+                }
             }
         }
+    }
+
+    /// #23 — reconstruct a tuple var's element `TypeExpr`s from the recorded
+    /// per-element type NAMES (`tuple_var_elem_type_names`, populated at the
+    /// let-binding site) as single-segment `Path`s, so the move-out suppressor
+    /// can drive `zero_tuple_elem_caps` over Map / enum / Set leaves the
+    /// LLVM-type walk can't see. A `None` name → empty `Path` (treated as a
+    /// no-drop leaf — safe: worst case a missed cap-zero degrades to the
+    /// pre-existing leak, never a double-free). Returns `None` when no names
+    /// were recorded, so the caller keeps the Vec-only fallback.
+    fn tuple_var_elem_tes(&self, var_name: &str) -> Option<Vec<TypeExpr>> {
+        let names = self.tuple_var_elem_type_names.get(var_name)?;
+        Some(
+            names
+                .iter()
+                .map(|n| TypeExpr {
+                    kind: TypeKind::Path(crate::ast::PathExpr {
+                        segments: n.clone().into_iter().collect(),
+                        generic_args: None,
+                        span: crate::token::Span::default(),
+                    }),
+                    span: crate::token::Span::default(),
+                })
+                .collect(),
+        )
     }
 
     /// Ref-share at the call site for `Option[shared T]` Identifier
