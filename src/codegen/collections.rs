@@ -1226,6 +1226,27 @@ impl<'ctx> super::Codegen<'ctx> {
     /// unchanged for a non-Vec index, a String range slice (already a fresh owned
     /// buffer), or a trivially-Copy element. Same clone path
     /// `compile_inline_temp_vec_index` uses for temp-Vec elements.
+    /// True when `expr` is a plain element index (`v[i]`, not a `v[a..b]` range)
+    /// into a named `Vec` whose element type is non-trivially-copyable (a heap
+    /// String/Vec/Map/enum/struct element). Mirrors the gates in
+    /// `clone_owned_vec_index_element` — used by the match path to decide whether
+    /// a `match v[i] { … }` scrutinee must be deep-cloned before destructuring.
+    pub(super) fn expr_is_heap_vec_index(&self, expr: &Expr) -> bool {
+        let ExprKind::Index { object, index } = &expr.kind else {
+            return false;
+        };
+        if matches!(&index.kind, ExprKind::Range { .. }) {
+            return false;
+        }
+        let ExprKind::Identifier(name) = &object.kind else {
+            return false;
+        };
+        match self.var_elem_type_exprs.get(name.as_str()) {
+            Some(elem_te) => !super::vec_method::is_trivially_copyable_te(elem_te),
+            None => false,
+        }
+    }
+
     pub(super) fn clone_owned_vec_index_element(
         &mut self,
         value: &Expr,
@@ -1237,15 +1258,6 @@ impl<'ctx> super::Codegen<'ctx> {
         // A String *range* slice (`s[a..b]`) already returns a freshly-allocated
         // owned buffer — only a plain element index (`v[i]`) shallow-aliases.
         if matches!(&index.kind, ExprKind::Range { .. }) {
-            return Ok(val);
-        }
-        // Scope: the result is a heap `{ptr, len, cap}` struct (String / Vec
-        // elements). A heap-bearing ENUM or STRUCT element shares a buffer too
-        // and is the same bug, but it takes a different binding path (its own
-        // layout, `enum_name_for_binding` routing) — tracked as a sibling
-        // follow-up of B-2026-06-14-11, not handled here. A Copy element
-        // (`Vec[i64]`'s `i64`) is a standalone scalar (not a vec-struct).
-        if !self.llvm_ty_is_vec_struct(val.get_type()) {
             return Ok(val);
         }
         // Element TypeExpr of the indexed object. Named-Vec var only: `v[i]`,

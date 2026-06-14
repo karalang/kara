@@ -9048,6 +9048,53 @@ fn main() {
     }
 
     #[test]
+    fn asan_let_bound_vec_enum_struct_element_no_double_free() {
+        // B-2026-06-14-12 (sibling of B-11): a `Vec` element that is a user ENUM
+        // or STRUCT carrying a heap String payload. Indexing returns a SHALLOW
+        // copy aliasing v's buffer, so it must be deep-cloned (emit_enum_clone_fn
+        // / emit_struct_clone_fn) — otherwise the binding and v's element-drop
+        // free the same buffer (double-free). Covers all three element-read shapes
+        // the fix touches: (1) `let e = es[i]` + `match e` move-out (enum), (2)
+        // `let p = ps[i]` + field access (struct), and (3) the DIRECT
+        // `match es[i] { Word(s) => … }` scrutinee (the lexer's token-consume
+        // shape), which clones `scrut` itself so the arm extracts the clone and
+        // the freshtemp materialization drop-tracks it. Each source vec is reused
+        // after the binds to confirm it stayed intact; the loop runs the
+        // synthesized clone + suppression paths thousands of times.
+        assert_clean_asan_run(
+            r#"
+enum Tok { Word(String), End }
+struct Pair { name: String, n: i64 }
+fn main() {
+    let mut es: Vec[Tok] = Vec.new();
+    let mut ps: Vec[Pair] = Vec.new();
+    let mut i = 0i64;
+    while i < 8 {
+        es.push(Tok.Word(f"w-{i}-payload"));
+        ps.push(Pair { name: f"p-{i}-payload", n: i });
+        i = i + 1i64;
+    }
+    let mut total = 0i64;
+    let mut j = 0i64;
+    while j < 4000 {
+        let e = es[j & 7i64];            // deep-clone bind of enum element
+        match e { Tok.Word(s) => { total = total + s.bytes().len(); }, Tok.End => {} }
+        let p = ps[j & 7i64];            // deep-clone bind of struct element
+        total = total + p.name.bytes().len() + p.n;
+        j = j + 1i64;
+    }
+    println(total);
+    match es[0i64] { Tok.Word(s) => println(s), Tok.End => println("end") }
+    println(ps[0i64].name);             // both vecs intact after 4000 binds
+    println(es.len());
+}
+"#,
+            &["102000", "w-0-payload", "p-0-payload", "8"],
+            "let_bound_vec_enum_struct_element_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_try_clone_vec_string_deep_independent_free() {
         // phase-8-stdlib-floor item 8: `Vec[String].try_clone()` deep-clones
         // every element into a fresh buffer. Source and clone own independent

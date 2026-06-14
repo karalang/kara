@@ -79,6 +79,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 None
             };
         let scrut = self.compile_expr(scrutinee)?;
+        // `match v[i] { V(s) => … }` over a heap-element `Vec` — deep-clone the
+        // shallow element so the destructure moves a payload field out of an
+        // INDEPENDENT buffer, not the container's (otherwise the binding's drop
+        // and `v`'s element-drop free the same buffer — double-free, the
+        // direct-match sibling of B-2026-06-14-12). The clone must replace
+        // `scrut` itself (not just the freshtemp alloca) so the arm's
+        // `extractvalue` reads the clone; `materialize_freshtemp_enum_scrutinee`
+        // then drop-tracks this same cloned value so a no-bind arm frees it.
+        // No-op for every non-index / Copy-element scrutinee.
+        let scrut = self.clone_owned_vec_index_element(scrutinee, scrut)?;
         // B-track (pattern-arm unbound heap-field drop): a fresh-temp enum
         // scrutinee (`match make() { … }`) has no source `EnumDrop`, so any arm
         // that leaves a heap payload field unbound leaks it. Materialize +
@@ -2706,7 +2716,18 @@ impl<'ctx> super::Codegen<'ctx> {
         pattern: &Pattern,
         val: BasicValueEnum<'ctx>,
     ) -> Option<(PointerValue<'ctx>, String)> {
-        if !self.expr_yields_fresh_owned_temp(scrutinee) {
+        // A heap `Vec`-index enum scrutinee (`match toks[i] { Word(s) => … }`,
+        // the lexer's token-consume shape) is NOT a fresh-owned temp, but the
+        // caller has already DEEP-CLONED `val` (see the
+        // `clone_owned_vec_index_element` call at the match scrutinee compile
+        // site), so the materialized temp owns an independent buffer. Drop-track
+        // it here exactly like a `Call`/`MethodCall` temp: `track_enum_var` frees
+        // an unbound arm's payload and the caller's per-field suppression hands a
+        // bound arm's payload to the binding, while the source element stays
+        // intact (matching the interpreter's read-a-copy semantics for `v[i]`).
+        // Without the materialization the clone would leak on a no-bind arm.
+        let heap_index = self.expr_is_heap_vec_index(scrutinee);
+        if !self.expr_yields_fresh_owned_temp(scrutinee) && !heap_index {
             return None;
         }
         let BasicValueEnum::StructValue(sv) = val else {

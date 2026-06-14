@@ -11,9 +11,11 @@
 
 use crate::ast::*;
 
+use super::state::EnumDropKind;
+use inkwell::basic_block::BasicBlock;
 use inkwell::module::Linkage;
 use inkwell::types::{BasicType, BasicTypeEnum};
-use inkwell::values::FunctionValue;
+use inkwell::values::{FunctionValue, IntValue};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 
@@ -81,6 +83,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 if head == Some("String") {
                     return self.emit_string_clone_fn();
+                }
+                // User struct / enum: deep-clone the heap payload (the
+                // `#[derive(Clone)]` analog of the synthesized drop). Without
+                // this, a `let w = v[i]` move-out of a `Vec[E]`/`Vec[S]` whose
+                // element carries a String/Vec shallow-copies the buffer ptr —
+                // both the binding's drop and the container's element-drop free
+                // it (B-2026-06-14-12, sibling of B-2026-06-14-11). Falls
+                // through to the shallow primitive clone for shared (RC) types
+                // and layout-block structs (handled / unsupported elsewhere).
+                if let Some(name) = head {
+                    if self.struct_types.contains_key(name) {
+                        if let Some(f) = self.emit_struct_clone_fn(name) {
+                            self.clone_fn_cache.insert(type_name, f);
+                            return f;
+                        }
+                    }
+                    if self.enum_layouts.contains_key(name) {
+                        if let Some(f) = self.emit_enum_clone_fn(name) {
+                            self.clone_fn_cache.insert(type_name, f);
+                            return f;
+                        }
+                    }
                 }
                 // Primitive (or unsupported path) — emit the load+store body.
                 self.emit_primitive_clone_fn(&type_name, te)
@@ -599,6 +623,251 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.position_at_end(bb);
         }
         clone_fn
+    }
+
+    /// `#[derive(Clone)]` for a non-shared user struct: GEP each field of the
+    /// registered struct LLVM type and recurse through
+    /// `emit_clone_fn_for_type_expr`, so a `String`/`Vec`/`Map`/nested-struct
+    /// field gets an independent heap buffer instead of a shared pointer
+    /// (mirrors `emit_tuple_clone_fn`, keyed on `struct_field_type_exprs`).
+    ///
+    /// Returns `None` — caller falls back to the shallow primitive clone — for:
+    /// a shared struct (RC machinery owns its lifecycle), an unknown struct, or
+    /// a layout-block / SoA struct whose physical LLVM field count diverges from
+    /// its logical field list (can't be GEP'd field-for-field here).
+    pub(super) fn emit_struct_clone_fn(
+        &mut self,
+        struct_name: &str,
+    ) -> Option<FunctionValue<'ctx>> {
+        if self.shared_types.contains_key(struct_name) {
+            return None;
+        }
+        let type_name = format!("struct_{struct_name}");
+        if let Some(&f) = self.clone_fn_cache.get(&type_name) {
+            return Some(f);
+        }
+        let fn_name = format!("karac_clone_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.clone_fn_cache.insert(type_name, f);
+            return Some(f);
+        }
+        let struct_ty = *self.struct_types.get(struct_name)?;
+        let field_tes = self.struct_field_type_exprs.get(struct_name)?.clone();
+        // Plain field-ordered struct only: a layout-block / SoA struct whose
+        // physical field count differs from its logical field list can't be
+        // walked field-for-field against the source TypeExprs.
+        if struct_ty.count_fields() as usize != field_tes.len() {
+            return None;
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved_bb = self.builder.get_insert_block();
+        let clone_fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let clone_fn = self
+            .module
+            .add_function(&fn_name, clone_fn_ty, Some(Linkage::Internal));
+        // Cache the declaration BEFORE emitting child clone fns so a
+        // self-recursive struct (`S { next: Vec[S] }`) terminates.
+        self.clone_fn_cache.insert(type_name, clone_fn);
+
+        // Emit per-field child clone fns up front (each repositions the
+        // builder, so finish them before filling this fn's entry block).
+        let child_fns: Vec<FunctionValue<'ctx>> = field_tes
+            .iter()
+            .map(|te| self.emit_clone_fn_for_type_expr(te))
+            .collect();
+
+        let entry_bb = self.context.append_basic_block(clone_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let src = clone_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let dst = clone_fn.get_nth_param(1).unwrap().into_pointer_value();
+        for (i, child_fn) in child_fns.iter().enumerate() {
+            let src_field = self
+                .builder
+                .build_struct_gep(struct_ty, src, i as u32, &format!("s.f{i}.s"))
+                .unwrap();
+            let dst_field = self
+                .builder
+                .build_struct_gep(struct_ty, dst, i as u32, &format!("s.f{i}.d"))
+                .unwrap();
+            self.builder
+                .build_call(*child_fn, &[src_field.into(), dst_field.into()], "")
+                .unwrap();
+        }
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Some(clone_fn)
+    }
+
+    /// `#[derive(Clone)]` for a non-shared user enum: shallow-copy the whole
+    /// value (tag + every payload word), then switch on the tag and overwrite
+    /// each heap-bearing field of the active variant with an independent deep
+    /// clone — the clone-side mirror of `emit_enum_drop_switch`. The field's
+    /// `{data,len,cap}` words live at LLVM index `start_word + 1` (tag is field
+    /// 0), byte-compatible with the vec-struct the `String`/`Vec`/nested-struct
+    /// clone fn expects, so `emit_clone_fn_for_type_expr(field_te)` handles
+    /// every payload shape uniformly.
+    ///
+    /// Returns `None` (caller falls back to the shallow primitive clone) for a
+    /// shared enum (RC) or an enum whose every variant is heap-free (the shallow
+    /// copy is already a complete clone).
+    pub(super) fn emit_enum_clone_fn(&mut self, enum_name: &str) -> Option<FunctionValue<'ctx>> {
+        let layout = self.enum_layouts.get(enum_name)?.clone();
+        if layout.is_shared {
+            return None; // shared enums use the RC machinery
+        }
+        // Every variant heap-free → the shallow whole-value copy is complete.
+        let any_heap = layout
+            .field_drop_kinds
+            .values()
+            .any(|kinds| kinds.iter().any(|k| *k != EnumDropKind::None));
+        if !any_heap {
+            return None;
+        }
+        let type_name = format!("enum_{enum_name}");
+        if let Some(&f) = self.clone_fn_cache.get(&type_name) {
+            return Some(f);
+        }
+        let fn_name = format!("karac_clone_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.clone_fn_cache.insert(type_name, f);
+            return Some(f);
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let saved_bb = self.builder.get_insert_block();
+        let clone_fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let clone_fn = self
+            .module
+            .add_function(&fn_name, clone_fn_ty, Some(Linkage::Internal));
+        // Cache before recursing so a self-recursive enum terminates.
+        self.clone_fn_cache.insert(type_name, clone_fn);
+
+        // Per-variant field TypeExprs — drive the per-field deep clone.
+        let variant_field_tes: Vec<(String, Vec<TypeExpr>)> = self
+            .enum_variant_field_type_exprs(enum_name)
+            .into_iter()
+            .map(|(_tag, name, tes)| (name, tes))
+            .collect();
+
+        // Sort variants by discriminant for deterministic IR.
+        let mut tag_entries: Vec<(String, u64)> =
+            layout.tags.iter().map(|(n, t)| (n.clone(), *t)).collect();
+        tag_entries.sort_by_key(|(_, t)| *t);
+
+        // Pre-emit every child clone fn (each repositions the builder), keyed
+        // by (variant, llvm field index). Done before any BB of this fn is
+        // filled so the builder isn't yanked mid-block.
+        let mut field_clones: Vec<(String, u32, FunctionValue<'ctx>)> = Vec::new();
+        for (variant_name, _tag) in &tag_entries {
+            let (Some(kinds), Some(offsets)) = (
+                layout.field_drop_kinds.get(variant_name),
+                layout.field_word_offsets.get(variant_name),
+            ) else {
+                continue;
+            };
+            let field_tes = variant_field_tes
+                .iter()
+                .find(|(n, _)| n == variant_name)
+                .map(|(_, tes)| tes.clone())
+                .unwrap_or_default();
+            for (fi, (kind, (start_word, _num_words))) in
+                kinds.iter().zip(offsets.iter()).enumerate()
+            {
+                if *kind == EnumDropKind::None {
+                    continue;
+                }
+                let Some(field_te) = field_tes.get(fi).cloned() else {
+                    continue;
+                };
+                let child_fn = self.emit_clone_fn_for_type_expr(&field_te);
+                // Field index in `llvm_type`: data/struct word at `start_word
+                // + 1` (tag is field 0), matching `emit_enum_drop_switch`.
+                field_clones.push((variant_name.clone(), (*start_word + 1) as u32, child_fn));
+            }
+        }
+
+        let entry_bb = self.context.append_basic_block(clone_fn, "entry");
+        let exit_bb = self.context.append_basic_block(clone_fn, "exit");
+        self.builder.position_at_end(entry_bb);
+        let src = clone_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let dst = clone_fn.get_nth_param(1).unwrap().into_pointer_value();
+
+        // 1. Shallow bitcopy the whole enum (tag + all payload words, sharing
+        //    heap pointers). Heap fields of the live variant are overwritten
+        //    with deep clones below; primitive fields keep this copy.
+        let whole = self
+            .builder
+            .build_load(layout.llvm_type, src, "enum.whole")
+            .unwrap();
+        self.builder.build_store(dst, whole).unwrap();
+
+        // 2. Switch on the tag (field 0).
+        let tag_ptr = self
+            .builder
+            .build_struct_gep(layout.llvm_type, src, 0, "clone.tag.p")
+            .unwrap();
+        let tag_val = self
+            .builder
+            .build_load(i64_t, tag_ptr, "clone.tag")
+            .unwrap()
+            .into_int_value();
+
+        let mut switch_cases: Vec<(IntValue<'ctx>, BasicBlock<'ctx>)> = Vec::new();
+        let case_bbs: Vec<(String, BasicBlock<'ctx>)> = tag_entries
+            .iter()
+            .map(|(name, tag)| {
+                let bb = self
+                    .context
+                    .append_basic_block(clone_fn, &format!("clone.{name}"));
+                switch_cases.push((i64_t.const_int(*tag, false), bb));
+                (name.clone(), bb)
+            })
+            .collect();
+        self.builder
+            .build_switch(tag_val, exit_bb, &switch_cases)
+            .unwrap();
+
+        // 3. Per-variant: deep-clone each heap field, overwriting the
+        //    shallow-copied shared pointer in `dst` with its own buffer.
+        for (variant_name, bb) in &case_bbs {
+            self.builder.position_at_end(*bb);
+            for (vn, field_idx, child_fn) in &field_clones {
+                if vn != variant_name {
+                    continue;
+                }
+                let src_field = self
+                    .builder
+                    .build_struct_gep(layout.llvm_type, src, *field_idx, "clone.fld.s")
+                    .unwrap();
+                let dst_field = self
+                    .builder
+                    .build_struct_gep(layout.llvm_type, dst, *field_idx, "clone.fld.d")
+                    .unwrap();
+                self.builder
+                    .build_call(*child_fn, &[src_field.into(), dst_field.into()], "")
+                    .unwrap();
+            }
+            self.builder.build_unconditional_branch(exit_bb).unwrap();
+        }
+
+        self.builder.position_at_end(exit_bb);
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Some(clone_fn)
     }
 
     // ── Fallible (try_clone) fn framework (mirror of clone, but i1 + cleanup) ──
