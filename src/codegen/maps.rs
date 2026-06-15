@@ -119,6 +119,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 key_shared_heap,
             );
         }
+        // Record the binding's surface type name, mirroring the place-source
+        // path (`let mm = s.m` records "Map" via `record_var_type_name`). Without
+        // it, `type_name_of` returns None for a `Map.new()`-created var, so a
+        // bare tuple over it (`let t = (d, i)`) can't infer the Map leaf's
+        // `TypeExpr` (`infer_arg_elem_te` → empty path) and the tuple's Part A
+        // drop never registers — the handle leaked (Linux LSan; silent on
+        // macOS). #23 sibling.
+        self.record_var_type_name(var_name.to_string(), "Map".to_string());
         Ok(())
     }
 
@@ -219,6 +227,10 @@ impl<'ctx> super::Codegen<'ctx> {
         if !self.snapshot_capture.contains_key(var_name) {
             self.track_map_var(slot_ptr, key_is_vec, false, None, key_shared_heap);
         }
+        // Record the surface type name so a bare tuple over a `Set.new()` var
+        // (`let t = (d, i)`) can infer the Set leaf and register its Part A
+        // drop — the Set sibling of the `compile_map_new_stmt` recording above.
+        self.record_var_type_name(var_name.to_string(), "Set".to_string());
         Ok(())
     }
 

@@ -2962,6 +2962,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 // via their early-return paths above; `let n = m;` (move) bypasses
                 // this since it's an Identifier RHS, not a MethodCall, so the
                 // source's existing track stays the unique cleanup owner.
+                //
+                // ALSO track when the RHS is a `Call` returning a Map/Set BY VALUE
+                // (`let m2 = make_map()`). An owned by-value return transfers the
+                // handle to this binding — the callee suppressed its own
+                // `FreeMapHandle` on the move-out `return m;`, so the binding is now
+                // the unique freer. Without this the handle leaked (Linux LSan;
+                // silent on macOS). EXCLUDE borrow-returning calls
+                // (`fn_ref_return_inner` — `ref Map` accessors): those alias the
+                // container's storage and must not be double-freed. `Map.new()` and
+                // map literals never reach here (early returns above); a place
+                // source (`let mm = s.m`) is a FieldAccess/Index, not a `Call`, so
+                // it stays a caller-retains alias as before (#28 / B-2026-06-14-9).
                 if let PatternKind::Binding(var_name) = &pattern.kind {
                     let fresh_handle = matches!(
                         &value.kind,
@@ -2970,7 +2982,8 @@ impl<'ctx> super::Codegen<'ctx> {
                                 method.as_str(),
                                 "clone" | "union" | "intersection" | "difference"
                             )
-                    );
+                    ) || (matches!(&value.kind, ExprKind::Call { .. })
+                        && !self.is_borrow_returning_call_expr(value));
                     if fresh_handle
                         && (self.map_key_types.contains_key(var_name.as_str())
                             || self.set_elem_types.contains_key(var_name.as_str()))
