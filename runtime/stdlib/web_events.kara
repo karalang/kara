@@ -163,3 +163,50 @@ pub fn wheel() -> Receiver[WheelEvent] with writes(Input) {
     tx.__schedule_wheel();
     rx
 }
+
+// A keyboard key-down event. Transparent single-field struct: its physical
+// layout (`key_code` as an `i64` at byte 0; 8 bytes total) is the contract the
+// host glue marshals each `keydown` into before `channel_send` — keep it in
+// sync with `src/wasm_glue.rs` (`__kara_keydown`). `key_code` is the DOM
+// `KeyboardEvent.keyCode` (a numeric code: ArrowLeft 37, ArrowUp 38,
+// ArrowRight 39, ArrowDown 40, letters A–Z 65–90, `=`/`+` 187, `-` 189, Space
+// 32, Enter 13, Escape 27 — physical-key based, so it is independent of Shift).
+pub struct KeyEvent {
+    key_code: i64,
+}
+
+impl KeyEvent {
+    fn key_code(ref self) -> i64 {
+        self.key_code
+    }
+}
+
+// Stream key-down events on a fresh channel, indefinitely. Returns the
+// receiving half; the waiting side writes a plain blocking loop —
+//
+//     let keys = keydown();
+//     loop {
+//         let k = keys.recv();
+//         match k.key_code() { 37 => pan_left(), 39 => pan_right(), _ => {} }
+//     }
+//
+// — no `await`, no `addEventListener` callback ceremony. Multi-shot and
+// coalesced exactly like `pointer_moves` / `wheel` (the host feeds a fresh
+// event only once the previous one is drained, so a key-repeat burst collapses
+// to a sample rather than accumulating backlog). The host listener is
+// registered on `opts.keyTarget` if given, else `globalThis`/window — keyboard
+// events bubble to the window, so a demo needs no element focus. Same
+// `--features wasm-threads` requirement as the other host-async producers.
+//
+// Mechanism: `Sender.__schedule_keydown` (a compiler builtin) clones the
+// sender's channel reference and hands the clone to the host's keydown
+// listener, which owns it for the listener's lifetime.
+pub fn keydown() -> Receiver[KeyEvent] with writes(Input) {
+    // Annotate the destructure so the channel element type is `KeyEvent` (the
+    // producer never `send`/`recv`s itself — the host fires the send — so there
+    // is no downstream channel op to infer the element from; an unannotated
+    // `Channel.new()` only type-checks under the interpreter).
+    let (tx, rx): (Sender[KeyEvent], Receiver[KeyEvent]) = Channel.new();
+    tx.__schedule_keydown();
+    rx
+}

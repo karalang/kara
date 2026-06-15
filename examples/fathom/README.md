@@ -82,6 +82,9 @@ full fluid-sim flagship on it — see [`docs/dogfooding.md`](../../docs/dogfoodi
   per-frame delta **only while a button is held** (`p.pressed()`), so a plain
   hover does nothing — true click-drag, not hover-pan. The last position is
   tracked on every move so a fresh drag never jumps.
+- **Keyboard** — `keydown()` delivers a `KeyEvent` with the DOM `key_code()`:
+  arrow keys pan, `+`/`-` zoom toward centre, `R` resets to the full view. The
+  listener is on the window, so no canvas focus is needed.
 
 The canvas is rendered 1:1 (CSS size == the wasm framebuffer size) so each
 event's element-relative coordinates map straight onto internal pixels — no
@@ -124,11 +127,12 @@ Protocol instead, and asserts the full interactive path:
 
 It loads the page cross-origin-isolated, checks the frame counter advances
 (the blocking render loop is running on a host-woken worker), confirms the
-canvas has real content, then **dispatches synthetic CDP wheel and pointer
-events** — the real host-listener → channel → wasm `recv` path, not a JS shim —
-and asserts: a scroll zooms, a buttonless **hover does NOT pan** (the canvas is
-unchanged — the click-drag gate works), and a **drag with a button held does
-pan**. Exits `0` on PASS, `2` if no Chrome is found. (This is the methodology from
+canvas has real content, then **dispatches synthetic CDP wheel, pointer, and
+keyboard events** — the real host-listener → channel → wasm `recv` path, not a
+JS shim — and asserts: a scroll zooms, a buttonless **hover does NOT pan** (the
+canvas is unchanged — the click-drag gate works), a **drag with a button held
+does pan**, and an **ArrowRight keypress pans** (driving the `keydown`
+producer). Exits `0` on PASS, `2` if no Chrome is found. (This is the methodology from
 `reference_headless_browser_wasm_testing`: node E2E cannot catch browser-only
 wasm-threads bugs, so the input path must be exercised in a real browser.)
 
@@ -181,6 +185,18 @@ revision**:
    + `src/wasm_glue.rs`; round-trip pinned by
    `tests/cli.rs::wasm_threads_pointer_moves_payload_recv_e2e`, which now asserts
    the `buttons` field crosses host→wasm.)
+
+6. **`std.web.events.keydown()`** — the third non-unit event-data producer
+   (after `pointer_moves`/`wheel`), adding keyboard input. `keydown() ->
+   Receiver[KeyEvent]` where `KeyEvent { key_code: i64 }` (8-byte payload), with
+   a `key_code()` accessor. Same spine as its siblings: a `__schedule_keydown`
+   builtin (`src/codegen/channel.rs`) emits the `__kara_keydown` import; the
+   glue's `keydown` listener (`src/wasm_glue.rs`, on the window — keydown bubbles,
+   so no focus needed) marshals `e.keyCode` as a little-endian i64 and
+   `channel_send`s 8 bytes. Drives Fathom's keyboard controls (arrows / `+`-`-` /
+   `R`). Pinned by `tests/cli.rs::{wasm_threads_keydown_payload_recv_e2e,
+   wasm_keydown_sequential_target_rejected}` + the browser `verify_browser.mjs`
+   keypress step. Touches only the karac binary + baked stdlib, no runtime `.a`.
 
 Ops gotcha (still true): the `wasm` / `wasm-threads` runtime archives must be
 rebuilt after any *runtime* change (the realloc-grow path `cda981bc` added

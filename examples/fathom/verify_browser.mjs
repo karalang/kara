@@ -97,12 +97,21 @@ function cleanup() {
 }
 process.on("exit", cleanup);
 
+// Overall watchdog: never let a wedged CDP await hang the run forever.
+const WATCHDOG = setTimeout(() => {
+  console.error(`FAIL: watchdog — verify exceeded 90s (last stage: ${lastStage})`);
+  process.exit(3);
+}, 90000);
+let lastStage = "start";
+const stage = (s) => { lastStage = s; console.error(`[stage] ${s}`); };
+
 async function main() {
   const chromePath = findChrome();
   if (!chromePath) {
     console.error("SKIP: no Chrome/Chromium found (set $CHROME).");
     process.exit(2);
   }
+  stage("serve");
 
   // 1. Serve the example cross-origin isolated.
   server = spawn("python3", [join(HERE, "serve.py"), String(PORT)], { stdio: "ignore" });
@@ -122,6 +131,7 @@ async function main() {
     "about:blank",
   ], { stdio: "ignore" });
 
+  stage("cdp-endpoint");
   let version;
   for (let i = 0; i < 60; i++) {
     try {
@@ -132,6 +142,7 @@ async function main() {
   }
   if (!version) throw new Error("Chrome CDP endpoint never came up");
 
+  stage("cdp-ws");
   const ws = new WebSocket(version.webSocketDebuggerUrl);
   await new Promise((res, rej) => {
     ws.addEventListener("open", res, { once: true });
@@ -140,10 +151,12 @@ async function main() {
   const cdp = new CDP(ws);
 
   // 3. Open a tab on the page and attach a flat session.
+  stage("create-target");
   const { targetId } = await cdp.send("Target.createTarget", { url: PAGE_URL });
   const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
   await cdp.send("Page.enable", {}, sessionId);
   await cdp.send("Runtime.enable", {}, sessionId);
+  stage("attached");
 
   const evalJs = async (expr) => {
     const r = await cdp.send("Runtime.evaluate", {
@@ -154,6 +167,7 @@ async function main() {
   };
 
   // 4. Wait for cross-origin isolation + the render loop to start.
+  stage("isolation");
   let isolated = false;
   for (let i = 0; i < 60; i++) {
     isolated = await evalJs("self.crossOriginIsolated === true");
@@ -176,6 +190,7 @@ async function main() {
   })()`);
 
   // 5. Frames must advance.
+  stage("frames");
   const f0 = await frameCount();
   await sleep(800);
   const f1 = await frameCount();
@@ -235,13 +250,27 @@ async function main() {
   const fpDrag = await fingerprint();
   if (fpDrag === fpHover) throw new Error("click-drag (primary button held) did not pan the canvas");
 
+  // 8c. Keyboard (ArrowRight via keydown()) MUST pan (content changes). Drives
+  //     the real keydown producer: CDP key event → window listener → channel →
+  //     wasm recv.
+  for (let i = 0; i < 6; i++) {
+    const k = { key: "ArrowRight", code: "ArrowRight", windowsVirtualKeyCode: 39, nativeVirtualKeyCode: 39 };
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", ...k }, sessionId);
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", ...k }, sessionId);
+    await sleep(100);
+  }
+  await sleep(400);
+  const fpKey = await fingerprint();
+  if (fpKey === fpDrag) throw new Error("keyboard ArrowRight (keydown producer) did not pan the canvas");
+
   const fEnd = await frameCount();
   console.log(`PASS — isolated, frames ${f0}->${f1}->${fEnd}, content fp ${fp0} ` +
-    `--wheel--> ${fpZoom} --hover(no-pan)--> ${fpHover} --drag--> ${fpDrag}`);
+    `--wheel--> ${fpZoom} --hover(no-pan)--> ${fpHover} --drag--> ${fpDrag} --key--> ${fpKey}`);
   ws.close();
 }
 
-main().then(() => process.exit(0)).catch((e) => {
+main().then(() => { clearTimeout(WATCHDOG); process.exit(0); }).catch((e) => {
+  clearTimeout(WATCHDOG);
   console.error("FAIL:", e.message);
   process.exit(1);
 });

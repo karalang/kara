@@ -15,16 +15,17 @@
 //     parallelism is real, measurable, in a browser tab.
 //   * `put_pixels` hands the framebuffer's bytes to JS, which does the
 //     `ctx.putImageData` blit. `Vec[u8].as_ptr()` is the FFI handoff.
-//   * `wheel()` and `pointer_moves()` (std.web.events) make it interactive:
-//     scroll to zoom toward the cursor, move the pointer to pan. Both arrive
-//     as typed channels the loop drains with a non-blocking `try_recv` each
-//     frame — live input, still no `await`, still no callback coloring.
+//   * `wheel()`, `pointer_moves()`, and `keydown()` (std.web.events) make it
+//     interactive: scroll to zoom toward the cursor, drag to pan, arrow keys /
+//     `+`/`-` / `R` to pan-zoom-reset from the keyboard. Each arrives as a typed
+//     channel the loop drains with a non-blocking `try_recv` each frame — live
+//     input, still no `await`, still no callback coloring.
 //
 // Build:  karac build mandelbrot.kara --target=wasm_browser --features wasm-threads
 // Serve:  see README.md (needs COOP/COEP headers for SharedArrayBuffer).
 
 import std.web.time.{animation_frames};
-import std.web.events.{pointer_moves, PointerEvent, wheel, WheelEvent};
+import std.web.events.{pointer_moves, PointerEvent, wheel, WheelEvent, keydown, KeyEvent};
 
 // The canvas this program paints. A user-defined host capability — like
 // `Dom` in examples/ssr_counter — reached through the `put_pixels` host fn.
@@ -199,6 +200,7 @@ fn main() {
     let frames = animation_frames();
     let wheels = wheel();
     let moves = pointer_moves();
+    let keys = keydown();
 
     // Last pointer position (CSS px == internal px at 1:1), for the pan delta.
     let mut last_px = 0.0;
@@ -240,6 +242,34 @@ fn main() {
                 last_px = p.x();
                 last_py = p.y();
                 have_last = true;
+            }
+            None => {}
+        }
+
+        // Keyboard → pan / zoom / reset. Host-coalesced (one key per frame);
+        // arrows pan, `+`/`-` zoom toward centre, `R` resets to the full view.
+        // Key codes are DOM `KeyEvent.key_code()` (physical-key based).
+        match keys.try_recv() {
+            Some(k) => {
+                let code = k.key_code();
+                let step = scale * 60.0;
+                if code == 37 { cx = cx - step; }   // ArrowLeft
+                if code == 39 { cx = cx + step; }   // ArrowRight
+                if code == 38 { cy = cy - step; }   // ArrowUp
+                if code == 40 { cy = cy + step; }   // ArrowDown
+                if code == 187 {                    // '='/'+': zoom in
+                    scale = scale * 0.8;
+                    if scale < 0.0000000000001 { scale = 0.0000000000001; }
+                }
+                if code == 189 {                    // '-': zoom out
+                    scale = scale * 1.25;
+                    if scale > start_scale { scale = start_scale; }
+                }
+                if code == 82 {                     // 'R': reset to full view
+                    cx = -0.75;
+                    cy = 0.0;
+                    scale = start_scale;
+                }
             }
             None => {}
         }

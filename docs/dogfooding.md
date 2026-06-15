@@ -61,7 +61,7 @@ per-project sections below hold the design. Status legend: ✅ shipped ·
 | **Forge** | `embedded` profile firmware on a real MCU | ⬜ planned | v8 hardware gaps | 3 |
 | **Iris** | One source → native + WASM, no port | ⬜ planned | Phase 10 WASM target | 3 |
 | **Plume** | Parallel browser compute driven by event streams — no `async`/coloring | ✅ shipped | `animation_frames` + event-data `pointer_moves` channel + `put_pixels` blit — all built (`examples/plume/`) | 3 |
-| **Fathom** | Browser × multi-core pixel compute, one source | ✅ shipped (interactive) | `animation_frames` + `Vec.as_ptr` blit host fn + `Vector[f64,2]` SIMD-128 inner kernel (1.47× fewer instrs, byte-identical) + interactive pan/zoom (`events.wheel` zoom-toward-cursor + `pointer_moves` pan, real-browser CDP-verified) — all built | 3 |
+| **Fathom** | Browser × multi-core pixel compute, one source | ✅ shipped (interactive) | `animation_frames` + `Vec.as_ptr` blit host fn + `Vector[f64,2]` SIMD-128 inner kernel (1.47× fewer instrs, byte-identical) + interactive pan/zoom (`events.wheel` zoom-toward-cursor + `pointer_moves` click-drag pan + `events.keydown` arrows/`+`-`-`/`R`, real-browser CDP-verified) — all built | 3 |
 
 ---
 
