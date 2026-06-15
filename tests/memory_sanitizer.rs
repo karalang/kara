@@ -10136,4 +10136,56 @@ fn main() {
             "struct_wrapped_move_out_then_consume",
         );
     }
+
+    #[test]
+    fn asan_value_enum_nested_struct_vec_shared_inplace_drop_no_leak_no_double_free() {
+        // B-2026-06-14-34 — a NON-shared enum (`Stmt`) whose variant wraps a
+        // struct (`CallExpr`) that owns BOTH an inline `shared` field (`callee:
+        // Expr`) AND a `Vec[shared]` (`args: Vec[Expr]`), dropped IN PLACE via
+        // the value-drop synthesizer `emit_enum_drop_switch`. This is the shape
+        // the self-host lexer hit: the B-31 `Vec[shared]` drain arm of
+        // `emit_nested_struct_shared_rc_decs` (1) appended its blocks to
+        // `self.current_fn` (the OUTER fn, not the drop fn) → cross-function
+        // basic-block reference → module-verification failure, masked on
+        // `--test codegen` because `compile_to_object` skips verification and
+        // the optimizer DCE'd the orphan blocks; and (2) unconditionally
+        // `free`d the Vec buffer that `__karac_drop_struct_CallExpr` ALSO freed
+        // → double-free once the blocks became reachable, plus a use-after-free
+        // if the drain ran after the buffer free. The fix threads the real
+        // `drop_fn` + scoped `current_fn` through the walker, gates the buffer
+        // `free` on `owns_buffer_free` (false in the value path — the struct
+        // drop owns it), and orders the element-drain BEFORE the struct drop.
+        // On Linux CI/LSan this faults if the element rc-dec drain regresses (a
+        // leak); on macOS it is the double-free / UAF gate.
+        assert_clean_asan_run(
+            r#"
+shared enum Expr { Num(i64), Add(BinOp) }
+struct BinOp { left: Expr, right: Expr }
+enum Stmt { Call(CallExpr) }
+struct CallExpr { callee: Expr, args: Vec[Expr] }
+fn main() {
+    let mut total: i64 = 0;
+    let mut j: i64 = 0;
+    while j < 20 {
+        let mut args: Vec[Expr] = Vec.new();
+        let mut i: i64 = 0;
+        while i < 3 { args.push(Num(i)); i = i + 1; }
+        // Dropped IN PLACE (wildcard match consumes nothing) — exercises the
+        // VALUE-drop of `Stmt`, whose `Call(CallExpr)` payload owns a
+        // `Vec[shared Expr]`: the walker must rc-dec the inline `callee` Expr
+        // box AND drain the `args` element boxes, while `__karac_drop_struct_
+        // CallExpr` frees the `args` buffer exactly once (and runs AFTER the
+        // drain, so the drain reads a live buffer).
+        let s = Call(CallExpr { callee: Num(100), args: args });
+        let k = match s { Call(_) => 1 };
+        total = total + k;
+        j = j + 1;
+    }
+    println(total);
+}
+"#,
+            &["20"],
+            "value_enum_nested_struct_vec_shared_inplace_drop",
+        );
+    }
 }

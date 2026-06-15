@@ -45415,4 +45415,72 @@ fn main() {
             assert_eq!(out.trim(), "7\n9\n5\n5\n10");
         }
     }
+
+    #[test]
+    fn b34_value_enum_drop_with_nested_struct_vec_shared_field_compiles() {
+        // B-2026-06-14-34 — the B-31 `Vec[shared]` drain arm in
+        // `emit_nested_struct_shared_rc_decs` (plus its sibling `shared`/Option
+        // arms) appends basic blocks to `self.current_fn`. When that walker is
+        // reached through the VALUE-drop synthesizer `emit_enum_drop_switch`
+        // (here: a NON-shared enum `Stmt` whose `Call` variant wraps a
+        // `CallExpr` struct that owns a `Vec[Expr]` of `shared` enum elements),
+        // `current_fn` historically still pointed at the OUTER fn that triggered
+        // drop synthesis (`use_stmt`), not the `__karac_drop_Stmt` fn the
+        // builder was emitting into. The walker's `nstr.*` blocks then landed in
+        // `use_stmt` while the surrounding switch's `br exit` referenced
+        // `__karac_drop_Stmt` — a cross-function basic-block reference that
+        // failed module verification ("Referring to a basic block in another
+        // function!"). The self-host lexer hit this via memoization order; the
+        // pre-existing `asan_struct_wrapped_deep_build_and_vec_children` case
+        // dodged it (its element drop was already memoized when the struct drop
+        // synthesized). Fix: the value-drop synthesizers now set
+        // `current_fn = drop_fn` for their whole body (mirroring the RC-drop
+        // synthesizers), so the walker's `self.current_fn` append target is
+        // always the fn being emitted. This test pins the cross-function shape
+        // WITHOUT the full lexer so it can't silently regress.
+        //
+        // `ir_for` `.expect`s on codegen — a verification failure panics the
+        // test. We additionally assert the drop fn was emitted and is internally
+        // consistent (its `exit` block belongs to `__karac_drop_Stmt`).
+        let ir = ir_for(
+            "shared enum Expr { Num(i64), Add(BinOp) }\n\
+             struct BinOp { left: Expr, right: Expr }\n\
+             enum Stmt { Call(CallExpr) }\n\
+             struct CallExpr { callee: Expr, args: Vec[Expr] }\n\
+             fn eval(e: Expr) -> i64 {\n\
+                 match e { Num(n) => n, Add(b) => eval(b.left) + eval(b.right) }\n\
+             }\n\
+             fn use_stmt(s: Stmt) -> i64 {\n\
+                 match s {\n\
+                     Call(c) => {\n\
+                         let mut acc = eval(c.callee);\n\
+                         for a in c.args { acc = acc + eval(a); }\n\
+                         acc\n\
+                     }\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let mut args: Vec[Expr] = Vec.new();\n\
+                 let mut i: i64 = 0;\n\
+                 while i < 3 { args.push(Num(i)); i = i + 1; }\n\
+                 let s = Call(CallExpr { callee: Num(100), args: args });\n\
+                 println(use_stmt(s));\n\
+             }",
+        );
+        assert!(
+            ir.contains("define internal void @__karac_drop_Stmt("),
+            "expected the value-drop fn for the non-shared `Stmt` enum to be emitted; IR:\n{ir}"
+        );
+        // The walker's `nstr.*` blocks must live inside the drop fn, never in
+        // `use_stmt`. A cross-function block reference would have aborted in
+        // `ir_for` already; this guards against a future silent relocation.
+        let use_stmt_body = ir
+            .split("define ")
+            .find(|chunk| chunk.contains("@use_stmt("))
+            .expect("use_stmt definition present");
+        assert!(
+            !use_stmt_body.contains("nstr."),
+            "drop-walker `nstr.*` blocks leaked into @use_stmt — current_fn append target regressed; IR:\n{ir}"
+        );
+    }
 }

@@ -248,14 +248,6 @@ impl<'ctx> super::Codegen<'ctx> {
                                         "drop.nstruct.p",
                                     )
                                     .unwrap();
-                                // Memoized; saves/restores the builder block,
-                                // so we resume in this drop fn's BB. `None`
-                                // when the nested struct needs no drop.
-                                if let Some(drop_fn) = self.emit_struct_drop_synthesis(&sname) {
-                                    self.builder
-                                        .build_call(drop_fn, &[field_ptr.into()], "")
-                                        .unwrap();
-                                }
                                 // B-2026-06-14-28 — the value-path struct drop
                                 // (`__karac_drop_struct_<S>`) frees Vec/String/
                                 // enum/Map buffers but has NO shared-field arm
@@ -267,7 +259,32 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // them here and rc-dec each — the box has hit
                                 // refcount 0 (uniquely owned), so this is the
                                 // sole dec of its one ref to each child.
-                                self.emit_nested_struct_shared_rc_decs(field_ptr, &sname);
+                                //
+                                // VALUE-drop path: the walker must NOT free the
+                                // struct's Vec/String buffers (`owns_buffer_free=
+                                // false`) — `__karac_drop_struct_<S>` does that.
+                                // It only rc-dec's the inline `shared` children
+                                // and drains `Vec[shared]` element boxes the
+                                // struct drop leaves untouched. B-2026-06-14-34:
+                                // the walker MUST run BEFORE the struct drop —
+                                // the element drain reads each element slot out
+                                // of the Vec's `data` buffer, which the struct
+                                // drop frees; running the struct drop first would
+                                // leave the drain reading freed memory (SEGV /
+                                // use-after-free).
+                                self.emit_nested_struct_shared_rc_decs(
+                                    field_ptr, &sname, drop_fn, false,
+                                );
+                                // Memoized; saves/restores the builder block,
+                                // so we resume in this drop fn's BB. `None`
+                                // when the nested struct needs no drop.
+                                if let Some(struct_drop_fn) =
+                                    self.emit_struct_drop_synthesis(&sname)
+                                {
+                                    self.builder
+                                        .build_call(struct_drop_fn, &[field_ptr.into()], "")
+                                        .unwrap();
+                                }
                             }
                         }
                     }
@@ -309,7 +326,41 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         struct_ptr: PointerValue<'ctx>,
         struct_name: &str,
+        drop_fn: FunctionValue<'ctx>,
+        owns_buffer_free: bool,
     ) {
+        // B-2026-06-14-34 — two independent fixes over B-31, both required:
+        //
+        // (1) `drop_fn` is passed in EXPLICITLY (it used to read
+        //     `self.current_fn`), and `self.current_fn` is scoped to it for the
+        //     walker body below. `self.current_fn` was the WRONG block-append
+        //     target from the VALUE-drop path (`emit_enum_drop_switch`): there
+        //     it still points at the OUTER fn that triggered drop synthesis
+        //     (e.g. `use_stmt`/`main`), so this walker's `nstr.*` blocks landed
+        //     in that outer fn while the surrounding switch's `br exit`
+        //     referenced the synthesized drop fn — a cross-function basic-block
+        //     reference that failed module verification (the self-host lexer's
+        //     memoization order is the trigger; the `--test codegen` cases had
+        //     it masked because `compile_to_object` skips verification and the
+        //     optimizer DCE'd the orphan blocks). Threading the target through
+        //     the arg + scoping `current_fn` only for this leaf walker (not the
+        //     whole value-drop body — that version double-freed the value-Vec
+        //     cases) fixes it without disturbing the value-drop body's own
+        //     emitters (alloca placement / cleanup tracking) that legitimately
+        //     read `self.current_fn`.
+        //
+        // (2) `owns_buffer_free` gates the `Vec[T]` field's `free(data)`. The
+        //     B-31 Vec arm unconditionally freed the buffer. That is correct in
+        //     the RC-DROP path (the shared-enum box owns the inline Vec buffer;
+        //     nothing else frees it), but a DOUBLE-FREE in the VALUE-drop path,
+        //     where the struct's own `__karac_drop_struct_<S>` (invoked at the
+        //     call site BEFORE this walker) already freed the buffer. The
+        //     double-free was latent on B-31 only because the cross-function
+        //     blocks above were DCE'd before they could run; fixing (1) made the
+        //     free reachable and surfaced it. So: the per-element rc-dec drain
+        //     (which `__karac_drop_struct_<S>` does NOT do — its VecOrString arm
+        //     frees the buffer but leaks `Vec[shared]` element boxes) ALWAYS
+        //     runs; the buffer `free(data)` runs only when this walker owns it.
         let Some(&st) = self.struct_types.get(struct_name) else {
             return;
         };
@@ -318,10 +369,19 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
         let i64_t = self.context.i64_type();
-        let drop_fn = match self.current_fn {
-            Some(f) => f,
-            None => return,
-        };
+        // Scope `current_fn` to `drop_fn` for the DURATION of this walker only:
+        // its leaf sub-emitters (`emit_refcount_dec_by_type` →
+        // `rc_is_zero`/`rc_free`/`rc_done` blocks, `vec_elem_agg_drop_for_type_expr`,
+        // and `create_entry_alloca` for the Vec-drain counter) all append to
+        // `self.current_fn`. The block-append targets passed `drop_fn` directly,
+        // but these sub-emitters key off `self.current_fn`; without this they'd
+        // land in the OUTER fn (the value-drop call site) → cross-function refs.
+        // Restored on exit so the surrounding value-drop body's own emitters
+        // (which legitimately read `self.current_fn` for alloca placement /
+        // cleanup tracking) are untouched — that whole-body version is what
+        // double-freed the value-Vec cases.
+        let saved_fn = self.current_fn;
+        self.current_fn = Some(drop_fn);
         for (idx, fte) in ftes.iter().enumerate() {
             // Direct `shared T` field — the recursive RC edge.
             if let Some(heap_ty) = self.shared_heap_type_for_type_expr(fte) {
@@ -529,27 +589,34 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.builder.position_at_end(after_bb);
                 }
                 // Free the buffer when heap-allocated (cap > 0; a static /
-                // empty Vec has cap == 0 and shares no buffer).
-                let is_heap = self
-                    .builder
-                    .build_int_compare(
-                        IntPredicate::UGT,
-                        cap,
-                        i64_t.const_zero(),
-                        "nstr.vec.is_heap",
-                    )
-                    .unwrap();
-                let free_bb = self.context.append_basic_block(drop_fn, "nstr.vec.free");
-                let done_bb = self.context.append_basic_block(drop_fn, "nstr.vec.done");
-                self.builder
-                    .build_conditional_branch(is_heap, free_bb, done_bb)
-                    .unwrap();
-                self.builder.position_at_end(free_bb);
-                self.builder
-                    .build_call(self.free_fn, &[data.into()], "")
-                    .unwrap();
-                self.builder.build_unconditional_branch(done_bb).unwrap();
-                self.builder.position_at_end(done_bb);
+                // empty Vec has cap == 0 and shares no buffer) — ONLY when this
+                // walker owns the buffer free (the RC-drop path). In the
+                // value-drop path the struct's own `__karac_drop_struct_<S>`
+                // already freed it, so freeing here is a double-free (B-34); we
+                // only did the per-element rc-dec drain above.
+                if owns_buffer_free {
+                    let is_heap = self
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::UGT,
+                            cap,
+                            i64_t.const_zero(),
+                            "nstr.vec.is_heap",
+                        )
+                        .unwrap();
+                    let free_bb = self.context.append_basic_block(drop_fn, "nstr.vec.free");
+                    let done_bb = self.context.append_basic_block(drop_fn, "nstr.vec.done");
+                    self.builder
+                        .build_conditional_branch(is_heap, free_bb, done_bb)
+                        .unwrap();
+                    self.builder.position_at_end(free_bb);
+                    self.builder
+                        .build_call(self.free_fn, &[data.into()], "")
+                        .unwrap();
+                    self.builder.build_unconditional_branch(done_bb).unwrap();
+                    self.builder.position_at_end(done_bb);
+                }
+                let _ = cap;
                 continue;
             }
             // Nested non-shared user struct → recurse into it in place.
@@ -563,12 +630,21 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .build_struct_gep(st, struct_ptr, idx as u32, "nstr.nest.p")
                         {
                             let name = head.clone();
-                            self.emit_nested_struct_shared_rc_decs(field_ptr, &name);
+                            // Recurse with the SAME buffer-ownership: a deeper
+                            // nested non-shared struct's Vec buffers are freed by
+                            // the same agent as this level's.
+                            self.emit_nested_struct_shared_rc_decs(
+                                field_ptr,
+                                &name,
+                                drop_fn,
+                                owns_buffer_free,
+                            );
                         }
                     }
                 }
             }
         }
+        self.current_fn = saved_fn;
     }
 
     /// TypeExpr-aware hash-fn wrapper. Dispatches tuples to a recursive
@@ -2184,7 +2260,12 @@ impl<'ctx> super::Codegen<'ctx> {
                         word_idx as u32,
                         &format!("{label}.nstr.p"),
                     ) {
-                        self.emit_nested_struct_shared_rc_decs(field_ptr, &sname);
+                        // RC-drop path (shared-enum box): the box owns the inline
+                        // struct payload's Vec/String buffers — no
+                        // `__karac_drop_struct_<S>` runs here, so the walker frees
+                        // them (`owns_buffer_free=true`), in addition to rc-dec'ing
+                        // the inline shared children.
+                        self.emit_nested_struct_shared_rc_decs(field_ptr, &sname, drop_fn, true);
                     }
                     return true;
                 }
