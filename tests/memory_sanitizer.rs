@@ -9838,4 +9838,201 @@ fn main() {
             "vec_of_shared_enum_elements_freed",
         );
     }
+
+    #[test]
+    fn asan_match_byvalue_shared_enum_bind_without_consume_no_leak() {
+        // B-2026-06-14-29 — a `match` on a BY-VALUE shared enum whose taken arm
+        // BINDS the struct payload (`Add(b) =>`) but does NOT consume its shared
+        // children, returning a FRESH tree instead. The original scrutinee box +
+        // its children must be freed exactly once at the function's RC cleanup.
+        //
+        // Root cause / closure: this was a DUPLICATE of B-2026-06-14-28 bug #3
+        // (the shared-enum box-drop walker `emit_shared_enum_rc_drop_fn` /
+        // `emit_nested_struct_shared_rc_decs` not recursing into a STRUCT
+        // payload's shared fields), NOT a distinct `compile_match` suppression
+        // bug. A malloc/free-balance bisect over `0890627c` (the B-28 fix)
+        // showed the struct-wrapped `Add(BinOp)` shape leaked unconditionally
+        // pre-fix (independent of whether the arm consumed `b` — the "leaky"
+        // bind-ignore variant and the fully-consuming variant leaked IDENTICALLY,
+        // disproving the consumption-gated hypothesis and the
+        // `control_flow_match.rs` locus) and is balanced post-fix; the
+        // direct-payload `Add(Expr,Expr)` shape never leaked. So the match path
+        // needed no change — this test pins the no-leak so any reintroduction in
+        // the box-drop walker is caught by the Linux-CI LSan gate. Looped to
+        // surface a per-iteration leak. (struct-wrapped shape.)
+        assert_clean_asan_run(
+            r#"
+shared enum Expr { Num(i64), Add(BinOp) }
+struct BinOp { left: Expr, right: Expr }
+fn eval(e: Expr) -> i64 {
+    match e {
+        Num(n) => n,
+        Add(b) => eval(b.left) + eval(b.right),
+    }
+}
+fn fold(e: Expr) -> Expr {
+    match e {
+        Num(n) => Num(n),
+        Add(b) => Add(BinOp { left: Num(99), right: Num(99) }),
+    }
+}
+fn build(n: i64) -> Expr {
+    if n <= 0 { Num(n) }
+    else { Add(BinOp { left: Num(n), right: build(n - 1) }) }
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 60 {
+        let t: Expr = build(3);
+        let t2: Expr = fold(t);
+        total = total + eval(t2);
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["11880"],
+            "match_byvalue_bind_without_consume_struct",
+        );
+    }
+
+    #[test]
+    fn asan_match_byvalue_shared_enum_bind_without_consume_direct_payload_no_leak() {
+        // B-2026-06-14-29 (direct-payload axis) — the same bind-without-consume
+        // shape on a DIRECT-payload shared enum `Add(Expr, Expr)` (no struct
+        // wrapper). The ledger flagged this shape as also reproducing; the
+        // bisect showed it was in fact already leak-free at the B-28 parent
+        // commit (the box-drop walker recursed correctly for direct payloads).
+        // Pinned here so the two axes stay covered together.
+        assert_clean_asan_run(
+            r#"
+shared enum Expr { Num(i64), Add(Expr, Expr) }
+fn eval(e: Expr) -> i64 {
+    match e {
+        Num(n) => n,
+        Add(l, r) => eval(l) + eval(r),
+    }
+}
+fn fold(e: Expr) -> Expr {
+    match e {
+        Num(n) => Num(n),
+        Add(l, r) => Add(Num(99), Num(99)),
+    }
+}
+fn build(n: i64) -> Expr {
+    if n <= 0 { Num(n) }
+    else { Add(Num(n), build(n - 1)) }
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 60 {
+        let t: Expr = build(3);
+        let t2: Expr = fold(t);
+        total = total + eval(t2);
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["11880"],
+            "match_byvalue_bind_without_consume_direct",
+        );
+    }
+
+    #[test]
+    fn asan_match_byvalue_shared_enum_fully_consumed_arm_no_double_free() {
+        // B-2026-06-14-29 no-regression direction: the already-OK FULLY-CONSUMING
+        // arm (`Add(b) => eval(b.left) + eval(b.right)` consumes both shared
+        // children). The scrutinee box + its children must be freed exactly once
+        // — no double-free of a child that the arm consumed, no leak. Bisect
+        // confirmed this leaked equally with the bind-ignore variant pre-B-28 and
+        // is balanced post-fix, so it locks in that the box-drop fix did not
+        // introduce a double-free in the consuming path. (struct-wrapped shape.)
+        assert_clean_asan_run(
+            r#"
+shared enum Expr { Num(i64), Add(BinOp) }
+struct BinOp { left: Expr, right: Expr }
+fn fold(e: Expr) -> Expr {
+    match e {
+        Num(n) => Num(n),
+        Add(b) => Add(BinOp { left: fold(b.left), right: fold(b.right) }),
+    }
+}
+fn eval(e: Expr) -> i64 {
+    match e {
+        Num(n) => n,
+        Add(b) => eval(b.left) + eval(b.right),
+    }
+}
+fn build(n: i64) -> Expr {
+    if n <= 0 { Num(n) }
+    else { Add(BinOp { left: Num(n), right: build(n - 1) }) }
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 60 {
+        let t: Expr = build(3);
+        let t2: Expr = fold(t);
+        total = total + eval(t2);
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["360"],
+            "match_byvalue_fully_consumed_arm",
+        );
+    }
+
+    #[test]
+    fn asan_match_byvalue_shared_enum_reconstruct_from_fresh_locals_no_leak() {
+        // B-2026-06-14-29 no-regression direction: the already-OK
+        // RECONSTRUCT-FROM-FRESH-LOCALS arm — `Add(b)` binds `b`, ignores it, and
+        // rebuilds from fresh `let`-bound locals (`let l = Num(1); let r = Num(2);
+        // Add(BinOp { left: l, right: r })`). The fresh locals are moved into the
+        // new tree (no double-free) and the original box + children freed once
+        // (no leak). The `Num(n)` arm (no shared child) is exercised by `build`.
+        assert_clean_asan_run(
+            r#"
+shared enum Expr { Num(i64), Add(BinOp) }
+struct BinOp { left: Expr, right: Expr }
+fn eval(e: Expr) -> i64 {
+    match e {
+        Num(n) => n,
+        Add(b) => eval(b.left) + eval(b.right),
+    }
+}
+fn fold(e: Expr) -> Expr {
+    match e {
+        Num(n) => Num(n),
+        Add(b) => {
+            let l: Expr = Num(1);
+            let r: Expr = Num(2);
+            Add(BinOp { left: l, right: r })
+        }
+    }
+}
+fn build(n: i64) -> Expr {
+    if n <= 0 { Num(n) }
+    else { Add(BinOp { left: Num(n), right: build(n - 1) }) }
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 60 {
+        let t: Expr = build(3);
+        let t2: Expr = fold(t);
+        total = total + eval(t2);
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["180"],
+            "match_byvalue_reconstruct_from_fresh_locals",
+        );
+    }
 }
