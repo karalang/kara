@@ -2640,7 +2640,29 @@ impl<'ctx> super::Codegen<'ctx> {
                         // unannotated enum `let g = f` need not have — so the
                         // enum case is suppressed here, at its own track site.
                         // No-op for a fresh-value RHS (constructor / call result).
-                        if matches!(&value.kind, ExprKind::Identifier(_)) {
+                        //
+                        // B-2026-06-14-31: a SHARED enum (`shared enum Expr`)
+                        // is excluded. `track_enum_var` above no-op'd for it
+                        // (DP3) — there is no value-`EnumDrop` to cap-zero — so
+                        // the only thing the suppressor does here is emit a
+                        // spurious aliasing-acquire `emit_refcount_inc` on the
+                        // source (`apply_shared_transfer`), on TOP of the inc
+                        // the shared-info let path already emitted for the
+                        // destination. That double-inc pins the box at rc=1
+                        // after both `RcDec`s run, leaking the whole tree on a
+                        // `let t2 = t1` move-out that is later consumed (the
+                        // Linux-CI LSan gate; silent under mac ASAN). Shared
+                        // STRUCT moves are already excluded the same way — the
+                        // `named_aggregate` gate on the struct-centric
+                        // suppressor below filters them — so this matches that
+                        // discipline. A shared enum's RC accounting is complete
+                        // via the destination inc + the dual scope-exit
+                        // `RcDec`s (1 inc per extra owner, 1 dec per owner).
+                        let dest_is_shared_enum = self
+                            .enum_layouts
+                            .get(name.as_str())
+                            .is_some_and(|l| l.is_shared);
+                        if matches!(&value.kind, ExprKind::Identifier(_)) && !dest_is_shared_enum {
                             self.suppress_source_vec_cleanup_for_arg(value);
                         }
                         // #19: an ENUM field moved OUT of an owned (entry-copied

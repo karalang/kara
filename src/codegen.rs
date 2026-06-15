@@ -1661,6 +1661,22 @@ pub(super) struct Codegen<'ctx> {
     /// double-free against the Option's own free. Gates the user-struct arm of
     /// the pattern-binding struct-drop registration.
     pub(crate) pattern_binding_scrutinee_is_option_result: bool,
+    /// B-2026-06-14-31 — set by `compile_match` when the scrutinee enum is a
+    /// user `shared enum` (RC-boxed). A struct payload bound in such an arm
+    /// (`Wrapped(w)` from `shared enum Expr { Wrapped(Wrap) }`,
+    /// `struct Wrap { items: Vec[Expr] }`) is a by-value VIEW of the box's
+    /// inline payload words — its Vec/String buffer aliases the buffer the
+    /// still-live RC box owns. The box's rc-drop walker
+    /// (`emit_nested_struct_shared_rc_decs`) is the sole owner of that buffer
+    /// and its elements, so the bound `w` must NOT get a `track_struct_var`,
+    /// whose `__karac_drop_struct_<S>` would `free` the buffer prematurely and
+    /// double-free against the box drop — silent on mac, a SEGV under the
+    /// Linux LSan/ASAN gate. Peer of the Option/Result flag above. Note that a
+    /// struct payload of ONLY shared fields, e.g. `BinOp { left, right }`, is
+    /// already safe: it is not copy-supported and its drop fn is a no-op for
+    /// shared fields — but a Vec/String field emits a real buffer-freeing drop
+    /// fn, which is the gap this flag closes.
+    pub(crate) pattern_binding_scrutinee_is_shared_enum: bool,
     /// Phase 7.2 Slice DP — per-enum drop function cache (enum name →
     /// `__karac_drop_<EnumName>` `FunctionValue`). Lazily populated by
     /// `emit_enum_drop_switch` on first registration of a value-type
@@ -4719,6 +4735,7 @@ impl<'ctx> Codegen<'ctx> {
             compiling_ref_return_let_rhs: false,
             pattern_binding_is_borrow: false,
             pattern_binding_scrutinee_is_option_result: false,
+            pattern_binding_scrutinee_is_shared_enum: false,
             enum_drop_fns: HashMap::new(),
             struct_drop_fns: HashMap::new(),
             user_drop_wrapper_fns: HashMap::new(),

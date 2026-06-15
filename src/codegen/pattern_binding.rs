@@ -386,8 +386,17 @@ impl<'ctx> super::Codegen<'ctx> {
                         // by the Option's inline/boxed cleanup, so tracking it here
                         // would double-free. `Response`/`HttpError` keep their
                         // by-name handling (their own move-suppression covers them).
+                        // B-2026-06-14-31 — also skipped for a user `shared enum`
+                        // scrutinee: a `Wrapped(w)` struct payload bound here is a
+                        // by-value VIEW of the RC box's inline payload, so its
+                        // Vec/String buffer aliases the buffer the still-live box
+                        // owns. `track_struct_var`'s `__karac_drop_struct_<S>` would
+                        // `free` that buffer prematurely, double-freeing against the
+                        // box's rc-drop walker (the sole owner). Same shape as the
+                        // Option/Result skip just above.
                         let is_copy_supported_user_struct = !self
                             .pattern_binding_scrutinee_is_option_result
+                            && !self.pattern_binding_scrutinee_is_shared_enum
                             && self.struct_types.contains_key(tn)
                             && !self.shared_types.contains_key(tn)
                             && self.aggregate_param_copy_supported_struct(tn, &mut Vec::new());

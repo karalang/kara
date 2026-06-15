@@ -134,6 +134,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 Some("Option") | Some("Result")
             )
         });
+        // B-2026-06-14-31 — the scrutinee enum is a user `shared enum` (RC-boxed):
+        // a struct payload bound in an arm (`Wrapped(w)`) is a by-value VIEW of
+        // the box's inline payload, so its Vec/String buffer must NOT get a
+        // per-binding struct value-drop (the box's rc-drop walker owns it).
+        // Resolved once from any variant arm (same enum for every arm).
+        let saved_shared_enum_flag = self.pattern_binding_scrutinee_is_shared_enum;
+        self.pattern_binding_scrutinee_is_shared_enum = arms.iter().any(|a| {
+            self.variant_pattern_enum_name(&a.pattern)
+                .and_then(|n| self.shared_types.get(&n).cloned())
+                .is_some_and(|i| i.is_enum)
+        });
         let fn_val = self.current_fn.unwrap();
         let merge_bb = self.context.append_basic_block(fn_val, "match.merge");
 
@@ -396,6 +407,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(merge_bb);
         self.pattern_binding_is_borrow = saved_borrow_flag;
         self.pattern_binding_scrutinee_is_option_result = saved_opt_res_flag;
+        self.pattern_binding_scrutinee_is_shared_enum = saved_shared_enum_flag;
 
         // Every arm diverged (`return` / `unreachable()` / `todo()` in all of
         // them): no arm branched to `merge_bb`, so it has no predecessors.

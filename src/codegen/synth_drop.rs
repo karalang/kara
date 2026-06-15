@@ -431,6 +431,127 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.position_at_end(skip_bb);
                 continue;
             }
+            // B-2026-06-14-31 — a `Vec[T]` field (`struct CallExpr { callee:
+            // Expr, args: Vec[Expr] }`, the AST-port `Call(CallExpr)` shape).
+            // The struct is laid out INLINE in the enum payload words, so the
+            // Vec's `{data, len, cap}` buffer + its per-element boxes are NOT
+            // touched by the enum box free — and `emit_nested_struct_shared_rc_decs`
+            // previously had no Vec arm at all, leaking the buffer (the
+            // 80-byte direct alloc) and every element box. Emit the buffer
+            // drain: loop `0..len` calling the element's per-slot drop, then
+            // `free(data)` when `cap > 0`. For a `Vec[shared]` element,
+            // `vec_elem_agg_drop_for_type_expr` returns the rc-dec helper
+            // (`__karac_vec_elem_rc_dec_<T>`), so each element box is rc-dec'd
+            // (and recurses into its children); for a Vec of value aggregates
+            // it returns the value-drop fn. A `Vec[primitive]` element returns
+            // `None` — then only the buffer is freed.
+            if let Some(elem_te) = crate::codegen::helpers::vec_inner_type_expr(fte) {
+                let Ok(field_ptr) =
+                    self.builder
+                        .build_struct_gep(st, struct_ptr, idx as u32, "nstr.vec.p")
+                else {
+                    continue;
+                };
+                let vec_ty = self.vec_struct_type();
+                // Recurse FIRST — the sub-emitter may switch the builder's
+                // insert block; capture the per-element drop fn before we open
+                // the loop blocks in THIS function.
+                let elem_drop = self.vec_elem_agg_drop_for_type_expr(&elem_te);
+                let data_pp = self
+                    .builder
+                    .build_struct_gep(vec_ty, field_ptr, 0, "nstr.vec.data.pp")
+                    .unwrap();
+                let len_p = self
+                    .builder
+                    .build_struct_gep(vec_ty, field_ptr, 1, "nstr.vec.len.p")
+                    .unwrap();
+                let cap_p = self
+                    .builder
+                    .build_struct_gep(vec_ty, field_ptr, 2, "nstr.vec.cap.p")
+                    .unwrap();
+                let data = self
+                    .builder
+                    .build_load(ptr_ty, data_pp, "nstr.vec.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let len = self
+                    .builder
+                    .build_load(i64_t, len_p, "nstr.vec.len")
+                    .unwrap()
+                    .into_int_value();
+                let cap = self
+                    .builder
+                    .build_load(i64_t, cap_p, "nstr.vec.cap")
+                    .unwrap()
+                    .into_int_value();
+                // Per-element drain loop (only when an element drop exists).
+                if let Some(elem_drop) = elem_drop {
+                    let elem_ty = self.llvm_type_for_type_expr(&elem_te);
+                    let cond_bb = self.context.append_basic_block(drop_fn, "nstr.vec.cond");
+                    let body_bb = self.context.append_basic_block(drop_fn, "nstr.vec.body");
+                    let incr_bb = self.context.append_basic_block(drop_fn, "nstr.vec.incr");
+                    let after_bb = self.context.append_basic_block(drop_fn, "nstr.vec.after");
+                    let counter = self.create_entry_alloca(drop_fn, "nstr.vec.i", i64_t.into());
+                    self.builder
+                        .build_store(counter, i64_t.const_zero())
+                        .unwrap();
+                    self.builder.build_unconditional_branch(cond_bb).unwrap();
+                    self.builder.position_at_end(cond_bb);
+                    let cur = self
+                        .builder
+                        .build_load(i64_t, counter, "nstr.vec.i.cur")
+                        .unwrap()
+                        .into_int_value();
+                    let lt = self
+                        .builder
+                        .build_int_compare(IntPredicate::ULT, cur, len, "nstr.vec.i.lt")
+                        .unwrap();
+                    self.builder
+                        .build_conditional_branch(lt, body_bb, after_bb)
+                        .unwrap();
+                    self.builder.position_at_end(body_bb);
+                    let elem_ptr = unsafe {
+                        self.builder
+                            .build_gep(elem_ty, data, &[cur], "nstr.vec.elem.p")
+                            .unwrap()
+                    };
+                    self.builder
+                        .build_call(elem_drop, &[elem_ptr.into()], "")
+                        .unwrap();
+                    self.builder.build_unconditional_branch(incr_bb).unwrap();
+                    self.builder.position_at_end(incr_bb);
+                    let next = self
+                        .builder
+                        .build_int_add(cur, i64_t.const_int(1, false), "nstr.vec.i.next")
+                        .unwrap();
+                    self.builder.build_store(counter, next).unwrap();
+                    self.builder.build_unconditional_branch(cond_bb).unwrap();
+                    self.builder.position_at_end(after_bb);
+                }
+                // Free the buffer when heap-allocated (cap > 0; a static /
+                // empty Vec has cap == 0 and shares no buffer).
+                let is_heap = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::UGT,
+                        cap,
+                        i64_t.const_zero(),
+                        "nstr.vec.is_heap",
+                    )
+                    .unwrap();
+                let free_bb = self.context.append_basic_block(drop_fn, "nstr.vec.free");
+                let done_bb = self.context.append_basic_block(drop_fn, "nstr.vec.done");
+                self.builder
+                    .build_conditional_branch(is_heap, free_bb, done_bb)
+                    .unwrap();
+                self.builder.position_at_end(free_bb);
+                self.builder
+                    .build_call(self.free_fn, &[data.into()], "")
+                    .unwrap();
+                self.builder.build_unconditional_branch(done_bb).unwrap();
+                self.builder.position_at_end(done_bb);
+                continue;
+            }
             // Nested non-shared user struct → recurse into it in place.
             if let TypeKind::Path(p) = &fte.kind {
                 if let Some(head) = p.segments.first() {

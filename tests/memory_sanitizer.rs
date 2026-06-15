@@ -10035,4 +10035,105 @@ fn main() {
             "match_byvalue_reconstruct_from_fresh_locals",
         );
     }
+
+    #[test]
+    fn asan_struct_wrapped_vec_field_in_struct_payload_no_leak() {
+        // B-2026-06-14-31 (leak #1) — a `Vec[Expr]` FIELD inside a struct
+        // payload of a shared enum (`Call(CallExpr { args: Vec[Expr] })`, the
+        // AST-port sequence-child shape), with the enum box dropped WHOLE
+        // (never consumed). Pre-fix, `emit_nested_struct_shared_rc_decs` had no
+        // Vec arm: the inline Vec's `{data,len,cap}` buffer (an 80-byte direct
+        // alloc) AND every element box leaked when the shared-enum box freed —
+        // silent under mac ASAN, caught by the Linux-CI LSan gate. Also covers
+        // a struct whose ONLY shared content is a `Vec[shared]` field
+        // (`Wrap { items: Vec[Expr] }`) — that requires the
+        // `field_owns_shared`/`struct_owns_shared_field` Vec[shared] classifier
+        // arm, or the variant gets no drop block at all. Looped to surface a
+        // per-iteration leak.
+        assert_clean_asan_run(
+            r#"
+shared enum Expr { Num(i64), Call(CallExpr), Wrapped(Wrap) }
+struct CallExpr { callee: Expr, args: Vec[Expr] }
+struct Wrap { items: Vec[Expr] }
+fn sum_args(e: Expr) -> i64 {
+    match e {
+        Num(n) => n,
+        Call(c) => c.args.len() as i64,
+        Wrapped(w) => w.items.len() as i64,
+    }
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut k: i64 = 0;
+    while k < 25 {
+        let mut args: Vec[Expr] = Vec.new();
+        let mut i: i64 = 0;
+        while i < 10 { args.push(Num(i)); i = i + 1; }
+        let call: Expr = Call(CallExpr { callee: Num(100), args: args });
+        total = total + sum_args(call);
+        // a struct whose ONLY shared content is a Vec[shared] field
+        let mut items: Vec[Expr] = Vec.new();
+        let mut j: i64 = 0;
+        while j < 5 { items.push(Num(j)); j = j + 1; }
+        let wrapped: Expr = Wrapped(Wrap { items: items });
+        total = total + sum_args(wrapped);
+        k = k + 1;
+    }
+    println(total);
+}
+"#,
+            &["375"],
+            "struct_wrapped_vec_field_in_struct_payload",
+        );
+    }
+
+    #[test]
+    fn asan_struct_wrapped_move_out_then_consume_no_leak() {
+        // B-2026-06-14-31 (leak #2) — `let t2 = t1` (a shared-enum local MOVED
+        // to another local) that is then CONSUMED by-value (`eval(t2)`).
+        // Pre-fix, the shared-enum let-binding's Identifier-RHS path called the
+        // value-enum move suppressor, which emitted a SPURIOUS aliasing-acquire
+        // `emit_refcount_inc` on the source on TOP of the destination inc the
+        // shared-info path already emitted — pinning the box at rc=1 after both
+        // scope-exit `RcDec`s, leaking the whole tree (silent under mac ASAN).
+        // The no-double-free crux: the SAME shape WITHOUT consume, and the
+        // subtree-into-parent move (a separate edge), must stay leak-free AND
+        // not double-free. Looped to surface a per-iteration leak.
+        assert_clean_asan_run(
+            r#"
+shared enum Expr { Num(i64), Add(BinOp), Neg(Unary) }
+struct BinOp { left: Expr, right: Expr }
+struct Unary { operand: Expr }
+fn eval(e: Expr) -> i64 {
+    match e {
+        Num(n) => n,
+        Add(b) => eval(b.left) + eval(b.right),
+        Neg(u) => 0 - eval(u.operand),
+    }
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 40 {
+        // move-out then consume
+        let t1 = Add(BinOp { left: Num(3), right: Num(4) });
+        let t2 = t1;
+        total = total + eval(t2);
+        // move-out then drop WHOLE (no consume)
+        let u1 = Neg(Unary { operand: Num(5) });
+        let u2 = u1;
+        match u2 { Num(n) => total = total + n, Add(b) => total = total + 0, Neg(x) => total = total + 0 }
+        // subtree moved into a parent literal, then consumed
+        let sub = Add(BinOp { left: Num(2), right: Num(3) });
+        let p1 = Add(BinOp { left: sub, right: Num(10) });
+        total = total + eval(p1);
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["880"],
+            "struct_wrapped_move_out_then_consume",
+        );
+    }
 }

@@ -235,6 +235,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 if (head == "Option" || head == "Result") && self.option_inner_decl_shared(fte) {
                     return true;
                 }
+                // B-2026-06-14-31 — a `Vec[shared T]` field also owns a shared
+                // edge: its element boxes are RC pointers that must be dec'd
+                // when the owning struct drops (the `Call(CallExpr { args:
+                // Vec[Expr] })` shape). Without this, a struct whose ONLY
+                // shared content is a `Vec[shared]` would be classified as
+                // non-walkable and the shared-enum box drop would skip its
+                // payload entirely, leaking the buffer + every element box.
+                // Judged by the NAME set (same reason as the direct-field
+                // case): this runs before `shared_types` is populated.
+                if (head == "Vec" || head == "VecDeque") && self.option_inner_decl_shared(fte) {
+                    return true;
+                }
                 // Recurse through a nested non-shared user struct.
                 if self.struct_field_type_exprs.contains_key(head)
                     && !self.shared_type_decl_names.contains(head)
