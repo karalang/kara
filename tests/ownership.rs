@@ -2321,6 +2321,53 @@ fn test_uam_predicate_carries_consume_and_use_spans() {
     );
 }
 
+#[test]
+fn test_tuple_destructure_copy_sibling_not_consumed() {
+    // B-2026-06-14-27: a Copy binding destructured from a tuple whose sibling
+    // is a move type (String) was given the WHOLE tuple type by the use
+    // classifier — non-Copy because of the String — so reads of the Copy
+    // binding in a consuming position were misclassified as Consume and the UAM
+    // predicate fired a spurious "value 'n' moved … used again". Here `n` (i64)
+    // is read in an `if` guard and again in tail/return position while the
+    // sibling `s` (String) is moved; that must NOT raise a UAM on `n`.
+    ownership_ok(
+        "fn helper() -> (i64, String) { (2i64, \"x\") }
+         fn build() -> i64 {
+             let (n, s) = helper();
+             let mut acc: String = \"\";
+             if n > 0i64 { acc.push_str(s); }
+             n + 1i64
+         }
+         fn main() { let _ = build(); }",
+    );
+}
+
+#[test]
+fn test_tuple_destructure_move_sibling_still_uam() {
+    // Guard for the B-2026-06-14-27 fix: the precise per-field typing must not
+    // mask a GENUINE use-after-move of the move-typed sibling. `s` (String) is
+    // consumed once and used again — that UAM must still fire.
+    let errors = ownership_errors(
+        "fn take(x: String) -> i64 { x.bytes().len() as i64 }
+         fn helper() -> (i64, String) { (2i64, \"x\") }
+         fn main() {
+             let (n, s) = helper();
+             let a = take(s);
+             let b = take(s);
+             let _ = n + a + b;
+         }",
+    );
+    let s_uam = errors
+        .iter()
+        .filter(|e| e.kind == OwnershipErrorKind::UseAfterMove && e.message.contains("'s'"))
+        .count();
+    assert_eq!(
+        s_uam, 1,
+        "genuine UAM of move-typed tuple sibling 's' must still fire; got {:?}",
+        errors
+    );
+}
+
 // ── Round 12.23: Closure parameter mode inference (Step 1) ─────────
 //
 // Each closure expression `|x, y, z| body` has its parameters

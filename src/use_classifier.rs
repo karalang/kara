@@ -275,9 +275,16 @@ impl<'a> UseClassifier<'a> {
                 // have a name-keyed type to fall back on when their
                 // span lookup would alias.
                 if let Some(rhs_ty) = self.tc.expr_types.get(&SpanKey::from_span(&value.span)) {
-                    for name in pattern.binding_names() {
-                        self.local_types.insert(name, rhs_ty.clone());
-                    }
+                    // Decompose a tuple destructure field-by-field so each
+                    // binding gets its OWN type, not the whole tuple's. Without
+                    // this, `let (n, s) = f()` where `f -> (i64, String)` maps
+                    // `n` to the tuple type `(i64, String)` — non-Copy because
+                    // of the String sibling — so reads of the Copy `n` in a
+                    // consuming position are misclassified as `Consume` and the
+                    // UAM predicate fires a spurious "value 'n' moved … used
+                    // again" (B-2026-06-14-27).
+                    let rhs_ty = rhs_ty.clone();
+                    self.assign_binding_types(pattern, &rhs_ty);
                 }
                 // Round 12.20: detect once-callable closure bindings.
                 // A closure RHS that produces at least one
@@ -715,6 +722,42 @@ impl<'a> UseClassifier<'a> {
                 self.walk_method_receiver_consuming(object);
             }
             _ => self.walk_expr(recv, Mode::Reading),
+        }
+    }
+
+    /// Record the type of every binding introduced by `pattern`, decomposing
+    /// a tuple destructure pairwise against a `Type::Tuple` RHS so each binding
+    /// is keyed to its OWN field type rather than the whole tuple's. Shapes we
+    /// don't structurally split (structs, tuple-variants, slices, or-patterns,
+    /// or an arity/kind mismatch) fall back to assigning the whole type to each
+    /// binding — the pre-fix behavior. See the B-2026-06-14-27 note at the
+    /// let-RHS call site.
+    fn assign_binding_types(&mut self, pattern: &Pattern, ty: &Type) {
+        match (&pattern.kind, ty) {
+            (PatternKind::Binding(name), _) => {
+                self.local_types.insert(name.clone(), ty.clone());
+            }
+            (PatternKind::Tuple(ps), Type::Tuple(field_tys)) if ps.len() == field_tys.len() => {
+                for (p, ft) in ps.iter().zip(field_tys.iter()) {
+                    self.assign_binding_types(p, ft);
+                }
+            }
+            (
+                PatternKind::AtBinding {
+                    name,
+                    pattern: inner,
+                    ..
+                },
+                _,
+            ) => {
+                self.local_types.insert(name.clone(), ty.clone());
+                self.assign_binding_types(inner, ty);
+            }
+            _ => {
+                for name in pattern.binding_names() {
+                    self.local_types.insert(name, ty.clone());
+                }
+            }
         }
     }
 
