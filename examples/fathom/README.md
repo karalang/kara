@@ -7,7 +7,7 @@ loop whose per-frame compute fans out across a Web Worker pool — with no
 
 It is the smallest demo that still lands the headline: **real multi-core
 compute in a browser, from one source** — and it is **interactive**: scroll to
-zoom toward the cursor, move the pointer to pan. (Its sibling **Plume** drives
+zoom toward the cursor, drag to pan. (Its sibling **Plume** drives
 the same live-input spine for a flow field; **Slipstream**'s wasm edition is the
 full fluid-sim flagship on it — see [`docs/dogfooding.md`](../../docs/dogfooding.md).)
 
@@ -77,21 +77,15 @@ full fluid-sim flagship on it — see [`docs/dogfooding.md`](../../docs/dogfoodi
   holding the complex point under the cursor fixed, so you zoom *into whatever
   you point at* (scroll up = in). Zoom is clamped to the full view at the top
   and to `f64`'s resolving power at the bottom.
-- **Move the pointer** to pan — `pointer_moves()` delivers a `PointerEvent`;
-  the loop pans the view by the pointer's per-frame delta so the fractal tracks
-  the cursor.
+- **Drag** to pan — `pointer_moves()` delivers a `PointerEvent` carrying the
+  position *and* the held-buttons bitmask. The loop pans by the pointer's
+  per-frame delta **only while a button is held** (`p.pressed()`), so a plain
+  hover does nothing — true click-drag, not hover-pan. The last position is
+  tracked on every move so a fresh drag never jumps.
 
 The canvas is rendered 1:1 (CSS size == the wasm framebuffer size) so each
 event's element-relative coordinates map straight onto internal pixels — no
 rescale in the demo math.
-
-> **Known limitation — hover-pan, not click-drag.** `std.web.events.PointerEvent`
-> currently carries only `{ x, y }`, no button/`buttons` state, so the demo
-> cannot gate panning on a held mouse button: the view follows the pointer
-> whenever it moves. Adding a `buttons` field to `PointerEvent` (host glue +
-> the 16-byte struct contract in `src/wasm_glue.rs`) would let this become true
-> click-drag panning. Tracked as a follow-up in
-> [`docs/dogfooding.md`](../../docs/dogfooding.md) (Fathom entry).
 
 ## Build & run
 
@@ -132,8 +126,9 @@ It loads the page cross-origin-isolated, checks the frame counter advances
 (the blocking render loop is running on a host-woken worker), confirms the
 canvas has real content, then **dispatches synthetic CDP wheel and pointer
 events** — the real host-listener → channel → wasm `recv` path, not a JS shim —
-and asserts the rendered canvas changes in response to each. Exits `0` on PASS,
-`2` if no Chrome is found. (This is the methodology from
+and asserts: a scroll zooms, a buttonless **hover does NOT pan** (the canvas is
+unchanged — the click-drag gate works), and a **drag with a button held does
+pan**. Exits `0` on PASS, `2` if no Chrome is found. (This is the methodology from
 `reference_headless_browser_wasm_testing`: node E2E cannot catch browser-only
 wasm-threads bugs, so the input path must be exercised in a real browser.)
 
@@ -172,12 +167,24 @@ Building Fathom surfaced and closed real `karac` gaps (the dogfood's job — cf.
    binding to a per-loop `@forN` rename frame in the CFG (`src/cfg.rs`), like
    match arms — so `render_frame` reuses the natural name in both places.
 
-The **interactive pan/zoom** slice (this revision) drove **no new compiler
-work** — it consumes the already-shipped `std.web.events.wheel` /
-`pointer_moves` producers as pure demo source, which is the point: the spine was
-built so a demo like this needs only application code. It did surface one
-feature gap (a `buttons` field on `PointerEvent`, see the Interaction note
-above) and one ops gotcha: the `wasm` / `wasm-threads` runtime archives must be
-rebuilt after any runtime change (the realloc-grow path `cda981bc` added
+The **interactive pan/zoom** slice first landed as pure demo source — it
+consumes the already-shipped `std.web.events.wheel` / `pointer_moves` producers,
+which is the point: the spine was built so a demo like this needs only
+application code. That first cut surfaced one feature gap, now **closed by this
+revision**:
+
+5. **`PointerEvent.buttons`** — the pointer payload carried only `{ x, y }`, so
+   the demo could only hover-pan. `PointerEvent` now also carries the DOM
+   `MouseEvent.buttons` bitmask (`buttons()` / `pressed()` accessors): the host
+   glue marshals it as an `i64` at byte 16 (24-byte payload now), so the demo
+   gates panning on a held button for true click-drag. (`runtime/stdlib/web_events.kara`
+   + `src/wasm_glue.rs`; round-trip pinned by
+   `tests/cli.rs::wasm_threads_pointer_moves_payload_recv_e2e`, which now asserts
+   the `buttons` field crosses host→wasm.)
+
+Ops gotcha (still true): the `wasm` / `wasm-threads` runtime archives must be
+rebuilt after any *runtime* change (the realloc-grow path `cda981bc` added
 `__karac_realloc_or_panic64`, so a stale archive fails the link with
 `undefined symbol` — rebuild per the repo-root `CLAUDE.md` archive recipe).
+(This `buttons` change touches only the karac binary + baked stdlib, not the
+runtime `.a`, so it needed a karac rebuild but no archive refresh.)

@@ -186,10 +186,13 @@ async function main() {
   const [, lo0, hi0] = fp0.split(":").map(Number);
   if (hi0 - lo0 < 8) throw new Error(`canvas looks blank/uniform: ${fp0}`);
 
+  // Canvas centre in *viewport* coords (the canvas is padded/centred in the
+  // page, so use its rect origin, not just its size).
+  const rect = await evalJs(`(() => { const r = document.getElementById('screen').getBoundingClientRect();
+    return { left: r.left, top: r.top, w: r.width, h: r.height }; })()`);
+  const cx = Math.round(rect.left + rect.w / 2), cy = Math.round(rect.top + rect.h / 2);
+
   // 7. Wheel scroll-up over the canvas centre must zoom (content changes).
-  const W = await evalJs("document.getElementById('screen').getBoundingClientRect().width");
-  const H = await evalJs("document.getElementById('screen').getBoundingClientRect().height");
-  const cx = Math.round(W / 2), cy = Math.round(H / 2);
   for (let i = 0; i < 6; i++) {
     await cdp.send("Input.dispatchMouseEvent", {
       type: "mouseWheel", x: cx, y: cy, deltaX: 0, deltaY: -240,
@@ -200,20 +203,41 @@ async function main() {
   const fpZoom = await fingerprint();
   if (fpZoom === fp0) throw new Error("wheel zoom did not change the canvas");
 
-  // 8. Pointer move must pan (content changes again).
-  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: cx, y: cy }, sessionId);
-  await sleep(120);
-  for (let i = 1; i <= 8; i++) {
-    await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: cx + i * 12, y: cy + i * 8 }, sessionId);
+  // 8a. Hover (NO button held) must NOT pan. With click-drag gating the view is
+  //     static between inputs, so a buttonless move must leave it unchanged —
+  //     this is the positive proof the `buttons` gate works, not hover-pan.
+  for (let i = 1; i <= 6; i++) {
+    await cdp.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved", x: cx + i * 14, y: cy + i * 9, buttons: 0,
+    }, sessionId);
     await sleep(60);
   }
+  await sleep(400);
+  const fpHover = await fingerprint();
+  if (fpHover !== fpZoom) {
+    throw new Error(`hover with no button held must NOT pan, but canvas changed: ${fpZoom} -> ${fpHover}`);
+  }
+
+  // 8b. Click-drag (primary button held) MUST pan (content changes).
+  await cdp.send("Input.dispatchMouseEvent", {
+    type: "mousePressed", x: cx, y: cy, button: "left", buttons: 1, clickCount: 1,
+  }, sessionId);
+  for (let i = 1; i <= 8; i++) {
+    await cdp.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved", x: cx + i * 12, y: cy + i * 8, button: "left", buttons: 1,
+    }, sessionId);
+    await sleep(60);
+  }
+  await cdp.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased", x: cx + 96, y: cy + 64, button: "left", buttons: 0, clickCount: 1,
+  }, sessionId);
   await sleep(500);
-  const fpPan = await fingerprint();
-  if (fpPan === fpZoom) throw new Error("pointer pan did not change the canvas");
+  const fpDrag = await fingerprint();
+  if (fpDrag === fpHover) throw new Error("click-drag (primary button held) did not pan the canvas");
 
   const fEnd = await frameCount();
-  console.log(`PASS — isolated, frames ${f0}->${f1}->${fEnd}, ` +
-    `content fp ${fp0} --wheel--> ${fpZoom} --pan--> ${fpPan}`);
+  console.log(`PASS — isolated, frames ${f0}->${f1}->${fEnd}, content fp ${fp0} ` +
+    `--wheel--> ${fpZoom} --hover(no-pan)--> ${fpHover} --drag--> ${fpDrag}`);
   ws.close();
 }
 

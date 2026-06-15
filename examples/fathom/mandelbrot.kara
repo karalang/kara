@@ -226,13 +226,14 @@ fn main() {
             None => {}
         }
 
-        // Pointer move → grab-pan: drag the view by the pointer's per-frame
-        // delta so the fractal tracks the cursor. No button gate — `PointerEvent`
-        // carries no button state yet (tracked follow-up in the README), so the
-        // pan is hover-driven rather than click-drag.
+        // Pointer drag → pan: while a button is held (`p.pressed()`), drag the
+        // view by the pointer's per-frame delta so the fractal tracks the
+        // cursor — true click-drag, not hover-pan. The last position is updated
+        // every move (held or not) so a fresh drag never jumps. `PointerEvent`
+        // carries the DOM `buttons` bitmask, so the gate is just `p.pressed()`.
         match moves.try_recv() {
             Some(p) => {
-                if have_last {
+                if p.pressed() and have_last {
                     cx = cx - (p.x() - last_px) * scale;
                     cy = cy - (p.y() - last_py) * scale;
                 }

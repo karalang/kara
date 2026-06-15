@@ -926,15 +926,24 @@ worker-pool parallelism + SIMD-128 already ship on wasm-threads.
 >   `wasm-threads` runtime archives were stale after the realloc-grow path
 >   (`cda981bc` added `__karac_realloc_or_panic64`) — rebuilt + reinstalled per
 >   the `CLAUDE.md` archive recipe; any runtime change needs the same refresh.
-> - [ ] **`PointerEvent` button/`buttons` state → true click-drag pan.**
->   `std.web.events.PointerEvent` carries only `{ x, y }`, so Fathom's pan is
->   *hover-driven* (the view follows the pointer whenever it moves) rather than
->   gated on a held mouse button. Adding a `buttons` field — host glue in
->   `src/wasm_glue.rs` (`__kara_pointer_moves`) + widening the marshalled struct
->   contract (currently 16 bytes: `x`@0, `y`@8) + the `PointerEvent` accessor in
->   `runtime/stdlib/web_events.kara` — would let the demo gate panning on a
->   primary-button press (classic click-drag). Surfaced by the pan/zoom slice
->   above; small, isolated to the event-stream surface, benefits Plume too.
+> - [x] **`PointerEvent` button/`buttons` state → true click-drag pan — DONE
+>   2026-06-14.** `std.web.events.PointerEvent` now carries the DOM
+>   `MouseEvent.buttons` bitmask alongside `{ x, y }`, with `buttons()` (raw i64)
+>   and `pressed()` (any-button convenience) accessors. The host glue
+>   (`src/wasm_glue.rs` `__kara_pointer_moves`) marshals it as a little-endian
+>   `i64` at byte 16 — the payload grew 16→**24 bytes**, kept in sync between the
+>   struct contract (`runtime/stdlib/web_events.kara`), the glue, and the
+>   glue-render unit test (`threaded_glue_renders_host_fn_proxy`, now `24n`).
+>   Fathom's pan is now gated on `p.pressed()` — **true click-drag, not
+>   hover-pan**. Round-trip pinned by
+>   `tests/cli.rs::wasm_threads_pointer_moves_payload_recv_e2e` (the synthetic
+>   `pointermove` now carries `buttons:1`; the guest asserts `pressed()` +
+>   `buttons() == 1` cross host→wasm) and by Fathom's `verify_browser.mjs` in a
+>   real browser (hover with no button leaves the canvas unchanged; a
+>   button-held drag pans). Plume (steers on position, ignores buttons) is
+>   unaffected — `plume_example_pointer_steered_flow_e2e` stays green. Touches
+>   only the karac binary + baked stdlib, **not** the runtime `.a` (karac rebuild,
+>   no archive refresh). Benefits any future `pointer_moves` consumer.
 
 **Primary capability:** The same browser spine reduced to its essence —
 multi-core pixel compute via framebuffer-blit, with zero domain code. The

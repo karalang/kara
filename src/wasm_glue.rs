@@ -1678,19 +1678,22 @@ async function runThreaded(hostImpls = {}, opts = {}) {
         (opts && opts.pointerTarget) ||
         (typeof globalThis.addEventListener === "function" ? globalThis : null);
       if (target === null) return;
-      // PointerEvent layout: { x: f64 @ 0, y: f64 @ 8 } = 16 bytes — kept in
-      // sync with runtime/stdlib/web_events.kara.
+      // PointerEvent layout: { x: f64 @ 0, y: f64 @ 8, buttons: i64 @ 16 } = 24
+      // bytes — kept in sync with runtime/stdlib/web_events.kara.
       const scratch = serviceInstance.exports.karac_runtime_event_scratch();
       const onMove = (e) => {
         if (Number(serviceInstance.exports.karac_runtime_channel_pending(ptr)) !== 0) return;
         // Re-derive the view each event: a shared Memory's `.buffer` may be
         // replaced on grow, so a cached DataView could go stale.
-        const dv = new DataView(memory.buffer, scratch, 16);
+        const dv = new DataView(memory.buffer, scratch, 24);
         // Prefer element-relative coordinates (what a canvas listener wants)
         // and fall back to viewport-relative when a synthetic event omits them.
         dv.setFloat64(0, e.offsetX ?? e.clientX ?? 0, true);
         dv.setFloat64(8, e.offsetY ?? e.clientY ?? 0, true);
-        serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 16n);
+        // `MouseEvent.buttons` bitmask held during the move (lets the guest gate
+        // on a held button for click-drag); 0 when a synthetic event omits it.
+        dv.setBigInt64(16, BigInt(e.buttons ?? 0), true);
+        serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 24n);
       };
       target.addEventListener("pointermove", onMove, { passive: true });
     };
@@ -2200,10 +2203,10 @@ mod tests {
             "builtinHostImpls[\"__kara_animation_frames\"] = (chPtr) =>",
             "Number(serviceInstance.exports.karac_runtime_channel_pending(ptr)) === 0",
             // Non-unit event-data producer: marshals a PointerEvent payload
-            // into the event-scratch buffer and sends 16 bytes.
+            // (x, y, buttons) into the event-scratch buffer and sends 24 bytes.
             "builtinHostImpls[\"__kara_pointer_moves\"] = (chPtr) =>",
             "serviceInstance.exports.karac_runtime_event_scratch()",
-            "serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 16n);",
+            "serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 24n);",
             // Sibling non-unit producer: wheel/scroll, 32-byte WheelEvent.
             "builtinHostImpls[\"__kara_wheel\"] = (chPtr) =>",
             "serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 32n);",

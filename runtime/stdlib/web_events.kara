@@ -33,14 +33,18 @@
 effect resource Input;
 
 // A pointer (mouse / touch / pen) position, in CSS pixels relative to the
-// listening element. Transparent two-field `f64` struct: its physical
-// layout (`x` at byte 0, `y` at byte 8; 16 bytes total) is the contract the
-// host glue marshals each `pointermove` into before `channel_send` — keep
-// the field order and types in sync with `src/wasm_glue.rs`
-// (`__kara_pointer_moves`).
+// listening element, plus the buttons held during the move. Transparent
+// struct: its physical layout (`x` at byte 0, `y` at byte 8 — two `f64`s —
+// then `buttons` as an `i64` at byte 16; 24 bytes total) is the contract the
+// host glue marshals each `pointermove` into before `channel_send` — keep the
+// field order and types in sync with `src/wasm_glue.rs`
+// (`__kara_pointer_moves`). `buttons` is the DOM `MouseEvent.buttons` bitmask
+// (0 = none, bit 0 = primary/left, bit 1 = secondary, …), so a demo can do
+// true click-drag — pan only while a button is held — instead of hover-pan.
 pub struct PointerEvent {
     x: f64,
     y: f64,
+    buttons: i64,
 }
 
 impl PointerEvent {
@@ -50,6 +54,17 @@ impl PointerEvent {
 
     fn y(ref self) -> f64 {
         self.y
+    }
+
+    // The raw `MouseEvent.buttons` bitmask held during this move.
+    fn buttons(ref self) -> i64 {
+        self.buttons
+    }
+
+    // Convenience: is any button held? (The common click-drag gate — true
+    // while dragging with any button, false on a plain hover.)
+    fn pressed(ref self) -> bool {
+        self.buttons != 0
     }
 }
 

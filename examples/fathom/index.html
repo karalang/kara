@@ -19,7 +19,7 @@
     border: 1px solid #1d2740; border-radius: 6px;
     /* 1:1 with the wasm framebuffer so wheel/pointer CSS coords map straight
        onto internal pixels (see mandelbrot.kara fb_width/fb_height). */
-    width: 640px; height: 420px; background: #000; cursor: crosshair;
+    width: 640px; height: 420px; background: #000; cursor: grab;
     /* Wheel-to-zoom only — don't let the scroll also pan the page. */
     touch-action: none; overscroll-behavior: contain;
   }
@@ -39,7 +39,7 @@
   <p class="sub">A Mandelbrot explorer in one Kāra source — the per-frame
     compute fans out across every CPU core, in a browser tab, with no
     <code>async</code> and no threading code. <b>Scroll to zoom toward the
-    cursor; move the pointer to pan.</b></p>
+    cursor; drag to pan.</b></p>
   <div id="stage">
     <canvas id="screen" width="640" height="420"></canvas>
     <div id="overlay">starting…</div>

@@ -15582,13 +15582,15 @@ process.exit(0);
 /// Headline E2E for the first NON-UNIT host-async producer (phase-10
 /// `std.web.events.pointer_moves` — the `Channel[T]`, `T != ()` slice that
 /// Plume drives). A `moves.recv()` parks the primary worker; a MAIN-THREAD
-/// `pointermove` listener marshals each event's `(clientX, clientY)` into the
-/// service instance's `karac_runtime_event_scratch` buffer and `channel_send`s
-/// a 16-byte `PointerEvent` payload — vs the 0-byte `()` a timer/frame
-/// producer sends. The guest asserts the *exact* f64 coordinates round-tripped
-/// (300.0, 400.0): a unit/zero channel would zero-fill the payload and the
-/// guest would print `PTR_FAIL`, so `PTR_OK` is positive evidence the
-/// structured payload crossed host→wasm intact, not just that recv woke.
+/// `pointermove` listener marshals each event's `(clientX, clientY, buttons)`
+/// into the service instance's `karac_runtime_event_scratch` buffer and
+/// `channel_send`s a 24-byte `PointerEvent` payload — vs the 0-byte `()` a
+/// timer/frame producer sends. The guest asserts the *exact* f64 coordinates
+/// round-tripped (300.0, 400.0) AND the `buttons` bitmask (1 = primary held →
+/// `pressed()`): a unit/zero channel would zero-fill the payload and the guest
+/// would print `PTR_FAIL`, so `PTR_OK` is positive evidence the structured
+/// payload (including the i64 `buttons` field) crossed host→wasm intact, not
+/// just that recv woke.
 ///
 /// Node has no DOM, so the harness injects an `EventTarget` via
 /// `opts.pointerTarget` and dispatches synthetic moves on it — the same seam a
@@ -15606,7 +15608,7 @@ fn wasm_threads_pointer_moves_payload_recv_e2e() {
              println(\"before\");\n    \
              let moves = pointer_moves();\n    \
              let p = moves.recv();\n    \
-             if p.x() == 300.0 and p.y() == 400.0 {\n        \
+             if p.x() == 300.0 and p.y() == 400.0 and p.pressed() and p.buttons() == 1 {\n        \
                  println(\"PTR_OK\");\n    \
              } else {\n        \
                  println(\"PTR_FAIL\");\n    \
@@ -15645,13 +15647,14 @@ fn wasm_threads_pointer_moves_payload_recv_e2e() {
 // A node EventTarget stands in for the canvas; synthetic pointermove events
 // carry fixed coordinates the guest checks exactly.
 class PM extends Event {
-  constructor(x, y) { super("pointermove"); this.clientX = x; this.clientY = y; }
+  constructor(x, y, buttons) { super("pointermove"); this.clientX = x; this.clientY = y; this.buttons = buttons; }
 }
 const target = new EventTarget();
 let dispatched = 0;
 // Multi-shot: keep dispatching until the worker parks in recv and the listener
 // is registered; the coalescing producer feeds the next event after each drain.
-const iv = setInterval(() => { dispatched++; target.dispatchEvent(new PM(300, 400)); }, 12);
+// buttons=1 (primary held) so the guest can also assert the i64 field crossed.
+const iv = setInterval(() => { dispatched++; target.dispatchEvent(new PM(300, 400, 1)); }, 12);
 // Self-kill if recv never wakes (would otherwise hang the test's node child).
 const bail = setTimeout(() => { console.error("FAIL: recv never woke, dispatched=" + dispatched); process.exit(2); }, 8000);
 const h = await run({}, { pointerTarget: target });
