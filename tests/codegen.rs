@@ -17838,6 +17838,42 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_nonpar_output_uses_lean_fwrite_not_capture_chokepoint() {
+        // B-2026-06-15-2: 1a401c7b routed EVERY console write through the
+        // runtime `karac_runtime_write_console` chokepoint, linking the
+        // OutputCapture machinery (segs realloc + replay + Drop) into every
+        // output-bearing binary — incl. KARAC_AUTO_PAR=0 seq-twins that can
+        // never install a capture — a ~17 KiB lean-floor regression. Writes now
+        // route through the internal `__karac_write_console` wrapper whose body
+        // is defined at finalization: a NON-parallel program (no `karac_par_run`
+        // / `karac_par_reduce` site) gets a lean direct `fwrite`, so the runtime
+        // chokepoint + capture machinery AOT `-dead_strip`. Assert the wrapper
+        // exists, calls `fwrite`, and does NOT call the chokepoint (a `declare`
+        // for it may still appear — only a `call` would anchor the machinery).
+        let ir = ir_for(
+            r#"
+fn main() {
+    println("hello");
+}
+"#,
+        );
+        assert!(
+            ir.contains("@__karac_write_console"),
+            "console writes must route through the internal wrapper; ir:\n{ir}"
+        );
+        assert!(
+            ir.contains("@fwrite"),
+            "a non-parallel program's wrapper must call the lean fwrite; ir:\n{ir}"
+        );
+        assert!(
+            !ir.contains("call void @karac_runtime_write_console"),
+            "a non-parallel binary must NOT call the capture chokepoint — that \
+             would anchor the OutputCapture machinery (the 1a401c7b lean-floor \
+             regression); ir:\n{ir}"
+        );
+    }
+
+    #[test]
     fn test_ir_fresh_return_rootlink_frees_root_only() {
         // Phase C1b RootLink: `dummy.next` at fn tail transfers the
         // chain; the root header node frees ALONE at scope exit (the

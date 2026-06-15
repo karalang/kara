@@ -2658,10 +2658,26 @@ impl<'ctx> Codegen<'ctx> {
             ],
             false,
         );
-        let write_console_fn = module.add_function(
+        // Runtime ordered-output console chokepoint (capture-capable; declared
+        // so the finalized wrapper can call it). Codegen routes every write
+        // through the internal `__karac_write_console` wrapper below, whose body
+        // — defined in `finalize_write_console_wrapper` once all function bodies
+        // are in — calls this runtime chokepoint ONLY when the module uses
+        // parallelism (a `karac_par_run` / `karac_par_reduce` site exists;
+        // `karac_par_run` is the sole `OutputCapture` installer). A non-parallel
+        // binary's wrapper does a lean direct `fwrite`, so it references neither
+        // the chokepoint nor the `OutputCapture` machinery and AOT `-dead_strip`s
+        // them — restoring the lean binary-size floor `1a401c7b` regressed
+        // ~17 KiB (B-2026-06-15-2).
+        module.add_function(
             "karac_runtime_write_console",
             write_console_type,
             Some(Linkage::External),
+        );
+        let write_console_fn = module.add_function(
+            "__karac_write_console",
+            write_console_type,
+            Some(Linkage::Internal),
         );
 
         // The libc `FILE*` globals for stdout / stderr, used as the `fwrite`
@@ -6028,6 +6044,11 @@ impl<'ctx> Codegen<'ctx> {
         // and emit canonical-ABI trampolines for record-returning exports.
         self.emit_wasm_component_export_surface(program)?;
 
+        // Define the `__karac_write_console` wrapper body now that every
+        // function — user + on-demand stdlib + wasm shims — is in, so its
+        // `karac_par_run` / `karac_par_reduce` use-check is final (B-2026-06-15-2).
+        self.finalize_write_console_wrapper();
+
         // Level 2 crash diagnostics — Part 2: finalize DWARF debug info BEFORE
         // verify. The verifier validates debug metadata, and unresolved
         // temporaries / a missing finalize would make it reject the module.
@@ -6037,6 +6058,76 @@ impl<'ctx> Codegen<'ctx> {
         self.module
             .verify()
             .map_err(|e| format!("Module verification failed: {}", e))
+    }
+
+    /// Define the body of the internal `__karac_write_console` wrapper that
+    /// every console write routes through (`emit_nul_safe_write` /
+    /// `compile_print`). It calls the capture-capable runtime
+    /// `karac_runtime_write_console` ONLY when the module emits a
+    /// `karac_par_run` / `karac_par_reduce` call — `karac_par_run` is the sole
+    /// installer of an `OutputCapture`, so its presence is exactly when a
+    /// par-branch write must be captured and replayed in source order.
+    /// Otherwise the wrapper does a lean libc `fwrite(data, 1, len, stream)`
+    /// directly, so a non-parallel binary references neither the runtime
+    /// chokepoint nor the `OutputCapture` machinery it transitively pulls, and
+    /// AOT `-dead_strip`s the whole lot — restoring the lean binary-size floor
+    /// `1a401c7b`'s blanket routing regressed by ~17 KiB on every output-bearing
+    /// compute binary (B-2026-06-15-2). Idempotent; must run after all function
+    /// bodies are compiled so the par use-check sees every site.
+    fn finalize_write_console_wrapper(&mut self) {
+        let wrapper = self.write_console_fn;
+        if wrapper.get_first_basic_block().is_some() {
+            return;
+        }
+        let par_used = |name: &str| -> bool {
+            self.module.get_function(name).is_some_and(|f| {
+                inkwell::values::BasicValue::get_first_use(&f.as_global_value().as_pointer_value())
+                    .is_some()
+            })
+        };
+        let needs_capture = par_used("karac_par_run") || par_used("karac_par_reduce");
+
+        let saved = self.builder.get_insert_block();
+        let entry = self.context.append_basic_block(wrapper, "entry");
+        self.builder.position_at_end(entry);
+        let data = wrapper.get_nth_param(0).unwrap();
+        let len = wrapper.get_nth_param(1).unwrap();
+        let stream = wrapper.get_nth_param(2).unwrap();
+
+        if needs_capture {
+            let rt = self
+                .module
+                .get_function("karac_runtime_write_console")
+                .expect("runtime write_console declared at setup");
+            self.builder
+                .build_call(rt, &[data.into(), len.into(), stream.into()], "")
+                .unwrap();
+        } else {
+            // Lean path: `fwrite(data, 1, len, stream)` — `size` = 1,
+            // `nmemb` = `len`, matching the chokepoint's fast path byte-for-byte.
+            let size_t = len.into_int_value().get_type();
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+            let fwrite_ty = size_t.fn_type(
+                &[ptr_ty.into(), size_t.into(), size_t.into(), ptr_ty.into()],
+                false,
+            );
+            let fwrite = self
+                .module
+                .get_function("fwrite")
+                .unwrap_or_else(|| self.module.add_function("fwrite", fwrite_ty, None));
+            let one = size_t.const_int(1, false);
+            self.builder
+                .build_call(
+                    fwrite,
+                    &[data.into(), one.into(), len.into(), stream.into()],
+                    "",
+                )
+                .unwrap();
+        }
+        self.builder.build_return(None).unwrap();
+        if let Some(bb) = saved {
+            self.builder.position_at_end(bb);
+        }
     }
 
     /// WASM entry-point shim (`--target=wasm_wasi` / `wasm_browser` —
