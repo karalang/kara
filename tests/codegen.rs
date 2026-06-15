@@ -10660,6 +10660,35 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_empty_array_binding_to_slice_param() {
+        // B-2026-06-14-30: `let a: Array[T, 0] = []` passed to a `Slice[T]`
+        // param used to lower as a scalar `i64 0` (compile_array_literal's
+        // empty fallback), so the Array → Slice coercion was skipped and the
+        // raw i64 failed LLVM verification (`{ptr,i64}` vs `i64`). The fix
+        // allocates a real `[0 x T]` slot from the annotation; the empty array
+        // now coerces to a zero-length slice header. The non-empty binding
+        // alongside it confirms the ordinary array path is unaffected.
+        let out = run_program(
+            r#"
+fn take(s: Slice[i64], len: i64) -> i64 {
+    let mut sum = 0i64;
+    for i in 0..len { sum = sum + s[i]; }
+    sum
+}
+fn main() {
+    let a: Array[i64, 0] = [];
+    println(take(a, 0));
+    let b: Array[i64, 3] = [1, 2, 3];
+    println(take(b, 3));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "0\n6");
+        }
+    }
+
+    #[test]
     fn test_e2e_array_literal_range_slice_arg() {
         let out = run_program(
             r#"

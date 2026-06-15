@@ -1621,6 +1621,18 @@ impl<'ctx> super::Codegen<'ctx> {
                         return result;
                     }
                 }
+                // Empty array literal: `let a: Array[T, 0] = []`. Allocate a
+                // real `[0 x T]` slot from the annotation so the binding
+                // coerces to a zero-length slice at call sites instead of the
+                // scalar-i64 sentinel `compile_array_literal` falls back to
+                // (which fails Array → Slice coercion). B-2026-06-14-30.
+                if let PatternKind::Binding(var_name) = &pattern.kind {
+                    if let Some(result) =
+                        self.try_emit_empty_array_let(var_name, value, ty.as_ref())
+                    {
+                        return result;
+                    }
+                }
                 // Prefer the explicit type annotation when present — it lets
                 // `let c: Cm = i.into();` (lowered to `Cm.from(i)`, which
                 // `type_name_of` can't classify) still register `c` as a

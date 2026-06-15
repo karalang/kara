@@ -624,6 +624,64 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(Ok(()))
     }
 
+    /// Empty array literal fast path: `let a: Array[T, 0] = []`.
+    ///
+    /// `compile_array_literal([])` cannot infer the element type from the
+    /// (empty) element list, so it returns a scalar `i64 0` sentinel — which
+    /// then registers the binding's slot type as `i64`, not `[0 x T]`. At a
+    /// call site that wants `Slice[T]`, `coerce_to_slice`'s Array → Slice
+    /// branch keys on `slot.ty` being an `ArrayType`, so it skips the empty
+    /// array and the raw `i64` reaches the call — failing LLVM verification
+    /// with a `{ptr, i64}`-vs-`i64` param mismatch (B-2026-06-14-30). The
+    /// `Array[T, 0]` annotation carries the element type the literal lacks, so
+    /// allocate a real `[0 x T]` slot here; the binding then coerces to a
+    /// zero-length slice header like any other array (the interpreter already
+    /// accepts the same `[] -> Slice` shape). Mirrors the zero-init repeat-let
+    /// path above, for the `[]` (empty `ArrayLiteral`) case it does not cover.
+    pub(super) fn try_emit_empty_array_let(
+        &mut self,
+        name: &str,
+        value: &Expr,
+        ty: Option<&TypeExpr>,
+    ) -> Option<Result<(), String>> {
+        let ExprKind::ArrayLiteral(elems) = &value.kind else {
+            return None;
+        };
+        if !elems.is_empty() {
+            return None;
+        }
+        // Recover the element type from the `Array[T, N]` annotation; without
+        // it there is no way to type the empty literal, so leave it to the
+        // scalar-sentinel fallback (no worse than today).
+        let te = ty?;
+        let TypeKind::Path(path) = &te.kind else {
+            return None;
+        };
+        if path.segments.first().map(|s| s.as_str()) != Some("Array") {
+            return None;
+        }
+        let args = path.generic_args.as_ref()?;
+        if args.len() != 2 {
+            return None;
+        }
+        let elem_llvm_ty: BasicTypeEnum<'ctx> = match &args[0] {
+            GenericArg::Type(t) => self.llvm_type_for_type_expr(t),
+            _ => return None,
+        };
+        // An empty literal has length 0 by construction.
+        let arr_ty = elem_llvm_ty.array_type(0);
+        let fn_val = self.current_fn?;
+        let alloca = self.create_entry_alloca(fn_val, name, arr_ty.into());
+        self.variables.insert(
+            name.to_string(),
+            VarSlot {
+                ptr: alloca,
+                ty: arr_ty.into(),
+            },
+        );
+        Some(Ok(()))
+    }
+
     /// Compile `[value; count]` / `Array[value; count]`. Produces an LLVM
     /// array value `[N x T]` whose every element is the compiled `value`.
     /// `count` must be a non-negative integer literal (mirrors the
