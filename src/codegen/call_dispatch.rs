@@ -1092,7 +1092,16 @@ impl<'ctx> super::Codegen<'ctx> {
             // owns a caller-scope cleanup — materializing it again would
             // double-free. (A scalar/`String` `.to_string()` and a plain user-fn
             // result do NOT stage the acc, so they still get materialized.)
-            let is_fresh_heap_call_arg = self.expr_yields_fresh_owned_temp(&a.value)
+            // An inline-temp-Vec heap-element index (`sink(names()[0])`) is the
+            // sibling of #20 for the by-value-arg consumer: the deep clone
+            // `compile_inline_temp_vec_index` mints has no consuming binding and
+            // its synth Vec local is de-registered, so the callee (which does
+            // not free owned String/Vec by-value params — they land in
+            // `owned_vecstr_params`) leaves it orphaned without a caller-scope
+            // drop. Materialize it here exactly like a direct fresh call result
+            // (B-2026-06-14-32).
+            let is_fresh_heap_call_arg = (self.expr_yields_fresh_owned_temp(&a.value)
+                || self.expr_is_inline_temp_vec_heap_index(&a.value))
                 && self.llvm_ty_is_vec_struct(val.get_type())
                 && !self.rhs_stages_fstr_acc(&a.value);
             if is_block_arg || is_fresh_heap_call_arg {

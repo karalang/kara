@@ -58,7 +58,38 @@ mod memory_sanitizer_tests {
     /// and the process exit status. `None` if the setup failed (parse error,
     /// runtime library missing, etc.) — tests should skip rather than fail in
     /// those cases to keep the harness robust on varied hosts.
+    ///
+    /// Leak detection is always on (Linux LSan) — the steady-state default for
+    /// clean-run assertions. Panic-path assertions use
+    /// [`run_under_asan_no_leak_check`] instead: a program that `emit_panic`s
+    /// aborts mid-operation, so the in-flight allocations LSan would flag are
+    /// abort-time, not steady-state leaks, and would spuriously flip the
+    /// process exit code from `emit_panic`'s 1 to LSan's 23.
     fn run_under_asan(src: &str, label: &str) -> Option<(String, std::process::ExitStatus)> {
+        run_under_asan_opts(src, label, true)
+    }
+
+    /// Variant of [`run_under_asan`] that disables LeakSanitizer for the run.
+    /// Used by [`assert_asan_panics_with`]: an `emit_panic` exit aborts the
+    /// program partway through an operation (e.g. the `extend_from_slice`
+    /// source-alias guard fires after the destination Vec has grown but before
+    /// the old buffer is reclaimed), leaving abort-time allocations that LSan
+    /// reports as leaks — flipping the exit code from the expected 1 to 23 and
+    /// masking the panic the test is actually asserting. Panic-path cleanup is
+    /// the OS's job at process death; steady-state leaks are covered by every
+    /// `assert_clean_asan_run` case.
+    fn run_under_asan_no_leak_check(
+        src: &str,
+        label: &str,
+    ) -> Option<(String, std::process::ExitStatus)> {
+        run_under_asan_opts(src, label, false)
+    }
+
+    fn run_under_asan_opts(
+        src: &str,
+        label: &str,
+        detect_leaks: bool,
+    ) -> Option<(String, std::process::ExitStatus)> {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -108,10 +139,16 @@ mod memory_sanitizer_tests {
         // Leak-style bugs are caught separately on Linux + by the runtime
         // alloc/free counter assertion described in phase-7-codegen.md
         // (`scope_cleanup_actions` testing note).
+        // LeakSanitizer ships only with upstream LLVM's ASAN runtime on Linux
+        // (macOS Apple clang has no LSan — see the cfg below). `detect_leaks`
+        // is the caller's steady-state-vs-panic-path choice; on macOS the flag
+        // is moot (no LSan to disable).
         let asan_options = if cfg!(target_os = "macos") {
             "abort_on_error=0:exitcode=23"
-        } else {
+        } else if detect_leaks {
             "detect_leaks=1:abort_on_error=0:exitcode=23"
+        } else {
+            "detect_leaks=0:abort_on_error=0:exitcode=23"
         };
         let output = Command::new(&exe_path)
             .env("ASAN_OPTIONS", asan_options)
@@ -147,7 +184,12 @@ mod memory_sanitizer_tests {
             eprintln!("[{label}] ASAN unavailable on this host — skipping");
             return;
         }
-        let Some((stdout, status)) = run_under_asan(src, label) else {
+        // Leak detection OFF: the panic aborts mid-operation, so any in-flight
+        // allocation LSan would report is an abort-time artifact, not a
+        // steady-state leak — and would flip the exit code 1 -> 23, masking
+        // the panic this assertion exists to verify. See
+        // `run_under_asan_no_leak_check`.
+        let Some((stdout, status)) = run_under_asan_no_leak_check(src, label) else {
             eprintln!("[{label}] setup failed — skipping");
             return;
         };
@@ -718,6 +760,39 @@ fn main() {
 "#,
             &["alice", "carol"],
             "inline_index_fn_returned_vec_string",
+        );
+    }
+
+    // Sibling of the above (B-2026-06-14-32, the by-value-argument consumer):
+    // the inline-temp-Vec heap-element clone passed DIRECTLY to a user fn
+    // (`sink(names()[0])`) — not just to `println` — must also free exactly
+    // once. The callee takes the `String` owned by value (which the callee does
+    // NOT free: owned String/Vec params land in `owned_vecstr_params`), so the
+    // caller-side `materialize_owned_temp` is the only thing reclaiming the
+    // clone. A missing materialization leaks the clone (Linux LSan); a stray
+    // second free (callee + caller both freeing) double-frees (ASAN, every
+    // host). Looping makes either fault unmistakable.
+    #[test]
+    fn asan_inline_index_fn_returned_vec_string_fn_arg_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn names() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("alice"); v.push("bob"); v.push("carol");
+    v
+}
+fn sink(s: String) { println(s); }
+fn main() {
+    let mut i = 0i64;
+    while i < 3 {
+        sink(names()[0]);
+        sink(names()[2]);
+        i = i + 1;
+    }
+}
+"#,
+            &["alice", "carol", "alice", "carol", "alice", "carol"],
+            "inline_index_fn_returned_vec_string_fn_arg",
         );
     }
 

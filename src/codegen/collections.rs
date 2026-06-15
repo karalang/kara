@@ -1305,6 +1305,36 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// True when `expr` is a plain element index (`make()[i]`, not a range)
+    /// into a *fresh-owned `Vec` temporary* (`inline_temp_vec_te` matches the
+    /// callee's return signature) whose element type is non-trivially-copyable.
+    /// `compile_inline_temp_vec_index` lowers that shape by **deep-cloning** the
+    /// indexed element into a fresh owned buffer (the temp Vec is dropped right
+    /// after the read, so the read must stand alone), then de-registers the
+    /// synth Vec local — so the clone has NO consuming binding and NO scope-exit
+    /// cleanup of its own. In a directly-consuming position (a `println`/`print`
+    /// argument, a by-value user-fn argument) the consumer must free it exactly
+    /// like a `Call`/`MethodCall` fresh temp (`expr_yields_fresh_owned_temp`),
+    /// or it leaks once per call — the reported `println(names()[0])`
+    /// (B-2026-06-14-32). A trivially-Copy element (`shape()[k] -> i64`) returns
+    /// a bare scalar — no clone, nothing to free — so it is excluded, matching
+    /// the clone gate in `compile_inline_temp_vec_index`.
+    pub(super) fn expr_is_inline_temp_vec_heap_index(&self, expr: &Expr) -> bool {
+        let ExprKind::Index { object, index } = &expr.kind else {
+            return false;
+        };
+        if matches!(&index.kind, ExprKind::Range { .. }) {
+            return false;
+        }
+        let Some(vec_te) = self.inline_temp_vec_te(object) else {
+            return false;
+        };
+        match vec_inner_type_expr(&vec_te) {
+            Some(elem_te) => !super::vec_method::is_trivially_copyable_te(&elem_te),
+            None => false,
+        }
+    }
+
     pub(super) fn clone_owned_vec_index_element(
         &mut self,
         value: &Expr,

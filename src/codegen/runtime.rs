@@ -1267,7 +1267,16 @@ impl<'ctx> super::Codegen<'ctx> {
         arg: &crate::ast::Expr,
         val: BasicValueEnum<'ctx>,
     ) {
-        if (!self.expr_yields_fresh_owned_temp(arg) && !self.expr_is_fresh_owned_string_slice(arg))
+        // Three fresh-owned-String shapes flow here, all freed identically: a
+        // direct `Call`/`MethodCall` result (#20), a `String[a..b]` range slice
+        // (B-2026-06-12-5), and an inline-temp-Vec heap-element index
+        // (`names()[0]` — B-2026-06-14-32: the deep clone
+        // `compile_inline_temp_vec_index` mints has no consuming binding). The
+        // `cap > 0` guard below no-ops on a borrowed (cap == 0) view, so a place
+        // expression / rodata literal is never double-freed.
+        if (!self.expr_yields_fresh_owned_temp(arg)
+            && !self.expr_is_fresh_owned_string_slice(arg)
+            && !self.expr_is_inline_temp_vec_heap_index(arg))
             || !self.llvm_ty_is_vec_struct(val.get_type())
         {
             return;
