@@ -482,12 +482,15 @@ pub fn render_glue(
     // backs `std.web.time.animation_frames` (a multi-shot rAF loop);
     // `__kara_pointer_moves(chPtr: i64) -> ()` backs
     // `std.web.events.pointer_moves` — the first non-unit producer: it sends a
-    // `PointerEvent` payload (not a `()` tick) across the service instance.
+    // `PointerEvent` payload (not a `()` tick) across the service instance;
+    // `__kara_wheel(chPtr: i64) -> ()` backs `std.web.events.wheel` (same
+    // non-unit spine, a 32-byte `WheelEvent` payload).
     let builtin_sigs: &[&str] = if threads.is_some() {
         &[
             "{ name: \"__kara_timer_after\", params: [\"bigint\", \"bigint\"], ret: \"void\" }",
             "{ name: \"__kara_animation_frames\", params: [\"bigint\"], ret: \"void\" }",
             "{ name: \"__kara_pointer_moves\", params: [\"bigint\"], ret: \"void\" }",
+            "{ name: \"__kara_wheel\", params: [\"bigint\"], ret: \"void\" }",
         ]
     } else {
         &[]
@@ -497,6 +500,7 @@ pub fn render_glue(
             "\"__kara_timer_after\"",
             "\"__kara_animation_frames\"",
             "\"__kara_pointer_moves\"",
+            "\"__kara_wheel\"",
         ]
     } else {
         &[]
@@ -1690,6 +1694,42 @@ async function runThreaded(hostImpls = {}, opts = {}) {
       };
       target.addEventListener("pointermove", onMove, { passive: true });
     };
+
+    // __kara_wheel(chPtr: i64 [BigInt]) -> (): a MULTI-SHOT wheel/scroll
+    // stream, sibling of __kara_pointer_moves. Each "wheel" event marshals
+    // (offsetX/clientX, offsetY/clientY, deltaX, deltaY) as four little-endian
+    // f64s into the event-scratch buffer, then channel_send copies the 32-byte
+    // WheelEvent payload into the queue (val_ptr=scratch, elem_size=32n).
+    // Coalesces like pointer_moves (feed a fresh event only once the worker
+    // drained the previous one). Registered `{ passive: true }` — the producer
+    // reads the deltas but does NOT preventDefault, so it never silently
+    // hijacks the page's scroll; a wheel-to-zoom demo suppresses scroll via
+    // CSS (overscroll-behavior / touch-action) on its own element. Event
+    // source: `opts.wheelTarget` (browser: the canvas; node test: an
+    // EventTarget it dispatches synthetic wheels on), else `globalThis` if it
+    // can addEventListener; no source → no-op (recv just blocks).
+    builtinHostImpls["__kara_wheel"] = (chPtr) => {
+      const ptr = Number(chPtr);
+      const target =
+        (opts && opts.wheelTarget) ||
+        (typeof globalThis.addEventListener === "function" ? globalThis : null);
+      if (target === null) return;
+      // WheelEvent layout: { x @ 0, y @ 8, delta_x @ 16, delta_y @ 24 } = 32
+      // bytes — kept in sync with runtime/stdlib/web_events.kara.
+      const scratch = serviceInstance.exports.karac_runtime_event_scratch();
+      const onWheel = (e) => {
+        if (Number(serviceInstance.exports.karac_runtime_channel_pending(ptr)) !== 0) return;
+        // Re-derive the view each event: a shared Memory's `.buffer` may be
+        // replaced on grow, so a cached DataView could go stale.
+        const dv = new DataView(memory.buffer, scratch, 32);
+        dv.setFloat64(0, e.offsetX ?? e.clientX ?? 0, true);
+        dv.setFloat64(8, e.offsetY ?? e.clientY ?? 0, true);
+        dv.setFloat64(16, e.deltaX ?? 0, true);
+        dv.setFloat64(24, e.deltaY ?? 0, true);
+        serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 32n);
+      };
+      target.addEventListener("wheel", onWheel, { passive: true });
+    };
   }
   // host fns: stand up the worker→main proxy (shared control block + the
   // main-thread service loop). Needed when the program declares user host
@@ -2132,14 +2172,15 @@ mod tests {
              { name: \"log_str\", params: [\"number\", \"bigint\"], ret: \"void\" }, \
              { name: \"__kara_timer_after\", params: [\"bigint\", \"bigint\"], ret: \"void\" }, \
              { name: \"__kara_animation_frames\", params: [\"bigint\"], ret: \"void\" }, \
-             { name: \"__kara_pointer_moves\", params: [\"bigint\"], ret: \"void\" }];"
+             { name: \"__kara_pointer_moves\", params: [\"bigint\"], ret: \"void\" }, \
+             { name: \"__kara_wheel\", params: [\"bigint\"], ret: \"void\" }];"
         ));
         // The builtins are registered as builtins, and excluded from the
         // user contract (DECLARED_IMPORTS drives the missing-impl check and
         // the d.ts).
         assert!(glue.contains(
             "const BUILTIN_HOST_FNS = [\"__kara_timer_after\", \"__kara_animation_frames\", \
-             \"__kara_pointer_moves\"];"
+             \"__kara_pointer_moves\", \"__kara_wheel\"];"
         ));
         assert!(glue.contains("const DECLARED_IMPORTS = [\"report\", \"log_str\"];"));
         // Both halves of the proxy plus the worker-side wiring.
@@ -2163,6 +2204,10 @@ mod tests {
             "builtinHostImpls[\"__kara_pointer_moves\"] = (chPtr) =>",
             "serviceInstance.exports.karac_runtime_event_scratch()",
             "serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 16n);",
+            // Sibling non-unit producer: wheel/scroll, 32-byte WheelEvent.
+            "builtinHostImpls[\"__kara_wheel\"] = (chPtr) =>",
+            "serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 32n);",
+            "target.addEventListener(\"wheel\", onWheel, { passive: true });",
         ] {
             assert!(glue.contains(needle), "missing proxy machinery: {needle}");
         }
@@ -2173,7 +2218,8 @@ mod tests {
         assert!(
             !dts.contains("__kara_timer_after")
                 && !dts.contains("__kara_animation_frames")
-                && !dts.contains("__kara_pointer_moves"),
+                && !dts.contains("__kara_pointer_moves")
+                && !dts.contains("__kara_wheel"),
             "builtin leaked into d.ts"
         );
     }

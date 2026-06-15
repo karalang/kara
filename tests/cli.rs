@@ -15741,6 +15741,158 @@ fn wasm_pointer_moves_sequential_target_rejected() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// `std.web.events.wheel` end-to-end on `wasm_browser --features wasm-threads`:
+/// the second non-unit event-data producer. A worker blocks in `wheel().recv()`,
+/// the host fires synthetic `wheel` events carrying fixed deltas + cursor
+/// position, and the 32-byte `WheelEvent` ({ x, y, delta_x, delta_y }) must
+/// round-trip host→wasm intact. Sibling of
+/// `wasm_threads_pointer_moves_payload_recv_e2e`; the harness injects an
+/// `EventTarget` via `opts.wheelTarget` (the seam a browser fills with the
+/// canvas). Load-immune: `WHEEL_OK` prints only if the worker parked, the host
+/// fed the real payload, and the worker woke and read the correct bytes.
+#[test]
+fn wasm_threads_wheel_payload_recv_e2e() {
+    let tmp = wasm_test_dir("wtwheel");
+    let path = tmp.join("wh.kara");
+    std::fs::write(
+        &path,
+        "import std.web.events.{wheel, WheelEvent};\n\n\
+         fn main() {\n    \
+             println(\"before\");\n    \
+             let wheels = wheel();\n    \
+             let w = wheels.recv();\n    \
+             if w.x() == 120.0 and w.y() == 60.0 and w.delta_x() == 0.0 and w.delta_y() == -53.0 {\n        \
+                 println(\"WHEEL_OK\");\n    \
+             } else {\n        \
+                 println(\"WHEEL_FAIL\");\n    \
+             }\n    \
+             println(\"after\");\n}\n",
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--features=wasm-threads",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_threads_wheel_payload_recv_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        out.status.success(),
+        "wheel wasm-threads build failed: {stderr}"
+    );
+    assert!(tmp.join("wh.threads.wasm").exists());
+
+    let harness = tmp.join("harness.mjs");
+    std::fs::write(
+        &harness,
+        r#"import { run } from "./wh.js";
+// A node EventTarget stands in for the canvas; synthetic wheel events carry
+// fixed deltas + cursor position the guest checks exactly.
+class WH extends Event {
+  constructor(x, y, dx, dy) { super("wheel"); this.clientX = x; this.clientY = y; this.deltaX = dx; this.deltaY = dy; }
+}
+const target = new EventTarget();
+let dispatched = 0;
+const iv = setInterval(() => { dispatched++; target.dispatchEvent(new WH(120, 60, 0, -53)); }, 12);
+const bail = setTimeout(() => { console.error("FAIL: recv never woke, dispatched=" + dispatched); process.exit(2); }, 8000);
+const h = await run({}, { wheelTarget: target });
+clearInterval(iv);
+clearTimeout(bail);
+if (h.threaded !== true) { console.error("FAIL: expected threaded pick"); process.exit(1); }
+console.log("WHEEL_HARNESS_OK dispatched=" + dispatched);
+process.exit(0);
+"#,
+    )
+    .unwrap();
+    let node = std::process::Command::new("node")
+        .arg(&harness)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: wasm_threads_wheel_payload_recv_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let node_stdout = String::from_utf8_lossy(&node_out.stdout);
+    let node_stderr = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success(),
+        "wheel harness failed under node: stdout={node_stdout} stderr={node_stderr}",
+    );
+    assert!(
+        node_stdout.contains("WHEEL_HARNESS_OK"),
+        "harness did not complete (recv woke): stdout={node_stdout} stderr={node_stderr}",
+    );
+    // The four-field payload crossed intact — a zero-filled / wrong-size floor
+    // would have printed WHEEL_FAIL.
+    assert!(
+        node_stdout.contains("WHEEL_OK") && !node_stdout.contains("WHEEL_FAIL"),
+        "exact (120,60,0,-53) WheelEvent payload must round-trip host→wasm: stdout={node_stdout}",
+    );
+    let before = node_stdout.find("before");
+    let after = node_stdout.find("after");
+    assert!(
+        matches!((before, after), (Some(b), Some(a)) if b < a),
+        "guest must print before→after (recv blocked then woke): stdout={node_stdout}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The sequential-target gate for `wheel`: built WITHOUT `--features
+/// wasm-threads` it is a hard compile error (codegen, pre-link) naming the
+/// flag — never a silent never-filling channel. Sibling of
+/// `wasm_pointer_moves_sequential_target_rejected`.
+#[test]
+fn wasm_wheel_sequential_target_rejected() {
+    let tmp = wasm_test_dir("wtwheelgate");
+    let path = tmp.join("wh.kara");
+    std::fs::write(
+        &path,
+        "import std.web.events.{wheel, WheelEvent};\n\n\
+         fn main() {\n    \
+             let wheels = wheel();\n    \
+             wheels.recv();\n}\n",
+    )
+    .unwrap();
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--bindings=none",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_wheel_sequential_target_rejected — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        !out.status.success(),
+        "sequential wasm wheel producer must be rejected, but build succeeded: {stderr}"
+    );
+    assert!(
+        stderr.contains("requires `--features wasm-threads`"),
+        "gate must name the flag: {stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// Full-demo E2E for the Plume flow-field dogfood (`examples/plume/`): builds
 /// the shipped `plume.kara` for `wasm_browser --features wasm-threads` and runs
 /// it under node, exercising the whole front-end spine together — the blocking

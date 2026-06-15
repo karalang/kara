@@ -84,3 +84,67 @@ pub fn pointer_moves() -> Receiver[PointerEvent] with writes(Input) {
     tx.__schedule_pointer_moves();
     rx
 }
+
+// A wheel (scroll) event: the cursor position when the wheel turned plus the
+// scroll deltas. Transparent four-field `f64` struct — physical layout
+// (`x` @ 0, `y` @ 8, `delta_x` @ 16, `delta_y` @ 24; 32 bytes) is the contract
+// the host glue marshals each `wheel` event into before `channel_send`; keep
+// the field order and types in sync with `src/wasm_glue.rs` (`__kara_wheel`).
+// `delta_y` is the vertical scroll (the usual zoom axis — negative = scroll
+// up / zoom in in most browsers); `x`/`y` are element-relative CSS pixels, so
+// a fractal explorer can zoom toward the cursor.
+pub struct WheelEvent {
+    x: f64,
+    y: f64,
+    delta_x: f64,
+    delta_y: f64,
+}
+
+impl WheelEvent {
+    fn x(ref self) -> f64 {
+        self.x
+    }
+
+    fn y(ref self) -> f64 {
+        self.y
+    }
+
+    fn delta_x(ref self) -> f64 {
+        self.delta_x
+    }
+
+    fn delta_y(ref self) -> f64 {
+        self.delta_y
+    }
+}
+
+// Stream wheel/scroll events on a fresh channel, indefinitely. Returns the
+// receiving half; the waiting side writes a plain blocking loop —
+//
+//     let wheels = wheel();
+//     loop {
+//         let w = wheels.recv();
+//         zoom_at(w.x(), w.y(), w.delta_y());   // wheel-to-zoom toward cursor
+//     }
+//
+// — no `await`, no `addEventListener` callback ceremony. Multi-shot and
+// coalesced exactly like `pointer_moves` (the host feeds a fresh event only
+// once the previous one is drained, so a fast scroll burst collapses to a
+// sample rather than accumulating backlog). The host listener is registered
+// `{ passive: true }`, so the producer reads the deltas but does not suppress
+// the page's default scroll — a demo that wants wheel-to-zoom-only sets
+// `overscroll-behavior`/`touch-action` on its canvas. Same
+// `--features wasm-threads` requirement as the other host-async producers.
+//
+// Mechanism: `Sender.__schedule_wheel` (a compiler builtin) clones the
+// sender's channel reference and hands the clone to the host's wheel listener,
+// which owns it for the listener's lifetime.
+pub fn wheel() -> Receiver[WheelEvent] with writes(Input) {
+    // Annotate the destructure so the channel element type is `WheelEvent`
+    // (the producer never `send`/`recv`s itself — the host fires the send — so
+    // there is no downstream channel op to infer the element from; an
+    // unannotated `Channel.new()` only type-checks under the interpreter).
+    let (tx, rx): (Sender[WheelEvent], Receiver[WheelEvent]) = Channel.new();
+    tx.__schedule_wheel();
+    rx
+}

@@ -907,13 +907,14 @@ worker-pool parallelism + SIMD-128 already ship on wasm-threads.
 >   ([`design.md`](design.md) § Vector lowering, 2026-06-07); pure demo-source
 >   rewrite (`examples/fathom/mandelbrot.kara`).
 > - [ ] **Fathom interactive pan/zoom** — replace the auto-zoom with
->   drag-to-pan + wheel-to-zoom. Depends on **`events.wheel`** (the remaining
->   `events.*` slice — see
+>   drag-to-pan + wheel-to-zoom. **Both input producers now ship**:
+>   `events.pointer_moves` (drag-to-pan) and `events.wheel` (wheel-to-zoom,
+>   `WheelEvent { x, y, delta_x, delta_y }`, shipped 2026-06-14 — see
 >   [`phase-10-targets.md`](implementation_checklist/phase-10-targets.md) §
->   event-stream wrappers, "REMAINING (mechanical follow-ups)", which already
->   names "`events.wheel` is what Plume/Fathom's pan-zoom cut needs next").
->   Pointer input (`events.pointer_moves`) already shipped; the shipped Fathom
->   cut auto-zooms with no input.
+>   event-stream wrappers). So this is now a pure demo-source slice: thread the
+>   two channels into the render loop (zoom toward `w.x()/w.y()` by `w.delta_y()`;
+>   pan by pointer drag-delta) and recompute the view transform per event. No
+>   compiler work pending.
 
 **Primary capability:** The same browser spine reduced to its essence —
 multi-core pixel compute via framebuffer-blit, with zero domain code. The
