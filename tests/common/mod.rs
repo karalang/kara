@@ -37,6 +37,22 @@ use std::time::Duration;
 /// `kill -9 <pid>` on timeout, watchdog thread joined before return so
 /// the kill is observable on stderr.
 pub fn output_with_hang_watchdog(mut cmd: Command, timeout: Duration) -> Option<Output> {
+    // Bound each child binary's auto-par worker pool so a suite-wide run does
+    // not oversubscribe the machine. `cargo test` runs ~`num_cpus` test threads
+    // in parallel, and since the 2026-06-14 auto-par ordered-output change far
+    // more E2E programs now spawn the runtime's work-stealing pool (output-
+    // bearing mains are no longer suppressed). Left uncapped, each child spins
+    // `available_parallelism()` (~18) workers → `test_threads × 18` threads
+    // thrash a `num_cpus`-core box, and child binaries miss the watchdog's
+    // timeout (slow-under-load read as "hung"). Two workers still exercises the
+    // real multi-branch par_run path (queue + work-helping join + ordered-
+    // output capture/replay) while keeping the total thread count bounded.
+    // Honors an explicit caller override (e.g. a wall-clock benchmark that
+    // wants full width) — only sets the default when unset.
+    let workers_key = std::ffi::OsStr::new("KARAC_PAR_WORKERS");
+    if !cmd.get_envs().any(|(k, _)| k == workers_key) {
+        cmd.env("KARAC_PAR_WORKERS", "2");
+    }
     let child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

@@ -48,30 +48,56 @@ fn stmt_is_constant_init(stmt: &Stmt) -> bool {
         StmtKind::LetUninit { .. } => return true,
         _ => return false,
     };
-    // Every literal-init form belongs here: the heuristic exists to
-    // recognize "this let does ~zero work" so the trivial-group filter in
-    // `find_parallel_groups` can drop sibling stmts that wouldn't benefit
-    // from `karac_par_run`'s ~70μs spawn cost. Surfaced 2026-05-22 by the
-    // kata-91 bench: `let zero: u8 = b'0';` was mis-classified as
-    // non-constant because `ByteLit` was missing from the arm, pushing
-    // `non_constant_count` over the `<= 1` threshold and emitting a par-
-    // block for the (`let l = N; let zero = b'0'; let buf = Vec.new();
-    // let j = 0;`) prologue. The captured `l` then became an opaque load
-    // downstream and LLVM lost the const-prop into `k % l` — costing
-    // ~47ms on a 10M-iter hot loop. `MultiStringLit` is added for parity
-    // with `StringLit`; both are textual literals with no runtime work.
-    matches!(
-        value.kind,
+    expr_is_constant_init(value)
+}
+
+/// `true` iff `expr` is a literal-init form that does ~zero work — a scalar
+/// literal, an identifier read, or a **source-bounded** composite literal
+/// (`[a, b, c]`, `Vec[..]`, `(a, b)`, `{k: v}`) whose every element is itself
+/// constant-init. The trivial-group filter in `find_parallel_groups` uses this
+/// to recognize sibling stmts that wouldn't benefit from `karac_par_run`'s
+/// ~70μs spawn cost.
+///
+/// Surfaced 2026-05-22 by the kata-91 bench: `let zero: u8 = b'0';` was
+/// mis-classified as non-constant because `ByteLit` was missing, pushing
+/// `non_constant_count` over the `<= 1` threshold and emitting a par-block for
+/// a (`let l = N; let zero = b'0'; let buf = Vec.new(); let j = 0;`) prologue —
+/// the captured `l` then became an opaque load and LLVM lost the const-prop
+/// into `k % l` (~47ms on a 10M-iter hot loop). `MultiStringLit` is parity with
+/// `StringLit`.
+///
+/// The composite-literal recursion was added 2026-06-14 (auto-par ordered-
+/// output corpus probe): once output suppression was removed, test-harness
+/// mains shaped `report("ex1", ex1); let ex2 = ["..", ".."]; report("ex2", ex2);`
+/// fanned out a par-block per (`report`, `let exN = [literals]`) pair — but a
+/// literal array build is ~zero work, so the group held only ONE substantial
+/// branch (the `report` call) and the fan-out bought no speedup, just spawn
+/// overhead + binary growth. Recognizing the literal array as constant-init
+/// drops `non_constant_count` to 1 → the group is trivial → inlined. A
+/// collection literal whose elements DO work (`[f(), g()]`) recurses to
+/// non-constant and stays parallelizable; `RepeatLiteral` (`[v; n]`) is
+/// deliberately excluded — its count is an expression, so it can be an O(n)
+/// fill worth overlapping with a sibling computation.
+fn expr_is_constant_init(expr: &Expr) -> bool {
+    match &expr.kind {
         ExprKind::Integer(_, _)
-            | ExprKind::Float(_, _)
-            | ExprKind::CharLit(_)
-            | ExprKind::ByteLit(_)
-            | ExprKind::StringLit(_)
-            | ExprKind::MultiStringLit(_)
-            | ExprKind::CStringLit { .. }
-            | ExprKind::Bool(_)
-            | ExprKind::Identifier(_)
-    )
+        | ExprKind::Float(_, _)
+        | ExprKind::CharLit(_)
+        | ExprKind::ByteLit(_)
+        | ExprKind::StringLit(_)
+        | ExprKind::MultiStringLit(_)
+        | ExprKind::CStringLit { .. }
+        | ExprKind::Bool(_)
+        | ExprKind::Identifier(_) => true,
+        ExprKind::Tuple(elems) | ExprKind::ArrayLiteral(elems) => {
+            elems.iter().all(expr_is_constant_init)
+        }
+        ExprKind::PrefixCollectionLiteral { items, .. } => items.iter().all(expr_is_constant_init),
+        ExprKind::MapLiteral(pairs) => pairs
+            .iter()
+            .all(|(k, v)| expr_is_constant_init(k) && expr_is_constant_init(v)),
+        _ => false,
+    }
 }
 
 /// `true` iff this statement contains a `return`, `break`, or

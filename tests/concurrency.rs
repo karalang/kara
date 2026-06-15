@@ -789,6 +789,44 @@ fn test_cost_model_one_expensive_plus_lets_marked_trivial() {
 }
 
 #[test]
+fn test_cost_model_call_plus_literal_collection_marked_trivial() {
+    // Auto-par ordered-output corpus probe (2026-06-14): once output
+    // suppression was removed, test-harness mains shaped
+    // `report(prev); let next = ["..", ".."]; report(next);` paired each
+    // substantial `report` call with the adjacent literal-array `let`. Pre-fix
+    // that `let` counted as non-constant work, so the group had two
+    // "non-constant" stmts → non-trivial → fanned out a par-block overlapping
+    // real work with a ~zero-work literal build (no speedup, pure spawn cost +
+    // binary growth — measured ~0.5ms/run on kata 722). Recognizing
+    // source-bounded collection literals as constant-init drops
+    // `non_constant_count` to 1 → the group is trivial → codegen inlines it.
+    let analysis = analyze(
+        r#"
+        effect resource R;
+        fn report(v: Vec[String]) writes(R) {}
+        fn main() {
+            let a: Vec[String] = ["x", "y"];
+            report(a);
+            let b: Vec[String] = ["z"];
+            report(b);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    let g = main_fc
+        .parallel_groups
+        .iter()
+        .find(|g| g.statement_indices.len() >= 2)
+        .expect("expected the report(a) + literal `let b` pair to group");
+    assert!(
+        g.is_trivial,
+        "a substantial call paired only with a source-bounded literal collection \
+         init has no balanced parallelism and must be trivial; got {:?}",
+        main_fc.parallel_groups
+    );
+}
+
+#[test]
 fn test_cost_model_hot_loop_plus_let_init_marked_trivial() {
     // Distillation of the kata 6 zigzag failure mode: the analyzer
     // groups a hot push loop with a let-init for the next phase's
