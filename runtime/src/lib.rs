@@ -895,7 +895,11 @@ impl Drop for FrameGuard {
 // (B-2026-06-14-20; the B-2026-06-11-8 class). `realloc`/`free` + `abort`-on-OOM
 // is panic-free, so the symbolizer stays DCE-strippable for a no-`par` binary.
 extern "C" {
-    fn realloc(ptr: *mut c_void, size: usize) -> *mut c_void;
+    // `*mut u8` (not `*mut c_void`) to match `alloc.rs`'s in-crate `realloc`
+    // declaration — two clashing `extern "C"` decls of the same libc symbol
+    // trip `clashing_extern_declarations` under `cargo clippy --all-targets`
+    // (B-2026-06-14-24).
+    fn realloc(ptr: *mut u8, size: usize) -> *mut u8;
     fn free(ptr: *mut c_void);
     fn abort() -> !;
 }
@@ -945,7 +949,7 @@ impl OutputCapture {
             while newcap < self.data_len + n {
                 newcap *= 2;
             }
-            let p = realloc(self.data as *mut c_void, newcap) as *mut u8;
+            let p = realloc(self.data, newcap);
             if p.is_null() {
                 abort();
             }
@@ -965,7 +969,7 @@ impl OutputCapture {
                 self.segs_cap * 2
             };
             let bytes = newcap * core::mem::size_of::<Seg>();
-            let p = realloc(self.segs as *mut c_void, bytes) as *mut Seg;
+            let p = realloc(self.segs as *mut u8, bytes) as *mut Seg;
             if p.is_null() {
                 abort();
             }
