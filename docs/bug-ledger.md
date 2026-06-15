@@ -89,17 +89,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **81 surfaced · 1 open · 80 fixed** (2026-05-20 → 2026-06-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **81 surfaced · 0 open · 81 fixed** (2026-05-20 → 2026-06-14). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (0)
 
-| id | date | surface | sev | title | tracker |
-|---|---|---|---|---|---|
-| B-2026-06-09-2 | 2026-06-09 | interp | low | Residual interp instruction-count drift on map-heavy workloads (333B->378B), interp-lane only | phase-4-interpreter.md |
+_None — the ledger is fully drained._
 
-### Fixed (80)
+### Fixed (81)
 
-<details><summary>80 fixed — the regression test is the durable artifact; prose lives in each owning phase tracker</summary>
+<details><summary>81 fixed — the regression test is the durable artifact; prose lives in each owning phase tracker</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -112,6 +110,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **81 surfaced �
 | B-2026-06-07-5 | codegen | high | Returned borrows (-> ref T) v1 COMPLETE: tiers+Option[ref T], false-pass fixed, docs honest; StringSlice=v2 | — |
 | B-2026-06-08-1 | codegen | high | Narrow-int binop computed at operand's true LLVM width, wrapping/truncating the wider operand | — |
 | B-2026-06-09-1 | lexer | low | F-string interpolation extractor not string-aware — brace/escaped-quote inside literal miscounts | — |
+| B-2026-06-09-2 | interp | low | Interp map-heavy drift RESOLVED: bench 333B->89.9B (3.7x via B-07-4 borrow fix); small-N +13.5% won't-chase | — |
 | B-2026-06-10-1 | codegen | med | Vec.contains / String.contains codegen lowering (linear element scan) | — |
 | B-2026-06-10-2 | codegen | high | Moving a heap field out of a by-value struct param shallow-shared the buffer — double-free | — |
 | B-2026-06-10-3 | codegen | high | VecDeque/String with_capacity + match-bound VecDeque payload: missing codegen arm crashed | — |
@@ -181,8 +180,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **81 surfaced �
 | B-2026-06-14-18 | typecheck | med | ref/mut-ref String stdlib methods degraded to Type::Error (find/slice unrouted); unwrap_or fell through | — |
 | B-2026-06-14-20 | codegen | med | write_console panic-free (try_with + realloc buffers) restores lean binary floor; @fwrite test->write_console | — |
 | B-2026-06-14-21 | codegen | high | A body-local owned heap `let` (Vec/String/Map/Set/Slice/array element) declared inside a for-over-COLLECTION loop leaks every iteration but the last. Only compile_for_range[_with_step] pushed a per-iteration scope-cleanup frame; the eight collection for-variants (compile_for_vec_var/slice_var/map_var/set_var/array_var/array_values/string_chars_inner/string_bytes_inner in src/codegen/control_flow_for.rs) called compile_block(body) with NO frame, so each body-local binding registered its FreeVecBuffer/drop in the enclosing FUNCTION frame and only the FINAL iteration's value was freed at the function tail - N-1 iterations' worth leaked (confirmed via `leaks --atExit`: 49999/50000). Surfaced as a hard browser OOM in the Fathom dogfood demo: render_frame's `for handle in handles { let chunk = handle.join(); for byte in chunk {...} }` leaked the joined Vec[u8] (~76KB) every frame, exhausting the wasm32 1GB linear-memory ceiling after ~550 frames (__karac_alloc_or_panic64 -> std::process::abort -> unreachable). NOT join-specific and NOT wasm-specific (native RSS climbed 175->461MB on the repro; wasm just hits a hard ceiling); for-over-range was already correct, which is why only collection loops leaked. FIXED: a shared compile_loop_body_with_cleanup(body, continue_bb) helper that pushes a per-iteration frame, compiles the body, and on normal fall-through drain_top_frame_with_emit()s before the back-edge branch; a body terminator (break/continue/return) pops without emitting (the loop_stack cleanup_depth walk already drained it). Wired into all eight collection variants (array_values inlines the drain since it is straight-line-unrolled, string_chars_inner inlines to preserve its byte_offset store). Regression: tests/memory_sanitizer.rs::asan_for_over_collection_body_local_no_leak (Linux-CI LSan is the leak gate; mac checks no double-free/UAF from the added cleanup). Verified: leaks 0 (was 49999); Fathom soaks 1750 frames @120fps no OOM (was ~550); memory_sanitizer 246/0. | 9a7920c6 |
-| B-2026-06-14-22 | codegen | high | wasm-threads browser builds: the WASI-preview1 polyfill's fd_write and random_get (emitted in src/wasm_glue.rs GLUE_STATIC_BODY) pass a SharedArrayBuffer-backed Uint8Array view straight to TextDecoder.decode / crypto.getRandomValues, which BOTH reject shared-backed views ('The provided ArrayBufferView value must not be shared.'). So ANY stdout/stderr write from a threaded browser program - a print, a panic, or the alloc-error abort path - throws a TypeError inside the polyfill, turning a benign diagnostic into a fatal worker error (it masked the real OOM message of B-2026-06-14-21 in the Fathom dogfood until fixed). node (non-shared buffer + fs.writeSync path) is unaffected, so the node E2E never caught it. FIXED: fd_write decodes a .slice() copy (fresh non-shared ArrayBuffer); random_get fills a non-shared scratch Uint8Array via crypto.getRandomValues then .set()s it into linear memory. Verified end-to-end in headless Chrome (Fathom prints/aborts with no 'must not be shared' TypeError). Regression: emit-level needles in wasm_glue::threaded_glue_renders_pick_constants_and_machinery. | 69c49ec0 |
-| B-2026-06-14-23 | codegen | med | Vec/String.with_capacity miscompiled on wasm32 with an i32 count (.len()-derived) — i32*i64 byte-size multiply + i32-into-i64 cap field/alloc param emit invalid IR; latent until loop-bound pre-sizing injected with_capacity(<i32 bound>) | 01d8e0fa |
+| B-2026-06-14-22 | codegen | high | wasm-threads browser builds: the WASI-preview1 polyfill's fd_write and random_get (emitted in src/wasm_glue.rs GLUE_STATIC_BODY) pass a SharedArrayBuffer-backed Uint8Array view straight to TextDecoder.decode / crypto.getRandomValues, which BOTH reject shared-backed views ('The provided ArrayBufferView value must not be shared.'). So ANY stdout/stderr write from a threaded browser program - a print, a panic, or the alloc-error abort path - throws a TypeError inside the polyfill, turning a benign diagnostic into a fatal worker error (it masked the real OOM message of B-2026-06-14-21 in the Fathom dogfood until fixed). node (non-shared buffer + fs.writeSync path) is unaffected, so the node E2E never caught it. FIXED: fd_write decodes a .slice() copy (fresh non-shared ArrayBuffer); random_get fills a non-shared scratch Uint8Array via crypto.getRandomValues then .set()s it into linear memory. Verified end-to-end in headless Chrome (Fathom prints/aborts with no 'must not be shared' TypeError). Regression: emit-level needles in wasm_glue::threaded_glue_renders_pick_constants_and_machinery. FOLLOW-UP: 69c49ec0 MISSED the exported readString() helper - the single string-decode funnel used by the threaded main-thread host-service ctx.readString (a host fn taking a string arg, line ~1395) and the rich string-export lift (karaLift case 4) - which has the identical shared-view bug (latent: Plume/Fathom take no string host-fn args so it never fired there; node's lenient TextDecoder hid it). Fixed by .slice()-copying inside readString too, covering all 3 call sites at once; regression needle added to the same wasm_glue test. | 69c49ec0 |
+| B-2026-06-14-23 | codegen | med | Vec/String.with_capacity miscompiled on wasm32 with an i32 count (.len()-derived) — i32*i64 byte-size multiply + i32-into-i64 cap field/alloc param emit invalid IR; latent until loop-bound pre-sizing injected with_capacity(<i32 bound>) | a55f17c1 |
 
 </details>
 
