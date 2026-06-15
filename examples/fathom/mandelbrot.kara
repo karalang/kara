@@ -15,11 +15,16 @@
 //     parallelism is real, measurable, in a browser tab.
 //   * `put_pixels` hands the framebuffer's bytes to JS, which does the
 //     `ctx.putImageData` blit. `Vec[u8].as_ptr()` is the FFI handoff.
+//   * `wheel()` and `pointer_moves()` (std.web.events) make it interactive:
+//     scroll to zoom toward the cursor, move the pointer to pan. Both arrive
+//     as typed channels the loop drains with a non-blocking `try_recv` each
+//     frame — live input, still no `await`, still no callback coloring.
 //
 // Build:  karac build mandelbrot.kara --target=wasm_browser --features wasm-threads
 // Serve:  see README.md (needs COOP/COEP headers for SharedArrayBuffer).
 
 import std.web.time.{animation_frames};
+import std.web.events.{pointer_moves, PointerEvent, wheel, WheelEvent};
 
 // The canvas this program paints. A user-defined host capability — like
 // `Dom` in examples/ssr_counter — reached through the `put_pixels` host fn.
@@ -33,9 +38,13 @@ effect resource Display;
 host fn put_pixels(ptr: *const u8, len: i64, w: i64, h: i64) with writes(Display);
 
 // Frame geometry. Kept modest so a single worker still renders smoothly —
-// the pool then multiplies the framerate rather than rescuing it.
-fn fb_width() -> i64 { 480 }
-fn fb_height() -> i64 { 320 }
+// the pool then multiplies the framerate rather than rescuing it. The canvas
+// is displayed 1:1 (CSS size == internal size; see index.html), so a wheel /
+// pointer event's element-relative CSS pixel coordinates map straight onto
+// these internal pixels — no rescale in the math below. `fb_width` stays even
+// for the two-pixels-per-SIMD-pair inner loop.
+fn fb_width() -> i64 { 640 }
+fn fb_height() -> i64 { 420 }
 fn max_iter() -> i64 { 200 }
 
 // Escape-time iteration count for the point (cr, ci): how many steps of
@@ -164,24 +173,76 @@ fn render_frame(cx: f64, cy: f64, scale: f64, workers: i64) with writes(Display)
 }
 
 // The render loop. A plain blocking loop over the frame clock — no `await`.
-// Each tick: zoom a little further into the seahorse valley, recompute the
-// frame in parallel, blit. When the zoom gets too deep for f64 to resolve,
-// reset to the full view and dive again. Private `fn main` (the `_start`
-// entry the host's `run()` invokes) — effects are inferred, so it needs no
-// `with` clause for the `writes(Timer)` / `suspends` of the frame clock.
+// Each tick: fold in the latest scroll (zoom toward the cursor) and the latest
+// pointer move (grab-pan), recompute the frame in parallel, blit. Both inputs
+// are drained with a NON-blocking `try_recv`, so the loop never stalls waiting
+// on a human and the render keeps its cadence whether or not anyone is
+// touching it. Private `fn main` (the `_start` entry the host's `run()`
+// invokes) — effects are inferred, so it needs no `with` clause for the frame
+// clock's `writes(Timer)` / `suspends` or the inputs' `writes(Input)`.
 fn main() {
-    let target_x = -0.743643887037151;
-    let target_y = 0.13182590420533;
     let workers = 8;
+    let w = fb_width();
+    let h = fb_height();
+    let half_w = (w as f64) / 2.0;
+    let half_h = (h as f64) / 2.0;
+
+    // View transform: (cx, cy) is the complex point at screen centre, `scale`
+    // the complex-plane distance per pixel (so screen pixel (px, py) maps to
+    // cx + (px - half_w) * scale, cy + (py - half_h) * scale — the same map
+    // render_rows uses). Start framed on the whole set.
+    let start_scale = 3.5 / (w as f64);
+    let mut cx = -0.75;
+    let mut cy = 0.0;
+    let mut scale = start_scale;
 
     let frames = animation_frames();
-    let mut scale = 0.012;
+    let wheels = wheel();
+    let moves = pointer_moves();
+
+    // Last pointer position (CSS px == internal px at 1:1), for the pan delta.
+    let mut last_px = 0.0;
+    let mut last_py = 0.0;
+    let mut have_last = false;
+
     loop {
         frames.recv();
-        render_frame(target_x, target_y, scale, workers);
-        scale = scale * 0.97;
-        if scale < 0.0000002 {
-            scale = 0.012;
+
+        // Scroll → zoom toward the cursor: scale the view while holding the
+        // complex point under the cursor fixed on screen. delta_y < 0 (scroll
+        // up) shrinks `scale` = zoom in. Host-coalesced, so one sample/frame.
+        match wheels.try_recv() {
+            Some(ev) => {
+                let mut f = 1.0 + ev.delta_y() * 0.0015;
+                if f < 0.6 { f = 0.6; }
+                if f > 1.4 { f = 1.4; }
+                cx = cx + (ev.x() - half_w) * scale * (1.0 - f);
+                cy = cy + (ev.y() - half_h) * scale * (1.0 - f);
+                scale = scale * f;
+                // Floor at f64's resolving power; ceiling at the full view.
+                if scale < 0.0000000000001 { scale = 0.0000000000001; }
+                if scale > start_scale { scale = start_scale; }
+            }
+            None => {}
         }
+
+        // Pointer move → grab-pan: drag the view by the pointer's per-frame
+        // delta so the fractal tracks the cursor. No button gate — `PointerEvent`
+        // carries no button state yet (tracked follow-up in the README), so the
+        // pan is hover-driven rather than click-drag.
+        match moves.try_recv() {
+            Some(p) => {
+                if have_last {
+                    cx = cx - (p.x() - last_px) * scale;
+                    cy = cy - (p.y() - last_py) * scale;
+                }
+                last_px = p.x();
+                last_py = p.y();
+                have_last = true;
+            }
+            None => {}
+        }
+
+        render_frame(cx, cy, scale, workers);
     }
 }

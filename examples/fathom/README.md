@@ -6,25 +6,35 @@ loop whose per-frame compute fans out across a Web Worker pool — with no
 `async`, no `await`, no callback coloring, and no hand-written threading code.
 
 It is the smallest demo that still lands the headline: **real multi-core
-compute in a browser, from one source.** (Its richer sibling **Plume** adds live
-pointer input; **Slipstream**'s wasm edition is the full fluid-sim flagship on
-the same spine — see [`docs/dogfooding.md`](../../docs/dogfooding.md).)
+compute in a browser, from one source** — and it is **interactive**: scroll to
+zoom toward the cursor, move the pointer to pan. (Its sibling **Plume** drives
+the same live-input spine for a flow field; **Slipstream**'s wasm edition is the
+full fluid-sim flagship on it — see [`docs/dogfooding.md`](../../docs/dogfooding.md).)
 
 ## What it shows
 
-- The render loop is a plain blocking loop:
+- The render loop is a plain blocking loop that also folds in live input —
+  every frame it drains the latest scroll and pointer move with a non-blocking
+  `try_recv`, with no `await` and no event callbacks:
 
   ```kara
   let frames = animation_frames();
+  let wheels = wheel();           // Channel[WheelEvent]   — scroll
+  let moves  = pointer_moves();   // Channel[PointerEvent] — pan
   loop {
-      frames.recv();                 // parks until the next frame — no await
+      frames.recv();              // parks until the next frame — no await
+      match wheels.try_recv() { Some(ev) => zoom_toward(ev), None => {} }
+      match moves.try_recv()  { Some(p)  => grab_pan(p),     None => {} }
       render_frame(cx, cy, scale, workers);
   }
   ```
 
   `frames.recv()` blocks the worker until the host fires the next
-  `requestAnimationFrame`; the worker parks and the host wakes it. *Where is the
-  `await`? There isn't one.*
+  `requestAnimationFrame`; the worker parks and the host wakes it. The wheel and
+  pointer events cross host→wasm as typed channel payloads (`WheelEvent` carries
+  the cursor position, so a scroll can zoom *toward the cursor*). *Where is the
+  `await`, the `addEventListener`, the SharedArrayBuffer juggling? There is
+  none.*
 
 - Each frame's rows are split into bands and computed in parallel:
 
@@ -60,8 +70,28 @@ the same spine — see [`docs/dogfooding.md`](../../docs/dogfooding.md).)
   output. In a browser the win is CPU headroom, not higher FPS — the frame rate
   is `requestAnimationFrame`/vsync-capped.
 
-The view auto-zooms into the seahorse valley and resets when `f64` runs out of
-precision — no input needed.
+## Interaction
+
+- **Scroll** to zoom — `wheel()` (`std.web.events`) delivers a `WheelEvent`
+  with the cursor position and scroll deltas. The loop scales the view while
+  holding the complex point under the cursor fixed, so you zoom *into whatever
+  you point at* (scroll up = in). Zoom is clamped to the full view at the top
+  and to `f64`'s resolving power at the bottom.
+- **Move the pointer** to pan — `pointer_moves()` delivers a `PointerEvent`;
+  the loop pans the view by the pointer's per-frame delta so the fractal tracks
+  the cursor.
+
+The canvas is rendered 1:1 (CSS size == the wasm framebuffer size) so each
+event's element-relative coordinates map straight onto internal pixels — no
+rescale in the demo math.
+
+> **Known limitation — hover-pan, not click-drag.** `std.web.events.PointerEvent`
+> currently carries only `{ x, y }`, no button/`buttons` state, so the demo
+> cannot gate panning on a held mouse button: the view follows the pointer
+> whenever it moves. Adding a `buttons` field to `PointerEvent` (host glue +
+> the 16-byte struct contract in `src/wasm_glue.rs`) would let this become true
+> click-drag panning. Tracked as a follow-up in
+> [`docs/dogfooding.md`](../../docs/dogfooding.md) (Fathom entry).
 
 ## Build & run
 
@@ -86,6 +116,26 @@ Cross-Origin-Embedder-Policy: require-corp
 `serve.py` sets both. A plain `python3 -m http.server` does **not**, and the
 threaded module will silently fall back to the single-thread build (still
 renders, but on one core).
+
+### Verifying it actually works
+
+A node mock-DOM harness (cf. `ssr_counter/run_browser.mjs`) can't exercise this
+demo — it needs a real Worker pool, `SharedArrayBuffer`, a `<canvas>`, and live
+input. `verify_browser.mjs` drives an actual headless Chrome over the DevTools
+Protocol instead, and asserts the full interactive path:
+
+```bash
+./build.sh --build && node verify_browser.mjs
+```
+
+It loads the page cross-origin-isolated, checks the frame counter advances
+(the blocking render loop is running on a host-woken worker), confirms the
+canvas has real content, then **dispatches synthetic CDP wheel and pointer
+events** — the real host-listener → channel → wasm `recv` path, not a JS shim —
+and asserts the rendered canvas changes in response to each. Exits `0` on PASS,
+`2` if no Chrome is found. (This is the methodology from
+`reference_headless_browser_wasm_testing`: node E2E cannot catch browser-only
+wasm-threads bugs, so the input path must be exercised in a real browser.)
 
 ## Artifacts
 
@@ -121,3 +171,13 @@ Building Fathom surfaced and closed real `karac` gaps (the dogfood's job — cf.
    (native) / `join` deadlock (wasm-threads). Fixed by scoping the for-loop
    binding to a per-loop `@forN` rename frame in the CFG (`src/cfg.rs`), like
    match arms — so `render_frame` reuses the natural name in both places.
+
+The **interactive pan/zoom** slice (this revision) drove **no new compiler
+work** — it consumes the already-shipped `std.web.events.wheel` /
+`pointer_moves` producers as pure demo source, which is the point: the spine was
+built so a demo like this needs only application code. It did surface one
+feature gap (a `buttons` field on `PointerEvent`, see the Interaction note
+above) and one ops gotcha: the `wasm` / `wasm-threads` runtime archives must be
+rebuilt after any runtime change (the realloc-grow path `cda981bc` added
+`__karac_realloc_or_panic64`, so a stale archive fails the link with
+`undefined symbol` — rebuild per the repo-root `CLAUDE.md` archive recipe).

@@ -61,7 +61,7 @@ per-project sections below hold the design. Status legend: ✅ shipped ·
 | **Forge** | `embedded` profile firmware on a real MCU | ⬜ planned | v8 hardware gaps | 3 |
 | **Iris** | One source → native + WASM, no port | ⬜ planned | Phase 10 WASM target | 3 |
 | **Plume** | Parallel browser compute driven by event streams — no `async`/coloring | ✅ shipped | `animation_frames` + event-data `pointer_moves` channel + `put_pixels` blit — all built (`examples/plume/`) | 3 |
-| **Fathom** | Browser × multi-core pixel compute, one source | ✅ shipped (non-interactive cut) | `animation_frames` + `Vec.as_ptr` blit host fn + `Vector[f64,2]` SIMD-128 inner kernel (1.47× fewer instrs, byte-identical) — all built · interactive pan/zoom (needs `events.wheel`) = follow-up | 3 |
+| **Fathom** | Browser × multi-core pixel compute, one source | ✅ shipped (interactive) | `animation_frames` + `Vec.as_ptr` blit host fn + `Vector[f64,2]` SIMD-128 inner kernel (1.47× fewer instrs, byte-identical) + interactive pan/zoom (`events.wheel` zoom-toward-cursor + `pointer_moves` pan, real-browser CDP-verified) — all built | 3 |
 
 ---
 
@@ -906,15 +906,35 @@ worker-pool parallelism + SIMD-128 already ship on wasm-threads.
 >   `Vector[f64, 2]` → WASM SIMD-128 lowering already shipped
 >   ([`design.md`](design.md) § Vector lowering, 2026-06-07); pure demo-source
 >   rewrite (`examples/fathom/mandelbrot.kara`).
-> - [ ] **Fathom interactive pan/zoom** — replace the auto-zoom with
->   drag-to-pan + wheel-to-zoom. **Both input producers now ship**:
->   `events.pointer_moves` (drag-to-pan) and `events.wheel` (wheel-to-zoom,
->   `WheelEvent { x, y, delta_x, delta_y }`, shipped 2026-06-14 — see
->   [`phase-10-targets.md`](implementation_checklist/phase-10-targets.md) §
->   event-stream wrappers). So this is now a pure demo-source slice: thread the
->   two channels into the render loop (zoom toward `w.x()/w.y()` by `w.delta_y()`;
->   pan by pointer drag-delta) and recompute the view transform per event. No
->   compiler work pending.
+> - [x] **Fathom interactive pan/zoom — DONE 2026-06-14.** The auto-zoom is
+>   replaced by live input: **scroll zooms toward the cursor** (`events.wheel` —
+>   the view scales while holding the complex point under the cursor fixed,
+>   clamped to the full view / `f64` resolution) and **pointer move pans**
+>   (`events.pointer_moves` — the view tracks the pointer's per-frame delta).
+>   Both channels are drained per frame with a non-blocking `try_recv` in the
+>   plain blocking render loop — no `await`. Pure demo-source slice
+>   (`examples/fathom/mandelbrot.kara` + `index.html`), **no new compiler work**:
+>   it consumes the already-shipped `std.web.events` producers, which was the
+>   point of building that surface. The canvas is now rendered 1:1 (CSS ==
+>   framebuffer, geometry 640×420) so event coords map straight to pixels.
+>   **Real-browser verified** by a new committed CDP harness
+>   `examples/fathom/verify_browser.mjs` (drives headless Chrome, dispatches
+>   synthetic wheel/pointer events through the real host-listener → channel →
+>   `recv` path, asserts the canvas changes — node E2E can't, per
+>   `reference_headless_browser_wasm_testing`): PASS (isolated, frames advance,
+>   wheel zooms, pointer pans). Ops note: building surfaced that the `wasm` /
+>   `wasm-threads` runtime archives were stale after the realloc-grow path
+>   (`cda981bc` added `__karac_realloc_or_panic64`) — rebuilt + reinstalled per
+>   the `CLAUDE.md` archive recipe; any runtime change needs the same refresh.
+> - [ ] **`PointerEvent` button/`buttons` state → true click-drag pan.**
+>   `std.web.events.PointerEvent` carries only `{ x, y }`, so Fathom's pan is
+>   *hover-driven* (the view follows the pointer whenever it moves) rather than
+>   gated on a held mouse button. Adding a `buttons` field — host glue in
+>   `src/wasm_glue.rs` (`__kara_pointer_moves`) + widening the marshalled struct
+>   contract (currently 16 bytes: `x`@0, `y`@8) + the `PointerEvent` accessor in
+>   `runtime/stdlib/web_events.kara` — would let the demo gate panning on a
+>   primary-button press (classic click-drag). Surfaced by the pan/zoom slice
+>   above; small, isolated to the event-stream surface, benefits Plume too.
 
 **Primary capability:** The same browser spine reduced to its essence —
 multi-core pixel compute via framebuffer-blit, with zero domain code. The
