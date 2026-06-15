@@ -283,6 +283,33 @@ const CORPUS: &[&str] = &[
     r#"f"é{x}" z"#,
     // Non-ASCII INSIDE the `{…}` expr scan — caught by the token after the f-string.
     r#"f"{αβ} y" z"#,
+    // #31: string-aware f-string interpolation brace matching + chained tuple
+    // index. Two seed-vs-port drifts (commits 3311df6d / 99131a7b) that no prior
+    // corpus input exercised. The interpolation brace matcher is now string-aware
+    // — a `{` / `}` inside a string or char literal nested in the hole must NOT
+    // change the brace depth, so the captured Expr `raw` is the full verbatim
+    // slice (incl. the nested literal), not truncated at the inner brace.
+    // `}` inside a nested string inside the hole closes nothing.
+    r#"f"{ "a}b" }""#,
+    // The open-brace twin: `{` inside a nested string must not inflate depth.
+    r#"f"{ "x{y" }""#,
+    // Same for a char literal: `'}'` is a brace-bearing char, not a hole close.
+    r#"f"{ '}' }""#,
+    // The headline case from the seed commit message: a `}` inside `"a}b"` that
+    // is itself inside a bracket index inside the hole.
+    r#"f"{ m["a}b"] }""#,
+    // An escaped quote in *expression* position is invalid input (interpolation
+    // expressions use plain quotes). The seed emits a clear lex Error here; the
+    // port must too, consuming the byte-identical extent (Error renders bare
+    // `ERROR`, so this asserts SPAN parity from `f` up to the backslash).
+    r#"f"{ id(\"hi\") }""#,
+    // Chained tuple index `t.1.1` / `t.1.0`: a number whose preceding char is `.`
+    // is a tuple index, never a float — the lexer must emit `t . 1 . 1`, not
+    // `t . 1.1`(float). A genuine float (`x = 1.5`) on the same lines stays a
+    // float, proving the guard is `.`-preceded-only.
+    "t.1.1",
+    "t.1.0",
+    "tup.0.1.2 x = 1.5",
 ];
 
 /// Render one Rust `SpannedToken` in the Kāra lexer's canonical one-line

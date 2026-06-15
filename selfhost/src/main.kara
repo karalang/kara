@@ -674,8 +674,19 @@ impl Lexer {
             self.advance();
         }
         let mut is_float = false;
+        // A number whose immediately-preceding char is `.` is a TUPLE INDEX
+        // (`x.1`, and crucially the trailing `1` of `x.1.1`), never a float —
+        // its leading `.` was already lexed as a `Dot`. Without this, `x.1.1`
+        // lexes as `x . 1.1`(float), and the parser can't recover the original
+        // digits from the `f64` to split it back into two indices, so chained
+        // tuple indexing fails to parse (mirrors `src/lexer.rs` `number`,
+        // commit 99131a7b, B-2026-06-11-7). A genuine float literal is never
+        // `.`-preceded — `.` after a value is always member access, and Kāra has
+        // no leading-dot float (`.5`) — so suppress BOTH the fractional and
+        // exponent float parts in this position; the number lexes as an integer.
+        let tuple_index_ctx = self.start > 0 and self.bytes[self.start - 1] == b'.';
         // Fractional part: `.DIGITS` and also `.eEXP` (e.g. `1.e10`).
-        if self.peek() == b'.' {
+        if not tuple_index_ctx and self.peek() == b'.' {
             let after_dot = self.peek_next();
             let is_exp_after_dot = (after_dot == b'e' or after_dot == b'E') and is_exp_start(self.peek_at(2));
             if is_digit(after_dot) or is_exp_after_dot {
@@ -687,7 +698,7 @@ impl Lexer {
             }
         }
         // Exponent: e|E [+|-] DIGITS.
-        if self.peek() == b'e' or self.peek() == b'E' {
+        if not tuple_index_ctx and (self.peek() == b'e' or self.peek() == b'E') {
             is_float = true;
             self.advance();
             if self.peek() == b'+' or self.peek() == b'-' {
@@ -1074,23 +1085,68 @@ impl Lexer {
                 let expr_line = self.line;
                 let expr_column = self.column;
                 let mut depth = 1;
+                // String-aware brace matching (mirrors `src/lexer.rs`
+                // `interpolated_string`, commit 3311df6d): a `{` / `}` inside a
+                // string or char literal nested in the interpolation must NOT
+                // change the brace depth — `f"{ m["a}b"] }"`'s `}` in `"a}b"`
+                // closes nothing, and a brace-only counter would truncate the
+                // expression there. `in_lit` holds the open delimiter (`"` or
+                // `'`) while inside such a literal, and `0` when outside it (no
+                // byte literal is `0`, so the sentinel is unambiguous). `raw` is
+                // still captured as the verbatim source substring, so the
+                // span-rebasing invariant (`byte i of raw == source offset
+                // expr_start + i`) is preserved — string-awareness only gates the
+                // brace counting and the nested-quote handling.
+                let mut in_lit: u8 = 0;
                 while depth > 0 and not self.is_at_end() {
                     let bc = self.peek();
-                    if bc == b'{' {
+                    if in_lit != 0 {
+                        if bc == b'\\' {
+                            // Copy the backslash and its escaped char as a pair so
+                            // a `\"` / `\'` inside the literal does not close it.
+                            // Both bytes are stepped over verbatim; nothing is
+                            // interpreted here.
+                            self.advance_codepoint();
+                            if not self.is_at_end() {
+                                if self.peek() == b'\n' {
+                                    self.line = self.line + 1;
+                                    self.column = 0;
+                                }
+                                self.advance_codepoint();
+                            }
+                            continue;
+                        }
+                        if bc == in_lit {
+                            in_lit = 0;
+                        }
+                    } else if bc == b'{' {
                         depth = depth + 1;
                     } else if bc == b'}' {
                         depth = depth - 1;
                         if depth == 0 {
                             break;
                         }
+                    } else if bc == b'"' or bc == b'\'' {
+                        in_lit = bc;
+                    } else if bc == b'\\' {
+                        // A backslash in *expression* position (outside any nested
+                        // literal) is the invalid escaped-quote case
+                        // (`f"{ id(\"hi\") }"`): expression context wants plain
+                        // quotes. The seed previously copied it verbatim, then
+                        // silently emitted it as literal text (the `\` fails to
+                        // re-parse) — wrong output, no error. Emit a clear error
+                        // instead, WITHOUT consuming the `\`, so the span runs
+                        // from `start` to the backslash (byte-identical to the
+                        // seed's `make_spanned`).
+                        return self.make_spanned(Token.Error("unexpected backslash in f-string interpolation; interpolation expressions use plain quotes".to_string()));
                     }
                     if bc == b'\n' {
                         self.line = self.line + 1;
                         self.column = 0;
                     }
                     // Codepoint-aware so non-ASCII inside the `{…}` expr advances
-                    // `column` once, not per byte (#30); `{`/`}`/`\n` are ASCII so
-                    // the depth + newline bookkeeping above is unaffected.
+                    // `column` once, not per byte (#30); `{`/`}`/`\n`/quotes are
+                    // ASCII so the depth + literal bookkeeping above is unaffected.
                     self.advance_codepoint();
                 }
                 let raw = self.src.substring(expr_start, self.current);

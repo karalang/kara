@@ -121,6 +121,36 @@ jobs:
   # lean→full pair first (codegen links them). Deliberately NOT here yet:
   # memory_sanitizer (needs an ASAN cc — Tier 2) and the wasm/component E2E
   # (needs node + wasm-tools + the wasm archives — Tier 3, B-2026-06-12-2 leg 3).
+  # Provenance guard: the self-hosted-lexer oracle (tests/selfhost_lexer.rs) is
+  # a DIFFERENTIAL oracle — it only catches port drift on behaviour its corpus
+  # exercises. A seed change to src/lexer.rs with no matching corpus input lets
+  # the Kāra port silently diverge while the oracle stays green (how commits
+  # 3311df6d / 99131a7b drifted — fixed in follow-on #31). This job fails when
+  # src/lexer.rs changes without tests/selfhost_lexer.rs over the push/PR range,
+  # so the seed and the oracle corpus are forced to move together. Escape
+  # hatches (whitespace/format-only diff, or a [skip-oracle-sync] commit marker)
+  # let genuinely oracle-irrelevant lexer edits through — see the script header.
+  oracle-sync:
+    name: Oracle corpus sync guard
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The guard diffs across the push/PR range, so it needs full history,
+          # not the default depth-1 shallow clone (a shallow clone has no
+          # merge-base to compare against).
+          fetch-depth: 0
+
+      - name: Enforce seed↔oracle corpus sync
+        # On a PR, compare the PR base branch tip against the head SHA; on a
+        # push, compare the push's before..after. The script merge-bases the two
+        # internally and applies the escape hatches.
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: bash scripts/oracle-sync-guard.sh
+
   codegen-e2e:
     name: Codegen E2E (LLVM 18)
     runs-on: ubuntu-latest
