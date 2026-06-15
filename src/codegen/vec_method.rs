@@ -1129,22 +1129,27 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_conditional_branch(needs_grow, grow_bb, copy_bb)
                     .unwrap();
 
-                // Grow: new_cap = max(new_len, max(4, cap * 2)) — same
-                // geometry as `push_str`.
+                // Grow: new_cap = max(new_len, max(8, cap * 2)) — same
+                // geometry as `push_str`. The min-cap floor is 8, not 4: a
+                // String is a 1-byte-element buffer, and Rust's `RawVec` floors
+                // the first allocation at 8 for 1-byte elements (4 for wider),
+                // so an ≤8-byte string (the common token / number-render case)
+                // lands in ONE allocation instead of growing 0→4→8 — halving
+                // the realloc traffic on short-string-heavy workloads.
                 self.builder.position_at_end(grow_bb);
                 let two = i64_t.const_int(2, false);
-                let four = i64_t.const_int(4, false);
+                let min_cap = i64_t.const_int(8, false);
                 let doubled = self
                     .builder
                     .build_int_mul(cap, two, "spush.doubled")
                     .unwrap();
                 let cmp1 = self
                     .builder
-                    .build_int_compare(inkwell::IntPredicate::UGT, doubled, four, "spush.cmp1")
+                    .build_int_compare(inkwell::IntPredicate::UGT, doubled, min_cap, "spush.cmp1")
                     .unwrap();
                 let growth_min = self
                     .builder
-                    .build_select(cmp1, doubled, four, "spush.growth_min")
+                    .build_select(cmp1, doubled, min_cap, "spush.growth_min")
                     .unwrap()
                     .into_int_value();
                 let cmp2 = self
@@ -2182,15 +2187,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.builder.position_at_end(ok_bb);
                 }
                 let two = i64_t.const_int(2, false);
-                let four = i64_t.const_int(4, false);
+                // String byte buffer: floor the first allocation at 8 (not 4),
+                // matching Rust's `RawVec` min-cap for 1-byte elements, so a
+                // short string (≤8 bytes) lands in one allocation rather than
+                // growing 0→4→8 — fewer reallocs on short-string workloads.
+                let min_cap = i64_t.const_int(8, false);
                 let doubled = self.builder.build_int_mul(cap, two, "doubled").unwrap();
                 let cmp1 = self
                     .builder
-                    .build_int_compare(inkwell::IntPredicate::UGT, doubled, four, "cmp1")
+                    .build_int_compare(inkwell::IntPredicate::UGT, doubled, min_cap, "cmp1")
                     .unwrap();
                 let growth_min = self
                     .builder
-                    .build_select(cmp1, doubled, four, "growth_min")
+                    .build_select(cmp1, doubled, min_cap, "growth_min")
                     .unwrap()
                     .into_int_value();
                 let cmp2 = self
@@ -2334,15 +2343,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Grow: new_cap = max(new_len, max(4, cap*2)); fallible alloc.
                 self.builder.position_at_end(grow_bb);
                 let two = i64_t.const_int(2, false);
-                let four = i64_t.const_int(4, false);
+                // String byte buffer floors at 8 (Rust `RawVec` 1-byte min-cap);
+                // see the `push_str` grow path for the rationale.
+                let min_cap = i64_t.const_int(8, false);
                 let doubled = self.builder.build_int_mul(cap, two, "tss.doubled").unwrap();
                 let cmp1 = self
                     .builder
-                    .build_int_compare(inkwell::IntPredicate::UGT, doubled, four, "tss.cmp1")
+                    .build_int_compare(inkwell::IntPredicate::UGT, doubled, min_cap, "tss.cmp1")
                     .unwrap();
                 let growth_min = self
                     .builder
-                    .build_select(cmp1, doubled, four, "tss.growth_min")
+                    .build_select(cmp1, doubled, min_cap, "tss.growth_min")
                     .unwrap()
                     .into_int_value();
                 let cmp2 = self
