@@ -1,10 +1,24 @@
 # Spike: build-time prelude precompilation (karac startup cost)
 
-**Status:** design + decomposition done 2026-06-14; implementation not started.
+**Status:** design + decomposition done 2026-06-14. **DECISION 2026-06-14 — DO
+NOT BUILD IN RUST; this is a Kāra-side post-pivot perf item (v2 / Phase-11).**
+The precompile mechanism is Rust/cargo-specific (`build.rs` + serde on Rust
+`Type`/`Symbol`/`Env` + `include_bytes!`); it does **not** carry over to the
+self-hosted compiler — the front-end *logic* ports line-for-line, but this
+*mechanism* would be re-implemented from scratch in Kāra. Per the self-hosting
+pivot rule ("stop adding NEW features to Rust pre-pivot; write once in Kāra"),
+building it in Rust now is throwaway work. The prelude-reprocessing *cost* DOES
+port (the prelude-injection architecture is line-for-line), so the self-hosted
+karac inherits the same ~33 M front-end cost — but the *fix* belongs in Kāra,
+bundled with the post-pivot perf work (the Phase-11 IR-quality pass is the bigger
+self-hosted-speed lever anyway). **This doc is now the design reference for the
+eventual Kāra-side implementation, not a Rust work order.** Revisit only if
+self-hosted-compiler dev iteration is genuinely painful (amortized on real
+compiles, so likely never the bottleneck). See [[project_prelude_startup_cost]].
+
 Origin: B-2026-06-09-2 close-out surfaced that every `karac` invocation
 re-parses + re-registers the 5,271-line baked stdlib prelude. See
-[[project_prelude_startup_cost]] (user memory) and `phase-4-interpreter.md`
-B-2026-06-09-2 entry. User authorized "build-time precompile" 2026-06-14.
+`phase-4-interpreter.md` B-2026-06-09-2 entry.
 
 ## Problem
 
