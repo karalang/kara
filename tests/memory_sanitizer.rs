@@ -9524,4 +9524,318 @@ fn main() {
             "raw_ptr_deref_store_no_bad_access",
         );
     }
+
+    // ── Parser pre-port: recursive-heap gate (AST tree shape) ──────
+    //
+    // The self-hosting parser builds the AST at scale. karac v1 forbids a
+    // direct nested-enum payload (`E_ENUM_NESTED_ENUM_PAYLOAD`), so the AST
+    // port wraps recursive edges as `shared enum` (RC pointer = the
+    // `Box<Expr>` analog), tagged-union operands as plain `struct`, and
+    // sequence children as `Vec[Expr]`:
+    //
+    //     shared enum Expr { Num(i64), Add(BinOp), Neg(Unary), Call(CallExpr) }
+    //     struct BinOp { left: Expr, right: Expr }
+    //     struct Unary { operand: Expr }
+    //     struct CallExpr { callee: Expr, args: Vec[Expr] }
+    //
+    // The existing `asan_*_recursive_shared_enum_*` cases above use the
+    // DIRECT-payload shape (`Add(Expr, Expr)`); these exercise the
+    // struct-wrapped shape the port actually uses, plus the operations the
+    // parser hammers: deep build, RC-share fan-out, move-out of Vec
+    // elements, and a by-value transform that returns a NEW tree (the
+    // parser-rewrite shape). They are the durable artifact of the
+    // "recursive-heap family quiet" green-light for the parser port. The
+    // Linux-CI LSan job is the authoritative leak gate (mac ASAN catches
+    // double-free / UAF only).
+
+    #[test]
+    fn asan_struct_wrapped_recursive_tree_freed_once() {
+        // Build/drop a struct-wrapped recursive `shared enum` tree (the AST
+        // wrapping convention). Each `Expr` child is an RC handle inside a
+        // plain-`struct` operand wrapper; the whole tree must be freed
+        // exactly once (no leak of the per-node boxes, no double-free of the
+        // RC-shared children).
+        assert_clean_asan_run(
+            r#"
+shared enum Expr { Num(i64), Add(BinOp), Neg(Unary) }
+struct BinOp { left: Expr, right: Expr }
+struct Unary { operand: Expr }
+fn eval(e: Expr) -> i64 {
+    match e {
+        Num(n) => n,
+        Add(b) => eval(b.left) + eval(b.right),
+        Neg(u) => 0 - eval(u.operand),
+    }
+}
+fn main() {
+    let inner = Add(BinOp { left: Num(2), right: Num(3) });
+    let sum = Add(BinOp { left: Num(1), right: inner });
+    let t = Neg(Unary { operand: sum });
+    println(eval(t));
+}
+"#,
+            &["-6"],
+            "struct_wrapped_recursive_tree_freed_once",
+        );
+    }
+
+    #[test]
+    fn asan_struct_wrapped_deep_build_and_vec_children_no_leak() {
+        // Recursive builder to depth N, trees built in a loop and pushed into
+        // a `Vec[Expr]`, and a `Call` variant with a `Vec[Expr]` of
+        // heterogeneous children. Looping makes any per-iteration leak of a
+        // tree (or its RC children) visible to the Linux-CI LSan gate.
+        assert_clean_asan_run(
+            r#"
+shared enum Expr { Num(i64), Add(BinOp), Neg(Unary), Call(CallExpr) }
+struct BinOp { left: Expr, right: Expr }
+struct Unary { operand: Expr }
+struct CallExpr { callee: Expr, args: Vec[Expr] }
+fn eval(e: Expr) -> i64 {
+    match e {
+        Num(n) => n,
+        Add(b) => eval(b.left) + eval(b.right),
+        Neg(u) => 0 - eval(u.operand),
+        Call(c) => {
+            let mut acc = eval(c.callee);
+            for a in c.args { acc = acc + eval(a); }
+            acc
+        }
+    }
+}
+fn build(n: i64) -> Expr {
+    if n <= 0 { Num(0) }
+    else { Neg(Unary { operand: Add(BinOp { left: Num(n), right: build(n - 1) }) }) }
+}
+fn main() {
+    let mut args: Vec[Expr] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 10 { args.push(Num(i)); i = i + 1; }
+    let call = Call(CallExpr { callee: Num(100), args: args });
+    let mut forest: Vec[Expr] = Vec.new();
+    let mut j: i64 = 0;
+    while j < 30 { forest.push(build(j)); j = j + 1; }
+    let mut total: i64 = eval(call);
+    for t in forest { total = total + eval(t); }
+    println(total);
+}
+"#,
+            &["-80"],
+            "struct_wrapped_deep_build_and_vec_children",
+        );
+    }
+
+    #[test]
+    fn asan_struct_wrapped_byvalue_transform_returns_new_tree_no_double_free() {
+        // The parser-rewrite shape: consume a tree BY VALUE in a recursive
+        // transformer that returns a NEW tree (moving the children through),
+        // including move-out of `Vec[Expr]` elements into the transformer in
+        // a for-loop. The original tree is consumed exactly once and the
+        // rebuilt tree freed exactly once — no double-free of a child that
+        // was moved into the new tree, no leak of the consumed original.
+        assert_clean_asan_run(
+            r#"
+shared enum Expr { Num(i64), Add(BinOp), Neg(Unary) }
+struct BinOp { left: Expr, right: Expr }
+struct Unary { operand: Expr }
+fn eval(e: Expr) -> i64 {
+    match e {
+        Num(n) => n,
+        Add(b) => eval(b.left) + eval(b.right),
+        Neg(u) => 0 - eval(u.operand),
+    }
+}
+fn fold(e: Expr) -> Expr {
+    match e {
+        Num(n) => Num(n),
+        Neg(u) => Neg(Unary { operand: fold(u.operand) }),
+        Add(b) => {
+            let l = fold(b.left);
+            let r = fold(b.right);
+            Add(BinOp { left: l, right: r })
+        }
+    }
+}
+fn build(n: i64) -> Expr {
+    if n <= 0 { Num(1) }
+    else { Add(BinOp { left: Num(n), right: build(n - 1) }) }
+}
+fn main() {
+    let t = build(15);
+    let t2 = fold(t);
+    let mut v: Vec[Expr] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 12 { v.push(build(i)); i = i + 1; }
+    let mut total: i64 = eval(t2);
+    for e in v {
+        let folded = fold(e);
+        total = total + eval(folded);
+    }
+    println(total);
+}
+"#,
+            &["419"],
+            "struct_wrapped_byvalue_transform_returns_new_tree",
+        );
+    }
+
+    #[test]
+    fn asan_struct_wrapped_move_out_and_rc_share_no_double_free() {
+        // `let t2 = t1` (move-out of a tree), a subtree moved into a parent
+        // (RC fan-in), and a builder returning a tree by move. Each node is
+        // owned by exactly one live path at a time and freed once.
+        assert_clean_asan_run(
+            r#"
+shared enum Expr { Num(i64), Add(BinOp), Neg(Unary) }
+struct BinOp { left: Expr, right: Expr }
+struct Unary { operand: Expr }
+fn eval(e: Expr) -> i64 {
+    match e {
+        Num(n) => n,
+        Add(b) => eval(b.left) + eval(b.right),
+        Neg(u) => 0 - eval(u.operand),
+    }
+}
+fn main() {
+    let t1 = Add(BinOp { left: Num(3), right: Num(4) });
+    let t2 = t1;
+    let sub = Add(BinOp { left: Num(2), right: Num(3) });
+    let p1 = Add(BinOp { left: sub, right: Num(10) });
+    let p2 = Neg(Unary { operand: Num(7) });
+    println(eval(t2));
+    println(eval(p1));
+    println(eval(p2));
+}
+"#,
+            &["7", "15", "-7"],
+            "struct_wrapped_move_out_and_rc_share",
+        );
+    }
+
+    #[test]
+    fn asan_struct_wrapped_recursive_cycle_accepted_and_freed() {
+        // B-2026-06-14-28 regression (memory side): the struct-wrapped
+        // recursive shape (`shared enum Expr` whose recursive edge passes
+        // through a plain `struct BinOp`) is a *breakable* cycle — the
+        // ownership checker must accept it (see the ownership.rs unit tests),
+        // and the resulting RC tree must be freed exactly once. Looped to
+        // surface a per-iteration leak to the Linux-CI LSan gate.
+        assert_clean_asan_run(
+            r#"
+shared enum Expr { Num(i64), Bin(BinOp) }
+struct BinOp { left: Expr, right: Expr }
+fn eval(e: Expr) -> i64 {
+    match e {
+        Num(n) => n,
+        Bin(b) => eval(b.left) + eval(b.right),
+    }
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 40 {
+        let t: Expr = Bin(BinOp { left: Num(i), right: Bin(BinOp { left: Num(i), right: Num(2) }) });
+        total = total + eval(t);
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["1640"],
+            "struct_wrapped_recursive_cycle_accepted_and_freed",
+        );
+    }
+
+    #[test]
+    fn asan_struct_wrapped_enum_payload_rc_children_freed_no_leak() {
+        // B-2026-06-14-28 (leak side) — when a `shared enum`'s variant payload
+        // is a plain `struct` that owns `shared` fields (`Add(BinOp)` +
+        // `struct BinOp { left: Expr, right: Expr }`), the inline RC children
+        // must be rc-dec'd when the enum box is freed. Pre-fix, the
+        // shared-enum-box RC drop walker (`emit_shared_enum_rc_drop_fn`)
+        // classified the struct payload non-walkable (the value-path struct
+        // drop `__karac_drop_struct_<S>` has no shared-field arm; a local
+        // binding's shared fields are dec'd by its let cleanup, which an enum
+        // payload has not) — so every inline `Expr` child leaked (~192 B /
+        // tree on macOS `leaks`, silent under mac ASAN; the Linux-CI LSan job
+        // is the gate). Looped to make the per-iteration leak visible.
+        assert_clean_asan_run(
+            r#"
+shared enum Expr { Num(i64), Add(BinOp), Neg(Unary) }
+struct BinOp { left: Expr, right: Expr }
+struct Unary { operand: Expr }
+fn eval(e: Expr) -> i64 {
+    match e {
+        Num(n) => n,
+        Add(b) => eval(b.left) + eval(b.right),
+        Neg(u) => 0 - eval(u.operand),
+    }
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 60 {
+        let t: Expr = Neg(Unary { operand: Add(BinOp { left: Num(i), right: Num(2) }) });
+        total = total + eval(t);
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["-1890"],
+            "struct_wrapped_enum_payload_rc_children_freed",
+        );
+    }
+
+    #[test]
+    fn asan_vec_of_shared_enum_elements_freed_no_leak() {
+        // B-2026-06-14-28 (Vec side) — a `Vec[Expr]` whose elements are a
+        // `shared enum` (the AST-port `Call(args: Vec[Expr])` sequence-child
+        // shape). Each element is an 8-byte RC pointer; the per-element drop
+        // must rc-dec it (and recurse into the box's children), not value-drop
+        // it. Pre-fix, `vec_elem_agg_drop_for_type_expr` routed a shared enum
+        // to `emit_enum_drop_switch` (the VALUE drop) — which never
+        // decremented the refcount, leaking every element (and its struct-
+        // wrapped children). Builds Vecs of heterogeneous variants in a loop,
+        // consumes some via a for-loop move-out and drops others whole.
+        assert_clean_asan_run(
+            r#"
+shared enum Expr { Num(i64), Add(BinOp) }
+struct BinOp { left: Expr, right: Expr }
+fn eval(e: Expr) -> i64 {
+    match e {
+        Num(n) => n,
+        Add(b) => eval(b.left) + eval(b.right),
+    }
+}
+fn build(n: i64) -> Vec[Expr] {
+    let mut v: Vec[Expr] = Vec.new();
+    let mut i: i64 = 0;
+    while i < n {
+        v.push(Add(BinOp { left: Num(i), right: Num(1) }));
+        i = i + 1;
+    }
+    v
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut k: i64 = 0;
+    while k < 20 {
+        let v: Vec[Expr] = build(8);
+        // consume via for-loop move-out
+        for e in v {
+            total = total + eval(e);
+        }
+        // a second Vec dropped WHOLE (not consumed)
+        let w: Vec[Expr] = build(4);
+        total = total + (w.len() as i64);
+        k = k + 1;
+    }
+    println(total);
+}
+"#,
+            &["800"],
+            "vec_of_shared_enum_elements_freed",
+        );
+    }
 }

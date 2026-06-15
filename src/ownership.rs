@@ -1271,8 +1271,30 @@ impl<'a> OwnershipChecker<'a> {
                     // to form a runtime reference cycle that leaks — so it keeps
                     // the `weak` advice. (Non-direct recursion through `Option`/
                     // `Vec` produces no graph edge here and was always accepted.)
-                    let breakable_shared = all_shared && self.cycle_has_base_escape(&cycle);
-                    if breakable_shared {
+                    // A cycle is *breakable* (builds finite, acyclic trees with
+                    // no forced runtime reference cycle) when it has BOTH:
+                    //   (a) a base escape — some enum variant in the cycle that
+                    //       doesn't recurse back in (`Num(i64)`), so finite trees
+                    //       can terminate; and
+                    //   (b) at least one `shared` participant, whose RC handle is
+                    //       a fixed-size indirection that breaks the size
+                    //       recursion (the child is a pointer, not inlined).
+                    // This covers the direct `shared enum Expr { Num, Add(Expr,
+                    // Expr) }` shape AND the AST-port wrapping convention where the
+                    // recursive edge passes through a plain `struct` operand
+                    // wrapper: `shared enum Expr { Num(i64), Add(BinOp) }` +
+                    // `struct BinOp { left: Expr, right: Expr }`. The `BinOp` node
+                    // is non-shared, but every `Expr` field it holds is an RC
+                    // handle, so `BinOp` is still fixed-size and the tree is
+                    // finite — requiring *all* participants to be shared wrongly
+                    // rejected this (the structs are the tagged-union operands the
+                    // AST port mandates, since v1 forbids a direct nested-enum
+                    // payload). A cycle with NO base escape (`shared struct A { b:
+                    // B }` / `struct B { a: A }`) stays an error: it has no
+                    // termination and forces an infinite/leaking structure.
+                    let any_shared = cycle.iter().any(|n| self.is_shared_type(n));
+                    let breakable = any_shared && self.cycle_has_base_escape(&cycle);
+                    if breakable {
                         continue;
                     }
                     let (message, suggestion) = if all_shared {

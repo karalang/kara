@@ -254,6 +254,22 @@ impl<'ctx> super::Codegen<'ctx> {
     /// This pass is layout-free — it only populates `struct_field_type_names`,
     /// `struct_field_type_exprs`, and `struct_field_names`.
     pub(super) fn register_struct_metadata(&mut self, program: &Program) {
+        // B-2026-06-14-28 — record every `shared` / `par` struct + enum NAME
+        // up front (before `shared_types` heap layouts exist) so the
+        // enum-drop-kind classifier can see that a struct field's type is
+        // shared (`struct BinOp { left: Expr }`, `Expr` a shared enum) while
+        // running inside `declare_enums`.
+        for item in &program.items {
+            match item {
+                Item::StructDef(s) if s.is_shared || s.is_par => {
+                    self.shared_type_decl_names.insert(s.name.clone());
+                }
+                Item::EnumDef(e) if e.is_shared || e.is_par => {
+                    self.shared_type_decl_names.insert(e.name.clone());
+                }
+                _ => {}
+            }
+        }
         for item in &program.items {
             if let Item::StructDef(s) = item {
                 // Per-field user-type name (last path segment if the
@@ -4263,6 +4279,36 @@ impl<'ctx> super::Codegen<'ctx> {
                             && !self.shared_types.contains_key(other)
                             && self
                                 .aggregate_param_copy_supported_struct(other, &mut Vec::new())
+                            && self.struct_payload_word_aligned(other, &mut Vec::new()) =>
+                    {
+                        EnumDropKind::NestedStruct
+                    }
+                    // B-2026-06-14-28: the AST-port operand-wrapper shape — a
+                    // plain (non-shared) struct whose fields are `shared`
+                    // (`struct BinOp { left: Expr, right: Expr }`, `Expr`
+                    // shared), carried inline as a shared-enum-variant payload
+                    // (`Add(BinOp)`). `aggregate_param_copy_supported_struct`
+                    // bails on a shared field (its `field_copy_supported`
+                    // shared arm returns false), so the copy-clean branch
+                    // above misses it and it classified `None` — leaking the
+                    // inline RC children at enum-box drop (the children were
+                    // never rc-dec'd: the enum drop walker's `NestedStruct`
+                    // arm routes through `__karac_drop_struct_<S>`, which has
+                    // no shared-field arm). Classify `NestedStruct` whenever
+                    // the struct *transitively owns a shared field*; the enum
+                    // drop walker's `NestedStruct` arm then rc-dec's those
+                    // shared children directly (in addition to any
+                    // `__karac_drop_struct_<S>` buffer free). This path is
+                    // reached only from the shared-enum-box RC drop (refcount
+                    // → 0, uniquely owned), so the rc-dec is correct and there
+                    // is no entry-copy symmetry to honor — a shared-enum
+                    // payload is constructed in place, not copied as a
+                    // by-value param. Word-alignment still required (the
+                    // payload words must line up with the struct's fields).
+                    other
+                        if self.struct_field_type_exprs.contains_key(other)
+                            && !self.shared_types.contains_key(other)
+                            && self.struct_owns_shared_field(other, &mut Vec::new())
                             && self.struct_payload_word_aligned(other, &mut Vec::new()) =>
                     {
                         EnumDropKind::NestedStruct

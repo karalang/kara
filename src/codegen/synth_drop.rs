@@ -256,6 +256,18 @@ impl<'ctx> super::Codegen<'ctx> {
                                         .build_call(drop_fn, &[field_ptr.into()], "")
                                         .unwrap();
                                 }
+                                // B-2026-06-14-28 — the value-path struct drop
+                                // (`__karac_drop_struct_<S>`) frees Vec/String/
+                                // enum/Map buffers but has NO shared-field arm
+                                // (a struct's `shared` fields are rc-dec'd by
+                                // the let/param cleanup actions when it's a
+                                // local, not by its drop fn). As a shared-enum
+                                // payload (`Add(BinOp)`) the struct has no such
+                                // binding, so its inline RC children leak. Walk
+                                // them here and rc-dec each — the box has hit
+                                // refcount 0 (uniquely owned), so this is the
+                                // sole dec of its one ref to each child.
+                                self.emit_nested_struct_shared_rc_decs(field_ptr, &sname);
                             }
                         }
                     }
@@ -275,6 +287,167 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         self.enum_drop_fns.insert(enum_name.to_string(), drop_fn);
         Some(drop_fn)
+    }
+
+    /// B-2026-06-14-28 — rc-dec every inline `shared` (RC-pointer) field of a
+    /// plain (non-shared) struct stored at `struct_ptr`. Used by the
+    /// shared-enum-box RC drop walker for a struct-wrapped recursive payload
+    /// (`Add(BinOp)` + `struct BinOp { left: Expr, right: Expr }`, `Expr`
+    /// shared — the AST-port operand-wrapper convention). The value-path
+    /// `__karac_drop_struct_<S>` frees Vec/String/enum/Map buffers but leaves
+    /// shared fields untouched (a local binding's shared fields are dec'd by
+    /// its let/param cleanup actions, not its drop fn), so as an enum payload
+    /// — which has no such binding — the inline RC children would leak.
+    ///
+    /// Per shared / `Option[shared T]` field: GEP into the inline struct,
+    /// load the RC pointer, null-check, then dec via the field's shared heap
+    /// layout. Recurses through nested non-shared struct fields so a deeper
+    /// wrapper (`struct Outer { mid: Mid }`, `Mid { e: Expr }`) is reached.
+    /// The caller has already established the box is uniquely owned (refcount
+    /// hit 0), so each dec is the sole release of the box's one ref.
+    pub(super) fn emit_nested_struct_shared_rc_decs(
+        &mut self,
+        struct_ptr: PointerValue<'ctx>,
+        struct_name: &str,
+    ) {
+        let Some(&st) = self.struct_types.get(struct_name) else {
+            return;
+        };
+        let Some(ftes) = self.struct_field_type_exprs.get(struct_name).cloned() else {
+            return;
+        };
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let drop_fn = match self.current_fn {
+            Some(f) => f,
+            None => return,
+        };
+        for (idx, fte) in ftes.iter().enumerate() {
+            // Direct `shared T` field — the recursive RC edge.
+            if let Some(heap_ty) = self.shared_heap_type_for_type_expr(fte) {
+                let Ok(field_ptr) =
+                    self.builder
+                        .build_struct_gep(st, struct_ptr, idx as u32, "nstr.sh.p")
+                else {
+                    continue;
+                };
+                let inner = self
+                    .builder
+                    .build_load(ptr_ty, field_ptr, "nstr.sh.ptr")
+                    .unwrap()
+                    .into_pointer_value();
+                let is_null = self.builder.build_is_null(inner, "nstr.sh.isnull").unwrap();
+                let do_bb = self.context.append_basic_block(drop_fn, "nstr.sh.do");
+                let skip_bb = self.context.append_basic_block(drop_fn, "nstr.sh.skip");
+                self.builder
+                    .build_conditional_branch(is_null, skip_bb, do_bb)
+                    .unwrap();
+                self.builder.position_at_end(do_bb);
+                self.emit_refcount_dec_by_type(heap_ty, inner);
+                self.builder.build_unconditional_branch(skip_bb).unwrap();
+                self.builder.position_at_end(skip_bb);
+                continue;
+            }
+            // `Option[shared T]` field — dec the inner when Some. The inline
+            // field is the 4-i64 Option enum (tag at w0, payload at w1); a
+            // niche-collapsed single-ptr Option does not occur for a struct
+            // field stored inline in an enum payload here. Read the tag, and
+            // on Some treat w1 as the RC pointer.
+            if let Some((_, inner_info)) = self.option_inner_shared_type_for_type_expr(fte) {
+                let Ok(opt_field_ptr) =
+                    self.builder
+                        .build_struct_gep(st, struct_ptr, idx as u32, "nstr.opt.p")
+                else {
+                    continue;
+                };
+                let option_ty = self
+                    .enum_layouts
+                    .get("Option")
+                    .map(|l| l.llvm_type)
+                    .unwrap_or(st);
+                let Ok(tag_ptr) =
+                    self.builder
+                        .build_struct_gep(option_ty, opt_field_ptr, 0, "nstr.opt.tag.p")
+                else {
+                    continue;
+                };
+                let tag = self
+                    .builder
+                    .build_load(i64_t, tag_ptr, "nstr.opt.tag")
+                    .unwrap()
+                    .into_int_value();
+                let some_tag = self
+                    .enum_layouts
+                    .get("Option")
+                    .and_then(|l| l.tags.get("Some").copied())
+                    .unwrap_or(1);
+                let is_some = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        tag,
+                        i64_t.const_int(some_tag, false),
+                        "nstr.opt.issome",
+                    )
+                    .unwrap();
+                let do_bb = self.context.append_basic_block(drop_fn, "nstr.opt.do");
+                let skip_bb = self.context.append_basic_block(drop_fn, "nstr.opt.skip");
+                self.builder
+                    .build_conditional_branch(is_some, do_bb, skip_bb)
+                    .unwrap();
+                self.builder.position_at_end(do_bb);
+                if let Ok(w0_ptr) =
+                    self.builder
+                        .build_struct_gep(option_ty, opt_field_ptr, 1, "nstr.opt.w0.p")
+                {
+                    let w0 = self
+                        .builder
+                        .build_load(i64_t, w0_ptr, "nstr.opt.w0")
+                        .unwrap()
+                        .into_int_value();
+                    let inner = self
+                        .builder
+                        .build_int_to_ptr(w0, ptr_ty, "nstr.opt.inner")
+                        .unwrap();
+                    let inner_null = self
+                        .builder
+                        .build_is_null(inner, "nstr.opt.inner.isnull")
+                        .unwrap();
+                    let ido = self
+                        .context
+                        .append_basic_block(drop_fn, "nstr.opt.inner.do");
+                    let iskip = self
+                        .context
+                        .append_basic_block(drop_fn, "nstr.opt.inner.skip");
+                    self.builder
+                        .build_conditional_branch(inner_null, iskip, ido)
+                        .unwrap();
+                    self.builder.position_at_end(ido);
+                    self.emit_refcount_dec_by_type(inner_info.heap_type, inner);
+                    self.builder.build_unconditional_branch(iskip).unwrap();
+                    self.builder.position_at_end(iskip);
+                }
+                self.builder.build_unconditional_branch(skip_bb).unwrap();
+                self.builder.position_at_end(skip_bb);
+                continue;
+            }
+            // Nested non-shared user struct → recurse into it in place.
+            if let TypeKind::Path(p) = &fte.kind {
+                if let Some(head) = p.segments.first() {
+                    if self.struct_types.contains_key(head.as_str())
+                        && !self.shared_types.contains_key(head.as_str())
+                    {
+                        if let Ok(field_ptr) =
+                            self.builder
+                                .build_struct_gep(st, struct_ptr, idx as u32, "nstr.nest.p")
+                        {
+                            let name = head.clone();
+                            self.emit_nested_struct_shared_rc_decs(field_ptr, &name);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// TypeExpr-aware hash-fn wrapper. Dispatches tuples to a recursive
@@ -1865,6 +2038,38 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // B-2026-06-14-28 — a plain (non-shared) user struct payload that
+        // transitively owns `shared` fields: the AST-port operand-wrapper
+        // shape `Add(BinOp)` + `struct BinOp { left: Expr, right: Expr }`
+        // (`Expr` shared). The struct is laid out INLINE in the enum payload
+        // words; its `shared` fields are RC pointers that must be dec'd or
+        // they leak. `field_is_walkable` flags it (it must, or this variant
+        // gets no drop block); here GEP to the inline word region as the
+        // struct's LLVM type and rc-dec each shared field via
+        // `emit_nested_struct_shared_rc_decs`. (Its OWN Vec/String/enum
+        // buffers are freed by `__karac_drop_struct_<S>`, invoked separately
+        // by the value-drop path; here we only release the inline RC
+        // children the value path leaves untouched.)
+        if let TypeKind::Path(p) = &te.kind {
+            if let Some(seg) = p.segments.last() {
+                let sname = seg.clone();
+                if self.struct_types.contains_key(&sname)
+                    && !self.shared_types.contains_key(&sname)
+                    && self.struct_owns_shared_field(&sname, &mut Vec::new())
+                {
+                    if let Ok(field_ptr) = self.builder.build_struct_gep(
+                        enum_heap,
+                        p_arg,
+                        word_idx as u32,
+                        &format!("{label}.nstr.p"),
+                    ) {
+                        self.emit_nested_struct_shared_rc_decs(field_ptr, &sname);
+                    }
+                    return true;
+                }
+            }
+        }
+
         // Vec / String (3 payload words `{data, len, cap}`): free data when
         // cap > 0. The payload words reinterpret as the `{ptr,i64,i64}` vec
         // struct (ptr and i64 are both 8 bytes), as the struct drop does.
@@ -2005,10 +2210,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     if slf.shared_types.contains_key(seg.as_str()) {
                         return true;
                     }
-                    return matches!(
+                    if matches!(
                         seg.as_str(),
                         "Vec" | "VecDeque" | "String" | "Map" | "HashMap" | "Set" | "HashSet"
-                    );
+                    ) {
+                        return true;
+                    }
+                    // B-2026-06-14-28 — a plain struct payload that owns
+                    // shared fields (`Add(BinOp)`, `BinOp { left: Expr }`):
+                    // its inline RC children need dec'ing at box drop.
+                    if slf.struct_types.contains_key(seg.as_str())
+                        && !slf.shared_types.contains_key(seg.as_str())
+                        && slf.struct_owns_shared_field(seg.as_str(), &mut Vec::new())
+                    {
+                        return true;
+                    }
                 }
             }
             false

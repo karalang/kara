@@ -1435,6 +1435,20 @@ impl<'ctx> super::Codegen<'ctx> {
         if matches!(name.as_str(), "Option" | "Result") {
             return None;
         }
+        // B-2026-06-14-28 — a `shared` struct / enum element (`Vec[Expr]`,
+        // `Expr` a shared enum — the AST-port sequence-child shape
+        // `Call(args: Vec[Expr])`). The slot holds an 8-byte RC pointer, NOT
+        // an inline aggregate, so the value-drop fns below are WRONG (they'd
+        // walk the slot as a struct/enum value). A shared element needs an
+        // rc-dec of its pointer. This check MUST precede the `enum_layouts`
+        // one — a shared enum is in `enum_layouts` too, so the old code
+        // routed it to `emit_enum_drop_switch` (the value drop), which never
+        // decremented the refcount and leaked every element. Synthesize a
+        // tiny per-element fn that loads the RC pointer from the slot,
+        // null-checks, and rc-dec's via the element's heap layout.
+        if let Some(heap_ty) = self.shared_heap_type_for_type_expr(elem_te) {
+            return self.emit_vec_elem_rc_dec_fn(&name, heap_ty);
+        }
         if self.struct_types.contains_key(&name) {
             return self.emit_struct_drop_synthesis(&name);
         }
@@ -1442,6 +1456,74 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.emit_enum_drop_switch(&name);
         }
         None
+    }
+
+    /// B-2026-06-14-28 — synthesize (or fetch) `__karac_vec_elem_rc_dec_<T>`,
+    /// a per-element drop fn for a `Vec` whose element type is `shared T` (an
+    /// inline RC pointer). The `FreeVecBuffer` drain calls it with a pointer
+    /// to each live element SLOT; the fn loads the RC pointer out of the
+    /// slot, null-checks, and rc-dec's via `T`'s heap layout (which fires
+    /// `__karac_rc_drop_<T>` and frees the box + recurses into its children
+    /// when the count reaches 0). Memoized by symbol name.
+    fn emit_vec_elem_rc_dec_fn(
+        &mut self,
+        type_name: &str,
+        heap_ty: StructType<'ctx>,
+    ) -> Option<inkwell::values::FunctionValue<'ctx>> {
+        let fn_name = format!("__karac_vec_elem_rc_dec_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+        // Force-synthesize the element type's recursive RC drop fn FIRST, so
+        // the `emit_refcount_dec_by_type` below resolves through
+        // `emit_rc_dec`'s `rc_drop_fns` dispatch to it (and recurses into the
+        // box's children) rather than falling to a plain `free` that strands
+        // them. Without this, a `Vec[Expr]` element's `Add(BinOp)` payload's
+        // shared children leaked even though the standalone tree drop frees
+        // them (the drop fn just wasn't built yet at Vec-cleanup synth time).
+        if let Some(info) = self.shared_types.get(type_name).cloned() {
+            if info.is_enum {
+                let _ = self.emit_shared_enum_rc_drop_fn(type_name);
+            } else {
+                let _ = self.emit_shared_struct_rc_drop_fn(type_name);
+            }
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let void_ty = self.context.void_type();
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let fn_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        let drop_fn =
+            self.module
+                .add_function(&fn_name, fn_ty, Some(inkwell::module::Linkage::Internal));
+        self.current_fn = Some(drop_fn);
+        let entry = self.context.append_basic_block(drop_fn, "entry");
+        self.builder.position_at_end(entry);
+        let slot_ptr = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let inner = self
+            .builder
+            .build_load(ptr_ty, slot_ptr, "vecelem.rc.ptr")
+            .unwrap()
+            .into_pointer_value();
+        let is_null = self
+            .builder
+            .build_is_null(inner, "vecelem.rc.isnull")
+            .unwrap();
+        let do_bb = self.context.append_basic_block(drop_fn, "vecelem.rc.do");
+        let ret_bb = self.context.append_basic_block(drop_fn, "vecelem.rc.ret");
+        self.builder
+            .build_conditional_branch(is_null, ret_bb, do_bb)
+            .unwrap();
+        self.builder.position_at_end(do_bb);
+        self.emit_refcount_dec_by_type(heap_ty, inner);
+        self.builder.build_unconditional_branch(ret_bb).unwrap();
+        self.builder.position_at_end(ret_bb);
+        self.builder.build_return(None).unwrap();
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        self.current_fn = saved_fn;
+        Some(drop_fn)
     }
 
     /// Derive the four `track_map_var` classification args for a `Map[K, V]`

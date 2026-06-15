@@ -637,8 +637,14 @@ fn test_nonshared_typed_param_unchanged() {
 
 #[test]
 fn test_mixed_shared_nonshared_cycle_is_ownership_cycle() {
-    // If any participant is non-shared, it's an ownership cycle (the non-shared
-    // type cannot transitively contain itself regardless of the others).
+    // A mixed shared/non-shared cycle with NO base escape (`shared struct A
+    // { b: B }` / `struct B { a: A }` — both single-field, every instance
+    // forced to recurse) is still an ownership cycle: there is no
+    // terminating variant, so it has no finite construction. It is reported
+    // as a plain ownership cycle (not the `shared-type cycle` "use weak"
+    // diagnostic, which is reserved for *all-shared* cycles). Contrast
+    // `test_struct_wrapped_recursive_shared_enum_breakable_compiles`, where
+    // a base escape makes the same shared/non-shared mix *breakable*.
     let errors = ownership_errors(
         "shared struct A { b: B }\n\
          struct B { a: A }",
@@ -651,6 +657,75 @@ fn test_mixed_shared_nonshared_cycle_is_ownership_cycle() {
         !err.message.contains("shared-type cycle"),
         "mixed cycle should be treated as an ownership cycle, not shared-type: {}",
         err.message
+    );
+}
+
+#[test]
+fn test_struct_wrapped_recursive_shared_enum_breakable_compiles() {
+    // B-2026-06-14-28: the self-hosting AST-port wrapping convention. v1
+    // forbids a direct nested-enum payload (`E_ENUM_NESTED_ENUM_PAYLOAD`),
+    // so the recursive `Box<Expr>` edge passes through a plain `struct`
+    // operand wrapper rather than `Add(Expr, Expr)` directly:
+    //
+    //     shared enum Expr { Num(i64), Add(BinOp), Neg(Unary) }
+    //     struct BinOp { left: Expr, right: Expr }
+    //     struct Unary { operand: Expr }
+    //
+    // The cycle `Expr → BinOp → Expr` has BOTH a base escape (`Num(i64)`,
+    // letting finite trees terminate) AND a `shared` participant (`Expr`,
+    // whose RC handle is a fixed-size indirection that breaks the size
+    // recursion — `BinOp` holds pointers, not inlined `Expr`s). That makes
+    // it a *breakable* cycle: it builds finite, leak-free trees and is the
+    // designed mechanism for recursive shared types, so the ownership
+    // checker must NOT flag it. Pre-fix, `breakable` required *all*
+    // participants to be `shared`; the plain-struct operand wrapper
+    // (non-shared, as the AST-port convention mandates) flipped the gate
+    // and spuriously reported `ownership cycle detected: Expr → BinOp →
+    // Expr` — non-deterministically, since the HashMap-ordered DFS start
+    // node decided whether the error survived dedup.
+    //
+    // Assert on the type graph alone (the cycle decision does not depend on
+    // any function body), so type-only definitions are the precise probe.
+    // `ownership_ok` asserts the program produces NO ownership errors — the
+    // breakable cycle must be accepted silently.
+    ownership_ok(
+        "shared enum Expr { Num(i64), Add(BinOp), Neg(Unary) }\n\
+         struct BinOp { left: Expr, right: Expr }\n\
+         struct Unary { operand: Expr }",
+    );
+}
+
+#[test]
+fn test_struct_wrapped_recursive_shared_enum_vec_child_breakable_compiles() {
+    // The sequence-child arm of the AST-port convention: a `Vec[Expr]`
+    // child (the `Call(args)` shape). The `Vec` produces no direct graph
+    // edge, but the struct-wrapped `Expr` edges still form the breakable
+    // cycle through `BinOp`. Accepted, no cycle error.
+    ownership_ok(
+        "shared enum Expr { Num(i64), Add(BinOp), Call(CallExpr) }\n\
+         struct BinOp { left: Expr, right: Expr }\n\
+         struct CallExpr { callee: Expr, args: Vec[Expr] }",
+    );
+}
+
+#[test]
+fn test_plain_struct_wrapped_cycle_without_shared_stays_ownership_cycle() {
+    // Guard the other half of the fix: the `any_shared` relaxation must NOT
+    // over-accept a cycle with NO shared participant. A plain `struct`
+    // cycle that passes through an enum operand wrapper but contains no
+    // `shared` edge has no fixed-size indirection — `Expr` is inlined into
+    // `BinOp`, so the type is infinite-sized regardless of the base escape.
+    // It must STAY an ownership cycle. (`is_shared_type` over the cycle is
+    // the discriminator: `any_shared` is false here.)
+    let errors = ownership_errors(
+        "enum Expr { Num(i64), Add(BinOp) }\n\
+         struct BinOp { left: Expr, right: Expr }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == OwnershipErrorKind::OwnershipCycle),
+        "a non-shared struct-wrapped recursive cycle must remain an ownership cycle"
     );
 }
 

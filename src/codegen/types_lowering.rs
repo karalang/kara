@@ -1552,6 +1552,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+        // A chained field access whose *intermediate* field is shared:
+        // `h.a.v` where `Holder { a: Leaf }` and `Leaf` is `shared`. The
+        // inline `a` field lowers to the 8-byte RC pointer, so reading `.v`
+        // through it must load that pointer and GEP into the heap payload —
+        // exactly the shared GEP-deref the identifier/`self` arms enable.
+        // Without this, the chained read fell to `compile_field_access`'s
+        // generic struct-value path: `compile_expr(h.a)` yields a
+        // `PointerValue` (the extracted inline RC pointer), the
+        // `StructValue` guard misses, and the access returned the const-0
+        // placeholder (silent wrong value). `compile_expr(object)` already
+        // produces that inline RC pointer, which is precisely the `ptr`
+        // the shared branch loads. Recover the field's surface type name
+        // via `type_name_of_expr` (which resolves a `FieldAccess` chain
+        // through `struct_field_type_names`) and look it up in
+        // `shared_types`.
+        if let ExprKind::FieldAccess { .. } = &expr.kind {
+            if let Some(type_name) = self.type_name_of_expr(expr) {
+                if let Some(info) = self.shared_types.get(type_name.as_str()) {
+                    return Some((type_name, info.clone()));
+                }
+            }
+        }
         None
     }
 

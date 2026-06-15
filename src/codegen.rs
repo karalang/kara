@@ -1279,6 +1279,15 @@ pub(super) struct Codegen<'ctx> {
     /// `register_var_from_type_expr`. Populated alongside
     /// `struct_field_type_names` in `declare_structs`.
     pub(crate) struct_field_type_exprs: HashMap<String, Vec<crate::ast::TypeExpr>>,
+    /// Names of all `shared` / `par` struct AND enum types, recorded by
+    /// `register_struct_metadata` — i.e. BEFORE the `shared_types` heap-layout
+    /// map is populated (that fills in during `declare_enums` / struct LLVM
+    /// build). `enum_drop_kind_for_type_expr` runs inside `declare_enums` and
+    /// must know whether a struct field's type is shared (`struct BinOp {
+    /// left: Expr }`, `Expr` a shared enum) before `shared_types` has the
+    /// `Expr` entry — B-2026-06-14-28. Name-only; the heap layout still comes
+    /// from `shared_types` at emit time, once populated.
+    pub(crate) shared_type_decl_names: std::collections::HashSet<String>,
     /// FFI union storage types (union name → LLVM struct type used as
     /// the storage blob). Phase 5 slice 4. The storage struct is sized
     /// to `max(field_sizes)` and aligned to `max(field_aligns)` per the
@@ -4655,6 +4664,7 @@ impl<'ctx> Codegen<'ctx> {
             struct_field_names: HashMap::new(),
             struct_field_type_names: HashMap::new(),
             struct_field_type_exprs: HashMap::new(),
+            shared_type_decl_names: std::collections::HashSet::new(),
             union_types: HashMap::new(),
             union_field_types: HashMap::new(),
             enum_layouts: HashMap::new(),

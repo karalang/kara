@@ -45282,4 +45282,108 @@ fn main() {
             assert_eq!(c.stdout.trim(), "-9223372036854775808\n-150\n300\n7");
         }
     }
+
+    #[test]
+    fn test_e2e_struct_wrapped_recursive_shared_enum_tree() {
+        // B-2026-06-14-28: the self-hosting AST-port wrapping convention —
+        // `shared enum Expr` for recursive edges (the `Box<Expr>` analog),
+        // plain `struct` for tagged-union operands, `Vec[Expr]` for sequence
+        // children. v1 forbids a direct nested-enum payload, so the recursive
+        // edge passes through a struct operand wrapper (`Add(BinOp)` +
+        // `struct BinOp { left: Expr, right: Expr }`) rather than the direct
+        // `Add(Expr, Expr)`. This pins value-correctness of build / recursive
+        // match-destructure / by-value transform-returning-a-new-tree (the
+        // parser-rewrite shape) / move-out of Vec[Expr] elements on that
+        // shape — the operations the self-hosting parser hammers while
+        // building the AST at scale. (Memory-safety on the same shape is
+        // pinned by the `asan_struct_wrapped_*` cases in
+        // tests/memory_sanitizer.rs.)
+        if let Some(out) = run_program(
+            "shared enum Expr { Num(i64), Add(BinOp), Neg(Unary), Call(CallExpr) }\n\
+             struct BinOp { left: Expr, right: Expr }\n\
+             struct Unary { operand: Expr }\n\
+             struct CallExpr { callee: Expr, args: Vec[Expr] }\n\
+             fn eval(e: Expr) -> i64 {\n\
+                 match e {\n\
+                     Num(n) => n,\n\
+                     Add(b) => eval(b.left) + eval(b.right),\n\
+                     Neg(u) => 0 - eval(u.operand),\n\
+                     Call(c) => {\n\
+                         let mut acc = eval(c.callee);\n\
+                         for a in c.args { acc = acc + eval(a); }\n\
+                         acc\n\
+                     }\n\
+                 }\n\
+             }\n\
+             fn fold(e: Expr) -> Expr {\n\
+                 match e {\n\
+                     Num(n) => Num(n),\n\
+                     Neg(u) => Neg(Unary { operand: fold(u.operand) }),\n\
+                     Add(b) => Add(BinOp { left: fold(b.left), right: fold(b.right) }),\n\
+                     Call(c) => Call(c),\n\
+                 }\n\
+             }\n\
+             fn build(n: i64) -> Expr {\n\
+                 if n <= 0 { Num(1) }\n\
+                 else { Add(BinOp { left: Num(n), right: build(n - 1) }) }\n\
+             }\n\
+             fn main() {\n\
+                 let inner = Add(BinOp { left: Num(2), right: Num(3) });\n\
+                 let t = Neg(Unary { operand: Add(BinOp { left: Num(1), right: inner }) });\n\
+                 println(eval(t).to_string());            // -(1+(2+3)) = -6\n\
+                 let mut args: Vec[Expr] = Vec.new();\n\
+                 let mut i: i64 = 0;\n\
+                 while i < 5 { args.push(Num(i)); i = i + 1; }\n\
+                 let call = Call(CallExpr { callee: Num(100), args: args });\n\
+                 println(eval(call).to_string());         // 100+0+1+2+3+4 = 110\n\
+                 let folded = fold(build(10));            // by-value transform\n\
+                 println(eval(folded).to_string());       // 10+9+..+1+1 = 56\n\
+                 let mut v: Vec[Expr] = Vec.new();\n\
+                 let mut j: i64 = 0;\n\
+                 while j < 4 { v.push(build(j)); j = j + 1; }\n\
+                 let mut total: i64 = 0;\n\
+                 for e in v { total = total + eval(fold(e)); }\n\
+                 println(total.to_string());              // 1+2+4+7 = 14\n\
+             }",
+        ) {
+            assert_eq!(out.trim(), "-6\n110\n56\n14");
+        }
+    }
+
+    #[test]
+    fn test_e2e_chained_access_through_inline_shared_field() {
+        // B-2026-06-14-28 — a plain struct with an INLINE field whose type is
+        // a `shared` struct/enum (an 8-byte RC pointer). Chained field access
+        // through that shared field (`h.a.v`) must LOAD the RC pointer and GEP
+        // into the heap payload. Pre-fix, `compile_field_access`'s shared
+        // branch only fired for an Identifier/`self` object — a `FieldAccess`
+        // object (the intermediate `h.a`) fell to the generic struct-value
+        // path, where `compile_expr(h.a)` yields the extracted RC pointer, the
+        // `StructValue` guard misses, and the access returned the const-0
+        // placeholder: SILENT wrong value (interp gave 5, AOT gave 0). The fix
+        // makes `shared_type_for_expr` resolve a `FieldAccess` object via
+        // `type_name_of_expr` + `shared_types`. This is the exact shape the
+        // AST-port operand wrappers use (`struct BinOp { left: Expr }` read as
+        // `b.left.something`). Verifies the chained read, sibling i64 fields
+        // around it, and the binding-out form (`let x = h.a; x.v`) all agree.
+        if let Some(out) = run_program(
+            "shared struct Leaf { v: i64 }\n\
+             struct Holder { x: i64, a: Leaf, y: i64 }\n\
+             fn main() {\n\
+                 let h = Holder { x: 7, a: Leaf { v: 5 }, y: 9 };\n\
+                 // `h.a.v` read as a VALUE (not a method receiver — chained\n\
+                 // field-receiver method calls are a separate deferred item).\n\
+                 let chained: i64 = h.a.v;       // chained through shared field\n\
+                 let bound = h.a;\n\
+                 let via_bind: i64 = bound.v;    // binding-out form\n\
+                 println(h.x);                   // 7  (sibling i64 before)\n\
+                 println(h.y);                   // 9  (sibling i64 after)\n\
+                 println(chained);               // 5  (the load-through-RC fix)\n\
+                 println(via_bind);              // 5  (already worked)\n\
+                 println(chained + via_bind);    // 10 (both reads sound)\n\
+             }",
+        ) {
+            assert_eq!(out.trim(), "7\n9\n5\n5\n10");
+        }
+    }
 }

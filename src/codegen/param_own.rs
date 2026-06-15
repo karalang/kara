@@ -171,6 +171,82 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Recursively decide whether a struct's heap content can be soundly
     /// outer-buffer-copied to mirror its drop. `stack` guards against
     /// self-referential owned structs (which would recurse forever — bail).
+    /// B-2026-06-14-28 — does this struct transitively own a `shared`
+    /// (RC-pointer) field? Used to classify a plain struct carried inline as
+    /// a shared-enum-variant payload (`Add(BinOp)`, `BinOp { left: Expr,
+    /// right: Expr }`) so the enum-box RC drop walker rc-dec's its inline RC
+    /// children. Walks direct shared fields, `Option[shared T]` fields, and
+    /// recurses through nested non-shared struct / tuple fields; `stack`
+    /// guards self-reference. Conservative on collections/enums (they don't
+    /// hold a *direct* shared edge this walk needs to dec — their own drop
+    /// machinery handles inner shared values).
+    pub(super) fn struct_owns_shared_field(
+        &self,
+        struct_name: &str,
+        stack: &mut Vec<String>,
+    ) -> bool {
+        if stack.iter().any(|s| s == struct_name) {
+            return false;
+        }
+        let Some(ftes) = self.struct_field_type_exprs.get(struct_name).cloned() else {
+            return false;
+        };
+        stack.push(struct_name.to_string());
+        let owns = ftes.iter().any(|fte| self.field_owns_shared(fte, stack));
+        stack.pop();
+        owns
+    }
+
+    /// Name-set companion to `option_inner_shared_type_for_type_expr`: does
+    /// `Option[T]` / `Result[T, _]` have a shared `T`, judged by the early
+    /// `shared_type_decl_names` set (before `shared_types` layouts exist)?
+    fn option_inner_decl_shared(&self, fte: &TypeExpr) -> bool {
+        let TypeKind::Path(p) = &fte.kind else {
+            return false;
+        };
+        let Some(args) = p.generic_args.as_ref() else {
+            return false;
+        };
+        args.iter().any(|a| {
+            if let crate::ast::GenericArg::Type(t) = a {
+                if let TypeKind::Path(ip) = &t.kind {
+                    if let Some(name) = ip.segments.last() {
+                        return self.shared_type_decl_names.contains(name.as_str());
+                    }
+                }
+            }
+            false
+        })
+    }
+
+    fn field_owns_shared(&self, fte: &TypeExpr, stack: &mut Vec<String>) -> bool {
+        match &fte.kind {
+            TypeKind::Tuple(elems) => elems.iter().any(|e| self.field_owns_shared(e, stack)),
+            TypeKind::Path(p) => {
+                let head = p.segments.first().map(String::as_str).unwrap_or("");
+                // A direct shared field (the `Expr` edge) — the one we dec.
+                // Use the NAME set (`shared_type_decl_names`), not
+                // `shared_types`: this classifier runs inside `declare_enums`,
+                // before `shared_types` is populated for `Expr` (B-2026-06-14-28).
+                if self.shared_type_decl_names.contains(head) {
+                    return true;
+                }
+                // `Option[shared T]` — the inner shared edge is reachable.
+                if (head == "Option" || head == "Result") && self.option_inner_decl_shared(fte) {
+                    return true;
+                }
+                // Recurse through a nested non-shared user struct.
+                if self.struct_field_type_exprs.contains_key(head)
+                    && !self.shared_type_decl_names.contains(head)
+                {
+                    return self.struct_owns_shared_field(head, stack);
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
     pub(super) fn aggregate_param_copy_supported_struct(
         &self,
         struct_name: &str,
