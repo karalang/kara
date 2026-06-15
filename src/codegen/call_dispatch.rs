@@ -1528,6 +1528,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // retains the free (kata-22 family, 2026-06-06).
                 self.suppress_fstr_acc_if_moved_out(&arg.value);
                 let val = self.maybe_defensive_copy_param_arg(&arg.value, val);
+                // #226 (B-2026-06-15): a `Variant(nodes[i])` payload reading a
+                // bare-`shared` Vec element is aliased, not moved — inc so the
+                // new enum owns its own ref (else freed when the Vec drops).
+                self.share_bare_shared_ctor_payload(&arg.value, val);
                 let (start_word, num_words) = offsets.get(i).copied().unwrap_or((i, 1));
                 let words = self.coerce_to_payload_words(val, num_words)?;
                 for (j, w) in words.into_iter().enumerate() {
@@ -1600,6 +1604,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // caller retains the free). Kata-22 family, 2026-06-06.
             self.suppress_fstr_acc_if_moved_out(&arg.value);
             let val = self.maybe_defensive_copy_param_arg(&arg.value, val);
+            // #226 (B-2026-06-15): `Some(nodes[i])` — a bare-`shared` Vec
+            // element read is aliased, not moved; inc so the Option owns its
+            // own ref (else freed when the source Vec drops).
+            self.share_bare_shared_ctor_payload(&arg.value, val);
             let (start_word, num_words) = offsets.get(i).copied().unwrap_or((i, 1)); // legacy fallback if layout missing
             let words = self.coerce_to_payload_words(val, num_words)?;
             for (j, w) in words.into_iter().enumerate() {
@@ -2584,6 +2592,88 @@ impl<'ctx> super::Codegen<'ctx> {
         self.emit_refcount_inc(var_name, heap_type, inner);
         let _ = self.builder.build_unconditional_branch(skip_bb);
         self.builder.position_at_end(skip_bb);
+    }
+
+    /// B-2026-06-15 (#226 invert-binary-tree). An enum-variant constructor
+    /// (`Some(x)` / `Variant(x)`) whose payload `x` reads a bare `shared` value
+    /// out of a `Vec` element (`Some(nodes[i])`) must rc-inc it: the new enum
+    /// owns an independent reference, but a `Vec[shared]` element read shallow-
+    /// aliases without an inc (`clone_owned_vec_index_element` treats a bare
+    /// shared element as trivially copyable, and the ctor never inc'd it).
+    /// `rhs_yields_fresh_ref` classifies the ctor as fresh, so the return /
+    /// let-bind / field consumers SKIP their own receive-inc; without this
+    /// self-inc the payload is under-counted and freed when the source `Vec`
+    /// (whose correct per-element dec landed in 0890627c / B-2026-06-14-28)
+    /// drops, leaving the enum dangling — a use-after-free (non-deterministic
+    /// garbage / crash; masked by the pre-0890627c `Vec[shared]`-element leak).
+    /// SCOPED TO the `v[i]` index by `bare_shared_heap_type_for_expr`: a bare
+    /// Identifier / FieldAccess payload (`Some(node)`, `Some(head)` — fresh
+    /// locals moved into a list) is already owned and would DOUBLE-count here.
+    /// Fresh payloads (`Some(make())`, `Some(N { .. })`) are skipped outright.
+    pub(super) fn share_bare_shared_ctor_payload(
+        &self,
+        arg_expr: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) {
+        if self.rhs_yields_fresh_ref(arg_expr) {
+            return;
+        }
+        let BasicValueEnum::PointerValue(ptr) = val else {
+            return;
+        };
+        let Some(heap_type) = self.bare_shared_heap_type_for_expr(arg_expr) else {
+            return;
+        };
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        // Null-guard (a moved-out source can leave a null sentinel) then inc.
+        let Ok(is_null) = self.builder.build_is_null(ptr, "ctorpl.isnull") else {
+            return;
+        };
+        let do_bb = self.context.append_basic_block(fn_val, "ctorpl.inc.do");
+        let skip_bb = self.context.append_basic_block(fn_val, "ctorpl.inc.skip");
+        let _ = self
+            .builder
+            .build_conditional_branch(is_null, skip_bb, do_bb);
+        self.builder.position_at_end(do_bb);
+        self.emit_refcount_inc_by_type(heap_type, ptr);
+        let _ = self.builder.build_unconditional_branch(skip_bb);
+        self.builder.position_at_end(skip_bb);
+    }
+
+    /// Resolve the heap (RC) layout of a bare `shared` value read by a `v[i]`
+    /// Vec-element index whose element type is a bare shared struct/enum —
+    /// the genuinely uncovered gap (a `Vec[shared]` element read shallow-
+    /// aliases without an inc; `clone_owned_vec_index_element` treats a bare
+    /// shared element as trivially copyable, and the ctor never inc'd it).
+    /// SCOPED TO INDEX ONLY: a bare Identifier / `self` / FieldAccess payload
+    /// is already accounted for by the existing move / consumer-inc paths (a
+    /// fresh local moved into a list, a niche field read, …), so inc'ing it
+    /// here too DOUBLE-counts and leaks — `from_arr`'s `tail.next = Some(node)`
+    /// / `Some(head)` (node/head fresh locals) are the canonical
+    /// false-positives. `None` for any other shape, a range slice, a
+    /// non-named-Vec object, or a non-shared element.
+    pub(super) fn bare_shared_heap_type_for_expr(
+        &self,
+        expr: &Expr,
+    ) -> Option<inkwell::types::StructType<'ctx>> {
+        let ExprKind::Index { object, index } = &expr.kind else {
+            return None;
+        };
+        if matches!(&index.kind, ExprKind::Range { .. }) {
+            return None;
+        }
+        let ExprKind::Identifier(name) = &object.kind else {
+            return None;
+        };
+        let elem_te = self.var_elem_type_exprs.get(name.as_str())?;
+        let TypeKind::Path(p) = &elem_te.kind else {
+            return None;
+        };
+        let seg = p.segments.last()?;
+        let info = self.shared_types.get(seg.as_str())?;
+        Some(info.heap_type)
     }
 
     /// Compound-payload enum codegen (CP4 helper) — decompose an

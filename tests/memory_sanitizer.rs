@@ -423,6 +423,66 @@ fn main() {
     }
 
     #[test]
+    fn asan_vec_shared_elem_into_some_returned_no_leak_no_uaf() {
+        // B-2026-06-15-1 (#226 invert-binary-tree): a bare `shared` struct read
+        // out of a `Vec` element into an enum-ctor payload (`Some(nodes[i])`)
+        // shallow-aliases without an rc-inc. `rhs_yields_fresh_ref` treats the
+        // ctor as fresh, so the return/field consumers skip their inc; the
+        // payload was then under-counted and freed when the source `Vec`
+        // dropped (its correct per-element dec landed in 0890627c). Building a
+        // chain through `nodes[i]`, returning `Some(nodes[0])`, then walking it
+        // AFTER the Vec drops read freed memory — non-deterministic garbage /
+        // crash (mac ASAN: UAF). The fix (`share_bare_shared_ctor_payload`,
+        // scoped to the `v[i]` index) rc-inc's the aliased element so the
+        // returned chain outlives the Vec. The loop makes any over-inc visible
+        // to the Linux-CI LSan gate (the broad first cut leaked on fresh-local
+        // `Some(node)` payloads — this pins the index-only scope).
+        assert_clean_asan_run(
+            r#"
+shared struct N { v: i64, mut next: Option[N] }
+fn build(k: i64) -> Option[N] {
+    let mut nodes: Vec[N] = Vec.new();
+    let mut i: i64 = 0;
+    while i < k {
+        nodes.push(N { v: i, next: None });
+        i = i + 1;
+    }
+    let mut j: i64 = 1;
+    while j < k {
+        let mut cur = nodes[j - 1];
+        cur.next = Some(nodes[j]);
+        j = j + 1;
+    }
+    return Some(nodes[0]);
+}
+fn sum_chain(root: Option[N]) -> i64 {
+    let mut s: i64 = 0;
+    let mut cur = root;
+    loop {
+        match cur {
+            None => { break; },
+            Some(n) => { s = s + n.v; cur = n.next; },
+        }
+    }
+    return s;
+}
+fn main() {
+    let mut iter: i64 = 0;
+    let mut total: i64 = 0;
+    while iter < 50 {
+        let r = build(20);
+        total = total + sum_chain(r);
+        iter = iter + 1;
+    }
+    println(total);
+}
+"#,
+            &["9500"],
+            "vec_shared_elem_into_some_returned",
+        );
+    }
+
+    #[test]
     fn asan_for_over_collection_body_local_no_leak() {
         // B-2026-06-14-21: a body-local owned heap `let` inside a
         // for-over-COLLECTION loop (Vec/Slice/Map/Set/String/array — NOT
