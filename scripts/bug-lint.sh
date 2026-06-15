@@ -52,10 +52,16 @@ for i, line in enumerate(pathlib.Path(ledger).read_text().splitlines(), 1):
 # cross-repo kata link check
 kd = pathlib.Path(katas_dir)
 if kd.exists():
-    # map kata num -> README path
+    # map kata key -> README path. LeetCode katas key by number
+    # (`leetcode/<range>/<N>-slug/`); bespoke katas key by directory name
+    # (`bespoke/<slug>/`), matched by `source: "kata:<slug>"`.
     readmes = {}
     for p in glob.glob(str(kd/"leetcode/*/*/README.md")):
         m = re.search(r"/(\d+)-[^/]+/README\.md$", p)
+        if m:
+            readmes[m.group(1)] = pathlib.Path(p)
+    for p in glob.glob(str(kd/"bespoke/*/README.md")):
+        m = re.search(r"/([^/]+)/README\.md$", p)
         if m:
             readmes[m.group(1)] = pathlib.Path(p)
     ledger_bids = set(seen)

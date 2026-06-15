@@ -89,15 +89,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **84 surfaced · 0 open · 84 fixed** (2026-05-20 → 2026-06-14). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **85 surfaced · 0 open · 85 fixed** (2026-05-20 → 2026-06-14). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (0)
 
 _None — the ledger is fully drained._
 
-### Fixed (84)
+### Fixed (85)
 
-<details><summary>84 fixed — the regression test is the durable artifact; prose lives in each owning phase tracker</summary>
+<details><summary>85 fixed — the regression test is the durable artifact; prose lives in each owning phase tracker</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -185,6 +185,7 @@ _None — the ledger is fully drained._
 | B-2026-06-14-24 | runtime | low | karac-runtime clippy-red under `cargo clippy --all --all-targets -- -D warnings`: `clashing_extern_declarations` on `realloc`. runtime/src/lib.rs's OutputCapture allocator hooks (added by aabc01c8, B-2026-06-14-20 panic-free write_console) declared `extern "C" fn realloc(ptr: *mut c_void, size) -> *mut c_void` while runtime/src/alloc.rs already declares `fn realloc(ptr: *mut u8, size) -> *mut u8` for the SAME libc symbol — two mismatched decls in one crate trip the lint. NOT cfg(test)-gated, so it also breaks CI's `cargo clippy --all -- -D warnings`. Exactly the '--all-targets not --tests/--all' coverage class CLAUDE.md flags. FIXED: align lib.rs's decl to `*mut u8` (matching alloc.rs — same byte allocator) and drop the now-redundant `as *mut c_void`/`as *mut u8` casts at the two call sites; `free` keeps `*mut c_void` (alloc.rs doesn't declare it, so no clash). Surfaced running the events.wheel slice's clippy gate. | 34ce3f4d |
 | B-2026-06-14-25 | codegen | med | Map/Set returned BY VALUE from a call and bound (`let m2 = make_map()`) leaks the handle on Linux LSan (silent on macOS — no LeakSanitizer there). The binding registered its dispatch side-tables (`m2.len()` compiles) but the let-path fresh-handle gate that queues `FreeMapHandle` only matched `clone`/`union`/`intersection`/`difference` MethodCalls, not a plain `Call`. The callee suppresses its own free on the move-out `return m;`, so with no caller-side track the handle leaks. FIXED: extend the gate to an owned-returning `Call`, excluding borrow-returning callees (`fn_ref_return_inner`, e.g. `ref Map` accessors). Latent since the call-sourced-Map-bind+method feature landed this window; authored macOS-only so LSan never saw it. Reddened CI memory-sanitizer (asan_returned_map_explicit_return_no_double_free). | ae9aa79d |
 | B-2026-06-14-26 | codegen | med | Bare tuple over a `Map.new()`-created var (`let t = (d, i)`) leaks the Map leaf on Linux LSan. The #23 Part A tuple drop never registered because `compile_map_new_stmt`/`compile_set_new_stmt` never recorded the binding's surface type name, so `type_name_of(d)` returned None, `infer_arg_elem_te` produced an empty `Path`, and `type_expr_has_drop_heap` was false — the tuple drop was skipped. The place-source path (`let mm = s.m`) already records "Map" via `record_var_type_name`. FIXED: mirror that recording in the two `*_new_stmt` builders. The tuple-var-moved-into-struct case (`pair`→`Hi{m:pair}`) is balanced by the existing Part C1 move-out suppression (verified no double-free under macOS ASAN). Reddened CI memory-sanitizer (asan_struct_tuple_map_leaf_no_double_free). | ae9aa79d |
+| B-2026-06-14-27 | ownership | med | A Copy binding destructured from a tuple whose sibling is a move type was misclassified as a move, so `karac check` rejected valid code with a spurious "value 'n' moved here, used again here" (n: i64). The use-classifier's let-RHS type recorder (use_classifier.rs) assigned the WHOLE tuple type to EVERY binding of a destructure; a tuple containing a `String` is non-Copy, so the Copy field `n` in `let (n, s) = f()` (`f -> (i64, String)`) inherited the non-Copy tuple type, its reads in consuming position were tagged `Consume`, and the UAM predicate fired. `karac run`/`build` produced correct output (neither gates on ownership) so only `check` surfaced it. FIXED: decompose a tuple destructure field-by-field (`assign_binding_types`) so each binding is keyed to its own field type; non-tuple shapes fall back to the prior whole-type behavior. Genuine UAM of a move-typed sibling is unaffected (regression-guarded both directions). Surfaced by the bespoke utf8-codepoints kata's recursive 5-tuple-returning style. Latent in selfhost/src/main.kara (no tuple destructure yet) but would go live in the parser port's `(node, pos)` recursive-descent returns. | 56847674 |
 
 </details>
 
