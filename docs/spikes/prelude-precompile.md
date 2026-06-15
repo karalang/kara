@@ -100,8 +100,19 @@ bug, never ship.
 
 ## Cheaper alternative levers (tracked, not this spike)
 
-- **Process-startup 20.9 M:** profile `karac --version`; likely arg-parser or a
-  stray eager init. Possibly a much cheaper win than precompile.
+- **Process-startup 20.9 M — PROFILED 2026-06-14, IRREDUCIBLE (not a cheap win).**
+  Instrumented `main`: in-`main` work (16 MB-stack thread spawn + `parse_args` +
+  `execute --version`) is only ~76 µs ≈ **0.2 M** instructions. The other ~21 M
+  is **pre-`main`** — dyld + libstd init. A trivial Rust binary
+  (`fn main(){println!()}`) already costs **14.6 M** on this macOS box (the
+  platform Rust-startup floor every binary pays); karac (8.8 MB binary) adds only
+  ~6.7 M on top (binary-size relocations/page-in). No `__mod_init_func`
+  load-time initializers, no `ctor`. So there is NO stray-init to remove; the only
+  sub-lever is shrinking the 8.8 MB binary (strip/LTO/fewer deps) for the ~6.7 M
+  marginal — marginal payoff, separate effort. **Conclusion: the ~21 M floor is
+  effectively fixed; precompile is the only lever for the recoverable front-end**
+  (`run empty` 60 M → ~38 M, the 38 M being mostly the irreducible 21 M floor +
+  ~6 M interp + residual front-end).
 - **`expr_method_call.rs:100`:** re-walks all `STDLIB_PROGRAMS` per `T: Bound`
   method dispatch (O(calls × stdlib)). Cache into a `LazyLock<HashMap<(trait,
   method), &Method>>`. Narrow (only generic-bounded dispatch) but trivial + safe.
