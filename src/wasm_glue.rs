@@ -870,10 +870,20 @@ pub fn render_dts(
 /// delimiter: the JS contains `"#kara-thread-worker"`, whose `"#`
 /// sequence would close a plain `r#` literal.)
 const GLUE_STATIC_BODY: &str = r##"
-/** Decode a (ptr, len) UTF-8 string out of the module's linear memory. */
+/** Decode a (ptr, len) UTF-8 string out of the module's linear memory.
+ * `.slice()` copies into a fresh non-shared buffer first: on the threaded
+ * (`--features wasm-threads`) build `memory.buffer` is a SharedArrayBuffer, and
+ * browser `TextDecoder.decode` rejects shared views ("The provided
+ * ArrayBufferView value must not be shared."). This helper is the single
+ * string-decode funnel — it backs `ctx.readString` in the main-thread
+ * host-service loop (a `host fn` taking a `string` arg) and the rich
+ * string-export lift — so the copy must live here, not just at the fd_write
+ * call site. B-2026-06-14-22 follow-up: 69c49ec0 fixed fd_write + random_get
+ * but missed this helper; node's lenient TextDecoder hid it. Harmless (a copy)
+ * on the sequential path where the buffer is already non-shared. */
 export function readString(memory, ptr, len) {
   return new TextDecoder("utf-8").decode(
-    new Uint8Array(memory.buffer, Number(ptr), Number(len)),
+    new Uint8Array(memory.buffer, Number(ptr), Number(len)).slice(),
   );
 }
 
@@ -2072,6 +2082,10 @@ mod tests {
             // before TextDecoder / crypto (which reject shared-backed views).
             "new Uint8Array(getMemory().buffer, ptr, len).slice()",
             "globalThis.crypto.getRandomValues(tmp);",
+            // B-2026-06-14-22 follow-up: the exported readString funnel (backs
+            // the threaded host-service `ctx.readString` string-arg path + the
+            // rich string-export lift) must also copy before decode.
+            "new Uint8Array(memory.buffer, Number(ptr), Number(len)).slice()",
         ] {
             assert!(glue.contains(needle), "missing in threaded glue: {needle}");
         }
