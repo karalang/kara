@@ -12,19 +12,20 @@
 //! [`ResolutionSurface`] — subsequent compiles re-emit only the
 //! still-open queries.
 //!
-//! **v1 ships the channel infrastructure plus the P1.3 catalogue entry.**
-//! P1.3 (inlining + branch hints) landed 2026-05-18 — emitted by the
-//! plain-data [`crate::codegen_queries`] analyzer, not from a phase
-//! result struct (it walks the parsed AST directly; see the CLI's
-//! `query_queries`). The remaining entries land alongside the phases
-//! that populate them — P1.1 (RC fallback, `ownership.rs`), P1.2
-//! (specialization, `typechecker.rs`), P1.4 (effect-set narrowing,
-//! `effectchecker.rs`), P1.5 (layout), P1.6 (fork threshold,
-//! `concurrency.rs`); the `queries` vec on each of those phase results
-//! is still empty. Each new variant on [`QueryKind`] is a non-breaking
-//! addition for tools that gracefully ignore unknown variants
-//! (matches the streaming-output discipline from Phase 5 §
-//! Structured Compiler Output).
+//! **v1 ships the channel infrastructure plus the P1.2 and P1.3
+//! catalogue entries.** Both are emitted by plain-data analyzers run
+//! from the CLI's `query_queries` collator, not from a phase result
+//! struct: P1.3 (inlining + branch hints, landed 2026-05-18) by
+//! [`crate::codegen_queries`], and P1.2 (generic specialization on the
+//! monomorphization tuple) by [`crate::specialization_queries`], which
+//! reads the monomorphization counter. The remaining entries land
+//! alongside the phases that populate them — P1.1 (RC fallback,
+//! `ownership.rs`), P1.4 (effect-set narrowing, `effectchecker.rs`),
+//! P1.5 (layout), P1.6 (fork threshold, `concurrency.rs`); the
+//! `queries` vec on each of those phase results is still empty. Each new
+//! variant on [`QueryKind`] is a non-breaking addition for tools that
+//! gracefully ignore unknown variants (matches the streaming-output
+//! discipline from Phase 5 § Structured Compiler Output).
 
 use crate::def_path::QueryId;
 use crate::token::Span;
@@ -68,12 +69,12 @@ pub struct CompilerQuery {
 }
 
 /// What kind of query this is. P1.3 (phase-7-codegen.md line 25)
-/// landed the first two real catalogue entries — `InliningDecision`
-/// and `BranchHint`, both emitted by [`crate::codegen_queries`].
-/// Marked `non_exhaustive` so adding the remaining catalogue entries
-/// (P1.1 RC fallback, P1.2 specialization, P1.4 effect-set narrowing,
-/// P1.5 layout, P1.6 fork threshold) stays a non-breaking change for
-/// downstream tooling.
+/// landed `InliningDecision` and `BranchHint` (both emitted by
+/// [`crate::codegen_queries`]); P1.2 landed `SpecializationDecision`
+/// (emitted by [`crate::specialization_queries`]). Marked
+/// `non_exhaustive` so adding the remaining catalogue entries (P1.1 RC
+/// fallback, P1.4 effect-set narrowing, P1.5 layout, P1.6 fork
+/// threshold) stays a non-breaking change for downstream tooling.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum QueryKind {
@@ -92,6 +93,11 @@ pub enum QueryKind {
     /// arm/branch body sizes). Resolution surface: `#[likely]` /
     /// `#[unlikely]` on the arm or branch the author considers hot.
     BranchHint,
+    /// Specialization decision at a generic free function monomorphized
+    /// into many distinct concrete type tuples (a fan-out). One query
+    /// per generic definition; the tuples are folded into `options`.
+    /// Resolution surface: `#[specialize(T = …)]` on the definition.
+    SpecializationDecision,
 }
 
 /// One alternative the compiler considered at a decision site.

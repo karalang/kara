@@ -81,6 +81,7 @@ pub mod resolver;
 pub mod scaffold;
 pub mod simd_report;
 pub mod span_visitor;
+pub mod specialization_queries;
 pub mod target;
 pub mod test_jit_dispatch;
 pub mod test_main_synth;

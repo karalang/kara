@@ -8435,6 +8435,18 @@ fn query_queries(pipeline: &Pipeline) {
     // require any later-phase side-tables.
     all.extend(crate::codegen_queries::analyze(&pipeline.parsed.program));
 
+    // P1.2 specialization queries — reads the monomorphization counter,
+    // so it needs the typecheck result (the type tuples). Skips silently
+    // when typecheck didn't run; `effects` enriches nothing here but is
+    // threaded for a uniform analyzer signature.
+    if let Some(t) = pipeline.typed.as_ref() {
+        all.extend(crate::specialization_queries::analyze(
+            &pipeline.parsed.program,
+            t,
+            pipeline.effects.as_ref(),
+        ));
+    }
+
     println!("{}", render_queries_envelope(&all, &pipeline.filename));
 }
 
@@ -8455,6 +8467,7 @@ fn render_compiler_query(q: &crate::queries::CompilerQuery, filename: &str) -> S
         QueryKind::Stub => "stub",
         QueryKind::InliningDecision => "inlining_decision",
         QueryKind::BranchHint => "branch_hint",
+        QueryKind::SpecializationDecision => "specialization_decision",
     };
     let confidence = match q.default_confidence {
         Confidence::Low => "low",

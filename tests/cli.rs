@@ -248,6 +248,71 @@ fn main() {
 }
 
 #[test]
+fn test_query_queries_populated_envelope_has_specialization_query() {
+    // Phase-8 (P1.2 specialization queries) — the specialization-queries
+    // analyzer surfaces one fan-out query for a generic free function
+    // monomorphized into four distinct type tuples. The CLI must
+    // serialize it into the same `{"queries":[…]}` envelope with the
+    // `specialization_decision` kind and the `specialize` resolution
+    // surface, alongside any codegen (P1.3) queries.
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-query-spec-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("fanout.kara");
+    let src = r#"
+fn identity[T](x: T) -> T { x }
+fn main() {
+    let _ = identity(1i64);
+    let _ = identity(2i32);
+    let _ = identity(3u8);
+    let _ = identity(4u64);
+}
+"#;
+    std::fs::write(&path, src).unwrap();
+
+    let out = karac_bin()
+        .args(["query", "queries", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "karac query queries should exit 0; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("\"kind\":\"specialization_decision\""),
+        "expected a specialization_decision entry; got stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("\"id\":\"identity\""),
+        "expected query id `identity`; got stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("\"specialize\""),
+        "expected `specialize` in resolution_surface; got stdout={stdout}",
+    );
+    // Fan-out folded into options: a per-tuple option plus the count in
+    // the default note.
+    assert!(
+        stdout.contains("\"specialize_i64\"") && stdout.contains("4 distinct type tuples"),
+        "expected per-tuple options + fan-out count; got stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("\"cross_phase_origin\":\"typechecker\""),
+        "expected typechecker-origin tag; got stdout={stdout}",
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
 fn test_subcommand_help_fmt() {
     let out = karac_bin().args(["fmt", "--help"]).output().unwrap();
     assert!(out.status.success());
