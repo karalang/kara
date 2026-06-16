@@ -4862,8 +4862,9 @@ fn main() {
         json.contains("\"instance_count\":2"),
         "expected instance_count:2 for two distinct type args; got {json}",
     );
-    // Both type tuples surface, each with the v1-empty `effects`
-    // list and a `site` string in `<file>:<line>:<col>` shape.
+    // Both type tuples surface. `identity[T]` has no `with E`
+    // variable, so each instance's effective `effects` set is empty;
+    // the `site` is a `<file>:<line>:<col>` string.
     assert!(
         json.contains("\"types\":[\"i64\"]"),
         "expected an i64 instance entry; got {json}",

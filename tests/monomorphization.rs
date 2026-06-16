@@ -3,8 +3,10 @@
 //! analyzer over the result, and asserts the per-generic / per-
 //! instance shape.
 
+use karac::effectchecker::PublicEffectsPolicy;
+use karac::manifest::CompileProfile;
 use karac::monomorphization::{analyze, MonomorphizationTable};
-use karac::{desugar_program, parse, resolve, typecheck};
+use karac::{desugar_program, effectcheck_with_typecheck_data, lower, parse, resolve, typecheck};
 
 fn analyze_program(src: &str) -> MonomorphizationTable {
     let mut pr = parse(src);
@@ -21,7 +23,21 @@ fn analyze_program(src: &str) -> MonomorphizationTable {
         resolved.errors,
     );
     let tc = typecheck(&pr.program, &resolved);
-    analyze(&pr.program, &tc)
+    // Mirror the `karac query monomorphization` pipeline: lower the
+    // program, then effect-check it so `call_effect_subs` is populated.
+    // call_type_subs spans (recorded pre-lower) survive lowering, so the
+    // type tuple still aligns; the effect checker walks the lowered AST.
+    let method_types = tc.method_callee_types.clone();
+    let call_type_subs = tc.call_type_subs.clone();
+    lower(&mut pr.program, &tc);
+    let ec = effectcheck_with_typecheck_data(
+        &pr.program,
+        PublicEffectsPolicy::default(),
+        CompileProfile::Default,
+        method_types,
+        call_type_subs,
+    );
+    analyze(&pr.program, &tc, Some(&ec))
 }
 
 #[test]
@@ -72,8 +88,78 @@ fn main() {
     assert_eq!(g.instances[0].types, vec!["i64".to_string()]);
     assert!(
         g.instances[0].effects.is_empty(),
-        "v1 effects slot is always empty; got {:?}",
+        "a generic with no `with E` variable carries an empty effect set; got {:?}",
         g.instances[0].effects,
+    );
+}
+
+#[test]
+fn compound_polymorphic_call_records_resolved_effect_set() {
+    // `run[T, with E]` is generic over `T` (the type tuple) and
+    // effect-polymorphic over `E`. The closure passed at the `cb` slot
+    // calls `write_log` (`writes(Log)`), so `E` resolves to
+    // `{writes(Log)}` — the instance's effective effect set.
+    let src = r#"
+effect resource Log;
+pub fn write_log() with writes(Log) {}
+pub fn run[T, with E](x: T, cb: Fn(T) -> () with E) with E { cb(x) }
+pub fn main() with writes(Log) {
+    run(7i64, |y| write_log())
+}
+"#;
+    let table = analyze_program(src);
+    let g = table
+        .by_generic
+        .iter()
+        .find(|g| g.generic == "run")
+        .unwrap_or_else(|| panic!("expected `run` generic; got {:?}", table.by_generic));
+    assert_eq!(g.instances.len(), 1, "got {:?}", g.instances);
+    assert_eq!(g.instances[0].types, vec!["i64".to_string()]);
+    assert_eq!(
+        g.instances[0].effects,
+        vec!["writes(Log)".to_string()],
+        "E must resolve to the closure's effect set",
+    );
+}
+
+#[test]
+fn same_types_different_effect_sets_are_distinct_instances() {
+    // Two call sites of `run` at the same type (`i64`) but with
+    // closures carrying different effects. Per design.md §
+    // Monomorphization identity, the resolved effect set is as binding
+    // on instance identity as the type tuple, so these are two
+    // distinct instances under one generic.
+    let src = r#"
+effect resource Log;
+effect resource Db;
+pub fn write_log() with writes(Log) {}
+pub fn read_db() with reads(Db) {}
+pub fn run[T, with E](x: T, cb: Fn(T) -> () with E) with E { cb(x) }
+pub fn main() with writes(Log) reads(Db) {
+    run(7i64, |y| write_log());
+    run(9i64, |z| read_db())
+}
+"#;
+    let table = analyze_program(src);
+    let g = table
+        .by_generic
+        .iter()
+        .find(|g| g.generic == "run")
+        .unwrap_or_else(|| panic!("expected `run` generic; got {:?}", table.by_generic));
+    assert_eq!(
+        g.instances.len(),
+        2,
+        "same types + differing effect sets must not merge; got {:?}",
+        g.instances,
+    );
+    let mut effect_sets: Vec<Vec<String>> = g.instances.iter().map(|i| i.effects.clone()).collect();
+    effect_sets.sort();
+    assert_eq!(
+        effect_sets,
+        vec![
+            vec!["reads(Db)".to_string()],
+            vec!["writes(Log)".to_string()],
+        ],
     );
 }
 

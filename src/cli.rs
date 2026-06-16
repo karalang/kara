@@ -5893,7 +5893,8 @@ fn enforce_monomorphization_budget(
     let Some(tc) = pipeline.typed.as_ref() else {
         return;
     };
-    let table = crate::monomorphization::analyze(&pipeline.parsed.program, tc);
+    let table =
+        crate::monomorphization::analyze(&pipeline.parsed.program, tc, pipeline.effects.as_ref());
     let violations = table.budget_violations(budget);
     if violations.is_empty() {
         return;
@@ -8244,9 +8245,16 @@ fn cmd_query(kind: QueryKind, filename: &str, function: &str) {
         }
         QueryKind::Monomorphization => {
             // Reads from `TypeCheckResult.call_type_subs` +
-            // `method_callee_types`; typecheck is the only phase
-            // required.
+            // `method_callee_types` for the type tuple, and from
+            // `EffectCheckResult.call_effect_subs` for each instance's
+            // effective effect set. Effect resolution needs the same
+            // typecheck + lower precondition as the Effects/Concurrency
+            // arms (so `with E` bindings resolve against the lowered AST
+            // the effect checker walks); call_type_subs spans survive
+            // lowering, so the type tuple is unaffected.
             pipeline.typecheck();
+            pipeline.lower();
+            pipeline.effectcheck();
             query_monomorphization(&pipeline);
         }
         QueryKind::AffectedBy {
@@ -8609,7 +8617,8 @@ fn query_monomorphization(pipeline: &Pipeline) {
             return;
         }
     };
-    let table = crate::monomorphization::analyze(&pipeline.parsed.program, tc);
+    let table =
+        crate::monomorphization::analyze(&pipeline.parsed.program, tc, pipeline.effects.as_ref());
     println!(
         "{}",
         render_monomorphization_json(&table, &pipeline.filename),

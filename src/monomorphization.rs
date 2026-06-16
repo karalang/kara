@@ -16,19 +16,29 @@
 //!   `MethodCall` site to its `Type.method` string. Used to attribute
 //!   method-call instantiations to a stable generic identity (the
 //!   receiver type with its concrete generic args stripped).
+//! - **`EffectCheckResult.call_effect_subs`** — the effect checker
+//!   records, per generic call site, how each `with E` effect variable
+//!   resolved (call-expression span → effect-variable name → concrete
+//!   `Effect` set). We take the *union* of those sets — the call's
+//!   effective effect set — and render it as the instance's `effects`.
+//!   Optional: when no effect-check result is threaded (e.g. an earlier
+//!   phase aborted), every instance's `effects` is empty.
+//!
+//! ### Effect-set identity
+//!
+//! Per `design.md § Effect Polymorphism > Monomorphization order for
+//! compound polymorphism`, a call site is monomorphized on its resolved
+//! `(T1..Tk, E1..Em)` tuple: two sites that agree on types but resolve
+//! to different effect sets are distinct instances. The dedup key here
+//! is therefore `(types, effects)` — see [`GroupAccum`]. We key on the
+//! *union* effect set rather than per-variable bindings: which variable
+//! carries an effect is codegen-irrelevant once the effective set is
+//! fixed, and `design.md § Specification Layers > Compiler Query API`
+//! explicitly permits the reported count to shrink when instances whose
+//! effect sets coincide are merged. The guaranteed rule is the upper
+//! bound (one instance per distinct tuple); reporting fewer is allowed.
 //!
 //! ### v1 limitations
-//!
-//! - **`effects` list is always empty.** The schema reserves a
-//!   per-instance effect tuple `(E1..Em)` for compound polymorphism
-//!   (`fn f[T, with E]`), but the typechecker does not currently
-//!   expose a public per-call effect-substitution table — the
-//!   effect-resolution closure-shape lookup happens during effect
-//!   inference and stays internal. The `effects` slot is present in
-//!   the envelope so consumers writing against the schema today get
-//!   a stable shape; populating it is a follow-up gated on the
-//!   effect-checker exposing a `call_effect_subs` analog of
-//!   `call_type_subs`.
 //!
 //! - **Param-order is alphabetical, not declaration-order.** The
 //!   typechecker's `call_type_subs` is a `HashMap<String, String>`;
@@ -47,10 +57,11 @@
 //!   stripping rule grows. v1 under-reports rather than over-reports.
 
 use crate::ast::*;
+use crate::effectchecker::{Effect, EffectCheckResult};
 use crate::resolver::SpanKey;
 use crate::token::Span;
 use crate::typechecker::TypeCheckResult;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 /// One concrete instantiation of a generic — the resolved
 /// `(T1..Tk)` tuple plus the call site that produced it.
@@ -60,7 +71,11 @@ pub struct Instance {
     /// the type names as the typechecker resolved them (e.g.
     /// `"i64"`, `"Vec[Order]"`, `"Wrapper"`).
     pub types: Vec<String>,
-    /// Per-instance effect tuple. v1 always empty — see module doc.
+    /// The instance's effective effect set — the union of every `with E`
+    /// effect-variable resolution at the call site, as sorted, de-duplicated
+    /// `verb(resource)` labels (`reads(Log)`, `blocks`). Empty for a generic
+    /// with no resolved compound-effect bindings, or when no effect-check
+    /// result was threaded. See module doc § Effect-set identity.
     pub effects: Vec<String>,
     /// Source span of the first call site that produced this
     /// tuple. When multiple call sites share the same tuple, the
@@ -179,9 +194,20 @@ impl MonomorphizationTable {
 
 /// Entry point. Walks `program` against `tc` and returns the
 /// per-generic instantiation table.
-pub fn analyze(program: &Program, tc: &TypeCheckResult) -> MonomorphizationTable {
+/// Enumerate every generic instantiation in `program`. `ec` supplies the
+/// per-call effect-variable resolutions used to populate each instance's
+/// effective effect set; pass `None` (e.g. when an earlier phase aborted)
+/// to leave every `effects` list empty.
+pub fn analyze(
+    program: &Program,
+    tc: &TypeCheckResult,
+    ec: Option<&EffectCheckResult>,
+) -> MonomorphizationTable {
+    let empty_subs: HashMap<SpanKey, HashMap<String, HashSet<Effect>>> = HashMap::new();
+    let effect_subs = ec.map(|e| &e.call_effect_subs).unwrap_or(&empty_subs);
     let mut walker = Walker {
         tc,
+        effect_subs,
         groups: BTreeMap::new(),
     };
 
@@ -214,10 +240,13 @@ pub fn analyze(program: &Program, tc: &TypeCheckResult) -> MonomorphizationTable
 }
 
 struct GroupAccum {
-    /// Dedup key is the `types` tuple (sorted-by-param-name); v1
-    /// effects are always empty so they don't enter the key. First
-    /// call-site for each tuple wins.
-    instances: BTreeMap<Vec<String>, Instance>,
+    /// Dedup key is the `(types, effects)` tuple — `types` sorted by
+    /// param name, `effects` the sorted effective effect set. Two call
+    /// sites that agree on both axes share one instance; differing
+    /// effect sets at the same types produce distinct instances
+    /// (`design.md § Monomorphization identity`). First call-site for
+    /// each tuple wins.
+    instances: BTreeMap<(Vec<String>, Vec<String>), Instance>,
 }
 
 impl GroupAccum {
@@ -227,17 +256,23 @@ impl GroupAccum {
         }
     }
 
-    fn record(&mut self, types: Vec<String>, site: Span) {
-        self.instances.entry(types.clone()).or_insert(Instance {
-            types,
-            effects: Vec::new(),
-            site,
-        });
+    fn record(&mut self, types: Vec<String>, effects: Vec<String>, site: Span) {
+        self.instances
+            .entry((types.clone(), effects.clone()))
+            .or_insert(Instance {
+                types,
+                effects,
+                site,
+            });
     }
 }
 
 struct Walker<'a> {
     tc: &'a TypeCheckResult,
+    /// Per-call effect-variable resolutions, sourced from
+    /// `EffectCheckResult.call_effect_subs` (empty when no effect-check
+    /// result was threaded).
+    effect_subs: &'a HashMap<SpanKey, HashMap<String, HashSet<Effect>>>,
     groups: BTreeMap<String, GroupAccum>,
 }
 
@@ -252,10 +287,15 @@ impl Walker<'_> {
             return;
         }
         let types = ordered_types(subs);
+        let effects = self
+            .effect_subs
+            .get(&span_key)
+            .map(ordered_effects)
+            .unwrap_or_default();
         self.groups
             .entry(generic)
             .or_insert_with(GroupAccum::new)
-            .record(types, span.clone());
+            .record(types, effects, span.clone());
     }
 
     fn walk_block(&mut self, block: &Block) {
@@ -442,6 +482,30 @@ fn ordered_types(subs: &HashMap<String, String>) -> Vec<String> {
         .into_iter()
         .filter_map(|k| subs.get(k).cloned())
         .collect()
+}
+
+/// Collapse a call site's per-effect-variable resolutions into the
+/// instance's effective effect set: the union of every variable's
+/// `Effect` set, rendered as sorted, de-duplicated `verb(resource)`
+/// labels. The `BTreeSet` gives both the sort and the dedup, so two
+/// variables that resolved to the same effect collapse to one label
+/// (the effective set is what drives codegen, not the binding site).
+fn ordered_effects(subs: &HashMap<String, HashSet<Effect>>) -> Vec<String> {
+    let labels: BTreeSet<String> = subs.values().flatten().map(effect_label).collect();
+    labels.into_iter().collect()
+}
+
+/// Render one `Effect` as `verb(resource)`, dropping the parens for the
+/// resourceless execution verbs (`blocks`, `suspends`). Shares
+/// `effectchecker::verb_name` so the spelling matches the effect
+/// checker's own diagnostics and `karac query effects`.
+fn effect_label(effect: &Effect) -> String {
+    let verb = crate::effectchecker::verb_name(&effect.verb);
+    if effect.resource.is_empty() {
+        verb
+    } else {
+        format!("{}({})", verb, effect.resource)
+    }
 }
 
 #[cfg(test)]
