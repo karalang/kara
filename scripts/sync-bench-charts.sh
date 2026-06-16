@@ -21,12 +21,12 @@ DEST="$REPO/docs/assets"
 
 mkdir -p "$DEST"
 for chart in runtime-seq binary-seq runtime-par; do
-    src="$KATAS/graphs/$chart.svg"
+    src="$KATAS/graphs/$chart.png"
     if [ ! -f "$src" ]; then
         echo "error: $src not found — set KARA_KATAS_DIR or regenerate the charts in kara-katas" >&2
         exit 1
     fi
-    cp "$src" "$DEST/$chart.svg"
-    echo "synced docs/assets/$chart.svg  <-  $src"
+    cp "$src" "$DEST/$chart.png"
+    echo "synced docs/assets/$chart.png  <-  $src"
 done
-echo "done. commit docs/assets/*.svg if they changed."
+echo "done. commit docs/assets/*.png if they changed."

@@ -302,20 +302,20 @@ disproportionate share of compiler bugs.
 against single-threaded Rust/C/Go. Each dot is one program; lower is
 faster; everything relative to **Rust = 1.0**.
 
-![Runtime, sequential lane — relative to Rust](docs/assets/runtime-seq.svg)
+![Runtime, sequential lane — relative to Rust](docs/assets/runtime-seq.png)
 
 Kāra tracks C closely and straddles the Rust baseline — ahead on
 allocation/RC- and string-heavy kernels, behind on a few tight numeric
 loops. Go trails on most single-threaded work.
 
-![Binary size, sequential lane — relative to Rust, log scale](docs/assets/binary-seq.svg)
+![Binary size, sequential lane — relative to Rust, log scale](docs/assets/binary-seq.png)
 
 C-sized binaries (~33 KiB) for most programs, rising to a ~285 KiB floor
 when the larger runtime surface links. Rust ~14× above C; Go ~70×
 (runtime + GC in every binary).
 
-- **Runtime memory** ([chart](https://github.com/karalang/kara-katas/blob/main/graphs/rss-seq.svg)) — Kāra/C/Rust at parity; Kāra runs leak-free at native footprint. Go's GC heap is 2–8×.
-- **Compile cost** ([time](https://github.com/karalang/kara-katas/blob/main/graphs/compile-elapsed.svg) · [memory](https://github.com/karalang/kara-katas/blob/main/graphs/compile-rss.svg)) — faster than `rustc -O` on every program (~0.55–0.8×) and ~0.3× its peak memory.
+- **Runtime memory** ([chart](https://github.com/karalang/kara-katas/blob/main/graphs/rss-seq.png)) — Kāra/C/Rust at parity; Kāra runs leak-free at native footprint. Go's GC heap is 2–8×.
+- **Compile cost** ([time](https://github.com/karalang/kara-katas/blob/main/graphs/compile-elapsed.png) · [memory](https://github.com/karalang/kara-katas/blob/main/graphs/compile-rss.png)) — faster than `rustc -O` on every program (~0.55–0.8×) and ~0.3× its peak memory.
 
 <sub>The two sequential-lane charts above and the parallel-lane chart below are mirrored from kara-katas into [`docs/assets/`](docs/assets) (GitHub doesn't reliably render hotlinked external SVGs). After adding a kata, regenerate them in kara-katas (`python3 scripts/bench-graph.py`) and refresh with [`scripts/sync-bench-charts.sh`](scripts/sync-bench-charts.sh).</sub>
 
@@ -326,17 +326,17 @@ no data-race risk — and the chart pits that against hand-written Rust `rayon`,
 Go goroutines, and a raw C-pthreads floor on the same workload. Each dot is one
 program; lower is faster; everything relative to **Rust = 1.0**.
 
-![Runtime, parallel lane — Kāra auto-par vs Rust rayon / Go / C-pthreads, relative to Rust](docs/assets/runtime-par.svg)
+![Runtime, parallel lane — Kāra auto-par vs Rust rayon / Go / C-pthreads, relative to Rust](docs/assets/runtime-par.png)
 
-Across the five katas that currently ship the full parallel comparator set,
-Kāra's auto-par lands in the same band as hand-tuned `rayon` — ahead on two,
-behind on three (by at most 1.45×), and edging the raw-pthreads C floor on two —
-for **none** of the engineering cost. More points land automatically as parallel
-katas are added.
+Across the eleven katas that currently ship the full parallel comparator set,
+Kāra's auto-par lands in the same band as hand-tuned `rayon` — ahead on one
+(#133 clone-graph), behind on ten (by at most 1.65×), and edging the raw-pthreads
+C floor on four — for **none** of the engineering cost. More points land
+automatically as parallel katas are added.
 
 The intra-Kāra view of the same effect (same source, auto-par vs its own
 sequential lane) runs **3.7×** on a ~100 ns kernel up to **13.4×** on a heavier
-one, against an 18-core ceiling ([speedup chart](https://github.com/karalang/kara-katas/blob/main/graphs/autopar-speedup.svg)).
+one, against an 18-core ceiling ([speedup chart](https://github.com/karalang/kara-katas/blob/main/graphs/autopar-speedup.png)).
 It applies to data-parallel work over large datasets — not I/O-bound, tiny, or
 sequentially-dependent loops, where the compiler's cost gate declines to
 parallelize.
