@@ -12,12 +12,16 @@
 //! [`ResolutionSurface`] — subsequent compiles re-emit only the
 //! still-open queries.
 //!
-//! **v1 ships the channel infrastructure with zero catalogue entries.**
-//! The first catalogue entries land alongside the phases that populate
-//! them — P1.1 (RC fallback, `ownership.rs`), P1.2 (specialization,
-//! `typechecker.rs`), P1.3 (inlining + branch hints, `codegen.rs` —
-//! tracked at phase-7-codegen.md line 25), P1.5 (layout), P1.6 (fork
-//! threshold). Each new variant on [`QueryKind`] is a non-breaking
+//! **v1 ships the channel infrastructure plus the P1.3 catalogue entry.**
+//! P1.3 (inlining + branch hints) landed 2026-05-18 — emitted by the
+//! plain-data [`crate::codegen_queries`] analyzer, not from a phase
+//! result struct (it walks the parsed AST directly; see the CLI's
+//! `query_queries`). The remaining entries land alongside the phases
+//! that populate them — P1.1 (RC fallback, `ownership.rs`), P1.2
+//! (specialization, `typechecker.rs`), P1.4 (effect-set narrowing,
+//! `effectchecker.rs`), P1.5 (layout), P1.6 (fork threshold,
+//! `concurrency.rs`); the `queries` vec on each of those phase results
+//! is still empty. Each new variant on [`QueryKind`] is a non-breaking
 //! addition for tools that gracefully ignore unknown variants
 //! (matches the streaming-output discipline from Phase 5 §
 //! Structured Compiler Output).
@@ -37,8 +41,9 @@ pub struct CompilerQuery {
     /// `--format=md` rendering. Not part of the query identity
     /// (`QueryId` is span-free by construction).
     pub site: Span,
-    /// What kind of decision this is. v1 catalogue is empty; entries
-    /// land alongside their populating phases.
+    /// What kind of decision this is. v1 ships P1.3
+    /// (`InliningDecision` / `BranchHint`); the remaining catalogue
+    /// entries land alongside their populating phases.
     pub kind: QueryKind,
     /// Alternatives the compiler considered. `default` indexes the
     /// option the compiler would pick absent a resolution attribute.
@@ -62,11 +67,13 @@ pub struct CompilerQuery {
     pub cross_phase_origin: Option<Phase>,
 }
 
-/// What kind of query this is. P1.3 (phase-7-codegen.md line 25) lands
-/// the first two real catalogue entries — `InliningDecision` and
-/// `BranchHint`. Marked `non_exhaustive` so adding catalogue entries
-/// (P1.1 RC fallback, P1.2 specialization, P1.5 layout, P1.6 fork
-/// threshold) stays a non-breaking change for downstream tooling.
+/// What kind of query this is. P1.3 (phase-7-codegen.md line 25)
+/// landed the first two real catalogue entries — `InliningDecision`
+/// and `BranchHint`, both emitted by [`crate::codegen_queries`].
+/// Marked `non_exhaustive` so adding the remaining catalogue entries
+/// (P1.1 RC fallback, P1.2 specialization, P1.4 effect-set narrowing,
+/// P1.5 layout, P1.6 fork threshold) stays a non-breaking change for
+/// downstream tooling.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum QueryKind {

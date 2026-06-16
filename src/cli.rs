@@ -8232,10 +8232,12 @@ fn cmd_query(kind: QueryKind, filename: &str, function: &str) {
             query_attributes(&pipeline, tool_prefix);
         }
         QueryKind::Queries => {
-            // Run every phase that may populate `queries`. v1 catalogue
-            // is empty so the output is `{"queries":[]}`; the surface
-            // lands so external tooling pinning to `karac query queries`
-            // gets a stable command without waiting for P1.x entries.
+            // Run every phase that may populate `queries`, then fold in
+            // the P1.3 codegen analyzer in `query_queries`. The envelope
+            // carries the P1.3 catalogue entries (inlining / branch-hint)
+            // when they fire; the remaining phase `queries` vecs (P1.1,
+            // P1.2, P1.4, P1.6) are still empty, so a program with no
+            // hot-looking helper or skewed branch renders `{"queries":[]}`.
             pipeline.typecheck();
             pipeline.lower();
             pipeline.effectcheck();
