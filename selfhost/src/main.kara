@@ -2,7 +2,6 @@
 // Top of the module DAG: span <- token <- lexer <- main.
 //
 
-import span.Span;
 import token.{Token, SpannedToken, InterpPart, InterpExpr, CStr};
 import lexer.lex_all;
 
