@@ -175,6 +175,42 @@ rustls, which is cross-platform.
    accept-loop wedge). Concurrency correctness shows at small N; 10k matches the
    macOS functional-parity precedent. Do NOT rely on CI alone for correctness.
 
+## Windows box setup (for steps 4b / 5 / 6)
+
+Steps 0–4-plain are done from macOS via cross-check. The remaining work — TLS
+bodies (4b), un-gating the unit tests (5), and the 10k loopback run (6) — needs
+a real Windows box, because (a) no Windows *runtime* testing is possible from
+macOS and (b) `ring`/rustls won't cross-compile for `windows-msvc` from a Mac.
+
+**Instance.** Windows Server 2025 **Full Base, x86-64** — NOT ARM: x86-64
+matches the `windows-latest` CI runner and avoids the LLVM-on-ARM yak-shave.
+(A local **Win-on-ARM VM** on Apple Silicon also works for a *first behavioural
+signal* on the 10k run, but the toolchain is fiddlier and it diverges from CI —
+use EC2 x86-64 for the authoritative pass.) On AWS: `m6i.2xlarge` (8 vCPU /
+32 GB, non-burstable — `t3` throttles on sustained LLVM builds) or `t3.2xlarge`
+with Unlimited mode; **≥80–100 GB gp3** (the Windows base AMI root is ~30 GB and
+VS tools + LLVM + Rust `target/` blow past it; EBS resize is live — grow the
+volume then `Resize-Partition`).
+
+**Toolchain.** VS **C++ Build Tools** (MSVC linker + Windows SDK — required for
+the `*-windows-msvc` Rust target) + rustup + **LLVM 18.1** (set
+`LLVM_SYS_181_PREFIX`, prefer-dynamic — this is the likely yak-shave). Connect
+via RDP (open TCP 3389 to your IP, "Get password" with the launch `.pem`, use
+the Mac "Windows App" client).
+
+**Prereqs already met.** Windows CI baseline is green (commit `842db493` gated
+the Unix-only componentize test). Steps 0–4-plain are on `main` — **push `main`
+to origin first** so the Windows box (which clones from origin) actually has
+them.
+
+**Driving it.** Run a Claude Code agent *on the instance* pointed at this file:
+*"Implement the remaining steps (4b/5/6) of `docs/spikes/windows-iocp-
+eventloop.md`; close the Windows entries by title in phase-6-runtime.md's Open
+work front as steps complete."* First sanity-check the toolchain with
+`cargo check --target x86_64-pc-windows-msvc -p karac-runtime
+--no-default-features --features net` (should match the macOS 0-error result),
+then build the runtime archive natively and proceed to step 4b → 6.
+
 ## Implementation plan (suggested order)
 
 0. **(prep, on unix) — ✅ DONE 2026-06-15.** Widen fd ABI `i32 → i64` across
