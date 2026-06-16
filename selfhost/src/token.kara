@@ -1,0 +1,212 @@
+// token.kara — token + literal-payload types for the self-hosted compiler.
+// Depends only on span (DAG layer 1). Mirrors src/token.rs.
+//
+
+import span.Span;
+
+// One `{…}` interpolation hole in an f-string: the verbatim expression source
+// plus the ABSOLUTE source position of its first byte (so the parser can rebase
+// the re-parsed sub-expression's spans — mirrors token.rs InterpolationPart::Expr).
+pub struct InterpExpr {
+    pub raw: String,
+    pub offset: i64,
+    pub line: i64,
+    pub column: i64,
+}
+
+pub enum InterpPart {
+    Text(String),
+    Expr(InterpExpr),
+}
+
+// Owning payload for a `c"…"` literal: the byte sequence (no trailing NUL —
+// codegen appends it) plus the textual body length.
+pub struct CStr {
+    pub bytes: Vec[u8],
+    pub source_len: i64,
+}
+
+// Numeric-literal type suffix (L4). `src/lexer.rs` stores `Option<IntSuffix>` /
+// `Option<FloatSuffix>` on the number token, but karac v1 forbids a nested-enum
+// payload (`E_ENUM_NESTED_ENUM_PAYLOAD` — an enum variant may not carry another
+// enum), so the port stores the suffix as its verbatim lexeme String instead
+// (`"i32"` / `"f64"` / …; `""` = no suffix). The lexer consumes the suffix bytes
+// for span fidelity AND records the lexeme so the parser stage can type the
+// literal (`5i32` vs `5u8`); the differential oracle renders the stored lexeme to
+// diff capture against the seed's `Option<IntSuffix>`.
+pub enum Token {
+    // Keywords — declarations
+    Fn,
+    Struct,
+    Union,
+    Enum,
+    Trait,
+    Marker,
+    Impl,
+    Mod,
+    Use,
+    Import,
+    Const,
+    Type,
+    Distinct,
+    // Visibility
+    Pub,
+    Private,
+    // Control flow
+    If,
+    Else,
+    Match,
+    While,
+    For,
+    In,
+    Loop,
+    Return,
+    Break,
+    Continue,
+    Defer,
+    ErrDefer,
+    Try,
+    Asm,
+    GlobalAsm,
+    // Bindings
+    Let,
+    Mut,
+    // Logical (keyword forms)
+    And,
+    Or,
+    Not,
+    // Ownership
+    Own,
+    Ref,
+    Weak,
+    Lock,
+    Move,
+    // Effects
+    Effect,
+    Resource,
+    Verb,
+    Reads,
+    Writes,
+    Sends,
+    Receives,
+    Allocates,
+    Panics,
+    Blocks,
+    Suspends,
+    With,
+    Transparent,
+    Stable,
+    Seq,
+    Par,
+    Yield,
+    // Type system
+    As,
+    Where,
+    Dyn,
+    // Contracts
+    Requires,
+    Ensures,
+    Invariant,
+    // Safety
+    Unsafe,
+    Extern,
+    Shared,
+    // Layout
+    Layout,
+    Group,
+    // Literals (keyword)
+    True,
+    False,
+    // Other keywords
+    Alias,
+    Independent,
+    SelfValue,
+    SelfType,
+    Underscore,
+
+    // Delimiters
+    LeftParen,
+    RightParen,
+    LeftBrace,
+    RightBrace,
+    LeftBracket,
+    RightBracket,
+
+    // Punctuation
+    Colon,
+    ColonColon,
+    Comma,
+    Semicolon,
+    Dot,
+    DotDot,
+    DotDotEq,
+    DotDotDot,
+    QuestionDot,
+    QuestionQuestion,
+    Arrow,
+    FatArrow,
+    Question,
+    Pound,
+    At,
+
+    // Arithmetic
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Percent,
+
+    // Comparison
+    EqualEqual,
+    BangEqual,
+    LessThan,
+    LessThanOrEqual,
+    GreaterThan,
+    GreaterThanOrEqual,
+
+    // Logical (legacy symbol forms)
+    AmpAmp,
+    PipePipe,
+    Bang,
+
+    // Bitwise
+    Amp,
+    Pipe,
+    PipeArrow,
+    Caret,
+    Tilde,
+    LessLess,
+    GreaterGreater,
+
+    // Assignment
+    Equal,
+    PlusEqual,
+    MinusEqual,
+    StarEqual,
+    SlashEqual,
+    PercentEqual,
+    AmpEqual,
+    PipeEqual,
+    CaretEqual,
+    LessLessEqual,
+    GreaterGreaterEqual,
+
+    // Literals / special
+    Identifier(String),
+    Integer(i64, String),
+    Float(f64, String),
+    StringLiteral(String),
+    MultiStringLiteral(String),
+    InterpolatedStringLiteral(Vec[InterpPart]),
+    CStringLiteral(CStr),
+    CharLiteral(char),
+    ByteLiteral(u8),
+    DocComment(String),
+    ModuleDocComment(String),
+    Eof,
+    Error(String),
+}
+pub struct SpannedToken {
+    pub token: Token,
+    pub span: Span,
+}

@@ -1,0 +1,10 @@
+// span.kara — source-span foundation for the self-hosted compiler.
+// DAG root: no imports. Mirrors the Span half of src/token.rs.
+//
+
+pub struct Span {
+    pub line: i64,
+    pub column: i64,
+    pub offset: i64,
+    pub length: i64,
+}

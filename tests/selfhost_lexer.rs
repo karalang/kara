@@ -583,9 +583,13 @@ fn escape_for_render(s: &str) -> String {
 
 #[test]
 fn selfhost_lexer_matches_rust_lexer() {
-    // 1. Build the generated program: the lexer library (everything in
-    //    `selfhost/src/main.kara` except its driver `fn main`) + a `main` that
-    //    lexes each corpus input and prints its token render, separated by SEP.
+    // 1. Build the generated program: the crate-root module of the split
+    //    self-hosted lexer (`selfhost/src/main.kara` = imports + `render` +
+    //    `escape_for_render`, minus its driver `fn main`) + a `main` that lexes
+    //    each corpus input and prints its token render, separated by SEP. The
+    //    lexer proper (`span`/`token`/`lexer` modules) is copied verbatim into
+    //    the temp project in step 2, so the oracle exercises the real
+    //    multi-file layout.
     let lib_src = {
         let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("selfhost/src/main.kara");
         let full = std::fs::read_to_string(&p).expect("read selfhost lexer source");
@@ -623,15 +627,27 @@ fn selfhost_lexer_matches_rust_lexer() {
     prog.push_str("}\n");
 
     // 2. Build via `karac build` (AOT — the interpreter mishandles the
-    //    lexer's self-mutating methods).
+    //    lexer's self-mutating methods). Assemble a temp PROJECT that reuses
+    //    the real `span`/`token`/`lexer` module files verbatim and uses the
+    //    corpus-driver `prog` as the crate-root `main.kara`.
     let tmp = std::env::temp_dir().join(format!("karac-selfhost-lexer-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
-    std::fs::create_dir_all(&tmp).unwrap();
-    std::fs::write(tmp.join("lex.kara"), &prog).unwrap();
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::write(
+        tmp.join("kara.toml"),
+        "[package]\nname = \"lex\"\nversion = \"0.1.0\"\nauthors = []\nedition = \"2026\"\n\n[dependencies]\n",
+    )
+    .unwrap();
+    let selfhost_src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("selfhost/src");
+    for f in ["span.kara", "token.kara", "lexer.kara"] {
+        std::fs::copy(selfhost_src.join(f), tmp.join("src").join(f))
+            .unwrap_or_else(|e| panic!("copy selfhost module {f}: {e}"));
+    }
+    std::fs::write(tmp.join("src").join("main.kara"), &prog).unwrap();
 
     let build = std::process::Command::new(env!("CARGO_BIN_EXE_karac"))
         .current_dir(&tmp)
-        .args(["build", "lex.kara"])
+        .args(["build"])
         .env_remove("KARAC_RUNTIME")
         .output()
         .expect("spawn karac build");

@@ -1,0 +1,1595 @@
+// main.kara — self-hosted Kāra lexer (phase-12 self-hosting). WIP.
+//
+// Byte-indexed scan mirroring the Rust `src/lexer.rs` near-line-for-line, so
+// the differential oracle (tests/selfhost_lexer.rs) reproduces the Rust
+// lexer's `(offset, length)` spans bit-for-bit.
+//
+// PORT SLICES (each shipped with the oracle green):
+//   A — delimiters, punctuation, single/multi-char operators, keyword table.
+//       The structural, non-literal core.                           [DONE]
+//   B — comments (line/block skip + `///`/`//!` doc tokens).        [DONE]
+//   C — number forms (hex/bin/octal, float, `_` separators, suffixes). [DONE]
+//   D — string / multi-string / char / byte literals (+ simple escapes). [DONE]
+//   D-cont — f-string interpolation (`f"…{e}…"`) + c-strings (`c"…"`).   [DONE]
+//       `\u{…}` / `\0` escapes still deferred (gated on a codepoint→char builder).
+//   E — raw idents (`r#x`), reserved string prefixes (`x"…"`, `_"…"`),
+//       reserved `#`-guarded strings (`#"…"#`), reserved future keywords
+//       (`f16`/`gen`/…), the reserved `expr_<year>` fragment-specifier
+//       namespace, and single-codepoint non-ASCII recovery.        [THIS SLICE]
+//       The multi-codepoint non-ASCII *identifier* recovery (consuming a run
+//       of Unicode letters into one error) is deferred: it needs a Unicode
+//       `char.is_alphabetic` classifier in karac (tracked blocker #13). The
+//       single-codepoint "unexpected character" path is exact for any isolated
+//       non-ASCII byte sequence not immediately followed by an identifier char.
+//
+// Bootstrap-blocker chain (see docs/implementation_checklist/
+// phase-12-self-hosting.md § Self-hosting-surfaced blockers): #1, #4, #5, #6,
+// #7, #8 are all FIXED — the byte-indexed scan core (Vec[u8] field,
+// self-mutating methods, struct return, enum render) builds, runs via
+// `karac build`, and lexes correctly with auto-par ON, guarded by the oracle.
+// #9 (codegen move-suppression): a let-bound bare user-enum with a heap payload
+// double-freed when moved out. RETURN-of-let-bound-enum and `let g = f` FIXED
+// 2026-06-11. The by-value-call-arg-then-transfer-out case (e.g.
+// `make_spanned(token)` re-wrapping into the returned `SpannedToken`) was the
+// distinct blocker #14 (it affected structs identically) — FIXED 2026-06-12 by
+// entry-deep-copying + callee-owning by-value aggregate params (src/codegen/
+// param_own.rs), so `identifier()` now uses the natural `let token = …;
+// self.make_spanned(token)` form.
+
+import span.Span;
+import token.{Token, SpannedToken, InterpExpr, InterpPart, CStr};
+
+struct Lexer {
+    src: String,
+    bytes: Vec[u8],
+    start: i64,
+    current: i64,
+    line: i64,
+    column: i64,
+    start_column: i64,
+}
+
+impl Lexer {
+    fn new(src: String) -> Lexer {
+        let mut bytes: Vec[u8] = Vec.new();
+        for b in src.bytes() {
+            bytes.push(b);
+        }
+        Lexer {
+            src: src,
+            bytes: bytes,
+            start: 0,
+            current: 0,
+            line: 1,
+            column: 1,
+            start_column: 1,
+        }
+    }
+
+    fn is_at_end(ref self) -> bool {
+        self.current >= self.bytes.len()
+    }
+
+    fn peek(ref self) -> u8 {
+        if self.current >= self.bytes.len() {
+            0
+        } else {
+            self.bytes[self.current]
+        }
+    }
+
+    fn peek_next(ref self) -> u8 {
+        if self.current + 1 >= self.bytes.len() {
+            0
+        } else {
+            self.bytes[self.current + 1]
+        }
+    }
+
+    fn peek_at(ref self, offset: i64) -> u8 {
+        let pos = self.current + offset;
+        if pos >= self.bytes.len() {
+            0
+        } else {
+            self.bytes[pos]
+        }
+    }
+
+    fn advance(mut ref self) -> u8 {
+        let c = self.bytes[self.current];
+        self.current = self.current + 1;
+        self.column = self.column + 1;
+        c
+    }
+
+    fn match_char(mut ref self, expected: u8) -> bool {
+        if self.current >= self.bytes.len() {
+            false
+        } else if self.bytes[self.current] != expected {
+            false
+        } else {
+            self.current = self.current + 1;
+            self.column = self.column + 1;
+            true
+        }
+    }
+
+    fn make_spanned(ref self, token: Token) -> SpannedToken {
+        SpannedToken {
+            token: token,
+            span: Span {
+                line: self.line,
+                column: self.start_column,
+                offset: self.start,
+                length: self.current - self.start,
+            },
+        }
+    }
+
+    fn skip_whitespace(mut ref self) {
+        loop {
+            let c = self.peek();
+            if c == b' ' or c == b'\r' or c == b'\t' {
+                self.advance();
+            } else if c == b'\n' {
+                self.line = self.line + 1;
+                self.column = 0;
+                self.advance();
+            } else if c == b'/' and self.peek_next() == b'/' {
+                // `//` line comment — UNLESS it is `///` / `//!`, which are doc
+                // comments that next_token tokenizes (peek_at(2) returns 0 past
+                // EOF, matching the Rust `current+2 < len && …` guard exactly).
+                let third = self.peek_at(2);
+                if third == b'/' or third == b'!' {
+                    break;
+                } else {
+                    while self.peek() != b'\n' and not self.is_at_end() {
+                        self.advance();
+                    }
+                }
+            } else if c == b'/' and self.peek_next() == b'*' {
+                // `/* … */` block comment, nesting-aware.
+                self.advance();
+                self.advance();
+                let mut depth = 1;
+                while depth > 0 and not self.is_at_end() {
+                    if self.peek() == b'/' and self.peek_next() == b'*' {
+                        self.advance();
+                        self.advance();
+                        depth = depth + 1;
+                    } else if self.peek() == b'*' and self.peek_next() == b'/' {
+                        self.advance();
+                        self.advance();
+                        depth = depth - 1;
+                    } else {
+                        if self.peek() == b'\n' {
+                            self.line = self.line + 1;
+                            self.column = 0;
+                        }
+                        self.advance();
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn next_token(mut ref self) -> SpannedToken {
+        self.skip_whitespace();
+        self.start = self.current;
+        self.start_column = self.column;
+
+        if self.is_at_end() {
+            return self.make_spanned(Token.Eof);
+        }
+
+        let c = self.advance();
+        match c {
+            // Delimiters
+            b'(' => self.make_spanned(Token.LeftParen),
+            b')' => self.make_spanned(Token.RightParen),
+            b'{' => self.make_spanned(Token.LeftBrace),
+            b'}' => self.make_spanned(Token.RightBrace),
+            b'[' => self.make_spanned(Token.LeftBracket),
+            b']' => self.make_spanned(Token.RightBracket),
+
+            // Single-byte punctuation
+            b',' => self.make_spanned(Token.Comma),
+            b';' => self.make_spanned(Token.Semicolon),
+            // `#` is `Token.Pound` for the `#[attr]` form; a `#` followed by
+            // another `#` or a `"` opens the reserved `#`-guarded string syntax
+            // (Rust-style raw strings), which is reserved at v1.
+            b'#' => {
+                if self.peek() == b'#' or self.peek() == b'"' {
+                    self.reserved_hash_guarded_string()
+                } else {
+                    self.make_spanned(Token.Pound)
+                }
+            }
+            b'@' => self.make_spanned(Token.At),
+            b'~' => self.make_spanned(Token.Tilde),
+
+            // Colon / ColonColon
+            b':' => {
+                if self.match_char(b':') {
+                    self.make_spanned(Token.ColonColon)
+                } else {
+                    self.make_spanned(Token.Colon)
+                }
+            }
+
+            // Dot / DotDot / DotDotEq / DotDotDot
+            b'.' => {
+                if self.match_char(b'.') {
+                    if self.match_char(b'=') {
+                        self.make_spanned(Token.DotDotEq)
+                    } else if self.match_char(b'.') {
+                        self.make_spanned(Token.DotDotDot)
+                    } else {
+                        self.make_spanned(Token.DotDot)
+                    }
+                } else {
+                    self.make_spanned(Token.Dot)
+                }
+            }
+
+            // Question / QuestionDot / QuestionQuestion
+            b'?' => {
+                if self.match_char(b'.') {
+                    self.make_spanned(Token.QuestionDot)
+                } else if self.match_char(b'?') {
+                    self.make_spanned(Token.QuestionQuestion)
+                } else {
+                    self.make_spanned(Token.Question)
+                }
+            }
+
+            // Arithmetic
+            b'+' => {
+                if self.match_char(b'=') {
+                    self.make_spanned(Token.PlusEqual)
+                } else {
+                    self.make_spanned(Token.Plus)
+                }
+            }
+            b'*' => {
+                if self.match_char(b'=') {
+                    self.make_spanned(Token.StarEqual)
+                } else {
+                    self.make_spanned(Token.Star)
+                }
+            }
+            b'/' => {
+                // The leading `/` is already consumed, so peek() is the 2nd byte.
+                if self.peek() == b'/' and self.peek_next() == b'/' {
+                    self.advance();
+                    self.advance();
+                    if self.peek() == b' ' {
+                        self.advance();
+                    }
+                    let text_start = self.current;
+                    while self.peek() != b'\n' and not self.is_at_end() {
+                        self.advance();
+                    }
+                    let text = self.src.substring(text_start, self.current);
+                    self.make_spanned(Token.DocComment(text))
+                } else if self.peek() == b'/' and self.peek_next() == b'!' {
+                    self.advance();
+                    self.advance();
+                    if self.peek() == b' ' {
+                        self.advance();
+                    }
+                    let text_start = self.current;
+                    while self.peek() != b'\n' and not self.is_at_end() {
+                        self.advance();
+                    }
+                    let text = self.src.substring(text_start, self.current);
+                    self.make_spanned(Token.ModuleDocComment(text))
+                } else if self.match_char(b'=') {
+                    self.make_spanned(Token.SlashEqual)
+                } else {
+                    self.make_spanned(Token.Slash)
+                }
+            }
+            b'%' => {
+                if self.match_char(b'=') {
+                    self.make_spanned(Token.PercentEqual)
+                } else {
+                    self.make_spanned(Token.Percent)
+                }
+            }
+
+            // Minus / MinusEqual / Arrow
+            b'-' => {
+                if self.match_char(b'>') {
+                    self.make_spanned(Token.Arrow)
+                } else if self.match_char(b'=') {
+                    self.make_spanned(Token.MinusEqual)
+                } else {
+                    self.make_spanned(Token.Minus)
+                }
+            }
+
+            // Equal / EqualEqual / FatArrow
+            b'=' => {
+                if self.match_char(b'=') {
+                    self.make_spanned(Token.EqualEqual)
+                } else if self.match_char(b'>') {
+                    self.make_spanned(Token.FatArrow)
+                } else {
+                    self.make_spanned(Token.Equal)
+                }
+            }
+
+            // Bang / BangEqual
+            b'!' => {
+                if self.match_char(b'=') {
+                    self.make_spanned(Token.BangEqual)
+                } else {
+                    self.make_spanned(Token.Bang)
+                }
+            }
+
+            // Less / LessEqual / LessLess / LessLessEqual
+            b'<' => {
+                if self.match_char(b'=') {
+                    self.make_spanned(Token.LessThanOrEqual)
+                } else if self.match_char(b'<') {
+                    if self.match_char(b'=') {
+                        self.make_spanned(Token.LessLessEqual)
+                    } else {
+                        self.make_spanned(Token.LessLess)
+                    }
+                } else {
+                    self.make_spanned(Token.LessThan)
+                }
+            }
+
+            // Greater / GreaterEqual / GreaterGreater / GreaterGreaterEqual
+            b'>' => {
+                if self.match_char(b'=') {
+                    self.make_spanned(Token.GreaterThanOrEqual)
+                } else if self.match_char(b'>') {
+                    if self.match_char(b'=') {
+                        self.make_spanned(Token.GreaterGreaterEqual)
+                    } else {
+                        self.make_spanned(Token.GreaterGreater)
+                    }
+                } else {
+                    self.make_spanned(Token.GreaterThan)
+                }
+            }
+
+            // Amp / AmpAmp / AmpEqual
+            b'&' => {
+                if self.match_char(b'&') {
+                    self.make_spanned(Token.AmpAmp)
+                } else if self.match_char(b'=') {
+                    self.make_spanned(Token.AmpEqual)
+                } else {
+                    self.make_spanned(Token.Amp)
+                }
+            }
+
+            // Pipe / PipePipe / PipeArrow / PipeEqual
+            b'|' => {
+                if self.match_char(b'|') {
+                    self.make_spanned(Token.PipePipe)
+                } else if self.match_char(b'>') {
+                    self.make_spanned(Token.PipeArrow)
+                } else if self.match_char(b'=') {
+                    self.make_spanned(Token.PipeEqual)
+                } else {
+                    self.make_spanned(Token.Pipe)
+                }
+            }
+
+            // Caret / CaretEqual
+            b'^' => {
+                if self.match_char(b'=') {
+                    self.make_spanned(Token.CaretEqual)
+                } else {
+                    self.make_spanned(Token.Caret)
+                }
+            }
+
+            // String literals: `"""..."""` multi-line vs `"..."` single.
+            b'"' => {
+                if self.peek() == b'"' and self.peek_next() == b'"' {
+                    self.advance();
+                    self.advance();
+                    self.multi_string()
+                } else {
+                    self.string()
+                }
+            }
+
+            // Character literal.
+            b'\'' => self.char_literal(),
+
+            _ => {
+                // `b'A'` byte literal — checked before the identifier path since
+                // `b` is also an identifier start. `f"…"` / `c"…"` are the
+                // recognized string prefixes; every OTHER single-letter prefix
+                // immediately before `"` is reserved (handled lower down).
+                if c == b'b' and self.peek() == b'\'' {
+                    self.advance();
+                    self.byte_char_literal()
+                } else if c == b'f' and self.peek() == b'"' {
+                    self.advance();
+                    self.interpolated_string()
+                } else if c == b'c' and self.peek() == b'"' {
+                    self.advance();
+                    self.c_string()
+                } else if c == b'r' and self.peek() == b'#' and is_alpha(self.peek_next()) {
+                    // Raw-identifier escape `r#NAME`. `r"` and `r#"…"#` are
+                    // reserved-string forms caught elsewhere; only `r#` + an
+                    // identifier-start byte enters this path.
+                    self.raw_identifier()
+                } else if (c.is_ascii_alphabetic() or c == b'_') and self.peek() == b'"' {
+                    // Reserved single-letter string prefix (`x"…"`, `_"…"`, `r"…"`).
+                    // `f"…"`/`c"…"` matched above; everything else is reserved.
+                    self.reserved_prefix_string()
+                } else if is_digit(c) {
+                    self.number()
+                } else if is_alpha(c) {
+                    self.identifier()
+                } else if c >= 0x80 {
+                    // Non-ASCII lead byte: emit one codepoint-spanning error.
+                    self.non_ascii_at_lead(c)
+                } else {
+                    self.make_spanned(Token.Error("Unexpected character".to_string()))
+                }
+            }
+        }
+    }
+
+    fn number(mut ref self) -> SpannedToken {
+        // Radix prefixes 0x / 0b / 0o (the leading digit is already consumed,
+        // so bytes[start] is it and peek() is the prefix letter).
+        if self.bytes[self.start] == b'0' and not self.is_at_end() {
+            let c0 = self.peek();
+            if c0 == b'x' or c0 == b'X' {
+                return self.radix_number(16);
+            } else if c0 == b'b' or c0 == b'B' {
+                return self.radix_number(2);
+            } else if c0 == b'o' or c0 == b'O' {
+                return self.radix_number(8);
+            }
+        }
+        while is_digit(self.peek()) or self.peek() == b'_' {
+            self.advance();
+        }
+        let mut is_float = false;
+        // A number whose immediately-preceding char is `.` is a TUPLE INDEX
+        // (`x.1`, and crucially the trailing `1` of `x.1.1`), never a float —
+        // its leading `.` was already lexed as a `Dot`. Without this, `x.1.1`
+        // lexes as `x . 1.1`(float), and the parser can't recover the original
+        // digits from the `f64` to split it back into two indices, so chained
+        // tuple indexing fails to parse (mirrors `src/lexer.rs` `number`,
+        // commit 99131a7b, B-2026-06-11-7). A genuine float literal is never
+        // `.`-preceded — `.` after a value is always member access, and Kāra has
+        // no leading-dot float (`.5`) — so suppress BOTH the fractional and
+        // exponent float parts in this position; the number lexes as an integer.
+        let tuple_index_ctx = self.start > 0 and self.bytes[self.start - 1] == b'.';
+        // Fractional part: `.DIGITS` and also `.eEXP` (e.g. `1.e10`).
+        if not tuple_index_ctx and self.peek() == b'.' {
+            let after_dot = self.peek_next();
+            let is_exp_after_dot = (after_dot == b'e' or after_dot == b'E') and is_exp_start(self.peek_at(2));
+            if is_digit(after_dot) or is_exp_after_dot {
+                is_float = true;
+                self.advance();
+                while is_digit(self.peek()) or self.peek() == b'_' {
+                    self.advance();
+                }
+            }
+        }
+        // Exponent: e|E [+|-] DIGITS.
+        if not tuple_index_ctx and (self.peek() == b'e' or self.peek() == b'E') {
+            is_float = true;
+            self.advance();
+            if self.peek() == b'+' or self.peek() == b'-' {
+                self.advance();
+            }
+            if not is_digit(self.peek()) {
+                return self.make_spanned(Token.Error("exponent has no digits".to_string()));
+            }
+            while is_digit(self.peek()) or self.peek() == b'_' {
+                self.advance();
+            }
+        }
+        if is_float {
+            // Capture the digit text BEFORE consuming the suffix (so `text`
+            // excludes it), then record the suffix kind; `make_spanned` runs
+            // after suffix consumption so the span still covers it.
+            let text = strip_underscores(self.src.substring(self.start, self.current));
+            let sfx = self.try_float_suffix();
+            match f64.parse(text) {
+                Some(v) => self.make_spanned(Token.Float(v, sfx)),
+                None => self.make_spanned(Token.Error("Invalid float literal".to_string())),
+            }
+        } else {
+            let text = strip_underscores(self.src.substring(self.start, self.current));
+            let sfx = self.try_int_suffix();
+            match i64.parse(text) {
+                Some(v) => self.make_spanned(Token.Integer(v, sfx)),
+                None => self.make_spanned(Token.Error("Invalid integer literal".to_string())),
+            }
+        }
+    }
+
+    // Hex (16) / binary (2) / octal (8) literal. The leading `0` is consumed;
+    // peek() is the prefix letter. Captures the digit text (sans the `0x`/`_`)
+    // BEFORE consuming any type suffix, so make_spanned's span includes it.
+    fn radix_number(mut ref self, radix: i64) -> SpannedToken {
+        self.advance(); // the x / b / o
+        while is_radix_digit(self.peek(), radix) or self.peek() == b'_' {
+            self.advance();
+        }
+        let text = strip_underscores(self.src.substring(self.start + 2, self.current));
+        let sfx = self.try_int_suffix();
+        match i64.from_str_radix(text, radix) {
+            Some(v) => self.make_spanned(Token.Integer(v, sfx)),
+            None => self.make_spanned(Token.Error("Invalid radix literal".to_string())),
+        }
+    }
+
+    // Consume `pat` at `current` iff it is present AND not followed by an
+    // identifier char (so `i32x` is not read as the `i32` suffix). Returns
+    // whether it consumed. `try_int_suffix` / `try_float_suffix` map the matched
+    // pattern to its suffix kind (L4); a non-match leaves the cursor untouched.
+    fn try_consume_suffix(mut ref self, pat: String) -> bool {
+        let mut pb: Vec[u8] = Vec.new();
+        for b in pat.bytes() {
+            pb.push(b);
+        }
+        let n = pb.len();
+        let mut i = 0;
+        while i < n {
+            if self.peek_at(i) != pb[i] {
+                return false;
+            }
+            i = i + 1;
+        }
+        let after = self.peek_at(n);
+        if is_alpha(after) or is_digit(after) {
+            return false;
+        }
+        let mut j = 0;
+        while j < n {
+            self.advance();
+            j = j + 1;
+        }
+        true
+    }
+
+    // Longest-match first (`i128` before `i64`, etc.), mirroring the seed's
+    // candidate ordering. Returns the consumed suffix lexeme, or `""` if none.
+    fn try_int_suffix(mut ref self) -> String {
+        if self.try_consume_suffix("i128") {
+            return "i128".to_string();
+        }
+        if self.try_consume_suffix("i64") {
+            return "i64".to_string();
+        }
+        if self.try_consume_suffix("i32") {
+            return "i32".to_string();
+        }
+        if self.try_consume_suffix("i16") {
+            return "i16".to_string();
+        }
+        if self.try_consume_suffix("i8") {
+            return "i8".to_string();
+        }
+        if self.try_consume_suffix("u128") {
+            return "u128".to_string();
+        }
+        if self.try_consume_suffix("u64") {
+            return "u64".to_string();
+        }
+        if self.try_consume_suffix("u32") {
+            return "u32".to_string();
+        }
+        if self.try_consume_suffix("u16") {
+            return "u16".to_string();
+        }
+        if self.try_consume_suffix("u8") {
+            return "u8".to_string();
+        }
+        "".to_string()
+    }
+
+    fn try_float_suffix(mut ref self) -> String {
+        if self.try_consume_suffix("f64") {
+            return "f64".to_string();
+        }
+        if self.try_consume_suffix("f32") {
+            return "f32".to_string();
+        }
+        "".to_string()
+    }
+
+    // `"..."` string literal. The opening `"` is consumed. Literal runs are
+    // appended via substring (so multi-byte UTF-8 copies through without a
+    // byte→char conversion); recognized escapes push the specific char,
+    // including `\0` (NUL) and `\u{…}` (codepoint → `char` via `char.try_from`,
+    // UTF-8-encoded by `String.push`).
+    fn string(mut ref self) -> SpannedToken {
+        let mut value = "".to_string();
+        let mut run_start = self.current;
+        while self.peek() != b'"' and not self.is_at_end() {
+            if self.peek() == b'\\' {
+                value.push_str(self.src.substring(run_start, self.current));
+                self.advance();
+                if self.is_at_end() {
+                    return self.make_spanned(Token.Error("Unterminated string: trailing backslash".to_string()));
+                }
+                let e = self.peek();
+                if e == b'n' {
+                    value.push('\n');
+                    self.advance();
+                } else if e == b't' {
+                    value.push('\t');
+                    self.advance();
+                } else if e == b'r' {
+                    value.push('\r');
+                    self.advance();
+                } else if e == b'\\' {
+                    value.push('\\');
+                    self.advance();
+                } else if e == b'"' {
+                    value.push('"');
+                    self.advance();
+                } else if e == b'0' {
+                    value.push('\0');
+                    self.advance();
+                } else if e == b'u' {
+                    self.advance();
+                    let cp = self.scan_unicode_escape();
+                    if cp < 0 {
+                        return self.make_spanned(Token.Error("Invalid unicode escape".to_string()));
+                    }
+                    match char.try_from(cp) {
+                        Ok(c) => value.push(c),
+                        Err(_) => return self.make_spanned(Token.Error("Invalid unicode scalar value".to_string())),
+                    }
+                } else {
+                    return self.make_spanned(Token.Error("Unknown escape sequence".to_string()));
+                }
+                run_start = self.current;
+            } else if self.peek() == b'\n' {
+                self.line = self.line + 1;
+                self.column = 0;
+                self.advance();
+            } else {
+                self.advance_codepoint();
+            }
+        }
+        if self.is_at_end() {
+            return self.make_spanned(Token.Error("Unterminated string".to_string()));
+        }
+        value.push_str(self.src.substring(run_start, self.current));
+        self.advance();
+        self.make_spanned(Token.StringLiteral(value))
+    }
+
+    // `"""..."""` multi-line string. The opening `"""` is consumed. No escape
+    // processing (raw body) — value is the verbatim source slice.
+    fn multi_string(mut ref self) -> SpannedToken {
+        let content_start = self.current;
+        loop {
+            if self.is_at_end() {
+                return self.make_spanned(Token.Error("Unterminated multi-line string".to_string()));
+            }
+            if self.peek() == b'"' and self.peek_next() == b'"' and self.peek_at(2) == b'"' {
+                let value = self.src.substring(content_start, self.current);
+                self.advance();
+                self.advance();
+                self.advance();
+                return self.make_spanned(Token.MultiStringLiteral(value));
+            }
+            if self.peek() == b'\n' {
+                self.line = self.line + 1;
+                self.column = 0;
+                self.advance();
+            } else {
+                self.advance_codepoint();
+            }
+        }
+    }
+
+    // `'c'` character literal. The opening `'` is consumed. ASCII / simple
+    // escapes + `\0` (NUL) + `\u{…}` (Unicode-codepoint → `char` via
+    // `char.try_from`) + multi-byte non-escape bodies (`'λ'`, read as one
+    // codepoint via `consume_codepoint` — L2). `\u{…}` source is all-ASCII so
+    // spans are unaffected.
+    fn char_literal(mut ref self) -> SpannedToken {
+        if self.is_at_end() {
+            return self.make_spanned(Token.Error("Unterminated character literal".to_string()));
+        }
+        // `mut ch` + if-STATEMENTS: this predates the #12 never-type fix (now
+        // landed, so a value-`if` with a `return` arm would also typecheck);
+        // the statement form is kept as-is — correct and readable.
+        let mut ch = '?';
+        if self.peek() == b'\\' {
+            self.advance();
+            if self.is_at_end() {
+                return self.make_spanned(Token.Error("Unterminated character literal".to_string()));
+            }
+            let e = self.peek();
+            self.advance();
+            if e == b'n' {
+                ch = '\n';
+            } else if e == b't' {
+                ch = '\t';
+            } else if e == b'r' {
+                ch = '\r';
+            } else if e == b'\\' {
+                ch = '\\';
+            } else if e == b'\'' {
+                ch = '\'';
+            } else if e == b'0' {
+                ch = '\0';
+            } else if e == b'u' {
+                let cp = self.scan_unicode_escape();
+                if cp < 0 {
+                    return self.make_spanned(Token.Error("Invalid unicode escape".to_string()));
+                }
+                // Value-position match with a diverging `Err` arm — relies on
+                // the #12 never-as-bottom coercion (the `return` arm coerces to
+                // the `char` the `Ok` arm yields). Dogfoods that fix.
+                ch = match char.try_from(cp) {
+                    Ok(c) => c,
+                    Err(_) => return self.make_spanned(Token.Error("Invalid unicode scalar value".to_string())),
+                };
+            } else {
+                return self.make_spanned(Token.Error("Unknown escape sequence in character literal".to_string()));
+            }
+        } else {
+            ch = self.consume_codepoint();
+        }
+        if self.is_at_end() or self.peek() != b'\'' {
+            return self.make_spanned(Token.Error("Unterminated character literal".to_string()));
+        }
+        self.advance();
+        self.make_spanned(Token.CharLiteral(ch))
+    }
+
+    // Scan a `\u{HEX}` escape body. The `u` is already consumed; `current` is at
+    // the `{`. Returns the decoded codepoint (>= 0), or -1 on any syntax error
+    // (missing `{`, unterminated, un-parseable / overflowing hex). Consumes
+    // through the closing `}` on the success + unterminated-hex paths, so the
+    // Error span the caller builds matches `src/lexer.rs::parse_unicode_escape`
+    // byte-for-byte. Scalar-value validity (surrogate / > U+10FFFF) is left to
+    // the caller's `char.try_from` (mirrors the seed's `char::from_u32`).
+    fn scan_unicode_escape(mut ref self) -> i64 {
+        if self.is_at_end() or self.peek() != b'{' {
+            return -1;
+        }
+        self.advance();
+        let hex_start = self.current;
+        while self.peek() != b'}' and not self.is_at_end() {
+            self.advance();
+        }
+        if self.is_at_end() {
+            return -1;
+        }
+        let hex_str = self.src.substring(hex_start, self.current);
+        self.advance();
+        match i64.from_str_radix(hex_str, 16) {
+            Some(code) => code,
+            None => -1,
+        }
+    }
+
+    // `b'A'` byte char literal. The leading `b'` is consumed. One ASCII byte or
+    // a simple escape; `\u{…}` and multi-byte bodies are rejected (as in Rust).
+    fn byte_char_literal(mut ref self) -> SpannedToken {
+        if self.is_at_end() {
+            return self.make_spanned(Token.Error("Unterminated byte literal".to_string()));
+        }
+        if self.peek() == b'\'' {
+            self.advance();
+            return self.make_spanned(Token.Error("empty byte literal: `b''` must contain exactly one byte".to_string()));
+        }
+        let mut byte: u8 = 0;
+        if self.peek() == b'\\' {
+            self.advance();
+            if self.is_at_end() {
+                return self.make_spanned(Token.Error("Unterminated byte literal".to_string()));
+            }
+            let e = self.peek();
+            self.advance();
+            if e == b'n' {
+                byte = b'\n';
+            } else if e == b't' {
+                byte = b'\t';
+            } else if e == b'r' {
+                byte = b'\r';
+            } else if e == b'\\' {
+                byte = b'\\';
+            } else if e == b'\'' {
+                byte = b'\'';
+            } else if e == b'"' {
+                byte = b'"';
+            } else if e == b'0' {
+                byte = 0;
+            } else if e == b'u' {
+                // `\u{…}` is not permitted in byte literals (Rust parity — use
+                // `\xHH`). Consume `{…}` + the closing quote so recovery doesn't
+                // cascade; the Error span then matches the Rust seed's extent.
+                if self.peek() == b'{' {
+                    self.advance();
+                    while not self.is_at_end() and self.peek() != b'}' and self.peek() != b'\'' {
+                        self.advance();
+                    }
+                    if self.peek() == b'}' {
+                        self.advance();
+                    }
+                }
+                if self.peek() == b'\'' {
+                    self.advance();
+                }
+                return self.make_spanned(Token.Error("Unicode escapes are not permitted in byte literals — use \\xFF for byte 0xFF.".to_string()));
+            } else {
+                return self.make_spanned(Token.Error("Unknown escape sequence in byte literal".to_string()));
+            }
+        } else {
+            let b = self.peek();
+            if b >= 0x80 {
+                return self.make_spanned(Token.Error("non-ASCII character in byte literal".to_string()));
+            }
+            self.advance();
+            byte = b;
+        }
+        if self.is_at_end() {
+            return self.make_spanned(Token.Error("Unterminated byte literal".to_string()));
+        }
+        if self.peek() != b'\'' {
+            return self.make_spanned(Token.Error("byte literal must contain exactly one byte".to_string()));
+        }
+        self.advance();
+        self.make_spanned(Token.ByteLiteral(byte))
+    }
+
+    // `f"…{expr}…"` interpolated string. The opening `f"` is consumed. Literal
+    // text accumulates (runs via substring + simple escapes, incl. `\0` / `\u{…}`);
+    // each `{…}` becomes an Expr part carrying the verbatim source and its
+    // absolute start position.
+    fn interpolated_string(mut ref self) -> SpannedToken {
+        let mut parts: Vec[InterpPart] = Vec.new();
+        let mut text = "".to_string();
+        let mut run_start = self.current;
+        while self.peek() != b'"' and not self.is_at_end() {
+            if self.peek() == b'{' {
+                text.push_str(self.src.substring(run_start, self.current));
+                if text.len() > 0 {
+                    parts.push(InterpPart.Text(text));
+                    text = "".to_string();
+                }
+                self.advance();
+                let expr_start = self.current;
+                let expr_line = self.line;
+                let expr_column = self.column;
+                let mut depth = 1;
+                // String-aware brace matching (mirrors `src/lexer.rs`
+                // `interpolated_string`, commit 3311df6d): a `{` / `}` inside a
+                // string or char literal nested in the interpolation must NOT
+                // change the brace depth — `f"{ m["a}b"] }"`'s `}` in `"a}b"`
+                // closes nothing, and a brace-only counter would truncate the
+                // expression there. `in_lit` holds the open delimiter (`"` or
+                // `'`) while inside such a literal, and `0` when outside it (no
+                // byte literal is `0`, so the sentinel is unambiguous). `raw` is
+                // still captured as the verbatim source substring, so the
+                // span-rebasing invariant (`byte i of raw == source offset
+                // expr_start + i`) is preserved — string-awareness only gates the
+                // brace counting and the nested-quote handling.
+                let mut in_lit: u8 = 0;
+                while depth > 0 and not self.is_at_end() {
+                    let bc = self.peek();
+                    if in_lit != 0 {
+                        if bc == b'\\' {
+                            // Copy the backslash and its escaped char as a pair so
+                            // a `\"` / `\'` inside the literal does not close it.
+                            // Both bytes are stepped over verbatim; nothing is
+                            // interpreted here.
+                            self.advance_codepoint();
+                            if not self.is_at_end() {
+                                if self.peek() == b'\n' {
+                                    self.line = self.line + 1;
+                                    self.column = 0;
+                                }
+                                self.advance_codepoint();
+                            }
+                            continue;
+                        }
+                        if bc == in_lit {
+                            in_lit = 0;
+                        }
+                    } else if bc == b'{' {
+                        depth = depth + 1;
+                    } else if bc == b'}' {
+                        depth = depth - 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    } else if bc == b'"' or bc == b'\'' {
+                        in_lit = bc;
+                    } else if bc == b'\\' {
+                        // A backslash in *expression* position (outside any nested
+                        // literal) is the invalid escaped-quote case
+                        // (`f"{ id(\"hi\") }"`): expression context wants plain
+                        // quotes. The seed previously copied it verbatim, then
+                        // silently emitted it as literal text (the `\` fails to
+                        // re-parse) — wrong output, no error. Emit a clear error
+                        // instead, WITHOUT consuming the `\`, so the span runs
+                        // from `start` to the backslash (byte-identical to the
+                        // seed's `make_spanned`).
+                        return self.make_spanned(Token.Error("unexpected backslash in f-string interpolation; interpolation expressions use plain quotes".to_string()));
+                    }
+                    if bc == b'\n' {
+                        self.line = self.line + 1;
+                        self.column = 0;
+                    }
+                    // Codepoint-aware so non-ASCII inside the `{…}` expr advances
+                    // `column` once, not per byte (#30); `{`/`}`/`\n`/quotes are
+                    // ASCII so the depth + literal bookkeeping above is unaffected.
+                    self.advance_codepoint();
+                }
+                let raw = self.src.substring(expr_start, self.current);
+                self.advance();
+                parts.push(InterpPart.Expr(InterpExpr {
+                    raw: raw,
+                    offset: expr_start,
+                    line: expr_line,
+                    column: expr_column,
+                }));
+                run_start = self.current;
+            } else if self.peek() == b'\\' {
+                text.push_str(self.src.substring(run_start, self.current));
+                self.advance();
+                let e = self.peek();
+                if e == b'n' {
+                    text.push('\n');
+                    self.advance();
+                } else if e == b't' {
+                    text.push('\t');
+                    self.advance();
+                } else if e == b'r' {
+                    text.push('\r');
+                    self.advance();
+                } else if e == b'\\' {
+                    text.push('\\');
+                    self.advance();
+                } else if e == b'"' {
+                    text.push('"');
+                    self.advance();
+                } else if e == b'{' {
+                    text.push('{');
+                    self.advance();
+                } else if e == b'}' {
+                    text.push('}');
+                    self.advance();
+                } else if e == b'0' {
+                    text.push('\0');
+                    self.advance();
+                } else if e == b'u' {
+                    self.advance();
+                    let cp = self.scan_unicode_escape();
+                    if cp < 0 {
+                        return self.make_spanned(Token.Error("Invalid unicode escape".to_string()));
+                    }
+                    match char.try_from(cp) {
+                        Ok(c) => text.push(c),
+                        Err(_) => return self.make_spanned(Token.Error("Invalid unicode scalar value".to_string())),
+                    }
+                } else {
+                    return self.make_spanned(Token.Error("Unknown escape sequence".to_string()));
+                }
+                run_start = self.current;
+            } else if self.peek() == b'\n' {
+                self.line = self.line + 1;
+                self.column = 0;
+                self.advance();
+            } else {
+                self.advance_codepoint();
+            }
+        }
+        if self.is_at_end() {
+            return self.make_spanned(Token.Error("Unterminated interpolated string".to_string()));
+        }
+        text.push_str(self.src.substring(run_start, self.current));
+        self.advance();
+        if text.len() > 0 {
+            parts.push(InterpPart.Text(text));
+        }
+        self.make_spanned(Token.InterpolatedStringLiteral(parts))
+    }
+
+    // `c"…"` C-string literal. The opening `c"` is consumed. Accumulates a byte
+    // sequence (ASCII verbatim; `\n \t \r \\ \"`, `\xHH`, and `\u{…}` →
+    // UTF-8-byte escapes; interior NUL rejected — incl. `\0` / `\x00` / `\u{0}`).
+    // Multi-byte *non-escape* bodies (`c"λ"`) encode to their UTF-8 bytes (L2).
+    fn c_string(mut ref self) -> SpannedToken {
+        let body_start = self.current;
+        let mut bytes: Vec[u8] = Vec.new();
+        while self.peek() != b'"' and not self.is_at_end() {
+            if self.peek() == b'\\' {
+                self.advance();
+                if self.is_at_end() {
+                    return self.make_spanned(Token.Error("Unterminated C-string: trailing backslash".to_string()));
+                }
+                let e = self.peek();
+                if e == b'n' {
+                    bytes.push(b'\n');
+                    self.advance();
+                } else if e == b't' {
+                    bytes.push(b'\t');
+                    self.advance();
+                } else if e == b'r' {
+                    bytes.push(b'\r');
+                    self.advance();
+                } else if e == b'\\' {
+                    bytes.push(b'\\');
+                    self.advance();
+                } else if e == b'"' {
+                    bytes.push(b'"');
+                    self.advance();
+                } else if e == b'0' {
+                    return self.make_spanned(Token.Error("interior NUL bytes are not permitted in C-string literals".to_string()));
+                } else if e == b'x' {
+                    self.advance();
+                    let hi = hex_val(self.peek());
+                    let lo = hex_val(self.peek_at(1));
+                    if hi < 0 or lo < 0 {
+                        return self.make_spanned(Token.Error("\\xHH escape requires two hex digits".to_string()));
+                    }
+                    let v = hi * 16 + lo;
+                    if v == 0 {
+                        return self.make_spanned(Token.Error("interior NUL bytes are not permitted in C-string literals".to_string()));
+                    }
+                    self.advance();
+                    self.advance();
+                    bytes.push(byte_of(v));
+                } else if e == b'u' {
+                    self.advance();
+                    let cp = self.scan_unicode_escape();
+                    if cp < 0 {
+                        return self.make_spanned(Token.Error("Invalid unicode escape".to_string()));
+                    }
+                    // `\u{0}` would embed a NUL — same rejection as `\0` / `\x00`.
+                    if cp == 0 {
+                        return self.make_spanned(Token.Error("interior NUL bytes are not permitted in C-string literals".to_string()));
+                    }
+                    match char.try_from(cp) {
+                        Ok(c) => {
+                            // Encode the scalar to its UTF-8 bytes (no other
+                            // codepoint's encoding contains a 0x00 byte, so the
+                            // cp==0 guard above is sufficient for NUL rejection).
+                            let mut tmp = "".to_string();
+                            tmp.push(c);
+                            for b in tmp.bytes() {
+                                bytes.push(b);
+                            }
+                        }
+                        Err(_) => return self.make_spanned(Token.Error("Invalid unicode scalar value".to_string())),
+                    }
+                } else {
+                    return self.make_spanned(Token.Error("Unknown escape sequence in C-string".to_string()));
+                }
+            } else {
+                // ASCII copies through verbatim; a multi-byte codepoint encodes
+                // as its UTF-8 bytes (L2 — mirrors `src/lexer.rs::c_string`).
+                let c = self.consume_codepoint();
+                let mut tmp = "".to_string();
+                tmp.push(c);
+                for tb in tmp.bytes() {
+                    bytes.push(tb);
+                }
+            }
+        }
+        if self.is_at_end() {
+            return self.make_spanned(Token.Error("Unterminated C-string".to_string()));
+        }
+        let source_len = self.current - body_start;
+        self.advance();
+        self.make_spanned(Token.CStringLiteral(CStr { bytes: bytes, source_len: source_len }))
+    }
+
+    fn identifier(mut ref self) -> SpannedToken {
+        // Fold ASCII-alnum and non-ASCII ident-continue codepoints. A non-ASCII
+        // codepoint anywhere in the run makes the whole token a (deferred)
+        // non-ASCII identifier Error spanning the full run — mirrors
+        // `src/lexer.rs::identifier` (#29, gated on #13's classifier). Pure-ASCII
+        // identifiers (the common case) take the same path as before: the
+        // non-ASCII probe returns false immediately on an ASCII lead byte.
+        let mut non_ascii_seen = false;
+        let mut folding = true;
+        while folding {
+            let mut progressed = false;
+            if is_alpha(self.peek()) or is_digit(self.peek()) {
+                self.advance();
+                progressed = true;
+            } else if self.try_consume_non_ascii_ident_continue() {
+                non_ascii_seen = true;
+                progressed = true;
+            }
+            folding = progressed;
+        }
+        if non_ascii_seen {
+            return self.make_spanned(Token.Error("non-ASCII identifier is deferred to a future edition".to_string()));
+        }
+        let text = self.src.substring(self.start, self.current);
+        // Natural form (#14 FIXED): the by-value aggregate param `token` is
+        // entry-deep-copied + callee-owned by `make_spanned`, so moving a
+        // let-bound enum into a call that transfers it out (re-wrapping it into
+        // the returned `SpannedToken`) no longer double-frees. See phase-12
+        // blocker #14 / src/codegen/param_own.rs.
+        let token = keyword_or_ident(text);
+        self.make_spanned(token)
+    }
+
+    // Raw-identifier escape `r#NAME` (design.md § Raw Identifiers). On entry the
+    // leading `r` is consumed and `peek()` is `#`. The keyword table is bypassed
+    // so reserved-for-future-use words flow through as ordinary identifiers; the
+    // span covers `r#NAME` but the payload is the bare `NAME`. Structural markers
+    // (`self`, `mut`, `ref`, …) are not reservable and are rejected.
+    fn raw_identifier(mut ref self) -> SpannedToken {
+        self.advance(); // consume `#`
+        let name_start = self.current;
+        while is_alpha(self.peek()) or is_digit(self.peek()) {
+            self.advance();
+        }
+        let name = self.src.substring(name_start, self.current);
+        if is_structural_marker(name) {
+            self.make_spanned(Token.Error("structural marker is not reservable".to_string()))
+        } else {
+            self.make_spanned(Token.Identifier(name))
+        }
+    }
+
+    // Reserved single-letter string-prefix syntax. The prefix letter (and, for
+    // `_"…"`, the underscore) is already consumed; `peek()` is the opening `"`.
+    // We consume the whole string body — handling `\`-escapes exactly like the
+    // regular string lexer — so the error token spans the entire construct, not
+    // just the prefix. `f"…"`/`c"…"` have dedicated arms and never reach here.
+    fn reserved_prefix_string(mut ref self) -> SpannedToken {
+        self.advance(); // consume opening `"`
+        while self.peek() != b'"' and not self.is_at_end() {
+            if self.peek() == b'\n' {
+                self.line = self.line + 1;
+                self.column = 0;
+            }
+            if self.peek() == b'\\' {
+                self.advance();
+                if not self.is_at_end() {
+                    self.advance();
+                }
+            } else {
+                self.advance();
+            }
+        }
+        if self.peek() == b'"' {
+            self.advance(); // closing quote
+        }
+        self.make_spanned(Token.Error("reserved string prefix".to_string()))
+    }
+
+    // Reserved `#`-guarded string syntax (Rust-style raw strings: `#"…"#`,
+    // `##"…"##`, …). The first `#` was consumed by the dispatch; count the
+    // remaining leading `#`s, then — if a `"` opens — scan to a matching `"`
+    // followed by the SAME number of `#`s (or to newline / EOF for recovery).
+    fn reserved_hash_guarded_string(mut ref self) -> SpannedToken {
+        let mut leading_hashes = 1; // the `#` consumed by the dispatch
+        while self.peek() == b'#' {
+            self.advance();
+            leading_hashes = leading_hashes + 1;
+        }
+        let consumed_string = self.peek() == b'"';
+        if consumed_string {
+            self.advance(); // opening `"`
+            loop {
+                if self.is_at_end() or self.peek() == b'\n' {
+                    break;
+                }
+                if self.peek() == b'"' {
+                    self.advance();
+                    let mut trailing = 0;
+                    while self.peek() == b'#' and trailing < leading_hashes {
+                        self.advance();
+                        trailing = trailing + 1;
+                    }
+                    if trailing == leading_hashes {
+                        break;
+                    }
+                } else if self.peek() == b'\\' {
+                    self.advance();
+                    if not self.is_at_end() {
+                        self.advance();
+                    }
+                } else {
+                    self.advance();
+                }
+            }
+        }
+        self.make_spanned(Token.Error("reserved hash-guarded string".to_string()))
+    }
+
+    // Non-ASCII lead byte (>= 0x80): consume the rest of the UTF-8 codepoint
+    // (advancing `current` by the byte length but NOT `column` — the lead's
+    // advance() already counted one codepoint) and emit a single "unexpected
+    // character" error spanning exactly that codepoint. The multi-codepoint
+    // non-ASCII *identifier* recovery (a run of Unicode letters folded into one
+    // error) is deferred pending a Unicode `char.is_alphabetic` in karac
+    // (blocker #13); for any isolated non-ASCII byte sequence this is exact.
+    // Consume the codepoint (1–4 UTF-8 bytes) at `current` and return it as one
+    // `char`. ASCII advances via the normal path (column +1); a multi-byte
+    // sequence advances `current` by its UTF-8 byte length but `column` by
+    // exactly one — mirrors `src/lexer.rs::consume_codepoint`, so non-ASCII
+    // literal bodies place one `char` (not mis-split bytes) and `column` stays
+    // codepoint-based for the tokens that follow.
+    fn consume_codepoint(mut ref self) -> char {
+        let lead = self.peek();
+        if lead < 0x80 {
+            let one_start = self.current;
+            self.advance();
+            return first_char(self.src.substring(one_start, self.current));
+        }
+        let len = utf8_byte_len(lead);
+        let mut end = self.current + len;
+        if end > self.bytes.len() {
+            end = self.bytes.len();
+        }
+        let cp_str = self.src.substring(self.current, end);
+        self.current = end;
+        self.column = self.column + 1;
+        first_char(cp_str)
+    }
+
+    // Advance the cursor over the codepoint at `current` WITHOUT decoding it:
+    // `current` by the UTF-8 byte length, `column` by exactly one. The string /
+    // multi-string / f-string body scanners capture the codepoint's bytes
+    // verbatim via the substring run, so they need only the cursor moved —
+    // `column` must stay codepoint-based (not per byte) so a token AFTER a
+    // non-ASCII codepoint on the same line gets the right start column (#30).
+    // ASCII falls back to the normal per-byte `advance`. Newlines are handled by
+    // the callers (line++/column=0) BEFORE this is reached.
+    fn advance_codepoint(mut ref self) {
+        let lead = self.peek();
+        if lead < 0x80 {
+            self.advance();
+        } else {
+            let len = utf8_byte_len(lead);
+            let mut end = self.current + len;
+            if end > self.bytes.len() {
+                end = self.bytes.len();
+            }
+            self.current = end;
+            self.column = self.column + 1;
+        }
+    }
+
+    // If the byte at `current` starts a UTF-8 sequence whose codepoint is
+    // identifier-continue (Unicode letter / numeric / `_`), consume the whole
+    // sequence (advancing `column` by one, not per byte) and return true;
+    // otherwise leave the cursor untouched and return false. Mirrors
+    // `src/lexer.rs::try_consume_non_ascii_ident_continue` (the seed returns the
+    // codepoint for its error message; the port needs only the boolean, since the
+    // oracle renders Error tokens as a bare `ERROR`).
+    fn try_consume_non_ascii_ident_continue(mut ref self) -> bool {
+        let lead = self.peek();
+        if lead < 0x80 {
+            return false;
+        }
+        let len = utf8_byte_len(lead);
+        if self.current + len > self.bytes.len() {
+            return false;
+        }
+        let c = first_char(self.src.substring(self.current, self.current + len));
+        if c.is_alphabetic() or c.is_numeric() or c == '_' {
+            self.current = self.current + len;
+            self.column = self.column + 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    // A non-ASCII lead byte. Consume the full UTF-8 codepoint, then dispatch on
+    // its class (mirrors `src/lexer.rs::non_ascii_at_lead`): a letter-class
+    // codepoint (or `_`, never reached for non-ASCII) opens would-be non-ASCII
+    // *identifier* recovery — fold the RUN of ASCII-alnum + non-ASCII
+    // ident-continue codepoints into ONE Error token spanning the whole run; any
+    // other codepoint becomes a single-codepoint "unexpected character" Error.
+    // The fold gates on the #13 `char.is_alphabetic` / `is_numeric` classifier.
+    fn non_ascii_at_lead(mut ref self, lead: u8) -> SpannedToken {
+        let len = utf8_byte_len(lead);
+        let mut i = 1;
+        while i < len {
+            if self.current < self.bytes.len() {
+                self.current = self.current + 1;
+            }
+            i = i + 1;
+        }
+        let cp = first_char(self.src.substring(self.start, self.current));
+        if cp.is_alphabetic() or cp == '_' {
+            let mut folding = true;
+            while folding {
+                let mut progressed = false;
+                if is_alpha(self.peek()) or is_digit(self.peek()) {
+                    self.advance();
+                    progressed = true;
+                } else if self.try_consume_non_ascii_ident_continue() {
+                    progressed = true;
+                }
+                folding = progressed;
+            }
+            self.make_spanned(Token.Error("non-ASCII identifier is deferred to a future edition".to_string()))
+        } else {
+            self.make_spanned(Token.Error("unexpected non-ASCII character".to_string()))
+        }
+    }
+}
+
+// Keyword lookup mirroring `src/lexer.rs::identifier`'s `match text`. A
+// non-keyword falls through to `Token.Identifier`. (Reserved-word and
+// reserved-fragment-specifier diagnostics are slice E.)
+fn keyword_or_ident(text: String) -> Token {
+    match text {
+        // Declarations
+        "fn" => Token.Fn,
+        "struct" => Token.Struct,
+        "union" => Token.Union,
+        "enum" => Token.Enum,
+        "trait" => Token.Trait,
+        "marker" => Token.Marker,
+        "impl" => Token.Impl,
+        "mod" => Token.Mod,
+        "use" => Token.Use,
+        "import" => Token.Import,
+        "const" => Token.Const,
+        "type" => Token.Type,
+        "distinct" => Token.Distinct,
+        // Visibility
+        "pub" => Token.Pub,
+        "private" => Token.Private,
+        // Control flow
+        "if" => Token.If,
+        "else" => Token.Else,
+        "match" => Token.Match,
+        "while" => Token.While,
+        "for" => Token.For,
+        "in" => Token.In,
+        "loop" => Token.Loop,
+        "return" => Token.Return,
+        "break" => Token.Break,
+        "continue" => Token.Continue,
+        "defer" => Token.Defer,
+        "errdefer" => Token.ErrDefer,
+        "try" => Token.Try,
+        "asm" => Token.Asm,
+        "global_asm" => Token.GlobalAsm,
+        // Bindings
+        "let" => Token.Let,
+        "mut" => Token.Mut,
+        // Logical
+        "and" => Token.And,
+        "or" => Token.Or,
+        "not" => Token.Not,
+        // Ownership
+        "own" => Token.Own,
+        "ref" => Token.Ref,
+        "weak" => Token.Weak,
+        "lock" => Token.Lock,
+        "move" => Token.Move,
+        // Effects
+        "effect" => Token.Effect,
+        "resource" => Token.Resource,
+        "verb" => Token.Verb,
+        "reads" => Token.Reads,
+        "writes" => Token.Writes,
+        "sends" => Token.Sends,
+        "receives" => Token.Receives,
+        "allocates" => Token.Allocates,
+        "panics" => Token.Panics,
+        "blocks" => Token.Blocks,
+        "suspends" => Token.Suspends,
+        "with" => Token.With,
+        "transparent" => Token.Transparent,
+        "stable" => Token.Stable,
+        "seq" => Token.Seq,
+        "par" => Token.Par,
+        "yield" => Token.Yield,
+        // Type system
+        "as" => Token.As,
+        "where" => Token.Where,
+        "dyn" => Token.Dyn,
+        // Contracts
+        "requires" => Token.Requires,
+        "ensures" => Token.Ensures,
+        "invariant" => Token.Invariant,
+        // Safety
+        "unsafe" => Token.Unsafe,
+        "extern" => Token.Extern,
+        "shared" => Token.Shared,
+        // Layout
+        "layout" => Token.Layout,
+        "group" => Token.Group,
+        // Literals
+        "true" => Token.True,
+        "false" => Token.False,
+        // Other
+        "alias" => Token.Alias,
+        "independent" => Token.Independent,
+        "self" => Token.SelfValue,
+        "Self" => Token.SelfType,
+        "_" => Token.Underscore,
+        // Reserved future numeric type keywords — not available until Phase 7.
+        "f16" => Token.Error("'f16' is a reserved future numeric type".to_string()),
+        "bf16" => Token.Error("'bf16' is a reserved future numeric type".to_string()),
+        // Reserved-for-future-use keywords (design.md § Reserved-for-Future-Use).
+        "gen" => Token.Error("reserved keyword".to_string()),
+        "become" => Token.Error("reserved keyword".to_string()),
+        "do" => Token.Error("reserved keyword".to_string()),
+        "final" => Token.Error("reserved keyword".to_string()),
+        "override" => Token.Error("reserved keyword".to_string()),
+        "priv" => Token.Error("reserved keyword".to_string()),
+        "typeof" => Token.Error("reserved keyword".to_string()),
+        "virtual" => Token.Error("reserved keyword".to_string()),
+        "async" => Token.Error("reserved keyword".to_string()),
+        "await" => Token.Error("reserved keyword".to_string()),
+        "comptime" => Token.Error("reserved keyword".to_string()),
+        "pure" => Token.Error("reserved keyword".to_string()),
+        "box" => Token.Error("reserved keyword".to_string()),
+        _ => {
+            // Reserved `expr_<year>` fragment-specifier namespace; everything
+            // else is an ordinary identifier. (`r#expr_2026` bypasses this via
+            // raw_identifier, matching the Rust seed's structural exemption.)
+            if is_reserved_fragment_specifier_namespace(text) {
+                Token.Error("reserved fragment-specifier identifier".to_string())
+            } else {
+                Token.Identifier(text)
+            }
+        }
+    }
+}
+
+// Structural markers that `r#` cannot escape (they are not reservable keywords).
+// Mirrors the `matches!` guard in `src/lexer.rs::raw_identifier`.
+fn is_structural_marker(name: ref String) -> bool {
+    match name {
+        "self" => true,
+        "Self" => true,
+        "_" => true,
+        "super" => true,
+        "crate" => true,
+        "mod" => true,
+        "pub" => true,
+        "priv" => true,
+        "private" => true,
+        "mut" => true,
+        "ref" => true,
+        "own" => true,
+        _ => false,
+    }
+}
+
+// Reserved fragment-specifier identifier namespace (design.md § v60 item 62):
+// `expr_<NNNN>` where `NNNN` is a 4-digit year in 2020..=2099. Checked only on
+// the plain-identifier path; `r#expr_2026` bypasses it via raw_identifier.
+fn is_reserved_fragment_specifier_namespace(name: ref String) -> bool {
+    if name.len() != 9 {
+        return false;
+    }
+    if name.substring(0, 5) != "expr_" {
+        return false;
+    }
+    let digits = name.substring(5, 9);
+    for b in digits.bytes() {
+        if not b.is_ascii_digit() {
+            return false;
+        }
+    }
+    match i64.parse(digits) {
+        Some(y) => y >= 2020 and y <= 2099,
+        None => false,
+    }
+}
+
+// UTF-8 byte length implied by a lead byte (1–4), or 1 for an invalid lead
+// (matching the Rust seed's `.unwrap_or(1)`). Range comparisons rather than the
+// bit-mask form, to lean only on u8 comparison (no bitwise dependency).
+fn utf8_byte_len(lead: u8) -> i64 {
+    if lead < 0x80 {
+        1
+    } else if lead >= 0xC0 and lead <= 0xDF {
+        2
+    } else if lead >= 0xE0 and lead <= 0xEF {
+        3
+    } else if lead >= 0xF0 and lead <= 0xF7 {
+        4
+    } else {
+        1
+    }
+}
+
+fn is_alpha(c: u8) -> bool {
+    c.is_ascii_alphabetic() or c == b'_'
+}
+
+fn is_digit(c: u8) -> bool {
+    c.is_ascii_digit()
+}
+
+// A byte that can follow `e`/`E` in a float exponent.
+fn is_exp_start(c: u8) -> bool {
+    is_digit(c) or c == b'+' or c == b'-'
+}
+
+// Hex digit value 0–15, or -1 if `c` is not a hex digit.
+fn hex_val(c: u8) -> i64 {
+    if c >= b'0' and c <= b'9' {
+        (c as i64) - (b'0' as i64)
+    } else if c >= b'a' and c <= b'f' {
+        (c as i64) - (b'a' as i64) + 10
+    } else if c >= b'A' and c <= b'F' {
+        (c as i64) - (b'A' as i64) + 10
+    } else {
+        -1
+    }
+}
+
+fn byte_of(v: i64) -> u8 {
+    v as u8
+}
+
+fn is_radix_digit(c: u8, radix: i64) -> bool {
+    if radix == 16 {
+        c.is_ascii_hexdigit()
+    } else if radix == 2 {
+        c == b'0' or c == b'1'
+    } else {
+        c >= b'0' and c <= b'7'
+    }
+}
+
+// Remove `_` digit separators before parsing. Iterates chars (not bytes) so we
+// can push each kept char directly — `b as char` and `char.try_from(b)` are
+// both unimplemented in codegen today (tracked self-hosting gaps).
+fn strip_underscores(s: String) -> String {
+    let mut out = "".to_string();
+    for c in s.chars() {
+        if c != '_' {
+            out.push(c);
+        }
+    }
+    out
+}
+
+// First char of a non-empty string (used to read one ASCII char literal from
+// its source slice without a byte→char cast). Returns '?' for the empty input,
+// which the char lexer never produces.
+fn first_char(s: String) -> char {
+    for c in s.chars() {
+        return c;
+    }
+    '?'
+}
+
+pub fn lex_all(src: String) -> Vec[SpannedToken] with panics {
+    let mut lx = Lexer.new(src);
+    let mut out: Vec[SpannedToken] = Vec.new();
+    loop {
+        let t = lx.next_token();
+        let is_eof = match t.token {
+            Eof => true,
+            _ => false,
+        };
+        out.push(t);
+        if is_eof {
+            break;
+        }
+    }
+    out
+}
