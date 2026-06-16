@@ -47,7 +47,7 @@ use crate::token::IntSuffix;
 
 use inkwell::intrinsics::Intrinsic;
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, IntType, StructType};
-use inkwell::values::{FunctionValue, IntValue, PointerValue};
+use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 
@@ -865,8 +865,16 @@ impl<'ctx> super::Codegen<'ctx> {
             if has_lo {
                 field_tys.push(acc_int_ty.into());
             }
+            let env_ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
             for n in captures {
-                field_tys.push(saved_vars[n].ty);
+                let ty = saved_vars[n].ty;
+                // B-2026-06-15-3: a fixed-size `[N x T]` array capture is passed
+                // BY POINTER, not inline — see the extract loop below.
+                field_tys.push(if matches!(ty, BasicTypeEnum::ArrayType(_)) {
+                    env_ptr_ty.into()
+                } else {
+                    ty
+                });
             }
             Some(self.context.struct_type(&field_tys, false))
         };
@@ -904,15 +912,34 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_extract_value(env_val, field_idx, var_name)
                     .unwrap();
-                let alloca = self.create_entry_alloca(worker_fn, var_name, cap_ty);
-                self.builder.build_store(alloca, field_val).unwrap();
-                self.variables.insert(
-                    var_name.clone(),
-                    VarSlot {
-                        ptr: alloca,
-                        ty: cap_ty,
-                    },
-                );
+                if matches!(cap_ty, BasicTypeEnum::ArrayType(_)) {
+                    // B-2026-06-15-3: by-pointer array capture — the env field
+                    // IS the pointer to the parent's array (a read-only
+                    // reduction input; the parent frame outlives the join).
+                    // Register it directly as the var's slot (ty stays the
+                    // array type so `data[idx]` GEPs correctly) — NO alloca +
+                    // by-value copy. Passing the `[N x T]` inline made LLVM O2
+                    // scalarize the 40 KB env load/store into N element ops,
+                    // blowing up DAGCombiner store-merging (auto-par compile of
+                    // brute_force 0.07 -> 2.15 s; #3629 60 s).
+                    self.variables.insert(
+                        var_name.clone(),
+                        VarSlot {
+                            ptr: field_val.into_pointer_value(),
+                            ty: cap_ty,
+                        },
+                    );
+                } else {
+                    let alloca = self.create_entry_alloca(worker_fn, var_name, cap_ty);
+                    self.builder.build_store(alloca, field_val).unwrap();
+                    self.variables.insert(
+                        var_name.clone(),
+                        VarSlot {
+                            ptr: alloca,
+                            ty: cap_ty,
+                        },
+                    );
+                }
                 if let Some(type_name) = saved_var_types.get(var_name) {
                     self.var_type_names
                         .insert(var_name.clone(), type_name.clone());
@@ -1239,7 +1266,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 field_tys.push(acc_int_ty.into());
             }
             for n in captures {
-                field_tys.push(self.variables[n].ty);
+                let ty = self.variables[n].ty;
+                // B-2026-06-15-3: `[N x T]` array captures travel by pointer
+                // (matches the worker's env layout).
+                field_tys.push(if matches!(ty, BasicTypeEnum::ArrayType(_)) {
+                    ptr_ty.into()
+                } else {
+                    ty
+                });
             }
             let env_ty = self.context.struct_type(&field_tys, false);
             let env_alloca = self.create_entry_alloca(parent_fn, "__reduce_env", env_ty.into());
@@ -1256,7 +1290,13 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             for (i, name) in captures.iter().enumerate() {
                 let slot = self.variables[name];
-                let val = self.builder.build_load(slot.ty, slot.ptr, name).unwrap();
+                // B-2026-06-15-3: by-pointer for array captures (pass the
+                // parent array's address); by-value otherwise.
+                let val: BasicValueEnum<'ctx> = if matches!(slot.ty, BasicTypeEnum::ArrayType(_)) {
+                    slot.ptr.into()
+                } else {
+                    self.builder.build_load(slot.ty, slot.ptr, name).unwrap()
+                };
                 env_agg = self
                     .builder
                     .build_insert_value(
@@ -1929,8 +1969,15 @@ impl<'ctx> super::Codegen<'ctx> {
             if has_lo {
                 field_tys.push(loop_var_int_ty.into());
             }
+            let env_ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
             for n in captures {
-                field_tys.push(saved_vars[n].ty);
+                let ty = saved_vars[n].ty;
+                // B-2026-06-15-3: array captures by pointer (see extract loop).
+                field_tys.push(if matches!(ty, BasicTypeEnum::ArrayType(_)) {
+                    env_ptr_ty.into()
+                } else {
+                    ty
+                });
             }
             Some(self.context.struct_type(&field_tys, false))
         };
@@ -1960,15 +2007,28 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_extract_value(env_val, field_idx, var_name)
                     .unwrap();
-                let alloca = self.create_entry_alloca(worker_fn, var_name, cap_ty);
-                self.builder.build_store(alloca, field_val).unwrap();
-                self.variables.insert(
-                    var_name.clone(),
-                    VarSlot {
-                        ptr: alloca,
-                        ty: cap_ty,
-                    },
-                );
+                if matches!(cap_ty, BasicTypeEnum::ArrayType(_)) {
+                    // B-2026-06-15-3: by-pointer array capture — env field IS
+                    // the parent array's pointer; register it directly (no
+                    // by-value copy that LLVM O2 scalarizes into N stores).
+                    self.variables.insert(
+                        var_name.clone(),
+                        VarSlot {
+                            ptr: field_val.into_pointer_value(),
+                            ty: cap_ty,
+                        },
+                    );
+                } else {
+                    let alloca = self.create_entry_alloca(worker_fn, var_name, cap_ty);
+                    self.builder.build_store(alloca, field_val).unwrap();
+                    self.variables.insert(
+                        var_name.clone(),
+                        VarSlot {
+                            ptr: alloca,
+                            ty: cap_ty,
+                        },
+                    );
+                }
                 if let Some(type_name) = saved_var_types.get(var_name) {
                     self.var_type_names
                         .insert(var_name.clone(), type_name.clone());
@@ -2179,7 +2239,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 field_tys.push(loop_var_int_ty.into());
             }
             for n in captures {
-                field_tys.push(self.variables[n].ty);
+                let ty = self.variables[n].ty;
+                // B-2026-06-15-3: array captures by pointer (matches worker).
+                field_tys.push(if matches!(ty, BasicTypeEnum::ArrayType(_)) {
+                    ptr_ty.into()
+                } else {
+                    ty
+                });
             }
             let env_ty = self.context.struct_type(&field_tys, false);
             let env_alloca = self.create_entry_alloca(parent_fn, "__reduce_env", env_ty.into());
@@ -2196,7 +2262,13 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             for (i, name) in captures.iter().enumerate() {
                 let slot = self.variables[name];
-                let val = self.builder.build_load(slot.ty, slot.ptr, name).unwrap();
+                // B-2026-06-15-3: by-pointer for array captures (pass the
+                // parent array's address); by-value otherwise.
+                let val: BasicValueEnum<'ctx> = if matches!(slot.ty, BasicTypeEnum::ArrayType(_)) {
+                    slot.ptr.into()
+                } else {
+                    self.builder.build_load(slot.ty, slot.ptr, name).unwrap()
+                };
                 env_agg = self
                     .builder
                     .build_insert_value(

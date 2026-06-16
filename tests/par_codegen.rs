@@ -2136,6 +2136,73 @@ fn main() {
         );
     }
 
+    /// B-2026-06-15-3: a reduction that captures a large fixed-size array
+    /// must pass it through the worker env BY POINTER, not inline. Capturing
+    /// `[N x i64]` by value made the worker `alloca [N x i64]` + load the
+    /// whole env + `store [N x i64]` (an N*8-byte copy); LLVM's O2 scalarized
+    /// that into N element load/stores, then DAGCombiner store-merging +
+    /// alias analysis went super-linear — auto-par compile of brute_force was
+    /// 0.07 -> 2.15 s (30x) and #3629's bfs_sieve hit 60 s / 639 MiB. The fix
+    /// stores the parent array's pointer in the env (a read-only reduction
+    /// input; the parent frame outlives the join). Pin it: the worker must NOT
+    /// `alloca`/`store` the array by value (GEP-through-the-pointer access,
+    /// which still names `[N x i64]`, is fine).
+    #[test]
+    fn test_reduce_worker_captures_array_by_pointer_not_inline() {
+        let src = r#"
+fn inner(data: Array[i64, 2048]) -> i64 {
+    let mut s: i64 = 0i64;
+    let mut i: i64 = 0i64;
+    while i < 2048i64 {
+        s = s + data[i];
+        i = i + 1i64;
+    }
+    return s;
+}
+fn run(data: Array[i64, 2048]) -> i64 {
+    let mut acc: i64 = 0i64;
+    for _ in 0i64..100i64 {
+        acc = acc + inner(data);
+    }
+    return acc;
+}
+fn main() {
+    let data: Array[i64, 2048] = [1i64; 2048];
+    println(run(data));
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        let worker = ir
+            .split("@__karac_reduce_worker_")
+            .nth(1)
+            .and_then(|s| s.split("\n}").next())
+            .unwrap_or("");
+        assert!(
+            !worker.is_empty(),
+            "expected a synthesized reduce worker fn; IR:\n{ir}"
+        );
+        assert!(
+            !worker.contains("alloca [2048 x i64]") && !worker.contains("store [2048 x i64]"),
+            "reduce worker must capture the array BY POINTER — no alloca/store \
+             of the [2048 x i64] by value (the O2 store-merge compile blowup, \
+             B-2026-06-15-3). Worker IR:\n{worker}"
+        );
+    }
+
     /// Slice 3b end-to-end: compile + link + run a program with a
     /// recognized reduction loop and verify the output matches the
     /// serial Σ-formula. Pinning correctness against the parallel
