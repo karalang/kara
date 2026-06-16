@@ -313,6 +313,60 @@ fn main() {
 }
 
 #[test]
+fn test_query_queries_populated_envelope_has_rc_fallback_query() {
+    // Phase-8 (P1.1 RC-fallback queries) — the ownership pass RC-promotes
+    // `o` (captured by-value into a closure, used again after), and the
+    // rc-fallback-queries analyzer surfaces one query for it. The CLI must
+    // serialize it into the `{"queries":[…]}` envelope with the
+    // `rc_fallback_decision` kind and the `no_rc`/`prefer_rc` surface.
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-query-rc-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("rc.kara");
+    let src = r#"
+struct Owned { x: i64 }
+fn take(o: Owned) { }
+fn main() {
+    let o = Owned { x: 1 };
+    let _f = || take(o);
+    let _u = o;
+}
+"#;
+    std::fs::write(&path, src).unwrap();
+
+    let out = karac_bin()
+        .args(["query", "queries", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "karac query queries should exit 0; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("\"kind\":\"rc_fallback_decision\""),
+        "expected an rc_fallback_decision entry; got stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("\"no_rc\"") && stdout.contains("\"prefer_rc\""),
+        "expected the no_rc/prefer_rc resolution surface; got stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("\"cross_phase_origin\":\"ownership\""),
+        "expected ownership-origin tag; got stdout={stdout}",
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
 fn test_subcommand_help_fmt() {
     let out = karac_bin().args(["fmt", "--help"]).output().unwrap();
     assert!(out.status.success());

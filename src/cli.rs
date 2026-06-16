@@ -8447,6 +8447,16 @@ fn query_queries(pipeline: &Pipeline) {
         ));
     }
 
+    // P1.1 RC-fallback queries — plain-data walk over the ownership
+    // pass's `rc_values`. Skips silently when the ownership pass didn't
+    // run.
+    if let Some(o) = pipeline.ownership.as_ref() {
+        all.extend(crate::rc_fallback_queries::analyze(
+            &pipeline.parsed.program,
+            o,
+        ));
+    }
+
     println!("{}", render_queries_envelope(&all, &pipeline.filename));
 }
 
@@ -8468,6 +8478,7 @@ fn render_compiler_query(q: &crate::queries::CompilerQuery, filename: &str) -> S
         QueryKind::InliningDecision => "inlining_decision",
         QueryKind::BranchHint => "branch_hint",
         QueryKind::SpecializationDecision => "specialization_decision",
+        QueryKind::RcFallbackDecision => "rc_fallback_decision",
     };
     let confidence = match q.default_confidence {
         Confidence::Low => "low",

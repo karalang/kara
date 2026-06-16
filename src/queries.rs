@@ -12,15 +12,16 @@
 //! [`ResolutionSurface`] — subsequent compiles re-emit only the
 //! still-open queries.
 //!
-//! **v1 ships the channel infrastructure plus the P1.2 and P1.3
-//! catalogue entries.** Both are emitted by plain-data analyzers run
-//! from the CLI's `query_queries` collator, not from a phase result
+//! **v1 ships the channel infrastructure plus the P1.1, P1.2, and P1.3
+//! catalogue entries.** All three are emitted by plain-data analyzers
+//! run from the CLI's `query_queries` collator, not from a phase result
 //! struct: P1.3 (inlining + branch hints, landed 2026-05-18) by
-//! [`crate::codegen_queries`], and P1.2 (generic specialization on the
-//! monomorphization tuple) by [`crate::specialization_queries`], which
-//! reads the monomorphization counter. The remaining entries land
-//! alongside the phases that populate them — P1.1 (RC fallback,
-//! `ownership.rs`), P1.4 (effect-set narrowing, `effectchecker.rs`),
+//! [`crate::codegen_queries`], P1.2 (generic specialization on the
+//! monomorphization tuple) by [`crate::specialization_queries`] reading
+//! the monomorphization counter, and P1.1 (RC fallback at use site) by
+//! [`crate::rc_fallback_queries`] reading the ownership pass's
+//! `rc_values`. The remaining entries land alongside the phases that
+//! populate them — P1.4 (effect-set narrowing, `effectchecker.rs`),
 //! P1.5 (layout), P1.6 (fork threshold, `concurrency.rs`); the
 //! `queries` vec on each of those phase results is still empty. Each new
 //! variant on [`QueryKind`] is a non-breaking addition for tools that
@@ -98,6 +99,12 @@ pub enum QueryKind {
     /// per generic definition; the tuples are folded into `options`.
     /// Resolution surface: `#[specialize(T = …)]` on the definition.
     SpecializationDecision,
+    /// RC-fallback decision at a binding the ownership pass made
+    /// reference-counted (used after a non-dominating consume). One
+    /// query per RC-fallback binding. Resolution surface: `#[prefer_rc]`
+    /// (accept) / `#[no_rc]` (forbid) on the function or the value's
+    /// type.
+    RcFallbackDecision,
 }
 
 /// One alternative the compiler considered at a decision site.
