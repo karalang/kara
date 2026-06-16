@@ -304,9 +304,15 @@ faster; everything relative to **Rust = 1.0**.
 
 ![Runtime, sequential lane — relative to Rust](docs/assets/runtime-seq.png)
 
-Kāra tracks C closely and straddles the Rust baseline — ahead on
-allocation/RC- and string-heavy kernels, behind on a few tight numeric
-loops. Go trails on most single-threaded work.
+Kāra tracks C closely and sits at or below the **Rust (checked)** rings —
+the safety-matched comparison. Kāra checks integer overflow by default;
+`rustc -O` silently wraps, so the gray `Rust = 1.0` line is *unsafe* Rust.
+Overlaid in goldenrod is `rustc -O -C overflow-checks=on` on the katas
+where it diverges; against *that*, Kāra is at parity or ahead (the apparent
+1.4–1.66× gaps on overflow-heavy katas collapse to ~1.0×), and it emits
+**fewer** instructions than safety-matched Rust on 16 collection/pointer
+kernels. The residue is a few string-building loops (~1.2×, tracked). Go
+trails on most single-threaded work.
 
 ![Binary size, sequential lane — relative to Rust, log scale](docs/assets/binary-seq.png)
 
