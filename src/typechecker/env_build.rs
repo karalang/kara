@@ -344,14 +344,37 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
         }
+        // Names the CURRENT module defines itself. An import must yield to a
+        // genuine local definition, but MUST shadow a prelude/stdlib-baked
+        // type of the same name — exactly as a local definition already does.
+        // The previous `env.{structs,enums,traits}.contains_key` guard skipped
+        // on ANY collision, including the baked prelude, so `import x.Span;
+        // Span { .. }` resolved to the prelude's tracing `Span` instead of the
+        // import (the self-hosting lexer's cross-module split surfaced this).
+        // `defining_stdlib_origin` can't distinguish the two here because the
+        // always-on `STDLIB_PROGRAMS` bake doesn't flip it (only the gated
+        // path does), so we test the current module's own items directly.
+        let local_type_names: std::collections::HashSet<String> = self
+            .program
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Item::StructDef(s) => Some(s.name.clone()),
+                Item::EnumDef(e) => Some(e.name.clone()),
+                Item::UnionDef(u) => Some(u.name.clone()),
+                Item::TraitDef(t) => Some(t.name.clone()),
+                Item::TraitAlias(t) => Some(t.name.clone()),
+                Item::MarkerTrait(t) => Some(t.name.clone()),
+                _ => None,
+            })
+            .collect();
         for (bound_name, item) in imported_items {
-            // Skip when an item with the bound name is already registered
-            // — local definitions and stdlib bakeds win over imports.
+            if local_type_names.contains(&bound_name) {
+                // A real local definition shadows the import.
+                continue;
+            }
             match &item {
                 Item::StructDef(s) => {
-                    if self.env.structs.contains_key(&bound_name) {
-                        continue;
-                    }
                     // Re-bind the struct under its locally-bound name so
                     // `infer_struct_literal`'s lookup succeeds. The
                     // canonical name is preserved in `type_origins` for
@@ -361,33 +384,21 @@ impl<'a> super::TypeChecker<'a> {
                     self.env_add_struct(&local_def);
                 }
                 Item::EnumDef(e) => {
-                    if self.env.enums.contains_key(&bound_name) {
-                        continue;
-                    }
                     let mut local_def = e.clone();
                     local_def.name = bound_name;
                     self.env_add_enum(&local_def);
                 }
                 Item::TraitDef(t) => {
-                    if self.env.traits.contains_key(&bound_name) {
-                        continue;
-                    }
                     let mut local_def = t.clone();
                     local_def.name = bound_name;
                     self.env_add_trait(&local_def);
                 }
                 Item::TraitAlias(t) => {
-                    if self.env.traits.contains_key(&bound_name) {
-                        continue;
-                    }
                     let mut local_def = t.clone();
                     local_def.name = bound_name;
                     self.env_add_trait_alias(&local_def);
                 }
                 Item::MarkerTrait(t) => {
-                    if self.env.traits.contains_key(&bound_name) {
-                        continue;
-                    }
                     let mut local_def = t.clone();
                     local_def.name = bound_name;
                     self.env_add_marker_trait(&local_def);

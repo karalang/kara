@@ -1469,16 +1469,80 @@ impl<'a> super::Resolver<'a> {
                 full.clone()
             };
             let bound = item.alias.clone().unwrap_or_else(|| item.name.clone());
-            if let Err(e) = self.table.define(
+            match self.table.define(
                 bound,
                 SymbolKind::Import {
-                    path: canonical_full,
+                    path: canonical_full.clone(),
                 },
                 item.span.clone(),
                 imp.is_pub,
             ) {
-                self.errors.push(e);
+                Ok(import_id) => {
+                    // If the imported item is an enum, also bring its variant
+                    // names into the importer's scope — exactly as `collect_enum`
+                    // does for a locally-defined enum. Without this, an imported
+                    // enum's *unqualified* variant patterns and constructors
+                    // (`B(x) =>`, `C { y } =>`, `B(3)`) fail name resolution
+                    // while the identical code against a *local* enum resolves,
+                    // because only the enum's type name is imported, not its
+                    // variants. That asymmetry was surfaced by the self-hosting
+                    // lexer's cross-module split. Submodule bindings have no
+                    // variants to register.
+                    if binds_item {
+                        self.register_imported_enum_variants(tree, &canonical_full, import_id);
+                    }
+                }
+                Err(e) => self.errors.push(e),
             }
+        }
+    }
+
+    /// Register the variants of an imported enum into the current scope,
+    /// mirroring [`Self::collect_enum`] for locally-defined enums. The enum's
+    /// `EnumDef` is located in its defining module via the program tree, keyed
+    /// off the canonical `[module.., EnumName]` import path. A no-op when the
+    /// path doesn't name an enum (structs, functions, type aliases, …). Name
+    /// collisions (another enum's variant, a local definition) are tolerated
+    /// the same way `collect_enum` tolerates them — the variant simply isn't
+    /// rebound, and the user must qualify it as `Enum.Variant`.
+    fn register_imported_enum_variants(
+        &mut self,
+        tree: &module::ProgramTree,
+        canonical_full: &[String],
+        parent_enum: SymbolId,
+    ) {
+        let Some((enum_name, mod_path)) = canonical_full.split_last() else {
+            return;
+        };
+        let Some(module_id) = tree.graph.by_path.get(mod_path).copied() else {
+            return;
+        };
+        let module = tree.module(module_id);
+        let Some(enum_def) = module.items.iter().find_map(|it| match it {
+            Item::EnumDef(e) if &e.name == enum_name => Some(e),
+            _ => None,
+        }) else {
+            return;
+        };
+        for variant in &enum_def.variants {
+            let variant_kind = match &variant.kind {
+                VariantKind::Unit => VariantSymbolKind::Unit,
+                VariantKind::Tuple(types) => VariantSymbolKind::Tuple(types.len()),
+                VariantKind::Struct(fields) => {
+                    VariantSymbolKind::Struct(fields.iter().map(|f| f.name.clone()).collect())
+                }
+            };
+            // Collision → leave the existing binding in place (qualify to
+            // disambiguate). Mirrors collect_enum's `if let Ok` tolerance.
+            let _ = self.table.define(
+                variant.name.clone(),
+                SymbolKind::EnumVariant {
+                    parent_enum,
+                    variant_kind,
+                },
+                variant.span.clone(),
+                enum_def.is_pub,
+            );
         }
     }
 

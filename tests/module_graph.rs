@@ -1460,3 +1460,194 @@ fn target_attr_project_filters_and_diagnoses_imports() {
         "import of a filtered item must get the gating diagnostic: {errs:?}",
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Grammar-shaped cross-module resolution matrix (self-hosting-surfaced).
+//
+// The single-file→multi-file split of the self-hosted lexer surfaced a
+// cluster of gaps the example-shaped tests above never hit, because the
+// examples only use struct-style variants, data types, and prelude-clear
+// names. This matrix exercises the full surface: every enum variant kind
+// (unit / tuple / struct) × qualified vs unqualified × across a module
+// boundary, plus user types whose names collide with the baked prelude.
+// ─────────────────────────────────────────────────────────────────────────
+
+fn undefined_name_errors(tree: &ProgramTree, module_id: usize) -> Vec<String> {
+    resolve_module_errors(tree, module_id)
+        .into_iter()
+        .filter(|e| e.kind == ResolveErrorKind::UndefinedName)
+        .map(|e| e.message)
+        .collect()
+}
+
+const TOK_ENUM: &str = "pub enum Tok { A, B(i64), C { y: i64 } }\n";
+
+#[test]
+fn xmod_unit_variant_pattern_resolves() {
+    // Baseline (must already pass): a nullary variant arm is parsed as a
+    // Binding and reinterpreted by the typechecker, so it never hit the
+    // resolver's eager head lookup. Guards against regressing the easy case.
+    let d = ScratchDir::new("xmod-unit-pat");
+    d.write(
+        "src/main.kara",
+        "import tok.Tok;\nfn k(t: Tok) -> i64 { match t { A => 1, _ => 0 } }\nfn main() {}\n",
+    );
+    d.write("src/tok.kara", TOK_ENUM);
+    let built = build_program_tree(&walked(d.root())).expect("tree");
+    let errs = undefined_name_errors(&built.tree, built.tree.root);
+    assert!(errs.is_empty(), "unit-variant arm should resolve: {errs:?}");
+}
+
+#[test]
+fn xmod_tuple_variant_pattern_resolves() {
+    // GAP 1: `B(x) =>` over an IMPORTED enum. Imported enum variants are not
+    // registered in the importer's scope (only the type name is), so the
+    // resolver's eager head lookup emits E0100 — even though the typechecker
+    // resolves the variant against the scrutinee. Same-module works because
+    // collect_enum registers variants locally.
+    let d = ScratchDir::new("xmod-tuple-pat");
+    d.write(
+        "src/main.kara",
+        "import tok.Tok;\nfn k(t: Tok) -> i64 { match t { B(x) => x, _ => 0 } }\nfn main() {}\n",
+    );
+    d.write("src/tok.kara", TOK_ENUM);
+    let built = build_program_tree(&walked(d.root())).expect("tree");
+    let errs = undefined_name_errors(&built.tree, built.tree.root);
+    assert!(
+        errs.is_empty(),
+        "tuple-variant arm should resolve: {errs:?}"
+    );
+}
+
+#[test]
+fn xmod_struct_variant_pattern_resolves() {
+    // GAP 1: struct-style variant arm `C { y } =>` over an imported enum.
+    let d = ScratchDir::new("xmod-struct-pat");
+    d.write(
+        "src/main.kara",
+        "import tok.Tok;\nfn k(t: Tok) -> i64 { match t { C { y } => y, _ => 0 } }\nfn main() {}\n",
+    );
+    d.write("src/tok.kara", TOK_ENUM);
+    let built = build_program_tree(&walked(d.root())).expect("tree");
+    let errs = undefined_name_errors(&built.tree, built.tree.root);
+    assert!(
+        errs.is_empty(),
+        "struct-variant arm should resolve: {errs:?}"
+    );
+}
+
+#[test]
+fn xmod_qualified_variant_patterns_resolve() {
+    // Baseline (must already pass): qualified `Tok.B(x)` resolves because the
+    // head `Tok` is the imported name.
+    let d = ScratchDir::new("xmod-qual-pat");
+    d.write(
+        "src/main.kara",
+        "import tok.Tok;\nfn k(t: Tok) -> i64 { match t { Tok.A => 1, Tok.B(x) => x, Tok.C { y } => y } }\nfn main() {}\n",
+    );
+    d.write("src/tok.kara", TOK_ENUM);
+    let built = build_program_tree(&walked(d.root())).expect("tree");
+    let errs = undefined_name_errors(&built.tree, built.tree.root);
+    assert!(errs.is_empty(), "qualified arms should resolve: {errs:?}");
+}
+
+#[test]
+fn samemod_tuple_variant_pattern_resolves() {
+    // Baseline (must already pass): same-module tuple-variant arm.
+    let d = ScratchDir::new("samemod-tuple-pat");
+    d.write(
+        "src/main.kara",
+        "enum Tok { A, B(i64) }\nfn k(t: Tok) -> i64 { match t { B(x) => x, _ => 0 } }\nfn main() {}\n",
+    );
+    let built = build_program_tree(&walked(d.root())).expect("tree");
+    let errs = undefined_name_errors(&built.tree, built.tree.root);
+    assert!(
+        errs.is_empty(),
+        "same-module tuple arm should resolve: {errs:?}"
+    );
+}
+
+#[test]
+fn xmod_unknown_variant_pattern_still_diagnosed() {
+    // Guard: the fix must not blanket-swallow genuinely undefined names. A
+    // tuple pattern whose head is neither in scope nor a real variant of the
+    // imported enum must still be diagnosed somewhere in the pipeline.
+    let d = ScratchDir::new("xmod-unknown-variant");
+    d.write(
+        "src/main.kara",
+        "import tok.Tok;\nfn k(t: Tok) -> i64 { match t { Nope(x) => x, _ => 0 } }\nfn main() {}\n",
+    );
+    d.write("src/tok.kara", TOK_ENUM);
+    let built = build_program_tree(&walked(d.root())).expect("tree");
+    let resolve_errs = resolve_module_errors(&built.tree, built.tree.root);
+    let type_errs = typecheck_module_errors(&built.tree, built.tree.root);
+    assert!(
+        !resolve_errs.is_empty() || !type_errs.is_empty(),
+        "an unknown variant must be diagnosed (resolver or typechecker)",
+    );
+}
+
+// ── GAP 2: imported user type must shadow a same-named prelude type ──
+
+#[test]
+fn xmod_imported_type_noncolliding_constructs() {
+    // Control: a non-colliding imported struct constructs cleanly across a
+    // module boundary. Isolates GAP 2 (prelude collision) from any general
+    // "cross-module struct literal" breakage.
+    let d = ScratchDir::new("xmod-construct-control");
+    d.write(
+        "src/main.kara",
+        "import geo.Pointt;\nfn mk() -> Pointt { Pointt { x: 1, y: 2 } }\nfn main() { let _p = mk(); }\n",
+    );
+    d.write(
+        "src/geo.kara",
+        "pub struct Pointt { pub x: i64, pub y: i64 }\n",
+    );
+    let built = build_program_tree(&walked(d.root())).expect("tree");
+    let errs = typecheck_module_errors(&built.tree, built.tree.root);
+    assert!(
+        !errs.iter().any(|e| e.kind == TypeErrorKind::MissingField),
+        "non-colliding imported struct should construct: {errs:?}",
+    );
+}
+
+#[test]
+fn xmod_imported_type_shadows_prelude() {
+    // GAP 2: the baked prelude exports a `Span` type (tracing). A LOCAL
+    // `struct Span` shadows it; an IMPORTED `Span` must too. Today the
+    // typechecker resolves the bare name `Span` to the prelude struct, so
+    // `Span { offset, length }` trips MissingField against the prelude's
+    // {name, span_id, parent_id, fields}.
+    let d = ScratchDir::new("xmod-shadow-prelude");
+    d.write(
+        "src/main.kara",
+        "import geo.Span;\nfn mk() -> Span { Span { offset: 1, length: 2 } }\nfn main() { let _s = mk(); }\n",
+    );
+    d.write(
+        "src/geo.kara",
+        "pub struct Span { pub offset: i64, pub length: i64 }\n",
+    );
+    let built = build_program_tree(&walked(d.root())).expect("tree");
+    let errs = typecheck_module_errors(&built.tree, built.tree.root);
+    assert!(
+        !errs.iter().any(|e| e.kind == TypeErrorKind::MissingField),
+        "imported type must shadow prelude type of the same name: {errs:?}",
+    );
+}
+
+#[test]
+fn samemod_local_type_shadows_prelude() {
+    // Baseline (must already pass): a locally-defined `Span` shadows the
+    // prelude one. This is why the single-file self-hosted lexer compiles.
+    let d = ScratchDir::new("samemod-shadow-prelude");
+    d.write(
+        "src/main.kara",
+        "struct Span { offset: i64, length: i64 }\nfn mk() -> Span { Span { offset: 1, length: 2 } }\nfn main() { let _s = mk(); }\n",
+    );
+    let built = build_program_tree(&walked(d.root())).expect("tree");
+    let errs = typecheck_module_errors(&built.tree, built.tree.root);
+    assert!(
+        !errs.iter().any(|e| e.kind == TypeErrorKind::MissingField),
+        "local type must shadow prelude type of the same name: {errs:?}",
+    );
+}
