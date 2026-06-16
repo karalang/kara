@@ -122,7 +122,7 @@ pub const PRELUDE_TYPES: &[&str] = &[
     // composing through the `karac_park_on_fd` parking primitive.
     // Surface: `TcpListener.bind` / `.accept` (slice 8), and
     // `TcpStream.read` / `.write` (slice 9). `WebSocket` shares the
-    // same single-i32-field layout and ships in slice 9e.1
+    // same single-i64-field layout and ships in slice 9e.1
     // (`send_text` / `recv_text` framing protocol).
     "TcpListener",
     "TcpStream",
@@ -140,7 +140,7 @@ pub const PRELUDE_TYPES: &[&str] = &[
     // Phase 6 line 236 slice 2 — TLS / HTTPS server-side surface.
     // `TlsListener` mirrors `TcpListener` (struct value carrying the
     // bound listener fd + an opaque `*mut TlsConfig` pointer);
-    // `TlsStream` mirrors `TcpStream` (single i32 fd for the
+    // `TlsStream` mirrors `TcpStream` (single i64 fd for the
     // post-handshake connection — TLS session state lives in the
     // runtime-side registry). `TlsConfig` is an empty marker type
     // — users never construct one directly; it exists so

@@ -149,7 +149,6 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i8_ty = self.context.i8_type();
-        let i32_ty = self.context.i32_type();
         let i64_ty = self.context.i64_type();
         let null_cancel = ptr_ty.const_null();
         let poll_call = self
@@ -205,7 +204,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .expect("GEP fd field for deregister");
         let fd_reload = self
             .builder
-            .build_load(i32_ty, fd_reload_ptr, "kara.park.fd.val")
+            .build_load(i64_ty, fd_reload_ptr, "kara.park.fd.val")
             .expect("load fd for deregister")
             .into_int_value();
         let token_ptr = self
@@ -1049,7 +1048,9 @@ impl<'ctx> super::Codegen<'ctx> {
             ),
         ];
 
-        let i32_ty = fd.get_type();
+        // `fd` carries the runtime's negative error code here (i64 fd ABI);
+        // build the comparison constants at the fd's own width.
+        let fd_ty = fd.get_type();
         // Start from the default variant tag and wrap a `select` for each
         // named cause the target enum declares. Codes are mutually
         // exclusive, so chain order is immaterial.
@@ -1061,7 +1062,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_int_compare(
                     IntPredicate::EQ,
                     fd,
-                    i32_ty.const_int(code as u64, true),
+                    fd_ty.const_int(code as u64, true),
                     &format!("{label_prefix}.err.is_{name}"),
                 )
                 .unwrap();
@@ -1124,14 +1125,14 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_conditional_branch(is_success, ok_bb, err_bb)
             .unwrap();
 
-        // ── Ok arm: Result.Ok(T) — tag at field 0; the single i32 fd
-        //    zero-extended into payload word 0 (field 1). The seeded
-        //    single-`i32` struct reconstruction truncates back to i32.
+        // ── Ok arm: Result.Ok(T) — tag at field 0; the i64 fd occupies
+        //    payload word 0 (field 1) directly. The single-`i64` socket
+        //    struct (TcpStream / TcpListener / WebSocket / Tls*) reads this
+        //    word back as its `fd` field with no width change (i64 fd ABI —
+        //    a Windows `SOCKET` is pointer-sized; the prior i32 path
+        //    zero-extended here and truncated on reconstruction).
         self.builder.position_at_end(ok_bb);
-        let fd_word = self
-            .builder
-            .build_int_z_extend(fd, i64_ty, &format!("{label_prefix}.ok.fd_word"))
-            .unwrap();
+        let fd_word = fd;
         let mut ok_agg = result_ty.get_undef();
         ok_agg = self
             .builder
@@ -1205,9 +1206,9 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(phi.as_basic_value())
     }
 
-    /// Extract the single `i32 fd` field from a `TcpListener` /
+    /// Extract the single `i64 fd` field from a `TcpListener` /
     /// `TcpStream` struct receiver. Handles both struct-value (owned /
-    /// move) and pointer (ref self) receiver shapes.
+    /// move) and pointer (ref self) receiver shapes. (i64 fd ABI.)
     fn extract_fd_from_tcp_struct(
         &self,
         self_val: BasicValueEnum<'ctx>,
@@ -1216,14 +1217,14 @@ impl<'ctx> super::Codegen<'ctx> {
         if self_val.is_pointer_value() {
             let struct_ty = self
                 .context
-                .struct_type(&[self.context.i32_type().into()], false);
+                .struct_type(&[self.context.i64_type().into()], false);
             let ptr_hint = format!("{name_hint}.ptr");
             let fd_ptr = self
                 .builder
                 .build_struct_gep(struct_ty, self_val.into_pointer_value(), 0, &ptr_hint)
                 .expect("GEP fd field of Tcp struct via ref self pointer");
             self.builder
-                .build_load(self.context.i32_type(), fd_ptr, name_hint)
+                .build_load(self.context.i64_type(), fd_ptr, name_hint)
                 .expect("load fd from Tcp struct via ref self")
                 .into_int_value()
         } else {
@@ -1286,7 +1287,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.build_fd_construct_result(conn_fd, "TcpError", "Other", "ws.accept")
     }
 
-    /// Lower `WebSocket.from_fd(fd: i32) -> WebSocket` — pack the i32
+    /// Lower `WebSocket.from_fd(fd: i64) -> WebSocket` — pack the i64
     /// fd into a fresh `WebSocket { fd }` struct value. Mirror of the
     /// post-bind `insert_value` pack in `lower_tcp_listener_bind`. No
     /// syscall, no parking — pure value construction.
@@ -1296,27 +1297,17 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let ws_ty = self
             .context
-            .struct_type(&[self.context.i32_type().into()], false);
-        let i32_ty = self.context.i32_type();
-        // Kara's value model represents int-typed values as `i64` at
-        // the LLVM SSA layer regardless of source-level width. The
-        // WebSocket struct's `fd` field is `i32`, so we truncate
-        // before inserting. Mirrors the i32-storage convention that
-        // `TcpListener.bind` follows (its `karac_runtime_tcp_bind`
-        // FFI returns `i32` directly, so no truncation is needed
-        // there).
+            .struct_type(&[self.context.i64_type().into()], false);
+        // Kara's value model represents int-typed values as `i64` at the
+        // LLVM SSA layer, and the WebSocket struct's `fd` field is now
+        // `i64` (i64 fd ABI — a Windows `SOCKET` is pointer-sized), so the
+        // fd inserts directly with no truncation (the prior i32-field
+        // convention truncated here).
         let fd_int = fd_val.into_int_value();
-        let fd_i32 = if fd_int.get_type().get_bit_width() == 32 {
-            fd_int
-        } else {
-            self.builder
-                .build_int_truncate(fd_int, i32_ty, "ws.from_fd.fd_i32")
-                .expect("truncate fd to i32 for WebSocket struct field")
-        };
         let undef = ws_ty.get_undef();
         let ws_val = self
             .builder
-            .build_insert_value(undef, fd_i32, 0, "ws.from_fd.val")
+            .build_insert_value(undef, fd_int, 0, "ws.from_fd.val")
             .expect("insert fd into WebSocket struct value");
         Ok(ws_val.into_struct_value().into())
     }

@@ -69,8 +69,12 @@ pub(super) fn synthesize_park_on_fd_layout(_program: &Program) -> Option<StateSt
     Some(StateStructLayout {
         fields: vec![
             StateStructField {
+                // i64 fd ABI (Windows IOCP prep): the parked fd is stored
+                // 64-bit so a Windows `SOCKET` survives; Unix `RawFd` (i32)
+                // sign-extends in. Must match the widened
+                // `karac_runtime_event_loop_register_fd` FFI signature.
                 name: "fd".to_string(),
-                type_name: Some("i32".to_string()),
+                type_name: Some("i64".to_string()),
                 binding_span: None,
             },
             StateStructField {
@@ -1716,7 +1720,8 @@ impl<'ctx> super::Codegen<'ctx> {
             .expect("GEP fd field");
         let fd = self
             .builder
-            .build_load(i32_ty, fd_ptr, "kara.park.fd")
+            // i64 fd ABI: the fd field is i64 (field 0 is the i32 state tag).
+            .build_load(self.context.i64_type(), fd_ptr, "kara.park.fd")
             .expect("load fd from state struct");
         let dir_ptr = self
             .builder
@@ -4119,10 +4124,13 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         // Network construction-method result structs (phase-8 line 64 audit:
         // `bind` / `accept` / `connect` return `Result[T, E]`, so the `Ok(x)`
-        // destructure must reconstruct these single-`i32`-field structs from
+        // destructure must reconstruct these single-`i64`-field structs from
         // the Result payload word — `pattern_payload_word_count` /
         // `reconstruct_payload_value` read `struct_types` to size + rebuild the
-        // aggregate, and baked stdlib structs skip `declare_structs`).
+        // aggregate, and baked stdlib structs skip `declare_structs`). The fd
+        // field is `i64` (i64 fd ABI — Windows IOCP prep; a Windows `SOCKET`
+        // is pointer-sized) and MUST match the `{ i64 }` layout in
+        // `types_lowering.rs::llvm_type_for_name` and the widened socket FFIs.
         //
         // NB: unlike `Response` / `HttpError` above, these types carry a user
         // `impl Drop` (close-on-drop, hand-rolled in codegen as
@@ -4133,10 +4141,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // need only the LLVM shape; the existing user-Drop chain handles
         // scope-exit close, keyed off the binding's resolved type.
         {
-            let i32_t = self.context.i32_type();
+            let i64_t = self.context.i64_type();
             for name in ["TcpListener", "TcpStream", "TlsStream", "WebSocket"] {
                 if !self.struct_types.contains_key(name) {
-                    let ty = self.context.struct_type(&[i32_t.into()], false);
+                    let ty = self.context.struct_type(&[i64_t.into()], false);
                     self.struct_types.insert(name.to_string(), ty);
                     self.struct_field_names
                         .insert(name.to_string(), vec!["fd".to_string()]);
@@ -4144,16 +4152,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     // (`reconstruct_payload_value` / the match-arm binding's
                     // slot sizing) resolves the binding to the struct shape
                     // rather than the i64 payload-word default. Safe alongside
-                    // the user `impl Drop`: the field is `i32` (primitive), so
+                    // the user `impl Drop`: the field is `i64` (primitive), so
                     // `emit_struct_drop_synthesis` returns `None` (no
                     // heap-bearing field) and the user-Drop wrapper's fd-close
                     // is the sole drop action — no synthesized drop is
                     // registered to shadow it.
                     self.struct_field_type_names
-                        .insert(name.to_string(), vec![Some("i32".to_string())]);
+                        .insert(name.to_string(), vec![Some("i64".to_string())]);
                 }
             }
-            // `TlsListener { fd: i32, config: *mut TlsConfig }` — two fields
+            // `TlsListener { fd: i64, config: *mut TlsConfig }` — two fields
             // (the second a pointer), so it reconstructs from two payload
             // words. Same primitive/pointer fields (no String/Vec/handle), so
             // the synth-drop stays `None` and the user `impl Drop` (frees
@@ -4162,7 +4170,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let ptr_ty = self.context.ptr_type(AddressSpace::default());
                 let ty = self
                     .context
-                    .struct_type(&[i32_t.into(), ptr_ty.into()], false);
+                    .struct_type(&[i64_t.into(), ptr_ty.into()], false);
                 self.struct_types.insert("TlsListener".to_string(), ty);
                 self.struct_field_names.insert(
                     "TlsListener".to_string(),
@@ -4170,7 +4178,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 );
                 self.struct_field_type_names.insert(
                     "TlsListener".to_string(),
-                    vec![Some("i32".to_string()), Some("*mut TlsConfig".to_string())],
+                    vec![Some("i64".to_string()), Some("*mut TlsConfig".to_string())],
                 );
             }
         }

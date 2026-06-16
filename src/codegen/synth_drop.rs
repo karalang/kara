@@ -2914,9 +2914,11 @@ impl<'ctx> super::Codegen<'ctx> {
         };
 
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
-        let i32_ty = self.context.i32_type();
+        // i64 fd ABI: the socket struct's fd field is i64; load it as i64
+        // and hand it to the now-i64 `karac_runtime_tcp_close`.
+        let i64_ty = self.context.i64_type();
         let void_ty = self.context.void_type();
-        let struct_ty = self.context.struct_type(&[i32_ty.into()], false);
+        let struct_ty = self.context.struct_type(&[i64_ty.into()], false);
 
         let saved_bb = self.builder.get_insert_block();
 
@@ -2934,7 +2936,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let fd = self
             .builder
-            .build_load(i32_ty, fd_ptr, "fd")
+            .build_load(i64_ty, fd_ptr, "fd")
             .unwrap()
             .into_int_value();
         self.builder.build_call(close_fn, &[fd.into()], "").unwrap();
@@ -2969,9 +2971,11 @@ impl<'ctx> super::Codegen<'ctx> {
         };
 
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
-        let i32_ty = self.context.i32_type();
+        // i64 fd ABI: load the i64 fd field and pass it to the now-i64
+        // `karac_runtime_tls_close`.
+        let i64_ty = self.context.i64_type();
         let void_ty = self.context.void_type();
-        let struct_ty = self.context.struct_type(&[i32_ty.into()], false);
+        let struct_ty = self.context.struct_type(&[i64_ty.into()], false);
 
         let saved_bb = self.builder.get_insert_block();
 
@@ -2989,7 +2993,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let fd = self
             .builder
-            .build_load(i32_ty, fd_ptr, "fd")
+            .build_load(i64_ty, fd_ptr, "fd")
             .unwrap()
             .into_int_value();
         self.builder.build_call(close_fn, &[fd.into()], "").unwrap();
@@ -3037,11 +3041,12 @@ impl<'ctx> super::Codegen<'ctx> {
         };
 
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
-        let i32_ty = self.context.i32_type();
+        // i64 fd ABI: `{ i64 fd, ptr config }`.
+        let i64_ty = self.context.i64_type();
         let void_ty = self.context.void_type();
         let struct_ty = self
             .context
-            .struct_type(&[i32_ty.into(), ptr_ty.into()], false);
+            .struct_type(&[i64_ty.into(), ptr_ty.into()], false);
 
         let saved_bb = self.builder.get_insert_block();
 
@@ -3060,7 +3065,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let fd = self
             .builder
-            .build_load(i32_ty, fd_field_ptr, "fd")
+            .build_load(i64_ty, fd_field_ptr, "fd")
             .unwrap()
             .into_int_value();
 

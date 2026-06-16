@@ -100,7 +100,7 @@ fn main() {
         );
         let main_body = function_body(&ir, "main").expect("main body");
         assert!(
-            main_body.contains("call i32 @karac_runtime_tls_client_connect("),
+            main_body.contains("call i64 @karac_runtime_tls_client_connect("),
             "main should call _tls_client_connect; body was:\n{}",
             main_body
         );
@@ -179,7 +179,7 @@ fn main() {
             main_body
         );
         assert!(
-            main_body.contains("call i32 @karac_runtime_tls_listener_bind("),
+            main_body.contains("call i64 @karac_runtime_tls_listener_bind("),
             "main should call _tls_listener_bind; body was:\n{}",
             main_body
         );
@@ -206,7 +206,7 @@ fn main() {
             main_body
         );
         assert!(
-            main_body.contains("call i32 @karac_runtime_tls_accept("),
+            main_body.contains("call i64 @karac_runtime_tls_accept("),
             "accept should call _tls_accept; body was:\n{}",
             main_body
         );
@@ -343,7 +343,7 @@ fn main() {
     #[test]
     fn test_ir_tls_listener_by_value_param_uses_struct_type() {
         // Mirror of the slice-9 test for TcpListener: a user fn taking
-        // `TlsListener` by value should get a `{ i32, ptr }` parameter
+        // `TlsListener` by value should get a `{ i64, ptr }` parameter
         // shape (matching the runtime-side struct shape) rather than
         // the i64 fall-through default. Surfaced by Demo 1 slice 2's
         // accept-loop pattern.
@@ -354,8 +354,8 @@ fn main() {}
 "#,
         );
         assert!(
-            ir.contains("define internal void @handle({ i32, ptr }"),
-            "handle should take TlsListener as `{{ i32, ptr }}`; IR was:\n{}",
+            ir.contains("define internal void @handle({ i64, ptr }"),
+            "handle should take TlsListener as `{{ i64, ptr }}`; IR was:\n{}",
             ir
         );
     }
@@ -405,7 +405,7 @@ fn main() {
         );
         // …but it must still call the TLS-aware WS accept FFI.
         assert!(
-            main_body.contains("call i32 @karac_runtime_ws_accept_tls("),
+            main_body.contains("call i64 @karac_runtime_ws_accept_tls("),
             "accept_tls should call _ws_accept_tls; body was:\n{}",
             main_body
         );
@@ -475,8 +475,8 @@ fn main() {}
 "#,
         );
         assert!(
-            ir.contains("define internal void @handle({ i32 }"),
-            "handle should take TlsStream as `{{ i32 }}`; IR was:\n{}",
+            ir.contains("define internal void @handle({ i64 }"),
+            "handle should take TlsStream as `{{ i64 }}`; IR was:\n{}",
             ir
         );
     }

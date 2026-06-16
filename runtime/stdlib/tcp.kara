@@ -107,11 +107,13 @@ enum TcpError {
 // possible but pointless without a kernel-side bound socket
 // matching the fd.
 struct TcpListener {
-    fd: i32,
+    fd: i64,
 }
 
 // `TcpStream` wraps an accepted (or connected) socket fd. Same
-// layout discipline as `TcpListener` — the single `i32 fd` field
+// layout discipline as `TcpListener` — the single `i64 fd` field
+// (i64 so a Windows `SOCKET` handle, which is pointer-sized, fits
+// losslessly; a Unix `RawFd` is i32 and sits in the low half)
 // lets codegen reach the underlying descriptor via
 // `extract_value` (struct-value receiver) or `struct_gep`
 // (ref-self pointer receiver). `read` / `write` codegen
@@ -119,7 +121,7 @@ struct TcpListener {
 // direction, then call into the raw `karac_runtime_tcp_read` /
 // `_write` FFIs for the syscall.
 struct TcpStream {
-    fd: i32,
+    fd: i64,
 }
 
 impl TcpListener {

@@ -896,7 +896,7 @@ unsafe impl Send for KaracWakeup {}
 #[cfg(unix)]
 #[no_mangle]
 pub extern "C" fn karac_runtime_event_loop_register_fd(
-    raw_fd: i32,
+    raw_fd: i64,
     direction: u8,
     parked: *mut c_void,
 ) -> u64 {
@@ -915,7 +915,7 @@ pub extern "C" fn karac_runtime_event_loop_register_fd(
 #[cfg(unix)]
 #[no_mangle]
 pub extern "C" fn karac_runtime_event_loop_register_fd_cancel(
-    raw_fd: i32,
+    raw_fd: i64,
     direction: u8,
     parked: *mut c_void,
     cancel: *const AtomicBool,
@@ -925,11 +925,16 @@ pub extern "C" fn karac_runtime_event_loop_register_fd_cancel(
 
 #[cfg(unix)]
 fn register_fd_impl(
-    raw_fd: i32,
+    raw_fd: i64,
     direction: u8,
     parked: *mut c_void,
     cancel: *const AtomicBool,
 ) -> u64 {
+    // i64 fd ABI → narrow to `RawFd` (i32 on Unix) for `mio::unix::SourceFd`
+    // and the fd-hash shard routing. The signature is i64 for a uniform
+    // cross-platform fd ABI; the Windows registration model (a different
+    // slice) narrows to `RawSocket` instead.
+    let raw_fd = raw_fd as std::os::unix::io::RawFd;
     let dir = match direction {
         0 => IoDirection::Read,
         1 => IoDirection::Write,
@@ -1003,7 +1008,9 @@ fn register_fd_impl(
 /// Returns 0 on success, -1 on error.
 #[cfg(unix)]
 #[no_mangle]
-pub extern "C" fn karac_runtime_event_loop_deregister_fd(raw_fd: i32, token: u64) -> i32 {
+pub extern "C" fn karac_runtime_event_loop_deregister_fd(raw_fd: i64, token: u64) -> i32 {
+    // i64 fd ABI → narrow to `RawFd` (i32 on Unix); see `register_fd_impl`.
+    let raw_fd = raw_fd as std::os::unix::io::RawFd;
     let mut source = mio::unix::SourceFd(&raw_fd);
     // Route by fd (authoritative — `register_fd` placed the entry on
     // `shard_of_fd(raw_fd)`); the token only carries the shard-local id.
@@ -1660,7 +1667,7 @@ pub extern "C" fn karac_runtime_event_loop_shutdown_background_thread() -> i32 {
 /// integration is a separate slice (different fd model).
 #[cfg(all(unix, feature = "test-helpers"))]
 #[no_mangle]
-pub extern "C" fn karac_runtime_test_bind_and_print_port() -> i32 {
+pub extern "C" fn karac_runtime_test_bind_and_print_port() -> i64 {
     use std::os::unix::io::IntoRawFd;
     let listener = match std::net::TcpListener::bind("127.0.0.1:0") {
         Ok(l) => l,
@@ -1679,8 +1686,12 @@ pub extern "C" fn karac_runtime_test_bind_and_print_port() -> i32 {
     let _ = std::io::stdout().flush();
     // IntoRawFd consumes the listener and returns the raw fd without
     // running the destructor — equivalent to mem::forget + as_raw_fd
-    // but with no double-ownership window.
-    listener.into_raw_fd()
+    // but with no double-ownership window. Widened to i64 so the fd ABI
+    // is uniform across platforms (a Windows `SOCKET` is pointer-sized).
+    // On Unix `RawFd` is a small non-negative i32 that sign-extends
+    // losslessly (and negative error codes sign-extend correctly too,
+    // keeping the `fd >= 0` success test intact).
+    listener.into_raw_fd() as i64
 }
 
 // ── TCP listener FFI (stdlib `TcpListener.bind` / `.accept`) ──────────────
@@ -1772,7 +1783,7 @@ pub(crate) fn net_construct_error_code(e: &std::io::Error) -> i32 {
 /// The buffer is read once during the call and not retained.
 #[cfg(unix)]
 #[no_mangle]
-pub unsafe extern "C" fn karac_runtime_tcp_bind(addr_ptr: *const u8, addr_len: i64) -> i32 {
+pub unsafe extern "C" fn karac_runtime_tcp_bind(addr_ptr: *const u8, addr_len: i64) -> i64 {
     use socket2::{Domain, Socket, Type};
     use std::os::unix::io::IntoRawFd;
     if addr_ptr.is_null() || addr_len <= 0 {
@@ -1808,10 +1819,10 @@ pub unsafe extern "C" fn karac_runtime_tcp_bind(addr_ptr: *const u8, addr_len: i
     // the port is taken, EACCES for a privileged port) — surface it via
     // the stable code so callers can branch (phase-8 line 74).
     if let Err(e) = socket.bind(&socket_addr.into()) {
-        return net_construct_error_code(&e);
+        return net_construct_error_code(&e) as i64;
     }
     if let Err(e) = socket.listen(KARAC_RUNTIME_TCP_LISTEN_BACKLOG) {
-        return net_construct_error_code(&e);
+        return net_construct_error_code(&e) as i64;
     }
     let listener: std::net::TcpListener = socket.into();
     // Only print BOUND_PORT for ephemeral-port binds; a fixed-port
@@ -1826,7 +1837,9 @@ pub unsafe extern "C" fn karac_runtime_tcp_bind(addr_ptr: *const u8, addr_len: i
             let _ = std::io::stdout().flush();
         }
     }
-    listener.into_raw_fd()
+    // i64 fd ABI: Unix `RawFd` (i32) sign-extends losslessly. See
+    // `karac_runtime_test_bind_and_print_port` for the rationale.
+    listener.into_raw_fd() as i64
 }
 
 /// Raw `accept(2)` on a listener fd. Does NOT park — the caller is
@@ -1839,20 +1852,24 @@ pub unsafe extern "C" fn karac_runtime_tcp_bind(addr_ptr: *const u8, addr_len: i
 /// destructor — caller owns the close on drop).
 #[cfg(unix)]
 #[no_mangle]
-pub extern "C" fn karac_runtime_tcp_accept(listener_fd: i32) -> i32 {
-    use std::os::unix::io::{FromRawFd, IntoRawFd};
+pub extern "C" fn karac_runtime_tcp_accept(listener_fd: i64) -> i64 {
+    use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
     if listener_fd < 0 {
         return -1;
     }
+    // i64 → RawFd (i32 on Unix). The signature is i64 for a uniform
+    // cross-platform fd ABI (Windows `SOCKET` is pointer-sized); the
+    // Unix body narrows back to `RawFd` for the `std::net` wrappers.
+    let listener_fd = listener_fd as RawFd;
     // SAFETY: the listener_fd must come from a successful
     // `karac_runtime_tcp_bind` call (or equivalent). We construct a
     // borrowed TcpListener via from_raw_fd, accept() through it, then
     // immediately into_raw_fd() to give the fd back without running
     // the destructor (the listener stays open for further accepts).
     let listener = unsafe { std::net::TcpListener::from_raw_fd(listener_fd) };
-    let result = match listener.accept() {
-        Ok((conn, _addr)) => conn.into_raw_fd(),
-        Err(e) => net_construct_error_code(&e),
+    let result: i64 = match listener.accept() {
+        Ok((conn, _addr)) => conn.into_raw_fd() as i64,
+        Err(e) => net_construct_error_code(&e) as i64,
     };
     // Release ownership of the listener fd back to the caller.
     let _ = listener.into_raw_fd();
@@ -1889,7 +1906,7 @@ pub extern "C" fn karac_runtime_tcp_accept(listener_fd: i32) -> i32 {
 /// once and not retained.
 #[cfg(unix)]
 #[no_mangle]
-pub unsafe extern "C" fn karac_runtime_tcp_connect(addr_ptr: *const u8, addr_len: i64) -> i32 {
+pub unsafe extern "C" fn karac_runtime_tcp_connect(addr_ptr: *const u8, addr_len: i64) -> i64 {
     use std::os::unix::io::IntoRawFd;
     if addr_ptr.is_null() || addr_len <= 0 {
         return -1;
@@ -1907,10 +1924,10 @@ pub unsafe extern "C" fn karac_runtime_tcp_connect(addr_ptr: *const u8, addr_len
         Err(_) => return -1,
     };
     match std::net::TcpStream::connect(socket_addr) {
-        Ok(sock) => sock.into_raw_fd(),
+        Ok(sock) => sock.into_raw_fd() as i64,
         // ECONNREFUSED (server not up) vs a fatal cause is exactly the
         // distinction a reconnect loop needs — surface it (line 74).
-        Err(e) => net_construct_error_code(&e),
+        Err(e) => net_construct_error_code(&e) as i64,
     }
 }
 
@@ -1948,12 +1965,12 @@ pub unsafe extern "C" fn karac_runtime_tcp_connect(addr_ptr: *const u8, addr_len
 #[cfg(unix)]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_tcp_read(
-    stream_fd: i32,
+    stream_fd: i64,
     buf_ptr: *mut u8,
     buf_len: i64,
 ) -> i64 {
     use std::io::Read;
-    use std::os::unix::io::{FromRawFd, IntoRawFd};
+    use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
     if stream_fd < 0 {
         return -1;
     }
@@ -1961,10 +1978,11 @@ pub unsafe extern "C" fn karac_runtime_tcp_read(
         return 0;
     }
     let buf = std::slice::from_raw_parts_mut(buf_ptr, buf_len as usize);
+    // i64 fd ABI → narrow to `RawFd` (i32) for the Unix `std::net` wrapper.
     // SAFETY: the stream_fd must come from a successful
     // `karac_runtime_tcp_accept` call (or equivalent). Borrowed
     // TcpStream wrapper avoids destructor while reading.
-    let mut stream = std::net::TcpStream::from_raw_fd(stream_fd);
+    let mut stream = std::net::TcpStream::from_raw_fd(stream_fd as RawFd);
     let result = match stream.read(buf) {
         Ok(n) => n as i64,
         Err(e) => {
@@ -2007,12 +2025,12 @@ pub unsafe extern "C" fn karac_runtime_tcp_read(
 #[cfg(unix)]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_tcp_write(
-    stream_fd: i32,
+    stream_fd: i64,
     buf_ptr: *const u8,
     buf_len: i64,
 ) -> i64 {
     use std::io::Write;
-    use std::os::unix::io::{FromRawFd, IntoRawFd};
+    use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
     if stream_fd < 0 {
         return -1;
     }
@@ -2020,10 +2038,11 @@ pub unsafe extern "C" fn karac_runtime_tcp_write(
         return 0;
     }
     let buf = std::slice::from_raw_parts(buf_ptr, buf_len as usize);
+    // i64 fd ABI → narrow to `RawFd` (i32) for the Unix `std::net` wrapper.
     // SAFETY: the stream_fd must come from a successful
     // `karac_runtime_tcp_accept` call (or equivalent). Borrowed
     // TcpStream wrapper avoids destructor while writing.
-    let mut stream = std::net::TcpStream::from_raw_fd(stream_fd);
+    let mut stream = std::net::TcpStream::from_raw_fd(stream_fd as RawFd);
     let result = match stream.write(buf) {
         Ok(n) => n as i64,
         Err(e) => {
@@ -2067,11 +2086,13 @@ pub unsafe extern "C" fn karac_runtime_tcp_write(
 
 #[cfg(unix)]
 #[no_mangle]
-pub extern "C" fn karac_runtime_tcp_close(fd: i32) -> i32 {
-    use std::os::unix::io::FromRawFd;
+pub extern "C" fn karac_runtime_tcp_close(fd: i64) -> i32 {
+    use std::os::unix::io::{FromRawFd, RawFd};
     if fd < 0 {
         return 0;
     }
+    // i64 fd ABI → narrow to `RawFd` (i32) for the Unix close-on-drop path.
+    let fd = fd as RawFd;
     // SAFETY: reconstructing the `TcpStream` from the raw fd and
     // letting it drop (no `into_raw_fd()` here, unlike the bind /
     // accept / read / write FFIs which release ownership back to
@@ -2180,7 +2201,7 @@ fn ws_write_unmasked_frame<W: std::io::Write>(stream: &mut W, opcode: u8, payloa
 #[cfg(unix)]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_ws_send_text(
-    fd: i32,
+    fd: i64,
     msg_ptr: *const u8,
     msg_len: i64,
 ) -> i64 {
@@ -2198,7 +2219,7 @@ pub unsafe extern "C" fn karac_runtime_ws_send_text(
 #[cfg(unix)]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_ws_send_binary(
-    fd: i32,
+    fd: i64,
     msg_ptr: *const u8,
     msg_len: i64,
 ) -> i64 {
@@ -2227,7 +2248,7 @@ pub unsafe extern "C" fn karac_runtime_ws_send_binary(
 #[cfg(unix)]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_ws_send_text_masked(
-    fd: i32,
+    fd: i64,
     msg_ptr: *const u8,
     msg_len: i64,
 ) -> i64 {
@@ -2242,7 +2263,7 @@ pub unsafe extern "C" fn karac_runtime_ws_send_text_masked(
 #[cfg(unix)]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_ws_send_binary_masked(
-    fd: i32,
+    fd: i64,
     msg_ptr: *const u8,
     msg_len: i64,
 ) -> i64 {
@@ -2327,11 +2348,13 @@ fn ws_write_masked_frame<W: std::io::Write>(stream: &mut W, opcode: u8, payload:
 
 /// Shared body for masked text + binary send.
 #[cfg(unix)]
-unsafe fn ws_send_masked_data_frame(fd: i32, msg_ptr: *const u8, msg_len: i64, opcode: u8) -> i64 {
-    use std::os::unix::io::{FromRawFd, IntoRawFd};
+unsafe fn ws_send_masked_data_frame(fd: i64, msg_ptr: *const u8, msg_len: i64, opcode: u8) -> i64 {
+    use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
     if fd < 0 || msg_len < 0 {
         return -1;
     }
+    // i64 fd ABI → narrow to `RawFd` (i32 on Unix); see `register_fd_impl`.
+    let fd = fd as RawFd;
     if msg_ptr.is_null() && msg_len > 0 {
         return -1;
     }
@@ -2354,11 +2377,15 @@ unsafe fn ws_send_masked_data_frame(fd: i32, msg_ptr: *const u8, msg_len: i64, o
 /// `0x2` (binary); the helper builds an unmasked single-frame
 /// (FIN=1) payload write.
 #[cfg(unix)]
-unsafe fn ws_send_data_frame(fd: i32, msg_ptr: *const u8, msg_len: i64, opcode: u8) -> i64 {
-    use std::os::unix::io::{FromRawFd, IntoRawFd};
+unsafe fn ws_send_data_frame(fd: i64, msg_ptr: *const u8, msg_len: i64, opcode: u8) -> i64 {
+    use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
     if fd < 0 || msg_len < 0 {
         return -1;
     }
+    // i64 fd ABI → narrow to `RawFd` (i32 on Unix); see `register_fd_impl`.
+    // The TLS session map is keyed by this narrowed fd (register + lookup
+    // both narrow identically), so the key stays consistent on Unix.
+    let fd = fd as RawFd;
     if msg_ptr.is_null() && msg_len > 0 {
         return -1;
     }
@@ -2439,15 +2466,18 @@ unsafe fn ws_send_data_frame(fd: i32, msg_ptr: *const u8, msg_len: i64, opcode: 
 /// reassembly state.
 #[cfg(unix)]
 unsafe fn ws_recv_data_frame(
-    fd: i32,
+    fd: i64,
     out_ptr: *mut u8,
     out_max_len: i64,
     accept_opcode: u8,
 ) -> i64 {
-    use std::os::unix::io::{FromRawFd, IntoRawFd};
+    use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
     if fd < 0 || out_max_len < 0 {
         return -1;
     }
+    // i64 fd ABI → narrow to `RawFd` (i32 on Unix); see `ws_send_data_frame`
+    // for the TLS-session-key consistency note.
+    let fd = fd as RawFd;
     if out_ptr.is_null() && out_max_len > 0 {
         return -1;
     }
@@ -2645,7 +2675,7 @@ unsafe fn ws_recv_data_frame_inner<S: std::io::Read + std::io::Write>(
 #[cfg(unix)]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_ws_recv_text(
-    fd: i32,
+    fd: i64,
     out_ptr: *mut u8,
     out_max_len: i64,
 ) -> i64 {
@@ -2662,7 +2692,7 @@ pub unsafe extern "C" fn karac_runtime_ws_recv_text(
 #[cfg(unix)]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_ws_recv_binary(
-    fd: i32,
+    fd: i64,
     out_ptr: *mut u8,
     out_max_len: i64,
 ) -> i64 {
@@ -3180,12 +3210,14 @@ fn ws_max_pending_handshakes() -> Option<usize> {
 /// listener-readability before invoking.
 #[cfg(unix)]
 #[no_mangle]
-pub extern "C" fn karac_runtime_ws_accept(listener_fd: i32) -> i32 {
-    use std::os::unix::io::{FromRawFd, IntoRawFd};
+pub extern "C" fn karac_runtime_ws_accept(listener_fd: i64) -> i64 {
+    use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
 
     if listener_fd < 0 {
         return -1;
     }
+    // i64 fd ABI → narrow to `RawFd` (i32 on Unix); see `register_fd_impl`.
+    let listener_fd = listener_fd as RawFd;
 
     // Accept the underlying TCP connection (same shape as
     // `karac_runtime_tcp_accept`).
@@ -3240,7 +3272,8 @@ pub extern "C" fn karac_runtime_ws_accept(listener_fd: i32) -> i32 {
     // Return the connection fd; ownership of close-on-drop
     // belongs to the kara `WebSocket` value the caller
     // constructs from this fd (slice-9e.1 + slice-9d Drop chain).
-    conn.into_raw_fd()
+    // i64 fd ABI: Unix `RawFd` (i32) sign-extends losslessly.
+    conn.into_raw_fd() as i64
 }
 
 // ── Phase 6 line 236 slice 3 — WebSocket-over-TLS support ────────────────
@@ -3463,7 +3496,7 @@ unsafe fn ws_handshake_conn_tls(
                 // Couldn't find what we just inserted — shouldn't
                 // happen, but failure-mode the connection clean.
                 let _ = sock.into_raw_fd();
-                let _ = crate::tls::karac_runtime_tls_close(fd);
+                let _ = crate::tls::karac_runtime_tls_close(fd as i64);
                 return Err((
                     HandshakeStep::SessionLookup,
                     format!("session lookup miss for fd {fd} immediately after register"),
@@ -3483,7 +3516,7 @@ unsafe fn ws_handshake_conn_tls(
         // header, etc.). Pull the session out of the registry and
         // close the fd.
         let _ = sock.into_raw_fd();
-        let _ = crate::tls::karac_runtime_tls_close(fd);
+        let _ = crate::tls::karac_runtime_tls_close(fd as i64);
         return Err((HandshakeStep::WsUpgrade, reason));
     }
 
@@ -3852,14 +3885,19 @@ fn ws_handshake_pool_for(
 #[cfg(all(unix, feature = "tls"))]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_ws_accept_tls(
-    listener_fd: i32,
+    listener_fd: i64,
     config: *mut crate::tls::KaracTlsConfig,
-) -> i32 {
-    use std::os::unix::io::{FromRawFd, IntoRawFd};
+) -> i64 {
+    use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
 
     if listener_fd < 0 || config.is_null() {
         return -1;
     }
+    // i64 fd ABI → narrow to `RawFd` (i32 on Unix) for the internal
+    // handshake-pool keying + `std::net` wrappers; see `register_fd_impl`.
+    // The conn fd produced by the pool is narrowed too and re-widened to
+    // i64 only at this public return boundary.
+    let listener_fd = listener_fd as RawFd;
 
     let pool = ws_handshake_pool_for(listener_fd, config);
 
@@ -3945,7 +3983,7 @@ pub unsafe extern "C" fn karac_runtime_ws_accept_tls(
 
         let mut d = pool.done.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(fd) = d.pop_front() {
-            return fd;
+            return fd as i64;
         }
         // No completed handshake yet — wait briefly, then loop back to
         // re-drain the backlog and re-check.
@@ -3954,7 +3992,7 @@ pub unsafe extern "C" fn karac_runtime_ws_accept_tls(
             .wait_timeout(d, Duration::from_millis(5))
             .unwrap_or_else(|p| p.into_inner());
         if let Some(fd) = g.pop_front() {
-            return fd;
+            return fd as i64;
         }
     }
 }
@@ -4942,7 +4980,8 @@ mod tests {
         let fd = unsafe { karac_runtime_tcp_bind(addr.as_ptr(), addr.len() as i64) };
         assert!(fd > 0, "tcp_bind should return a positive fd, got {fd}");
 
-        let listener = unsafe { std::net::TcpListener::from_raw_fd(fd) };
+        let listener =
+            unsafe { std::net::TcpListener::from_raw_fd(fd as std::os::unix::io::RawFd) };
         let port = listener
             .local_addr()
             .expect("bound listener local_addr")
@@ -5026,7 +5065,9 @@ mod tests {
         // Reclaim the raw fd into a std TcpStream so its Drop closes it.
         unsafe {
             use std::os::unix::io::FromRawFd;
-            drop(std::net::TcpStream::from_raw_fd(fd));
+            drop(std::net::TcpStream::from_raw_fd(
+                fd as std::os::unix::io::RawFd,
+            ));
         }
 
         // Closed port → ConnectionRefused stable code (-3) since the
@@ -5207,7 +5248,7 @@ mod tests {
         let std_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         std_listener.set_nonblocking(true).unwrap();
         let local = std_listener.local_addr().unwrap();
-        let raw_fd = std_listener.as_raw_fd();
+        let raw_fd = std_listener.as_raw_fd() as i64;
 
         // Round-trip marker stored in the parked pointer.
         let marker: u64 = 0xC0DE_FACE_C0DE_FACE;
@@ -5404,7 +5445,7 @@ mod tests {
     #[repr(C)]
     struct HandRolledState {
         tag: u8,
-        listener_fd: i32,
+        listener_fd: i64,
         token: u64,
         ready_observed: bool,
     }
@@ -5451,7 +5492,7 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let local = listener.local_addr().unwrap();
-        let listener_fd = listener.as_raw_fd();
+        let listener_fd = listener.as_raw_fd() as i64;
 
         let mut state = HandRolledState {
             tag: 0,
@@ -5543,7 +5584,7 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let local = listener.local_addr().unwrap();
-        let raw_fd = listener.as_raw_fd();
+        let raw_fd = listener.as_raw_fd() as i64;
 
         let marker: u64 = 0xBEEF_0F0F_BEEF_0F0F;
         let parked = std::ptr::addr_of!(marker) as *mut c_void;
@@ -5733,7 +5774,7 @@ mod tests {
     #[repr(C)]
     struct SchedulerTestState {
         tag: u8,
-        listener_fd: i32,
+        listener_fd: i64,
         token: u64,
         completed: std::sync::atomic::AtomicBool,
     }
@@ -5782,7 +5823,7 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let local = listener.local_addr().unwrap();
-        let listener_fd = listener.as_raw_fd();
+        let listener_fd = listener.as_raw_fd() as i64;
 
         // Build state + parked task. Box pins them so their address
         // doesn't move while the dispatcher holds the pointer.
@@ -5847,7 +5888,7 @@ mod tests {
     /// so the test can assert the sweep invokes it exactly once (one-shot claim).
     #[cfg(unix)]
     struct CancelSweepState {
-        fd: i32,
+        fd: i64,
         token: std::sync::atomic::AtomicU64,
         cancelled: std::sync::atomic::AtomicBool,
         invocations: std::sync::atomic::AtomicU64,
@@ -5899,7 +5940,7 @@ mod tests {
         // the parked task. Only the sweep can reach it.
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
-        let listener_fd = listener.as_raw_fd();
+        let listener_fd = listener.as_raw_fd() as i64;
 
         let state = Box::new(CancelSweepState {
             fd: listener_fd,
@@ -5976,7 +6017,7 @@ mod tests {
     // the dispatcher's inline invocation — the exact path B3 broke.
     #[cfg(unix)]
     struct ReparkState {
-        fd: i32,
+        fd: i64,
         /// Points to the owning `KaracParkedTask` so poll_fn can re-park
         /// itself. Set once before registration; read-only thereafter.
         task_ptr: *mut c_void,
@@ -6011,8 +6052,9 @@ mod tests {
         // Read without owning the fd (ManuallyDrop ⇒ no close here). The fd is
         // ready on resume; non-blocking so a spurious wake re-parks instead of
         // blocking the dispatcher thread.
-        let mut stream =
-            std::mem::ManuallyDrop::new(unsafe { std::net::TcpStream::from_raw_fd(st.fd) });
+        let mut stream = std::mem::ManuallyDrop::new(unsafe {
+            std::net::TcpStream::from_raw_fd(st.fd as std::os::unix::io::RawFd)
+        });
         let mut buf = [0u8; 64];
         match stream.read(&mut buf) {
             Ok(0) => {
@@ -6052,7 +6094,7 @@ mod tests {
         let (server, _addr) = listener.accept().unwrap();
         let mut client = connector.join().unwrap();
         server.set_nonblocking(true).unwrap();
-        let server_fd = server.into_raw_fd();
+        let server_fd = server.into_raw_fd() as i64;
 
         let state = Box::new(ReparkState {
             fd: server_fd,
@@ -6108,7 +6150,9 @@ mod tests {
         }
         // SAFETY: reclaim ownership to close exactly once.
         unsafe {
-            drop(std::net::TcpStream::from_raw_fd(server_fd));
+            drop(std::net::TcpStream::from_raw_fd(
+                server_fd as std::os::unix::io::RawFd,
+            ));
         }
         drop(task);
         drop(state);
@@ -6136,7 +6180,7 @@ mod tests {
             let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             l.set_nonblocking(true).unwrap();
             let addr = l.local_addr().unwrap();
-            let fd = l.as_raw_fd();
+            let fd = l.as_raw_fd() as i64;
             (l, addr, fd)
         };
         let (l0, addr0, fd0) = make();
@@ -6246,7 +6290,7 @@ mod tests {
             let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             l.set_nonblocking(true).unwrap();
             let addr = l.local_addr().unwrap();
-            let fd = l.as_raw_fd();
+            let fd = l.as_raw_fd() as i64;
             let mut s = Box::new(SchedulerTestState {
                 tag: 0,
                 listener_fd: fd,
@@ -6349,7 +6393,7 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let local = listener.local_addr().unwrap();
-        let lfd = listener.as_raw_fd();
+        let lfd = listener.as_raw_fd() as i64;
 
         const K: usize = 40;
         // Burst all K connections up front (no pacing) so the listener
@@ -6496,7 +6540,7 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let local = listener.local_addr().unwrap();
-        let listener_fd = listener.as_raw_fd();
+        let listener_fd = listener.as_raw_fd() as i64;
 
         let mut state = Box::new(SchedulerTestState {
             tag: 0,
@@ -6573,7 +6617,7 @@ mod tests {
     // the FFI's read (for recv).
 
     #[cfg(unix)]
-    fn loopback_pair() -> (i32, std::net::TcpStream) {
+    fn loopback_pair() -> (i64, std::net::TcpStream) {
         use std::os::unix::io::IntoRawFd;
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
         let addr = listener.local_addr().expect("local_addr");
@@ -6582,15 +6626,15 @@ mod tests {
         let (server_side, _) = listener.accept().expect("accept loopback");
         let client_side = client_handle.join().expect("client thread join");
         let server_fd = server_side.into_raw_fd();
-        (server_fd, client_side)
+        (server_fd as i64, client_side)
     }
 
     /// Close a raw fd at test end (reconstruct + drop). Mirrors
     /// the cleanup convention in `karac_runtime_tcp_close`.
     #[cfg(unix)]
-    fn close_fd(fd: i32) {
-        use std::os::unix::io::FromRawFd;
-        let _ = unsafe { std::net::TcpStream::from_raw_fd(fd) };
+    fn close_fd(fd: i64) {
+        use std::os::unix::io::{FromRawFd, RawFd};
+        let _ = unsafe { std::net::TcpStream::from_raw_fd(fd as RawFd) };
     }
 
     #[cfg(unix)]
@@ -6858,7 +6902,7 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let addr = listener.local_addr().expect("local_addr");
         use std::os::unix::io::IntoRawFd;
-        let listener_fd = listener.into_raw_fd();
+        let listener_fd = listener.into_raw_fd() as i64;
 
         let client_handle = std::thread::spawn(move || {
             let mut conn = std::net::TcpStream::connect(addr).expect("client connect");
@@ -6928,7 +6972,7 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let addr = listener.local_addr().expect("local_addr");
         use std::os::unix::io::IntoRawFd;
-        let listener_fd = listener.into_raw_fd();
+        let listener_fd = listener.into_raw_fd() as i64;
 
         let client_handle = std::thread::spawn(move || {
             let mut conn = std::net::TcpStream::connect(addr).expect("client connect");
@@ -7147,7 +7191,7 @@ mod tests {
         use std::os::unix::io::IntoRawFd;
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let addr = listener.local_addr().expect("local_addr");
-        let listener_fd = listener.into_raw_fd();
+        let listener_fd = listener.into_raw_fd() as i64;
 
         let client_handle = std::thread::spawn(move || {
             let mut conn = std::net::TcpStream::connect(addr).expect("client connect");

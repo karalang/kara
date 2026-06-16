@@ -9893,7 +9893,7 @@ fn main() {
         );
         let body = function_body(&ir, "main").expect("main body");
         assert!(
-            body.contains("call i32 @karac_runtime_tcp_connect("),
+            body.contains("call i64 @karac_runtime_tcp_connect("),
             "main should call @karac_runtime_tcp_connect; body was:\n{}",
             body
         );

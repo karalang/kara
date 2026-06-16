@@ -178,7 +178,7 @@ fn main() {
         let main_body =
             function_body(&ir, "main").unwrap_or_else(|| panic!("main body not found:\n{}", ir));
         assert!(
-            main_body.contains("call i32 @karac_runtime_ws_accept("),
+            main_body.contains("call i64 @karac_runtime_ws_accept("),
             "main should call `karac_runtime_ws_accept`; body was:\n{}",
             main_body
         );
@@ -293,12 +293,12 @@ fn main() {
     fn test_ir_websocket_masked_send_ffis_declared() {
         let ir = ir_for("fn main() {}");
         assert!(
-            ir.contains("declare i64 @karac_runtime_ws_send_text_masked(i32, ptr, i64)"),
+            ir.contains("declare i64 @karac_runtime_ws_send_text_masked(i64, ptr, i64)"),
             "expected ws_send_text_masked FFI declaration; IR:\n{}",
             ir
         );
         assert!(
-            ir.contains("declare i64 @karac_runtime_ws_send_binary_masked(i32, ptr, i64)"),
+            ir.contains("declare i64 @karac_runtime_ws_send_binary_masked(i64, ptr, i64)"),
             "expected ws_send_binary_masked FFI declaration; IR:\n{}",
             ir
         );
@@ -308,12 +308,12 @@ fn main() {
     fn test_ir_websocket_binary_ffis_declared() {
         let ir = ir_for("fn main() {}");
         assert!(
-            ir.contains("declare i64 @karac_runtime_ws_send_binary(i32, ptr, i64)"),
+            ir.contains("declare i64 @karac_runtime_ws_send_binary(i64, ptr, i64)"),
             "expected ws_send_binary FFI declaration; IR:\n{}",
             ir
         );
         assert!(
-            ir.contains("declare i64 @karac_runtime_ws_recv_binary(i32, ptr, i64)"),
+            ir.contains("declare i64 @karac_runtime_ws_recv_binary(i64, ptr, i64)"),
             "expected ws_recv_binary FFI declaration; IR:\n{}",
             ir
         );
@@ -326,7 +326,7 @@ fn main() {
         // FFIs from slice 9e.1.
         let ir = ir_for("fn main() {}");
         assert!(
-            ir.contains("declare i32 @karac_runtime_ws_accept(i32)"),
+            ir.contains("declare i64 @karac_runtime_ws_accept(i64)"),
             "expected ws_accept FFI declaration; IR:\n{}",
             ir
         );
@@ -335,7 +335,7 @@ fn main() {
     // ── Stdlib struct-as-by-value-param LLVM ABI regression guard ──
     //
     // The `TcpListener` / `TcpStream` / `WebSocket` baked-stdlib structs
-    // share the `{ fd: i32 }` shape. `src/codegen/types_lowering.rs::
+    // share the `{ fd: i64 }` shape. `src/codegen/types_lowering.rs::
     // llvm_type_for_name` carries explicit arms for each so that a user
     // fn taking one by value gets the right LLVM signature shape rather
     // than the i64 fall-through default that produced the LLVM verifier
@@ -346,7 +346,7 @@ fn main() {
     #[test]
     fn test_ir_websocket_by_value_param_uses_struct_type() {
         // A user fn taking `WebSocket` by value must declare its
-        // parameter as `{ i32 }`, matching the value-site lowering of
+        // parameter as `{ i64 }`, matching the value-site lowering of
         // `WebSocket.from_fd(_)` / `WebSocket.accept(_)`. Pre-fix the
         // declared param was `i64` (from the fall-through default in
         // `llvm_type_for_name`) and any direct `handle(ws)` call hit
@@ -362,8 +362,8 @@ fn main() {
 "#,
         );
         assert!(
-            ir.contains("define internal void @handle({ i32 }"),
-            "expected `@handle` to declare its WebSocket param as `{{ i32 }}`; IR:\n{}",
+            ir.contains("define internal void @handle({ i64 }"),
+            "expected `@handle` to declare its WebSocket param as `{{ i64 }}`; IR:\n{}",
             ir
         );
     }
@@ -381,8 +381,8 @@ fn main() {
 "#,
         );
         assert!(
-            ir.contains("define internal void @handle({ i32 }"),
-            "expected `@handle` to declare its TcpStream param as `{{ i32 }}`; IR:\n{}",
+            ir.contains("define internal void @handle({ i64 }"),
+            "expected `@handle` to declare its TcpStream param as `{{ i64 }}`; IR:\n{}",
             ir
         );
     }
@@ -399,8 +399,8 @@ fn main() {
 "#,
         );
         assert!(
-            ir.contains("define internal void @handle({ i32 }"),
-            "expected `@handle` to declare its TcpListener param as `{{ i32 }}`; IR:\n{}",
+            ir.contains("define internal void @handle({ i64 }"),
+            "expected `@handle` to declare its TcpListener param as `{{ i64 }}`; IR:\n{}",
             ir
         );
     }
@@ -415,12 +415,12 @@ fn main() {
         // WebSocket).
         let ir = ir_for("fn main() {}");
         assert!(
-            ir.contains("declare i64 @karac_runtime_ws_send_text(i32, ptr, i64)"),
+            ir.contains("declare i64 @karac_runtime_ws_send_text(i64, ptr, i64)"),
             "expected ws_send_text FFI declaration; IR:\n{}",
             ir
         );
         assert!(
-            ir.contains("declare i64 @karac_runtime_ws_recv_text(i32, ptr, i64)"),
+            ir.contains("declare i64 @karac_runtime_ws_recv_text(i64, ptr, i64)"),
             "expected ws_recv_text FFI declaration; IR:\n{}",
             ir
         );

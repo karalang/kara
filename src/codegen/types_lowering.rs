@@ -1319,10 +1319,12 @@ impl<'ctx> super::Codegen<'ctx> {
             // wise overflowed the field. Mirrors `llvm_type_for_type_expr`
             // line 67-69's identical `TypeKind::Path("Slice")` arm.
             "Slice" => self.slice_struct_type().into(),
-            // Phase 6 line 17 — baked-stdlib single-i32-field network
+            // Phase 6 line 17 — baked-stdlib single-i64-field network
             // structs. All three (`TcpListener`, `TcpStream`, `WebSocket`)
-            // share the same `{ fd: i32 }` layout per their declarations
-            // in `runtime/stdlib/tcp.kara` + `ws.kara`. Codegen does not
+            // share the same `{ fd: i64 }` layout per their declarations
+            // in `runtime/stdlib/tcp.kara` + `ws.kara` (i64 since the
+            // Windows-IOCP-prep fd ABI widening — a Windows `SOCKET` is
+            // pointer-sized; Unix `RawFd` is i32 in the low half). Codegen does not
             // load baked stdlib struct definitions into `self.struct_types`
             // (the value-site lowerings hand-roll the struct via
             // `context.struct_type(&[i32_type], false)` — see
@@ -1339,14 +1341,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // `Slice` baked-stdlib arms above.
             "TcpListener" | "TcpStream" | "WebSocket" => self
                 .context
-                .struct_type(&[self.context.i32_type().into()], false)
+                .struct_type(&[self.context.i64_type().into()], false)
                 .into(),
             // Phase 6 line 236 slice 2 — TLS baked-stdlib structs.
-            // `TlsListener` carries `{ fd: i32, config: *mut TlsConfig }`
+            // `TlsListener` carries `{ fd: i64, config: *mut TlsConfig }`
             // (the slice-1 FFI's `karac_runtime_tls_config_new` returns
             // an opaque pointer that the listener struct keeps for
             // forwarding to each `karac_runtime_tls_accept` call).
-            // `TlsStream` is `{ fd: i32 }` — identical to `TcpStream`,
+            // `TlsStream` is `{ fd: i64 }` — identical to `TcpStream`,
             // since the TLS session state lives in the runtime-side
             // `SESSIONS` registry keyed by fd. Same rationale as the
             // TCP arm above: by-value param sites would otherwise hit
@@ -1355,7 +1357,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .context
                 .struct_type(
                     &[
-                        self.context.i32_type().into(),
+                        self.context.i64_type().into(),
                         self.context.ptr_type(AddressSpace::default()).into(),
                     ],
                     false,
@@ -1363,7 +1365,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .into(),
             "TlsStream" => self
                 .context
-                .struct_type(&[self.context.i32_type().into()], false)
+                .struct_type(&[self.context.i64_type().into()], false)
                 .into(),
             // Phase 6 line 218 — baked-stdlib concurrency handles.
             // `TaskGroup { id: i64 }` (`runtime/stdlib/task_group.kara`)

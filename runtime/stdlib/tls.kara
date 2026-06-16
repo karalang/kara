@@ -118,19 +118,19 @@ struct TlsConfig {}
 // `ServerConnection` clones the right config. Both fields are
 // freed/closed at scope exit via `impl Drop`.
 struct TlsListener {
-    fd: i32,
+    fd: i64,
     config: *mut TlsConfig,
 }
 
 // `TlsStream` wraps a post-handshake connection fd. The TLS session
 // state itself lives in the runtime-side `SESSIONS` registry keyed by
 // this fd (see `runtime/src/tls.rs` `## Session storage`); the kara
-// struct only carries the fd lookup key. Same single-i32-field
+// struct only carries the fd lookup key. Same single-i64-field
 // shape as `TcpStream` so the LLVM struct ABI arm in
 // `types_lowering.rs::llvm_type_for_name` can group the two under
-// the same `{ i32 }` pattern.
+// the same `{ i64 }` pattern.
 struct TlsStream {
-    fd: i32,
+    fd: i64,
 }
 
 impl TlsListener {
@@ -207,7 +207,7 @@ impl TlsStream {
     // the TLS handshake synchronously, and return a `TlsStream`
     // wrapping the post-handshake fd. The returned stream is
     // interchangeable with one from `TlsListener.accept` — same
-    // single-i32-field shape, same per-fd session map, same
+    // single-i64-field shape, same per-fd session map, same
     // `read` / `write` / `write_all` / `Drop` paths.
     //
     // Trust posture: only the certs in `roots_pem` are trusted; there

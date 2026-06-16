@@ -158,11 +158,10 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
 
         // ── Ok: Ok(TlsListener { fd, config }) — fd word 0, config word 1.
+        // fd is already i64 (i64 fd ABI), so it occupies the payload word
+        // directly with no zero-extend.
         self.builder.position_at_end(ok_bb);
-        let fd_word = self
-            .builder
-            .build_int_z_extend(fd, i64_ty, "tls.bind.ok.fd_word")
-            .unwrap();
+        let fd_word = fd;
         let config_word = self
             .builder
             .build_ptr_to_int(config_ptr, i64_ty, "tls.bind.ok.config_word")
@@ -747,16 +746,16 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(phi.as_basic_value())
     }
 
-    /// LLVM struct type for `TlsListener` — `{ i32 fd, ptr config }`.
+    /// LLVM struct type for `TlsListener` — `{ i64 fd, ptr config }`.
     /// Built inline rather than read from `self.struct_types` because
     /// stdlib structs aren't registered there (same convention as
-    /// `lower_tcp_listener_bind` for the `{ i32 }` shape). Used by
+    /// `lower_tcp_listener_bind` for the `{ i64 }` shape). Used by
     /// `lower_tls_listener_bind_tls`, `extract_fd_and_config_from_tls_listener`,
-    /// and `emit_tls_listener_drop_body`.
+    /// and `emit_tls_listener_drop_body`. (i64 fd ABI — Windows IOCP prep.)
     pub(super) fn tls_listener_llvm_type(&self) -> inkwell::types::StructType<'ctx> {
         self.context.struct_type(
             &[
-                self.context.i32_type().into(),
+                self.context.i64_type().into(),
                 self.context.ptr_type(AddressSpace::default()).into(),
             ],
             false,
@@ -775,7 +774,7 @@ impl<'ctx> super::Codegen<'ctx> {
         inkwell::values::IntValue<'ctx>,
         inkwell::values::PointerValue<'ctx>,
     ) {
-        let i32_ty = self.context.i32_type();
+        let i64_ty = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         if self_val.is_pointer_value() {
             let struct_ty = self.tls_listener_llvm_type();
@@ -786,7 +785,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .expect("GEP fd field of TlsListener via ref self");
             let fd = self
                 .builder
-                .build_load(i32_ty, fd_field_ptr, &format!("{name_hint}.fd"))
+                .build_load(i64_ty, fd_field_ptr, &format!("{name_hint}.fd"))
                 .expect("load fd from TlsListener via ref self")
                 .into_int_value();
             let config_field_ptr = self
@@ -815,10 +814,10 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    /// Extract the single `i32 fd` field from a `TlsStream` struct
+    /// Extract the single `i64 fd` field from a `TlsStream` struct
     /// receiver — identical to `extract_fd_from_tcp_struct` (the
     /// layouts are byte-for-byte the same). Kept separate so debug
-    /// labels stay TLS-specific in IR dumps.
+    /// labels stay TLS-specific in IR dumps. (i64 fd ABI.)
     fn extract_fd_from_tls_stream(
         &self,
         self_val: BasicValueEnum<'ctx>,
@@ -827,14 +826,14 @@ impl<'ctx> super::Codegen<'ctx> {
         if self_val.is_pointer_value() {
             let struct_ty = self
                 .context
-                .struct_type(&[self.context.i32_type().into()], false);
+                .struct_type(&[self.context.i64_type().into()], false);
             let ptr_hint = format!("{name_hint}.ptr");
             let fd_ptr = self
                 .builder
                 .build_struct_gep(struct_ty, self_val.into_pointer_value(), 0, &ptr_hint)
                 .expect("GEP fd field of TlsStream via ref self pointer");
             self.builder
-                .build_load(self.context.i32_type(), fd_ptr, name_hint)
+                .build_load(self.context.i64_type(), fd_ptr, name_hint)
                 .expect("load fd from TlsStream via ref self")
                 .into_int_value()
         } else {

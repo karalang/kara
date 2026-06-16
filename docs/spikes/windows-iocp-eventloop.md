@@ -1,6 +1,10 @@
 # Windows IOCP event-loop backend — design + scoping (Phase 6, line 13)
 
-> **Status:** groundwork / scoping (2026-06-07). Authored on macOS via the
+> **Status:** groundwork / scoping (2026-06-07). **Prep step 0 (i64 fd ABI
+> widening) landed + verified on unix 2026-06-15** — see Implementation plan
+> step 0 below for exactly what changed and the Windows-side cast guidance.
+> Remaining work (steps 1–6, the `#[cfg(windows)]` bodies + 10k loopback run)
+> still needs a Windows box. Authored on macOS via the
 > `cargo check --target x86_64-pc-windows-msvc` cross-check loop; runtime
 > implementation + validation happen on a Windows box (no Windows runtime
 > testing is possible from macOS). Tracks phase-6-runtime.md "Open work front"
@@ -170,9 +174,33 @@ rustls, which is cross-platform.
 
 ## Implementation plan (suggested order)
 
-0. **(prep, on unix)** Widen fd ABI `i32 → i64` across runtime FFIs + codegen
-   call sites; verify on macOS/Linux (`park_and_wake` + codegen E2E). Land when
-   codegen-touching agents are quiescent.
+0. **(prep, on unix) — ✅ DONE 2026-06-15.** Widen fd ABI `i32 → i64` across
+   runtime FFIs + codegen call sites; verified on macOS (`park_and_wake` 262 +
+   codegen E2E 1605 + `memory_sanitizer` 27 + tcp/ws/tls codegen suites, fmt +
+   `clippy --all-targets --features llvm -D warnings` clean). What landed (so the
+   Windows port adds only `#[cfg(windows)]` bodies against a uniform signature):
+   - **Kāra stdlib fd field** `i32 → i64` in `TcpListener`/`TcpStream`
+     (`runtime/stdlib/tcp.kara`), `TlsListener`/`TlsStream` (`tls.kara`),
+     `WebSocket` + `from_fd` (`ws.kara`). (`File`'s fd is **not** on the socket
+     path — left i32; the Windows port widens it separately if needed.)
+   - **Runtime FFI signatures** (`runtime/src/event_loop.rs` + `tls.rs`): every
+     fd PARAM widened to i64; fd-RETURNS (`tcp_bind`/`tcp_connect`/`tcp_accept`/
+     `ws_accept`/`ws_accept_tls`/`tls_listener_bind`/`tls_accept`/
+     `tls_client_connect`/`test_bind_and_print_port`) widened to i64. Status-code
+     returns (`deregister_fd`/`tcp_close`/`tls_close`) stay i32. Unix bodies
+     narrow `i64 -> RawFd (i32)` at the top via `as RawFd`; `mio::unix::SourceFd`
+     and the TLS `SESSIONS` map stay i32-keyed (register + lookup narrow
+     identically). **Windows: alias `RawHandle = RawSocket (u64)` and narrow to
+     that instead — the cast sites are already isolated at each body's top.**
+   - **Codegen**: FFI declarations in `Codegen::new` (`src/codegen.rs`); the
+     `karac_park_on_fd` state-struct fd field (`declarations.rs::
+     synthesize_park_on_fd_layout` + the poll-fn fd load); the hardcoded socket
+     struct layouts (`types_lowering.rs::llvm_type_for_name`) **and** the
+     `struct_types`/`struct_field_type_names` seeding in `declarations.rs`
+     (both must agree — the Result `Ok(x)` destructure reads the seeding); the
+     hand-rolled `build_fd_construct_result` / `extract_fd_*` / `from_fd` packs;
+     the hand-rolled drop bodies (`synth_drop.rs`). Signature-pinned IR tests
+     updated (`tests/{ws_framing,tls_codegen,codegen}.rs`).
 1. **fd-type abstraction** in `event_loop.rs`: a `cfg`-aliased raw-handle type
    and `i64 <-> handle` casts, plus a `windows_register_source(sock) -> impl
    Source` bridge helper (the `from_raw_socket`/`into_raw_socket` dance). See the

@@ -3551,9 +3551,9 @@ impl<'ctx> Codegen<'ctx> {
         // module test block.
         let register_fd_ty = i64_type.fn_type(
             &[
-                context.i32_type().into(), // raw_fd
-                context.i8_type().into(),  // direction (0=Read, 1=Write, 2=ReadWrite)
-                ptr_type.into(),           // parked task pointer (opaque)
+                i64_type.into(),          // raw_fd (i64 fd ABI — Windows IOCP prep)
+                context.i8_type().into(), // direction (0=Read, 1=Write, 2=ReadWrite)
+                ptr_type.into(),          // parked task pointer (opaque)
             ],
             false,
         );
@@ -3568,10 +3568,10 @@ impl<'ctx> Codegen<'ctx> {
         // the coroutine its own cooperative-cancellation flag.
         let register_fd_cancel_ty = i64_type.fn_type(
             &[
-                context.i32_type().into(), // raw_fd
-                context.i8_type().into(),  // direction
-                ptr_type.into(),           // parked task pointer (opaque)
-                ptr_type.into(),           // cancel: *const AtomicBool (null = none)
+                i64_type.into(),          // raw_fd (i64 fd ABI — Windows IOCP prep)
+                context.i8_type().into(), // direction
+                ptr_type.into(),          // parked task pointer (opaque)
+                ptr_type.into(),          // cancel: *const AtomicBool (null = none)
             ],
             false,
         );
@@ -3635,9 +3635,10 @@ impl<'ctx> Codegen<'ctx> {
         // (one-shot), so a re-registered fd in a subsequent loop iteration
         // gets a fresh token and the event loop doesn't keep reporting a
         // stale registration.
+        // Return stays i32 (0/-1 status); raw_fd param widens to i64.
         let deregister_fd_ty = context
             .i32_type()
-            .fn_type(&[context.i32_type().into(), i64_type.into()], false);
+            .fn_type(&[i64_type.into(), i64_type.into()], false);
         module.add_function(
             "karac_runtime_event_loop_deregister_fd",
             deregister_fd_ty,
@@ -3724,9 +3725,8 @@ impl<'ctx> Codegen<'ctx> {
         // the listener fd; -1 on UTF-8 / parse / bind failure. Prints
         // `BOUND_PORT=<n>` to stdout when the requested address ends in
         // `:0` (ephemeral-port convention).
-        let tcp_bind_ty = context
-            .i32_type()
-            .fn_type(&[ptr_type.into(), i64_type.into()], false);
+        // Returns the listener fd (or negative error code) — widened to i64.
+        let tcp_bind_ty = i64_type.fn_type(&[ptr_type.into(), i64_type.into()], false);
         module.add_function(
             "karac_runtime_tcp_bind",
             tcp_bind_ty,
@@ -3737,9 +3737,8 @@ impl<'ctx> Codegen<'ctx> {
         // Result[TcpStream, TcpError]`, the plain-TCP client primitive.
         // Same signature shape as `karac_runtime_tcp_bind`; returns the
         // connected socket fd, -1 on UTF-8 / parse / connect failure.
-        let tcp_connect_ty = context
-            .i32_type()
-            .fn_type(&[ptr_type.into(), i64_type.into()], false);
+        // Returns the connected socket fd (or negative error code) — i64.
+        let tcp_connect_ty = i64_type.fn_type(&[ptr_type.into(), i64_type.into()], false);
         module.add_function(
             "karac_runtime_tcp_connect",
             tcp_connect_ty,
@@ -3752,9 +3751,8 @@ impl<'ctx> Codegen<'ctx> {
         // pure-syscall (no event-loop interaction). Returns the new
         // connection fd; -1 on failure (incl. EAGAIN, which signals
         // a missed-wakeup bug).
-        let tcp_accept_ty = context
-            .i32_type()
-            .fn_type(&[context.i32_type().into()], false);
+        // listener_fd param + connection-fd return both widen to i64.
+        let tcp_accept_ty = i64_type.fn_type(&[i64_type.into()], false);
         module.add_function(
             "karac_runtime_tcp_accept",
             tcp_accept_ty,
@@ -3766,10 +3764,10 @@ impl<'ctx> Codegen<'ctx> {
         // responsible for parking via `karac_park_on_fd(stream_fd, 0)`
         // BEFORE invoking this. Returns byte count read; 0 on EOF;
         // -1 on error.
-        let tcp_read_ty = context.i64_type().fn_type(
-            &[context.i32_type().into(), ptr_type.into(), i64_type.into()],
-            false,
-        );
+        // stream_fd param widens to i64; byte-count return already i64.
+        let tcp_read_ty = context
+            .i64_type()
+            .fn_type(&[i64_type.into(), ptr_type.into(), i64_type.into()], false);
         module.add_function(
             "karac_runtime_tcp_read",
             tcp_read_ty,
@@ -3781,10 +3779,10 @@ impl<'ctx> Codegen<'ctx> {
         // responsible for parking via `karac_park_on_fd(stream_fd, 1)`
         // BEFORE invoking this. Returns byte count written; -1 on
         // error.
-        let tcp_write_ty = context.i64_type().fn_type(
-            &[context.i32_type().into(), ptr_type.into(), i64_type.into()],
-            false,
-        );
+        // stream_fd param widens to i64; byte-count return already i64.
+        let tcp_write_ty = context
+            .i64_type()
+            .fn_type(&[i64_type.into(), ptr_type.into(), i64_type.into()], false);
         module.add_function(
             "karac_runtime_tcp_write",
             tcp_write_ty,
@@ -3796,9 +3794,8 @@ impl<'ctx> Codegen<'ctx> {
         // bodies emitted by `emit_hardcoded_stdlib_drop_bodies`.
         // Closes the kernel-side socket; a `-1` fd is a no-op.
         // Phase 6 line 17 slice 9d.
-        let tcp_close_ty = context
-            .i32_type()
-            .fn_type(&[context.i32_type().into()], false);
+        // Return stays i32 (0/-1 status); fd param widens to i64.
+        let tcp_close_ty = context.i32_type().fn_type(&[i64_type.into()], false);
         module.add_function(
             "karac_runtime_tcp_close",
             tcp_close_ty,
@@ -3841,9 +3838,9 @@ impl<'ctx> Codegen<'ctx> {
         // accept time. v1 delegates to `karac_runtime_tcp_bind`; the
         // config pointer is forwarded by the kara struct rather than
         // stored runtime-side. Same `:0` BOUND_PORT convention as TCP.
-        let tls_listener_bind_ty = context
-            .i32_type()
-            .fn_type(&[ptr_type.into(), i64_type.into(), ptr_type.into()], false);
+        // Returns the listener fd (or negative error code) — widened to i64.
+        let tls_listener_bind_ty =
+            i64_type.fn_type(&[ptr_type.into(), i64_type.into(), ptr_type.into()], false);
         module.add_function(
             "karac_runtime_tls_listener_bind",
             tls_listener_bind_ty,
@@ -3853,9 +3850,8 @@ impl<'ctx> Codegen<'ctx> {
         // raw accept(2) + synchronous rustls handshake; registers a
         // `TlsSession` in the per-fd registry on success. Returns the
         // connection fd or -1.
-        let tls_accept_ty = context
-            .i32_type()
-            .fn_type(&[context.i32_type().into(), ptr_type.into()], false);
+        // listener_fd param + connection-fd return both widen to i64.
+        let tls_accept_ty = i64_type.fn_type(&[i64_type.into(), ptr_type.into()], false);
         module.add_function(
             "karac_runtime_tls_accept",
             tls_accept_ty,
@@ -3868,7 +3864,8 @@ impl<'ctx> Codegen<'ctx> {
         // handshake against `server_name`, register session in the
         // shared per-fd map (`Connection::Client` variant). Returns the
         // connection fd or -1. Backs `TlsStream.connect`.
-        let tls_client_connect_ty = context.i32_type().fn_type(
+        // Returns the connection fd (or -1) — widened to i64.
+        let tls_client_connect_ty = i64_type.fn_type(
             &[
                 ptr_type.into(), // addr_ptr
                 i64_type.into(), // addr_len
@@ -3890,19 +3887,19 @@ impl<'ctx> Codegen<'ctx> {
         // via `karac_park_on_fd(fd, dir)` BEFORE invoking. Same
         // negative-errno return convention as the TCP siblings; -1 for
         // non-syscall errors (protocol failure, session-lookup miss).
-        let tls_read_ty = context.i64_type().fn_type(
-            &[context.i32_type().into(), ptr_type.into(), i64_type.into()],
-            false,
-        );
+        // fd param widens to i64; byte-count return already i64.
+        let tls_read_ty = context
+            .i64_type()
+            .fn_type(&[i64_type.into(), ptr_type.into(), i64_type.into()], false);
         module.add_function(
             "karac_runtime_tls_read",
             tls_read_ty,
             Some(Linkage::External),
         );
-        let tls_write_ty = context.i64_type().fn_type(
-            &[context.i32_type().into(), ptr_type.into(), i64_type.into()],
-            false,
-        );
+        // fd param widens to i64; byte-count return already i64.
+        let tls_write_ty = context
+            .i64_type()
+            .fn_type(&[i64_type.into(), ptr_type.into(), i64_type.into()], false);
         module.add_function(
             "karac_runtime_tls_write",
             tls_write_ty,
@@ -3911,9 +3908,8 @@ impl<'ctx> Codegen<'ctx> {
         // `karac_runtime_tls_close(fd) -> i32` — remove the session
         // entry from the per-fd registry and close the underlying TCP
         // fd. Same `-1` no-op shape as `karac_runtime_tcp_close`.
-        let tls_close_ty = context
-            .i32_type()
-            .fn_type(&[context.i32_type().into()], false);
+        // Return stays i32 (0/-1 status); fd param widens to i64.
+        let tls_close_ty = context.i32_type().fn_type(&[i64_type.into()], false);
         module.add_function(
             "karac_runtime_tls_close",
             tls_close_ty,
@@ -4198,10 +4194,9 @@ impl<'ctx> Codegen<'ctx> {
         // `karac_park_on_fd(fd, 1)` BEFORE invoking this. Returns
         // payload byte count on success (== msg_len); -1 on error.
         // Phase 6 line 17 slice 9e.1.
-        let ws_send_text_ty = context.i64_type().fn_type(
-            &[context.i32_type().into(), ptr_type.into(), i64_type.into()],
-            false,
-        );
+        let ws_send_text_ty = context
+            .i64_type()
+            .fn_type(&[i64_type.into(), ptr_type.into(), i64_type.into()], false);
         module.add_function(
             "karac_runtime_ws_send_text",
             ws_send_text_ty,
@@ -4216,10 +4211,9 @@ impl<'ctx> Codegen<'ctx> {
         // payload byte count on success; 0 on graceful EOF;
         // -1 on protocol error / IO error / oversize payload.
         // Phase 6 line 17 slice 9e.1.
-        let ws_recv_text_ty = context.i64_type().fn_type(
-            &[context.i32_type().into(), ptr_type.into(), i64_type.into()],
-            false,
-        );
+        let ws_recv_text_ty = context
+            .i64_type()
+            .fn_type(&[i64_type.into(), ptr_type.into(), i64_type.into()], false);
         module.add_function(
             "karac_runtime_ws_recv_text",
             ws_recv_text_ty,
@@ -4235,9 +4229,8 @@ impl<'ctx> Codegen<'ctx> {
         // any failure (accept error, IO error, missing
         // Sec-WebSocket-Key, response write error).
         // Phase 6 line 17 slice 9e.2.
-        let ws_accept_ty = context
-            .i32_type()
-            .fn_type(&[context.i32_type().into()], false);
+        // listener_fd param + connection-fd return both widen to i64.
+        let ws_accept_ty = i64_type.fn_type(&[i64_type.into()], false);
         module.add_function(
             "karac_runtime_ws_accept",
             ws_accept_ty,
@@ -4253,9 +4246,8 @@ impl<'ctx> Codegen<'ctx> {
         // `ws_send_text` calls auto-dispatch through TLS once the
         // session is registered (their FFI bodies check `tls::
         // lookup_session(fd)`).
-        let ws_accept_tls_ty = context
-            .i32_type()
-            .fn_type(&[context.i32_type().into(), ptr_type.into()], false);
+        // listener_fd param + connection-fd return both widen to i64.
+        let ws_accept_tls_ty = i64_type.fn_type(&[i64_type.into(), ptr_type.into()], false);
         module.add_function(
             "karac_runtime_ws_accept_tls",
             ws_accept_tls_ty,
@@ -4266,19 +4258,17 @@ impl<'ctx> Codegen<'ctx> {
         // as the text framing FFIs from slice 9e.1 (3-arg `(fd,
         // ptr, len)` returning i64); the runtime helper switches
         // on the opcode bit (0x2 vs 0x1) internally.
-        let ws_send_binary_ty = context.i64_type().fn_type(
-            &[context.i32_type().into(), ptr_type.into(), i64_type.into()],
-            false,
-        );
+        let ws_send_binary_ty = context
+            .i64_type()
+            .fn_type(&[i64_type.into(), ptr_type.into(), i64_type.into()], false);
         module.add_function(
             "karac_runtime_ws_send_binary",
             ws_send_binary_ty,
             Some(Linkage::External),
         );
-        let ws_recv_binary_ty = context.i64_type().fn_type(
-            &[context.i32_type().into(), ptr_type.into(), i64_type.into()],
-            false,
-        );
+        let ws_recv_binary_ty = context
+            .i64_type()
+            .fn_type(&[i64_type.into(), ptr_type.into(), i64_type.into()], false);
         module.add_function(
             "karac_runtime_ws_recv_binary",
             ws_recv_binary_ty,
@@ -4290,19 +4280,17 @@ impl<'ctx> Codegen<'ctx> {
         // `(fd, ptr, len)` returning i64); the runtime helper
         // generates the mask key per-call and writes a MASK=1
         // frame.
-        let ws_send_text_masked_ty = context.i64_type().fn_type(
-            &[context.i32_type().into(), ptr_type.into(), i64_type.into()],
-            false,
-        );
+        let ws_send_text_masked_ty = context
+            .i64_type()
+            .fn_type(&[i64_type.into(), ptr_type.into(), i64_type.into()], false);
         module.add_function(
             "karac_runtime_ws_send_text_masked",
             ws_send_text_masked_ty,
             Some(Linkage::External),
         );
-        let ws_send_binary_masked_ty = context.i64_type().fn_type(
-            &[context.i32_type().into(), ptr_type.into(), i64_type.into()],
-            false,
-        );
+        let ws_send_binary_masked_ty = context
+            .i64_type()
+            .fn_type(&[i64_type.into(), ptr_type.into(), i64_type.into()], false);
         module.add_function(
             "karac_runtime_ws_send_binary_masked",
             ws_send_binary_masked_ty,

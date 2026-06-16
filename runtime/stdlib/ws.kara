@@ -35,18 +35,18 @@
 // `CleanupAction::UserDrop`. The `@WebSocket.drop` LLVM body is
 // hand-rolled in codegen (mirror of `@TcpStream.drop` from slice 9d)
 // to call `karac_runtime_tcp_close(self.fd)` — WebSocket and
-// TcpStream share the same single-i32-field layout, so the
+// TcpStream share the same single-i64-field layout, so the
 // `emit_tcp_drop_body_for` helper extends trivially.
 
 // `WebSocket` wraps an accepted (or connected) socket fd that has
 // completed the WebSocket protocol upgrade. v1 layout matches
-// `TcpStream` — a single `i32 fd` — because v1 ships text-only
+// `TcpStream` — a single `i64 fd` — because v1 ships text-only
 // unfragmented frames, so no per-connection state beyond the fd
 // itself is needed. Fragmentation tracking (`state: u32` in the
 // original slice 9e description) lands with 9e.3 when continuation
 // opcode 0x0 / multi-frame messages become first-class.
 struct WebSocket {
-    fd: i32,
+    fd: i64,
 }
 
 impl WebSocket {
@@ -69,7 +69,7 @@ impl WebSocket {
     // `#[allow(unstable_api)]` (the WS test harness does).
     #[unstable(note: "test-only raw-fd constructor; production code uses WebSocket.accept / accept_tls")]
     #[compiler_builtin]
-    fn from_fd(fd: i32) -> WebSocket {
+    fn from_fd(fd: i64) -> WebSocket {
         WebSocket { fd: fd }
     }
 

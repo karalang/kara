@@ -290,7 +290,9 @@ pub unsafe extern "C" fn karac_runtime_tls_listener_bind(
     addr_ptr: *const u8,
     addr_len: i64,
     _config: *mut KaracTlsConfig,
-) -> i32 {
+) -> i64 {
+    // i64 fd ABI: delegates to `tcp_bind`, which already returns the
+    // listener fd (or a negative error code) as i64.
     crate::event_loop::karac_runtime_tcp_bind(addr_ptr, addr_len)
 }
 
@@ -319,14 +321,17 @@ pub unsafe extern "C" fn karac_runtime_tls_listener_bind(
 #[cfg(unix)]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_tls_accept(
-    listener_fd: i32,
+    listener_fd: i64,
     config: *mut KaracTlsConfig,
-) -> i32 {
-    use std::os::unix::io::{FromRawFd, IntoRawFd};
+) -> i64 {
+    use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
 
     if listener_fd < 0 || config.is_null() {
         return -1;
     }
+    // i64 fd ABI → narrow to `RawFd` (i32 on Unix). The TLS session map is
+    // keyed by this narrowed fd (register + lookup narrow identically).
+    let listener_fd = listener_fd as RawFd;
     let cfg = &*config;
 
     let listener = std::net::TcpListener::from_raw_fd(listener_fd);
@@ -361,7 +366,9 @@ pub unsafe extern "C" fn karac_runtime_tls_accept(
             conn: rustls::Connection::Server(conn),
         })),
     );
-    fd
+    // i64 fd ABI: Unix `RawFd` (i32) sign-extends losslessly at the
+    // public return boundary; the session map stays keyed by the i32 fd.
+    fd as i64
 }
 
 /// Phase-8 line 22 — TLS client-side connect + synchronous handshake.
@@ -401,7 +408,7 @@ pub unsafe extern "C" fn karac_runtime_tls_client_connect(
     server_name_len: i64,
     roots_pem_ptr: *const u8,
     roots_pem_len: i64,
-) -> i32 {
+) -> i64 {
     use std::os::unix::io::IntoRawFd;
 
     // ── Parse the destination address ──
@@ -452,7 +459,7 @@ pub unsafe extern "C" fn karac_runtime_tls_client_connect(
     // (decoded as the TlsError default variant, `Protocol`).
     let mut sock = match std::net::TcpStream::connect(socket_addr) {
         Ok(s) => s,
-        Err(e) => return crate::event_loop::net_construct_error_code(&e),
+        Err(e) => return crate::event_loop::net_construct_error_code(&e) as i64,
     };
     // Client half of the handshake-latency fix: disable Nagle so the
     // client's small handshake / WS-upgrade records aren't withheld
@@ -480,7 +487,8 @@ pub unsafe extern "C" fn karac_runtime_tls_client_connect(
             conn: rustls::Connection::Client(client_conn),
         })),
     );
-    fd
+    // i64 fd ABI: see `karac_runtime_tls_accept`'s return note.
+    fd as i64
 }
 
 /// Drive rustls's inbound packet processor: ciphertext from socket →
@@ -507,11 +515,11 @@ pub unsafe extern "C" fn karac_runtime_tls_client_connect(
 #[cfg(unix)]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_tls_read(
-    stream_fd: i32,
+    stream_fd: i64,
     buf_ptr: *mut u8,
     buf_len: i64,
 ) -> i64 {
-    use std::os::unix::io::{FromRawFd, IntoRawFd};
+    use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
 
     if stream_fd < 0 {
         return -1;
@@ -519,6 +527,8 @@ pub unsafe extern "C" fn karac_runtime_tls_read(
     if buf_ptr.is_null() || buf_len <= 0 {
         return 0;
     }
+    // i64 fd ABI → narrow to `RawFd` (i32 on Unix); session map keyed by it.
+    let stream_fd = stream_fd as RawFd;
 
     let session = {
         let reg = sessions().read().unwrap_or_else(|p| p.into_inner());
@@ -609,11 +619,11 @@ fn drive_read(
 #[cfg(unix)]
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_tls_write(
-    stream_fd: i32,
+    stream_fd: i64,
     buf_ptr: *const u8,
     buf_len: i64,
 ) -> i64 {
-    use std::os::unix::io::{FromRawFd, IntoRawFd};
+    use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
 
     if stream_fd < 0 {
         return -1;
@@ -621,6 +631,8 @@ pub unsafe extern "C" fn karac_runtime_tls_write(
     if buf_ptr.is_null() || buf_len <= 0 {
         return 0;
     }
+    // i64 fd ABI → narrow to `RawFd` (i32 on Unix); session map keyed by it.
+    let stream_fd = stream_fd as RawFd;
 
     let session = {
         let reg = sessions().read().unwrap_or_else(|p| p.into_inner());
@@ -664,12 +676,14 @@ fn drive_write(conn: &mut rustls::Connection, sock: &mut std::net::TcpStream, bu
 /// reclaimed). Mirrors `karac_runtime_tcp_close`'s contract.
 #[cfg(unix)]
 #[no_mangle]
-pub extern "C" fn karac_runtime_tls_close(fd: i32) -> i32 {
-    use std::os::unix::io::FromRawFd;
+pub extern "C" fn karac_runtime_tls_close(fd: i64) -> i32 {
+    use std::os::unix::io::{FromRawFd, RawFd};
 
     if fd < 0 {
         return 0;
     }
+    // i64 fd ABI → narrow to `RawFd` (i32 on Unix); session map keyed by it.
+    let fd = fd as RawFd;
     {
         let mut reg = sessions().write().unwrap_or_else(|p| p.into_inner());
         reg.remove(&fd);
@@ -860,7 +874,7 @@ mod tests {
         // message back.
         let cfg_addr = cfg as usize;
         use std::os::unix::io::IntoRawFd;
-        let listener_fd = listener.into_raw_fd();
+        let listener_fd = listener.into_raw_fd() as i64;
         let server = thread::spawn(move || {
             let fd = unsafe { karac_runtime_tls_accept(listener_fd, cfg_addr as *mut _) };
             assert!(fd >= 0, "tls_accept failed");
@@ -875,7 +889,9 @@ mod tests {
             karac_runtime_tls_close(fd);
             // Also close the listener fd to free the kernel resource.
             use std::os::unix::io::FromRawFd;
-            let _ = unsafe { std::net::TcpListener::from_raw_fd(listener_fd) };
+            let _ = unsafe {
+                std::net::TcpListener::from_raw_fd(listener_fd as std::os::unix::io::RawFd)
+            };
             n as usize
         });
 
@@ -956,7 +972,7 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let cfg_addr = cfg as usize;
-        let listener_fd = listener.into_raw_fd();
+        let listener_fd = listener.into_raw_fd() as i64;
 
         // Server thread: invoke the FFI under test. With the fix in
         // place this returns a positive fd; without it, the handshake
@@ -1100,7 +1116,7 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let cfg_addr = cfg as usize;
-        let listener_fd = listener.into_raw_fd();
+        let listener_fd = listener.into_raw_fd() as i64;
 
         // Server: accept + handshake N connections through the real FFI,
         // closing each upgraded fd so sessions don't accumulate.
@@ -1215,7 +1231,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let cfg_addr = cfg as usize;
         use std::os::unix::io::IntoRawFd;
-        let listener_fd = listener.into_raw_fd();
+        let listener_fd = listener.into_raw_fd() as i64;
         let server = thread::spawn(move || {
             let fd = unsafe { karac_runtime_tls_accept(listener_fd, cfg_addr as *mut _) };
             assert!(fd >= 0, "tls_accept failed");
@@ -1226,7 +1242,9 @@ mod tests {
             assert_eq!(w, n);
             karac_runtime_tls_close(fd);
             use std::os::unix::io::FromRawFd;
-            let _ = unsafe { std::net::TcpListener::from_raw_fd(listener_fd) };
+            let _ = unsafe {
+                std::net::TcpListener::from_raw_fd(listener_fd as std::os::unix::io::RawFd)
+            };
             n as usize
         });
 
@@ -1324,13 +1342,15 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         use std::os::unix::io::{FromRawFd, IntoRawFd};
-        let listener_fd = listener.into_raw_fd();
+        let listener_fd = listener.into_raw_fd() as i64;
         let cfg_addr = cfg as usize;
 
         let server = thread::spawn(move || {
             let fd = unsafe { karac_runtime_tls_accept(listener_fd, cfg_addr as *mut _) };
             // Listener cleanup so the kernel reclaims the port.
-            let _ = unsafe { std::net::TcpListener::from_raw_fd(listener_fd) };
+            let _ = unsafe {
+                std::net::TcpListener::from_raw_fd(listener_fd as std::os::unix::io::RawFd)
+            };
             fd
         });
 
@@ -1375,7 +1395,7 @@ mod tests {
             karac_runtime_tls_listener_bind(addr.as_ptr(), addr.len() as i64, std::ptr::null_mut())
         };
         assert!(fd >= 0);
-        use std::os::unix::io::FromRawFd;
-        let _ = unsafe { std::net::TcpListener::from_raw_fd(fd) };
+        use std::os::unix::io::{FromRawFd, RawFd};
+        let _ = unsafe { std::net::TcpListener::from_raw_fd(fd as RawFd) };
     }
 }
