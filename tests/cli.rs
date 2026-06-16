@@ -367,6 +367,60 @@ fn main() {
 }
 
 #[test]
+fn test_query_queries_populated_envelope_has_fork_threshold_query() {
+    // Phase-8 (P1.6 fork-threshold queries) — two effectful calls on
+    // independent resources form a non-trivial parallel group the
+    // auto-parallelizer forks; the fork-threshold analyzer surfaces one
+    // query advertising `#[fork_at]`.
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-query-fork-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("fork.kara");
+    let src = r#"
+effect resource R1;
+effect resource R2;
+fn w1() writes(R1) {}
+fn w2() writes(R2) {}
+fn main() {
+    w1();
+    w2();
+}
+"#;
+    std::fs::write(&path, src).unwrap();
+
+    let out = karac_bin()
+        .args(["query", "queries", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "karac query queries should exit 0; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("\"kind\":\"fork_threshold_decision\""),
+        "expected a fork_threshold_decision entry; got stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("\"fork_at\""),
+        "expected the fork_at resolution surface; got stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("\"cross_phase_origin\":\"concurrency\""),
+        "expected concurrency-origin tag; got stdout={stdout}",
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
 fn test_subcommand_help_fmt() {
     let out = karac_bin().args(["fmt", "--help"]).output().unwrap();
     assert!(out.status.success());

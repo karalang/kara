@@ -8457,6 +8457,16 @@ fn query_queries(pipeline: &Pipeline) {
         ));
     }
 
+    // P1.6 fork-threshold queries — plain-data walk over the concurrency
+    // analysis's per-function parallelization decisions. Skips silently
+    // when the concurrency pass didn't run.
+    if let Some(c) = pipeline.concurrency.as_ref() {
+        all.extend(crate::fork_threshold_queries::analyze(
+            &pipeline.parsed.program,
+            c,
+        ));
+    }
+
     println!("{}", render_queries_envelope(&all, &pipeline.filename));
 }
 
@@ -8479,6 +8489,7 @@ fn render_compiler_query(q: &crate::queries::CompilerQuery, filename: &str) -> S
         QueryKind::BranchHint => "branch_hint",
         QueryKind::SpecializationDecision => "specialization_decision",
         QueryKind::RcFallbackDecision => "rc_fallback_decision",
+        QueryKind::ForkThresholdDecision => "fork_threshold_decision",
     };
     let confidence = match q.default_confidence {
         Confidence::Low => "low",

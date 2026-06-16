@@ -12,21 +12,26 @@
 //! [`ResolutionSurface`] — subsequent compiles re-emit only the
 //! still-open queries.
 //!
-//! **v1 ships the channel infrastructure plus the P1.1, P1.2, and P1.3
-//! catalogue entries.** All three are emitted by plain-data analyzers
-//! run from the CLI's `query_queries` collator, not from a phase result
-//! struct: P1.3 (inlining + branch hints, landed 2026-05-18) by
-//! [`crate::codegen_queries`], P1.2 (generic specialization on the
-//! monomorphization tuple) by [`crate::specialization_queries`] reading
-//! the monomorphization counter, and P1.1 (RC fallback at use site) by
+//! **v1 ships the channel infrastructure plus the P1.1, P1.2, P1.3, and
+//! P1.6 catalogue entries.** All four are emitted by plain-data
+//! analyzers run from the CLI's `query_queries` collator, not from a
+//! phase result struct: P1.3 (inlining + branch hints, landed
+//! 2026-05-18) by [`crate::codegen_queries`], P1.2 (generic
+//! specialization on the monomorphization tuple) by
+//! [`crate::specialization_queries`] reading the monomorphization
+//! counter, P1.1 (RC fallback at use site) by
 //! [`crate::rc_fallback_queries`] reading the ownership pass's
-//! `rc_values`. The remaining entries land alongside the phases that
-//! populate them — P1.4 (effect-set narrowing, `effectchecker.rs`),
-//! P1.5 (layout), P1.6 (fork threshold, `concurrency.rs`); the
-//! `queries` vec on each of those phase results is still empty. Each new
-//! variant on [`QueryKind`] is a non-breaking addition for tools that
-//! gracefully ignore unknown variants (matches the streaming-output
-//! discipline from Phase 5 § Structured Compiler Output).
+//! `rc_values`, and P1.6 (auto-concurrency fork threshold) by
+//! [`crate::fork_threshold_queries`] reading the concurrency analysis's
+//! per-function fork decisions. The remaining entries are P1.5 (layout)
+//! and P1.4 (effect-set narrowing) — P1.4 is architecturally blocked at
+//! v1 (the effect model trusts declarations, so `inferred == declared`
+//! and there is no slack to narrow; a faithful version needs the
+//! phase-11 branch-reachability analysis, see phase-8-stdlib-floor.md).
+//! Each new variant on [`QueryKind`] is a non-breaking addition for
+//! tools that gracefully ignore unknown variants (matches the
+//! streaming-output discipline from Phase 5 § Structured Compiler
+//! Output).
 
 use crate::def_path::QueryId;
 use crate::token::Span;
@@ -105,6 +110,11 @@ pub enum QueryKind {
     /// (accept) / `#[no_rc]` (forbid) on the function or the value's
     /// type.
     RcFallbackDecision,
+    /// Fork-threshold decision at a group of statements the
+    /// auto-parallelizer chose to fork onto the par runtime. One query
+    /// per forked group. Resolution surface: `#[fork_at(...)]` on the
+    /// enclosing function.
+    ForkThresholdDecision,
 }
 
 /// One alternative the compiler considered at a decision site.
