@@ -1651,3 +1651,65 @@ fn samemod_local_type_shadows_prelude() {
         "local type must shadow prelude type of the same name: {errs:?}",
     );
 }
+
+// ── Follow-ups to B-2026-06-15-5: qualified construction + transitive field types ──
+
+#[test]
+fn xmod_qualified_struct_construction_parses_and_checks() {
+    // `module.Type { .. }` qualified construction. Qualified module access
+    // already works for type annotations (`-> geo.Pointt`) and calls
+    // (`geo.origin()`), but the struct-literal form failed to parse
+    // ("Expected Semicolon, found LeftBrace"). Close the inconsistency.
+    let d = ScratchDir::new("xmod-qual-construct");
+    d.write(
+        "src/main.kara",
+        "import geo;\nfn mk() -> geo.Pointt { geo.Pointt { x: 1, y: 2 } }\nfn main() { let _p = mk(); }\n",
+    );
+    d.write(
+        "src/geo.kara",
+        "pub struct Pointt { pub x: i64, pub y: i64 }\n",
+    );
+    let built = build_program_tree(&walked(d.root())).expect("tree");
+    assert!(
+        built.parse_errors.is_empty(),
+        "qualified `module.Type {{}}` should parse: {:?}",
+        built.parse_errors
+    );
+    let errs = typecheck_module_errors(&built.tree, built.tree.root);
+    assert!(
+        !errs.iter().any(|e| matches!(
+            e.kind,
+            TypeErrorKind::MissingField | TypeErrorKind::NotAStruct
+        )),
+        "qualified construction should typecheck: {errs:?}"
+    );
+}
+
+#[test]
+fn xmod_imported_struct_field_type_resolves_transitively() {
+    // Consumer imports SpannedTok but NOT Span. SpannedTok.span: Span comes
+    // from the `tok` module (which imports geo.Span). Field access
+    // `t.span.offset` must resolve to geo's Span -- not the prelude `Span` --
+    // WITHOUT the consumer importing Span itself. (Span is chosen to collide
+    // with the prelude so the bug is a visible UndefinedField, not a silent
+    // Type::Error.)
+    let d = ScratchDir::new("xmod-transitive-field");
+    d.write(
+        "src/geo.kara",
+        "pub struct Span { pub offset: i64, pub length: i64 }\n",
+    );
+    d.write(
+        "src/tok.kara",
+        "import geo.Span;\npub struct SpannedTok { pub span: Span, pub kind: i64 }\n",
+    );
+    d.write(
+        "src/main.kara",
+        "import tok.SpannedTok;\nfn off(t: SpannedTok) -> i64 { t.span.offset }\nfn main() {}\n",
+    );
+    let built = build_program_tree(&walked(d.root())).expect("tree");
+    let errs = typecheck_module_errors(&built.tree, built.tree.root);
+    assert!(
+        !errs.iter().any(|e| e.kind == TypeErrorKind::UndefinedField),
+        "imported struct field type must resolve transitively, not to prelude: {errs:?}"
+    );
+}

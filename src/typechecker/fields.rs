@@ -12,8 +12,9 @@ use crate::token::Span;
 use std::collections::HashSet;
 
 use super::const_eval::primitive_const_type;
+use super::env::StructInfo;
 use super::types::Type;
-use super::{find_struct_def, TypeErrorKind};
+use super::{extract_derived_traits, extract_must_use_message, find_struct_def, TypeErrorKind};
 
 impl<'a> super::TypeChecker<'a> {
     pub(super) fn infer_field_access(&mut self, object: &Expr, field: &str, span: &Span) -> Type {
@@ -435,6 +436,41 @@ impl<'a> super::TypeChecker<'a> {
 
     // ── Struct Literals ─────────────────────────────────────────
 
+    /// Resolve a module-qualified struct path (`module.Type`, `a.b.Type`) to a
+    /// `StructInfo` by locating the defining module in the program tree and
+    /// lowering its field types. Returns `None` for a bare (single-segment)
+    /// path or when the addressed module has no such struct. Generics get an
+    /// empty scope — cross-module generic construction is a coarse surface,
+    /// matching `infer_imported_field_access`.
+    fn resolve_qualified_struct_info(&mut self, path: &[String]) -> Option<StructInfo> {
+        if path.len() < 2 {
+            return None;
+        }
+        let tree = self.tree?;
+        let name = path.last()?;
+        let module_path = &path[..path.len() - 1];
+        let &mid = tree.graph.by_path.get::<[String]>(module_path)?;
+        let module = tree.module(mid);
+        let sdef = find_struct_def(module, name)?;
+        let gp = Self::generic_param_names(&sdef.generic_params);
+        let fields: Vec<(String, Type, bool)> = sdef
+            .fields
+            .iter()
+            .map(|f| (f.name.clone(), self.lower_type_expr(&f.ty, &gp), f.is_pub))
+            .collect();
+        Some(StructInfo {
+            generic_params: gp,
+            fields,
+            derived_traits: extract_derived_traits(&sdef.attributes),
+            no_rc: sdef.no_rc,
+            is_shared: sdef.is_shared,
+            is_par: sdef.is_par,
+            must_use_message: extract_must_use_message(&sdef.attributes),
+            is_non_exhaustive: sdef.is_non_exhaustive,
+            defining_stdlib_origin: sdef.stdlib_origin,
+        })
+    }
+
     pub(super) fn infer_struct_literal(
         &mut self,
         path: &[String],
@@ -445,18 +481,26 @@ impl<'a> super::TypeChecker<'a> {
 
         let struct_info = match self.env.structs.get(&struct_name) {
             Some(info) => info.clone(),
-            None => {
-                // Type-check field values anyway
-                for f in fields {
-                    self.infer_expr(&f.value);
+            None => match self.resolve_qualified_struct_info(path) {
+                // Module-qualified construction `module.Type { .. }`: the type
+                // is not bound by bare name in this module (only the module is
+                // imported), so resolve its definition from the defining module
+                // via the program tree. Mirrors how `module.Type` type
+                // annotations and `module.fn()` calls already resolve.
+                Some(info) => info,
+                None => {
+                    // Type-check field values anyway
+                    for f in fields {
+                        self.infer_expr(&f.value);
+                    }
+                    self.type_error(
+                        format!("'{}' is not a struct", struct_name),
+                        span.clone(),
+                        TypeErrorKind::NotAStruct,
+                    );
+                    return Type::Error;
                 }
-                self.type_error(
-                    format!("'{}' is not a struct", struct_name),
-                    span.clone(),
-                    TypeErrorKind::NotAStruct,
-                );
-                return Type::Error;
-            }
+            },
         };
 
         // `#[deprecated]` slice 4 — emit the deprecation warning when

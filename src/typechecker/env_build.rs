@@ -293,7 +293,7 @@ impl<'a> super::TypeChecker<'a> {
         // Items collected for env_add_* registration. Done in two
         // passes so the iteration borrow on `self.program.items` ends
         // before the env_add_* methods take `&mut self`.
-        let mut imported_items: Vec<(String, crate::ast::Item)> = Vec::new();
+        let mut imported_items: Vec<(String, crate::ast::Item, Vec<String>)> = Vec::new();
         for item in &self.program.items {
             let Item::Import(imp) = item else { continue };
             for ii in &imp.items {
@@ -313,7 +313,7 @@ impl<'a> super::TypeChecker<'a> {
                 if let Some(vis) = find_item_visibility(origin_module, &origin_name) {
                     let bound = ii.alias.clone().unwrap_or_else(|| ii.name.clone());
                     self.type_origins
-                        .insert(bound, (origin_path, origin_name.clone(), vis));
+                        .insert(bound, (origin_path.clone(), origin_name.clone(), vis));
                 }
                 // Theme 4 follow-up (2026-05-10) — pull the imported
                 // item's full definition into the local env so per-
@@ -338,6 +338,7 @@ impl<'a> super::TypeChecker<'a> {
                         imported_items.push((
                             ii.alias.clone().unwrap_or_else(|| ii.name.clone()),
                             oitem.clone(),
+                            origin_path.clone(),
                         ));
                         break;
                     }
@@ -368,7 +369,7 @@ impl<'a> super::TypeChecker<'a> {
                 _ => None,
             })
             .collect();
-        for (bound_name, item) in imported_items {
+        for (bound_name, item, origin_path) in imported_items {
             if local_type_names.contains(&bound_name) {
                 // A real local definition shadows the import.
                 continue;
@@ -382,11 +383,30 @@ impl<'a> super::TypeChecker<'a> {
                     let mut local_def = s.clone();
                     local_def.name = bound_name;
                     self.env_add_struct(&local_def);
+                    // Transitively register the types this struct's fields
+                    // reference (resolved from its DEFINING module), so a
+                    // consumer that uses an imported struct's field need not
+                    // also import that field's type by name. Without this,
+                    // `t.span` (where `SpannedTok.span: Span` is defined via
+                    // another module) re-lowers `Span` in the consumer's
+                    // namespace and resolves to the prelude `Span`.
+                    self.register_transitive_type_deps(
+                        tree,
+                        struct_referenced_names(s),
+                        &origin_path,
+                        &local_type_names,
+                    );
                 }
                 Item::EnumDef(e) => {
                     let mut local_def = e.clone();
                     local_def.name = bound_name;
                     self.env_add_enum(&local_def);
+                    self.register_transitive_type_deps(
+                        tree,
+                        enum_referenced_names(e),
+                        &origin_path,
+                        &local_type_names,
+                    );
                 }
                 Item::TraitDef(t) => {
                     let mut local_def = t.clone();
@@ -404,6 +424,72 @@ impl<'a> super::TypeChecker<'a> {
                     self.env_add_marker_trait(&local_def);
                 }
                 _ => {}
+            }
+        }
+    }
+
+    /// Register, into the current module's env, the struct/enum types
+    /// transitively referenced by an imported aggregate's field / variant-
+    /// payload types — resolved from the aggregate's DEFINING module, not the
+    /// importer's. Each referenced type is bound under the name it is referenced
+    /// by, so the consumer's by-name lookups (`infer_field_access`, struct-
+    /// literal checks) see the right type instead of falling through to a
+    /// same-named prelude type. Worklist + visited set bound the walk over
+    /// recursive / shared types; a name the current module defines itself is
+    /// left untouched (local wins). Unresolved names (primitives, generic
+    /// params) are silently skipped.
+    fn register_transitive_type_deps(
+        &mut self,
+        tree: &crate::module::ProgramTree,
+        seed_names: Vec<String>,
+        seed_origin: &[String],
+        local_type_names: &std::collections::HashSet<String>,
+    ) {
+        let mut visited: std::collections::HashSet<(Vec<String>, String)> =
+            std::collections::HashSet::new();
+        let mut work: std::collections::VecDeque<(Vec<String>, String)> = seed_names
+            .into_iter()
+            .map(|n| (seed_origin.to_vec(), n))
+            .collect();
+        while let Some((from_mod, tname)) = work.pop_front() {
+            if local_type_names.contains(&tname) {
+                continue; // a genuine local definition wins over the import
+            }
+            let Some((dep_path, dep_name)) =
+                resolve_type_origin_in_module(tree, &from_mod, &tname, 0)
+            else {
+                continue; // primitive / generic param / unresolved — nothing to pull
+            };
+            if !visited.insert((dep_path.clone(), dep_name.clone())) {
+                continue;
+            }
+            let Some(&dep_mid) = tree.graph.by_path.get::<[String]>(&dep_path) else {
+                continue;
+            };
+            let dep_mod = tree.module(dep_mid);
+            let found: Option<crate::ast::Item> = dep_mod.items.iter().find_map(|it| match it {
+                Item::StructDef(s) if s.name == dep_name => Some(it.clone()),
+                Item::EnumDef(e) if e.name == dep_name => Some(it.clone()),
+                _ => None,
+            });
+            let next: Vec<String> = match &found {
+                Some(Item::StructDef(s)) => struct_referenced_names(s),
+                Some(Item::EnumDef(e)) => enum_referenced_names(e),
+                _ => Vec::new(),
+            };
+            match found {
+                Some(Item::StructDef(mut s)) => {
+                    s.name = tname;
+                    self.env_add_struct(&s);
+                }
+                Some(Item::EnumDef(mut e)) => {
+                    e.name = tname;
+                    self.env_add_enum(&e);
+                }
+                _ => continue,
+            }
+            for n in next {
+                work.push_back((dep_path.clone(), n));
             }
         }
     }
@@ -2448,4 +2534,119 @@ fn match_with_provider_call_shape<'e>(
         return None;
     }
     Some((resource, &args[0].value, &args[1].value))
+}
+
+/// Collect the last-segment name of every `Path` type that appears in a type
+/// expression, descending through tuples, arrays, pointers, references,
+/// slices, weak refs, function types, and generic arguments. Used to find the
+/// types an imported aggregate's fields / variant payloads transitively
+/// depend on (see [`super::TypeChecker::register_transitive_type_deps`]).
+fn collect_type_names(ty: &TypeExpr, out: &mut Vec<String>) {
+    match &ty.kind {
+        TypeKind::Path(p) => {
+            if let Some(last) = p.segments.last() {
+                out.push(last.clone());
+            }
+            if let Some(args) = &p.generic_args {
+                for a in args {
+                    if let GenericArg::Type(t) = a {
+                        collect_type_names(t, out);
+                    }
+                }
+            }
+        }
+        TypeKind::Tuple(ts) => {
+            for t in ts {
+                collect_type_names(t, out);
+            }
+        }
+        TypeKind::Array { element, .. } => collect_type_names(element, out),
+        TypeKind::Pointer { inner, .. }
+        | TypeKind::Ref(inner)
+        | TypeKind::MutRef(inner)
+        | TypeKind::MutSlice(inner)
+        | TypeKind::Weak(inner) => collect_type_names(inner, out),
+        TypeKind::FnType {
+            params,
+            return_type,
+            ..
+        } => {
+            for p in params {
+                collect_type_names(p, out);
+            }
+            if let Some(r) = return_type {
+                collect_type_names(r, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn struct_referenced_names(s: &StructDef) -> Vec<String> {
+    let mut out = Vec::new();
+    for f in &s.fields {
+        collect_type_names(&f.ty, &mut out);
+    }
+    out
+}
+
+fn enum_referenced_names(e: &EnumDef) -> Vec<String> {
+    let mut out = Vec::new();
+    for v in &e.variants {
+        match &v.kind {
+            VariantKind::Tuple(ts) => {
+                for t in ts {
+                    collect_type_names(t, &mut out);
+                }
+            }
+            VariantKind::Struct(fs) => {
+                for f in fs {
+                    collect_type_names(&f.ty, &mut out);
+                }
+            }
+            VariantKind::Unit => {}
+        }
+    }
+    out
+}
+
+/// Resolve a type name as seen from *inside* `module_path` to the module that
+/// defines it and its canonical name -- following that module's own imports of
+/// any visibility, unlike `module::canonical_origin` which only walks `pub`
+/// re-export chains. Returns `None` for primitives / generic params / names the
+/// module neither defines nor imports. The `depth` guard bounds the walk over
+/// the (acyclic, cycle-checked) module import graph.
+fn resolve_type_origin_in_module(
+    tree: &crate::module::ProgramTree,
+    module_path: &[String],
+    name: &str,
+    depth: u32,
+) -> Option<(Vec<String>, String)> {
+    if depth > 64 {
+        return None;
+    }
+    let mid = tree.graph.by_path.get::<[String]>(module_path).copied()?;
+    let module = tree.module(mid);
+    for it in &module.items {
+        match it {
+            Item::StructDef(s) if s.name == name => {
+                return Some((module_path.to_vec(), name.to_string()));
+            }
+            Item::EnumDef(e) if e.name == name => {
+                return Some((module_path.to_vec(), name.to_string()));
+            }
+            _ => {}
+        }
+    }
+    for it in &module.items {
+        if let Item::Import(imp) = it {
+            for ii in &imp.items {
+                let bound = ii.alias.as_deref().unwrap_or(&ii.name);
+                if bound == name {
+                    return resolve_type_origin_in_module(tree, &imp.path, &ii.name, depth + 1);
+                }
+            }
+        }
+    }
+    None
 }

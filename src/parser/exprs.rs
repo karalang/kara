@@ -1370,8 +1370,20 @@ impl super::Parser {
 
         // Check for path: Name.Name2.... Type/Const-class idents (uppercase leading)
         // root a path here; Value-class idents fall through to the postfix loop,
-        // which handles `.` as field/method access.
-        if self.check(&Token::Dot) && starts_upper(&name) {
+        // which handles `.` as field/method access. A *module-qualified struct
+        // literal* (`module.Type { .. }` -- lowercase module segment, uppercase
+        // type segment, immediately followed by `{`) also roots here, so it
+        // parses consistently with the already-supported `module.Type` type-
+        // annotation and `module.fn()` call forms. The trailing-`{` guard is
+        // load-bearing: WITHOUT it, primitive associated-constant access
+        // (`i64.MAX`, `f64.NAN` -- lowercase primitive, uppercase const, no
+        // brace) would be misparsed as a path instead of a field access. Other
+        // lowercase-rooted `.` forms (`v.field`, `m.func()`, `m.Type(..)`) stay
+        // in the postfix loop.
+        let module_qualified_struct_lit = !starts_upper(&name)
+            && matches!(self.peek_token_at(1), Token::Identifier { name: ref seg, .. } if starts_upper(seg))
+            && matches!(self.peek_token_at(2), Token::LeftBrace);
+        if self.check(&Token::Dot) && (starts_upper(&name) || module_qualified_struct_lit) {
             let mut path = vec![name];
             while self.eat(&Token::Dot) {
                 match self.peek_token() {
