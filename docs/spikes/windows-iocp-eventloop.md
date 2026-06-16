@@ -1,16 +1,19 @@
 # Windows IOCP event-loop backend — design + scoping (Phase 6, line 13)
 
-> **Status:** groundwork / scoping (2026-06-07). **Prep step 0 (i64 fd ABI
-> widening) landed + verified on unix 2026-06-15** — see Implementation plan
-> step 0 below for exactly what changed and the Windows-side cast guidance.
-> Remaining work (steps 1–6, the `#[cfg(windows)]` bodies + 10k loopback run)
-> still needs a Windows box. Authored on macOS via the
-> `cargo check --target x86_64-pc-windows-msvc` cross-check loop; runtime
-> implementation + validation happen on a Windows box (no Windows runtime
-> testing is possible from macOS). Tracks phase-6-runtime.md "Open work front"
-> **Slice 10 — Windows IOCP integration** and its sibling **Windows IOCP
-> cancel-sweep** (line 19). De-risks the implementation before a Windows agent
-> picks it up.
+> **Status:** implementation in progress (2026-06-07 scoping). **Steps 0–4
+> (plain) DONE + verified on unix / cross-checked for Windows, 2026-06-15:** the
+> i64 fd ABI widening (step 0), the `#[cfg(windows)]` register/deregister bodies
+> (steps 1–2), all `tcp_*` socket I/O (step 3), and the plain-TCP WebSocket
+> surface (`ws_send_*`/`ws_recv_*`/`ws_accept`, step 4) are written and
+> cross-compile clean (`cargo check --target x86_64-pc-windows-msvc … --features
+> net,test-helpers`: 0 errors, 0 warnings), with the unix path fully green. See
+> the Implementation plan below for exactly what landed. **Remaining: step 4b
+> (TLS-over-Windows — deferred to the Windows box), step 5 (un-gate unit tests),
+> step 6 (10k loopback run).** Those need a real Windows box (no Windows runtime
+> testing — or `ring`/TLS cross-compile — is possible from macOS). Authored on
+> macOS via the `cargo check --target x86_64-pc-windows-msvc` cross-check loop.
+> Tracks phase-6-runtime.md "Open work front" **Slice 10 — Windows IOCP
+> integration** and its sibling **Windows IOCP cancel-sweep** (line 19).
 
 ## Goal
 
@@ -201,16 +204,44 @@ rustls, which is cross-platform.
      hand-rolled `build_fd_construct_result` / `extract_fd_*` / `from_fd` packs;
      the hand-rolled drop bodies (`synth_drop.rs`). Signature-pinned IR tests
      updated (`tests/{ws_framing,tls_codegen,codegen}.rs`).
-1. **fd-type abstraction** in `event_loop.rs`: a `cfg`-aliased raw-handle type
-   and `i64 <-> handle` casts, plus a `windows_register_source(sock) -> impl
-   Source` bridge helper (the `from_raw_socket`/`into_raw_socket` dance). See the
-   compile-checked PoC committed alongside this doc.
-2. **Core registration** `#[cfg(windows)]`: `register_fd{,_cancel}`,
-   `deregister_fd` via the bridge. Mirror the unix wake-on-register + cancel race
-   guard exactly (logic is platform-agnostic). Cross-check compiles.
-3. **Socket I/O** `#[cfg(windows)]`: `tcp_*` + `test_bind_and_print_port` —
-   `FromRawSocket`/`IntoRawSocket`, non-blocking setup, SIGPIPE gate-out.
-4. **WebSocket** `#[cfg(windows)]`: `ws_*` (+ `ws_accept_tls`).
+1. **fd-type abstraction** — ✅ **DONE 2026-06-15.** The `windows_iocp_bridge`
+   (`source_from_socket` / `release`) is wired; `register_fd_impl` /
+   `deregister_fd` narrow the i64 fd ABI to `RawSocket` (u64) and route through
+   it. `shard_of_handle` is the `RawSocket` sibling of `shard_of_fd`.
+2. **Core registration** `#[cfg(windows)]` — ✅ **DONE 2026-06-15.**
+   `register_fd` / `register_fd_cancel` / `deregister_fd` ungated + given
+   `#[cfg(windows)]` bodies; the unix wake-on-register + cancel-race guard is
+   shared verbatim via the new platform-agnostic `finish_register` helper.
+3. **Socket I/O** `#[cfg(windows)]` — ✅ **DONE 2026-06-15.** `tcp_bind` /
+   `tcp_accept` / `tcp_connect` / `tcp_read` / `tcp_write` / `tcp_close` +
+   `test_bind_and_print_port` mirrored with `FromRawSocket`/`IntoRawSocket`, with
+   `set_nonblocking(true)` at each socket-creation point (mio AFD requires it; no
+   SIGPIPE on Windows so nothing to gate out).
+4. **WebSocket** `#[cfg(windows)]` — ✅ **plain-TCP surface DONE 2026-06-15**;
+   **TLS-over-WS deferred** (see follow-on below). `ws_send_*` / `ws_recv_*` /
+   `ws_accept` mirrored (the generic frame/handshake helpers were ungated from
+   `#[cfg(unix)]` so both platforms share them; `ws_generate_mask_key` is now
+   cross-platform). `ws_accept_tls` and the `#[cfg(feature = "tls")]`
+   `lookup_session` dispatch are NOT ported — that is **step 4b** below.
+
+   > **Verification (steps 1–4 plain):** `cargo check --target
+   > x86_64-pc-windows-msvc -p karac-runtime --no-default-features --features
+   > net,test-helpers` is **0 errors, 0 warnings**. The unix side stayed green
+   > (fmt + clippy clean; `park_and_wake` / `ws_framing` / `tcp_listener` /
+   > `tcp_stream` / `tls_codegen` E2E + 253 runtime unit tests all pass — the
+   > `finish_register` extraction + ws-helper ungating are zero-behaviour
+   > refactors). The **full (TLS) build cannot be cross-checked from macOS** —
+   > `ring`'s C/asm won't cross-compile for `windows-msvc` from the Mac; that arm
+   > validates natively on the Windows box.
+
+4b. **(deferred) TLS-over-Windows**: `#[cfg(windows)]` bodies for `tls.rs`'s
+   `tls_listener_bind` / `tls_accept` / `tls_read` / `tls_write` / `tls_close` /
+   `tls_client_connect`, plus `ws_accept_tls` + its handshake worker pool, plus
+   the `ws_send_data_frame` / `ws_recv_data_frame` TLS dispatch branch. Prereq:
+   widen the TLS `SESSIONS` map key past `i32` (a `SOCKET` is u64 — make it a
+   `cfg`-aliased `SessionKey` = `RawFd` on unix / `RawSocket` on windows, zero
+   unix change). Best done **on the Windows box** alongside step 6, since rustls
+   handshake behaviour (and `ring`) need native validation anyway.
 5. **Un-gate event-loop unit tests** for Windows; green on `windows-latest`.
 6. **10k loopback functional run** on a Windows box (x86-64 EC2/Azure dev
    instance, or a Win-on-ARM VM). Flip the M3 Windows parity clause + line 13

@@ -824,8 +824,19 @@ fn shard_count() -> usize {
 
 /// Map a raw fd to its reactor shard. `raw_fd` is non-negative for any live
 /// descriptor; the `as u32` guards the theoretical negative case.
+#[cfg(unix)]
 fn shard_of_fd(raw_fd: i32) -> usize {
     (raw_fd as u32 as usize) % shard_count()
+}
+
+/// Windows analog of [`shard_of_fd`]: map a raw `SOCKET` to its reactor shard.
+/// SOCKET handles are pointer-sized kernel object handles (not the small
+/// sequential ints Unix fds are), so the low bits may distribute less evenly —
+/// acceptable at v1, and flagged as a Windows open question in the spike
+/// (`docs/spikes/windows-iocp-eventloop.md`).
+#[cfg(windows)]
+fn shard_of_handle(sock: std::os::windows::io::RawSocket) -> usize {
+    (sock as usize) % shard_count()
 }
 
 // ── Registration-token packing ─────────────────────────────────────────────
@@ -890,10 +901,9 @@ unsafe impl Send for KaracWakeup {}
 /// Token 0 is reserved for the cross-thread waker and is never
 /// returned by this fn even on success.
 ///
-/// Unix-only — `mio::unix::SourceFd` is the cross-Unix raw-fd wrapper
-/// that mio uses to talk to epoll / kqueue. Windows IOCP integration
-/// is a separate slice (different fd model).
-#[cfg(unix)]
+/// Cross-platform: Unix uses `mio::unix::SourceFd` (epoll / kqueue); Windows
+/// bridges the raw `SOCKET` through `mio::net::TcpStream` onto mio's AFD/IOCP
+/// readiness backend (see [`register_fd_impl`]'s per-platform bodies).
 #[no_mangle]
 pub extern "C" fn karac_runtime_event_loop_register_fd(
     raw_fd: i64,
@@ -911,8 +921,7 @@ pub extern "C" fn karac_runtime_event_loop_register_fd(
 /// ([`karac_runtime_park_slot_cancel_ptr`]) and passes it here; a null `cancel`
 /// is equivalent to the plain `register_fd` (never-cancelled fallback).
 ///
-/// Unix-only, same as the plain register entry.
-#[cfg(unix)]
+/// Cross-platform, same as the plain register entry.
 #[no_mangle]
 pub extern "C" fn karac_runtime_event_loop_register_fd_cancel(
     raw_fd: i64,
@@ -921,6 +930,55 @@ pub extern "C" fn karac_runtime_event_loop_register_fd_cancel(
     cancel: *const AtomicBool,
 ) -> u64 {
     register_fd_impl(raw_fd, direction, parked, cancel)
+}
+
+/// Shared post-`register` arming logic for the fd registration FFIs. The only
+/// platform-specific ingredient is building the mio `Source` (`SourceFd` on
+/// Unix, a bridged `mio::net::TcpStream` on Windows); everything after a
+/// successful `register_with_cancel` is identical, so it lives here.
+fn finish_register(shard: usize, token: RegistrationToken, cancel: *const AtomicBool) -> u64 {
+    // Wake the background poller so it re-evaluates its interest list. Without
+    // this, a poller blocked in `run_once(None)` (epoll_wait / kevent / the
+    // Windows AFD poll) would not observe a freshly-registered fd until some
+    // *other* fd fires — and an fd that is already readable at registration
+    // time (e.g. a listener re-armed in an accept loop while connections sit in
+    // the backlog) would be silently missed, wedging the task parked on it.
+    //
+    // **Gated on a background poller actually existing.** mio's waker is
+    // coalescing AND edge-triggered: a `wake()` issued before any `poll()` call
+    // leaves a pending waker event that the NEXT `poll()` consumes immediately
+    // (returning 0 user-facing wakeups, since WAKER_TOKEN is filtered out in
+    // `run_once`). That breaks the synchronous-FFI case where the same thread
+    // registers an fd and then calls `karac_runtime_event_loop_poll` itself:
+    // the prefired wake would race ahead of any real readiness event. Gating on
+    // a poller being installed restricts the wake to the only state it's needed
+    // for and leaves the synchronous-poll path race-free.
+    if reactor_polling_active() {
+        // Wake only THIS fd's shard reactor thread — each shard blocks on its
+        // own poll, so a cross-shard wake would be wasted churn. (Covers both
+        // the background poller and the combined dispatcher — either may be
+        // blocked in `run_once` on this shard and must re-arm interest on the
+        // freshly-registered fd.)
+        if let Some(h) = EVENT_LOOP_HANDLES.get().and_then(|hs| hs.get(shard)) {
+            let _ = h.wake();
+        }
+    }
+    // Park-vs-cancel race guard (slice 5c). If this fd is registered for a
+    // coroutine whose `cancel` flag is ALREADY set — a `TaskGroup.cancel()`
+    // that raced the handler reaching its park, so the cancel sweep ran before
+    // this registration existed — the idle fd would never wake the dispatcher
+    // to observe the flag, hanging the joiner. Request a fresh sweep so the
+    // just-parked-but-cancelled coroutine is torn down promptly. Ordering: the
+    // entry is inserted (under the `fds` lock, released by
+    // `register_with_cancel`) before this `Acquire` load, so either this load
+    // sees the flag and we sweep, or `taskgroup_cancel`'s own later
+    // request-sweep observes the now-present entry — every transition covered.
+    // SAFETY: a non-null `cancel` points at the owning handle's flag, live for
+    // the duration of the ramp that called this.
+    if !cancel.is_null() && unsafe { (*cancel).load(Ordering::Acquire) } {
+        karac_runtime_request_cancel_sweep();
+    }
+    pack_token(shard, token.0)
 }
 
 #[cfg(unix)]
@@ -932,8 +990,7 @@ fn register_fd_impl(
 ) -> u64 {
     // i64 fd ABI → narrow to `RawFd` (i32 on Unix) for `mio::unix::SourceFd`
     // and the fd-hash shard routing. The signature is i64 for a uniform
-    // cross-platform fd ABI; the Windows registration model (a different
-    // slice) narrows to `RawSocket` instead.
+    // cross-platform fd ABI; the Windows body narrows to `RawSocket` instead.
     let raw_fd = raw_fd as std::os::unix::io::RawFd;
     let dir = match direction {
         0 => IoDirection::Read,
@@ -945,59 +1002,50 @@ fn register_fd_impl(
     let shard = shard_of_fd(raw_fd);
     let ev = &event_loops()[shard];
     match ev.register_with_cancel(&mut source, dir, None, parked, cancel) {
-        Ok(token) => {
-            // Wake the background poller so it re-evaluates its interest
-            // list. Without this, a poller blocked in `run_once(None)`
-            // (epoll_wait / kevent) would not observe a freshly-registered
-            // fd until some *other* fd fires — and an fd that is already
-            // readable at registration time (e.g. a listener re-armed in an
-            // accept loop while connections sit in the backlog) would be
-            // silently missed, wedging the task parked on it.
-            //
-            // **Gated on a background poller actually existing.** mio's
-            // waker is coalescing AND edge-triggered: a `wake()` issued
-            // before any `poll()` call leaves a pending waker event that
-            // the NEXT `poll()` consumes immediately (returning 0 user-
-            // facing wakeups, since WAKER_TOKEN is filtered out in
-            // `run_once`). That breaks the synchronous-FFI case where the
-            // same thread registers an fd and then calls
-            // `karac_runtime_event_loop_poll` itself: the prefired wake
-            // would race ahead of any real readiness event, returning 0
-            // wakeups well under the caller's `max_wait_nanos`. Gating
-            // the wake on `BACKGROUND_POLLER` being installed restricts
-            // the wake to the only state it's needed for (a poller
-            // blocked in `run_once`) and leaves the synchronous-poll
-            // path race-free.
-            if reactor_polling_active() {
-                // Wake only THIS fd's shard reactor thread — each shard blocks
-                // on its own epoll, so a cross-shard wake would be wasted churn.
-                // (Covers both the background poller and the combined
-                // dispatcher — either may be blocked in `run_once` on this
-                // shard and must re-arm interest on the freshly-registered fd.)
-                if let Some(h) = EVENT_LOOP_HANDLES.get().and_then(|hs| hs.get(shard)) {
-                    let _ = h.wake();
-                }
-            }
-            // Park-vs-cancel race guard (slice 5c). If this fd is registered for
-            // a coroutine whose `cancel` flag is ALREADY set — a
-            // `TaskGroup.cancel()` that raced the handler reaching its park, so
-            // the cancel sweep ran before this registration existed — the idle
-            // fd would never wake the dispatcher to observe the flag, hanging
-            // the joiner. Request a fresh sweep so the just-parked-but-cancelled
-            // coroutine is torn down promptly. Ordering: the entry is inserted
-            // (under the `fds` lock, released by `register_with_cancel`) before
-            // this `Acquire` load, so either this load sees the flag and we
-            // sweep, or `taskgroup_cancel`'s own later request-sweep observes
-            // the now-present entry — every cancel transition is covered.
-            // SAFETY: a non-null `cancel` points at the owning handle's flag,
-            // live for the duration of the ramp that called this.
-            if !cancel.is_null() && unsafe { (*cancel).load(Ordering::Acquire) } {
-                karac_runtime_request_cancel_sweep();
-            }
-            pack_token(shard, token.0)
-        }
+        Ok(token) => finish_register(shard, token, cancel),
         Err(_) => 0,
     }
+}
+
+/// Windows IOCP registration (spike step 2). Bridges the raw `SOCKET` into
+/// mio's AFD/IOCP readiness backend via an owned `mio::net::TcpStream`, then
+/// recovers the handle with `release` — NEVER letting it drop, since dropping
+/// would `closesocket()` it (the Windows analog of the unix double-close that
+/// wedged the macOS demo). The post-register arming + cancel-race guard are
+/// shared with the unix path via [`finish_register`] (logic is platform-
+/// agnostic). The listener-vs-stream wrap and the `into_raw_socket` lifetime
+/// are the spike's open questions, validated only by the Windows 10k run.
+#[cfg(windows)]
+fn register_fd_impl(
+    raw_fd: i64,
+    direction: u8,
+    parked: *mut c_void,
+    cancel: *const AtomicBool,
+) -> u64 {
+    // i64 fd ABI → narrow to `RawSocket` (u64 on Windows). A Windows `SOCKET`
+    // is a pointer-sized kernel handle, so unlike a Unix `RawFd` it can occupy
+    // the full i64 width — this is exactly the truncation the i64 ABI avoids.
+    let sock = raw_fd as std::os::windows::io::RawSocket;
+    let dir = match direction {
+        0 => IoDirection::Read,
+        1 => IoDirection::Write,
+        2 => IoDirection::ReadWrite,
+        _ => return 0,
+    };
+    let shard = shard_of_handle(sock);
+    let ev = &event_loops()[shard];
+    // SAFETY: `sock` is a live socket the runtime owns for the duration of this
+    // register call; `release` below recovers it without closing.
+    let mut source = unsafe { windows_iocp_bridge::source_from_socket(sock) };
+    let result = match ev.register_with_cancel(&mut source, dir, None, parked, cancel) {
+        Ok(token) => finish_register(shard, token, cancel),
+        Err(_) => 0,
+    };
+    // Recover the handle WITHOUT closing, on BOTH success and error — the
+    // runtime retains ownership of the fd's lifetime (closed later via
+    // `karac_runtime_tcp_close` at kara `Drop`).
+    let _ = windows_iocp_bridge::release(source);
+    result
 }
 
 /// Deregister a previously registered fd.
@@ -1020,6 +1068,31 @@ pub extern "C" fn karac_runtime_event_loop_deregister_fd(raw_fd: i64, token: u64
         Ok(()) => 0,
         Err(_) => -1,
     }
+}
+
+/// Windows IOCP deregistration (spike step 2). Mirrors the unix path: rebuild a
+/// mio source from the raw `SOCKET` (a fresh wrapper, exactly as the unix path
+/// builds a fresh `SourceFd`), deregister by token, then `release` the handle
+/// without closing.
+#[cfg(windows)]
+#[no_mangle]
+pub extern "C" fn karac_runtime_event_loop_deregister_fd(raw_fd: i64, token: u64) -> i32 {
+    // i64 fd ABI → narrow to `RawSocket` (u64 on Windows); see `register_fd_impl`.
+    let sock = raw_fd as std::os::windows::io::RawSocket;
+    // SAFETY: `sock` is a live socket the runtime owns for this call; `release`
+    // below recovers it without closing (the kernel close happens later via
+    // `karac_runtime_tcp_close`).
+    let mut source = unsafe { windows_iocp_bridge::source_from_socket(sock) };
+    // Route by socket handle (authoritative — `register_fd` placed the entry on
+    // `shard_of_handle(sock)`); the token only carries the shard-local id.
+    let ev = &event_loops()[shard_of_handle(sock)];
+    let (_token_shard, local) = unpack_token(token);
+    let result = match ev.deregister(&mut source, RegistrationToken(local)) {
+        Ok(()) => 0,
+        Err(_) => -1,
+    };
+    let _ = windows_iocp_bridge::release(source);
+    result
 }
 
 /// Round-robin reactor shard for a *timer* registration. Unlike an fd
@@ -1087,15 +1160,11 @@ pub extern "C" fn karac_runtime_event_loop_cancel_timer(token: u64) -> i32 {
 /// `SOCKET` into mio's AFD/IOCP readiness backend through an owned
 /// `mio::net::TcpStream`, then recovering the handle WITHOUT closing it.
 ///
-/// The full `#[cfg(windows)]` `register_fd` / `register_fd_cancel` /
-/// `deregister_fd` are written against this bridge (see the spike's
-/// implementation plan). They are NOT included here because they require the
-/// `i32 -> i64` fd-ABI widening (spike Problem 2) which touches codegen and is
-/// sequenced separately to avoid colliding with the active codegen agents.
+/// The `#[cfg(windows)]` `register_fd` / `register_fd_cancel` / `deregister_fd`
+/// FFIs are wired against this bridge (spike implementation plan step 2 —
+/// landed once the `i32 -> i64` fd-ABI widening they depend on shipped, so the
+/// fd ABI is uniform and a `SOCKET` survives without truncation).
 #[cfg(windows)]
-// Intentionally unwired groundwork — consumed once the `#[cfg(windows)]`
-// register/deregister FFIs land (spike implementation plan, step 2).
-#[allow(dead_code)]
 pub(crate) mod windows_iocp_bridge {
     use std::os::windows::io::{FromRawSocket, IntoRawSocket, RawSocket};
 
@@ -2106,6 +2175,247 @@ pub extern "C" fn karac_runtime_tcp_close(fd: i64) -> i32 {
     0
 }
 
+// ── Windows IOCP socket I/O (#[cfg(windows)], spike step 3) ──────────────
+//
+// Faithful mirrors of the `#[cfg(unix)]` `tcp_*` + `test_bind_and_print_port`
+// FFIs above, with the raw-handle plumbing swapped from `RawFd` (i32,
+// `FromRawFd`/`IntoRawFd`) to `RawSocket` (u64, `FromRawSocket`/
+// `IntoRawSocket`), and the **non-blocking flag set at every socket-creation
+// point** — mio's Windows AFD/IOCP readiness backend requires non-blocking
+// sockets, whereas the unix epoll/kqueue path does not (so the unix bodies omit
+// it). There is no SIGPIPE on Windows, so nothing to gate out here (the unix
+// `SIG_IGN` install lives in the reactor-startup path, already `#[cfg(unix)]`).
+// Behavior — especially the `into_raw_socket` lifetime under mio's AFD shim and
+// whether a listener can register through a `TcpStream` wrapper — is validated
+// only by the Windows 10k loopback run (spike step 6); the macOS dev host can
+// only confirm these compile via `cargo check --target x86_64-pc-windows-msvc`.
+
+/// Windows mirror of [`karac_runtime_test_bind_and_print_port`].
+#[cfg(all(windows, feature = "test-helpers"))]
+#[no_mangle]
+pub extern "C" fn karac_runtime_test_bind_and_print_port() -> i64 {
+    use std::os::windows::io::IntoRawSocket;
+    let listener = match std::net::TcpListener::bind("127.0.0.1:0") {
+        Ok(l) => l,
+        Err(_) => return -1,
+    };
+    let port = match listener.local_addr() {
+        Ok(addr) => addr.port(),
+        Err(_) => return -1,
+    };
+    println!("BOUND_PORT={port}");
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+    // mio's AFD readiness registration requires a non-blocking socket; set it
+    // before the caller registers + parks.
+    let _ = listener.set_nonblocking(true);
+    // i64 fd ABI: a Windows `SOCKET` (`RawSocket` = u64) occupies the full
+    // width — no truncation (the whole point of the i64 ABI).
+    listener.into_raw_socket() as i64
+}
+
+/// Windows mirror of [`karac_runtime_tcp_bind`].
+///
+/// # Safety
+/// Same contract as the unix `karac_runtime_tcp_bind`: `addr_ptr` must point to
+/// `addr_len` readable bytes for the call, or be null with `addr_len <= 0`.
+#[cfg(windows)]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_tcp_bind(addr_ptr: *const u8, addr_len: i64) -> i64 {
+    use socket2::{Domain, Socket, Type};
+    use std::os::windows::io::IntoRawSocket;
+    if addr_ptr.is_null() || addr_len <= 0 {
+        return -1;
+    }
+    let bytes = std::slice::from_raw_parts(addr_ptr, addr_len as usize);
+    let addr_str = match std::str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let socket_addr: std::net::SocketAddr = match addr_str.parse() {
+        Ok(a) => a,
+        Err(_) => return -1,
+    };
+    let domain = if socket_addr.is_ipv4() {
+        Domain::IPV4
+    } else {
+        Domain::IPV6
+    };
+    let socket = match Socket::new(domain, Type::STREAM, None) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let _ = socket.set_reuse_address(true);
+    if let Err(e) = socket.bind(&socket_addr.into()) {
+        return net_construct_error_code(&e) as i64;
+    }
+    if let Err(e) = socket.listen(KARAC_RUNTIME_TCP_LISTEN_BACKLOG) {
+        return net_construct_error_code(&e) as i64;
+    }
+    let listener: std::net::TcpListener = socket.into();
+    if addr_str.rsplit(':').next() == Some("0") {
+        if let Ok(local) = listener.local_addr() {
+            println!("BOUND_PORT={}", local.port());
+            use std::io::Write;
+            let _ = std::io::stdout().flush();
+        }
+    }
+    // mio requires non-blocking listeners for AFD readiness registration.
+    let _ = listener.set_nonblocking(true);
+    listener.into_raw_socket() as i64
+}
+
+/// Windows mirror of [`karac_runtime_tcp_accept`].
+#[cfg(windows)]
+#[no_mangle]
+pub extern "C" fn karac_runtime_tcp_accept(listener_fd: i64) -> i64 {
+    use std::os::windows::io::{FromRawSocket, IntoRawSocket, RawSocket};
+    if listener_fd < 0 {
+        return -1;
+    }
+    let listener_sock = listener_fd as RawSocket;
+    // SAFETY: `listener_fd` comes from a successful `karac_runtime_tcp_bind`;
+    // borrow it, accept, then release the listener handle without closing.
+    let listener = unsafe { std::net::TcpListener::from_raw_socket(listener_sock) };
+    let result: i64 = match listener.accept() {
+        Ok((conn, _addr)) => {
+            // Accepted sockets do NOT inherit the listener's non-blocking flag
+            // on Windows (unlike some Unix), so set it explicitly before the
+            // caller registers the conn for readiness.
+            let _ = conn.set_nonblocking(true);
+            conn.into_raw_socket() as i64
+        }
+        Err(e) => net_construct_error_code(&e) as i64,
+    };
+    let _ = listener.into_raw_socket();
+    result
+}
+
+/// Windows mirror of [`karac_runtime_tcp_connect`].
+///
+/// # Safety
+/// Same contract as the unix `karac_runtime_tcp_connect`.
+#[cfg(windows)]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_tcp_connect(addr_ptr: *const u8, addr_len: i64) -> i64 {
+    use std::os::windows::io::IntoRawSocket;
+    if addr_ptr.is_null() || addr_len <= 0 {
+        return -1;
+    }
+    let bytes = std::slice::from_raw_parts(addr_ptr, addr_len as usize);
+    let addr_str = match std::str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let socket_addr: std::net::SocketAddr = match addr_str.parse() {
+        Ok(a) => a,
+        Err(_) => return -1,
+    };
+    match std::net::TcpStream::connect(socket_addr) {
+        Ok(sock) => {
+            // The blocking `connect` has completed; flip to non-blocking for
+            // mio readiness before handing the fd back.
+            let _ = sock.set_nonblocking(true);
+            sock.into_raw_socket() as i64
+        }
+        Err(e) => net_construct_error_code(&e) as i64,
+    }
+}
+
+/// Windows mirror of [`karac_runtime_tcp_read`].
+///
+/// # Safety
+/// Same contract as the unix `karac_runtime_tcp_read`.
+#[cfg(windows)]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_tcp_read(
+    stream_fd: i64,
+    buf_ptr: *mut u8,
+    buf_len: i64,
+) -> i64 {
+    use std::io::Read;
+    use std::os::windows::io::{FromRawSocket, IntoRawSocket, RawSocket};
+    if stream_fd < 0 {
+        return -1;
+    }
+    if buf_ptr.is_null() || buf_len <= 0 {
+        return 0;
+    }
+    let buf = std::slice::from_raw_parts_mut(buf_ptr, buf_len as usize);
+    // SAFETY: `stream_fd` comes from a successful accept/connect; borrow it for
+    // the read, then release without closing.
+    let mut stream = std::net::TcpStream::from_raw_socket(stream_fd as RawSocket);
+    let result = match stream.read(buf) {
+        Ok(n) => n as i64,
+        Err(e) => {
+            let errno = e.raw_os_error().unwrap_or(1);
+            if errno > 0 {
+                -(errno as i64)
+            } else {
+                -1
+            }
+        }
+    };
+    let _ = stream.into_raw_socket();
+    result
+}
+
+/// Windows mirror of [`karac_runtime_tcp_write`].
+///
+/// # Safety
+/// Same contract as the unix `karac_runtime_tcp_write`.
+#[cfg(windows)]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_tcp_write(
+    stream_fd: i64,
+    buf_ptr: *const u8,
+    buf_len: i64,
+) -> i64 {
+    use std::io::Write;
+    use std::os::windows::io::{FromRawSocket, IntoRawSocket, RawSocket};
+    if stream_fd < 0 {
+        return -1;
+    }
+    if buf_ptr.is_null() || buf_len <= 0 {
+        return 0;
+    }
+    let buf = std::slice::from_raw_parts(buf_ptr, buf_len as usize);
+    // SAFETY: `stream_fd` comes from a successful accept/connect; borrow it for
+    // the write, then release without closing.
+    let mut stream = std::net::TcpStream::from_raw_socket(stream_fd as RawSocket);
+    let result = match stream.write(buf) {
+        Ok(n) => n as i64,
+        Err(e) => {
+            let errno = e.raw_os_error().unwrap_or(1);
+            if errno > 0 {
+                -(errno as i64)
+            } else {
+                -1
+            }
+        }
+    };
+    let _ = stream.into_raw_socket();
+    result
+}
+
+/// Windows mirror of [`karac_runtime_tcp_close`]. Reconstructs the
+/// `TcpStream` from the raw `SOCKET` and lets it drop → `closesocket()`.
+#[cfg(windows)]
+#[no_mangle]
+pub extern "C" fn karac_runtime_tcp_close(fd: i64) -> i32 {
+    use std::os::windows::io::{FromRawSocket, RawSocket};
+    if fd < 0 {
+        return 0;
+    }
+    let fd = fd as RawSocket;
+    // SAFETY: reconstruct the `TcpStream` from the raw socket and let it drop —
+    // unlike accept/read/write (which `into_raw_socket` to release), drop here
+    // runs `closesocket()`. `TcpStream` vs `TcpListener` only governs the Rust
+    // API surface, not the underlying handle's close.
+    let _ = unsafe { std::net::TcpStream::from_raw_socket(fd) };
+    0
+}
+
 // ── WebSocket framing FFI (stdlib `WebSocket.send_text` / `.recv_text`) ──
 //
 // Phase 6 line 17 slice 9e.1 — RFC 6455 frame encode/decode for text
@@ -2131,7 +2441,8 @@ pub extern "C" fn karac_runtime_tcp_close(fd: i64) -> i32 {
 /// Returns `Ok(true)` on full read, `Ok(false)` on EOF (peer closed
 /// before all bytes arrived), `Err` on syscall failure. Loops past
 /// `EINTR` per the standard convention.
-#[cfg(unix)]
+// Cross-platform (generic over the stream): used by both the unix and Windows
+// WebSocket FFI bodies. No raw-handle conversion here — pure byte logic.
 fn ws_read_exact_or_eof<R: std::io::Read>(stream: &mut R, buf: &mut [u8]) -> std::io::Result<bool> {
     let mut got = 0;
     while got < buf.len() {
@@ -2151,7 +2462,7 @@ fn ws_read_exact_or_eof<R: std::io::Read>(stream: &mut R, buf: &mut [u8]) -> std
 /// control-frame replies generated inside the recv loop
 /// (auto-pong on inbound ping, close response on inbound close).
 /// Returns `true` on success, `false` on any write failure.
-#[cfg(unix)]
+// Cross-platform (generic over the stream): shared by unix + Windows WS bodies.
 fn ws_write_unmasked_frame<W: std::io::Write>(stream: &mut W, opcode: u8, payload: &[u8]) -> bool {
     debug_assert!(opcode <= 0x0F);
     // Worst-case header: 1 fin/opcode + 1 mask/len-marker + 8
@@ -2270,21 +2581,26 @@ pub unsafe extern "C" fn karac_runtime_ws_send_binary_masked(
     ws_send_masked_data_frame(fd, msg_ptr, msg_len, 0x2)
 }
 
-/// Read 4 bytes of cryptographically-strong randomness for the
-/// client-side mask key. `/dev/urandom` is the unix-portable
-/// path; fall back to a clock-derived seed if reading fails
-/// (defensive — keep the connection alive over fail-closed).
-#[cfg(unix)]
+/// Read 4 bytes of randomness for the client-side mask key. `/dev/urandom` is
+/// the unix-portable CSPRNG path; both the unix read-failure case and the
+/// Windows path fall back to a clock-derived LCG seed (a Windows follow-on can
+/// wire `BCryptGenRandom` for a CSPRNG mask key — masking is anti-cache-
+/// poisoning hygiene, not a confidentiality boundary, so the fallback is
+/// acceptable at v1). Cross-platform so the generic `ws_write_masked_frame`
+/// compiles on Windows.
 fn ws_generate_mask_key() -> [u8; 4] {
-    use std::io::Read;
     let mut key = [0u8; 4];
-    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-        if f.read_exact(&mut key).is_ok() {
-            return key;
+    #[cfg(unix)]
+    {
+        use std::io::Read;
+        if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+            if f.read_exact(&mut key).is_ok() {
+                return key;
+            }
         }
     }
-    // Fallback: time-derived LCG mix. Not cryptographically
-    // strong but harder to predict than a hardcoded constant.
+    // Fallback (and the Windows path): time-derived LCG mix. Not
+    // cryptographically strong but harder to predict than a hardcoded constant.
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
@@ -2301,7 +2617,7 @@ fn ws_generate_mask_key() -> [u8; 4] {
 /// opcode, MASK=1, mask key, masked payload. The mask key is
 /// generated per-call via `ws_generate_mask_key`. Returns
 /// `payload.len()` on success, -1 on write failure.
-#[cfg(unix)]
+// Cross-platform (generic over the stream): shared by unix + Windows WS bodies.
 fn ws_write_masked_frame<W: std::io::Write>(stream: &mut W, opcode: u8, payload: &[u8]) -> bool {
     debug_assert!(opcode <= 0x0F);
     // Header: 1 fin/opcode + 1 mask/len-marker + up to 8 extended-len + 4 mask key.
@@ -2516,7 +2832,7 @@ unsafe fn ws_recv_data_frame(
 ///
 /// `out_ptr` must point to `out_max_len` writable bytes when
 /// `out_max_len > 0`. Same contract as the public `ws_recv_data_frame`.
-#[cfg(unix)]
+// Cross-platform (generic over the stream): shared by unix + Windows WS bodies.
 unsafe fn ws_recv_data_frame_inner<S: std::io::Read + std::io::Write>(
     stream: &mut S,
     out_ptr: *mut u8,
@@ -2885,7 +3201,7 @@ fn base64_encode(input: &[u8]) -> String {
 /// read time is bounded to ≈ `2t` (the in-flight read can run one
 /// extra `t` past the deadline before the next pre-read check
 /// fires). `None` disables the bound (handshake-timeout opt-out).
-#[cfg(unix)]
+// Cross-platform (generic over the stream): shared by unix + Windows WS bodies.
 fn ws_read_http_request<R: std::io::Read>(
     stream: &mut R,
     deadline: Option<std::time::Instant>,
@@ -3274,6 +3590,225 @@ pub extern "C" fn karac_runtime_ws_accept(listener_fd: i64) -> i64 {
     // constructs from this fd (slice-9e.1 + slice-9d Drop chain).
     // i64 fd ABI: Unix `RawFd` (i32) sign-extends losslessly.
     conn.into_raw_fd() as i64
+}
+
+// ── Windows IOCP WebSocket FFI (#[cfg(windows)], spike step 4) ───────────
+//
+// Plain-TCP WebSocket surface for Windows: `ws_send_*` / `ws_recv_*` /
+// `ws_accept` and their small raw-handle wrappers, mirroring the `#[cfg(unix)]`
+// bodies above with `RawFd`→`RawSocket`. The heavy lifting — frame
+// encode/decode (`ws_write_unmasked_frame` / `ws_write_masked_frame` /
+// `ws_recv_data_frame_inner`) and the RFC 6455 upgrade handshake
+// (`ws_drive_upgrade_handshake`) — is already generic over the stream type, so
+// it is shared, not duplicated.
+//
+// **TLS-over-WebSocket is deliberately omitted here** (the `#[cfg(feature =
+// "tls")]` `lookup_session` dispatch the unix bodies carry): `ws_accept_tls`,
+// the handshake worker pool, and `tls.rs`'s `tls_*` FFIs are a separate Windows
+// slice — they need the TLS `SESSIONS` key widened past i32 (a `SOCKET` is u64)
+// and rustls handshake behavior validated on a real Windows box. The Windows WS
+// path is plain-TCP only until that lands (spike implementation plan).
+
+/// Windows mirror of the masked-send shared body (plain TCP).
+///
+/// # Safety
+/// `msg_ptr` must point to `msg_len` valid bytes when `msg_len > 0`; `fd` must
+/// be a live socket handle.
+#[cfg(windows)]
+unsafe fn ws_send_masked_data_frame(fd: i64, msg_ptr: *const u8, msg_len: i64, opcode: u8) -> i64 {
+    use std::os::windows::io::{FromRawSocket, IntoRawSocket, RawSocket};
+    if fd < 0 || msg_len < 0 {
+        return -1;
+    }
+    let sock = fd as RawSocket;
+    if msg_ptr.is_null() && msg_len > 0 {
+        return -1;
+    }
+    let mut stream = std::net::TcpStream::from_raw_socket(sock);
+    let payload: &[u8] = if msg_len > 0 {
+        std::slice::from_raw_parts(msg_ptr, msg_len as usize)
+    } else {
+        &[]
+    };
+    let result = if ws_write_masked_frame(&mut stream, opcode, payload) {
+        msg_len
+    } else {
+        -1
+    };
+    let _ = stream.into_raw_socket();
+    result
+}
+
+/// Windows mirror of the unmasked-send shared body (plain TCP; no TLS dispatch).
+///
+/// # Safety
+/// Same contract as [`ws_send_masked_data_frame`].
+#[cfg(windows)]
+unsafe fn ws_send_data_frame(fd: i64, msg_ptr: *const u8, msg_len: i64, opcode: u8) -> i64 {
+    use std::os::windows::io::{FromRawSocket, IntoRawSocket, RawSocket};
+    if fd < 0 || msg_len < 0 {
+        return -1;
+    }
+    let sock = fd as RawSocket;
+    if msg_ptr.is_null() && msg_len > 0 {
+        return -1;
+    }
+    let payload: &[u8] = if msg_len > 0 {
+        std::slice::from_raw_parts(msg_ptr, msg_len as usize)
+    } else {
+        &[]
+    };
+    let mut stream = std::net::TcpStream::from_raw_socket(sock);
+    let result = if ws_write_unmasked_frame(&mut stream, opcode, payload) {
+        msg_len
+    } else {
+        -1
+    };
+    let _ = stream.into_raw_socket();
+    result
+}
+
+/// Windows mirror of the recv shared body (plain TCP; no TLS dispatch).
+///
+/// # Safety
+/// `out_ptr` must point to `out_max_len` writable bytes when `out_max_len > 0`;
+/// `fd` must be a live socket handle.
+#[cfg(windows)]
+unsafe fn ws_recv_data_frame(
+    fd: i64,
+    out_ptr: *mut u8,
+    out_max_len: i64,
+    accept_opcode: u8,
+) -> i64 {
+    use std::os::windows::io::{FromRawSocket, IntoRawSocket, RawSocket};
+    if fd < 0 || out_max_len < 0 {
+        return -1;
+    }
+    let sock = fd as RawSocket;
+    if out_ptr.is_null() && out_max_len > 0 {
+        return -1;
+    }
+    let mut stream = std::net::TcpStream::from_raw_socket(sock);
+    let result = ws_recv_data_frame_inner(&mut stream, out_ptr, out_max_len, accept_opcode);
+    let _ = stream.into_raw_socket();
+    result
+}
+
+/// Windows mirror of [`karac_runtime_ws_send_text`].
+/// # Safety: see the unix sibling.
+#[cfg(windows)]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_ws_send_text(
+    fd: i64,
+    msg_ptr: *const u8,
+    msg_len: i64,
+) -> i64 {
+    ws_send_data_frame(fd, msg_ptr, msg_len, 0x1)
+}
+
+/// Windows mirror of [`karac_runtime_ws_send_binary`].
+/// # Safety: see the unix sibling.
+#[cfg(windows)]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_ws_send_binary(
+    fd: i64,
+    msg_ptr: *const u8,
+    msg_len: i64,
+) -> i64 {
+    ws_send_data_frame(fd, msg_ptr, msg_len, 0x2)
+}
+
+/// Windows mirror of [`karac_runtime_ws_send_text_masked`].
+/// # Safety: see the unix sibling.
+#[cfg(windows)]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_ws_send_text_masked(
+    fd: i64,
+    msg_ptr: *const u8,
+    msg_len: i64,
+) -> i64 {
+    ws_send_masked_data_frame(fd, msg_ptr, msg_len, 0x1)
+}
+
+/// Windows mirror of [`karac_runtime_ws_send_binary_masked`].
+/// # Safety: see the unix sibling.
+#[cfg(windows)]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_ws_send_binary_masked(
+    fd: i64,
+    msg_ptr: *const u8,
+    msg_len: i64,
+) -> i64 {
+    ws_send_masked_data_frame(fd, msg_ptr, msg_len, 0x2)
+}
+
+/// Windows mirror of [`karac_runtime_ws_recv_text`].
+/// # Safety: see the unix sibling.
+#[cfg(windows)]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_ws_recv_text(
+    fd: i64,
+    out_ptr: *mut u8,
+    out_max_len: i64,
+) -> i64 {
+    ws_recv_data_frame(fd, out_ptr, out_max_len, 0x1)
+}
+
+/// Windows mirror of [`karac_runtime_ws_recv_binary`].
+/// # Safety: see the unix sibling.
+#[cfg(windows)]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_ws_recv_binary(
+    fd: i64,
+    out_ptr: *mut u8,
+    out_max_len: i64,
+) -> i64 {
+    ws_recv_data_frame(fd, out_ptr, out_max_len, 0x2)
+}
+
+/// Windows mirror of [`karac_runtime_ws_accept`] (plain-TCP WebSocket).
+///
+/// # Safety
+/// `listener_fd` must be a valid listener socket handle; the caller parks on
+/// listener-readability before invoking.
+#[cfg(windows)]
+#[no_mangle]
+pub extern "C" fn karac_runtime_ws_accept(listener_fd: i64) -> i64 {
+    use std::os::windows::io::{FromRawSocket, IntoRawSocket, RawSocket};
+    if listener_fd < 0 {
+        return -1;
+    }
+    let listener_sock = listener_fd as RawSocket;
+    // SAFETY: `listener_fd` comes from a successful bind; borrow it, accept,
+    // then release the listener handle without closing.
+    let listener = unsafe { std::net::TcpListener::from_raw_socket(listener_sock) };
+    let accept_result = listener.accept();
+    let _ = listener.into_raw_socket();
+
+    let mut conn = match accept_result {
+        Ok((c, _addr)) => c,
+        Err(_) => return -1,
+    };
+    // Disable Nagle for the multi-RTT small-record upgrade exchange.
+    let _ = conn.set_nodelay(true);
+    // Bound the opening handshake (slowloris guard) — same two-layer scheme as
+    // the unix path. The accepted conn is blocking here, so the handshake's
+    // synchronous reads work; it is flipped non-blocking just before return.
+    let handshake_timeout = ws_handshake_timeout();
+    if handshake_timeout.is_some() {
+        let _ = conn.set_read_timeout(handshake_timeout);
+    }
+    let deadline = handshake_timeout.map(|t| std::time::Instant::now() + t);
+    if ws_drive_upgrade_handshake(&mut conn, deadline).is_err() {
+        return -1;
+    }
+    if handshake_timeout.is_some() {
+        let _ = conn.set_read_timeout(None);
+    }
+    // mio's AFD readiness registration for the post-handshake framed I/O
+    // requires a non-blocking socket (the synchronous handshake above is done).
+    let _ = conn.set_nonblocking(true);
+    conn.into_raw_socket() as i64
 }
 
 // ── Phase 6 line 236 slice 3 — WebSocket-over-TLS support ────────────────
@@ -4009,7 +4544,7 @@ pub unsafe extern "C" fn karac_runtime_ws_accept_tls(
 /// two transports run identical RFC 6455 §4.2.1 validation and
 /// rejection-status behaviour. Generic over `Read + Write` with no
 /// TLS types, so it compiles without the `tls` feature.
-#[cfg(unix)]
+// Cross-platform (generic over the stream): shared by unix + Windows WS bodies.
 fn ws_drive_upgrade_handshake<S: std::io::Read + std::io::Write>(
     stream: &mut S,
     deadline: Option<std::time::Instant>,
