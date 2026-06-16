@@ -813,3 +813,248 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 }
+
+// ===================================================================
+// Binary-search midpoint assumes
+// ===================================================================
+//
+// The monotone-assume tier above folds bounds checks on conditionally-
+// updated cursors. It does NOT reach the canonical binary search
+//
+//     while lo < hi { let mid = lo + (hi - lo) / 2; ... nums[mid] ... }
+//
+// because the surviving check is on the DERIVED `mid`, and folding
+// `mid < len` needs the RELATIONAL invariant `mid < hi` (correlating
+// `lo` and `hi` inside `mid`'s definition). LLVM's CVP/LVI is interval-
+// based — it bounds `mid` componentwise as `[lo_min+div_min,
+// lo_max+div_max]` and cannot derive `mid < hi`; the
+// `mid = extractvalue(sadd.with.overflow …)` value is additionally
+// opaque to its range pass (see `docs/investigations/
+// bce_monotonic_assume.md`). Validated in `opt`: supplying the two
+// relational facts `mid >= lo` and `mid < hi` as `llvm.assume`s folds
+// the check (zero residue), and neither absolute monotone bound on
+// `lo`/`hi` is needed once both relational facts are present.
+//
+// SOUNDNESS. Both facts are LOCALLY sound from the midpoint form plus
+// the dominating strict guard `lo < hi` (so `d = hi - lo >= 1`), with
+// no whole-loop monotonicity analysis:
+//   * `(hi - lo) / 2` is signed floor division of `d >= 1`, landing in
+//     `[0, d - 1]`. Hence `lo <= mid = lo + (hi-lo)/2 <= lo + d - 1 =
+//     hi - 1 < hi`. The `(lo + hi) / 2` form lands in `[lo, hi)` for
+//     `lo < hi` by the same floor-division bound.
+//   * AOT integer-overflow trapping (design.md § Arithmetic Overflow)
+//     makes any wrapping `hi - lo` / `lo + …` panic before the wrapped
+//     value exists, so the facts hold on every DEFINED execution — the
+//     same soundness gate the monotone tier rests on.
+// The assumes are emitted at the binding site, where `lo`/`hi` still
+// hold the values `mid` was derived from, so later mutation of `lo` /
+// `hi` in the loop body cannot retroactively falsify them.
+
+/// A bare `ExprKind::Identifier`'s name, else `None`. Deliberately
+/// narrower than `place_root_ident` — only a simple variable can name a
+/// guard/midpoint operand.
+fn simple_ident(e: &Expr) -> Option<&str> {
+    match &e.kind {
+        ExprKind::Identifier(n) => Some(n.as_str()),
+        _ => None,
+    }
+}
+
+/// `e` as `(a, b)` when it is `a + b` — surface `Binary(Add)` or the
+/// trait-lowered `Call { Path([ty, "add"]), [a, b] }`.
+fn as_add(e: &Expr) -> Option<(&Expr, &Expr)> {
+    as_binop(e, BinOp::Add, "add")
+}
+
+/// `e` as `(a, b)` when it is `a - b` (surface or trait-lowered).
+fn as_sub(e: &Expr) -> Option<(&Expr, &Expr)> {
+    as_binop(e, BinOp::Sub, "sub")
+}
+
+fn as_binop<'e>(e: &'e Expr, op: BinOp, method: &str) -> Option<(&'e Expr, &'e Expr)> {
+    match &e.kind {
+        ExprKind::Binary { op: o, left, right } if *o == op => Some((left, right)),
+        ExprKind::Call { callee, args } => {
+            let ExprKind::Path { segments, .. } = &callee.kind else {
+                return None;
+            };
+            if segments.len() == 2 && segments[1] == method && args.len() == 2 {
+                Some((&args[0].value, &args[1].value))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// The dividend `x` when `e` is `x / 2` (surface `Binary(Div)` by the
+/// integer literal 2, or the trait-lowered `Call { Path([ty, "div"]),
+/// [x, 2] }`).
+fn as_div_by_2(e: &Expr) -> Option<&Expr> {
+    let is_two = |x: &Expr| matches!(&x.kind, ExprKind::Integer(2, _));
+    match &e.kind {
+        ExprKind::Binary {
+            op: BinOp::Div,
+            left,
+            right,
+        } if is_two(right) => Some(left),
+        ExprKind::Call { callee, args } => {
+            let ExprKind::Path { segments, .. } = &callee.kind else {
+                return None;
+            };
+            if segments.len() == 2
+                && segments[1] == "div"
+                && args.len() == 2
+                && is_two(&args[1].value)
+            {
+                Some(&args[0].value)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// True iff `value` computes the midpoint of `lo`/`hi`: `lo + (hi-lo)/2`,
+/// `(hi-lo)/2 + lo`, or `(lo+hi)/2` (commutative in the sum). Both yield
+/// `mid in [lo, hi)` under `lo < hi` (see the section SOUNDNESS note).
+fn expr_is_midpoint(value: &Expr, lo: &str, hi: &str) -> bool {
+    // `(lo + hi) / 2` (or `(hi + lo) / 2`).
+    if let Some(dividend) = as_div_by_2(value) {
+        if let Some((a, b)) = as_add(dividend) {
+            let a = simple_ident(a);
+            let b = simple_ident(b);
+            if (a == Some(lo) && b == Some(hi)) || (a == Some(hi) && b == Some(lo)) {
+                return true;
+            }
+        }
+    }
+    // `lo + (hi - lo) / 2` (or the sum commuted).
+    if let Some((a, b)) = as_add(value) {
+        for (x, y) in [(a, b), (b, a)] {
+            if simple_ident(x) == Some(lo) {
+                if let Some(dividend) = as_div_by_2(y) {
+                    if let Some((s1, s2)) = as_sub(dividend) {
+                        if simple_ident(s1) == Some(hi) && simple_ident(s2) == Some(lo) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+impl<'ctx> super::Codegen<'ctx> {
+    /// `(lo, hi)` when `cond` is a strict `lo < hi` between two distinct
+    /// bare identifiers — surface `Binary(Lt)` or trait-lowered
+    /// `Call { Path([ty, "lt"]), [lo, hi] }`. The strict form is required:
+    /// the midpoint upper fact `mid < hi` only holds for `lo < hi`
+    /// (a `lo <= hi` guard admits `lo == hi`, where `mid == hi`).
+    pub(super) fn binsearch_guard_pair(cond: &Expr) -> Option<(String, String)> {
+        let (l, r) = match &cond.kind {
+            ExprKind::Binary {
+                op: BinOp::Lt,
+                left,
+                right,
+            } => (simple_ident(left)?, simple_ident(right)?),
+            ExprKind::Call { callee, args } => {
+                let ExprKind::Path { segments, .. } = &callee.kind else {
+                    return None;
+                };
+                if segments.len() != 2 || segments[1] != "lt" || args.len() != 2 {
+                    return None;
+                }
+                (simple_ident(&args[0].value)?, simple_ident(&args[1].value)?)
+            }
+            _ => None?,
+        };
+        if l != r {
+            Some((l.to_string(), r.to_string()))
+        } else {
+            None
+        }
+    }
+
+    /// Emit `assume(mid >= lo)` + `assume(mid < hi)` when a `let mid = …`
+    /// binding under a dominating strict `lo < hi` guard computes the
+    /// midpoint of `lo`/`hi`. Folds the otherwise-surviving `nums[mid]`
+    /// bounds check (see the section comment). No-op outside a binary-
+    /// search guard, for non-midpoint RHS, or when the binding shadows a
+    /// guard variable.
+    pub(super) fn try_emit_binsearch_midpoint_assumes(&mut self, pattern: &Pattern, value: &Expr) {
+        let Some((lo, hi)) = self.binsearch_guard_stack.last().cloned() else {
+            return;
+        };
+        let PatternKind::Binding(mid) = &pattern.kind else {
+            return;
+        };
+        // A binding that shadows a guard var repurposes that slot — the
+        // loaded `lo`/`hi` below would no longer be the midpoint operands.
+        if mid == &lo || mid == &hi {
+            return;
+        }
+        if !expr_is_midpoint(value, &lo, &hi) {
+            return;
+        }
+        let (Some(mid_slot), Some(lo_slot), Some(hi_slot)) = (
+            self.variables.get(mid).copied(),
+            self.variables.get(&lo).copied(),
+            self.variables.get(&hi).copied(),
+        ) else {
+            return;
+        };
+        // All three must be same-width integer slots (the comparisons are
+        // i64-on-i64; a width mismatch or non-int slot means this isn't the
+        // primitive-index binary search we recognise — bail, keep the check).
+        if !mid_slot.ty.is_int_type() || !lo_slot.ty.is_int_type() || !hi_slot.ty.is_int_type() {
+            return;
+        }
+        let mid_w = mid_slot.ty.into_int_type().get_bit_width();
+        if mid_w != lo_slot.ty.into_int_type().get_bit_width()
+            || mid_w != hi_slot.ty.into_int_type().get_bit_width()
+        {
+            return;
+        }
+
+        let assume =
+            inkwell::intrinsics::Intrinsic::find("llvm.assume").expect("llvm.assume must exist");
+        let assume_fn = assume
+            .get_declaration(&self.module, &[])
+            .expect("llvm.assume declaration");
+        let mid_v = self
+            .builder
+            .build_load(mid_slot.ty, mid_slot.ptr, "bs.mid")
+            .unwrap()
+            .into_int_value();
+        let lo_v = self
+            .builder
+            .build_load(lo_slot.ty, lo_slot.ptr, "bs.lo")
+            .unwrap()
+            .into_int_value();
+        let hi_v = self
+            .builder
+            .build_load(hi_slot.ty, hi_slot.ptr, "bs.hi")
+            .unwrap()
+            .into_int_value();
+        let ge = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SGE, mid_v, lo_v, "bs.mid.ge.lo")
+            .unwrap();
+        self.builder
+            .build_call(assume_fn, &[ge.into()], "")
+            .unwrap();
+        let lt = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, mid_v, hi_v, "bs.mid.lt.hi")
+            .unwrap();
+        self.builder
+            .build_call(assume_fn, &[lt.into()], "")
+            .unwrap();
+        // Flag the gated second optimization pass (see the field doc).
+        self.binsearch_assume_emitted = true;
+    }
+}

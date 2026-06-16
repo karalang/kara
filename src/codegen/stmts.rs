@@ -3064,6 +3064,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // cells whose binding doesn't qualify for snapshotting
                 // — non-primitive type, destructuring pattern, etc.).
                 self.try_emit_snapshot_capture(pattern);
+                // Binary-search midpoint BCE: under a dominating strict
+                // `while lo < hi`, a `let mid = lo + (hi - lo) / 2` binding
+                // emits `assume(lo <= mid < hi)` so LLVM folds the
+                // `nums[mid]` bounds check (control_flow_bce.rs § midpoint).
+                self.try_emit_binsearch_midpoint_assumes(pattern, value);
                 Ok(())
                 // (`Set.new()` and `Map.new()` register their own
                 // `FreeMapHandle` cleanup inside `compile_set_new_stmt` /

@@ -1110,6 +1110,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // LLVM's range passes to fold checks the source guard can't
         // express (conditionally-updated write heads / cursors).
         self.emit_monotone_assumes(&mono_inits);
+        // Binary-search midpoint facts: a strict `lo < hi` guard lets a
+        // `let mid = lo + (hi - lo) / 2` binding in the body assert
+        // `lo <= mid < hi`, folding the `nums[mid]` bounds check that
+        // interval-based CVP can't (control_flow_bce.rs § midpoint).
+        let binsearch_guard = Self::binsearch_guard_pair(condition);
+        if let Some(pair) = binsearch_guard.clone() {
+            self.binsearch_guard_stack.push(pair);
+        }
         // Per-iteration scope frame, same shape as compile_for_range — see
         // its comment for the leak rationale.
         self.scope_cleanup_actions.push(Vec::new());
@@ -1119,6 +1127,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // own and outer-loop bounds, never inner-loop leftovers.
         for _ in 0..pushed_count {
             self.asserted_index_bounds.pop();
+        }
+        if binsearch_guard.is_some() {
+            self.binsearch_guard_stack.pop();
         }
         let body_has_terminator = self
             .builder

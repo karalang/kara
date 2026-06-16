@@ -10689,6 +10689,131 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_binsearch_midpoint_emits_assumes() {
+        // Binary-search midpoint BCE (control_flow_bce.rs § midpoint): a
+        // `let mid = lo + (hi - lo) / 2` under a strict `while lo < hi`
+        // guard emits `assume(mid >= lo)` + `assume(mid < hi)` so LLVM
+        // folds the `nums[mid]` bounds check. Pin both `llvm.assume`s and
+        // the named comparisons appear.
+        let ir = ir_for(
+            r#"
+fn lower_bound(nums: ref Vec[i64], len: i64, target: i64) -> i64 {
+    let mut lo = 0i64;
+    let mut hi = len;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2i64;
+        if nums[mid] < target { lo = mid + 1i64; } else { hi = mid; }
+    }
+    lo
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1i64); v.push(3i64); v.push(5i64);
+    println(f"{lower_bound(v, 3i64, 3i64)}");
+}
+"#,
+        );
+        assert!(
+            ir.contains("bs.mid.ge.lo"),
+            "expected midpoint lower-bound assume (mid >= lo); IR had none"
+        );
+        assert!(
+            ir.contains("bs.mid.lt.hi"),
+            "expected midpoint upper-bound assume (mid < hi); IR had none"
+        );
+        assert!(
+            ir.contains("@llvm.assume"),
+            "expected an llvm.assume call for the midpoint facts"
+        );
+    }
+
+    #[test]
+    fn test_ir_non_midpoint_binding_no_binsearch_assume() {
+        // Negative gate: a non-midpoint `let` under a `while lo < hi` guard
+        // (`mid = lo + 1`, not the midpoint form) must NOT emit the
+        // binary-search assumes — the recognition is shape-exact.
+        let ir = ir_for(
+            r#"
+fn scan(nums: ref Vec[i64], len: i64) -> i64 {
+    let mut lo = 0i64;
+    let mut hi = len;
+    let mut acc = 0i64;
+    while lo < hi {
+        let mid = lo + 1i64;
+        acc = acc + nums[lo];
+        lo = mid;
+    }
+    acc
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(7i64); v.push(9i64);
+    println(f"{scan(v, 2i64)}");
+}
+"#,
+        );
+        assert!(
+            !ir.contains("bs.mid.ge.lo") && !ir.contains("bs.mid.lt.hi"),
+            "non-midpoint binding must not emit binary-search midpoint assumes"
+        );
+    }
+
+    #[test]
+    fn test_e2e_binsearch_midpoint_assume_is_sound() {
+        // Soundness E2E: the midpoint assumes must not corrupt results. A
+        // lower/upper-bound search over a sorted Vec with duplicate runs is
+        // exercised across hit / miss / boundary targets; output must match
+        // the hand-computed [first, last] pairs exactly.
+        let out = run_program(
+            r#"
+fn lower_bound(nums: ref Vec[i64], len: i64, target: i64) -> i64 {
+    let mut lo = 0i64;
+    let mut hi = len;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2i64;
+        if nums[mid] < target { lo = mid + 1i64; } else { hi = mid; }
+    }
+    lo
+}
+fn upper_bound(nums: ref Vec[i64], len: i64, target: i64) -> i64 {
+    let mut lo = 0i64;
+    let mut hi = len;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2i64;
+        if nums[mid] <= target { lo = mid + 1i64; } else { hi = mid; }
+    }
+    lo
+}
+fn report(nums: ref Vec[i64], len: i64, target: i64) {
+    let lo = lower_bound(nums, len, target);
+    if lo == len or nums[lo] != target {
+        println(f"{target}: -1 -1");
+    } else {
+        println(f"{target}: {lo} {upper_bound(nums, len, target) - 1i64}");
+    }
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    // [5, 7, 7, 8, 8, 10]
+    v.push(5i64); v.push(7i64); v.push(7i64); v.push(8i64); v.push(8i64); v.push(10i64);
+    report(v, 6i64, 8i64);   // 3 4
+    report(v, 6i64, 7i64);   // 1 2
+    report(v, 6i64, 5i64);   // 0 0
+    report(v, 6i64, 10i64);  // 5 5
+    report(v, 6i64, 6i64);   // -1 -1
+    report(v, 6i64, 11i64);  // -1 -1
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "8: 3 4\n7: 1 2\n5: 0 0\n10: 5 5\n6: -1 -1\n11: -1 -1"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_array_literal_range_slice_arg() {
         let out = run_program(
             r#"

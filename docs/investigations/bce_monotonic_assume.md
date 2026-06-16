@@ -47,3 +47,64 @@ opt -passes='default<O2>' merge_base.ll -S -o out.ll && grep -c 'icmp ugt' out.l
 ```
 
 The `.ll` sources are small enough to reconstruct from the table above (three-phi loop, two checks, cold panic callee); the experiment is deterministic on LLVM 18.
+
+## Midpoint idiom — the binary-search extension (landed 2026-06-16)
+
+**Surfaced by kata #34** (find-first-and-last-position). The monotone tier above
+does *not* reach the canonical binary search
+
+```kara
+while lo < hi { let mid = lo + (hi - lo) / 2; … nums[mid] … }
+```
+
+because the surviving check is on the **derived** `mid`, and folding `mid < len`
+needs the **relational** invariant `mid < hi` (correlating `lo` and `hi` inside
+`mid`'s definition). LLVM's CVP/LVI is interval-based — it bounds `mid`
+componentwise as `[lo_min + div_min, lo_max + div_max]`, which cannot prove
+`mid < hi`; the `mid = extractvalue(sadd.with.overflow …)` value is additionally
+opaque to its range pass. Diagnosis on the real kata IR (`otool`/`opt`, LLVM 18):
+the `nums[mid]` bounds check (`icmp ult mid, 4096`) survives `default<O2>`, and
+kata #34 lands the widest equal-safety gap of the binary-search katas — **298 ms
+vs equal-safety Rust 189 ms (1.58×)**, with the overflow tax *zero* here
+(`rustc -O` == `-C overflow-checks=on`), so it is a pure codegen gap. `get_unchecked`
+(no check) reaches 205 ms, pinning the bounds check as ~85 % of the gap.
+
+**Experiments (LLVM 18.1.8 `opt`, real post-inline kata IR).** Injecting facts as
+`llvm.assume` before the check:
+
+- `assume(lo >= 0) ∧ assume(hi <= len)` (the monotone facts) — **does not fold**
+  (the check is on `mid`, disconnected from `lo`/`hi` through the extractvalue).
+- `assume(mid >= lo) ∧ assume(mid < hi)` — **folds** (`panic_site → 0`). The two
+  *relational* facts alone suffice; no absolute monotone bound is needed.
+
+**Mechanism (landed).** When codegen lowers a strict `while lo < hi` (two bare
+identifiers) and a body `let mid = lo + (hi - lo) / 2` (or `(lo + hi) / 2`, and
+the trait-lowered `i64.add/sub/div` forms) binds the midpoint, it emits
+`assume(mid >= lo)` + `assume(mid < hi)` at the binding site —
+`src/codegen/control_flow_bce.rs § midpoint` (`binsearch_guard_pair`,
+`expr_is_midpoint`, `try_emit_binsearch_midpoint_assumes`), wired through a
+`binsearch_guard_stack` pushed/popped in `compile_while`.
+
+**Soundness** is *local* — no whole-loop monotonicity analysis. Under the
+dominating `lo < hi` (so `d = hi - lo >= 1`), signed floor `(hi-lo)/2 ∈ [0, d-1]`,
+hence `lo <= mid <= hi - 1 < hi`. AOT overflow trapping makes any wrapping
+`hi - lo` / `lo + …` panic before the wrapped value exists, so the facts hold on
+every defined execution (same gate as the monotone tier). Emitted at the binding
+site, where `lo`/`hi` still hold the values `mid` was derived from, so later
+mutation cannot retroactively falsify them. The strict guard is load-bearing: a
+`lo <= hi` guard admits `lo == hi → mid == hi`, so the closed-interval style is
+deliberately out of scope.
+
+**Phase-ordering caveat.** A single `default<Ox>` does *not* fold even with the
+assumes co-resident post-inline (callee-optimize-then-inline ordering); a second
+pipeline run does (`3 → 0`, verified). Codegen therefore runs one extra
+`default<O1>` pass **gated on emission** (`binsearch_assume_emitted`) — the baked
+prelude has no midpoint binary search, so non-binary-search programs never pay it
+(verified: the flag never sets for a `spawn`-only module).
+
+**Result.** Kata #34 ★ two-bounds search: **298 ms → ~215 ms** (the residual gap
+to Rust is one guard-proven `nums[lo]` check in `main`, a separate len-decoupling
+issue, plus measurement noise). Regression-guarded by
+`tests/codegen.rs::{test_ir_binsearch_midpoint_emits_assumes,
+test_ir_non_midpoint_binding_no_binsearch_assume,
+test_e2e_binsearch_midpoint_assume_is_sound}`. Bug ledger: `B-2026-06-16-1`.

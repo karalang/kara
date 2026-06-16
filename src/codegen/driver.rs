@@ -1193,6 +1193,7 @@ pub(super) fn backend_optimization_level() -> OptimizationLevel {
 pub(super) fn apply_optimization_passes(
     module: &Module<'_>,
     target_machine: &TargetMachine,
+    binsearch_reopt: bool,
 ) -> Result<(), String> {
     // Coroutine lowering is a CORRECTNESS pass, not an optimization: a
     // function marked `presplitcoroutine` (the A2 network-async transform —
@@ -1240,7 +1241,22 @@ pub(super) fn apply_optimization_passes(
                 pipeline,
                 e.to_string()
             )
-        })
+        })?;
+
+    // Binary-search midpoint BCE (control_flow_bce.rs § midpoint): the
+    // `assume(lo <= mid < hi)` facts only fold the `nums[mid]` bounds
+    // check once they are co-resident with it post-inline, which the
+    // single pipeline above doesn't reach (callee-optimize-then-inline
+    // phase ordering). A second pipeline run completes the fold. Gated on
+    // emission, so non-binary-search modules never pay it; `default<O1>`
+    // suffices (verified) and is cheaper than re-running the full level.
+    if binsearch_reopt {
+        let opts2 = inkwell::passes::PassBuilderOptions::create();
+        module
+            .run_passes("default<O1>", target_machine, opts2)
+            .map_err(|e| format!("LLVM binary-search re-optimization pass failed: {e}."))?;
+    }
+    Ok(())
 }
 
 /// Read the `KARAC_RUNTIME_DEBUG_METADATA` env var to decide whether

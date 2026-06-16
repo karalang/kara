@@ -584,7 +584,7 @@ pub fn compile_to_object_with_coro(
     cg.compile_program(program)?;
 
     let target_machine = create_target_machine()?;
-    apply_optimization_passes(&cg.module, &target_machine)?;
+    apply_optimization_passes(&cg.module, &target_machine, cg.binsearch_assume_emitted)?;
     target_machine
         .write_to_file(&cg.module, FileType::Object, Path::new(output_path))
         .map_err(|e| format!("Failed to write object file: {}", e))
@@ -703,7 +703,7 @@ pub fn compile_to_object_with_hot_swap(
     cg.compile_program(program)?;
 
     let target_machine = create_target_machine()?;
-    apply_optimization_passes(&cg.module, &target_machine)?;
+    apply_optimization_passes(&cg.module, &target_machine, cg.binsearch_assume_emitted)?;
     target_machine
         .write_to_file(&cg.module, FileType::Object, Path::new(output_path))
         .map_err(|e| format!("Failed to write object file: {}", e))
@@ -756,7 +756,7 @@ pub fn compile_to_object_wasm_threaded(
     cg.set_wasm_threaded_pass(true);
     cg.compile_program(program)?;
 
-    apply_optimization_passes(&cg.module, &target_machine)?;
+    apply_optimization_passes(&cg.module, &target_machine, cg.binsearch_assume_emitted)?;
     target_machine
         .write_to_file(&cg.module, FileType::Object, Path::new(output_path))
         .map_err(|e| format!("Failed to write object file: {}", e))
@@ -1450,6 +1450,30 @@ pub(super) struct Codegen<'ctx> {
     /// The stack discipline (push on body-entry, pop on body-exit) maps
     /// directly onto the source-level lexical scope of the guard.
     pub(crate) asserted_index_bounds: Vec<AssertedIndexBound>,
+    /// Stack of `(lo, hi)` variable-name pairs from dominating strict
+    /// `while lo < hi` guards (innermost last). When a `let mid = lo +
+    /// (hi - lo) / 2` (or `(lo + hi) / 2`) binding is compiled under such
+    /// a guard, codegen emits `assume(mid >= lo)` + `assume(mid < hi)` —
+    /// the relational midpoint facts that let LLVM fold the `nums[mid]`
+    /// bounds check (which interval-based CVP/LVI cannot, because the
+    /// `mid = extractvalue(sadd.with.overflow …)` value is opaque to its
+    /// range analysis). Both facts are LOCALLY sound from the midpoint
+    /// form + the dominating `lo < hi` (so `hi - lo >= 1`): `(hi-lo)/2`
+    /// lands in `[0, hi-lo-1]`, hence `lo <= mid <= hi-1 < hi`. Emitted at
+    /// the binding site, where `lo`/`hi` still hold the values `mid` was
+    /// derived from, so later mutation of `lo`/`hi` cannot invalidate them.
+    /// See `docs/investigations/bce_monotonic_assume.md` § midpoint idiom.
+    pub(crate) binsearch_guard_stack: Vec<(String, String)>,
+    /// Set when `try_emit_binsearch_midpoint_assumes` emits at least one
+    /// midpoint `llvm.assume`. CVP only consumes these once the bounds
+    /// check and the assume are co-resident post-inline, which the first
+    /// `default<Ox>` run doesn't achieve in one shot (the callee is
+    /// optimized, then inlined; the fold needs CVP to re-run over the
+    /// inlined-and-simplified form). When set, the driver runs ONE extra
+    /// `default<O1>` pass to complete the fold — gated, so modules with no
+    /// binary search pay nothing. Validated in `opt`: a second pipeline
+    /// run folds the otherwise-surviving `mid < len` check (3 → 0).
+    pub(crate) binsearch_assume_emitted: bool,
     /// Per-variable Vec element type tracking (variable name → element LLVM type).
     pub(crate) vec_elem_types: HashMap<String, BasicTypeEnum<'ctx>>,
     /// Element type for the let-binding currently being compiled, threaded
@@ -4713,6 +4737,8 @@ impl<'ctx> Codegen<'ctx> {
             sched_yield_fn,
             len_alias: HashMap::new(),
             asserted_index_bounds: Vec::new(),
+            binsearch_guard_stack: Vec::new(),
+            binsearch_assume_emitted: false,
             vec_elem_types: HashMap::new(),
             pending_let_elem_type: None,
             slice_elem_types: HashMap::new(),
