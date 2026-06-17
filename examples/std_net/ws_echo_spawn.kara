@@ -1,0 +1,37 @@
+// WebSocket echo server, concurrent variant of ws_echo.kara.
+//
+// Identical protocol, but the accept loop fans each connection out through
+// `TaskGroup.spawn(|| echo(ws))` instead of servicing it inline. The plain
+// `ws_echo.kara` calls `echo(ws)` directly in the loop, so it handles one
+// connection at a time (added connections queue in the kernel backlog —
+// throughput is single-connection-service-bound and latency grows with
+// client concurrency). This variant lets many handlers run concurrently on
+// the par-runtime pool / IOCP reactors, so it actually exercises *connection-
+// level* concurrency on the Windows event loop — the thing the serial example
+// does not. Mirrors the spawn shape of examples/ws_idle_holder/src/main.kara.
+fn echo(ws: WebSocket) {
+    let mut buf: Array[u8, 1024] = [0u8; 1024];
+    loop {
+        match ws.recv_text(mut buf) {
+            Result.Ok(n) => {
+                if n == 0 { break; }
+                match ws.send_text(buf[0..n]) {
+                    Result.Ok(_) => {}
+                    Result.Err(_) => { break; }
+                }
+            }
+            Result.Err(_) => { break; }
+        }
+    }
+}
+
+fn main() {
+    let listener = TcpListener.bind("127.0.0.1:8080").unwrap();
+    let mut tg: TaskGroup = TaskGroup.new();
+    loop {
+        match WebSocket.accept(listener) {
+            Result.Ok(ws) => { tg.spawn(|| echo(ws)); }
+            Result.Err(_) => {}
+        }
+    }
+}

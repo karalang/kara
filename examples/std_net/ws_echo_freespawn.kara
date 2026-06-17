@@ -1,0 +1,31 @@
+// Echo server using free `spawn(|| ...)` (no TaskGroup) per connection.
+// Probes whether the per-connection memory growth seen with TaskGroup.spawn
+// (children retained until group-scope-exit, which never happens in an
+// unbounded accept loop) also affects the free-spawn form, which the stdlib
+// docs say "uses the enclosing function's implicit scope ID" — i.e. fn main's
+// scope, which in a server loop likewise never exits.
+fn echo(ws: WebSocket) {
+    let mut buf: Array[u8, 1024] = [0u8; 1024];
+    loop {
+        match ws.recv_text(mut buf) {
+            Result.Ok(n) => {
+                if n == 0 { break; }
+                match ws.send_text(buf[0..n]) {
+                    Result.Ok(_) => {}
+                    Result.Err(_) => { break; }
+                }
+            }
+            Result.Err(_) => { break; }
+        }
+    }
+}
+
+fn main() {
+    let listener = TcpListener.bind("127.0.0.1:8080").unwrap();
+    loop {
+        match WebSocket.accept(listener) {
+            Result.Ok(ws) => { spawn(|| echo(ws)); }
+            Result.Err(_) => {}
+        }
+    }
+}
