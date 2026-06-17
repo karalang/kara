@@ -483,6 +483,21 @@ step 6 is now a *load/leak* confirmation, not a first-light correctness probe.
    that caught Problem 4 (and bug 3, the non-blocking-accept). Flips the M3
    Windows parity clause + line 13 + line 19.
 
+   > **Scale re-validation — 250k, 2026-06-17.** Re-ran the same AOT `ws_echo`
+   > server at **250,000/250,000 @ concurrency 16, 1,455/s, 171.8s** on a Windows
+   > Server 2025 box (default multi-shard, 8 shards/8 cores). Server handle count
+   > **flat at 91→96 across the whole run** (zero handle/socket leak), 5 MiB RSS
+   > steady, 16 ESTABLISHED in-flight throughout, and a post-run liveness probe
+   > still PASSed (no wedge). 25× the original step-6 scale with no degradation —
+   > the per-socket persistent-source model (Problem 4 fix) holds at scale.
+   > Driver: `examples/std_net/ws_loop_client_abortive.py`, a sibling of the step-6
+   > client that uses an **abortive (RST) close** (`SO_LINGER 0`) so the client's
+   > ephemeral ports never park in TIME_WAIT — the only thing that makes a
+   > >16k-connection loopback run fit the default ~16,384-port pool without OS
+   > tuning. The server-side IOCP register→park→wake→deregister cycle is identical
+   > (the final `recv` returns ECONNRESET instead of a 0-length read; same
+   > deregister/close path).
+
 ## Open questions — resolved natively 2026-06-17
 
 - **Listener wrapped as `mio::net::TcpStream` vs `TcpListener`?** ✅ Resolved:
