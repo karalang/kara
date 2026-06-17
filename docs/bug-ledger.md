@@ -89,11 +89,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **100 surfaced · 0 open · 100 fixed** (2026-05-20 → 2026-06-16). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **101 surfaced · 1 open · 100 fixed** (2026-05-20 → 2026-06-17). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-06-17-1 | 2026-06-17 | codegen | low | Indexing a `ref Array[T,N]` parameter fails codegen with 'Index operator applied to non-array type'. A `ref`/`mut ref Array` param's slot LLVM type is `ptr` (the borrow), not `[N x T]`, and the param is in no name-keyed index registry, so compile_index (src/codegen/collections.rs) falls past the tensor/slice/map/soa/vec routes to the generic tail whose ArrayType/VectorType branches can't match a ptr -> error. The `ref Vec[T]` form is handled by an explicit vec_elem_types name-keyed route (collections.rs ~972) precisely because its ref slot is also ptr; `ref Array` has no analogous route. Local fixed arrays (slot.ty=ArrayType) and `Slice[T]` params both index fine, so the idiomatic borrowed-view form is Slice (the kata's bench uses it; not a workaround -- same form as #34/#35 nums). Repro: `fn g(xs: ref Array[i64,4]) -> i64 { xs[0] }` builds-fails, runs fine (run_program bypasses codegen). Suggested fix: mirror the ref-Vec route -- detect a ref/mut-ref Array param via its recorded TypeExpr, load the pointer from the slot and GEP through `[N x T]`, for BOTH index-read and index-store (assignment) paths. | kata:36-README |
 
 ### Fixed (100)
 
