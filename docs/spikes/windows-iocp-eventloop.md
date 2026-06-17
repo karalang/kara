@@ -440,8 +440,17 @@ step 6 is now a *load/leak* confirmation, not a first-light correctness probe.
    so an in-use rebind succeeds, not `EADDRINUSE`; `shard_of_fd` has a `RawSocket`
    twin). CI's Linux-only clippy never lints `#[cfg(windows)]` code — running it
    natively also fixed 6 pre-existing `missing_safety_doc` lints on the Windows WS
-   FFIs. **Note: not yet wired into `windows-latest` CI** (CI runs plain `cargo
-   test`, which now exercises these — but confirm the runner picks them up).
+   FFIs. **CI wiring DONE:** the `test` matrix's `windows-latest` leg runs
+   `cargo test --all` with default features (`tls` ⊇ `net`), and the un-gated
+   tests live in a plain `#[cfg(test)] mod tests` — so the runner already
+   exercises them (verified: the module is not OS-gated). The clippy gap is now
+   closed by a dedicated **`windows-lint`** job (`.github/workflows/ci.yml`):
+   `cargo clippy -p karac-runtime --all-targets --features tls,net,test-helpers
+   -- -D warnings` on `windows-latest`, guarding the `#[cfg(windows)]` runtime
+   surface against regressions the ubuntu `lint` job structurally can't see.
+   (The `#[cfg(windows)]` codegen linker driver stays uncovered pending LLVM 18
+   on the Windows runner — the same yak-shave that keeps all `--features llvm`
+   E2E off Windows CI.)
 5a. **AOT toolchain port (unscoped by the original plan)** — ✅ **DONE
    2026-06-17.** Step 6 needs real AOT binaries, which surfaced that the karac
    *build pipeline* was unix-only — not just the runtime. What landed:

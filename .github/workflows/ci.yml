@@ -64,6 +64,41 @@ jobs:
             exit 1
           fi
 
+  # Clippy for the `#[cfg(windows)]` runtime surface the native `lint` job
+  # (ubuntu-only) structurally cannot see. The Windows IOCP event-loop, TLS,
+  # and fatal-path bodies (`runtime/src/{event_loop,tls,fatal}.rs` — the
+  # Windows IOCP port, docs/spikes/windows-iocp-eventloop.md) are gated behind
+  # `#[cfg(windows)]`, so `cargo clippy` on a Linux runner never type-checks —
+  # let alone lints — them. They were authored and fixed natively on a Windows
+  # box, where 6 pre-existing `missing_safety_doc` lints on the WS FFIs only
+  # surfaced; this job keeps that surface green going forward (mirrors the
+  # per-target `wasm` clippy job's rationale). Scope: the runtime crate with
+  # its full native feature set (`tls,net` + `test-helpers` for the test-only
+  # FFI's Windows body) — the exact set validated clean on the box. The
+  # `#[cfg(windows)]` codegen linker driver (`src/codegen/driver.rs`) is
+  # `--features llvm`-gated and stays uncovered until the broader "LLVM in CI"
+  # decision puts LLVM 18 on the Windows runner (the documented yak-shave the
+  # spike defers — same reason the codegen E2E jobs are Linux-only).
+  windows-lint:
+    name: Windows clippy (cfg(windows) surface)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-lint
+
+      - name: Clippy (cfg(windows) runtime surface)
+        run: cargo clippy -p karac-runtime --all-targets --features tls,net,test-helpers -- -D warnings
+
   # Wasm runtime surface that the native `lint` / `test` jobs never see
   # (B-2026-06-12-2). `cargo clippy --all` runs on the host target only, so a
   # wasm-cfg'd lint — e.g. the `clashing_extern_declarations` malloc clash that
