@@ -24,7 +24,7 @@ LEDGER = Path(__file__).resolve().parent.parent / "docs" / "bug-ledger.jsonl"
 
 
 def load():
-    rows = [json.loads(l) for l in LEDGER.read_text().splitlines() if l.strip()]
+    rows = [json.loads(l) for l in LEDGER.read_text(encoding="utf-8").splitlines() if l.strip()]
     rows.sort(key=lambda r: r["date"])
     return rows
 
@@ -130,7 +130,7 @@ def svg(rows, path):
     s.append(f'<text x="{W-P-70}" y="{H-12}">{rows[-1]["date"]}</text>')
     s.append(f'<text x="{P}" y="20">cumulative bugs surfaced: {total}</text>')
     s.append("</svg>")
-    Path(path).write_text("\n".join(s))
+    Path(path).write_text("\n".join(s), encoding="utf-8", newline="\n")
 
 
 GEN_BEGIN = "<!-- BUG-LEDGER:GENERATED:BEGIN -->"
@@ -194,7 +194,7 @@ def ledger_view(rows) -> str:
 
 def inject(rows, md_path):
     p = Path(md_path)
-    text = p.read_text()
+    text = p.read_text(encoding="utf-8")
     block = ledger_view(rows)
     if GEN_BEGIN in text and GEN_END in text:
         pre = text[: text.index(GEN_BEGIN)]
@@ -205,10 +205,15 @@ def inject(rows, md_path):
         if not text.endswith("\n"):
             text += "\n"
         text += "\n" + block + "\n"
-    p.write_text(text)
+    p.write_text(text, encoding="utf-8", newline="\n")
 
 
 def main():
+    # The report (and the generated block) carry non-ASCII — box-drawing bars,
+    # arrows, "Kāra". Force UTF-8 for stdout so report mode doesn't die on a
+    # Windows cp1252 console (file writes pin encoding="utf-8" at each call site).
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     rows = load()
     if "--inject" in sys.argv:
         out = sys.argv[sys.argv.index("--inject") + 1]

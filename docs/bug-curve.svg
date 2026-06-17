@@ -1,20 +1,20 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="720" height="300" font-family="monospace" font-size="12">
 <rect width="720" height="300" fill="white"/>
-<polyline fill="none" stroke="#e8730a" stroke-width="2" points="40.0,257.8 154.3,255.6 451.4,244.8 474.3,242.6 497.1,238.2 520.0,223.0 542.9,203.4 565.7,172.9 588.6,129.3 611.4,59.6 634.3,44.4 657.1,42.2 680.0,40.0"/>
+<polyline fill="none" stroke="#e8730a" stroke-width="2" points="40.0,257.8 154.3,255.7 451.4,244.9 474.3,242.7 497.1,238.4 520.0,223.3 542.9,203.9 565.7,173.7 588.6,130.6 611.4,61.6 634.3,46.5 657.1,44.3 680.0,40.0"/>
 <circle cx="40.0" cy="257.8" r="2.5" fill="#e8730a"/>
-<circle cx="154.3" cy="255.6" r="2.5" fill="#e8730a"/>
-<circle cx="451.4" cy="244.8" r="2.5" fill="#e8730a"/>
-<circle cx="474.3" cy="242.6" r="2.5" fill="#e8730a"/>
-<circle cx="497.1" cy="238.2" r="2.5" fill="#e8730a"/>
-<circle cx="520.0" cy="223.0" r="2.5" fill="#e8730a"/>
-<circle cx="542.9" cy="203.4" r="2.5" fill="#e8730a"/>
-<circle cx="565.7" cy="172.9" r="2.5" fill="#e8730a"/>
-<circle cx="588.6" cy="129.3" r="2.5" fill="#e8730a"/>
-<circle cx="611.4" cy="59.6" r="2.5" fill="#e8730a"/>
-<circle cx="634.3" cy="44.4" r="2.5" fill="#e8730a"/>
-<circle cx="657.1" cy="42.2" r="2.5" fill="#e8730a"/>
+<circle cx="154.3" cy="255.7" r="2.5" fill="#e8730a"/>
+<circle cx="451.4" cy="244.9" r="2.5" fill="#e8730a"/>
+<circle cx="474.3" cy="242.7" r="2.5" fill="#e8730a"/>
+<circle cx="497.1" cy="238.4" r="2.5" fill="#e8730a"/>
+<circle cx="520.0" cy="223.3" r="2.5" fill="#e8730a"/>
+<circle cx="542.9" cy="203.9" r="2.5" fill="#e8730a"/>
+<circle cx="565.7" cy="173.7" r="2.5" fill="#e8730a"/>
+<circle cx="588.6" cy="130.6" r="2.5" fill="#e8730a"/>
+<circle cx="611.4" cy="61.6" r="2.5" fill="#e8730a"/>
+<circle cx="634.3" cy="46.5" r="2.5" fill="#e8730a"/>
+<circle cx="657.1" cy="44.3" r="2.5" fill="#e8730a"/>
 <circle cx="680.0" cy="40.0" r="2.5" fill="#e8730a"/>
 <text x="40" y="288">2026-05-20</text>
 <text x="610" y="288">2026-06-17</text>
-<text x="40" y="20">cumulative bugs surfaced: 101</text>
+<text x="40" y="20">cumulative bugs surfaced: 102</text>
 </svg>

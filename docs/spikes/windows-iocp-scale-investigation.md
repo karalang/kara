@@ -100,16 +100,30 @@ marks discarded spawn handles detached**.
 The serial inline server is the only currently leak-free shape — and it pays
 Findings 2–3, so "just use the serial server" is not the answer.
 
-## Finding 2 — ~15.6 ms per-connection latency floor at low concurrency (Windows-specific)
+## Finding 2 — ~15 ms per-connection latency floor on the main-thread blocking-I/O path (platform-agnostic)
 
-At **conc 1, every variant ≈ 90/s, p50 ≈ 15.3 ms, min 2.4 ms** — bimodal, the
-signature of the **Windows default 15.6 ms timer quantum** quantizing a timed
-wait in the wake path. It amortizes away under load (spawn conc≥4 → p50 0.5 ms,
-because one ~15.6 ms wake services many ready connections). Aggregate-throughput
-tests at conc 16 never measured conc-1 latency, so it went unseen; the macOS
-parity run wouldn't show it (hi-res timers). Likely fixable with
-`timeBeginPeriod(1)` at runtime startup, or by making the hot-path wait fully
-event-driven (untimed).
+> **Corrected after deeper analysis (the first pass mis-attributed this to the
+> Windows timer quantum — it isn't Windows-specific).**
+
+At **conc 1, every variant ≈ 90/s, p50 ≈ 15.3 ms** (min 2.4 ms). The floor is
+*not* in the IOCP wake path: the reactor's `dispatcher_thread_main` blocks in
+`run_once(None)` — an **infinite, event-driven** IOCP wait that returns the
+instant a socket is ready (`runtime/src/event_loop.rs`). The proof is in the
+sweep: a **spawned** handler (a coroutine the dispatcher drives) hits **0.53 ms
+p50 at conc 4**, while the **serial/inline** handler stays ~15 ms — same I/O,
+same box, only the execution context differs. So the floor lives in the
+**main-thread (non-coroutine) blocking-wait path** that an *inline* handler's
+`recv`/`accept` use, not in the event loop.
+
+This is **platform-agnostic**: the macOS parity run hit the *same* ~1,400/s at
+conc 16 (≈ the Windows serial figure), so the coarse main-thread wait is present
+there too. The only Windows-specific detail is the **bimodal quantization** of
+the distribution (min 2.4 ms vs p50 15.3 ms — the Windows 15.6 ms timer
+resolution sharpening it); `timeBeginPeriod(1)` would smooth that *shape* but not
+lift the floor, since the floor is the wait mechanism, not the timer. **Real
+fix (Linux follow-up): route main-thread blocking I/O through the same
+event-driven dispatcher path the spawned-coroutine handlers already use** — then
+an inline handler gets the spawn path's sub-ms latency.
 
 ## Finding 3 — the validation example under-represents runtime throughput ~5×
 
@@ -125,9 +139,9 @@ Every 10k/250k/1M run used the **serial** `ws_echo.kara`. Concurrency sweep
 | 256 | 4,566/s · p99 **548ms** | 6,195/s · p99 **506ms** |
 
 So the spike's "~1,400/s" headline is the *serial example's* ceiling, not the
-runtime's (~7,000/s peak with spawn). The serial/inline path also fails to
-amortize the 15 ms tick (stays ~15 ms through conc 16 where spawn drops to
-sub-ms) — an inline-handler inefficiency on top of the timer floor.
+runtime's (~7,000/s peak with spawn). The serial/inline path also carries
+Finding 2's ~15 ms floor (stays ~15 ms through conc 16 where spawn drops to
+sub-ms) — the same inline-handler blocking-wait inefficiency.
 
 ## Finding 4 — saturation / tail-latency cliff above ~conc 64
 
@@ -135,6 +149,36 @@ Both servers: **p99 jumps to ~500 ms at conc 256**, and spawn throughput
 *regresses* (7,031 → 6,195/s). A contention ceiling around ~7k/s with tail
 collapse under overload — worth a deeper look (single accept loop? a hot
 listener shard?). Not yet root-caused.
+
+## Follow-up worklist (all platform-agnostic — do on a Linux box)
+
+Deeper analysis found **none of the four findings is Windows-specific** — they
+all reproduce on macOS/Linux (the scheduler/runtime code involved is not
+`cfg`-gated). Windows merely surfaced them. So this work belongs on a
+Linux-capable machine, where it can also clear the authoritative leak gate
+(`scripts/lsan-local.sh`, Linux ASAN+LSan). The only genuinely Windows-specific
+item found — the `bug-curve.py` injector crashing under cp1252/CRLF — is fixed
+in this same change.
+
+1. **Leak fix (B-2026-06-17-2), highest priority.** Implement the detached-gated
+   eager-reap above: `detached: AtomicBool` on `KaracTaskHandle` +
+   `karac_runtime_task_detach` FFI; codegen marks discarded `spawn`/`tg.spawn`
+   handles detached; `taskgroup_register` reaps terminal detached children (peek
+   `state`/slot `done`); free-spawn detached self-frees. Regression test in
+   `tests/memory_sanitizer.rs`; must be green under Linux LSan. Memory-ownership
+   surgery on the async hot path — UAF-prone (B-2026-06-09-1 class), so the LSan
+   gate is mandatory.
+2. **Finding 2 — main-thread blocking-I/O latency floor.** Route a non-coroutine
+   (inline-handler / main-thread) blocking `recv`/`accept` through the
+   event-driven dispatcher path the spawned coroutines already use, so it gets
+   sub-ms latency instead of the ~15 ms floor. Validate with the conc-1 row of
+   the `ws_loop_client_soak.py` sweep (expect 90/s → multi-k/s).
+3. **Finding 4 — saturation/tail cliff above ~conc 64.** Root-cause the ~7k/s
+   ceiling + p99→500 ms collapse (single accept loop? hot listener shard?
+   global pool-queue contention?). Use the same soak client's percentile output.
+4. **Finding 3 is informational** — no fix; just prefer the spawn shape for any
+   throughput benchmark, and note that the spike's "~1,400/s" headline is the
+   serial example's ceiling, not the runtime's.
 
 ## Reproduction
 
