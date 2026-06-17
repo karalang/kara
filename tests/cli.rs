@@ -421,6 +421,59 @@ fn main() {
 }
 
 #[test]
+fn test_query_queries_populated_envelope_has_layout_query() {
+    // Phase-8 (P1.5 layout-choice queries) — a loop over `Vec[Entity]`
+    // that reads a strict subset of the struct's fields is a
+    // struct-of-arrays candidate; the layout analyzer surfaces one query.
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-query-layout-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("layout.kara");
+    let src = r#"
+struct Entity { x: f64, y: f64, hp: i64 }
+fn sum_x(entities: Vec[Entity]) -> f64 {
+    let mut total: f64 = 0.0;
+    for e in entities {
+        total = total + e.x;
+    }
+    total
+}
+"#;
+    std::fs::write(&path, src).unwrap();
+
+    let out = karac_bin()
+        .args(["query", "queries", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "karac query queries should exit 0; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("\"kind\":\"layout_choice\""),
+        "expected a layout_choice entry; got stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("\"id\":\"sum_x") && stdout.contains("group_hot_fields"),
+        "expected the sum_x layout query with a group option; got stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("\"cross_phase_origin\":\"codegen\""),
+        "expected codegen-origin tag; got stdout={stdout}",
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
 fn test_subcommand_help_fmt() {
     let out = karac_bin().args(["fmt", "--help"]).output().unwrap();
     assert!(out.status.success());

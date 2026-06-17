@@ -8467,6 +8467,13 @@ fn query_queries(pipeline: &Pipeline) {
         ));
     }
 
+    // P1.5 layout-choice queries — plain-data walk over the AST keyed by
+    // the typechecker's `expr_types` + `struct_info`. Skips silently when
+    // typecheck didn't run.
+    if let Some(t) = pipeline.typed.as_ref() {
+        all.extend(crate::layout_queries::analyze(&pipeline.parsed.program, t));
+    }
+
     println!("{}", render_queries_envelope(&all, &pipeline.filename));
 }
 
@@ -8490,6 +8497,7 @@ fn render_compiler_query(q: &crate::queries::CompilerQuery, filename: &str) -> S
         QueryKind::SpecializationDecision => "specialization_decision",
         QueryKind::RcFallbackDecision => "rc_fallback_decision",
         QueryKind::ForkThresholdDecision => "fork_threshold_decision",
+        QueryKind::LayoutChoice => "layout_choice",
     };
     let confidence = match q.default_confidence {
         Confidence::Low => "low",

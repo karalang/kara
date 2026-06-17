@@ -12,22 +12,25 @@
 //! [`ResolutionSurface`] — subsequent compiles re-emit only the
 //! still-open queries.
 //!
-//! **v1 ships the channel infrastructure plus the P1.1, P1.2, P1.3, and
-//! P1.6 catalogue entries.** All four are emitted by plain-data
-//! analyzers run from the CLI's `query_queries` collator, not from a
-//! phase result struct: P1.3 (inlining + branch hints, landed
+//! **v1 ships the channel infrastructure plus five of the six P1
+//! catalogue entries (P1.1, P1.2, P1.3, P1.5, P1.6).** All are emitted
+//! by plain-data analyzers run from the CLI's `query_queries` collator,
+//! not from a phase result struct: P1.3 (inlining + branch hints, landed
 //! 2026-05-18) by [`crate::codegen_queries`], P1.2 (generic
 //! specialization on the monomorphization tuple) by
 //! [`crate::specialization_queries`] reading the monomorphization
 //! counter, P1.1 (RC fallback at use site) by
 //! [`crate::rc_fallback_queries`] reading the ownership pass's
-//! `rc_values`, and P1.6 (auto-concurrency fork threshold) by
+//! `rc_values`, P1.6 (auto-concurrency fork threshold) by
 //! [`crate::fork_threshold_queries`] reading the concurrency analysis's
-//! per-function fork decisions. The remaining entries are P1.5 (layout)
-//! and P1.4 (effect-set narrowing) — P1.4 is architecturally blocked at
-//! v1 (the effect model trusts declarations, so `inferred == declared`
-//! and there is no slack to narrow; a faithful version needs the
-//! phase-11 branch-reachability analysis, see phase-8-stdlib-floor.md).
+//! per-function fork decisions, and P1.5 (layout choice) by
+//! [`crate::layout_queries`] reading the typechecker's `expr_types` +
+//! `struct_info` to spot struct-collection loops that read a strict
+//! subset of fields. The one remaining entry, P1.4 (effect-set
+//! narrowing), is architecturally blocked at v1 (the effect model trusts
+//! declarations, so `inferred == declared` and there is no slack to
+//! narrow; a faithful version needs the phase-11 branch-reachability
+//! analysis, see phase-8-stdlib-floor.md).
 //! Each new variant on [`QueryKind`] is a non-breaking addition for
 //! tools that gracefully ignore unknown variants (matches the
 //! streaming-output discipline from Phase 5 § Structured Compiler
@@ -115,6 +118,11 @@ pub enum QueryKind {
     /// per forked group. Resolution surface: `#[fork_at(...)]` on the
     /// enclosing function.
     ForkThresholdDecision,
+    /// Layout-choice decision at a loop that reads a strict subset of a
+    /// struct collection's fields — a struct-of-arrays (`layout` block)
+    /// candidate. One query per such loop. Resolution surface: the
+    /// existing `layout` block syntax (no attribute).
+    LayoutChoice,
 }
 
 /// One alternative the compiler considered at a decision site.

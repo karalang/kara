@@ -46,6 +46,7 @@ pub mod install_spec;
 pub mod interpreter;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod karac_toolchain;
+pub mod layout_queries;
 pub mod lexer;
 pub mod lints;
 pub mod lockfile;
