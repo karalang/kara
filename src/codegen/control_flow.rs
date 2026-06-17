@@ -342,6 +342,49 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(())
     }
 
+    /// The libc `FILE*` for stdout (`to_stderr == false`) or stderr, as the
+    /// `fwrite` stream argument. On glibc / wasi-libc / Apple this loads the
+    /// `stdout` / `stderr` (`__stdoutp` / `__stderrp`) data global. The MSVC
+    /// UCRT exposes **no such data symbol** — `<stdio.h>`'s `stdout` / `stderr`
+    /// are macros over `__acrt_iob_func(n)` (1 = stdout, 2 = stderr) — so a
+    /// Windows build emits that call instead. Without it the linked object
+    /// carries an undefined `stdout` reference (`lld-link: error: undefined
+    /// symbol: stdout`). Host-`cfg`'d, mirroring the `__stdoutp` Apple branch in
+    /// `Codegen::new` — karac is built natively per target. Both arms are
+    /// syntactically live so `stdout_global` is never "field never read" on
+    /// Windows.
+    fn stdio_stream(&self, to_stderr: bool) -> inkwell::values::BasicValueEnum<'ctx> {
+        let ptr_t = self.context.ptr_type(inkwell::AddressSpace::default());
+        if cfg!(windows) {
+            let i32_t = self.context.i32_type();
+            let iob = self
+                .module
+                .get_function("__acrt_iob_func")
+                .unwrap_or_else(|| {
+                    self.module.add_function(
+                        "__acrt_iob_func",
+                        ptr_t.fn_type(&[i32_t.into()], false),
+                        Some(inkwell::module::Linkage::External),
+                    )
+                });
+            let idx = i32_t.const_int(if to_stderr { 2 } else { 1 }, false);
+            self.builder
+                .build_call(iob, &[idx.into()], "iob")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+        } else {
+            let glob = if to_stderr {
+                self.stderr_global
+            } else {
+                self.stdout_global
+            };
+            self.builder
+                .build_load(ptr_t, glob.as_pointer_value(), "fw.stream")
+                .unwrap()
+        }
+    }
+
     /// Write exactly `len` bytes of `data` to stdout (or stderr) via `fwrite`,
     /// followed by the newline `nl`. NUL-safe — unlike `printf("%.*s")`, which
     /// stops at the first interior NUL even with a precision set (so a
@@ -355,7 +398,6 @@ impl<'ctx> super::Codegen<'ctx> {
         nl: &str,
         to_stderr: bool,
     ) {
-        let ptr_t = self.context.ptr_type(inkwell::AddressSpace::default());
         // `fwrite`'s size args are `size_t` — i32 on wasm32, i64 natively
         // (must match the extern declaration EXACTLY; wasm traps a mismatch).
         let size_t = if crate::target::active_target_is_wasm() {
@@ -380,15 +422,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap()
             }
         };
-        let file_glob = if to_stderr {
-            self.stderr_global
-        } else {
-            self.stdout_global
-        };
-        let stream = self
-            .builder
-            .build_load(ptr_t, file_glob.as_pointer_value(), "fw.stream")
-            .unwrap();
+        let stream = self.stdio_stream(to_stderr);
         // Route through the runtime console chokepoint (auto-par ordered-
         // output): at the top level it `fwrite`s `len` bytes to `stream` (the
         // old inline behavior); inside a parallel branch it captures the bytes
@@ -408,10 +442,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if !nl.is_empty() {
             let nl_g = self.builder.build_global_string_ptr(nl, "fw.nl").unwrap();
             let nl_len = size_t.const_int(nl.len() as u64, false);
-            let stream2 = self
-                .builder
-                .build_load(ptr_t, file_glob.as_pointer_value(), "fw.stream.nl")
-                .unwrap();
+            let stream2 = self.stdio_stream(to_stderr);
             self.builder
                 .build_call(
                     self.write_console_fn,

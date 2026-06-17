@@ -442,27 +442,169 @@ pub(super) fn link_executable_impl(
     // always correct.
     let prefer_min = !object_references_tls(obj_path);
     let runtime_path = resolve_runtime_path(prefer_min)?;
-    let mut cmd = std::process::Command::new("cc");
+
+    // Windows uses a separate link path (MSVC toolchain): a `clang` driver
+    // (not `cc`), the Windows system import libs the runtime archive
+    // references, `/OPT:REF` instead of `-dead_strip`/`--gc-sections`, and no
+    // `strip` pass (Windows has no drop-in equivalent — `link_executable_impl`'s
+    // strip is already `cfg!(unix)`-gated). See `link_executable_windows`.
+    #[cfg(windows)]
+    return link_executable_windows(obj_path, exe_path, &runtime_path, extra_cc_args);
+    #[cfg(not(windows))]
+    {
+        let mut cmd = std::process::Command::new("cc");
+        for arg in extra_cc_args {
+            cmd.arg(arg);
+        }
+        cmd.args([
+            obj_path,
+            &runtime_path,
+            "-o",
+            exe_path,
+            "-lm",
+            "-lpthread",
+            "-ldl",
+        ]);
+        // External native libraries from `kara.toml`'s `[link]` table
+        // (`docs/spikes/self-hosting-llvm-c-ffi.md` § Linking). Search paths
+        // (`-L`) precede the `-l` flags so the linker can resolve each lib
+        // against them, and both follow the karac-emitted object on the line so
+        // the object's undefined symbols pull from these libraries. The
+        // motivating consumer is the self-hosted codegen leg linking
+        // `libLLVM-18`; absent a `[link]` table this loop is empty and the line
+        // is byte-identical to before.
+        if let Some(link) = crate::target::native_link_config() {
+            for dir in &link.search_paths {
+                cmd.arg(format!("-L{dir}"));
+            }
+            for lib in &link.libs {
+                cmd.arg(format!("-l{lib}"));
+            }
+        }
+        // Binary-size phase 2: cross-archive DCE. The runtime exports HTTP /
+        // JSON / par / map / etc. entry points unconditionally as `#[no_mangle]`,
+        // and any program statically links the full archive even if it never
+        // calls those subsystems. `-Wl,-dead_strip` (Mach-O) / `-Wl,--gc-sections`
+        // (ELF) makes the linker compute reachability from the entry point and
+        // drop unreached objects across the cc-line archive boundary. Combined
+        // with `lto = "thin"` on the runtime crate (workspace `Cargo.toml`'s
+        // `[profile.release.package.karac-runtime]`), the unused tokio / hyper /
+        // serde_json subgraph collapses to zero bytes when the program imports
+        // none of those stdlib modules. Skipped under sanitizer builds: ASAN's
+        // interceptor table is reached via `__asan_*` symbols that aren't always
+        // referenced from main, and dead-stripping the table breaks
+        // instrumentation. See `runtime/SYMBOL_KEEP_LIST.md` for the keep-list
+        // audit; the runtime declares no `#[used]` / `#[link_section]` /
+        // `#[ctor]` / `#[dtor]` attributes, so every reachable runtime symbol
+        // is anchored through a direct call from codegen-emitted IR.
+        if !is_sanitizer_link(extra_cc_args) {
+            if cfg!(target_os = "macos") {
+                cmd.args(["-Wl,-dead_strip"]);
+            } else if cfg!(target_os = "linux") {
+                cmd.args(["-Wl,--gc-sections"]);
+            }
+        }
+        let output = cmd
+            .output()
+            .map_err(|e| format!("Failed to invoke linker: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("Linker failed: {}", stderr));
+        }
+
+        // Binary-size phase 1: strip non-global symbols from the linked
+        // executable. `strip -x` keeps the global symbol table intact (so the
+        // `karac_*` runtime entry points the program actually calls remain
+        // resolvable, and ASAN-instrumented builds keep the `__asan_*`
+        // globals they need at runtime) and drops local debug symbols only.
+        // Skipped when sanitizer flags are passed: ASAN's stack-trace
+        // symbolication walks local symbol tables for function-name lookup,
+        // and stripping them turns "leak in karac_par_run+0x42" into
+        // "leak in <unknown>+0x42" — the sanitizer harness keeps the full
+        // symbol table for diagnostic legibility. Unix-only at v1; Windows
+        // toolchains lack a drop-in `strip` equivalent.
+        //
+        // `strip` failures are non-fatal — the executable already exists and
+        // works; we just lose the size-reduction benefit on this specific
+        // build. Print a stderr note rather than failing the codegen path so
+        // hosts without `strip` (rare on macOS/Linux) keep producing
+        // working binaries.
+        if cfg!(unix) && !is_sanitizer_link(extra_cc_args) {
+            let strip_status = std::process::Command::new("strip")
+                .args(["-x", exe_path])
+                .output();
+            match strip_status {
+                Ok(o) if !o.status.success() => {
+                    eprintln!(
+                        "warning: `strip -x {exe_path}` failed: {}",
+                        String::from_utf8_lossy(&o.stderr)
+                    );
+                }
+                Err(e) => {
+                    eprintln!("warning: failed to invoke `strip`: {e}");
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Windows (MSVC) link path — the analog of the unix `cc` body in
+/// [`link_executable_impl`]. Uses `clang` as the linker driver (it auto-detects
+/// the installed VS toolchain, links the MSVC CRT, and resolves the
+/// `mainCRTStartup → main` entry the codegen-emitted object provides), passes
+/// the Windows system import libs the runtime archive (tokio / mio / ring /
+/// backtrace) references — obtained from `cargo rustc … --print
+/// native-static-libs` — and dead-strips with `/OPT:REF` (the linker computes
+/// reachability from the entry, dropping the unreferenced runtime subgraph the
+/// unix path drops via `-dead_strip` / `--gc-sections`). No `strip` pass:
+/// Windows has no drop-in equivalent (the unix path's strip is already
+/// `cfg!(unix)`-gated).
+///
+/// `clang` drives `lld-link` (or `link.exe`), which honors the `raw-dylib`
+/// import directives `windows-sys` embeds in the runtime object files, so the
+/// `windows.0.52.0` import library does not need to be named explicitly.
+#[cfg(windows)]
+fn link_executable_windows(
+    obj_path: &str,
+    exe_path: &str,
+    runtime_path: &str,
+    extra_cc_args: &[&str],
+) -> Result<(), String> {
+    // System import libs the runtime archive references (from
+    // `cargo rustc -p karac-runtime --crate-type staticlib --print
+    // native-static-libs`): ws2_32 (sockets), bcrypt + advapi32 (ring / RNG),
+    // userenv, ntdll, dbghelp (backtrace), kernel32. `clang` passes these to
+    // the linker as `<name>.lib`. msvcrt is linked by the clang driver's
+    // default CRT selection (matches Rust's default `/MD` dynamic CRT, so the
+    // runtime archive's CRT references resolve consistently).
+    const WINDOWS_SYSTEM_LIBS: &[&str] = &[
+        "ws2_32",
+        "bcrypt",
+        "advapi32",
+        "userenv",
+        "ntdll",
+        "dbghelp",
+        "kernel32",
+        // The classic stdio functions codegen references as symbols — `printf`
+        // (panic-site message printing) and friends — are header-inline-only in
+        // the MSVC UCRT, so the actual symbols come from this CRT shim lib
+        // (rustc links it automatically; the clang driver does not by default).
+        "legacy_stdio_definitions",
+    ];
+
+    let mut cmd = std::process::Command::new("clang");
     for arg in extra_cc_args {
         cmd.arg(arg);
     }
-    cmd.args([
-        obj_path,
-        &runtime_path,
-        "-o",
-        exe_path,
-        "-lm",
-        "-lpthread",
-        "-ldl",
-    ]);
-    // External native libraries from `kara.toml`'s `[link]` table
-    // (`docs/spikes/self-hosting-llvm-c-ffi.md` § Linking). Search paths
-    // (`-L`) precede the `-l` flags so the linker can resolve each lib
-    // against them, and both follow the karac-emitted object on the line so
-    // the object's undefined symbols pull from these libraries. The
-    // motivating consumer is the self-hosted codegen leg linking
-    // `libLLVM-18`; absent a `[link]` table this loop is empty and the line
-    // is byte-identical to before.
+    cmd.args([obj_path, runtime_path, "-o", exe_path]);
+    for lib in WINDOWS_SYSTEM_LIBS {
+        cmd.arg(format!("-l{lib}"));
+    }
+    // External native libraries from `kara.toml`'s `[link]` table (parallels
+    // the unix path's `native_link_config` loop).
     if let Some(link) = crate::target::native_link_config() {
         for dir in &link.search_paths {
             cmd.arg(format!("-L{dir}"));
@@ -471,71 +613,21 @@ pub(super) fn link_executable_impl(
             cmd.arg(format!("-l{lib}"));
         }
     }
-    // Binary-size phase 2: cross-archive DCE. The runtime exports HTTP /
-    // JSON / par / map / etc. entry points unconditionally as `#[no_mangle]`,
-    // and any program statically links the full archive even if it never
-    // calls those subsystems. `-Wl,-dead_strip` (Mach-O) / `-Wl,--gc-sections`
-    // (ELF) makes the linker compute reachability from the entry point and
-    // drop unreached objects across the cc-line archive boundary. Combined
-    // with `lto = "thin"` on the runtime crate (workspace `Cargo.toml`'s
-    // `[profile.release.package.karac-runtime]`), the unused tokio / hyper /
-    // serde_json subgraph collapses to zero bytes when the program imports
-    // none of those stdlib modules. Skipped under sanitizer builds: ASAN's
-    // interceptor table is reached via `__asan_*` symbols that aren't always
-    // referenced from main, and dead-stripping the table breaks
-    // instrumentation. See `runtime/SYMBOL_KEEP_LIST.md` for the keep-list
-    // audit; the runtime declares no `#[used]` / `#[link_section]` /
-    // `#[ctor]` / `#[dtor]` attributes, so every reachable runtime symbol
-    // is anchored through a direct call from codegen-emitted IR.
+    // Dead-strip equivalent: `/OPT:REF` drops unreferenced sections (the
+    // unix `-dead_strip` / `--gc-sections` analog). Skipped under a sanitizer
+    // build, matching the unix path.
     if !is_sanitizer_link(extra_cc_args) {
-        if cfg!(target_os = "macos") {
-            cmd.args(["-Wl,-dead_strip"]);
-        } else if cfg!(target_os = "linux") {
-            cmd.args(["-Wl,--gc-sections"]);
-        }
+        cmd.args(["-Wl,/OPT:REF"]);
     }
-    let output = cmd
-        .output()
-        .map_err(|e| format!("Failed to invoke linker: {}", e))?;
 
+    let output = cmd.output().map_err(|e| {
+        format!(
+            "Failed to invoke linker (clang): {e}. Install LLVM/clang and ensure it is on PATH."
+        )
+    })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Linker failed: {}", stderr));
-    }
-
-    // Binary-size phase 1: strip non-global symbols from the linked
-    // executable. `strip -x` keeps the global symbol table intact (so the
-    // `karac_*` runtime entry points the program actually calls remain
-    // resolvable, and ASAN-instrumented builds keep the `__asan_*`
-    // globals they need at runtime) and drops local debug symbols only.
-    // Skipped when sanitizer flags are passed: ASAN's stack-trace
-    // symbolication walks local symbol tables for function-name lookup,
-    // and stripping them turns "leak in karac_par_run+0x42" into
-    // "leak in <unknown>+0x42" — the sanitizer harness keeps the full
-    // symbol table for diagnostic legibility. Unix-only at v1; Windows
-    // toolchains lack a drop-in `strip` equivalent.
-    //
-    // `strip` failures are non-fatal — the executable already exists and
-    // works; we just lose the size-reduction benefit on this specific
-    // build. Print a stderr note rather than failing the codegen path so
-    // hosts without `strip` (rare on macOS/Linux) keep producing
-    // working binaries.
-    if cfg!(unix) && !is_sanitizer_link(extra_cc_args) {
-        let strip_status = std::process::Command::new("strip")
-            .args(["-x", exe_path])
-            .output();
-        match strip_status {
-            Ok(o) if !o.status.success() => {
-                eprintln!(
-                    "warning: `strip -x {exe_path}` failed: {}",
-                    String::from_utf8_lossy(&o.stderr)
-                );
-            }
-            Err(e) => {
-                eprintln!("warning: failed to invoke `strip`: {e}");
-            }
-            _ => {}
-        }
+        return Err(format!("Linker (clang) failed: {stderr}"));
     }
     Ok(())
 }
@@ -619,7 +711,16 @@ fn symbol_listing_references_tls(nm_output: &str) -> bool {
 /// archive existed on disk. The min preference now applies only to the
 /// directory-search tiers (2 and 3), where no specific file was named.
 pub(super) fn resolve_runtime_path(prefer_min: bool) -> Result<String, String> {
+    // Windows (MSVC) names a `staticlib` crate `karac_runtime.lib`, not the
+    // unix `libkarac_runtime.a`. The `KARAC_RUNTIME` override (tier 1) is
+    // honored verbatim on either platform.
+    #[cfg(windows)]
+    const FULL: &str = "karac_runtime.lib";
+    #[cfg(windows)]
+    const MIN: &str = "karac_runtime_min.lib";
+    #[cfg(not(windows))]
     const FULL: &str = "libkarac_runtime.a";
+    #[cfg(not(windows))]
     const MIN: &str = "libkarac_runtime_min.a";
 
     // Pick the preferred archive name within a directory: lean first when
