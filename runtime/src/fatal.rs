@@ -12,9 +12,21 @@
 
 use core::fmt::{self, Write};
 
+#[cfg(not(windows))]
 extern "C" {
     // POSIX `write(2)`; on wasm32-wasip1 this resolves to wasi-libc's `write`.
     fn write(fd: i32, buf: *const u8, count: usize) -> isize;
+}
+
+#[cfg(windows)]
+extern "C" {
+    // Windows has no POSIX `write` symbol; the MSVC CRT exposes the
+    // POSIX-compat shim as `_write(int fd, const void *buf, unsigned count)`
+    // (resolved against the already-linked `/defaultlib:msvcrt`). fd 2 is
+    // stderr, same convention as POSIX. Returns bytes written or -1. Same
+    // no-std-IO discipline as the unix path — keeps the ~250 KB std-IO
+    // `__TEXT`/`.text` off the lean compute hot path on Windows too.
+    fn _write(fd: i32, buf: *const u8, count: u32) -> i32;
 }
 
 /// Best-effort raw write of `msg` to stderr (fd 2). Short writes are ignored —
@@ -23,7 +35,10 @@ pub fn write_stderr(msg: &[u8]) {
     // SAFETY: `msg` is a valid readable slice of `msg.len()` bytes; fd 2 is the
     // process's stderr. We discard the return value deliberately.
     unsafe {
+        #[cfg(not(windows))]
         let _ = write(2, msg.as_ptr(), msg.len());
+        #[cfg(windows)]
+        let _ = _write(2, msg.as_ptr(), msg.len() as u32);
     }
 }
 
