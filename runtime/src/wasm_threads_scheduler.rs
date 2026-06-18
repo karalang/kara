@@ -97,6 +97,16 @@ pub struct WasmTaskHandle {
     /// it waits + copies the result but does NOT free (the group is the
     /// sole freer). Mirror of `scheduler.rs`'s `registered` field.
     registered: AtomicBool,
+    /// B-2026-06-17-2 — set by `karac_runtime_task_detach`. A discarded
+    /// (never-joined) free `spawn` handle has no joiner, so the join path can
+    /// never free it; instead the worker's completion block self-reaps it once
+    /// it is detached + terminal + unregistered. Mirror of `scheduler.rs`'s
+    /// `detached` (no `coro_slot` here — wasm-threads has no coroutine path).
+    detached: AtomicBool,
+    /// B-2026-06-17-2 — claims the detached-self-reap free exactly once between
+    /// the worker's completion block and the detach path (both may observe
+    /// "detached AND terminal"). Mirror of `scheduler.rs`'s `reaped`.
+    reaped: AtomicBool,
 }
 
 // SAFETY: same reasoning as `scheduler.rs::KaracTaskHandle` — the raw
@@ -148,6 +158,8 @@ pub(crate) unsafe fn wt_spawn(
         notify_mutex: Mutex::new(()),
         notify_cv: Condvar::new(),
         registered: AtomicBool::new(false),
+        detached: AtomicBool::new(false),
+        reaped: AtomicBool::new(false),
     }));
 
     // Per-task ParCall: 1 work unit, no frame tracking — the
@@ -186,17 +198,35 @@ pub(crate) unsafe fn wt_spawn(
 
             // Mutex-held terminal-state write, then notify — the joiner's
             // wait_while check observes the post-write state.
-            let _g = handle
-                .notify_mutex
-                .lock()
-                .unwrap_or_else(|p| p.into_inner());
-            let terminal = if panicked {
-                TASK_STATE_PANICKED
-            } else {
-                TASK_STATE_COMPLETED
+            //
+            // B-2026-06-17-2 parity (wasm-threads): under the same lock, decide
+            // whether this completion must reap a *detached* free-spawn handle (a
+            // discarded `spawn(...)` with no joiner). Deciding under the lock
+            // serializes against `karac_runtime_task_detach`, which takes the same
+            // mutex, so the free is claimed exactly once. Only free-spawn
+            // (unregistered) handles self-reap here — registered children are the
+            // group's to free.
+            let should_free = {
+                let _g = handle
+                    .notify_mutex
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner());
+                let terminal = if panicked {
+                    TASK_STATE_PANICKED
+                } else {
+                    TASK_STATE_COMPLETED
+                };
+                handle.state.store(terminal, Ordering::Release);
+                handle.notify_cv.notify_all();
+                !handle.registered.load(Ordering::Acquire)
+                    && handle.detached.load(Ordering::Acquire)
+                    && !handle.reaped.swap(true, Ordering::AcqRel)
             };
-            handle.state.store(terminal, Ordering::Release);
-            handle.notify_cv.notify_all();
+            if should_free {
+                // SAFETY: we claimed the sole free via `reaped` under the lock;
+                // nothing else touches the handle after this.
+                unsafe { free_handle(handle_addr as *mut WasmTaskHandle) };
+            }
         }),
     };
 
@@ -283,6 +313,38 @@ pub(crate) unsafe fn wt_task_handle_free(handle: *mut WasmTaskHandle) {
         return;
     }
     free_handle(handle);
+}
+
+/// Detach a discarded spawn handle (B-2026-06-17-2 / -8). Codegen emits this for
+/// every discarded `spawn` / `tg.spawn` handle (never joined), to reap it when
+/// safe. A `tg.spawn`-registered child is the group's to free (`join_and_free`,
+/// the sole-freer invariant), so detaching it only flags it. A discarded free
+/// `spawn` has no joiner: mark it detached under the notify mutex, and free it
+/// here iff it is already terminal — otherwise the worker's completion block,
+/// which takes the same mutex and observes `detached`, performs the reap. The
+/// `reaped` swap claims the free exactly once between the two parties. Mirror of
+/// the native non-coro `karac_runtime_task_detach`.
+///
+/// # Safety
+///
+/// `handle` must be a non-null live `*mut WasmTaskHandle` from [`wt_spawn`], not
+/// already freed. Codegen emits this only for discarded handles, so it runs at
+/// most once per handle and never races an explicit `.join()`.
+pub(crate) unsafe fn wt_task_detach(handle: *mut WasmTaskHandle) {
+    if handle.is_null() {
+        return;
+    }
+    let h = &*handle;
+    let should_free = {
+        let _g = h.notify_mutex.lock().unwrap_or_else(|p| p.into_inner());
+        h.detached.store(true, Ordering::Release);
+        !h.registered.load(Ordering::Acquire)
+            && h.state.load(Ordering::Acquire) != TASK_STATE_PENDING
+            && !h.reaped.swap(true, Ordering::AcqRel)
+    };
+    if should_free {
+        free_handle(handle);
+    }
 }
 
 /// Free a handle and its result buffer. Single free site shared by the
@@ -460,6 +522,18 @@ mod exports {
     #[no_mangle]
     pub unsafe extern "C" fn karac_runtime_task_handle_free(handle: *mut WasmTaskHandle) {
         wt_task_handle_free(handle)
+    }
+
+    /// Detach a discarded spawn handle — see [`wt_task_detach`]. Codegen emits
+    /// this for every discarded `spawn` / `tg.spawn` handle (B-2026-06-17-2);
+    /// without it the wasm-threads archive fails to link (B-2026-06-17-8).
+    ///
+    /// # Safety
+    ///
+    /// See [`wt_task_detach`].
+    #[no_mangle]
+    pub unsafe extern "C" fn karac_runtime_task_detach(handle: *mut WasmTaskHandle) {
+        wt_task_detach(handle)
     }
 
     /// Non-joining state read — see [`wt_task_state`].
@@ -847,6 +921,62 @@ mod tests {
             wt_taskgroup_register(std::ptr::null_mut(), std::ptr::null_mut());
             wt_taskgroup_join_and_free(std::ptr::null_mut());
             wt_taskgroup_cancel(std::ptr::null_mut());
+            wt_task_detach(std::ptr::null_mut());
+        }
+    }
+
+    #[test]
+    fn task_detach_free_spawn_self_reaps_both_orderings() {
+        // B-2026-06-17-8: a discarded free `spawn` (no group, no joiner) must be
+        // reaped exactly once. Exercise both ordering races: detach while the task
+        // may still be in flight (the worker's completion block reaps), and detach
+        // after the task is terminal (the detach path reaps). Both must run the
+        // task and not crash / double-free. (LSan E2E covers the no-leak property.)
+        unsafe {
+            let counter = AtomicU32::new(0);
+            let env = &counter as *const AtomicU32 as *mut c_void;
+            // Ordering A — detach immediately (worker may not have run yet).
+            for _ in 0..32 {
+                let h = wt_spawn(bump_counter_wrapper, env, 0, 1);
+                wt_task_detach(h);
+            }
+            // Ordering B — wait for terminal, then detach.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            for _ in 0..32 {
+                let h = wt_spawn(bump_counter_wrapper, env, 0, 1);
+                while wt_task_state(h) == TASK_STATE_PENDING {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "spawned task never reached terminal"
+                    );
+                    std::thread::yield_now();
+                }
+                wt_task_detach(h);
+            }
+            while counter.load(Ordering::SeqCst) < 64 {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "not all detached tasks ran"
+                );
+                std::thread::yield_now();
+            }
+            assert_eq!(counter.load(Ordering::SeqCst), 64);
+        }
+    }
+
+    #[test]
+    fn task_detach_registered_is_noop_group_frees() {
+        // A `tg.spawn`-registered child detached: detach only flags it; the group
+        // remains the sole freer (`join_and_free`), so no double free.
+        unsafe {
+            let counter = AtomicU32::new(0);
+            let env = &counter as *const AtomicU32 as *mut c_void;
+            let group = wt_taskgroup_new();
+            let h = wt_spawn(bump_counter_wrapper, env, 0, 1);
+            wt_taskgroup_register(group, h);
+            wt_task_detach(h);
+            wt_taskgroup_join_and_free(group);
+            assert_eq!(counter.load(Ordering::SeqCst), 1);
         }
     }
 }

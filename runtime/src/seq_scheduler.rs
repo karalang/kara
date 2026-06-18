@@ -276,6 +276,30 @@ pub(crate) unsafe fn seq_task_handle_free(handle: *mut SeqTaskHandle) {
     free_handle(handle);
 }
 
+/// Sequential `karac_runtime_task_detach` (B-2026-06-17-2 / -8). Codegen emits
+/// this for a discarded `spawn` / `tg.spawn` handle (never joined), to reap it
+/// when safe. In the single-threaded sequential model there is no worker race:
+/// a `tg.spawn`-registered child is freed by the group's `join_and_free` (the
+/// sole-freer invariant, B-2026-06-09-1), so detaching it is a no-op; a discarded
+/// free `spawn` has no joiner and no group, so it is driven to completion (parity
+/// with the native pool, which runs every spawned task) and freed here.
+///
+/// # Safety
+///
+/// `handle` must be from [`seq_spawn`] and not already joined/freed. Codegen
+/// emits this at most once per handle (the handle is discarded), so the free is
+/// claimed exactly once.
+pub(crate) unsafe fn seq_task_detach(handle: *mut SeqTaskHandle) {
+    if handle.is_null() {
+        return;
+    }
+    if (*handle).registered.get() {
+        return;
+    }
+    drive_until_terminal(handle);
+    free_handle(handle);
+}
+
 /// Free a handle and its result buffer. Single free site shared by the
 /// join + free paths (mirror of `scheduler.rs::free_handle`).
 ///
@@ -443,6 +467,18 @@ mod exports {
     #[no_mangle]
     pub unsafe extern "C" fn karac_runtime_task_handle_free(handle: *mut SeqTaskHandle) {
         seq_task_handle_free(handle)
+    }
+
+    /// Detach a discarded spawn handle — see [`seq_task_detach`]. Codegen emits
+    /// this for every discarded `spawn` / `tg.spawn` handle (B-2026-06-17-2);
+    /// without it the sequential-wasm archive fails to link (B-2026-06-17-8).
+    ///
+    /// # Safety
+    ///
+    /// See [`seq_task_detach`].
+    #[no_mangle]
+    pub unsafe extern "C" fn karac_runtime_task_detach(handle: *mut SeqTaskHandle) {
+        seq_task_detach(handle)
     }
 
     /// Non-joining state read — see [`seq_task_state`].
@@ -681,6 +717,45 @@ mod tests {
             seq_taskgroup_register(std::ptr::null_mut(), std::ptr::null_mut());
             seq_taskgroup_join_and_free(std::ptr::null_mut());
             seq_taskgroup_cancel(std::ptr::null_mut());
+            seq_task_detach(std::ptr::null_mut());
+        }
+    }
+
+    // Unit wrapper: bumps the i64 the env points at.
+    unsafe extern "C" fn bump_i64_wrapper(
+        env: *mut c_void,
+        _result_out: *mut u8,
+        _cancel: *const AtomicBool,
+    ) {
+        *(env as *mut i64) += 1;
+    }
+
+    #[test]
+    fn task_detach_free_spawn_runs_and_reaps() {
+        // B-2026-06-17-8: a discarded free `spawn` is detached — the sequential
+        // model drives it to completion (its side effect must run) and frees the
+        // handle. No joiner exists, so detach is the sole reaper.
+        unsafe {
+            let mut n: i64 = 0;
+            let h = seq_spawn(bump_i64_wrapper, &mut n as *mut i64 as *mut c_void, 0, 1);
+            seq_task_detach(h);
+            assert_eq!(n, 1, "detached free-spawn task must run to completion");
+        }
+    }
+
+    #[test]
+    fn task_detach_registered_is_noop_group_frees() {
+        // A `tg.spawn`-registered child detached: detach is a no-op (the group is
+        // the sole freer, B-2026-06-09-1), and `join_and_free` drives + frees it
+        // exactly once — no double free.
+        unsafe {
+            let mut n: i64 = 0;
+            let group = seq_taskgroup_new();
+            let h = seq_spawn(bump_i64_wrapper, &mut n as *mut i64 as *mut c_void, 0, 1);
+            seq_taskgroup_register(group, h);
+            seq_task_detach(h);
+            seq_taskgroup_join_and_free(group);
+            assert_eq!(n, 1);
         }
     }
 }
