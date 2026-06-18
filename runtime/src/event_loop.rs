@@ -1324,6 +1324,33 @@ pub(crate) mod windows_iocp_bridge {
         let mut map = sources().lock().unwrap_or_else(|p| p.into_inner());
         map.remove(&sock)
     }
+
+    /// Test-only: drop every persistent per-socket source.
+    ///
+    /// In production a source is reaped by `karac_runtime_tcp_close`
+    /// (`take_by_sock` + `release` before `closesocket`), so the map tracks
+    /// exactly the live sockets. The runtime **test harness**, however,
+    /// registers raw `std::net` sockets through the FFI but closes them via
+    /// `std`'s `Drop` — never `tcp_close` — so their entries are never reaped
+    /// and **leak across tests**. When the OS later reuses a closed socket's
+    /// handle for a different test, the stale entry makes
+    /// [`register_or_reregister`] re-arm a *dead* `SockState` instead of
+    /// adopting the new socket, and that registration's readiness is never
+    /// delivered — a dispatcher test then wedges (observed as a flaky
+    /// `windows-latest` CI failure: "dispatcher did not drive task to
+    /// completion", reproducible even single-threaded since it is cross-test,
+    /// not a parallelism race). Clearing the map at the start of every
+    /// FFI-locked test gives each a clean bridge. Each entry is `release`d —
+    /// the handle is recovered, NOT closed (the test's `std` socket already
+    /// closed it; this only drops the stale `IoSourceState` / AFD poll, which
+    /// is sound because the dispatcher is already shut down at this point).
+    #[cfg(test)]
+    pub(crate) fn clear_for_test() {
+        let mut map = sources().lock().unwrap_or_else(|p| p.into_inner());
+        for (_sock, source) in map.drain() {
+            let _ = release(source);
+        }
+    }
 }
 
 /// Drive the event loop once.
@@ -5309,9 +5336,18 @@ mod tests {
     static FFI_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn ffi_test_guard() -> std::sync::MutexGuard<'static, ()> {
-        FFI_TEST_LOCK
+        let guard = FFI_TEST_LOCK
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Reset the Windows per-socket IOCP bridge so a prior test's leaked
+        // entries (the harness closes sockets via std `Drop`, not `tcp_close`,
+        // so they are never reaped) can't corrupt this test's registrations
+        // when the OS reuses a handle. See `windows_iocp_bridge::clear_for_test`.
+        // No-op on unix (the bridge is `#[cfg(windows)]`; `SourceFd` is
+        // stateless, so the unix path has no cross-test source state).
+        #[cfg(windows)]
+        windows_iocp_bridge::clear_for_test();
+        guard
     }
 
     /// Regression: the reactor's one-time init must mask SIGPIPE. A
