@@ -41,9 +41,10 @@ p99=16.47ms — extremely tight (the queueing signature; see Finding 2).
 > children — UAF-safe terminal peek: `notify_mutex` non-coro, the new
 > `karac_runtime_park_slot_done` for coro), and a free-spawn non-coro handle
 > self-reaps on completion. Green on the full Linux ASAN+LSan suite (263/263).
-> **Residual:** free-spawn + coro (`ws_echo_freespawn`) self-reap is deferred to
-> **B-2026-06-17-3** (needs dispatcher signal-path surgery); the canonical
-> server shape here (`tg.spawn`, `examples/ws_idle_holder`) is fully closed.
+> The free-spawn + coro residual (`ws_echo_freespawn`) is **also fixed now** —
+> **B-2026-06-17-3 (`69a03439`)**, a slot-armed self-reap (the completion signal
+> frees handle+slot when the slot is armed by detach). So all spawn shapes —
+> `tg.spawn` and free `spawn`, coro and non-coro — are leak-clean.
 
 **Any long-lived spawning loop leaks ~100 bytes per spawned task, linearly,
 unbounded** — confirmed empirically and from source. This is the canonical
@@ -186,11 +187,20 @@ in this same change.
    Vec stays bounded — fails pre-fix) + `detached_free_spawn_self_reaps_after_
    completion`, and the `tests/memory_sanitizer.rs` E2E `asan_discarded_
    taskgroup_spawn_loop_eager_reap_no_double_free`. **Green under Linux ASAN+LSan,
-   263/263** (`scripts/lsan-local.sh`). **Residual:** free-spawn + coro
-   (`ws_echo_freespawn`) self-reap — the ramp-worker returns before completion and
-   there is no group to sweep it, so detach only flags it — is split out as
-   **B-2026-06-17-3** (needs a dispatcher signal-or-reap path). The canonical
-   server shape (`tg.spawn`) is fully closed.
+   263/263** (`scripts/lsan-local.sh`). The free-spawn + coro residual
+   (`ws_echo_freespawn`) — the ramp-worker returns before completion and there is
+   no group to sweep it — is **also fixed now: B-2026-06-17-3 (`69a03439`)**, a
+   slot-armed self-reap: `karac_runtime_task_detach` arms the bound slot and the
+   coroutine's completion signal frees handle+slot (the `done` lock claims the
+   free exactly once; sound because signal is the slot's last use on every
+   completion path). Covered by runtime unit tests
+   `detached_free_spawn_coro_reaps_when_{already_complete_at_detach,
+   completion_follows_detach}` + the `coro_e2e`
+   `coroutine_discarded_free_spawn_self_reaps_under_asan` E2E (real connection, 2s
+   barrier → deterministic Linux LSan leak gate). **All spawn shapes are now
+   leak-clean.** (An orthogonal anomaly surfaced while testing — moving a channel
+   `Sender` into a free-spawn coroutine closes the channel before the send lands —
+   is noted for separate investigation.)
 2. **Finding 2 — main-thread blocking-I/O latency floor.** Route a non-coroutine
    (inline-handler / main-thread) blocking `recv`/`accept` through the
    event-driven dispatcher path the spawned coroutines already use, so it gets
