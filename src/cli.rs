@@ -1130,7 +1130,25 @@ impl Pipeline {
     /// predicate further if the same diagnostic-swallowing pattern
     /// appears for any of those phases.
     fn has_fatal_errors(&self) -> bool {
-        self.has_parse_errors() || self.has_resolve_errors() || self.has_type_errors()
+        self.has_parse_errors()
+            || self.has_resolve_errors()
+            || self.has_type_errors()
+            || self.has_fatal_ownership_errors()
+    }
+
+    /// Most ownership errors are advisory at the CLI layer (see the note on
+    /// `has_fatal_errors`), but the exclusive-borrow rule (B-2026-06-17-6) is a
+    /// soundness gate, not a lint: an aliased `mut ref` / `mut Slice` argument
+    /// (`f(mut v, mut v)`, `f(mut v, v)`) miscompiles — codegen passes the
+    /// borrow's value by copy per argument and assumes the two don't alias — so
+    /// it must stop before codegen. Only this one kind is promoted to fatal; the
+    /// rest of the ownership surface stays diagnostic-only.
+    fn has_fatal_ownership_errors(&self) -> bool {
+        self.ownership.as_ref().is_some_and(|o| {
+            o.errors
+                .iter()
+                .any(|e| e.kind == crate::ownership::OwnershipErrorKind::ExclusiveBorrowAliasedArgs)
+        })
     }
 
     fn total_errors(&self) -> usize {
@@ -3086,6 +3104,9 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::ownership::OwnershipErrorKind::BorrowReturnNotSourcePinned { .. } => "E0509",
                 crate::ownership::OwnershipErrorKind::RcFallbackAllocatesUnderFallibleProfile => {
                     "E_RC_FALLBACK_ALLOCATES_UNDER_FALLIBLE_PROFILE"
+                }
+                crate::ownership::OwnershipErrorKind::ExclusiveBorrowAliasedArgs => {
+                    "E_EXCLUSIVE_BORROW_ALIASED_ARGS"
                 }
             };
             let replacement_json = err.replacement.as_ref().map(|r| {

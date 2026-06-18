@@ -306,6 +306,9 @@ impl<'a> super::OwnershipChecker<'a> {
                 // `check_expr_reading`'s Call arm for rationale.
                 let snapshot = self.snapshot_active_borrow_lens();
                 self.check_call_callee(callee, states, param_types, param_usage);
+                // Exclusive-borrow rule across the call's arguments (B-2026-06-17-6):
+                // reject two overlapping arg places where one is `mut ref`/`mut Slice`.
+                self.check_exclusive_borrow_arg_aliasing(callee, args);
                 for (i, arg) in args.iter().enumerate() {
                     // Step 2 (consume-predicate): the arg's classification
                     // is driven by the callee's declared parameter mode.
@@ -525,6 +528,9 @@ impl<'a> super::OwnershipChecker<'a> {
                 // effects the diagnostic.
                 let snapshot = self.snapshot_active_borrow_lens();
                 self.check_call_callee(callee, states, param_types, param_usage);
+                // Exclusive-borrow rule across the call's arguments (B-2026-06-17-6):
+                // reject two overlapping arg places where one is `mut ref`/`mut Slice`.
+                self.check_exclusive_borrow_arg_aliasing(callee, args);
                 for (i, arg) in args.iter().enumerate() {
                     // Step 2 (consume-predicate): see the analogous arm in
                     // `check_expr_consuming` for the rationale.

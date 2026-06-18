@@ -537,6 +537,15 @@ pub enum OwnershipErrorKind {
     /// an explicit `Rc.try_new(...)?`. A profile-flag-gated transformation of
     /// the existing RC-fallback records (`rc_values`) — no new dataflow.
     RcFallbackAllocatesUnderFallibleProfile,
+    /// Two arguments of a single call borrow overlapping places, and at least
+    /// one of those parameters is `mut ref T` / `mut Slice[T]` (an exclusive
+    /// borrow). The exclusive-borrow rule (design.md § Ownership) requires a
+    /// `mut ref`/`mut Slice` borrow to be the *only* active borrow of its
+    /// place; `f(mut v, mut v)` / `f(mut v, v)` violate it. `split_at_mut` is
+    /// the sanctioned way to obtain two disjoint mutable borrows. Enforcing
+    /// this is the soundness precondition for emitting LLVM `noalias` on
+    /// `mut ref`/`mut Slice` parameters (B-2026-06-17-6 / B-2026-06-17-5).
+    ExclusiveBorrowAliasedArgs,
 }
 
 /// Why a `-> ref T` return failed the source-pinning check — selects the

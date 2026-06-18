@@ -121,6 +121,64 @@ impl<'a> super::OwnershipChecker<'a> {
         }
     }
 
+    /// Exclusive-borrow rule at a call site (B-2026-06-17-6). A `mut ref` /
+    /// `mut Slice` argument is an EXCLUSIVE borrow, so the place it borrows
+    /// must not be borrowed again — shared or exclusive — by any other
+    /// argument of the same call (all arguments' borrows are live together
+    /// for the call's duration). Two arguments whose places overlap (equal,
+    /// or one a prefix of the other) where at least one is exclusive violate
+    /// the rule — `f(mut v, mut v)` and `f(mut v, v)` are the canonical
+    /// cases. Without this the aliasing compiles and codegen miscompiles it
+    /// (the Vec header is passed by value per borrow). `split_at_mut` is the
+    /// sanctioned path for two disjoint mutable halves. Enforcing this is the
+    /// soundness precondition for emitting LLVM `noalias` on `mut` params
+    /// (B-2026-06-17-5). Keyed on the callee's declared parameter modes, so a
+    /// missing/anonymous callee (function-typed value) is conservatively
+    /// skipped rather than mis-flagged.
+    pub(crate) fn check_exclusive_borrow_arg_aliasing(&mut self, callee: &Expr, args: &[CallArg]) {
+        // (place, is_exclusive, span) for each argument that borrows a place.
+        let mut borrows: Vec<(PlaceExpr, bool, Span)> = Vec::new();
+        for (i, arg) in args.iter().enumerate() {
+            let kind = match self.arg_formal_slice_kind(callee, i) {
+                Some(true) => Some(BorrowKind::MutSlice),
+                Some(false) => Some(BorrowKind::ImmSlice),
+                None => self.arg_formal_ref_borrow_kind(callee, i),
+            };
+            let Some(kind) = kind else {
+                continue;
+            };
+            let Some(place) = self.place_expr_root(&arg.value) else {
+                continue;
+            };
+            let is_excl = kind.is_mut();
+            for (prev_place, prev_excl, prev_span) in &borrows {
+                if (is_excl || *prev_excl) && places_overlap(prev_place, &place) {
+                    self.errors.push(OwnershipError {
+                        message: format!(
+                            "exclusive-borrow conflict: `{place}` is borrowed by two arguments of \
+                             the same call and at least one is a `mut ref` / `mut Slice` \
+                             (exclusive) borrow. An exclusive borrow must be the only active \
+                             borrow of its place; pass distinct values, or use `split_at_mut` for \
+                             two disjoint mutable halves.",
+                            place = render_place(&place),
+                        ),
+                        span: arg.value.span.clone(),
+                        kind: OwnershipErrorKind::ExclusiveBorrowAliasedArgs,
+                        suggestion: Some(
+                            "pass distinct bindings to the two parameters, or split the value \
+                             into non-overlapping mutable borrows with `split_at_mut`"
+                                .to_string(),
+                        ),
+                        replacement: None,
+                        consume_span: Some(prev_span.clone()),
+                    });
+                    break;
+                }
+            }
+            borrows.push((place, is_excl, arg.value.span.clone()));
+        }
+    }
+
     /// Resolve the root binding of a place expression at a slice creation
     /// site. Walks identifier / field / index / tuple-index / `.as_slice` /
     /// `.as_slice_mut` chains down to a root binding; returns `None` for
@@ -701,4 +759,49 @@ impl<'a> super::OwnershipChecker<'a> {
             });
         }
     }
+}
+
+/// Do two argument places overlap — i.e. could they name memory that aliases?
+/// Same root binding AND one projection chain is a prefix of the other (so one
+/// place contains or equals the other). Field steps must match by name to stay
+/// disjoint (`a.x` vs `a.y` do not overlap); `Index`/`Range` steps are treated
+/// as possibly-equal (we don't track index values), so `a[i]` vs `a[j]` is a
+/// conservative overlap — matching the coarse borrow model, where `split_at_mut`
+/// is the sanctioned way to assert disjoint mutable sub-ranges.
+fn places_overlap(a: &PlaceExpr, b: &PlaceExpr) -> bool {
+    if a.root != b.root {
+        return false;
+    }
+    let common = a.projections.len().min(b.projections.len());
+    a.projections[..common]
+        .iter()
+        .zip(&b.projections[..common])
+        .all(|(pa, pb)| proj_compatible(pa, pb))
+}
+
+/// Whether two projection steps at the same depth could address the same slot.
+fn proj_compatible(a: &Projection, b: &Projection) -> bool {
+    match (a, b) {
+        (Projection::Field(x), Projection::Field(y)) => x == y,
+        // A field step and an index/range step at the same depth can't both
+        // apply to one value — different access shapes, treat as disjoint.
+        (Projection::Field(_), _) | (_, Projection::Field(_)) => false,
+        // Two index/range steps: index values are not tracked, so assume overlap.
+        _ => true,
+    }
+}
+
+/// Render a place for diagnostics: `v`, `c.inner`, `arr[..]`, `v[..]`.
+fn render_place(p: &PlaceExpr) -> String {
+    let mut s = p.root.clone();
+    for proj in &p.projections {
+        match proj {
+            Projection::Field(f) => {
+                s.push('.');
+                s.push_str(f);
+            }
+            Projection::Index | Projection::Range => s.push_str("[..]"),
+        }
+    }
+    s
 }

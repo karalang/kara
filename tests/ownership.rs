@@ -7916,3 +7916,66 @@ fn test_default_mode_rc_fallback_is_note_not_error() {
         "the RC fallback should still be recorded in default mode"
     );
 }
+
+// ── Exclusive-borrow rule at call sites (B-2026-06-17-6) ─────────
+
+#[test]
+fn exclusive_borrow_same_binding_two_mut_args_rejected() {
+    // `f(mut v, mut v)` — the same binding borrowed exclusively by two
+    // arguments of one call. The exclusive-borrow rule forbids it.
+    let errors = ownership_errors(
+        "fn f(x: mut ref Vec[i64], y: mut ref Vec[i64]) { x.push(1); y.push(2); }\n\
+         fn main() { let mut v: Vec[i64] = Vec.new(); f(mut v, mut v); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == OwnershipErrorKind::ExclusiveBorrowAliasedArgs),
+        "f(mut v, mut v) must be an exclusive-borrow conflict; got {:?}",
+        errors.iter().map(|e| &e.kind).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn exclusive_borrow_mut_plus_shared_same_binding_rejected() {
+    // `g(mut v, v)` — exclusive borrow + shared borrow of the same binding.
+    // The exclusive borrow must be the only active borrow of its place.
+    let errors = ownership_errors(
+        "fn g(x: mut ref Vec[i64], y: ref Vec[i64]) -> i64 { x.push(1); y[0] }\n\
+         fn main() { let mut v: Vec[i64] = Vec.new(); v.push(9); let _ = g(mut v, v); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == OwnershipErrorKind::ExclusiveBorrowAliasedArgs),
+        "g(mut v, v) must be an exclusive-borrow conflict; got {:?}",
+        errors.iter().map(|e| &e.kind).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn exclusive_borrow_distinct_bindings_ok() {
+    // Two exclusive borrows of DISTINCT bindings never alias — accepted.
+    ownership_ok(
+        "fn f(x: mut ref Vec[i64], y: mut ref Vec[i64]) { x.push(1); y.push(2); }\n\
+         fn main() {\n\
+             let mut a: Vec[i64] = Vec.new();\n\
+             let mut b: Vec[i64] = Vec.new();\n\
+             f(mut a, mut b);\n\
+         }",
+    );
+}
+
+#[test]
+fn exclusive_borrow_disjoint_fields_ok() {
+    // Two exclusive borrows of disjoint fields of the same struct do not
+    // overlap (`p.x` vs `p.y`) — accepted.
+    ownership_ok(
+        "struct P { x: Vec[i64], y: Vec[i64] }\n\
+         fn f(a: mut ref Vec[i64], b: mut ref Vec[i64]) { a.push(1); b.push(2); }\n\
+         fn main() {\n\
+             let mut p = P { x: Vec.new(), y: Vec.new() };\n\
+             f(mut p.x, mut p.y);\n\
+         }",
+    );
+}
