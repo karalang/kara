@@ -316,6 +316,33 @@ mod tests {
         }
     "#;
 
+    /// Channel-`Sender` moved into a non-blocking (coroutine) free-spawn must be
+    /// dropped by the COROUTINE at its completion — AFTER the handler's `send` —
+    /// not by the spawn wrapper at ramp-return time. `serve_one` parks on
+    /// `accept`, so the wrapper ramps and returns while the coroutine is still
+    /// parked; the captured `tx` is moved into the coroutine frame as an owned
+    /// param. Before the fix the wrapper's channel-end cleanup frame dropped
+    /// `tx` immediately on ramp-return (`drain_top_frame_with_emit`), CLOSING the
+    /// channel before the resumed coroutine ran `tx.send(7)` — so `rx.recv()`
+    /// observed the closed-sentinel `0` instead of `7`. The fix makes the
+    /// coroutine the owner of its channel-end params (drops at real completion,
+    /// after the send) and suppresses the wrapper's early drop at the move site,
+    /// mirroring the owned-user-`Drop` param ownership transfer. A green run
+    /// prints `7` (the sent value), proving send-before-close ordering.
+    const CHANNEL_SPAWN_SRC: &str = r#"
+        fn serve_one(listener: TcpListener, tx: Sender[i64]) {
+            let _stream = listener.accept().unwrap();
+            tx.send(7);
+        }
+        fn main() {
+            let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+            let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();
+            spawn(|| serve_one(listener, tx));
+            let v: i64 = rx.recv();
+            println(v);
+        }
+    "#;
+
     /// Coro-frame heap-overflow regression. A **fixed-size `Array[u8, 4096]`
     /// local live across a park** — the exact shape of the ws_idle_holder
     /// flagship handler's `recv_text` buffer. The array is touched at BOTH
@@ -1392,6 +1419,56 @@ mod tests {
             "owned user-Drop coroutine param must drop exactly once \
              (0 == reap leak, 2 == double-free); saw {drop_count}; \
              stdout lines: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn coroutine_free_spawn_channel_send_lands_before_close() {
+        // Send-before-close ordering for a `Sender` moved into a non-blocking
+        // free-spawn coroutine. The handler `tx.send(7)`s AFTER its `accept`
+        // park; the wrapper ramps and returns while the coroutine is parked, so
+        // the wrapper must NOT drop (close) `tx` on ramp-return — the coroutine
+        // owns it and closes it only after the send. A broken ownership transfer
+        // closes the channel early and `rx.recv()` returns the sentinel `0`.
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_coro_chan_spawn_{pid}_{nanos}"));
+
+        if let Err(e) = compile_link_coro(CHANNEL_SPAWN_SRC, &exe_path, None) {
+            panic!("compile/link failed: {e}");
+        }
+
+        let (exit_status, lines) = service_one_connection(&exe_path, None);
+        let _ = std::fs::remove_file(&exe_path);
+
+        assert!(
+            exit_status.success(),
+            "channel-spawn binary exited non-success {exit_status:?}; \
+             stdout lines: {lines:?}"
+        );
+        // `rx.recv()` must observe the sent value `7`, never the closed-sentinel
+        // `0` (the bug: wrapper closed the channel before the coroutine's send).
+        assert!(
+            lines.iter().any(|l| l == "7"),
+            "receiver must observe the sent value 7, not the closed-channel \
+             sentinel 0 (channel closed before the coroutine's send landed); \
+             stdout lines: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l == "0"),
+            "receiver observed the closed-channel sentinel 0 — the captured \
+             Sender was dropped (closing the channel) before the coroutine's \
+             send landed; stdout lines: {lines:?}"
         );
     }
 

@@ -941,6 +941,27 @@ impl<'ctx> super::Codegen<'ctx> {
                             {
                                 self.track_user_drop_var(struct_name, &param_name, alloca);
                             }
+                            // Channel-end (`Sender`/`Receiver`) sibling of the
+                            // owned user-`Drop` transfer above. A channel end
+                            // moved into a coroutine handler must be dropped BY
+                            // THE COROUTINE at its completion — and for a
+                            // `Sender` that drop is what CLOSES the channel
+                            // (waking blocked receivers). At a non-blocking spawn
+                            // boundary the wrapper ramps and returns while the
+                            // coroutine is still parked, so it cannot be the one
+                            // to drop: dropping `tx` there closes the channel
+                            // *before* the resumed coroutine runs `tx.send(..)`,
+                            // and the receiver sees the closed-sentinel instead of
+                            // the sent value. Registering it here (drained at
+                            // body-end completion, AFTER the send, and on the
+                            // per-park destroy/cancel edge) makes the coroutine
+                            // the unique owner; every caller suppresses its own
+                            // `DropChannelEnd` at the move site
+                            // (`suppress_channel_drop_for_var` in `call_dispatch`
+                            // / `method_call`), keeping it a single close.
+                            if struct_name == "Sender" || struct_name == "Receiver" {
+                                self.track_channel_var(alloca, struct_name == "Sender");
+                            }
                         }
                     }
                 }

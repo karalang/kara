@@ -621,13 +621,22 @@ impl<'ctx> super::Codegen<'ctx> {
                     // the caller's user-`Drop` of the source binding so it isn't
                     // dropped twice — a synchronous (ramp+wait) caller would
                     // otherwise drop the same value the coroutine already
-                    // dropped. No-op for non-`UserDrop` bindings and for the
-                    // spawn-wrapper path (the captured var has no caller-side
-                    // drop registered; the parent's drop is suppressed at the
-                    // capture site). `ref`/`slice` args are borrows — never
-                    // ownership transfers — so this only fires on owned moves.
+                    // dropped. No-op for non-`UserDrop` bindings. `ref`/`slice`
+                    // args are borrows — never ownership transfers — so this only
+                    // fires on owned moves.
+                    //
+                    // Channel-end (`Sender`/`Receiver`) moves need the same
+                    // suppression on their `DropChannelEnd` action — and for the
+                    // spawn-wrapper path this is load-bearing, not a no-op: the
+                    // wrapper registered a channel-end cleanup for the captured
+                    // `tx`/`rx` (`lower_spawn_shared`), and without suppressing it
+                    // here the wrapper would drop (CLOSE) the channel on
+                    // ramp-return — before the still-parked coroutine ran its
+                    // `send`, so the receiver would see the closed-sentinel. The
+                    // coroutine now owns that drop. No-op for non-channel args.
                     if let ExprKind::Identifier(var_name) = &arg.value.kind {
                         self.suppress_user_drop_for_var(var_name);
+                        self.suppress_channel_drop_for_var(var_name);
                     }
                     self.compile_expr(&arg.value)?
                 };

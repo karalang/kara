@@ -670,9 +670,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     // Owned receiver moved into the coroutine method — the
                     // coroutine owns + drops it at completion, so suppress the
                     // caller's drop (mirrors the free-fn coroutine arg path in
-                    // `call_dispatch`). No-op for non-`UserDrop` receivers.
+                    // `call_dispatch`). No-op for non-`UserDrop` receivers; the
+                    // channel-end sibling suppresses an early `DropChannelEnd`
+                    // close on a moved `Sender`/`Receiver` receiver.
                     if let ExprKind::Identifier(var_name) = &object.kind {
                         self.suppress_user_drop_for_var(var_name);
+                        self.suppress_channel_drop_for_var(var_name);
                     }
                     self.compile_expr(object)?
                 };
@@ -701,9 +704,12 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     } else {
                         // Owned method arg moved into the coroutine — suppress the
-                        // caller's drop (see the receiver case above).
+                        // caller's drop (see the receiver case above), including
+                        // an early channel-end close on a moved `Sender`/
+                        // `Receiver`.
                         if let ExprKind::Identifier(var_name) = &arg.value.kind {
                             self.suppress_user_drop_for_var(var_name);
+                            self.suppress_channel_drop_for_var(var_name);
                         }
                         self.compile_expr(&arg.value)?
                     };
