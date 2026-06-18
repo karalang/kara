@@ -5205,6 +5205,21 @@ pub struct KaracParkSlot {
     /// field) keeps `KaracParkSlot` `Sync` and lets the bind store through
     /// a shared `&KaracParkSlot`.
     cancel: AtomicPtr<AtomicBool>,
+    /// B-2026-06-17-3 — type-erased `*mut KaracTaskHandle` for a **detached
+    /// free-spawn coroutine** handle this slot completes (null otherwise). Such
+    /// a handle has no joiner, so nothing waits on the slot to free it; instead
+    /// [`karac_runtime_park_slot_arm_reap`] (from `karac_runtime_task_detach`)
+    /// stores the handle here and [`karac_runtime_park_slot_signal`] frees
+    /// handle+slot the instant the coroutine completes — safe because the signal
+    /// is the slot's last use on every completion path (the codegen
+    /// `CoroContext.slot` / cancel-edge invariant: "the woken waiter may free the
+    /// slot immediately after"). Null for every other slot (inline parks, joined
+    /// spawns, registered `tg.spawn` children reaped by the group sweep), so
+    /// `signal` is byte-for-byte unchanged for them. Erased to `*mut c_void` to
+    /// keep this module free of a `scheduler::KaracTaskHandle` type dep; the reap
+    /// routine ([`crate::scheduler::karac_runtime_reap_detached_coro_handle`])
+    /// casts it back.
+    reap: AtomicPtr<c_void>,
 }
 
 /// Allocate a fresh park slot. Returns an owning raw pointer the caller
@@ -5215,6 +5230,7 @@ pub extern "C" fn karac_runtime_park_slot_new() -> *mut KaracParkSlot {
         done: Mutex::new(false),
         cv: Condvar::new(),
         cancel: AtomicPtr::new(std::ptr::null_mut()),
+        reap: AtomicPtr::new(std::ptr::null_mut()),
     }))
 }
 
@@ -5283,6 +5299,18 @@ pub unsafe extern "C" fn karac_runtime_park_slot_wait(slot: *mut KaracParkSlot) 
 /// Signal the slot, unblocking a (current or future) waiter. Idempotent:
 /// signaling twice is harmless (the second is a no-op `done = true`).
 ///
+/// B-2026-06-17-3 — if the slot was **armed for reap**
+/// ([`karac_runtime_park_slot_arm_reap`], i.e. it completes a detached
+/// free-spawn coroutine with no joiner), this frees the owning handle AND the
+/// slot itself the moment the coroutine completes, instead of leaving them for
+/// a `wait`/`free` that will never come. Safe because the signal is the slot's
+/// **last use** on every completion path (normal `coro_return` and the cancel
+/// destroy edge both document "the woken waiter may free the slot immediately
+/// after"); the reaper is read under the `done` lock and the free runs only
+/// after the lock — and the borrowed `&KaracParkSlot` — is dropped. For any
+/// slot that was not armed (`reap == null` — the default for inline parks,
+/// joined spawns, and `tg.spawn` children) this is byte-for-byte the old signal.
+///
 /// # Safety
 ///
 /// `slot` must be a live pointer returned by
@@ -5293,13 +5321,67 @@ pub unsafe extern "C" fn karac_runtime_park_slot_signal(slot: *mut KaracParkSlot
     if slot.is_null() {
         return;
     }
-    // SAFETY: caller's contract — `slot` is live until the matching
-    // `wait` returns, which cannot happen before this `signal` releases
-    // the mutex below.
+    // Read the armed reaper under the `done` lock so the arm/complete handshake
+    // (see `karac_runtime_park_slot_arm_reap`) claims the free exactly once. The
+    // borrow `s` is confined to this block and dropped before any free below.
+    let reap = {
+        // SAFETY: caller's contract — `slot` is live until the matching `wait`
+        // returns (or, for the reap path, until this call frees it); the lock
+        // orders this against `arm_reap`.
+        let s = unsafe { &*slot };
+        let mut done = s.done.lock().unwrap_or_else(|p| p.into_inner());
+        *done = true;
+        s.cv.notify_one();
+        s.reap.load(Ordering::Acquire)
+    };
+    if !reap.is_null() {
+        // SAFETY: `reap` is a detached free-spawn `KaracTaskHandle` with no
+        // joiner; the reap routine frees it and this slot (its `coro_slot`).
+        // `s` (and its lock guard) are already dropped, and nothing touches the
+        // slot after this signal — so freeing it now is sound. The arm/complete
+        // handshake guarantees exactly one of {this signal, the detach path}
+        // frees, so there is no double-free.
+        unsafe { crate::scheduler::karac_runtime_reap_detached_coro_handle(reap) };
+    }
+}
+
+/// B-2026-06-17-3 — arm this slot to reap a **detached free-spawn coroutine**
+/// handle (one with no joiner). Stores the type-erased handle pointer under the
+/// `done` lock and returns whether the coroutine has **already completed**:
+/// - `true`  — the slot was already signalled (completion ran before detach saw
+///   a null `reap` and did not free), so the caller (`karac_runtime_task_detach`)
+///   must free the handle now.
+/// - `false` — completion has not happened yet; the stored pointer makes
+///   [`karac_runtime_park_slot_signal`] free handle+slot when it does.
+///
+/// Locking on `done` serializes this against `signal`, so exactly one of the two
+/// performs the free regardless of interleaving — the one that observes the
+/// other's state second.
+///
+/// # Safety
+///
+/// `slot` must be a live pointer from [`karac_runtime_park_slot_new`]; `handle`
+/// is an opaque `*mut KaracTaskHandle` whose lifetime the caller guarantees
+/// until the reap (the coroutine, still parked or in flight, keeps it live).
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_park_slot_arm_reap(
+    slot: *mut KaracParkSlot,
+    handle: *mut c_void,
+) -> bool {
+    if slot.is_null() {
+        return false;
+    }
+    // SAFETY: caller's contract — `slot` is live.
     let s = unsafe { &*slot };
-    let mut done = s.done.lock().unwrap_or_else(|p| p.into_inner());
-    *done = true;
-    s.cv.notify_one();
+    let done = s.done.lock().unwrap_or_else(|p| p.into_inner());
+    if *done {
+        // Already completed; `signal` ran with a null `reap` and did not free.
+        // The caller frees now. Leave `reap` null (no second freer).
+        true
+    } else {
+        s.reap.store(handle, Ordering::Release);
+        false
+    }
 }
 
 /// Non-blocking peek at whether the slot has been signalled. Unlike

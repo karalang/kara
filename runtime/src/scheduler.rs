@@ -686,9 +686,15 @@ pub unsafe extern "C" fn karac_runtime_task_state(handle: *const KaracTaskHandle
 /// parties (see `karac_runtime_spawn`'s completion block).
 ///
 /// A **registered** (`tg.spawn`) handle is never freed here — the owning group
-/// reaps detached children in [`karac_runtime_taskgroup_register`]'s sweep. A
-/// **coro** free-spawn handle is likewise only flagged (its completion is
-/// dispatcher-driven; the coro free-spawn self-reap is a follow-up slice).
+/// reaps detached children in [`karac_runtime_taskgroup_register`]'s sweep.
+///
+/// A **coro free-spawn** handle (B-2026-06-17-3) can't self-reap on the worker
+/// side (the worker only ramps the coroutine and returns; completion is the
+/// dispatcher signalling the bound slot later). Instead detach **arms the slot**
+/// via [`crate::event_loop::karac_runtime_park_slot_arm_reap`] so the completion
+/// signal frees handle+slot; if the coroutine already completed, arm-reap reports
+/// it and detach frees now. The slot's `done` lock serializes that against the
+/// completion signal, claiming the free exactly once.
 ///
 /// # Safety
 ///
@@ -701,20 +707,64 @@ pub unsafe extern "C" fn karac_runtime_task_detach(handle: *mut KaracTaskHandle)
     if handle.is_null() {
         return;
     }
+
+    // Coroutine handle (coro_slot non-null): the worker only ramped the
+    // coroutine and is long gone, so the worker-side self-reap never applies.
+    let coro_slot = (*handle).coro_slot;
+    if !coro_slot.is_null() {
+        (*handle).detached.store(true, Ordering::Release);
+        if (*handle).registered.load(Ordering::Acquire) {
+            // Registered (`tg.spawn`) coro child: the group's register-time
+            // sweep reaps it (terminal peek via `park_slot_done`). Just flag it.
+            return;
+        }
+        // B-2026-06-17-3 — free-spawn coro: no group, no joiner. Arm the slot so
+        // the coroutine's completion signal frees handle+slot; if it has already
+        // completed, free now. The slot `done` lock claims the free exactly once
+        // against the completion signal.
+        let already_done =
+            crate::event_loop::karac_runtime_park_slot_arm_reap(coro_slot, handle as *mut c_void);
+        if already_done {
+            free_handle(handle);
+        }
+        return;
+    }
+
+    // Non-coro handle: self-reap handshake with the pool worker (B-2026-06-17-2).
     let should_free = {
         let h = &*handle;
         let _g = h.notify_mutex.lock().unwrap_or_else(|p| p.into_inner());
         h.detached.store(true, Ordering::Release);
         // Mirror the worker's claim (see `karac_runtime_spawn`): only a
-        // terminal, non-coro, unregistered handle self-reaps, exactly once.
+        // terminal, unregistered handle self-reaps, exactly once.
         !h.registered.load(Ordering::Acquire)
-            && h.coro_slot.is_null()
             && h.state.load(Ordering::Acquire) != TASK_STATE_PENDING
             && !h.reaped.swap(true, Ordering::AcqRel)
     };
     if should_free {
         free_handle(handle);
     }
+}
+
+/// B-2026-06-17-3 — free a detached free-spawn **coroutine** handle (and its
+/// park slot) at completion. Called from
+/// [`crate::event_loop::karac_runtime_park_slot_signal`] when the slot was armed
+/// for reap (the coroutine had no joiner), and is the exactly-once partner of
+/// the detach-time free in [`karac_runtime_task_detach`]. `handle` is the
+/// type-erased pointer the slot stored; [`free_handle`] reclaims the handle and,
+/// because `coro_slot` is non-null, the park slot too.
+///
+/// # Safety
+///
+/// `handle` must be the non-null `*mut KaracTaskHandle` previously armed on the
+/// slot (a detached, unregistered coro handle), not already freed.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_reap_detached_coro_handle(handle: *mut c_void) {
+    let handle = handle as *mut KaracTaskHandle;
+    if handle.is_null() {
+        return;
+    }
+    free_handle(handle);
 }
 
 // ── TaskGroup container — slice 5 ──────────────────────────────────────────
@@ -1266,6 +1316,87 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(1));
             }
             assert_eq!(counter.load(AtomicOrdering::Relaxed), 64);
+        }
+    }
+
+    // ── B-2026-06-17-3 — detached free-spawn CORO self-reap ──────────
+    //
+    // A discarded free `spawn(|| coro_handler())` lowers through
+    // `karac_runtime_spawn_coro`: the worker only *ramps* the coroutine and
+    // returns; completion is the dispatcher signalling the bound slot. Such a
+    // handle has no joiner and no group, so it self-reaps via the slot:
+    // `karac_runtime_task_detach` arms the slot, and whichever of {the
+    // completion signal, the detach call} sees the other's state second frees
+    // handle+slot exactly once. These tests drive both orderings deterministically
+    // (a real coroutine isn't needed — the ramp `wrap_fn` stands in for it).
+    // A double-free would abort; a deadlock would hit the test timeout; a UAF is
+    // caught under ASAN.
+
+    /// Ramp stand-in that "completes" immediately by signalling the slot — models
+    /// a coroutine whose first poll finishes (e.g. a peer that closed at once).
+    unsafe extern "C" fn ramp_signals_immediately(
+        _env: *mut c_void,
+        slot: *mut crate::event_loop::KaracParkSlot,
+        _cancel: *const AtomicBool,
+    ) {
+        crate::event_loop::karac_runtime_park_slot_signal(slot);
+    }
+
+    /// Ramp stand-in that parks and never self-completes — the test drives the
+    /// completion signal manually to model the dispatcher finishing it later.
+    unsafe extern "C" fn ramp_parks_forever(
+        _env: *mut c_void,
+        _slot: *mut crate::event_loop::KaracParkSlot,
+        _cancel: *const AtomicBool,
+    ) {
+    }
+
+    #[test]
+    fn detached_free_spawn_coro_reaps_when_already_complete_at_detach() {
+        // Ordering A: the coroutine completes (slot signalled) BEFORE detach.
+        // detach's arm-reap sees the slot done and frees handle+slot itself.
+        unsafe {
+            let h = karac_runtime_spawn_coro(ramp_signals_immediately, std::ptr::null_mut());
+            assert!(!h.is_null());
+            let slot = (*h).coro_slot;
+            assert!(!slot.is_null(), "coro handle must carry a park slot");
+
+            // Wait for the ramp worker to signal completion.
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !crate::event_loop::karac_runtime_park_slot_done(slot) {
+                if Instant::now() > deadline {
+                    panic!("ramp did not signal the slot within budget");
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+
+            // detach must reclaim now (no completion signal will come again).
+            karac_runtime_task_detach(h);
+            // Reaching here without an allocator abort == single, sound free.
+        }
+    }
+
+    #[test]
+    fn detached_free_spawn_coro_reaps_when_completion_follows_detach() {
+        // Ordering B: detach runs BEFORE completion. arm-reap stores the handle
+        // on the slot; the later completion signal frees handle+slot.
+        unsafe {
+            let h = karac_runtime_spawn_coro(ramp_parks_forever, std::ptr::null_mut());
+            assert!(!h.is_null());
+            let slot = (*h).coro_slot;
+
+            // Arm: the slot is not done, so detach leaves the handle alive for
+            // the completion signal to reap.
+            karac_runtime_task_detach(h);
+            assert!(
+                !crate::event_loop::karac_runtime_park_slot_done(slot),
+                "slot must still be un-signalled after arm-only detach",
+            );
+
+            // Drive completion (what the dispatcher does at coro_return): this
+            // signal observes the armed handle and frees handle+slot inline.
+            crate::event_loop::karac_runtime_park_slot_signal(slot);
+            // Reaching here without an abort == the reap ran exactly once.
         }
     }
 

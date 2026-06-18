@@ -161,6 +161,39 @@ mod tests {
         }
     "#;
 
+    /// B-2026-06-17-3 — **discarded FREE-spawn coroutine** (the `ws_echo_freespawn`
+    /// shape). `spawn(|| serve_one(listener, tx))` is a free `spawn` (no
+    /// `TaskGroup`) whose discarded `TaskHandle` codegen marks detached; its tail
+    /// is a coroutine handler, so it lowers through `karac_runtime_spawn_coro`. A
+    /// free-spawn coro handle has no joiner AND no group sweep, so it self-reaps
+    /// via the slot: `karac_runtime_task_detach` arms the bound slot, and the
+    /// coroutine's completion signal frees handle+slot.
+    ///
+    /// `main` does **not** join the discarded handle (that's the point), but it
+    /// must stay alive long enough for the handler to service the connection,
+    /// complete, and be reaped — otherwise process exit races the reap. A fixed
+    /// `sleep_ms(2000)` is the barrier: the handler accepts + prints `7` within
+    /// milliseconds of the client connecting, then completes (→ `coro_return` →
+    /// slot signal → reap frees handle+slot), all comfortably before `main` wakes
+    /// 2s later. That margin makes the run deterministic for **both** assertions:
+    /// `7` appears in stdout (handler serviced the connection), and — because the
+    /// reap has long finished by exit — Linux LeakSanitizer sees no leaked handle
+    /// or slot (pre-fix, the free-spawn coro handle + park slot leak, so LSan
+    /// fails). The barrier is `sleep`, not a channel, because moving a `Sender`
+    /// into a free-spawn coroutine surfaced a separate drop-order problem (the
+    /// channel closed before the send landed) unrelated to this reap.
+    const FREE_SPAWN_NONBLOCK_SRC: &str = r#"
+        fn serve_one(listener: TcpListener) {
+            let _stream = listener.accept().unwrap();
+            println(7);
+        }
+        fn main() {
+            let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+            spawn(|| serve_one(listener));
+            sleep_ms(2000);
+        }
+    "#;
+
     /// Slice 5c — **live mid-flight cancellation**. `serve_buf` is a non-blocking
     /// spawned coroutine handler that parks on `accept` of a listener **no client
     /// ever connects to** — so it stays parked on an idle fd that will never
@@ -1800,6 +1833,84 @@ mod tests {
         assert!(
             lines.iter().any(|l| l == "1") && lines.iter().any(|l| l == "2"),
             "coroutine did not complete under ASAN; stdout lines: {lines:?}"
+        );
+    }
+
+    /// B-2026-06-17-3 — a **discarded free-spawn coroutine** must self-reap its
+    /// handle + park slot via the slot-signal reap path, with no UAF / double-free
+    /// when the completion signal frees them. Drives `FREE_SPAWN_NONBLOCK_SRC`
+    /// (free `spawn(|| serve_one(listener, tx))`, coro-lowered, handle discarded)
+    /// over a real connection under ASAN.
+    ///
+    /// **Leak detection is OFF here, by design.** A free spawn is fire-and-forget:
+    /// the reap runs on the dispatcher at the coroutine's completion, *after* the
+    /// handler's `tx.send` unblocks `main` — so `main` can reach process exit
+    /// before the dispatcher finishes the reap, which LeakSanitizer at exit would
+    /// flag as a (false) leak even post-fix. There is no user-observable event
+    /// that happens-after the reap to gate exit on, so the leak arm is inherently
+    /// racy for this shape (same reason the free-spawn cases carry no at-exit LSan
+    /// test). The deterministic no-leak / exactly-once-free guarantee is pinned by
+    /// the runtime unit tests `detached_free_spawn_coro_reaps_*`; this E2E's job is
+    /// the UAF / double-free coverage of the reap firing under a *real* coroutine.
+    #[test]
+    fn coroutine_discarded_free_spawn_self_reaps_under_asan() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        if !asan_available() {
+            eprintln!("skip: ASAN unavailable on this host");
+            return;
+        }
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_coro_freespawn_asan_{pid}_{nanos}"));
+
+        if let Err(e) = compile_link_coro(
+            FREE_SPAWN_NONBLOCK_SRC,
+            &exe_path,
+            Some(&["-fsanitize=address"]),
+        ) {
+            eprintln!("skip: ASAN compile/link failed: {e}");
+            return;
+        }
+
+        // The 2s `sleep_ms` barrier makes the reap finish well before exit, so the
+        // leak arm IS deterministic here (unlike the channel-barrier shape): on
+        // Linux enable LeakSanitizer — pre-fix the free-spawn coro handle + park
+        // slot leak (LSan fails); post-fix they're reaped (clean). macOS Apple-clang
+        // ASAN has no LSan, so it keeps only UAF / double-free / heap-overflow
+        // coverage. `exitcode=23` turns any ASAN error into a non-success exit.
+        let asan_options = if cfg!(target_os = "macos") {
+            "abort_on_error=0:exitcode=23"
+        } else {
+            "detect_leaks=1:abort_on_error=0:exitcode=23"
+        };
+
+        let (exit_status, lines) = service_one_connection(&exe_path, Some(asan_options));
+        let _ = std::fs::remove_file(&exe_path);
+
+        // Clean ASAN exit == the slot-signal reap freed handle+slot soundly: no
+        // UAF on the freed slot, no double-free against any other freer, and (on
+        // Linux) no leak. An ASAN/LSan error would exit 23 (or signal) → !success().
+        assert!(
+            exit_status.success(),
+            "ASAN/LSan reported a memory error in the free-spawn coro reap path \
+             (exit {exit_status:?}); stdout lines: {lines:?}"
+        );
+        // `7` is the handler's print after it serviced the connection — proof the
+        // free-spawn coroutine ran to completion (the path that fires the reap).
+        // The 2s barrier guarantees it is flushed long before exit.
+        assert!(
+            lines.iter().any(|l| l == "7"),
+            "free-spawn coroutine did not service the connection under ASAN \
+             (expected `7`); stdout lines: {lines:?}"
         );
     }
 
