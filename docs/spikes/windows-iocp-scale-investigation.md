@@ -5,7 +5,9 @@
 > DONE). After the 250k re-validation, we pushed the loopback functional run to
 > **1,000,000 connections** on the Windows Server 2025 box explicitly to surface
 > *gaps and frictions* at scale rather than to reconfirm a green number. It
-> surfaced four, one of them a real unbounded **memory leak** (B-2026-06-17-2).
+> surfaced four, one of them a real unbounded **memory leak** (B-2026-06-17-2 —
+> **fixed 2026-06-17, `849030b6`**; see worklist item 1. The residual
+> free-spawn+coro variant is split out as B-2026-06-17-3).
 > The IOCP event loop itself — the subject of the port — held flawlessly; every
 > friction lives in the concurrency layer *above* it.
 
@@ -30,7 +32,18 @@ throughput flat (no cliff), no wedge, no counter wraparound.** The IOCP
 register→park→wake→deregister churn is solid at 1M. Latency p50=15.48ms,
 p99=16.47ms — extremely tight (the queueing signature; see Finding 2).
 
-## Finding 1 — unbounded memory leak in the spawn/structured-concurrency model ⚠️ (B-2026-06-17-2)
+## Finding 1 — unbounded memory leak in the spawn/structured-concurrency model ✅ (B-2026-06-17-2)
+
+> **FIXED 2026-06-17 (`849030b6`).** Detached-gated eager-reap, per the fix
+> design below. Codegen marks a discarded `spawn`/`tg.spawn` handle detached
+> (`karac_runtime_task_detach`); `karac_runtime_taskgroup_register` sweeps and
+> frees detached, terminal children (bounding the `children` Vec to ~live
+> children — UAF-safe terminal peek: `notify_mutex` non-coro, the new
+> `karac_runtime_park_slot_done` for coro), and a free-spawn non-coro handle
+> self-reaps on completion. Green on the full Linux ASAN+LSan suite (263/263).
+> **Residual:** free-spawn + coro (`ws_echo_freespawn`) self-reap is deferred to
+> **B-2026-06-17-3** (needs dispatcher signal-path surgery); the canonical
+> server shape here (`tg.spawn`, `examples/ws_idle_holder`) is fully closed.
 
 **Any long-lived spawning loop leaks ~100 bytes per spawned task, linearly,
 unbounded** — confirmed empirically and from source. This is the canonical
@@ -160,14 +173,24 @@ Linux-capable machine, where it can also clear the authoritative leak gate
 item found — the `bug-curve.py` injector crashing under cp1252/CRLF — is fixed
 in this same change.
 
-1. **Leak fix (B-2026-06-17-2), highest priority.** Implement the detached-gated
-   eager-reap above: `detached: AtomicBool` on `KaracTaskHandle` +
-   `karac_runtime_task_detach` FFI; codegen marks discarded `spawn`/`tg.spawn`
-   handles detached; `taskgroup_register` reaps terminal detached children (peek
-   `state`/slot `done`); free-spawn detached self-frees. Regression test in
-   `tests/memory_sanitizer.rs`; must be green under Linux LSan. Memory-ownership
-   surgery on the async hot path — UAF-prone (B-2026-06-09-1 class), so the LSan
-   gate is mandatory.
+1. **Leak fix (B-2026-06-17-2), highest priority. ✅ DONE 2026-06-17 (`849030b6`).**
+   Implemented the detached-gated eager-reap above: `detached`/`reaped:
+   AtomicBool` on `KaracTaskHandle` + `karac_runtime_task_detach` FFI; codegen
+   marks discarded `spawn`/`tg.spawn` handles detached (`pending_spawn_detach` in
+   `compile_stmt` → `lower_spawn_shared`); `taskgroup_register` reaps terminal
+   detached children (peek `state` under `notify_mutex` non-coro, the new
+   `karac_runtime_park_slot_done` for coro), bounding the Vec to ~live children;
+   free-spawn non-coro self-reaps on completion, the worker and the detach path
+   claiming the free exactly once under `notify_mutex`. Regression coverage:
+   runtime unit `taskgroup_register_reaps_detached_completed_children` (children
+   Vec stays bounded — fails pre-fix) + `detached_free_spawn_self_reaps_after_
+   completion`, and the `tests/memory_sanitizer.rs` E2E `asan_discarded_
+   taskgroup_spawn_loop_eager_reap_no_double_free`. **Green under Linux ASAN+LSan,
+   263/263** (`scripts/lsan-local.sh`). **Residual:** free-spawn + coro
+   (`ws_echo_freespawn`) self-reap — the ramp-worker returns before completion and
+   there is no group to sweep it, so detach only flags it — is split out as
+   **B-2026-06-17-3** (needs a dispatcher signal-or-reap path). The canonical
+   server shape (`tg.spawn`) is fully closed.
 2. **Finding 2 — main-thread blocking-I/O latency floor.** Route a non-coroutine
    (inline-handler / main-thread) blocking `recv`/`accept` through the
    event-driven dispatcher path the spawned coroutines already use, so it gets
