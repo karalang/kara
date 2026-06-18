@@ -468,7 +468,10 @@ step 6 is now a *load/leak* confirmation, not a first-light correctness probe.
      kernel32` + `legacy_stdio_definitions` for the header-inline `printf`),
      `/OPT:REF` for dead-strip, no `strip`. `resolve_runtime_path` learned the
      `karac_runtime.lib` MSVC archive name. Codegen already emits a correct COFF
-     object (LLVM default host triple).
+     object (LLVM default host triple). (`winmm` was later added to this list for
+     the reactor's `timeBeginPeriod(1)` timer-resolution call — `8f0c56c6`, see
+     `windows-iocp-scale-investigation.md` Finding 2; the driver names system libs
+     explicitly, so it must carry every lib the runtime's `#[link]` directives name.)
    - **Two codegen stdio fixes** (`src/codegen.rs` / `control_flow.rs`): MSVC's
      UCRT has **no `stdout`/`stderr` data symbol** (`<stdio.h>` macros over
      `__acrt_iob_func(n)`) — codegen now emits that call on Windows instead of

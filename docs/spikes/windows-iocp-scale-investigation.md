@@ -10,73 +10,86 @@
 > free-spawn+coro variant is split out as B-2026-06-17-3).
 > The IOCP event loop itself — the subject of the port — held flawlessly; every
 > friction lives in the concurrency layer *above* it.
-> **One code change remains — Windows-only (Finding 2) — and it can only be
-> validated on Windows. The cold-start brief for it is the next section.**
+> **All code changes are now DONE.** Finding 2's Windows timer fix landed +
+> validated natively 2026-06-18 (`8f0c56c6`) — but the measurement **refuted the
+> spike's own prediction**: raising the timer to 1 ms drops conc-1 p50 only
+> 15.24 ms → 10.52 ms (a real ~31 % win, not the anticipated ~15×), because the
+> residual ~10.5 ms is a per-in-flight-connection IOCP/AFD readiness latency that
+> **concurrency hides** — the spawn server pays the *identical* 10.5 ms at conc 1
+> and only diverges at conc ≥ 4 (spawn conc-4 p50 0.53 ms). See the (now closed-out)
+> Finding 2 + worklist item 2 below.
 
-## ⇒ Remaining work (the only open code change): Finding 2 Windows timer fix — cold-start agent brief
+## ⇒ Finding 2 Windows timer fix — DONE + the prediction it refuted (`8f0c56c6`, 2026-06-18)
 
-*Everything in this section is self-contained; the full diagnosis and the
-cross-platform measurements that justify it are in **Finding 2** and **Finding 4**
-below. Findings 1 & 3 are done; Finding 4 needs no code change (measured — its
-ceiling is the OS kernel/loopback, not the runtime). This is the one remaining
-fix.*
+*All code changes in this doc are now closed. This section records what landed
+and — more importantly — how the native measurement **refuted the fix's own
+predicted outcome**, which re-root-causes the conc-1 floor.*
 
-**Problem (one line).** On Windows the inline (non-spawn) server — serial
-`ws_echo.kara`, `loop { accept(); echo() }` — pays a ~15 ms/op latency floor
-because the calling thread's wakeup from `karac_runtime_park_slot_wait`
-(`runtime/src/event_loop.rs:5287`, a `Condvar` signalled by the dispatcher's
-`karac_runtime_park_slot_signal` at `:5320`) is quantized to the Windows **15.6 ms
-system timer tick**. macOS pays **0.09 ms** for the *same* wait — proof the floor
-is the timer, not the wait mechanism. Two parks per echo round-trip × ~7.8 ms
-half-tick ≈ the observed 15.6 ms.
+**What landed.** `event_loop.rs::ensure_high_res_timer` (a `#[cfg(windows)]`
+one-shot called from the `event_loops()` `get_or_init` reactor init) raises the
+process timer resolution to 1 ms via a minimal `#[link(name = "winmm")]`
+`timeBeginPeriod(1)` extern — no `windows-sys`/`winapi` dependency added. The AOT
+linker driver (`src/codegen/driver.rs`) gained `winmm` in its Windows system-lib
+list, because that driver names system libs explicitly and does **not** honor the
+runtime crate's `#[link]` directive (which only covers cargo's own test/build
+links) — without it every karac-built binary fails to link with `undefined symbol:
+timeBeginPeriod`. `timeBeginPeriod` is process-scoped on Windows 10 2004+, so the
+blast radius is just the server process; no `timeEndPeriod` (the process serves
+until exit).
 
-**Fix.** Raise the Windows timer resolution to 1 ms for the server process.
+**Measured, Windows Server 2025, serial `ws_echo`, conc 1 (`ws_loop_client_soak.py`):**
 
-- **Where:** the one-time reactor init — the `OnceLock::get_or_init` inside
-  `event_loops()` at `runtime/src/event_loop.rs:828` (runs once, on first
-  park/register, for the process lifetime). Add a `#[cfg(windows)]` one-shot
-  there, e.g. a `#[cfg(windows)] fn ensure_high_res_timer()` it calls.
-- **API:** `timeBeginPeriod(1)` from `winmm.dll`. The runtime has **no
-  `windows-sys`/`winapi` dependency today** (verified — `runtime/Cargo.toml`), so
-  either add one under `[target.'cfg(windows)'.dependencies]`
-  (`windows-sys` with the `Win32_Media` feature) **or** declare a minimal raw
-  extern and link `winmm`:
-  ```rust
-  #[cfg(windows)]
-  #[link(name = "winmm")]
-  extern "system" { fn timeBeginPeriod(uPeriod: u32) -> u32; }
-  ```
-- **Guardrails / caveats:**
-  - `timeBeginPeriod` is **process-scoped on Windows 10 2004+** (no longer
-    system-global), so the blast radius is just this process — acceptable for a
-    server. It raises the idle timer-interrupt rate (minor power cost); that's the
-    accepted trade. No `timeEndPeriod` needed (the process serves until exit).
-  - Heavier alternative if you'd rather not touch the global timer: replace the
-    park `Condvar` wait with a high-resolution waitable timer
-    (`CreateWaitableTimerExW` + `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION`). Bigger
-    change — `timeBeginPeriod(1)` is the ~3-line win; start there.
-  - **Do NOT** "route inline I/O through the spawn/coro dispatcher path" (an
-    earlier proposed fix in Finding 2's original text): measured off-Windows that
-    path is *slower* than the inline path (see Finding 3). The timer is the whole
-    problem; don't re-architect the I/O model.
+| | conc-1 p50 | system timer (`NtQueryTimerResolution`) |
+|---|---|---|
+| before | 15.24 ms | 15.625 ms |
+| after | **10.52 ms** | **1.000 ms** |
+
+The timer change is real and causal (verified: the finest the OS offers is 0.5 ms,
+the fix pins `current` at 1.000 ms; with no high-res requester the box idles at
+15.625 ms). But it is a **~31 % win, not the ~15× the spike predicted** — conc-1
+p50 did **not** drop to ~1 ms.
+
+**Why the "→1 ms" prediction was wrong (the real root cause).** The residual
+~10.5 ms is **not** the system timer and **not** the inline/main-thread wait
+mechanism. Two measurements on the same box settle it:
+
+- The **spawn** server (`ws_echo_spawn.kara`, coro dispatcher path) pays the
+  **identical 10.52 ms p50 at conc 1** — so the floor is *not* inline-vs-coro.
+  Finding 2's original "the floor lives in the main-thread blocking-wait path"
+  premise is **refuted**: both execution contexts pay it equally at conc 1.
+- The **same spawn server at conc 4** drops to **p50 0.53 ms** (p99 still 10.78 ms).
+  So a single connection's full cycle *can* complete in ~0.5 ms; the ~10.5 ms at
+  conc 1 is a **per-in-flight-connection latency that concurrency overlaps away** —
+  the Windows IOCP/AFD readiness-notification latency for a single outstanding
+  socket (most plausibly the listener's accept-readiness re-arm between sequential
+  connections). It is paid once per concurrently-live connection, so it vanishes
+  from the median the moment ≥2 connections are in flight.
+
+This also reconciles Finding 3's table, which already shows **both** serial and
+spawn at **90/s · p50 ~15 ms at conc 1** and divergence only from conc 4 up: the
+conc-1 row was never measuring the inline path's overhead — it was measuring this
+shared readiness floor, with the (then-15.6 ms) timer stacked on top.
+
+**Consequences for the runtime.** conc-1 latency is the wrong yardstick for the
+runtime's capability — it is dominated by an OS readiness floor that real
+(concurrent) workloads never hit. The right yardsticks are the conc ≥ 4 figures
+(spawn p50 0.53 ms) and the persistent-connection throughput in Finding 4
+(65k echoes/s). Driving conc-1 to ~1 ms would require shrinking the per-socket
+AFD readiness latency itself — a deeper mio-integration change, **not** worth it
+for a metric no real workload is bound by, and explicitly **not** "route inline
+I/O through the spawn path" (off Windows that path is *slower*, Finding 3; on
+Windows it pays the same conc-1 floor anyway). The timer fix is kept as a cheap,
+correct latency win + server hygiene.
 
 **Repro (Windows).** Build per the [Reproduction](#reproduction) block below, then:
 ```
 karac build examples/std_net/ws_echo.kara          # serial / inline path
 ws_echo                                            # binds 127.0.0.1:8080 (run in another shell)
-python examples/std_net/ws_loop_client_soak.py 127.0.0.1 8080 10000 1
+python examples/std_net/ws_loop_client_soak.py 127.0.0.1 8080 2000 1   # conc 1 → p50 ~10.5 ms
+python examples/std_net/ws_loop_client_soak.py 127.0.0.1 8080 4000 4   # spawn conc 4 → p50 ~0.5 ms
 ```
-**Before (conc 1):** `p50 ≈ 15.3 ms, ~90/s`. **After (target):** `p50 ≈ 1 ms,
-multi-k/s`. macOS reference (no floor): `p50 0.09 ms, ~10.6k/s`. The harness'
-`SO_LINGER` was already made cross-platform (commit `6136446e`) and runs as-is on
-Windows.
-
-**Done =** (a) Windows conc-1 p50 drops ~15 ms → ~1 ms on the serial server;
-(b) the spawn/coro server is unchanged (it never paid the floor — sanity-check it
-didn't regress); (c) flip **Finding 2** below to FIXED with the measured Windows
-before/after numbers + the commit SHA, and tick worklist item 2. Cheap regression
-guard: assert conc-1 p50 < a few ms in a Windows bench if CI has one; otherwise
-record the manual repro numbers in the commit message.
+The harness' `SO_LINGER` was already made cross-platform (commit `6136446e`) and
+runs as-is on Windows.
 
 ## What was run
 
@@ -181,7 +194,19 @@ marks discarded spawn handles detached**.
 The serial inline server is the only currently leak-free shape — and it pays
 Findings 2–3, so "just use the serial server" is not the answer.
 
-## Finding 2 — ~15 ms per-connection latency floor on the main-thread blocking-I/O path (Windows-timer-specific — corrected by measurement)
+## Finding 2 — ~15 ms per-connection latency floor at conc 1 (timer + a deeper readiness floor)
+
+> **FIXED + RE-ROOT-CAUSED 2026-06-18 (`8f0c56c6`, native Windows).** The
+> `timeBeginPeriod(1)` fix landed and measurably lowered conc-1 p50 (15.24 → 10.52 ms,
+> timer 15.6 → 1.0 ms), but the native A/B **refuted both the floor's diagnosis and
+> the predicted outcome**: the floor is NOT the main-thread wait mechanism (the spawn
+> server pays the identical 10.52 ms at conc 1) and does NOT drop to ~1 ms — the
+> residual is a per-in-flight-connection IOCP/AFD readiness latency that concurrency
+> hides (spawn conc-4 p50 0.53 ms). Full write-up + the corrected root cause are in
+> the closed-out **"Finding 2 Windows timer fix — DONE"** section near the top of this
+> doc; the historical analysis below is left for provenance. Read the two together:
+> the "≈15× win" / "the timer is the whole problem" claims below are the ones the
+> measurement overturned.
 
 > **RE-CORRECTED BY MEASUREMENT 2026-06-17 (macOS / Apple Silicon, current code).**
 > The floor **is** the Windows 15.6 ms timer quantum after all — it does **not**
@@ -337,21 +362,21 @@ in this same change.
    leak-clean.** (An orthogonal anomaly surfaced while testing — moving a channel
    `Sender` into a free-spawn coroutine closes the channel before the send lands —
    is noted for separate investigation.)
-2. **Finding 2 — main-thread blocking-I/O latency floor. ⚠️ REASSESSED 2026-06-17
-   (measured) — the planned fix was wrong; the real fix is Windows-only. → THE
-   ONLY OPEN CODE CHANGE; cold-start brief in the "Remaining work" section at the
-   top of this doc.** Driving
-   `ws_loop_client_soak.py` against the serial `ws_echo` server on macOS measured
-   **conc-1 = 10,617/s, p50 0.09 ms** (no floor) — so the floor is the Windows
-   15.6 ms timer quantizing the wakeup, not a platform-agnostic main-thread-wait
-   cost (see the re-corrected Finding 2 above). Do **not** route inline I/O
-   through the spawn/coro dispatcher path — off Windows the serial path is already
-   *faster* than spawn (12.7k vs 6.3k/s at conc 16). **Actual fix:** raise the
-   Windows timer resolution (`timeBeginPeriod(1)` or a high-resolution
-   waitable-timer wait) in the Windows-cfg runtime init; **only validatable on a
-   Windows box** (the bench harness `ws_loop_client_soak.py` had a Windows-only
-   `SO_LINGER` layout that crashed off-Windows — fixed in this change to be
-   platform-aware). Expected Windows effect: p50 15.4 ms → ~1 ms.
+2. **Finding 2 — conc-1 latency floor. ✅ DONE 2026-06-18 (`8f0c56c6`), native
+   Windows — but the fix's predicted outcome was REFUTED by the measurement.**
+   `timeBeginPeriod(1)` landed in the reactor init (+ `winmm` in the AOT linker
+   driver) and the system timer verifiably drops 15.625 → 1.000 ms, lowering serial
+   conc-1 p50 **15.24 → 10.52 ms** (~31 %, not the predicted ~15×). The remaining
+   ~10.5 ms is **not** the timer and **not** the inline-vs-coro wait mechanism: the
+   spawn server pays the *identical* 10.52 ms at conc 1 and only diverges at conc ≥ 4
+   (spawn conc-4 p50 0.53 ms), so it is a per-in-flight-connection IOCP/AFD readiness
+   latency that concurrency hides. The earlier "the floor is purely the Windows timer,
+   `timeBeginPeriod` is the ~15× lever" conclusion is therefore wrong — see the
+   closed-out **"Finding 2 Windows timer fix — DONE"** section at the top of this doc
+   for the corrected root cause and why conc-1 is the wrong yardstick. No further work:
+   conc-1 latency is bound by an OS readiness floor real (concurrent) workloads never
+   hit. (Do **not** route inline I/O through the spawn/coro path — off Windows it is
+   *slower*, and on Windows it pays the same conc-1 floor.)
 3. **Finding 4 — saturation/tail cliff above ~conc 64. ✅ ROOT-CAUSED 2026-06-17
    (measured) — see the rewritten Finding 4 above.** Three findings, **no runtime
    fix needed**: (a) the "~7k/s ceiling" was the single Python client (server
