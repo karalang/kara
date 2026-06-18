@@ -50,7 +50,11 @@ def ws_roundtrip(host, port, idx):
     except OSError as e:
         return f"conn[{idx}] connect failed: {e}"
     # Abortive (RST) close: free the ephemeral port immediately, no TIME_WAIT.
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("HH", 1, 0))
+    # `struct linger` differs by OS: Windows is {u_short l_onoff; u_short l_linger}
+    # (4 bytes, "HH"); Unix (Linux/macOS) is {int l_onoff; int l_linger} (8 bytes,
+    # "ii"). Pick the right layout so the harness runs cross-platform.
+    _linger = struct.pack("HH", 1, 0) if sys.platform == "win32" else struct.pack("ii", 1, 0)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, _linger)
     step = "init"
     try:
         s.settimeout(10)

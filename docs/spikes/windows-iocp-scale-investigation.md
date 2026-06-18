@@ -114,10 +114,26 @@ marks discarded spawn handles detached**.
 The serial inline server is the only currently leak-free shape — and it pays
 Findings 2–3, so "just use the serial server" is not the answer.
 
-## Finding 2 — ~15 ms per-connection latency floor on the main-thread blocking-I/O path (platform-agnostic)
+## Finding 2 — ~15 ms per-connection latency floor on the main-thread blocking-I/O path (Windows-timer-specific — corrected by measurement)
 
-> **Corrected after deeper analysis (the first pass mis-attributed this to the
-> Windows timer quantum — it isn't Windows-specific).**
+> **RE-CORRECTED BY MEASUREMENT 2026-06-17 (macOS / Apple Silicon, current code).**
+> The floor **is** the Windows 15.6 ms timer quantum after all — it does **not**
+> reproduce off Windows. Driving the real benchmark
+> (`examples/std_net/ws_loop_client_soak.py`) against the serial `ws_echo` server
+> on macOS measured **conc-1 = 10,617/s, p50 0.09 ms** (and conc-16 = 12,716/s,
+> p50 1.20 ms) — ~170× faster than the Windows 15.4 ms, with **no floor**. So the
+> inline path's condvar handoff (`park_slot_wait` ← dispatcher `park_slot_signal`)
+> is **sub-0.1 ms** when the OS scheduler isn't timer-quantizing the wakeup; the
+> floor is the *timer*, not the wait mechanism (reversing the claim below). Two
+> consequences: (1) the fix is **Windows-only** — raise the timer resolution
+> (`timeBeginPeriod(1)` or a high-resolution waitable-timer wait in the
+> Windows-cfg runtime init) — and is only validatable on a Windows box; (2) the
+> proposed "route inline I/O through the spawn/coro path" fix would **backfire** —
+> on macOS the **serial path is faster than spawn at every concurrency** (12.7k vs
+> 6.3k/s at conc 16; see Finding 3), because with no floor the coro machinery is
+> pure overhead. The original Windows observation + analysis below stands; only
+> the "platform-agnostic / not the timer / route-through-dispatcher" conclusions
+> were wrong.
 
 At **conc 1, every variant ≈ 90/s, p50 ≈ 15.3 ms** (min 2.4 ms). The floor is
 *not* in the IOCP wake path: the reactor's `dispatcher_thread_main` blocks in
@@ -129,15 +145,18 @@ same box, only the execution context differs. So the floor lives in the
 **main-thread (non-coroutine) blocking-wait path** that an *inline* handler's
 `recv`/`accept` use, not in the event loop.
 
-This is **platform-agnostic**: the macOS parity run hit the *same* ~1,400/s at
-conc 16 (≈ the Windows serial figure), so the coarse main-thread wait is present
-there too. The only Windows-specific detail is the **bimodal quantization** of
-the distribution (min 2.4 ms vs p50 15.3 ms — the Windows 15.6 ms timer
-resolution sharpening it); `timeBeginPeriod(1)` would smooth that *shape* but not
-lift the floor, since the floor is the wait mechanism, not the timer. **Real
-fix (Linux follow-up): route main-thread blocking I/O through the same
-event-driven dispatcher path the spawned-coroutine handlers already use** — then
-an inline handler gets the spawn path's sub-ms latency.
+~~This is platform-agnostic…~~ **— refuted by the macOS measurement above.** The
+"macOS parity ~1,400/s at conc 16" data point that motivated this paragraph does
+not match the current code: measured macOS serial conc-16 is **12,716/s**
+(≈9× the cited figure), and conc-1 is 0.09 ms p50 with **no floor**. The bimodal
+min-2.4/p50-15.3 distribution is exactly the Windows 15.6 ms timer quantizing the
+wakeup (two parks per echo round-trip × ~7.8 ms half-tick ≈ 15.6 ms), and
+`timeBeginPeriod(1)` lowering that tick to ~1 ms is therefore the **right** lever
+(≈15× win), not a cosmetic one. **Real fix: Windows-only timer-resolution change,
+validated on the Windows box.** Do **not** route inline I/O through the
+spawn/coro dispatcher path — off Windows that path is *slower* (Finding 3's
+"spawn is ~5× faster" is itself a Windows-floor artifact; with the floor gone the
+ordering inverts).
 
 ## Finding 3 — the validation example under-represents runtime throughput ~5×
 
@@ -201,11 +220,19 @@ in this same change.
    leak-clean.** (An orthogonal anomaly surfaced while testing — moving a channel
    `Sender` into a free-spawn coroutine closes the channel before the send lands —
    is noted for separate investigation.)
-2. **Finding 2 — main-thread blocking-I/O latency floor.** Route a non-coroutine
-   (inline-handler / main-thread) blocking `recv`/`accept` through the
-   event-driven dispatcher path the spawned coroutines already use, so it gets
-   sub-ms latency instead of the ~15 ms floor. Validate with the conc-1 row of
-   the `ws_loop_client_soak.py` sweep (expect 90/s → multi-k/s).
+2. **Finding 2 — main-thread blocking-I/O latency floor. ⚠️ REASSESSED 2026-06-17
+   (measured) — the planned fix was wrong; the real fix is Windows-only.** Driving
+   `ws_loop_client_soak.py` against the serial `ws_echo` server on macOS measured
+   **conc-1 = 10,617/s, p50 0.09 ms** (no floor) — so the floor is the Windows
+   15.6 ms timer quantizing the wakeup, not a platform-agnostic main-thread-wait
+   cost (see the re-corrected Finding 2 above). Do **not** route inline I/O
+   through the spawn/coro dispatcher path — off Windows the serial path is already
+   *faster* than spawn (12.7k vs 6.3k/s at conc 16). **Actual fix:** raise the
+   Windows timer resolution (`timeBeginPeriod(1)` or a high-resolution
+   waitable-timer wait) in the Windows-cfg runtime init; **only validatable on a
+   Windows box** (the bench harness `ws_loop_client_soak.py` had a Windows-only
+   `SO_LINGER` layout that crashed off-Windows — fixed in this change to be
+   platform-aware). Expected Windows effect: p50 15.4 ms → ~1 ms.
 3. **Finding 4 — saturation/tail cliff above ~conc 64.** Root-cause the ~7k/s
    ceiling + p99→500 ms collapse (single accept loop? hot listener shard?
    global pool-queue contention?). Use the same soak client's percentile output.
