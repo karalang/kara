@@ -189,21 +189,28 @@ runtime.** `ws_loop_client_soak.py` burns ~3.1 cores of per-connection Python CP
 ~6.6k/s. Pointing **more clients at the same server** lifts it immediately: 1
 client = 6.6k/s, 2 = 8.5k/s, 4 = **16.0k/s**, 6 = 16.2k/s. The server's real
 ceiling is **~16k/s (spawn) / ~13k/s (serial)** — ~2.4× the reported figure. The
-"throughput regression at conc 256" is just the tail (see (2)) stealing wall-clock.
+"throughput regression at conc 256" is just the tail (see (3)) stealing wall-clock.
 
-**(2) The ceiling that *is* real is the single-threaded `main` accept loop —
-not pool-queue contention or a hot shard.** At the ~16k/s plateau the server uses
-only ~5.2 of 18 cores (serial: ~0.45 core — mostly parked), so **13 cores sit
-idle**; throughput is flat across conc while latency grows exactly as
-`conc/throughput` (Little's Law — the single-server-queue signature). The serial
-loop `loop { accept(); echo() }` and the spawn loop `loop { accept();
-tg.spawn(echo) }` both gate on `main` doing **accept + the WebSocket HTTP
-handshake serially per connection** (the echo is what spawn offloads, which is
-why spawn's accept rate is higher). Confirmed *not* global pool-queue contention
-(CPU is low, not lock-spinning) and *not* a hot listener shard (shards are idle).
-**Fix = parallelize accept:** multiple accept loops / threads on the listener, or
-have `main` do only the raw `accept` and spawn the *handshake too* (so only
-`accept(2)` stays on the serial path). Architectural / programming-model change.
+**(2) The ~16k/s ceiling is the kernel's loopback connection-churn rate, NOT the
+runtime — parallel accept does not help (tested).** It *looked* like the
+single-threaded `main` accept loop (flat throughput, latency = `conc/throughput`
+Little's-Law signature, ~13 of 18 cores idle at the plateau), so the natural fix
+was "parallelize accept." **Measured: it doesn't.** A `SO_REUSEPORT` prototype
+running **4 independent accept-loop processes on the same port** delivered the
+**same ~16k/s** aggregate (16,486/s) as one process — if the accept loop were the
+gate, 4 of them would give ~4×. So the limit is **shared system-wide**: the macOS
+loopback connection setup/teardown path (SYN/accept/close per round-trip), which
+the benchmark hammers because it opens a *new* connection per echo.
+
+The runtime itself is **not** the bottleneck — it parallelizes fine on the work
+that isn't connection churn. **Steady-state echo on *persistent* connections**
+(the flagship workload's actual shape) measured **65,070 echoes/s scaling to ~15
+of 18 cores** (4 clients × 16 persistent conns), 4× the churn ceiling and rising
+with cores — vs the same single client's 6.6k *conn/s* churn. So there is **no
+accept-loop fix to make**: the churn ceiling is the loopback, and the persistent
+workload already scales. (`SO_REUSEPORT` is still worth exposing later as an
+opt-in for multi-process deployment / graceful restart — but as a deployment
+feature, not a fix for this, since it gave zero throughput win here.)
 
 **(3) The tail collapse (p99 → ~1 s at conc > ~128) is the OS listen-backlog
 cap, not the runtime.** macOS `kern.ipc.somaxconn = 128` silently caps the
@@ -217,12 +224,14 @@ kern.ipc.somaxconn` / Windows equivalent), not a userspace runtime change.
 
 **Caveat — the benchmark over-weights connection churn.** It opens a *new*
 connection per round-trip (connect + handshake + 1 echo + RST-close), so it
-measures connection-*setup* throughput, which is exactly what the serial accept
-loop (2) and the backlog cap (3) gate. The flagship workload (1M *persistent*
-idle connections) does its accept churn only at ramp-up and is steady-state idle
-after — it does **not** hit either ceiling. So (2) matters for connection-churn
-workloads (proxies, short-lived RPC); for the launch headline it is not on the
-critical path.
+measures connection-*setup* throughput, which is exactly what the kernel loopback
+churn rate (2) and the backlog cap (3) gate. The flagship workload (1M
+*persistent* idle connections) does its accept churn only at ramp-up and is
+steady-state idle after — it does **not** hit either ceiling, and its steady-state
+I/O scales to ~15 cores (the 65k-echoes/s measurement in (2)). So both ceilings
+matter only for connection-churn workloads (proxies, short-lived RPC) and are
+kernel/OS-side; for the launch headline neither is on the critical path, and
+neither is a runtime defect.
 
 ## Follow-up worklist (all platform-agnostic — do on a Linux box)
 
@@ -275,18 +284,19 @@ in this same change.
    `SO_LINGER` layout that crashed off-Windows — fixed in this change to be
    platform-aware). Expected Windows effect: p50 15.4 ms → ~1 ms.
 3. **Finding 4 — saturation/tail cliff above ~conc 64. ✅ ROOT-CAUSED 2026-06-17
-   (measured) — see the rewritten Finding 4 above.** Three findings: (a) the
-   "~7k/s ceiling" was the single Python client (server scales to ~16k/s with 4–6
-   clients); (b) the real server ceiling (~16k/s spawn / ~13k/s serial, 13 of 18
-   cores idle) is the **single-threaded `main` accept+handshake loop** — not
-   pool-queue contention, not a hot shard — fixable only by parallelizing accept
-   (multiple accept loops, or spawn the handshake so only raw `accept(2)` stays
-   serial); (c) the p99→~1 s tail is the **OS listen-backlog cap** (macOS
-   `somaxconn=128`) dropping SYNs under connection-storm → ~1 s retransmit,
-   mitigated deployment-side. The benchmark over-weights connection churn; the
-   1M-persistent-connection launch workload hits none of these. The accept-loop
-   parallelization (b) is the only runtime-side follow-up, and it's architectural
-   — open for a dedicated session.
+   (measured) — see the rewritten Finding 4 above.** Three findings, **no runtime
+   fix needed**: (a) the "~7k/s ceiling" was the single Python client (server
+   scales to ~16k/s with 4–6 clients); (b) the ~16k/s churn ceiling is the
+   **kernel loopback connection-setup rate, NOT the accept loop** — a
+   `SO_REUSEPORT` 4-process test gave the *same* 16k (parallel accept = zero win),
+   while **steady-state echo on persistent connections hit 65k echoes/s scaling to
+   ~15 of 18 cores**, so the runtime is not the bottleneck; (c) the p99→~1 s tail
+   is the **OS listen-backlog cap** (macOS `somaxconn=128`) dropping SYNs under
+   connection-storm, mitigated deployment-side. The benchmark over-weights
+   connection churn; the 1M-persistent-connection launch workload hits none of
+   these and already scales. No follow-up — `SO_REUSEPORT` is worth exposing later
+   only as a *deployment* opt-in (multi-process / graceful restart), not as a perf
+   fix.
 4. **Finding 3 is informational** — no fix; just prefer the spawn shape for any
    throughput benchmark, and note that the spike's "~1,400/s" headline is the
    serial example's ceiling, not the runtime's.
