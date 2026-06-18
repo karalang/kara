@@ -10,6 +10,73 @@
 > free-spawn+coro variant is split out as B-2026-06-17-3).
 > The IOCP event loop itself — the subject of the port — held flawlessly; every
 > friction lives in the concurrency layer *above* it.
+> **One code change remains — Windows-only (Finding 2) — and it can only be
+> validated on Windows. The cold-start brief for it is the next section.**
+
+## ⇒ Remaining work (the only open code change): Finding 2 Windows timer fix — cold-start agent brief
+
+*Everything in this section is self-contained; the full diagnosis and the
+cross-platform measurements that justify it are in **Finding 2** and **Finding 4**
+below. Findings 1 & 3 are done; Finding 4 needs no code change (measured — its
+ceiling is the OS kernel/loopback, not the runtime). This is the one remaining
+fix.*
+
+**Problem (one line).** On Windows the inline (non-spawn) server — serial
+`ws_echo.kara`, `loop { accept(); echo() }` — pays a ~15 ms/op latency floor
+because the calling thread's wakeup from `karac_runtime_park_slot_wait`
+(`runtime/src/event_loop.rs:5287`, a `Condvar` signalled by the dispatcher's
+`karac_runtime_park_slot_signal` at `:5320`) is quantized to the Windows **15.6 ms
+system timer tick**. macOS pays **0.09 ms** for the *same* wait — proof the floor
+is the timer, not the wait mechanism. Two parks per echo round-trip × ~7.8 ms
+half-tick ≈ the observed 15.6 ms.
+
+**Fix.** Raise the Windows timer resolution to 1 ms for the server process.
+
+- **Where:** the one-time reactor init — the `OnceLock::get_or_init` inside
+  `event_loops()` at `runtime/src/event_loop.rs:828` (runs once, on first
+  park/register, for the process lifetime). Add a `#[cfg(windows)]` one-shot
+  there, e.g. a `#[cfg(windows)] fn ensure_high_res_timer()` it calls.
+- **API:** `timeBeginPeriod(1)` from `winmm.dll`. The runtime has **no
+  `windows-sys`/`winapi` dependency today** (verified — `runtime/Cargo.toml`), so
+  either add one under `[target.'cfg(windows)'.dependencies]`
+  (`windows-sys` with the `Win32_Media` feature) **or** declare a minimal raw
+  extern and link `winmm`:
+  ```rust
+  #[cfg(windows)]
+  #[link(name = "winmm")]
+  extern "system" { fn timeBeginPeriod(uPeriod: u32) -> u32; }
+  ```
+- **Guardrails / caveats:**
+  - `timeBeginPeriod` is **process-scoped on Windows 10 2004+** (no longer
+    system-global), so the blast radius is just this process — acceptable for a
+    server. It raises the idle timer-interrupt rate (minor power cost); that's the
+    accepted trade. No `timeEndPeriod` needed (the process serves until exit).
+  - Heavier alternative if you'd rather not touch the global timer: replace the
+    park `Condvar` wait with a high-resolution waitable timer
+    (`CreateWaitableTimerExW` + `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION`). Bigger
+    change — `timeBeginPeriod(1)` is the ~3-line win; start there.
+  - **Do NOT** "route inline I/O through the spawn/coro dispatcher path" (an
+    earlier proposed fix in Finding 2's original text): measured off-Windows that
+    path is *slower* than the inline path (see Finding 3). The timer is the whole
+    problem; don't re-architect the I/O model.
+
+**Repro (Windows).** Build per the [Reproduction](#reproduction) block below, then:
+```
+karac build examples/std_net/ws_echo.kara          # serial / inline path
+ws_echo                                            # binds 127.0.0.1:8080 (run in another shell)
+python examples/std_net/ws_loop_client_soak.py 127.0.0.1 8080 10000 1
+```
+**Before (conc 1):** `p50 ≈ 15.3 ms, ~90/s`. **After (target):** `p50 ≈ 1 ms,
+multi-k/s`. macOS reference (no floor): `p50 0.09 ms, ~10.6k/s`. The harness'
+`SO_LINGER` was already made cross-platform (commit `6136446e`) and runs as-is on
+Windows.
+
+**Done =** (a) Windows conc-1 p50 drops ~15 ms → ~1 ms on the serial server;
+(b) the spawn/coro server is unchanged (it never paid the floor — sanity-check it
+didn't regress); (c) flip **Finding 2** below to FIXED with the measured Windows
+before/after numbers + the commit SHA, and tick worklist item 2. Cheap regression
+guard: assert conc-1 p50 < a few ms in a Windows bench if CI has one; otherwise
+record the manual repro numbers in the commit message.
 
 ## What was run
 
@@ -271,7 +338,9 @@ in this same change.
    `Sender` into a free-spawn coroutine closes the channel before the send lands —
    is noted for separate investigation.)
 2. **Finding 2 — main-thread blocking-I/O latency floor. ⚠️ REASSESSED 2026-06-17
-   (measured) — the planned fix was wrong; the real fix is Windows-only.** Driving
+   (measured) — the planned fix was wrong; the real fix is Windows-only. → THE
+   ONLY OPEN CODE CHANGE; cold-start brief in the "Remaining work" section at the
+   top of this doc.** Driving
    `ws_loop_client_soak.py` against the serial `ws_echo` server on macOS measured
    **conc-1 = 10,617/s, p50 0.09 ms** (no floor) — so the floor is the Windows
    15.6 ms timer quantizing the wakeup, not a platform-agnostic main-thread-wait
