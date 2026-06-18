@@ -9062,6 +9062,48 @@ fn main() {
     }
 
     #[test]
+    fn asan_discarded_taskgroup_spawn_loop_eager_reap_no_double_free() {
+        // B-2026-06-17-2 — the canonical server shape `loop { tg.spawn(|| …) }`
+        // discards each child's `TaskHandle`. Codegen now marks the discarded
+        // handle detached (`karac_runtime_task_detach`), and the runtime
+        // eager-reaps detached, completed children inside
+        // `karac_runtime_taskgroup_register`'s sweep — bounding the group's
+        // `children` Vec instead of leaking ~100 B/conn unbounded.
+        //
+        // This E2E drives the FULL path (codegen detach emission + register-time
+        // sweep + scope-exit `join_and_free`) under ASAN/LSan. Its job is to
+        // pin the UAF-prone hazard the spike flagged: the sweep and the
+        // scope-exit join must never both free the same child (double-free), and
+        // the sweep's terminal-peek must never free a still-running child (UAF).
+        // The `join_and_free` barrier at the group's scope exit makes the run
+        // deterministic — every child is reclaimed before exit, so Linux LSan
+        // also confirms no leak. (The fails-before-fix leak *regression* lives in
+        // the runtime unit test `taskgroup_register_reaps_detached_completed_
+        // children`, which asserts the Vec stays bounded; an at-exit LSan check
+        // can't catch the leak because `join_and_free` reclaims everything when
+        // a finite scope exits.)
+        assert_clean_asan_run_with_concurrency(
+            r#"
+fn work(n: i64) -> i64 {
+    n + 1
+}
+fn main() {
+    let mut tg = TaskGroup.new();
+    let mut i = 0;
+    while i < 2000 {
+        let c = i;
+        tg.spawn(|| work(c));
+        i = i + 1;
+    }
+    println(0);
+}
+"#,
+            &["0"],
+            "discarded_taskgroup_spawn_loop_eager_reap_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_bounded_channel_scope_exit_single_free() {
         // `BoundedChannel.new` allocates a runtime queue; the `BoundedChannel`
         // Drop frees it (and any undrained payloads) exactly once at scope

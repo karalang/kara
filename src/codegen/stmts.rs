@@ -1150,6 +1150,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.pending_map_insert_old_dec = true;
             }
         }
+
+        // B-2026-06-17-2 — a discarded `spawn(...);` / `tg.spawn(...);` throws
+        // away its `TaskHandle`, so no join will ever free the runtime handle.
+        // Flag it (cleared unconditionally so a prior statement never bleeds
+        // through) for `lower_spawn_shared` to mark detached → eager-reaped.
+        self.pending_spawn_detach = Self::stmt_is_discarded_spawn(stmt);
         match &stmt.kind {
             // Slice 5 (general owned-temp tracking): `let _ = make();` /
             // `let _ = { make() };` discards a fresh owned temp with no
@@ -4731,6 +4737,40 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         None
+    }
+
+    /// B-2026-06-17-2 — is `stmt` a **discarded** `spawn(...)` / `tg.spawn(...)`?
+    /// True for a bare `spawn(c);` / `obj.spawn(c);` expression-statement or a
+    /// `let _ = spawn(c)` / `let _ = obj.spawn(c)`, i.e. the spawn call is the
+    /// statement's head expression so its result `TaskHandle` is the value the
+    /// statement throws away (never bound, never `.join()`ed). Drives
+    /// `pending_spawn_detach`, which `lower_spawn_shared` consumes to emit a
+    /// `karac_runtime_task_detach` so the runtime eager-reaps the handle.
+    ///
+    /// Syntactic by design: the flag is only ever *consumed* when a genuine
+    /// `spawn` / `TaskGroup.spawn` lowering runs, so an `obj.spawn(...)` on some
+    /// unrelated type never reaches the detach emission, and the flag is reset
+    /// at the next statement regardless. Restricting to the *head* expression
+    /// (not arbitrary nested calls) is what keeps a `process(spawn(|| …))` —
+    /// where the handle is handed to `process`, not discarded — from being
+    /// wrongly detached.
+    pub(super) fn stmt_is_discarded_spawn(stmt: &Stmt) -> bool {
+        let expr: &Expr = match &stmt.kind {
+            StmtKind::Let { pattern, value, .. }
+                if matches!(&pattern.kind, PatternKind::Wildcard) =>
+            {
+                value
+            }
+            StmtKind::Expr(e) => e,
+            _ => return false,
+        };
+        match &expr.kind {
+            ExprKind::Call { callee, args } => {
+                args.len() == 1 && matches!(&callee.kind, ExprKind::Identifier(n) if n == "spawn")
+            }
+            ExprKind::MethodCall { method, args, .. } => method == "spawn" && args.len() == 1,
+            _ => false,
+        }
     }
 
     /// General owned-temp tracking discard gate (see

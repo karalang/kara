@@ -1392,6 +1392,15 @@ pub(super) struct Codegen<'ctx> {
     /// handles the +1; the discard path is the only one that needs
     /// the receive-site dec.
     pub(crate) pending_map_insert_old_dec: bool,
+    /// B-2026-06-17-2 — set by `compile_stmt` when the statement being lowered
+    /// is a discarded `spawn(...)` / `tg.spawn(...)` (a bare expression-
+    /// statement or `let _ = …`), whose result `TaskHandle` is never bound or
+    /// joined. Consumed (read + cleared) inside `lower_spawn_shared`, which
+    /// emits a `karac_runtime_task_detach(handle)` call so the runtime
+    /// eager-reaps the handle instead of leaking it. Set false unconditionally
+    /// at the top of `compile_stmt` so a prior statement's value never bleeds
+    /// into an unrelated spawn lowered as a subexpression.
+    pub(crate) pending_spawn_detach: bool,
     /// Staging slot — set by `compile_expr`'s `InterpolatedStringLit` arm
     /// to the f-string's accumulator alloca. The Let / Assign handlers
     /// consume it when the RHS is an f-string AND the LHS is a tracked
@@ -4024,6 +4033,19 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // `karac_runtime_task_detach(handle: ptr)` — B-2026-06-17-2. Mark a
+        // spawn handle detached (its call-site `TaskHandle` is discarded, never
+        // bound/joined) so the runtime eager-reaps it instead of leaking: a
+        // free-spawn handle self-reaps on completion, a `tg.spawn` child is
+        // reaped by the group's register-time sweep. Emitted by
+        // `lower_spawn_shared` when `pending_spawn_detach` is set.
+        let task_detach_ty = context.void_type().fn_type(&[ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_task_detach",
+            task_detach_ty,
+            Some(Linkage::External),
+        );
+
         // Phase 6 line 218 slice 5 — TaskGroup container FFI.
         //
         // `karac_runtime_taskgroup_new() -> ptr` — allocate a fresh
@@ -4726,6 +4748,7 @@ impl<'ctx> Codegen<'ctx> {
             pending_closure_fn_type: None,
             pending_closure_param_hints: None,
             pending_map_insert_old_dec: false,
+            pending_spawn_detach: false,
             last_fstr_acc: None,
             shared_types: HashMap::new(),
             malloc_fn,

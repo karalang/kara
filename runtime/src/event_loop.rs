@@ -5302,6 +5302,34 @@ pub unsafe extern "C" fn karac_runtime_park_slot_signal(slot: *mut KaracParkSlot
     s.cv.notify_one();
 }
 
+/// Non-blocking peek at whether the slot has been signalled. Unlike
+/// [`karac_runtime_park_slot_wait`] this never blocks: it locks the `done`
+/// mutex, reads the flag, and returns. `true` means the dispatcher has already
+/// signalled completion (the coroutine bound to this slot has finished); the
+/// lock-acquire establishes the same happens-before edge `wait` relies on, so
+/// a `true` return guarantees `signal` has released the mutex and will not
+/// touch the slot again.
+///
+/// B-2026-06-17-2 — the group's register-time eager-reap
+/// ([`crate::scheduler::karac_runtime_taskgroup_register`]) uses this to tell a
+/// terminal coro child apart from a still-parked one without blocking the
+/// accept loop.
+///
+/// # Safety
+///
+/// `slot` must be a live pointer from [`karac_runtime_park_slot_new`], not yet
+/// freed.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_park_slot_done(slot: *const KaracParkSlot) -> bool {
+    if slot.is_null() {
+        return false;
+    }
+    // SAFETY: caller's contract — `slot` is live.
+    let s = unsafe { &*slot };
+    let done = s.done.lock().unwrap_or_else(|p| p.into_inner());
+    *done
+}
+
 /// Free a park slot. Idempotent on null; must be called exactly once per
 /// [`karac_runtime_park_slot_new`], after the matching `wait` returns.
 ///

@@ -141,6 +141,11 @@ impl<'ctx> super::Codegen<'ctx> {
         closure_expr: &Expr,
         group_ptr: Option<BasicValueEnum<'ctx>>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // B-2026-06-17-2 — consume the discard flag now, before the closure
+        // body is lowered into the wrapper, so a `spawn` nested in the body
+        // doesn't inherit this site's detach. Emitted after the handle is
+        // created and (for `tg.spawn`) registered.
+        let detach_handle = std::mem::take(&mut self.pending_spawn_detach);
         let (params, body) = match &closure_expr.kind {
             ExprKind::Closure { params, body, .. } => (params.as_slice(), body.as_ref()),
             _ => {
@@ -534,6 +539,25 @@ impl<'ctx> super::Codegen<'ctx> {
             let _ = self
                 .builder
                 .build_call(register_fn, &[g.into(), handle_ptr.into()], "")
+                .unwrap();
+        }
+
+        // B-2026-06-17-2 — a discarded handle (bare `spawn(...);` /
+        // `tg.spawn(...);`) is never bound or joined, so nothing will ever free
+        // the runtime handle through the join path. Mark it detached so the
+        // runtime eager-reaps it: a free-spawn handle self-reaps on completion;
+        // a `tg.spawn` child is reaped by the group's register-time sweep.
+        // Emitted *after* register so the child is already `registered` when
+        // detach runs — the detach path checks that flag to leave a group child
+        // for the sweep rather than self-freeing it.
+        if detach_handle {
+            let detach_fn = self
+                .module
+                .get_function("karac_runtime_task_detach")
+                .expect("karac_runtime_task_detach declared in Codegen::new");
+            let _ = self
+                .builder
+                .build_call(detach_fn, &[handle_ptr.into()], "")
                 .unwrap();
         }
 

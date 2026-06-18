@@ -113,6 +113,26 @@ pub struct KaracTaskHandle {
     /// consumed twice (the join frees, then group-drop joins a dangling
     /// pointer) → use-after-free → SIGSEGV.
     registered: AtomicBool,
+    /// B-2026-06-17-2 — set true by [`karac_runtime_task_detach`] when codegen
+    /// determines the call-site `TaskHandle` is **discarded** (a bare
+    /// `spawn(...);` / `tg.spawn(...);` expression-statement, never bound or
+    /// joined). A detached handle has no joiner, so the join path can never
+    /// free it; instead it is reaped eagerly — a free-spawn detached handle
+    /// self-reaps on completion (see the worker run-closure + the detach
+    /// path's [`try_reap_detached_free_spawn`]), and a `tg.spawn` detached
+    /// child is reaped by the group's register-time sweep
+    /// ([`karac_runtime_taskgroup_register`]). Without this, every discarded
+    /// spawn in a long-lived accept loop leaks its handle (+ park slot for the
+    /// coro path), ~100 B/conn unbounded.
+    detached: AtomicBool,
+    /// B-2026-06-17-2 — claims the detached-self-reap free exactly once. Both
+    /// the worker's completion block and [`karac_runtime_task_detach`] race to
+    /// reap a free-spawn detached handle (either may observe "detached AND
+    /// terminal" second); whichever sets this from `false` performs the free.
+    /// All transitions happen under `notify_mutex`, so the bool is effectively
+    /// a guarded flag — atomic only for the `Sync` requirement. Unused by the
+    /// group-sweep path (the group is the sole freer of a registered child).
+    reaped: AtomicBool,
 }
 
 // SAFETY: KaracTaskHandle stores a raw `*mut u8` (result_buf) which is
@@ -205,6 +225,8 @@ pub unsafe extern "C" fn karac_runtime_spawn(
         notify_cv: Condvar::new(),
         coro_slot: std::ptr::null_mut(),
         registered: AtomicBool::new(false),
+        detached: AtomicBool::new(false),
+        reaped: AtomicBool::new(false),
     });
     let handle_ptr: *mut KaracTaskHandle = Box::into_raw(handle_box);
 
@@ -245,17 +267,41 @@ pub unsafe extern "C" fn karac_runtime_spawn(
             // Take the mutex, write the terminal state, then notify.
             // Holding the mutex during the write ensures the joiner's
             // wait_while check observes the post-write state.
-            let _g = handle
-                .notify_mutex
-                .lock()
-                .unwrap_or_else(|p| p.into_inner());
-            let terminal = if panicked {
-                TASK_STATE_PANICKED
-            } else {
-                TASK_STATE_COMPLETED
+            //
+            // B-2026-06-17-2 — under the same lock, decide whether this
+            // completion is responsible for reaping a *detached* free-spawn
+            // handle (a discarded `spawn(...);` with no joiner to free it).
+            // Deciding under the lock serializes against the detach path
+            // ([`karac_runtime_task_detach`]), which takes the same mutex, so
+            // the free is claimed exactly once: whichever party observes
+            // "detached AND terminal" second sets `reaped` and frees, and the
+            // first never touches the handle after releasing the lock. Only
+            // free-spawn (unregistered), non-coro handles self-reap here —
+            // registered children are the group's to free (the register-time
+            // sweep), and coro free-spawn completion is the dispatcher's.
+            let should_free = {
+                let _g = handle
+                    .notify_mutex
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner());
+                let terminal = if panicked {
+                    TASK_STATE_PANICKED
+                } else {
+                    TASK_STATE_COMPLETED
+                };
+                handle.state.store(terminal, Ordering::Release);
+                handle.notify_cv.notify_all();
+                !handle.registered.load(Ordering::Acquire)
+                    && handle.coro_slot.is_null()
+                    && handle.detached.load(Ordering::Acquire)
+                    && !handle.reaped.swap(true, Ordering::AcqRel)
             };
-            handle.state.store(terminal, Ordering::Release);
-            handle.notify_cv.notify_all();
+            if should_free {
+                // SAFETY: we claimed the sole free via `reaped` under the
+                // lock; the handle is detached (no joiner) and the detach
+                // path observed `reaped` set, so no other reference remains.
+                unsafe { free_handle(handle_addr as *mut KaracTaskHandle) };
+            }
         }),
     };
 
@@ -335,6 +381,8 @@ pub unsafe extern "C" fn karac_runtime_spawn_coro(
         notify_cv: Condvar::new(),
         coro_slot: slot,
         registered: AtomicBool::new(false),
+        detached: AtomicBool::new(false),
+        reaped: AtomicBool::new(false),
     });
     let handle_ptr: *mut KaracTaskHandle = Box::into_raw(handle_box);
 
@@ -573,6 +621,36 @@ unsafe fn free_handle(handle: *mut KaracTaskHandle) {
     // `boxed` drops here, releasing the Mutex / Condvar / AtomicU8 / etc.
 }
 
+/// B-2026-06-17-2 — non-blocking test for "this registered child is detached
+/// **and** has reached a terminal state", used by the group's register-time
+/// eager-reap. A `true` result means the child can be freed now without a
+/// joiner and without blocking.
+///
+/// The terminal probe establishes the same happens-before edge the join path
+/// relies on before freeing:
+/// - **coro child** (`coro_slot` non-null): terminal == the dispatcher has
+///   signalled the bound slot, read non-blockingly via `park_slot_done` (its
+///   mutex-acquire orders our free after the dispatcher's last slot touch).
+/// - **non-coro child**: terminal == the worker stored a terminal state;
+///   acquiring `notify_mutex` guarantees the worker has finished its locked
+///   store+notify and will not touch the handle again.
+///
+/// # Safety
+///
+/// `child` must be a non-null live `*mut KaracTaskHandle`.
+unsafe fn child_is_terminal_detached(child: *mut KaracTaskHandle) -> bool {
+    let h = &*child;
+    if !h.detached.load(Ordering::Acquire) {
+        return false;
+    }
+    if !h.coro_slot.is_null() {
+        crate::event_loop::karac_runtime_park_slot_done(h.coro_slot)
+    } else {
+        let _g = h.notify_mutex.lock().unwrap_or_else(|p| p.into_inner());
+        h.state.load(Ordering::Acquire) != TASK_STATE_PENDING
+    }
+}
+
 /// Read the task's current state without joining. Returns one of the
 /// `TASK_STATE_*` constants. Useful for tests + future polling APIs.
 ///
@@ -589,6 +667,54 @@ pub unsafe extern "C" fn karac_runtime_task_state(handle: *const KaracTaskHandle
         return TASK_STATE_CANCELLED;
     }
     (*handle).state.load(Ordering::Acquire)
+}
+
+/// B-2026-06-17-2 — mark a `spawn`/`tg.spawn` handle **detached**. Codegen
+/// emits this at a spawn site whose result `TaskHandle` is discarded (a bare
+/// `spawn(...);` / `tg.spawn(...);` expression-statement, never bound or
+/// `.join()`ed). A detached handle has no joiner, so the ordinary
+/// join-frees-the-handle path can never reclaim it — detach enables eager
+/// reaping instead, closing the per-connection leak in long-lived accept
+/// loops (`loop { tg.spawn(|| handle(conn)) }`).
+///
+/// For a **free-spawn** handle (not registered with any group, non-coro) this
+/// also performs the detach side of the self-reap handshake: if the task has
+/// already completed, the worker's completion block found `detached == false`
+/// and skipped the free, so detach reclaims the handle here. The decision is
+/// taken under `notify_mutex` — the same lock the worker holds while storing
+/// terminal state — so the free is claimed exactly once across the two
+/// parties (see `karac_runtime_spawn`'s completion block).
+///
+/// A **registered** (`tg.spawn`) handle is never freed here — the owning group
+/// reaps detached children in [`karac_runtime_taskgroup_register`]'s sweep. A
+/// **coro** free-spawn handle is likewise only flagged (its completion is
+/// dispatcher-driven; the coro free-spawn self-reap is a follow-up slice).
+///
+/// # Safety
+///
+/// `handle` must be a non-null live `*mut KaracTaskHandle` from
+/// `karac_runtime_spawn` / `karac_runtime_spawn_coro`, not already freed.
+/// Codegen only emits this for discarded handles, which are never joined, so
+/// it runs at most once per handle and never races an explicit `.join()`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_task_detach(handle: *mut KaracTaskHandle) {
+    if handle.is_null() {
+        return;
+    }
+    let should_free = {
+        let h = &*handle;
+        let _g = h.notify_mutex.lock().unwrap_or_else(|p| p.into_inner());
+        h.detached.store(true, Ordering::Release);
+        // Mirror the worker's claim (see `karac_runtime_spawn`): only a
+        // terminal, non-coro, unregistered handle self-reaps, exactly once.
+        !h.registered.load(Ordering::Acquire)
+            && h.coro_slot.is_null()
+            && h.state.load(Ordering::Acquire) != TASK_STATE_PENDING
+            && !h.reaped.swap(true, Ordering::AcqRel)
+    };
+    if should_free {
+        free_handle(handle);
+    }
 }
 
 // ── TaskGroup container — slice 5 ──────────────────────────────────────────
@@ -671,6 +797,30 @@ pub unsafe extern "C" fn karac_runtime_taskgroup_register(
     let g = &*group;
     let mut children = g.children.lock().unwrap_or_else(|p| p.into_inner());
     children.push(child);
+
+    // B-2026-06-17-2 — eager-reap detached, completed children. The canonical
+    // server shape `loop { tg.spawn(|| handle(conn)) }` creates the group once
+    // and never exits its scope, so without this every completed child's
+    // handle (+ park slot, for the coro path) is retained in `children`
+    // forever — ~100 B/conn, unbounded. Sweeping here bounds the Vec to the
+    // count of concurrently-live children (~conc): each freshly registered
+    // spawn pays one O(live) pass that frees any sibling that has since
+    // finished. Only **detached** children (the discarded fire-and-forget
+    // shape) are reaped — a child whose handle the user retained for `.join()`
+    // is never detached, so it stays for scope-exit `join_and_free`, preserving
+    // the structured wait guarantee and the B-2026-06-09-1 sole-freer
+    // invariant. `child_is_terminal_detached` is a UAF-safe non-blocking probe.
+    children.retain(|&c| {
+        if child_is_terminal_detached(c) {
+            // Detached + terminal + registered: the group is the sole freer and
+            // no joiner exists, so free now and drop from the Vec — scope-exit
+            // `join_and_free` then never sees (and never double-frees) it.
+            free_handle(c);
+            false
+        } else {
+            true
+        }
+    });
 }
 
 /// Block until every registered child has reached a terminal state,
@@ -1006,6 +1156,116 @@ mod tests {
             karac_runtime_taskgroup_join_and_free(group);
             // All 16 children must have completed before drop returned.
             assert_eq!(counter.load(AtomicOrdering::Relaxed), 16);
+        }
+    }
+
+    // ── B-2026-06-17-2 — eager-reap of detached children ─────────────
+
+    #[test]
+    fn taskgroup_register_reaps_detached_completed_children() {
+        // Regression for B-2026-06-17-2: the canonical server shape
+        // `loop { tg.spawn(|| handle(conn)) }` creates the group once and never
+        // exits its scope, so without the register-time sweep every completed
+        // child's handle is retained in `children` forever — ~100 B/conn,
+        // unbounded. Drive the sweep directly: register a detached child, wait
+        // for it to complete, then register the next; the `children` Vec must
+        // stay bounded (the previous, now-terminal child is reaped on each
+        // register) rather than growing with the iteration count.
+        const ITERS: usize = 200;
+        let counter = AtomicU32::new(0);
+        unsafe {
+            let group = karac_runtime_taskgroup_new();
+            let mut max_children = 0usize;
+            for _ in 0..ITERS {
+                let h = karac_runtime_spawn(
+                    inc_counter_wrapper,
+                    &counter as *const AtomicU32 as *mut c_void,
+                    0,
+                    1,
+                );
+                assert!(!h.is_null());
+                // Match codegen's discard lowering order: register, then detach.
+                karac_runtime_taskgroup_register(group, h);
+                karac_runtime_task_detach(h);
+
+                // Wait for this child to reach a terminal state so the *next*
+                // register's sweep is guaranteed to reap it.
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while karac_runtime_task_state(h) == TASK_STATE_PENDING {
+                    if Instant::now() > deadline {
+                        panic!("detached child did not complete within budget");
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+
+                let len = {
+                    let g = &*group;
+                    let children = g.children.lock().unwrap_or_else(|p| p.into_inner());
+                    children.len()
+                };
+                max_children = max_children.max(len);
+            }
+            // With the sweep, `children` never holds more than the freshly
+            // registered child plus at most one not-yet-swept sibling — far
+            // below ITERS. Pre-fix this grows to ITERS (the assertion fails).
+            assert!(
+                max_children <= 4,
+                "children Vec grew to {max_children} (expected bounded ≤ 4) — \
+                 the detached eager-reap sweep is not bounding retention",
+            );
+            karac_runtime_taskgroup_join_and_free(group);
+            assert_eq!(counter.load(AtomicOrdering::Relaxed), ITERS as u32);
+        }
+    }
+
+    #[test]
+    fn detached_free_spawn_self_reaps_after_completion() {
+        // A discarded free `spawn(...)` (no group, non-coro) must self-reap its
+        // handle on completion — there is no joiner to free it. We can't assert
+        // the free directly without ASAN/LSan (that's the memory_sanitizer E2E),
+        // but we can pin the handshake's observable behavior: detach AFTER the
+        // task has already completed must still reclaim (and not deadlock /
+        // double-panic). Run both orderings.
+        let counter = AtomicU32::new(0);
+        unsafe {
+            // Ordering A: detach while the task may still be in flight (the
+            // worker's completion block performs the reap).
+            for _ in 0..32 {
+                let h = karac_runtime_spawn(
+                    inc_counter_wrapper,
+                    &counter as *const AtomicU32 as *mut c_void,
+                    0,
+                    1,
+                );
+                karac_runtime_task_detach(h);
+            }
+            // Ordering B: wait for terminal, THEN detach (the detach path
+            // performs the reap).
+            for _ in 0..32 {
+                let h = karac_runtime_spawn(
+                    inc_counter_wrapper,
+                    &counter as *const AtomicU32 as *mut c_void,
+                    0,
+                    1,
+                );
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while karac_runtime_task_state(h) == TASK_STATE_PENDING {
+                    if Instant::now() > deadline {
+                        panic!("free-spawn task did not complete within budget");
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                karac_runtime_task_detach(h);
+            }
+            // Give ordering-A workers time to finish incrementing.
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while counter.load(AtomicOrdering::Relaxed) < 64 {
+                if Instant::now() > deadline {
+                    panic!("not all detached free-spawn tasks ran");
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert_eq!(counter.load(AtomicOrdering::Relaxed), 64);
         }
     }
 
