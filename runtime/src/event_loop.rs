@@ -844,6 +844,11 @@ fn event_loops() -> &'static [Arc<EventLoop>] {
             unsafe {
                 libc::signal(libc::SIGPIPE, libc::SIG_IGN);
             }
+            // Raise the Windows system timer resolution to 1 ms for this
+            // process. Same one-time, network-scoped placement as the SIGPIPE
+            // mask above, and for a parallel reason: see `ensure_high_res_timer`.
+            #[cfg(windows)]
+            ensure_high_res_timer();
             let n = resolve_shard_count();
             let mut loops = Vec::with_capacity(n);
             let mut handles = Vec::with_capacity(n);
@@ -862,6 +867,40 @@ fn event_loops() -> &'static [Arc<EventLoop>] {
             loops
         })
         .as_slice()
+}
+
+/// Raise the Windows system timer resolution to 1 ms for the lifetime of the
+/// server process. Called once from the reactor's one-time init.
+///
+/// Why: the inline (non-spawn) blocking-I/O path parks the calling thread on a
+/// `Condvar` (`karac_runtime_park_slot_wait`) that the dispatcher signals when a
+/// socket is ready. The wakeup latency of that handoff is quantized to the
+/// Windows system timer tick, which defaults to **15.6 ms**. A serial
+/// `loop { accept(); echo() }` server does two parks per echo round-trip, so it
+/// pays ~2 × 7.8 ms ≈ a ~15 ms p50 latency floor — purely an artifact of the
+/// coarse timer, not the IOCP wake path or the wait mechanism (macOS pays
+/// 0.09 ms for the *same* wait). `timeBeginPeriod(1)` lowers the tick to 1 ms,
+/// dropping that floor to ~1 ms (~15× win on the serial server; the spawn/coro
+/// path never paid it). See
+/// `docs/spikes/windows-iocp-scale-investigation.md` Finding 2.
+///
+/// `timeBeginPeriod` is process-scoped on Windows 10 2004+ (no longer
+/// system-global), so the blast radius is just this process — acceptable for a
+/// server, at the cost of a slightly higher idle timer-interrupt rate. No
+/// matching `timeEndPeriod` is needed: the process serves until exit, and the
+/// resolution is released automatically when it terminates.
+#[cfg(windows)]
+fn ensure_high_res_timer() {
+    #[link(name = "winmm")]
+    extern "system" {
+        fn timeBeginPeriod(uPeriod: u32) -> u32;
+    }
+    // Best-effort: a non-`TIMERR_NOERROR` return just means the tick stays
+    // coarse (the latency floor persists, nothing breaks), so there is nothing
+    // actionable to do with the result.
+    unsafe {
+        let _ = timeBeginPeriod(1);
+    }
 }
 
 /// Number of reactor shards (frozen at first [`event_loops`] call).

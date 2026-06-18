@@ -588,6 +588,14 @@ fn link_executable_windows(
         "ntdll",
         "dbghelp",
         "kernel32",
+        // `timeBeginPeriod` — the runtime's reactor init raises the system timer
+        // resolution to 1 ms on Windows (`event_loop.rs::ensure_high_res_timer`,
+        // killing the serial blocking-I/O path's ~15 ms timer-quantized latency
+        // floor; see docs/spikes/windows-iocp-scale-investigation.md Finding 2).
+        // The runtime's `#[link(name = "winmm")]` directive is what makes cargo's
+        // own test/build links resolve it; this AOT driver names system libs
+        // explicitly, so it must list winmm too.
+        "winmm",
         // The classic stdio functions codegen references as symbols — `printf`
         // (panic-site message printing) and friends — are header-inline-only in
         // the MSVC UCRT, so the actual symbols come from this CRT shim lib
