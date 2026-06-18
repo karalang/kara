@@ -5595,6 +5595,34 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_ref_array_index_read_and_mut_store() {
+        // B-2026-06-17-1: indexing a `ref`/`mut ref Array[T, N]` param used to
+        // fail codegen ("Index operator applied to non-array type") because the
+        // borrow slot's LLVM type is `ptr`, not `[N x T]`, and the dispatcher had
+        // no ref-Array route. `ref_array_index_target` loads the data pointer and
+        // GEPs through the recorded `[N x T]`, for both index-read and
+        // index-store. `read_ref` reads through a `ref` borrow; `store_mut`
+        // writes through a `mut ref` borrow; the write is observable back in the
+        // owner via indexing.
+        let src = r#"
+fn read_ref(xs: ref Array[i64, 4]) -> i64 { xs[0] + xs[3] }
+fn store_mut(xs: mut ref Array[i64, 4]) { xs[2] = 99; }
+
+fn main() {
+    let mut a: Array[i64, 4] = [10, 20, 30, 40];
+    let r = read_ref(a);
+    store_mut(mut a);
+    println(r);
+    println(a[2]);
+}
+"#;
+        let out = run_program(src);
+        if let Some(out) = out {
+            assert_eq!(out, "50\n99\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_ptr_dangling_is_not_null() {
         // ptr.dangling() returns a non-null pointer; ptr.is_null
         // observes false.

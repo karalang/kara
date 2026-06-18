@@ -777,6 +777,41 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(agg.into())
     }
 
+    /// `ref`/`mut ref Array[T, N]` index target (B-2026-06-17-1).
+    ///
+    /// A borrowed fixed array param's slot holds the BORROW — an alloca
+    /// containing a `ptr` to the caller's `[N x T]` storage — and its slot LLVM
+    /// type is therefore `ptr`, not `[N x T]`. The generic `compile_index` /
+    /// `compile_index_store` tail dispatches on `slot.ty` and so falls past its
+    /// `ArrayType` branch into the "non-array type" error. `ref_params[name]`
+    /// already records the inner `[N x T]` array type (`inner_type_of_ref`), so
+    /// here we load the data pointer from the slot and hand back that pointer +
+    /// the `[N x T]` type; the existing `ArrayType` arm then bounds-checks and
+    /// GEPs exactly as for a local array. Returns `None` for any binding that is
+    /// not a ref-Array param (owned arrays, ref Vec/Slice/Map/etc. — all routed
+    /// elsewhere), so non-Array dispatch is untouched. This mirrors the explicit
+    /// `ref Vec[T]` route, which exists for the same `ptr`-slot reason.
+    fn ref_array_index_target(
+        &self,
+        name: &str,
+    ) -> Option<(PointerValue<'ctx>, BasicTypeEnum<'ctx>)> {
+        let slot = self.variables.get(name)?;
+        let arr_ty = self.ref_params.get(name).copied()?;
+        if !matches!(arr_ty, BasicTypeEnum::ArrayType(_)) {
+            return None;
+        }
+        let data_ptr = self
+            .builder
+            .build_load(
+                self.context.ptr_type(AddressSpace::default()),
+                slot.ptr,
+                "refarr.data.ptr",
+            )
+            .unwrap()
+            .into_pointer_value();
+        Some((data_ptr, arr_ty))
+    }
+
     pub(super) fn compile_index(
         &mut self,
         object: &Expr,
@@ -1028,7 +1063,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // pointer + type carries the same role — we use the global's
         // pointer and the binding's recorded llvm_ty for the GEP.
         let (arr_ptr, arr_ty) = if let ExprKind::Identifier(name) = &object.kind {
-            if let Some(slot) = self.variables.get(name.as_str()).copied() {
+            if let Some((data_ptr, ref_arr_ty)) = self.ref_array_index_target(name) {
+                (data_ptr, ref_arr_ty)
+            } else if let Some(slot) = self.variables.get(name.as_str()).copied() {
                 (slot.ptr, slot.ty)
             } else if let Some(info) = self.module_bindings.get(name.as_str()) {
                 (info.global.as_pointer_value(), info.llvm_ty)
@@ -2384,7 +2421,9 @@ impl<'ctx> super::Codegen<'ctx> {
         let i64_t = self.context.i64_type();
 
         let (arr_ptr, arr_ty) = if let ExprKind::Identifier(name) = &object.kind {
-            if let Some(slot) = self.variables.get(name.as_str()).copied() {
+            if let Some((data_ptr, ref_arr_ty)) = self.ref_array_index_target(name) {
+                (data_ptr, ref_arr_ty)
+            } else if let Some(slot) = self.variables.get(name.as_str()).copied() {
                 (slot.ptr, slot.ty)
             } else {
                 return Err(format!("Undefined variable '{}' in index store", name));
