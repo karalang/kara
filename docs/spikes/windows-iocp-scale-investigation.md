@@ -176,12 +176,53 @@ runtime's (~7,000/s peak with spawn). The serial/inline path also carries
 Finding 2's ~15 ms floor (stays ~15 ms through conc 16 where spawn drops to
 sub-ms) — the same inline-handler blocking-wait inefficiency.
 
-## Finding 4 — saturation / tail-latency cliff above ~conc 64
+## Finding 4 — saturation / tail-latency cliff above ~conc 64 — ROOT-CAUSED 2026-06-17 (measured, macOS / Apple Silicon, 18 cores)
 
-Both servers: **p99 jumps to ~500 ms at conc 256**, and spawn throughput
-*regresses* (7,031 → 6,195/s). A contention ceiling around ~7k/s with tail
-collapse under overload — worth a deeper look (single accept loop? a hot
-listener shard?). Not yet root-caused.
+Original observation: both servers p99 jumps to ~500 ms at conc 256, spawn
+throughput "regresses" 7,031 → 6,195/s; a "~7k/s contention ceiling." **Driving
+the real benchmark and drilling in decomposed this into two separate things,
+*neither* a runtime contention point:**
+
+**(1) The "~7k/s ceiling" was the single Python benchmark client, not the
+runtime.** `ws_loop_client_soak.py` burns ~3.1 cores of per-connection Python CPU
+(WS frame masking via a byte-loop, parse) and tops out a single client around
+~6.6k/s. Pointing **more clients at the same server** lifts it immediately: 1
+client = 6.6k/s, 2 = 8.5k/s, 4 = **16.0k/s**, 6 = 16.2k/s. The server's real
+ceiling is **~16k/s (spawn) / ~13k/s (serial)** — ~2.4× the reported figure. The
+"throughput regression at conc 256" is just the tail (see (2)) stealing wall-clock.
+
+**(2) The ceiling that *is* real is the single-threaded `main` accept loop —
+not pool-queue contention or a hot shard.** At the ~16k/s plateau the server uses
+only ~5.2 of 18 cores (serial: ~0.45 core — mostly parked), so **13 cores sit
+idle**; throughput is flat across conc while latency grows exactly as
+`conc/throughput` (Little's Law — the single-server-queue signature). The serial
+loop `loop { accept(); echo() }` and the spawn loop `loop { accept();
+tg.spawn(echo) }` both gate on `main` doing **accept + the WebSocket HTTP
+handshake serially per connection** (the echo is what spawn offloads, which is
+why spawn's accept rate is higher). Confirmed *not* global pool-queue contention
+(CPU is low, not lock-spinning) and *not* a hot listener shard (shards are idle).
+**Fix = parallelize accept:** multiple accept loops / threads on the listener, or
+have `main` do only the raw `accept` and spawn the *handshake too* (so only
+`accept(2)` stays on the serial path). Architectural / programming-model change.
+
+**(3) The tail collapse (p99 → ~1 s at conc > ~128) is the OS listen-backlog
+cap, not the runtime.** macOS `kern.ipc.somaxconn = 128` silently caps the
+`listen(2)` backlog at 128 regardless of the runtime's requested 16384; once
+**in-flight connects exceed 128**, excess SYNs are dropped and the client
+retransmits after the ~1 s RTO — exactly the 1,008 ms p99 / 2,041 ms max seen.
+Onset confirmed at the boundary: conc 130 is clean (max 48 ms), conc 160 tails
+(p99.9 1,022 ms). The doc's Windows ~500 ms tail is the same phenomenon (Windows
+has its own backlog cap). Mitigation is deployment-side (`sysctl
+kern.ipc.somaxconn` / Windows equivalent), not a userspace runtime change.
+
+**Caveat — the benchmark over-weights connection churn.** It opens a *new*
+connection per round-trip (connect + handshake + 1 echo + RST-close), so it
+measures connection-*setup* throughput, which is exactly what the serial accept
+loop (2) and the backlog cap (3) gate. The flagship workload (1M *persistent*
+idle connections) does its accept churn only at ramp-up and is steady-state idle
+after — it does **not** hit either ceiling. So (2) matters for connection-churn
+workloads (proxies, short-lived RPC); for the launch headline it is not on the
+critical path.
 
 ## Follow-up worklist (all platform-agnostic — do on a Linux box)
 
@@ -233,9 +274,19 @@ in this same change.
    Windows box** (the bench harness `ws_loop_client_soak.py` had a Windows-only
    `SO_LINGER` layout that crashed off-Windows — fixed in this change to be
    platform-aware). Expected Windows effect: p50 15.4 ms → ~1 ms.
-3. **Finding 4 — saturation/tail cliff above ~conc 64.** Root-cause the ~7k/s
-   ceiling + p99→500 ms collapse (single accept loop? hot listener shard?
-   global pool-queue contention?). Use the same soak client's percentile output.
+3. **Finding 4 — saturation/tail cliff above ~conc 64. ✅ ROOT-CAUSED 2026-06-17
+   (measured) — see the rewritten Finding 4 above.** Three findings: (a) the
+   "~7k/s ceiling" was the single Python client (server scales to ~16k/s with 4–6
+   clients); (b) the real server ceiling (~16k/s spawn / ~13k/s serial, 13 of 18
+   cores idle) is the **single-threaded `main` accept+handshake loop** — not
+   pool-queue contention, not a hot shard — fixable only by parallelizing accept
+   (multiple accept loops, or spawn the handshake so only raw `accept(2)` stays
+   serial); (c) the p99→~1 s tail is the **OS listen-backlog cap** (macOS
+   `somaxconn=128`) dropping SYNs under connection-storm → ~1 s retransmit,
+   mitigated deployment-side. The benchmark over-weights connection churn; the
+   1M-persistent-connection launch workload hits none of these. The accept-loop
+   parallelization (b) is the only runtime-side follow-up, and it's architectural
+   — open for a dedicated session.
 4. **Finding 3 is informational** — no fix; just prefer the spawn shape for any
    throughput benchmark, and note that the spike's "~1,400/s" headline is the
    serial example's ceiling, not the runtime's.
