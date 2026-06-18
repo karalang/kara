@@ -5623,6 +5623,71 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_small_counted_loop_full_unroll_is_sound() {
+        // B-2026-06-17-7: a small, constant-upper-bounded `while` loop with a
+        // constant-step induction var now carries `llvm.loop.unroll.full` so
+        // LLVM fully unrolls it (matching rustc; ~1.34x on kata:37). This
+        // guards SOUNDNESS — the unrolled codegen must produce byte-identical
+        // results to the rolled form. The body mirrors kata:37's candidate
+        // loop: a `while d <= 9` with a `1 << d` shift, a conditional update
+        // (so a mis-unroll that dropped/duplicated an iteration would change
+        // the order-dependent accumulator), nested in an outer `while i < 5`
+        // counted loop (also eligible). Pinned against the interpreter.
+        let src = r#"
+fn f(start: i64) -> i64 {
+    let mut acc = 0i64;
+    let mut d = 1i64;
+    while d <= 9i64 {
+        let bit = 1i64 << d;
+        if (acc & 1i64) == 0i64 {
+            acc = acc + bit * d + start;
+        }
+        d = d + 1i64;
+    }
+    acc
+}
+fn main() {
+    let mut total = 0i64;
+    let mut i = 0i64;
+    while i < 5i64 {
+        total = total + f(i);
+        i = i + 1i64;
+    }
+    println(f"{total}");
+}
+"#;
+        let out = run_program(src);
+        if let Some(out) = out {
+            assert_eq!(out, "24644\n");
+        }
+    }
+
+    #[test]
+    fn test_ir_full_unroll_metadata_gated_on_small_constant_bound() {
+        // The full-unroll hint is attached only to small constant-trip
+        // counted loops. `while d <= 9` (constant step `d = d + 1`, bound 9
+        // <= 32) gets `llvm.loop.unroll.full`; `while i < 100000` (bound far
+        // over the cap) does NOT — its trip count is large, so unrolling
+        // would bloat. Both are real loops; only the gate differs.
+        let eligible = ir_for(
+            "fn main() { let mut d = 1i64; let mut s = 0i64; \
+             while d <= 9i64 { s = s + d; d = d + 1i64; } println(s); }",
+        );
+        assert!(
+            eligible.contains("llvm.loop.unroll.full"),
+            "small `while d <= 9` counted loop should carry the full-unroll hint; IR:\n{eligible}"
+        );
+        let ineligible = ir_for(
+            "fn main() { let mut i = 0i64; let mut s = 0i64; \
+             while i < 100000i64 { s = s + i; i = i + 1i64; } println(s); }",
+        );
+        assert!(
+            !ineligible.contains("llvm.loop.unroll.full"),
+            "large-bound `while i < 100000` loop must NOT carry the full-unroll hint; IR:\n{ineligible}"
+        );
+    }
+
+    #[test]
     fn test_e2e_ptr_dangling_is_not_null() {
         // ptr.dangling() returns a non-null pointer; ptr.is_null
         // observes false.

@@ -1162,6 +1162,14 @@ impl<'ctx> super::Codegen<'ctx> {
         if binsearch_guard.is_some() {
             self.binsearch_guard_stack.pop();
         }
+        // Small constant-trip counted loop → hint LLVM to fully unroll
+        // (B-2026-06-17-7): the back-edge branch built below carries
+        // `llvm.loop.unroll.full` so a loop like kata:37's `while d <= 9`
+        // unrolls the way rustc unrolls its equivalent (worth ~1.34x on
+        // that bench). Advisory-only — LLVM ignores it if it can't prove a
+        // small constant trip count. Computed while `condition`/`body` are
+        // in scope; applied to the back-edge instruction.
+        let wants_full_unroll = self.while_loop_wants_full_unroll(condition, body);
         let body_has_terminator = self
             .builder
             .get_insert_block()
@@ -1170,7 +1178,10 @@ impl<'ctx> super::Codegen<'ctx> {
             .is_some();
         if !body_has_terminator {
             self.drain_top_frame_with_emit();
-            self.builder.build_unconditional_branch(cond_bb).unwrap();
+            let back_edge = self.builder.build_unconditional_branch(cond_bb).unwrap();
+            if wants_full_unroll {
+                self.attach_unroll_full_metadata(back_edge);
+            }
         } else {
             self.scope_cleanup_actions.pop();
         }

@@ -1058,3 +1058,176 @@ impl<'ctx> super::Codegen<'ctx> {
         self.binsearch_assume_emitted = true;
     }
 }
+
+// ===================================================================
+// Small constant-trip `while`-loop full-unroll hinting
+// ===================================================================
+//
+// karac runs the same `default<O2>` LLVM pipeline as clang, yet on
+// kata:37 (the sudoku backtracker, B-2026-06-17-7) the hot inner loop
+// `while d <= 9 { ... if go(..) ..; d = d + 1 }` stayed ROLLED while
+// rustc fully unrolled its byte-identical loop — and that single
+// difference was the entire ~1.34x gap to Rust (proven: forcing the
+// unroll via `#pragma clang loop unroll(full)` on the C mirror lands it
+// exactly on Rust, 189.8ms; disabling rustc's unroller drops Rust back
+// onto Kara/C at ~255ms). clang's default cost model DECLINES this
+// unroll (recursive call + early exit make the body look expensive)
+// even at `-O3 -funroll-loops`; rustc's LLVM config takes it. We close
+// the gap the same way rustc effectively does: attach
+// `llvm.loop.unroll.full` metadata to the back-edge of small,
+// constant-upper-bounded counted loops so LLVM's full unroller fires.
+//
+// The hint is advisory-SAFE: unrolling never changes semantics, and if
+// LLVM cannot actually prove a small constant trip count it ignores the
+// metadata (so a mis-detected loop costs nothing, never correctness).
+// The eligibility gate below only narrows WHICH loops carry the hint,
+// to keep code size in check — LLVM remains the backstop.
+
+/// Upper bound on the guard literal `K` in `v < K` / `v <= K` for a loop
+/// to be hinted for full unroll. 9 (kata:37's candidate loop) sits well
+/// under this; the 81-trip copy/signature loops in the same bench sit
+/// above it and are left to the vectorizer, which serves them better.
+const UNROLL_FULL_MAX_BOUND: i64 = 32;
+
+/// `(var, K)` when `cond` upper-bounds a bare induction identifier by a
+/// non-negative integer literal: `v < K`, `v <= K`, `K > v`, `K >= v`
+/// — in the surface `Binary` form and the trait-method-lowered `Call`
+/// form (mirror of `walk_guard_conjuncts`). Lower-bounded / decreasing
+/// shapes (`v > K`, `K < v`) are intentionally rejected: there the
+/// literal does not bound the trip count (the unseen init does), so the
+/// hint would be meaningless.
+fn guard_upper_bounded_counter(cond: &Expr) -> Option<(String, i64)> {
+    // Surface Binary form.
+    if let ExprKind::Binary { op, left, right } = &cond.kind {
+        return match (op, &left.kind, &right.kind) {
+            (BinOp::Lt | BinOp::LtEq, ExprKind::Identifier(v), ExprKind::Integer(k, _)) => {
+                Some((v.clone(), *k))
+            }
+            (BinOp::Gt | BinOp::GtEq, ExprKind::Integer(k, _), ExprKind::Identifier(v)) => {
+                Some((v.clone(), *k))
+            }
+            _ => None,
+        };
+    }
+    // Trait-method-lowered Call form: `i64::lt(v, K)` etc.
+    if let ExprKind::Call { callee, args } = &cond.kind {
+        let ExprKind::Path { segments, .. } = &callee.kind else {
+            return None;
+        };
+        if segments.len() != 2 || args.len() != 2 {
+            return None;
+        }
+        let (a, b) = (&args[0].value.kind, &args[1].value.kind);
+        return match (segments[1].as_str(), a, b) {
+            ("lt" | "le", ExprKind::Identifier(v), ExprKind::Integer(k, _)) => {
+                Some((v.clone(), *k))
+            }
+            ("gt" | "ge", ExprKind::Integer(k, _), ExprKind::Identifier(v)) => {
+                Some((v.clone(), *k))
+            }
+            _ => None,
+        };
+    }
+    None
+}
+
+/// True iff `body`'s top-level statements update `var` by a constant
+/// step (`var = var + c` / `var += c`, or the `-` forms) at least once
+/// AND never reassign it any other way. A top-level-only scan is
+/// deliberate: a step buried in a nested branch isn't every-iteration,
+/// so we conservatively decline (miss the unroll rather than over-apply
+/// it). A non-step top-level reassignment disqualifies outright — that
+/// breaks the constant-stride trip count.
+fn body_top_level_constant_step(body: &Block, var: &str) -> bool {
+    let mut saw_step = false;
+    for stmt in &body.stmts {
+        match &stmt.kind {
+            StmtKind::Assign { target, value } => {
+                if let ExprKind::Identifier(t) = &target.kind {
+                    if t == var {
+                        if classify_monotone_rhs(var, value).is_some() {
+                            saw_step = true;
+                        } else {
+                            return false;
+                        }
+                    }
+                }
+            }
+            StmtKind::CompoundAssign { target, op, value } => {
+                if let ExprKind::Identifier(t) = &target.kind {
+                    if t == var {
+                        let is_step = matches!(op, CompoundOp::Add | CompoundOp::Sub)
+                            && matches!(value.kind, ExprKind::Integer(_, _));
+                        if is_step {
+                            saw_step = true;
+                        } else {
+                            return false;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    saw_step
+}
+
+impl<'ctx> super::Codegen<'ctx> {
+    /// Whether this `while` loop should carry `llvm.loop.unroll.full`
+    /// metadata: a small, constant-upper-bounded counted loop whose
+    /// induction variable advances by a constant step every iteration.
+    /// See the section comment for the kata:37 motivation and the safety
+    /// argument (advisory-only hint, LLVM is the trip-count backstop).
+    pub(super) fn while_loop_wants_full_unroll(&self, cond: &Expr, body: &Block) -> bool {
+        let Some((var, bound)) = guard_upper_bounded_counter(cond) else {
+            return false;
+        };
+        if !(0..=UNROLL_FULL_MAX_BOUND).contains(&bound) {
+            return false;
+        }
+        body_top_level_constant_step(body, &var)
+    }
+
+    /// Attach `!llvm.loop !{!self, !{!"llvm.loop.unroll.full"}}` to a
+    /// loop's back-edge branch so LLVM's full unroller fires. Builds the
+    /// self-referential loop-id node via the temporary-node + RAUW recipe
+    /// (LLVM's canonical way to construct cyclic metadata through the C
+    /// API). karac's first `llvm.loop` metadata emission — see
+    /// `while_loop_wants_full_unroll` for when it's called.
+    pub(super) fn attach_unroll_full_metadata(
+        &self,
+        branch: inkwell::values::InstructionValue<'ctx>,
+    ) {
+        use inkwell::values::AsValueRef;
+        use llvm_sys::core::{
+            LLVMGetMDKindIDInContext, LLVMMDNodeInContext2, LLVMMDStringInContext2,
+            LLVMMetadataAsValue, LLVMSetMetadata,
+        };
+        use llvm_sys::debuginfo::{LLVMMetadataReplaceAllUsesWith, LLVMTemporaryMDNode};
+        use std::os::raw::{c_char, c_uint};
+
+        let ctx = self.context.raw();
+        unsafe {
+            // !{!"llvm.loop.unroll.full"}
+            let key = b"llvm.loop.unroll.full";
+            let prop_str = LLVMMDStringInContext2(ctx, key.as_ptr() as *const c_char, key.len());
+            let mut prop_ops = [prop_str];
+            let prop_node = LLVMMDNodeInContext2(ctx, prop_ops.as_mut_ptr(), prop_ops.len());
+
+            // Self-referential loop id: forward-declare a temp as the
+            // first operand, build the real node, then RAUW temp -> node
+            // so operand 0 points back at the node itself.
+            let temp = LLVMTemporaryMDNode(ctx, std::ptr::null_mut(), 0);
+            let mut loop_ops = [temp, prop_node];
+            let loop_id = LLVMMDNodeInContext2(ctx, loop_ops.as_mut_ptr(), loop_ops.len());
+            LLVMMetadataReplaceAllUsesWith(temp, loop_id);
+
+            // branch !llvm.loop !loop_id
+            let kind = b"llvm.loop";
+            let kind_id =
+                LLVMGetMDKindIDInContext(ctx, kind.as_ptr() as *const c_char, kind.len() as c_uint);
+            let loop_id_val = LLVMMetadataAsValue(ctx, loop_id);
+            LLVMSetMetadata(branch.as_value_ref(), kind_id, loop_id_val);
+        }
+    }
+}
