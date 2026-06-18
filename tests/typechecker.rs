@@ -927,6 +927,35 @@ fn test_vec_clone_through_borrow_returns_owned() {
     );
 }
 
+#[test]
+fn test_mut_ref_arg_downgrades_to_ref_param() {
+    // B-2026-06-17-4: a `mut ref T` binding may be passed where a `ref T`
+    // parameter is expected — the `&mut T → &T` reborrow. The read-only
+    // destination cannot write through the borrow, so this is sound (and was
+    // already accepted by the interpreter; it must build too).
+    typecheck_ok(
+        "fn peek(xs: ref Vec[i64]) -> i64 { xs[0] }\n\
+         fn poke(xs: mut ref Vec[i64]) -> i64 { xs[0] = 9; peek(xs) }\n\
+         fn main() {}",
+    );
+}
+
+#[test]
+fn test_ref_arg_does_not_upgrade_to_mut_ref_param() {
+    // The soundness boundary stays closed: a `ref T` binding must NOT satisfy a
+    // `mut ref T` parameter (that would conjure mutability from a read-only
+    // borrow). Only the downgrade direction above is accepted.
+    let errors = typecheck_errors(
+        "fn poke(xs: mut ref Vec[i64]) { xs[0] = 9; }\n\
+         fn peek(xs: ref Vec[i64]) { poke(xs); }\n\
+         fn main() {}",
+    );
+    assert!(
+        !errors.is_empty(),
+        "passing a `ref` binding to a `mut ref` parameter must remain an error",
+    );
+}
+
 // ── Category 8: Pattern Exhaustiveness ──────────────────────────
 
 #[test]

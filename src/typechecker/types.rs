@@ -976,6 +976,17 @@ pub(super) fn is_subtype(super_ty: &Type, sub_ty: &Type) -> bool {
         // refinement-base widening is rejected in both directions, so
         // the MutRef arm demands mutual subtyping.
         (Type::Ref(s), Type::Ref(b)) => is_subtype(s, b),
+        // A `mut ref T` reborrows down to a read-only `ref U` view: sound and
+        // covariant in the pointee *exactly like* the `Ref → Ref` arm above,
+        // because the destination `ref` cannot write through the borrow — so
+        // pointee widening is safe here, unlike the invariant `MutRef → MutRef`
+        // arm below (which must reject refinement-base widening in both
+        // directions because the callee writes through it). This is the
+        // `&mut T → &T` reborrow. Without it, passing a `mut ref` binding to a
+        // `ref` parameter is accepted by the interpreter (`karac run`, a
+        // warning) but rejected by `karac build` — the run/build divergence
+        // tracked as B-2026-06-17-4.
+        (Type::Ref(s), Type::MutRef(b)) => is_subtype(s, b),
         (Type::MutRef(s), Type::MutRef(b)) => is_subtype(s, b) && is_subtype(b, s),
         // Owned-to-ref coercion: a `ref T` slot accepts an owned `T` value.
         // design.md Feature 4 Part 3 § Explicit ref for Borrow Returns — the
