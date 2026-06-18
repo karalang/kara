@@ -1473,6 +1473,71 @@ mod tests {
     }
 
     #[test]
+    fn coroutine_free_spawn_channel_single_close_under_asan() {
+        // ASAN/LSan companion to `..._send_lands_before_close`. The functional
+        // test asserts the *value* (`7`, not `0`) but runs WITHOUT a sanitizer,
+        // so a latent double-close/double-free that still happens to print `7`
+        // would slip past it. The send-before-close fix has two halves that must
+        // agree: the coroutine now drops (closes) the captured `Sender` at its
+        // completion, AND the spawn wrapper suppresses its own `DropChannelEnd`
+        // at the move site. If the alloca-keyed suppression ever fails to match
+        // the wrapper's registration, BOTH drop the same channel end — a
+        // double-`drop_sender` (double-free of the `KaracChannel` once the
+        // refcount underflows). That edge is coro-specific (the non-coro
+        // `asan_channel_*` cases never ramp-and-resume across a suspend), so it
+        // needs its own sanitized run. A clean ASAN exit proves the single-close
+        // invariant on the actual coroutine path; on Linux LSan the same run
+        // proves the close isn't *under*-counted either (no channel leak).
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        if !asan_available() {
+            eprintln!("skip: ASAN unavailable on this host");
+            return;
+        }
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_coro_chan_asan_{pid}_{nanos}"));
+
+        if let Err(e) =
+            compile_link_coro(CHANNEL_SPAWN_SRC, &exe_path, Some(&["-fsanitize=address"]))
+        {
+            eprintln!("skip: ASAN compile/link failed: {e}");
+            return;
+        }
+        let asan_options = if cfg!(target_os = "macos") {
+            "abort_on_error=0:exitcode=23"
+        } else {
+            "detect_leaks=1:abort_on_error=0:exitcode=23"
+        };
+
+        let (exit_status, lines) = service_one_connection(&exe_path, Some(asan_options));
+        let _ = std::fs::remove_file(&exe_path);
+
+        // Clean ASAN exit == the captured `Sender` is dropped (channel closed)
+        // exactly once — by the coroutine at completion, not also by the wrapper.
+        assert!(
+            exit_status.success(),
+            "ASAN reported a memory error in the coro channel-move path (exit \
+             {exit_status:?}) — likely a double-close of the captured Sender; \
+             stdout lines: {lines:?}"
+        );
+        // And the value still lands (the send ran before the close).
+        assert!(
+            lines.iter().any(|l| l == "7") && !lines.iter().any(|l| l == "0"),
+            "coro channel-move did not deliver the sent value under ASAN; \
+             stdout lines: {lines:?}"
+        );
+    }
+
+    #[test]
     fn coroutine_method_handler_services_connection() {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let Some(rt) = runtime_path() else {
