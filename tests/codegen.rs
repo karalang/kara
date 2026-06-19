@@ -2970,6 +2970,32 @@ fn main() {
     }
 
     #[test]
+    fn e2e_from_slice_range_of_array_codegen() {
+        // Relay dogfood slice 4: `Vec.from_slice(arr[a..b])` — a RANGE-slice of
+        // an array (or vec/slice) as the source. Previously mis-routed to the
+        // scalar nested-index `Vec[Vec[T]]` path ("nested-index source
+        // `arr[i]` requires outer to be Vec[Vec[T]]") because
+        // `recover_from_slice_src` treated every `Index` expr as a scalar
+        // nested index. Now a `Range` index is recognized as a slice and
+        // lowered via `coerce_to_slice` (the same `compile_range_slice` path
+        // a bare `f(arr[a..b])` call argument uses). Copies a window of bytes
+        // into an owned Vec — the canonical "read N bytes, hand them to a
+        // parser" shape (`examples/relay`'s request-line peek).
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let arr: Array[i64, 5] = [10, 20, 30, 40, 50];\n\
+                 let v: Vec[i64] = Vec.from_slice(arr[1..4]);\n\
+                 println(v.len());\n\
+                 println(v[0]);\n\
+                 println(v[1]);\n\
+                 println(v[2]);\n\
+             }",
+        ) {
+            assert_eq!(out, "3\n20\n30\n40\n");
+        }
+    }
+
+    #[test]
     fn e2e_try_from_slice_string_clone_codegen() {
         // Heap-element source (Vec[String]) takes the per-element clone loop, so
         // the new Vec's strings are independent of the source. Exercises the

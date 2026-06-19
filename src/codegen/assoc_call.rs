@@ -44,9 +44,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // nested-Index path for Vec[Vec[T]] sources. Returns
         // (LLVM elem type, optional elem TypeExpr for the RC-clone path,
         // label for diagnostics).
+        // `use_coerce`: the source is a slice header recoverable via
+        // `coerce_to_slice` — a bare slice/vec/array Identifier, OR a
+        // RANGE-slice `arr[a..b]` (which `coerce_to_slice` lowers through
+        // `compile_range_slice`). A SCALAR nested index `rows[r]` is the
+        // separate Vec[Vec[T]] path and keeps `use_coerce = false`.
+        let mut use_coerce = false;
         let (elem_ty, src_elem_te, src_label): (BasicTypeEnum<'ctx>, Option<TypeExpr>, String) =
             match &arg.kind {
                 ExprKind::Identifier(src_name) => {
+                    use_coerce = true;
                     let t = if let Some(&t) = self.slice_elem_types.get(src_name.as_str()) {
                         t
                     } else if let Some(&t) = self.vec_elem_types.get(src_name.as_str()) {
@@ -68,6 +75,45 @@ impl<'ctx> super::Codegen<'ctx> {
                     };
                     let te = self.var_elem_type_exprs.get(src_name.as_str()).cloned();
                     (t, te, src_name.clone())
+                }
+                // Range-slice `arr[a..b]` — a contiguous window of an
+                // array/vec/slice var. Same element type as the outer var;
+                // `coerce_to_slice` builds the `{data, len}` header (via
+                // `compile_range_slice`). Distinct from the scalar nested
+                // index below: a `Range` index slices, a scalar index selects
+                // one (inner-Vec) element. Without this arm, `Vec.from_slice(
+                // buf[0..n])` mis-routed to the Vec[Vec[T]] path and errored.
+                ExprKind::Index { object, index }
+                    if matches!(index.kind, ExprKind::Range { .. }) =>
+                {
+                    use_coerce = true;
+                    let ExprKind::Identifier(outer_name) = &object.kind else {
+                        return Err(
+                            "Vec.from_slice: range-slice source must root at a named variable"
+                                .to_string(),
+                        );
+                    };
+                    let t = if let Some(&t) = self.slice_elem_types.get(outer_name.as_str()) {
+                        t
+                    } else if let Some(&t) = self.vec_elem_types.get(outer_name.as_str()) {
+                        t
+                    } else if let Some(slot) = self.variables.get(outer_name.as_str()).copied() {
+                        if let BasicTypeEnum::ArrayType(at) = slot.ty {
+                            at.get_element_type()
+                        } else {
+                            return Err(format!(
+                                "Vec.from_slice: range-slice source '{}' is not a slice / vec / array",
+                                outer_name
+                            ));
+                        }
+                    } else {
+                        return Err(format!(
+                            "Vec.from_slice: range-slice source '{}' not found in scope",
+                            outer_name
+                        ));
+                    };
+                    let te = self.var_elem_type_exprs.get(outer_name.as_str()).cloned();
+                    (t, te, format!("{outer_name}[..]"))
                 }
                 ExprKind::Index {
                     object: outer,
@@ -108,7 +154,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Index path compiles the expression directly to get the inner Vec
         // aggregate value and extracts its first two fields (same fallback
         // shape as `extend_from_slice`).
-        let (src_data, src_len) = if matches!(arg.kind, ExprKind::Identifier(_)) {
+        let (src_data, src_len) = if use_coerce {
             let slice_val = self.coerce_to_slice(arg, elem_ty)?.ok_or_else(|| {
                 format!(
                     "Vec.from_slice: could not coerce '{}' to a slice header",
