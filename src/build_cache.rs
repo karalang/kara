@@ -131,9 +131,14 @@ impl CacheKey {
 /// was absent, or the schema version was wrong (in all three cases
 /// the caller should treat the cache as cold and proceed with a
 /// build).
+///
+/// `Hit`'s `CacheEntry` is boxed so the enum's size tracks the empty
+/// `Miss` variant rather than the ~208-byte entry (clippy
+/// `large_enum_variant`); the `Box` auto-derefs, so matching `Hit(e)`
+/// reads `e`'s fields exactly as if it were unboxed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LookupStatus {
-    Hit(CacheEntry),
+    Hit(Box<CacheEntry>),
     Miss,
 }
 
@@ -306,7 +311,7 @@ pub fn lookup(root: &Path, key: &CacheKey) -> Result<LookupStatus, CacheError> {
         // `karac cache prune` can sweep mismatched slots.
         return Ok(LookupStatus::Miss);
     }
-    Ok(LookupStatus::Hit(entry))
+    Ok(LookupStatus::Hit(Box::new(entry)))
 }
 
 /// Write `artifact_bytes` into the cache slot for `key`, alongside a
