@@ -377,6 +377,7 @@ mod tests {
                     captured_mutations: std::collections::HashSet::new(),
                 }],
                 total_statements: 2,
+                statement_spans: Vec::new(),
                 loop_reductions: Vec::new(),
                 serialization_points: Vec::new(),
             },

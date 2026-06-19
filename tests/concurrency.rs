@@ -1192,6 +1192,136 @@ pub fn twice() with writes(Log) {{
         stdout.contains("\"resource\":\"Log\",\"blocking_callees\":[\"emit\"]"),
         "serialization point attributes the conflict to callee `emit` on Log; stdout: {stdout}",
     );
+    // The structured `serialized_by` tag lets a consumer branch on the
+    // conflict class without parsing the prose `reason`. Here it is a
+    // resource-level effect conflict, both verbs `writes` on `Log`.
+    assert!(
+        stdout.contains(
+            "\"serialized_by\":{\"category\":\"effect_conflict\",\"resource\":\"Log\",\"verbs\":[\"writes\",\"writes\"]}"
+        ),
+        "serialization point carries a structured effect-conflict tag; stdout: {stdout}",
+    );
+
+    let _ = std::fs::remove_file(&file_path);
+}
+
+#[test]
+fn test_cli_query_concurrency_emits_statement_spans() {
+    use std::io::Write;
+    use std::process::Command;
+
+    // The concurrency query reports grouped/serialized statements by
+    // *ordinal* index. Those ordinals are the stable key, but they are not
+    // self-locating — an IDE/LSP layer (or a human report) needs source
+    // positions. `statement_spans[i]` locates statement ordinal `i`, making
+    // the machine surface self-locating without re-deriving positions by
+    // counting statements. See phase-5-diagnostics.md "Self-locating query
+    // output".
+    let dir = std::env::temp_dir();
+    let file_path = dir.join("test_concurrency_statement_spans.kara");
+    {
+        let mut f = std::fs::File::create(&file_path).unwrap();
+        // The two `let`s land on source lines 4 and 5 (the leading `\n` from
+        // the raw string is line 1, `fn a` line 2, `fn main {` line 3).
+        writeln!(
+            f,
+            r#"
+fn a() -> i32 {{ 1 }}
+fn main() {{
+    let x = a();
+    let y = a();
+}}
+"#
+        )
+        .unwrap();
+    }
+
+    let karac_bin = env!("CARGO_BIN_EXE_karac");
+    let output = Command::new(karac_bin)
+        .args([
+            "query",
+            "concurrency",
+            &format!("{}.main", file_path.display()),
+        ])
+        .output()
+        .expect("failed to run karac");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // One span per statement, in ordinal order, carrying file + line/col.
+    let fname = file_path.display().to_string();
+    let expected = format!(
+        "\"statement_spans\":[{{\"file\":\"{fname}\",\"line\":4,\"column\":5}},\
+         {{\"file\":\"{fname}\",\"line\":5,\"column\":5}}]"
+    );
+    assert!(
+        stdout.contains(&expected),
+        "statement_spans must locate each ordinal by source line/col; want {expected}; stdout: {stdout}",
+    );
+
+    let _ = std::fs::remove_file(&file_path);
+}
+
+#[test]
+fn test_cli_query_concurrency_serialized_by_data_dependency_raw() {
+    use std::io::Write;
+    use std::process::Command;
+
+    // Two statements that serialize purely on a *value dependency* (the
+    // second reads a binding the first writes) must be distinguishable on
+    // the wire from an effect conflict — they imply a different fix (break
+    // the dataflow vs split the resource). The structured `serialized_by`
+    // tag carries `category: data_dependency`, the direction (`raw` — a
+    // read-after-write / true dependency), and the binding. See
+    // phase-5-diagnostics.md "Per-statement exclusion-reason attribution".
+    let dir = std::env::temp_dir();
+    let file_path = dir.join("test_concurrency_serialized_by_raw.kara");
+    {
+        let mut f = std::fs::File::create(&file_path).unwrap();
+        writeln!(
+            f,
+            r#"
+fn a() -> i32 {{ 1 }}
+fn chain() {{
+    let x = a();
+    let y = x + 1;
+}}
+"#
+        )
+        .unwrap();
+    }
+
+    let karac_bin = env!("CARGO_BIN_EXE_karac");
+    let output = Command::new(karac_bin)
+        .args([
+            "query",
+            "concurrency",
+            &format!("{}.chain", file_path.display()),
+        ])
+        .output()
+        .expect("failed to run karac");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Prose reason is preserved; the structured tag distinguishes the axis.
+    assert!(
+        stdout.contains("\"reason\":\"data dependency on `x`\""),
+        "human reason preserved; stdout: {stdout}",
+    );
+    assert!(
+        stdout.contains(
+            "\"serialized_by\":{\"category\":\"data_dependency\",\"kind\":\"raw\",\"vars\":[\"x\"]}"
+        ),
+        "data-dependency serialization carries a structured raw tag on `x`; stdout: {stdout}",
+    );
 
     let _ = std::fs::remove_file(&file_path);
 }

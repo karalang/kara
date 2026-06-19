@@ -19,8 +19,9 @@ use std::fmt::Write as _;
 
 use crate::ast::EffectVerbKind;
 use crate::call_graph::CallGraph;
-use crate::concurrency::{ConcurrencyAnalysis, FunctionConcurrency};
+use crate::concurrency::{ConcurrencyAnalysis, FunctionConcurrency, SerializationCause};
 use crate::effectchecker::{DeclaredEffects, EffectCheckResult, EffectSet};
+use crate::token::Span;
 
 // ── JSON helpers (module-local so this stays free of the CLI layer) ──────────
 
@@ -56,6 +57,58 @@ fn effect_verb_str(v: &EffectVerbKind) -> &str {
         EffectVerbKind::Blocks => "blocks",
         EffectVerbKind::Suspends => "suspends",
         EffectVerbKind::UserDefined(s) => s.as_str(),
+    }
+}
+
+/// Render a source span as a `{"file","line","column"}` JSON object.
+/// Mirrors `cli::span_to_json`'s field shape (kept module-local so this
+/// stays free of the CLI layer and wasm-safe).
+fn span_json(span: &Span, filename: &str) -> String {
+    format!(
+        "{{\"file\":{},\"line\":{},\"column\":{}}}",
+        json_string(filename),
+        span.line,
+        span.column,
+    )
+}
+
+/// Render a function's per-statement spans as a JSON array indexed by the
+/// same ordinal used in `parallel_groups`/`serialization_points`, so the
+/// concurrency surface is self-locating: `statement_spans[i]` locates the
+/// statement referenced by ordinal `i`.
+pub(crate) fn statement_spans_json(fc: &FunctionConcurrency, filename: &str) -> String {
+    let entries: Vec<String> = fc
+        .statement_spans
+        .iter()
+        .map(|s| span_json(s, filename))
+        .collect();
+    format!("[{}]", entries.join(","))
+}
+
+/// Render a [`SerializationCause`] as the structured `serialized_by`
+/// object — the machine-readable counterpart to the prose `reason`.
+fn serialized_by_json(cause: &SerializationCause) -> String {
+    match cause {
+        SerializationCause::SeqOrdering => "{\"category\":\"seq_ordering\"}".to_string(),
+        SerializationCause::DataDependency { kind, vars } => {
+            let vars_json: Vec<String> = vars.iter().map(|v| json_string(v)).collect();
+            format!(
+                "{{\"category\":\"data_dependency\",\"kind\":{},\"vars\":[{}]}}",
+                json_string(kind.as_str()),
+                vars_json.join(","),
+            )
+        }
+        SerializationCause::PolymorphicEffect => {
+            "{\"category\":\"polymorphic_effect\"}".to_string()
+        }
+        SerializationCause::EffectConflict { resource, verbs } => {
+            format!(
+                "{{\"category\":\"effect_conflict\",\"resource\":{},\"verbs\":[{},{}]}}",
+                json_string(resource),
+                json_string(effect_verb_str(&verbs.0)),
+                json_string(effect_verb_str(&verbs.1)),
+            )
+        }
     }
 }
 
@@ -125,11 +178,12 @@ pub(crate) fn serialization_points_json(fc: &FunctionConcurrency) -> String {
             let indices: Vec<String> = sp.statement_indices.iter().map(|i| i.to_string()).collect();
             let callees: Vec<String> = sp.blocking_callees.iter().map(|c| json_string(c)).collect();
             format!(
-                "{{\"statements\":[{}],\"reason\":{},\"resource\":{},\"blocking_callees\":[{}]}}",
+                "{{\"statements\":[{}],\"reason\":{},\"resource\":{},\"blocking_callees\":[{}],\"serialized_by\":{}}}",
                 indices.join(","),
                 json_string(&sp.reason),
                 json_string(&sp.resource),
                 callees.join(","),
+                serialized_by_json(&sp.cause),
             )
         })
         .collect();
@@ -196,10 +250,11 @@ pub(crate) fn build_concurrency_graph_json(
         .filter_map(|(key, node)| {
             analysis.function_decisions.get(key).map(|fc| {
                 format!(
-                    "{{\"function\":{},\"line\":{},\"total_statements\":{},\"parallel_groups\":{},\"serialization_points\":{}}}",
+                    "{{\"function\":{},\"line\":{},\"total_statements\":{},\"statement_spans\":{},\"parallel_groups\":{},\"serialization_points\":{}}}",
                     json_string(key),
                     node.line,
                     fc.total_statements,
+                    statement_spans_json(fc, scope),
                     parallel_groups_json(fc),
                     serialization_points_json(fc),
                 )

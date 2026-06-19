@@ -326,6 +326,15 @@ pub struct FunctionConcurrency {
     pub parallel_groups: Vec<ParallelGroup>,
     /// Total statements analyzed.
     pub total_statements: usize,
+    /// Source span of each top-level body statement, indexed by the same
+    /// ordinal used in `parallel_groups[].statement_indices` and
+    /// `serialization_points[].statement_indices` (so `statement_spans[i]`
+    /// locates statement `i`). Length is always `total_statements`. The
+    /// ordinal stays the stable key for agents/diffs; this array makes the
+    /// machine surface self-locating for IDE/LSP decoration and human
+    /// reports without re-deriving positions by counting statements. See
+    /// phase-5-diagnostics.md "Self-locating query output".
+    pub statement_spans: Vec<crate::token::Span>,
     /// Top-level loops in the function body whose only loop-carried write
     /// is a reduction over an outer-scope accumulator with an op in the
     /// associative + commutative allow-list. Codegen consumes this list
@@ -364,6 +373,62 @@ pub struct SerializationPoint {
     /// whose effect on `resource` caused the conflict. Empty for
     /// non-effect conflicts. Sorted + deduped.
     pub blocking_callees: Vec<String>,
+    /// Structured, machine-readable counterpart to `reason`: *which axis*
+    /// forced this serialization. Lets a consumer branch on the conflict
+    /// class without parsing the prose `reason` — a data dependency and an
+    /// effect conflict imply different fixes (break the dataflow vs split
+    /// the resource), and the human string alone hides the distinction
+    /// when two pairs read byte-identical on the effect surface. See
+    /// phase-5-diagnostics.md "Per-statement exclusion-reason attribution".
+    pub cause: SerializationCause,
+}
+
+/// Structured attribution of *which axis* serialized a statement pair —
+/// the discriminated counterpart to [`SerializationPoint::reason`].
+#[derive(Debug, Clone)]
+pub enum SerializationCause {
+    /// One of the two statements is inside a `seq {}` block — explicit
+    /// user-requested ordering, not a discovered dependency.
+    SeqOrdering,
+    /// A local-binding dependency between the two statements. `vars` lists
+    /// the bindings at issue (sorted, deduped); `kind` records the
+    /// dependency direction.
+    DataDependency {
+        kind: DataDepKind,
+        vars: Vec<String>,
+    },
+    /// A `with _` polymorphic-effect call whose effects are unknown at
+    /// analysis time, forcing a conservative serialization.
+    PolymorphicEffect,
+    /// A resource-level effect conflict: both `verbs` act on `resource`.
+    EffectConflict {
+        resource: String,
+        verbs: (EffectVerbKind, EffectVerbKind),
+    },
+}
+
+/// Direction of a [`SerializationCause::DataDependency`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataDepKind {
+    /// Read-after-write: the later statement reads a binding the earlier
+    /// one writes — a true (flow) dependency.
+    Raw,
+    /// Write-after-read: the later statement writes a binding the earlier
+    /// one reads — an anti-dependency.
+    War,
+    /// Both statements write the same binding — an output dependency.
+    WriteWrite,
+}
+
+impl DataDepKind {
+    /// Lowercase wire tag used in the structured query output.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DataDepKind::Raw => "raw",
+            DataDepKind::War => "war",
+            DataDepKind::WriteWrite => "ww",
+        }
+    }
 }
 
 /// An associative + commutative reduction operator recognized at v1.
@@ -738,6 +803,7 @@ impl<'a> ConcurrencyChecker<'a> {
             return FunctionConcurrency {
                 parallel_groups: Vec::new(),
                 total_statements: 0,
+                statement_spans: Vec::new(),
                 loop_reductions: Vec::new(),
                 serialization_points: Vec::new(),
             };
@@ -777,9 +843,12 @@ impl<'a> ConcurrencyChecker<'a> {
         // be split across workers when the op is associative + commutative.
         let loop_reductions = self.recognize_reductions(func);
 
+        let statement_spans = stmts.iter().map(|s| s.span.clone()).collect();
+
         FunctionConcurrency {
             parallel_groups,
             total_statements,
+            statement_spans,
             loop_reductions,
             serialization_points,
         }
@@ -791,12 +860,16 @@ impl<'a> ConcurrencyChecker<'a> {
     /// decision order of [`Self::statements_conflict`] and returns the
     /// first cause found. `statement_indices` is filled in by the caller.
     fn conflict_detail(&self, a: &StmtInfo, b: &StmtInfo) -> Option<SerializationPoint> {
-        let mk = |reason: String, resource: String, blocking_callees: Vec<String>| {
+        let mk = |reason: String,
+                  resource: String,
+                  blocking_callees: Vec<String>,
+                  cause: SerializationCause| {
             Some(SerializationPoint {
                 statement_indices: Vec::new(),
                 reason,
                 resource,
                 blocking_callees,
+                cause,
             })
         };
 
@@ -805,10 +878,16 @@ impl<'a> ConcurrencyChecker<'a> {
                 "explicit seq ordering".to_string(),
                 String::new(),
                 Vec::new(),
+                SerializationCause::SeqOrdering,
             );
         }
 
-        // Data dependency: one reads a binding the other defines.
+        // Data dependency: one reads a binding the other defines. `a` is the
+        // earlier statement, `b` the later (the caller passes ascending
+        // indices), so `a.defines ∩ b.reads` is read-after-write (a true flow
+        // dependency) and `b.defines ∩ a.reads` is write-after-read (an
+        // anti-dependency). RAW dominates the `kind` tag when both are present.
+        let raw_present = a.defines.intersection(&b.reads).next().is_some();
         let mut dep: Vec<&String> = a.defines.intersection(&b.reads).collect();
         dep.extend(b.defines.intersection(&a.reads));
         if !dep.is_empty() {
@@ -819,10 +898,17 @@ impl<'a> ConcurrencyChecker<'a> {
                 .map(|s| format!("`{s}`"))
                 .collect::<Vec<_>>()
                 .join(", ");
+            let vars = dep.iter().map(|s| (*s).clone()).collect();
+            let kind = if raw_present {
+                DataDepKind::Raw
+            } else {
+                DataDepKind::War
+            };
             return mk(
                 format!("data dependency on {names}"),
                 String::new(),
                 Vec::new(),
+                SerializationCause::DataDependency { kind, vars },
             );
         }
 
@@ -835,7 +921,16 @@ impl<'a> ConcurrencyChecker<'a> {
                 .map(|s| format!("`{s}`"))
                 .collect::<Vec<_>>()
                 .join(", ");
-            return mk(format!("both assign {names}"), String::new(), Vec::new());
+            let vars = ww.iter().map(|s| (*s).clone()).collect();
+            return mk(
+                format!("both assign {names}"),
+                String::new(),
+                Vec::new(),
+                SerializationCause::DataDependency {
+                    kind: DataDepKind::WriteWrite,
+                    vars,
+                },
+            );
         }
 
         // Polymorphic call: effects unknown at analysis time.
@@ -846,6 +941,7 @@ impl<'a> ConcurrencyChecker<'a> {
                 "polymorphic-effect call — effects unknown at analysis time".to_string(),
                 String::new(),
                 Vec::new(),
+                SerializationCause::PolymorphicEffect,
             );
         }
 
@@ -880,7 +976,11 @@ impl<'a> ConcurrencyChecker<'a> {
                 effect_verb_label(&vb),
                 resource,
             );
-            return mk(reason, resource, callees.into_iter().collect());
+            let cause = SerializationCause::EffectConflict {
+                resource: resource.clone(),
+                verbs: (va, vb),
+            };
+            return mk(reason, resource, callees.into_iter().collect(), cause);
         }
 
         None
