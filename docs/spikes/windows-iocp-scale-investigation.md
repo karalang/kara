@@ -10,6 +10,11 @@
 > free-spawn+coro variant is split out as B-2026-06-17-3).
 > The IOCP event loop itself — the subject of the port — held flawlessly; every
 > friction lives in the concurrency layer *above* it.
+> **Connection-density addendum (2026-06-19):** the prior runs all measured
+> connection *churn* (~16 live at once); a dedicated density run then held
+> **45,000 concurrent persistent connections** clean — flat 94 MB / 46.5k handles
+> across a 90 s hold, ~2 KB & ~1 handle per connection, liveness OK, no wedge; the
+> ceiling is the OS loopback port range, not the runtime. See **Finding 5**.
 > **All code changes are now DONE.** Finding 2's Windows timer fix landed +
 > validated natively 2026-06-18 (`8f0c56c6`) — but the measurement **refuted the
 > spike's own prediction**: raising the timer to 1 ms drops conc-1 p50 only
@@ -324,6 +329,69 @@ I/O scales to ~15 cores (the 65k-echoes/s measurement in (2)). So both ceilings
 matter only for connection-churn workloads (proxies, short-lived RPC) and are
 kernel/OS-side; for the launch headline neither is on the critical path, and
 neither is a runtime defect.
+
+## Finding 5 — connection DENSITY (the untested dimension) — clean to 45k held, 2026-06-19
+
+Every Windows run above — the 10k/250k/1M soaks — measured connection **churn**
+(open → echo → RST-close, only ~16 live at any instant). None measured connection
+**density**: many *persistent* connections held open simultaneously, which is the
+flagship workload's actual shape (`examples/ws_idle_holder` — "M1: 100K stable idle
+connections … M3: 1M+", a target set and validated on **Linux**, never on Windows).
+Density stresses what the port specifically changed: N **simultaneous** persistent
+mio sources / `SockState`s / AFD polls (the Problem-4 per-socket model under
+sustained load, not the register→park→wake→deregister *cycle* churn exercised), plus
+steady-state per-connection memory/handle scaling.
+
+**Run.** Plaintext `examples/std_net/ws_echo_spawn.kara` (`tg.spawn(|| echo(ws))`
+per connection; an idle client leaves each handler parked in `recv_text`, so each
+is a held, density-contributing connection) driven by the new
+`examples/std_net/ws_density_client.py` — it opens N persistent ws:// connections,
+holds them all open, samples the server at peak, runs a liveness probe, then closes
+them. **45,000 concurrent connections held** on a single Windows Server 2025 box,
+default multi-shard (8 shards/8 cores).
+
+**Result — clean, linear, flat.** Server at the 45k peak: **46,525 handles,
+94.14 MB RSS, 17 threads**, and the plateau held **dead-flat at 94.14 MB / 46,525
+handles for the entire 90 s hold** (17 identical samples — zero drift under
+sustained density). Per-connection cost is **perfectly linear** across the 2k→45k
+ramp:
+
+| held conns | handles | RSS (MB) |
+|---|---|---|
+| ~5,645 | 5,645 | 22.56 |
+| ~15,498 | 15,498 | 40.23 |
+| ~30,216 | 30,216 | 65.89 |
+| **45,000** | **46,525** | **94.14** |
+
+- **~1.03 OS handles / connection** ((46,525 − 99 baseline)/45,000) — one socket
+  handle each, nothing else accumulating.
+- **~1.97 KB RSS / connection** ((94.14 − 5.68 baseline)/45,000) — the
+  `KaracTaskHandle` + `KaracParkSlot` + persistent mio source/`SockState` +
+  registration + the handler's 1 KiB coro-frame buffer + socket buffers. Linear,
+  no superlinearity.
+- **Threads flat at 17** (baseline 12) regardless of connection count — the
+  handlers are coroutines on a **bounded pool**, not thread-per-connection.
+- **`LIVENESS_OK` at peak** — a brand-new connection still established while 45k
+  were held, so the accept/register/park path does **not** wedge at density.
+- **Clean reap on close** — after the client closed all 45k, the server drained to
+  **119 handles** (≈ baseline + 20, not + 45k) and RSS to 21.5 MB (allocator
+  high-water retention, not a leak): the held-then-closed connections' handles +
+  slots are reaped (clean EOF → handler completes → detached-reap, B-2026-06-17-2/-3).
+
+**Ceiling is the OS, not the runtime.** 45k is **port-bound, not runtime-bound**:
+each held connection burns one *client* ephemeral port (the server side shares
+:8080 via the 4-tuple — a handle, not a port), and Windows loopback is only
+`127.0.0.1` (no `127/8` source-IP fan-out, which is how the Linux 1M runs scaled).
+The default 16,384-port range was widened to ~55k for this run
+(`netsh int ipv4 set dynamicport tcp start=10000 num=55000`, reverted after); the
+linear-and-flat profile extrapolates cleanly past it. Pushing to the Linux 1M
+number on Windows needs loopback aliasing or a second client box — a *harness*
+limit, not a runtime one. (Establishment ran at ~279 conns/s during ramp — the same
+Windows loopback connection-setup rate Finding 4 identified, orthogonal to density.)
+
+**Bottom line:** the IOCP per-socket persistent-source model holds flat and leak-free
+at 45k concurrent held connections — the density dimension is validated on Windows
+to the box's port ceiling, with no runtime ceiling in sight.
 
 ## Follow-up worklist (all platform-agnostic — do on a Linux box)
 
