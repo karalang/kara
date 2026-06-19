@@ -1,0 +1,17 @@
+# Build artifacts produced by `bench.sh`.
+kara/.bin/
+kara/server
+# `karac build server.kara` emits `./server` in the invoker's CWD; bench.sh
+# moves it into kara/.bin/, but a manual build can drop it here — ignore both.
+server
+go/relay-bench-go
+upstream/relay-bench-upstream
+
+# Node artifacts (no build step, but guard against stray installs).
+node/node_modules/
+node/package-lock.json
+
+# Server logs (bench.sh uses mktemp, but guard against any local redirects).
+*.log
+server.log
+upstream.log

@@ -1,0 +1,97 @@
+// Relay bench — Kāra reference impl: a single-upstream HTTP passthrough proxy.
+//
+// This is the bench-runnable, slice-1 *shape* of `examples/relay/relay.kara`
+// stripped to the bare reverse-proxy critical path so the measurement is raw
+// proxy overhead, apples-to-apples with the Go (`httputil.ReverseProxy`) and
+// Node (manual `http.request` pipe) comparators:
+//
+//   * NO per-request `println` / metrics-report spam (relay.kara reports every
+//     10 requests — that I/O would dominate a microbench),
+//   * NO path-routing / UTF-8 request-line decode (relay.kara's slice-4
+//     `from_utf8` + `split` work is feature surface, not proxy overhead),
+//   * NO round-robin LB — one fixed upstream.
+//
+// The feature artifact (`examples/relay/relay.kara`) stays untouched; this is
+// the clean passthrough variant for the benchmark.
+//
+// The thesis it carries is unchanged: effect-driven event-loop networking with
+// no `async fn`. Every `TcpStream.read`/`.write_all` carries
+// `sends(Network) receives(Network)`, so codegen parks the spawned handler on
+// fd-readiness instead of thread-blocking it — thousands of in-flight proxied
+// connections ride a handful of reactor threads, and the handler body reads
+// like a straight-line blocking program. The Go differentiator: no goroutine
+// lifecycle to manage; the compiler manages the event loop.
+//
+// **Upstream address.** Read from `RELAY_UPSTREAM` (an `IP:port` literal),
+// defaulting to `127.0.0.1:9000` if unset so the server is runnable
+// standalone. `bench.sh` launches the shared upstream first, discovers its
+// ephemeral port, then exports `RELAY_UPSTREAM=127.0.0.1:<port>` before
+// launching this proxy.
+//
+// **BOUND_PORT convention.** Binding to `127.0.0.1:0` makes the runtime print
+// `BOUND_PORT=<port>\n` to stdout on bind (see `runtime/stdlib/tcp.kara`), so
+// `bench.sh`'s one port-discovery helper works across all three impls.
+//
+// Build & run:
+//   karac build examples/relay/bench/kara/server.kara
+//   RELAY_UPSTREAM=127.0.0.1:9000 ./server   # listens on an ephemeral port
+
+// Resolve the single upstream address: `RELAY_UPSTREAM` env var, or the
+// `127.0.0.1:9000` default. Consumes nothing; returns a fresh owned String.
+fn upstream_addr() -> String {
+    match Env.var("RELAY_UPSTREAM") {
+        Result.Ok(addr) => { return addr; }
+        Result.Err(_) => { return "127.0.0.1:9000"; }
+    }
+}
+
+// Service one connection: read the first request chunk, open the upstream,
+// forward the bytes already read, then stream the response back. HTTP
+// request/response is half-duplex, so forward-then-stream-back in line — no
+// full-duplex splice needed for the plaintext passthrough shape.
+fn handle(client: TcpStream, upstream_addr: String) {
+    let mut buf: Array[u8, 4096] = [0u8; 4096];
+    match client.read(mut buf) {
+        Result.Ok(n) => {
+            if n > 0 {
+                match TcpStream.connect(upstream_addr) {
+                    Result.Ok(upstream) => {
+                        let _ = upstream.write_all(buf[0..n]);
+                        loop {
+                            match upstream.read(mut buf) {
+                                Result.Ok(m) => {
+                                    if m == 0 { break; }
+                                    match client.write_all(buf[0..m]) {
+                                        Result.Ok(_) => {}
+                                        Result.Err(_) => { break; }
+                                    }
+                                }
+                                Result.Err(_) => { break; }
+                            }
+                        }
+                    }
+                    Result.Err(_) => {}
+                }
+            }
+        }
+        Result.Err(_) => {}
+    }
+}
+
+fn main() {
+    let addr = upstream_addr();
+    let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+    let mut tg: TaskGroup = TaskGroup.new();
+    loop {
+        match listener.accept() {
+            Result.Ok(client) => {
+                // Each handler captures its own clone of the upstream address;
+                // the spawned task forwards to it. No shared mutable state —
+                // the passthrough variant carries no metrics counters.
+                let target = addr.clone();
+                tg.spawn(|| handle(client, target));
+            }
+            Result.Err(_) => {}
+        }
+    }
+}
