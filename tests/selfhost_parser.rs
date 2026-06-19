@@ -261,7 +261,7 @@ fn rust_render(src: &str) -> String {
 // in its target clone-free shape but cannot compile until #32 lands; this oracle
 // is the gate for parser slice 1 the moment it does. Remove `#[ignore]` then.
 #[test]
-#[ignore = "blocked on phase-12 codegen blocker #32 (self-field Vec-index miscompile)"]
+#[ignore = "blocked on phase-12 codegen blocker #38 (shared-enum String payload from parsed token reads empty)"]
 fn selfhost_parser_matches_rust_parser() {
     // 1. Generate the crate-root program: imports of the Kāra parser +
     //    renderer, a per-input driver, and `main`. The `span`/`token`/`lexer`/

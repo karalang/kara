@@ -4,10 +4,11 @@
 // Rust seed reproduces this exactly in `tests/selfhost_parser.rs::render_rust_expr`.
 //
 // Node shape: `(HEAD @off:len)` for a leaf, `(HEAD @off:len CHILD ...)` for a
-// compound node, children space-separated.
+// compound node, children space-separated. Reads the DIRECT-model AST: each
+// `Expr.<Variant>(node)` carries the node's `span`.
 //
 
-import ast.{Expr, ExprKind, BinaryExpr, UnaryExpr, BinOp, UnaryOp};
+import ast.{Expr, BinaryExpr, BinOp, UnaryOp};
 
 // MUST stay identical to `escape_for_render` in `selfhost/src/main.kara` and
 // `tests/selfhost_parser.rs` so control chars don't break the comparison.
@@ -33,9 +34,7 @@ fn escape_for_render(s: String) -> String {
     out
 }
 
-// Takes the op by `ref` so naming it does not MOVE `bx.op` out of the
-// `BinaryExpr` node — Kāra treats a field move as a whole-struct move, which
-// would invalidate the subsequent `bx.left` / `bx.right` reads.
+// Takes the op by `ref` so naming it does not move it out of the node struct.
 fn binop_name(op: ref BinOp) -> String {
     let mut s = "".to_string();
     match op {
@@ -84,123 +83,133 @@ fn span_str(off: i64, len: i64) -> String {
 }
 
 pub fn render_expr(e: Expr) -> String {
-    let off = e.span.offset;
-    let len = e.span.length;
     let mut out = "".to_string();
-    let k = e.kind;
-    match k {
-        Integer(v, sfx) => {
+    match e {
+        Int(n) => {
+            let off = n.span.offset;
+            let len = n.span.length;
             out.push_str("(int ");
-            out.push_str(v.to_string());
-            if sfx.len() > 0 {
+            out.push_str(n.value.to_string());
+            if n.suffix.len() > 0 {
                 out.push_str(" ");
-                out.push_str(sfx);
+                out.push_str(n.suffix);
             }
             out.push_str(span_str(off, len));
             out.push_str(")");
         }
-        Float(v, sfx) => {
+        Float(n) => {
+            let off = n.span.offset;
+            let len = n.span.length;
             out.push_str("(float ");
-            out.push_str(v.to_string());
-            if sfx.len() > 0 {
+            out.push_str(n.value.to_string());
+            if n.suffix.len() > 0 {
                 out.push_str(" ");
-                out.push_str(sfx);
+                out.push_str(n.suffix);
             }
             out.push_str(span_str(off, len));
             out.push_str(")");
         }
-        Bool(b) => {
+        Bool(n) => {
             out.push_str("(bool ");
-            if b {
+            if n.value {
                 out.push_str("true");
             } else {
                 out.push_str("false");
             }
-            out.push_str(span_str(off, len));
+            out.push_str(span_str(n.span.offset, n.span.length));
             out.push_str(")");
         }
-        CharLit(c) => {
+        Char(n) => {
             out.push_str("(char ");
             let mut tmp = "".to_string();
-            tmp.push(c);
+            tmp.push(n.value);
             out.push_str(escape_for_render(tmp));
-            out.push_str(span_str(off, len));
+            out.push_str(span_str(n.span.offset, n.span.length));
             out.push_str(")");
         }
-        ByteLit(b) => {
+        Byte(n) => {
             out.push_str("(byte ");
-            out.push_str(b.to_string());
-            out.push_str(span_str(off, len));
+            out.push_str(n.value.to_string());
+            out.push_str(span_str(n.span.offset, n.span.length));
             out.push_str(")");
         }
-        StringLit(s) => {
+        Str(n) => {
+            let off = n.span.offset;
+            let len = n.span.length;
             out.push_str("(str ");
-            out.push_str(escape_for_render(s));
+            out.push_str(escape_for_render(n.value));
             out.push_str(span_str(off, len));
             out.push_str(")");
         }
-        MultiStringLit(s) => {
+        MultiStr(n) => {
+            let off = n.span.offset;
+            let len = n.span.length;
             out.push_str("(mstr ");
-            out.push_str(escape_for_render(s));
+            out.push_str(escape_for_render(n.value));
             out.push_str(span_str(off, len));
             out.push_str(")");
         }
-        Ident(name) => {
+        Ident(n) => {
+            let off = n.span.offset;
+            let len = n.span.length;
             out.push_str("(ident ");
-            out.push_str(name);
+            out.push_str(n.name);
             out.push_str(span_str(off, len));
             out.push_str(")");
         }
-        SelfValue => {
+        SelfVal(n) => {
             out.push_str("(self");
-            out.push_str(span_str(off, len));
+            out.push_str(span_str(n.span.offset, n.span.length));
             out.push_str(")");
         }
-        SelfType => {
+        SelfTy(n) => {
             out.push_str("(Self");
-            out.push_str(span_str(off, len));
+            out.push_str(span_str(n.span.offset, n.span.length));
             out.push_str(")");
         }
-        Binary(bx) => {
-            // Destructure so both child edges move out together (#34b): Kāra
-            // treats a single field move as a whole-struct move, so disjoint
-            // `render_expr(bx.left)` then `render_expr(bx.right)` is rejected as
-            // "value 'bx' used after move". `op` is borrowed by `binop_name`
-            // (ref param), so it survives the destructure unmoved.
+        Binary(b) => {
+            // Destructure so both child edges move out together (Kāra treats a
+            // single field move as a whole-struct move); `op` is borrowed by
+            // `binop_name`.
             let BinaryExpr {
                 op,
                 left,
                 right,
-            } = bx;
+                span,
+            } = b;
             out.push_str("(binary ");
             out.push_str(binop_name(op));
-            out.push_str(span_str(off, len));
+            out.push_str(span_str(span.offset, span.length));
             out.push_str(" ");
             out.push_str(render_expr(left));
             out.push_str(" ");
             out.push_str(render_expr(right));
             out.push_str(")");
         }
-        Unary(ux) => {
+        Unary(u) => {
+            let off = u.span.offset;
+            let len = u.span.length;
             out.push_str("(unary ");
-            out.push_str(unaryop_name(ux.op));
+            out.push_str(unaryop_name(u.op));
             out.push_str(span_str(off, len));
             out.push_str(" ");
-            out.push_str(render_expr(ux.operand));
+            out.push_str(render_expr(u.operand));
             out.push_str(")");
         }
-        Tuple(elems) => {
+        Tuple(t) => {
+            let off = t.span.offset;
+            let len = t.span.length;
             out.push_str("(tuple");
             out.push_str(span_str(off, len));
-            for el in elems {
+            for el in t.elems {
                 out.push_str(" ");
                 out.push_str(render_expr(el));
             }
             out.push_str(")");
         }
-        Error => {
+        Error(n) => {
             out.push_str("(error");
-            out.push_str(span_str(off, len));
+            out.push_str(span_str(n.span.offset, n.span.length));
             out.push_str(")");
         }
     }

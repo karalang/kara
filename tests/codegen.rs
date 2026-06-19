@@ -2110,6 +2110,42 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_shared_enum_struct_payload_with_aggregate_fields() {
+        // #37 (phase-12 self-hosting, parser stage): constructing/matching a
+        // shared-enum variant whose payload struct has SUB-AGGREGATE fields — a
+        // unit enum stored as `{i64}` (here `BinOp`) and a nested `{4×i64}`
+        // struct (`Span`) — failed LLVM verification (`Invalid InsertValueInst`):
+        // the payload reconstruction inserted a bare `i64` into a `{i64}` /
+        // `{4×i64}` slot. `reconstruct_payload_value` (`control_flow_match.rs`)
+        // now routes a single-WORD struct field through the struct branch
+        // (wrapping the word) instead of the scalar branch. This is the AST's
+        // `Expr.Binary(BinaryExpr { op: BinOp, left, right, span: Span })` shape.
+        if let Some(out) = run_program(
+            "struct Sp { line: i64, column: i64, offset: i64, length: i64 }\n\
+             enum Bop { Add, Sub }\n\
+             struct IntLit { value: i64, span: Sp }\n\
+             struct BinE { op: Bop, left: Expr, right: Expr, span: Sp }\n\
+             shared enum Expr { Int(IntLit), Bin(BinE) }\n\
+             fn eval(e: Expr) -> i64 {\n\
+                 match e {\n\
+                     Int(n) => n.value,\n\
+                     Bin(b) => b.span.length,\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let lf = Expr.Int(IntLit { value: 1, span: Sp { line: 1, column: 1, offset: 0, length: 1 } });\n\
+                 let rt = Expr.Int(IntLit { value: 2, span: Sp { line: 1, column: 1, offset: 2, length: 1 } });\n\
+                 let b = Expr.Bin(BinE { op: Bop.Add, left: lf, right: rt, span: Sp { line: 1, column: 1, offset: 0, length: 3 } });\n\
+                 println(eval(b).to_string());\n\
+                 let a = Expr.Int(IntLit { value: 5, span: Sp { line: 1, column: 1, offset: 0, length: 1 } });\n\
+                 println(eval(a).to_string());\n\
+             }",
+        ) {
+            assert_eq!(out, "3\n5\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_string_method_on_self_field() {
         // Regression for the self-hosting lexer blocker #5: a String/Vec
         // method on a field accessed through `self`

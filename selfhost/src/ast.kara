@@ -2,29 +2,30 @@
 // Depends on span (DAG: span <- token <- ast). Mirrors the expression half of
 // `src/ast/exprs.rs`.
 //
-// AST-port wrapping convention (phase-12 § "AST-port wrapping convention",
-// DECIDED 2026-06-14) — the recursive node uses RC indirection (`shared`), and
-// per-node spans ride an OUTER wrapper struct, mirroring the lexer's
-// `SpannedToken { token, span }` precedent:
+// AST-port wrapping convention (phase-12 § "AST-port wrapping convention") —
+// DIRECT `shared enum` model (chosen 2026-06-18 over the outer-wrapper model):
 //
-//   * `shared enum ExprKind` is the recursive node — every child edge (the
-//     Rust `Box<Expr>` analog) is a field of type `Expr`, a fixed-size RC
-//     handle that breaks the otherwise-infinite enum size.
-//   * `struct Expr { kind: ExprKind, span: Span }` is the span wrapper. Every
-//     node — leaves included — carries a span, so the differential oracle can
-//     check leaf spans (the surface that caught the lexer's span bugs).
-//   * Non-trivial variants funnel their operands through ONE per-variant node
-//     struct (`Binary(BinaryExpr)`); a struct field may freely be an enum
-//     (`op: BinOp`), a recursive `Expr` edge, or a `Vec[Expr]`, none of which
-//     is legal as a *direct* enum-variant payload (`E_ENUM_NESTED_ENUM_PAYLOAD`).
-//   * Trivial variants keep direct payloads (`Integer(i64, String)`, `Bool(bool)`,
-//     `Ident(String)`, unit `SelfValue`); sequence children are `Vec[Expr]`.
+//   * `shared enum Expr` IS the recursive node — exactly the shape the
+//     recursive-heap gate (B-28..B-34) flushed for memory safety. Every child
+//     edge (the Rust `Box<Expr>` analog) is a field of type `Expr`, an RC
+//     handle = a POINTER, so node structs embed only scalars / `String` /
+//     `Expr` pointers / `Span` — never another node struct by value. This keeps
+//     the recursive drop/clone/move walk on the gate-tested heap shape and
+//     avoids the struct-by-value-field layout ordering (#36) the wrapper model
+//     hit.
+//   * Per-node spans ride INSIDE each variant's node struct (`IntLit.span`,
+//     `BinaryExpr.span`), so every node — leaves included — carries a span the
+//     differential oracle checks. (The trade vs the wrapper model: trivial
+//     literals get a tiny node struct to hold their span, rather than a direct
+//     `Integer(i64, String)` payload.)
+//   * Non-recursive operator tags (`BinOp`/`UnaryOp`) are plain enums stored as
+//     a node-struct field — legal (a struct field may be an enum), unlike a
+//     direct enum-variant-of-enum payload (`E_ENUM_NESTED_ENUM_PAYLOAD`).
 //
 
 import span.Span;
 
-// Binary operator — non-recursive plain enum (a node-struct field, never a
-// direct enum-variant payload). Mirrors `ast::BinOp`.
+// Binary operator — non-recursive plain enum. Mirrors `ast::BinOp`.
 pub enum BinOp {
     // Arithmetic
     Add,
@@ -61,53 +62,135 @@ pub enum UnaryOp {
     Deref,  // *
 }
 
-// `left OP right` — the recursive edges are `Expr` (RC handle) fields of this
-// node struct, sidestepping the nested-enum-payload limit. Mirrors the fields
-// of `ExprKind::Binary`.
+// ── Per-variant node structs (each carries its span) ──
+
+pub struct IntLit {
+    pub value: i64,
+    pub suffix: String,
+    pub span: Span,
+}
+
+pub struct FloatLit {
+    pub value: f64,
+    pub suffix: String,
+    pub span: Span,
+}
+
+pub struct BoolLit {
+    pub value: bool,
+    pub span: Span,
+}
+
+pub struct CharLit {
+    pub value: char,
+    pub span: Span,
+}
+
+pub struct ByteLit {
+    pub value: u8,
+    pub span: Span,
+}
+
+// Shared by the `Str` (double-quoted) and `MultiStr` (triple-quoted) variants.
+pub struct StrLit {
+    pub value: String,
+    pub span: Span,
+}
+
+pub struct IdentExpr {
+    pub name: String,
+    pub span: Span,
+}
+
+// Span-only payload for the nullary nodes (`self` / `Self` / error recovery).
+pub struct SpanNode {
+    pub span: Span,
+}
+
+// `left OP right` — the child edges are `Expr` (RC handle = pointer) fields.
 pub struct BinaryExpr {
     pub op: BinOp,
     pub left: Expr,
     pub right: Expr,
+    pub span: Span,
 }
 
-// `OP operand`. Mirrors the fields of `ExprKind::Unary`.
+// `OP operand`.
 pub struct UnaryExpr {
     pub op: UnaryOp,
     pub operand: Expr,
+    pub span: Span,
+}
+
+// `(e0, e1, ...)` — sequence children via the collection layer.
+pub struct TupleExpr {
+    pub elems: Vec[Expr],
+    pub span: Span,
 }
 
 // The recursive expression node (RC-backed). Slice 1 covers literals,
 // identifiers, `self`/`Self`, unary, binary, grouping, and tuples; the
-// remaining `ExprKind` variants (calls, indexing, control flow, …) land in
-// later parser slices.
-pub shared enum ExprKind {
-    // Literals — trivial direct payloads.
-    Integer(i64, String),
-    Float(f64, String),
-    Bool(bool),
-    CharLit(char),
-    ByteLit(u8),
-    StringLit(String),
-    MultiStringLit(String),
+// remaining forms (calls, indexing, control flow, …) land in later slices.
+pub shared enum Expr {
+    // Literals.
+    Int(IntLit),
+    Float(FloatLit),
+    Bool(BoolLit),
+    Char(CharLit),
+    Byte(ByteLit),
+    Str(StrLit),
+    MultiStr(StrLit),
 
     // Identifiers / receivers.
-    Ident(String),
-    SelfValue,
-    SelfType,
+    Ident(IdentExpr),
+    SelfVal(SpanNode),
+    SelfTy(SpanNode),
 
-    // Operators — node-struct payloads carrying the recursive edges.
+    // Operators.
     Binary(BinaryExpr),
     Unary(UnaryExpr),
 
-    // Composite literal — sequence children via the collection layer.
-    Tuple(Vec[Expr]),
+    // Composite literal.
+    Tuple(TupleExpr),
 
-    // Error-recovery placeholder.
-    Error,
+    // Error-recovery placeholder. Named `Error` (not `Err`) to match the seed
+    // and avoid colliding with `Result.Err` in codegen's error-exit heuristic
+    // (`is_error_exit_value` flags any `return` whose callee path ends in
+    // `"Err"`, which would mis-stage errdefer cleanup and panic on the
+    // shared-enum return value).
+    Error(SpanNode),
 }
 
-// Span wrapper — the `SpannedToken { token, span }` analog for expressions.
-pub struct Expr {
-    pub kind: ExprKind,
-    pub span: Span,
+// Copy a `Span` out of a borrow — `Span` is all-scalar, so this is the
+// move-free read (you can't move a field out of a `ref`-bound value).
+pub fn clone_span(s: ref Span) -> Span {
+    Span {
+        line: s.line,
+        column: s.column,
+        offset: s.offset,
+        length: s.length,
+    }
+}
+
+// The source span of any expression node. In the direct model the span lives
+// inside each variant's node struct, so reading it is a per-variant match. `ref`
+// keeps the caller's ownership (the parser reads `lhs`/`rhs` spans before moving
+// them into a `BinaryExpr`).
+pub fn expr_span(e: ref Expr) -> Span {
+    match e {
+        Int(n) => clone_span(n.span),
+        Float(n) => clone_span(n.span),
+        Bool(n) => clone_span(n.span),
+        Char(n) => clone_span(n.span),
+        Byte(n) => clone_span(n.span),
+        Str(n) => clone_span(n.span),
+        MultiStr(n) => clone_span(n.span),
+        Ident(n) => clone_span(n.span),
+        SelfVal(n) => clone_span(n.span),
+        SelfTy(n) => clone_span(n.span),
+        Binary(n) => clone_span(n.span),
+        Unary(n) => clone_span(n.span),
+        Tuple(n) => clone_span(n.span),
+        Error(n) => clone_span(n.span),
+    }
 }

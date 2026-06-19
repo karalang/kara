@@ -1823,96 +1823,104 @@ impl<'ctx> super::Codegen<'ctx> {
                 break;
             }
             let slice = &field_words[cursor..end];
-            let field_val: BasicValueEnum<'ctx> = if n == 1 {
-                let word = slice
-                    .first()
-                    .copied()
-                    .unwrap_or_else(|| i64_t.const_int(0, false));
-                match field_ty {
-                    BasicTypeEnum::IntType(it) => {
-                        if it.get_bit_width() == 64 {
-                            word.into()
-                        } else if it.get_bit_width() < 64 {
-                            self.builder
-                                .build_int_truncate(word, it, "pl.tr")
-                                .unwrap()
-                                .into()
-                        } else {
-                            self.builder
-                                .build_int_z_extend(word, it, "pl.zx")
-                                .unwrap()
-                                .into()
-                        }
-                    }
-                    BasicTypeEnum::FloatType(ft) => {
-                        self.builder.build_bit_cast(word, ft, "pl.fc").unwrap()
-                    }
-                    BasicTypeEnum::PointerType(_) => self
-                        .builder
-                        .build_int_to_ptr(word, ptr_ty, "pl.itop")
-                        .unwrap()
-                        .into(),
-                    _ => word.into(),
-                }
-            } else if let BasicTypeEnum::StructType(inner_st) = field_ty {
-                // Nested struct field — recursively build by walking its
-                // sub-fields. v1 covers the `String` aggregate
-                // (`{ ptr, i64, i64 }`) embedded in `Response.body` /
-                // `HttpError.message`; deeper nesting would need
-                // recursion, but those shapes don't surface here yet.
-                let mut sub_agg = inner_st.get_undef();
-                let sub_fields = inner_st.count_fields() as usize;
-                for j in 0..sub_fields {
-                    if j >= slice.len() {
-                        break;
-                    }
-                    let sub_ty = inner_st
-                        .get_field_type_at_index(j as u32)
-                        .ok_or_else(|| format!("sub-field {} missing", j))?;
-                    let sw = slice[j];
-                    let sub_val: BasicValueEnum<'ctx> = match sub_ty {
+            // #37: a single-WORD struct field (e.g. `{i64}` — a unit-only enum
+            // like `BinOp` used as a payload-struct field) has `n == 1` but its
+            // LLVM type is a `StructType`, so it must reconstruct via the
+            // struct branch below (wrap the word in the `{i64}` aggregate), NOT
+            // the scalar path (which would `insertvalue` a bare `i64` into a
+            // `{i64}` slot → "Invalid InsertValueInst operands"). Exclude struct
+            // field types from the scalar branch so they fall through.
+            let field_val: BasicValueEnum<'ctx> =
+                if n == 1 && !matches!(field_ty, BasicTypeEnum::StructType(_)) {
+                    let word = slice
+                        .first()
+                        .copied()
+                        .unwrap_or_else(|| i64_t.const_int(0, false));
+                    match field_ty {
                         BasicTypeEnum::IntType(it) => {
                             if it.get_bit_width() == 64 {
-                                sw.into()
+                                word.into()
                             } else if it.get_bit_width() < 64 {
                                 self.builder
-                                    .build_int_truncate(sw, it, "pl.sub.tr")
+                                    .build_int_truncate(word, it, "pl.tr")
                                     .unwrap()
                                     .into()
                             } else {
                                 self.builder
-                                    .build_int_z_extend(sw, it, "pl.sub.zx")
+                                    .build_int_z_extend(word, it, "pl.zx")
                                     .unwrap()
                                     .into()
                             }
                         }
+                        BasicTypeEnum::FloatType(ft) => {
+                            self.builder.build_bit_cast(word, ft, "pl.fc").unwrap()
+                        }
                         BasicTypeEnum::PointerType(_) => self
                             .builder
-                            .build_int_to_ptr(sw, ptr_ty, "pl.sub.itop")
+                            .build_int_to_ptr(word, ptr_ty, "pl.itop")
                             .unwrap()
                             .into(),
-                        BasicTypeEnum::FloatType(ft) => {
-                            self.builder.build_bit_cast(sw, ft, "pl.sub.fc").unwrap()
+                        _ => word.into(),
+                    }
+                } else if let BasicTypeEnum::StructType(inner_st) = field_ty {
+                    // Nested struct field — recursively build by walking its
+                    // sub-fields. v1 covers the `String` aggregate
+                    // (`{ ptr, i64, i64 }`) embedded in `Response.body` /
+                    // `HttpError.message`; deeper nesting would need
+                    // recursion, but those shapes don't surface here yet.
+                    let mut sub_agg = inner_st.get_undef();
+                    let sub_fields = inner_st.count_fields() as usize;
+                    for j in 0..sub_fields {
+                        if j >= slice.len() {
+                            break;
                         }
-                        _ => sw.into(),
-                    };
-                    sub_agg = self
-                        .builder
-                        .build_insert_value(sub_agg, sub_val, j as u32, "pl.sub.iv")
-                        .unwrap()
-                        .into_struct_value();
-                }
-                sub_agg.into()
-            } else {
-                // Unexpected: a multi-word non-struct field. Fall back to
-                // dropping all but the first word — same shape as the
-                // legacy single-word path so we don't crash the build.
-                let word = slice
-                    .first()
-                    .copied()
-                    .unwrap_or_else(|| i64_t.const_int(0, false));
-                word.into()
-            };
+                        let sub_ty = inner_st
+                            .get_field_type_at_index(j as u32)
+                            .ok_or_else(|| format!("sub-field {} missing", j))?;
+                        let sw = slice[j];
+                        let sub_val: BasicValueEnum<'ctx> = match sub_ty {
+                            BasicTypeEnum::IntType(it) => {
+                                if it.get_bit_width() == 64 {
+                                    sw.into()
+                                } else if it.get_bit_width() < 64 {
+                                    self.builder
+                                        .build_int_truncate(sw, it, "pl.sub.tr")
+                                        .unwrap()
+                                        .into()
+                                } else {
+                                    self.builder
+                                        .build_int_z_extend(sw, it, "pl.sub.zx")
+                                        .unwrap()
+                                        .into()
+                                }
+                            }
+                            BasicTypeEnum::PointerType(_) => self
+                                .builder
+                                .build_int_to_ptr(sw, ptr_ty, "pl.sub.itop")
+                                .unwrap()
+                                .into(),
+                            BasicTypeEnum::FloatType(ft) => {
+                                self.builder.build_bit_cast(sw, ft, "pl.sub.fc").unwrap()
+                            }
+                            _ => sw.into(),
+                        };
+                        sub_agg = self
+                            .builder
+                            .build_insert_value(sub_agg, sub_val, j as u32, "pl.sub.iv")
+                            .unwrap()
+                            .into_struct_value();
+                    }
+                    sub_agg.into()
+                } else {
+                    // Unexpected: a multi-word non-struct field. Fall back to
+                    // dropping all but the first word — same shape as the
+                    // legacy single-word path so we don't crash the build.
+                    let word = slice
+                        .first()
+                        .copied()
+                        .unwrap_or_else(|| i64_t.const_int(0, false));
+                    word.into()
+                };
             agg = self
                 .builder
                 .build_insert_value(agg, field_val, i as u32, "pl.iv")

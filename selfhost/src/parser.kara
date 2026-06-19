@@ -2,24 +2,34 @@
 // the self-hosted compiler (port slice 1). Mirrors the expression core of
 // `src/parser.rs` + `src/parser/exprs.rs`: `parse_expr_bp` (the Pratt loop with
 // the seed's exact binding-power ladder), `parse_prefix` (literals / identifiers
-// / unary / grouping), and `parse_paren_or_tuple`.
+// / unary / grouping), and `parse_paren_or_tuple`. Builds the DIRECT-model AST
+// (`ast.kara`): each node is an `Expr.<Variant>(NodeStruct { …, span })`.
 //
-// ┌─ BLOCKED on phase-12 codegen blocker #32 (bootstrap-critical) ───────────────┐
-// │ This parser reads its token stream via `self.tokens[self.pos]…` — a          │
-// │ self-field-rooted Vec-index access that karac currently MISCOMPILES          │
-// │ (silent garbage scalar reads + a match-scrutinee bind failure; see           │
-// │ phase-12-self-hosting.md "Parser pre-port: codegen blockers" #32). The code  │
-// │ here is the intended TARGET shape — clone-free reads, because user `.clone()`│
-// │ is also unavailable (#33). It compiles + runs once #32 lands; the differential│
-// │ AST oracle (`tests/selfhost_parser.rs`) is the gate. Token access is via     │
-// │ payload-less peek-matches (kind), direct scalar field reads (spans), and     │
-// │ payload-binding matches at leaves (consume-once move-out).                   │
-// └──────────────────────────────────────────────────────────────────────────────┘
+// Token/span reads are clone-free (user `.clone()` is unavailable): payload-less
+// peek-matches for the kind, direct scalar field reads for spans, and a
+// payload-binding match at each leaf (consume-once move-out). The self-field-
+// rooted Vec-index reads (`self.tokens[self.pos]…`) compile after the #32 fix.
 //
 
 import span.Span;
 import token.{Token, SpannedToken};
-import ast.{Expr, ExprKind, BinaryExpr, UnaryExpr, BinOp, UnaryOp};
+import ast.{
+    Expr,
+    expr_span,
+    BinOp,
+    UnaryOp,
+    IntLit,
+    FloatLit,
+    BoolLit,
+    CharLit,
+    ByteLit,
+    StrLit,
+    IdentExpr,
+    SpanNode,
+    BinaryExpr,
+    UnaryExpr,
+    TupleExpr,
+};
 import lexer.lex_all;
 
 struct Parser {
@@ -42,7 +52,6 @@ impl Parser {
         if self.pos >= self.tokens.len() {
             return true;
         }
-        // Payload-less peek of the current token kind.
         match self.tokens[self.pos].token {
             Eof => true,
             _ => false,
@@ -50,8 +59,7 @@ impl Parser {
     }
 
     // Span of the current token (or the last token / a default when out of
-    // range) — built from scalar field reads so no SpannedToken is moved or
-    // cloned. Mirrors `src/parser.rs::current_span`.
+    // range) — built from scalar field reads. Mirrors `src/parser.rs::current_span`.
     fn current_span(ref self) -> Span {
         if self.pos < self.tokens.len() {
             Span {
@@ -222,21 +230,22 @@ impl Parser {
             self.advance();
             let rhs = self.parse_expr_bp(r_bp);
             // Span the full operator expression (lhs start → rhs end) so the
-            // Binary node has a unique span distinct from its LHS.
+            // Binary node has a unique span distinct from its LHS. Read both
+            // child spans by `ref` before moving the children into the node.
+            let lspan = expr_span(lhs);
+            let rspan = expr_span(rhs);
             let sp = Span {
-                line: lhs.span.line,
-                column: lhs.span.column,
-                offset: lhs.span.offset,
-                length: (rhs.span.offset + rhs.span.length) - lhs.span.offset,
+                line: lspan.line,
+                column: lspan.column,
+                offset: lspan.offset,
+                length: (rspan.offset + rspan.length) - lspan.offset,
             };
-            lhs = Expr {
-                kind: ExprKind.Binary(BinaryExpr {
-                    op: op,
-                    left: lhs,
-                    right: rhs,
-                }),
+            lhs = Expr.Binary(BinaryExpr {
+                op: op,
+                left: lhs,
+                right: rhs,
                 span: sp,
-            };
+            });
         }
         lhs
     }
@@ -245,147 +254,126 @@ impl Parser {
     fn parse_prefix(mut ref self) -> Expr {
         let start = self.current_span();
         if self.pos >= self.tokens.len() {
-            return Expr {
-                kind: ExprKind.Error,
-                span: self.span_from(start),
-            };
+            return Expr.Error(SpanNode { span: self.span_from(start) });
         }
-        // Bind any leaf payload (Integer/Float/String/Char/Byte/Identifier) by
-        // moving it out of the consumed token; the operator/keyword arms bind
-        // nothing. `self.advance()` runs inside each arm after the match has
-        // extracted the payload.
         match self.tokens[self.pos].token {
             // Unary operators — all bind at 24 (above multiplicative).
             Minus => {
                 self.advance();
                 let operand = self.parse_expr_bp(24);
-                Expr {
-                    kind: ExprKind.Unary(UnaryExpr {
-                        op: UnaryOp.Neg,
-                        operand: operand,
-                    }),
+                Expr.Unary(UnaryExpr {
+                    op: UnaryOp.Neg,
+                    operand: operand,
                     span: self.span_from(start),
-                }
+                })
             }
             Not => {
                 self.advance();
                 let operand = self.parse_expr_bp(24);
-                Expr {
-                    kind: ExprKind.Unary(UnaryExpr {
-                        op: UnaryOp.Not,
-                        operand: operand,
-                    }),
+                Expr.Unary(UnaryExpr {
+                    op: UnaryOp.Not,
+                    operand: operand,
                     span: self.span_from(start),
-                }
+                })
             }
             Bang => {
                 // The seed accepts `!` with a diagnostic redirect to `not`;
                 // slice 1 parses it identically (Unary Not) without the note.
                 self.advance();
                 let operand = self.parse_expr_bp(24);
-                Expr {
-                    kind: ExprKind.Unary(UnaryExpr {
-                        op: UnaryOp.Not,
-                        operand: operand,
-                    }),
+                Expr.Unary(UnaryExpr {
+                    op: UnaryOp.Not,
+                    operand: operand,
                     span: self.span_from(start),
-                }
+                })
             }
             Tilde => {
                 self.advance();
                 let operand = self.parse_expr_bp(24);
-                Expr {
-                    kind: ExprKind.Unary(UnaryExpr {
-                        op: UnaryOp.BitNot,
-                        operand: operand,
-                    }),
+                Expr.Unary(UnaryExpr {
+                    op: UnaryOp.BitNot,
+                    operand: operand,
                     span: self.span_from(start),
-                }
+                })
             }
             Star => {
                 self.advance();
                 let operand = self.parse_expr_bp(24);
-                Expr {
-                    kind: ExprKind.Unary(UnaryExpr {
-                        op: UnaryOp.Deref,
-                        operand: operand,
-                    }),
+                Expr.Unary(UnaryExpr {
+                    op: UnaryOp.Deref,
+                    operand: operand,
                     span: self.span_from(start),
-                }
+                })
             }
 
             // Literals.
             Integer(v, sfx) => {
                 self.advance();
-                Expr {
-                    kind: ExprKind.Integer(v, sfx),
+                Expr.Int(IntLit {
+                    value: v,
+                    suffix: sfx,
                     span: self.span_from(start),
-                }
+                })
             }
             Float(v, sfx) => {
                 self.advance();
-                Expr {
-                    kind: ExprKind.Float(v, sfx),
+                Expr.Float(FloatLit {
+                    value: v,
+                    suffix: sfx,
                     span: self.span_from(start),
-                }
+                })
             }
             CharLiteral(c) => {
                 self.advance();
-                Expr {
-                    kind: ExprKind.CharLit(c),
+                Expr.Char(CharLit {
+                    value: c,
                     span: self.span_from(start),
-                }
+                })
             }
             ByteLiteral(b) => {
                 self.advance();
-                Expr {
-                    kind: ExprKind.ByteLit(b),
+                Expr.Byte(ByteLit {
+                    value: b,
                     span: self.span_from(start),
-                }
+                })
             }
             StringLiteral(s) => {
                 self.advance();
-                Expr {
-                    kind: ExprKind.StringLit(s),
+                Expr.Str(StrLit {
+                    value: s,
                     span: self.span_from(start),
-                }
+                })
             }
             MultiStringLiteral(s) => {
                 self.advance();
-                Expr {
-                    kind: ExprKind.MultiStringLit(s),
+                Expr.MultiStr(StrLit {
+                    value: s,
                     span: self.span_from(start),
-                }
+                })
             }
             True => {
                 self.advance();
-                Expr {
-                    kind: ExprKind.Bool(true),
+                Expr.Bool(BoolLit {
+                    value: true,
                     span: self.span_from(start),
-                }
+                })
             }
             False => {
                 self.advance();
-                Expr {
-                    kind: ExprKind.Bool(false),
+                Expr.Bool(BoolLit {
+                    value: false,
                     span: self.span_from(start),
-                }
+                })
             }
 
             // self / Self.
             SelfValue => {
                 self.advance();
-                Expr {
-                    kind: ExprKind.SelfValue,
-                    span: self.span_from(start),
-                }
+                Expr.SelfVal(SpanNode { span: self.span_from(start) })
             }
             SelfType => {
                 self.advance();
-                Expr {
-                    kind: ExprKind.SelfType,
-                    span: self.span_from(start),
-                }
+                Expr.SelfTy(SpanNode { span: self.span_from(start) })
             }
 
             // Grouping / tuple.
@@ -395,20 +383,17 @@ impl Parser {
             // later slices).
             Identifier(name) => {
                 self.advance();
-                Expr {
-                    kind: ExprKind.Ident(name),
+                Expr.Ident(IdentExpr {
+                    name: name,
                     span: self.span_from(start),
-                }
+                })
             }
 
             // Error-recovery placeholder for any token that can't start an
             // expression in slice 1.
             _ => {
                 self.advance();
-                Expr {
-                    kind: ExprKind.Error,
-                    span: self.span_from(start),
-                }
+                Expr.Error(SpanNode { span: self.span_from(start) })
             }
         }
     }
@@ -429,10 +414,10 @@ impl Parser {
         };
         if is_rp {
             self.advance();
-            return Expr {
-                kind: ExprKind.Tuple(Vec.new()),
+            return Expr.Tuple(TupleExpr {
+                elems: Vec.new(),
                 span: self.span_from(start),
-            };
+            });
         }
 
         let first = self.parse_expr_bp(0);
@@ -476,10 +461,10 @@ impl Parser {
                 }
             }
             self.expect_rparen();
-            Expr {
-                kind: ExprKind.Tuple(elements),
+            Expr.Tuple(TupleExpr {
+                elems: elements,
                 span: self.span_from(start),
-            }
+            })
         } else {
             self.expect_rparen();
             first
