@@ -1,0 +1,20 @@
+// Iris — the shared entry point.
+//
+// One package, one `main`, two targets. The same `karac build` on this source
+// tree produces a native binary (the checksum oracle) OR browser WASM (the
+// interactive editor) — only `--target` changes. The target-specific I/O lives
+// in a single `host` module that exists in two platform-suffixed variants the
+// walker picks between automatically (`host_wasm.kara` on the browser target,
+// `host_macos.kara` / `host_linux.kara` natively). The filter kernels in
+// `filters.kara` are shared verbatim across both. That is the whole "one
+// source -> native + WASM, no port" claim, made literal: nothing in this file,
+// or in filters.kara, knows which target it is building for.
+//
+//   karac build                                          # native oracle
+//   karac build --target=wasm_browser --features wasm-threads   # browser editor
+
+import host.{run};
+
+fn main() {
+    run();
+}

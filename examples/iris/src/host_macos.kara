@@ -1,0 +1,57 @@
+// Iris — the native host layer (macOS).
+//
+// The native half of "one source -> native + WASM". On a native target the
+// walker selects this `host` variant; `main.kara` calls `run()` and it applies
+// every filter to the shared procedural image and prints a checksum of each.
+// Those checksums are the ground truth the browser build is verified against:
+// `verify_browser.mjs` applies each filter in a real browser, reads the canvas
+// back, hashes it with the identical FNV-1a, and asserts a match. If the native
+// and wasm kernels ever diverged by a byte, the checksums would not match — that
+// is the proof that there is genuinely one kernel, not two.
+//
+// (This file and `host_linux.kara` are byte-identical — Kāra's platform
+// suffixes are exact tokens with no shared "unix", so the native driver is
+// carried once per native OS. The portable logic it leans on all lives in
+// `filters.kara`.)
+
+import filters.{apply_full, img_width, img_height, filter_count,
+    f_blur, f_sharpen, f_edge, f_invert, f_grayscale};
+
+// FNV-1a rolling checksum over the buffer bytes — order-sensitive, so any
+// per-pixel divergence changes it. Folded to 32-bit unsigned space so the
+// printed value matches the browser harness's JS hashing exactly.
+fn checksum(buf: ref Vec[u8]) -> i64 {
+    let mut h = 2166136261;
+    let n = buf.len();
+    let mut i = 0;
+    while i < n {
+        h = (h ^ (buf[i] as i64)).wrapping_mul(16777619);
+        h = h % 4294967296;
+        if h < 0 { h = h + 4294967296; }
+        i = i + 1;
+    }
+    h
+}
+
+fn name_of(id: i64) -> String {
+    if id == f_blur() { return "blur"; }
+    if id == f_sharpen() { return "sharpen"; }
+    if id == f_edge() { return "edge"; }
+    if id == f_invert() { return "invert"; }
+    if id == f_grayscale() { return "grayscale"; }
+    "original"
+}
+
+pub fn run() with panics {
+    let w = img_width();
+    let h = img_height();
+    println(f"iris oracle: {w}x{h} RGBA, {filter_count()} filters");
+    let mut id = 0;
+    while id < filter_count() {
+        let out = apply_full(id);
+        let c = checksum(out);
+        let nm = name_of(id);
+        println(f"filter {nm} {id} checksum {c}");
+        id = id + 1;
+    }
+}

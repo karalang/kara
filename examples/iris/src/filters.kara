@@ -1,0 +1,203 @@
+// Iris — the shared filter core.
+//
+// This module is the whole point of the demo: **one source** for the image
+// kernels, compiled unchanged to a native binary AND to browser WASM. Nothing
+// in here knows or cares which target it ends up on — there is no `host fn`, no
+// `std.web` import, no `main`. The native oracle and the browser entry each
+// import these functions and wrap them in a thin, target-specific I/O layer (a
+// checksum print vs a `<canvas>` blit). That split is the honest shape of "one
+// source → native + WASM, no port": only the render/IO host layer swaps; the
+// pixels are computed by identical code.
+//
+// The image being edited is a *procedural* source — a pure per-pixel function,
+// not a loaded photo — so the source pixels are recomputed identically on every
+// target and the native-vs-wasm comparison is byte-exact (loading a real photo
+// needs an image-decode host fn and is a tracked follow-up; see README). Because
+// the source is a pure function, every output row band is fully independent: no
+// shared buffer to alias, nothing to capture across tasks. The browser entry
+// fans the bands out across a Web Worker pool with no change to the math here.
+
+// Image geometry. Even width keeps a future two-pixels-per-SIMD-lane inner loop
+// aligned (see README "SIMD inner kernel" follow-up); modest size so a single
+// worker still renders smoothly and the pool multiplies the framerate.
+pub fn img_width() -> i64 { 512 }
+pub fn img_height() -> i64 { 384 }
+
+// Filter ids — the browser keyboard and the native oracle share these.
+pub fn f_original()  -> i64 { 0 }
+pub fn f_blur()      -> i64 { 1 }
+pub fn f_sharpen()   -> i64 { 2 }
+pub fn f_edge()      -> i64 { 3 }
+pub fn f_invert()    -> i64 { 4 }
+pub fn f_grayscale() -> i64 { 5 }
+pub fn filter_count() -> i64 { 6 }
+
+fn clampi(v: i64, lo: i64, hi: i64) -> i64 {
+    if v < lo { return lo; }
+    if v > hi { return hi; }
+    v
+}
+
+fn to_byte(v: i64) -> u8 {
+    clampi(v, 0, 255) as u8
+}
+
+// The procedural source image: channel `ch` (0=R, 1=G, 2=B) of the pixel at
+// (x, y), 0..255. Coordinates are clamped to the image edge so a 3x3 filter
+// window never samples out of bounds (standard clamp-to-edge boundary).
+//
+// The picture deliberately packs sharp edges and smooth gradients — a filled
+// disc, a checkerboard quadrant, diagonal stripes, and a corner-to-corner colour
+// ramp — so blur visibly softens, sharpen bites, and Sobel lights up every
+// boundary. All integer math, so it is byte-identical on native and wasm.
+fn source_channel(x0: i64, y0: i64, ch: i64) -> i64 {
+    let w = img_width();
+    let h = img_height();
+    let x = clampi(x0, 0, w - 1);
+    let y = clampi(y0, 0, h - 1);
+    let cx = w / 2;
+    let cy = h / 2;
+    let radius = h / 4;
+
+    // Base: a smooth diagonal colour ramp.
+    let mut r = (x * 255) / w;
+    let mut g = (y * 255) / h;
+    let mut b = ((x + y) * 255) / (w + h);
+
+    // A bright filled disc in the centre (hard circular edge).
+    let dx = x - cx;
+    let dy = y - cy;
+    if dx * dx + dy * dy < radius * radius {
+        r = 250;
+        g = 230;
+        b = 40;
+    }
+
+    // A checkerboard in the top-left quadrant (high-frequency edges).
+    if x < cx and y < cy {
+        if ((x / 24) + (y / 24)) % 2 == 0 {
+            r = 20;
+            g = 20;
+            b = 30;
+        }
+    }
+
+    // Diagonal stripes across the bottom-right (oriented edges).
+    if x >= cx and y >= cy {
+        if ((x + y) / 16) % 2 == 0 {
+            r = 230;
+            g = 60;
+            b = 90;
+        }
+    }
+
+    if ch == 0 { return clampi(r, 0, 255); }
+    if ch == 1 { return clampi(g, 0, 255); }
+    clampi(b, 0, 255)
+}
+
+// Perceptual luminance of the source pixel at (x, y), 0..255. Integer weights
+// (77/150/29)/256 approximate Rec.601 (0.299/0.587/0.114) — kept integer so
+// native and wasm agree to the byte.
+fn luma(x: i64, y: i64) -> i64 {
+    let r = source_channel(x, y, 0);
+    let g = source_channel(x, y, 1);
+    let b = source_channel(x, y, 2);
+    (r * 77 + g * 150 + b * 29) / 256
+}
+
+// One output channel under a 3x3 box blur: mean of the 9 neighbours.
+fn blur_channel(x: i64, y: i64, ch: i64) -> i64 {
+    let mut acc = 0;
+    let mut dy = -1;
+    while dy <= 1 {
+        let mut dx = -1;
+        while dx <= 1 {
+            acc = acc + source_channel(x + dx, y + dy, ch);
+            dx = dx + 1;
+        }
+        dy = dy + 1;
+    }
+    acc / 9
+}
+
+// One output channel under a 3x3 sharpen kernel
+//   [ 0 -1  0 ; -1  5 -1 ;  0 -1  0 ]
+// — the centre boosted, the 4-neighbourhood subtracted, then clamped.
+fn sharpen_channel(x: i64, y: i64, ch: i64) -> i64 {
+    let c = source_channel(x, y, ch) * 5;
+    let n = source_channel(x, y - 1, ch);
+    let s = source_channel(x, y + 1, ch);
+    let e = source_channel(x + 1, y, ch);
+    let west = source_channel(x - 1, y, ch);
+    c - n - s - e - west
+}
+
+// Sobel edge magnitude at (x, y), computed on luminance. gx/gy are the standard
+// 3x3 Sobel gradients; the magnitude sqrt(gx^2+gy^2) is clamped to a byte.
+fn sobel(x: i64, y: i64) -> i64 {
+    let tl = luma(x - 1, y - 1);
+    let tc = luma(x,     y - 1);
+    let tr = luma(x + 1, y - 1);
+    let ml = luma(x - 1, y);
+    let mr = luma(x + 1, y);
+    let bl = luma(x - 1, y + 1);
+    let bc = luma(x,     y + 1);
+    let br = luma(x + 1, y + 1);
+    let gx = (tr + 2 * mr + br) - (tl + 2 * ml + bl);
+    let gy = (bl + 2 * bc + br) - (tl + 2 * tc + tr);
+    let mag2 = (gx * gx + gy * gy) as f64;
+    mag2.sqrt() as i64
+}
+
+// Render output rows [y0, y1) under `filter_id` into a fresh RGBA buffer and
+// return it. This is the per-task unit: each spawned worker owns its band's
+// output and hands it back at join. The source is a pure function, so the bands
+// are fully independent — no shared buffer, nothing captured across tasks.
+// A full-image apply is just render_band(0, h, ...) — see apply_full.
+pub fn render_band(y0: i64, y1: i64, filter_id: i64) -> Vec[u8] {
+    let w = img_width();
+    let mut out: Vec[u8] = Vec.new();
+    for y in y0..y1 {
+        for x in 0..w {
+            if filter_id == f_blur() {
+                out.push(to_byte(blur_channel(x, y, 0)));
+                out.push(to_byte(blur_channel(x, y, 1)));
+                out.push(to_byte(blur_channel(x, y, 2)));
+            } else if filter_id == f_sharpen() {
+                out.push(to_byte(sharpen_channel(x, y, 0)));
+                out.push(to_byte(sharpen_channel(x, y, 1)));
+                out.push(to_byte(sharpen_channel(x, y, 2)));
+            } else if filter_id == f_edge() {
+                let m = to_byte(sobel(x, y));
+                out.push(m);
+                out.push(m);
+                out.push(m);
+            } else if filter_id == f_invert() {
+                out.push(to_byte(255 - source_channel(x, y, 0)));
+                out.push(to_byte(255 - source_channel(x, y, 1)));
+                out.push(to_byte(255 - source_channel(x, y, 2)));
+            } else if filter_id == f_grayscale() {
+                let l = to_byte(luma(x, y));
+                out.push(l);
+                out.push(l);
+                out.push(l);
+            } else {
+                // f_original / unknown: the source pixel, unmodified.
+                out.push(to_byte(source_channel(x, y, 0)));
+                out.push(to_byte(source_channel(x, y, 1)));
+                out.push(to_byte(source_channel(x, y, 2)));
+            }
+            out.push(255u8); // opaque alpha
+        }
+    }
+    out
+}
+
+// Whole-image apply, sequential. The native oracle uses this to get a
+// deterministic, single-threaded reference; the browser entry instead calls
+// render_band per worker band and concatenates — both produce byte-identical
+// output because the bands tile [0, h) exactly.
+pub fn apply_full(filter_id: i64) -> Vec[u8] {
+    render_band(0, img_height(), filter_id)
+}
