@@ -1081,7 +1081,73 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 let cp_val = self.compile_expr(&args[0].value)?;
                 let cp = cp_val.into_int_value();
-                let (enc_buf, enc_len) = self.emit_codepoint_to_utf8(cp);
+                // UTF-8 encoded length from the codepoint, computed INLINE (no
+                // runtime call): 1 if < 0x80, 2 if < 0x800, 3 if < 0x10000, else 4.
+                // The ASCII fast-path in the copy section then stores the single
+                // byte directly, so a pure-ASCII push needs neither an encode call
+                // (`karac_string_encode_char`) nor a variable-length `memcpy` —
+                // which LLVM lowers to a libc `memmove` call even for one byte, the
+                // dominant cost on string-build workloads (kata:38 profile:
+                // memmove/memcpy ~40%, encode ~20% of the hot time). Only the rare
+                // multibyte path pays the call + copy.
+                let cp_ty = cp.get_type();
+                let lt_0x80 = self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::ULT,
+                        cp,
+                        cp_ty.const_int(0x80, false),
+                        "spush.lt80",
+                    )
+                    .unwrap();
+                let lt_0x800 = self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::ULT,
+                        cp,
+                        cp_ty.const_int(0x800, false),
+                        "spush.lt800",
+                    )
+                    .unwrap();
+                let lt_0x10000 = self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::ULT,
+                        cp,
+                        cp_ty.const_int(0x10000, false),
+                        "spush.lt10000",
+                    )
+                    .unwrap();
+                let enc_len_3or4 = self
+                    .builder
+                    .build_select(
+                        lt_0x10000,
+                        i64_t.const_int(3, false),
+                        i64_t.const_int(4, false),
+                        "spush.l34",
+                    )
+                    .unwrap()
+                    .into_int_value();
+                let enc_len_2plus = self
+                    .builder
+                    .build_select(
+                        lt_0x800,
+                        i64_t.const_int(2, false),
+                        enc_len_3or4,
+                        "spush.l234",
+                    )
+                    .unwrap()
+                    .into_int_value();
+                let enc_len = self
+                    .builder
+                    .build_select(
+                        lt_0x80,
+                        i64_t.const_int(1, false),
+                        enc_len_2plus,
+                        "spush.enc_len",
+                    )
+                    .unwrap()
+                    .into_int_value();
 
                 let data_ptr_ptr = self
                     .builder
@@ -1192,9 +1258,33 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_gep(self.context.i8_type(), cur_data, &[cur_len], "spush.dest")
                         .unwrap()
                 };
+                // ASCII fast-path: a codepoint < 0x80 is its own single UTF-8 byte,
+                // so store it directly (truncate the i32 codepoint to i8) — no
+                // encode call, no memcpy. The rare multibyte path encodes into a
+                // scratch buffer and memcpy's the 1–4 bytes as before.
+                let ascii_bb = self.context.append_basic_block(fn_val, "spush.ascii");
+                let multi_bb = self.context.append_basic_block(fn_val, "spush.multi");
+                let stored_bb = self.context.append_basic_block(fn_val, "spush.stored");
+                self.builder
+                    .build_conditional_branch(lt_0x80, ascii_bb, multi_bb)
+                    .unwrap();
+
+                self.builder.position_at_end(ascii_bb);
+                let byte = self
+                    .builder
+                    .build_int_truncate(cp, self.context.i8_type(), "spush.byte")
+                    .unwrap();
+                self.builder.build_store(dest, byte).unwrap();
+                self.builder.build_unconditional_branch(stored_bb).unwrap();
+
+                self.builder.position_at_end(multi_bb);
+                let (enc_buf, _enc_len_runtime) = self.emit_codepoint_to_utf8(cp);
                 self.builder
                     .build_memcpy(dest, 1, enc_buf, 1, enc_len)
                     .unwrap();
+                self.builder.build_unconditional_branch(stored_bb).unwrap();
+
+                self.builder.position_at_end(stored_bb);
                 let updated_len = self
                     .builder
                     .build_int_add(cur_len, enc_len, "spush.updated_len")

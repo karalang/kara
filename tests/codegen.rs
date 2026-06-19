@@ -2589,6 +2589,34 @@ fn main() {
     }
 
     #[test]
+    fn e2e_string_push_ascii_fastpath_and_multibyte() {
+        // `String.push(char)` ASCII fast-path: a codepoint < 0x80 is stored as a
+        // single byte directly (no `karac_string_encode_char` call, no
+        // variable-length memcpy → libc memmove), the dominant string-build cost
+        // (kata:38 profile). SOUNDNESS: the multibyte slow path must still encode
+        // correctly, so this interleaves 1/2/3/4-byte codepoints with ASCII and
+        // checks both the bytes (printed string) and the scalar count. Must match
+        // the interpreter oracle exactly.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut s: String = \"\";\n\
+                 s.push('a');\n\
+                 s.push('é');\n\
+                 s.push('€');\n\
+                 s.push('🦀');\n\
+                 s.push('z');\n\
+                 println(s);\n\
+                 let mut n = 0i64;\n\
+                 for c in s.chars() { n = n + 1i64; }\n\
+                 println(f\"{n}\");\n\
+             }",
+        ) {
+            // a(1) é(2) €(3) 🦀(4) z(1) bytes; 5 scalar values
+            assert_eq!(out, "aé€🦀z\n5\n");
+        }
+    }
+
+    #[test]
     fn e2e_string_substring_two_arg_codegen() {
         // Two-arg `substring(start, end)` (byte range `[start, end)`): prefix /
         // suffix / empty-when-equal / inverted-bounds (end<start) / end-clamped /
