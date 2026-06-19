@@ -2280,6 +2280,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_gep(elem_ty, data, &[idx_val], "v.st.elem.ptr")
                 .unwrap()
         };
+        // Drop the OLD heap-owning element before overwriting it. A
+        // `Vec[Vec[T]]` / `Vec[String]` element slot holds a `{ptr,len,cap}`
+        // whose buffer is orphaned by the store; without this free it leaks
+        // (`out[j] = nb` per iteration). Outer-buffer-only, matching the
+        // Identifier-assign move-overwrite eager free — a live per-element
+        // alias (`let r = out[j]`) keeps its own scope-exit cleanup, so a deep
+        // walk here would double-free it (the borrow-elision pass already
+        // refuses to alias when the container is index-stored in scope, so the
+        // common case is a true owner). No-op for scalar / sub-word elements
+        // (`Vec[i64]`, `Vec[u8]`), whose slots own no heap. Pairs with the
+        // moved-source cleanup suppression at the `Index` assign site
+        // (B-2026-06-19-7).
+        if self.llvm_ty_is_vec_struct(elem_ty) {
+            self.emit_free_vec_buffer_if_owned(elem_ptr);
+        }
         // Narrow to the element width before storing — a computed scalar for a
         // sub-word element (`v[i] = b'a' + (k as u8)` into `Vec[u8]`) compiles
         // to i64 and would write 8 bytes over a 1-byte slot. Same fix as the

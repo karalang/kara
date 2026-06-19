@@ -1084,6 +1084,69 @@ fn main() {
         }
     }
 
+    // ── Index-store of a heap-owning Vec element (B-2026-06-19-7) ──
+
+    /// `out[j] = nb` where `out: Vec[Vec[i64]]` moves a tracked `Vec` binding
+    /// into an owning element slot. Before the fix the AOT binary SIGTRAPped
+    /// (exit 133): the store neither dropped the old element (leak) nor
+    /// suppressed the moved source's cleanup, so the source binding and the
+    /// container both freed the buffer (double-free). The interpreter was always
+    /// correct. This build+run test would crash pre-fix.
+    #[test]
+    fn e2e_index_store_heap_vec_element_no_double_free() {
+        // Single overwrite: out[0] becomes [99]; read it back.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+             let mut out: Vec[Vec[i64]] = Vec.new();\n\
+             let mut b: Vec[i64] = Vec.new(); b.push(5i64);\n\
+             let mut k = 0i64; while k < 4i64 { out.push(b.clone()); k = k + 1i64; }\n\
+             let mut nb: Vec[i64] = Vec.new(); nb.push(99i64);\n\
+             out[0i64] = nb;\n\
+             println(f\"{out[0i64][0i64]}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "99\n");
+        }
+        // Loop of overwrites: each out[j] becomes [j]; sum the heads. Exercises
+        // the old-element drop (no leak) and source-cleanup suppression (no
+        // double-free) on every iteration. Sum_{j=0}^{99} j = 4950.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+             let mut out: Vec[Vec[i64]] = Vec.new();\n\
+             let mut b: Vec[i64] = Vec.new(); b.push(0i64);\n\
+             let mut k = 0i64; while k < 100i64 { out.push(b.clone()); k = k + 1i64; }\n\
+             let mut acc = 0i64; let mut j = 0i64;\n\
+             while j < 100i64 {\n\
+                 let mut nb: Vec[i64] = Vec.new(); nb.push(j);\n\
+                 out[j] = nb;\n\
+                 acc = acc + out[j][0i64];\n\
+                 j = j + 1i64;\n\
+             }\n\
+             println(f\"{acc}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "4950\n");
+        }
+    }
+
+    /// Sibling of the above for `Vec[String]`: `out[i] = s` moves a `String`
+    /// binding into an owning element slot. Same double-free class; the old
+    /// element string buffer is dropped and the source is suppressed.
+    #[test]
+    fn e2e_index_store_heap_string_element_no_double_free() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+             let mut out: Vec[String] = Vec.new();\n\
+             let mut k = 0i64; while k < 4i64 { out.push(\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"); k = k + 1i64; }\n\
+             let s: String = \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\";\n\
+             out[1i64] = s;\n\
+             println(out[1i64]);\n\
+             }",
+        ) {
+            assert_eq!(out, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n");
+        }
+    }
+
     // ── Enum struct-variant construction + scalar enum `==` (codegen) ──
 
     #[test]

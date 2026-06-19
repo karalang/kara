@@ -407,6 +407,45 @@ fn main() {
         );
     }
 
+    /// Index-store of a heap-owning Vec element (B-2026-06-19-7): `out[j] = nb`
+    /// over a `Vec[Vec[i64]]` in a loop. The store must (a) drop the old element
+    /// buffer (no leak) and (b) suppress the moved source binding's cleanup (no
+    /// double-free); pre-fix the AOT binary SIGTRAPped. ASAN confirms a clean run
+    /// (no use-after-free / double-free; Linux CI LSan covers the leak arm).
+    /// Inner vectors carry 8 i64s (64 bytes) for LSan reachability. Sum of heads
+    /// j=0..31 = 496.
+    #[test]
+    fn asan_index_store_heap_vec_element_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut k = 0i64;
+    while k < 32i64 {
+        let mut b: Vec[i64] = Vec.new();
+        let mut p = 0i64;
+        while p < 8i64 { b.push(7i64); p = p + 1i64; }
+        out.push(b);
+        k = k + 1i64;
+    }
+    let mut acc = 0i64;
+    let mut j = 0i64;
+    while j < 32i64 {
+        let mut nb: Vec[i64] = Vec.new();
+        let mut q = 0i64;
+        while q < 8i64 { nb.push(j); q = q + 1i64; }
+        out[j] = nb;
+        acc = acc + out[j][0i64];
+        j = j + 1i64;
+    }
+    println(acc);
+}
+"#,
+            &["496"],
+            "index_store_heap_vec_element",
+        );
+    }
+
     // ── Direct recursive shared enum (RC tree) ────────────────────
     //
     // `shared enum Expr { Num(i64), Add(Expr, Expr) }` builds an RC tree whose

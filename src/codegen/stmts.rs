@@ -3607,6 +3607,29 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.compile_field_store(object, field, val, rhs_is_fresh)?;
                 } else if let ExprKind::Index { object, index } = &target.kind {
                     self.compile_index_store(object, index, val)?;
+                    // A tracked Vec/String binding moved into an OWNING Vec's
+                    // heap-element slot (`out[j] = nb` where `out: Vec[Vec[T]]`)
+                    // must have its scope-exit cleanup suppressed: the container
+                    // now owns the buffer and frees it via its element-drop, so
+                    // without this both the source binding and the container free
+                    // it (double-free → SIGTRAP, B-2026-06-19-7). Mirrors the
+                    // Identifier-assign move-suppression above and `Vec.push`'s
+                    // `suppress_source_vec_cleanup_for_arg`. Gated to an owning
+                    // Vec target with a heap-struct element type so a slice/map
+                    // element store (borrowed / handle-owned) is untouched;
+                    // `suppress_source_vec_cleanup_for_arg` is itself a no-op for
+                    // a non-Identifier / non-tracked RHS.
+                    if let ExprKind::Identifier(container) = &object.kind {
+                        let owns_heap_elem = self
+                            .vec_elem_types
+                            .get(container.as_str())
+                            .is_some_and(|&et| self.llvm_ty_is_vec_struct(et))
+                            && !self.slice_elem_types.contains_key(container.as_str())
+                            && !self.map_key_types.contains_key(container.as_str());
+                        if owns_heap_elem {
+                            self.suppress_source_vec_cleanup_for_arg(value);
+                        }
+                    }
                 } else if let ExprKind::Unary {
                     op: UnaryOp::Deref,
                     operand,
