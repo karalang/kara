@@ -10365,4 +10365,54 @@ fn main() {
             "value_enum_nested_struct_vec_shared_inplace_drop",
         );
     }
+
+    #[test]
+    fn asan_self_field_vec_index_match_move_out_no_double_free() {
+        // #32 (phase-12 self-hosting, parser stage): reading + matching a token
+        // through a `self`-field-rooted Vec index — `self.toks[self.pos].tok` —
+        // is the parser's core token-access shape. A scalar field read and a
+        // payload-binding match both go through `compile_field_access`'s generic
+        // value path, which now resolves the element struct type via
+        // `type_name_of_expr`'s `Index` arm (the fix). The payload-binding match
+        // moves a `String` out of the element via the existing #16/#25 source
+        // suppression; this asserts no double-free (macOS ASAN) and no leak
+        // (Linux LSan). Every heap element is CONSUMED by `take` so the dropped
+        // Vec holds no live enum-String payloads — isolating the #32 read +
+        // move-out from the SEPARATE pre-existing Vec[struct-with-enum-field]-
+        // element-drop leak ([#35]), which a Vec left holding live heap-enum
+        // elements would otherwise trip.
+        assert_clean_asan_run(
+            r#"
+enum Tk { A, Id(String), Num(i64) }
+struct Sp { tok: Tk, off: i64 }
+struct P { toks: Vec[Sp], pos: i64 }
+impl P {
+    fn off_now(ref self) -> i64 { self.toks[self.pos].off }
+    fn kind_now(ref self) -> i64 {
+        match self.toks[self.pos].tok { Id(_) => 1, Num(_) => 2, A => 3 }
+    }
+    fn take(mut ref self) -> String {
+        match self.toks[self.pos].tok {
+            Id(s) => { self.pos = self.pos + 1; s }
+            Num(n) => { self.pos = self.pos + 1; n.to_string() }
+            A => { self.pos = self.pos + 1; "a".to_string() }
+        }
+    }
+}
+fn main() {
+    let mut w: Vec[Sp] = Vec.new();
+    w.push(Sp { tok: Tk.Id("hello".to_string()), off: 5 });
+    w.push(Sp { tok: Tk.Id("world".to_string()), off: 9 });
+    let mut p = P { toks: w, pos: 0 };
+    println(p.off_now().to_string());
+    println(p.kind_now().to_string());
+    println(p.take());
+    println(p.off_now().to_string());
+    println(p.take());
+}
+"#,
+            &["5", "1", "hello", "9", "world"],
+            "self_field_vec_index_match_move_out",
+        );
+    }
 }

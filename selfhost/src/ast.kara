@@ -1,0 +1,113 @@
+// ast.kara — expression AST for the self-hosted parser (port slice 1).
+// Depends on span (DAG: span <- token <- ast). Mirrors the expression half of
+// `src/ast/exprs.rs`.
+//
+// AST-port wrapping convention (phase-12 § "AST-port wrapping convention",
+// DECIDED 2026-06-14) — the recursive node uses RC indirection (`shared`), and
+// per-node spans ride an OUTER wrapper struct, mirroring the lexer's
+// `SpannedToken { token, span }` precedent:
+//
+//   * `shared enum ExprKind` is the recursive node — every child edge (the
+//     Rust `Box<Expr>` analog) is a field of type `Expr`, a fixed-size RC
+//     handle that breaks the otherwise-infinite enum size.
+//   * `struct Expr { kind: ExprKind, span: Span }` is the span wrapper. Every
+//     node — leaves included — carries a span, so the differential oracle can
+//     check leaf spans (the surface that caught the lexer's span bugs).
+//   * Non-trivial variants funnel their operands through ONE per-variant node
+//     struct (`Binary(BinaryExpr)`); a struct field may freely be an enum
+//     (`op: BinOp`), a recursive `Expr` edge, or a `Vec[Expr]`, none of which
+//     is legal as a *direct* enum-variant payload (`E_ENUM_NESTED_ENUM_PAYLOAD`).
+//   * Trivial variants keep direct payloads (`Integer(i64, String)`, `Bool(bool)`,
+//     `Ident(String)`, unit `SelfValue`); sequence children are `Vec[Expr]`.
+//
+
+import span.Span;
+
+// Binary operator — non-recursive plain enum (a node-struct field, never a
+// direct enum-variant payload). Mirrors `ast::BinOp`.
+pub enum BinOp {
+    // Arithmetic
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    // Comparison
+    Eq,
+    NotEq,
+    Lt,
+    LtEq,
+    Gt,
+    GtEq,
+    // Logical
+    And,
+    Or,
+    // Bitwise
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
+    // Range (reserved for the range slice; unused by slice 1)
+    Range,
+    RangeInclusive,
+}
+
+// Unary operator. Mirrors `ast::UnaryOp`.
+pub enum UnaryOp {
+    Neg,    // -
+    Not,    // not / !
+    BitNot, // ~
+    Deref,  // *
+}
+
+// `left OP right` — the recursive edges are `Expr` (RC handle) fields of this
+// node struct, sidestepping the nested-enum-payload limit. Mirrors the fields
+// of `ExprKind::Binary`.
+pub struct BinaryExpr {
+    pub op: BinOp,
+    pub left: Expr,
+    pub right: Expr,
+}
+
+// `OP operand`. Mirrors the fields of `ExprKind::Unary`.
+pub struct UnaryExpr {
+    pub op: UnaryOp,
+    pub operand: Expr,
+}
+
+// The recursive expression node (RC-backed). Slice 1 covers literals,
+// identifiers, `self`/`Self`, unary, binary, grouping, and tuples; the
+// remaining `ExprKind` variants (calls, indexing, control flow, …) land in
+// later parser slices.
+pub shared enum ExprKind {
+    // Literals — trivial direct payloads.
+    Integer(i64, String),
+    Float(f64, String),
+    Bool(bool),
+    CharLit(char),
+    ByteLit(u8),
+    StringLit(String),
+    MultiStringLit(String),
+
+    // Identifiers / receivers.
+    Ident(String),
+    SelfValue,
+    SelfType,
+
+    // Operators — node-struct payloads carrying the recursive edges.
+    Binary(BinaryExpr),
+    Unary(UnaryExpr),
+
+    // Composite literal — sequence children via the collection layer.
+    Tuple(Vec[Expr]),
+
+    // Error-recovery placeholder.
+    Error,
+}
+
+// Span wrapper — the `SpannedToken { token, span }` analog for expressions.
+pub struct Expr {
+    pub kind: ExprKind,
+    pub span: Span,
+}

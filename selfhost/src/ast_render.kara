@@ -1,0 +1,198 @@
+// ast_render.kara — canonical, deterministic render of an expression AST for
+// the differential oracle (phase-12 AST-port convention rule 4). Pre-order,
+// fully parenthesized, every node tagged with its `@offset:length` span. The
+// Rust seed reproduces this exactly in `tests/selfhost_parser.rs::render_rust_expr`.
+//
+// Node shape: `(HEAD @off:len)` for a leaf, `(HEAD @off:len CHILD ...)` for a
+// compound node, children space-separated.
+//
+
+import ast.{Expr, ExprKind, BinaryExpr, UnaryExpr, BinOp, UnaryOp};
+
+// MUST stay identical to `escape_for_render` in `selfhost/src/main.kara` and
+// `tests/selfhost_parser.rs` so control chars don't break the comparison.
+fn escape_for_render(s: String) -> String {
+    let mut out = "".to_string();
+    for c in s.chars() {
+        if c == '\n' {
+            out.push('\\');
+            out.push('n');
+        } else if c == '\t' {
+            out.push('\\');
+            out.push('t');
+        } else if c == '\r' {
+            out.push('\\');
+            out.push('r');
+        } else if c == '\\' {
+            out.push('\\');
+            out.push('\\');
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+// Takes the op by `ref` so naming it does not MOVE `bx.op` out of the
+// `BinaryExpr` node — Kāra treats a field move as a whole-struct move, which
+// would invalidate the subsequent `bx.left` / `bx.right` reads.
+fn binop_name(op: ref BinOp) -> String {
+    let mut s = "".to_string();
+    match op {
+        Add => s.push_str("+"),
+        Sub => s.push_str("-"),
+        Mul => s.push_str("*"),
+        Div => s.push_str("/"),
+        Mod => s.push_str("%"),
+        Eq => s.push_str("=="),
+        NotEq => s.push_str("!="),
+        Lt => s.push_str("<"),
+        LtEq => s.push_str("<="),
+        Gt => s.push_str(">"),
+        GtEq => s.push_str(">="),
+        And => s.push_str("and"),
+        Or => s.push_str("or"),
+        BitAnd => s.push_str("&"),
+        BitOr => s.push_str("|"),
+        BitXor => s.push_str("^"),
+        Shl => s.push_str("<<"),
+        Shr => s.push_str(">>"),
+        Range => s.push_str(".."),
+        RangeInclusive => s.push_str("..="),
+    }
+    s
+}
+
+fn unaryop_name(op: ref UnaryOp) -> String {
+    let mut s = "".to_string();
+    match op {
+        Neg => s.push_str("-"),
+        Not => s.push_str("not"),
+        BitNot => s.push_str("~"),
+        Deref => s.push_str("*"),
+    }
+    s
+}
+
+// ` @<off>:<len>` — the span tag appended after every node head.
+fn span_str(off: i64, len: i64) -> String {
+    let mut s = " @".to_string();
+    s.push_str(off.to_string());
+    s.push_str(":");
+    s.push_str(len.to_string());
+    s
+}
+
+pub fn render_expr(e: Expr) -> String {
+    let off = e.span.offset;
+    let len = e.span.length;
+    let mut out = "".to_string();
+    let k = e.kind;
+    match k {
+        Integer(v, sfx) => {
+            out.push_str("(int ");
+            out.push_str(v.to_string());
+            if sfx.len() > 0 {
+                out.push_str(" ");
+                out.push_str(sfx);
+            }
+            out.push_str(span_str(off, len));
+            out.push_str(")");
+        }
+        Float(v, sfx) => {
+            out.push_str("(float ");
+            out.push_str(v.to_string());
+            if sfx.len() > 0 {
+                out.push_str(" ");
+                out.push_str(sfx);
+            }
+            out.push_str(span_str(off, len));
+            out.push_str(")");
+        }
+        Bool(b) => {
+            out.push_str("(bool ");
+            if b {
+                out.push_str("true");
+            } else {
+                out.push_str("false");
+            }
+            out.push_str(span_str(off, len));
+            out.push_str(")");
+        }
+        CharLit(c) => {
+            out.push_str("(char ");
+            let mut tmp = "".to_string();
+            tmp.push(c);
+            out.push_str(escape_for_render(tmp));
+            out.push_str(span_str(off, len));
+            out.push_str(")");
+        }
+        ByteLit(b) => {
+            out.push_str("(byte ");
+            out.push_str(b.to_string());
+            out.push_str(span_str(off, len));
+            out.push_str(")");
+        }
+        StringLit(s) => {
+            out.push_str("(str ");
+            out.push_str(escape_for_render(s));
+            out.push_str(span_str(off, len));
+            out.push_str(")");
+        }
+        MultiStringLit(s) => {
+            out.push_str("(mstr ");
+            out.push_str(escape_for_render(s));
+            out.push_str(span_str(off, len));
+            out.push_str(")");
+        }
+        Ident(name) => {
+            out.push_str("(ident ");
+            out.push_str(name);
+            out.push_str(span_str(off, len));
+            out.push_str(")");
+        }
+        SelfValue => {
+            out.push_str("(self");
+            out.push_str(span_str(off, len));
+            out.push_str(")");
+        }
+        SelfType => {
+            out.push_str("(Self");
+            out.push_str(span_str(off, len));
+            out.push_str(")");
+        }
+        Binary(bx) => {
+            out.push_str("(binary ");
+            out.push_str(binop_name(bx.op));
+            out.push_str(span_str(off, len));
+            out.push_str(" ");
+            out.push_str(render_expr(bx.left));
+            out.push_str(" ");
+            out.push_str(render_expr(bx.right));
+            out.push_str(")");
+        }
+        Unary(ux) => {
+            out.push_str("(unary ");
+            out.push_str(unaryop_name(ux.op));
+            out.push_str(span_str(off, len));
+            out.push_str(" ");
+            out.push_str(render_expr(ux.operand));
+            out.push_str(")");
+        }
+        Tuple(elems) => {
+            out.push_str("(tuple");
+            out.push_str(span_str(off, len));
+            for el in elems {
+                out.push_str(" ");
+                out.push_str(render_expr(el));
+            }
+            out.push_str(")");
+        }
+        Error => {
+            out.push_str("(error");
+            out.push_str(span_str(off, len));
+            out.push_str(")");
+        }
+    }
+    out
+}

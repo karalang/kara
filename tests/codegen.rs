@@ -2009,6 +2009,54 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_self_field_vec_index_struct_element_field() {
+        // #32 (phase-12 self-hosting, parser stage): a struct-element field read
+        // AND an enum-field match THROUGH a `self`-field-rooted Vec index —
+        // `self.toks[self.pos].off` / `match self.toks[self.pos].tok { … }`. The
+        // sibling `self.bytes[i]` (a Copy scalar ELEMENT, #4 above) worked, but
+        // reading a FIELD of a struct element via a `self`/FieldAccess-rooted
+        // index was a SILENT MISCOMPILE: `type_name_of_expr` had no `Index` arm,
+        // so `field_index_for` couldn't find the element struct's field layout
+        // and `compile_field_access`'s generic tail returned the `i64 0`
+        // placeholder (scalar fields read 0, an enum field mis-resolved its match
+        // scrutinee). The fix adds an `Index` arm resolving the element type from
+        // the indexed collection's element/field `TypeExpr` (Identifier root via
+        // `var_elem_type_exprs`, FieldAccess/`self` root via the field's `Vec[E]`).
+        // This is the parser's core token-access shape (`self.tokens[self.pos]…`).
+        if let Some(out) = run_program(
+            "enum Tk { A, Id(String), Num(i64) }\n\
+             struct Sp { tok: Tk, off: i64 }\n\
+             struct P { toks: Vec[Sp], pos: i64 }\n\
+             impl P {\n\
+                 fn off_now(ref self) -> i64 { self.toks[self.pos].off }\n\
+                 fn kind_now(ref self) -> i64 {\n\
+                     match self.toks[self.pos].tok { Id(_) => 1, Num(_) => 2, A => 3 }\n\
+                 }\n\
+                 fn take(mut ref self) -> String {\n\
+                     match self.toks[self.pos].tok {\n\
+                         Id(s) => { self.pos = self.pos + 1; s }\n\
+                         Num(n) => { self.pos = self.pos + 1; n.to_string() }\n\
+                         A => { self.pos = self.pos + 1; \"a\".to_string() }\n\
+                     }\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let mut w: Vec[Sp] = Vec.new();\n\
+                 w.push(Sp { tok: Tk.Id(\"hello\".to_string()), off: 5 });\n\
+                 w.push(Sp { tok: Tk.Num(7), off: 9 });\n\
+                 let mut p = P { toks: w, pos: 0 };\n\
+                 println(p.off_now().to_string());\n\
+                 println(p.kind_now().to_string());\n\
+                 println(p.take());\n\
+                 println(p.off_now().to_string());\n\
+                 println(p.take());\n\
+             }",
+        ) {
+            assert_eq!(out, "5\n1\nhello\n9\n7\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_string_method_on_self_field() {
         // Regression for the self-hosting lexer blocker #5: a String/Vec
         // method on a field accessed through `self`

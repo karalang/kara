@@ -1,0 +1,497 @@
+// parser.kara — recursive-descent / precedence-climbing expression parser for
+// the self-hosted compiler (port slice 1). Mirrors the expression core of
+// `src/parser.rs` + `src/parser/exprs.rs`: `parse_expr_bp` (the Pratt loop with
+// the seed's exact binding-power ladder), `parse_prefix` (literals / identifiers
+// / unary / grouping), and `parse_paren_or_tuple`.
+//
+// ┌─ BLOCKED on phase-12 codegen blocker #32 (bootstrap-critical) ───────────────┐
+// │ This parser reads its token stream via `self.tokens[self.pos]…` — a          │
+// │ self-field-rooted Vec-index access that karac currently MISCOMPILES          │
+// │ (silent garbage scalar reads + a match-scrutinee bind failure; see           │
+// │ phase-12-self-hosting.md "Parser pre-port: codegen blockers" #32). The code  │
+// │ here is the intended TARGET shape — clone-free reads, because user `.clone()`│
+// │ is also unavailable (#33). It compiles + runs once #32 lands; the differential│
+// │ AST oracle (`tests/selfhost_parser.rs`) is the gate. Token access is via     │
+// │ payload-less peek-matches (kind), direct scalar field reads (spans), and     │
+// │ payload-binding matches at leaves (consume-once move-out).                   │
+// └──────────────────────────────────────────────────────────────────────────────┘
+//
+
+import span.Span;
+import token.{Token, SpannedToken};
+import ast.{Expr, ExprKind, BinaryExpr, UnaryExpr, BinOp, UnaryOp};
+import lexer.lex_all;
+
+struct Parser {
+    tokens: Vec[SpannedToken],
+    pos: i64,
+}
+
+impl Parser {
+    fn new(tokens: Vec[SpannedToken]) -> Parser {
+        Parser { tokens: tokens, pos: 0 }
+    }
+
+    fn advance(mut ref self) {
+        if self.pos < self.tokens.len() {
+            self.pos = self.pos + 1;
+        }
+    }
+
+    fn is_at_end(ref self) -> bool {
+        if self.pos >= self.tokens.len() {
+            return true;
+        }
+        // Payload-less peek of the current token kind.
+        match self.tokens[self.pos].token {
+            Eof => true,
+            _ => false,
+        }
+    }
+
+    // Span of the current token (or the last token / a default when out of
+    // range) — built from scalar field reads so no SpannedToken is moved or
+    // cloned. Mirrors `src/parser.rs::current_span`.
+    fn current_span(ref self) -> Span {
+        if self.pos < self.tokens.len() {
+            Span {
+                line: self.tokens[self.pos].span.line,
+                column: self.tokens[self.pos].span.column,
+                offset: self.tokens[self.pos].span.offset,
+                length: self.tokens[self.pos].span.length,
+            }
+        } else if self.tokens.len() > 0 {
+            let j = self.tokens.len() - 1;
+            Span {
+                line: self.tokens[j].span.line,
+                column: self.tokens[j].span.column,
+                offset: self.tokens[j].span.offset,
+                length: self.tokens[j].span.length,
+            }
+        } else {
+            Span { line: 1, column: 1, offset: 0, length: 0 }
+        }
+    }
+
+    // Span covering `start` through the previously-consumed token — mirrors
+    // `src/parser.rs::span_from`.
+    fn span_from(ref self, start: Span) -> Span {
+        let mut end_off = start.offset;
+        let mut end_len = start.length;
+        if self.pos > 0 {
+            let j = self.pos - 1;
+            end_off = self.tokens[j].span.offset;
+            end_len = self.tokens[j].span.length;
+        }
+        Span {
+            line: start.line,
+            column: start.column,
+            offset: start.offset,
+            length: (end_off + end_len) - start.offset,
+        }
+    }
+
+    // Consume a `)` if present (slice-1 corpus is well-formed; error recovery
+    // for an unmatched paren lands with the diagnostics slice).
+    fn expect_rparen(mut ref self) {
+        if self.pos < self.tokens.len() {
+            let is_rp = match self.tokens[self.pos].token {
+                RightParen => true,
+                _ => false,
+            };
+            if is_rp {
+                self.advance();
+            }
+        }
+    }
+
+    // ── Precedence-climbing core (`parse_expr_bp_with_ctx` binary loop) ──
+    fn parse_expr_bp(mut ref self, min_bp: i64) -> Expr {
+        let mut lhs = self.parse_prefix();
+        loop {
+            if self.pos >= self.tokens.len() {
+                break;
+            }
+            let mut found = true;
+            let mut op = BinOp.Add;
+            let mut l_bp = 0;
+            let mut r_bp = 0;
+            // The seed's exact binding-power ladder (src/parser/exprs.rs). All
+            // operator tokens are unit variants, so this peek binds no payload.
+            match self.tokens[self.pos].token {
+                Or => {
+                    op = BinOp.Or;
+                    l_bp = 6;
+                    r_bp = 7;
+                }
+                And => {
+                    op = BinOp.And;
+                    l_bp = 8;
+                    r_bp = 9;
+                }
+                EqualEqual => {
+                    op = BinOp.Eq;
+                    l_bp = 10;
+                    r_bp = 11;
+                }
+                BangEqual => {
+                    op = BinOp.NotEq;
+                    l_bp = 10;
+                    r_bp = 11;
+                }
+                LessThan => {
+                    op = BinOp.Lt;
+                    l_bp = 10;
+                    r_bp = 11;
+                }
+                LessThanOrEqual => {
+                    op = BinOp.LtEq;
+                    l_bp = 10;
+                    r_bp = 11;
+                }
+                GreaterThan => {
+                    op = BinOp.Gt;
+                    l_bp = 10;
+                    r_bp = 11;
+                }
+                GreaterThanOrEqual => {
+                    op = BinOp.GtEq;
+                    l_bp = 10;
+                    r_bp = 11;
+                }
+                Pipe => {
+                    op = BinOp.BitOr;
+                    l_bp = 12;
+                    r_bp = 13;
+                }
+                Caret => {
+                    op = BinOp.BitXor;
+                    l_bp = 14;
+                    r_bp = 15;
+                }
+                Amp => {
+                    op = BinOp.BitAnd;
+                    l_bp = 16;
+                    r_bp = 17;
+                }
+                LessLess => {
+                    op = BinOp.Shl;
+                    l_bp = 18;
+                    r_bp = 19;
+                }
+                GreaterGreater => {
+                    op = BinOp.Shr;
+                    l_bp = 18;
+                    r_bp = 19;
+                }
+                Plus => {
+                    op = BinOp.Add;
+                    l_bp = 20;
+                    r_bp = 21;
+                }
+                Minus => {
+                    op = BinOp.Sub;
+                    l_bp = 20;
+                    r_bp = 21;
+                }
+                Star => {
+                    op = BinOp.Mul;
+                    l_bp = 22;
+                    r_bp = 23;
+                }
+                Slash => {
+                    op = BinOp.Div;
+                    l_bp = 22;
+                    r_bp = 23;
+                }
+                Percent => {
+                    op = BinOp.Mod;
+                    l_bp = 22;
+                    r_bp = 23;
+                }
+                _ => {
+                    found = false;
+                }
+            }
+            if not found {
+                break;
+            }
+            if l_bp < min_bp {
+                break;
+            }
+            self.advance();
+            let rhs = self.parse_expr_bp(r_bp);
+            // Span the full operator expression (lhs start → rhs end) so the
+            // Binary node has a unique span distinct from its LHS.
+            let sp = Span {
+                line: lhs.span.line,
+                column: lhs.span.column,
+                offset: lhs.span.offset,
+                length: (rhs.span.offset + rhs.span.length) - lhs.span.offset,
+            };
+            lhs = Expr {
+                kind: ExprKind.Binary(BinaryExpr {
+                    op: op,
+                    left: lhs,
+                    right: rhs,
+                }),
+                span: sp,
+            };
+        }
+        lhs
+    }
+
+    // ── Prefix: unary operators, literals, identifiers, grouping ──
+    fn parse_prefix(mut ref self) -> Expr {
+        let start = self.current_span();
+        if self.pos >= self.tokens.len() {
+            return Expr {
+                kind: ExprKind.Error,
+                span: self.span_from(start),
+            };
+        }
+        // Bind any leaf payload (Integer/Float/String/Char/Byte/Identifier) by
+        // moving it out of the consumed token; the operator/keyword arms bind
+        // nothing. `self.advance()` runs inside each arm after the match has
+        // extracted the payload.
+        match self.tokens[self.pos].token {
+            // Unary operators — all bind at 24 (above multiplicative).
+            Minus => {
+                self.advance();
+                let operand = self.parse_expr_bp(24);
+                Expr {
+                    kind: ExprKind.Unary(UnaryExpr {
+                        op: UnaryOp.Neg,
+                        operand: operand,
+                    }),
+                    span: self.span_from(start),
+                }
+            }
+            Not => {
+                self.advance();
+                let operand = self.parse_expr_bp(24);
+                Expr {
+                    kind: ExprKind.Unary(UnaryExpr {
+                        op: UnaryOp.Not,
+                        operand: operand,
+                    }),
+                    span: self.span_from(start),
+                }
+            }
+            Bang => {
+                // The seed accepts `!` with a diagnostic redirect to `not`;
+                // slice 1 parses it identically (Unary Not) without the note.
+                self.advance();
+                let operand = self.parse_expr_bp(24);
+                Expr {
+                    kind: ExprKind.Unary(UnaryExpr {
+                        op: UnaryOp.Not,
+                        operand: operand,
+                    }),
+                    span: self.span_from(start),
+                }
+            }
+            Tilde => {
+                self.advance();
+                let operand = self.parse_expr_bp(24);
+                Expr {
+                    kind: ExprKind.Unary(UnaryExpr {
+                        op: UnaryOp.BitNot,
+                        operand: operand,
+                    }),
+                    span: self.span_from(start),
+                }
+            }
+            Star => {
+                self.advance();
+                let operand = self.parse_expr_bp(24);
+                Expr {
+                    kind: ExprKind.Unary(UnaryExpr {
+                        op: UnaryOp.Deref,
+                        operand: operand,
+                    }),
+                    span: self.span_from(start),
+                }
+            }
+
+            // Literals.
+            Integer(v, sfx) => {
+                self.advance();
+                Expr {
+                    kind: ExprKind.Integer(v, sfx),
+                    span: self.span_from(start),
+                }
+            }
+            Float(v, sfx) => {
+                self.advance();
+                Expr {
+                    kind: ExprKind.Float(v, sfx),
+                    span: self.span_from(start),
+                }
+            }
+            CharLiteral(c) => {
+                self.advance();
+                Expr {
+                    kind: ExprKind.CharLit(c),
+                    span: self.span_from(start),
+                }
+            }
+            ByteLiteral(b) => {
+                self.advance();
+                Expr {
+                    kind: ExprKind.ByteLit(b),
+                    span: self.span_from(start),
+                }
+            }
+            StringLiteral(s) => {
+                self.advance();
+                Expr {
+                    kind: ExprKind.StringLit(s),
+                    span: self.span_from(start),
+                }
+            }
+            MultiStringLiteral(s) => {
+                self.advance();
+                Expr {
+                    kind: ExprKind.MultiStringLit(s),
+                    span: self.span_from(start),
+                }
+            }
+            True => {
+                self.advance();
+                Expr {
+                    kind: ExprKind.Bool(true),
+                    span: self.span_from(start),
+                }
+            }
+            False => {
+                self.advance();
+                Expr {
+                    kind: ExprKind.Bool(false),
+                    span: self.span_from(start),
+                }
+            }
+
+            // self / Self.
+            SelfValue => {
+                self.advance();
+                Expr {
+                    kind: ExprKind.SelfValue,
+                    span: self.span_from(start),
+                }
+            }
+            SelfType => {
+                self.advance();
+                Expr {
+                    kind: ExprKind.SelfType,
+                    span: self.span_from(start),
+                }
+            }
+
+            // Grouping / tuple.
+            LeftParen => self.parse_paren_or_tuple(),
+
+            // Bare identifier (paths / struct literals / generic-args land in
+            // later slices).
+            Identifier(name) => {
+                self.advance();
+                Expr {
+                    kind: ExprKind.Ident(name),
+                    span: self.span_from(start),
+                }
+            }
+
+            // Error-recovery placeholder for any token that can't start an
+            // expression in slice 1.
+            _ => {
+                self.advance();
+                Expr {
+                    kind: ExprKind.Error,
+                    span: self.span_from(start),
+                }
+            }
+        }
+    }
+
+    // `(` expr `)` (grouping) or `(` e0 `,` e1 `,` ... `)` (tuple); `()` is the
+    // unit (empty tuple). Mirrors `parse_paren_or_tuple`.
+    fn parse_paren_or_tuple(mut ref self) -> Expr {
+        let start = self.current_span();
+        self.advance(); // consume (
+
+        let is_rp = if self.pos < self.tokens.len() {
+            match self.tokens[self.pos].token {
+                RightParen => true,
+                _ => false,
+            }
+        } else {
+            false
+        };
+        if is_rp {
+            self.advance();
+            return Expr {
+                kind: ExprKind.Tuple(Vec.new()),
+                span: self.span_from(start),
+            };
+        }
+
+        let first = self.parse_expr_bp(0);
+        let is_comma = if self.pos < self.tokens.len() {
+            match self.tokens[self.pos].token {
+                Comma => true,
+                _ => false,
+            }
+        } else {
+            false
+        };
+        if is_comma {
+            self.advance(); // eat the first comma
+            let mut elements: Vec[Expr] = Vec.new();
+            elements.push(first);
+            loop {
+                if self.is_at_end() {
+                    break;
+                }
+                let stop = match self.tokens[self.pos].token {
+                    RightParen => true,
+                    _ => false,
+                };
+                if stop {
+                    break;
+                }
+                let e = self.parse_expr_bp(0);
+                elements.push(e);
+                let ate = if self.pos < self.tokens.len() {
+                    match self.tokens[self.pos].token {
+                        Comma => true,
+                        _ => false,
+                    }
+                } else {
+                    false
+                };
+                if ate {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            self.expect_rparen();
+            Expr {
+                kind: ExprKind.Tuple(elements),
+                span: self.span_from(start),
+            }
+        } else {
+            self.expect_rparen();
+            first
+        }
+    }
+}
+
+// Parse `src` as a single expression and return its AST root. The differential
+// oracle (`tests/selfhost_parser.rs`) diffs the rendered tree against the Rust
+// seed's `karac::parse`.
+pub fn parse_expr(src: String) -> Expr with panics {
+    let toks = lex_all(src);
+    let mut p = Parser.new(toks);
+    p.parse_expr_bp(0)
+}

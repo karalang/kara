@@ -11,6 +11,7 @@
 //! (`coerce_to_slice`, `build_slice_header`, `compile_range_slice`).
 
 use crate::ast::*;
+use crate::codegen::helpers::{slice_inner_type_expr, vec_inner_type_expr};
 
 use inkwell::types::{BasicTypeEnum, StructType};
 use inkwell::values::{BasicValue, BasicValueEnum, PointerValue, VectorValue};
@@ -1704,6 +1705,43 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 None
             }
+            // #32 — element struct type of an indexed collection. For an
+            // Identifier root (`v[i]`) read the recorded element TypeExpr; for a
+            // FieldAccess / `self` root (`self.toks[i]`, `obj.items[i]`) unwrap
+            // the collection FIELD's `Vec[E]` / `Slice[E]` TypeExpr. Without this
+            // arm `field_index_for(self.toks[i], "off")` found no element layout,
+            // so `compile_field_access`'s generic tail returned the `i64 0`
+            // placeholder — a silent miscompile of `self.field[i].subfield`.
+            ExprKind::Index { object, .. } => match &object.kind {
+                ExprKind::Identifier(n) => {
+                    match self.var_elem_type_exprs.get(n.as_str()).map(|te| &te.kind) {
+                        Some(TypeKind::Path(p)) => p.segments.last().cloned(),
+                        _ => None,
+                    }
+                }
+                ExprKind::FieldAccess {
+                    object: inner,
+                    field,
+                } => {
+                    let obj_ty = self.type_name_of_expr(inner)?;
+                    let idx = self
+                        .struct_field_names
+                        .get(obj_ty.as_str())?
+                        .iter()
+                        .position(|n| n == field)?;
+                    let field_te = self
+                        .struct_field_type_exprs
+                        .get(obj_ty.as_str())?
+                        .get(idx)?;
+                    let elem_te = vec_inner_type_expr(field_te)
+                        .or_else(|| slice_inner_type_expr(field_te))?;
+                    match &elem_te.kind {
+                        TypeKind::Path(p) => p.segments.last().cloned(),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            },
             _ => None,
         }
     }
