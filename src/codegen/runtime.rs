@@ -2716,6 +2716,31 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Heap-buffer sibling of [`suppress_user_drop_for_var`] /
+    /// [`suppress_channel_drop_for_var`]: drop the parent's scope-exit
+    /// `FreeVecBuffer` for a `String` / `Vec[T]` binding `name` whose
+    /// `{data, len, cap}` header was moved (e.g. bitwise-copied into a
+    /// spawned task's capture env, which now owns and frees the buffer).
+    /// `FreeVecBuffer` keys on the binding's *alloca*, not its name — and is
+    /// type-agnostic, so this matches by `slot.ptr` rather than a nominal
+    /// type comparison (a `String` binding's slot type is not always the
+    /// canonical vec-struct type even though its layout is). No-op when
+    /// `name` has no live slot or no buffer cleanup queued.
+    pub(super) fn suppress_vec_buffer_drop_for_var(&mut self, name: &str) {
+        let Some(slot) = self.variables.get(name) else {
+            return;
+        };
+        let target = slot.ptr;
+        for frame in self.scope_cleanup_actions.iter_mut().rev() {
+            frame.retain(|action| {
+                !matches!(
+                    action,
+                    CleanupAction::FreeVecBuffer { vec_alloca, .. } if *vec_alloca == target
+                )
+            });
+        }
+    }
+
     /// Emit all cleanup actions registered across all scope frames (for function exit).
     /// Iterates frames in reverse (innermost first) and within each frame in reverse
     /// push order (LIFO). LIFO is mandatory for user `defer` per design.md § Drop

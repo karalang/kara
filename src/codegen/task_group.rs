@@ -467,6 +467,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 // blocked on `recv` (deadlock). Mirrors the user-Drop
                 // suppression; a no-op for non-channel captures.
                 self.suppress_channel_drop_for_var(var_name);
+                // Heap builtins (`String` / `Vec[T]`) moved into the task: the
+                // `{data, len, cap}` header was bitwise-copied into the env
+                // above, so the wrapper's env now owns the buffer and frees it
+                // at task completion. The parent must NOT also free it. Its
+                // `FreeVecBuffer` keys on the alloca (not a name), so the
+                // user/channel suppressors above miss it. Without this, a
+                // capture moved inside a LOOP is freed at loop-body scope exit
+                // while the spawned coroutine still reads it — a use-after-free.
+                // A single non-loop spawn masks the bug because the `TaskGroup`
+                // join at the enclosing scope precedes the parent's free; a
+                // loop drains each iteration's frame first. This closes the
+                // same double-ownership hole for plain heap collections — the
+                // canonical `loop { let s = …; tg.spawn(|| use(s)) }`
+                // server-handler shape.
+                self.suppress_vec_buffer_drop_for_var(var_name);
             }
         }
 

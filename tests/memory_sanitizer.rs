@@ -10415,4 +10415,79 @@ fn main() {
             "self_field_vec_index_match_move_out",
         );
     }
+
+    // A heap value (`String`) moved into a `tg.spawn` closure INSIDE A LOOP:
+    // the per-iteration `let addr = base.clone()` is freed at loop-body scope
+    // exit, but the spawned task now owns that buffer (the env got a bitwise
+    // copy of the `{data,len,cap}` header). Before the fix, the spawn capture
+    // suppression only removed the parent's user-`Drop` and channel-end
+    // cleanups, not its `FreeVecBuffer` — so the parent freed the buffer the
+    // task still reads. A single non-loop spawn masked it (the `TaskGroup`
+    // join precedes the parent free); the loop drains each iteration's frame
+    // first. The handler body compares its captured string to the known
+    // content (a buffer read — poisoned-memory access if freed under ASAN)
+    // and stays silent unless it mismatches, so a regression shows as an ASAN
+    // use-after-free / a `CORRUPT` line. This is the canonical
+    // `loop { let s = …; tg.spawn(|| use(s)) }` server-handler shape — exactly
+    // `examples/relay/relay.kara`'s round-robin accept loop.
+    #[test]
+    fn asan_taskgroup_spawn_heap_capture_in_loop_coro_no_uaf() {
+        assert_clean_asan_run(
+            r#"
+fn check(addr: String) {
+    sleep_ms(5);
+    if addr == "relay-upstream-127.0.0.1-9000" {
+    } else {
+        println("CORRUPT");
+    }
+}
+fn main() {
+    let base = "relay-upstream-127.0.0.1-9000";
+    let mut tg: TaskGroup = TaskGroup.new();
+    let mut i: i64 = 0;
+    loop {
+        let addr = base.clone();
+        i = i + 1;
+        tg.spawn(|| check(addr));
+        if i >= 6 { break; }
+    }
+    println("ok");
+}
+"#,
+            &["ok"],
+            "taskgroup_spawn_heap_capture_in_loop_coro",
+        );
+    }
+
+    // Non-coroutine sibling of the above: the handler does not suspend, so it
+    // lowers through the run-to-completion spawn path rather than the coro
+    // park path. Same double-ownership hole, same fix (the `FreeVecBuffer`
+    // suppression is shared by both paths in `lower_spawn_shared`).
+    #[test]
+    fn asan_taskgroup_spawn_heap_capture_in_loop_noncoro_no_uaf() {
+        assert_clean_asan_run(
+            r#"
+fn check(addr: String) {
+    if addr == "relay-upstream-127.0.0.1-9000" {
+    } else {
+        println("CORRUPT");
+    }
+}
+fn main() {
+    let base = "relay-upstream-127.0.0.1-9000";
+    let mut tg: TaskGroup = TaskGroup.new();
+    let mut i: i64 = 0;
+    loop {
+        let addr = base.clone();
+        i = i + 1;
+        tg.spawn(|| check(addr));
+        if i >= 6 { break; }
+    }
+    println("ok");
+}
+"#,
+            &["ok"],
+            "taskgroup_spawn_heap_capture_in_loop_noncoro",
+        );
+    }
 }
