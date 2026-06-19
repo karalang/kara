@@ -5306,4 +5306,50 @@ fn main() {
             );
         }
     }
+
+    #[test]
+    fn test_auto_par_sort_by_comparator_no_stray_cancel_flag_e2e() {
+        // Regression for B-2026-06-18-10. When the auto-par pass parallelizes a
+        // function that calls `Vec.sort_by(|a, b| a.cmp(b))`, the sort helper
+        // functions (the mono insertion-sort routine and the comparator thunk)
+        // were emitted while `branch_cancel_ptr` still pointed at the enclosing
+        // par-branch fn's `cancel_flag` argument. The comparator's `a.cmp(b)`
+        // method call then ran `emit_branch_cancel_check`, emitting a
+        // `load i8, ptr %1` cancel-flag read — but `%1` in those helper
+        // functions is an element pointer / the i64 length, not a cancel flag,
+        // so LLVM module verification rejected it ("Referring to an argument in
+        // another function" + a void/i64 return-type mismatch). The kata #39
+        // sorted solver hit this: sort the candidates, then `path.clone()` later
+        // in the same function tipped the auto-par pass into parallelizing.
+        //
+        // The fix clears `branch_cancel_ptr` for the duration of each sort-helper
+        // / closure body. The trigger needs the auto-par pass to actually fire:
+        // the sort of `v` and the independent build+clone of `p` are two
+        // resource-disjoint groups, so the analyzer parallelizes them — which is
+        // what placed the comparator emission inside a par-branch cancel context.
+        // (A clone of the just-sorted vec instead would chain on the sort and NOT
+        // parallelize, so it would not reproduce.) Pre-fix this panicked the
+        // codegen with the module-verification error; it must now build and print
+        // the combined result.
+        let out = run_program(
+            r#"
+fn solve(input: Slice[i64]) -> i64 {
+    let mut v: Vec[i64] = Vec.from_slice(input);
+    v.sort_by(|a, b| a.cmp(b));
+    let mut p: Vec[i64] = Vec.new();
+    p.push(10i64);
+    p.push(20i64);
+    let q = p.clone();
+    v[0] + q[0] + q[1]
+}
+fn main() {
+    // sorted [1,2,3,5,8] -> v[0]=1; q=[10,20]; 1 + 10 + 20 = 31.
+    println(f"{solve([5, 3, 8, 1, 2])}");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "31\n");
+        }
+    }
 }

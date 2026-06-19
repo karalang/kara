@@ -22861,6 +22861,69 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_clone_borrowed_receiver_is_deep() {
+        // Regression for B-2026-06-18-9: `path.clone()` where `path` is a
+        // BORROWED receiver (`ref` / `mut ref` parameter) mis-built — the clone
+        // fn was handed the alloca's raw pointer (a `**Vec` for a ref param), so
+        // it copied the {data,len,cap} from the pointer's own bits, producing an
+        // alias that shared the source buffer. A later mutation of the source
+        // then drained the "snapshot". The interpreter always deep-copied, so it
+        // was a run/build divergence. `get_data_ptr` now unwraps the ref level.
+        //
+        // Two receiver modes, both through a function-parameter borrow, both
+        // followed by draining the source AFTER the snapshot:
+        //   - `mut ref`: snapshot via a recursive backtracking shape (the kata
+        //     #39 form — push, recurse, snapshot at the leaf, pop on unwind).
+        //   - `ref`: snapshot a borrowed Vec, return it, then drain the source.
+        let out = run_program(
+            r#"
+fn snap_mut(path: mut ref Vec[i64], out: mut ref Vec[Vec[i64]]) {
+    out.push(path.clone());
+}
+fn snap_ref(path: ref Vec[i64]) -> Vec[i64] {
+    path.clone()
+}
+fn rec(depth: i64, path: mut ref Vec[i64], out: mut ref Vec[Vec[i64]]) {
+    if depth == 0i64 {
+        snap_mut(path, out);
+        return;
+    }
+    path.push(depth);
+    rec(depth - 1i64, path, out);
+    path.pop();
+}
+fn main() {
+    // mut ref through recursion: snapshot [3,2,1] taken at the leaf must
+    // survive the pops on the way back up.
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut path: Vec[i64] = Vec.new();
+    rec(3i64, mut path, mut out);
+    let row = out[0];
+    println(row.len());
+    println(row[0]);
+    println(row[1]);
+    println(row[2]);
+
+    // ref borrow: snapshot must be independent of a later drain.
+    let mut src: Vec[i64] = Vec.new();
+    src.push(7_i64);
+    src.push(8_i64);
+    let kept = snap_ref(src);
+    src.pop();
+    src.pop();
+    println(kept.len());
+    println(kept[0]);
+    println(kept[1]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["3", "3", "2", "1", "2", "7", "8"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_map_clone_preserves_entry() {
         // Cloned Map carries the source's single entry; lookup on the clone
         // resolves to the cloned value.

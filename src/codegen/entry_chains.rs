@@ -115,13 +115,21 @@ impl<'ctx> super::Codegen<'ctx> {
             .current_fn
             .ok_or_else(|| "clone: no current function".to_string())?;
         let dst = self.create_entry_alloca(fn_val, "clone.dst", llvm_ty);
-        let src_slot = self
-            .variables
-            .get(name_owned.as_str())
-            .copied()
+        // The clone fn reads the source through a place pointer to its
+        // `{data,len,cap}` value. Use `get_data_ptr`, NOT the raw alloca, so a
+        // `ref`/`mut ref` receiver is unwrapped one ref-level (the alloca holds
+        // a pointer TO the value) and an RC-promoted binding is unboxed past its
+        // refcount header. Passing `slot.ptr` directly handed the clone fn a
+        // `**Vec` for a borrowed receiver: it copied the {data,len,cap} from the
+        // pointer's own bits, producing an alias that shared the source buffer
+        // (so a later `path.pop()` drained the snapshot) — a `clone()` that ran
+        // correctly under the interpreter but mis-built. Owned bindings still
+        // yield `slot.ptr`, so the common case is unchanged (B-2026-06-18-9).
+        let src_ptr = self
+            .get_data_ptr(&name_owned)
             .ok_or_else(|| format!("clone: unknown variable '{}'", name_owned))?;
         self.builder
-            .build_call(clone_fn, &[src_slot.ptr.into(), dst.into()], "")
+            .build_call(clone_fn, &[src_ptr.into(), dst.into()], "")
             .unwrap();
         let dst_val = self.builder.build_load(llvm_ty, dst, "clone.val").unwrap();
         Ok(Some(dst_val))

@@ -220,6 +220,15 @@ impl<'ctx> super::Codegen<'ctx> {
         // registration a frame of its own.
         let saved_cleanup = std::mem::take(&mut self.scope_cleanup_actions);
         self.scope_cleanup_actions.push(Vec::new());
+        // Isolate the par-branch cancel pointer (B-2026-06-18-10). When the
+        // enclosing scope is a `par {}` branch the auto-par pass produced,
+        // `branch_cancel_ptr` points at THAT branch fn's `cancel_flag` arg. The
+        // closure is a SEPARATE function, so a method call in its body that runs
+        // `emit_branch_cancel_check` would load the cancel flag from an argument
+        // of the wrong function ("referring to an argument in another
+        // function"). Clear it for the body and restore after, exactly as the
+        // par/reduce/task-group emitters do at their function boundaries.
+        let saved_cancel_ptr = self.branch_cancel_ptr.take();
 
         // 7. Build the closure body.
         self.current_fn = Some(closure_fn);
@@ -415,6 +424,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pending_closure_fn_type = saved_pct;
         self.last_fstr_acc = saved_fstr_acc;
         self.scope_cleanup_actions = saved_cleanup;
+        self.branch_cancel_ptr = saved_cancel_ptr;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
