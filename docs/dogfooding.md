@@ -59,7 +59,7 @@ per-project sections below hold the design. Status legend: ✅ shipped ·
 | **Chronicle** | Self-hosting; Kāra's own tooling explains Kāra — *and* the ownership model holds across the whole compiler, zero lifetime annotations | ⬜ planned | Phase 10/12 self-hosting | 2 |
 | **Relay** | Effect-driven event-loop networking (no `async fn`) | ✅ shipped (slices 1–5 + bench) | round-robin LB + full-duplex splice (`try_clone`/`shutdown_write`) + path routing (`from_utf8`) + live metrics (`par struct` + `Atomic` counters shared across handlers) + wrk 3-language bench (kara/go/node) — `examples/relay/` | 3 |
 | **Forge** | `embedded` profile firmware on a real MCU | ⬜ planned | v8 hardware gaps | 3 |
-| **Iris** | One source → native + WASM, no port | ⬜ planned | Phase 10 WASM target | 3 |
+| **Iris** | One source → native + WASM, no port | ✅ shipped | one package · one `main` · two targets via platform-suffixed host module; six filters byte-identical native vs wasm (CDP-verified) — `examples/iris/` | 3 |
 | **Plume** | Parallel browser compute driven by event streams — no `async`/coloring | ✅ shipped | `animation_frames` + event-data `pointer_moves` channel + `put_pixels` blit — all built (`examples/plume/`) | 3 |
 | **Fathom** | Browser × multi-core pixel compute, one source | ✅ shipped (interactive) | `animation_frames` + `Vec.as_ptr` blit host fn + `Vector[f64,2]` SIMD-128 inner kernel (1.47× fewer instrs, byte-identical) + interactive pan/zoom (`events.wheel` zoom-toward-cursor + `pointer_moves` click-drag pan + `events.keydown` arrows/`+`-`-`/`R`, real-browser CDP-verified) — all built | 3 |
 
@@ -801,6 +801,32 @@ is the integration test for the embedded story.
 ---
 
 ### Iris — Browser Image Editor
+
+> **Built — 2026-06-19.** Shipped at [`examples/iris/`](../examples/iris/): one
+> Kāra package built to **both** a native binary and `--target=wasm_browser
+> --features wasm-threads` from the same source tree — only the target flag
+> changes. `filters.kara` (procedural source + box blur / sharpen / Sobel edge /
+> invert / grayscale, as a pure per-row-band kernel) and `main.kara` are shared
+> verbatim; the only target-specific code is a `host` module in platform-suffixed
+> variants the walker selects automatically (`host_wasm` → browser editor with a
+> `TaskGroup`-fanned render loop + `put_pixels` blit + keydown filter switch;
+> `host_macos`/`host_linux` → a native checksum oracle). `verify_browser.mjs`
+> drives the real browser over CDP and asserts all **six filters are
+> byte-identical** native vs wasm (same FNV-1a over the canvas vs the oracle).
+>
+> The dogfood drove one `karac` fix (the dogfood's job — cf.
+> `feedback_no_workarounds_fix_compiler`): **project-mode `--target` did not drive
+> platform-suffix module selection** — `cmd_build_project` always walked with the
+> host platform, so `karac build --target=wasm_browser` compiled the `_macos`
+> module into the wasm artifact (the native oracle instead of the browser editor)
+> and dropped the `_wasm` one. Fixed in `src/cli.rs` (the project walker takes
+> `Platform::Wasm` for any `--target=wasm_*` build); regression
+> `tests/cli.rs::project_build_wasm_target_selects_wasm_platform_module`. This is
+> the gap that makes the one-source/two-target structure load-bearing. Honest cut:
+> the edited image is a *procedural* source (so the native↔wasm comparison is
+> byte-exact) and the inner kernels are scalar; real-photo load (an image-decode
+> host fn), a SIMD-128 kernel, and render-only-on-change are tracked follow-ups in
+> the example README.
 
 **Audience:** Web developers, WASM users.
 
