@@ -2138,7 +2138,7 @@ fn main() {
     println(v.len());
 }
 "#,
-            &["0"],
+            &["1680"],
             "vec_with_capacity_unused_buffer_freed",
         );
     }
@@ -2821,7 +2821,7 @@ fn main() {
     }
 }
 "#,
-            &["0"],
+            &["1680"],
             "question_drains_scope_cleanup_on_none",
         );
     }
@@ -2910,7 +2910,7 @@ fn main() {
     println(w.len());
 }
 "#,
-            &["0"],
+            &["1680"],
             "vec_clone_empty_no_leak",
         );
     }
@@ -4529,7 +4529,7 @@ fn main() {
     println(s);
 }
 "#,
-            &["0"],
+            &["1680"],
             "match_arm_vec_binding_freed_on_arm_exit",
         );
     }
@@ -4608,7 +4608,7 @@ fn main() {
     println(s);
 }
 "#,
-            &["0"],
+            &["1680"],
             "early_return_cleans_up_tracked_locals",
         );
     }
@@ -5273,7 +5273,7 @@ fn main() {
     println(s);
 }
 "#,
-            &["0"],
+            &["1680"],
             "struct_with_multiple_vec_fields_freed_on_scope_exit",
         );
     }
@@ -7236,7 +7236,7 @@ fn main() {
     println(entities.len());
 }
 "#,
-            &["0"],
+            &["1680"],
             "soa_drop_empty_collection",
         );
     }
@@ -9206,7 +9206,7 @@ fn main() {
     println(0);
 }
 "#,
-            &["0"],
+            &["1680"],
             "discarded_taskgroup_spawn_loop_eager_reap_no_double_free",
         );
     }
@@ -9295,7 +9295,7 @@ fn main() {
     println(m.len());
 }
 "#,
-            &["0"],
+            &["1680"],
             "map_string_key_clear_frees_heap_keys",
         );
     }
@@ -10627,6 +10627,63 @@ fn main() {
 "#,
             &["600"],
             "match_variant_name_shared_across_enums_string_payload",
+        );
+    }
+
+    #[test]
+    fn asan_shared_enum_recursive_struct_payload_string_freed_no_leak() {
+        // A `shared enum E` with a recursive Binary variant (`Add(Bin)`,
+        // `Bin { left: E, right: E }`) AND a leaf variant whose plain-struct
+        // payload owns a String (`Ident(Id)`, `Id { name: String }`) — the
+        // self-hosted parser's `Expr.Binary(BinaryExpr)` / `Expr.Ident(IdentExpr
+        // { name })` shape. When a leaf is a CHILD of a Binary box, the box's
+        // recursive rc-drop frees the child box but used to SKIP its inline
+        // struct payload's String (`field_is_walkable` only flagged structs
+        // owning a SHARED field, not a String). The single-level case was freed
+        // via the top-level match path, masking it. Fix: `field_is_walkable` /
+        // the rc-drop struct branch now also walk a struct payload that owns a
+        // String/Vec/heap field (`type_expr_has_drop_heap`), and
+        // `emit_nested_struct_shared_rc_decs` gained a direct-String arm. Long
+        // identifiers (≥36 B) so the leak is unambiguous under LSan (short ones
+        // evade it via freed-but-reachable pointers).
+        assert_clean_asan_run(
+            r#"
+struct Id { name: String, off: i64 }
+struct Bin { left: E, right: E, off: i64 }
+shared enum E { Ident(Id), Add(Bin) }
+fn render(e: E) -> String {
+    let mut out = "".to_string();
+    match e {
+        Ident(n) => { out.push_str(n.name); }
+        Add(b) => {
+            out.push_str(render(b.left));
+            out.push_str(render(b.right));
+        }
+    }
+    out
+}
+fn ident(s: String) -> E {
+    E.Ident(Id { name: s, off: 0 })
+}
+fn make() -> E {
+    E.Add(Bin {
+        left: ident("left_identifier_long_enough_to_force_heap".to_string()),
+        right: ident("right_identifier_long_enough_to_force_heap".to_string()),
+        off: 0,
+    })
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 {
+        total = total + render(make()).len();
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["1660"],
+            "shared_enum_recursive_struct_payload_string_freed",
         );
     }
 

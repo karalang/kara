@@ -491,6 +491,68 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.position_at_end(skip_bb);
                 continue;
             }
+            // A direct `String` field (`{ptr,len,cap}`) — the String peer of
+            // the `Vec[T]` arm below. A `shared enum` variant whose plain-struct
+            // payload owns a String (`Ident(IdentExpr { name: String, span })`,
+            // `Str(StrLit { value: String, span })` — the parser's AST nodes)
+            // is laid out INLINE in the box's payload words, so the box owns
+            // the String buffer and nothing else frees it; without this arm the
+            // name/value String leaked when the box dropped (the recursive peer
+            // of the single-level fix — surfaced once a node became a CHILD of
+            // a Binary box, freed via the parent box's rc-drop rather than the
+            // top-level match path). `vec_inner_type_expr` returns `None` for a
+            // String, so the Vec arm never reached it. Free the buffer when
+            // this walker owns it (`owns_buffer_free`, the RC-drop path); in the
+            // value-drop path the struct's own `__karac_drop_struct_<S>` frees
+            // it, so freeing here would double-free.
+            if owns_buffer_free && self.is_string_type_expr(fte) {
+                let Ok(field_ptr) =
+                    self.builder
+                        .build_struct_gep(st, struct_ptr, idx as u32, "nstr.str.p")
+                else {
+                    continue;
+                };
+                let vec_ty = self.vec_struct_type();
+                let cap_p = self
+                    .builder
+                    .build_struct_gep(vec_ty, field_ptr, 2, "nstr.str.cap.p")
+                    .unwrap();
+                let cap = self
+                    .builder
+                    .build_load(i64_t, cap_p, "nstr.str.cap")
+                    .unwrap()
+                    .into_int_value();
+                let is_heap = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::UGT,
+                        cap,
+                        i64_t.const_zero(),
+                        "nstr.str.is_heap",
+                    )
+                    .unwrap();
+                let free_bb = self.context.append_basic_block(drop_fn, "nstr.str.free");
+                let done_bb = self.context.append_basic_block(drop_fn, "nstr.str.done");
+                self.builder
+                    .build_conditional_branch(is_heap, free_bb, done_bb)
+                    .unwrap();
+                self.builder.position_at_end(free_bb);
+                let data_pp = self
+                    .builder
+                    .build_struct_gep(vec_ty, field_ptr, 0, "nstr.str.data.pp")
+                    .unwrap();
+                let data = self
+                    .builder
+                    .build_load(ptr_ty, data_pp, "nstr.str.data")
+                    .unwrap()
+                    .into_pointer_value();
+                self.builder
+                    .build_call(self.free_fn, &[data.into()], "")
+                    .unwrap();
+                self.builder.build_unconditional_branch(done_bb).unwrap();
+                self.builder.position_at_end(done_bb);
+                continue;
+            }
             // B-2026-06-14-31 — a `Vec[T]` field (`struct CallExpr { callee:
             // Expr, args: Vec[Expr] }`, the AST-port `Call(CallExpr)` shape).
             // The struct is laid out INLINE in the enum payload words, so the
@@ -2354,9 +2416,18 @@ impl<'ctx> super::Codegen<'ctx> {
         if let TypeKind::Path(p) = &te.kind {
             if let Some(seg) = p.segments.last() {
                 let sname = seg.clone();
+                // `struct_owns_shared_field` OR `type_expr_has_drop_heap`: the
+                // walker (`emit_nested_struct_shared_rc_decs`, owns_buffer_free)
+                // both rc-decs inline shared children AND frees the payload's
+                // own Vec/String buffers. A struct that owns ONLY a String/Vec
+                // (no shared edge) — `IdentExpr { name: String }`, the parser's
+                // `Ident`/`Str` node — must still be walked, else its String
+                // leaks when the box drops (it has no top-level match path to
+                // free it when reached as a nested child of a Binary box).
                 if self.struct_types.contains_key(&sname)
                     && !self.shared_types.contains_key(&sname)
-                    && self.struct_owns_shared_field(&sname, &mut Vec::new())
+                    && (self.struct_owns_shared_field(&sname, &mut Vec::new())
+                        || self.type_expr_has_drop_heap(te))
                 {
                     if let Ok(field_ptr) = self.builder.build_struct_gep(
                         enum_heap,
@@ -2524,10 +2595,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                     // B-2026-06-14-28 — a plain struct payload that owns
                     // shared fields (`Add(BinOp)`, `BinOp { left: Expr }`):
-                    // its inline RC children need dec'ing at box drop.
+                    // its inline RC children need dec'ing at box drop. Also a
+                    // struct that owns a String/Vec/heap field with NO shared
+                    // edge (`Ident(IdentExpr { name: String })`): the box owns
+                    // that buffer and must free it (`type_expr_has_drop_heap`),
+                    // or the payload's String leaks when the box drops. The
+                    // walk site (`emit_shared_enum_field_drop`'s struct branch)
+                    // mirrors this same union.
                     if slf.struct_types.contains_key(seg.as_str())
                         && !slf.shared_types.contains_key(seg.as_str())
-                        && slf.struct_owns_shared_field(seg.as_str(), &mut Vec::new())
+                        && (slf.struct_owns_shared_field(seg.as_str(), &mut Vec::new())
+                            || slf.type_expr_has_drop_heap(te))
                     {
                         return true;
                     }
