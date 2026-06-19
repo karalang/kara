@@ -1475,7 +1475,12 @@ impl<'ctx> super::Codegen<'ctx> {
         if args.is_empty()
             && matches!(
                 method,
-                "is_alphabetic" | "is_numeric" | "is_alphanumeric" | "is_whitespace"
+                "is_alphabetic"
+                    | "is_numeric"
+                    | "is_alphanumeric"
+                    | "is_whitespace"
+                    | "is_uppercase"
+                    | "is_lowercase"
             )
         {
             let v = self.compile_expr(object)?;
@@ -1497,6 +1502,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     "is_numeric" => "karac_runtime_char_is_numeric",
                     "is_alphanumeric" => "karac_runtime_char_is_alphanumeric",
                     "is_whitespace" => "karac_runtime_char_is_whitespace",
+                    "is_uppercase" => "karac_runtime_char_is_uppercase",
+                    "is_lowercase" => "karac_runtime_char_is_lowercase",
                     _ => unreachable!(),
                 };
                 let f = self

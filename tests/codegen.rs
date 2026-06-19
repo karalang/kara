@@ -16674,6 +16674,42 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_char_case_predicates() {
+        // B-2026-06-18-4: `char.is_uppercase()` / `is_lowercase()` — the case
+        // siblings of the `is_alphabetic` / … predicates above. They were wired
+        // for neither typecheck, interpret, nor codegen (build failed with "no
+        // handler for method is_uppercase"; run panicked because the typechecker
+        // returned Unit for the call), while the other four classification
+        // predicates worked. Now routed through `karac_runtime_char_is_upper/
+        // lowercase`, Unicode-aware: Ä (U+00C4) is uppercase, ß (U+00DF) is
+        // lowercase — both beyond an ASCII A-Z / a-z check — and a digit / space
+        // is neither.
+        let out = run_program(
+            r#"
+fn main() {
+    println(f"{'A'.is_uppercase()} {'A'.is_lowercase()}");
+    println(f"{'z'.is_uppercase()} {'z'.is_lowercase()}");
+    println(f"{'5'.is_uppercase()} {' '.is_lowercase()}");
+    match char.try_from(196) {
+        Ok(u) => { println(f"{u.is_uppercase()} {u.is_lowercase()}"); }
+        Err(e) => { println("err"); }
+    }
+    match char.try_from(223) {
+        Ok(l) => { println(f"{l.is_uppercase()} {l.is_lowercase()}"); }
+        Err(e) => { println("err"); }
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out,
+                "true false\nfalse true\nfalse false\ntrue false\nfalse true\n"
+            );
+        }
+    }
+
     // ── ref parameter semantics ───────────────────────────────────
 
     #[test]

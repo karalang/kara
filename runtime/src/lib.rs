@@ -283,6 +283,8 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         karac_runtime_char_is_numeric,
         karac_runtime_char_is_alphanumeric,
         karac_runtime_char_is_whitespace,
+        karac_runtime_char_is_uppercase,
+        karac_runtime_char_is_lowercase,
     );
     // The serve loops themselves need the tokio/hyper substrate (`net`);
     // the request/response accessors above are plain FFI-struct reads and
@@ -4229,6 +4231,18 @@ pub extern "C" fn karac_runtime_char_is_alphanumeric(cp: u32) -> u8 {
 #[no_mangle]
 pub extern "C" fn karac_runtime_char_is_whitespace(cp: u32) -> u8 {
     char::from_u32(cp).is_some_and(|c| c.is_whitespace()) as u8
+}
+
+/// See [`karac_runtime_char_is_alphabetic`]. Backs `char.is_uppercase()`.
+#[no_mangle]
+pub extern "C" fn karac_runtime_char_is_uppercase(cp: u32) -> u8 {
+    char::from_u32(cp).is_some_and(|c| c.is_uppercase()) as u8
+}
+
+/// See [`karac_runtime_char_is_alphabetic`]. Backs `char.is_lowercase()`.
+#[no_mangle]
+pub extern "C" fn karac_runtime_char_is_lowercase(cp: u32) -> u8 {
+    char::from_u32(cp).is_some_and(|c| c.is_lowercase()) as u8
 }
 
 /// Parse a UTF-8 byte slice as a signed 64-bit integer in the given

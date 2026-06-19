@@ -2338,7 +2338,12 @@ impl<'a> super::TypeChecker<'a> {
             && matches!(&receiver_for_lookup, Type::Char)
             && matches!(
                 method,
-                "is_alphabetic" | "is_numeric" | "is_alphanumeric" | "is_whitespace"
+                "is_alphabetic"
+                    | "is_numeric"
+                    | "is_alphanumeric"
+                    | "is_whitespace"
+                    | "is_uppercase"
+                    | "is_lowercase"
             )
         {
             return Type::Bool;

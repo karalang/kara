@@ -9487,6 +9487,36 @@ fn test_char_unicode_predicates_interpreter() {
 }
 
 #[test]
+fn test_char_case_predicates_interpreter() {
+    // B-2026-06-18-4 — `char.is_uppercase()` / `is_lowercase()`, the case
+    // siblings of the classification predicates above. The interpreter must
+    // agree with codegen's `karac_runtime_char_is_upper/lowercase` externs
+    // (`test_e2e_char_case_predicates`). Ä (U+00C4) is uppercase, ß (U+00DF) is
+    // lowercase — both beyond an ASCII A-Z / a-z check.
+    let output = run(r#"fn main() {
+            println(f"{'A'.is_uppercase()} {'A'.is_lowercase()}");
+            println(f"{'z'.is_uppercase()} {'z'.is_lowercase()}");
+            println(f"{'5'.is_uppercase()} {' '.is_lowercase()}");
+            match char.try_from(196) {
+                Ok(u) => { println(f"{u.is_uppercase()} {u.is_lowercase()}"); }
+                Err(e) => { println("err"); }
+            }
+            match char.try_from(223) {
+                Ok(l) => { println(f"{l.is_uppercase()} {l.is_lowercase()}"); }
+                Err(e) => { println("err"); }
+            }
+        }"#);
+    assert_eq!(
+        output,
+        "true false\n\
+         false true\n\
+         false false\n\
+         true false\n\
+         false true\n"
+    );
+}
+
+#[test]
 fn test_i64_parse_interpreter() {
     // Five cases mirror `/tmp/kara-probes/i64_parse_full_probe.kara`:
     // numeric / non-numeric / negative / whitespace-padded / empty.

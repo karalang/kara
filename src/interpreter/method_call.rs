@@ -1022,6 +1022,8 @@ impl<'a> super::Interpreter<'a> {
                     "is_numeric" => Some(c.is_numeric()),
                     "is_alphanumeric" => Some(c.is_alphanumeric()),
                     "is_whitespace" => Some(c.is_whitespace()),
+                    "is_uppercase" => Some(c.is_uppercase()),
+                    "is_lowercase" => Some(c.is_lowercase()),
                     _ => None,
                 };
                 if let Some(r) = r {
