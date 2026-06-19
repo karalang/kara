@@ -3,55 +3,74 @@
 // The thesis: effect-driven event-loop networking with no `async fn` and no
 // function coloring. Every `TcpStream.read`/`.write` call carries
 // `sends(Network) receives(Network)`, so the codegen state-machine transform
-// parks the spawned handler on fd-readiness instead of thread-blocking it —
+// parks the spawned task on fd-readiness instead of thread-blocking it —
 // thousands of in-flight proxied connections ride a handful of reactor
-// threads, and the handler body reads like a straight-line blocking program.
+// threads, and each task body reads like a straight-line blocking program.
 //
-// Slice 2 — round-robin load balancing across N upstreams. The accept loop
-// rotates through a `Vec[String]` of backend addresses, handing each new
-// connection the next one. Still half-duplex passthrough per connection
-// (forward the request once, stream the response back until EOF); concurrent
-// bidirectional splicing, path-based routing, and metrics are later slices.
+// Slice 3 — full-duplex (concurrent bidirectional) splice. A real proxy must
+// move bytes BOTH ways at once (client→upstream and upstream→client), which
+// means two tasks operating on the same two sockets. The owned move model
+// forbids aliasing a single move-only `TcpStream` across two closures, so each
+// connection is `try_clone`d — a `dup(2)` giving a second owned handle over
+// the same socket. One task owns the client-read + upstream-write halves, the
+// other owns the upstream-read + client-write halves; no handle is shared, yet
+// both directions run concurrently. Round-robin load balancing (slice 2) is
+// kept. Path-based routing and metrics are later slices.
+//
+// Known limitation (needs `TcpStream.shutdown`, a follow-on): a half-close is
+// not propagated across the proxy — when one direction hits EOF, dropping its
+// dup'd handle does not FIN the peer (the sibling task still holds the other
+// dup). This works for responses delimited by `Content-Length` (the client
+// ends the exchange itself) but would hang an EOF-delimited body. The bundled
+// backends send `Content-Length` + `Connection: close`, so the demo completes.
 //
 // Build & run:
 //   karac build examples/relay/relay.kara
 //   ./relay                         # listens on 127.0.0.1:8080
-// In other shells, run HTTP backends on :9000/:9001/:9002 that answer with
-// `Connection: close`, then repeated `curl localhost:8080/` rotate across them.
+// In other shells, run HTTP backends on :9000/:9001/:9002 (Content-Length +
+// Connection: close), then repeated `curl localhost:8080/` rotate across them.
 
-// Service one proxied connection against a chosen upstream. Private fn —
-// effects inferred (transitively `sends(Network) receives(Network)`), so the
-// whole handler is a parkable coroutine. Both `client` and `upstream_addr`
-// are moved in: `client` is dropped (closed) at scope exit, `upstream_addr`
-// is consumed by `connect`.
+// Pump one direction to EOF: read from `src`, write everything to `dst`, until
+// `src` closes (read returns 0) or either side errors. Private fn — effects
+// inferred (transitively `sends(Network) receives(Network)`), so it is a
+// parkable coroutine. Both streams are moved in and dropped (closed) at exit.
+fn pump(src: TcpStream, dst: TcpStream) {
+    let mut buf: Array[u8, 4096] = [0u8; 4096];
+    loop {
+        match src.read(mut buf) {
+            Result.Ok(n) => {
+                if n == 0 { break; }
+                match dst.write_all(buf[0..n]) {
+                    Result.Ok(_) => {}
+                    Result.Err(_) => { break; }
+                }
+            }
+            Result.Err(_) => { break; }
+        }
+    }
+}
+
+// Service one proxied connection full-duplex against a chosen upstream.
 fn handle(client: TcpStream, upstream_addr: String) {
     match TcpStream.connect(upstream_addr) {
         Result.Ok(upstream) => {
-            let mut buf: Array[u8, 4096] = [0u8; 4096];
-
-            // Forward the request (single buffer — small GET fits one read;
-            // request streaming with Content-Length/chunked framing is later).
-            match client.read(mut buf) {
-                Result.Ok(n) => {
-                    if n > 0 {
-                        let _ = upstream.write_all(buf[0..n]);
+            // Split each socket into a second owned handle (dup'd fd). One
+            // task gets the read end, the other the write end — no aliasing.
+            match client.try_clone() {
+                Result.Ok(client_w) => {
+                    match upstream.try_clone() {
+                        Result.Ok(upstream_w) => {
+                            // Both directions concurrently; the group joins
+                            // both at scope exit (a nested TaskGroup inside a
+                            // spawned handler).
+                            let mut tg: TaskGroup = TaskGroup.new();
+                            tg.spawn(|| pump(client, upstream_w)); // client → upstream
+                            tg.spawn(|| pump(upstream, client_w)); // upstream → client
+                        }
+                        Result.Err(_) => {}
                     }
                 }
                 Result.Err(_) => {}
-            }
-
-            // Stream the response back until the upstream closes (EOF).
-            loop {
-                match upstream.read(mut buf) {
-                    Result.Ok(n) => {
-                        if n == 0 { break; }
-                        match client.write_all(buf[0..n]) {
-                            Result.Ok(_) => {}
-                            Result.Err(_) => { break; }
-                        }
-                    }
-                    Result.Err(_) => { break; }
-                }
             }
         }
         Result.Err(_) => {}
@@ -73,9 +92,6 @@ fn main() {
     loop {
         match listener.accept() {
             Result.Ok(client) => {
-                // Pick the next backend, round-robin. Clone the address out
-                // of the pool so the pool itself stays put for later picks;
-                // the clone moves into the per-connection handler.
                 let idx = next % n;
                 let addr = upstreams[idx].clone();
                 next = next + 1;
