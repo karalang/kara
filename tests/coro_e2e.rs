@@ -181,7 +181,11 @@ mod tests {
     /// or slot (pre-fix, the free-spawn coro handle + park slot leak, so LSan
     /// fails). The barrier is `sleep`, not a channel, because moving a `Sender`
     /// into a free-spawn coroutine surfaced a separate drop-order problem (the
-    /// channel closed before the send landed) unrelated to this reap.
+    /// channel closed before the send landed) unrelated to this reap — since fixed
+    /// in `691117f6` (B-2026-06-17-9; coroutine owns its moved channel-end params),
+    /// covered by `coroutine_free_spawn_channel_send_lands_before_close`. The sleep
+    /// barrier stays here regardless: it keeps this reap test independent of the
+    /// channel path and deterministic for the LSan timing window.
     const FREE_SPAWN_NONBLOCK_SRC: &str = r#"
         fn serve_one(listener: TcpListener) {
             let _stream = listener.accept().unwrap();

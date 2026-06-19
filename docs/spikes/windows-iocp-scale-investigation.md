@@ -360,8 +360,11 @@ in this same change.
    `coroutine_discarded_free_spawn_self_reaps_under_asan` E2E (real connection, 2s
    barrier → deterministic Linux LSan leak gate). **All spawn shapes are now
    leak-clean.** (An orthogonal anomaly surfaced while testing — moving a channel
-   `Sender` into a free-spawn coroutine closes the channel before the send lands —
-   is noted for separate investigation.)
+   `Sender` into a free-spawn coroutine closed the channel before the send landed,
+   so `rx.recv()` saw the closed-sentinel `0`. **Already FIXED the same day by
+   `691117f6`** — logged retroactively as **B-2026-06-17-9**: the coroutine now owns
+   its moved channel-end params and closes the channel only at completion, after the
+   send. Regression: `coroutine_free_spawn_channel_send_lands_before_close`.)
 2. **Finding 2 — conc-1 latency floor. ✅ DONE 2026-06-18 (`8f0c56c6`), native
    Windows — but the fix's predicted outcome was REFUTED by the measurement.**
    `timeBeginPeriod(1)` landed in the reactor init (+ `winmm` in the AOT linker
