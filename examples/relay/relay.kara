@@ -7,22 +7,22 @@
 // thousands of in-flight proxied connections ride a handful of reactor
 // threads, and each task body reads like a straight-line blocking program.
 //
-// Slice 3 — full-duplex (concurrent bidirectional) splice. A real proxy must
-// move bytes BOTH ways at once (client→upstream and upstream→client), which
-// means two tasks operating on the same two sockets. The owned move model
-// forbids aliasing a single move-only `TcpStream` across two closures, so each
-// connection is `try_clone`d — a `dup(2)` giving a second owned handle over
-// the same socket. One task owns the client-read + upstream-write halves, the
-// other owns the upstream-read + client-write halves; no handle is shared, yet
-// both directions run concurrently. Round-robin load balancing (slice 2) is
-// kept. Path-based routing and metrics are later slices.
+// Slice 3 — full-duplex (concurrent bidirectional) splice with EOF
+// propagation. A real proxy must move bytes BOTH ways at once
+// (client→upstream and upstream→client), which means two tasks operating on
+// the same two sockets. The owned move model forbids aliasing a single
+// move-only `TcpStream` across two closures, so each connection is
+// `try_clone`d — a `dup(2)` giving a second owned handle over the same socket.
+// One task owns the client-read + upstream-write halves, the other owns the
+// upstream-read + client-write halves; no handle is shared, yet both
+// directions run concurrently. Round-robin load balancing (slice 2) is kept.
 //
-// Known limitation (needs `TcpStream.shutdown`, a follow-on): a half-close is
-// not propagated across the proxy — when one direction hits EOF, dropping its
-// dup'd handle does not FIN the peer (the sibling task still holds the other
-// dup). This works for responses delimited by `Content-Length` (the client
-// ends the exchange itself) but would hang an EOF-delimited body. The bundled
-// backends send `Content-Length` + `Connection: close`, so the demo completes.
+// When one direction hits EOF, dropping its dup'd handle does NOT FIN the peer
+// (the sibling task still holds the other dup), so each pump explicitly
+// `shutdown_write()`s its destination to flush a FIN. That propagates the
+// half-close across the proxy — correct for both `Content-Length`- and
+// EOF-delimited response bodies. Path-based routing and metrics are later
+// slices.
 //
 // Build & run:
 //   karac build examples/relay/relay.kara
@@ -48,6 +48,11 @@ fn pump(src: TcpStream, dst: TcpStream) {
             Result.Err(_) => { break; }
         }
     }
+    // `src` hit EOF (or errored): no more bytes flow this direction. Half-close
+    // the write side of `dst` so its peer sees EOF — propagates the half-close
+    // across the proxy (the sibling pump still holds the other dup, so dropping
+    // `dst` alone would not FIN). Best-effort; ignore the result.
+    let _ = dst.shutdown_write();
 }
 
 // Service one proxied connection full-duplex against a chosen upstream.
