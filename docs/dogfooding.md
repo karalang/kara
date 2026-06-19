@@ -725,13 +725,25 @@ and curating the Rust side-by-side honestly.
 > three proxies (kara / go / node) forwarding to one shared Go upstream, driven
 > by `wrk` (cohort kara/go/node, matching the installed-toolchain set; nginx and
 > `hey` are absent on the bench host). Building the Kāra proxy through the
-> coroutine spawn path was itself a bug-finder — it surfaced a use-after-free in
+> coroutine spawn path was itself a bug-finder, **twice**: (1) a use-after-free in
 > the non-blocking coroutine-spawn lowering (the spawn wrapper freed a moved-in
 > `String` capture's buffer while the coroutine was still parked), fixed in
-> `src/codegen/task_group.rs` and regression-pinned by
-> `tests/coro_e2e.rs::coroutine_multi_capture_string_*`. The measured numbers,
-> the per-impl build history, and the keep-alive perf-investigation signal the
-> bench surfaced live in [`examples/relay/bench/README.md`](../examples/relay/bench/README.md).
+> `src/codegen/task_group.rs`, pinned by `tests/coro_e2e.rs::coroutine_multi_capture_string_*`;
+> and (2) — surfaced by the **keep-alive rewrite** of the bench proxy, whose
+> `relay_response(...) -> bool` helper is called and branched on from the spawned
+> handler — a codegen miscompile where a *suspending coroutine returning a
+> non-unit value, called from another coroutine, discarded its real return value
+> and yielded a hard-coded `i64 0`* (crashing LLVM verification with
+> `Branch condition is not 'i1' type`). Fixed in `src/codegen/call_dispatch.rs` +
+> a runtime slot store/load pair (`runtime/src/event_loop.rs`), the blocking-call
+> analog of the Fathom `join` non-scalar-return fix; pinned by
+> `tests/coro_e2e.rs::coroutine_bool_return_{false_branches_then,true_branches_else}`
+> (the 7-vs-8 pair proves value-correctness, not just verifier-pass). With
+> keep-alive in place the Kāra proxy sustains a stable ~35–38k req/s across the
+> `-c100/1000/5000` sweep (fastest cold start; comparators hit acceptor cliffs at
+> higher connection counts). The measured numbers, the per-impl build history, and
+> both compiler-bug writeups live in
+> [`examples/relay/bench/README.md`](../examples/relay/bench/README.md).
 
 **Audience:** Infrastructure engineers, performance-focused backend developers.
 

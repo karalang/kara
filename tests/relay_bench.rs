@@ -210,20 +210,57 @@ mod relay_bench_tests {
     }
 
     /// Send `GET /` through the proxy on `port` and return the response body.
+    ///
+    /// The proxy speaks HTTP/1.1 **keep-alive**: after streaming one response it
+    /// keeps the client connection open for the next request rather than closing
+    /// it, so this reader must NOT `read_to_end` (that would block until the
+    /// proxy's idle timeout). Instead it reads incrementally until it has the
+    /// full response — the end-of-headers `\r\n\r\n` plus the `Content-Length`
+    /// body — then returns, leaving the connection open (the client drops it).
     fn http_get_body(port: u16) -> Result<String, String> {
         let mut stream = TcpStream::connect(format!("127.0.0.1:{port}"))
             .map_err(|e| format!("connect failed: {e}"))?;
         stream
             .set_read_timeout(Some(Duration::from_secs(10)))
             .map_err(|e| format!("set_read_timeout failed: {e}"))?;
-        let req = "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+        // Keep-alive request — no `Connection: close`: we want the proxy to hold
+        // the connection open (the keep-alive path), and we frame the response
+        // ourselves by Content-Length below.
+        let req = "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
         stream
             .write_all(req.as_bytes())
             .map_err(|e| format!("write failed: {e}"))?;
         let mut buf = Vec::new();
-        stream
-            .read_to_end(&mut buf)
-            .map_err(|e| format!("read failed: {e}"))?;
+        let mut chunk = [0u8; 4096];
+        // Read until we have the headers and the full Content-Length body, then
+        // stop (do not wait for EOF — the keep-alive connection never sends one).
+        loop {
+            let text = String::from_utf8_lossy(&buf);
+            if let Some(hdr_end) = text.find("\r\n\r\n") {
+                // Parse Content-Length from the header block.
+                let clen = text[..hdr_end]
+                    .lines()
+                    .find_map(|l| {
+                        let lower = l.to_ascii_lowercase();
+                        lower
+                            .strip_prefix("content-length:")
+                            .map(|v| v.trim().to_string())
+                    })
+                    .and_then(|v| v.parse::<usize>().ok());
+                if let Some(clen) = clen {
+                    if buf.len() >= hdr_end + 4 + clen {
+                        break;
+                    }
+                }
+            }
+            let n = stream
+                .read(&mut chunk)
+                .map_err(|e| format!("read failed: {e}"))?;
+            if n == 0 {
+                break; // peer closed early — return whatever we have
+            }
+            buf.extend_from_slice(&chunk[..n]);
+        }
         let text = String::from_utf8_lossy(&buf).into_owned();
         let body = text
             .split("\r\n\r\n")
@@ -237,14 +274,27 @@ mod relay_bench_tests {
     /// upstream via `RELAY_UPSTREAM`, drive one `GET /` through it, and assert
     /// the proxied body matches the upstream's constant payload.
     ///
-    /// This is the dogfooding gate: building this `server.kara` through the
-    /// coroutine path surfaced the multi-capture-spawn use-after-free (the
+    /// This is the dogfooding gate. The proxy is now an HTTP/1.1 **keep-alive**
+    /// proxy (one persistent upstream connection per client, a request loop on
+    /// the client socket, each response framed by `Content-Length`), so the
+    /// reader frames the response itself rather than reading to EOF.
+    ///
+    /// Building this `server.kara` through the coroutine path has surfaced
+    /// multiple codegen finds: (1) the multi-capture-spawn use-after-free — the
     /// `handle(client, upstream_addr)` closure captured the moved `TcpStream`
-    /// alongside a `String`; the spawn wrapper freed the `String`'s buffer
-    /// while the coroutine was still parked). Fixed in
-    /// `src/codegen/task_group.rs`; regression-pinned by
-    /// `tests/coro_e2e.rs::coroutine_multi_capture_string_*`. If this smoke
-    /// ever fails with an empty body, that's the same bug class resurfacing.
+    /// alongside a `String`; the spawn wrapper freed the `String`'s buffer while
+    /// the coroutine was still parked (fixed in `src/codegen/task_group.rs`,
+    /// pinned by `tests/coro_e2e.rs::coroutine_multi_capture_string_*`); and
+    /// (2) the non-unit coroutine return value bug — a suspending `-> bool`
+    /// helper driven inline discarded its value and yielded a hard-coded
+    /// `i64 0`, failing LLVM verification when branched on (fixed in
+    /// `call_dispatch.rs`/`coro.rs`/runtime, pinned by
+    /// `tests/coro_e2e.rs::coroutine_bool_return_*`). The keep-alive rewrite
+    /// ALSO surfaced a third, deeper limitation — nested *inline* coroutine-await
+    /// from a reactor-resident coroutine deadlocks — which is documented in
+    /// `docs/dogfooding.md` and is why the response leg is inlined into `handle`
+    /// rather than a `relay_response(...) -> bool` helper. If this smoke ever
+    /// fails with an empty body, that's a forwarding regression resurfacing.
     #[test]
     fn test_kara_bench_server_smoke() {
         let Some(rt) = runtime_path() else {
