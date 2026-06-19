@@ -10941,4 +10941,33 @@ fn main() {
             "relay_request_parse_atomic_soak",
         );
     }
+
+    // ── `Vec[v; n]` repeat literal — heap fill lifecycle ──────────────
+    // `Vec[v; n]` / `vec![v; n]` allocate a heap buffer via the shared
+    // `build_vec_filled` (same path as `Vec.filled(n, v)`). This pins that the
+    // resulting `{ptr, len, cap}` Vec is dropped exactly once: a fill, a
+    // push-after-fill (grow-realloc reclaims the original buffer), an index
+    // read, and a `vec![v; n]` with a larger payload all in one scope. On
+    // Linux CI LSan additionally catches a missed free of the fill buffer.
+    #[test]
+    fn asan_vec_repeat_literal_fill_push_index() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut g: Vec[i64] = Vec[5; 8];
+    g.push(1);
+    g.push(2);
+    let mut total = 0;
+    for x in g { total = total + x; }
+    println(total);
+    let n = 100;
+    let r: Vec[i64] = vec![3; n];
+    println(r.len());
+    println(r[99]);
+}
+"#,
+            &["43", "100", "3"],
+            "vec_repeat_literal_fill_push_index",
+        );
+    }
 }

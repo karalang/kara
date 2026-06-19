@@ -3373,9 +3373,8 @@ fn main() {
         // codegen already lowers for `Vec[a, b, c]` — codegen never sees a
         // `vec!` node. Pins the parser desugaring through the AOT backend
         // (skips vacuously when the runtime archive is absent). The repeat
-        // form `vec![v; n]` is exercised in the interpreter test; its codegen
-        // lowering is the separate, still-open `Vec[v; n]` repeat-literal item
-        // (phase-4-interpreter.md) and is intentionally not asserted here.
+        // form `vec![v; n]` / `Vec[v; n]` is covered by
+        // `test_e2e_vec_repeat_literal` below.
         let Some(output) = run_program(
             "fn main() {\n\
                  let v = vec![10, 20, 30];\n\
@@ -3388,6 +3387,37 @@ fn main() {
             return;
         };
         assert_eq!(output, "60\n3\n");
+    }
+
+    #[test]
+    fn test_e2e_vec_repeat_literal() {
+        // `Vec[v; n]` / `vec![v; n]` build a heap Vec[T] of n copies of v via
+        // the shared `build_vec_filled` (malloc + runtime fill loop) — the same
+        // path as `Vec.filled(n, v)`. Covers: literal count, runtime count, the
+        // `vec!` macro spelling, push-after-fill (cap==len ⇒ first push grows),
+        // and indexing the filled element. This is the codegen tail of the
+        // phase-4-interpreter.md `Vec[v; n]` repeat-literal item.
+        let Some(output) = run_program(
+            "fn main() {\n\
+                 let v: Vec[i64] = Vec[7; 4];\n\
+                 let mut sum = 0;\n\
+                 for x in v { sum = sum + x; }\n\
+                 println(sum);\n\
+                 println(v.len());\n\
+                 let m = vec![3; 5];\n\
+                 println(m.len());\n\
+                 let n = 6;\n\
+                 let r: Vec[i64] = Vec[2; n];\n\
+                 println(r.len());\n\
+                 let mut g: Vec[i64] = Vec[0; 3];\n\
+                 g.push(99);\n\
+                 println(g.len());\n\
+                 println(g[3]);\n\
+             }",
+        ) else {
+            return;
+        };
+        assert_eq!(output, "28\n4\n5\n6\n4\n99\n");
     }
 
     #[test]

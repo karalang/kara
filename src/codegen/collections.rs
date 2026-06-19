@@ -12,7 +12,7 @@
 use crate::ast::*;
 
 use inkwell::types::{BasicType, BasicTypeEnum, StructType};
-use inkwell::values::{BasicValueEnum, PointerValue};
+use inkwell::values::{BasicValueEnum, IntValue, PointerValue};
 use inkwell::AddressSpace;
 
 use super::helpers::vec_inner_type_expr;
@@ -529,6 +529,101 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(agg.into())
     }
 
+    /// Build a heap `Vec[T]` of `n` copies of `val`: `malloc(n * sizeof(T))`,
+    /// a runtime fill loop `for i in 0..n { buf[i] = val }`, returning the
+    /// `{data=buf, len=n, cap=n}` aggregate. `n` is a runtime `i64` value (not
+    /// necessarily a compile-time constant). Shared by `Vec.filled(n, val)` and
+    /// the `Vec[v; n]` repeat-literal form — both denote the same runtime fill.
+    ///
+    /// Limitation (same as the `Vec.filled` arm it was extracted from): the
+    /// per-slot store is a bit-copy. For aggregate element types whose Kāra
+    /// semantics need a deep clone per slot the bit-copy aliases storage —
+    /// `Vec[Vec.new(); n]` is safe (every slot is the empty `{null, 0, 0}`
+    /// aggregate, and the first push per row allocates a fresh buffer), but
+    /// non-empty aggregate element types need a Clone-codegen upgrade (separate
+    /// slice). `free(malloc(0))` is well-defined, so `n == 0` is not special-cased.
+    pub(super) fn build_vec_filled(
+        &mut self,
+        n: IntValue<'ctx>,
+        val: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let elem_ty = val.get_type();
+        let elem_size = elem_ty.size_of().unwrap();
+        let i64_t = self.context.i64_type();
+        let fn_val = self.current_fn.unwrap();
+
+        let alloc_bytes = self
+            .builder
+            .build_int_mul(n, elem_size, "filled.alloc_bytes")
+            .unwrap();
+        let buf = self
+            .builder
+            .build_call(self.alloc_or_panic_fn, &[alloc_bytes.into()], "filled.buf")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+
+        // Fill loop: for i in 0..n { buf[i] = val }
+        let counter = self.create_entry_alloca(fn_val, "filled.i", i64_t.into());
+        self.builder
+            .build_store(counter, i64_t.const_int(0, false))
+            .unwrap();
+        let cond_bb = self.context.append_basic_block(fn_val, "filled.cond");
+        let body_bb = self.context.append_basic_block(fn_val, "filled.body");
+        let exit_bb = self.context.append_basic_block(fn_val, "filled.exit");
+
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.builder.position_at_end(cond_bb);
+        let cur = self
+            .builder
+            .build_load(i64_t, counter, "filled.cur")
+            .unwrap()
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::ULT, cur, n, "filled.lt")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cond, body_bb, exit_bb)
+            .unwrap();
+
+        self.builder.position_at_end(body_bb);
+        let elem_ptr = unsafe {
+            self.builder
+                .build_gep(elem_ty, buf, &[cur], "filled.elem.ptr")
+                .unwrap()
+        };
+        self.builder.build_store(elem_ptr, val).unwrap();
+        let one = i64_t.const_int(1, false);
+        let next = self.builder.build_int_add(cur, one, "filled.next").unwrap();
+        self.builder.build_store(counter, next).unwrap();
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.builder.position_at_end(exit_bb);
+
+        // Build {data=buf, len=n, cap=n} aggregate.
+        let vec_ty = self.vec_struct_type();
+        let mut agg = vec_ty.get_undef();
+        agg = self
+            .builder
+            .build_insert_value(agg, buf, 0, "vec.data")
+            .unwrap()
+            .into_struct_value();
+        agg = self
+            .builder
+            .build_insert_value(agg, n, 1, "vec.len")
+            .unwrap()
+            .into_struct_value();
+        agg = self
+            .builder
+            .build_insert_value(agg, n, 2, "vec.cap")
+            .unwrap()
+            .into_struct_value();
+        Ok(agg.into())
+    }
+
     /// Let-binding fast path for `let buf: Array[T, N] = [zero; N]`.
     /// Returns `Some(Ok(()))` on success, `None` if the RHS doesn't match
     /// the literal-zero repeat pattern (caller falls through to the
@@ -682,14 +777,17 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(Ok(()))
     }
 
-    /// Compile `[value; count]` / `Array[value; count]`. Produces an LLVM
-    /// array value `[N x T]` whose every element is the compiled `value`.
-    /// `count` must be a non-negative integer literal (mirrors the
-    /// typechecker's `Array[T, N]` size constraint).
+    /// Compile `[value; count]` / `Array[value; count]` / `Vec[value; count]`.
     ///
-    /// `Vec[v; n]` prefix form needs heap allocation + fill and is not
-    /// implemented here yet — it errors with a clear message rather than
-    /// silently producing the wrong shape.
+    /// Bare `[v; n]` and `Array[v; n]` produce a stack `[N x T]` array value;
+    /// `count` must be a non-negative integer literal (mirrors the typechecker's
+    /// `Array[T, N]` size constraint) and the body emits a `zeroinitializer`
+    /// fast path, a capped `const_array`, or a per-element `insertvalue` chain.
+    ///
+    /// `Vec[v; n]` is a heap `Vec[T]` — semantically identical to
+    /// `Vec.filled(n, v)` — so it routes through the shared `build_vec_filled`
+    /// (malloc + runtime fill loop). Unlike the Array forms, `count` may be a
+    /// runtime expression.
     pub(super) fn compile_repeat_literal(
         &mut self,
         type_name: Option<&str>,
@@ -697,7 +795,12 @@ impl<'ctx> super::Codegen<'ctx> {
         count: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         if matches!(type_name, Some("Vec")) {
-            return Err("codegen: Vec[v; n] repeat literal not yet supported".to_string());
+            // `Vec[v; n]` ≡ `Vec.filled(n, v)`. Compile `v` then `n` to preserve
+            // source-order evaluation of side effects (the value precedes the
+            // count in `[v; n]`), then delegate to the shared heap fill.
+            let val = self.compile_expr(value)?;
+            let n = self.compile_expr(count)?.into_int_value();
+            return self.build_vec_filled(n, val);
         }
         let n = match &count.kind {
             ExprKind::Integer(n, _) if *n >= 0 => *n as u32,
