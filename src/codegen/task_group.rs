@@ -368,6 +368,25 @@ impl<'ctx> super::Codegen<'ctx> {
         for (wrapper_alloca, is_sender) in channel_caps {
             self.track_channel_var(wrapper_alloca, is_sender);
         }
+        // For the non-blocking coroutine spawn (`use_coro_spawn`), the wrapper
+        // ramps the coroutine and RETURNS while the coroutine is still parked
+        // at its first suspend — its `drain_top_frame_with_emit` below runs
+        // long before the coroutine finishes. So a `FreeVecBuffer` re-registered
+        // here would free a moved-in `String`/`Vec` capture's buffer out from
+        // under the still-running coroutine — a use-after-free (empty proxied
+        // response / silent connect failure when the freed buffer is the
+        // upstream address). The coroutine receives the capture BY VALUE through
+        // the ramp args and owns it; it frees the buffer at ITS completion
+        // (body-end + per-park destroy edge), exactly as it already owns its
+        // moved-in `UserDrop` and channel-end params (see the coroutine param
+        // registration in `compile_function_body`). So drop the wrapper-side
+        // re-registration on this path — only the blocking spawn (`spawn`
+        // wrapper IS the task, runs to completion) needs it. Regression:
+        // `tests/relay_bench.rs` + the multi-capture coroutine-spawn cases in
+        // `tests/coro_e2e.rs`.
+        if use_coro_spawn {
+            vec_caps.clear();
+        }
         for (vec_alloca, elem_ty, elem_is_tensor, elem_map_drop, elem_agg_drop) in vec_caps {
             if let Some(frame) = self.scope_cleanup_actions.last_mut() {
                 frame.push(CleanupAction::FreeVecBuffer {

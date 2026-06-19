@@ -161,6 +161,48 @@ mod tests {
         }
     "#;
 
+    /// Multi-capture non-blocking spawn — the Relay-bench regression. The
+    /// closure captures BOTH the moved `listener` AND a heap-builtin `String`
+    /// (`addr`), and the handler uses `addr` *after* the park (`accept`). The
+    /// tail call is the coroutine handler, so this routes through
+    /// `karac_runtime_spawn_coro` (the worker ramps + returns while the
+    /// coroutine is still parked).
+    ///
+    /// The bug this pins (found dogfooding the Relay passthrough proxy, whose
+    /// `handle(client, upstream_addr)` captured the moved `TcpStream` + a
+    /// `String` upstream address): the spawn wrapper re-registered a
+    /// `FreeVecBuffer` cleanup for the moved-in `String` capture and drained it
+    /// on wrapper return — which, on the non-blocking coro path, happens while
+    /// the coroutine is STILL PARKED. So the `String`'s buffer was freed out
+    /// from under the live coroutine; when the coroutine resumed and read
+    /// `addr`, it touched freed memory (the proxy returned an empty body; ASAN
+    /// flags the use-after-free). A single `TcpStream`-only capture masked it
+    /// (no heap buffer to free → `cap > 0` guard skipped). The fix makes the
+    /// coroutine the sole owner of its moved-in heap-builtin captures (it frees
+    /// them at its own completion); the wrapper no longer frees on the coro
+    /// path. Fix: `src/codegen/task_group.rs` (`use_coro_spawn` ⇒ skip the
+    /// wrapper `vec_caps` re-registration).
+    ///
+    /// `addr` is ≥36 bytes so the `String` is heap-backed, not SSO/inline —
+    /// LeakSanitizer (and the macOS use-after-free detector) only see the bug on
+    /// a real heap buffer (`reference_lsan_short_string_leaks`). The post-park
+    /// `addr.len()` print (`38`) is the discriminating signal: it reads the
+    /// captured `String` on the resume edge. Pre-fix that read is a UAF; post-fix
+    /// it prints the correct length.
+    const SPAWN_MULTI_CAPTURE_SRC: &str = r#"
+        fn serve_one(listener: TcpListener, addr: String) {
+            let _stream = listener.accept().unwrap();
+            println(addr.len());
+        }
+        fn main() {
+            let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+            let addr: String = "127.0.0.1:9000/upstream/backend/path/x";
+            let mut tg = TaskGroup.new();
+            tg.spawn(|| serve_one(listener, addr));
+            println(2);
+        }
+    "#;
+
     /// B-2026-06-17-3 — **discarded FREE-spawn coroutine** (the `ws_echo_freespawn`
     /// shape). `spawn(|| serve_one(listener, tx))` is a free `spawn` (no
     /// `TaskGroup`) whose discarded `TaskHandle` codegen marks detached; its tail
@@ -1180,6 +1222,106 @@ mod tests {
             lines.iter().any(|l| l == "1") && lines.iter().any(|l| l == "2"),
             "non-blocking spawned coroutine did not complete under ASAN; \
              stdout lines: {lines:?}"
+        );
+    }
+
+    /// Relay-bench regression (functional): a non-blocking spawned coroutine
+    /// that captures BOTH the moved `listener` AND a heap `String`, and reads
+    /// the `String` *after* the park. Pre-fix the wrapper freed the captured
+    /// `String`'s buffer on ramp-return (while the coroutine was still parked),
+    /// so the post-park `addr.len()` read hit freed memory; post-fix the
+    /// coroutine owns the buffer and the read returns the correct length.
+    #[test]
+    fn coroutine_multi_capture_string_serviced() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_coro_multicap_{pid}_{nanos}"));
+
+        if let Err(e) = compile_link_coro(SPAWN_MULTI_CAPTURE_SRC, &exe_path, None) {
+            panic!("compile/link failed: {e}");
+        }
+
+        let (exit_status, lines) = service_one_connection(&exe_path, None);
+        let _ = std::fs::remove_file(&exe_path);
+
+        assert!(
+            exit_status.success(),
+            "multi-capture spawned-coroutine binary exited non-success {exit_status:?}; \
+             stdout lines: {lines:?}"
+        );
+        // `38` is the captured `String`'s length, read on the post-park resume
+        // edge — pre-fix this was a use-after-free on the wrapper-freed buffer.
+        // `2` is main's own line.
+        assert!(
+            lines.iter().any(|l| l == "38") && lines.iter().any(|l| l == "2"),
+            "multi-capture coroutine did not read its captured String post-park \
+             (expected `38` + `2`); stdout lines: {lines:?}"
+        );
+    }
+
+    /// Relay-bench regression (ASAN): same multi-capture spawn under
+    /// `-fsanitize=address`. A clean exit proves the captured `String`'s buffer
+    /// is freed exactly once (by the coroutine at its completion), with no
+    /// use-after-free on the post-park read and no double-free. Pre-fix the
+    /// wrapper's premature free was a use-after-free ASAN catches even on macOS
+    /// (where LeakSanitizer is absent); the ≥36-byte payload keeps the buffer
+    /// heap-backed so the detector sees it.
+    #[test]
+    fn coroutine_multi_capture_string_under_asan() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        if !asan_available() {
+            eprintln!("skip: ASAN unavailable on this host");
+            return;
+        }
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_coro_multicap_asan_{pid}_{nanos}"));
+
+        if let Err(e) = compile_link_coro(
+            SPAWN_MULTI_CAPTURE_SRC,
+            &exe_path,
+            Some(&["-fsanitize=address"]),
+        ) {
+            eprintln!("skip: ASAN compile/link failed: {e}");
+            return;
+        }
+        let asan_options = if cfg!(target_os = "macos") {
+            "abort_on_error=0:exitcode=23"
+        } else {
+            "detect_leaks=1:abort_on_error=0:exitcode=23"
+        };
+
+        let (exit_status, lines) = service_one_connection(&exe_path, Some(asan_options));
+        let _ = std::fs::remove_file(&exe_path);
+
+        assert!(
+            exit_status.success(),
+            "ASAN reported a memory error in the multi-capture coroutine spawn \
+             path (exit {exit_status:?}); stdout lines: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l == "38") && lines.iter().any(|l| l == "2"),
+            "multi-capture coroutine did not complete under ASAN (expected `38` + \
+             `2`); stdout lines: {lines:?}"
         );
     }
 
