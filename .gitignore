@@ -27,3 +27,11 @@ bench/hot_swap_cost/moderate_call_hotswap
 # this entry covers the directory itself so a fresh checkout starts
 # without it.
 playground/web/pkg/
+
+# Claude Code session tooling (worktrees, local settings, scratch). Never
+# committed — the .claude/worktrees/ tree in particular must not land in the repo.
+.claude/
+
+# Self-hosted compiler binary built from the in-tree .kara sources — a local
+# build artifact, not source. Regenerate by compiling the self-host entrypoint.
+nbe_main
