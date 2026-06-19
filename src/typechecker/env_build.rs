@@ -504,8 +504,47 @@ impl<'a> super::TypeChecker<'a> {
     /// files into the typechecker's environment. See
     /// `runtime/stdlib/` for the authoritative declarations.
     fn register_baked_stdlib(&mut self) {
+        // Collision-skip (the typecheck peer of codegen's
+        // `user_redefines_stdlib_type`, #6/#34): when the USER program redefines
+        // a struct/enum that an always-injected stdlib module exports — e.g. the
+        // self-hosted compiler's `struct Parser` vs `std.cli`'s `Parser`, or its
+        // `struct Span` vs `std.tracing`'s `Span` — skip that WHOLE stdlib
+        // module so the user's definition owns the name (and its associated
+        // functions: `Parser.new(tokens)` then resolves to the user impl, not
+        // the prelude's `Parser.new(program: String)`). Skipping only the
+        // colliding type is unsafe — the module's own bodies reference its types
+        // through the shared env. Safe: a program redefining a module's public
+        // type can't use that module anyway.
+        //
+        // Gated on `!self.compiling_stdlib`: when a baked stdlib module compiles
+        // standalone (`lower_stdlib_source`), self.program IS that module, so its
+        // own types match the injected copy — skipping would make it skip
+        // itself and corrupt its lowering (the reverted first attempt broke the
+        // `e2e_tracing_*` / `ordering` codegen). Stdlib self-compiles register
+        // the full prelude, exactly as before.
+        let user_types: std::collections::HashSet<&str> = if self.compiling_stdlib {
+            std::collections::HashSet::new()
+        } else {
+            self.program
+                .items
+                .iter()
+                .filter_map(|it| match it {
+                    Item::StructDef(s) if !s.stdlib_origin => Some(s.name.as_str()),
+                    Item::EnumDef(e) if !e.stdlib_origin => Some(e.name.as_str()),
+                    _ => None,
+                })
+                .collect()
+        };
         let baked: Vec<Item> = crate::prelude::STDLIB_PROGRAMS
             .iter()
+            .filter(|(_, p)| {
+                user_types.is_empty()
+                    || !p.items.iter().any(|it| match it {
+                        Item::StructDef(s) => user_types.contains(s.name.as_str()),
+                        Item::EnumDef(e) => user_types.contains(e.name.as_str()),
+                        _ => false,
+                    })
+            })
             .flat_map(|(_, p)| p.items.iter().cloned())
             .collect();
         for item in &baked {

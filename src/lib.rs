@@ -177,6 +177,18 @@ pub fn typecheck(program: &Program, resolve_result: &ResolveResult) -> TypeCheck
     checker.check()
 }
 
+/// Type-check a baked stdlib module compiled as its own program
+/// (`codegen::lower_stdlib_source`). Identical to [`typecheck`] except the
+/// always-injected-stdlib collision-skip (#34) is disabled — a stdlib module's
+/// own types match the injected copy, so the skip would make it skip itself.
+pub fn typecheck_stdlib_module(
+    program: &Program,
+    resolve_result: &ResolveResult,
+) -> TypeCheckResult {
+    let checker = TypeChecker::new(program, resolve_result).compiling_stdlib();
+    checker.check()
+}
+
 /// Type-check with CLI-driven build-wide lint level overrides
 /// (slice 4b polish — `-A NAME` / `-W NAME` / `-D NAME` / `-F NAME`
 /// / `-D warnings`). The CLI dispatch in `src/cli.rs` calls this

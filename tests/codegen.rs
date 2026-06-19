@@ -2057,6 +2057,59 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_user_struct_shadows_always_injected_stdlib_type() {
+        // #34 (phase-12 self-hosting, parser stage): a user `struct Parser` (+
+        // `impl Parser { fn new(items: Vec[i64]) }`) collides with the
+        // always-injected `std.cli` `Parser` (whose `new` takes a `String`).
+        // Before the fix, `Parser.new(vec)` resolved to cli's impl via
+        // `env.impls` and type-errored `expected 'String', found 'Vec<i64>'`
+        // (the #6 stdlib-collision pattern, now hit through an associated-fn
+        // call rather than struct-literal construction). The collision-skip in
+        // `register_baked_stdlib` drops the cli module when the user redefines a
+        // type it exports, so `Parser.new` resolves to the user impl. The skip is
+        // gated to NOT fire when a stdlib module self-compiles (`compiling_stdlib`).
+        if let Some(out) = run_program(
+            "struct Parser { items: Vec[i64], pos: i64 }\n\
+             impl Parser {\n\
+                 fn new(items: Vec[i64]) -> Parser { Parser { items: items, pos: 0 } }\n\
+                 fn first(ref self) -> i64 { self.items[self.pos] }\n\
+             }\n\
+             fn main() {\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 v.push(7);\n\
+                 let p = Parser.new(v);\n\
+                 println(p.first().to_string());\n\
+             }",
+        ) {
+            assert_eq!(out, "7\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_recursive_struct_by_value_field_layout() {
+        // #36 (phase-12 self-hosting, parser stage): a struct embedded BY VALUE
+        // in another struct DECLARED EARLIER in source, in a recursive cycle
+        // broken only by a shared-enum (pointer) edge. Source-order struct-type
+        // building laid `Wrap` out before `Inner`, so `Wrap.inner: Inner`
+        // collapsed to the `i64` placeholder → `Invalid InsertValueInst` at
+        // module verification (the #1 family, extended to struct-by-value-field).
+        // `build_struct_types` now builds in topological dependency order
+        // (`Inner` before `Wrap`); the shared enum `Link` field is a pointer, so
+        // it's not a build-order dep and the cycle resolves.
+        if let Some(out) = run_program(
+            "struct Wrap { inner: Inner, tag: i64 }\n\
+             shared enum Link { Leaf(i64), Chain(Wrap) }\n\
+             struct Inner { value: i64, next: Link }\n\
+             fn main() {\n\
+                 let w = Wrap { inner: Inner { value: 5, next: Link.Leaf(9) }, tag: 7 };\n\
+                 println(w.tag.to_string());\n\
+             }",
+        ) {
+            assert_eq!(out, "7\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_string_method_on_self_field() {
         // Regression for the self-hosting lexer blocker #5: a String/Vec
         // method on a field accessed through `self`

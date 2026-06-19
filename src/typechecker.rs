@@ -1253,6 +1253,14 @@ pub struct TypeChecker<'a> {
     /// (the safer assumption — fires the check uniformly when we're
     /// outside any function context, e.g. at module-const init exprs).
     pub(super) current_fn_stdlib_origin: bool,
+    /// True when this checker is compiling a baked stdlib module *as its own
+    /// program* (`lower_stdlib_source` → [`crate::typecheck_stdlib_module`]).
+    /// Gates the always-injected-stdlib collision-skip in `register_baked_stdlib`
+    /// (#34): the user program collision-skips a module it redefines, but a
+    /// stdlib module self-compiling must NOT skip itself (its own types match
+    /// the injected copy, and the skip corrupted its lowering — broke the
+    /// `e2e_tracing_*` / `ordering` codegen).
+    pub(super) compiling_stdlib: bool,
     /// Stack of `lint_overrides` frames for the items currently being
     /// type-checked (slice 4b of the lint-level entry). Frame
     /// pushed at every item-walk entry (`check_function`,
@@ -1367,6 +1375,7 @@ impl<'a> TypeChecker<'a> {
             enclosing_trait: None,
             closure_once_reasons: HashMap::new(),
             current_fn_stdlib_origin: false,
+            compiling_stdlib: false,
             lint_override_stack: Vec::new(),
             cli_lint_overrides: crate::lints::CliLintOverrides::default(),
             fulfilled_expectations: HashSet::new(),
@@ -1397,6 +1406,15 @@ impl<'a> TypeChecker<'a> {
     /// resolution rule.
     pub fn with_cli_lint_overrides(mut self, overrides: crate::lints::CliLintOverrides) -> Self {
         self.cli_lint_overrides = overrides;
+        self
+    }
+
+    /// Mark this checker as compiling a baked stdlib module standalone
+    /// (`lower_stdlib_source`), so `register_baked_stdlib` does NOT apply the
+    /// always-injected-stdlib collision-skip to it (#34). A user program leaves
+    /// this `false` and collision-skips any module it redefines.
+    pub fn compiling_stdlib(mut self) -> Self {
+        self.compiling_stdlib = true;
         self
     }
 

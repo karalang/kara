@@ -383,7 +383,10 @@ fn lower_stdlib_source(module: &str, src: &str) -> Program {
     );
     crate::desugar_program(&mut parsed.program);
     let resolve = crate::resolve(&parsed.program);
-    let tc = crate::typecheck(&parsed.program, &resolve);
+    // `typecheck_stdlib_module` (not `typecheck`) disables the #34 collision-skip
+    // — this module IS a stdlib module, so its own types must not skip the
+    // injected prelude copy of themselves.
+    let tc = crate::typecheck_stdlib_module(&parsed.program, &resolve);
     let mut program = parsed.program;
     crate::lower(&mut program, &tc);
     program

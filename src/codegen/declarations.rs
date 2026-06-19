@@ -87,6 +87,37 @@ pub(super) fn synthesize_park_on_fd_layout(_program: &Program) -> Option<StateSt
 }
 
 /// Decide whether a shared-struct field's source type is `Option[T]` where
+/// #36 — collect the names of NON-SHARED user structs that `ty` embeds BY VALUE
+/// (so their LLVM struct type must be built before the struct holding this
+/// field). A direct `Path` to such a struct, or a tuple/array embedding one,
+/// is a build-order dependency; a `Vec`/`Map`/`Set`/`Slice`/`ref`/pointer field
+/// is NOT (it stores a pointer/handle), and an enum/`Option`/`Result` field is
+/// NOT (its LLVM type comes from `enum_layouts`, built by the earlier
+/// `declare_enums`). Drives the topological build order in `build_struct_types`.
+fn collect_value_struct_deps(ty: &TypeExpr, nonshared: &HashSet<&str>, out: &mut HashSet<String>) {
+    match &ty.kind {
+        TypeKind::Path(p) => {
+            if let Some(name) = p.segments.last() {
+                if nonshared.contains(name.as_str()) {
+                    out.insert(name.clone());
+                }
+            }
+            // Vec/Map/Set/Slice/Option/Result/… store pointers or are
+            // enum-layout-sized, so their generic args are NOT by-value embeds
+            // — do not recurse into them.
+        }
+        TypeKind::Tuple(elems) => {
+            for t in elems {
+                collect_value_struct_deps(t, nonshared, out);
+            }
+        }
+        TypeKind::Array { element, .. } => collect_value_struct_deps(element, nonshared, out),
+        // Ref/MutRef/MutSlice/Weak/Pointer/FnType/ImplTrait: pointer or fn —
+        // never a by-value struct embed.
+        _ => {}
+    }
+}
+
 /// `T` is itself a (known) shared struct — the precondition for niche-opt
 /// storage of the field as a single nullable pointer instead of the
 /// conventional 4-i64 Option enum. Pre-computed at `declare_structs` time
@@ -335,75 +366,124 @@ impl<'ctx> super::Codegen<'ctx> {
             })
             .collect();
 
-        for item in &program.items {
-            if let Item::StructDef(s) = item {
-                // Per-field niche-eligibility decision (only meaningful for
-                // shared structs — owned structs don't get an RC header so
-                // there's no heap-layout to compact). A field is niche if
-                // its source type is `Option[T]` with T a known shared
-                // struct (`shared_struct_names`), in which case the heap
-                // slot is a single `ptr` (null = None, non-null = Some)
-                // instead of the conventional 4-i64 Option layout. Saves
-                // 24 bytes/field — biggest win on small reference-
-                // semantics shapes like the ListNode kata.
-                let niche_option_fields: Vec<Option<String>> = if s.is_shared {
-                    s.fields
-                        .iter()
-                        .map(|f| niche_inner_name_if_eligible(&f.ty, &shared_struct_names))
-                        .collect()
-                } else {
-                    vec![None; s.fields.len()]
-                };
-                let ptr_ty = self.context.ptr_type(AddressSpace::default());
-                let field_types: Vec<BasicTypeEnum<'ctx>> = s
-                    .fields
-                    .iter()
-                    .enumerate()
-                    .map(|(i, f)| {
-                        if s.is_shared && niche_option_fields[i].is_some() {
-                            // Niche-optimized Option[shared T] — store as ptr.
-                            ptr_ty.into()
-                        } else {
-                            self.llvm_type_for_type_expr(&f.ty)
-                        }
-                    })
-                    .collect();
-                let names: Vec<String> = s.fields.iter().map(|f| f.name.clone()).collect();
-
-                if s.is_shared || s.is_par {
-                    // Shared / par struct: identical heap layout
-                    // `{ i64 refcount, field0, field1, … }`. A `par struct`
-                    // (always Arc) registers here too — the only difference is
-                    // that its refcount header is mutated atomically; every
-                    // other path (layout, field access, method dispatch, drop)
-                    // is shared with the `shared` case. `par` structs get
-                    // conventional Option layout (no niche) — niche is a
-                    // `shared`-only optimization at v1; widening it to `par`
-                    // is a Slice D follow-up, and conventional layout is
-                    // always correct.
-                    let mut heap_fields: Vec<BasicTypeEnum<'ctx>> =
-                        vec![self.context.i64_type().into()]; // refcount
-                    heap_fields.extend_from_slice(&field_types);
-                    let heap_type = self.context.struct_type(&heap_fields, false);
-
-                    self.shared_types.insert(
-                        s.name.clone(),
-                        SharedTypeInfo {
-                            heap_type,
-                            field_names: names,
-                            is_enum: false,
-                            niche_option_fields,
-                            is_par: s.is_par,
-                        },
-                    );
-                } else {
-                    let st = self.context.struct_type(&field_types, false);
-                    self.struct_types.insert(s.name.clone(), st);
+        // #36: build struct LLVM types in DEPENDENCY order, not source order. A
+        // struct embedded BY VALUE in another (`BinaryExpr { left: Expr }`)
+        // needs the embedded struct's type built first; source order fails for a
+        // recursive cycle broken only by a shared-enum / pointer edge
+        // (`BinaryExpr → Expr → ExprKind(shared) → BinaryExpr`), where a valid
+        // topological order exists (`Span`, `Expr`, `BinaryExpr`) but the source
+        // order isn't it → the embedded field collapsed to the `i64`
+        // placeholder. Kahn's algorithm over by-value struct deps; any residual
+        // (a true by-value cycle — infinite-size, rejected upstream) falls back
+        // to source order.
+        let all_structs: Vec<&StructDef> = program
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Item::StructDef(s) => Some(s),
+                _ => None,
+            })
+            .collect();
+        let nonshared: HashSet<&str> = all_structs
+            .iter()
+            .filter(|s| !s.is_shared && !s.is_par)
+            .map(|s| s.name.as_str())
+            .collect();
+        let mut ordered: Vec<&StructDef> = Vec::with_capacity(all_structs.len());
+        let mut placed: HashSet<&str> = HashSet::new();
+        loop {
+            let mut progress = false;
+            for s in &all_structs {
+                if placed.contains(s.name.as_str()) {
+                    continue;
                 }
+                let mut deps: HashSet<String> = HashSet::new();
+                for f in &s.fields {
+                    collect_value_struct_deps(&f.ty, &nonshared, &mut deps);
+                }
+                deps.remove(s.name.as_str());
+                if deps.iter().all(|d| placed.contains(d.as_str())) {
+                    ordered.push(s);
+                    placed.insert(s.name.as_str());
+                    progress = true;
+                }
+            }
+            if !progress {
+                break;
+            }
+        }
+        for s in &all_structs {
+            if !placed.contains(s.name.as_str()) {
+                ordered.push(s);
+            }
+        }
+
+        for s in &ordered {
+            // Per-field niche-eligibility decision (only meaningful for
+            // shared structs — owned structs don't get an RC header so
+            // there's no heap-layout to compact). A field is niche if
+            // its source type is `Option[T]` with T a known shared
+            // struct (`shared_struct_names`), in which case the heap
+            // slot is a single `ptr` (null = None, non-null = Some)
+            // instead of the conventional 4-i64 Option layout. Saves
+            // 24 bytes/field — biggest win on small reference-
+            // semantics shapes like the ListNode kata.
+            let niche_option_fields: Vec<Option<String>> = if s.is_shared {
+                s.fields
+                    .iter()
+                    .map(|f| niche_inner_name_if_eligible(&f.ty, &shared_struct_names))
+                    .collect()
+            } else {
+                vec![None; s.fields.len()]
+            };
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+            let field_types: Vec<BasicTypeEnum<'ctx>> = s
+                .fields
+                .iter()
+                .enumerate()
+                .map(|(i, f)| {
+                    if s.is_shared && niche_option_fields[i].is_some() {
+                        // Niche-optimized Option[shared T] — store as ptr.
+                        ptr_ty.into()
+                    } else {
+                        self.llvm_type_for_type_expr(&f.ty)
+                    }
+                })
+                .collect();
+            let names: Vec<String> = s.fields.iter().map(|f| f.name.clone()).collect();
+
+            if s.is_shared || s.is_par {
+                // Shared / par struct: identical heap layout
+                // `{ i64 refcount, field0, field1, … }`. A `par struct`
+                // (always Arc) registers here too — the only difference is
+                // that its refcount header is mutated atomically; every
+                // other path (layout, field access, method dispatch, drop)
+                // is shared with the `shared` case. `par` structs get
+                // conventional Option layout (no niche) — niche is a
+                // `shared`-only optimization at v1; widening it to `par`
+                // is a Slice D follow-up, and conventional layout is
+                // always correct.
+                let mut heap_fields: Vec<BasicTypeEnum<'ctx>> =
+                    vec![self.context.i64_type().into()]; // refcount
+                heap_fields.extend_from_slice(&field_types);
+                let heap_type = self.context.struct_type(&heap_fields, false);
+
+                self.shared_types.insert(
+                    s.name.clone(),
+                    SharedTypeInfo {
+                        heap_type,
+                        field_names: names,
+                        is_enum: false,
+                        niche_option_fields,
+                        is_par: s.is_par,
+                    },
+                );
+            } else {
+                let st = self.context.struct_type(&field_types, false);
+                self.struct_types.insert(s.name.clone(), st);
             }
         }
     }
-
     // ── Union declaration pass (phase 5 line 569 slice 4) ──────────
 
     /// FFI union LLVM-type construction. For each `#[repr(C)] union

@@ -162,13 +162,23 @@ pub fn render_expr(e: Expr) -> String {
             out.push_str(")");
         }
         Binary(bx) => {
+            // Destructure so both child edges move out together (#34b): Kāra
+            // treats a single field move as a whole-struct move, so disjoint
+            // `render_expr(bx.left)` then `render_expr(bx.right)` is rejected as
+            // "value 'bx' used after move". `op` is borrowed by `binop_name`
+            // (ref param), so it survives the destructure unmoved.
+            let BinaryExpr {
+                op,
+                left,
+                right,
+            } = bx;
             out.push_str("(binary ");
-            out.push_str(binop_name(bx.op));
+            out.push_str(binop_name(op));
             out.push_str(span_str(off, len));
             out.push_str(" ");
-            out.push_str(render_expr(bx.left));
+            out.push_str(render_expr(left));
             out.push_str(" ");
-            out.push_str(render_expr(bx.right));
+            out.push_str(render_expr(right));
             out.push_str(")");
         }
         Unary(ux) => {
