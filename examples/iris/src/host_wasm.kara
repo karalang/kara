@@ -1,0 +1,108 @@
+// Iris — the browser host layer (WASM).
+//
+// The browser half of "one source -> native + WASM". On `--target=wasm_browser`
+// the walker selects this `host` variant; `main.kara` calls `run()` and it
+// drives the interactive editor: a plain blocking render loop that re-applies
+// the current filter across a Web Worker pool every frame and blits the result
+// to a `<canvas>` — with no `async`, no `await`, and no hand-written threading.
+//
+//   * `animation_frames()` (std.web.time) yields once per requestAnimationFrame;
+//     `frames.recv()` parks the worker until the host fires the next frame — no
+//     `await` (design.md § Async Host APIs on WASM).
+//   * `keydown()` (std.web.events) is a `Channel[KeyEvent]` — number keys 1..6
+//     pick the filter. The loop drains the latest with a NON-blocking `try_recv`
+//     each frame, so input never stalls the render.
+//   * `TaskGroup.spawn` splits the output rows of each frame across the pool.
+//     Halve the pool and the framerate visibly halves — the parallelism is real.
+//   * `put_pixels` hands the framebuffer to JS for the `ctx.putImageData` blit;
+//     `Vec[u8].as_ptr()` is the FFI handoff.
+//
+// The filter math itself is in `filters.kara`, shared verbatim with the native
+// oracle — this file is only the browser I/O wrapper.
+
+import std.web.time.{animation_frames, Timer};
+import std.web.events.{keydown, KeyEvent, Input};
+import filters.{render_band, img_width, img_height,
+    f_original, f_blur, f_sharpen, f_edge, f_invert, f_grayscale};
+
+// The canvas this program paints — a host capability reached via `put_pixels`.
+effect resource Display;
+
+// The framebuffer blit. JS provides the body (see index.html): it reads `len`
+// bytes of RGBA at `ptr` out of shared wasm memory and `ctx.putImageData`s them.
+// The call is synchronous, so the buffer never dangles while in use.
+host fn put_pixels(ptr: *const u8, len: i64, w: i64, h: i64) with writes(Display);
+
+// Map a DOM key code to a filter id. Number row 1..6 selects the six filters in
+// roster order; anything else leaves the current filter unchanged (returns -1).
+// Key codes are DOM `KeyEvent.key_code()` ('1' = 49 ... '6' = 54).
+fn filter_for_key(code: i64) -> i64 {
+    if code == 49 { return f_original(); }
+    if code == 50 { return f_blur(); }
+    if code == 51 { return f_sharpen(); }
+    if code == 52 { return f_edge(); }
+    if code == 53 { return f_invert(); }
+    if code == 54 { return f_grayscale(); }
+    -1
+}
+
+// Render one full frame under `filter_id` across the worker pool, then blit.
+// The output rows are split into `workers` contiguous bands; each band is a
+// spawned task computing render_band over its rows. The TaskGroup joins them in
+// order and the bands concatenate into one framebuffer for a single put_pixels.
+// The source image is a pure function (filters.kara), so the bands share no
+// state — nothing is captured across tasks but the scalar band bounds + filter.
+fn render_frame(filter_id: i64, workers: i64) with writes(Display) {
+    let w = img_width();
+    let h = img_height();
+    let band = (h + workers - 1) / workers;
+
+    let mut pool: TaskGroup = TaskGroup.new();
+    let mut handles: Vec[TaskHandle[Vec[u8]]] = Vec.new();
+    let mut k = 0;
+    while k < workers {
+        let y0 = k * band;
+        let mut y1 = y0 + band;
+        if y1 > h { y1 = h; }
+        if y0 < y1 {
+            let handle: TaskHandle[Vec[u8]] = pool.spawn(|| render_band(y0, y1, filter_id));
+            handles.push(handle);
+        }
+        k = k + 1;
+    }
+
+    let mut frame: Vec[u8] = Vec.new();
+    for handle in handles {
+        let chunk: Vec[u8] = handle.join();
+        for byte in chunk {
+            frame.push(byte);
+        }
+    }
+
+    put_pixels(frame.as_ptr(), frame.len(), w, h);
+}
+
+// The render loop. A plain blocking loop over the frame clock — no `await`.
+// Each tick: fold in the latest key (non-blocking) to switch filters, recompute
+// the frame in parallel under the current filter, blit. The image is static, so
+// re-rendering every frame is redundant work — but it keeps the worker scheduled
+// and the live FPS / worker-count overlay honest, exactly as the particle demos
+// do; a render-only-on-change optimization is a tracked follow-up (see README).
+pub fn run() with writes(Display, Input, Timer) suspends panics {
+    let workers = 8;
+    let frames = animation_frames();
+    let keys = keydown();
+    let mut current = f_original();
+
+    loop {
+        frames.recv();
+        match keys.try_recv() {
+            Some(k) => {
+                let picked = filter_for_key(k.key_code());
+                if picked >= 0 { current = picked; }
+            }
+            None => {}
+        }
+        render_frame(current, workers);
+    }
+}

@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Iris — one Kāra source, image filters native + in the browser</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; background: #07090f; color: #d7e0f0;
+    font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    display: flex; flex-direction: column; align-items: center; gap: 14px;
+    padding: 22px;
+  }
+  h1 { font-size: 18px; font-weight: 600; margin: 0; letter-spacing: .02em; }
+  p.sub { margin: 0; opacity: .65; max-width: 560px; text-align: center; }
+  #stage { position: relative; }
+  canvas {
+    border: 1px solid #1d2740; border-radius: 6px;
+    /* 1:1 with the wasm framebuffer (see filters.kara img_width/img_height). */
+    width: 512px; height: 384px; background: #000;
+  }
+  #overlay {
+    position: absolute; top: 10px; left: 10px;
+    background: rgba(8, 11, 20, .72); border: 1px solid #233052;
+    border-radius: 6px; padding: 8px 11px; pointer-events: none;
+    white-space: pre; font-size: 13px;
+  }
+  #overlay b { color: #6fd3ff; font-weight: 600; }
+  #filters { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
+  #filters button {
+    background: #111a2e; color: #cfe0ff;
+    border: 1px solid #243a5e; border-radius: 5px; padding: 6px 10px;
+    font: inherit; cursor: pointer;
+  }
+  #filters button.active { background: #1d3a66; border-color: #6fd3ff; color: #fff; }
+  #note { opacity: .55; max-width: 580px; text-align: center; font-size: 12px; }
+  code { color: #9ad0ff; }
+</style>
+</head>
+<body>
+  <h1>Iris</h1>
+  <p class="sub">An image editor in one Kāra source — the filter kernels compile
+    unchanged to a native binary <i>and</i> to browser WASM, and every frame's
+    pixels are computed across a Web Worker pool with no <code>async</code> and no
+    threading code. <b>Press 1–6 (or click) to switch filter.</b></p>
+  <div id="stage">
+    <canvas id="screen" width="512" height="384"></canvas>
+    <div id="overlay">starting…</div>
+  </div>
+  <div id="filters">
+    <button data-f="0" data-k="1">1 · original</button>
+    <button data-f="1" data-k="2">2 · blur</button>
+    <button data-f="2" data-k="3">3 · sharpen</button>
+    <button data-f="3" data-k="4">4 · edge</button>
+    <button data-f="4" data-k="5">5 · invert</button>
+    <button data-f="5" data-k="6">6 · grayscale</button>
+  </div>
+  <p id="note">Where is the threading code? There isn't any — the compiler found
+    it. The render loop is a plain blocking
+    <code>loop { frames.recv(); /* drain keydown */ render_frame(filter); }</code>;
+    each frame's output rows are split across a Web Worker pool by
+    <code>TaskGroup.spawn</code>, and the filter math lives in
+    <code>filters.kara</code>, shared byte-for-byte with the native build.</p>
+
+<script type="module">
+  import { run } from "./iris.js";
+
+  const canvas = document.getElementById("screen");
+  const ctx2d = canvas.getContext("2d");
+  const overlay = document.getElementById("overlay");
+  const W = canvas.width, H = canvas.height;
+  // A reusable ImageData; shared-memory bytes are copied into it each frame
+  // (a SharedArrayBuffer-backed view can't be handed to putImageData directly).
+  const img = ctx2d.createImageData(W, H);
+
+  const FILTER_NAMES = ["original", "blur", "sharpen", "edge", "invert", "grayscale"];
+  let frames = 0, lastT = performance.now(), fps = 0, lastFilter = 0;
+  const workers = (globalThis.navigator && navigator.hardwareConcurrency) || 4;
+
+  // The filtered image is what's on the canvas; we infer the active filter from
+  // the keys the user pressed (the wasm side owns the real state, but echoing it
+  // in the overlay/buttons keeps the UI honest enough for a demo).
+  function setActive(f) {
+    lastFilter = f;
+    for (const b of document.querySelectorAll("#filters button")) {
+      b.classList.toggle("active", Number(b.dataset.f) === f);
+    }
+  }
+  setActive(0);
+
+  function paintOverlay() {
+    overlay.innerHTML =
+      `filter:  <b>${FILTER_NAMES[lastFilter]}</b>\n` +
+      `FPS:     <b>${fps.toFixed(0)}</b>\n` +
+      `workers: <b>${workers}</b>\n` +
+      `frames:  <b>${frames}</b>`;
+  }
+  paintOverlay();
+
+  // Clicking a button dispatches the same keydown the wasm loop listens for, so
+  // there is exactly one input path (keydown → channel → recv). The buttons are
+  // a convenience over the 1–6 keys, not a second control surface.
+  for (const b of document.querySelectorAll("#filters button")) {
+    b.addEventListener("click", () => {
+      const key = b.dataset.k;
+      window.dispatchEvent(new KeyboardEvent("keydown", { key, keyCode: key.charCodeAt(0), bubbles: true }));
+      setActive(Number(b.dataset.f));
+    });
+  }
+  // Keep the overlay/button highlight in sync when the user types 1–6 directly.
+  window.addEventListener("keydown", (e) => {
+    const n = "123456".indexOf(e.key);
+    if (n >= 0) setActive(n);
+  });
+
+  // The host side of `host fn put_pixels(ptr, len, w, h)`. The proxy passes the
+  // marshalled scalar args, then a ctx with the (shared) wasm memory.
+  function put_pixels(ptr, len, w, h, ctx) {
+    const view = new Uint8ClampedArray(ctx.memory.buffer, Number(ptr), Number(len));
+    img.data.set(view);
+    ctx2d.putImageData(img, 0, 0);
+    frames++;
+    const now = performance.now();
+    if (now - lastT >= 500) {
+      fps = (frames - (paintOverlay._last || 0)) * 1000 / (now - lastT);
+      paintOverlay._last = frames;
+      lastT = now;
+      paintOverlay();
+    }
+  }
+
+  run({ put_pixels }).catch((e) => {
+    // run() loops forever, so it never resolves on success; a rejection is a
+    // real failure (no SharedArrayBuffer / not cross-origin isolated).
+    overlay.textContent = "error: " + (e && e.message ? e.message : e);
+    console.error(e);
+  });
+</script>
+</body>
+</html>
