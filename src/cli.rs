@@ -6379,7 +6379,22 @@ fn cmd_build_project(
         process::exit(1);
     }
 
-    let walk_opts = WalkerOpts::default();
+    // Project-mode platform-suffix selection must follow the *build* target,
+    // not the host. A `--target=wasm_*` build has to select `_wasm` platform
+    // modules (and drop `_macos`/`_linux`/`_windows`), exactly as a single-file
+    // cross-target build does — otherwise a wasm build wrongly compiles the
+    // host's native platform modules (and omits the wasm ones), so an example
+    // that swaps its host/IO layer per target via platform suffixes builds the
+    // wrong half. Native builds keep the host platform; cross-triple native
+    // selection is a separate concern that `host()` preserves unchanged.
+    let walk_opts = WalkerOpts {
+        target: if is_wasm {
+            walker::Platform::Wasm
+        } else {
+            walker::Platform::host()
+        },
+        ..WalkerOpts::default()
+    };
     let walked = match walker::walk_project(&root, walk_opts) {
         Ok(w) => w,
         Err(e) => {

@@ -1474,6 +1474,44 @@ fn test_build_project_lists_discovered_modules() {
     assert!(stdout.contains("<crate root>"));
 }
 
+/// Project-mode platform-suffix selection must follow the `--target`, not the
+/// host. A `--target=wasm_*` build selects `_wasm` modules and drops the
+/// `_macos`/`_linux` siblings — so an example that swaps its host/IO layer per
+/// target (e.g. `examples/iris`) builds the browser half, not the native half.
+/// Regression for the `cmd_build_project` walker target (was always
+/// `Platform::host()`). The "modules:" header is emitted right after the walk
+/// and before codegen, so this asserts the *selection* without depending on a
+/// wasm toolchain — the build itself may not complete in a minimal environment.
+#[test]
+fn project_build_wasm_target_selects_wasm_platform_module() {
+    let tmp = scratch_project("wasm-platform-select");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(
+        &tmp.join("src/main.kara"),
+        "import host.{run};\nfn main() { run(); }\n",
+    );
+    write(&tmp.join("src/host_wasm.kara"), "pub fn run() {}\n");
+    write(&tmp.join("src/host_macos.kara"), "pub fn run() {}\n");
+    write(&tmp.join("src/host_linux.kara"), "pub fn run() {}\n");
+
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "--target=wasm_browser"])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // The wasm host is selected; the native siblings are filtered out.
+    assert!(
+        stdout.contains("host [wasm]"),
+        "wasm build should select host_wasm; stdout=\n{stdout}",
+    );
+    assert!(
+        !stdout.contains("host [macos]") && !stdout.contains("host [linux]"),
+        "wasm build must not select native host modules; stdout=\n{stdout}",
+    );
+}
+
 #[test]
 fn test_build_project_mixed_entry_files_fails() {
     let tmp = scratch_project("mixed-entry");
