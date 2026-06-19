@@ -1125,7 +1125,59 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), byte_offset, "for.s.off")
             .unwrap()
             .into_int_value();
-        let new_off = self
+        // ASCII fast-path: peek the byte at `cur_off`; a byte < 0x80 is a
+        // complete 1-byte UTF-8 scalar, so set the codepoint to the byte and
+        // advance the offset by 1 INLINE — skipping the per-char
+        // `karac_string_decode_char` CALL. This is the symmetric read-side
+        // counterpart of the `push(char)` ASCII fast-path (B-2026-06-18-6): on a
+        // pure-ASCII workload the decode was the top non-allocation cost in the
+        // `for c in s.chars()` loop (kata:38 profile). Multibyte (>= 0x80) takes
+        // the slow runtime call, which decodes the scalar and returns the new
+        // offset exactly as before. `cur_off < len` is guaranteed by the loop
+        // condition, so the byte peek is in bounds.
+        let byte_ptr = unsafe {
+            self.builder
+                .build_gep(self.context.i8_type(), data, &[cur_off], "for.s.byte.ptr")
+                .unwrap()
+        };
+        let byte = self
+            .builder
+            .build_load(self.context.i8_type(), byte_ptr, "for.s.byte")
+            .unwrap()
+            .into_int_value();
+        let byte_i32 = self
+            .builder
+            .build_int_z_extend(byte, i32_t, "for.s.byte.z")
+            .unwrap();
+        let is_ascii = self
+            .builder
+            .build_int_compare(
+                IntPredicate::ULT,
+                byte_i32,
+                i32_t.const_int(0x80, false),
+                "for.s.ascii",
+            )
+            .unwrap();
+        let ascii_bb = self.context.append_basic_block(fn_val, "for.s.ascii");
+        let slow_bb = self.context.append_basic_block(fn_val, "for.s.slow");
+        let cont_bb = self.context.append_basic_block(fn_val, "for.s.cont");
+        self.builder
+            .build_conditional_branch(is_ascii, ascii_bb, slow_bb)
+            .unwrap();
+
+        // ASCII: codepoint = byte; new offset = cur_off + 1.
+        self.builder.position_at_end(ascii_bb);
+        self.builder.build_store(out_codepoint, byte_i32).unwrap();
+        let ascii_off = self
+            .builder
+            .build_int_add(cur_off, i64_t.const_int(1, false), "for.s.ascii.off")
+            .unwrap();
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        // Multibyte: the runtime decoder writes the scalar to `out_codepoint`
+        // and returns the post-char byte offset.
+        self.builder.position_at_end(slow_bb);
+        let slow_off = self
             .builder
             .build_call(
                 self.karac_string_decode_char_fn,
@@ -1141,6 +1193,14 @@ impl<'ctx> super::Codegen<'ctx> {
             .try_as_basic_value()
             .unwrap_basic()
             .into_int_value();
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        // Merge: `new_off` is the chosen path's offset; the codepoint is in
+        // `out_codepoint` either way.
+        self.builder.position_at_end(cont_bb);
+        let new_off_phi = self.builder.build_phi(i64_t, "for.s.new_off").unwrap();
+        new_off_phi.add_incoming(&[(&ascii_off, ascii_bb), (&slow_off, slow_bb)]);
+        let new_off = new_off_phi.as_basic_value().into_int_value();
         let cp_val = self
             .builder
             .build_load(i32_t, out_codepoint, "for.s.cp.load")

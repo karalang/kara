@@ -2617,6 +2617,29 @@ fn main() {
     }
 
     #[test]
+    fn e2e_for_chars_decode_ascii_fastpath_and_multibyte() {
+        // `for c in s.chars()` ASCII fast-path: a leading byte < 0x80 is its own
+        // scalar, decoded inline (peek byte, offset += 1) without the per-char
+        // `karac_string_decode_char` call — the read-side counterpart of the
+        // push fast-path (B-2026-06-18-6). SOUNDNESS: the multibyte slow path
+        // must still decode the *correct codepoints*, so this sums `c as i64`
+        // over a string interleaving 1/2/3/4-byte scalars with ASCII and checks
+        // both the count and the codepoint sum against the interpreter.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let s: String = \"aé€🦀z\";\n\
+                 let mut n = 0i64;\n\
+                 let mut sum = 0i64;\n\
+                 for c in s.chars() { n = n + 1i64; sum = sum + (c as i64); }\n\
+                 println(f\"{n} {sum}\");\n\
+             }",
+        ) {
+            // 'a'97 + 'é'233 + '€'8364 + '🦀'129408 + 'z'122 = 138224; 5 scalars
+            assert_eq!(out, "5 138224\n");
+        }
+    }
+
+    #[test]
     fn e2e_string_substring_two_arg_codegen() {
         // Two-arg `substring(start, end)` (byte range `[start, end)`): prefix /
         // suffix / empty-when-equal / inverted-bounds (end<start) / end-clamped /
