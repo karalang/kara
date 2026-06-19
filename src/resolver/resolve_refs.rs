@@ -23,6 +23,7 @@
 use std::collections::HashMap;
 
 use crate::ast::*;
+use crate::token::Span;
 
 use super::{ResolveError, ResolveErrorKind, SymbolId, SymbolKind};
 
@@ -369,17 +370,78 @@ impl<'a> super::Resolver<'a> {
     }
 
     /// Define bindings from a let-pattern (used for `let` statements).
+    /// Define the bindings introduced by a non-`let` pattern (function
+    /// params, closure params, `for`-loop variables). No top-level shadowing:
+    /// a name already bound in the current scope is a duplicate-definition
+    /// error (e.g. `fn f(x: i64, x: i64)`).
     pub(crate) fn define_pattern_bindings(&mut self, pattern: &Pattern, is_mut: bool) {
+        let mut bound = std::collections::HashSet::new();
+        self.define_pattern_bindings_inner(pattern, is_mut, false, &mut bound);
+    }
+
+    /// Define the bindings of a `let`/`let mut` pattern. A *top-level*
+    /// re-binding of a name already present in the current scope **shadows**
+    /// it (creates a fresh binding) rather than erroring — design.md
+    /// § Variables > Shadowing. Duplicate binders *within the same pattern*
+    /// (e.g. `let (a, a) = ...`) are still rejected, tracked via `bound`.
+    pub(crate) fn define_let_bindings(&mut self, pattern: &Pattern, is_mut: bool) {
+        let mut bound = std::collections::HashSet::new();
+        self.define_pattern_bindings_inner(pattern, is_mut, true, &mut bound);
+    }
+
+    /// Define a single leaf binder. When `allow_shadow` is set, an existing
+    /// same-scope binding is shadowed; otherwise it is a duplicate error.
+    /// In both modes, a name that already appears *in this pattern* (tracked
+    /// in `bound`) is a duplicate-binder error.
+    fn define_binding_leaf(
+        &mut self,
+        name: &str,
+        is_mut: bool,
+        span: Span,
+        allow_shadow: bool,
+        bound: &mut std::collections::HashSet<String>,
+    ) {
+        if !bound.insert(name.to_string()) {
+            self.errors.push(ResolveError {
+                message: format!("'{}' is bound more than once in the same pattern", name),
+                span,
+                kind: ResolveErrorKind::DuplicateDefinition,
+                suggestion: None,
+                replacement: None,
+                stub_hint: None,
+            });
+            return;
+        }
+        let result = if allow_shadow {
+            self.table.define_shadowable(
+                name.to_string(),
+                SymbolKind::Variable { is_mut },
+                span,
+                false,
+            )
+        } else {
+            self.table.define(
+                name.to_string(),
+                SymbolKind::Variable { is_mut },
+                span,
+                false,
+            )
+        };
+        if let Err(e) = result {
+            self.errors.push(e);
+        }
+    }
+
+    fn define_pattern_bindings_inner(
+        &mut self,
+        pattern: &Pattern,
+        is_mut: bool,
+        allow_shadow: bool,
+        bound: &mut std::collections::HashSet<String>,
+    ) {
         match &pattern.kind {
             PatternKind::Binding(name) => {
-                if let Err(e) = self.table.define(
-                    name.clone(),
-                    SymbolKind::Variable { is_mut },
-                    pattern.span.clone(),
-                    false,
-                ) {
-                    self.errors.push(e);
-                }
+                self.define_binding_leaf(name, is_mut, pattern.span.clone(), allow_shadow, bound);
             }
             PatternKind::Struct {
                 path,
@@ -397,13 +459,19 @@ impl<'a> super::Resolver<'a> {
                 }
                 for field in fields {
                     if let Some(ref sub_pattern) = field.pattern {
-                        self.define_pattern_bindings(sub_pattern, is_mut);
+                        self.define_pattern_bindings_inner(
+                            sub_pattern,
+                            is_mut,
+                            allow_shadow,
+                            bound,
+                        );
                     } else {
-                        let _ = self.table.define(
-                            field.name.clone(),
-                            SymbolKind::Variable { is_mut },
+                        self.define_binding_leaf(
+                            &field.name,
+                            is_mut,
                             field.span.clone(),
-                            false,
+                            allow_shadow,
+                            bound,
                         );
                     }
                 }
@@ -418,31 +486,24 @@ impl<'a> super::Resolver<'a> {
                     }
                 }
                 for p in patterns {
-                    self.define_pattern_bindings(p, is_mut);
+                    self.define_pattern_bindings_inner(p, is_mut, allow_shadow, bound);
                 }
             }
             PatternKind::Tuple(patterns) => {
                 for p in patterns {
-                    self.define_pattern_bindings(p, is_mut);
+                    self.define_pattern_bindings_inner(p, is_mut, allow_shadow, bound);
                 }
             }
             PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::RangePattern { .. } => {}
             PatternKind::Or(alternatives) => {
                 // Bindings from first alternative (all alts should bind same names)
                 if let Some(first) = alternatives.first() {
-                    self.define_pattern_bindings(first, is_mut);
+                    self.define_pattern_bindings_inner(first, is_mut, allow_shadow, bound);
                 }
             }
             PatternKind::AtBinding { name, pattern, .. } => {
-                if let Err(e) = self.table.define(
-                    name.clone(),
-                    SymbolKind::Variable { is_mut },
-                    pattern.span.clone(),
-                    false,
-                ) {
-                    self.errors.push(e);
-                }
-                self.define_pattern_bindings(pattern, is_mut);
+                self.define_binding_leaf(name, is_mut, pattern.span.clone(), allow_shadow, bound);
+                self.define_pattern_bindings_inner(pattern, is_mut, allow_shadow, bound);
             }
             PatternKind::Slice {
                 prefix,
@@ -450,20 +511,19 @@ impl<'a> super::Resolver<'a> {
                 suffix,
             } => {
                 for p in prefix {
-                    self.define_pattern_bindings(p, is_mut);
+                    self.define_pattern_bindings_inner(p, is_mut, allow_shadow, bound);
                 }
                 if let Some(RestPattern::Bound(name)) = rest {
-                    if let Err(e) = self.table.define(
-                        name.clone(),
-                        SymbolKind::Variable { is_mut },
+                    self.define_binding_leaf(
+                        name,
+                        is_mut,
                         pattern.span.clone(),
-                        false,
-                    ) {
-                        self.errors.push(e);
-                    }
+                        allow_shadow,
+                        bound,
+                    );
                 }
                 for p in suffix {
-                    self.define_pattern_bindings(p, is_mut);
+                    self.define_pattern_bindings_inner(p, is_mut, allow_shadow, bound);
                 }
             }
         }

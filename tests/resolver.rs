@@ -249,6 +249,70 @@ fn test_shadowing_in_block() {
 }
 
 #[test]
+fn test_same_scope_let_shadowing_allowed() {
+    // design.md § Variables > Shadowing: a later `let` of an existing name in
+    // the *same* scope creates a fresh binding rather than erroring. The
+    // shadowing initializer may read the previous binding.
+    resolve_ok("fn main() { let x = 5; let x = x + 1; x; }");
+}
+
+#[test]
+fn test_same_scope_let_mut_shadowing_allowed() {
+    // `let mut` shadowing is permitted regardless of the prior binding's
+    // mutability, and shadowing a `let mut` with a plain `let` is fine too.
+    resolve_ok("fn main() { let mut x = 5; let x = x; let mut x = 7; x; }");
+}
+
+#[test]
+fn test_let_shadows_parameter() {
+    // A `let` in the body may shadow a function parameter of the same name.
+    resolve_ok("fn f(x: i64) -> i64 { let x = x + 1; x }");
+}
+
+#[test]
+fn test_let_shadowing_changes_type() {
+    // The canonical shadowing example from design.md: rebind with a new type.
+    resolve_ok(
+        "fn parse_int(s: bool) -> i64 { 0 }\n\
+         fn main() { let x = true; let x = parse_int(x); x; }",
+    );
+}
+
+#[test]
+fn test_duplicate_parameter_still_rejected() {
+    // Shadowing applies to `let`, not to parameter declarations: two params
+    // of the same name remain a duplicate-definition error.
+    let errors = resolve_errors("fn f(x: i64, x: i64) -> i64 { x }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == ResolveErrorKind::DuplicateDefinition),
+        "expected duplicate-parameter diagnostic, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_duplicate_binder_in_same_pattern_rejected() {
+    // Shadowing is a *top-level* re-`let`; binding the same name twice inside
+    // a single destructuring pattern is still an error.
+    let errors = resolve_errors("fn main() { let (a, a) = (1, 2); a; }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == ResolveErrorKind::DuplicateDefinition),
+        "expected duplicate-binder-in-pattern diagnostic, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_let_uninit_shadowing_allowed() {
+    // The `let x: T;` (uninitialized) form participates in shadowing too.
+    resolve_ok("fn main() { let x = 1; let x: i64; x = 2; x; }");
+}
+
+#[test]
 fn test_variable_not_visible_after_block() {
     let errors = resolve_errors(
         "fn main() {\n\

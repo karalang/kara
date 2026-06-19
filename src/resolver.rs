@@ -370,6 +370,50 @@ impl SymbolTable {
         Ok(id)
     }
 
+    /// Like [`define`](Self::define) but permits *shadowing*: a name already
+    /// bound in the current scope is replaced by a fresh symbol (new
+    /// `SymbolId`, the old binding's name→id mapping is overwritten) instead
+    /// of raising a duplicate-definition error. The old symbol stays in
+    /// `symbols` so any use-site already resolved to it keeps pointing there;
+    /// later lookups of the name find the new binding. Used only for
+    /// `let`/`let mut` binding sites, where shadowing is a committed v1
+    /// feature (design.md § Variables > Shadowing). Reserved-identifier
+    /// rejection still applies.
+    pub fn define_shadowable(
+        &mut self,
+        name: String,
+        kind: SymbolKind,
+        span: Span,
+        is_pub: bool,
+    ) -> Result<SymbolId, ResolveError> {
+        for &(reserved, reason) in Self::RESERVED_IDENTIFIERS {
+            if name == reserved {
+                return Err(ResolveError {
+                    message: format!("'{}' is {}", name, reason),
+                    span,
+                    kind: ResolveErrorKind::ReservedIdentifier,
+                    suggestion: None,
+                    replacement: None,
+                    stub_hint: None,
+                });
+            }
+        }
+
+        let scope_id = self.current_scope;
+        let id = SymbolId(self.symbols.len());
+        self.symbols.push(Symbol {
+            id,
+            name: name.clone(),
+            kind,
+            span,
+            is_pub,
+            scope: scope_id,
+        });
+        // Overwrites any existing same-scope binding (shadowing) or inserts.
+        self.scopes[scope_id.0].names.insert(name, id);
+        Ok(id)
+    }
+
     pub fn lookup(&self, name: &str) -> Option<&Symbol> {
         let mut scope_id = self.current_scope;
         loop {

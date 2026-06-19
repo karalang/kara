@@ -61,8 +61,9 @@ impl<'a> super::Resolver<'a> {
                 if let Some(ref ty) = ty {
                     self.resolve_type_expr(ty);
                 }
-                // Now define the pattern bindings
-                self.define_pattern_bindings(pattern, *is_mut);
+                // Now define the pattern bindings (shadowing-permitted: a `let`
+                // may re-bind a name already present in the current scope).
+                self.define_let_bindings(pattern, *is_mut);
             }
             StmtKind::LetUninit {
                 is_mut,
@@ -71,7 +72,7 @@ impl<'a> super::Resolver<'a> {
                 ty,
             } => {
                 self.resolve_type_expr(ty);
-                if let Err(e) = self.table.define(
+                if let Err(e) = self.table.define_shadowable(
                     name.clone(),
                     SymbolKind::Variable { is_mut: *is_mut },
                     name_span.clone(),
@@ -91,7 +92,7 @@ impl<'a> super::Resolver<'a> {
                     self.resolve_type_expr(ty);
                 }
                 self.resolve_block(else_block);
-                self.define_pattern_bindings(pattern, false);
+                self.define_let_bindings(pattern, false);
             }
             StmtKind::Defer { body } => {
                 self.resolve_block(body);

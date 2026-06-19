@@ -3767,6 +3767,55 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<(), String> {
         match &pattern.kind {
             PatternKind::Binding(name) => {
+                // Type-changing-shadow guard. A `let` that re-binds a name
+                // already in scope reuses the old name's sidecar metadata
+                // (`string_vars`, `vec_elem_types`, …, all keyed by variable
+                // name); when the new binding has a different type, a later
+                // use is mis-dispatched against the old type and traps at
+                // runtime. The resolver and interpreter support such shadows
+                // (design.md § Variables > Shadowing); the AOT backend's
+                // metadata-purge is a tracked follow-up (phase-5-diagnostics.md
+                // "codegen type-changing-shadow"). Until it lands, reject with
+                // a clean compile error rather than emitting a trapping binary.
+                //
+                // The trap is narrow: it fires only when the *old* binding
+                // carries heap-collection / string class metadata (keyed by
+                // variable name) that the *new* value can't inhabit. A plain
+                // rebind whose old slot has no such metadata is harmless — the
+                // new binding simply overwrites the slot. In particular,
+                // codegen's `variables` map is function-flat, so an out-of-scope
+                // match-arm payload (`Some(x) => …`, x: i64) lingers under the
+                // same name; a later `let x = <struct>` must still compile.
+                // So we do NOT key off a bare LLVM-type change.
+                //
+                // We fire when the old binding is string/collection-tagged and
+                // the new value is a scalar (int/float/bool) — a scalar can
+                // never be a String/Vec/Map/Set, so the stale tag would
+                // mis-dispatch a later use and trap (e.g. `let s = "x";
+                // let s = s.len();`). Same-class shadows (`let s = "a";
+                // let s = "b";`, `let v = vec1; let v = vec2;`) keep working.
+                // Best-effort: a same-layout cross-class shadow (String↔Vec,
+                // both `{ptr,i64,i64}` and both tagged) is not distinguished
+                // here — that, and the full metadata-purge, are the tracked
+                // follow-up slice.
+                if self.variables.contains_key(name) {
+                    let new_ty = val.get_type();
+                    let old_is_string_like = self.string_vars.contains(name);
+                    let old_is_collection = self.vec_elem_types.contains_key(name)
+                        || self.slice_elem_types.contains_key(name)
+                        || self.map_key_types.contains_key(name)
+                        || self.set_elem_types.contains_key(name);
+                    let new_is_scalar = !new_ty.is_struct_type() && !new_ty.is_pointer_type();
+                    if (old_is_string_like || old_is_collection) && new_is_scalar {
+                        return Err(format!(
+                            "shadowing local `{}` with a value of a different type is not yet \
+                             supported by the AOT backend (the interpreter supports it); rename \
+                             the new binding or keep the same type. Tracked as a \
+                             phase-5-diagnostics follow-up.",
+                            name
+                        ));
+                    }
+                }
                 let fn_val = self.current_fn.unwrap();
                 let alloca = self.create_entry_alloca(fn_val, name, val.get_type());
                 self.builder.build_store(alloca, val).unwrap();

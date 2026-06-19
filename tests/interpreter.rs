@@ -35,6 +35,36 @@ fn test_integer_arithmetic() {
     assert_eq!(run("fn main() { println(1 + 2); }"), "3\n");
 }
 
+// ── Same-scope `let` shadowing (design.md § Variables > Shadowing) ──
+
+#[test]
+fn test_same_scope_let_shadowing_value() {
+    // The shadowing initializer reads the previous binding; the new binding
+    // wins for later uses.
+    assert_eq!(
+        run_no_errors("fn main() { let x = 5; let x = x + 1; println(x); }"),
+        "6\n"
+    );
+}
+
+#[test]
+fn test_same_scope_let_shadowing_changes_type() {
+    // Canonical type-changing shadow: String rebound to its length (i64).
+    assert_eq!(
+        run_no_errors("fn main() { let s = \"hello\"; let s = s.len(); println(s); }"),
+        "5\n"
+    );
+}
+
+#[test]
+fn test_same_scope_let_mut_shadowing_value() {
+    // `let mut` shadowing is permitted regardless of the prior mutability.
+    assert_eq!(
+        run_no_errors("fn main() { let mut y = 10; let y = y * 2; println(y); }"),
+        "20\n"
+    );
+}
+
 #[test]
 fn test_abs_signed_int() {
     assert_eq!(run("fn main() { println((-5i64).abs()); }"), "5\n");
