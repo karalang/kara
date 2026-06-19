@@ -2197,6 +2197,158 @@ pub unsafe extern "C" fn karac_runtime_tcp_connect(addr_ptr: *const u8, addr_len
     }
 }
 
+/// Begin a NON-BLOCKING `connect(2)` and return the in-flight socket fd (or
+/// `-1` on a setup error). Paired with [`karac_runtime_tcp_connect_finish`]:
+/// codegen parks on the fd's WRITE-readiness between the two, so a coroutine
+/// handler's upstream connect SUSPENDS on the reactor instead of blocking the
+/// reactor thread (the previous blocking `karac_runtime_tcp_connect` serialized
+/// every handler's connect — the Relay throughput bottleneck). Backs the
+/// parked lowering of `TcpStream.connect`.
+///
+/// The non-blocking `connect` returns immediately — success, `EINPROGRESS`, or
+/// an immediate failure all leave the socket write-pollable (a failed connect
+/// surfaces as the socket becoming writable with `SO_ERROR` set), so the result
+/// is intentionally ignored here; only addr-parse / socket-creation failure can
+/// prevent a parkable fd. The socket is non-blocking, which is exactly what the
+/// event loop's read/write park path wants.
+///
+/// # Safety
+///
+/// `addr_ptr` must point to `addr_len` readable bytes for the duration of the
+/// call (the kara `String`'s `{ptr, len}`), or be null with `addr_len <= 0`
+/// (rejected via the early return). The bytes are read once and not retained.
+#[cfg(unix)]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_tcp_connect_start(
+    addr_ptr: *const u8,
+    addr_len: i64,
+) -> i64 {
+    use socket2::{Domain, SockAddr, Socket, Type};
+    use std::os::unix::io::IntoRawFd;
+    if addr_ptr.is_null() || addr_len <= 0 {
+        return -1;
+    }
+    let bytes = std::slice::from_raw_parts(addr_ptr, addr_len as usize);
+    let addr_str = match std::str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let socket_addr: std::net::SocketAddr = match addr_str.parse() {
+        Ok(a) => a,
+        Err(_) => return -1,
+    };
+    let sock = match Socket::new(Domain::for_address(socket_addr), Type::STREAM, None) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    if sock.set_nonblocking(true).is_err() {
+        return -1;
+    }
+    let _ = sock.connect(&SockAddr::from(socket_addr));
+    sock.into_raw_fd() as i64
+}
+
+/// Complete a parked non-blocking connect: read `SO_ERROR` on the now
+/// write-ready socket. Returns `fd` (kept open) on success, or `-1` after
+/// closing the socket on failure (a failed connect must not leak the fd).
+/// Paired with [`karac_runtime_tcp_connect_start`].
+///
+/// # Safety
+///
+/// `fd` must be a live in-flight socket fd returned by a prior
+/// `karac_runtime_tcp_connect_start` and not used after this call: ownership is
+/// taken here (`from_raw_fd`) and either re-released on success (`into_raw_fd`,
+/// fd kept open) or closed on failure (`sock` drop).
+#[cfg(unix)]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_tcp_connect_finish(fd: i64) -> i64 {
+    use socket2::Socket;
+    use std::os::unix::io::{FromRawFd, IntoRawFd};
+    let sock = Socket::from_raw_fd(fd as i32);
+    match sock.take_error() {
+        // Connected — keep the fd open (no close).
+        Ok(None) => sock.into_raw_fd() as i64,
+        // Connect failed — classify the SO_ERROR the same way the blocking
+        // `karac_runtime_tcp_connect` did (`-3` ConnectionRefused / `-1` other)
+        // so the `ConnectionRefused` retry signal survives; `sock` drop closes
+        // the fd (no leak).
+        Ok(Some(e)) => {
+            let code = net_construct_error_code(&e) as i64;
+            drop(sock);
+            code
+        }
+        Err(e) => {
+            let code = net_construct_error_code(&e) as i64;
+            drop(sock);
+            code
+        }
+    }
+}
+
+/// Windows mirror of [`karac_runtime_tcp_connect_start`].
+///
+/// # Safety
+///
+/// Same contract as the unix arm: `addr_ptr` must point to `addr_len` readable
+/// bytes for the duration of the call, or be null with `addr_len <= 0`.
+#[cfg(windows)]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_tcp_connect_start(
+    addr_ptr: *const u8,
+    addr_len: i64,
+) -> i64 {
+    use socket2::{Domain, SockAddr, Socket, Type};
+    use std::os::windows::io::IntoRawSocket;
+    if addr_ptr.is_null() || addr_len <= 0 {
+        return -1;
+    }
+    let bytes = std::slice::from_raw_parts(addr_ptr, addr_len as usize);
+    let addr_str = match std::str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let socket_addr: std::net::SocketAddr = match addr_str.parse() {
+        Ok(a) => a,
+        Err(_) => return -1,
+    };
+    let sock = match Socket::new(Domain::for_address(socket_addr), Type::STREAM, None) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    if sock.set_nonblocking(true).is_err() {
+        return -1;
+    }
+    let _ = sock.connect(&SockAddr::from(socket_addr));
+    sock.into_raw_socket() as i64
+}
+
+/// Windows mirror of [`karac_runtime_tcp_connect_finish`].
+///
+/// # Safety
+///
+/// Same contract as the unix arm: `fd` must be a live in-flight socket handle
+/// from a prior `karac_runtime_tcp_connect_start` and not used after this call.
+#[cfg(windows)]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_tcp_connect_finish(fd: i64) -> i64 {
+    use socket2::Socket;
+    use std::os::windows::io::{FromRawSocket, IntoRawSocket, RawSocket};
+    let sock = Socket::from_raw_socket(fd as RawSocket);
+    match sock.take_error() {
+        Ok(None) => sock.into_raw_socket() as i64,
+        Ok(Some(e)) => {
+            let code = net_construct_error_code(&e) as i64;
+            drop(sock);
+            code
+        }
+        Err(e) => {
+            let code = net_construct_error_code(&e) as i64;
+            drop(sock);
+            code
+        }
+    }
+}
+
 /// `dup(2)` a socket fd: a second independent descriptor for the SAME
 /// underlying socket. Backs `TcpStream.try_clone(ref self) ->
 /// Result[TcpStream, TcpError]`. Both descriptors read/write the one

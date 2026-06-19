@@ -3820,6 +3820,24 @@ impl<'ctx> Codegen<'ctx> {
             tcp_connect_ty,
             Some(Linkage::External),
         );
+        // Parked (non-blocking) connect pair — `connect_start(addr_ptr, len) ->
+        // fd` begins a non-blocking connect; codegen parks on the fd's WRITE
+        // readiness; `connect_finish(fd) -> fd` reads SO_ERROR (fd on success,
+        // -1 closing the socket on failure). Backs the parked lowering of
+        // `TcpStream.connect` so a coroutine handler's upstream connect SUSPENDS
+        // instead of blocking the reactor thread.
+        let tcp_connect_start_ty = i64_type.fn_type(&[ptr_type.into(), i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_tcp_connect_start",
+            tcp_connect_start_ty,
+            Some(Linkage::External),
+        );
+        let tcp_connect_finish_ty = i64_type.fn_type(&[i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_tcp_connect_finish",
+            tcp_connect_finish_ty,
+            Some(Linkage::External),
+        );
         // `karac_runtime_tcp_try_clone(fd: i64) -> i64` — backs
         // `TcpStream.try_clone(ref self) -> Result[TcpStream, TcpError]`.
         // `dup(2)`s the socket fd so a connection can be split into two

@@ -413,13 +413,22 @@ impl<'ctx> super::Codegen<'ctx> {
         self.build_fd_construct_result(fd, "TcpError", "Other", "tcp.bind")
     }
 
-    /// Lower `TcpStream.connect(addr: String) -> Result[TcpStream,
-    /// TcpError]` — the plain-TCP client mirror of `bind`. Extract the
-    /// addr `String`'s `{ptr, len}`, call `karac_runtime_tcp_connect`
-    /// (a blocking `connect(2)`, no parking), then wrap the returned fd
-    /// in `Result[TcpStream, TcpError]` via the shared
-    /// `build_fd_construct_result` (`Ok(TcpStream { fd })` on `fd >= 0`,
-    /// else `Err(TcpError.Other(-1))`).
+    /// Lower `TcpStream.connect(addr: String) -> Result[TcpStream, TcpError]`
+    /// — the plain-TCP client mirror of `bind`, now PARKED so a coroutine
+    /// handler's upstream connect SUSPENDS on the reactor instead of blocking
+    /// the reactor thread (the previous blocking `karac_runtime_tcp_connect`
+    /// serialized every handler's connect — the Relay throughput bottleneck).
+    ///
+    /// Shape (mirrors `accept`/`read`/`write`'s park, but on WRITE readiness):
+    /// `connect_start(addr)` begins a non-blocking connect and returns the
+    /// in-flight fd (or `-1` on addr-parse / socket-creation error). On a valid
+    /// fd we `karac_park_on_fd(fd, 1u8=Write)` — a connecting socket becomes
+    /// WRITABLE when the connect resolves (success or failure) — then
+    /// `connect_finish(fd)` reads `SO_ERROR` (returns the fd on success, `-1`
+    /// closing the socket on failure). The `-1` (no-fd) path skips the park.
+    /// Both arms merge to a single fd, wrapped once via `build_fd_construct_
+    /// result` (`Ok(TcpStream { fd })` on `fd >= 0`, else `Err(TcpError.
+    /// Other(-1))`).
     pub(super) fn lower_tcp_stream_connect(
         &mut self,
         addr_val: BasicValueEnum<'ctx>,
@@ -436,21 +445,75 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_int_value();
 
-        let connect_fn = self
+        let i64_ty = self.context.i64_type();
+        let zero = i64_ty.const_zero();
+
+        // Begin the non-blocking connect.
+        let start_fn = self
             .module
-            .get_function("karac_runtime_tcp_connect")
-            .expect("karac_runtime_tcp_connect declared in Codegen::new");
-        let fd_call = self
+            .get_function("karac_runtime_tcp_connect_start")
+            .expect("karac_runtime_tcp_connect_start declared in Codegen::new");
+        let start_call = self
             .builder
             .build_call(
-                connect_fn,
+                start_fn,
                 &[addr_ptr.into(), addr_len.into()],
-                "tcp.connect.fd",
+                "tcp.connect.start",
             )
-            .expect("call karac_runtime_tcp_connect");
-        let fd = fd_call.try_as_basic_value().unwrap_basic().into_int_value();
+            .expect("call karac_runtime_tcp_connect_start");
+        let fd = start_call
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
 
-        self.build_fd_construct_result(fd, "TcpError", "Other", "tcp.connect")
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "TcpStream.connect lowered outside fn".to_string())?;
+        let park_bb = self.context.append_basic_block(fn_val, "tcp.connect.park");
+        let skip_bb = self.context.append_basic_block(fn_val, "tcp.connect.skip");
+        let join_bb = self.context.append_basic_block(fn_val, "tcp.connect.join");
+
+        // fd >= 0 → park + finish; fd < 0 (start error) → pass the error through.
+        let is_started = self
+            .builder
+            .build_int_compare(IntPredicate::SGE, fd, zero, "tcp.connect.started")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_started, park_bb, skip_bb)
+            .unwrap();
+
+        // ── park_bb: park on WRITE readiness, then finish (read SO_ERROR).
+        self.builder.position_at_end(park_bb);
+        let dir_write = self.context.i8_type().const_int(1, false); // 1 = Write
+        self.emit_state_machine_invocation_for_park_on_fd(fd, dir_write);
+        // The park leaves the builder at its resume edge; finish runs there.
+        let finish_fn = self
+            .module
+            .get_function("karac_runtime_tcp_connect_finish")
+            .expect("karac_runtime_tcp_connect_finish declared in Codegen::new");
+        let finish_call = self
+            .builder
+            .build_call(finish_fn, &[fd.into()], "tcp.connect.finish")
+            .expect("call karac_runtime_tcp_connect_finish");
+        let finished_fd = finish_call
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let park_end = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(join_bb).unwrap();
+
+        // ── skip_bb: connect_start failed; forward the negative fd.
+        self.builder.position_at_end(skip_bb);
+        let skip_end = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(join_bb).unwrap();
+
+        // ── join: merge the final fd, then wrap once.
+        self.builder.position_at_end(join_bb);
+        let phi = self.builder.build_phi(i64_ty, "tcp.connect.final").unwrap();
+        phi.add_incoming(&[(&finished_fd, park_end), (&fd, skip_end)]);
+        let final_fd = phi.as_basic_value().into_int_value();
+
+        self.build_fd_construct_result(final_fd, "TcpError", "Other", "tcp.connect")
     }
 
     /// Lower `TcpStream.try_clone(ref self) -> Result[TcpStream, TcpError]`

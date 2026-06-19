@@ -10439,10 +10439,12 @@ fn main() {
     // when a kara binding goes out of scope, replacing the previous
     // "kernel reaps fds on process exit" leak.
 
-    /// Phase-8 line 74 prereq — `TcpStream.connect(addr)` dispatches to
-    /// the `karac_runtime_tcp_connect` FFI and wraps the fd via the
-    /// shared `build_fd_construct_result` (the `tcp.connect.*` labels).
-    /// Pins the assoc-dispatch arm + extern wiring.
+    /// `TcpStream.connect(addr)` lowers to the PARKED connect pair —
+    /// `connect_start` (non-blocking initiate) + a write-readiness park +
+    /// `connect_finish` (SO_ERROR) — and wraps the fd via the shared
+    /// `build_fd_construct_result` (the `tcp.connect.*` labels). Pins the
+    /// assoc-dispatch arm + the parked-connect extern wiring (so the upstream
+    /// connect suspends on the reactor instead of blocking it).
     #[test]
     fn test_ir_tcp_stream_connect_dispatches_to_runtime_ffi() {
         let ir = ir_for(
@@ -10455,8 +10457,16 @@ fn main() {
         );
         let body = function_body(&ir, "main").expect("main body");
         assert!(
-            body.contains("call i64 @karac_runtime_tcp_connect("),
-            "main should call @karac_runtime_tcp_connect; body was:\n{}",
+            body.contains("call i64 @karac_runtime_tcp_connect_start(")
+                && body.contains("call i64 @karac_runtime_tcp_connect_finish("),
+            "connect should call the parked pair @karac_runtime_tcp_connect_start \
+             + @karac_runtime_tcp_connect_finish; body was:\n{}",
+            body
+        );
+        assert!(
+            body.contains("tcp.connect.park") && body.contains("tcp.connect.final"),
+            "connect should park on write-readiness then phi the final fd \
+             (tcp.connect.park / tcp.connect.final); body was:\n{}",
             body
         );
         assert!(
