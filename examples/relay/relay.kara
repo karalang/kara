@@ -1,4 +1,4 @@
-// Relay — a Layer-7 HTTP reverse proxy written in plain sequential Kāra.
+// Relay — a Layer-7 HTTP reverse proxy / load balancer in plain sequential Kāra.
 //
 // The thesis: effect-driven event-loop networking with no `async fn` and no
 // function coloring. Every `TcpStream.read`/`.write` call carries
@@ -7,35 +7,30 @@
 // thousands of in-flight proxied connections ride a handful of reactor
 // threads, and the handler body reads like a straight-line blocking program.
 //
-// Slice 1 — single-upstream half-duplex passthrough. Accept an inbound
-// connection, connect to a fixed upstream, forward the client's request
-// bytes once, then stream the upstream's response back until the upstream
-// closes the connection. This is the smallest shape that exercises the full
-// proxy spine (accept -> connect -> read -> write -> read-loop -> write) end
-// to end on the parking event loop. Concurrent bidirectional splicing,
-// path-based routing, and round-robin load balancing across N upstreams are
-// later slices.
+// Slice 2 — round-robin load balancing across N upstreams. The accept loop
+// rotates through a `Vec[String]` of backend addresses, handing each new
+// connection the next one. Still half-duplex passthrough per connection
+// (forward the request once, stream the response back until EOF); concurrent
+// bidirectional splicing, path-based routing, and metrics are later slices.
 //
 // Build & run:
 //   karac build examples/relay/relay.kara
 //   ./relay                         # listens on 127.0.0.1:8080
-// In another shell, run any HTTP backend on 127.0.0.1:9000 that answers with
-// `Connection: close` (so it EOFs after the response), then:
-//   curl -s localhost:8080/         # proxied through Relay
+// In other shells, run HTTP backends on :9000/:9001/:9002 that answer with
+// `Connection: close`, then repeated `curl localhost:8080/` rotate across them.
 
-// Service one proxied connection: connect to the upstream, forward the
-// client's request, and stream the response back. Private fn — effects are
-// inferred (it transitively `sends(Network) receives(Network)` through the
-// TcpStream calls), so the whole handler is a parkable coroutine. `client`
-// is moved in and dropped (closed) at scope exit; `upstream` likewise.
-fn handle(client: TcpStream) {
-    match TcpStream.connect("127.0.0.1:9000") {
+// Service one proxied connection against a chosen upstream. Private fn —
+// effects inferred (transitively `sends(Network) receives(Network)`), so the
+// whole handler is a parkable coroutine. Both `client` and `upstream_addr`
+// are moved in: `client` is dropped (closed) at scope exit, `upstream_addr`
+// is consumed by `connect`.
+fn handle(client: TcpStream, upstream_addr: String) {
+    match TcpStream.connect(upstream_addr) {
         Result.Ok(upstream) => {
             let mut buf: Array[u8, 4096] = [0u8; 4096];
 
-            // Forward the request. Slice 1 reads a single buffer's worth —
-            // a small GET arrives as one read; request streaming is a later
-            // slice once we parse Content-Length / chunked framing.
+            // Forward the request (single buffer — small GET fits one read;
+            // request streaming with Content-Length/chunked framing is later).
             match client.read(mut buf) {
                 Result.Ok(n) => {
                     if n > 0 {
@@ -64,11 +59,28 @@ fn handle(client: TcpStream) {
 }
 
 fn main() {
+    // Backend pool. A real deployment would read these from config; the
+    // round-robin policy is the load-balancing story.
+    let mut upstreams: Vec[String] = Vec.new();
+    upstreams.push("127.0.0.1:9000");
+    upstreams.push("127.0.0.1:9001");
+    upstreams.push("127.0.0.1:9002");
+    let n = upstreams.len();
+
     let listener = TcpListener.bind("127.0.0.1:8080").unwrap();
     let mut tg: TaskGroup = TaskGroup.new();
+    let mut next: i64 = 0;
     loop {
         match listener.accept() {
-            Result.Ok(client) => { tg.spawn(|| handle(client)); }
+            Result.Ok(client) => {
+                // Pick the next backend, round-robin. Clone the address out
+                // of the pool so the pool itself stays put for later picks;
+                // the clone moves into the per-connection handler.
+                let idx = next % n;
+                let addr = upstreams[idx].clone();
+                next = next + 1;
+                tg.spawn(|| handle(client, addr));
+            }
             Result.Err(_) => {}
         }
     }
