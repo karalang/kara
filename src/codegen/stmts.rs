@@ -1776,7 +1776,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 // element so the binding owns a distinct buffer; without it both
                 // the binding's drop and `v`'s element-drop free the same buffer
                 // (double-free, B-2026-06-14-11). No-op for every other RHS shape.
-                let val = self.clone_owned_vec_index_element(value, val)?;
+                //
+                // Borrow-elision (B-2026-06-19-6): when the conservative
+                // `compute_vec_index_borrow_spans` pre-pass proved this exact
+                // `v[i]` binding is read-only, non-escaping, and `v` is not
+                // mutated in the binding's scope, SKIP the clone — the binding
+                // aliases the container element — and remember to also skip the
+                // scope-exit `track_vec_*` below so the container stays the
+                // unique owner (no double-free, no leak).
+                let borrow_elided = matches!(&value.kind, ExprKind::Index { .. })
+                    && self
+                        .vec_index_borrow_spans
+                        .contains(&crate::resolver::SpanKey::from_span(&value.span));
+                let val = if borrow_elided {
+                    val
+                } else {
+                    self.clone_owned_vec_index_element(value, val)?
+                };
                 // Owned String/Vec PARAM moved into a local binding
                 // (`let mut work = lists;` where `lists` is a bare
                 // by-value param): under the owned-param ABI the CALLER
@@ -2578,7 +2594,13 @@ impl<'ctx> super::Codegen<'ctx> {
                             // W3.3 routing of `test_e2e_array_for_loop`. Skip
                             // the registration when the slot's LLVM type is
                             // anything but the Vec / String aggregate.
-                            if !matches!(slot_ty, BasicTypeEnum::ArrayType(_)) {
+                            //
+                            // Borrow-elision (B-2026-06-19-6): when the clone was
+                            // skipped above, this binding aliases the container
+                            // element and does NOT own a buffer — registering a
+                            // `track_vec_*` cleanup would double-free (the
+                            // container's drop frees the same buffer). Skip it.
+                            if !borrow_elided && !matches!(slot_ty, BasicTypeEnum::ArrayType(_)) {
                                 // `Vec[Tensor]` (the `iter_axis` result):
                                 // elements are `ptr`s to tensor blocks that
                                 // each need a `free`. The generic

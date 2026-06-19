@@ -1061,6 +1061,14 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // Borrow-elision (B-2026-06-19-6): per-function set of `let r = v[i]`
+        // RHS spans whose binding is a provably read-only, non-escaping borrow
+        // of a container that is not mutated in scope. Consulted by the Let arm
+        // to skip the heap-element deep-clone and the binding's scope-exit free.
+        // Recomputed (overwritten) per function so it never leaks across fns.
+        self.vec_index_borrow_spans =
+            crate::codegen::borrow_elision::compute_vec_index_borrow_spans(&func.body);
+
         // Slice 2 (auto-par codegen MVP): route the function body through
         // `compile_function_body`, which dispatches inferred parallel
         // groups to `karac_par_run` when a `ConcurrencyAnalysis` was

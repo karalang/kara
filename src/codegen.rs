@@ -23,6 +23,7 @@ use crate::resolver::SpanKey;
 use crate::token::Span;
 
 mod assoc_call;
+mod borrow_elision;
 mod bounded_channel;
 mod cabi;
 mod call_dispatch;
@@ -2037,6 +2038,18 @@ pub(super) struct Codegen<'ctx> {
     /// Per-function RC-fallback binding names populated from `OwnershipCheckResult`.
     /// Function name → set of binding names that need heap-boxing + refcount.
     pub(crate) rc_fallback_fns: HashMap<String, HashSet<String>>,
+    /// Borrow-elision for read-only `let r = v[i]` indexed-element bindings
+    /// (B-2026-06-19-6, clone-elision). Per-function set of the RHS index
+    /// expression's `SpanKey` for each `let r = v[i]` whose binding `r` is
+    /// provably read-only and non-escaping AND whose container `v` is not
+    /// mutated within `r`'s lexical scope — computed by the conservative
+    /// whitelist scan `compute_vec_index_borrow_spans` at `compile_function`
+    /// entry. At such a let site the heap-element deep-clone
+    /// (`clone_owned_vec_index_element`) is skipped — `r` aliases the
+    /// container element — and the binding's scope-exit `track_vec_*`
+    /// (FreeVecBuffer + recursive element drop) is suppressed, since the
+    /// container stays the unique owner. Recomputed (overwritten) per fn.
+    pub(crate) vec_index_borrow_spans: HashSet<SpanKey>,
     /// RC elision phase A (`src/ownership/elision.rs`; design record in
     /// phase-7-codegen.md): per-function sets of shared bindings whose
     /// refcount provably never exceeds 1. The let-site queues a
@@ -4928,6 +4941,7 @@ impl<'ctx> Codegen<'ctx> {
             used_data_globals: Vec::new(),
             branch_cancel_ptr: None,
             rc_fallback_fns: HashMap::new(),
+            vec_index_borrow_spans: HashSet::new(),
             elided_bindings: HashMap::new(),
             elided_cluster_roots: HashMap::new(),
             elided_b2_bindings: HashMap::new(),

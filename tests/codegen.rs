@@ -930,6 +930,160 @@ fn main() {
         run_program_capturing(src).map(|c| c.stdout)
     }
 
+    // ── Borrow-elision for read-only `let r = v[i]` (B-2026-06-19-6) ──
+
+    /// Count `karac_clone_Vec*` call sites inside the `@main` function body.
+    fn main_vec_clone_calls(ir: &str) -> usize {
+        let mut in_main = false;
+        let mut n = 0;
+        for line in ir.lines() {
+            if line.starts_with("define ") && line.contains("@main") {
+                in_main = true;
+            }
+            if in_main {
+                if line.contains("call void @karac_clone_Vec") {
+                    n += 1;
+                }
+                if line == "}" {
+                    break;
+                }
+            }
+        }
+        n
+    }
+
+    /// A read-only, non-escaping `let r = out[j]` over a `Vec[Vec[i64]]` whose
+    /// container is not mutated in scope binds `r` as a BORROW of the element
+    /// (no deep clone) — the read loop's index clone is elided. Only the
+    /// build-loop `out.push(b.clone())` clone remains in `@main` (without the
+    /// elision there would be two). B-2026-06-19-6.
+    #[test]
+    fn borrow_elision_elides_read_only_vecvec_index_binding() {
+        let ir = ir_for(
+            "fn main() {\n\
+             let mut out: Vec[Vec[i64]] = Vec.new();\n\
+             let mut b: Vec[i64] = Vec.new(); b.push(1i64);\n\
+             let mut k = 0i64; while k < 4i64 { out.push(b.clone()); k = k + 1i64; }\n\
+             let mut acc = 0i64; let m = out.len(); let mut j = 0i64;\n\
+             while j < m { let r = out[j]; let mut i = 0i64; let rl = r.len();\n\
+                 while i < rl { acc = acc + r[i]; i = i + 1i64; } j = j + 1i64; }\n\
+             println(f\"{acc}\");\n\
+             }",
+        );
+        assert_eq!(
+            main_vec_clone_calls(&ir),
+            1,
+            "read-only let r = out[j] should be borrow-elided; only build-loop clone remains"
+        );
+    }
+
+    /// Adversarial NEGATIVES: each pattern would be a use-after-free if `r`
+    /// borrowed the element, so each MUST retain the deep clone (≥ the build-loop
+    /// clone PLUS the index clone). B-2026-06-19-6 — the gate is whitelist-only,
+    /// so anything it doesn't prove read-only/non-escaping/container-stable falls
+    /// back to cloning.
+    #[test]
+    fn borrow_elision_keeps_clone_for_unsafe_index_bindings() {
+        // (a) element overwritten while `r` live (frees the old buffer).
+        let overwrite = ir_for(
+            "fn main() {\n\
+             let mut out: Vec[Vec[i64]] = Vec.new();\n\
+             let mut b: Vec[i64] = Vec.new(); b.push(1i64);\n\
+             let mut k = 0i64; while k < 4i64 { out.push(b.clone()); k = k + 1i64; }\n\
+             let mut acc = 0i64; let m = out.len(); let mut j = 0i64;\n\
+             while j < m { let r = out[j];\n\
+                 let mut nb: Vec[i64] = Vec.new(); nb.push(9i64); out[j] = nb;\n\
+                 acc = acc + r[0i64]; j = j + 1i64; }\n\
+             println(f\"{acc}\");\n\
+             }",
+        );
+        // (b) `r` moved into another container (escapes).
+        let escape = ir_for(
+            "fn main() {\n\
+             let mut out: Vec[Vec[i64]] = Vec.new();\n\
+             let mut b: Vec[i64] = Vec.new(); b.push(1i64);\n\
+             let mut k = 0i64; while k < 4i64 { out.push(b.clone()); k = k + 1i64; }\n\
+             let mut keep: Vec[Vec[i64]] = Vec.new();\n\
+             let mut j = 0i64; while j < out.len() { let r = out[j]; keep.push(r); j = j + 1i64; }\n\
+             println(f\"{keep.len()}\");\n\
+             }",
+        );
+        // (c) container grown (realloc) while `r` live.
+        let grow = ir_for(
+            "fn main() {\n\
+             let mut out: Vec[Vec[i64]] = Vec.new();\n\
+             let mut b: Vec[i64] = Vec.new(); b.push(1i64);\n\
+             let mut k = 0i64; while k < 4i64 { out.push(b.clone()); k = k + 1i64; }\n\
+             let mut acc = 0i64; let mut j = 0i64;\n\
+             while j < 4i64 { let r = out[j]; out.push(b.clone()); acc = acc + r[0i64]; j = j + 1i64; }\n\
+             println(f\"{acc}\");\n\
+             }",
+        );
+        // (d) `r` passed to a function (own-mode arg → escapes).
+        let callarg = ir_for(
+            "fn sink(v: Vec[i64]) -> i64 { v.len() }\n\
+             fn main() {\n\
+             let mut out: Vec[Vec[i64]] = Vec.new();\n\
+             let mut b: Vec[i64] = Vec.new(); b.push(1i64);\n\
+             let mut k = 0i64; while k < 4i64 { out.push(b.clone()); k = k + 1i64; }\n\
+             let mut acc = 0i64; let mut j = 0i64;\n\
+             while j < out.len() { let r = out[j]; acc = acc + sink(r); j = j + 1i64; }\n\
+             println(f\"{acc}\");\n\
+             }",
+        );
+        for (label, ir) in [
+            ("overwrite", &overwrite),
+            ("escape", &escape),
+            ("grow", &grow),
+            ("callarg", &callarg),
+        ] {
+            assert!(
+                main_vec_clone_calls(ir) >= 2,
+                "negative '{label}' MUST keep the index clone (borrowing would UAF); got {} clone calls",
+                main_vec_clone_calls(ir)
+            );
+        }
+    }
+
+    /// End-to-end: the elided read-only binding produces the correct result, and
+    /// — critically — the UAF-shaped negatives (overwrite / grow) still compute
+    /// the right answer at runtime (a wrongly-borrowed binding would read freed
+    /// memory). B-2026-06-19-6.
+    #[test]
+    fn e2e_borrow_elision_correctness_positive_and_negatives() {
+        // Positive: sum of 4 single-element [1] vectors = 4.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+             let mut out: Vec[Vec[i64]] = Vec.new();\n\
+             let mut b: Vec[i64] = Vec.new(); b.push(1i64);\n\
+             let mut k = 0i64; while k < 4i64 { out.push(b.clone()); k = k + 1i64; }\n\
+             let mut acc = 0i64; let m = out.len(); let mut j = 0i64;\n\
+             while j < m { let r = out[j]; let mut i = 0i64; let rl = r.len();\n\
+                 while i < rl { acc = acc + r[i]; i = i + 1i64; } j = j + 1i64; }\n\
+             println(f\"{acc}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "4\n");
+        }
+        // Negative (escape): each `r` is moved into `keep`, so the binding must
+        // be a clone (an aliasing borrow would dangle once `out` drops). Sum over
+        // 4 single-element [7] vectors = 28; a mis-borrowed `r` would dangle.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+             let mut out: Vec[Vec[i64]] = Vec.new();\n\
+             let mut b: Vec[i64] = Vec.new(); b.push(7i64);\n\
+             let mut k = 0i64; while k < 4i64 { out.push(b.clone()); k = k + 1i64; }\n\
+             let mut keep: Vec[Vec[i64]] = Vec.new();\n\
+             let mut j = 0i64; while j < out.len() { let r = out[j]; keep.push(r); j = j + 1i64; }\n\
+             let mut acc = 0i64; let mut i = 0i64;\n\
+             while i < keep.len() { let z = keep[i]; acc = acc + z[0i64]; i = i + 1i64; }\n\
+             println(f\"{acc}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "28\n");
+        }
+    }
+
     // ── Enum struct-variant construction + scalar enum `==` (codegen) ──
 
     #[test]

@@ -327,6 +327,86 @@ fn main() {
         );
     }
 
+    /// Borrow-elision (B-2026-06-19-6): a read-only `let r = out[j]` over a
+    /// `Vec[Vec[i64]]` binds `r` as a borrow of the element and SKIPS both the
+    /// deep clone and the binding's scope-exit free. ASAN must confirm this is
+    /// clean — no leak (the container still owns and frees each buffer), no
+    /// double-free (the borrow doesn't free), no use-after-free. Inner vectors
+    /// carry 8 i64s (64 bytes) so a wrongly-skipped owned-buffer free would be a
+    /// reachable-at-exit leak LSan can see (≥36-byte payload rule).
+    #[test]
+    fn asan_borrow_elision_read_only_vecvec_index_is_clean() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut k = 0i64;
+    while k < 32i64 {
+        let mut b: Vec[i64] = Vec.new();
+        let mut p = 0i64;
+        while p < 8i64 { b.push(k * 8i64 + p); p = p + 1i64; }
+        out.push(b);
+        k = k + 1i64;
+    }
+    let mut acc = 0i64;
+    let m = out.len();
+    let mut j = 0i64;
+    while j < m {
+        let r = out[j];
+        let mut i = 0i64;
+        let rl = r.len();
+        while i < rl { acc = acc + r[i]; i = i + 1i64; }
+        j = j + 1i64;
+    }
+    println(acc);
+}
+"#,
+            &["32640"],
+            "borrow_elision_read_only_vecvec_index",
+        );
+    }
+
+    /// Borrow-elision negative: each `r` is moved into `keep`, so the gate must
+    /// KEEP the deep clone — `r` owns an independent buffer that outlives `out`.
+    /// ASAN confirms no use-after-free (a mis-borrowed `r` would dangle once
+    /// `out` drops) / double-free / leak. Inner vectors are 8 i64s (64 bytes) for
+    /// LSan reachability.
+    #[test]
+    fn asan_borrow_elision_escape_negative_clones_and_is_clean() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut out: Vec[Vec[i64]] = Vec.new();
+    let mut k = 0i64;
+    while k < 32i64 {
+        let mut b: Vec[i64] = Vec.new();
+        let mut p = 0i64;
+        while p < 8i64 { b.push(7i64); p = p + 1i64; }
+        out.push(b);
+        k = k + 1i64;
+    }
+    let mut keep: Vec[Vec[i64]] = Vec.new();
+    let mut j = 0i64;
+    while j < out.len() {
+        let r = out[j];
+        keep.push(r);
+        j = j + 1i64;
+    }
+    let mut acc = 0i64;
+    let mut i = 0i64;
+    while i < keep.len() {
+        let z = keep[i];
+        acc = acc + z[0i64];
+        i = i + 1i64;
+    }
+    println(acc);
+}
+"#,
+            &["224"],
+            "borrow_elision_escape_negative",
+        );
+    }
+
     // ── Direct recursive shared enum (RC tree) ────────────────────
     //
     // `shared enum Expr { Num(i64), Add(Expr, Expr) }` builds an RC tree whose
