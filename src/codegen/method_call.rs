@@ -480,6 +480,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 let self_val = self.compile_expr(object)?;
                 return self.lower_tcp_stream_try_clone(self_val);
             }
+            if key == "TcpStream.shutdown_write" && args.is_empty() {
+                // Half-close the write side (`shutdown(SHUT_WR)`) — sends a
+                // FIN so a proxy can propagate one direction's EOF across a
+                // full-duplex splice.
+                let self_val = self.compile_expr(object)?;
+                return self.lower_tcp_stream_shutdown_write(self_val);
+            }
             // Phase 6 line 236 slice 2 — TLS-side method dispatch. Same
             // shape as the TCP dispatch above; lowerings in
             // `src/codegen/tls.rs` route through `karac_runtime_tls_*`.

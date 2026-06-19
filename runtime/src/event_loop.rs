@@ -2242,6 +2242,60 @@ pub extern "C" fn karac_runtime_tcp_try_clone(fd: i64) -> i64 {
     }
 }
 
+/// Half-close one (or both) directions of a socket via `shutdown(2)`. Backs
+/// `TcpStream.shutdown_write(ref self) -> Result[Unit, TcpError]` (called
+/// with `how = 1`). `how`: `0` = Read, `1` = Write, `2` = Both. The write
+/// shutdown sends a FIN to the peer, which is how a proxy propagates one
+/// side's EOF across to the other end of a full-duplex splice (without it,
+/// dropping a `try_clone`'d write-half does NOT FIN the peer because the
+/// sibling task still holds the other dup). Returns `0` on success, `-1` on
+/// failure (decoded by codegen into `Err(TcpError.Other(-1))`).
+///
+/// Reconstructs a `TcpStream` from the raw fd only to reach `shutdown`, then
+/// releases it with `into_raw_fd` so the fd is NOT closed — only the
+/// shutdown takes effect. No parking (a one-shot syscall).
+#[cfg(unix)]
+#[no_mangle]
+pub extern "C" fn karac_runtime_tcp_shutdown(fd: i64, how: i64) -> i32 {
+    use std::os::fd::{FromRawFd, IntoRawFd};
+    let how = match how {
+        0 => std::net::Shutdown::Read,
+        2 => std::net::Shutdown::Both,
+        _ => std::net::Shutdown::Write,
+    };
+    // SAFETY: `fd` is a live socket owned by the calling `TcpStream` for the
+    // duration of the call; the temporary is released with `into_raw_fd`
+    // (no close) so only the `shutdown(2)` takes effect.
+    let stream = unsafe { std::net::TcpStream::from_raw_fd(fd as i32) };
+    let res = stream.shutdown(how);
+    let _ = stream.into_raw_fd();
+    match res {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
+/// Windows mirror of [`karac_runtime_tcp_shutdown`]. Same `how` codes and
+/// no-close (`into_raw_socket`) discipline.
+#[cfg(windows)]
+#[no_mangle]
+pub extern "C" fn karac_runtime_tcp_shutdown(fd: i64, how: i64) -> i32 {
+    use std::os::windows::io::{FromRawSocket, IntoRawSocket, RawSocket};
+    let how = match how {
+        0 => std::net::Shutdown::Read,
+        2 => std::net::Shutdown::Both,
+        _ => std::net::Shutdown::Write,
+    };
+    // SAFETY: same contract as the unix arm.
+    let stream = unsafe { std::net::TcpStream::from_raw_socket(fd as RawSocket) };
+    let res = stream.shutdown(how);
+    let _ = stream.into_raw_socket();
+    match res {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
 // ── TCP stream read/write FFI (stdlib `TcpStream.read` / `.write`) ────────
 //
 // Always-on FFIs (no feature gate) backing `runtime/stdlib/tcp.kara`'s

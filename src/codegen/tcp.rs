@@ -481,6 +481,160 @@ impl<'ctx> super::Codegen<'ctx> {
         self.build_fd_construct_result(new_fd, "TcpError", "Other", "tcp.try_clone")
     }
 
+    /// Lower `TcpStream.shutdown_write(ref self) -> Result[Unit, TcpError]`
+    /// to: extract `self.fd`, call `karac_runtime_tcp_shutdown(self.fd, 1)`
+    /// (1 = `SHUT_WR`, no parking), then build a `Result[Unit, TcpError]`
+    /// from the 0/-1 status. The write half-close sends a FIN so a proxy can
+    /// propagate one direction's EOF across a full-duplex splice.
+    pub(super) fn lower_tcp_stream_shutdown_write(
+        &mut self,
+        self_val: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fd = self.extract_fd_from_tcp_struct(self_val, "tcp.shutwr.self.fd");
+        let how = self.context.i64_type().const_int(1, false); // 1 = Write
+        let shutdown_fn = self
+            .module
+            .get_function("karac_runtime_tcp_shutdown")
+            .expect("karac_runtime_tcp_shutdown declared in Codegen::new");
+        let status_call = self
+            .builder
+            .build_call(shutdown_fn, &[fd.into(), how.into()], "tcp.shutwr.status")
+            .expect("call karac_runtime_tcp_shutdown");
+        let status_i32 = status_call
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        // The FFI returns i32; widen to i64 for the shared status-result build.
+        let status = self
+            .builder
+            .build_int_s_extend(status_i32, self.context.i64_type(), "tcp.shutwr.status.i64")
+            .unwrap();
+        self.build_unit_status_result(status, "tcp.shutwr")
+    }
+
+    /// Build a `Result[Unit, TcpError]` from an i64 status code: `>= 0`
+    /// produces `Result.Ok(Unit)`, `< 0` produces `Result.Err(TcpError.
+    /// Other(-1))`. Mirrors `lower_tcp_stream_write_all`'s inline
+    /// Result-construction (the `{tag, w0, w1}` tagged-union shape via
+    /// `enum_layouts`) for the no-payload-success case.
+    pub(super) fn build_unit_status_result(
+        &mut self,
+        status: inkwell::values::IntValue<'ctx>,
+        label_prefix: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let ctx = self.context;
+        let i64_ty = ctx.i64_type();
+        let zero = i64_ty.const_zero();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "build_unit_status_result outside fn".to_string())?;
+
+        let ok_bb = ctx.append_basic_block(fn_val, &format!("{label_prefix}.ok"));
+        let err_bb = ctx.append_basic_block(fn_val, &format!("{label_prefix}.err"));
+        let cont_bb = ctx.append_basic_block(fn_val, &format!("{label_prefix}.cont"));
+        let is_ok = self
+            .builder
+            .build_int_compare(
+                IntPredicate::SGE,
+                status,
+                zero,
+                &format!("{label_prefix}.is_ok"),
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_ok, ok_bb, err_bb)
+            .unwrap();
+
+        let result_layout = self
+            .enum_layouts
+            .get("Result")
+            .expect("Result layout seeded");
+        let result_ty = result_layout.llvm_type;
+        let ok_tag = *result_layout.tags.get("Ok").expect("Result.Ok tag seeded");
+        let err_tag = *result_layout
+            .tags
+            .get("Err")
+            .expect("Result.Err tag seeded");
+        let tcp_err_layout = self
+            .enum_layouts
+            .get("TcpError")
+            .expect("TcpError layout seeded");
+        let other_tag = *tcp_err_layout
+            .tags
+            .get("Other")
+            .expect("TcpError.Other tag seeded");
+
+        // ── ok: Result.Ok(Unit) = {ok_tag, 0, 0}
+        self.builder.position_at_end(ok_bb);
+        let mut ok_agg = result_ty.get_undef();
+        ok_agg = self
+            .builder
+            .build_insert_value(
+                ok_agg,
+                i64_ty.const_int(ok_tag, false),
+                0,
+                &format!("{label_prefix}.ok.tag"),
+            )
+            .unwrap()
+            .into_struct_value();
+        ok_agg = self
+            .builder
+            .build_insert_value(ok_agg, zero, 1, &format!("{label_prefix}.ok.w0"))
+            .unwrap()
+            .into_struct_value();
+        ok_agg = self
+            .builder
+            .build_insert_value(ok_agg, zero, 2, &format!("{label_prefix}.ok.w1"))
+            .unwrap()
+            .into_struct_value();
+        let ok_end = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        // ── err: Result.Err(TcpError.Other(-1)) = {err_tag, other_tag, -1}
+        self.builder.position_at_end(err_bb);
+        let neg_one = i64_ty.const_int((-1i64) as u64, false);
+        let mut err_agg = result_ty.get_undef();
+        err_agg = self
+            .builder
+            .build_insert_value(
+                err_agg,
+                i64_ty.const_int(err_tag, false),
+                0,
+                &format!("{label_prefix}.err.tag"),
+            )
+            .unwrap()
+            .into_struct_value();
+        err_agg = self
+            .builder
+            .build_insert_value(
+                err_agg,
+                i64_ty.const_int(other_tag, false),
+                1,
+                &format!("{label_prefix}.err.w0"),
+            )
+            .unwrap()
+            .into_struct_value();
+        err_agg = self
+            .builder
+            .build_insert_value(err_agg, neg_one, 2, &format!("{label_prefix}.err.w1"))
+            .unwrap()
+            .into_struct_value();
+        let err_end = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        // ── cont: phi between the two arms.
+        self.builder.position_at_end(cont_bb);
+        let phi = self
+            .builder
+            .build_phi(result_ty, &format!("{label_prefix}.result"))
+            .unwrap();
+        phi.add_incoming(&[
+            (&ok_agg.as_basic_value_enum(), ok_end),
+            (&err_agg.as_basic_value_enum(), err_end),
+        ]);
+        Ok(phi.as_basic_value())
+    }
+
     /// Lower `TcpListener.accept(ref self) -> TcpStream` to: park on
     /// the listener's fd (via `karac_park_on_fd(self.fd, 0u8)`), call
     /// `karac_runtime_tcp_accept(self.fd)` for the raw accept(2), then

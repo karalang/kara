@@ -10339,6 +10339,36 @@ fn main() {
         );
     }
 
+    /// Relay dogfood slice 3 — `TcpStream.shutdown_write()` dispatches to the
+    /// `karac_runtime_tcp_shutdown` FFI (with `how = 1` = Write) and builds a
+    /// `Result[Unit, TcpError]` from the 0/-1 status via `build_unit_status_
+    /// result` (the `tcp.shutwr.*` labels). Pins the half-close primitive that
+    /// propagates EOF across the full-duplex splice (`examples/relay/relay.kara`).
+    #[test]
+    fn test_ir_tcp_stream_shutdown_write_dispatches_to_runtime_ffi() {
+        let ir = ir_for(
+            r#"
+fn main() {
+    let s = TcpStream.connect("127.0.0.1:8080").unwrap();
+    let _ = s.shutdown_write();
+    println(s.fd);
+}
+"#,
+        );
+        let body = function_body(&ir, "main").expect("main body");
+        assert!(
+            body.contains("call i32 @karac_runtime_tcp_shutdown("),
+            "shutdown_write should call @karac_runtime_tcp_shutdown; body was:\n{}",
+            body
+        );
+        assert!(
+            body.contains("tcp.shutwr.is_ok"),
+            "shutdown_write should build Result[Unit, TcpError] via \
+             build_unit_status_result (tcp.shutwr.is_ok branch); body was:\n{}",
+            body
+        );
+    }
+
     /// Phase-8 line 74 — `build_fd_construct_result`'s Err arm decodes the
     /// runtime's stable negative code into a named `TcpError` variant via
     /// a `select` chain (`.err.is_conn_refused` / `.err.variant_tag.*`),

@@ -202,6 +202,23 @@ impl TcpStream {
         Result.Err(TcpError.Other(-1))
     }
 
+    // Half-close the WRITE side of this connection (`shutdown(SHUT_WR)`):
+    // flushes a FIN to the peer so it observes EOF, while this side stays
+    // open for reading. This is how a full-duplex proxy propagates one
+    // direction's EOF to the other end of the splice — dropping a
+    // `try_clone`d write-half does NOT send a FIN (the socket has another
+    // live descriptor in the sibling task), so an explicit half-close is
+    // needed for protocols whose response body is delimited by EOF rather
+    // than `Content-Length`. Returns `Ok(unit)` on success or
+    // `Err(TcpError.Other(-1))` if the syscall fails. No declared effect —
+    // `shutdown` is a one-shot syscall that doesn't park, read, or write.
+    // Stub body never executes — codegen replaces via
+    // `lower_tcp_stream_shutdown_write`.
+    #[compiler_builtin]
+    fn shutdown_write(ref self) -> Result[Unit, TcpError] {
+        Result.Err(TcpError.Other(-1))
+    }
+
     // Park on read-readiness of `self.fd`, then perform `read(2)`
     // into `buf`'s backing buffer (up to `buf.len` bytes).
     // Returns `Ok(n)` with the byte count (0 = clean EOF) or

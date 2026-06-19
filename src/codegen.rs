@@ -3786,6 +3786,16 @@ impl<'ctx> Codegen<'ctx> {
         // owned handles (read-half + write-half) for a full-duplex splice.
         // Returns the new fd, or -1 on failure. No parking (a pure syscall,
         // like connect/bind).
+        // `karac_runtime_tcp_shutdown(fd: i64, how: i64) -> i32` — backs
+        // `TcpStream.shutdown_write(ref self) -> Result[Unit, TcpError]`
+        // (called with how=1=Write). Half-closes a socket direction so a
+        // proxy can propagate EOF across a full-duplex splice. 0 ok / -1 err.
+        let tcp_shutdown_ty = i32_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_tcp_shutdown",
+            tcp_shutdown_ty,
+            Some(Linkage::External),
+        );
         let tcp_try_clone_ty = i64_type.fn_type(&[i64_type.into()], false);
         module.add_function(
             "karac_runtime_tcp_try_clone",
