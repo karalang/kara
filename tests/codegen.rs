@@ -10272,6 +10272,37 @@ fn main() {
         );
     }
 
+    /// Relay dogfood slice 3 — `TcpStream.try_clone()` dispatches to the
+    /// `karac_runtime_tcp_try_clone` FFI (a `dup(2)`) and wraps the new fd
+    /// via the shared `build_fd_construct_result` (the `tcp.try_clone.*`
+    /// labels). Pins the method-dispatch arm + extern wiring for the
+    /// full-duplex-splice primitive (`examples/relay/relay.kara`).
+    #[test]
+    fn test_ir_tcp_stream_try_clone_dispatches_to_runtime_ffi() {
+        let ir = ir_for(
+            r#"
+fn main() {
+    let s = TcpStream.connect("127.0.0.1:8080").unwrap();
+    let c = s.try_clone().unwrap();
+    println(s.fd);
+    println(c.fd);
+}
+"#,
+        );
+        let body = function_body(&ir, "main").expect("main body");
+        assert!(
+            body.contains("call i64 @karac_runtime_tcp_try_clone("),
+            "try_clone should call @karac_runtime_tcp_try_clone; body was:\n{}",
+            body
+        );
+        assert!(
+            body.contains("tcp.try_clone.is_ok"),
+            "try_clone should wrap its fd via build_fd_construct_result \
+             (tcp.try_clone.is_ok branch); body was:\n{}",
+            body
+        );
+    }
+
     /// Phase-8 line 74 — `build_fd_construct_result`'s Err arm decodes the
     /// runtime's stable negative code into a named `TcpError` variant via
     /// a `select` chain (`.err.is_conn_refused` / `.err.variant_tag.*`),

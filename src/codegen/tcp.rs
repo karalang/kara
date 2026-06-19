@@ -453,6 +453,34 @@ impl<'ctx> super::Codegen<'ctx> {
         self.build_fd_construct_result(fd, "TcpError", "Other", "tcp.connect")
     }
 
+    /// Lower `TcpStream.try_clone(ref self) -> Result[TcpStream, TcpError]`
+    /// to: extract `self.fd`, call `karac_runtime_tcp_try_clone(self.fd)`
+    /// (a `dup(2)`, no parking), then wrap the returned fd in
+    /// `Result[TcpStream, TcpError]` via the shared
+    /// `build_fd_construct_result` (`Ok(TcpStream { fd })` on `fd >= 0`,
+    /// else `Err(TcpError.Other(-1))`). The dup'd handle is an independent
+    /// owned `TcpStream` over the same socket — used to split a connection
+    /// into a read-half and a write-half for a full-duplex splice.
+    pub(super) fn lower_tcp_stream_try_clone(
+        &mut self,
+        self_val: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fd = self.extract_fd_from_tcp_struct(self_val, "tcp.try_clone.self.fd");
+        let clone_fn = self
+            .module
+            .get_function("karac_runtime_tcp_try_clone")
+            .expect("karac_runtime_tcp_try_clone declared in Codegen::new");
+        let new_fd_call = self
+            .builder
+            .build_call(clone_fn, &[fd.into()], "tcp.try_clone.fd")
+            .expect("call karac_runtime_tcp_try_clone");
+        let new_fd = new_fd_call
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        self.build_fd_construct_result(new_fd, "TcpError", "Other", "tcp.try_clone")
+    }
+
     /// Lower `TcpListener.accept(ref self) -> TcpStream` to: park on
     /// the listener's fd (via `karac_park_on_fd(self.fd, 0u8)`), call
     /// `karac_runtime_tcp_accept(self.fd)` for the raw accept(2), then

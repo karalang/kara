@@ -3780,6 +3780,18 @@ impl<'ctx> Codegen<'ctx> {
             tcp_connect_ty,
             Some(Linkage::External),
         );
+        // `karac_runtime_tcp_try_clone(fd: i64) -> i64` — backs
+        // `TcpStream.try_clone(ref self) -> Result[TcpStream, TcpError]`.
+        // `dup(2)`s the socket fd so a connection can be split into two
+        // owned handles (read-half + write-half) for a full-duplex splice.
+        // Returns the new fd, or -1 on failure. No parking (a pure syscall,
+        // like connect/bind).
+        let tcp_try_clone_ty = i64_type.fn_type(&[i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_tcp_try_clone",
+            tcp_try_clone_ty,
+            Some(Linkage::External),
+        );
         // `karac_runtime_tcp_accept(listener_fd: i32) -> i32` — backs
         // the *raw* accept(2) inside `TcpListener.accept`'s codegen
         // lowering. Caller (codegen) is responsible for parking via

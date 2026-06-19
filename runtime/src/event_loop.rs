@@ -2197,6 +2197,51 @@ pub unsafe extern "C" fn karac_runtime_tcp_connect(addr_ptr: *const u8, addr_len
     }
 }
 
+/// `dup(2)` a socket fd: a second independent descriptor for the SAME
+/// underlying socket. Backs `TcpStream.try_clone(ref self) ->
+/// Result[TcpStream, TcpError]`. Both descriptors read/write the one
+/// socket and close independently — the socket itself is torn down only
+/// when the LAST descriptor is closed (standard `dup` refcount semantics).
+/// This is what makes a full-duplex splice expressible under the owned
+/// move model: a connection is `try_clone`d into two owned handles so one
+/// task can own the read-half and another the write-half without aliasing
+/// a single move-only `TcpStream`. Returns the new fd, or `-1` on failure
+/// (decoded by codegen's `build_fd_construct_result` into
+/// `Err(TcpError.Other(-1))`).
+///
+/// Uses `BorrowedFd::try_clone_to_owned` (an `fcntl(F_DUPFD_CLOEXEC)` /
+/// `dup` under the hood) so no `libc` dependency is pulled in.
+#[cfg(unix)]
+#[no_mangle]
+pub extern "C" fn karac_runtime_tcp_try_clone(fd: i64) -> i64 {
+    use std::os::fd::{BorrowedFd, IntoRawFd};
+    // SAFETY: `fd` is a live socket descriptor owned by the calling
+    // `TcpStream` for the duration of this call; the borrow does not
+    // outlive it and the dup'd OwnedFd takes its own ownership.
+    let borrowed = unsafe { BorrowedFd::borrow_raw(fd as i32) };
+    match borrowed.try_clone_to_owned() {
+        Ok(owned) => owned.into_raw_fd() as i64,
+        Err(_) => -1,
+    }
+}
+
+/// Windows mirror of [`karac_runtime_tcp_try_clone`]. `BorrowedSocket::
+/// try_clone_to_owned` performs a `WSADuplicateSocket` + `WSASocket`, the
+/// socket analog of `dup`; same independent-close / last-close-tears-down
+/// refcount semantics.
+#[cfg(windows)]
+#[no_mangle]
+pub extern "C" fn karac_runtime_tcp_try_clone(fd: i64) -> i64 {
+    use std::os::windows::io::{BorrowedSocket, IntoRawSocket, RawSocket};
+    // SAFETY: same contract as the unix arm — `fd` is a live socket
+    // handle owned by the caller for the duration of the call.
+    let borrowed = unsafe { BorrowedSocket::borrow_raw(fd as RawSocket) };
+    match borrowed.try_clone_to_owned() {
+        Ok(owned) => owned.into_raw_socket() as i64,
+        Err(_) => -1,
+    }
+}
+
 // ── TCP stream read/write FFI (stdlib `TcpStream.read` / `.write`) ────────
 //
 // Always-on FFIs (no feature gate) backing `runtime/stdlib/tcp.kara`'s

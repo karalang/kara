@@ -471,6 +471,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 return self.lower_tcp_stream_write_all(self_val, buf_val);
             }
+            if key == "TcpStream.try_clone" && args.is_empty() {
+                // `dup(2)` the socket into a second owned handle — splits a
+                // connection into read-half + write-half for a full-duplex
+                // splice. Dispatched here (before the generic Vec/String
+                // `try_clone` deep-copy arm) so TcpStream gets the fd-dup
+                // lowering, not the buffer-clone one.
+                let self_val = self.compile_expr(object)?;
+                return self.lower_tcp_stream_try_clone(self_val);
+            }
             // Phase 6 line 236 slice 2 — TLS-side method dispatch. Same
             // shape as the TCP dispatch above; lowerings in
             // `src/codegen/tls.rs` route through `karac_runtime_tls_*`.

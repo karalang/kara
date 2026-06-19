@@ -185,6 +185,23 @@ impl TcpStream {
         Result.Err(TcpError.Other(-1))
     }
 
+    // `dup(2)` this connection into a SECOND independent `TcpStream` over
+    // the same underlying socket. Both handles read/write the one socket
+    // and close independently; the socket is torn down only when the LAST
+    // handle drops (standard `dup` refcount semantics). This is what lets a
+    // connection be split into a read-half and a write-half so a
+    // full-duplex splice runs each direction in its own spawned task
+    // without aliasing one move-only `TcpStream` (the owned model forbids
+    // moving a `TcpStream` into two closures). Returns
+    // `Err(TcpError.Other(-1))` if the dup syscall fails. No declared
+    // effect — `dup` is a one-shot syscall that doesn't park, read, or
+    // write. Stub body never executes — codegen replaces via
+    // `lower_tcp_stream_try_clone`.
+    #[compiler_builtin]
+    fn try_clone(ref self) -> Result[TcpStream, TcpError] {
+        Result.Err(TcpError.Other(-1))
+    }
+
     // Park on read-readiness of `self.fd`, then perform `read(2)`
     // into `buf`'s backing buffer (up to `buf.len` bytes).
     // Returns `Ok(n)` with the byte count (0 = clean EOF) or
