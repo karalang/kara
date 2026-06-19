@@ -190,6 +190,47 @@ impl<'a> super::Interpreter<'a> {
                 }
                 return None;
             }
+            "char_count" => {
+                // `String.char_count() -> i64` — O(n) count of Unicode scalar
+                // values (design.md § String), the Unicode-aware companion of
+                // `len()`'s O(1) byte count. Codegen routes through
+                // `karac_runtime_string_char_count`.
+                if let Value::String(s) = &obj {
+                    return Some(Value::Int(s.chars().count() as i64));
+                }
+                return None;
+            }
+            "char_at" => {
+                // `String.char_at(i) -> Option[char]` — the i-th Unicode scalar
+                // value, `None` past the end (or for a negative index). O(n);
+                // codegen routes through `karac_runtime_string_char_at`.
+                if let Value::String(s) = &obj {
+                    if let [a] = args {
+                        let idx = match self.eval_expr_inner(&a.value) {
+                            Value::Int(i) => i,
+                            _ => return None,
+                        };
+                        let hit = if idx >= 0 {
+                            s.chars().nth(idx as usize)
+                        } else {
+                            None
+                        };
+                        return Some(match hit {
+                            Some(c) => Value::EnumVariant {
+                                enum_name: "Option".to_string(),
+                                variant: "Some".to_string(),
+                                data: EnumData::Tuple(vec![Value::Char(c)]),
+                            },
+                            None => Value::EnumVariant {
+                                enum_name: "Option".to_string(),
+                                variant: "None".to_string(),
+                                data: EnumData::Unit,
+                            },
+                        });
+                    }
+                }
+                return None;
+            }
             "find" => {
                 // `String.find(needle) -> Option[i64]` — byte offset of the
                 // first occurrence of `needle` (String or char), else `None`.

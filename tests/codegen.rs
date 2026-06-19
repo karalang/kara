@@ -16710,6 +16710,43 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_string_char_at_and_count() {
+        // B-2026-06-18-3: `s.char_at(i) -> Option[char]` and `s.char_count() ->
+        // i64` were unimplemented end-to-end (typecheck rejected them, interp
+        // and codegen had no arm). They are the O(n) Unicode-aware access pair
+        // (design.md § String) vs the O(1) `bytes()`/`len()` byte view. Codegen
+        // routes through `karac_runtime_string_char_at` (out-slot + found flag →
+        // Some/None) and `karac_runtime_string_char_count`.
+        //
+        // The cases are Unicode on purpose: "héllo" is 6 BYTES but 5 SCALARS,
+        // and scalar index 1 is `é` (a 2-byte char) — a byte-index would return
+        // the wrong thing. Past-the-end and negative indices → None.
+        let out = run_program(
+            r#"
+fn nth(s: String, i: i64) -> String {
+    match s.char_at(i) {
+        Some(c) => f"{c}",
+        None => "_",
+    }
+}
+fn main() {
+    let s: String = "héllo";
+    println(f"{s.len()} {s.char_count()}");
+    println(f"{nth(s, 0)} {nth(s, 1)} {nth(s, 4)}");
+    println(f"{nth(s, 5)} {nth(s, 99)} {nth(s, -1)}");
+    let cjk: String = "日本語";
+    println(f"{cjk.len()} {cjk.char_count()} {nth(cjk, 1)}");
+}
+"#,
+        );
+        if let Some(out) = out {
+            // "héllo": 6 bytes, 5 scalars; chars 0,1,4 = h,é,o; 5/99/-1 → None.
+            // "日本語": 9 bytes, 3 scalars; char 1 = 本.
+            assert_eq!(out, "6 5\nh é o\n_ _ _\n9 3 本\n");
+        }
+    }
+
     // ── ref parameter semantics ───────────────────────────────────
 
     #[test]

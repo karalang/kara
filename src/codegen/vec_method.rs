@@ -712,6 +712,127 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 Ok(agg)
             }
+            "char_count" => {
+                // `String.char_count() -> i64` — O(n) Unicode scalar count
+                // (design.md § String, vs the O(1) byte count `s.bytes().len()`).
+                // Load the String's {ptr,len} and call the runtime decoder-counter.
+                let recv_data_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "cc.ptr.p")
+                    .unwrap();
+                let recv_data = self
+                    .builder
+                    .build_load(ptr_ty, recv_data_ptr, "cc.ptr")
+                    .unwrap()
+                    .into_pointer_value();
+                let recv_len_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "cc.len.p")
+                    .unwrap();
+                let recv_len = self
+                    .builder
+                    .build_load(i64_t, recv_len_ptr, "cc.len")
+                    .unwrap()
+                    .into_int_value();
+                let f = self
+                    .module
+                    .get_function("karac_runtime_string_char_count")
+                    .expect("char_count extern declared in Codegen::new");
+                let cnt = self
+                    .builder
+                    .build_call(f, &[recv_data.into(), recv_len.into()], "cc.count")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic();
+                Ok(cnt)
+            }
+            "char_at" => {
+                // `String.char_at(idx) -> Option[char]` — O(n) Unicode-aware
+                // access (design.md § String: returns `None` past the end, no
+                // panic). The runtime decoder writes the idx-th scalar's
+                // codepoint through an out-slot and returns 1 in range / 0 past
+                // the end; branch into Some(char)/None and phi-merge the Option
+                // aggregate, mirroring `find`'s `Option[i64]` shape (the char
+                // codepoint is zero-extended into the i64 payload word).
+                if args.len() != 1 {
+                    return Err("String.char_at requires an index argument".to_string());
+                }
+                let i32_t = self.context.i32_type();
+                let recv_data_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "ca.ptr.p")
+                    .unwrap();
+                let recv_data = self
+                    .builder
+                    .build_load(ptr_ty, recv_data_ptr, "ca.ptr")
+                    .unwrap()
+                    .into_pointer_value();
+                let recv_len_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "ca.len.p")
+                    .unwrap();
+                let recv_len = self
+                    .builder
+                    .build_load(i64_t, recv_len_ptr, "ca.len")
+                    .unwrap()
+                    .into_int_value();
+                let idx = self.compile_expr(&args[0].value)?.into_int_value();
+                let fn_val = self.current_fn.unwrap();
+                let out_cp = self.create_entry_alloca(fn_val, "ca.out_cp", i32_t.into());
+                let f = self
+                    .module
+                    .get_function("karac_runtime_string_char_at")
+                    .expect("char_at extern declared in Codegen::new");
+                let found = self
+                    .builder
+                    .build_call(
+                        f,
+                        &[recv_data.into(), recv_len.into(), idx.into(), out_cp.into()],
+                        "ca.found",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let is_some = self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::NE,
+                        found,
+                        self.context.i8_type().const_zero(),
+                        "ca.is_some",
+                    )
+                    .unwrap();
+                let some_bb = self.context.append_basic_block(fn_val, "ca.some");
+                let none_bb = self.context.append_basic_block(fn_val, "ca.none");
+                let merge_bb = self.context.append_basic_block(fn_val, "ca.merge");
+                self.builder
+                    .build_conditional_branch(is_some, some_bb, none_bb)
+                    .unwrap();
+
+                // some: load the codepoint, zero-extend to the i64 payload word.
+                self.builder.position_at_end(some_bb);
+                let cp = self
+                    .builder
+                    .build_load(i32_t, out_cp, "ca.cp")
+                    .unwrap()
+                    .into_int_value();
+                let cp_word = self
+                    .builder
+                    .build_int_z_extend(cp, i64_t, "ca.cp.word")
+                    .unwrap();
+                let some_end = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                // none: past the end.
+                self.builder.position_at_end(none_bb);
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                // merge: Some(codepoint) from some_end, None from none_bb.
+                self.builder.position_at_end(merge_bb);
+                let agg = self.build_option_some_via_phis(&[cp_word], some_end, none_bb, "ca.opt");
+                Ok(agg)
+            }
             // `String.substring(start) -> String` — bytes from `start` to end.
             // `String.substring(start, end) -> String` — bytes in `[start, end)`.
             // Both indices are byte offsets (matching the `bytes()` view).

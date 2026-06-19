@@ -173,6 +173,52 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Bool
             }
+            "char_count" => {
+                // char_count() -> i64 — O(n) count of Unicode scalar values
+                // (design.md § String), the Unicode-aware companion of `len()`'s
+                // O(1) byte count. Runtime decodes + counts; interp uses Rust's
+                // `chars().count()`.
+                if !args.is_empty() {
+                    self.type_error(
+                        "'char_count' takes no arguments".to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                Type::Int(IntSize::I64)
+            }
+            "char_at" => {
+                // char_at(i: i64) -> Option[char] — the i-th Unicode scalar
+                // value, O(n), `None` past the end (design.md § String:
+                // `s[i]` is a compile error; the explicit method makes the O(n)
+                // cost visible). The pair to `len()`/`bytes()`'s O(1) byte access.
+                if args.len() != 1 {
+                    self.type_error(
+                        format!("'char_at' expects 1 argument, found {}", args.len()),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    let arg_ty = self.infer_expr(&args[0].value);
+                    if !matches!(arg_ty, Type::Int(_) | Type::Error) {
+                        self.type_error(
+                            format!(
+                                "'char_at' expects an integer index, found '{}'",
+                                type_display(&arg_ty)
+                            ),
+                            args[0].value.span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    }
+                }
+                Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![Type::Char],
+                }
+            }
             "contains" => {
                 // contains(substr: String) -> bool — runtime ships substring
                 // search; the typechecker just enforces the arg shape.

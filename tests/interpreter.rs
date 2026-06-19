@@ -9517,6 +9517,30 @@ fn test_char_case_predicates_interpreter() {
 }
 
 #[test]
+fn test_string_char_at_and_count_interpreter() {
+    // B-2026-06-18-3 — `s.char_at(i) -> Option[char]` / `s.char_count() -> i64`,
+    // the O(n) Unicode-aware access pair. The interpreter must agree with
+    // codegen's `karac_runtime_string_char_*` (`test_e2e_string_char_at_and_count`):
+    // "héllo" is 6 bytes / 5 scalars, scalar index 1 is `é`; out-of-range and
+    // negative indices yield None.
+    let output = run(r#"fn nth(s: String, i: i64) -> String {
+            match s.char_at(i) {
+                Some(c) => f"{c}",
+                None => "_",
+            }
+        }
+        fn main() {
+            let s: String = "héllo";
+            println(f"{s.len()} {s.char_count()}");
+            println(f"{nth(s, 0)} {nth(s, 1)} {nth(s, 4)}");
+            println(f"{nth(s, 5)} {nth(s, 99)} {nth(s, -1)}");
+            let cjk: String = "日本語";
+            println(f"{cjk.len()} {cjk.char_count()} {nth(cjk, 1)}");
+        }"#);
+    assert_eq!(output, "6 5\nh é o\n_ _ _\n9 3 本\n");
+}
+
+#[test]
 fn test_i64_parse_interpreter() {
     // Five cases mirror `/tmp/kara-probes/i64_parse_full_probe.kara`:
     // numeric / non-numeric / negative / whitespace-padded / empty.

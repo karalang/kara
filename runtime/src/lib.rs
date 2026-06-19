@@ -285,6 +285,8 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         karac_runtime_char_is_whitespace,
         karac_runtime_char_is_uppercase,
         karac_runtime_char_is_lowercase,
+        karac_runtime_string_char_count,
+        karac_runtime_string_char_at,
     );
     // The serve loops themselves need the tokio/hyper substrate (`net`);
     // the request/response accessors above are plain FFI-struct reads and
@@ -4243,6 +4245,56 @@ pub extern "C" fn karac_runtime_char_is_uppercase(cp: u32) -> u8 {
 #[no_mangle]
 pub extern "C" fn karac_runtime_char_is_lowercase(cp: u32) -> u8 {
     char::from_u32(cp).is_some_and(|c| c.is_lowercase()) as u8
+}
+
+/// O(n) count of Unicode scalar values in a UTF-8 String. Backs
+/// `s.char_count()` (design.md § String — the O(n) scalar count, vs the O(1)
+/// `s.bytes().len()` byte count). `String` is always valid UTF-8, so the
+/// `from_utf8` never errors in practice; a malformed buffer counts 0 defensively
+/// rather than trapping.
+///
+/// # Safety
+/// `ptr` must point to `len` readable bytes (or be null with `len <= 0`).
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_string_char_count(ptr: *const u8, len: i64) -> i64 {
+    if ptr.is_null() || len <= 0 {
+        return 0;
+    }
+    let bytes = std::slice::from_raw_parts(ptr, len as usize);
+    match std::str::from_utf8(bytes) {
+        Ok(s) => s.chars().count() as i64,
+        Err(_) => 0,
+    }
+}
+
+/// O(n) access to the `idx`-th Unicode scalar value of a UTF-8 String. Backs
+/// `s.char_at(idx) -> Option[char]` (design.md § String — "returns `Option[char]`
+/// … no panic on out-of-bounds"). Writes the codepoint through `out_cp` and
+/// returns `1` when `idx` is in range; returns `0` (leaving `out_cp` untouched)
+/// for a negative or past-the-end index, which codegen/interpret turn into
+/// `None`.
+///
+/// # Safety
+/// `ptr` must point to `len` readable bytes (or be null with `len <= 0`), and
+/// `out_cp` must be a writable `*mut u32`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_string_char_at(
+    ptr: *const u8,
+    len: i64,
+    idx: i64,
+    out_cp: *mut u32,
+) -> u8 {
+    if ptr.is_null() || len <= 0 || idx < 0 {
+        return 0;
+    }
+    let bytes = std::slice::from_raw_parts(ptr, len as usize);
+    if let Ok(s) = std::str::from_utf8(bytes) {
+        if let Some(c) = s.chars().nth(idx as usize) {
+            *out_cp = c as u32;
+            return 1;
+        }
+    }
+    0
 }
 
 /// Parse a UTF-8 byte slice as a signed 64-bit integer in the given

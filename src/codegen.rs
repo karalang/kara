@@ -3307,6 +3307,32 @@ impl<'ctx> Codegen<'ctx> {
         ] {
             module.add_function(name, char_pred_type, Some(Linkage::External));
         }
+        // `i64 karac_runtime_string_char_count(*const u8 ptr, i64 len)` — O(n)
+        // Unicode scalar count, backing `s.char_count()`. And
+        // `i8 karac_runtime_string_char_at(*const u8 ptr, i64 len, i64 idx,
+        //  *mut u32 out_cp)` — writes the idx-th scalar through `out_cp` and
+        // returns 1 in range / 0 past the end, backing `s.char_at(i)`'s
+        // `Option[char]`. Both fetched by name in `compile_vec_method`.
+        module.add_function(
+            "karac_runtime_string_char_count",
+            context
+                .i64_type()
+                .fn_type(&[ptr_type.into(), context.i64_type().into()], false),
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "karac_runtime_string_char_at",
+            context.i8_type().fn_type(
+                &[
+                    ptr_type.into(),
+                    context.i64_type().into(),
+                    context.i64_type().into(),
+                    ptr_type.into(),
+                ],
+                false,
+            ),
+            Some(Linkage::External),
+        );
         // `karac_runtime_parse_i64_radix(data: *const u8, len: usize,
         //  radix: u32, out: *mut i64) -> u8`. Backs `i64.from_str_radix(s,
         //  radix)` — the self-hosting lexer's hex/binary/octal literal path.
