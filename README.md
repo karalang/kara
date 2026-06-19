@@ -1,10 +1,5 @@
 # Kāra
 
-```
- compiling the compiler...
- [▓▓▓▓▓▓▓▓▓▓▓▓▒▒░░░░░░░░░░░░]
-```
-
 Kāra is a systems programming language for the age of AI-written code. Declare intent; the compiler handles what LLMs get wrong — memory layout, ownership, concurrency — and emits every decision as structured output agents can consume.
 
 Questions, ideas, or design feedback? [Start a GitHub Discussion](https://github.com/karalang/kara/discussions/new/choose) — all input welcome.
@@ -306,7 +301,8 @@ faster; everything relative to **Rust = 1.0**.
 
 Kāra tracks C closely and sits at or below the **Rust (checked)** rings —
 the safety-matched comparison. Kāra checks integer overflow by default;
-`rustc -O` silently wraps, so the gray `Rust = 1.0` line is *unsafe* Rust.
+`rustc -O` silently wraps — defined behavior, but a wrong value where Kāra
+would trap — so the gray `Rust (default)` baseline does strictly less work.
 Overlaid in goldenrod is `rustc -O -C overflow-checks=on` on the katas
 where it diverges; against *that*, Kāra is at parity or ahead (the apparent
 1.4–1.66× gaps on overflow-heavy katas collapse to ~1.0×), and it emits
@@ -375,7 +371,7 @@ parallelize.
 
 ## Project Status
 
-Actively developed, pre-1.0. The frontend, interpreter, query API, auto-concurrency runtime, and LLVM codegen are in place; the standard library is being filled in. End-to-end compilation works for a growing subset of the language. See [docs/roadmap.md](docs/roadmap.md) for the current phase breakdown.
+Actively developed, pre-1.0. The compiler frontend, interpreter, query API, auto-concurrency runtime, and LLVM codegen are complete (roadmap Phases 0–7); the standard-library floor and verification enforcement are effectively done (Phases 8–9), and the additional targets — WASM, the GPU gate — are mostly in place (Phase 10). The project is now in its **v1 pivot: self-hosting the compiler in Kāra** (Phase 12) — the lexer is already ported and running on real source — alongside test coverage and bug-fixing. Remaining before v1: completing self-hosting, then the long-tail standard library (Phase 11). See [docs/roadmap.md](docs/roadmap.md) for the phase-by-phase breakdown.
 
 We took a **tree-walk interpreter first** approach: language semantics were validated with an interpreter before LLVM code generation.
 
