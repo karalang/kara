@@ -931,6 +931,34 @@ impl<'ctx> super::Codegen<'ctx> {
             match kind {
                 FieldDrop::None => {}
                 FieldDrop::VecOrString => {
+                    // #35 — a `Vec[T]` field whose element type itself carries
+                    // heap (`Vec[Sp]`, `Sp { tok: Tk }` with a heap enum `Tk`;
+                    // the parser's `Parser { tokens: Vec[SpannedToken] }`) must
+                    // DRAIN each live element's payload before freeing the
+                    // buffer — this arm previously freed only the
+                    // `{ptr,len,cap}` buffer, leaking every unconsumed
+                    // element's String/enum payload (the Vec-element peer of
+                    // the #15 / #18 / #21 struct-drop-ignores-heap-leaf family).
+                    // `vec_elem_agg_drop_for_type_expr` returns the per-element
+                    // drop fn for a struct / enum / shared element (→ that
+                    // type's own `__karac_drop_*`); a `String` field (same
+                    // `{ptr,len,cap}` layout, no Vec element type) and a
+                    // `Vec[primitive]` element both resolve to `None`, leaving
+                    // the buffer-only free unchanged. Resolve it FIRST — the
+                    // sub-emitter may synthesize a fn and move the builder's
+                    // insert block, so capture it before opening the cap-guard
+                    // blocks below (same discipline as the nested-shared Vec
+                    // arm in `emit_nested_struct_shared_rc_decs`).
+                    let vec_elem_drop = self
+                        .struct_field_type_exprs
+                        .get(struct_name)
+                        .and_then(|v| v.get(field_idx))
+                        .cloned()
+                        .and_then(|fte| crate::codegen::helpers::vec_inner_type_expr(&fte))
+                        .and_then(|elem_te| {
+                            self.vec_elem_agg_drop_for_type_expr(&elem_te)
+                                .map(|f| (f, elem_te))
+                        });
                     // GEP the Vec struct field within the parent struct.
                     let field_ptr = self
                         .builder
@@ -990,6 +1018,82 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_load(ptr_ty, data_ptr_ptr, &format!("drop.field{field_idx}.data"))
                         .unwrap()
                         .into_pointer_value();
+                    // #35 — drain each live element's heap payload BEFORE the
+                    // buffer free (loop `0..len`, calling the per-element drop
+                    // on `data + i`). `cap > 0` here implies a heap buffer; an
+                    // empty Vec (`len == 0`) runs zero iterations. Skipped
+                    // entirely for `String` / `Vec[primitive]` fields
+                    // (`vec_elem_drop` is `None`).
+                    if let Some((elem_drop, elem_te)) = &vec_elem_drop {
+                        let elem_ty = self.llvm_type_for_type_expr(elem_te);
+                        let len_ptr = self
+                            .builder
+                            .build_struct_gep(
+                                vec_ty,
+                                field_ptr,
+                                1,
+                                &format!("drop.field{field_idx}.len.p"),
+                            )
+                            .unwrap();
+                        let len = self
+                            .builder
+                            .build_load(i64_t, len_ptr, &format!("drop.field{field_idx}.len"))
+                            .unwrap()
+                            .into_int_value();
+                        let cond_bb = self.context.append_basic_block(
+                            drop_fn,
+                            &format!("drop.field{field_idx}.elem.cond"),
+                        );
+                        let body_bb = self.context.append_basic_block(
+                            drop_fn,
+                            &format!("drop.field{field_idx}.elem.body"),
+                        );
+                        let incr_bb = self.context.append_basic_block(
+                            drop_fn,
+                            &format!("drop.field{field_idx}.elem.incr"),
+                        );
+                        let after_bb = self.context.append_basic_block(
+                            drop_fn,
+                            &format!("drop.field{field_idx}.elem.after"),
+                        );
+                        let counter =
+                            self.create_entry_alloca(drop_fn, "drop.elem.i", i64_t.into());
+                        self.builder
+                            .build_store(counter, i64_t.const_zero())
+                            .unwrap();
+                        self.builder.build_unconditional_branch(cond_bb).unwrap();
+                        self.builder.position_at_end(cond_bb);
+                        let cur = self
+                            .builder
+                            .build_load(i64_t, counter, "drop.elem.i.cur")
+                            .unwrap()
+                            .into_int_value();
+                        let lt = self
+                            .builder
+                            .build_int_compare(IntPredicate::ULT, cur, len, "drop.elem.i.lt")
+                            .unwrap();
+                        self.builder
+                            .build_conditional_branch(lt, body_bb, after_bb)
+                            .unwrap();
+                        self.builder.position_at_end(body_bb);
+                        let elem_ptr = unsafe {
+                            self.builder
+                                .build_gep(elem_ty, data, &[cur], "drop.elem.p")
+                                .unwrap()
+                        };
+                        self.builder
+                            .build_call(*elem_drop, &[elem_ptr.into()], "")
+                            .unwrap();
+                        self.builder.build_unconditional_branch(incr_bb).unwrap();
+                        self.builder.position_at_end(incr_bb);
+                        let next = self
+                            .builder
+                            .build_int_add(cur, i64_t.const_int(1, false), "drop.elem.i.next")
+                            .unwrap();
+                        self.builder.build_store(counter, next).unwrap();
+                        self.builder.build_unconditional_branch(cond_bb).unwrap();
+                        self.builder.position_at_end(after_bb);
+                    }
                     self.builder
                         .build_call(self.free_fn, &[data.into()], "")
                         .unwrap();

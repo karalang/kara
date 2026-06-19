@@ -1836,6 +1836,60 @@ impl<'ctx> super::Codegen<'ctx> {
                 idx_phi.add_incoming(&[(&next, body_bb)]);
 
                 self.builder.position_at_end(exit_bb);
+            } else if self.type_expr_has_drop_heap(inner_te) {
+                // #35 copy-side peer — a struct / enum / tuple element that
+                // owns heap through a NON-`{ptr,len,cap}` leaf (`Vec[Sp]`,
+                // `Sp { tok: Tk }` with a heap enum `Tk`; the parser's
+                // `Vec[SpannedToken]`). The flat memcpy above aliased each
+                // element's inner String/enum payload with the source — both
+                // the source's recursive element drop and (post-#35) this
+                // copy's owning struct drop would then free it (double-free,
+                // exactly what the parser's `Parser.new(toks)` entry-copy of a
+                // `Vec[SpannedToken]` hit). Deep-clone each element in place via
+                // its synthesized `karac_clone_<T>(*const, *mut)` — a slot->slot
+                // clone is sound (the clone reads each source field's header
+                // before overwriting the slot, and the heap deep-copy reads the
+                // shared buffer before the new header lands). Stride by
+                // `elem_ty` (the element struct/enum size), not the 24-byte
+                // `vec_ty`. `type_expr_has_drop_heap` is false for shared (RC)
+                // leaves and no-heap aggregates, so neither is touched here.
+                let clone_fn = self.emit_clone_fn_for_type_expr(inner_te);
+
+                let loop_bb = self.context.append_basic_block(fn_val, "dcopy.agg.loop");
+                let body_bb = self.context.append_basic_block(fn_val, "dcopy.agg.body");
+                let exit_bb = self.context.append_basic_block(fn_val, "dcopy.agg.exit");
+                let pre_bb = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(loop_bb).unwrap();
+
+                self.builder.position_at_end(loop_bb);
+                let idx_phi = self.builder.build_phi(i64_t, "dcopy.agg.i").unwrap();
+                idx_phi.add_incoming(&[(&i64_t.const_int(0, false), pre_bb)]);
+                let idx = idx_phi.as_basic_value().into_int_value();
+                let in_range = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::ULT, idx, len, "dcopy.agg.cmp")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(in_range, body_bb, exit_bb)
+                    .unwrap();
+
+                self.builder.position_at_end(body_bb);
+                let slot = unsafe {
+                    self.builder
+                        .build_gep(elem_ty, buf, &[idx], "dcopy.agg.slot")
+                        .unwrap()
+                };
+                self.builder
+                    .build_call(clone_fn, &[slot.into(), slot.into()], "")
+                    .unwrap();
+                let next = self
+                    .builder
+                    .build_int_add(idx, i64_t.const_int(1, false), "dcopy.agg.next")
+                    .unwrap();
+                self.builder.build_unconditional_branch(loop_bb).unwrap();
+                idx_phi.add_incoming(&[(&next, body_bb)]);
+
+                self.builder.position_at_end(exit_bb);
             }
         }
 

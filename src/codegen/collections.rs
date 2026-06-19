@@ -1429,13 +1429,22 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `Index` scrutinee); a plain-var `v[i].field` is left to the #18
     /// suppression (which DOES resolve it), so this fires only for the
     /// FieldAccess-rooted-Index field shape the suppression misses.
+    /// Returns `(value, did_clone)` — `did_clone` is `true` only when an
+    /// independent deep clone was actually emitted (the FieldAccess-rooted
+    /// Vec-index heap-enum shape). The caller uses it to force the cloned
+    /// value through `materialize_freshtemp_enum_scrutinee` so the clone-temp
+    /// is drop-tracked (a no-bind arm frees it; a bound arm's per-field
+    /// suppression zeroes the CLONE's moved-out caps) — without that, the
+    /// clone leaks once [#35] makes the container drop free the original
+    /// element (the clone's reachability anchor vanishes). The original Vec
+    /// element is left intact for the container's element drain.
     pub(super) fn clone_borrowed_index_field_enum_scrutinee(
         &mut self,
         value: &Expr,
         val: BasicValueEnum<'ctx>,
-    ) -> Result<BasicValueEnum<'ctx>, String> {
+    ) -> Result<(BasicValueEnum<'ctx>, bool), String> {
         let ExprKind::FieldAccess { object, field } = &value.kind else {
-            return Ok(val);
+            return Ok((val, false));
         };
         // Only a FieldAccess-rooted Vec index (`self.toks[i].field`); a plain-var
         // `v[i].field` is handled by the #18 suppression — cloning it too would
@@ -1444,20 +1453,20 @@ impl<'ctx> super::Codegen<'ctx> {
             object: idx_obj, ..
         } = &object.kind
         else {
-            return Ok(val);
+            return Ok((val, false));
         };
         if matches!(idx_obj.kind, ExprKind::Identifier(_)) {
-            return Ok(val);
+            return Ok((val, false));
         }
         let Some(obj_ty) = self.place_chain_type_name(object) else {
-            return Ok(val);
+            return Ok((val, false));
         };
         let Some(fidx) = self
             .struct_field_names
             .get(obj_ty.as_str())
             .and_then(|ns| ns.iter().position(|n| n == field))
         else {
-            return Ok(val);
+            return Ok((val, false));
         };
         let Some(field_te) = self
             .struct_field_type_exprs
@@ -1465,11 +1474,11 @@ impl<'ctx> super::Codegen<'ctx> {
             .and_then(|tes| tes.get(fidx))
             .cloned()
         else {
-            return Ok(val);
+            return Ok((val, false));
         };
         // Only a heap-bearing field needs the clone (a Copy field can't dangle).
         if super::vec_method::is_trivially_copyable_te(&field_te) {
-            return Ok(val);
+            return Ok((val, false));
         }
         let fn_val = self.current_fn.unwrap();
         let ll = val.get_type();
@@ -1480,7 +1489,10 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_call(clone_fn, &[src.into(), dst.into()], "")
             .unwrap();
-        Ok(self.builder.build_load(ll, dst, "fld.enum.cloned").unwrap())
+        Ok((
+            self.builder.build_load(ll, dst, "fld.enum.cloned").unwrap(),
+            true,
+        ))
     }
 
     /// String slicing `s[a..b]` -> a fresh `String` (phase-8 line 737).

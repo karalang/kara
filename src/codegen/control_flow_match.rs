@@ -108,7 +108,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // Clone the enum value so a heap payload bound out owns an independent
         // buffer (else it aliases the Vec element's buffer and dangles when the
         // container drops). The parser's `self.tokens[self.pos].token` shape.
-        let scrut = self.clone_borrowed_index_field_enum_scrutinee(scrutinee, scrut)?;
+        let (scrut, did_clone_borrowed_index_field) =
+            self.clone_borrowed_index_field_enum_scrutinee(scrutinee, scrut)?;
         // B-track (pattern-arm unbound heap-field drop): a fresh-temp enum
         // scrutinee (`match make() { … }`) has no source `EnumDrop`, so any arm
         // that leaves a heap payload field unbound leaks it. Materialize +
@@ -116,11 +117,28 @@ impl<'ctx> super::Codegen<'ctx> {
         // all arms share the scrutinee's enum); each arm's per-arm suppression
         // below then zeroes the caps of fields THAT arm moved into bindings.
         // No-op for non-fresh / non-enum / ref scrutinees.
+        //
+        // `did_clone_borrowed_index_field` (#38 + [#35]): the
+        // `self.toks[i].tok` FieldAccess-rooted-index shape was just deep-cloned
+        // into `scrut`, so — exactly like the `clone_owned_vec_index_element`
+        // heap-Vec-index case — the OWNED clone must be drop-tracked even though
+        // the scrutinee Expr is a place (not a fresh-temp call). `force` makes
+        // `materialize_freshtemp_enum_scrutinee` skip its scrutinee-shape gate;
+        // the per-arm suppression below then zeroes the CLONE's moved-out caps
+        // (line 304 path), and the container's [#35] element drain frees the
+        // untouched source element. Without this the clone leaked.
         let freshtemp_enum = if scrut_ref_ptr.is_none() {
             arms.iter()
                 .map(|a| &a.pattern)
                 .find(|p| self.variant_pattern_enum_name(p).is_some())
-                .and_then(|p| self.materialize_freshtemp_enum_scrutinee(scrutinee, p, scrut))
+                .and_then(|p| {
+                    self.materialize_freshtemp_enum_scrutinee(
+                        scrutinee,
+                        p,
+                        scrut,
+                        did_clone_borrowed_index_field,
+                    )
+                })
         } else {
             None
         };
@@ -2825,6 +2843,7 @@ impl<'ctx> super::Codegen<'ctx> {
         scrutinee: &Expr,
         pattern: &Pattern,
         val: BasicValueEnum<'ctx>,
+        force: bool,
     ) -> Option<(PointerValue<'ctx>, String)> {
         // A heap `Vec`-index enum scrutinee (`match toks[i] { Word(s) => … }`,
         // the lexer's token-consume shape) is NOT a fresh-owned temp, but the
@@ -2836,8 +2855,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // bound arm's payload to the binding, while the source element stays
         // intact (matching the interpreter's read-a-copy semantics for `v[i]`).
         // Without the materialization the clone would leak on a no-bind arm.
+        // `force` (the #38 borrowed-index-field clone): the caller already
+        // deep-cloned `val` into an OWNED temp, so the scrutinee-shape gate
+        // (which only recognizes fresh-temp calls / bare heap Vec-index) does
+        // not apply — drop-track the clone regardless of the scrutinee Expr.
         let heap_index = self.expr_is_heap_vec_index(scrutinee);
-        if !self.expr_yields_fresh_owned_temp(scrutinee) && !heap_index {
+        if !force && !self.expr_yields_fresh_owned_temp(scrutinee) && !heap_index {
             return None;
         }
         let BasicValueEnum::StructValue(sv) = val else {

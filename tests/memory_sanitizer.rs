@@ -10416,16 +10416,63 @@ fn main() {
         );
     }
 
-    // NOTE — #38 (FieldAccess-rooted Vec-index match binding a String that
-    // outlives the container) has no isolated ASAN test here: in any shape small
-    // enough to unit-test, the separate pre-existing [#35] leak (a
-    // `Vec[struct-with-enum-field]` dropping a live `Id(String)` element never
-    // frees it) keeps the aliased buffer alive, so the dangle is NOT an
-    // observable UAF/double-free that ASAN can flag. The precise #38 regression
-    // guard is the differential `tests/selfhost_parser.rs` oracle: with the
-    // clone disabled, identifiers/strings render EMPTY (`(ident   @0:1)`), the
-    // exact "String payload reads empty" symptom — so a regression fails the
-    // oracle, not this suite.
+    #[test]
+    fn asan_borrowed_index_field_enum_scrutinee_binding_outlives_container_no_uaf() {
+        // #38 (phase-12 self-hosting, parser stage): matching a `.token`
+        // FieldAccess rooted on a Vec `Index` (`self.toks[self.pos].tok`) on a
+        // BORROWED receiver, binding a `String` payload that ESCAPES the call
+        // (returned out, outliving the `Parser`'s token `Vec`). Without the
+        // `clone_borrowed_index_field_enum_scrutinee` clone, the binding
+        // shallow-ALIASES the Vec element's `{ptr,len,cap}`; when the container
+        // drops it frees that buffer, leaving the escaped String dangling — a
+        // use-after-free on the next read and a double-free at its own drop.
+        //
+        // This isolated ASAN test was IMPOSSIBLE before [#35] was fixed: the
+        // old struct-field Vec drop freed only the buffer and leaked the live
+        // `Id(String)` element, so the aliased buffer stayed allocated and the
+        // dangle was never an observable UAF. Now that [#35] drains each
+        // element's payload on the container's drop, the alias (if the #38
+        // clone is removed) becomes a genuine ASAN-flaggable UAF + double-free.
+        // The two fixes are complementary: #35 frees the original element once,
+        // #38 gives the escaped binding an independent buffer freed once.
+        // Looped + heap-sized payloads so a per-iteration fault is unmissable.
+        assert_clean_asan_run(
+            r#"
+enum Tk { Id(String), Num(i64) }
+struct Sp { tok: Tk, off: i64 }
+struct P { toks: Vec[Sp], pos: i64 }
+impl P {
+    fn name_now(ref self) -> String {
+        match self.toks[self.pos].tok {
+            Id(s) => s,
+            Num(n) => n.to_string(),
+        }
+    }
+}
+fn mk() -> Vec[Sp] {
+    let mut w: Vec[Sp] = Vec.new();
+    w.push(Sp { tok: Tk.Id("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()), off: 5 });
+    w
+}
+fn grab() -> String {
+    let p = P { toks: mk(), pos: 0 };
+    p.name_now()
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 50 {
+        let n = grab();
+        total = total + n.len();
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["2000"],
+            "borrowed_index_field_enum_scrutinee_binding_outlives_container",
+        );
+    }
 
     #[test]
     fn asan_match_variant_name_shared_across_enums_string_payload_no_leak() {
@@ -10472,6 +10519,58 @@ fn main() {
 "#,
             &["600"],
             "match_variant_name_shared_across_enums_string_payload",
+        );
+    }
+
+    #[test]
+    fn asan_struct_field_vec_of_struct_with_enum_field_drop_no_leak() {
+        // #35 (phase-12 self-hosting, parser stage): a `Vec[Sp]`
+        // (`Sp { tok: Tk, off }`, heap enum `Tk`) held in a struct FIELD
+        // (`P { toks: Vec[Sp] }`), dropped with live `Id(String)` elements
+        // still in the buffer. The owning struct's synthesized drop
+        // (`__karac_drop_struct_P`) used to free only the Vec's `{ptr,len,cap}`
+        // buffer and NEVER drain elements, so every unconsumed element's String
+        // payload leaked — the Vec-element peer of the #15 / #18 / #21
+        // struct-drop-ignores-heap-leaf family. The fix drains each element
+        // through `vec_elem_agg_drop_for_type_expr` (→ `Sp`'s
+        // `__karac_drop_struct_Sp` → `Tk`'s `__karac_drop_Tk` switch) before
+        // the buffer free, so each live element's payload frees exactly once.
+        // Looped so a per-iteration leak accumulates visibly under LSan; the
+        // dropped Vec keeps ALL elements live (nothing consumed) to exercise
+        // the element-drain path. This is the parser's own shape: the `Parser`
+        // drops its `Vec[SpannedToken]` with unconsumed trailing tokens whose
+        // `Token` enums carry Strings.
+        // `mk` returns the `Vec[Sp]` (its local cleanup is move-suppressed),
+        // so inside the loop the ONLY live owner of the buffer is `p`, and the
+        // ONLY cleanup is `__karac_drop_struct_P` — there is no sibling local
+        // Vec-of-aggs drain to mask the gap. This is the parser's exact shape:
+        // `Parser { tokens: Vec[SpannedToken] }` holds the sole reference and
+        // is dropped with unconsumed tokens.
+        assert_clean_asan_run(
+            r#"
+enum Tk { A, Id(String), Num(i64) }
+struct Sp { tok: Tk, off: i64 }
+struct P { toks: Vec[Sp], pos: i64 }
+fn mk() -> Vec[Sp] {
+    let mut w: Vec[Sp] = Vec.new();
+    w.push(Sp { tok: Tk.Id("ident_long_enough_to_force_a_heap_buffer".to_string()), off: 5 });
+    w.push(Sp { tok: Tk.Id("another_heap_allocated_identifier_string".to_string()), off: 9 });
+    w.push(Sp { tok: Tk.Num(7), off: 3 });
+    w
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 50 {
+        let p = P { toks: mk(), pos: 0 };
+        total = total + p.toks[0].off + p.toks[1].off + p.toks[2].off;
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["850"],
+            "struct_field_vec_of_struct_with_enum_field_drop",
         );
     }
 

@@ -47,7 +47,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // exit; the suppression after `bind_pattern_values` (then-arm only)
         // zeroes the caps of fields the pattern moved into bindings. No-op for
         // non-fresh / non-enum scrutinees.
-        let freshtemp_enum = self.materialize_freshtemp_enum_scrutinee(value, pattern, val);
+        let freshtemp_enum = self.materialize_freshtemp_enum_scrutinee(value, pattern, val, false);
         // Oversized-enum-payload §1/§2: free the heap box for a fresh-temp
         // Option[Wide]/Result[Wide,_] scrutinee (box-only — the bound payload
         // owns its inner heap). Registers in the enclosing frame, so the box
@@ -218,7 +218,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // in `body_bb` (dominated by `cond_bb` where `val` is defined). The
         // heap-bearing *miss* variant at loop exit (the final non-matching
         // scrutinee) is freed wholesale on the `miss_bb` edge below.
-        let freshtemp_enum = self.materialize_freshtemp_enum_scrutinee(value, pattern, val);
+        let freshtemp_enum = self.materialize_freshtemp_enum_scrutinee(value, pattern, val, false);
         // Oversized-enum-payload §1/§2: free the heap box for a fresh-temp
         // boxed-payload scrutinee, registered in the per-iteration body frame
         // (drains each iteration). An `Option` loop terminates on `None` (no
@@ -292,7 +292,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // escaped bindings), and at the divergent else edge's
         // `emit_scope_cleanup` walk on the miss edge (wholesale). Suppression
         // on the match edge zeroes the caps of moved-in fields.
-        let freshtemp_enum = self.materialize_freshtemp_enum_scrutinee(value, pattern, val);
+        let freshtemp_enum = self.materialize_freshtemp_enum_scrutinee(value, pattern, val, false);
         // Oversized-enum-payload §1/§2: free the heap box for a fresh-temp
         // boxed-payload scrutinee (box-only). Registers in the enclosing frame,
         // so it frees after the escaped bindings on the match edge and via the
