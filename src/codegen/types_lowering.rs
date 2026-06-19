@@ -603,6 +603,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
             TypeKind::MutSlice(element) => Some(self.llvm_type_for_type_expr(element)),
+            // `ref Slice[T]` / `mut ref Slice[T]` — a reference to an
+            // already-borrowed slice handle (design.md § Slices uses
+            // `ref Slice[T]`). Peel the redundant `ref` and report the inner
+            // slice's element type, so the call site synthesizes a proper
+            // `{ptr,len}` header for it instead of classifying it as a bare ref
+            // param. Recursing is safe — a non-slice inner (`ref Vec[T]`,
+            // `ref i64`) still returns `None`. Without this, `ref Slice` was a
+            // bare ref param and an `Array` argument was passed as its raw
+            // element storage — a bogus slice header → segfault
+            // (B-2026-06-19-1).
+            TypeKind::Ref(inner) | TypeKind::MutRef(inner) => self.extract_slice_elem_type(inner),
             _ => None,
         }
     }

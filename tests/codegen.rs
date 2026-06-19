@@ -11228,6 +11228,68 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_array_arg_to_ref_slice_param() {
+        // Regression for B-2026-06-19-1: an `Array[T, N]` passed to a
+        // `ref Slice[T]` param mis-built. `ref Slice` was classified as a bare
+        // ref param (extract_slice_elem_type returned None through the `Ref`
+        // wrapper), so the call site's `get_data_ptr` identifier fast-path
+        // passed the array's raw element storage as the slice arg; the callee
+        // read `{ptr,len}` out of the array's first two elements — a bogus slice
+        // (ptr = elem0, len = elem1) → out-of-bounds / segfault. The interpreter
+        // always built a real header, so it was a run/build divergence. The fix
+        // synthesizes a `{ptr,len}` header for an Array source and passes a
+        // pointer to it.
+        //
+        // Three shapes, all of which segfaulted/OOB'd before the fix:
+        //   - direct Array -> ref Slice, indexed read;
+        //   - FORWARDING a ref-slice binding to another ref-slice param (must
+        //     keep using get_data_ptr, NOT re-coerce — the narrowing guard);
+        //   - the same forward, where the callee also builds a `Vec[bool]` sized
+        //     by `n` and indexes it by a slice value (the kata-41 seen shape) —
+        //     a corrupted slice made `n`/the read value wrong and OOB'd the Vec.
+        let out = run_program(
+            r#"
+fn sum_ref(nums: ref Slice[i64], n: i64) -> i64 {
+    let mut s = 0i64;
+    let mut i = 0i64;
+    while i < n { s = s + nums[i]; i = i + 1i64; }
+    s
+}
+fn forward(nums: ref Slice[i64], n: i64) -> i64 {
+    sum_ref(nums, n)
+}
+fn first_missing(nums: ref Slice[i64], n: i64) -> i64 {
+    let mut seen: Vec[bool] = Vec.new();
+    let mut k = 0i64;
+    while k <= n { seen.push(false); k = k + 1i64; }
+    let mut i = 0i64;
+    while i < n {
+        let v = nums[i];
+        if v >= 1i64 and v <= n { seen[v] = true; }
+        i = i + 1i64;
+    }
+    let mut v = 1i64;
+    while v <= n {
+        if not seen[v] { return v; }
+        v = v + 1i64;
+    }
+    n + 1i64
+}
+fn main() {
+    let a: Array[i64, 4] = [10, 20, 30, 40];
+    println(sum_ref(a, 4));      // 100 — direct Array -> ref Slice
+    println(forward(a, 4));      // 100 — forwarded ref-slice binding
+    let b: Array[i64, 5] = [3, 4, -1, 1, 9];
+    println(first_missing(b, 5)); // 2 — ref-slice forward + Vec[bool] index
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "100\n100\n2");
+        }
+    }
+
+    #[test]
     fn test_ir_binsearch_midpoint_emits_assumes() {
         // Binary-search midpoint BCE (control_flow_bce.rs § midpoint): a
         // `let mid = lo + (hi - lo) / 2` under a strict `while lo < hi`

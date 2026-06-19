@@ -906,6 +906,33 @@ impl<'ctx> super::Codegen<'ctx> {
         for (i, a) in args.iter().enumerate() {
             let is_ref = ref_flags.get(i).copied().unwrap_or(false);
             if is_ref {
+                // `ref Slice[T]` / `mut ref Slice[T]` param fed an `Array[T, N]`:
+                // the callee receives a POINTER to a `{ptr,len}` slice header,
+                // but an Array binding's storage is its raw elements — no header.
+                // The `get_data_ptr` fast-path below would pass `&array[0]`, so
+                // the callee read `{ptr,len}` out of the first two elements — a
+                // bogus slice → segfault (B-2026-06-19-1). Synthesize the header
+                // and pass a pointer to it instead (what the rvalue-ref path does
+                // for `v.as_slice()`). Restricted to Array sources on purpose: a
+                // `Vec` binding's storage starts with `{ptr,len}` (a header
+                // superset) and a `Slice` / `ref Slice` binding's `get_data_ptr`
+                // already yields a header pointer, so those forward correctly
+                // through the fast-path below — intercepting them would re-coerce
+                // a ref-slice binding and corrupt the forward.
+                if let Some(Some(elem_ty)) = slice_elems.get(i).cloned() {
+                    let src_is_array = matches!(&a.value.kind, ExprKind::Identifier(var)
+                        if self
+                            .variables
+                            .get(var.as_str())
+                            .is_some_and(|s| matches!(s.ty, BasicTypeEnum::ArrayType(_))));
+                    if src_is_array {
+                        if let Some(slice_val) = self.coerce_to_slice(&a.value, elem_ty)? {
+                            let ptr = self.materialize_rvalue_for_ref_arg(slice_val, i);
+                            compiled_args.push(ptr.into());
+                            continue;
+                        }
+                    }
+                }
                 // Pass a pointer to the variable's data instead of the loaded value.
                 if let ExprKind::Identifier(var_name) = &a.value.kind {
                     if let Some(ptr) = self.get_data_ptr(var_name) {
