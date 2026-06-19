@@ -2419,6 +2419,46 @@ fn main() {
     }
 
     #[test]
+    fn e2e_chars_collect_to_vec_char_codegen() {
+        // B-2026-06-18-1 (kata:38): `s.chars().collect()` into a `Vec[char]` —
+        // the idiomatic O(1)-indexed-access form (per examples/leetcode/
+        // valid_palindrome.kara) — failed codegen ("no handler for method
+        // 'collect' on non-identifier receiver"): codegen has no general
+        // iterator/collect lowering. The fix lowers the idiom to the supported
+        // `for c in s.chars() { v.push(c) }` build. Exercises the load-bearing
+        // uses: `.len()` on the result, `chars[i]` indexing with two pointers
+        // (run grouping), char equality, and `char as i64` digit value — the
+        // exact shape count_and_say_indexed.kara needs. Owned `String` and a
+        // `ref String` parameter receiver both covered.
+        if let Some(out) = run_program(
+            "fn longest_run(s: ref String) -> i64 {\n\
+                 let chars: Vec[char] = s.chars().collect();\n\
+                 let n = chars.len();\n\
+                 let mut best = 0i64;\n\
+                 let mut i = 0i64;\n\
+                 while i < n {\n\
+                     let mut j = i;\n\
+                     while j < n and chars[j] == chars[i] { j = j + 1i64; }\n\
+                     if j - i > best { best = j - i; }\n\
+                     i = j;\n\
+                 }\n\
+                 best\n\
+             }\n\
+             fn main() {\n\
+                 let s: String = \"aabbbbc\";\n\
+                 let cs: Vec[char] = s.chars().collect();\n\
+                 println(f\"{cs.len()}\");\n\
+                 let v = (cs[2] as i64) - ('0' as i64) + 1i64;\n\
+                 println(f\"{v}\");\n\
+                 println(f\"{longest_run(s)}\");\n\
+             }",
+        ) {
+            // len 7; cs[2]=='b'(98) - '0'(48) + 1 = 51; longest run = 4 ('bbbb')
+            assert_eq!(out, "7\n51\n4\n");
+        }
+    }
+
+    #[test]
     fn e2e_string_substring_two_arg_codegen() {
         // Two-arg `substring(start, end)` (byte range `[start, end)`): prefix /
         // suffix / empty-when-equal / inverted-bounds (end<start) / end-clamped /

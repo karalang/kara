@@ -2481,6 +2481,28 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // `<string>.chars().collect()` → materialize a `Vec[char]`. Codegen has
+        // no general iterator/`collect` lowering (the chars-iterator value is
+        // unsupported, and `collect` on a non-identifier receiver — here the
+        // `.chars()` call — falls through to the dispatch-fail error). But the
+        // equivalent `for c in <string>.chars() { v.push(c) }` IS fully
+        // supported, so lower this idiom to exactly that block and compile it.
+        // Surfaced by kata:38 (B-2026-06-18-1). The `.chars()` call is `object`
+        // here (the receiver of `collect`); it is reused verbatim as the loop
+        // iterable, so no string-receiver shape needs re-synthesizing.
+        if method == "collect" && args.is_empty() {
+            if let ExprKind::MethodCall {
+                method: inner_method,
+                args: inner_args,
+                ..
+            } = &object.kind
+            {
+                if inner_method == "chars" && inner_args.is_empty() {
+                    return self.compile_chars_collect_to_vec(object, call_span);
+                }
+            }
+        }
+
         // Last-resort before the dispatch-fail error: a String collection
         // method (`split`, `contains`, …) on a **non-identifier** receiver
         // (`"a,b,c".split(",")`, `make_csv().split(",")`). The collection
@@ -2507,6 +2529,143 @@ impl<'ctx> super::Codegen<'ctx> {
              or mark the test `#[ignore]` if the method is genuinely deferred)",
             method, receiver_desc
         ))
+    }
+
+    /// Lower `<string>.chars().collect()` to the already-supported
+    /// `for c in <string>.chars() { v.push(c) }` build and compile that
+    /// (B-2026-06-18-1, kata:38). `chars_call` is the `<string>.chars()`
+    /// expression (the `collect` receiver), reused verbatim as the loop
+    /// iterable. We synthesize the block
+    ///
+    /// ```text
+    /// { let mut __cas_N: Vec[char] = Vec.new();
+    ///   for __casc_N in <string>.chars() { __cas_N.push(__casc_N); }
+    ///   __cas_N }
+    /// ```
+    ///
+    /// and hand it to `compile_expr`. The `Vec[char]` annotation makes the
+    /// let-binding handler register the element type at codegen time (no
+    /// typechecker dependency — see `stmts.rs` let lowering), so `push`
+    /// dispatches and the result is a usable `Vec[char]`. Reusing the
+    /// existing for-chars + push + block-return paths means no new low-level
+    /// Vec/iterator codegen, and the block's move-out gives the caller the
+    /// freshly built Vec exactly as a `fn() -> Vec[char]` would.
+    fn compile_chars_collect_to_vec(
+        &mut self,
+        chars_call: &Expr,
+        call_span: &crate::token::Span,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let n = self.indexed_elem_counter;
+        self.indexed_elem_counter += 1;
+        let vec_name = format!("__cas_{}", n);
+        let char_name = format!("__casc_{}", n);
+        let sp = call_span.clone();
+
+        let ident = |name: &str, sp: &crate::token::Span| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: sp.clone(),
+        };
+
+        // Vec[char] type annotation.
+        let char_ty = TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec!["char".to_string()],
+                generic_args: None,
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let vec_char_ty = TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec!["Vec".to_string()],
+                generic_args: Some(vec![GenericArg::Type(char_ty)]),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+
+        // `Vec.new()`
+        let vec_new = Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Path {
+                        segments: vec!["Vec".to_string(), "new".to_string()],
+                        generic_args: None,
+                    },
+                    span: sp.clone(),
+                }),
+                args: vec![],
+            },
+            span: sp.clone(),
+        };
+
+        // `let mut __cas_N: Vec[char] = Vec.new();`
+        let let_stmt = Stmt {
+            kind: StmtKind::Let {
+                is_mut: true,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(vec_name.clone()),
+                    span: sp.clone(),
+                },
+                ty: Some(vec_char_ty),
+                value: vec_new,
+            },
+            span: sp.clone(),
+        };
+
+        // `__cas_N.push(__casc_N)`
+        let push_call = Expr {
+            kind: ExprKind::MethodCall {
+                object: Box::new(ident(&vec_name, &sp)),
+                method: "push".to_string(),
+                turbofish: None,
+                args: vec![CallArg {
+                    label: None,
+                    mut_marker: false,
+                    value: ident(&char_name, &sp),
+                    span: sp.clone(),
+                }],
+                args_close_span: sp.clone(),
+            },
+            span: sp.clone(),
+        };
+
+        // `for __casc_N in <string>.chars() { __cas_N.push(__casc_N); }`
+        let for_stmt = Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::For {
+                    label: None,
+                    pattern: Pattern {
+                        kind: PatternKind::Binding(char_name.clone()),
+                        span: sp.clone(),
+                    },
+                    iterable: Box::new(chars_call.clone()),
+                    body: Block {
+                        stmts: vec![Stmt {
+                            kind: StmtKind::Expr(push_call),
+                            span: sp.clone(),
+                        }],
+                        final_expr: None,
+                        span: sp.clone(),
+                    },
+                    attributes: vec![],
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+
+        // `{ <let>; <for>; __cas_N }`
+        let block = Expr {
+            kind: ExprKind::Block(Block {
+                stmts: vec![let_stmt, for_stmt],
+                final_expr: Some(Box::new(ident(&vec_name, &sp))),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+
+        self.compile_expr(&block)
     }
 
     /// Materialize a **non-identifier String** method receiver into a synthetic
