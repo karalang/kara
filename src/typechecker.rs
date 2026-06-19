@@ -486,6 +486,13 @@ pub enum TypeErrorKind {
     /// codegen retains the arm. Reachability slice of the Maranget
     /// exhaustiveness upgrade (step 6).
     UnreachableArm,
+    /// A `match` scrutinee is a bounded integer refinement (`type T = Base
+    /// where self >= A and self <= B`) whose domain width `B − A` exceeds the
+    /// finite-domain enumeration cap (1024), so exhaustiveness falls back to
+    /// requiring a wildcard arm rather than enumerating the range. Emitted as
+    /// a lint suggesting an `enum` for a domain that large. Design.md
+    /// § Pattern Exhaustiveness — bounded integer ranges.
+    RefinementDomainTooWide,
     /// A generic call's return type contains a `TypeParam(T)` that no
     /// argument or expected-type context pinned. Today the permissive
     /// `TypeParam` arm of `types_compatible` lets these silently flow
@@ -728,6 +735,7 @@ pub(crate) fn class_for_type_error_kind(
         // explicitly; the mapping here covers direct calls to
         // `type_error` that route through these kinds).
         TypeErrorKind::UnreachableArm
+        | TypeErrorKind::RefinementDomainTooWide
         | TypeErrorKind::UnknownLint
         | TypeErrorKind::Deprecated
         | TypeErrorKind::UnstableApi

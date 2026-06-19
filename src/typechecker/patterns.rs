@@ -949,6 +949,34 @@ impl<'a> super::TypeChecker<'a> {
             );
         }
 
+        // Bounded-refinement finite-domain cap (design.md § Pattern
+        // Exhaustiveness — "When B − A exceeds 1024 the compiler falls back
+        // to requiring a wildcard and emits a lint suggesting an enum"). A
+        // refinement like `type T = i64 where self >= 0 and self <= 5000` is
+        // bounded but too wide to enumerate, so the exhaustiveness algorithm
+        // treats it as open-domain (wildcard required); surface that with a
+        // lint so the author can switch to an `enum`.
+        if let Some(width) =
+            crate::exhaustive::refinement_domain_too_wide(scrutinee_type, &self.env)
+        {
+            let name = match scrutinee_type {
+                Type::Refinement { name, .. } | Type::Named { name, .. } => name.clone(),
+                _ => String::new(),
+            };
+            self.type_lint_warning(
+                format!(
+                    "match on `{name}`: its refinement domain spans {} values (B − A = {width} \
+                     > {cap}), too wide to enumerate for exhaustiveness — a wildcard arm is \
+                     required. Consider an `enum` if you need exhaustive matching over this set.",
+                    width + 1,
+                    cap = crate::exhaustive::MAX_REFINEMENT_FINITE_DOMAIN,
+                ),
+                span.clone(),
+                TypeErrorKind::RefinementDomainTooWide,
+                "refinement_domain_too_wide",
+            );
+        }
+
         // `#[non_exhaustive]` slice 5 — cross-package enum match must
         // include a wildcard arm regardless of variant coverage. The
         // defining package may add variants without breaking source

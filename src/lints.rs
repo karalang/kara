@@ -202,6 +202,14 @@ pub const STARTER_LINTS: &[LintInfo] = &[
              can never execute.",
     },
     LintInfo {
+        name: "refinement_domain_too_wide",
+        default_level: LintLevel::Warn,
+        description:
+            "A match scrutinee is a bounded integer refinement whose domain (B − A) exceeds \
+             1024, so exhaustiveness requires a wildcard arm instead of enumerating the range; \
+             consider an `enum` for a domain that large.",
+    },
+    LintInfo {
         name: "missing_non_exhaustive",
         default_level: LintLevel::Deny,
         description:

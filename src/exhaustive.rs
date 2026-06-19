@@ -51,7 +51,10 @@
 //! behaviour; float literal patterns still lower to `Pat::Wildcard`
 //! (awaiting an Eq/Hash story for `f64`).
 
-use crate::ast::{LiteralPattern, MatchArm, Pattern, PatternKind, RangeBound, RestPattern};
+use crate::ast::{
+    BinOp, Expr, ExprKind, LiteralPattern, MatchArm, Pattern, PatternKind, RangeBound, RestPattern,
+    UnaryOp,
+};
 use crate::typechecker::{IntSize, Type, TypeEnv, UIntSize, VariantTypeInfo};
 
 /// Inclusive integer/`char` domain `[min, max]` for a scrutinee type, in
@@ -80,6 +83,197 @@ fn int_domain(ty: &Type) -> Option<(i128, i128)> {
         // surrogate gap [0xD800, 0xDFFF] has no inhabitants, so including
         // it here is sound (no real char ever lands there to be a witness).
         Type::Char => Some((0, 0x10FFFF)),
+        _ => None,
+    }
+}
+
+/// Cap on bounded-refinement finite-domain enumeration. A refinement range
+/// `[A, B]` with `B − A` greater than this is treated as open-domain (a
+/// wildcard arm is required), per design.md § Pattern Exhaustiveness —
+/// "When B − A exceeds 1024 the compiler falls back to requiring a wildcard
+/// and emits a lint suggesting an enum." The accompanying lint is emitted at
+/// the typechecker layer via [`refinement_domain_too_wide`].
+pub(crate) const MAX_REFINEMENT_FINITE_DOMAIN: i128 = 1024;
+
+/// The effective integer/`char` domain for exhaustiveness — refinement-aware.
+///
+/// A refinement type (`type T = Base where …`) or combined distinct type
+/// (`distinct type T = Base where …`) over an integer primitive whose
+/// predicate is exactly a *bounded* range `self >= A and self <= B` (in any
+/// equivalent spelling) defines a **closed finite domain** `[A, B]`; for
+/// exhaustiveness the algorithm then treats it like an enum whose variants
+/// are the integers `A..=B` (design.md § Pattern Exhaustiveness —
+/// "Exception — bounded integer ranges"). Every other case falls back to the
+/// base type's full domain via [`int_domain`]: non-refinement types, and
+/// refinements that are unbounded (`self > 0`), over-wide (`B − A > 1024`),
+/// or over a non-integer base.
+fn effective_int_domain(ty: &Type, env: &TypeEnv) -> Option<(i128, i128)> {
+    refinement_finite_domain(ty, env).or_else(|| int_domain(ty))
+}
+
+/// The closed finite domain `[A, B]` of a bounded-integer refinement, or
+/// `None` if `ty` is not such a refinement. Recognizes both `Type::Refinement`
+/// (base carried structurally) and the combined `distinct type T = Base where …`
+/// form (which flows as a nominal `Type::Named`, base in `env.distinct_bases`,
+/// predicate in `env.refinement_predicates`). Requires the base to be a bounded
+/// integer primitive (`i8`..`i64` / `u8`..`u64` / `usize` — `int_domain` excludes
+/// `i128`/`u128`), the predicate to bound `self` on *both* sides, and the
+/// resulting width to be within [`MAX_REFINEMENT_FINITE_DOMAIN`].
+fn refinement_finite_domain(ty: &Type, env: &TypeEnv) -> Option<(i128, i128)> {
+    let (name, base): (&str, &Type) = match ty {
+        Type::Refinement { name, base } => (name.as_str(), base.as_ref()),
+        // Combined `distinct type T = Base where self >= A and self <= B`
+        // flows as a nominal `Type::Named`; its base lives in `distinct_bases`
+        // and its predicate in `refinement_predicates` (phase-9 distinct
+        // slice 4 — design.md § Distinct Types). A plain distinct type with
+        // no `where` clause has no predicate entry and falls through to None.
+        Type::Named { name, .. } => (name.as_str(), env.distinct_bases.get(name)?),
+        _ => return None,
+    };
+    let (dmin, dmax) = int_domain(base)?;
+    let pred = env.refinement_predicates.get(name)?;
+    let (lo, hi) = refinement_pred_bounds(&pred.expr, env)?;
+    // Intersect the predicate range with the base type's representable
+    // domain — a defensive clamp; the typechecker rejects out-of-base
+    // constants upstream, but clamping keeps the enumeration sound if one
+    // slips through.
+    let lo = lo.max(dmin);
+    let hi = hi.min(dmax);
+    if lo > hi || hi - lo > MAX_REFINEMENT_FINITE_DOMAIN {
+        return None;
+    }
+    Some((lo, hi))
+}
+
+/// If `ty` is a *bounded* integer refinement whose domain width exceeds
+/// [`MAX_REFINEMENT_FINITE_DOMAIN`], return that width. The typechecker uses
+/// this to emit the "use an enum" lint while exhaustiveness falls back to
+/// requiring a wildcard (design.md § Pattern Exhaustiveness — bounded
+/// integer ranges, the `B − A > 1024` fallback). Returns `None` for every
+/// type that is either not a both-sides-bounded integer refinement or whose
+/// width is within the cap (those are handled by `refinement_finite_domain`).
+pub(crate) fn refinement_domain_too_wide(ty: &Type, env: &TypeEnv) -> Option<i128> {
+    let (name, base): (&str, &Type) = match ty {
+        Type::Refinement { name, base } => (name.as_str(), base.as_ref()),
+        Type::Named { name, .. } => (name.as_str(), env.distinct_bases.get(name)?),
+        _ => return None,
+    };
+    int_domain(base)?;
+    let pred = env.refinement_predicates.get(name)?;
+    let (lo, hi) = refinement_pred_bounds(&pred.expr, env)?;
+    let width = hi.checked_sub(lo)?;
+    (width > MAX_REFINEMENT_FINITE_DOMAIN).then_some(width)
+}
+
+/// Extract the inclusive integer bounds `(A, B)` from a refinement predicate
+/// of the form `self >= A and self <= B` (in any equivalent spelling). The
+/// predicate must constrain `self` on *both* sides — a one-sided constraint
+/// (`self > 0`) is unbounded and returns `None`, so the type keeps the
+/// open-domain (wildcard-required) behaviour. Conjunctions tighten: the
+/// lower bound is the max of all lower constraints, the upper the min of all
+/// upper constraints. Any leaf that is not a recognized `self`-vs-constant
+/// integer comparison (or an `and` of such) makes the whole predicate
+/// unrecognized → `None`.
+fn refinement_pred_bounds(expr: &Expr, env: &TypeEnv) -> Option<(i128, i128)> {
+    let mut lo: Option<i128> = None;
+    let mut hi: Option<i128> = None;
+    collect_refinement_bounds(expr, env, &mut lo, &mut hi)?;
+    Some((lo?, hi?))
+}
+
+/// Walk a conjunction of `self`-vs-constant comparisons, tightening `lo`/`hi`.
+/// Returns `None` (and leaves `lo`/`hi` partially updated) the moment a leaf
+/// is not a recognized comparison or `and`.
+fn collect_refinement_bounds(
+    expr: &Expr,
+    env: &TypeEnv,
+    lo: &mut Option<i128>,
+    hi: &mut Option<i128>,
+) -> Option<()> {
+    match &expr.kind {
+        ExprKind::Binary {
+            op: BinOp::And,
+            left,
+            right,
+        } => {
+            collect_refinement_bounds(left, env, lo, hi)?;
+            collect_refinement_bounds(right, env, lo, hi)
+        }
+        ExprKind::Binary { op, left, right } => {
+            let (bound, is_lower) = comparison_bound(op, left, right, env)?;
+            if is_lower {
+                *lo = Some(lo.map_or(bound, |cur| cur.max(bound)));
+            } else {
+                *hi = Some(hi.map_or(bound, |cur| cur.min(bound)));
+            }
+            Some(())
+        }
+        _ => None,
+    }
+}
+
+/// Interpret a single comparison between `self` and a compile-time integer
+/// constant as a (bound, is_lower) pair, normalizing strict bounds to
+/// inclusive ones (`self > A` → lower `A+1`, `self < B` → upper `B-1`).
+/// Returns `None` for any comparison that is not `self`-vs-constant or whose
+/// operator is not an order comparison (`==`, `!=`, etc.).
+fn comparison_bound(op: &BinOp, left: &Expr, right: &Expr, env: &TypeEnv) -> Option<(i128, bool)> {
+    // Orient to `self <op'> K`. If `self` is on the right, flip the operator.
+    let (op, k) = if is_self(left) {
+        (op.clone(), refinement_const_int(right, env)?)
+    } else if is_self(right) {
+        (flip_comparison(op)?, refinement_const_int(left, env)?)
+    } else {
+        return None;
+    };
+    match op {
+        // lower bounds (is_lower = true)
+        BinOp::GtEq => Some((k, true)),
+        BinOp::Gt => Some((k.checked_add(1)?, true)),
+        // upper bounds (is_lower = false)
+        BinOp::LtEq => Some((k, false)),
+        BinOp::Lt => Some((k.checked_sub(1)?, false)),
+        _ => None,
+    }
+}
+
+/// Mirror a comparison operator so `K <op> self` becomes `self <flip(op)> K`.
+fn flip_comparison(op: &BinOp) -> Option<BinOp> {
+    match op {
+        BinOp::Lt => Some(BinOp::Gt),
+        BinOp::LtEq => Some(BinOp::GtEq),
+        BinOp::Gt => Some(BinOp::Lt),
+        BinOp::GtEq => Some(BinOp::LtEq),
+        _ => None,
+    }
+}
+
+fn is_self(expr: &Expr) -> bool {
+    matches!(expr.kind, ExprKind::SelfValue)
+}
+
+/// Compile-time integer value of a refinement-predicate leaf: an integer
+/// literal, a negated integer literal, or a single-segment constant
+/// reference resolved through `env.const_values` (mirrors
+/// `range_bound_to_i128`). Returns `None` for anything else.
+fn refinement_const_int(expr: &Expr, env: &TypeEnv) -> Option<i128> {
+    match &expr.kind {
+        ExprKind::Integer(n, _) => Some(*n as i128),
+        ExprKind::Unary {
+            op: UnaryOp::Neg,
+            operand,
+        } => match &operand.kind {
+            ExprKind::Integer(n, _) => (*n as i128).checked_neg(),
+            _ => None,
+        },
+        ExprKind::Identifier(name) => env
+            .const_values
+            .get(name)
+            .and_then(crate::typechecker::const_value_to_i128),
+        ExprKind::Path { segments, .. } if segments.len() == 1 => env
+            .const_values
+            .get(&segments[0])
+            .and_then(crate::typechecker::const_value_to_i128),
         _ => None,
     }
 }
@@ -359,7 +553,8 @@ fn lower_pattern(p: &Pattern, scrut_type: &Type, env: &TypeEnv) -> Pat {
             end,
             inclusive,
         } => {
-            let (dmin, dmax) = int_domain(scrut_type).unwrap_or((i128::MIN, i128::MAX));
+            let (dmin, dmax) =
+                effective_int_domain(scrut_type, env).unwrap_or((i128::MIN, i128::MAX));
             let lo = start
                 .as_ref()
                 .and_then(|b| range_bound_to_i128(b, env))
@@ -707,11 +902,13 @@ fn usefulness(matrix: &Matrix, q: &[Pat], head_types: &[Type], env: &TypeEnv) ->
         Pat::Ctor {
             ctor: PatCtor::IntRange { lo, hi },
             ..
-        } if int_domain(head_ty).is_some() => {
+        } if effective_int_domain(head_ty, env).is_some() => {
             int_column_useful(matrix, (*lo, *hi), q_rest, rest_tys, env)
         }
-        Pat::Wildcard if int_domain(head_ty).is_some() && matrix_has_int_head(matrix) => {
-            let (min, max) = int_domain(head_ty).unwrap();
+        Pat::Wildcard
+            if effective_int_domain(head_ty, env).is_some() && matrix_has_int_head(matrix) =>
+        {
+            let (min, max) = effective_int_domain(head_ty, env).unwrap();
             int_column_useful(matrix, (min, max), q_rest, rest_tys, env)
         }
         Pat::Ctor { ctor, args } => {
@@ -1100,7 +1297,7 @@ fn render_witness(witness: &Pat, ty: &Type, env: &TypeEnv) -> String {
 fn render_ctor(ctor: &PatCtor, args: &[Pat], ty: &Type, env: &TypeEnv) -> String {
     match ctor {
         PatCtor::Bool(b) => b.to_string(),
-        PatCtor::IntRange { lo, hi } => render_int_range(*lo, *hi, ty),
+        PatCtor::IntRange { lo, hi } => render_int_range(*lo, *hi, ty, env),
         PatCtor::Lit(PatLit::String(s)) => format!("{s:?}"),
         PatCtor::Variant(name) => render_variant(name, args, ty, env),
         PatCtor::Tuple => render_tuple(args, ty, env),
@@ -1118,16 +1315,19 @@ fn render_ctor(ctor: &PatCtor, args: &[Pat], ty: &Type, env: &TypeEnv) -> String
 /// - an **extreme-touching gap** (`lo == MIN` or `hi == MAX` — i.e.
 ///   "everything outside what you matched") renders a single representative
 ///   value (`0`, `11`) instead of echoing the giant `MIN`/`MAX` bound.
-fn render_int_range(lo: i128, hi: i128, ty: &Type) -> String {
+fn render_int_range(lo: i128, hi: i128, ty: &Type, env: &TypeEnv) -> String {
     if lo == hi {
         return render_scalar(lo, ty);
     }
-    if let Some((dmin, dmax)) = int_domain(ty) {
+    // Refinement-aware: a bounded refinement's `[A, B]` domain drives the
+    // extreme-touching test, so a gap interior to a finite refinement domain
+    // renders as the explicit range rather than a lone representative.
+    if let Some((dmin, dmax)) = effective_int_domain(ty, env) {
         if lo != dmin && hi != dmax {
             return format!("{}..={}", render_scalar(lo, ty), render_scalar(hi, ty));
         }
     }
-    render_scalar(representative_value(lo, hi, ty), ty)
+    render_scalar(representative_value(lo, hi, ty, env), ty)
 }
 
 /// Render a single integer/`char` value as it would appear in source.
@@ -1149,11 +1349,11 @@ fn render_scalar(v: i128, ty: &Type) -> String {
 /// prefer `0` when it is in range; otherwise the bound adjacent to a
 /// covered region (the non-domain-extreme end), so a gap renders as e.g.
 /// `11` (just past a covered range) rather than the domain extreme.
-fn representative_value(lo: i128, hi: i128, ty: &Type) -> i128 {
+fn representative_value(lo: i128, hi: i128, ty: &Type, env: &TypeEnv) -> i128 {
     if lo <= 0 && 0 <= hi {
         return 0;
     }
-    match int_domain(ty) {
+    match effective_int_domain(ty, env) {
         Some((dmin, _)) if lo != dmin => lo,
         Some(_) => hi,
         None => lo,

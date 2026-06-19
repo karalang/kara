@@ -22743,6 +22743,183 @@ fn refinement_deref_rejected() {
     refinement_predicate_rejected("type Bad = i64 where *self == 0;");
 }
 
+// ── Bounded-refinement finite-domain exhaustiveness ─────────────
+// (phase-4 § "upgrade exhaustiveness to Maranget's algorithm" step 8;
+//  design.md § Pattern Exhaustiveness — "Exception — bounded integer
+//  ranges"). A refinement `type T = IntBase where self >= A and self <= B`
+//  with A, B compile-time integer constants defines a closed finite domain
+//  [A, B] that the algorithm enumerates like an enum — a match covering all
+//  of [A, B] via literals/ranges is exhaustive *without* a wildcard arm.
+
+fn has_lint(result: &TypeCheckResult, lint: &str) -> bool {
+    result
+        .warnings
+        .iter()
+        .any(|w| w.lint_name.as_deref() == Some(lint))
+}
+
+#[test]
+fn bounded_refinement_match_exhaustive_without_wildcard() {
+    // The canonical design.md example: literals covering the whole [1, 3]
+    // domain make the match exhaustive with no wildcard arm.
+    typecheck_ok(
+        "type ValidFloor = i64 where self >= 1 and self <= 3;
+         fn describe(floor: ValidFloor) -> i64 {
+             match floor { 1 => 0, 2 => 1, 3 => 2, }
+         }",
+    );
+}
+
+#[test]
+fn bounded_refinement_match_range_patterns_exhaustive() {
+    // Range patterns tile the finite domain [1, 10] exactly.
+    typecheck_ok(
+        "type ValidFloor = i64 where self >= 1 and self <= 10;
+         fn describe(floor: ValidFloor) -> i64 {
+             match floor { 1 => 0, 2..=9 => 1, 10 => 2, }
+         }",
+    );
+}
+
+#[test]
+fn bounded_refinement_reversed_orientation_exhaustive() {
+    // `A <= self and self <= B` is the same domain as `self >= A and self <= B`.
+    typecheck_ok(
+        "type R = i64 where 1 <= self and self <= 3;
+         fn d(f: R) -> i64 { match f { 1 => 0, 2 => 1, 3 => 2, } }",
+    );
+}
+
+#[test]
+fn bounded_refinement_strict_bounds_exhaustive() {
+    // Strict bounds normalize: `self > 0 and self < 4` is the domain [1, 3].
+    typecheck_ok(
+        "type R = i64 where self > 0 and self < 4;
+         fn d(f: R) -> i64 { match f { 1 => 0, 2 => 1, 3 => 2, } }",
+    );
+}
+
+#[test]
+fn bounded_refinement_const_bounds_exhaustive() {
+    // Bounds may be `const` references (resolved through `env.const_values`,
+    // like range-pattern bounds).
+    typecheck_ok(
+        "const LO: i64 = 1;
+         const HI: i64 = 3;
+         type R = i64 where self >= LO and self <= HI;
+         fn d(f: R) -> i64 { match f { 1 => 0, 2 => 1, 3 => 2, } }",
+    );
+}
+
+#[test]
+fn combined_distinct_type_bounded_match_exhaustive() {
+    // The combined `distinct type T = Base where …` form applies the same
+    // finite-domain rule (design.md § Distinct Types) when matched directly.
+    typecheck_ok(
+        "distinct type ValidPort = i64 where self >= 1 and self <= 3;
+         fn d(f: ValidPort) -> i64 { match f { 1 => 0, 2 => 1, 3 => 2, } }",
+    );
+}
+
+#[test]
+fn bounded_refinement_missing_value_non_exhaustive() {
+    // Omitting a value in [1, 5] (and any wildcard) is non-exhaustive; the
+    // witness names the missing value.
+    let errors = typecheck_errors(
+        "type ValidFloor = i64 where self >= 1 and self <= 5;
+         fn d(f: ValidFloor) -> i64 {
+             match f { 1 => 0, 3 => 1, 4 => 2, 5 => 3, }
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("non-exhaustive") && e.to_string().contains('2')),
+        "expected a non-exhaustive witness naming `2`, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
+fn unbounded_refinement_match_requires_wildcard() {
+    // A one-sided constraint (`self > 0`) is unbounded — the domain stays
+    // open and a wildcard arm is still required.
+    let errors = typecheck_errors(
+        "type Pos = i64 where self > 0;
+         fn d(f: Pos) -> i64 { match f { 1 => 0, 2 => 1, } }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("non-exhaustive")),
+        "unbounded refinement should require a wildcard, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
+fn over_cap_bounded_refinement_requires_wildcard() {
+    // A bounded domain wider than the 1024 cap falls back to open-domain:
+    // even a range covering all of [0, 5000] is non-exhaustive without `_`.
+    let errors = typecheck_errors(
+        "type Wide = i64 where self >= 0 and self <= 5000;
+         fn d(f: Wide) -> i64 { match f { 0..=5000 => 0, } }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("non-exhaustive")),
+        "over-cap refinement should require a wildcard, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
+fn over_cap_bounded_refinement_emits_lint() {
+    // With a wildcard the match is exhaustive, but the over-cap domain still
+    // earns the `refinement_domain_too_wide` lint suggesting an enum.
+    let result = typecheck_ok(
+        "type Wide = i64 where self >= 0 and self <= 5000;
+         fn d(f: Wide) -> i64 { match f { 0 => 0, _ => 1, } }
+         fn main() {}",
+    );
+    assert!(
+        has_lint(&result, "refinement_domain_too_wide"),
+        "expected refinement_domain_too_wide lint, warnings: {:?}",
+        result
+            .warnings
+            .iter()
+            .map(|w| w.to_string())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn within_cap_bounded_refinement_emits_no_lint() {
+    // A small bounded domain enumerates cleanly — no "too wide" lint.
+    let result = typecheck_ok(
+        "type Small = i64 where self >= 1 and self <= 3;
+         fn d(f: Small) -> i64 { match f { 1 => 0, 2 => 1, 3 => 2, } }
+         fn main() {}",
+    );
+    assert!(
+        !has_lint(&result, "refinement_domain_too_wide"),
+        "within-cap refinement must not emit the too-wide lint"
+    );
+}
+
 // ── Refinement types (phase-9 line 26, step 2) ──────────────────
 //
 // One-directional refined→base widening + the §1C method base-deref

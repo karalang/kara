@@ -2829,6 +2829,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::typechecker::TypeErrorKind::OnceFnIntoFnSlot => "E0235",
                 crate::typechecker::TypeErrorKind::NoMethodFound => "E0236",
                 crate::typechecker::TypeErrorKind::UnreachableArm => "W0237",
+                crate::typechecker::TypeErrorKind::RefinementDomainTooWide => "W0238",
                 crate::typechecker::TypeErrorKind::CannotInferTypeParam => "E0238",
                 crate::typechecker::TypeErrorKind::AmbiguousMethod => "E0239",
                 crate::typechecker::TypeErrorKind::ConflictingImpl => "E0240",
@@ -2949,6 +2950,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
             id_counter += 1;
             let code = match warn.kind {
                 crate::typechecker::TypeErrorKind::UnreachableArm => "W0237",
+                crate::typechecker::TypeErrorKind::RefinementDomainTooWide => "W0238",
                 crate::typechecker::TypeErrorKind::UnknownLint => "W0244",
                 crate::typechecker::TypeErrorKind::Deprecated => "W0245",
                 crate::typechecker::TypeErrorKind::MissingNonExhaustive => "W0246",
