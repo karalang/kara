@@ -61,9 +61,12 @@ Needs `karac` with the threaded-WASM runtime archives (see the repo-root
 ```
 
 Then open <http://localhost:8000> and press **1–6** (or click the buttons):
-1 original · 2 blur · 3 sharpen · 4 edge · 5 invert · 6 grayscale. The overlay
-shows the active filter, live FPS, the worker count, and the frame counter;
-halving the cores visibly halves the framerate — the parallelism is real.
+1 original · 2 blur · 3 sharpen · 4 edge · 5 invert · 6 grayscale. Each switch
+fans the filter out across the worker pool in one parallel pass; the overlay
+shows the active filter, the worker count, the render latency, and a render
+counter. The image is static, so Iris renders **on filter change**, not every
+frame — the renderer sits idle between switches rather than burning every core
+on a frame that never changes.
 
 **Cross-origin isolation is required.** `SharedArrayBuffer` and the Worker pool
 only exist on a page served with `Cross-Origin-Opener-Policy: same-origin` and
@@ -138,9 +141,12 @@ Building Iris surfaced and closed a real `karac` gap (the dogfood's job — cf.
   `Vector[u8, 16]` / `Vector[i32, 4]` → WASM SIMD-128, as Fathom did for its
   escape-time loop. The image width is even to keep a two-pixel-per-lane loop
   aligned; the lowering already ships, so this is demo-source-only.
-- [ ] **Render-only-on-change** — the browser loop re-renders every frame even
-  though the image is static; render only when the filter changes (keep
-  `frames.recv()` for scheduling + the live overlay) to cut idle CPU.
+- [x] **Render-only-on-change — DONE.** The browser loop renders only when the
+  filter actually changes (a `dirty` flag), keeping `frames.recv()` every tick
+  for scheduling/input. The image is static, so this cuts idle CPU to ~zero
+  between switches — and, by leaving the render thread idle, makes the CDP-driven
+  `verify_browser.mjs` reliable (continuous full-frame rendering pegged the
+  renderer and starved the harness's evals).
 - [ ] **Histogram equalization** — a global two-pass filter (build the luminance
   histogram, then remap), which needs a parallel reduce + scan across bands
   rather than the embarrassingly-parallel per-band shape here. A good dogfood for

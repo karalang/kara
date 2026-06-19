@@ -83,26 +83,36 @@ fn render_frame(filter_id: i64, workers: i64) with writes(Display) {
 }
 
 // The render loop. A plain blocking loop over the frame clock — no `await`.
-// Each tick: fold in the latest key (non-blocking) to switch filters, recompute
-// the frame in parallel under the current filter, blit. The image is static, so
-// re-rendering every frame is redundant work — but it keeps the worker scheduled
-// and the live FPS / worker-count overlay honest, exactly as the particle demos
-// do; a render-only-on-change optimization is a tracked follow-up (see README).
+// Each tick: fold in the latest key (non-blocking) to switch filters; render the
+// frame in parallel ONLY when the filter actually changed (the image is static,
+// so re-rendering an unchanged filter every frame is pure waste). The very first
+// tick is dirty, so the initial image paints immediately. `frames.recv()` still
+// runs every tick — the worker parks on it and the host wakes it, so input stays
+// responsive — but the parallel filter pass fires only on a real change. This
+// keeps the renderer idle between switches (no pegged CPU), and each switch is
+// one fan-out across the worker pool.
 pub fn run() with writes(Display, Input, Timer) suspends panics {
     let workers = 8;
     let frames = animation_frames();
     let keys = keydown();
     let mut current = f_original();
+    let mut dirty = true;
 
     loop {
         frames.recv();
         match keys.try_recv() {
             Some(k) => {
                 let picked = filter_for_key(k.key_code());
-                if picked >= 0 { current = picked; }
+                if picked >= 0 and picked != current {
+                    current = picked;
+                    dirty = true;
+                }
             }
             None => {}
         }
-        render_frame(current, workers);
+        if dirty {
+            render_frame(current, workers);
+            dirty = false;
+        }
     }
 }

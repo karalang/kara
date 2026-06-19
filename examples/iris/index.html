@@ -41,9 +41,9 @@
 <body>
   <h1>Iris</h1>
   <p class="sub">An image editor in one Kāra source — the filter kernels compile
-    unchanged to a native binary <i>and</i> to browser WASM, and every frame's
-    pixels are computed across a Web Worker pool with no <code>async</code> and no
-    threading code. <b>Press 1–6 (or click) to switch filter.</b></p>
+    unchanged to a native binary <i>and</i> to browser WASM, and each filter is
+    computed across a Web Worker pool with no <code>async</code> and no threading
+    code. <b>Press 1–6 (or click) to switch filter.</b></p>
   <div id="stage">
     <canvas id="screen" width="512" height="384"></canvas>
     <div id="overlay">starting…</div>
@@ -58,8 +58,8 @@
   </div>
   <p id="note">Where is the threading code? There isn't any — the compiler found
     it. The render loop is a plain blocking
-    <code>loop { frames.recv(); /* drain keydown */ render_frame(filter); }</code>;
-    each frame's output rows are split across a Web Worker pool by
+    <code>loop { frames.recv(); /* drain keydown */ if dirty { render_frame(filter); } }</code>;
+    on each filter switch the output rows are split across a Web Worker pool by
     <code>TaskGroup.spawn</code>, and the filter math lives in
     <code>filters.kara</code>, shared byte-for-byte with the native build.</p>
 
@@ -75,7 +75,7 @@
   const img = ctx2d.createImageData(W, H);
 
   const FILTER_NAMES = ["original", "blur", "sharpen", "edge", "invert", "grayscale"];
-  let frames = 0, lastT = performance.now(), fps = 0, lastFilter = 0;
+  let frames = 0, lastFilter = 0, lastMs = 0, switchT = performance.now();
   const workers = (globalThis.navigator && navigator.hardwareConcurrency) || 4;
 
   // The filtered image is what's on the canvas; we infer the active filter from
@@ -92,9 +92,9 @@
   function paintOverlay() {
     overlay.innerHTML =
       `filter:  <b>${FILTER_NAMES[lastFilter]}</b>\n` +
-      `FPS:     <b>${fps.toFixed(0)}</b>\n` +
       `workers: <b>${workers}</b>\n` +
-      `frames:  <b>${frames}</b>`;
+      `render:  <b>${lastMs.toFixed(0)} ms</b>\n` +
+      `renders: <b>${frames}</b>`;
   }
   paintOverlay();
 
@@ -108,26 +108,26 @@
       setActive(Number(b.dataset.f));
     });
   }
-  // Keep the overlay/button highlight in sync when the user types 1–6 directly.
+  // Keep the overlay/button highlight in sync when the user types 1–6 directly,
+  // and stamp the switch time so the overlay can report render latency. Fires for
+  // button-dispatched keydowns too (one input path).
   window.addEventListener("keydown", (e) => {
     const n = "123456".indexOf(e.key);
-    if (n >= 0) setActive(n);
+    if (n >= 0) { switchT = performance.now(); setActive(n); }
   });
 
   // The host side of `host fn put_pixels(ptr, len, w, h)`. The proxy passes the
   // marshalled scalar args, then a ctx with the (shared) wasm memory.
+  // Each paint corresponds to one parallel filter render (Iris renders on
+  // filter-change, not every frame). lastMs is the wall time from the keydown
+  // that requested the switch to the blit landing — the parallel render latency.
   function put_pixels(ptr, len, w, h, ctx) {
     const view = new Uint8ClampedArray(ctx.memory.buffer, Number(ptr), Number(len));
     img.data.set(view);
     ctx2d.putImageData(img, 0, 0);
     frames++;
-    const now = performance.now();
-    if (now - lastT >= 500) {
-      fps = (frames - (paintOverlay._last || 0)) * 1000 / (now - lastT);
-      paintOverlay._last = frames;
-      lastT = now;
-      paintOverlay();
-    }
+    lastMs = performance.now() - switchT;
+    paintOverlay();
   }
 
   run({ put_pixels }).catch((e) => {

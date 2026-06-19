@@ -208,9 +208,6 @@ async function main() {
   }
   if (!isolated) throw new Error("page is NOT cross-origin isolated (no SharedArrayBuffer)");
 
-  const frameCount = () => evalJs(
-    `(() => { const o = document.getElementById('overlay'); const m = o && o.textContent.match(/frames:\\s*(\\d+)/); return m ? +m[1] : 0; })()`
-  );
   // FNV-1a over the full RGBA canvas — byte-for-byte identical to the Kāra
   // `checksum` in host_macos.kara (offset 2166136261, prime 16777619, mod 2^32).
   const canvasChecksum = () => evalJs(`(() => {
@@ -221,46 +218,45 @@ async function main() {
     return h >>> 0;
   })()`);
 
-  // 1. Frames must advance — the blocking render loop is live on a woken worker.
-  stage("frames");
-  let f0 = 0, f1 = 0;
-  const deadline = Date.now() + 45000;
-  while (Date.now() < deadline) {
-    try {
-      const a = await frameCount();
-      await sleep(700);
-      const b = await frameCount();
-      if (b > a) { f0 = a; f1 = b; break; }
-    } catch {}
-    await sleep(300);
-  }
-  if (!(f1 > f0)) throw new Error(`render loop never advanced (frames ${f0} -> ${f1}) within 45s`);
+  // For each filter: switch via a synthetic keydown (the real host-listener
+  // path; synthetic avoids headless Chrome's trusted-key flood — see the Fathom
+  // verify harness note), then poll the canvas hash until it equals the native
+  // oracle's checksum for that filter. This single check is BOTH the liveness
+  // proof (the render loop ran and painted) and the correctness proof (the wasm
+  // pixels are byte-identical to native) — no separate "frames advanced" gate.
+  // Iris renders on filter-change rather than every frame, so the renderer is
+  // idle between switches and these CDP reads are never starved by a pegged
+  // render thread (the flakiness the old continuous-render gate suffered).
+  // Filter 0 (original) is painted by the loop's initial dirty render, so it is
+  // already on the canvas when the loop here switches to it.
+  const dispatchKey = (f) =>
+    evalJs(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '${f.id + 1}', keyCode: ${f.key} }))`);
 
-  // 2. For each filter: switch via a synthetic keydown (the real host-listener
-  //    path; synthetic avoids headless Chrome's trusted-key flood — see the
-  //    Fathom verify harness note), wait for the canvas hash to settle, and
-  //    assert it equals the native oracle's checksum for that filter.
   const results = [];
   for (const f of FILTER_KEYS) {
     stage(`filter:${f.name}`);
-    await evalJs(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '${f.id + 1}', keyCode: ${f.key} }))`);
     const want = native.get(f.id);
     let got = null, matched = false;
-    const fDeadline = Date.now() + 12000;
+    const fDeadline = Date.now() + 30000;
+    // Re-dispatch the switch keydown every iteration: a single early dispatch can
+    // race the wasm keydown listener's attachment at startup and be lost, leaving
+    // the canvas on the previous filter. Re-switching to the same filter is
+    // idempotent in the render loop (picked == current → no-op), so this is safe
+    // and converges the moment the listener is live.
     while (Date.now() < fDeadline) {
+      try { await dispatchKey(f); } catch {}
       await sleep(250);
       try { got = await canvasChecksum(); } catch { continue; }
       if (got === want) { matched = true; break; }
     }
     if (!matched) {
-      throw new Error(`filter ${f.name} (id ${f.id}): browser checksum ${got} != native ${want}`);
+      throw new Error(`filter ${f.name} (id ${f.id}): browser checksum ${got} != native ${want} within 30s`);
     }
     results.push(`${f.name}=${got}`);
     console.error(`[ok] ${f.name}: browser pixels match native (${got})`);
   }
 
-  const fEnd = await frameCount();
-  console.log(`PASS — isolated, frames ${f0}->${f1}->${fEnd}; all 6 filters byte-identical native vs wasm: ${results.join(" ")}`);
+  console.log(`PASS — isolated; all 6 filters byte-identical native vs wasm: ${results.join(" ")}`);
   ws.close();
 }
 
