@@ -5795,7 +5795,7 @@ fn main() {
         // decode an HTTP request line from a raw byte window
         // (`Vec.from_slice(arr[0..n])` -> `String.from_utf8`), split on ' ',
         // take the path, and route by prefix. Composes the from_slice
-        // range-slice fix (B-2026-06-18-10), from_utf8 (B-2026-06-18-11),
+        // range-slice fix (B-2026-06-18-12), from_utf8 (B-2026-06-18-11),
         // `split`, `clone`, and `starts_with` — the request-line parse end to
         // end, the exact shape `examples/relay`'s router runs.
         let src = r#"
