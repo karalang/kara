@@ -2138,7 +2138,7 @@ fn main() {
     println(v.len());
 }
 "#,
-            &["1680"],
+            &["0"],
             "vec_with_capacity_unused_buffer_freed",
         );
     }
@@ -2821,7 +2821,7 @@ fn main() {
     }
 }
 "#,
-            &["1680"],
+            &["0"],
             "question_drains_scope_cleanup_on_none",
         );
     }
@@ -2910,7 +2910,7 @@ fn main() {
     println(w.len());
 }
 "#,
-            &["1680"],
+            &["0"],
             "vec_clone_empty_no_leak",
         );
     }
@@ -4529,7 +4529,7 @@ fn main() {
     println(s);
 }
 "#,
-            &["1680"],
+            &["0"],
             "match_arm_vec_binding_freed_on_arm_exit",
         );
     }
@@ -4608,7 +4608,7 @@ fn main() {
     println(s);
 }
 "#,
-            &["1680"],
+            &["0"],
             "early_return_cleans_up_tracked_locals",
         );
     }
@@ -5273,7 +5273,7 @@ fn main() {
     println(s);
 }
 "#,
-            &["1680"],
+            &["0"],
             "struct_with_multiple_vec_fields_freed_on_scope_exit",
         );
     }
@@ -7236,7 +7236,7 @@ fn main() {
     println(entities.len());
 }
 "#,
-            &["1680"],
+            &["0"],
             "soa_drop_empty_collection",
         );
     }
@@ -9206,7 +9206,7 @@ fn main() {
     println(0);
 }
 "#,
-            &["1680"],
+            &["0"],
             "discarded_taskgroup_spawn_loop_eager_reap_no_double_free",
         );
     }
@@ -9295,7 +9295,7 @@ fn main() {
     println(m.len());
 }
 "#,
-            &["1680"],
+            &["0"],
             "map_string_key_clear_frees_heap_keys",
         );
     }
