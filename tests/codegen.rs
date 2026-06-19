@@ -2506,6 +2506,41 @@ fn main() {
     }
 
     #[test]
+    fn e2e_for_char_in_string_binds_char_codegen() {
+        // B-2026-06-18-2: `for c in s` over a String (owned and `ref String`)
+        // must bind `c: char`, not `String` / `ref String`. The typechecker's
+        // `element_type_of` had no `Str` arm, so it fell to `ty.clone()` and
+        // mistyped the loop var — a typechecker/codegen MISMATCH (codegen's
+        // `compile_for_string_chars` already binds the decoded codepoint as
+        // `char`), surfacing as "no method '<char-method>' on type 'String'"
+        // under `karac build` the moment `c` was used as a char. Exercises both
+        // an owned `String` and a `ref String` parameter, and a char method on
+        // the loop var (`is_alphabetic`) — the exact shape valid_palindrome.kara
+        // and digit-classifying loops need.
+        if let Some(out) = run_program(
+            "fn count_alpha(s: ref String) -> i64 {\n\
+                 let mut n = 0i64;\n\
+                 for c in s {\n\
+                     if c.is_alphabetic() { n = n + 1i64; }\n\
+                 }\n\
+                 n\n\
+             }\n\
+             fn main() {\n\
+                 let s: String = \"aB3 z9\";\n\
+                 let mut digits = 0i64;\n\
+                 for c in s {\n\
+                     if c.is_numeric() { digits = digits + 1i64; }\n\
+                 }\n\
+                 println(f\"{digits}\");\n\
+                 println(f\"{count_alpha(s)}\");\n\
+             }",
+        ) {
+            // "aB3 z9": numeric = 3,9 → 2; alphabetic = a,B,z → 3
+            assert_eq!(out, "2\n3\n");
+        }
+    }
+
+    #[test]
     fn e2e_string_substring_two_arg_codegen() {
         // Two-arg `substring(start, end)` (byte range `[start, end)`): prefix /
         // suffix / empty-when-equal / inverted-bounds (end<start) / end-clamped /

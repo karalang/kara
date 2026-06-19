@@ -1099,6 +1099,25 @@ impl<'a> super::TypeChecker<'a> {
     /// type arguments from `ty`. Falls back to `ty` itself for unknown types
     /// so the rest of the type checker can proceed without a hard error.
     pub(super) fn element_type_of(&self, ty: &Type) -> Type {
+        // Strings iterate as `char` BY VALUE — a `char` is a Copy scalar decoded
+        // from the UTF-8 storage, not a borrow into it — so `for c in s` and
+        // `for c in (ref/mut ref String)` all bind `c: char`, never `String` /
+        // `ref String`. Peel any borrow first so the borrowed forms don't fall to
+        // the `Ref`/`MutRef` arms below (which would re-wrap to `ref char`).
+        // Without this, `String`/`Str` fell through to the `_ => ty.clone()` tail
+        // and `for c in s` mistyped `c` as the whole `String` — a typechecker/
+        // codegen MISMATCH, since `compile_for_string_chars` already binds the
+        // codepoint as `char` (warning under `karac run`, hard error under
+        // `karac build` the moment `c` is used as a char). B-2026-06-18-2.
+        {
+            let mut base = ty;
+            while let Type::Ref(inner) | Type::MutRef(inner) = base {
+                base = inner;
+            }
+            if matches!(base, Type::Str) {
+                return Type::Char;
+            }
+        }
         match ty {
             // Borrowed collections (`for w in (ref Vec[T])` / `mut ref`):
             // iterating a borrow yields *borrowed* elements (design.md's
