@@ -1140,8 +1140,30 @@ impl<'ctx> super::Codegen<'ctx> {
                 || self.expr_is_inline_temp_vec_heap_index(&a.value))
                 && self.llvm_ty_is_vec_struct(val.get_type())
                 && !self.rhs_stages_fstr_acc(&a.value);
+            // A fresh bare-`shared` (RC-box) call / variant-constructor result
+            // passed BY VALUE: the callee's entry `emit_refcount_inc` + scope-exit
+            // `track_rc_var` dec are NET-ZERO (the caller-keeps-reference
+            // convention, `functions.rs`), so the caller still owns the temp's +1
+            // and must release it — but a directly-passed temp has no binding to
+            // carry that dec, so the box leaks (the self-hosted
+            // `render_expr(parse_expr(src))` AST node: 80 bytes / parse). The #20
+            // sibling above was Vec-only on the (correct-for-`Option[shared T]`,
+            // wrong-for-bare-shared) belief that the callee balances the ref; a
+            // bare shared param does NOT consume — it inc/decs — so queue the
+            // caller-side dec here. `fresh_arg_bare_shared_heap_type` resolves the
+            // box's heap layout from the producing fn's return type (or a variant
+            // ctor) and self-excludes a `g(make())` passthrough chain, so the box
+            // is dec'd exactly once. (Not routed through `materialize_owned_temp`:
+            // a bare shared call result carries no `owned_temp_drops` entry — that
+            // table only records `Type::Shared`, which a user `shared enum` result
+            // is not — so the hint-driven shared arm there never fires for it.)
             if is_block_arg || is_fresh_heap_call_arg {
                 self.materialize_owned_temp(val, (a.value.span.offset, a.value.span.length));
+            }
+            if val.is_pointer_value() {
+                if let Some(heap_type) = self.fresh_arg_bare_shared_heap_type(&a.value) {
+                    self.track_rc_var("__owned_arg_tmp", val.into_pointer_value(), heap_type);
+                }
             }
             // Register the caller-side drop for an inline owned-aggregate arg
             // (tuple/struct literal — B-2026-06-11-4 part b; enum-variant
@@ -1187,6 +1209,51 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             Ok(self.unpack_niche_abi_ret(&name, basic_val.unwrap_basic()))
         }
+    }
+
+    /// The shared (RC) heap-box layout produced by a fresh-temp by-value call
+    /// argument whose `+1` the CALLER must release — the bare-`shared`
+    /// enum/struct net-zero-param case (`render_expr(parse_expr(src))`: the AST
+    /// node box). `Some(heap_type)` only when:
+    ///   * the arg is a fresh owned temp (`expr_yields_fresh_owned_temp` — a
+    ///     non-borrow Call / variant ctor; an identifier arg is an existing
+    ///     tracked binding whose own scope-exit dec already covers it), AND
+    ///   * its producing call returns a bare `shared` type (resolved from
+    ///     `fn_return_type_names`, or `enum_name_of_expr` for a variant ctor)
+    ///     that is in `shared_types`, AND
+    ///   * NONE of that call's own arguments is itself such a fresh shared-box
+    ///     temp — the passthrough guard. A `g(make())` chain where `g` returns
+    ///     the same box it received would otherwise register a dec for BOTH
+    ///     `make()` and `g(make())` against the one box (a double-free); skipping
+    ///     the outer leaves exactly the innermost producer's dec, freeing the box
+    ///     once. (Cost: a `g` that ignores its shared arg and mints a fresh box
+    ///     is conservatively left a leak rather than risk the double-free.)
+    pub(super) fn fresh_arg_bare_shared_heap_type(
+        &self,
+        expr: &Expr,
+    ) -> Option<inkwell::types::StructType<'ctx>> {
+        if !self.expr_yields_fresh_owned_temp(expr) {
+            return None;
+        }
+        let ExprKind::Call { callee, args, .. } = &expr.kind else {
+            return None;
+        };
+        if args
+            .iter()
+            .any(|a| self.fresh_arg_bare_shared_heap_type(&a.value).is_some())
+        {
+            return None;
+        }
+        let type_name = match &callee.kind {
+            ExprKind::Identifier(n) => self
+                .fn_return_type_names
+                .get(n)
+                .cloned()
+                .or_else(|| self.enum_name_of_expr(expr)),
+            ExprKind::Path { .. } => self.enum_name_of_expr(expr),
+            _ => None,
+        }?;
+        self.shared_types.get(&type_name).map(|i| i.heap_type)
     }
 
     /// Register the caller-side drop for an inline owned-**aggregate** call

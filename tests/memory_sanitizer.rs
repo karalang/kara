@@ -423,6 +423,77 @@ fn main() {
     }
 
     #[test]
+    fn asan_shared_enum_fnret_temp_arg_freed_no_leak() {
+        // B-2026-06-19-3 — the self-hosted parser's `render_expr(parse_expr(src))`
+        // leak: a bare `shared enum` AST node, produced as a function-return (or inline
+        // variant-ctor) TEMPORARY and passed BY VALUE to a consumer, was never
+        // freed. A bare-shared by-value param is NET-ZERO (callee `emit_refcount_inc`
+        // at entry + `track_rc_var` dec at exit — the caller-keeps-reference
+        // convention), so the caller still owns the temp's +1; but a directly
+        // passed temp has no binding to carry that dec, so the box leaked once per
+        // call (input `"1"`: a single 80-byte node; a deep parse: the whole tree).
+        // A let-bound producer (`let e = parse(...); render(e)`) was always freed
+        // via the binding's scope-exit dec — only the *temporary* arg leaked. The
+        // fix queues the caller-side dec for a fresh bare-shared box arg
+        // (`fresh_arg_bare_shared_heap_type` + `track_rc_var`, call_dispatch.rs),
+        // mirroring the Vec/String fresh-temp-arg arm next to it.
+        //
+        // Shape mirrors `render_expr(parse_expr(src))`: `build` returns a fresh RC
+        // tree, `render` consumes it by value and recurses on the destructured
+        // children. Looped so the per-iteration box leak accumulates LSan-visibly;
+        // each `Expr` box is >=48 bytes, above the short-allocation reachability
+        // floor LSan silently tolerates. Payloads are all-scalar (`Span`) on
+        // purpose — this pins the BOX free, isolated from the orthogonal
+        // whole-struct-payload-binding String-field drop (a separate gap).
+        assert_clean_asan_run(
+            r#"
+struct Span { line: i64, column: i64, offset: i64, length: i64 }
+struct BinData { left: Expr, right: Expr, span: Span }
+shared enum Expr { Int(Span), Bin(BinData) }
+fn build(depth: i64, v: i64) -> Expr {
+    if depth <= 0 {
+        return Expr.Int(Span { line: v, column: 0, offset: v, length: 1 });
+    }
+    let l = build(depth - 1, v);
+    let r = build(depth - 1, v + 1);
+    return Expr.Bin(BinData { left: l, right: r, span: Span { line: 0, column: 0, offset: 0, length: 2 } });
+}
+fn render(e: Expr) -> String {
+    let mut out = "".to_string();
+    match e {
+        Int(n) => { out.push_str("(int "); out.push_str(n.line.to_string()); out.push_str(")"); }
+        Bin(b) => {
+            let BinData { left, right, span } = b;
+            out.push_str("(bin ");
+            out.push_str(span.length.to_string());
+            out.push_str(" ");
+            out.push_str(render(left));
+            out.push_str(" ");
+            out.push_str(render(right));
+            out.push_str(")");
+        }
+    }
+    out
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 50 {
+        // render(build(..)) — the tree is a function-return temporary passed by
+        // value; render(Expr.Int(..)) — an inline variant-ctor temporary.
+        total = total + render(build(3, i)).len();
+        total = total + render(Expr.Int(Span { line: i, column: 0, offset: i, length: 1 })).len();
+        i = i + 1;
+    }
+    if total > 0 { println("ok"); } else { println("bad"); }
+}
+"#,
+            &["ok"],
+            "shared_enum_fnret_temp_arg_freed",
+        );
+    }
+
+    #[test]
     fn asan_vec_shared_elem_into_some_returned_no_leak_no_uaf() {
         // B-2026-06-15-1 (#226 invert-binary-tree): a bare `shared` struct read
         // out of a `Vec` element into an enum-ctor payload (`Some(nodes[i])`)
