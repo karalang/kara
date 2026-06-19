@@ -1,4 +1,5 @@
-// Relay — a Layer-7 HTTP reverse proxy / load balancer in plain sequential Kāra.
+// Relay — a Layer-7 HTTP reverse proxy with path-based routing, in plain
+// sequential Kāra.
 //
 // The thesis: effect-driven event-loop networking with no `async fn` and no
 // function coloring. Every `TcpStream.read`/`.write` call carries
@@ -7,75 +8,94 @@
 // thousands of in-flight proxied connections ride a handful of reactor
 // threads, and each task body reads like a straight-line blocking program.
 //
-// Slice 3 — full-duplex (concurrent bidirectional) splice with EOF
-// propagation. A real proxy must move bytes BOTH ways at once
-// (client→upstream and upstream→client), which means two tasks operating on
-// the same two sockets. The owned move model forbids aliasing a single
-// move-only `TcpStream` across two closures, so each connection is
-// `try_clone`d — a `dup(2)` giving a second owned handle over the same socket.
-// One task owns the client-read + upstream-write halves, the other owns the
-// upstream-read + client-write halves; no handle is shared, yet both
-// directions run concurrently. Round-robin load balancing (slice 2) is kept.
+// Slice 4 — Layer-7 path-based routing. The handler PEEKS the request: it
+// reads the first chunk, decodes the request line (`Vec.from_slice` of the
+// read window → `String.from_utf8` → `split`), extracts the path, and routes
+// to an upstream tier by prefix (/api → API tier, /static → asset tier, else
+// → app tier). It then connects to the chosen tier, forwards the bytes it
+// already read, and streams the response back. This is the defining L7
+// capability: the proxy reads the request and decides where it goes — all
+// straight-line Kāra.
 //
-// When one direction hits EOF, dropping its dup'd handle does NOT FIN the peer
-// (the sibling task still holds the other dup), so each pump explicitly
-// `shutdown_write()`s its destination to flush a FIN. That propagates the
-// half-close across the proxy — correct for both `Content-Length`- and
-// EOF-delimited response bodies. Path-based routing and metrics are later
-// slices.
+// Earlier slices established the runtime building blocks this rests on:
+// full-duplex `try_clone` splicing and `shutdown_write()` EOF propagation
+// (for streaming protocols); HTTP request/response is half-duplex, so the
+// router forwards the request and streams the response back in line.
 //
 // Build & run:
 //   karac build examples/relay/relay.kara
 //   ./relay                         # listens on 127.0.0.1:8080
-// In other shells, run HTTP backends on :9000/:9001/:9002 (Content-Length +
-// Connection: close), then repeated `curl localhost:8080/` rotate across them.
+// Run backends on :9000 (api), :9001 (static), :9002 (app), then:
+//   curl localhost:8080/api/users   # -> :9000
+//   curl localhost:8080/static/x    # -> :9001
+//   curl localhost:8080/            # -> :9002
 
-// Pump one direction to EOF: read from `src`, write everything to `dst`, until
-// `src` closes (read returns 0) or either side errors. Private fn — effects
-// inferred (transitively `sends(Network) receives(Network)`), so it is a
-// parkable coroutine. Both streams are moved in and dropped (closed) at exit.
-fn pump(src: TcpStream, dst: TcpStream) {
-    let mut buf: Array[u8, 4096] = [0u8; 4096];
-    loop {
-        match src.read(mut buf) {
-            Result.Ok(n) => {
-                if n == 0 { break; }
-                match dst.write_all(buf[0..n]) {
-                    Result.Ok(_) => {}
-                    Result.Err(_) => { break; }
-                }
+// Decode the request line's path from the first `n` request bytes:
+// "GET /api/users HTTP/1.1\r\n..." -> "/api/users". Consumes the byte Vec.
+// Returns "/" if the bytes aren't valid UTF-8 or the line is malformed — a
+// best-effort routing key, never a hard failure.
+fn request_path(bytes: Vec[u8]) -> String {
+    match String.from_utf8(bytes) {
+        Result.Ok(line) => {
+            let parts = line.split(' ');
+            if parts.len() >= 2 {
+                return parts[1].clone();
             }
-            Result.Err(_) => { break; }
+            return "/";
+        }
+        Result.Err(_) => {
+            return "/";
         }
     }
-    // `src` hit EOF (or errored): no more bytes flow this direction. Half-close
-    // the write side of `dst` so its peer sees EOF — propagates the half-close
-    // across the proxy (the sibling pump still holds the other dup, so dropping
-    // `dst` alone would not FIN). Best-effort; ignore the result.
-    let _ = dst.shutdown_write();
 }
 
-// Service one proxied connection full-duplex against a chosen upstream.
-fn handle(client: TcpStream, upstream_addr: String) {
-    match TcpStream.connect(upstream_addr) {
-        Result.Ok(upstream) => {
-            // Split each socket into a second owned handle (dup'd fd). One
-            // task gets the read end, the other the write end — no aliasing.
-            match client.try_clone() {
-                Result.Ok(client_w) => {
-                    match upstream.try_clone() {
-                        Result.Ok(upstream_w) => {
-                            // Both directions concurrently; the group joins
-                            // both at scope exit (a nested TaskGroup inside a
-                            // spawned handler).
-                            let mut tg: TaskGroup = TaskGroup.new();
-                            tg.spawn(|| pump(client, upstream_w)); // client → upstream
-                            tg.spawn(|| pump(upstream, client_w)); // upstream → client
+// Layer-7 routing policy: pick the upstream tier by path prefix. A real
+// gateway consults a routing table; this is the canonical "route /api to the
+// API tier, /static to the asset tier, everything else to the app tier" shape.
+fn route(path: ref String) -> String {
+    if path.starts_with("/api") {
+        return "127.0.0.1:9000";
+    }
+    if path.starts_with("/static") {
+        return "127.0.0.1:9001";
+    }
+    return "127.0.0.1:9002";
+}
+
+// Service one connection: peek the request line, route by path, connect to the
+// chosen tier, forward the bytes already read, and stream the response back.
+// Private fn — effects inferred (transitively `sends(Network)
+// receives(Network)`), so the whole handler is a parkable coroutine.
+fn handle(client: TcpStream) {
+    let mut buf: Array[u8, 4096] = [0u8; 4096];
+    match client.read(mut buf) {
+        Result.Ok(n) => {
+            if n > 0 {
+                // Decode the request line and route by path prefix.
+                let bytes: Vec[u8] = Vec.from_slice(buf[0..n]);
+                let path = request_path(bytes);
+                let addr = route(path);
+
+                match TcpStream.connect(addr) {
+                    Result.Ok(upstream) => {
+                        // Forward the bytes we already read peeking.
+                        let _ = upstream.write_all(buf[0..n]);
+                        // Stream the response back until the upstream closes.
+                        loop {
+                            match upstream.read(mut buf) {
+                                Result.Ok(m) => {
+                                    if m == 0 { break; }
+                                    match client.write_all(buf[0..m]) {
+                                        Result.Ok(_) => {}
+                                        Result.Err(_) => { break; }
+                                    }
+                                }
+                                Result.Err(_) => { break; }
+                            }
                         }
-                        Result.Err(_) => {}
                     }
+                    Result.Err(_) => {}
                 }
-                Result.Err(_) => {}
             }
         }
         Result.Err(_) => {}
@@ -83,25 +103,11 @@ fn handle(client: TcpStream, upstream_addr: String) {
 }
 
 fn main() {
-    // Backend pool. A real deployment would read these from config; the
-    // round-robin policy is the load-balancing story.
-    let mut upstreams: Vec[String] = Vec.new();
-    upstreams.push("127.0.0.1:9000");
-    upstreams.push("127.0.0.1:9001");
-    upstreams.push("127.0.0.1:9002");
-    let n = upstreams.len();
-
     let listener = TcpListener.bind("127.0.0.1:8080").unwrap();
     let mut tg: TaskGroup = TaskGroup.new();
-    let mut next: i64 = 0;
     loop {
         match listener.accept() {
-            Result.Ok(client) => {
-                let idx = next % n;
-                let addr = upstreams[idx].clone();
-                next = next + 1;
-                tg.spawn(|| handle(client, addr));
-            }
+            Result.Ok(client) => { tg.spawn(|| handle(client)); }
             Result.Err(_) => {}
         }
     }
