@@ -10703,4 +10703,77 @@ fn main() {
             "taskgroup_spawn_heap_capture_moved_into_callee",
         );
     }
+
+    // ── Relay per-request parse + atomic soak ─────────────────────
+    //
+    // High-volume leak stress for the exact allocation churn a Relay
+    // (`examples/relay`) connection handler runs per request: the
+    // request-line peek `Vec.from_slice(buf[0..n])` -> `String.from_utf8`
+    // -> `.split(' ')` -> `parts[i].clone()`, plus the shared-`Metrics`
+    // `Atomic[i64].fetch_add`/`.load`. Each of those is a heap allocation
+    // (Vec[u8], String, Vec[String] + per-part Strings, the cloned path),
+    // and every iteration must reclaim ALL of them — a single missing free
+    // in any drop path compounds 4000x and LSan (Linux CI / `scripts/
+    // lsan-local.sh`) flags it. This is the steady-state proxy loop in a
+    // bottle: no networking, just the parse/atomic allocators on repeat.
+    //
+    // Payloads are deliberately >= 40 bytes: LSan misses *reachable*
+    // short-String leaks (the small-string buffer can stay pinned by an
+    // allocator freelist), so a leak regression only surfaces with a
+    // payload past the small-string threshold — see the user-memory note
+    // `lsan-reachability-short-string-leaks`. The buffer plants two spaces
+    // so `split(' ')` yields a >= 40-byte middle token that `clone()`
+    // returns, keeping the leak-candidate object well past the threshold.
+    //
+    // The fd path (`connect_start`/`connect_finish` close-on-failure) is
+    // intentionally NOT soaked here: it needs a live reactor to drive the
+    // write-readiness park, which a bare ASAN `main` has no harness for.
+    // That path is covered by the relay E2E under a real reactor and the
+    // existing tcp/park ASAN cases.
+    #[test]
+    fn asan_relay_request_parse_atomic_soak_no_leak() {
+        assert_clean_asan_run(
+            r#"
+par struct Counters {
+    n: Atomic[i64],
+}
+fn request_path(bytes: Vec[u8]) -> String {
+    match String.from_utf8(bytes) {
+        Result.Ok(line) => {
+            let parts = line.split(' ');
+            if parts.len() >= 2 {
+                return parts[1].clone();
+            }
+            return "/";
+        }
+        Result.Err(_) => {
+            return "/";
+        }
+    }
+}
+fn main() {
+    // 48 'A' (0x41, valid UTF-8); spaces at 3 and 44 split it into
+    // ["AAA", <40-byte middle>, "AAA"] — parts[1] is the >= 36-byte
+    // leak-candidate the LSan short-string blind spot needs.
+    let mut buf: Array[u8, 48] = [65u8; 48];
+    buf[3] = 32u8;
+    buf[44] = 32u8;
+    let counters = Counters { n: Atomic.new(0) };
+    let mut i: i64 = 0;
+    loop {
+        if i >= 4000 { break; }
+        let bytes: Vec[u8] = Vec.from_slice(buf[0..48]);
+        let path = request_path(bytes);
+        if path.len() >= 40 {
+            let _ = counters.n.fetch_add(1, MemoryOrdering.Relaxed);
+        }
+        i = i + 1;
+    }
+    println(counters.n.load(MemoryOrdering.Relaxed));
+}
+"#,
+            &["4000"],
+            "relay_request_parse_atomic_soak",
+        );
+    }
 }
