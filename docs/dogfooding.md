@@ -57,7 +57,7 @@ per-project sections below hold the design. Status legend: ✅ shipped ·
 | **Weave** | Refinement types + contracts + effects together | ✅ shipped (CSV cut) | refinement+contracts (CSV) · `Pool[T]`+TLS+tracing (service) | 2 |
 | **Tangle** | No `'a` at the cases that force `Rc<RefCell>`/arenas elsewhere — graphs, back-pointers, undo/redo; every RC escalation surfaced | ✅ shipped | ownership + `karac query ownership` (done) | 2 |
 | **Chronicle** | Self-hosting; Kāra's own tooling explains Kāra — *and* the ownership model holds across the whole compiler, zero lifetime annotations | ⬜ planned | Phase 10/12 self-hosting | 2 |
-| **Relay** | Effect-driven event-loop networking (no `async fn`) | ✅ shipped (slices 1–4) | round-robin LB + full-duplex splice (`try_clone`/`shutdown_write`) + path routing (`from_utf8`) — `examples/relay/`; metrics (slice 5) is the remaining enhancement | 3 |
+| **Relay** | Effect-driven event-loop networking (no `async fn`) | ✅ shipped (slices 1–5) | round-robin LB + full-duplex splice (`try_clone`/`shutdown_write`) + path routing (`from_utf8`) + live metrics (`par struct` + `Atomic` counters shared across handlers) — `examples/relay/` | 3 |
 | **Forge** | `embedded` profile firmware on a real MCU | ⬜ planned | v8 hardware gaps | 3 |
 | **Iris** | One source → native + WASM, no port | ⬜ planned | Phase 10 WASM target | 3 |
 | **Plume** | Parallel browser compute driven by event streams — no `async`/coloring | ✅ shipped | `animation_frames` + event-data `pointer_moves` channel + `put_pixels` blit — all built (`examples/plume/`) | 3 |
@@ -701,22 +701,26 @@ and curating the Rust side-by-side honestly.
 
 ### Relay — High-Performance Network Proxy
 
-> **Built (slices 1–4) — 2026-06-19.** Shipped at [`examples/relay/relay.kara`](../examples/relay/relay.kara):
+> **Built (slices 1–5) — 2026-06-19.** Shipped at [`examples/relay/relay.kara`](../examples/relay/relay.kara):
 > a Layer-7 reverse proxy in plain sequential Kāra on the parking event loop —
 > slice 1 single-upstream passthrough, slice 2 round-robin load balancing,
 > slice 3 full-duplex bidirectional splice, slice 3b `shutdown_write()` EOF
-> propagation, slice 4 path-based routing. Each slice was a real bug-finder
-> (`feedback_katas_are_bug_finders`): it drove **five** compiler contributions,
-> all merged — a spawn-capture double-free fix (B-2026-06-18-8), two networking
-> primitives (`TcpStream.try_clone` dup-backed fd sharing for the splice,
-> `TcpStream.shutdown_write` half-close), and two codegen fixes
-> (`Vec.from_slice(arr[a..b])` range-slice, B-2026-06-18-12; `String.from_utf8`
-> codegen, B-2026-06-18-11, which the request-line parse needs). The router
-> reads the request line (`Vec.from_slice` → `from_utf8` → `split`), extracts
-> the path, and routes by prefix to an upstream tier — `/api`→:9000,
-> `/static`→:9001, else→:9002 (verified end-to-end). **Remaining:** slice 5
-> metrics/observability, and the wrk-based 3-language benchmark (the original
-> entry's perf-comparison framing below).
+> propagation, slice 4 path-based routing, slice 5 live metrics. Each slice was
+> a real bug-finder (`feedback_katas_are_bug_finders`): it drove **five**
+> compiler contributions, all merged — a spawn-capture double-free fix
+> (B-2026-06-18-8), two networking primitives (`TcpStream.try_clone` dup-backed
+> fd sharing for the splice, `TcpStream.shutdown_write` half-close), and two
+> codegen fixes (`Vec.from_slice(arr[a..b])` range-slice, B-2026-06-18-12;
+> `String.from_utf8` codegen, B-2026-06-18-11, which the request-line parse
+> needs). The router reads the request line (`Vec.from_slice` → `from_utf8` →
+> `split`), extracts the path, and routes by prefix to an upstream tier —
+> `/api`→:9000, `/static`→:9001, else→:9002 (verified end-to-end). Slice 5's
+> metrics are a `par struct` holding `Atomic[i64]` counters, fetch_add'd
+> race-free from every concurrent handler and reported from the accept loop —
+> the canonical "wrap shared mutable state in `Atomic[T]`" pattern the
+> compiler's own `E_NOT_CROSS_TASK` diagnostic points to. **Remaining:** the
+> wrk-based 3-language benchmark (the original entry's perf-comparison framing
+> below).
 
 **Audience:** Infrastructure engineers, performance-focused backend developers.
 

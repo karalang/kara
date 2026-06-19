@@ -1,5 +1,5 @@
-// Relay — a Layer-7 HTTP reverse proxy with path-based routing, in plain
-// sequential Kāra.
+// Relay — a Layer-7 HTTP reverse proxy with path-based routing and live
+// metrics, in plain sequential Kāra.
 //
 // The thesis: effect-driven event-loop networking with no `async fn` and no
 // function coloring. Every `TcpStream.read`/`.write` call carries
@@ -12,28 +12,60 @@
 // reads the first chunk, decodes the request line (`Vec.from_slice` of the
 // read window → `String.from_utf8` → `split`), extracts the path, and routes
 // to an upstream tier by prefix (/api → API tier, /static → asset tier, else
-// → app tier). It then connects to the chosen tier, forwards the bytes it
-// already read, and streams the response back. This is the defining L7
-// capability: the proxy reads the request and decides where it goes — all
-// straight-line Kāra.
+// → app tier), then forwards and streams the response back.
 //
-// Earlier slices established the runtime building blocks this rests on:
-// full-duplex `try_clone` splicing and `shutdown_write()` EOF propagation
-// (for streaming protocols); HTTP request/response is half-duplex, so the
-// router forwards the request and streams the response back in line.
+// Slice 5 — live metrics across concurrent handlers. A `par struct Metrics`
+// (the cross-task-safe shared form) holds `Atomic[i64]` counters; every
+// spawned handler records its routed tier into the SAME shared struct via
+// lock-free `fetch_add`, and the accept loop reports the totals periodically.
+// No mutex, no channel back to a collector — the shared counters are the
+// canonical "wrap shared mutable state in `Atomic[T]`" answer the compiler's
+// own E_NOT_CROSS_TASK diagnostic points to. Sharing reads like passing a
+// plain struct; the `par` form makes it safe across `tg.spawn`.
+//
+// Earlier slices established the runtime building blocks: full-duplex
+// `try_clone` splicing and `shutdown_write()` EOF propagation (for streaming
+// protocols); HTTP request/response is half-duplex, so the router forwards
+// the request and streams the response back in line.
 //
 // Build & run:
 //   karac build examples/relay/relay.kara
 //   ./relay                         # listens on 127.0.0.1:8080
-// Run backends on :9000 (api), :9001 (static), :9002 (app), then:
-//   curl localhost:8080/api/users   # -> :9000
-//   curl localhost:8080/static/x    # -> :9001
-//   curl localhost:8080/            # -> :9002
+// Run backends on :9000 (api), :9001 (static), :9002 (app), then a mix of:
+//   curl localhost:8080/api/users   curl localhost:8080/static/x   curl localhost:8080/
+// and watch the `[metrics] total=… api=… static=… app=…` lines.
+
+// Per-tier request counters, shared lock-free across every connection handler.
+// `par struct` is the cross-task-safe shared form (a plain `shared struct`
+// can't cross a `tg.spawn` boundary — E_NOT_CROSS_TASK); its `Atomic[i64]`
+// fields make concurrent `fetch_add` from many handlers race-free.
+par struct Metrics {
+    total: Atomic[i64],
+    api: Atomic[i64],
+    assets: Atomic[i64],
+    app: Atomic[i64],
+}
+impl Metrics {
+    fn record(ref self, tier: i64) {
+        let _ = self.total.fetch_add(1, MemoryOrdering.Relaxed);
+        match tier {
+            0 => { let _ = self.api.fetch_add(1, MemoryOrdering.Relaxed); }
+            1 => { let _ = self.assets.fetch_add(1, MemoryOrdering.Relaxed); }
+            _ => { let _ = self.app.fetch_add(1, MemoryOrdering.Relaxed); }
+        }
+    }
+    fn report(ref self) {
+        let t = self.total.load(MemoryOrdering.Relaxed);
+        let a = self.api.load(MemoryOrdering.Relaxed);
+        let s = self.assets.load(MemoryOrdering.Relaxed);
+        let p = self.app.load(MemoryOrdering.Relaxed);
+        println(f"[metrics] total={t} api={a} static={s} app={p}");
+    }
+}
 
 // Decode the request line's path from the first `n` request bytes:
 // "GET /api/users HTTP/1.1\r\n..." -> "/api/users". Consumes the byte Vec.
-// Returns "/" if the bytes aren't valid UTF-8 or the line is malformed — a
-// best-effort routing key, never a hard failure.
+// Returns "/" if the bytes aren't valid UTF-8 or the line is malformed.
 fn request_path(bytes: Vec[u8]) -> String {
     match String.from_utf8(bytes) {
         Result.Ok(line) => {
@@ -49,38 +81,36 @@ fn request_path(bytes: Vec[u8]) -> String {
     }
 }
 
-// Layer-7 routing policy: pick the upstream tier by path prefix. A real
-// gateway consults a routing table; this is the canonical "route /api to the
-// API tier, /static to the asset tier, everything else to the app tier" shape.
-fn route(path: ref String) -> String {
-    if path.starts_with("/api") {
-        return "127.0.0.1:9000";
-    }
-    if path.starts_with("/static") {
-        return "127.0.0.1:9001";
-    }
+// Layer-7 routing policy: classify a path to an upstream tier (0=api,
+// 1=static, 2=app), and map a tier to its upstream address.
+fn classify(path: ref String) -> i64 {
+    if path.starts_with("/api") { return 0; }
+    if path.starts_with("/static") { return 1; }
+    return 2;
+}
+fn upstream_for(tier: i64) -> String {
+    if tier == 0 { return "127.0.0.1:9000"; }
+    if tier == 1 { return "127.0.0.1:9001"; }
     return "127.0.0.1:9002";
 }
 
-// Service one connection: peek the request line, route by path, connect to the
-// chosen tier, forward the bytes already read, and stream the response back.
-// Private fn — effects inferred (transitively `sends(Network)
-// receives(Network)`), so the whole handler is a parkable coroutine.
-fn handle(client: TcpStream) {
+// Service one connection: peek the request line, classify + record the tier,
+// connect to it, forward the bytes already read, and stream the response back.
+// `metrics` is the shared `par struct` — `record` fetch_adds the counters.
+fn handle(client: TcpStream, metrics: Metrics) {
     let mut buf: Array[u8, 4096] = [0u8; 4096];
     match client.read(mut buf) {
         Result.Ok(n) => {
             if n > 0 {
-                // Decode the request line and route by path prefix.
                 let bytes: Vec[u8] = Vec.from_slice(buf[0..n]);
                 let path = request_path(bytes);
-                let addr = route(path);
+                let tier = classify(path);
+                metrics.record(tier);
+                let addr = upstream_for(tier);
 
                 match TcpStream.connect(addr) {
                     Result.Ok(upstream) => {
-                        // Forward the bytes we already read peeking.
                         let _ = upstream.write_all(buf[0..n]);
-                        // Stream the response back until the upstream closes.
                         loop {
                             match upstream.read(mut buf) {
                                 Result.Ok(m) => {
@@ -103,11 +133,27 @@ fn handle(client: TcpStream) {
 }
 
 fn main() {
+    let metrics = Metrics {
+        total: Atomic.new(0),
+        api: Atomic.new(0),
+        assets: Atomic.new(0),
+        app: Atomic.new(0),
+    };
     let listener = TcpListener.bind("127.0.0.1:8080").unwrap();
     let mut tg: TaskGroup = TaskGroup.new();
+    let mut count: i64 = 0;
     loop {
         match listener.accept() {
-            Result.Ok(client) => { tg.spawn(|| handle(client)); }
+            Result.Ok(client) => {
+                // `metrics` is shared into each handler (the `par` form makes
+                // the cross-task capture safe); the accept loop keeps its own
+                // reference and reports the running totals every 10 requests.
+                tg.spawn(|| handle(client, metrics));
+                count = count + 1;
+                if count % 10 == 0 {
+                    metrics.report();
+                }
+            }
             Result.Err(_) => {}
         }
     }
