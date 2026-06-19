@@ -27,9 +27,11 @@ under test is the *proxy*, not the origin:
   per connection; see the "Compiler bugs this dogfood surfaced" section
   for the keep-alive rewrite and the codegen bug it flushed out.)
 - **[`go/main.go`](go/main.go)** — `httputil.NewSingleHostReverseProxy`
-  + `http.Serve`, the idiomatic standard-library reverse proxy. Owns
-  connection pooling and **client-side HTTP keep-alive** (it does not
-  propagate the upstream's `Connection: close` to the client).
+  + `http.Serve`, the idiomatic standard-library reverse proxy, **with a
+  pooled `Transport`** (`MaxIdleConnsPerHost = 10000`). The pool is
+  load-bearing: the default transport caps idle upstream conns per host at
+  2, which exhausts loopback ephemeral ports under load — see the package
+  comment and "A note on fairness" below. Owns client-side keep-alive.
 - **[`node/server.js`](node/server.js)** — hand-written `http`-module
   passthrough (no `http-proxy` dep): `http.request` to the upstream,
   pipe body in and response out. Single-process (F4 fairness footnote).
@@ -107,85 +109,130 @@ All three impls ran — none skipped.
 
 | Impl | req/s | p50 ms | p75 ms | p90 ms | p99 ms | max ms |
 |------|-------|--------|--------|--------|--------|--------|
-| Kāra | 17811 | 0.05   | 0.06   | 0.06   | 0.20   | 1.03   |
-| Go   | 14245 | 0.06   | 0.07   | 0.10   | 1.87   | 3.35   |
-| Node | 14300 | 0.06   | 0.07   | 0.09   | 2.24   | 4.34   |
+| Kāra |  9978 | 0.09   | 0.11   | 0.14   | 0.23   | 2.32   |
+| Go   | 13883 | 0.06   | 0.07   | 0.10   | 2.18   | 5.27   |
+| Node | 14359 | 0.06   | 0.07   | 0.09   | 2.54   | 5.16   |
 
 ### Steady-state (sustained `wrk` load)
 
 | Impl | -c    | req/s (median [min..max])   | p50 ms | p75 ms | p90 ms | p99 ms  | max ms  |
 |------|-------|-----------------------------|--------|--------|--------|---------|---------|
-| Kāra | 100   | 36556 [36052..37328]        | 2.49   | 3.09   | 3.93   | 4.80    | 47.66   |
-| Kāra | 1000  | 38180 [37643..38188]        | 24.10  | 28.61  | 33.90  | 122.55  | 735.17  |
-| Kāra | 5000  | 34914 [30025..36061]        | 45.12  | 66.74  | 87.02  | 251.69  | 1980.00 |
-| Go   | 100   | 1399 [1399..1399]           | 76.13  | 248.87 | 364.68 | 652.73  | 923.29  |
-| Go   | 1000  | NA (acceptor saturation)    | NA     | NA     | NA     | NA      | NA      |
-| Go   | 5000  | NA (acceptor saturation)    | NA     | NA     | NA     | NA      | NA      |
-| Node | 100   | 695 [695..695]              | 114.40 | 142.75 | 211.11 | 754.97  | 1930.00 |
-| Node | 1000  | NA (acceptor saturation)    | NA     | NA     | NA     | NA      | NA      |
-| Node | 5000  | 11828 [1025..16162]         | 5.94   | 12.50  | 82.25  | 151.00  | 1980.00 |
+| Kāra | 100   | 37582 [36052..37990]        | 2.41   | 3.12   | 4.09   | 9.32    | 51.62   |
+| Kāra | 1000  | 38654 [37965..39567]        | 23.56  | 30.78  | 39.19  | 110.74  | 445.68  |
+| Kāra | 5000  | 34373 [28586..36639]        | 43.14  | 62.91  | 80.78  | 188.61  | 1890.00 |
+| Go   | 100   | 41314 [40775..42879]        | 2.15   | 3.19   | 4.21   | 7.02    | 18.36   |
+| Go   | 1000  | 52262 [52039..52780]        | 17.28  | 23.28  | 29.38  | 42.97   | 89.00   |
+| Go   | 5000  | 16468 [11269..58660]        | 13.07  | 19.67  | 30.19  | 1040.00 | 1860.00 |
+| Node | 100   | 46037 [45779..46410]        | 2.08   | 2.34   | 2.55   | 5.63    | 55.86   |
+| Node | 1000  | 9398 [8943..9853]           | 11.77  | 138.97 | 483.09 | 1013.92 | 1398.05 |
+| Node | 5000  | NA (single-process cliff)   | NA     | NA     | NA     | NA      | NA      |
 
 ### How to read this
 
-**This is a measure-first artifact with no pre-baked win condition.**
-With keep-alive implemented (see below), the Kāra proxy is now the
-strongest and — more notably — the *most stable* impl across the
-connection sweep: it sustains **~35–38k req/s at every connection count**
-(`-c100`/`-c1000`/`-c5000`) and has the fastest cold start, while both
-comparators collapse to unmeasurable (`NA`) under higher loopback-burst
-connection counts on this host.
+**This is a measure-first artifact with no pre-baked win condition, and
+the honest summary is: Kāra is competitive and uniquely stable, but not
+the throughput leader.** All three impls — once each pools upstream
+connections (see "A note on fairness and an earlier wrong conclusion"
+below) — land in the same order of magnitude (~35–52k req/s where they
+work). The differences are about *which* part of the connection sweep
+each one is strong or weak at:
 
-- **Kāra is flat across `-c`.** 36.6k → 38.2k → 34.9k req/s from `-c100`
-  to `-c5000`, p50 staying single-digit to low-double-digit ms. The
-  event-loop reactor absorbs the connection-count growth without the
-  acceptor cliff the thread-per-connection comparators hit. This is the
-  property the auto-concurrency story predicts: connection scaling is the
-  runtime's job, not the handler's.
+- **Kāra is the flattest.** 37.6k → 38.7k → 34.4k req/s from `-c100` to
+  `-c5000`, with the tightest run-to-run ranges and no collapse anywhere.
+  The event-loop reactor absorbs connection-count growth smoothly — the
+  property the auto-concurrency story predicts (connection scaling is the
+  runtime's job, not the handler's). This stability is Kāra's real,
+  defensible result here.
 
-- **Go / Node `NA` rows are comparator instability, not a Kāra win per
-  se.** Go's `httputil.ReverseProxy` + `http.Serve` and Node's single-
-  process `http.Server` both hit a queueing cliff under a 1000–5000-
-  connection `wrk` burst on macOS loopback on this host — `wrk` reports
-  no completed requests in the window (recorded as `NA`). Their `-c100`
-  rows are also depressed and run-to-run noisy (Go 1.4k–3.9k, Node
-  0.7k–40k across runs). These are properties of each comparator's
-  default config under loopback burst, recorded as-measured with **no
-  tuning knobs** (per the fairness controls below) — read them as "the
-  comparators are unstable on this harness," not as a precise Kāra-vs-X
-  multiple. The honest, defensible claim is the absolute one: **Kāra's
-  event-loop proxy holds a stable ~35k req/s across the whole sweep.**
+- **Go (with a pooled transport) is the throughput leader at moderate
+  concurrency** — 41k at `-c100`, **52k at `-c1000`**, beating Kāra at
+  both. At `-c5000` its `httputil.ReverseProxy` gets noisy (11k–59k across
+  rounds) but doesn't fully collapse. Goroutine-per-connection scales well
+  here; the cost is the lifecycle and transport-pool tuning you have to
+  get right (the un-tuned default is what produced the earlier wrong
+  result — see below).
 
-- **The cold-start flip.** In the pre-keep-alive revision Kāra's cold
-  start read 0.99 req/s — an artifact of one-request-per-connection, not
-  a real number. With keep-alive the cold start is now 17.8k req/s, the
-  fastest of the three: the very first held connection pipelines requests
-  immediately, no per-request reconnect.
+- **Node is fastest at `-c100`** (46k) but **collapses at higher
+  concurrency** — 9.4k at `-c1000`, `NA` at `-c5000`. Single-process
+  Node has one event loop and one acceptor; past ~hundreds of concurrent
+  connections on this host it falls off a cliff. Cluster mode would lift
+  this at the cost of process orchestration.
 
-**Conclusion (post-hoc, un-spun).** The benchmark did exactly its job
-twice over. The first run surfaced that the passthrough lacked client
-keep-alive (the dominant throughput factor under any keep-alive load
-generator); implementing it surfaced a real **codegen miscompile** in the
-coroutine non-unit-return path (next section). With both fixed, the Kāra
-event-loop proxy is competitive-to-leading on throughput and distinctly
-more stable under connection-count scaling than the stdlib Go/Node
-proxies on this host — and the handler is still plain straight-line
-blocking-looking code with no `async fn` and no goroutine lifecycle.
+- **Cold start is noisy and not load-bearing.** It's a single 1 s `-t1
+  -c1` probe; treat the ~10–14k req/s spread as in-the-noise, not a
+  ranking. (Kāra's pre-keep-alive 0.99 req/s cold start *was* meaningful —
+  it was the one-request-per-connection artifact — but that's fixed.)
+
+- **`-c5000` on a single loopback host is a stress regime, not a clean
+  data point.** At 5000 connections the `somaxconn = 128` accept backlog
+  and the ~16k ephemeral-port range dominate for *everyone* (Go goes
+  noisy, Node goes `NA`); only Kāra's one-persistent-upstream-connection-
+  per-client design stays smooth. Read `-c100`/`-c1000` as the meaningful
+  comparison and `-c5000` as "what happens past the host's limits."
+
+**Conclusion (post-hoc, un-spun).** Where the proxies are fairly
+configured and the host isn't saturated (`-c100`/`-c1000`), **Go is the
+fastest, Node peaks then collapses, and Kāra sits in between — slower than
+a tuned Go proxy but the most stable across the load range, and never the
+one that falls over.** That is a genuinely good result for a young
+language's event-loop runtime, and it comes with the ergonomic payoff the
+whole demo is about: the handler is plain straight-line blocking-looking
+code — no `async fn`, no goroutine lifecycle, and (unlike the Go
+comparator) **no transport-pool knob you have to know to set**, because
+the Kāra proxy holds one upstream connection per client by construction.
+It is **not** a "Kāra is fastest" benchmark, and shouldn't be cited as one.
+
+> ⚠️ **Caveat — loopback + a shared machine.** These numbers were taken on
+> a single host over the loopback interface, with other compute
+> (compiler builds) intermittently active on the box. Loopback removes the
+> NIC/network but makes the client `wrk` contend with the servers for the
+> same cores, and `somaxconn`/ephemeral-port limits bite at high `-c`. The
+> qualitative story (Kāra competitive + most stable; Go fastest tuned;
+> Node peaks then collapses) is robust across runs; the exact req/s are
+> ±10–20% noisy. A separate-client/separate-server rig over a real network
+> is the next step for defensible cross-language *multiples* — though for
+> a 2-byte response that test becomes network-bound and would need a
+> larger payload / higher concurrency to keep the proxy the bottleneck.
+
+### A note on fairness and an earlier wrong conclusion
+
+An earlier revision of this README reported Kāra as "competitive-to-
+leading and the most stable, while Go/Node collapse to `NA`." **That
+conclusion was wrong — it measured a crippled Go comparator.** Go's
+`httputil.ReverseProxy` used the default transport, whose
+`MaxIdleConnsPerHost = 2` made it open and discard a fresh upstream
+connection per request under load, exhausting loopback ephemeral ports
+(`connect: can't assign requested address`) and dropping Go to a few
+hundred req/s with 502s. Giving the Go proxy a pooled `Transport`
+(`MaxIdleConnsPerHost = 10000`, matching the spirit of Node's
+`maxSockets: 4096` agent and Kāra's one-persistent-connection-per-client
+design) took Go from `NA`/1.4k to 41k–52k req/s — and flipped the
+headline. The lesson is the one this benchmark is supposed to teach about
+itself: **diagnose the comparator before believing a win.**
 
 ## Fairness controls
 
 - **Hardware:** all three proxies run on the same machine, sequentially
   (one proxy active at a time), forwarding to the *same* shared upstream
   process. Background load is the same for all.
-- **Worker counts:** no tuning knobs are pre-set. Kāra uses its runtime's
-  natural reactor-thread default; Go uses the default
-  `GOMAXPROCS = num_cpus`; Node runs single-process (its default).
+- **Worker counts:** Kāra uses its runtime's natural reactor-thread
+  default; Go uses the default `GOMAXPROCS = num_cpus`; Node runs
+  single-process (its default).
+- **Upstream connection pooling (made equal on purpose):** each proxy
+  pools/reuses upstream connections per its own idiom — Go via an explicit
+  `Transport` (`MaxIdleConnsPerHost = 10000`), Node via
+  `new http.Agent({ keepAlive: true, maxSockets: 4096 })`, Kāra by holding
+  one persistent upstream connection per client connection. This is the
+  one knob that *must* be set fairly: leaving Go on the default
+  `MaxIdleConnsPerHost = 2` is what produced the earlier wrong result
+  (see "A note on fairness" above). Everything else is each language's
+  default.
 - **Single-process Node footnote:** Node's single-process default is
   faithful to the language's typical deployment reality. Cluster-mode
   (`cluster.fork()`) would scale ~`num_cpus`× at the cost of process
-  orchestration; not v1 of this bench. Single-process is part of why
-  Node hits an acceptor cliff at higher connection counts on this host
-  (the `NA` rows); cluster-mode would likely lift those — an honest
-  caveat on the comparison, not a Kāra claim.
+  orchestration; not v1 of this bench. Single-process is why Node hits an
+  acceptor cliff at `-c1000`/`-c5000` on this host — an honest caveat on
+  the comparison, not a Kāra claim.
 - **Shared upstream:** one Go origin returning a constant `"OK"`, the
   same backend for every proxy, launched once and reached via the
   ephemeral port discovered + exported as `RELAY_UPSTREAM`. The upstream

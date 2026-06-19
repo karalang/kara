@@ -739,10 +739,18 @@ and curating the Rust side-by-side honestly.
 > analog of the Fathom `join` non-scalar-return fix; pinned by
 > `tests/coro_e2e.rs::coroutine_bool_return_{false_branches_then,true_branches_else}`
 > (the 7-vs-8 pair proves value-correctness, not just verifier-pass). With
-> keep-alive in place the Kāra proxy sustains a stable ~35–38k req/s across the
-> `-c100/1000/5000` sweep (fastest cold start; comparators hit acceptor cliffs at
-> higher connection counts). The measured numbers, the per-impl build history, and
-> both compiler-bug writeups live in
+> keep-alive in place the Kāra proxy holds a stable ~34–39k req/s across the
+> `-c100/1000/5000` sweep. **Honest framing (a corrected earlier overclaim):**
+> once the Go comparator is *fairly* configured — its default transport caps
+> `MaxIdleConnsPerHost` at 2, which exhausted loopback ephemeral ports and made
+> Go look like it collapsed; pooling upstream conns flips it — **Go is the
+> throughput leader at `-c100/1000` (~41–52k), Node peaks at `-c100` (~46k) then
+> collapses, and Kāra sits in between: not fastest, but the most stable across
+> the load range and the only impl that never falls over** (and with no
+> transport-pool knob to set — it holds one upstream connection per client by
+> construction). Diagnosing that comparator artifact was itself part of the
+> exercise. The measured numbers, the fairness writeup, and both compiler-bug
+> writeups live in
 > [`examples/relay/bench/README.md`](../examples/relay/bench/README.md).
 
 **Audience:** Infrastructure engineers, performance-focused backend developers.
