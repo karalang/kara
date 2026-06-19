@@ -10416,6 +10416,65 @@ fn main() {
         );
     }
 
+    // NOTE — #38 (FieldAccess-rooted Vec-index match binding a String that
+    // outlives the container) has no isolated ASAN test here: in any shape small
+    // enough to unit-test, the separate pre-existing [#35] leak (a
+    // `Vec[struct-with-enum-field]` dropping a live `Id(String)` element never
+    // frees it) keeps the aliased buffer alive, so the dangle is NOT an
+    // observable UAF/double-free that ASAN can flag. The precise #38 regression
+    // guard is the differential `tests/selfhost_parser.rs` oracle: with the
+    // clone disabled, identifiers/strings render EMPTY (`(ident   @0:1)`), the
+    // exact "String payload reads empty" symptom — so a regression fails the
+    // oracle, not this suite.
+
+    #[test]
+    fn asan_match_variant_name_shared_across_enums_string_payload_no_leak() {
+        // #39 (phase-12 self-hosting, parser stage): a bare variant name shared
+        // by a value enum (`Tok.Str`) and a shared enum (`Expr.Str`) used to
+        // bind a shared-enum String payload off the WRONG enum's word offsets —
+        // reading a single word for a multi-word `SLit` and reconstructing a
+        // garbage buffer pointer. Now that resolution pins to the match
+        // scrutinee's own enum, the bound `n.value` owns a real buffer; the
+        // arm consumes it (returns it out) so the LSan gate proves the
+        // String is freed exactly once per iteration — no leak, no double-free.
+        // Looped so a per-iteration leak accumulates visibly. This is the
+        // parser's `Token.Str`/`Expr.Str` payload-read shape.
+        assert_clean_asan_run(
+            r#"
+struct Sp { line: i64, column: i64, offset: i64, length: i64 }
+struct SLit { value: String, span: Sp }
+enum Tok { Str(String, Sp), Int(i64) }
+shared enum Expr { Int(i64), Boolish(i64), Str(SLit) }
+fn text_of(e: Expr) -> String {
+    match e {
+        Int(v) => v.to_string(),
+        Boolish(v) => v.to_string(),
+        Str(n) => n.value,
+    }
+}
+fn tok_kind(t: Tok) -> i64 {
+    match t { Str(s, sp) => 1, Int(v) => 2 }
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 50 {
+        let t = Tok.Str("tok".to_string(), Sp { line: 1, column: 1, offset: 0, length: 3 });
+        total = total + tok_kind(t);
+        let n = SLit { value: "hello world".to_string(), span: Sp { line: 1, column: 1, offset: 7, length: 11 } };
+        let e = Expr.Str(n);
+        let s = text_of(e);
+        total = total + s.len();
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["600"],
+            "match_variant_name_shared_across_enums_string_payload",
+        );
+    }
+
     // A heap value (`String`) moved into a `tg.spawn` closure INSIDE A LOOP:
     // the per-iteration `let addr = base.clone()` is freed at loop-body scope
     // exit, but the spawned task now owns that buffer (the env got a bitwise

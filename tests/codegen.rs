@@ -2146,6 +2146,55 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_match_variant_name_shared_across_enums_resolves_to_scrutinee() {
+        // #39 (phase-12 self-hosting, parser stage): a bare variant name that
+        // exists in MORE THAN ONE enum (`Float` in both a value `Tok` and a
+        // shared `Expr`) was resolved against whichever enum the unordered
+        // `enum_layouts` map yielded first, not the match scrutinee's own enum.
+        // Two distinct failures, both fixed by pinning resolution to the
+        // scrutinee's enum (`match_scrutinee_enum_hint`):
+        //   (a) value-enum match — the arm's TAG came from the wrong enum, so
+        //       a `match tok { Float(v, s) => … }` never matched (tags differ:
+        //       `Tok.Float` is variant 0, `Expr.Float` is variant 2) and fell
+        //       through to the wrong arm / default.
+        //   (b) shared-enum match — the bound payload's WORD OFFSETS came from
+        //       the wrong enum. `Tok.Float` is a 2-field `(f64, String)` whose
+        //       first slot is 1 word; binding `Expr.Float(n)` (one whole
+        //       multi-word `FLit` struct) off that layout read a single word
+        //       and reconstructed `n` with a garbage `Sp` pointer → SIGSEGV
+        //       reading `n.span.offset`. This is the parser's
+        //       `Token.Float`/`Expr.Float` shape exactly.
+        if let Some(out) = run_program(
+            "struct Sp { line: i64, column: i64, offset: i64, length: i64 }\n\
+             struct FLit { value: f64, suffix: String, span: Sp }\n\
+             enum Tok { Float(f64, String), Int(i64, String) }\n\
+             shared enum Expr { Int(i64), Boolish(i64), Float(FLit) }\n\
+             fn tok_kind(t: Tok) -> i64 {\n\
+                 match t {\n\
+                     Float(v, s) => 100,\n\
+                     Int(v, s) => 200,\n\
+                 }\n\
+             }\n\
+             fn expr_off(e: Expr) -> i64 {\n\
+                 match e {\n\
+                     Int(v) => v,\n\
+                     Boolish(v) => v,\n\
+                     Float(n) => n.span.offset,\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let t = Tok.Float(1.5, \"f64\");\n\
+                 println(tok_kind(t).to_string());\n\
+                 let n = FLit { value: 2.5, suffix: \"\", span: Sp { line: 1, column: 1, offset: 7, length: 3 } };\n\
+                 let e = Expr.Float(n);\n\
+                 println(expr_off(e).to_string());\n\
+             }",
+        ) {
+            assert_eq!(out, "100\n7\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_string_method_on_self_field() {
         // Regression for the self-hosting lexer blocker #5: a String/Vec
         // method on a field accessed through `self`

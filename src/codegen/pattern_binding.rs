@@ -471,12 +471,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 let offsets: Vec<(usize, usize)> = self
                     .enum_layouts
                     .iter()
-                    .find(|(_, l)| {
-                        l.tags.contains_key(variant_name)
-                            && scrut_struct_ty
-                                .as_ref()
-                                .map(|t| &l.llvm_type == t)
-                                .unwrap_or(true)
+                    .find(|(en, l)| {
+                        if !l.tags.contains_key(variant_name) {
+                            return false;
+                        }
+                        match (&scrut_struct_ty, &self.match_scrutinee_enum_hint) {
+                            // Value enum: the inline struct type pins the layout.
+                            (Some(t), _) => &l.llvm_type == t,
+                            // #39 — a shared (RC-pointer) scrutinee has no inline
+                            // struct type to match on, so a bare variant name
+                            // shared across enums (`Float` in both `Token` and
+                            // `Expr`) would otherwise pick whichever the unordered
+                            // map yields first and read the WRONG word count
+                            // (a `Token.Float` 1-word slot for an `Expr.Float`
+                            // whole-`FloatLit` bind → garbage Span ptr → crash).
+                            // Pin to the match scrutinee's enum by name.
+                            (None, Some(h)) => en.as_str() == h.as_str(),
+                            // No hint and no inline type: legacy first-match.
+                            (None, None) => true,
+                        }
                     })
                     .map(|(_, l)| l)
                     .or_else(|| {
@@ -504,8 +517,34 @@ impl<'ctx> super::Codegen<'ctx> {
 
                 // Shared enum: extract payload via GEP (words at heap index 2+).
                 if let BasicValueEnum::PointerValue(ptr) = scrut {
-                    for (enum_name, layout) in &self.enum_layouts.clone() {
-                        if layout.tags.contains_key(variant_name) {
+                    // #39 — when a bare variant name is shared across enums,
+                    // the heap layout (`info.heap_type`) must come from the
+                    // match scrutinee's OWN enum, not whichever shared enum the
+                    // unordered map happens to yield first. Try the hint enum
+                    // before the general scan (the scan stays as the fallback
+                    // for the no-hint / unresolved-scrutinee case).
+                    let ordered: Vec<String> = {
+                        let mut names: Vec<String> = Vec::new();
+                        if let Some(h) = self
+                            .match_scrutinee_enum_hint
+                            .as_ref()
+                            .filter(|h| self.shared_types.contains_key(h.as_str()))
+                        {
+                            names.push(h.clone());
+                        }
+                        for en in self.enum_layouts.keys() {
+                            if Some(en) != names.first() {
+                                names.push(en.clone());
+                            }
+                        }
+                        names
+                    };
+                    for enum_name in &ordered {
+                        let has_variant = self
+                            .enum_layouts
+                            .get(enum_name)
+                            .is_some_and(|l| l.tags.contains_key(variant_name));
+                        if has_variant {
                             if let Some(info) = self.shared_types.get(enum_name).cloned() {
                                 for (i, sub_pat) in patterns.iter().enumerate() {
                                     let (start_word, num_words) =

@@ -1713,6 +1713,17 @@ pub(super) struct Codegen<'ctx> {
     /// shared fields — but a Vec/String field emits a real buffer-freeing drop
     /// fn, which is the gap this flag closes.
     pub(crate) pattern_binding_scrutinee_is_shared_enum: bool,
+    /// #39 — the resolved enum type name of the match scrutinee currently being
+    /// compiled (e.g. `Token` for `match self.tokens[i].token { … }`). An
+    /// unqualified variant pattern (`Float(v, sfx)`) is resolved against THIS
+    /// enum first, so a bare variant name that ALSO exists in another imported
+    /// enum (`Expr.Float`) no longer mis-resolves to whichever enum the
+    /// (unordered) `enum_layouts` map yields first. Set once at the top of
+    /// `compile_match` from `type_name_of_expr(scrutinee)`, restored after the
+    /// arm loop (nested matches save/restore). `None` when the scrutinee's
+    /// enum can't be resolved statically, in which case the resolvers keep
+    /// their prior user-vs-seed fallback.
+    pub(crate) match_scrutinee_enum_hint: Option<String>,
     /// Phase 7.2 Slice DP — per-enum drop function cache (enum name →
     /// `__karac_drop_<EnumName>` `FunctionValue`). Lazily populated by
     /// `emit_enum_drop_switch` on first registration of a value-type
@@ -4814,6 +4825,7 @@ impl<'ctx> Codegen<'ctx> {
             pattern_binding_is_borrow: false,
             pattern_binding_scrutinee_is_option_result: false,
             pattern_binding_scrutinee_is_shared_enum: false,
+            match_scrutinee_enum_hint: None,
             enum_drop_fns: HashMap::new(),
             struct_drop_fns: HashMap::new(),
             user_drop_wrapper_fns: HashMap::new(),

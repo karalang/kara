@@ -254,14 +254,13 @@ fn rust_render(src: &str) -> String {
     }
 }
 
-// IGNORED pending phase-12 codegen blocker #32 (self-field-rooted Vec-index
-// reads, `self.tokens[self.pos]…`, are miscompiled — see
-// docs/implementation_checklist/phase-12-self-hosting.md "Parser pre-port:
-// codegen blockers"). The parser (`selfhost/src/parser.kara`) is code-complete
-// in its target clone-free shape but cannot compile until #32 lands; this oracle
-// is the gate for parser slice 1 the moment it does. Remove `#[ignore]` then.
+// Parser slice 1 (expression core) differential gate. The five codegen
+// blockers it surfaced — #32 (self-field-rooted Vec-index reads), #34 (stdlib
+// type collision), #36 (recursive by-value struct layout), #37 (shared-enum
+// struct-payload pack), #38 (borrowed index-field enum scrutinee dangle), and
+// #39 (bare variant name shared across enums mis-resolving in a match) — all
+// landed, so this oracle now runs as a normal gated test.
 #[test]
-#[ignore = "blocked on phase-12 codegen blocker #38 (shared-enum String payload from parsed token reads empty)"]
 fn selfhost_parser_matches_rust_parser() {
     // 1. Generate the crate-root program: imports of the Kāra parser +
     //    renderer, a per-input driver, and `main`. The `span`/`token`/`lexer`/

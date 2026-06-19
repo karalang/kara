@@ -18,6 +18,7 @@
 //! Lives in a sibling `impl<'ctx> super::Codegen<'ctx>` block.
 
 use crate::ast::*;
+use crate::codegen::helpers::vec_inner_type_expr;
 
 use inkwell::basic_block::BasicBlock;
 use inkwell::types::{BasicTypeEnum, StructType};
@@ -79,6 +80,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 None
             };
         let scrut = self.compile_expr(scrutinee)?;
+        // #39 — resolve the scrutinee's enum type so unqualified variant
+        // patterns disambiguate against it (`Float` → `Token.Float`, not a
+        // colliding `Expr.Float`). Set before any pattern-resolution call below
+        // (variant→enum, variant→tag) so they prefer THIS enum over whichever
+        // the unordered `enum_layouts` map happens to yield first. Gated on the
+        // resolved name actually naming a known enum; a struct / unknown
+        // scrutinee leaves the hint cleared so the resolvers keep their prior
+        // user-vs-seed fallback. Saved/restored so a nested match doesn't leak
+        // an outer scrutinee's hint inward.
+        let saved_scrut_enum_hint = self.match_scrutinee_enum_hint.take();
+        self.match_scrutinee_enum_hint = self
+            .type_name_of_expr(scrutinee)
+            .filter(|n| self.enum_layouts.contains_key(n.as_str()));
         // `match v[i] { V(s) => … }` over a heap-element `Vec` — deep-clone the
         // shallow element so the destructure moves a payload field out of an
         // INDEPENDENT buffer, not the container's (otherwise the binding's drop
@@ -89,6 +103,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // then drop-tracks this same cloned value so a no-bind arm frees it.
         // No-op for every non-index / Copy-element scrutinee.
         let scrut = self.clone_owned_vec_index_element(scrutinee, scrut)?;
+        // #38: a `match <self.field[i]>.enumfield { … }` scrutinee — the
+        // FieldAccess-rooted-Index field shape the #18 suppression can't reach.
+        // Clone the enum value so a heap payload bound out owns an independent
+        // buffer (else it aliases the Vec element's buffer and dangles when the
+        // container drops). The parser's `self.tokens[self.pos].token` shape.
+        let scrut = self.clone_borrowed_index_field_enum_scrutinee(scrutinee, scrut)?;
         // B-track (pattern-arm unbound heap-field drop): a fresh-temp enum
         // scrutinee (`match make() { … }`) has no source `EnumDrop`, so any arm
         // that leaves a heap payload field unbound leaks it. Materialize +
@@ -408,6 +428,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.pattern_binding_is_borrow = saved_borrow_flag;
         self.pattern_binding_scrutinee_is_option_result = saved_opt_res_flag;
         self.pattern_binding_scrutinee_is_shared_enum = saved_shared_enum_flag;
+        self.match_scrutinee_enum_hint = saved_scrut_enum_hint;
 
         // Every arm diverged (`return` / `unreachable()` / `todo()` in all of
         // them): no arm branched to `merge_bb`, so it has no predecessors.
@@ -1188,6 +1209,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+        // #39 — an unqualified variant resolves against the match scrutinee's
+        // enum first, so a name shared with another imported enum (`Float` in
+        // both `Token` and `Expr`) binds to the scrutinee's variant, not
+        // whichever the unordered map yields first.
+        if let Some(hint) = &self.match_scrutinee_enum_hint {
+            if let Some(layout) = self.enum_layouts.get(hint) {
+                if layout.tags.contains_key(variant_name) {
+                    return Some(hint.clone());
+                }
+            }
+        }
         let mut user_hit: Option<String> = None;
         let mut seed_hit: Option<String> = None;
         for (en, l) in &self.enum_layouts {
@@ -1217,6 +1249,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // Qualified `Enum.Variant`: take both type and tag from that enum.
         if segments.len() >= 2 {
             if let Some(layout) = self.enum_layouts.get(segments[segments.len() - 2]) {
+                if let Some(&tag) = layout.tags.get(variant_name) {
+                    return Some((layout.llvm_type, tag));
+                }
+            }
+        }
+        // #39 — prefer the match scrutinee's enum for an unqualified variant,
+        // so a name shared across enums (`Token.Float` vs `Expr.Float`) resolves
+        // to the scrutinee's tag instead of whichever the unordered map yields.
+        if let Some(hint) = &self.match_scrutinee_enum_hint {
+            if let Some(layout) = self.enum_layouts.get(hint) {
                 if let Some(&tag) = layout.tags.get(variant_name) {
                     return Some((layout.llvm_type, tag));
                 }
@@ -2306,13 +2348,37 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn place_chain_type_name(&self, expr: &Expr) -> Option<String> {
         match &expr.kind {
             ExprKind::Index { object, .. } => {
-                let ExprKind::Identifier(v) = &object.kind else {
-                    return None;
-                };
-                match self.var_elem_type_exprs.get(v.as_str()).map(|te| &te.kind) {
-                    Some(TypeKind::Path(p)) => p.segments.last().cloned(),
-                    _ => None,
+                if let ExprKind::Identifier(v) = &object.kind {
+                    return match self.var_elem_type_exprs.get(v.as_str()).map(|te| &te.kind) {
+                        Some(TypeKind::Path(p)) => p.segments.last().cloned(),
+                        _ => None,
+                    };
                 }
+                // #38 — a FieldAccess/`self`-rooted Vec index (`self.tokens[i]`):
+                // element type name from the collection FIELD's `Vec[E]`
+                // TypeExpr. Pure resolution (no IR), so safe regardless of the
+                // `ref self` element-pointer subtlety that gates `field_chain_place_ptr`.
+                if let ExprKind::FieldAccess {
+                    object: inner,
+                    field,
+                } = &object.kind
+                {
+                    let obj_ty = self.place_chain_type_name(inner)?;
+                    let fidx = self
+                        .struct_field_names
+                        .get(obj_ty.as_str())?
+                        .iter()
+                        .position(|n| n == field)?;
+                    let field_te = self
+                        .struct_field_type_exprs
+                        .get(obj_ty.as_str())?
+                        .get(fidx)?;
+                    let elem_te = vec_inner_type_expr(field_te)?;
+                    if let TypeKind::Path(p) = &elem_te.kind {
+                        return p.segments.last().cloned();
+                    }
+                }
+                None
             }
             ExprKind::FieldAccess { object, field } => {
                 let obj_ty = self.place_chain_type_name(object)?;
