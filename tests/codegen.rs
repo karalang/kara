@@ -46519,4 +46519,60 @@ fn main() {
             "drop-walker `nstr.*` blocks leaked into @use_stmt — current_fn append target regressed; IR:\n{ir}"
         );
     }
+
+    // ── Sub-word Vec element store must narrow the value to the element width ──
+    //
+    // Regression for the `Vec[u8]`/`Vec[bool]` push (and index-store) heap
+    // overflow: a computed scalar for a sub-word element (`v.push(b'a' + (i as
+    // u8))`) compiles to the default i64, and the element store wrote 8 bytes
+    // over the 1-byte slot. Harmless inside allocation slack, but the push that
+    // fills an exact-size-class buffer (cap 64/128/256…) smeared 7 bytes past
+    // the end, corrupting the adjacent heap — an ASLR-intermittent SIGSEGV on
+    // later realloc/free. The values read back correct (each slot's low byte
+    // survives), so this is a build+run test: pre-fix it reliably crashes once
+    // the buffer grows past ~64 elements; the fix narrows the value to the
+    // element type before the store. ASAN missed it (the spill lands in
+    // realloc-rounding slack, not a poisoned redzone), so the guard is E2E
+    // execution, not the sanitizer suite.
+    #[test]
+    fn e2e_subword_vec_push_narrows_to_elem_width_no_heap_overflow() {
+        // 240 computed-u8 pushes cross the 64/128 power-of-two cap boundaries
+        // where the pre-fix 8-byte store overflowed an exact-size allocation.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut v: Vec[u8] = Vec.new();\n\
+                 let mut a = 0i64;\n\
+                 while a < 240i64 { v.push(b'a' + ((a % 3i64) as u8)); a = a + 1i64; }\n\
+                 let mut sum = 0i64;\n\
+                 let mut k = 0i64;\n\
+                 while k < v.len() { sum = sum + (v[k] as i64); k = k + 1i64; }\n\
+                 println(f\"{v.len()} {sum}\");\n\
+                 // index-store path: overwrite a computed u8 then re-sum.\n\
+                 v[100] = 200u8 - ((0i64 % 3i64) as u8);\n\
+                 println(f\"{v[100] as i64}\");\n\
+             }",
+        ) {
+            // 80×(97+98+99) = 23520; v[100] = 200.
+            assert_eq!(out, "240 23520\n200\n");
+        }
+    }
+
+    #[test]
+    fn e2e_subword_vec_bool_push_no_heap_overflow() {
+        // Vec[bool] is also 1-byte; a computed bool push past the cap boundary
+        // hit the same overflow. Count the trues over 200 elements.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut v: Vec[bool] = Vec.new();\n\
+                 let mut a = 0i64;\n\
+                 while a < 200i64 { v.push((a % 2i64) == 0i64); a = a + 1i64; }\n\
+                 let mut trues = 0i64;\n\
+                 let mut k = 0i64;\n\
+                 while k < v.len() { if v[k] { trues = trues + 1i64; } k = k + 1i64; }\n\
+                 println(f\"{v.len()} {trues}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "200 100\n");
+        }
+    }
 }

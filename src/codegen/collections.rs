@@ -2177,6 +2177,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_gep(elem_ty, data, &[idx_val], "v.st.elem.ptr")
                 .unwrap()
         };
+        // Narrow to the element width before storing — a computed scalar for a
+        // sub-word element (`v[i] = b'a' + (k as u8)` into `Vec[u8]`) compiles
+        // to i64 and would write 8 bytes over a 1-byte slot. Same fix as the
+        // `push` element store and `coerce_to_struct_field_ty`.
+        let val = self.coerce_scalar_to_type(val, elem_ty);
         self.builder.build_store(elem_ptr, val).unwrap();
         Ok(())
     }
@@ -2316,6 +2321,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_gep(elem_ty, data, &[idx_val], "s.st.elem.ptr")
                 .unwrap()
         };
+        // Narrow to element width before storing into a sub-word slice element
+        // — same fix as the Vec push / index-store paths.
+        let val = self.coerce_scalar_to_type(val, elem_ty);
         self.builder.build_store(elem_ptr, val).unwrap();
         Ok(())
     }

@@ -1556,6 +1556,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_gep(elem_ty, cur_data, &[len], "elem.ptr")
                         .unwrap()
                 };
+                // Narrow the value to the element width before storing. A
+                // sub-word element type (`Vec[u8]` / `Vec[bool]` / `Vec[u16]`
+                // / `Vec[u32]`) has a 1/2/4-byte stride and allocation, but a
+                // computed scalar (`v.push(b'a' + (i as u8))`) compiles to the
+                // default i64 — storing it raw writes 8 bytes over a 1-byte
+                // slot, smearing 7 bytes past the buffer on the slot that fills
+                // an exact-size-class allocation (heap overflow → corruption,
+                // ASLR-intermittent crash). Mirrors `coerce_to_struct_field_ty`
+                // for struct fields and the index-store path below.
+                let elem_val = self.coerce_scalar_to_type(elem_val, elem_ty);
                 self.builder.build_store(elem_ptr, elem_val).unwrap();
 
                 // Increment len.
@@ -1721,6 +1731,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_gep(elem_ty, cur_data, &[len], "tpush.elem.ptr")
                         .unwrap()
                 };
+                // Narrow to element width — see the `push` store note.
+                let elem_val = self.coerce_scalar_to_type(elem_val, elem_ty);
                 self.builder.build_store(elem_ptr, elem_val).unwrap();
                 let one = i64_t.const_int(1, false);
                 let new_len = self
@@ -1880,6 +1892,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder
                     .build_memmove(shifted_dst, 8, cur_data, 8, shift_bytes)
                     .unwrap();
+                let elem_val = self.coerce_scalar_to_type(elem_val, elem_ty);
                 self.builder.build_store(cur_data, elem_val).unwrap();
                 let one = i64_t.const_int(1, false);
                 let new_len = self.builder.build_int_add(len, one, "new_len").unwrap();
@@ -2034,6 +2047,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder
                     .build_memmove(shifted_dst, 8, cur_data, 8, shift_bytes)
                     .unwrap();
+                let elem_val = self.coerce_scalar_to_type(elem_val, elem_ty);
                 self.builder.build_store(cur_data, elem_val).unwrap();
                 let new_len = self.builder.build_int_add(len, one, "tpf.new_len").unwrap();
                 self.builder.build_store(len_ptr, new_len).unwrap();
