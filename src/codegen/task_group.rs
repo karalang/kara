@@ -302,33 +302,82 @@ impl<'ctx> super::Codegen<'ctx> {
         // from `var_type_names`/`saved_var_types`, which the statement-
         // hoisting pre-pass resets (the same volatility the dispatch gate
         // hit). `is_sender` rides along from the parent action.
+        //
+        // Heap-builtin (`String` / `Vec[T]`) captures need the symmetric
+        // transfer. The parent's scope-exit `FreeVecBuffer` for the capture
+        // is suppressed at the outer site below (so the parent never frees a
+        // buffer the spawned task still reads — the loop UAF B-2026-06-18-8
+        // closed), which hands buffer ownership to the task. But the wrapper
+        // only *binds* the capture into a fresh alloca; it registers no
+        // cleanup of its own, so whatever the body does not itself consume
+        // leaks. A body that merely *borrows* the capture — `check(addr)`
+        // whose `addr: String` param is inferred `ref` — moves nothing, so
+        // without a wrapper-side free the buffer leaks once per spawn
+        // (LeakSanitizer: N×`karac_string_clone` reachable from `main`; the
+        // suppress-only B-2026-06-18-8 fix masked the UAF on macOS, where
+        // there is no LSan, but converted it into this leak). Re-register the
+        // parent's exact `FreeVecBuffer` (same `elem_ty` / element-drop
+        // payload) against the wrapper-local alloca: the task frees the buffer
+        // at completion, and if the body *does* move the capture into an
+        // owning callee the standard move path zeros the source `cap`, so this
+        // cleanup's `cap > 0` guard skips it (no double-free). Drains with the
+        // channel-end frame at task exit (`drain_top_frame_with_emit` below),
+        // before the env struct itself is freed.
         self.scope_cleanup_actions.push(Vec::new());
         let mut channel_caps: Vec<(PointerValue<'ctx>, bool)> = Vec::new();
+        let mut vec_caps = Vec::new();
         for var_name in &free_vars {
             let Some(parent_slot) = saved_vars.get(var_name) else {
                 continue;
             };
             let parent_ptr = parent_slot.ptr;
+            let wrapper_ptr = self.variables[var_name].ptr;
             let mut is_sender = None;
             for frame in &self.scope_cleanup_actions {
                 for action in frame {
-                    if let CleanupAction::DropChannelEnd {
-                        chan_alloca,
-                        is_sender: s,
-                    } = action
-                    {
-                        if *chan_alloca == parent_ptr {
+                    match action {
+                        CleanupAction::DropChannelEnd {
+                            chan_alloca,
+                            is_sender: s,
+                        } if *chan_alloca == parent_ptr => {
                             is_sender = Some(*s);
                         }
+                        CleanupAction::FreeVecBuffer {
+                            vec_alloca,
+                            elem_ty,
+                            elem_is_tensor,
+                            elem_map_drop,
+                            elem_agg_drop,
+                        } if *vec_alloca == parent_ptr => {
+                            vec_caps.push((
+                                wrapper_ptr,
+                                *elem_ty,
+                                *elem_is_tensor,
+                                elem_map_drop.clone(),
+                                *elem_agg_drop,
+                            ));
+                        }
+                        _ => {}
                     }
                 }
             }
             if let Some(s) = is_sender {
-                channel_caps.push((self.variables[var_name].ptr, s));
+                channel_caps.push((wrapper_ptr, s));
             }
         }
         for (wrapper_alloca, is_sender) in channel_caps {
             self.track_channel_var(wrapper_alloca, is_sender);
+        }
+        for (vec_alloca, elem_ty, elem_is_tensor, elem_map_drop, elem_agg_drop) in vec_caps {
+            if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                frame.push(CleanupAction::FreeVecBuffer {
+                    vec_alloca,
+                    elem_ty,
+                    elem_is_tensor,
+                    elem_map_drop,
+                    elem_agg_drop,
+                });
+            }
         }
 
         // Compile the closure body inside the wrapper context. For the

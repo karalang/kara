@@ -10577,15 +10577,29 @@ fn main() {
     // A heap value (`String`) moved into a `tg.spawn` closure INSIDE A LOOP:
     // the per-iteration `let addr = base.clone()` is freed at loop-body scope
     // exit, but the spawned task now owns that buffer (the env got a bitwise
-    // copy of the `{data,len,cap}` header). Before the fix, the spawn capture
-    // suppression only removed the parent's user-`Drop` and channel-end
-    // cleanups, not its `FreeVecBuffer` — so the parent freed the buffer the
-    // task still reads. A single non-loop spawn masked it (the `TaskGroup`
-    // join precedes the parent free); the loop drains each iteration's frame
-    // first. The handler body compares its captured string to the known
-    // content (a buffer read — poisoned-memory access if freed under ASAN)
-    // and stays silent unless it mismatches, so a regression shows as an ASAN
-    // use-after-free / a `CORRUPT` line. This is the canonical
+    // copy of the `{data,len,cap}` header). Ownership must transfer cleanly
+    // from parent to task — exactly once across the two of them:
+    //
+    //   1. The parent's per-iteration `FreeVecBuffer` is suppressed (the
+    //      original B-2026-06-18-8 half): a non-suppressed parent frees the
+    //      buffer the task still reads. A single non-loop spawn masked it (the
+    //      `TaskGroup` join precedes the parent free); the loop drains each
+    //      iteration's frame first → ASAN use-after-free.
+    //   2. The task wrapper must then free whatever the body does not itself
+    //      consume (the completing half). The handler here only *reads* the
+    //      captured string (`addr: String` is inferred `ref`), so nothing in
+    //      the body owns it — without a wrapper-side free the buffer leaks once
+    //      per spawn. macOS ASAN has no LeakSanitizer, so the suppress-only fix
+    //      looked green locally while leaking under the Linux/LSan gate
+    //      (`scripts/lsan-local.sh`); `lower_spawn_shared` now re-registers the
+    //      parent's `FreeVecBuffer` against the wrapper-local binding to close
+    //      it. The move-into-callee sibling below guards the no-double-free
+    //      half of that same transfer.
+    //
+    // The handler body compares its captured string to the known content (a
+    // buffer read — poisoned-memory access if freed under ASAN) and stays
+    // silent unless it mismatches, so a regression shows as an ASAN
+    // use-after-free / leak / a `CORRUPT` line. This is the canonical
     // `loop { let s = …; tg.spawn(|| use(s)) }` server-handler shape — exactly
     // `examples/relay/relay.kara`'s round-robin accept loop.
     #[test]
@@ -10646,6 +10660,47 @@ fn main() {
 "#,
             &["ok"],
             "taskgroup_spawn_heap_capture_in_loop_noncoro",
+        );
+    }
+
+    // Companion to the two loop-capture cases above: there the spawned body
+    // only *borrows* the captured `String` (`check(addr)` — a `ref` param), so
+    // the task wrapper is the sole owner and must free it. Here the body
+    // *moves* the capture into a consuming callee (`sink` pushes it into a
+    // local `Vec`, taking ownership), so `sink`'s own scope-exit drop frees the
+    // buffer. The wrapper's transferred `FreeVecBuffer` (the same ownership
+    // hand-off the loop tests exercise) MUST then be a no-op — the move into
+    // `sink` zeros the capture's `cap`, so the `cap > 0` drain guard skips it.
+    // If the wrapper freed regardless, this is a double-free (ASAN: `attempting
+    // double-free`); if neither freed, a leak (LSan). Exactly one free is the
+    // pass. Guards the move-suppression half of the B-2026-06-18-8 follow-up.
+    #[test]
+    fn asan_taskgroup_spawn_heap_capture_moved_into_callee_single_free() {
+        assert_clean_asan_run(
+            r#"
+fn sink(addr: String) {
+    let mut held: Vec[String] = Vec.new();
+    held.push(addr);
+    if held[0] == "relay-upstream-127.0.0.1-9000" {
+    } else {
+        println("CORRUPT");
+    }
+}
+fn main() {
+    let base = "relay-upstream-127.0.0.1-9000";
+    let mut tg: TaskGroup = TaskGroup.new();
+    let mut i: i64 = 0;
+    loop {
+        let addr = base.clone();
+        i = i + 1;
+        tg.spawn(|| sink(addr));
+        if i >= 4 { break; }
+    }
+    println("ok");
+}
+"#,
+            &["ok"],
+            "taskgroup_spawn_heap_capture_moved_into_callee",
         );
     }
 }
