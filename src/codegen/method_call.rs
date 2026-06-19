@@ -154,6 +154,51 @@ impl<'ctx> super::Codegen<'ctx> {
             .cloned();
         self.emit_branch_cancel_check("mcall", callee_key.as_deref());
 
+        // `<string>.chars()` as a STANDALONE value (e.g. `let it = s.chars()`).
+        // Codegen has no first-class iterator value, so materialize the eager
+        // `Vec[char]` snapshot — the faithful representation of a char-iterator
+        // — by reusing the `.chars().collect()` lowering (`for c in s.chars() {
+        // v.push(c) }`). This fires ONLY when `chars()` is compiled as a value:
+        // `for c in s.chars()` is special-cased in the for-loop codegen (the
+        // iterable never reaches here), and `s.chars().collect()` is caught by
+        // the chain intercept below (its inner `chars()` is never compiled
+        // standalone). The let-binding handler registers the binding as
+        // `Vec[char]` so `it.collect()` / `for c in it` dispatch as Vec ops
+        // (B-2026-06-18-5). `chars()` exists only on `String`, so the method
+        // name alone identifies the shape.
+        if method == "chars" && args.is_empty() {
+            let chars_call = Expr {
+                kind: ExprKind::MethodCall {
+                    object: Box::new(object.clone()),
+                    method: "chars".to_string(),
+                    turbofish: None,
+                    args: vec![],
+                    args_close_span: call_span.clone(),
+                },
+                span: call_span.clone(),
+            };
+            return self.compile_chars_collect_to_vec(&chars_call, call_span);
+        }
+
+        // `<it>.collect()` where `it` is an identifier the codegen materialized
+        // as a `Vec` (a bound `s.chars()`, B-2026-06-18-5). The eager snapshot
+        // already IS the collected Vec, so return an independent copy (collect
+        // yields a fresh owned Vec). `collect()` only typechecks on an
+        // `Iterator`, so a Vec-typed receiver here is always such a materialized
+        // iterator — never a user Vec. Placed before the identifier
+        // → `compile_vec_method` dispatch, which has no `collect` arm. (The
+        // `s.chars().collect()` chain, whose `collect` receiver is a `MethodCall`
+        // not an identifier, is handled by the chain intercept further below.)
+        if method == "collect" && args.is_empty() {
+            if let ExprKind::Identifier(name) = &object.kind {
+                if self.vec_elem_types.contains_key(name.as_str()) {
+                    if let Some(v) = self.try_compile_clone(object)? {
+                        return Ok(v);
+                    }
+                }
+            }
+        }
+
         // `process.exit(code: i32) -> !` — lower to libc `exit`. The typechecker
         // registers `process.exit` as a dotted free function and the interpreter
         // (eval_call.rs) handles it as a path-call, but the parser hands codegen a

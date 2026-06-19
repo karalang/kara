@@ -2692,6 +2692,50 @@ fn main() {
     }
 
     #[test]
+    fn e2e_chars_iterator_bound_to_variable_codegen() {
+        // B-2026-06-18-5: `s.chars()` bound to a NAME (`let it = s.chars();`)
+        // failed codegen ("Vec/String method 'chars' is not yet supported")
+        // because codegen has no first-class iterator value — only the direct
+        // `s.chars().collect()` chain was pattern-matched (B-2026-06-18-1). The
+        // fix materializes a standalone `chars()` as the eager `Vec[char]`
+        // snapshot, registers the binding as `Vec[char]`, and treats
+        // `it.collect()` (collect only typechecks on an iterator) as a clone of
+        // that snapshot. Exercises: collect from a bound iterator, a `for c in
+        // it` loop directly over the bound iterator, an empty string, Unicode
+        // (é is a 2-byte char counted as one scalar), and collecting the SAME
+        // bound iterator twice (independent copies — no aliasing/double-free).
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    let s: String = "héllo";
+    let it = s.chars();
+    let v: Vec[char] = it.collect();
+    let mut joined: String = "";
+    for c in v { joined.push(c); }
+    println(f"{joined} {joined.char_count()}");
+
+    let it2 = s.chars();
+    let mut dashed: String = "";
+    for c in it2 { dashed.push(c); dashed.push('-'); }
+    println(dashed);
+
+    let e: String = "";
+    let ie = e.chars();
+    let ve: Vec[char] = ie.collect();
+    println(f"{ve.len()}");
+
+    let it3 = s.chars();
+    let a: Vec[char] = it3.collect();
+    let b: Vec[char] = it3.collect();
+    println(f"{a.len()} {b.len()} {a[0]} {b[4]}");
+}
+"#,
+        ) {
+            assert_eq!(out, "héllo 5\nh-é-l-l-o-\n0\n5 5 h o\n");
+        }
+    }
+
+    #[test]
     fn e2e_for_char_in_string_binds_char_codegen() {
         // B-2026-06-18-2: `for c in s` over a String (owned and `ref String`)
         // must bind `c: char`, not `String` / `ref String`. The typechecker's

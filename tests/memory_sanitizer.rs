@@ -828,6 +828,43 @@ fn main() {
         );
     }
 
+    // ── bound `s.chars()` iterator materialized as Vec[char] — clone ownership ──
+    //
+    // B-2026-06-18-5: `let it = s.chars()` materializes an eager `Vec[char]`
+    // snapshot, and `it.collect()` returns a CLONE of it. Collecting the same
+    // bound iterator twice yields two independent buffers, and the snapshot `it`
+    // is itself freed at scope exit — three buffers per iteration that must each
+    // be freed exactly once. A `for c in it` also drains a materialized snapshot.
+    // Looped 1000× so LSan catches a per-iter leak (e.g. the snapshot never
+    // freed) and local ASAN catches a double-free (e.g. a clone aliasing the
+    // snapshot's buffer). A ≥36-byte payload keeps the snapshot heap-allocated
+    // past any short-buffer fast path.
+    #[test]
+    fn asan_chars_bound_iterator_collect_clone_no_leak_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 1000 {
+        let s = "the quick brown fox jumps over the lazy dog";
+        let it = s.chars();
+        let a: Vec[char] = it.collect();
+        let b: Vec[char] = it.collect();
+        total = total + a.len() + b.len();
+        let it2 = s.chars();
+        for c in it2 { if c == 'o' { total = total + 1; } }
+        i = i + 1;
+    }
+    println(f"{total}");
+}
+"#,
+            // len 43 each (×2 = 86) + 4 'o's, ×1000 = 90000.
+            &["90000"],
+            "chars_bound_iterator_collect_clone_loop",
+        );
+    }
+
     // ── `String.split` on a NON-identifier receiver — temp drop ownership ──
     //
     // `make_csv().split(',')` — a String method on a CALL-RESULT receiver. The

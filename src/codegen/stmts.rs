@@ -1292,6 +1292,36 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Track Vec/String element types from type annotation or RHS.
                 if let PatternKind::Binding(var_name) = &pattern.kind {
                     let mut detected = false;
+                    // `let it = s.chars()` — codegen materializes the
+                    // char-iterator as an eager `Vec[char]` snapshot (see the
+                    // `chars()` intercept in `compile_method_call`), so register
+                    // the binding as `Vec[char]`: `vec_elem_types` (the i32
+                    // codepoint element) drives method / for-loop dispatch, and
+                    // `var_elem_type_exprs` (the `char` element type) makes
+                    // `it.collect()`'s clone build a `Vec[char]` rather than a
+                    // `String` — `receiver_collection_type_expr` distinguishes
+                    // the two on exactly that map. B-2026-06-18-5.
+                    let rhs_is_chars = matches!(
+                        &value.kind,
+                        ExprKind::MethodCall { method, args, .. }
+                            if method == "chars" && args.is_empty()
+                    );
+                    if rhs_is_chars {
+                        self.vec_elem_types
+                            .insert(var_name.clone(), self.context.i32_type().into());
+                        self.var_elem_type_exprs.insert(
+                            var_name.clone(),
+                            TypeExpr {
+                                kind: TypeKind::Path(PathExpr {
+                                    segments: vec!["char".to_string()],
+                                    generic_args: None,
+                                    span: value.span.clone(),
+                                }),
+                                span: value.span.clone(),
+                            },
+                        );
+                        detected = true;
+                    }
                     // Explicit type annotation: let v: Vec[T] = ... or let s: String = ...
                     if let Some(ref te) = ty {
                         // `let t: Tensor[T, [dims]] = ...` — register the

@@ -9541,6 +9541,34 @@ fn test_string_char_at_and_count_interpreter() {
 }
 
 #[test]
+fn test_chars_iterator_bound_to_variable_interpreter() {
+    // B-2026-06-18-5 — `let it = s.chars()` (the char-iterator bound to a name),
+    // then `it.collect()` / `for c in it`. The interpreter already snapshots
+    // chars eagerly into a Value::Iterator, so it works; codegen now matches by
+    // materializing a Vec[char] (`e2e_chars_iterator_bound_to_variable_codegen`).
+    // Collecting the same bound iterator twice yields independent copies.
+    let output = run(r#"fn main() {
+            let s: String = "héllo";
+            let it = s.chars();
+            let v: Vec[char] = it.collect();
+            let mut joined: String = "";
+            for c in v { joined.push(c); }
+            println(f"{joined} {joined.char_count()}");
+
+            let it2 = s.chars();
+            let mut dashed: String = "";
+            for c in it2 { dashed.push(c); dashed.push('-'); }
+            println(dashed);
+
+            let it3 = s.chars();
+            let a: Vec[char] = it3.collect();
+            let b: Vec[char] = it3.collect();
+            println(f"{a.len()} {b.len()} {a[0]} {b[4]}");
+        }"#);
+    assert_eq!(output, "héllo 5\nh-é-l-l-o-\n5 5 h o\n");
+}
+
+#[test]
 fn test_i64_parse_interpreter() {
     // Five cases mirror `/tmp/kara-probes/i64_parse_full_probe.kara`:
     // numeric / non-numeric / negative / whitespace-padded / empty.
