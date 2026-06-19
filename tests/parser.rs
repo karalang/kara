@@ -5296,6 +5296,96 @@ fn test_repeat_literal_vec_prefix() {
     }
 }
 
+// ── `vec![...]` list-macro sugar ────────────────────────────────
+
+#[test]
+fn test_vec_macro_literal() {
+    // `vec![1, 3, 5]` desugars to the same PrefixCollectionLiteral as `Vec[...]`.
+    let program = parse_ok("fn main() { let v = vec![1, 3, 5]; }");
+    if let Item::Function(f) = &program.items[0] {
+        if let StmtKind::Let { value, .. } = &f.body.stmts[0].kind {
+            if let ExprKind::PrefixCollectionLiteral { type_name, items } = &value.kind {
+                assert_eq!(type_name, "Vec");
+                assert_eq!(items.len(), 3);
+                assert!(matches!(items[0].kind, ExprKind::Integer(1, _)));
+                assert!(matches!(items[2].kind, ExprKind::Integer(5, _)));
+            } else {
+                panic!("Expected PrefixCollectionLiteral, got: {:?}", value.kind);
+            }
+        } else {
+            panic!("Expected let");
+        }
+    }
+}
+
+#[test]
+fn test_vec_macro_literal_empty() {
+    let program = parse_ok("fn main() { let v = vec![]; }");
+    if let Item::Function(f) = &program.items[0] {
+        if let StmtKind::Let { value, .. } = &f.body.stmts[0].kind {
+            if let ExprKind::PrefixCollectionLiteral { type_name, items } = &value.kind {
+                assert_eq!(type_name, "Vec");
+                assert!(items.is_empty());
+            } else {
+                panic!("Expected PrefixCollectionLiteral, got: {:?}", value.kind);
+            }
+        }
+    }
+}
+
+#[test]
+fn test_vec_macro_repeat_form() {
+    // `vec![v; n]` desugars to RepeatLiteral with type_name == Some("Vec").
+    let program = parse_ok("fn main() { let v = vec![0; 8]; }");
+    if let Item::Function(f) = &program.items[0] {
+        if let StmtKind::Let { value, .. } = &f.body.stmts[0].kind {
+            if let ExprKind::RepeatLiteral {
+                type_name,
+                value: v,
+                count: c,
+            } = &value.kind
+            {
+                assert_eq!(type_name.as_deref(), Some("Vec"));
+                assert!(matches!(v.kind, ExprKind::Integer(0, _)));
+                assert!(matches!(c.kind, ExprKind::Integer(8, _)));
+            } else {
+                panic!("Expected RepeatLiteral, got: {:?}", value.kind);
+            }
+        }
+    }
+}
+
+#[test]
+fn test_vec_macro_nested() {
+    // `vec![vec![1], vec![2]]` — nested macro literals.
+    let program = parse_ok("fn main() { let v = vec![vec![1], vec![2]]; }");
+    if let Item::Function(f) = &program.items[0] {
+        if let StmtKind::Let { value, .. } = &f.body.stmts[0].kind {
+            if let ExprKind::PrefixCollectionLiteral { type_name, items } = &value.kind {
+                assert_eq!(type_name, "Vec");
+                assert_eq!(items.len(), 2);
+                assert!(matches!(
+                    items[0].kind,
+                    ExprKind::PrefixCollectionLiteral { .. }
+                ));
+            } else {
+                panic!("Expected PrefixCollectionLiteral, got: {:?}", value.kind);
+            }
+        }
+    }
+}
+
+#[test]
+fn test_non_vec_bang_still_errors() {
+    // `vec!` is the only blessed list macro — any other `ident!` falls through
+    // to the bare-identifier path and the `!` is rejected as before.
+    let (_, errors) = parse_with_errors("fn main() { let v = foo![1, 2]; }");
+    assert!(
+        !errors.is_empty(),
+        "Expected `foo![...]` to be rejected (only `vec!` is recognized)"
+    );
+}
+
 // ── Where Clauses ───────────────────────────────────────────────
 
 #[test]

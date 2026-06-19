@@ -3368,6 +3368,29 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_macro_literal() {
+        // `vec![a, b, c]` desugars to the same PrefixCollectionLiteral node
+        // codegen already lowers for `Vec[a, b, c]` — codegen never sees a
+        // `vec!` node. Pins the parser desugaring through the AOT backend
+        // (skips vacuously when the runtime archive is absent). The repeat
+        // form `vec![v; n]` is exercised in the interpreter test; its codegen
+        // lowering is the separate, still-open `Vec[v; n]` repeat-literal item
+        // (phase-4-interpreter.md) and is intentionally not asserted here.
+        let Some(output) = run_program(
+            "fn main() {\n\
+                 let v = vec![10, 20, 30];\n\
+                 let mut total = 0;\n\
+                 for x in v { total = total + x; }\n\
+                 println(total);\n\
+                 println(v.len());\n\
+             }",
+        ) else {
+            return;
+        };
+        assert_eq!(output, "60\n3\n");
+    }
+
+    #[test]
     fn test_e2e_option_result_unwrap_or() {
         // B-2026-06-11-10: `unwrap_or(default)` on Option/Result. The bug
         // report mis-scoped this as a non-identifier-receiver dispatch gap; it

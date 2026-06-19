@@ -1325,6 +1325,20 @@ impl super::Parser {
             return self.parse_offset_of_special_form(start);
         }
 
+        // `vec![...]` / `vec![v; n]` list-macro sugar (design.md:543). Desugars
+        // to the same `PrefixCollectionLiteral` / `RepeatLiteral` nodes as the
+        // `Vec[...]` / `Vec[v; n]` prefix forms, so every downstream phase sees
+        // an ordinary `Vec` literal — no new AST node, no `!`-macro machinery.
+        // `vec!` is the only blessed list macro; any other `ident!` still falls
+        // through to the bare-identifier path and the `!` errors as before.
+        if name == "vec"
+            && self.check(&Token::Bang)
+            && matches!(self.peek_token_at(1), Token::LeftBracket)
+        {
+            self.advance(); // consume !
+            return self.parse_prefix_collection_literal("Vec".to_string(), &start);
+        }
+
         // Check for labeled loop / labeled block: `label: while/for/loop`
         // or `label: { ... }`. `is_loop_label` accepts both shapes.
         if self.check(&Token::Colon) && self.is_loop_label() {
@@ -1471,77 +1485,87 @@ impl super::Parser {
         if self.check(&Token::LeftBracket)
             && matches!(name.as_str(), "Vec" | "Array" | "Set" | "Map")
         {
-            self.advance(); // consume [
-            let mut items = Vec::new();
-            // Empty literal: `Vec[]` etc.
-            if self.check(&Token::RightBracket) {
-                self.advance();
-                return Some(Expr {
-                    span: self.span_from(&start),
-                    kind: ExprKind::PrefixCollectionLiteral {
-                        type_name: name,
-                        items,
-                    },
-                });
-            }
-            let first = self.parse_expression()?;
-            // `Vec[v; n]` / `Array[v; n]` — repeat form. Only meaningful for
-            // sequence types; the typechecker rejects `Set[v; n]` / `Map[v; n]`.
-            if self.eat(&Token::Semicolon) {
-                let count = self.parse_expression()?;
-                self.expect(&Token::RightBracket)?;
-                return Some(Expr {
-                    span: self.span_from(&start),
-                    kind: ExprKind::RepeatLiteral {
-                        type_name: Some(name),
-                        value: Box::new(first),
-                        count: Box::new(count),
-                    },
-                });
-            }
-            // `Map[k: v, k2: v2, ...]` — prefix-literal map form. The first
-            // expression is a key, followed by `:`, then the value. Switch to
-            // key-value parsing and emit `MapLiteral` (the same AST shape the
-            // bare `["k": v]` form produces, so the existing typechecker case
-            // applies unchanged).
-            if name == "Map" && self.eat(&Token::Colon) {
-                let first_val = self.parse_expression()?;
-                let mut entries = vec![(first, first_val)];
-                while self.eat(&Token::Comma) {
-                    if self.check(&Token::RightBracket) {
-                        break;
-                    }
-                    let k = self.parse_expression()?;
-                    self.expect(&Token::Colon)?;
-                    let v = self.parse_expression()?;
-                    entries.push((k, v));
-                }
-                self.expect(&Token::RightBracket)?;
-                return Some(Expr {
-                    span: self.span_from(&start),
-                    kind: ExprKind::MapLiteral(entries),
-                });
-            }
-            items.push(first);
-            while self.eat(&Token::Comma) {
-                if self.check(&Token::RightBracket) {
-                    break;
-                }
-                items.push(self.parse_expression()?);
-            }
-            self.expect(&Token::RightBracket)?;
+            return self.parse_prefix_collection_literal(name, &start);
+        }
+
+        Some(Expr {
+            span: self.span_from(&start),
+            kind: ExprKind::Identifier(name),
+        })
+    }
+
+    /// Parse the `[...]` body of a prefix collection literal. `self.pos` must
+    /// point at the opening `[`; `name` is the collection type-name (`Vec`,
+    /// `Array`, `Set`, `Map`) and `start` the span of the head token. Produces
+    /// `PrefixCollectionLiteral` / `RepeatLiteral` / `MapLiteral` as the body
+    /// shape dictates. Shared between the `TypeName[...]` form and the
+    /// `vec![...]` list-macro sugar.
+    fn parse_prefix_collection_literal(&mut self, name: String, start: &Span) -> Option<Expr> {
+        self.advance(); // consume [
+        let mut items = Vec::new();
+        // Empty literal: `Vec[]` etc.
+        if self.check(&Token::RightBracket) {
+            self.advance();
             return Some(Expr {
-                span: self.span_from(&start),
+                span: self.span_from(start),
                 kind: ExprKind::PrefixCollectionLiteral {
                     type_name: name,
                     items,
                 },
             });
         }
-
+        let first = self.parse_expression()?;
+        // `Vec[v; n]` / `Array[v; n]` — repeat form. Only meaningful for
+        // sequence types; the typechecker rejects `Set[v; n]` / `Map[v; n]`.
+        if self.eat(&Token::Semicolon) {
+            let count = self.parse_expression()?;
+            self.expect(&Token::RightBracket)?;
+            return Some(Expr {
+                span: self.span_from(start),
+                kind: ExprKind::RepeatLiteral {
+                    type_name: Some(name),
+                    value: Box::new(first),
+                    count: Box::new(count),
+                },
+            });
+        }
+        // `Map[k: v, k2: v2, ...]` — prefix-literal map form. The first
+        // expression is a key, followed by `:`, then the value. Switch to
+        // key-value parsing and emit `MapLiteral` (the same AST shape the
+        // bare `["k": v]` form produces, so the existing typechecker case
+        // applies unchanged).
+        if name == "Map" && self.eat(&Token::Colon) {
+            let first_val = self.parse_expression()?;
+            let mut entries = vec![(first, first_val)];
+            while self.eat(&Token::Comma) {
+                if self.check(&Token::RightBracket) {
+                    break;
+                }
+                let k = self.parse_expression()?;
+                self.expect(&Token::Colon)?;
+                let v = self.parse_expression()?;
+                entries.push((k, v));
+            }
+            self.expect(&Token::RightBracket)?;
+            return Some(Expr {
+                span: self.span_from(start),
+                kind: ExprKind::MapLiteral(entries),
+            });
+        }
+        items.push(first);
+        while self.eat(&Token::Comma) {
+            if self.check(&Token::RightBracket) {
+                break;
+            }
+            items.push(self.parse_expression()?);
+        }
+        self.expect(&Token::RightBracket)?;
         Some(Expr {
-            span: self.span_from(&start),
-            kind: ExprKind::Identifier(name),
+            span: self.span_from(start),
+            kind: ExprKind::PrefixCollectionLiteral {
+                type_name: name,
+                items,
+            },
         })
     }
 

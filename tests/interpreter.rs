@@ -476,6 +476,25 @@ fn test_vec_deque_pop_empty_returns_none() {
 // kara-katas/leetcode/71-simplify-path which wanted stack-style
 // push/pop on a `Vec[i64]`.
 #[test]
+fn test_vec_macro_literal_end_to_end() {
+    // `vec![...]` desugars to the same node as `Vec[...]`, so it flows through
+    // the interpreter unchanged. Pins the parser desugaring end-to-end.
+    let out = run(r#"
+        fn main() {
+            let v = vec![10, 20, 30];
+            let mut total = 0;
+            for x in v {
+                total = total + x;
+            }
+            println(total);
+            let zeros = vec![0; 4];
+            println(zeros.len());
+        }
+    "#);
+    assert_eq!(out, "60\n4\n");
+}
+
+#[test]
 fn test_vec_pop_returns_some_then_none_on_drain() {
     let out = run(r#"
         fn main() {
