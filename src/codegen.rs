@@ -3793,6 +3793,25 @@ impl<'ctx> Codegen<'ctx> {
             park_slot_cancel_ptr_ty,
             Some(Linkage::External),
         );
+        // `karac_runtime_park_slot_store_result(slot: ptr, src: ptr, size: i64)`
+        // / `_load_result(slot: ptr, dst: ptr, size: i64)` — carry a non-unit
+        // coroutine's return value across the inline ramp+wait boundary
+        // (B-2026-06-19). The coroutine body stores its `size`-byte return into
+        // the slot at `coro_return` before signalling; the inline-drive caller
+        // loads it back after `park_slot_wait` and before `park_slot_free`.
+        let park_slot_result_ty = context
+            .void_type()
+            .fn_type(&[ptr_type.into(), ptr_type.into(), i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_park_slot_store_result",
+            park_slot_result_ty,
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "karac_runtime_park_slot_load_result",
+            park_slot_result_ty,
+            Some(Linkage::External),
+        );
 
         // ── stdlib TcpListener codegen-side wiring (Phase 6 line 17) ──────
         //

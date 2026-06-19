@@ -454,6 +454,55 @@ mod tests {
         }
     "#;
 
+    /// B-2026-06-19 — **non-unit coroutine return value carried across the
+    /// inline ramp+wait boundary.** `probe` is a network-boundary coroutine
+    /// (parks on `accept`) that returns `bool`; it is driven *inline* from its
+    /// caller (`if not probe(...)`), which branches on the result — the exact
+    /// shape `examples/relay/bench/kara/server.kara`'s `relay_response` has.
+    /// Before the fix the inline-drive call discarded `probe`'s real return and
+    /// yielded a hard-coded `i64 0` — wrong VALUE and wrong TYPE: branching on
+    /// the `i64` failed LLVM verification (`Branch condition is not 'i1'
+    /// type!`). These two sources differ ONLY in the literal `probe` returns, so
+    /// they pin the VALUE (not just "it compiles"): a fix that still hard-coded
+    /// 0 would make both print the same marker.
+    ///
+    /// `probe` returns **false** → `not probe(...)` is true → prints `7`.
+    const CORO_BOOL_FALSE_SRC: &str = r#"
+        fn probe(listener: TcpListener) -> bool {
+            let _stream = listener.accept().unwrap();
+            return false;
+        }
+        fn main() {
+            let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+            if not probe(listener) {
+                println(7);
+            } else {
+                println(8);
+            }
+            println(9);
+        }
+    "#;
+
+    /// Sibling of `CORO_BOOL_FALSE_SRC` — `probe` returns **true** → `not
+    /// probe(...)` is false → prints `8`. The marker difference (7 vs 8) between
+    /// the two programs is the value-correctness assertion: the real `bool`
+    /// flows back from the inline-driven coroutine, not a hard-coded 0.
+    const CORO_BOOL_TRUE_SRC: &str = r#"
+        fn probe(listener: TcpListener) -> bool {
+            let _stream = listener.accept().unwrap();
+            return true;
+        }
+        fn main() {
+            let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+            if not probe(listener) {
+                println(7);
+            } else {
+                println(8);
+            }
+            println(9);
+        }
+    "#;
+
     static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn workspace_root() -> PathBuf {
@@ -3019,6 +3068,104 @@ mod tests {
         assert!(
             not_ws_status.starts_with("HTTP/1.1 400"),
             "request missing Upgrade/Connection must get 400 from the real binary; got: {not_ws_status:?}"
+        );
+    }
+
+    /// B-2026-06-19 — a `-> bool` coroutine driven inline from another coroutine
+    /// must compile (no `Branch condition is not 'i1' type!` verifier crash) AND
+    /// carry its REAL return value back. `probe` returns `false`, so `not
+    /// probe(...)` takes the `then` branch and prints `7` (never `8`).
+    #[test]
+    fn coroutine_bool_return_false_branches_then() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_coro_bool_false_{pid}_{nanos}"));
+
+        // Compiling at all proves the verifier crash is fixed (the always-`i64 0`
+        // condition no longer reaches `br`).
+        if let Err(e) = compile_link_coro(CORO_BOOL_FALSE_SRC, &exe_path, None) {
+            panic!("compile/link failed (verifier crash regressed?): {e}");
+        }
+
+        // One connection triggers `probe`'s `accept` park; the dispatcher
+        // resumes it, it returns false, and `main` branches on the real value.
+        let (exit_status, lines) = service_one_connection(&exe_path, None);
+        let _ = std::fs::remove_file(&exe_path);
+
+        assert!(
+            exit_status.success(),
+            "coro bool-return binary exited non-success {exit_status:?}; stdout lines: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l == "7"),
+            "`probe` returned false → `not probe(...)` must take the then-branch \
+             (print 7); stdout lines: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l == "8"),
+            "false return must NOT take the else-branch (8); stdout lines: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l == "9"),
+            "main did not resume after the inline coro drive; stdout lines: {lines:?}"
+        );
+    }
+
+    /// Value-correctness sibling: identical program except `probe` returns
+    /// `true`, so `not probe(...)` is false and the binary prints `8` (never
+    /// `7`). The 7-vs-8 difference between the two tests is what distinguishes a
+    /// real fix from a still-hard-coded-0 one — a fix that ignored `probe`'s
+    /// value would print `7` in BOTH.
+    #[test]
+    fn coroutine_bool_return_true_branches_else() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!("skip: libkarac_runtime.a not built");
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_coro_bool_true_{pid}_{nanos}"));
+
+        if let Err(e) = compile_link_coro(CORO_BOOL_TRUE_SRC, &exe_path, None) {
+            panic!("compile/link failed (verifier crash regressed?): {e}");
+        }
+
+        let (exit_status, lines) = service_one_connection(&exe_path, None);
+        let _ = std::fs::remove_file(&exe_path);
+
+        assert!(
+            exit_status.success(),
+            "coro bool-return binary exited non-success {exit_status:?}; stdout lines: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l == "8"),
+            "`probe` returned true → `not probe(...)` is false, must take the \
+             else-branch (print 8); stdout lines: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l == "7"),
+            "true return must NOT take the then-branch (7) — that would be the \
+             always-0 bug; stdout lines: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l == "9"),
+            "main did not resume after the inline coro drive; stdout lines: {lines:?}"
         );
     }
 }

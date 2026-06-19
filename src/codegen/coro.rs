@@ -40,7 +40,8 @@ use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::{Linkage, Module};
-use inkwell::values::{AsValueRef, FunctionValue, IntValue, PointerValue};
+use inkwell::types::{BasicType, BasicTypeEnum};
+use inkwell::values::{AsValueRef, BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
 
 use llvm_sys::core::{
@@ -1070,6 +1071,62 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_call(self.karac_tracing_set_active_span_fn, &[saved.into()], "")
             .unwrap();
+    }
+
+    /// B-2026-06-19 — at an explicit `return v` inside a **non-unit** coroutine
+    /// (a suspending `-> bool`/scalar fn driven inline from another coroutine),
+    /// stash the return value into the completion slot so the inline-drive
+    /// caller can read it back after `park_slot_wait` (see the
+    /// `is_coroutine_compiled` intercept in `call_dispatch.rs`). Without this the
+    /// value is discarded and the caller saw a hard-coded `i64 0` — wrong value
+    /// and (used as a branch condition) wrong type, failing LLVM verification
+    /// (`Branch condition is not 'i1' type!`).
+    ///
+    /// Emitted at the `return` site (where `v` is live), before the branch to
+    /// `coro_return_bb`. Coerces `v` to the coroutine's declared return LLVM
+    /// type, spills it to a stack slot, and memcpy's `size_of(ret_ty)` bytes into
+    /// the slot via `karac_runtime_park_slot_store_result`. A no-op for a unit
+    /// return (`store_result` is also a no-op for `size == 0`), and for the
+    /// non-blocking spawn drive (nobody reads the slot result there — harmless).
+    pub(super) fn emit_coro_return_value_store(&mut self, v: BasicValueEnum<'ctx>) {
+        let Some(ctx) = self.coro_ctx else { return };
+        // A `-> ref T` coroutine returns a borrow pointer, not a value through
+        // the slot; the inline-drive caller does not currently read it, so leave
+        // that path alone.
+        if self.current_fn_returns_ref {
+            return;
+        }
+        let Some(ret_ty) = self.coro_return_basic_type() else {
+            return;
+        };
+        // Unit return: nothing to carry.
+        if matches!(ret_ty, BasicTypeEnum::StructType(s) if s.count_fields() == 0) {
+            return;
+        }
+        let coerced = self.coerce_scalar_to_type(v, ret_ty);
+        let cur_fn = match self.current_fn {
+            Some(f) => f,
+            None => return,
+        };
+        let tmp = self.create_entry_alloca(cur_fn, "kara.coro.ret.tmp", ret_ty);
+        self.builder.build_store(tmp, coerced).unwrap();
+        let size = ret_ty.size_of().expect("coroutine return type has a size");
+        let store_fn = self
+            .module
+            .get_function("karac_runtime_park_slot_store_result")
+            .expect("karac_runtime_park_slot_store_result declared in Codegen::new");
+        self.builder
+            .build_call(store_fn, &[ctx.slot.into(), tmp.into(), size.into()], "")
+            .expect("call karac_runtime_park_slot_store_result");
+    }
+
+    /// The coroutine's declared return type lowered to LLVM, derived from the
+    /// recorded `fn_return_type_exprs` for `current_fn_name`. `None` when no
+    /// type-expr is recorded (e.g. an implicitly-unit fn) — callers treat that
+    /// as unit.
+    pub(super) fn coro_return_basic_type(&self) -> Option<BasicTypeEnum<'ctx>> {
+        let te = self.fn_return_type_exprs.get(&self.current_fn_name)?;
+        Some(self.llvm_type_for_type_expr(te))
     }
 
     /// Fill the three shared exit blocks after the function body is emitted

@@ -5510,6 +5510,19 @@ pub struct KaracParkSlot {
     /// routine ([`crate::scheduler::karac_runtime_reap_detached_coro_handle`])
     /// casts it back.
     reap: AtomicPtr<c_void>,
+    /// B-2026-06-19 — completion return value for a **non-unit coroutine**
+    /// driven through this slot (the inline ramp+wait path: a suspending
+    /// `-> bool`/scalar coroutine called from inside another coroutine). The
+    /// coroutine body memcpy's its `T`-sized return bytes here via
+    /// [`karac_runtime_park_slot_store_result`] just before it
+    /// [`karac_runtime_park_slot_signal`]s, and the inline-drive caller reads
+    /// them back via [`karac_runtime_park_slot_load_result`] after its `wait`
+    /// returns (and before `free`). Guarded by the same `done` mutex as
+    /// `signal`/`wait`, so the store happens-before the load across the two
+    /// threads with no extra synchronization. `None` for unit-returning
+    /// coroutines and every other slot use (inline parks, joined spawns,
+    /// `tg.spawn` children) — `signal`/`wait`/`free` are otherwise unchanged.
+    result: Mutex<Option<Box<[u8]>>>,
 }
 
 /// Allocate a fresh park slot. Returns an owning raw pointer the caller
@@ -5521,6 +5534,7 @@ pub extern "C" fn karac_runtime_park_slot_new() -> *mut KaracParkSlot {
         cv: Condvar::new(),
         cancel: AtomicPtr::new(std::ptr::null_mut()),
         reap: AtomicPtr::new(std::ptr::null_mut()),
+        result: Mutex::new(None),
     }))
 }
 
@@ -5718,6 +5732,66 @@ pub unsafe extern "C" fn karac_runtime_park_slot_free(slot: *mut KaracParkSlot) 
     // SAFETY: caller's contract — `slot` came from `park_slot_new` and is
     // freed exactly once.
     drop(unsafe { Box::from_raw(slot) });
+}
+
+/// B-2026-06-19 — store a non-unit coroutine's `size`-byte return value into the
+/// slot, to be read back by the inline-drive caller after its `wait` returns.
+/// Called by the coroutine body at its single `coro_return` block, just before
+/// [`karac_runtime_park_slot_signal`]. Copies `size` bytes from `src` into a
+/// fresh heap buffer owned by the slot (a `Box<[u8]>` dropped by
+/// [`karac_runtime_park_slot_free`]). A no-op for `size == 0` (unit return) or a
+/// null slot/src, so unit-returning coroutines never allocate. Guarded by the
+/// `done` mutex so the bytes are visible to the matching `load_result` after the
+/// wait/signal hand-off.
+///
+/// # Safety
+///
+/// `slot` must be a live pointer from [`karac_runtime_park_slot_new`]; `src`
+/// must point to at least `size` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_park_slot_store_result(
+    slot: *mut KaracParkSlot,
+    src: *const u8,
+    size: usize,
+) {
+    if slot.is_null() || src.is_null() || size == 0 {
+        return;
+    }
+    // SAFETY: caller's contract — `slot` is live, `src` has `size` bytes.
+    let s = unsafe { &*slot };
+    let bytes = unsafe { std::slice::from_raw_parts(src, size) }.to_vec();
+    let mut result = s.result.lock().unwrap_or_else(|p| p.into_inner());
+    *result = Some(bytes.into_boxed_slice());
+}
+
+/// B-2026-06-19 — read a non-unit coroutine's return value back out of the slot
+/// into `dst`. Called by the inline-drive caller after `wait` returns and before
+/// `free`. Copies `min(size, stored_len)` bytes; if the body stored nothing (a
+/// unit return, or this call races a store that never happened) `dst` is left
+/// untouched. A no-op for `size == 0` or a null slot/dst. Guarded by the `done`
+/// mutex (same as `store_result`).
+///
+/// # Safety
+///
+/// `slot` must be a live pointer from [`karac_runtime_park_slot_new`]; `dst`
+/// must point to at least `size` writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_park_slot_load_result(
+    slot: *mut KaracParkSlot,
+    dst: *mut u8,
+    size: usize,
+) {
+    if slot.is_null() || dst.is_null() || size == 0 {
+        return;
+    }
+    // SAFETY: caller's contract — `slot` is live, `dst` has `size` bytes.
+    let s = unsafe { &*slot };
+    let result = s.result.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(bytes) = result.as_ref() {
+        let n = size.min(bytes.len());
+        // SAFETY: `dst` has `size >= n` writable bytes; `bytes` has `n`.
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, n) };
+    }
 }
 
 #[cfg(test)]

@@ -1199,7 +1199,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 // A2 slice 2b.3: a coroutine body's normal completion routes to
                 // the signal + final-suspend block, not a `ret` (the ramp's
                 // `ptr` return is emitted in the shared suspend-return block).
-                // The Kāra tail value is discarded — unit-only for this slice.
+                // B-2026-06-19: a non-unit coroutine carries its tail value to
+                // the inline-drive caller through the completion slot (same as
+                // an explicit `return v`); unit returns store nothing.
+                if let Some(val) = result {
+                    self.emit_coro_return_value_store(val);
+                }
                 self.builder
                     .build_unconditional_branch(ctx.coro_return_bb)
                     .unwrap();

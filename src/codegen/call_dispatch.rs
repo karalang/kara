@@ -662,6 +662,46 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder
                     .build_call(wait_fn, &[slot.into()], "")
                     .expect("call karac_runtime_park_slot_wait");
+                // B-2026-06-19: a non-unit coroutine (`-> bool`/scalar) carried
+                // its real return value into the slot at completion (see
+                // `emit_coro_return_value_store`). Read it back here — after the
+                // wait, before the free — into a temp of the callee's declared
+                // return LLVM type. Pre-fix this path always returned `i64 0`,
+                // discarding the value AND emitting the wrong type; using that
+                // as a branch condition (`if ok` / `if not ok`) failed LLVM
+                // verification (`Branch condition is not 'i1' type!`).
+                let ret_ty = self
+                    .fn_return_type_exprs
+                    .get(&name)
+                    .map(|te| self.llvm_type_for_type_expr(te));
+                let is_unit = matches!(
+                    ret_ty,
+                    Some(BasicTypeEnum::StructType(s)) if s.count_fields() == 0
+                );
+                let loaded: Option<BasicValueEnum<'ctx>> = match ret_ty {
+                    Some(ty) if !is_unit => {
+                        let cur_fn = self
+                            .builder
+                            .get_insert_block()
+                            .and_then(|bb| bb.get_parent())
+                            .expect("coroutine call inside a function context");
+                        let out = self.create_entry_alloca(cur_fn, "kara.coro.ret.out", ty);
+                        let size = ty.size_of().expect("coroutine return type has a size");
+                        let load_fn = self
+                            .module
+                            .get_function("karac_runtime_park_slot_load_result")
+                            .expect("karac_runtime_park_slot_load_result declared in Codegen::new");
+                        self.builder
+                            .build_call(load_fn, &[slot.into(), out.into(), size.into()], "")
+                            .expect("call karac_runtime_park_slot_load_result");
+                        Some(
+                            self.builder
+                                .build_load(ty, out, "kara.coro.ret.value")
+                                .expect("load coroutine return value"),
+                        )
+                    }
+                    _ => None,
+                };
                 let free_fn = self
                     .module
                     .get_function("karac_runtime_park_slot_free")
@@ -669,6 +709,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder
                     .build_call(free_fn, &[slot.into()], "")
                     .expect("call karac_runtime_park_slot_free");
+                if let Some(val) = loaded {
+                    return Ok(val);
+                }
             }
             return Ok(self.context.i64_type().const_int(0, false).into());
         }

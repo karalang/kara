@@ -728,6 +728,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.compile_ref_return_ptr(e)
                     };
                     if let Some(ctx) = self.coro_ctx {
+                        // B-2026-06-19: carry the non-unit return value to the
+                        // inline-drive caller via the completion slot before
+                        // branching to the shared signal+suspend block (where
+                        // `v` is no longer in scope). No-op for unit returns.
+                        self.emit_coro_return_value_store(v);
                         self.builder
                             .build_unconditional_branch(ctx.coro_return_bb)
                             .unwrap();
