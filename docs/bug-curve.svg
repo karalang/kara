@@ -1,21 +1,21 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="720" height="300" font-family="monospace" font-size="12">
 <rect width="720" height="300" fill="white"/>
-<polyline fill="none" stroke="#e8730a" stroke-width="2" points="40.0,258.1 150.3,256.2 437.2,246.6 459.3,244.7 481.4,240.9 503.4,227.5 525.5,210.3 547.6,183.5 569.7,145.2 591.7,84.0 613.8,70.6 635.9,68.7 657.9,51.5 680.0,40.0"/>
+<polyline fill="none" stroke="#e8730a" stroke-width="2" points="40.0,258.1 150.3,256.2 437.2,246.7 459.3,244.8 481.4,241.0 503.4,227.8 525.5,210.7 547.6,184.1 569.7,146.2 591.7,85.5 613.8,72.2 635.9,70.3 657.9,53.3 680.0,40.0"/>
 <circle cx="40.0" cy="258.1" r="2.5" fill="#e8730a"/>
 <circle cx="150.3" cy="256.2" r="2.5" fill="#e8730a"/>
-<circle cx="437.2" cy="246.6" r="2.5" fill="#e8730a"/>
-<circle cx="459.3" cy="244.7" r="2.5" fill="#e8730a"/>
-<circle cx="481.4" cy="240.9" r="2.5" fill="#e8730a"/>
-<circle cx="503.4" cy="227.5" r="2.5" fill="#e8730a"/>
-<circle cx="525.5" cy="210.3" r="2.5" fill="#e8730a"/>
-<circle cx="547.6" cy="183.5" r="2.5" fill="#e8730a"/>
-<circle cx="569.7" cy="145.2" r="2.5" fill="#e8730a"/>
-<circle cx="591.7" cy="84.0" r="2.5" fill="#e8730a"/>
-<circle cx="613.8" cy="70.6" r="2.5" fill="#e8730a"/>
-<circle cx="635.9" cy="68.7" r="2.5" fill="#e8730a"/>
-<circle cx="657.9" cy="51.5" r="2.5" fill="#e8730a"/>
+<circle cx="437.2" cy="246.7" r="2.5" fill="#e8730a"/>
+<circle cx="459.3" cy="244.8" r="2.5" fill="#e8730a"/>
+<circle cx="481.4" cy="241.0" r="2.5" fill="#e8730a"/>
+<circle cx="503.4" cy="227.8" r="2.5" fill="#e8730a"/>
+<circle cx="525.5" cy="210.7" r="2.5" fill="#e8730a"/>
+<circle cx="547.6" cy="184.1" r="2.5" fill="#e8730a"/>
+<circle cx="569.7" cy="146.2" r="2.5" fill="#e8730a"/>
+<circle cx="591.7" cy="85.5" r="2.5" fill="#e8730a"/>
+<circle cx="613.8" cy="72.2" r="2.5" fill="#e8730a"/>
+<circle cx="635.9" cy="70.3" r="2.5" fill="#e8730a"/>
+<circle cx="657.9" cy="53.3" r="2.5" fill="#e8730a"/>
 <circle cx="680.0" cy="40.0" r="2.5" fill="#e8730a"/>
 <text x="40" y="288">2026-05-20</text>
 <text x="610" y="288">2026-06-18</text>
-<text x="40" y="20">cumulative bugs surfaced: 115</text>
+<text x="40" y="20">cumulative bugs surfaced: 116</text>
 </svg>
