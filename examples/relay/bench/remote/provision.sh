@@ -40,7 +40,8 @@ apt_install() {
 install_wrk() {
   if have wrk; then log "wrk present: $(wrk --version 2>&1 | head -1)"; return; fi
   log "installing wrk (build from source — not packaged on most distros)"
-  apt_install build-essential libssl-dev git
+  # `unzip` is needed by wrk's Makefile to unpack the vendored LuaJIT.
+  apt_install build-essential libssl-dev git unzip
   local tmp; tmp="$(mktemp -d)"
   git clone --depth 1 https://github.com/wg/wrk.git "$tmp/wrk"
   make -C "$tmp/wrk" -j"$(nproc)"

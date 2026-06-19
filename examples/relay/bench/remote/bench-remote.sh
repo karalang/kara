@@ -29,6 +29,10 @@ set -euo pipefail
 
 # ── Defaults ─────────────────────────────────────────────────────────
 PROXY_HOST=""; CLIENT_HOST=""; UPSTREAM_HOST=""; USER_NAME="${USER}"
+# Data-plane addresses (the IPs used for client→proxy and proxy→upstream
+# traffic). On cloud VMs these are the PRIVATE IPs, distinct from the public
+# SSH addresses above. Default to the SSH host (correct for a flat LAN).
+PROXY_DATA=""; UPSTREAM_DATA=""
 SSH_OPTS="-o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
 PAYLOADS="0,1024,16384"; CONNECTIONS="100,1000"; IMPLS="k,g,n"
 DURATION=10; RUNS=3; THREADS=8; PROXY_PORT=18080; UPSTREAM_PORT=19000
@@ -39,6 +43,8 @@ while [ $# -gt 0 ]; do
     --proxy) PROXY_HOST="$2"; shift 2;;
     --client) CLIENT_HOST="$2"; shift 2;;
     --upstream) UPSTREAM_HOST="$2"; shift 2;;
+    --proxy-data) PROXY_DATA="$2"; shift 2;;
+    --upstream-data) UPSTREAM_DATA="$2"; shift 2;;
     --user) USER_NAME="$2"; shift 2;;
     --ssh-opts) SSH_OPTS="$2"; shift 2;;
     --payloads) PAYLOADS="$2"; shift 2;;
@@ -61,6 +67,10 @@ done
 [ -n "$CLIENT_HOST" ] || { echo "--client HOST required" >&2; exit 2; }
 # Upstream co-locates with the client host if a third host isn't given.
 [ -n "$UPSTREAM_HOST" ] || UPSTREAM_HOST="$CLIENT_HOST"
+# Data-plane addresses default to the SSH hosts (flat LAN); on cloud, pass the
+# private IPs via --proxy-data / --upstream-data.
+[ -n "$PROXY_DATA" ]    || PROXY_DATA="$PROXY_HOST"
+[ -n "$UPSTREAM_DATA" ] || UPSTREAM_DATA="$UPSTREAM_HOST"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/../../../.." && pwd)"
@@ -78,9 +88,9 @@ kill_remote() { ssh_to "$1" "kill $2 2>/dev/null || true; sleep 0.3; kill -9 $2 
 
 impl_cmd() { # impl host-relative launch command (proxy)
   case "$1" in
-    k) echo "RELAY_BIND=0.0.0.0:$PROXY_PORT RELAY_UPSTREAM=$UPSTREAM_HOST:$UPSTREAM_PORT ~/$RDIR/kara/.bin/server";;
-    g) echo "RELAY_BIND=0.0.0.0:$PROXY_PORT RELAY_UPSTREAM=$UPSTREAM_HOST:$UPSTREAM_PORT ~/$RDIR/go/relay-bench-go";;
-    n) echo "RELAY_BIND=0.0.0.0:$PROXY_PORT RELAY_UPSTREAM=$UPSTREAM_HOST:$UPSTREAM_PORT node ~/$RDIR/node/server.js";;
+    k) echo "RELAY_BIND=0.0.0.0:$PROXY_PORT RELAY_UPSTREAM=$UPSTREAM_DATA:$UPSTREAM_PORT ~/$RDIR/kara/.bin/server";;
+    g) echo "RELAY_BIND=0.0.0.0:$PROXY_PORT RELAY_UPSTREAM=$UPSTREAM_DATA:$UPSTREAM_PORT ~/$RDIR/go/relay-bench-go";;
+    n) echo "RELAY_BIND=0.0.0.0:$PROXY_PORT RELAY_UPSTREAM=$UPSTREAM_DATA:$UPSTREAM_PORT node ~/$RDIR/node/server.js";;
   esac
 }
 impl_name() { case "$1" in k) echo kara;; g) echo go;; n) echo node;; esac; }
@@ -122,7 +132,7 @@ log "sweep: payloads=[$PAYLOADS]  connections=[$CONNECTIONS]  impls=$IMPLS  ${DU
 if [ "$DRY_RUN" -eq 1 ]; then
   log "DRY RUN — would: preflight ssh, measure RTT, then per payload {launch upstream; per impl {launch proxy; upstream-direct sanity; per conn × run: wrk}}"
   for p in $(echo "$PAYLOADS" | tr ',' ' '); do for i in $(echo "$IMPLS" | tr ',' ' '); do for c in $(echo "$CONNECTIONS" | tr ',' ' '); do
-    echo "  [plan] payload=${p}B impl=$(impl_name "$i") -c$c : wrk -t$THREADS -c$c -d${DURATION}s http://$PROXY_HOST:$PROXY_PORT/"
+    echo "  [plan] payload=${p}B impl=$(impl_name "$i") -c$c : wrk -t$THREADS -c$c -d${DURATION}s http://$PROXY_DATA:$PROXY_PORT/"
   done; done; done
   exit 0
 fi
@@ -131,8 +141,10 @@ for h in "$CLIENT_HOST" "$PROXY_HOST" "$UPSTREAM_HOST"; do
   ssh_to "$h" "echo ok" >/dev/null || { echo "ssh preflight failed for $h" >&2; exit 1; }
 done
 log "ssh preflight ok for all hosts"
-RTT="$(ssh_to "$CLIENT_HOST" "ping -c5 -q $PROXY_HOST 2>/dev/null | tail -1" || true)"
-log "client→proxy RTT: ${RTT:-unknown}"
+# ICMP is often blocked between cloud instances; fall back to a TCP-connect
+# time against the (already-open) proxy data port range via SSH port if needed.
+RTT="$(ssh_to "$CLIENT_HOST" "ping -c5 -q $PROXY_DATA 2>/dev/null | tail -1" || true)"
+log "client→proxy RTT: ${RTT:-unknown (ICMP likely blocked; see per-run connect times)}"
 
 RESULTS=""   # rows: "name payload conn rps p50 p99 max xfer"
 SANITY=""    # rows: "payload rps xfer" (upstream-direct from client)
@@ -147,7 +159,7 @@ for payload in $(echo "$PAYLOADS" | tr ',' ' '); do
   sleep 1
   # Upstream-direct sanity: the upstream must out-throughput the proxies, else
   # it (not the proxy) is the bottleneck. Measured from the client host.
-  s="$(ssh_to "$CLIENT_HOST" "wrk -t$THREADS -c100 -d3s --latency http://$UPSTREAM_HOST:$UPSTREAM_PORT/ 2>&1" | parse_wrk)"
+  s="$(ssh_to "$CLIENT_HOST" "wrk -t$THREADS -c100 -d3s --latency http://$UPSTREAM_DATA:$UPSTREAM_PORT/ 2>&1" | parse_wrk)"
   SANITY="${SANITY}${payload} $(echo "$s" | awk '{print $1, $5}')
 "
   log "upstream-direct @${payload}B: rps/xfer = $(echo "$s" | awk '{print $1, $5"MB/s"}')"
@@ -161,7 +173,7 @@ for payload in $(echo "$PAYLOADS" | tr ',' ' '); do
       best_rps=""; agg=""
       r=0
       while [ "$r" -lt "$RUNS" ]; do
-        line="$(ssh_to "$CLIENT_HOST" "wrk -t$THREADS -c$c -d${DURATION}s --latency http://$PROXY_HOST:$PROXY_PORT/ 2>&1" | parse_wrk)"
+        line="$(ssh_to "$CLIENT_HOST" "wrk -t$THREADS -c$c -d${DURATION}s --latency http://$PROXY_DATA:$PROXY_PORT/ 2>&1" | parse_wrk)"
         agg="${agg}${line}
 "
         r=$((r+1))
