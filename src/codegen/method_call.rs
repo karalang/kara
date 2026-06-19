@@ -2848,7 +2848,51 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_extract_value(agg, 1, "cstr.ts.len")
             .unwrap()
             .into_int_value();
+        self.build_utf8_validated_result(data_ptr, data_len)
+    }
 
+    /// `String.from_utf8(bytes: Vec[u8]) -> Result[String, Utf8Error]` — the
+    /// UTF-8-validating String constructor (interpreter parity in
+    /// `eval_call.rs`). Extracts the input `Vec`'s `{data, len}` (fields 0/1 of
+    /// the `{data, len, cap}` aggregate) and delegates to the shared
+    /// `build_utf8_validated_result`. The bytes are validated and COPIED into a
+    /// fresh heap String (the consume-by-copy convention `Vec.push(param)`
+    /// uses), so the input `Vec`'s own scope-exit drop frees its buffer — no
+    /// move/ownership transfer needed. Was interpreter-only (B-2026-06-18-11);
+    /// this wires the codegen path so `match String.from_utf8(v) { Ok(s) => …,
+    /// Err(_) => … }` builds (the Relay slice-4 request-line parse).
+    pub(super) fn compile_string_from_utf8(
+        &mut self,
+        arg: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let vec_val = self.compile_expr(arg)?;
+        let agg = vec_val.into_struct_value();
+        let data_ptr = self
+            .builder
+            .build_extract_value(agg, 0, "fu8.data")
+            .unwrap()
+            .into_pointer_value();
+        let data_len = self
+            .builder
+            .build_extract_value(agg, 1, "fu8.len")
+            .unwrap()
+            .into_int_value();
+        self.build_utf8_validated_result(data_ptr, data_len)
+    }
+
+    /// Shared core of `CStr.to_string()` and `String.from_utf8(Vec[u8])`:
+    /// given a `(data_ptr, data_len)` byte range, validate UTF-8 via
+    /// `karac_runtime_cstr_to_string` (which COPIES the bytes into a fresh heap
+    /// String on success) and build `Result[String, Utf8Error]` — `Ok(String)`
+    /// on valid UTF-8, else `Err(Utf8Error.{InvalidByte | IncompleteSequence})`
+    /// selected from the runtime discriminant. The range is only READ (the
+    /// runtime copies), so the caller's source buffer keeps its own scope-exit
+    /// drop — no ownership transfer.
+    fn build_utf8_validated_result(
+        &mut self,
+        data_ptr: inkwell::values::PointerValue<'ctx>,
+        data_len: inkwell::values::IntValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
         let i64_t = self.context.i64_type();
         let i8_t = self.context.i8_type();
         let str_ty = self.vec_struct_type();

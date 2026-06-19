@@ -5743,6 +5743,90 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_string_from_utf8_result() {
+        // `String.from_utf8(bytes: Vec[u8]) -> Result[String, Utf8Error]`
+        // (B-2026-06-18-11). Was interpreter-only — the codegen path now
+        // validates + copies the bytes into a fresh heap String (reusing the
+        // CStr.to_string validator), so the canonical "read bytes -> Vec[u8] ->
+        // parse" shape builds. Covers Ok (ASCII), Err InvalidByte (lone 0xFF),
+        // and Err IncompleteSequence (truncated 3-byte 0xE2 0x82) — the same
+        // arms as the cstr test, sourced from a runtime-built Vec instead of a
+        // c"..." literal. The input Vec drops normally (consume-by-copy); no
+        // leak / double-free.
+        let src = r#"
+fn main() {
+    let mut a: Vec[u8] = Vec.new();
+    a.push(104u8); a.push(105u8);
+    match String.from_utf8(a) {
+        Ok(s) => println(s),
+        Err(_) => println("ERR"),
+    }
+    let mut b: Vec[u8] = Vec.new();
+    b.push(255u8);
+    match String.from_utf8(b) {
+        Ok(_) => println("OK?"),
+        Err(e) => match e {
+            Utf8Error.InvalidByte => println("INVALID"),
+            Utf8Error.IncompleteSequence => println("INCOMPLETE"),
+            Utf8Error.Other(m) => println(m),
+        },
+    }
+    let mut c: Vec[u8] = Vec.new();
+    c.push(226u8); c.push(130u8);
+    match String.from_utf8(c) {
+        Ok(_) => println("OK?"),
+        Err(e) => match e {
+            Utf8Error.InvalidByte => println("INVALID"),
+            Utf8Error.IncompleteSequence => println("INCOMPLETE"),
+            Utf8Error.Other(m) => println(m),
+        },
+    }
+}
+"#;
+        let out = run_program(src);
+        if let Some(out) = out {
+            assert_eq!(out, "hi\nINVALID\nINCOMPLETE\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_request_line_routing_parse() {
+        // The from_utf8-enabled Layer-7 routing parse the Relay dogfood needs:
+        // decode an HTTP request line from a raw byte window
+        // (`Vec.from_slice(arr[0..n])` -> `String.from_utf8`), split on ' ',
+        // take the path, and route by prefix. Composes the from_slice
+        // range-slice fix (B-2026-06-18-10), from_utf8 (B-2026-06-18-11),
+        // `split`, `clone`, and `starts_with` — the request-line parse end to
+        // end, the exact shape `examples/relay`'s router runs.
+        let src = r#"
+fn classify(line: String) -> i64 {
+    let parts = line.split(' ');
+    if parts.len() >= 2 {
+        let path = parts[1].clone();
+        if path.starts_with("/api") { return 1; }
+        if path.starts_with("/static") { return 2; }
+    }
+    return 0;
+}
+fn main() {
+    let r1: Array[u8, 18] = [71u8,69,84,32,47,97,112,105,47,120,32,72,84,84,80,47,49,49];
+    let v1: Vec[u8] = Vec.from_slice(r1[0..18]);
+    match String.from_utf8(v1) { Ok(l) => println(classify(l)), Err(_) => println(0) }
+    let r2: Array[u8, 18] = [71u8,69,84,32,47,115,116,97,116,105,99,47,121,32,72,84,84,80];
+    let v2: Vec[u8] = Vec.from_slice(r2[0..18]);
+    match String.from_utf8(v2) { Ok(l) => println(classify(l)), Err(_) => println(0) }
+    let r3: Array[u8, 10] = [71u8,69,84,32,47,32,72,84,84,80];
+    let v3: Vec[u8] = Vec.from_slice(r3[0..10]);
+    match String.from_utf8(v3) { Ok(l) => println(classify(l)), Err(_) => println(0) }
+}
+"#;
+        let out = run_program(src);
+        if let Some(out) = out {
+            assert_eq!(out, "1\n2\n0\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_string_slice_v1() {
         // StringSlice v1 graduation (B-2026-06-07-5 → StringSlice slice).
         // `String.slice(a,b) -> StringSlice` (a zero-copy `{ptr,len,cap=0}`

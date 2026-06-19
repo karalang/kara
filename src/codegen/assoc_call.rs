@@ -1816,6 +1816,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 return self.compile_expr(&arg.value);
             }
         }
+        // `String.from_utf8(bytes: Vec[u8]) -> Result[String, Utf8Error]` —
+        // UTF-8-validating constructor (was interpreter-only, B-2026-06-18-11).
+        // Validates + copies the bytes into a fresh String; reuses the
+        // CStr.to_string runtime validator. Unblocks the Relay request-line
+        // parse (read bytes -> Vec[u8] -> from_utf8 -> split/route).
+        if type_name == "String" && method == "from_utf8" {
+            if let Some(arg) = _args.first() {
+                return self.compile_string_from_utf8(&arg.value);
+            }
+        }
         // `CStr.from_ptr(p: *const u8) -> ref CStr` — wrap a raw, caller-
         // owned C string pointer as the same `{ptr, len}` aggregate a
         // `c"..."` literal lowers to (`slice_struct_type`, see
