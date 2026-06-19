@@ -57,7 +57,7 @@ per-project sections below hold the design. Status legend: ✅ shipped ·
 | **Weave** | Refinement types + contracts + effects together | ✅ shipped (CSV cut) | refinement+contracts (CSV) · `Pool[T]`+TLS+tracing (service) | 2 |
 | **Tangle** | No `'a` at the cases that force `Rc<RefCell>`/arenas elsewhere — graphs, back-pointers, undo/redo; every RC escalation surfaced | ✅ shipped | ownership + `karac query ownership` (done) | 2 |
 | **Chronicle** | Self-hosting; Kāra's own tooling explains Kāra — *and* the ownership model holds across the whole compiler, zero lifetime annotations | ⬜ planned | Phase 10/12 self-hosting | 2 |
-| **Relay** | Effect-driven event-loop networking (no `async fn`) | ✅ shipped (slices 1–5) | round-robin LB + full-duplex splice (`try_clone`/`shutdown_write`) + path routing (`from_utf8`) + live metrics (`par struct` + `Atomic` counters shared across handlers) — `examples/relay/` | 3 |
+| **Relay** | Effect-driven event-loop networking (no `async fn`) | ✅ shipped (slices 1–5 + bench) | round-robin LB + full-duplex splice (`try_clone`/`shutdown_write`) + path routing (`from_utf8`) + live metrics (`par struct` + `Atomic` counters shared across handlers) + wrk 3-language bench (kara/go/node) — `examples/relay/` | 3 |
 | **Forge** | `embedded` profile firmware on a real MCU | ⬜ planned | v8 hardware gaps | 3 |
 | **Iris** | One source → native + WASM, no port | ⬜ planned | Phase 10 WASM target | 3 |
 | **Plume** | Parallel browser compute driven by event streams — no `async`/coloring | ✅ shipped | `animation_frames` + event-data `pointer_moves` channel + `put_pixels` blit — all built (`examples/plume/`) | 3 |
@@ -718,9 +718,20 @@ and curating the Rust side-by-side honestly.
 > metrics are a `par struct` holding `Atomic[i64]` counters, fetch_add'd
 > race-free from every concurrent handler and reported from the accept loop —
 > the canonical "wrap shared mutable state in `Atomic[T]`" pattern the
-> compiler's own `E_NOT_CROSS_TASK` diagnostic points to. **Remaining:** the
-> wrk-based 3-language benchmark (the original entry's perf-comparison framing
-> below).
+> compiler's own `E_NOT_CROSS_TASK` diagnostic points to.
+>
+> **Built (benchmark) — 2026-06-19.** The wrk-based 3-language Layer-7
+> reverse-proxy benchmark ships at [`examples/relay/bench/`](../examples/relay/bench/):
+> three proxies (kara / go / node) forwarding to one shared Go upstream, driven
+> by `wrk` (cohort kara/go/node, matching the installed-toolchain set; nginx and
+> `hey` are absent on the bench host). Building the Kāra proxy through the
+> coroutine spawn path was itself a bug-finder — it surfaced a use-after-free in
+> the non-blocking coroutine-spawn lowering (the spawn wrapper freed a moved-in
+> `String` capture's buffer while the coroutine was still parked), fixed in
+> `src/codegen/task_group.rs` and regression-pinned by
+> `tests/coro_e2e.rs::coroutine_multi_capture_string_*`. The measured numbers,
+> the per-impl build history, and the keep-alive perf-investigation signal the
+> bench surfaced live in [`examples/relay/bench/README.md`](../examples/relay/bench/README.md).
 
 **Audience:** Infrastructure engineers, performance-focused backend developers.
 
