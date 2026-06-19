@@ -742,6 +742,44 @@ impl<'a> UseClassifier<'a> {
                     self.assign_binding_types(p, ft);
                 }
             }
+            // #45 — the STRUCT-pattern peer of the tuple case above
+            // (B-2026-06-14-27). Decompose a struct destructure field-by-field so
+            // each binding is keyed to its OWN field type, not the whole struct's.
+            // Without this, a `Copy` field (`span: Span`) bound from
+            // `let MethodCallExpr { …, span } = m` inherits the non-`Copy`
+            // `MethodCallExpr` type, so reading a SECOND field of it
+            // (`span_str(span.offset, span.length)`) classifies the first read as
+            // a Consume and fires a spurious "value 'span' moved here, used again
+            // here". Surfaced by the self-hosted parser's renderer (a 20-arm
+            // match destructuring node structs that all carry a `span: Span`).
+            (PatternKind::Struct { fields, .. }, Type::Named { name, .. }) => {
+                if let Some(info) = self.tc.struct_info.get(name.as_str()) {
+                    for fp in fields {
+                        let field_ty = info
+                            .fields
+                            .iter()
+                            .find(|(fname, _, _)| fname == &fp.name)
+                            .map(|(_, ft, _)| ft.clone());
+                        match (&fp.pattern, field_ty) {
+                            (Some(sub), Some(ft)) => self.assign_binding_types(sub, &ft),
+                            // Shorthand `{ field }` binds the field name directly.
+                            (None, Some(ft)) => {
+                                self.local_types.insert(fp.name.clone(), ft);
+                            }
+                            // Unknown field / unrecorded type → conservative
+                            // whole-type fallback for this binding only.
+                            (Some(sub), None) => self.assign_binding_types(sub, ty),
+                            (None, None) => {
+                                self.local_types.insert(fp.name.clone(), ty.clone());
+                            }
+                        }
+                    }
+                } else {
+                    for name in pattern.binding_names() {
+                        self.local_types.insert(name, ty.clone());
+                    }
+                }
+            }
             (
                 PatternKind::AtBinding {
                     name,

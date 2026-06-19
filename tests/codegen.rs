@@ -46800,6 +46800,62 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_shared_enum_payload_with_nested_heap_struct_field() {
+        // #44 (phase-12 parser slice 2a): a shared-enum variant whose payload
+        // node struct embeds ANOTHER heap-bearing struct BY VALUE — the parser's
+        // `IfExpr.then_block: Block` where `Block { stmts: Vec, tail: Option,
+        // span: Span }`. The nested `Block` is a multi-word struct (Vec=3w +
+        // Option=4w + Span=4w = 11 words) sitting inside the `IfNode` payload.
+        // Two stacked bugs, both fixed: (1) the PACK
+        // (`coerce_to_payload_words`) recursed with `count_fields()` (3) as the
+        // sub-struct's `num_words`, so `out.len()(11) > 3` fired the oversize
+        // BOXING path — the nested Block got heap-boxed (pointer in word 0) while
+        // the unpack expected 11 inline words; (2) the UNPACK
+        // (`reconstruct_payload_value`) rebuilt the nested struct assuming each
+        // sub-field was a single word and `insertvalue`d a bare `i64` into a
+        // multi-word struct sub-field → \"Invalid InsertValueInst operands\". Pins
+        // the build + match round-trip of both a DIRECT block payload
+        // (`E.Blk(Block)`) and a NESTED one (`E.Iff(IfNode { then_block: Block })`).
+        if let Some(out) = run_program(
+            "struct Span { a: i64, b: i64, c: i64, d: i64 }\n\
+             shared enum E { Lit(i64), Iff(IfNode), Blk(Block) }\n\
+             struct Block { stmts: Vec[i64], tail: Option[E], span: Span }\n\
+             struct IfNode { cond: E, then_block: Block, span: Span }\n\
+             fn mk_block(first: i64, sp: i64) -> Block {\n\
+                 let mut s: Vec[i64] = Vec.new();\n\
+                 s.push(first); s.push(first + 1);\n\
+                 Block { stmts: s, tail: Some(E.Lit(99)), span: Span { a: sp, b: 0, c: 0, d: 0 } }\n\
+             }\n\
+             fn main() {\n\
+                 let be = E.Blk(mk_block(10, 1));\n\
+                 match be {\n\
+                     Lit(n) => println(n),\n\
+                     Iff(nd) => println(nd.span.a),\n\
+                     Blk(b) => {\n\
+                         println(b.span.a);\n\
+                         println(b.stmts[0]);\n\
+                         println(b.stmts[1]);\n\
+                         match b.tail { Some(t) => match t { Lit(v) => println(v), Iff(_) => println(-1), Blk(_) => println(-2) }, None => println(-3) }\n\
+                     }\n\
+                 }\n\
+                 let ife = E.Iff(IfNode { cond: E.Lit(7), then_block: mk_block(20, 2), span: Span { a: 5, b: 0, c: 0, d: 0 } });\n\
+                 match ife {\n\
+                     Lit(n) => println(n),\n\
+                     Iff(nd) => {\n\
+                         println(nd.span.a);\n\
+                         let tb = nd.then_block;\n\
+                         println(tb.span.a);\n\
+                         println(tb.stmts[0]);\n\
+                     }\n\
+                     Blk(_) => println(-9)\n\
+                 }\n\
+             }",
+        ) {
+            assert_eq!(out.trim(), "1\n10\n11\n99\n5\n2\n20");
+        }
+    }
+
+    #[test]
     fn test_e2e_chained_access_through_inline_shared_field() {
         // B-2026-06-14-28 — a plain struct with an INLINE field whose type is
         // a `shared` struct/enum (an 8-byte RC pointer). Chained field access

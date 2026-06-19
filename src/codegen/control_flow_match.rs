@@ -1923,54 +1923,17 @@ impl<'ctx> super::Codegen<'ctx> {
                         _ => word.into(),
                     }
                 } else if let BasicTypeEnum::StructType(inner_st) = field_ty {
-                    // Nested struct field — recursively build by walking its
-                    // sub-fields. v1 covers the `String` aggregate
-                    // (`{ ptr, i64, i64 }`) embedded in `Response.body` /
-                    // `HttpError.message`; deeper nesting would need
-                    // recursion, but those shapes don't surface here yet.
-                    let mut sub_agg = inner_st.get_undef();
-                    let sub_fields = inner_st.count_fields() as usize;
-                    for j in 0..sub_fields {
-                        if j >= slice.len() {
-                            break;
-                        }
-                        let sub_ty = inner_st
-                            .get_field_type_at_index(j as u32)
-                            .ok_or_else(|| format!("sub-field {} missing", j))?;
-                        let sw = slice[j];
-                        let sub_val: BasicValueEnum<'ctx> = match sub_ty {
-                            BasicTypeEnum::IntType(it) => {
-                                if it.get_bit_width() == 64 {
-                                    sw.into()
-                                } else if it.get_bit_width() < 64 {
-                                    self.builder
-                                        .build_int_truncate(sw, it, "pl.sub.tr")
-                                        .unwrap()
-                                        .into()
-                                } else {
-                                    self.builder
-                                        .build_int_z_extend(sw, it, "pl.sub.zx")
-                                        .unwrap()
-                                        .into()
-                                }
-                            }
-                            BasicTypeEnum::PointerType(_) => self
-                                .builder
-                                .build_int_to_ptr(sw, ptr_ty, "pl.sub.itop")
-                                .unwrap()
-                                .into(),
-                            BasicTypeEnum::FloatType(ft) => {
-                                self.builder.build_bit_cast(sw, ft, "pl.sub.fc").unwrap()
-                            }
-                            _ => sw.into(),
-                        };
-                        sub_agg = self
-                            .builder
-                            .build_insert_value(sub_agg, sub_val, j as u32, "pl.sub.iv")
-                            .unwrap()
-                            .into_struct_value();
-                    }
-                    sub_agg.into()
+                    // Nested struct field — rebuild via the recursive,
+                    // word-correct helper. #44 (phase-12 parser slice 2a): the
+                    // prior inline walk assumed every sub-field was a SINGLE
+                    // word (`slice[j]`) and `insertvalue`d a bare `i64` into a
+                    // multi-word struct sub-field (`Vec {ptr,i64,i64}` /
+                    // `Option {4×i64}` / `Span {4×i64}` inside the parser's
+                    // `Block` payload struct, reached through `IfExpr.then_block:
+                    // Block`) → "Invalid InsertValueInst operands". The helper
+                    // walks sub-fields by their true `llvm_type_word_count` width
+                    // and recurses into nested structs.
+                    self.reconstruct_struct_from_words(inner_st, slice)?.into()
                 } else {
                     // Unexpected: a multi-word non-struct field. Fall back to
                     // dropping all but the first word — same shape as the
@@ -1989,6 +1952,82 @@ impl<'ctx> super::Codegen<'ctx> {
             cursor = end;
         }
         Ok(agg.into())
+    }
+
+    /// Reconstruct a struct VALUE from its flat `i64`-word decomposition,
+    /// recursing into nested struct fields. Each LLVM field consumes
+    /// `llvm_type_word_count(field_ty)` words in declaration order (the inverse
+    /// of `coerce_to_payload_words`). #44 (phase-12 parser slice 2a): the
+    /// previous inline nested-struct reconstruction in `reconstruct_payload_value`
+    /// assumed every sub-field was a single word and `insertvalue`d a bare `i64`
+    /// into a multi-word struct sub-field (`Vec {ptr,i64,i64}` / `Option {4×i64}`
+    /// / `Span {4×i64}` inside a `Block` payload struct reached via
+    /// `IfExpr.then_block: Block`) → "Invalid InsertValueInst operands". This
+    /// walks sub-fields by their true word width and recurses, so an arbitrarily
+    /// nested heap-bearing payload struct rebuilds correctly.
+    fn reconstruct_struct_from_words(
+        &self,
+        st: inkwell::types::StructType<'ctx>,
+        words: &[inkwell::values::IntValue<'ctx>],
+    ) -> Result<inkwell::values::StructValue<'ctx>, String> {
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let mut agg = st.get_undef();
+        let n_fields = st.count_fields() as usize;
+        let mut cursor = 0usize;
+        for i in 0..n_fields {
+            let field_ty = st
+                .get_field_type_at_index(i as u32)
+                .ok_or_else(|| format!("sub-field type at index {} missing", i))?;
+            let n = Self::llvm_type_word_count(field_ty).max(1);
+            if cursor >= words.len() {
+                break;
+            }
+            let end = (cursor + n).min(words.len());
+            let slice = &words[cursor..end];
+            let field_val: BasicValueEnum<'ctx> = if let BasicTypeEnum::StructType(inner) = field_ty
+            {
+                self.reconstruct_struct_from_words(inner, slice)?.into()
+            } else {
+                let word = slice
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| i64_t.const_int(0, false));
+                match field_ty {
+                    BasicTypeEnum::IntType(it) => {
+                        if it.get_bit_width() == 64 {
+                            word.into()
+                        } else if it.get_bit_width() < 64 {
+                            self.builder
+                                .build_int_truncate(word, it, "pl.sub.tr")
+                                .unwrap()
+                                .into()
+                        } else {
+                            self.builder
+                                .build_int_z_extend(word, it, "pl.sub.zx")
+                                .unwrap()
+                                .into()
+                        }
+                    }
+                    BasicTypeEnum::FloatType(ft) => {
+                        self.builder.build_bit_cast(word, ft, "pl.sub.fc").unwrap()
+                    }
+                    BasicTypeEnum::PointerType(_) => self
+                        .builder
+                        .build_int_to_ptr(word, ptr_ty, "pl.sub.itop")
+                        .unwrap()
+                        .into(),
+                    _ => word.into(),
+                }
+            };
+            agg = self
+                .builder
+                .build_insert_value(agg, field_val, i as u32, "pl.sub.iv")
+                .unwrap()
+                .into_struct_value();
+            cursor = end;
+        }
+        Ok(agg)
     }
 
     /// After a `match scrut { Variant(b1, b2, …) => … }` arm has bound

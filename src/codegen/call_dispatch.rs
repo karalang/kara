@@ -2912,9 +2912,26 @@ impl<'ctx> super::Codegen<'ctx> {
                     // top-level LLVM field of `sv` contributes its own
                     // word count to the running total. Push every word —
                     // the oversize check below sees the true count.
+                    //
+                    // #44 (phase-12 parser slice 2a): use the recursive WORD
+                    // count, not `count_fields()`. A nested struct field (a
+                    // `Block {Vec, Option, Span}` — 3 fields but 11 words —
+                    // reached via `IfExpr.then_block: Block`) has
+                    // `count_fields() == 3` but flattens to 11 words, so passing
+                    // 3 as the recursion's `num_words` made `out.len()(11) >
+                    // num_words(3)` fire the oversize-BOXING path INSIDE the
+                    // recursion — the sub-struct got heap-boxed (a pointer in
+                    // word 0) while the unpack (`reconstruct_payload_value`)
+                    // reads it as inline words → wrong value. `llvm_type_word_count`
+                    // recurses, so `out.len() == num_words` and the sub-struct
+                    // flattens inline (boxing stays a top-level decision).
                     let sub_count = match f {
-                        BasicValueEnum::StructValue(ssv) => ssv.get_type().count_fields() as usize,
-                        BasicValueEnum::ArrayValue(av) => av.get_type().len() as usize,
+                        BasicValueEnum::StructValue(ssv) => {
+                            Self::llvm_type_word_count(ssv.get_type().into())
+                        }
+                        BasicValueEnum::ArrayValue(av) => {
+                            Self::llvm_type_word_count(av.get_type().into())
+                        }
                         _ => 1,
                     };
                     let sub_words = if sub_count <= 1 {

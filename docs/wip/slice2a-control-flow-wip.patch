@@ -1,0 +1,746 @@
+diff --git a/selfhost/src/ast.kara b/selfhost/src/ast.kara
+index 9032ba24..66617ca3 100644
+--- a/selfhost/src/ast.kara
++++ b/selfhost/src/ast.kara
+@@ -178,6 +178,7 @@ pub struct IndexExpr {
+     pub span: Span,
+ }
+ 
++
+ // The recursive expression node (RC-backed). Slice 1 covers literals,
+ // identifiers, `self`/`Self`, unary, binary, grouping, and tuples; the
+ // remaining forms (calls, indexing, control flow, …) land in later slices.
+@@ -210,6 +211,12 @@ pub shared enum Expr {
+     TupleIdx(TupleIndexExpr),
+     Index(IndexExpr),
+ 
++    // Control flow (slice 2a): block / if / return expressions. `Blk` (not
++    // `Block`) — the bare variant name would collide with the `Block` type.
++    Blk(Block),
++    If(IfExpr),
++    Return(ReturnExpr),
++
+     // Error-recovery placeholder. Named `Error` (not `Err`) to match the seed
+     // and avoid colliding with `Result.Err` in codegen's error-exit heuristic
+     // (`is_error_exit_value` flags any `return` whose callee path ends in
+@@ -253,6 +260,85 @@ pub fn expr_span(e: ref Expr) -> Span {
+         Field(n) => clone_span(n.span),
+         TupleIdx(n) => clone_span(n.span),
+         Index(n) => clone_span(n.span),
++        Blk(n) => clone_span(n.span),
++        If(n) => clone_span(n.span),
++        Return(n) => clone_span(n.span),
+         Error(n) => clone_span(n.span),
+     }
+ }
++
++// ── Statements + blocks (slice 2a) ── (declared AFTER `Expr` to keep the
++// typechecker's order-sensitive resolution happy — #46: the `Stmt`/`Block`
++// declarations placed BEFORE the `Expr` enum broke match-binding field
++// type resolution for the literal arms. A forward reference from `Expr`'s
++// `Blk`/`If`/`Return` variants to these node structs works; the reverse order
++// (a second enum + heap structs declared first) does not.)
++//
++// `Block` is a plain struct (its child edges are already pointers/heap —
++// `Vec[Stmt]` and `Option[Expr]` — so it carries no by-value recursive node and
++// needs no `shared`). `Stmt` is a plain enum; each variant wraps a node struct
++// (span fidelity + the no-direct-enum-payload rule). The recursive cycle
++// `Expr → Block → Stmt → Expr` is broken by the `Vec`/`Option`/`Expr`-pointer
++// edges, so no infinite size.
++
++// `target = value;`
++pub struct AssignStmt {
++    pub target: Expr,
++    pub value: Expr,
++    pub span: Span,
++}
++
++// `let [mut] name = value;` — slice 2a restricts the binding to a single
++// identifier; full patterns + `: T` annotations land with later slices.
++pub struct LetStmt {
++    pub is_mut: bool,
++    pub name: String,
++    pub value: Expr,
++    pub span: Span,
++}
++
++// `expr;` (expression statement). Wrapped (not a bare `Expr` payload) for span
++// fidelity and to keep every `Stmt` variant a node struct.
++pub struct ExprStmt {
++    pub expr: Expr,
++    pub span: Span,
++}
++
++// `Exp` (not `Expr`) for the expression-statement variant — a bare variant
++// name shares the scope with type names, and `Expr` is already a type.
++pub enum Stmt {
++    Let(LetStmt),
++    Assign(AssignStmt),
++    Exp(ExprStmt),
++}
++
++// A brace-delimited block: statements + an optional tail expression (the
++// block's value). Mirrors `ast::Block` (`stmts` + `final_expr`).
++//
++// A plain (by-value) struct, embedded directly in `IfExpr.then_block` and as the
++// `Expr.Blk(Block)` payload. A `Block` is a multi-word heap-bearing struct
++// (`Vec[Stmt]` + inline `Option[Expr]` + `Span` = 11 words), so embedding it in
++// a shared-enum payload exercises the nested-heap-struct enum pack/unpack — the
++// path #44 fixed (`coerce_to_payload_words` / `reconstruct_payload_value`
++// recurse by true word width). A value struct (not `shared`) keeps the renderer
++// on simple value semantics — `render_block` destructures the block by value.
++pub struct Block {
++    pub stmts: Vec[Stmt],
++    pub tail: Option[Expr],
++    pub span: Span,
++}
++
++// `if cond { … } [else …]`. `then_block` is a raw `Block`; `else_branch` is an
++// `Expr` (a wrapped `Block` for `else { … }`, or another `If` for `else if`).
++pub struct IfExpr {
++    pub cond: Expr,
++    pub then_block: Block,
++    pub else_branch: Option[Expr],
++    pub span: Span,
++}
++
++// `return [value];`
++pub struct ReturnExpr {
++    pub value: Option[Expr],
++    pub span: Span,
++}
+\ No newline at end of file
+diff --git a/selfhost/src/ast_render.kara b/selfhost/src/ast_render.kara
+index 02e39ffd..574f520e 100644
+--- a/selfhost/src/ast_render.kara
++++ b/selfhost/src/ast_render.kara
+@@ -8,6 +8,7 @@
+ // `Expr.<Variant>(node)` carries the node's `span`.
+ //
+ 
++import span.Span;
+ import ast.{
+     Expr,
+     BinaryExpr,
+@@ -19,6 +20,13 @@ import ast.{
+     FieldAccessExpr,
+     TupleIndexExpr,
+     IndexExpr,
++    Stmt,
++    LetStmt,
++    AssignStmt,
++    ExprStmt,
++    Block,
++    IfExpr,
++    ReturnExpr,
+ };
+ 
+ // MUST stay identical to `escape_for_render` in `selfhost/src/main.kara` and
+@@ -93,6 +101,17 @@ fn span_str(off: i64, len: i64) -> String {
+     s
+ }
+ 
++// `span_str` of a `Span` read through a BORROW. Used at the sites that
++// destructure the node's `span` out by value (`let X { …, span } = n`): passing
++// `span.offset, span.length` as two owned args makes the ownership checker
++// treat the first field-arg as a move of the (non-`Copy`) `Span` root and flag
++// the second as a use-after-move; reading both fields off a `ref Span` here
++// never consumes the root. (Sites that read `n.span.offset` or pre-bind `off`/
++// `len` keep calling `span_str` directly — those forms don't trip it.)
++fn span_str_v(s: ref Span) -> String {
++    span_str(s.offset, s.length)
++}
++
+ // `(arg[ :LABEL][ mut] @off:len VALUE)` — one call/method-call argument. The
+ // Rust seed reproduces this in `tests/selfhost_parser.rs::render_rust_arg`.
+ fn render_arg(a: CallArg) -> String {
+@@ -115,13 +134,85 @@ fn render_arg(a: CallArg) -> String {
+     if mut_marker {
+         out.push_str(" mut");
+     }
+-    out.push_str(span_str(span.offset, span.length));
++    out.push_str(span_str_v(span));
+     out.push_str(" ");
+     out.push_str(render_expr(value));
+     out.push_str(")");
+     out
+ }
+ 
++// `(let[ mut] NAME @off:len VALUE)` / `(assign @off:len TARGET VALUE)` /
++// `(exprstmt @off:len EXPR)` — one statement. Destructures so the node's heap
++// fields move out together.
++fn render_stmt(s: Stmt) -> String {
++    let mut out = "".to_string();
++    match s {
++        Let(n) => {
++            let LetStmt {
++                is_mut,
++                name,
++                value,
++                span,
++            } = n;
++            out.push_str("(let");
++            if is_mut {
++                out.push_str(" mut");
++            }
++            out.push_str(" ");
++            out.push_str(name);
++            out.push_str(span_str_v(span));
++            out.push_str(" ");
++            out.push_str(render_expr(value));
++            out.push_str(")");
++        }
++        Assign(n) => {
++            let AssignStmt {
++                target,
++                value,
++                span,
++            } = n;
++            out.push_str("(assign");
++            out.push_str(span_str_v(span));
++            out.push_str(" ");
++            out.push_str(render_expr(target));
++            out.push_str(" ");
++            out.push_str(render_expr(value));
++            out.push_str(")");
++        }
++        Exp(n) => {
++            let ExprStmt { expr, span } = n;
++            out.push_str("(exprstmt");
++            out.push_str(span_str_v(span));
++            out.push_str(" ");
++            out.push_str(render_expr(expr));
++            out.push_str(")");
++        }
++    }
++    out
++}
++
++// `(block @off:len STMT... (tail EXPR)?)`. Destructure so `stmts`/`tail` move
++// out together (a single field move is a whole-struct move).
++fn render_block(b: Block) -> String {
++    let Block { stmts, tail, span } = b;
++    let mut out = "(block".to_string();
++    out.push_str(span_str_v(span));
++    for s in stmts {
++        out.push_str(" ");
++        out.push_str(render_stmt(s));
++    }
++    match tail {
++        Some(e) => {
++            out.push_str(" (tail ");
++            out.push_str(render_expr(e));
++            out.push_str(")");
++        }
++        None => {}
++    }
++    out.push_str(")");
++    out
++}
++
+ pub fn render_expr(e: Expr) -> String {
+     let mut out = "".to_string();
+     match e {
+@@ -219,7 +310,7 @@ pub fn render_expr(e: Expr) -> String {
+             } = b;
+             out.push_str("(binary ");
+             out.push_str(binop_name(op));
+-            out.push_str(span_str(span.offset, span.length));
++            out.push_str(span_str_v(span));
+             out.push_str(" ");
+             out.push_str(render_expr(left));
+             out.push_str(" ");
+@@ -251,7 +342,7 @@ pub fn render_expr(e: Expr) -> String {
+             // Destructure so callee + args move out together (#34b).
+             let CallExpr { callee, args, span } = c;
+             out.push_str("(call");
+-            out.push_str(span_str(span.offset, span.length));
++            out.push_str(span_str_v(span));
+             out.push_str(" ");
+             out.push_str(render_expr(callee));
+             for a in args {
+@@ -269,7 +360,7 @@ pub fn render_expr(e: Expr) -> String {
+             } = m;
+             out.push_str("(mcall ");
+             out.push_str(method);
+-            out.push_str(span_str(span.offset, span.length));
++            out.push_str(span_str_v(span));
+             out.push_str(" ");
+             out.push_str(render_expr(object));
+             for a in args {
+@@ -286,7 +377,7 @@ pub fn render_expr(e: Expr) -> String {
+             } = f;
+             out.push_str("(field ");
+             out.push_str(field);
+-            out.push_str(span_str(span.offset, span.length));
++            out.push_str(span_str_v(span));
+             out.push_str(" ");
+             out.push_str(render_expr(object));
+             out.push_str(")");
+@@ -308,13 +399,51 @@ pub fn render_expr(e: Expr) -> String {
+                 span,
+             } = ix;
+             out.push_str("(index");
+-            out.push_str(span_str(span.offset, span.length));
++            out.push_str(span_str_v(span));
+             out.push_str(" ");
+             out.push_str(render_expr(object));
+             out.push_str(" ");
+             out.push_str(render_expr(index));
+             out.push_str(")");
+         }
++        Blk(b) => {
++            out.push_str(render_block(b));
++        }
++        If(n) => {
++            let IfExpr {
++                cond,
++                then_block,
++                else_branch,
++                span,
++            } = n;
++            out.push_str("(if");
++            out.push_str(span_str_v(span));
++            out.push_str(" ");
++            out.push_str(render_expr(cond));
++            out.push_str(" ");
++            out.push_str(render_block(then_block));
++            match else_branch {
++                Some(e) => {
++                    out.push_str(" ");
++                    out.push_str(render_expr(e));
++                }
++                None => {}
++            }
++            out.push_str(")");
++        }
++        Return(n) => {
++            let ReturnExpr { value, span } = n;
++            out.push_str("(return");
++            out.push_str(span_str_v(span));
++            match value {
++                Some(e) => {
++                    out.push_str(" ");
++                    out.push_str(render_expr(e));
++                }
++                None => {}
++            }
++            out.push_str(")");
++        }
+         Error(n) => {
+             out.push_str("(error");
+             out.push_str(span_str(n.span.offset, n.span.length));
+diff --git a/selfhost/src/parser.kara b/selfhost/src/parser.kara
+index 77312416..58b9017a 100644
+--- a/selfhost/src/parser.kara
++++ b/selfhost/src/parser.kara
+@@ -35,6 +35,13 @@ import ast.{
+     FieldAccessExpr,
+     TupleIndexExpr,
+     IndexExpr,
++    Stmt,
++    LetStmt,
++    AssignStmt,
++    ExprStmt,
++    Block,
++    IfExpr,
++    ReturnExpr,
+ };
+ import lexer.lex_all;
+ 
+@@ -132,6 +139,219 @@ impl Parser {
+         }
+     }
+ 
++    // Consume a `{` / `}` / `;` / `=` if present (well-formed corpus).
++    fn expect_lbrace(mut ref self) {
++        if self.pos < self.tokens.len() {
++            let ok = match self.tokens[self.pos].token {
++                LeftBrace => true,
++                _ => false,
++            };
++            if ok {
++                self.advance();
++            }
++        }
++    }
++
++    fn expect_rbrace(mut ref self) {
++        if self.pos < self.tokens.len() {
++            let ok = match self.tokens[self.pos].token {
++                RightBrace => true,
++                _ => false,
++            };
++            if ok {
++                self.advance();
++            }
++        }
++    }
++
++    fn eat_semicolon(mut ref self) {
++        if self.pos < self.tokens.len() {
++            let ok = match self.tokens[self.pos].token {
++                Semicolon => true,
++                _ => false,
++            };
++            if ok {
++                self.advance();
++            }
++        }
++    }
++
++    fn eat_equal(mut ref self) {
++        if self.pos < self.tokens.len() {
++            let ok = match self.tokens[self.pos].token {
++                Equal => true,
++                _ => false,
++            };
++            if ok {
++                self.advance();
++            }
++        }
++    }
++
++    // ── Blocks + statements (slice 2a) ──
++    //
++    // `{ stmt* tail? }`. Mirrors `src/parser/stmts.rs::parse_block`, restricted
++    // to the slice-2a statement forms (`let` / expr-stmt / assignment) and a
++    // value-producing tail. A trailing expression without `;` at `}` is the
++    // block's tail (only `while`/`for`/`loop` — not in 2a — become trailing
++    // expr-statements, per the seed's `is_block_expr`).
++    fn parse_block(mut ref self) -> Block {
++        let start = self.current_span();
++        self.expect_lbrace();
++        let mut stmts: Vec[Stmt] = Vec.new();
++        let mut tail: Option[Expr] = None;
++        loop {
++            if self.pos >= self.tokens.len() {
++                break;
++            }
++            let at_rb = match self.tokens[self.pos].token {
++                RightBrace => true,
++                _ => false,
++            };
++            if at_rb {
++                break;
++            }
++            let is_let = match self.tokens[self.pos].token {
++                Let => true,
++                _ => false,
++            };
++            if is_let {
++                let s = self.parse_let_statement();
++                stmts.push(s);
++                continue;
++            }
++            let e = self.parse_expr_bp(0);
++            // Assignment `target = value;` — the seed spans it at the target.
++            let is_assign = if self.pos < self.tokens.len() {
++                match self.tokens[self.pos].token {
++                    Equal => true,
++                    _ => false,
++                }
++            } else {
++                false
++            };
++            if is_assign {
++                self.advance(); // =
++                let v = self.parse_expr_bp(0);
++                self.eat_semicolon();
++                let sp = expr_span(e);
++                stmts.push(Stmt.Assign(AssignStmt {
++                    target: e,
++                    value: v,
++                    span: sp,
++                }));
++                continue;
++            }
++            let has_semi = if self.pos < self.tokens.len() {
++                match self.tokens[self.pos].token {
++                    Semicolon => true,
++                    _ => false,
++                }
++            } else {
++                false
++            };
++            if has_semi {
++                self.advance(); // ;
++                let sp = expr_span(e);
++                stmts.push(Stmt.Exp(ExprStmt { expr: e, span: sp }));
++                continue;
++            }
++            // No semicolon: the block's tail if we're at `}`, else a lenient
++            // expression-statement (recovery; the well-formed corpus hits the
++            // tail case).
++            let at_rb2 = if self.pos < self.tokens.len() {
++                match self.tokens[self.pos].token {
++                    RightBrace => true,
++                    _ => false,
++                }
++            } else {
++                false
++            };
++            if at_rb2 {
++                tail = Some(e);
++                break;
++            } else {
++                let sp = expr_span(e);
++                stmts.push(Stmt.Exp(ExprStmt { expr: e, span: sp }));
++            }
++        }
++        self.expect_rbrace();
++        Block {
++            stmts: stmts,
++            tail: tail,
++            span: self.span_from(start),
++        }
++    }
++
++    // `let [mut] name = value;` — span covers the whole statement.
++    fn parse_let_statement(mut ref self) -> Stmt {
++        let start = self.current_span();
++        self.advance(); // let
++        let is_mut = match self.tokens[self.pos].token {
++            Mut => true,
++            _ => false,
++        };
++        if is_mut {
++            self.advance();
++        }
++        let name = self.take_member_name();
++        self.eat_equal();
++        let value = self.parse_expr_bp(0);
++        self.eat_semicolon();
++        Stmt.Let(LetStmt {
++            is_mut: is_mut,
++            name: name,
++            value: value,
++            span: self.span_from(start),
++        })
++    }
++
++    // `if cond { … } [else (if … | { … })]`. Span covers the whole `if`.
++    fn parse_if(mut ref self) -> Expr {
++        let start = self.current_span();
++        self.advance(); // if
++        let cond = self.parse_expr_bp(0);
++        let then_block = self.parse_block();
++        let else_branch = self.parse_else();
++        Expr.If(IfExpr {
++            cond: cond,
++            then_block: then_block,
++            else_branch: else_branch,
++            span: self.span_from(start),
++        })
++    }
++
++    // The optional `else` arm — `else if …` chains another `If`; `else { … }`
++    // wraps the block as an `Expr.Block` (span = block span, per the seed).
++    fn parse_else(mut ref self) -> Option[Expr] {
++        let has_else = if self.pos < self.tokens.len() {
++            match self.tokens[self.pos].token {
++                Else => true,
++                _ => false,
++            }
++        } else {
++            false
++        };
++        if not has_else {
++            return None;
++        }
++        self.advance(); // else
++        let is_if = if self.pos < self.tokens.len() {
++            match self.tokens[self.pos].token {
++                If => true,
++                _ => false,
++            }
++        } else {
++            false
++        };
++        if is_if {
++            Some(self.parse_if())
++        } else {
++            let block = self.parse_block();
++            Some(Expr.Blk(block))
++        }
++    }
++
+     // ── Postfix builders (slice 2a) ──
+     //
+     // Each takes the already-parsed left operand BY VALUE and returns the
+@@ -615,6 +835,40 @@ impl Parser {
+                 Expr.SelfTy(SpanNode { span: self.span_from(start) })
+             }
+ 
++            // Block expression `{ … }` — span is the block's own span.
++            LeftBrace => {
++                let block = self.parse_block();
++                Expr.Blk(block)
++            }
++
++            // `if` / `if … else …` expression.
++            If => self.parse_if(),
++
++            // `return [value]`.
++            Return => {
++                self.advance();
++                // A value follows unless the next token closes the construct.
++                let has_value = if self.pos < self.tokens.len() {
++                    match self.tokens[self.pos].token {
++                        Semicolon => false,
++                        RightBrace => false,
++                        Comma => false,
++                        _ => true,
++                    }
++                } else {
++                    false
++                };
++                let value = if has_value {
++                    Some(self.parse_expr_bp(0))
++                } else {
++                    None
++                };
++                Expr.Return(ReturnExpr {
++                    value: value,
++                    span: self.span_from(start),
++                })
++            }
++
+             // Grouping / tuple.
+             LeftParen => self.parse_paren_or_tuple(),
+ 
+diff --git a/tests/selfhost_parser.rs b/tests/selfhost_parser.rs
+index 7374e72f..11005c48 100644
+--- a/tests/selfhost_parser.rs
++++ b/tests/selfhost_parser.rs
+@@ -17,7 +17,8 @@
+ //! are wrapper-independent. The corpus is single-line, so the shift is a plain
+ //! constant subtraction.
+ 
+-use karac::ast::{BinOp, CallArg, Expr, ExprKind, Item, StmtKind, UnaryOp};
++use karac::ast::{Block, CallArg, Expr, ExprKind, Item, Stmt, StmtKind, UnaryOp};
++use karac::ast::{BinOp, PatternKind};
+ use karac::token::{FloatSuffix, IntSuffix};
+ use std::path::PathBuf;
+ 
+@@ -118,6 +119,28 @@ const CORPUS: &[&str] = &[
+     "f(x: 1)",
+     "g(a, b: 2)",
+     "h(mut x)",
++    // Control flow (slice 2a) — blocks, statements, if/else, return.
++    "{ a }",
++    "{ 1 }",
++    "{ a; b }",
++    "{ a; b; c }",
++    "{ let x = 1; x }",
++    "{ let mut y = a; y = b; y }",
++    "{ let z = a + b; z }",
++    "{ f(x); g(y) }",
++    "{ a.b = c; a.b }",
++    "{ v[0] = x; v[0] }",
++    "if a { b }",
++    "if a { b } else { c }",
++    "if a { b } else if c { d } else { e }",
++    "if x < y { a } else { b }",
++    "if a { let p = b; p } else { c }",
++    "{ if a { b } else { c } }",
++    "{ let r = if a { b } else { c }; r }",
++    "{ return a; }",
++    "{ return; }",
++    "return a + b",
++    "{ let w = f(x); w.y }",
+ ];
+ 
+ // ── Rust-side canonical render (must match `ast_render.kara::render_expr`) ──
+@@ -225,6 +248,57 @@ fn render_rust_arg(a: &CallArg) -> String {
+     out
+ }
+ 
++/// ` @<offset-shift>:<length>` for a raw (non-Expr) span — stmt/block heads.
++fn span_tag(offset: usize, length: usize) -> String {
++    format!(" @{}:{}", offset as i64 - OFFSET_SHIFT, length)
++}
++
++/// Must match `ast_render.kara::render_stmt`.
++fn render_rust_stmt(s: &Stmt) -> String {
++    let sp = span_tag(s.span.offset, s.span.length);
++    match &s.kind {
++        StmtKind::Let {
++            is_mut,
++            pattern,
++            value,
++            ..
++        } => {
++            let name = match &pattern.kind {
++                PatternKind::Binding(n) => n.clone(),
++                other => panic!("slice-2a let pattern must be a plain binding, got {other:?}"),
++            };
++            let m = if *is_mut { " mut" } else { "" };
++            format!("(let{m} {name}{sp} {})", render_rust_expr(value))
++        }
++        StmtKind::Assign { target, value } => format!(
++            "(assign{sp} {} {})",
++            render_rust_expr(target),
++            render_rust_expr(value)
++        ),
++        StmtKind::Expr(e) => format!("(exprstmt{sp} {})", render_rust_expr(e)),
++        other => panic!(
++            "render_rust_stmt: StmtKind {other:?} is outside parser slice 2a; \
++             keep the corpus to let/expr/assign statements or extend the renderer"
++        ),
++    }
++}
++
++/// Must match `ast_render.kara::render_block`.
++fn render_rust_block(b: &Block) -> String {
++    let mut out = format!("(block{}", span_tag(b.span.offset, b.span.length));
++    for s in &b.stmts {
++        out.push(' ');
++        out.push_str(&render_rust_stmt(s));
++    }
++    if let Some(tail) = &b.final_expr {
++        out.push_str(" (tail ");
++        out.push_str(&render_rust_expr(tail));
++        out.push(')');
++    }
++    out.push(')');
++    out
++}
++
+ fn render_rust_expr(e: &Expr) -> String {
+     let sp = span_str(e);
+     match &e.kind {
+@@ -308,6 +382,33 @@ fn render_rust_expr(e: &Expr) -> String {
+             render_rust_expr(object),
+             render_rust_expr(index)
+         ),
++        ExprKind::Block(block) => render_rust_block(block),
++        ExprKind::If {
++            condition,
++            then_block,
++            else_branch,
++        } => {
++            let mut out = format!(
++                "(if{sp} {} {}",
++                render_rust_expr(condition),
++                render_rust_block(then_block)
++            );
++            if let Some(eb) = else_branch {
++                out.push(' ');
++                out.push_str(&render_rust_expr(eb));
++            }
++            out.push(')');
++            out
++        }
++        ExprKind::Return(value) => {
++            let mut out = format!("(return{sp}");
++            if let Some(v) = value {
++                out.push(' ');
++                out.push_str(&render_rust_expr(v));
++            }
++            out.push(')');
++            out
++        }
+         other => panic!(
+             "render_rust_expr: ExprKind {other:?} is outside parser slice 1; \
+              keep the corpus to expression-core forms or extend the renderer"
