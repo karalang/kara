@@ -29,6 +29,12 @@ import ast.{
     BinaryExpr,
     UnaryExpr,
     TupleExpr,
+    CallArg,
+    CallExpr,
+    MethodCallExpr,
+    FieldAccessExpr,
+    TupleIndexExpr,
+    IndexExpr,
 };
 import lexer.lex_all;
 
@@ -113,12 +119,245 @@ impl Parser {
         }
     }
 
+    // Consume a `]` if present (well-formed slice-2a corpus; recovery later).
+    fn expect_rbracket(mut ref self) {
+        if self.pos < self.tokens.len() {
+            let is_rb = match self.tokens[self.pos].token {
+                RightBracket => true,
+                _ => false,
+            };
+            if is_rb {
+                self.advance();
+            }
+        }
+    }
+
+    // ── Postfix builders (slice 2a) ──
+    //
+    // Each takes the already-parsed left operand BY VALUE and returns the
+    // wrapped node. The postfix node's span is the operand's span (read by
+    // `ref` BEFORE the operand moves into the node) — exactly the seed's
+    // `lhs.span.clone()`; it is NOT extended to cover the call/index args.
+
+    // `callee(args)`.
+    fn finish_call(mut ref self, callee: Expr) -> Expr {
+        let sp = expr_span(callee);
+        self.advance(); // consume (
+        let args = self.parse_arg_list();
+        self.expect_rparen();
+        Expr.Call(CallExpr {
+            callee: callee,
+            args: args,
+            span: sp,
+        })
+    }
+
+    // `object[index]` — single index (multi-dim `t[i, j]` desugaring lands with
+    // the types/patterns slice).
+    fn finish_index(mut ref self, object: Expr) -> Expr {
+        let sp = expr_span(object);
+        self.advance(); // consume [
+        let index = self.parse_expr_bp(0);
+        self.expect_rbracket();
+        Expr.Index(IndexExpr {
+            object: object,
+            index: index,
+            span: sp,
+        })
+    }
+
+    // `.` postfix: tuple index (`.N`), method call (`.m(args)`), or field
+    // access (`.field`). Mirrors the seed's `Token::Dot` arm.
+    fn finish_dot(mut ref self, object: Expr) -> Expr {
+        let sp = expr_span(object);
+        self.advance(); // consume .
+        if self.pos >= self.tokens.len() {
+            return Expr.Field(FieldAccessExpr {
+                object: object,
+                field: "".to_string(),
+                span: sp,
+            });
+        }
+        // Tuple index `.N` (the suffix, if any, is ignored — seed parity).
+        let is_int = match self.tokens[self.pos].token {
+            Integer(_, _) => true,
+            _ => false,
+        };
+        if is_int {
+            let idx = match self.tokens[self.pos].token {
+                Integer(v, _) => v,
+                _ => 0,
+            };
+            self.advance();
+            return Expr.TupleIdx(TupleIndexExpr {
+                object: object,
+                index: idx,
+                span: sp,
+            });
+        }
+        // Field / method name (Identifier, or the weak keywords union/const/mut
+        // accepted in member-name position — `Set.union(...)`, `ptr.const(x)`).
+        let name = self.take_member_name();
+        let is_call = if self.pos < self.tokens.len() {
+            match self.tokens[self.pos].token {
+                LeftParen => true,
+                _ => false,
+            }
+        } else {
+            false
+        };
+        if is_call {
+            self.advance(); // consume (
+            let args = self.parse_arg_list();
+            self.expect_rparen();
+            Expr.MethodCall(MethodCallExpr {
+                object: object,
+                method: name,
+                args: args,
+                span: sp,
+            })
+        } else {
+            Expr.Field(FieldAccessExpr {
+                object: object,
+                field: name,
+                span: sp,
+            })
+        }
+    }
+
+    // Read an identifier (or weak-keyword) member name and advance past it.
+    // Returns "" without advancing when the current token is not a name token.
+    fn take_member_name(mut ref self) -> String {
+        if self.pos >= self.tokens.len() {
+            return "".to_string();
+        }
+        match self.tokens[self.pos].token {
+            Identifier(n) => {
+                self.advance();
+                n
+            }
+            Union => {
+                self.advance();
+                "union".to_string()
+            }
+            Const => {
+                self.advance();
+                "const".to_string()
+            }
+            Mut => {
+                self.advance();
+                "mut".to_string()
+            }
+            _ => "".to_string(),
+        }
+    }
+
+    // Parse a parenthesized argument list up to (but NOT consuming) the `)`.
+    // Mirrors `src/parser/exprs.rs::parse_arg_list`: optional `name:` label,
+    // optional call-site `mut`, then the argument expression.
+    fn parse_arg_list(mut ref self) -> Vec[CallArg] {
+        let mut args: Vec[CallArg] = Vec.new();
+        loop {
+            if self.pos >= self.tokens.len() {
+                break;
+            }
+            let stop = match self.tokens[self.pos].token {
+                RightParen => true,
+                _ => false,
+            };
+            if stop {
+                break;
+            }
+            let arg_start = self.current_span();
+            let label = self.try_parse_arg_label();
+            let mm = match self.tokens[self.pos].token {
+                Mut => true,
+                _ => false,
+            };
+            if mm {
+                self.advance();
+            }
+            let value = self.parse_expr_bp(0);
+            args.push(CallArg {
+                label: label,
+                mut_marker: mm,
+                value: value,
+                span: self.span_from(arg_start),
+            });
+            let ate = if self.pos < self.tokens.len() {
+                match self.tokens[self.pos].token {
+                    Comma => true,
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            if ate {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        args
+    }
+
+    // `name :` lookahead → labeled argument. Consumes both tokens and returns
+    // the label; otherwise consumes nothing and returns None.
+    fn try_parse_arg_label(mut ref self) -> Option[String] {
+        if self.pos + 1 >= self.tokens.len() {
+            return None;
+        }
+        let is_ident = match self.tokens[self.pos].token {
+            Identifier(_) => true,
+            _ => false,
+        };
+        if not is_ident {
+            return None;
+        }
+        let next_colon = match self.tokens[self.pos + 1].token {
+            Colon => true,
+            _ => false,
+        };
+        if not next_colon {
+            return None;
+        }
+        let name = match self.tokens[self.pos].token {
+            Identifier(n) => n,
+            _ => "".to_string(),
+        };
+        self.advance(); // identifier
+        self.advance(); // colon
+        Some(name)
+    }
+
     // ── Precedence-climbing core (`parse_expr_bp_with_ctx` binary loop) ──
     fn parse_expr_bp(mut ref self, min_bp: i64) -> Expr {
         let mut lhs = self.parse_prefix();
         loop {
             if self.pos >= self.tokens.len() {
                 break;
+            }
+            // Postfix operators bind tighter than any binary operator and apply
+            // unconditionally (highest precedence, not gated by min_bp). Mirrors
+            // the top of the seed's `parse_expr_bp_with_ctx` loop: `.`/`(`/`[`
+            // are tried before the binary-operator ladder.
+            let mut did_postfix = true;
+            match self.tokens[self.pos].token {
+                Dot => {
+                    lhs = self.finish_dot(lhs);
+                }
+                LeftParen => {
+                    lhs = self.finish_call(lhs);
+                }
+                LeftBracket => {
+                    lhs = self.finish_index(lhs);
+                }
+                _ => {
+                    did_postfix = false;
+                }
+            }
+            if did_postfix {
+                continue;
             }
             let mut found = true;
             let mut op = BinOp.Add;

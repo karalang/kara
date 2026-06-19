@@ -17,7 +17,7 @@
 //! are wrapper-independent. The corpus is single-line, so the shift is a plain
 //! constant subtraction.
 
-use karac::ast::{BinOp, Expr, ExprKind, Item, StmtKind, UnaryOp};
+use karac::ast::{BinOp, CallArg, Expr, ExprKind, Item, StmtKind, UnaryOp};
 use karac::token::{FloatSuffix, IntSuffix};
 use std::path::PathBuf;
 
@@ -88,6 +88,36 @@ const CORPUS: &[&str] = &[
     "(a, b, c)",
     "(1 + 2, 3 * 4)",
     "(x, (y, z))",
+    // Postfix (slice 2a) — field / tuple-index / index / call / method-call.
+    "a.b",
+    "a.b.c",
+    "foo.bar",
+    "a.0",
+    "a.1.2",
+    "v[0]",
+    "v[i]",
+    "m[k][j]",
+    "a[i + 1]",
+    "f()",
+    "f(x)",
+    "f(x, y)",
+    "g(1, 2, 3)",
+    "a.m()",
+    "a.m(x)",
+    "obj.field.method(arg)",
+    "f(g(x))",
+    "v[0].field",
+    "a.b(c).d",
+    // Postfix mixed with prefix / binary.
+    "-a.b",
+    "a.b + c",
+    "f(x) * 2",
+    "not a.flag",
+    "a.b == c.d",
+    // Labeled + mut-marker arguments.
+    "f(x: 1)",
+    "g(a, b: 2)",
+    "h(mut x)",
 ];
 
 // ── Rust-side canonical render (must match `ast_render.kara::render_expr`) ──
@@ -174,6 +204,27 @@ fn span_str(e: &Expr) -> String {
     )
 }
 
+/// `(arg[ :LABEL][ mut] @off:len VALUE)` — must match `ast_render.kara::render_arg`.
+fn render_rust_arg(a: &CallArg) -> String {
+    let mut out = String::from("(arg");
+    if let Some(l) = &a.label {
+        out.push_str(" :");
+        out.push_str(l);
+    }
+    if a.mut_marker {
+        out.push_str(" mut");
+    }
+    out.push_str(&format!(
+        " @{}:{}",
+        a.span.offset as i64 - OFFSET_SHIFT,
+        a.span.length
+    ));
+    out.push(' ');
+    out.push_str(&render_rust_expr(&a.value));
+    out.push(')');
+    out
+}
+
 fn render_rust_expr(e: &Expr) -> String {
     let sp = span_str(e);
     match &e.kind {
@@ -223,6 +274,40 @@ fn render_rust_expr(e: &Expr) -> String {
             s.push(')');
             s
         }
+        ExprKind::Call { callee, args } => {
+            let mut s = format!("(call{sp} {}", render_rust_expr(callee));
+            for a in args {
+                s.push(' ');
+                s.push_str(&render_rust_arg(a));
+            }
+            s.push(')');
+            s
+        }
+        ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } => {
+            let mut s = format!("(mcall {method}{sp} {}", render_rust_expr(object));
+            for a in args {
+                s.push(' ');
+                s.push_str(&render_rust_arg(a));
+            }
+            s.push(')');
+            s
+        }
+        ExprKind::FieldAccess { object, field } => {
+            format!("(field {field}{sp} {})", render_rust_expr(object))
+        }
+        ExprKind::TupleIndex { object, index } => {
+            format!("(tupidx {index}{sp} {})", render_rust_expr(object))
+        }
+        ExprKind::Index { object, index } => format!(
+            "(index{sp} {} {})",
+            render_rust_expr(object),
+            render_rust_expr(index)
+        ),
         other => panic!(
             "render_rust_expr: ExprKind {other:?} is outside parser slice 1; \
              keep the corpus to expression-core forms or extend the renderer"

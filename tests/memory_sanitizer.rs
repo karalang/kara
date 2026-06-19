@@ -10739,6 +10739,195 @@ fn main() {
         );
     }
 
+    // PINNED REPRODUCER for phase-12 #43 (label-in-plain-drop leak), deferred.
+    // `#[ignore]`d because it FAILS under LeakSanitizer (the leak it pins is not
+    // yet fixed) — leaving it un-ignored would red the Linux-CI `memory-sanitizer`
+    // gate. Run it deliberately under the authoritative LSan harness to observe
+    // the leak:
+    //   scripts/lsan-local.sh asan_vec_of_struct_labeled_plain_drop_leaks_pinned_43 -- --ignored
+    // (On macOS — no LeakSanitizer — it passes vacuously; the leak only shows
+    // under LSan.) **Un-ignore when #43 lands.**
+    //
+    // The leak: a LABELED call node (`Arg { label: Some(..), value: Expr }`) is
+    // built and PLAIN-DROPPED without consuming (read by `ref`, no `for a in
+    // args` / render). The shared-enum RC box-walker rc-dec's the shared `value`
+    // (refcount-safe) and frees the Vec buffer, but does NOT free the plain
+    // `Option[String]` label — re-adding that free (#42's removed arm) instead
+    // double-frees it against a by-value consumer that ALSO frees it, because
+    // the for-loop's move-out suppression can't reach the box's retained payload
+    // alias. The render/CONSUME path (the real parser path) is leak-free
+    // (`asan_vec_of_struct_shared_and_option_field_consumed_no_leak`); only this
+    // build-then-discard-labeled-call shape leaks. Closing it needs field-granular
+    // move-out suppression for shared-enum payloads (zero the plain-heap caps,
+    // keep the shared-edge pointers) — its own slice. See phase-12 §"Parser in
+    // Kāra" #43. All Strings >=36 bytes for LSan visibility.
+    #[test]
+    #[ignore = "phase-12 #43: known label-plain-drop leak, deferred; reproduces under LSan; un-ignore when the field-granular shared-enum move-out suppression lands"]
+    fn asan_vec_of_struct_labeled_plain_drop_leaks_pinned_43() {
+        assert_clean_asan_run(
+            r#"
+shared enum Expr { Lit(LitNode), Call(CallNode) }
+struct LitNode { name: String, val: i64 }
+struct Arg { label: Option[String], value: Expr }
+struct CallNode { callee: Expr, args: Vec[Arg], nargs: i64 }
+fn lit(s: String, v: i64) -> Expr { Expr.Lit(LitNode { name: s, val: v }) }
+fn mk() -> Expr {
+    let mut args: Vec[Arg] = Vec.new();
+    args.push(Arg { label: Some("first_argument_label_long_enough_to_force_heap".to_string()), value: lit("first_arg_value_identifier_long_enough_for_heap".to_string(), 1) });
+    args.push(Arg { label: None, value: lit("second_arg_value_identifier_long_enough_for_heap".to_string(), 2) });
+    Expr.Call(CallNode { callee: lit("callee_identifier_name_long_enough_for_heap_buf".to_string(), 100), args: args, nargs: 2 })
+}
+fn root(e: ref Expr) -> i64 {
+    match e {
+        Lit(n) => n.val,
+        Call(c) => c.nargs,
+    }
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 50 {
+        let e = mk();
+        total = total + root(e);
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["100"],
+            "vec_of_struct_labeled_plain_drop_leaks_pinned_43",
+        );
+    }
+
+    #[test]
+    fn asan_vec_of_struct_with_shared_field_drop_no_leak() {
+        // B-2026-06-19 (phase-12 parser slice 2a): the self-hosted parser's
+        // `Call(CallExpr { args: Vec[CallArg] })` shape — a `Vec[Arg]` whose
+        // element struct `Arg { value: Expr }` owns a SHARED-enum field, the Vec
+        // living inside a shared-enum struct payload (`Call(CallNode)`). The
+        // whole `Call` tree is built and dropped on the PLAIN scope-exit path
+        // (read by `ref`, never consumed), so its cleanup is the shared-enum RC
+        // drop walker. The Vec element's value drop (`__karac_drop_struct_Arg`)
+        // skips its shared `value` field by design (a local struct's shared
+        // fields are rc-dec'd by the `let` cleanup — B-2026-06-14-28 #3), but a
+        // Vec ELEMENT has no let-cleanup, so each arg's shared box leaked once
+        // per element. `vec_elem_agg_drop_for_type_expr` now routes a
+        // shared-owning struct element through `__karac_vec_elem_full_drop_Arg`
+        // (the value drop PLUS `emit_nested_struct_shared_rc_decs`, which
+        // rc-dec's the shared field). The drain is refcount-safe in BOTH the
+        // pure-drop path (here) and the by-value-consume path (the renderer /
+        // later compiler phases) — the consume site rc-incs the shared handle
+        // on the element copy, balancing the box-walker's dec.
+        // Looped so a per-iteration leak accumulates visibly under the
+        // authoritative Linux-CI LSan gate; every String is >=36 bytes so the
+        // freed-but-reachable short-String LSan blind spot can't mask it.
+        // (NOTE: the `CallArg.label: Option[String]` field is intentionally
+        // omitted here. The shared-value drain above is consume-safe; an
+        // Option[String]/String *plain* heap field is NOT refcount-protected,
+        // so freeing it in the box-walker double-frees against a by-value
+        // consumer that also frees it — the render/consume path stays leak-free
+        // because the consumer frees the label, but a labeled call built and
+        // plain-dropped without consuming leaks its label. Closing that residual
+        // needs move-out suppression at the Vec[struct] consume site — tracked
+        // as a phase-12 parser follow-on, not a regression here.)
+        assert_clean_asan_run(
+            r#"
+shared enum Expr { Lit(LitNode), Call(CallNode) }
+struct LitNode { name: String, val: i64 }
+struct Arg { value: Expr }
+struct CallNode { callee: Expr, args: Vec[Arg], nargs: i64 }
+fn lit(s: String, v: i64) -> Expr { Expr.Lit(LitNode { name: s, val: v }) }
+fn mk() -> Expr {
+    let mut args: Vec[Arg] = Vec.new();
+    args.push(Arg { value: lit("first_arg_value_identifier_long_enough_for_heap".to_string(), 1) });
+    args.push(Arg { value: lit("second_arg_value_identifier_long_enough_for_heap".to_string(), 2) });
+    Expr.Call(CallNode { callee: lit("callee_identifier_name_long_enough_for_heap_buf".to_string(), 100), args: args, nargs: 2 })
+}
+fn root(e: ref Expr) -> i64 {
+    match e {
+        Lit(n) => n.val,
+        Call(c) => c.nargs,
+    }
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 50 {
+        let e = mk();
+        total = total + root(e);
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["100"],
+            "vec_of_struct_with_shared_field_drop",
+        );
+    }
+
+    #[test]
+    fn asan_vec_of_struct_shared_and_option_field_consumed_no_leak() {
+        // B-2026-06-19 (phase-12 parser slice 2a) — the CONSUME peer of
+        // `asan_vec_of_struct_with_shared_field_drop_no_leak`, and the shape the
+        // self-hosted parser's renderer / later phases actually exercise:
+        // `Arg { label: Option[String], value: Expr }` elements of a
+        // `Vec[Arg]` are MOVED OUT (by-value match + `for a in args` +
+        // destructure) and consumed — the `Option[String]` label is read then
+        // dropped, the shared `value` recursively consumed. Here the consumer
+        // frees the label (so the Option[String] is leak-free on THIS path,
+        // unlike the pure-drop path where it's a documented residual), and the
+        // shared-value recursion frees each box AND its inner `LitNode.name`
+        // String (the force-synth pre-pass in `emit_nested_struct_shared_rc_decs`
+        // makes the rc-dec dispatch to the recursive `__karac_rc_drop_Expr`
+        // rather than inline-`free`ing the box and stranding the name). Looped;
+        // all Strings >=36 bytes for LSan visibility.
+        assert_clean_asan_run(
+            r#"
+shared enum Expr { Lit(LitNode), Call(CallNode) }
+struct LitNode { name: String, val: i64 }
+struct Arg { label: Option[String], value: Expr }
+struct CallNode { callee: Expr, args: Vec[Arg], nargs: i64 }
+fn lit(s: String, v: i64) -> Expr { Expr.Lit(LitNode { name: s, val: v }) }
+fn mk() -> Expr {
+    let mut args: Vec[Arg] = Vec.new();
+    args.push(Arg { label: Some("first_argument_label_long_enough_to_force_heap".to_string()), value: lit("first_arg_value_identifier_long_enough_for_heap".to_string(), 1) });
+    args.push(Arg { label: None, value: lit("second_arg_value_identifier_long_enough_for_heap".to_string(), 2) });
+    Expr.Call(CallNode { callee: lit("callee_identifier_name_long_enough_for_heap_buf".to_string(), 100), args: args, nargs: 2 })
+}
+fn consume(e: Expr) -> i64 {
+    match e {
+        Lit(n) => n.val,
+        Call(c) => {
+            let CallNode { callee, args, nargs } = c;
+            let mut acc = consume(callee) + nargs;
+            for a in args {
+                let Arg { label, value } = a;
+                match label {
+                    Some(l) => { if l.len() > 0 { acc = acc + 1000; } }
+                    None => {}
+                }
+                acc = acc + consume(value);
+            }
+            acc
+        }
+    }
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 50 {
+        let e = mk();
+        total = total + consume(e);
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["55250"],
+            "vec_of_struct_shared_and_option_field_consumed",
+        );
+    }
+
     // A heap value (`String`) moved into a `tg.spawn` closure INSIDE A LOOP:
     // the per-iteration `let addr = base.clone()` is freed at loop-body scope
     // exit, but the spawned task now owns that buffer (the env got a bitwise

@@ -128,6 +128,56 @@ pub struct TupleExpr {
     pub span: Span,
 }
 
+// ── Postfix nodes (slice 2a) ──
+
+// One argument in a call / method-call list. `label` is the optional `name:`
+// prefix (Kāra labeled args); `mut_marker` is the call-site `mut <expr>`.
+// Mirrors `ast::CallArg`. A plain struct holding an `Expr` (shared handle) +
+// scalars — legal to nest under a `Vec[CallArg]` collection child.
+pub struct CallArg {
+    pub label: Option[String],
+    pub mut_marker: bool,
+    pub value: Expr,
+    pub span: Span,
+}
+
+// `callee(args)`. Span = the callee's span (mirrors the seed's
+// `lhs.span.clone()` for every postfix node — NOT extended over the args).
+pub struct CallExpr {
+    pub callee: Expr,
+    pub args: Vec[CallArg],
+    pub span: Span,
+}
+
+// `object.method(args)`. Span = the receiver's span.
+pub struct MethodCallExpr {
+    pub object: Expr,
+    pub method: String,
+    pub args: Vec[CallArg],
+    pub span: Span,
+}
+
+// `object.field`. Span = the receiver's span.
+pub struct FieldAccessExpr {
+    pub object: Expr,
+    pub field: String,
+    pub span: Span,
+}
+
+// `object.N` tuple index (`N` is a non-negative integer). Span = receiver span.
+pub struct TupleIndexExpr {
+    pub object: Expr,
+    pub index: i64,
+    pub span: Span,
+}
+
+// `object[index]`. Both edges are `Expr` pointers; span = receiver span.
+pub struct IndexExpr {
+    pub object: Expr,
+    pub index: Expr,
+    pub span: Span,
+}
+
 // The recursive expression node (RC-backed). Slice 1 covers literals,
 // identifiers, `self`/`Self`, unary, binary, grouping, and tuples; the
 // remaining forms (calls, indexing, control flow, …) land in later slices.
@@ -152,6 +202,13 @@ pub shared enum Expr {
 
     // Composite literal.
     Tuple(TupleExpr),
+
+    // Postfix (slice 2a): `f(x)`, `a.m(x)`, `a.b`, `a.0`, `a[i]`.
+    Call(CallExpr),
+    MethodCall(MethodCallExpr),
+    Field(FieldAccessExpr),
+    TupleIdx(TupleIndexExpr),
+    Index(IndexExpr),
 
     // Error-recovery placeholder. Named `Error` (not `Err`) to match the seed
     // and avoid colliding with `Result.Err` in codegen's error-exit heuristic
@@ -191,6 +248,11 @@ pub fn expr_span(e: ref Expr) -> Span {
         Binary(n) => clone_span(n.span),
         Unary(n) => clone_span(n.span),
         Tuple(n) => clone_span(n.span),
+        Call(n) => clone_span(n.span),
+        MethodCall(n) => clone_span(n.span),
+        Field(n) => clone_span(n.span),
+        TupleIdx(n) => clone_span(n.span),
+        Index(n) => clone_span(n.span),
         Error(n) => clone_span(n.span),
     }
 }

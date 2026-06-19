@@ -46469,6 +46469,49 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_of_struct_with_shared_and_option_field() {
+        // B-2026-06-19 (phase-12 parser slice 2a): a `Vec[Arg]` whose element
+        // struct `Arg { label: Option[String], value: Expr }` holds BOTH a
+        // shared-enum field (`value`) AND an `Option[String]` field (`label`),
+        // the Vec living inside a shared-enum struct payload
+        // (`Call(CallNode { args: Vec[Arg] })`) — the self-hosted parser's
+        // `Call(CallExpr { args: Vec[CallArg] })` shape exactly. Pins
+        // value-correctness of build + recursive read + by-value consume on
+        // that shape (the per-element shared field's box and the Option[String]
+        // label were both being leaked by the Vec-element value drop — neither
+        // is freed by `__karac_drop_struct_<S>`; the drop walker now routes a
+        // shared-owning struct element through `__karac_vec_elem_full_drop_<S>`
+        // and frees an `Option[String]` field directly). Leak-freedom under
+        // LSan is pinned by the asan_* peer in tests/memory_sanitizer.rs.
+        if let Some(out) = run_program(
+            "shared enum Expr { Lit(LitNode), Call(CallNode) }\n\
+             struct LitNode { name: String, val: i64 }\n\
+             struct Arg { label: Option[String], value: Expr }\n\
+             struct CallNode { callee: Expr, args: Vec[Arg] }\n\
+             fn lit(s: String, v: i64) -> Expr { Expr.Lit(LitNode { name: s, val: v }) }\n\
+             fn sum(e: Expr) -> i64 {\n\
+                 match e {\n\
+                     Lit(n) => n.val,\n\
+                     Call(c) => {\n\
+                         let mut acc = sum(c.callee);\n\
+                         for a in c.args { acc = acc + sum(a.value); }\n\
+                         acc\n\
+                     }\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let mut args: Vec[Arg] = Vec.new();\n\
+                 args.push(Arg { label: Some(\"label_one\".to_string()), value: lit(\"v1\".to_string(), 10) });\n\
+                 args.push(Arg { label: None, value: lit(\"v2\".to_string(), 20) });\n\
+                 let call = Expr.Call(CallNode { callee: lit(\"callee\".to_string(), 100), args: args });\n\
+                 println(sum(call).to_string());\n\
+             }",
+        ) {
+            assert_eq!(out.trim(), "130");
+        }
+    }
+
+    #[test]
     fn test_e2e_chained_access_through_inline_shared_field() {
         // B-2026-06-14-28 — a plain struct with an INLINE field whose type is
         // a `shared` struct/enum (an 8-byte RC pointer). Chained field access

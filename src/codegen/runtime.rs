@@ -1459,12 +1459,78 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.emit_vec_elem_rc_dec_fn(&name, heap_ty);
         }
         if self.struct_types.contains_key(&name) {
+            // A non-shared struct element that transitively owns `shared` fields
+            // (`Vec[CallArg]`, `CallArg` holding a shared `Expr` `value` — the
+            // AST-port `Call(CallExpr { args })` shape). The plain value drop
+            // skips shared fields by design (a local struct's shared fields are
+            // rc-dec'd by its `let` cleanup — B-2026-06-14-28 #3), but a Vec
+            // element has no let-cleanup, so the shared field's box leaks once
+            // per element. Route it to the combined element drop instead.
+            if self.struct_owns_shared_field(&name, &mut Vec::new()) {
+                return self.emit_vec_elem_struct_with_shared_drop_fn(&name);
+            }
             return self.emit_struct_drop_synthesis(&name);
         }
         if self.enum_layouts.contains_key(&name) {
             return self.emit_enum_drop_switch(&name);
         }
         None
+    }
+
+    /// Synthesize (or fetch) `__karac_vec_elem_full_drop_<S>` — the per-element
+    /// drop for a `Vec` whose element is a NON-shared user struct `S` that
+    /// transitively owns `shared` fields (e.g. `Vec[CallArg]`, `CallArg`
+    /// carrying a shared `Expr`). `emit_struct_drop_synthesis(S)` alone is
+    /// INCOMPLETE for a Vec element: it frees `S`'s Vec/String/Map/Set/Option
+    /// fields but, by design (B-2026-06-14-28 #3), leaves `shared` fields for
+    /// the owner's `let` cleanup to rc-dec — which a Vec element does not have,
+    /// so the shared box leaks on every element drop (surfaced by the
+    /// self-hosted parser: each call argument's `value: Expr` box leaked).
+    ///
+    /// The combined drop runs two DISJOINT passes over the same element slot.
+    /// Pass 1 is `__karac_drop_struct_<S>` — the value-heap free, which skips
+    /// shared fields (it classifies them as no-cleanup). Pass 2 is
+    /// `emit_nested_struct_shared_rc_decs(.., owns_buffer_free=false)` — it
+    /// rc-dec's the shared / `Option[shared]` fields and drains any
+    /// `Vec[shared]` field's element boxes, WITHOUT re-freeing the buffers pass
+    /// 1 already freed (`owns_buffer_free=false` gates the String/Vec buffer
+    /// frees off). Disjoint field coverage ⇒ no double-free. The shared rc-dec
+    /// is refcount-safe even when the element is ALSO consumed by value
+    /// elsewhere (the consume site rc-incs the shared handle on its element
+    /// copy, balancing this dec). Memoized by symbol name.
+    fn emit_vec_elem_struct_with_shared_drop_fn(
+        &mut self,
+        struct_name: &str,
+    ) -> Option<inkwell::values::FunctionValue<'ctx>> {
+        let fn_name = format!("__karac_vec_elem_full_drop_{struct_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+        // Step-1 value drop first (None when `S`'s only heap IS its shared
+        // field — then there is nothing for step 1 to free).
+        let value_drop = self.emit_struct_drop_synthesis(struct_name);
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let void_ty = self.context.void_type();
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let fn_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        let drop_fn =
+            self.module
+                .add_function(&fn_name, fn_ty, Some(inkwell::module::Linkage::Internal));
+        self.current_fn = Some(drop_fn);
+        let entry = self.context.append_basic_block(drop_fn, "entry");
+        self.builder.position_at_end(entry);
+        let slot_ptr = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+        if let Some(vd) = value_drop {
+            self.builder.build_call(vd, &[slot_ptr.into()], "").unwrap();
+        }
+        self.emit_nested_struct_shared_rc_decs(slot_ptr, struct_name, drop_fn, false);
+        self.builder.build_return(None).unwrap();
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        self.current_fn = saved_fn;
+        Some(drop_fn)
     }
 
     /// B-2026-06-14-28 — synthesize (or fetch) `__karac_vec_elem_rc_dec_<T>`,

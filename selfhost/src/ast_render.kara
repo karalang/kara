@@ -8,7 +8,18 @@
 // `Expr.<Variant>(node)` carries the node's `span`.
 //
 
-import ast.{Expr, BinaryExpr, BinOp, UnaryOp};
+import ast.{
+    Expr,
+    BinaryExpr,
+    BinOp,
+    UnaryOp,
+    CallArg,
+    CallExpr,
+    MethodCallExpr,
+    FieldAccessExpr,
+    TupleIndexExpr,
+    IndexExpr,
+};
 
 // MUST stay identical to `escape_for_render` in `selfhost/src/main.kara` and
 // `tests/selfhost_parser.rs` so control chars don't break the comparison.
@@ -80,6 +91,35 @@ fn span_str(off: i64, len: i64) -> String {
     s.push_str(":");
     s.push_str(len.to_string());
     s
+}
+
+// `(arg[ :LABEL][ mut] @off:len VALUE)` — one call/method-call argument. The
+// Rust seed reproduces this in `tests/selfhost_parser.rs::render_rust_arg`.
+fn render_arg(a: CallArg) -> String {
+    // Destructure so the `value` (a shared Expr) and the scalars/label move out
+    // together (Kāra treats a single field move as a whole-struct move).
+    let CallArg {
+        label,
+        mut_marker,
+        value,
+        span,
+    } = a;
+    let mut out = "(arg".to_string();
+    match label {
+        Some(l) => {
+            out.push_str(" :");
+            out.push_str(l);
+        }
+        None => {}
+    }
+    if mut_marker {
+        out.push_str(" mut");
+    }
+    out.push_str(span_str(span.offset, span.length));
+    out.push_str(" ");
+    out.push_str(render_expr(value));
+    out.push_str(")");
+    out
 }
 
 pub fn render_expr(e: Expr) -> String {
@@ -205,6 +245,74 @@ pub fn render_expr(e: Expr) -> String {
                 out.push_str(" ");
                 out.push_str(render_expr(el));
             }
+            out.push_str(")");
+        }
+        Call(c) => {
+            // Destructure so callee + args move out together (#34b).
+            let CallExpr { callee, args, span } = c;
+            out.push_str("(call");
+            out.push_str(span_str(span.offset, span.length));
+            out.push_str(" ");
+            out.push_str(render_expr(callee));
+            for a in args {
+                out.push_str(" ");
+                out.push_str(render_arg(a));
+            }
+            out.push_str(")");
+        }
+        MethodCall(m) => {
+            let MethodCallExpr {
+                object,
+                method,
+                args,
+                span,
+            } = m;
+            out.push_str("(mcall ");
+            out.push_str(method);
+            out.push_str(span_str(span.offset, span.length));
+            out.push_str(" ");
+            out.push_str(render_expr(object));
+            for a in args {
+                out.push_str(" ");
+                out.push_str(render_arg(a));
+            }
+            out.push_str(")");
+        }
+        Field(f) => {
+            let FieldAccessExpr {
+                object,
+                field,
+                span,
+            } = f;
+            out.push_str("(field ");
+            out.push_str(field);
+            out.push_str(span_str(span.offset, span.length));
+            out.push_str(" ");
+            out.push_str(render_expr(object));
+            out.push_str(")");
+        }
+        TupleIdx(t) => {
+            let off = t.span.offset;
+            let len = t.span.length;
+            out.push_str("(tupidx ");
+            out.push_str(t.index.to_string());
+            out.push_str(span_str(off, len));
+            out.push_str(" ");
+            out.push_str(render_expr(t.object));
+            out.push_str(")");
+        }
+        Index(ix) => {
+            let IndexExpr {
+                object,
+                index,
+                span,
+            } = ix;
+            out.push_str("(index");
+            out.push_str(span_str(span.offset, span.length));
+            out.push_str(" ");
+            out.push_str(render_expr(object));
+            out.push_str(" ");
+            out.push_str(render_expr(index));
             out.push_str(")");
         }
         Error(n) => {

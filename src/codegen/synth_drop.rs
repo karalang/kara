@@ -322,6 +322,49 @@ impl<'ctx> super::Codegen<'ctx> {
     /// wrapper (`struct Outer { mid: Mid }`, `Mid { e: Expr }`) is reached.
     /// The caller has already established the box is uniquely owned (refcount
     /// hit 0), so each dec is the sole release of the box's one ref.
+    /// Force-synthesize the recursive `__karac_rc_drop_<T>` for any shared `T`
+    /// reachable from `te` — either `te` itself being a `shared T`, or the inner
+    /// of an `Option[shared T]` / `Result[shared T, _]` / `Vec[shared T]`. So a
+    /// later `emit_refcount_dec_by_type` dispatches to it (recursing into the
+    /// box's children) instead of inline-`free`ing the box and stranding them.
+    /// No-op for a non-shared type. Memoized, so safe while the same drop fn is
+    /// mid-synthesis.
+    fn force_synth_shared_rc_drop_for_type_expr(&mut self, te: &TypeExpr) {
+        let TypeKind::Path(p) = &te.kind else {
+            return;
+        };
+        if let Some(head) = p.segments.last() {
+            if self.shared_types.contains_key(head.as_str()) {
+                self.force_synth_shared_rc_drop_by_name(&head.clone());
+                return;
+            }
+        }
+        // Generic inner (`Option[shared]` / `Result[shared, _]` / `Vec[shared]`).
+        if let Some(args) = p.generic_args.as_ref() {
+            for a in args {
+                if let crate::ast::GenericArg::Type(t) = a {
+                    if let TypeKind::Path(ip) = &t.kind {
+                        if let Some(n) = ip.segments.last() {
+                            if self.shared_types.contains_key(n.as_str()) {
+                                self.force_synth_shared_rc_drop_by_name(&n.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn force_synth_shared_rc_drop_by_name(&mut self, name: &str) {
+        if let Some(info) = self.shared_types.get(name).cloned() {
+            if info.is_enum {
+                let _ = self.emit_shared_enum_rc_drop_fn(name);
+            } else {
+                let _ = self.emit_shared_struct_rc_drop_fn(name);
+            }
+        }
+    }
+
     pub(super) fn emit_nested_struct_shared_rc_decs(
         &mut self,
         struct_ptr: PointerValue<'ctx>,
@@ -367,6 +410,24 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(ftes) = self.struct_field_type_exprs.get(struct_name).cloned() else {
             return;
         };
+        // Force-synthesize the recursive RC drop fn for every shared type
+        // referenced by a field (a direct `shared T`, or the inner of an
+        // `Option[shared T]` / `Vec[shared T]`) BEFORE emitting any rc-dec
+        // below. Without this, an `emit_refcount_dec_by_type` emitted before
+        // `__karac_rc_drop_<T>` is registered in `rc_drop_fns` falls to a plain
+        // inline `free` of the box that STRANDS its heap children (the box's own
+        // String/Vec/shared payload) — the inner `LitNode.name` String of a
+        // `Vec[Arg]` element's `value: Expr` leaked under Linux LSan exactly
+        // this way (the self-host parser's `Call(CallExpr { args })` shape).
+        // This is the identical pre-synth `emit_vec_elem_rc_dec_fn` (B-28) does;
+        // it must run for THIS walker too because the walker rc-dec's shared
+        // fields directly. Done up front (not inline per arm) so the
+        // builder-repositioning the synthesizers do happens before the walker
+        // body is emitted. Memoized at fn entry, so re-entrant during the
+        // surrounding drop-fn synthesis.
+        for fte in &ftes {
+            self.force_synth_shared_rc_drop_for_type_expr(fte);
+        }
         let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
         let i64_t = self.context.i64_type();
         // Scope `current_fn` to `drop_fn` for the DURATION of this walker only:
