@@ -10322,6 +10322,77 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_user_drop_fires_for_inline_temp_call_arg() {
+        // B-2026-06-10 — a Drop-typed temporary materialized DIRECTLY as a
+        // call argument (`consume(Guard { id: 1 })`) is caller-owned under the
+        // caller-drops convention, exactly like a let-bound arg. Before the
+        // fix, the inline-temp arg path (`track_inline_owned_aggregate_arg`)
+        // never consulted `drop_method_keys`, so a heap-free `Guard`'s user
+        // `drop` never fired and the temporary leaked. The caller's body must
+        // now run `@karac_drop_Guard` once for the temp.
+        let ir = ir_for(
+            r#"
+struct Guard { id: i64 }
+impl Drop for Guard {
+    fn drop(mut ref self) {}
+}
+fn consume(g: Guard) {}
+fn main() {
+    consume(Guard { id: 1 });
+}
+"#,
+        );
+        let main_body = function_body(&ir, "main").unwrap_or_else(|| {
+            panic!("main body not found in IR:\n{}", ir);
+        });
+        assert!(
+            main_body.contains("call void @karac_drop_Guard("),
+            "expected `main` to call `@karac_drop_Guard(...)` for the inline \
+             temporary argument; body was:\n{}",
+            main_body
+        );
+        assert!(
+            !main_body.contains("call void @__karac_drop_struct_Guard("),
+            "main must NOT also emit a direct `@__karac_drop_struct_Guard` \
+             call — UserDrop and StructDrop are mutually exclusive (the \
+             wrapper handles field cleanup internally). body was:\n{}",
+            main_body
+        );
+    }
+
+    #[test]
+    fn test_e2e_user_drop_fires_once_for_inline_temp_call_arg() {
+        // B-2026-06-10 behavioral check: a Drop-typed temporary passed
+        // directly as a call argument must run its user `drop` EXACTLY once —
+        // not zero (the original leak) and not twice (a double-drop from
+        // registering both UserDrop and StructDrop). A side-effecting `drop`
+        // body makes the count observable without needing LSan.
+        let out = run_program(
+            r#"
+struct Guard { id: i64 }
+impl Drop for Guard {
+    fn drop(mut ref self) { println(f"drop {self.id}"); }
+}
+fn consume(g: Guard) {}
+fn main() {
+    consume(Guard { id: 7 });
+    println("after");
+}
+"#,
+        )
+        .expect("program should compile and run");
+        assert_eq!(
+            out.matches("drop 7").count(),
+            1,
+            "inline-temp Guard drop must fire exactly once; got:\n{out}"
+        );
+        assert!(
+            out.contains("after"),
+            "program body should run to completion; got:\n{out}"
+        );
+    }
+
+    #[test]
     fn test_ir_struct_drop_still_fires_without_impl_drop() {
         // Sibling assertion of the above: without user Drop, the
         // existing field-cleanup path stands. Bag's let-binding

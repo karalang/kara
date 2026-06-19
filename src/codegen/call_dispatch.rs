@@ -1400,6 +1400,39 @@ impl<'ctx> super::Codegen<'ctx> {
                 // and could be consumed internally, so registering a caller drop
                 // would risk a double-free; leave it a (safe) leak, matching the
                 // param-copy policy ("better to leak than double-free").
+                // B-2026-06-10 — a Drop-typed temporary materialized DIRECTLY
+                // as a call argument (`consume(Guard { id: 1 })` where
+                // `Guard: Drop`) is caller-owned under the caller-drops
+                // convention (`param_own.rs`), exactly like a let-bound arg.
+                // The let-path (`stmts.rs`) routes such a binding through
+                // `track_user_drop_var`, whose `karac_drop_<T>` wrapper runs
+                // the user `drop` body at scope exit. This inline-temp path
+                // only ever registered `track_struct_var` (a field-free walk
+                // that never runs the user body) — and for a heap-free struct
+                // it registered NOTHING, because the `llvm_heap ||
+                // src_heap_copyable` gate is false AND `emit_struct_drop_-
+                // synthesis` returns `None`. So the user `drop` never fired
+                // and the temporary leaked. Mirror the let-path: when the type
+                // has a validated user Drop (and isn't shared — those drop via
+                // the RC path, `stmts.rs:3021`), register exactly ONE UserDrop,
+                // materializing a slot even with no heap fields, since the user
+                // body has observable side effects regardless of heap content.
+                // UserDrop and StructDrop are mutually exclusive (the wrapper
+                // calls `__karac_drop_struct_<T>` internally, so registering
+                // both double-walks fields). Coroutine-compiled callees can't
+                // double-drop here — they return early above (the
+                // `is_coroutine_compiled` arm) and never reach this helper.
+                let has_user_drop = self
+                    .program_snapshot
+                    .as_deref()
+                    .map(|p| p.drop_method_keys.contains_key(&name))
+                    .unwrap_or(false);
+                if has_user_drop && !self.shared_types.contains_key(&name) {
+                    let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
+                    self.builder.build_store(slot, val).unwrap();
+                    self.track_user_drop_var(&name, "__owned_agg_tmp", slot);
+                    return;
+                }
                 let llvm_heap = self.aggregate_has_heap_field(agg_ty);
                 let src_heap_copyable = !llvm_heap
                     && self.aggregate_param_copy_supported_struct(&name, &mut Vec::new())
