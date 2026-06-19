@@ -1588,10 +1588,24 @@ impl<'ctx> super::Codegen<'ctx> {
             .try_as_basic_value()
             .unwrap_basic()
             .into_pointer_value();
-        let view_len = self
-            .builder
-            .build_int_sub(end_i, start_i, "bs.view.len")
-            .unwrap();
+        // Fixed-width slices (`s[d..d+1]`, `s[2..5]`) carry a compile-time
+        // width; emitting it as an i64 constant lets the consumer's copy —
+        // `push_str`'s memcpy, which reads this `len` field — lower to a sized
+        // store instead of a branchy variable-length copy. That runtime
+        // `src_len` was the root of the v2 sweep's String-build residual
+        // (`out.push_str(s[d..d+1])` 1-byte append loops). The runtime
+        // `karac_string_slice_borrow` validation above is unchanged — it still
+        // panics on out-of-range / non-char-boundary bounds before this point,
+        // so a folded width only ever reaches the copy when it equals the
+        // real `end - start`. Any runtime or unrecognized shape falls back to
+        // the exact subtraction, which is always correct, just not folded.
+        let view_len = match const_slice_width(start, end, inclusive) {
+            Some(w) => i64_t.const_int(w, false),
+            None => self
+                .builder
+                .build_int_sub(end_i, start_i, "bs.view.len")
+                .unwrap(),
+        };
 
         // {ptr, len, cap = 0} — cap 0 marks a non-owned view (never freed).
         let str_ty = self.vec_struct_type();
@@ -2461,5 +2475,135 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             Err("Index store on non-array type".to_string())
         }
+    }
+}
+
+/// Integer literal value of `e`, if `e` is a bare integer literal. Negative
+/// literals parse as `Unary { Neg, Integer }`, not `Integer(<0)`, so a value
+/// returned here is always `>= 0` for the forms slice bounds take — but callers
+/// still range-check, never assuming sign.
+fn slice_bound_int_lit(e: &Expr) -> Option<i64> {
+    match e.kind {
+        ExprKind::Integer(n, _) => Some(n),
+        _ => None,
+    }
+}
+
+/// Structural equality for the narrow class of side-effect-free, value-stable
+/// expressions a slice bound can be: identifiers, dotted paths, `self`, integer
+/// literals, and field / tuple-index projections over the same. Two such
+/// expressions that are structurally equal read the *same value* when evaluated
+/// twice with no intervening statements (as in `s[a..a+k]`), which is what makes
+/// folding the width to `k` sound. Deliberately conservative — calls, indexing,
+/// and arithmetic return `false`, so the caller keeps the exact runtime
+/// subtraction. Must never return a false positive.
+fn slice_bound_place_eq(a: &Expr, b: &Expr) -> bool {
+    match (&a.kind, &b.kind) {
+        (ExprKind::Identifier(x), ExprKind::Identifier(y)) => x == y,
+        (ExprKind::Integer(x, _), ExprKind::Integer(y, _)) => x == y,
+        (ExprKind::SelfValue, ExprKind::SelfValue) => true,
+        (ExprKind::Path { segments: s1, .. }, ExprKind::Path { segments: s2, .. }) => s1 == s2,
+        (
+            ExprKind::FieldAccess {
+                object: o1,
+                field: f1,
+            },
+            ExprKind::FieldAccess {
+                object: o2,
+                field: f2,
+            },
+        ) => f1 == f2 && slice_bound_place_eq(o1, o2),
+        (
+            ExprKind::TupleIndex {
+                object: o1,
+                index: i1,
+            },
+            ExprKind::TupleIndex {
+                object: o2,
+                index: i2,
+            },
+        ) => i1 == i2 && slice_bound_place_eq(o1, o2),
+        _ => false,
+    }
+}
+
+/// Compile-time byte width of a borrowed string slice `s[start..end]` (or
+/// `..=end`), when statically determinable and non-negative. Recognizes the
+/// two fixed-width forms the hot `out.push_str(s[d..d+1])` builder loop emits:
+///
+///   * both bounds integer literals — `s[2..5]` ⇒ 3;
+///   * `s[a..a+k]` / `s[a..=a+k]` — upper bound is the lower bound plus an
+///     integer literal, with `a` a side-effect-free place (so the two reads
+///     yield the same value) ⇒ `k` (`+1` inclusive).
+///
+/// Returns `None` for an open upper bound (`s[a..]`, whose width is the runtime
+/// string length) and any runtime or unrecognized shape; the caller then falls
+/// back to the exact `end - start` subtraction. The value equals `end - start`
+/// by construction whenever it is `Some`, so substituting it for the runtime
+/// computation is sound — the slice's runtime bounds validation is unaffected.
+fn const_slice_width(
+    start: &Option<Box<Expr>>,
+    end: &Option<Box<Expr>>,
+    inclusive: bool,
+) -> Option<u64> {
+    // An open upper bound resolves to the runtime string length.
+    let end = end.as_ref()?;
+    let incl: i64 = if inclusive { 1 } else { 0 };
+
+    // Both bounds integer literals (absent lower bound = 0): width = end - start.
+    let start_lit = match start {
+        None => Some(0),
+        Some(e) => slice_bound_int_lit(e),
+    };
+    if let (Some(a), Some(b)) = (start_lit, slice_bound_int_lit(end)) {
+        return b
+            .checked_add(incl)
+            .and_then(|hi| hi.checked_sub(a))
+            .and_then(|w| u64::try_from(w).ok());
+    }
+
+    // `s[a..a+k]`: upper bound is `a + k` (or `k + a`) with `a` structurally
+    // equal to the lower bound. The width is the literal `k` (+1 inclusive).
+    let start_e = start.as_ref()?;
+    let (left, right) = as_addition(end)?;
+    if let Some(k) = slice_bound_int_lit(right) {
+        if slice_bound_place_eq(start_e, left) {
+            return k.checked_add(incl).and_then(|w| u64::try_from(w).ok());
+        }
+    }
+    if let Some(k) = slice_bound_int_lit(left) {
+        if slice_bound_place_eq(start_e, right) {
+            return k.checked_add(incl).and_then(|w| u64::try_from(w).ok());
+        }
+    }
+    None
+}
+
+/// `(left, right)` of an addition expression, matching both the pre-lowered
+/// `Binary { Add, .. }` AST and the post-lowering
+/// `Call(Path([type, "add"]), [left, right])` form that `src/lowering.rs`
+/// rewrites every primitive `+` into before codegen runs (so `s[d..d+1]` reaches
+/// here as a call, not a `Binary`). The 2-segment `[type, "add"]` path is the
+/// established boundary that separates the numeric intrinsic from a user-defined
+/// `add` — mirrors `match_lowered_op_call` (concurrency.rs) and `as_binop`
+/// (control_flow_bce.rs). Returns `None` for any other shape.
+fn as_addition(e: &Expr) -> Option<(&Expr, &Expr)> {
+    match &e.kind {
+        ExprKind::Binary {
+            op: BinOp::Add,
+            left,
+            right,
+        } => Some((left, right)),
+        ExprKind::Call { callee, args } => {
+            let ExprKind::Path { segments, .. } = &callee.kind else {
+                return None;
+            };
+            if segments.len() == 2 && segments[1] == "add" && args.len() == 2 {
+                Some((&args[0].value, &args[1].value))
+            } else {
+                None
+            }
+        }
+        _ => None,
     }
 }

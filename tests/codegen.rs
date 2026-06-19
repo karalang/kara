@@ -226,6 +226,53 @@ mod codegen_tests {
     }
 
     #[test]
+    fn ir_fixed_width_string_slice_folds_view_len() {
+        // The String-build residual fix: a fixed-width borrowed slice
+        // (`s[d..d+1]`, `s[1..3]`) carries a compile-time byte width, so the
+        // view's `len` field is emitted as an i64 constant rather than the
+        // runtime `bs.view.len = sub end, start`. That constant flows through
+        // `push_str`'s memcpy and lets it lower to a sized store instead of a
+        // branchy variable-length copy. The `bs.view.len` sub name is unique to
+        // that subtraction, so its absence proves the fold fired.
+        let folded = ir_for(
+            "fn main() {\n\
+                 let s = \"abcd\";\n\
+                 let mut out: String = \"\";\n\
+                 let mut d: i64 = 0;\n\
+                 while d < 4 {\n\
+                     out.push_str(s[d..d+1]);\n\
+                     d = d + 1;\n\
+                 }\n\
+                 out.push_str(s[1..3]);\n\
+                 println(out);\n\
+             }",
+        );
+        assert!(
+            !folded.contains("bs.view.len"),
+            "fixed-width slice widths (`s[d..d+1]`, `s[1..3]`) must fold to an \
+             i64 constant, not a runtime `bs.view.len` subtraction; IR:\n{folded}"
+        );
+
+        // A genuinely runtime width (`s[a..b]`, distinct runtime bounds) has no
+        // compile-time width and must keep the exact subtraction.
+        let runtime = ir_for(
+            "fn main() {\n\
+                 let s = \"abcd\";\n\
+                 let mut out: String = \"\";\n\
+                 let a: i64 = 1;\n\
+                 let b: i64 = 3;\n\
+                 out.push_str(s[a..b]);\n\
+                 println(out);\n\
+             }",
+        );
+        assert!(
+            runtime.contains("bs.view.len"),
+            "a runtime-width slice (`s[a..b]`) must keep the exact `end - start` \
+             subtraction; IR:\n{runtime}"
+        );
+    }
+
+    #[test]
     fn ir_map_string_key_clear_uses_drop_variant() {
         // `Map[String, _].clear()` must free heap key buffers via the drop
         // variant, not leak them through plain `karac_map_clear`. (Count > 1
