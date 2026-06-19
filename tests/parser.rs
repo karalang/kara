@@ -402,6 +402,60 @@ fn test_assignment() {
 }
 
 #[test]
+fn test_multi_assign_desugars_to_temp_block() {
+    // `a, b = b, a;` is parser-desugared into a block-expr statement that
+    // evaluates both RHS into temporaries, then writes both targets — the
+    // swap-correct lowering. Shape: 2 `let`s followed by 2 `Assign`s.
+    let prog = parse_ok("fn main() { let mut a = 1; let mut b = 2; a, b = b, a; }");
+    if let Item::Function(f) = &prog.items[0] {
+        assert_eq!(f.body.stmts.len(), 3);
+        let StmtKind::Expr(Expr {
+            kind: ExprKind::Block(block),
+            ..
+        }) = &f.body.stmts[2].kind
+        else {
+            panic!("expected multi-assign to desugar to a block-expr statement");
+        };
+        assert_eq!(block.stmts.len(), 4, "two let-temps + two assigns");
+        assert!(matches!(block.stmts[0].kind, StmtKind::Let { .. }));
+        assert!(matches!(block.stmts[1].kind, StmtKind::Let { .. }));
+        assert!(matches!(block.stmts[2].kind, StmtKind::Assign { .. }));
+        assert!(matches!(block.stmts[3].kind, StmtKind::Assign { .. }));
+    }
+}
+
+#[test]
+fn test_multi_assign_three_way() {
+    // n-ary parallel assignment parses for n > 2.
+    let prog =
+        parse_ok("fn main() { let mut x = 1; let mut y = 2; let mut z = 3; x, y, z = z, x, y; }");
+    if let Item::Function(f) = &prog.items[0] {
+        let StmtKind::Expr(Expr {
+            kind: ExprKind::Block(block),
+            ..
+        }) = &f.body.stmts[3].kind
+        else {
+            panic!("expected block-expr statement");
+        };
+        assert_eq!(block.stmts.len(), 6, "three let-temps + three assigns");
+    }
+}
+
+#[test]
+fn test_multi_assign_arity_mismatch_is_error() {
+    // Unequal target/value counts is a parse error.
+    let result = parse("fn main() { let mut a = 1; let mut b = 2; a, b = b, a, a; }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.message.contains("parallel assignment")),
+        "expected an arity-mismatch parse error, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
 fn test_block_expression() {
     let prog = parse_ok("fn main() { let x = { let a = 1; a + 2 }; }");
     if let Item::Function(f) = &prog.items[0] {

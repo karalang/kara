@@ -1730,6 +1730,22 @@ PLACE_EXPR = VALUE_IDENT                              // let-bound name (must be
 
 A `*expr` place requires `expr: mut ref T`; `ref T` (shared borrow) is read-only. Method-call results, function-call results, and literals are not place expressions — they may appear on the right of `=` but not on the left.
 
+**Parallel (destructuring) assignment.** A comma-separated list of place targets may be assigned a comma-separated list of values in one statement:
+
+```
+MULTI_ASSIGN = PLACE_EXPR { "," PLACE_EXPR } "=" EXPR { "," EXPR } ";"
+```
+
+```
+a, b = b, a;                       // swap two locals
+v[i], v[j] = v[j], v[i];           // swap two Vec slots in place
+x, y, z = z, x, y;                 // n-ary rotate
+```
+
+Every right-hand value is evaluated left-to-right into a temporary **before any** target is written, which is what makes `a, b = b, a` a true swap. The two sides must list the same number of elements (a mismatch is a parse error). Each target follows the place-expression rule above (so the swapped locals must be `let mut`). This is the in-place idiom that swap-based sorts and permutation enumerators rely on.
+
+Mechanically it desugars to a temp-block of `let`s + single assignments (`{ let _t0 = v0; let _t1 = v1; a = _t0; b = _t1; }`); for that reason `karac fmt` currently re-prints a parallel assignment in that expanded form rather than round-tripping the comma syntax verbatim.
+
 ### 5.14 Range Expressions
 
 ```

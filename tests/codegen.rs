@@ -47015,4 +47015,53 @@ fn main() {
             assert_eq!(out, "200 100\n");
         }
     }
+
+    #[test]
+    fn e2e_multi_assign_swap_locals() {
+        // `a, b = b, a;` evaluates both RHS before writing either target, so it
+        // swaps. Parser-desugared to a temp-block of let/assign; this confirms
+        // the lowering executes correctly under codegen.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut a = 1i64;\n\
+                 let mut b = 2i64;\n\
+                 a, b = b, a;\n\
+                 println(f\"{a} {b}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "2 1\n");
+        }
+    }
+
+    #[test]
+    fn e2e_multi_assign_swaps_vec_slots() {
+        // Index targets: `v[i], v[j] = v[j], v[i];` swaps two heap-vec slots —
+        // the in-place idiom swap-sorts and swap-permutations rely on.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 v.push(10i64); v.push(20i64); v.push(30i64);\n\
+                 let i = 0i64;\n\
+                 let j = 2i64;\n\
+                 v[i], v[j] = v[j], v[i];\n\
+                 println(f\"{v[0]} {v[1]} {v[2]}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "30 20 10\n");
+        }
+    }
+
+    #[test]
+    fn e2e_multi_assign_three_way_rotate() {
+        // n-ary parallel assignment rotates without a manual temp.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut x = 1i64; let mut y = 2i64; let mut z = 3i64;\n\
+                 x, y, z = z, x, y;\n\
+                 println(f\"{x} {y} {z}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "3 1 2\n");
+        }
+    }
 }

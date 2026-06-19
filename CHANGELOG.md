@@ -22,7 +22,7 @@ All notable changes to the Kāra language and compiler will be documented in thi
 - **Lexer:** Complete tokenizer for all keywords, symbols, and literals
 - **Parser:** Recursive-descent parser with Pratt expression parsing, producing a full AST
   - All expressions: literals, binary/unary operators, function/method calls, field/index access, closures, ranges, casts, `?` operator
-  - All statements: `let`/`let mut` bindings with patterns, assignments, expression statements
+  - All statements: `let`/`let mut` bindings with patterns, assignments, parallel/destructuring assignment (`a, b = b, a` — every RHS evaluated before any target is written, so it swaps), expression statements
   - All items: functions, structs, enums, traits, impl blocks, effect declarations, layouts, modules, imports, constants, type aliases, extern functions, alias/independent declarations
   - Effects syntax: resource declarations, effect groups, `with`/`with _`, transparent effects, parameterized resources
   - Ownership types: `ref`, `mut ref`, `weak`, pointer types
