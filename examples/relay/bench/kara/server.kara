@@ -65,6 +65,16 @@ fn upstream_addr() -> String {
     }
 }
 
+// Listen address: `RELAY_BIND` env var, or `127.0.0.1:0` (ephemeral loopback,
+// the local-bench default). The cross-host harness sets `RELAY_BIND` to a
+// routable `0.0.0.0:<port>` so a client on another host can reach the proxy.
+fn bind_addr() -> String {
+    match Env.var("RELAY_BIND") {
+        Ok(a) => { return a; }
+        Err(_) => { return "127.0.0.1:0"; }
+    }
+}
+
 // Extract a `Content-Length` value from a header block under the given spelling
 // (`needle` must end in `:`), or -1 if that spelling is absent. The value is
 // the first whitespace-separated numeric token after the marker on its line —
@@ -197,7 +207,7 @@ fn handle(client: TcpStream, upstream_addr: String) {
 
 fn main() {
     let addr = upstream_addr();
-    let listener = TcpListener.bind("127.0.0.1:0").unwrap();
+    let listener = TcpListener.bind(bind_addr()).unwrap();
     let mut tg: TaskGroup = TaskGroup.new();
     loop {
         match listener.accept() {

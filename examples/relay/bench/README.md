@@ -328,6 +328,52 @@ also guards this end to end: it builds `server.kara` through the
 coroutine path and asserts a non-empty proxied body — if the UAF
 resurfaces, it returns empty and the test fails.
 
+## Cross-host benchmark (separate client / server)
+
+The numbers above are **loopback** (client and servers on one machine) — fine
+for "is the proxy fast and stable," but the client `wrk` contends with the
+servers for cores and `somaxconn`/ephemeral-port limits bite at high `-c`. For
+defensible *cross-language multiples* the rig in
+[`remote/`](remote/) drives a separate-client / separate-server topology over
+SSH:
+
+```
+  control (your Mac, SSH only)
+       │
+  client (wrk) ──network──► proxy (under test) ──network──► upstream (origin)
+```
+
+Two scripts (host-agnostic — ARM or x86 Linux):
+
+- [`remote/provision.sh <role>`](remote/provision.sh) — runs on each Linux host;
+  installs the role's toolchains (proxy → Rust + LLVM 18 + go + node; client →
+  wrk; upstream → go) and builds that role's binaries.
+- [`remote/bench-remote.sh`](remote/bench-remote.sh) — runs on the control
+  machine; `--setup` rsyncs the repo + provisions each host, then a measure run
+  sweeps **payload sizes** (`--payloads`) × connection counts, with an
+  upstream-direct sanity check per payload (the upstream must out-throughput
+  every proxy or it's the bottleneck) and an inter-host RTT probe.
+
+```sh
+# one-time provisioning
+remote/bench-remote.sh --setup  --proxy P --client C --upstream U --user bench
+# measure
+remote/bench-remote.sh --proxy P --client C --upstream U --user bench \
+    --payloads 0,1024,16384 --connections 100,1000 --impls k,g,n
+```
+
+**Why a payload sweep here and not on loopback:** across a real wire a 2-byte
+response goes network-bound — every proxy converges on the link's RTT/bandwidth
+ceiling and the proxy stops being the bottleneck. Sweeping 0 / 1 KiB / 16 KiB
+keeps the proxy the variable. All four binaries take `RELAY_BIND` /
+`RELAY_UPSTREAM_BIND` (routable `0.0.0.0:<port>`) and the upstream takes
+`RELAY_BODY_BYTES`; unset, they default to the loopback ephemeral behavior, so
+the local `bench.sh` path is unchanged.
+
+> **Status:** harness built and validated locally (routable-bind + payload
+> pipeline confirmed end-to-end on the control machine); the populated
+> cross-host results table is pending a real two/three-host run.
+
 ## See also
 
 - [`docs/dogfooding.md § Relay`](../../../docs/dogfooding.md) — the

@@ -45,6 +45,16 @@ func upstreamAddr() string {
 	return "127.0.0.1:9000"
 }
 
+// Listen address: `RELAY_BIND` env var, or `127.0.0.1:0` (ephemeral loopback,
+// the local-bench default). The cross-host harness sets it to a routable
+// `0.0.0.0:<port>` so a client on another host can reach the proxy.
+func bindAddr() string {
+	if a := os.Getenv("RELAY_BIND"); a != "" {
+		return a
+	}
+	return "127.0.0.1:0"
+}
+
 func main() {
 	target, err := url.Parse("http://" + upstreamAddr())
 	if err != nil {
@@ -62,7 +72,7 @@ func main() {
 	tr.IdleConnTimeout = 90 * time.Second
 	proxy.Transport = tr
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := net.Listen("tcp", bindAddr())
 	if err != nil {
 		fmt.Println("bind failed:", err)
 		return

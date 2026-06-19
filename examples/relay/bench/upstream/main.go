@@ -20,13 +20,39 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"strconv"
 )
 
-// Small constant body. Keeping it tiny (and identical across every response)
-// means the upstream's per-request cost is dominated by the HTTP framing, not
-// payload generation — exactly what we want from a backend that must not be
-// the bottleneck.
-var body = []byte("OK")
+// Response body. Defaults to a tiny "OK" (the local-bench default, where a
+// 2-byte body keeps the upstream's per-request cost dominated by HTTP framing).
+// `RELAY_BODY_BYTES` overrides the size: the cross-host harness sweeps larger
+// payloads (e.g. 1 KiB / 16 KiB) so the proxy stays the bottleneck instead of
+// the test going network-bound on 2 bytes across a real wire.
+var body = makeBody()
+
+func makeBody() []byte {
+	if s := os.Getenv("RELAY_BODY_BYTES"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n >= 0 {
+			b := make([]byte, n)
+			for i := range b {
+				b[i] = 'x'
+			}
+			return b
+		}
+	}
+	return []byte("OK")
+}
+
+// Listen address: `RELAY_UPSTREAM_BIND` env var, or `127.0.0.1:0` (ephemeral
+// loopback, the local-bench default). The cross-host harness sets it to a
+// routable `0.0.0.0:<port>` so the proxy host can reach the upstream host.
+func bindAddr() string {
+	if a := os.Getenv("RELAY_UPSTREAM_BIND"); a != "" {
+		return a
+	}
+	return "127.0.0.1:0"
+}
 
 func handle(w http.ResponseWriter, r *http.Request) {
 	_ = r // path/body ignored — the backend is intentionally uniform
@@ -37,7 +63,7 @@ func handle(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := net.Listen("tcp", bindAddr())
 	if err != nil {
 		fmt.Println("bind failed:", err)
 		return

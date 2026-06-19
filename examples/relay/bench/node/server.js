@@ -23,8 +23,18 @@ function upstreamAddr() {
   return process.env.RELAY_UPSTREAM || '127.0.0.1:9000';
 }
 
+// Listen address: RELAY_BIND env var, or 127.0.0.1:0 (ephemeral loopback, the
+// local-bench default). The cross-host harness sets it to a routable
+// 0.0.0.0:<port> so a client on another host can reach the proxy.
+function bindAddr() {
+  return process.env.RELAY_BIND || '127.0.0.1:0';
+}
+
 const [upstreamHost, upstreamPortStr] = upstreamAddr().split(':');
 const upstreamPort = parseInt(upstreamPortStr, 10);
+
+const [bindHost, bindPortStr] = bindAddr().split(':');
+const bindPort = parseInt(bindPortStr, 10);
 
 // Reuse upstream connections — the apples-to-apples mirror of Go's
 // ReverseProxy connection pooling and Kāra's per-connection upstream open.
@@ -52,7 +62,7 @@ const server = http.createServer((clientReq, clientRes) => {
   clientReq.pipe(upstreamReq);
 });
 
-server.listen(0, '127.0.0.1', () => {
+server.listen(bindPort, bindHost, () => {
   const addr = server.address();
   process.stdout.write(`BOUND_PORT=${addr.port}\n`);
 });
