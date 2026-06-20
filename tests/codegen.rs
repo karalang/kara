@@ -40896,10 +40896,11 @@ fn main() {
 
     #[test]
     fn test_e2e_vec_sort_non_integer_element_rejected() {
-        // `sort()` only has a default comparator for integer element types.
-        // A tuple-element Vec typechecks but must be rejected loudly in
-        // codegen (directing the user to sort_by) rather than silently
-        // leaving it unsorted.
+        // `sort()` has a default comparator only for integer and String
+        // element types. A tuple-element Vec typechecks but must be rejected
+        // loudly in codegen (directing the user to sort_by) rather than
+        // silently leaving it unsorted. (Integer and String elements are
+        // covered by `test_e2e_vec_string_sort` and the integer sort tests.)
         let src = r#"
 fn main() {
     let mut v: Vec[(i64, i64)] = Vec.new();
@@ -40919,10 +40920,10 @@ fn main() {
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
         let err = compile_to_ir(&parsed.program, None, None)
-            .expect_err("expected codegen to reject sort() on non-integer elements");
+            .expect_err("expected codegen to reject sort() on non-integer/non-String elements");
         assert!(
-            err.contains("only integer element types"),
-            "expected integer-only sort diagnostic; got: {}",
+            err.contains("integer and String element types"),
+            "expected integer/String-only sort diagnostic; got: {}",
             err
         );
     }

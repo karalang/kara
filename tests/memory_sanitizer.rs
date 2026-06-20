@@ -5112,7 +5112,7 @@ fn main() {
     fn asan_map_string_keys_values_entries_deep_copy_no_double_free() {
         // `keys()` / `values()` / `entries()` over a `Map[String,String]`
         // return OWNED Vecs whose heap halves are DEEP-CLONED from the bucket
-        // (B-2026-06-20-10). A shallow `{ptr,len,cap}` copy aliased the map's
+        // (B-2026-06-20-11). A shallow `{ptr,len,cap}` copy aliased the map's
         // stored buffer, so the result Vec's scope-exit drop and the map's drop
         // freed the same allocation — a double-free (it crashed `keys()` even
         // before any read). ≥36-byte payloads; the result Vecs and the map all
