@@ -1219,6 +1219,24 @@ impl<'a> Interpreter<'a> {
                 Item::ImplBlock(imp) => {
                     self.register_impl_methods(imp, /* skip_compiler_builtin = */ true);
                 }
+                // Register baked-stdlib `comptime fn` free functions so a
+                // stdlib-provided derive (e.g. `derive_message` for
+                // `#[derive(Message)]`) is callable from the comptime
+                // expansion pass — it invokes the derive fn by name through
+                // this same interpreter env. Only `comptime` free fns are
+                // registered (never runtime-callable; the typechecker rejects
+                // calling them at runtime), keeping the baked runtime surface
+                // unchanged. User items register afterward and win ties.
+                Item::Function(f) if f.is_comptime => {
+                    let val = Value::Function {
+                        name: f.name.clone(),
+                        param_patterns: f.params.iter().map(|p| p.pattern.clone()).collect(),
+                        param_defaults: f.params.iter().map(|p| p.default_value.clone()).collect(),
+                        body: f.body.clone(),
+                        closure_env: None,
+                    };
+                    self.env.define(f.name.clone(), val);
+                }
                 // Register baked-stdlib enum unit variants under their
                 // qualified path (e.g. `IoError.NotFound`, `VarError.NotPresent`)
                 // so they can be used as expressions, peer to the

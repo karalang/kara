@@ -1,14 +1,17 @@
-//! Protocol Buffers wire format (proto3) — slice 1: the low-level wire codec.
+//! Protocol Buffers (proto3) — wire format (slice 1) + `#[derive(Message)]`
+//! comptime codegen (slice 2).
 //!
-//! This is the foundation of `std.protobuf` (phase-8 floor: "protobuf — wire
-//! format + comptime codegen"). It implements the proto3 *wire format* — the
-//! byte-level encoding every message serializes down to — as ordinary Kāra
-//! code (no compiler intrinsic): base-128 varints, ZigZag signed mapping,
-//! field tags, length-delimited fields, and the fixed-width forms.
+//! This is `std.protobuf` (phase-8 floor: "protobuf — wire format + comptime
+//! codegen"). Slice 1 implements the proto3 *wire format* — the byte-level
+//! encoding every message serializes down to — as ordinary Kāra code (no
+//! compiler intrinsic): base-128 varints, ZigZag signed mapping, field tags,
+//! length-delimited fields, and the fixed-width forms. Slice 2 adds the
+//! schema-driven codegen: `#[derive(Message)]` on a struct comptime-emits
+//! `encode` / `decode` / `merge` methods built from these primitives, reading
+//! the struct's fields via comptime reflection (no separate codegen tool).
 //!
-//! Later slices layer the schema-driven codegen on top: `#[derive(Message)]`
-//! emits `encode` / `decode` / `merge` methods that call these primitives, and
-//! `.proto` schema parsing at comptime emits the message types themselves.
+//! A future slice layers `.proto` schema parsing at comptime to emit the
+//! message types themselves.
 //!
 //! ## Surface
 //!
@@ -20,6 +23,11 @@
 //!   time, advancing as it goes: `read_varint` / `read_tag` / `read_zigzag` /
 //!   `read_len_delim` / `read_string` / `read_fixed64` / `read_fixed32`, with
 //!   `at_end` / `remaining` for framing.
+//! - `#[derive(Message)]` — generates, for a struct of proto3 scalar fields,
+//!   `fn encode(ref self) -> Vec[u8]`, `fn decode(bytes: Vec[u8]) -> Self`, and
+//!   `fn merge(mut ref self, bytes: Vec[u8])`. Field numbers are 1-based
+//!   declaration order. Supported field types (v1): `i32` / `i64` / `u32` /
+//!   `u64` / `bool` (varint), `String` / `Vec[u8]` (length-delimited).
 //!
 //! Encoding is pure; decoding allocates (`Vec[u8]` / `String`) — matching the
 //! spec's "pure on encode, allocates(Heap) on decode".
@@ -64,6 +72,32 @@ impl ProtoBuf {
             }
             out.push(((v & 127u64) | 128u64) as u8);
             v = v >> 7u64;
+        }
+        out
+    }
+
+    // Encode a signed `i64` as a base-128 varint over its 64-bit two's-
+    // complement pattern — the proto3 `int32` / `int64` encoding, where a
+    // negative value is sign-extended to 64 bits and always occupies 10 bytes
+    // (e.g. `-1` → `FF FF FF FF FF FF FF FF FF 01`). Distinct from
+    // [`encode_varint`]: that takes a `u64` and is correct for non-negative
+    // magnitudes, while this walks the full signed bit pattern so negatives
+    // round-trip. The right shift is made logical by masking off the seven
+    // sign-extended high bits each step (`& 0x01FF_FFFF_FFFF_FFFF`), and the
+    // loop is bounded at 10 bytes — the maximum a 64-bit varint can need.
+    fn encode_varint_i64(value: i64) -> Vec[u8] {
+        let mut v = value;
+        let mut out = Vec.new();
+        let mut i = 0;
+        while i < 10 {
+            let lower = (v & 127) as u8;
+            v = (v >> 7) & 144115188075855871;
+            if v == 0 {
+                out.push(lower);
+                break;
+            }
+            out.push(lower | 128u8);
+            i = i + 1;
         }
         out
     }
@@ -256,4 +290,154 @@ impl ProtoReader {
         }
         self.pos
     }
+}
+
+// ── #[derive(Message)] — comptime codegen (slice 2) ──────────────
+//
+// `#[derive(Message)]` on a struct dispatches to `derive_message` (the
+// `derive_<snake(TraitName)>` convention). Reading the struct's fields via
+// comptime reflection, it emits an `impl` with `encode` / `decode` / `merge`
+// methods that drive the slice-1 wire codec. Field numbers are the 1-based
+// declaration order (proto3 v1; per-field `#[field(N)]` overrides aren't in
+// reflection yet). Each helper below maps a reflected field-type name (as
+// produced by `Field.ty.name()` — note generics render with angle brackets,
+// e.g. `Vec<u8>`) to the matching code fragment.
+
+// True when `tn` is a proto3 scalar this derive can codegen for.
+comptime fn proto_supported(tn: String) -> bool {
+    tn == "String" or tn == "Vec<u8>" or tn == "bool" or tn == "u64" or tn == "i64"
+        or tn == "i32" or tn == "u32"
+}
+
+// The zero value a decoded field starts from before any wire bytes overwrite
+// it (proto3 fields default to zero). Carries an explicit suffix so the
+// generated `let mut` binding infers the field's exact width.
+comptime fn proto_default(tn: String) -> String {
+    if tn == "String" {
+        "\"\""
+    } else if tn == "Vec<u8>" {
+        "Vec.new()"
+    } else if tn == "bool" {
+        "false"
+    } else if tn == "u64" {
+        "0u64"
+    } else if tn == "i64" {
+        "0i64"
+    } else if tn == "i32" {
+        "0i32"
+    } else {
+        "0u32"
+    }
+}
+
+// The expression that reads one value of type `tn` from `reader` (a
+// `ProtoReader`), already cast to the field's declared type.
+comptime fn proto_read_expr(tn: String) -> String {
+    if tn == "String" {
+        "reader.read_string()"
+    } else if tn == "Vec<u8>" {
+        "reader.read_len_delim()"
+    } else if tn == "bool" {
+        "reader.read_varint() != 0u64"
+    } else if tn == "u64" {
+        "reader.read_varint()"
+    } else if tn == "i64" {
+        "reader.read_varint() as i64"
+    } else if tn == "i32" {
+        "reader.read_varint() as i32"
+    } else {
+        "reader.read_varint() as u32"
+    }
+}
+
+// The statement(s) that append field `fname` (number `idx`, type `tn`) to the
+// `out` buffer: its tag followed by the wire-encoded value. Strings and bytes
+// are length-delimited and written without consuming `self` (encode is pure).
+comptime fn proto_encode_field(idx: i64, fname: String, tn: String) -> String {
+    let tag = f"{idx}";
+    if tn == "String" {
+        "out.extend_from_slice(ProtoBuf.encode_tag(" + tag
+            + ", 2)); out.extend_from_slice(ProtoBuf.encode_varint(self." + fname
+            + ".bytes().len() as u64)); out.extend_from_slice(self." + fname + ".bytes());"
+    } else if tn == "Vec<u8>" {
+        "out.extend_from_slice(ProtoBuf.encode_tag(" + tag
+            + ", 2)); out.extend_from_slice(ProtoBuf.encode_varint(self." + fname
+            + ".len() as u64)); out.extend_from_slice(self." + fname + ");"
+    } else if tn == "bool" {
+        "out.extend_from_slice(ProtoBuf.encode_tag(" + tag
+            + ", 0)); if self." + fname
+            + " { out.extend_from_slice(ProtoBuf.encode_varint(1u64)); } else { out.extend_from_slice(ProtoBuf.encode_varint(0u64)); }"
+    } else if tn == "u64" {
+        "out.extend_from_slice(ProtoBuf.encode_tag(" + tag
+            + ", 0)); out.extend_from_slice(ProtoBuf.encode_varint(self." + fname + "));"
+    } else if tn == "u32" {
+        "out.extend_from_slice(ProtoBuf.encode_tag(" + tag
+            + ", 0)); out.extend_from_slice(ProtoBuf.encode_varint(self." + fname + " as u64));"
+    } else if tn == "i64" {
+        // Signed: proto3 int64 sign-extends to a 64-bit two's-complement
+        // varint, so a dedicated i64 encoder (negatives → 10 bytes).
+        "out.extend_from_slice(ProtoBuf.encode_tag(" + tag
+            + ", 0)); out.extend_from_slice(ProtoBuf.encode_varint_i64(self." + fname + "));"
+    } else {
+        // i32: widen to i64 first so a negative sign-extends to 64 bits, then
+        // encode as int64 (proto3 encodes negative int32 in the 64-bit form).
+        "out.extend_from_slice(ProtoBuf.encode_tag(" + tag
+            + ", 0)); out.extend_from_slice(ProtoBuf.encode_varint_i64(self." + fname + " as i64));"
+    }
+}
+
+// Emit `impl T { encode / decode / merge }` for a `#[derive(Message)]` struct.
+comptime fn derive_message(comptime T: Type) -> Vec[Item] {
+    let n = T.name();
+    let mut enc = "let mut out = Vec.new(); ";
+    let mut decls = "";
+    let mut dec = "";
+    let mut mrg = "";
+    let mut ctor = n + " { ";
+    let mut idx = 1;
+    let mut first = true;
+    for f in T.fields() {
+        let fname = f.name;
+        let tn = f.ty.name();
+        if not proto_supported(tn) {
+            compiler.error(
+                "derive(Message): field `" + fname + "` has unsupported type `" + tn
+                    + "` (proto3 v1 supports i32/i64/u32/u64/bool/String/Vec[u8])",
+            );
+        }
+        let tag = f"{idx}";
+        let cond = "field == " + tag;
+        let read = proto_read_expr(tn);
+        enc = enc + proto_encode_field(idx, fname, tn) + " ";
+        decls = decls + "let mut " + fname + " = " + proto_default(tn) + "; ";
+        if first {
+            dec = "if " + cond + " { " + fname + " = " + read + "; }";
+            mrg = "if " + cond + " { self." + fname + " = " + read + "; }";
+            first = false;
+        } else {
+            dec = dec + " else if " + cond + " { " + fname + " = " + read + "; }";
+            mrg = mrg + " else if " + cond + " { self." + fname + " = " + read + "; }";
+        }
+        ctor = ctor + fname + ": " + fname + ", ";
+        idx = idx + 1;
+    }
+    ctor = ctor + "}";
+    // Close the field-dispatch with the forward-compatible unknown-field skip.
+    // With no supported fields every tag is unknown, so skip unconditionally
+    // (otherwise the decode loop would never advance).
+    if first {
+        dec = "reader.skip_field(wire);";
+        mrg = "reader.skip_field(wire);";
+    } else {
+        dec = dec + " else { reader.skip_field(wire); }";
+        mrg = mrg + " else { reader.skip_field(wire); }";
+    }
+    let encode_fn = "fn encode(ref self) -> Vec[u8] { " + enc + "out }";
+    let decode_fn = "fn decode(bytes: Vec[u8]) -> " + n
+        + " { let mut reader = ProtoReader.new(bytes); " + decls
+        + "while not reader.at_end() { let (field, wire) = reader.read_tag(); " + dec + " } "
+        + ctor + " }";
+    let merge_fn = "fn merge(mut ref self, bytes: Vec[u8]) { let mut reader = ProtoReader.new(bytes); while not reader.at_end() { let (field, wire) = reader.read_tag(); "
+        + mrg + " } }";
+    [ast.item("impl " + n + " { " + encode_fn + " " + decode_fn + " " + merge_fn + " }")]
 }

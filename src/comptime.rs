@@ -132,19 +132,27 @@ pub fn evaluate(program: &mut Program, typed: &TypeCheckResult) -> Vec<ComptimeE
     folder.errors
 }
 
-/// Collect the names of every top-level `comptime fn derive_*` in `program`.
-/// These are the functions a `#[derive(X)]` attribute can dispatch to (lookup
-/// convention: `#[derive(TraitName)]` → `derive_<snake(TraitName)>`).
+/// Collect the names of every `comptime fn derive_*` a `#[derive(X)]` can
+/// dispatch to (lookup convention: `#[derive(TraitName)]` →
+/// `derive_<snake(TraitName)>`). Both the user program and the baked stdlib
+/// are scanned — the latter is how a stdlib-provided derive such as
+/// `derive_message` (for `#[derive(Message)]`) becomes available without the
+/// user defining it (the interpreter registers baked comptime fns to match).
 fn collect_derive_fns(program: &Program) -> std::collections::HashSet<String> {
-    program
-        .items
-        .iter()
-        .filter_map(|item| match item {
+    fn derive_fn_names<'a>(items: &'a [Item]) -> impl Iterator<Item = String> + 'a {
+        items.iter().filter_map(|item| match item {
             Item::Function(f) if f.is_comptime && f.name.starts_with("derive_") => {
                 Some(f.name.clone())
             }
             _ => None,
         })
+    }
+    derive_fn_names(&program.items)
+        .chain(
+            crate::prelude::STDLIB_PROGRAMS
+                .iter()
+                .flat_map(|(_, p)| derive_fn_names(&p.items)),
+        )
         .collect()
 }
 

@@ -35,16 +35,33 @@ impl<'a> super::Interpreter<'a> {
         // known type at comptime; dispatch on the head segment as a `Type`
         // value. Substrate 2.
         if let ExprKind::Path { segments, .. } = &callee.kind {
-            if segments.len() == 2
-                && Self::is_reflection_method_name(&segments[1])
-                && self.is_known_type_name(&segments[0])
-            {
-                return self.eval_type_reflection(
-                    &segments[0].clone(),
-                    &segments[1].clone(),
-                    args,
-                    span,
-                );
+            if segments.len() == 2 && Self::is_reflection_method_name(&segments[1]) {
+                // Head names a concrete type directly (`Widget.fields()`).
+                if self.is_known_type_name(&segments[0]) {
+                    return self.eval_type_reflection(
+                        &segments[0].clone(),
+                        &segments[1].clone(),
+                        args,
+                        span,
+                    );
+                }
+                // Head is a `comptime T: Type` parameter bound to a `Type`
+                // pseudovalue in the current frame (`T.fields()`). For a
+                // user-program `derive_*` the branch above already catches this
+                // — the typechecker records the comptime param in this
+                // program's type tables. A baked-stdlib `derive_*` (e.g.
+                // `derive_message` for `#[derive(Message)]`) is typechecked
+                // separately, so its `T` is absent there; recover it from the
+                // bound value, which is a `TypeVal` regardless of definition
+                // site.
+                if let Some(Value::TypeVal(name)) = self.env.get(&segments[0]) {
+                    return self.eval_type_reflection(
+                        &name.clone(),
+                        &segments[1].clone(),
+                        args,
+                        span,
+                    );
+                }
             }
         }
 
