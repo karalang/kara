@@ -162,6 +162,19 @@ const CORPUS: &[&str] = &[
     "{ for x in xs { f(x) } }",
     "{ loop { break } x }",
     "loop { while a { break } }",
+    // Labeled loops + labeled break/continue (slice 2b). Note the seed's span
+    // quirk: a labeled `loop` span starts at the LABEL, while a labeled
+    // `while`/`for` span starts at the KEYWORD (the label is excluded).
+    "outer: loop { break outer }",
+    "outer: loop { break outer 42 }",
+    "outer: while a { continue outer }",
+    "outer: for x in xs { break outer }",
+    "loop { outer: loop { break outer } }",
+    // Adversarial: a NON-label value identifier inside a labeled loop must stay
+    // a value (`break x`), exercising the non-consuming known-label peek.
+    "outer: loop { break x }",
+    "outer: loop { break a + b }",
+    "row: while a { col: while b { break row } }",
 ];
 
 // ── Rust-side canonical render (must match `ast_render.kara::render_expr`) ──

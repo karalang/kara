@@ -51,14 +51,47 @@ import ast.{
 };
 import lexer.lex_all;
 
+// Duplicate a `String` by value — `.clone()` is unavailable, and `push_str`
+// reads its argument's bytes by borrow, so this is the move-free copy used to
+// keep a loop label both on the `loop_labels` stack and in the AST node.
+fn dup_str(s: ref String) -> String {
+    let mut out = "".to_string();
+    out.push_str(s);
+    out
+}
+
 struct Parser {
     tokens: Vec[SpannedToken],
     pos: i64,
+    // In-scope loop labels (innermost last). Pushed when entering a labeled
+    // loop, popped on exit; `break <ident>` consults it to tell a label
+    // (`break outer`) from a value (`break x`) — the seed's `is_known_label`.
+    loop_labels: Vec[String],
 }
 
 impl Parser {
     fn new(tokens: Vec[SpannedToken]) -> Parser {
-        Parser { tokens: tokens, pos: 0 }
+        Parser { tokens: tokens, pos: 0, loop_labels: Vec.new() }
+    }
+
+    // True iff `name` is currently an in-scope loop label. Compares against an
+    // owned copy of `name` (karac does not yet compare `String` with
+    // `ref String` directly — a value-vs-borrow `==` ergonomic gap).
+    fn label_known(ref self, name: ref String) -> bool {
+        let target = dup_str(name);
+        let mut i = 0;
+        let mut found = false;
+        loop {
+            if i >= self.loop_labels.len() {
+                break;
+            }
+            if self.loop_labels[i] == target {
+                found = true;
+                break;
+            }
+            i = i + 1;
+        }
+        found
     }
 
     fn advance(mut ref self) {
@@ -386,17 +419,20 @@ impl Parser {
     // Mirror `src/parser/exprs.rs`'s `parse_while_expr` / `parse_for_expr` /
     // `Token::Loop` / `parse_break_args` / `parse_continue_label`. `while let`,
     // `for`-pattern destructuring, and `match` are deferred to Slice 3; `for`
-    // binds a single identifier. The optional `label:` prefix is wired in a
-    // follow-on commit (the `loop_labels` disambiguation for `break label`).
+    // binds a single identifier. Each fn takes the span the loop begins from
+    // (`start`) — for an unlabeled loop or a labeled `while`/`for` it is the
+    // keyword's span; for a labeled `loop` it is the LABEL's span, reproducing
+    // the seed's `span_from` quirk (labeled `loop` includes its label in the
+    // span; labeled `while`/`for` do NOT — they recapture `start` at the
+    // keyword in `parse_*_expr_with_label_and_attrs`).
 
-    // `while cond { … }`. Span covers the whole loop (keyword → body `}`).
-    fn parse_while(mut ref self) -> Expr {
-        let start = self.current_span();
+    // `while cond { … }`. `while let` is deferred to Slice 3.
+    fn parse_while(mut ref self, label: Option[String], start: Span) -> Expr {
         self.advance(); // while
         let cond = self.parse_expr_bp(0);
         let body = self.parse_block();
         Expr.While(WhileExpr {
-            label: None,
+            label: label,
             cond: cond,
             body: body,
             span: self.span_from(start),
@@ -404,15 +440,14 @@ impl Parser {
     }
 
     // `for var in iter { … }` — `var` is a single identifier (slice 2b).
-    fn parse_for(mut ref self) -> Expr {
-        let start = self.current_span();
+    fn parse_for(mut ref self, label: Option[String], start: Span) -> Expr {
         self.advance(); // for
         let var = self.take_member_name();
         self.eat_in();
         let iter = self.parse_expr_bp(0);
         let body = self.parse_block();
         Expr.For(ForExpr {
-            label: None,
+            label: label,
             var: var,
             iter: iter,
             body: body,
@@ -421,57 +456,136 @@ impl Parser {
     }
 
     // `loop { … }` (infinite loop; exits via `break`).
-    fn parse_loop(mut ref self) -> Expr {
-        let start = self.current_span();
+    fn parse_loop(mut ref self, label: Option[String], start: Span) -> Expr {
         self.advance(); // loop
         let body = self.parse_block();
         Expr.Loop(LoopExpr {
-            label: None,
+            label: label,
             body: body,
             span: self.span_from(start),
         })
     }
 
-    // `break [value]` — a value follows unless the next token closes the
-    // construct (`;` / `}` / `,`), exactly like `return`. Labels land with the
-    // follow-on `loop_labels` commit.
-    fn parse_break(mut ref self) -> Expr {
-        let start = self.current_span();
+    // `name : (while | for | loop)` — a labeled loop. `name` is already
+    // consumed; `label_start` is its span (used only by the `loop` arm). Pushes
+    // the label for the body's `break`/`continue`, dispatches, then pops.
+    fn parse_labeled_loop(mut ref self, name: String, label_start: Span) -> Expr {
+        self.advance(); // consume ':'
+        self.loop_labels.push(dup_str(name));
+        let kw = match self.tokens[self.pos].token {
+            While => 0,
+            For => 1,
+            _ => 2, // Loop — `at_loop_label` guaranteed one of the three.
+        };
+        let result = if kw == 0 {
+            let kw_start = self.current_span();
+            self.parse_while(Some(name), kw_start)
+        } else if kw == 1 {
+            let kw_start = self.current_span();
+            self.parse_for(Some(name), kw_start)
+        } else {
+            self.parse_loop(Some(name), label_start)
+        };
+        self.loop_labels.pop();
+        result
+    }
+
+    // True iff the current token is `:` and the next is `while`/`for`/`loop`
+    // (a labeled loop). Labeled blocks (`name: { … }`) are deferred to Slice 3.
+    fn at_loop_label(ref self) -> bool {
+        if self.pos + 1 >= self.tokens.len() {
+            return false;
+        }
+        let is_colon = match self.tokens[self.pos].token {
+            Colon => true,
+            _ => false,
+        };
+        if not is_colon {
+            return false;
+        }
+        match self.tokens[self.pos + 1].token {
+            While => true,
+            For => true,
+            Loop => true,
+            _ => false,
+        }
+    }
+
+    // True iff the current token is an identifier naming an in-scope loop label.
+    // Non-consuming (the identifier is only consumed once classified as a
+    // label) — mirrors the seed's `peek_token` borrow in `parse_break_args`.
+    fn current_is_known_label(ref self) -> bool {
+        if self.pos >= self.tokens.len() {
+            return false;
+        }
+        match self.tokens[self.pos].token {
+            Identifier(n) => self.label_known(n),
+            _ => false,
+        }
+    }
+
+    // `break [label] [value]`. A known loop label may precede the optional
+    // value; otherwise a leading identifier is the start of the value
+    // expression. Mirrors `src/parser/exprs.rs::parse_break_args`.
+    fn parse_break(mut ref self, start: Span) -> Expr {
         self.advance(); // break
-        let value = self.parse_break_value();
+        let mut label: Option[String] = None;
+        let mut value: Option[Expr] = None;
+        if not self.at_break_terminator() {
+            if self.loop_labels.len() > 0 {
+                if self.current_is_known_label() {
+                    label = Some(self.take_member_name());
+                }
+            }
+            if not self.at_break_terminator() {
+                value = Some(self.parse_expr_bp(0));
+            }
+        }
         Expr.Break(BreakExpr {
-            label: None,
+            label: label,
             value: value,
             span: self.span_from(start),
         })
     }
 
-    // The optional value after `break` — None when the next token closes the
-    // construct. Mirrors the seed's `parse_break_args` value tail (sans label).
-    fn parse_break_value(mut ref self) -> Option[Expr] {
-        let has_value = if self.pos < self.tokens.len() {
-            match self.tokens[self.pos].token {
-                Semicolon => false,
-                RightBrace => false,
-                Comma => false,
-                _ => true,
-            }
-        } else {
-            false
-        };
-        if has_value {
-            Some(self.parse_expr_bp(0))
-        } else {
-            None
+    // The `break` terminators (`;` / `}` / `,`, or end of input).
+    fn at_break_terminator(ref self) -> bool {
+        if self.pos >= self.tokens.len() {
+            return true;
+        }
+        match self.tokens[self.pos].token {
+            Semicolon => true,
+            RightBrace => true,
+            Comma => true,
+            _ => false,
         }
     }
 
-    // `continue` — takes no value. Labels land with the follow-on commit.
-    fn parse_continue(mut ref self) -> Expr {
-        let start = self.current_span();
+    // `continue [label]`. The seed takes ANY following identifier as the label
+    // (no known-label check), stopping at `;` / `}`.
+    fn parse_continue(mut ref self, start: Span) -> Expr {
         self.advance(); // continue
+        let mut label: Option[String] = None;
+        let stop = if self.pos < self.tokens.len() {
+            match self.tokens[self.pos].token {
+                Semicolon => true,
+                RightBrace => true,
+                _ => false,
+            }
+        } else {
+            true
+        };
+        if not stop {
+            let is_ident = match self.tokens[self.pos].token {
+                Identifier(_) => true,
+                _ => false,
+            };
+            if is_ident {
+                label = Some(self.take_member_name());
+            }
+        }
         Expr.Continue(ContinueExpr {
-            label: None,
+            label: label,
             span: self.span_from(start),
         })
     }
@@ -968,12 +1082,12 @@ impl Parser {
             // `if` / `if … else …` expression.
             If => self.parse_if(),
 
-            // Loops + loop control (slice 2b).
-            While => self.parse_while(),
-            For => self.parse_for(),
-            Loop => self.parse_loop(),
-            Break => self.parse_break(),
-            Continue => self.parse_continue(),
+            // Loops + loop control (slice 2b). `start` is the keyword span.
+            While => self.parse_while(None, start),
+            For => self.parse_for(None, start),
+            Loop => self.parse_loop(None, start),
+            Break => self.parse_break(start),
+            Continue => self.parse_continue(start),
 
             // `return [value]`.
             Return => {
@@ -1004,13 +1118,18 @@ impl Parser {
             LeftParen => self.parse_paren_or_tuple(),
 
             // Bare identifier (paths / struct literals / generic-args land in
-            // later slices).
+            // later slices) — or a labeled loop `name: while/for/loop`. `start`
+            // is the label identifier's span (the labeled-`loop` span anchor).
             Identifier(name) => {
                 self.advance();
-                Expr.Ident(IdentExpr {
-                    name: name,
-                    span: self.span_from(start),
-                })
+                if self.at_loop_label() {
+                    self.parse_labeled_loop(name, start)
+                } else {
+                    Expr.Ident(IdentExpr {
+                        name: name,
+                        span: self.span_from(start),
+                    })
+                }
             }
 
             // Error-recovery placeholder for any token that can't start an
