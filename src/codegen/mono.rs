@@ -198,6 +198,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // body and restore below, like `variables` — see the matching note
             // in `ensure_layout_mono_generated`.
             let saved_ref_params = std::mem::take(&mut self.ref_params);
+            // Slice 5: per-binding layout carrier — the mono body seeds its own
+            // locals at their `let` sites; swap out the caller's map and restore
+            // below, parallel to `variables` / `ref_params`.
+            let saved_binding_layouts = std::mem::take(&mut self.binding_layouts);
 
             // Declare then compile the specialization.
             self.declare_mono_function(&generic_fn, &mangled)?;
@@ -218,6 +222,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.emit_state_machine_helpers_for_mono(name, &mangled);
 
             // Restore state.
+            self.binding_layouts = saved_binding_layouts;
             self.ref_params = saved_ref_params;
             self.layout_subst = saved_layout_subst;
             self.const_subst = saved_const_subst;
@@ -646,11 +651,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // mirroring the `variables` save/restore above. Without this a mono's
         // ref param would mark a same-named caller binding as a borrow.
         let saved_ref_params = std::mem::take(&mut self.ref_params);
+        // Slice 5: the mono body seeds its own locals' layouts in
+        // `binding_layouts` at their `let` sites. Take the caller's carrier for
+        // the duration (the body starts empty, like `variables`) and restore it
+        // after, so a mono's local can't leak its SoA-ness back to a same-named
+        // caller binding.
+        let saved_binding_layouts = std::mem::take(&mut self.binding_layouts);
 
         let result = self
             .declare_mono_function(func, mangled)
             .and_then(|_| self.compile_mono_function(func, mangled));
 
+        self.binding_layouts = saved_binding_layouts;
         self.ref_params = saved_ref_params;
         self.return_layout = saved_return_layout;
         self.layout_subst = saved_layout_subst;
@@ -764,6 +776,10 @@ impl<'ctx> super::Codegen<'ctx> {
         self.current_fn = Some(fn_val);
         self.variables.clear();
         self.var_type_names.clear();
+        // Per-binding layout carrier (slice 5): the caller's map was swapped out
+        // (`mem::take`) at the mono entry point, so this fresh body starts empty
+        // and seeds its own locals; `let`-site registrations land here.
+        self.binding_layouts.clear();
         self.inline_option_payload_vars.clear();
         self.inline_result_payload_vars.clear();
         self.inline_option_map_payload_vars.clear();
@@ -1124,20 +1140,57 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    /// The active physical layout of a binding in the current codegen context:
-    /// the per-call layout subst (a SoA-forwarded param in the active
-    /// monomorph) takes precedence, then the name-keyed `layout`-block origin
-    /// (`soa_layouts`), else `Aos`. This is the bridge that lets the
-    /// `LayoutId` model and the legacy name-keyed origin map coexist until the
-    /// origin map is reduced to declarations only (slice 5).
+    /// The active physical layout of a binding at a *use site* in the current
+    /// codegen context, read purely from the value carriers (slice 5 — no
+    /// name-keyed `soa_layouts` lookup): the per-call layout subst (a
+    /// SoA-forwarded param/return in the active monomorph) takes precedence,
+    /// then the per-binding `binding_layouts` carrier (an in-function local
+    /// seeded at its binding site by `seed_binding_site_layout`), else `Aos`.
+    /// This is design.md Feature 1's "the value carrier is a `LayoutId`
+    /// attached to bindings, not the binding name": a binding reads as SoA iff
+    /// it was *made* SoA — by the call dispatch (`layout_subst`) or at its `let`
+    /// (`binding_layouts`) — so a base-symbol param that merely shares a name
+    /// with a `layout` block no longer lowers SoA by coincidence.
     pub(super) fn active_layout_id(&self, binding_name: &str) -> LayoutId {
         if let Some(layout) = self.layout_subst.get(binding_name) {
             return layout.clone();
         }
-        if self.soa_layouts.contains_key(binding_name) {
-            return LayoutId::Soa(binding_name.to_string());
+        if let Some(layout) = self.binding_layouts.get(binding_name) {
+            return layout.clone();
         }
         LayoutId::Aos
+    }
+
+    /// Resolve a `let` binding's layout from its binding *site* and, if SoA,
+    /// seed the per-binding `binding_layouts` carrier so every downstream use
+    /// reads it via `active_layout_id` (no further name-keyed lookups). This is
+    /// the **one sanctioned origin name-match** (design.md Feature 1: "layout
+    /// binds to the binding site"): the binding's layout is the active
+    /// `layout_subst` entry if present — a returned local seeded by a return-SoA
+    /// mono (slice 3), or a name the dispatch already laid out — otherwise the
+    /// `layout <name>` origin map keyed by the binding's own name. Returns the
+    /// resolved `SoaLayout` (and records the carrier) for a SoA binding, or
+    /// `None` for an `Aos` one. Called only from the `let` arm; use sites read
+    /// `active_soa_layout`, which never touches the origin map.
+    pub(super) fn seed_binding_site_layout(
+        &mut self,
+        binding_name: &str,
+    ) -> Option<super::state::SoaLayout> {
+        let layout = if let Some(layout) = self.layout_subst.get(binding_name) {
+            layout.clone()
+        } else if self.soa_layouts.contains_key(binding_name) {
+            LayoutId::Soa(binding_name.to_string())
+        } else {
+            LayoutId::Aos
+        };
+        match layout {
+            LayoutId::Soa(block) => {
+                self.binding_layouts
+                    .insert(binding_name.to_string(), LayoutId::Soa(block.clone()));
+                self.soa_layouts.get(&block).cloned()
+            }
+            LayoutId::Aos => None,
+        }
     }
 
     /// The `SoaLayout` metadata for a binding whose active layout is `Soa`, or

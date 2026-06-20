@@ -1564,8 +1564,27 @@ pub(super) struct Codegen<'ctx> {
     /// independent (B-2026-06-10-2). Cleared per-function alongside
     /// `ref_params`.
     pub(crate) owned_struct_params: HashSet<String>,
-    /// SoA layout metadata (layout name → SoaLayout).
+    /// SoA layout metadata (layout name → SoaLayout). **Origin-only** (slice 5):
+    /// keyed by the `layout <name>` block's name, consulted to resolve a
+    /// `LayoutId::Soa(<block>)` to its struct shape, to populate the layout
+    /// catalogue (`collect_soa_layouts`), and — at a `let` binding *site* — to
+    /// decide whether the binding's name matches a layout origin
+    /// (`seed_binding_site_layout`). It is **never** the access-path trigger:
+    /// a binding's physical layout is carried by `binding_layouts` /
+    /// `layout_subst`, not re-derived from this map by name at each use.
     pub(crate) soa_layouts: HashMap<String, SoaLayout>,
+    /// Per-binding physical-layout value carrier (slice 5): the active
+    /// `LayoutId` of each in-function *local* binding, seeded at its binding
+    /// site (`seed_binding_site_layout` — the one sanctioned origin name-match)
+    /// and read by `active_layout_id` at every use site. This is design.md
+    /// Feature 1's "the value carrier is a `LayoutId` attached to bindings, not
+    /// the binding name": it replaces the old name-keyed `soa_layouts` fallback
+    /// in the access paths, so a base-symbol param named like a layout block no
+    /// longer lowers SoA by coincidence (its layout comes from `layout_subst`,
+    /// set by the call dispatch, only inside a monomorph). Function-scoped:
+    /// cleared at each function entry and save/restored (`mem::take`) around the
+    /// mono entry points, exactly like `variables` / `ref_params`.
+    pub(crate) binding_layouts: HashMap<String, LayoutId>,
     /// Function parameter ref-ness (function name → vec of is_ref per param).
     pub(crate) fn_param_ref: HashMap<String, Vec<bool>>,
     /// `unsafe extern` imports that carry `#[link_name("symbol")]`: maps the
@@ -4989,6 +5008,7 @@ impl<'ctx> Codegen<'ctx> {
             var_option_shared_heap: HashMap::new(),
             tail_ret_inner: None,
             soa_layouts: HashMap::new(),
+            binding_layouts: HashMap::new(),
             scope_cleanup_actions: Vec::new(),
             pending_errdefer_payload: None,
             current_fn_err_payload_ty: None,

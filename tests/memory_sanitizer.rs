@@ -7682,6 +7682,60 @@ fn main() {
     }
 
     #[test]
+    fn asan_soa_layout_named_param_base_aos_and_mono_soa_no_leak() {
+        // Per-layout monomorphization slice 5 (origin-only `soa_layouts`): one
+        // by-value helper `total(entities: Vec[Entity])` whose param NAME matches
+        // the `layout entities` block is called BOTH ways per iteration —
+        //   - with the SoA local `entities` → routed to a SoA monomorph
+        //     (caller-retains: no callee-side FreeSoaGroups, the SoA local frees
+        //     both group buffers once), and
+        //   - with an ordinary AoS `plain: Vec[Entity]` → routed to the AoS BASE
+        //     symbol (caller-owns: the plain Vec frees its single buffer once).
+        // Retiring the name-keyed by-value param ABI moved BOTH routes onto their
+        // correct ownership paths; a regression on either is a double-free (ASAN)
+        // or a leak (LSan). Looped 20× to amplify. ≥36 bytes of live payload per
+        // element across the groups so a reachable leak isn't masked by LSan's
+        // short-allocation blind spot.
+        assert_clean_asan_run(
+            r#"
+struct Entity { x: f64, y: f64, hp: i64 }
+layout entities: Vec[Entity] {
+    group physics { x, y }
+    group combat { hp }
+}
+fn total(entities: Vec[Entity]) -> i64 {
+    let mut t = 0;
+    let mut i = 0;
+    while i < entities.len() {
+        let e = entities[i];
+        t = t + e.hp;
+        i = i + 1;
+    }
+    t
+}
+fn main() {
+    let mut sum = 0;
+    let mut k = 0;
+    while k < 20 {
+        let mut entities: Vec[Entity] = Vec.new();
+        entities.push(Entity { x: 1.0, y: 2.0, hp: 100 });
+        entities.push(Entity { x: 3.0, y: 4.0, hp: 200 });
+        entities.push(Entity { x: 5.0, y: 6.0, hp: 300 });
+        let mut plain: Vec[Entity] = Vec.new();
+        plain.push(Entity { x: 7.0, y: 8.0, hp: 7 });
+        plain.push(Entity { x: 9.0, y: 1.0, hp: 11 });
+        sum = sum + total(entities) + total(plain);
+        k = k + 1;
+    }
+    println(sum);
+}
+"#,
+            &["12360"],
+            "soa_layout_named_param_base_aos_and_mono_soa",
+        );
+    }
+
+    #[test]
     fn asan_soa_drop_with_cold_group_primitive() {
         // Cold group adds an extra buffer that pre-fix codegen never
         // freed (the cold pointer sits between the hot pointers and the

@@ -3105,43 +3105,6 @@ impl<'ctx> super::Codegen<'ctx> {
         self.context.struct_type(&fields, false)
     }
 
-    /// By-value SoA param classifier (B-2026-06-19-14, slice 1): returns the
-    /// `SoaLayout` when `param` is a bare (non-`ref`) `Vec[E]` whose binding
-    /// NAME matches a `layout` block AND whose element struct matches the
-    /// layout's. A `ref Vec[E]` param is `TypeKind::Ref`, not `Path`, so it is
-    /// excluded here — the by-ref read path (b5e0fc58) owns that case. Used at
-    /// signature lowering (param type → SoA struct), the param prologue (slot
-    /// setup + `FreeSoaGroups`), and call sites (move-suppression).
-    pub(super) fn soa_value_param_layout(&self, param: &Param) -> Option<SoaLayout> {
-        let TypeKind::Path(path) = &param.ty.kind else {
-            return None;
-        };
-        if path.segments.last().map(|s| s.as_str()) != Some("Vec") {
-            return None;
-        }
-        let name = param.name()?;
-        let soa = self.soa_layouts.get(name)?;
-        // Guard: the param's `Vec[E]` element must be the layout's element
-        // struct, so a same-named-but-different-typed param can't alias a
-        // layout. (`layout es: Vec[E]` is keyed by `es` AND describes `E`.)
-        let elem = path
-            .generic_args
-            .as_ref()
-            .and_then(|args| args.first())
-            .and_then(|a| match a {
-                GenericArg::Type(te) => Some(te),
-                _ => None,
-            })
-            .and_then(|te| match &te.kind {
-                TypeKind::Path(inner) => inner.segments.first().map(|s| s.as_str()),
-                _ => None,
-            });
-        if elem != Some(soa.struct_name.as_str()) {
-            return None;
-        }
-        Some(soa.clone())
-    }
-
     /// Returns the struct field index of the cold pointer within a SoA vec struct.
     /// `num_hot_groups` is the count of hot groups (excluding cold).
     pub(super) fn soa_cold_ptr_index(num_hot_groups: usize) -> u32 {

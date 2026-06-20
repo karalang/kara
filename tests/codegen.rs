@@ -18170,6 +18170,59 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_soa_layout_named_param_base_is_aos_mono_is_soa() {
+        // Per-layout monomorphization slice 5 (origin-only `soa_layouts`): a
+        // by-value `Vec[E]` param whose NAME coincides with a `layout` block
+        // (`es`) no longer lowers SoA by name. The physical layout is the value
+        // carrier of the ARGUMENT's binding site, not the param name:
+        //   - `sumall(es)`    — `es` is the SoA local (matches `layout es`), so
+        //                       the call routes to a per-layout monomorph whose
+        //                       `es` param is the 4-field SoA struct.
+        //   - `sumall(plain)` — `plain` is an ordinary AoS `Vec[E]`, so the call
+        //                       routes to the BASE symbol, whose `es` param is
+        //                       AoS `{ptr,len,cap}`.
+        // Before slice 5 the name-keyed `soa_value_param_layout` lowered the
+        // base `sumall`'s `es` param SoA on the name match alone, so the AoS
+        // `sumall(plain)` call marshalled a 3-field AoS Vec into a 4-field SoA
+        // slot — an LLVM "Call parameter type does not match function signature"
+        // verification failure (the footgun this slice retires). Each path reads
+        // its own grouping correctly: es → (1+2)+(3+4)=10, plain → 100+200=300.
+        let out = run_program(
+            r#"
+struct E { x: f64, y: f64 }
+layout es: Vec[E] { group g1 { x } group g2 { y } }
+fn sumall(es: Vec[E]) -> f64 {
+    let mut s = 0.0;
+    let mut i = 0;
+    while i < es.len() {
+        let e = es[i];
+        s = s + e.x + es[i].y;
+        i = i + 1;
+    }
+    s
+}
+fn main() {
+    let mut es: Vec[E] = Vec.new();
+    es.push(E { x: 1.0, y: 2.0 });
+    es.push(E { x: 3.0, y: 4.0 });
+    let mut plain: Vec[E] = Vec.new();
+    plain.push(E { x: 100.0, y: 0.0 });
+    plain.push(E { x: 200.0, y: 0.0 });
+    println(sumall(es));
+    println(sumall(plain));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "10\n300",
+                "layout-named by-value param: SoA arg routes to a SoA mono, AoS arg to the AoS base symbol"
+            );
+        }
+    }
+
     // ── String operators ──────────────────────────────────────────
 
     #[test]

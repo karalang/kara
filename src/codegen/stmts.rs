@@ -1602,13 +1602,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
                 // SoA layout: if the binding's active layout is SoA, build the
-                // SoA struct instead of the normal Vec. The trigger reads
-                // `active_soa_layout` (not the raw name-keyed `soa_layouts`) so
-                // it ALSO fires for a returned local seeded by a return-SoA
-                // monomorph (slice 3) — `let out = Vec.new()` inside an
-                // `init_grid()`-shape callee — not only a `layout`-block name.
+                // SoA struct instead of the normal Vec. This is the binding
+                // *site* — `seed_binding_site_layout` resolves the layout (the
+                // mono `layout_subst` for a returned local seeded by a
+                // return-SoA monomorph, slice 3 — `let out = Vec.new()` inside
+                // an `init_grid()`-shape callee — else the `layout`-block origin
+                // keyed by this name) and records it in the per-binding
+                // `binding_layouts` carrier, so every downstream *use*
+                // (`active_soa_layout`) reads the carrier without re-touching
+                // the origin map (slice 5).
                 if let PatternKind::Binding(var_name) = &pattern.kind {
-                    if let Some(soa) = self.active_soa_layout(var_name) {
+                    if let Some(soa) = self.seed_binding_site_layout(var_name) {
                         if self.is_vec_new_call(value) {
                             return self.compile_soa_new(var_name, &soa);
                         }
