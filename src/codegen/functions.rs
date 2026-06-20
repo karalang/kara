@@ -198,6 +198,25 @@ impl<'ctx> super::Codegen<'ctx> {
             );
         }
 
+        // By-value SoA param ABI (B-2026-06-19-14, slice 1): a bare (non-`ref`)
+        // `Vec[E]` param whose NAME matches a `layout` block is passed as the
+        // 4-field `{g0_ptr,…,len,cap}` SoA struct, not the AoS `{ptr,len,cap}`
+        // Vec — otherwise the caller (which holds the SoA struct for that name)
+        // would marshal a 4-field value into a 3-field param slot (LLVM "Call
+        // parameter type does not match function signature"). The callee's slot
+        // then IS the SoA struct, so its access paths need no `ref_params`
+        // deref. A `ref Vec[E]` SoA param is `TypeKind::Ref` (not matched by
+        // `soa_value_param_layout`) and keeps its existing pointer ABI (the
+        // by-ref read path, b5e0fc58). The caller passes the matching SoA
+        // identifier, which `load_variable` already loads as this same struct,
+        // so no call-site marshalling is needed.
+        for (i, p) in func.params.iter().enumerate() {
+            if let Some(soa) = self.soa_value_param_layout(p) {
+                let soa_ty = self.soa_vec_type(soa.num_groups, soa.cold_group.is_some());
+                param_types[i] = soa_ty.into();
+            }
+        }
+
         // A2 slice 2b.3: a coroutine-compiled network-boundary fn is a *ramp*.
         // It takes a hidden trailing `ptr` completion-slot param (the caller
         // `park_slot_new`s it and waits on it; the body signals it) and returns
@@ -678,6 +697,38 @@ impl<'ctx> super::Codegen<'ctx> {
                 } else {
                     param_val
                 };
+                // By-value SoA param (B-2026-06-19-14, slice 1): the incoming
+                // `param_val` IS the 4-field SoA struct (declare_function set the
+                // signature). Spill it to a slot the SoA access paths can GEP,
+                // then `continue` — skipping the AoS Vec registration below,
+                // which would file it in `vec_elem_types` / `owned_vecstr_params`
+                // and queue an AoS `FreeVecBuffer` that mis-reads the SoA struct.
+                // The access paths key off `soa_layouts` (already populated for
+                // this name), operating on the slot directly (no ref deref).
+                //
+                // Ownership: CALLER-RETAINS, mirroring an owned by-value AoS
+                // `Vec`/`String` param (those land in `owned_vecstr_params`, get
+                // no callee-side `track_vec_var`, and are freed once by the
+                // caller's binding — see call_dispatch's #20 note). So NO
+                // `track_soa_groups` here: the callee borrows the moved-in struct
+                // (a copy of the 4-field header sharing the caller's group
+                // buffers), and the caller's existing `FreeSoaGroups` frees them
+                // exactly once. This keeps the slice read-only-safe with zero
+                // double-free risk; a callee that mutates a by-value Vec hits the
+                // same pre-existing realloc-aliasing hazard AoS already has.
+                if let Some(soa) = self.soa_value_param_layout(param) {
+                    let soa_ty = self.soa_vec_type(soa.num_groups, soa.cold_group.is_some());
+                    let alloca = self.create_entry_alloca(fn_val, &param_name, soa_ty.into());
+                    self.builder.build_store(alloca, param_val).unwrap();
+                    self.variables.insert(
+                        param_name.clone(),
+                        VarSlot {
+                            ptr: alloca,
+                            ty: soa_ty.into(),
+                        },
+                    );
+                    continue;
+                }
                 let alloca = self.create_entry_alloca(fn_val, &param_name, param_val.get_type());
                 self.builder.build_store(alloca, param_val).unwrap();
                 // Track ref params: alloca holds a pointer-to-data.

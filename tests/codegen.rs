@@ -17570,6 +17570,48 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_soa_by_value_param_read_across_function() {
+        // B-2026-06-19-14 slice 1: pass a SoA-laid-out `Vec[E]` BY VALUE
+        // (not `ref`) to another function. The param `es` matches `layout es`,
+        // so its signature type is the 4-field SoA struct (not AoS
+        // `{ptr,len,cap}`) — without the fix the caller marshalled a 4-field
+        // value into a 3-field param slot (LLVM "Call parameter type does not
+        // match function signature" verification failure). Caller-retains
+        // ownership (like an owned by-value AoS Vec param), so `main`'s `es`
+        // frees the buffers once after the call; the callee borrows.
+        let out = run_program(
+            r#"
+struct E { x: f64, y: f64 }
+layout es: Vec[E] { group g1 { x } group g2 { y } }
+fn sumall(es: Vec[E]) -> f64 {
+    let mut s = 0.0;
+    let mut i = 0;
+    while i < es.len() {
+        let e = es[i];
+        s = s + e.x + es[i].y;
+        i = i + 1;
+    }
+    s
+}
+fn main() {
+    let mut es: Vec[E] = Vec.new();
+    es.push(E { x: 1.0, y: 2.0 });
+    es.push(E { x: 3.0, y: 4.0 });
+    es.push(E { x: 5.0, y: 6.0 });
+    println(sumall(es));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "21",
+                "SoA Vec read by value across a function boundary"
+            );
+        }
+    }
+
     // ── String operators ──────────────────────────────────────────
 
     #[test]
