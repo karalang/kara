@@ -19,7 +19,7 @@
 // are exact tokens with no shared "unix", so the native driver is carried once
 // per native OS. The portable logic all lives in `sim.kara`.)
 
-import sim.{grid_w, grid_h, default_slope, steps_per_frame,
+import sim.{grid_w, grid_h, default_slope, steps_per_frame, default_workers,
     init_grid, substep, render_fb, peak_speed};
 
 // FNV-1a rolling checksum over the buffer bytes — order-sensitive, so any
@@ -45,6 +45,7 @@ pub fn run() with panics {
     let spf = steps_per_frame();
     println(f"slipstream oracle: {w}x{h} D2Q9, {spf} substeps/frame, slope {s}");
 
+    let workers = default_workers();
     let mut grid = init_grid();
     // Milestones are in displayed-frame units: each frame is `spf` substeps.
     let frames = [30, 60, 120];
@@ -55,7 +56,7 @@ pub fn run() with panics {
         while total_frames < target {
             let mut k = 0;
             while k < spf {
-                grid = substep(grid, s);
+                grid = substep(grid, s, workers);
                 k = k + 1;
             }
             total_frames = total_frames + 1;

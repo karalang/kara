@@ -19,7 +19,7 @@
 // fans collide+stream across the Web Worker pool with `TaskGroup.spawn`.
 
 import std.web.time.{animation_frames, Timer};
-import sim.{grid_w, grid_h, default_slope, steps_per_frame,
+import sim.{grid_w, grid_h, default_slope, steps_per_frame, default_workers,
     init_grid, substep, render_fb};
 
 // The canvas this program paints — a host capability reached via `put_pixels`.
@@ -34,6 +34,7 @@ pub fn run() with writes(Display, Timer) suspends panics {
     let h = grid_h();
     let s = default_slope();
     let spf = steps_per_frame();
+    let workers = default_workers();
 
     let mut grid = init_grid();
     let frames = animation_frames();
@@ -41,7 +42,7 @@ pub fn run() with writes(Display, Timer) suspends panics {
         frames.recv();
         let mut k = 0;
         while k < spf {
-            grid = substep(grid, s);
+            grid = substep(grid, s, workers);
             k = k + 1;
         }
         let fb = render_fb(grid, s);

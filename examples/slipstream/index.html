@@ -48,8 +48,10 @@
     <code>loop { frames.recv(); /* advance fluid */ put_pixels(); }</code> — no
     <code>async</code>, no <code>await</code>. Each frame advances the D2Q9 solver
     a few substeps from the previous frame's grid and blits the vorticity field.
-    Where is the threading code? (Slice 2 fans the solver across the Web Worker
-    pool — until then this is single-threaded.)</p>
+    Each substep's collide + stream passes fan out across the Web Worker pool via
+    <code>TaskGroup.spawn</code>, every worker reading the one shared grid — yet
+    there is no threading code, no locks, no <code>SharedArrayBuffer</code>
+    juggling in the Kāra source. Where is it? The compiler put it there.</p>
 
 <script type="module">
   import { run } from "./slipstream.js";

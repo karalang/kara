@@ -126,30 +126,38 @@ fn idx(x: i64, y: i64, w: i64) -> i64 {
     y * w + x
 }
 
-// Collide every cell: grid -> post-collision grid (fresh Vec).
-fn collide_all(grid: ref Vec[LbmNode]) -> Vec[LbmNode] {
+// Collide the cells in rows [y0, y1): a band of the grid -> its post-collision
+// cells (fresh Vec, row-major). Per-cell, no neighbour reads, so a band reads
+// only its own rows of `grid` — but it takes the WHOLE grid by `ref` so the
+// fan-out captures one shared, read-only buffer across every worker (the
+// canonical parallel-stencil shape; the cross-task shared read is what
+// B-2026-06-19-8 made sound).
+fn collide_band(grid: ref Vec[LbmNode], y0: i64, y1: i64) -> Vec[LbmNode] {
+    let w = grid_w();
     let om = omega();
-    let n = grid_w() * grid_h();
     let mut out: Vec[LbmNode] = Vec.new();
-    let mut c = 0;
-    while c < n {
+    let mut c = y0 * w;
+    let c1 = y1 * w;
+    while c < c1 {
         out.push(collide(grid[c], om));
         c = c + 1;
     }
     out
 }
 
-// Stream the post-collision grid into the next grid (pull scheme). Each interior
-// fluid cell pulls each distribution from its upwind neighbour; if that neighbour
-// is solid, the distribution bounces back off the wing and we take this cell's
-// own opposite post-collision distribution instead. Borders are clamped to
-// equilibrium inflow at (u0, 0) — a steady wind tunnel.
-fn stream(coll: ref Vec[LbmNode], u0: f64, s: f64) -> Vec[LbmNode] {
+// Stream the post-collision grid into rows [y0, y1) of the next grid (pull
+// scheme). Each interior fluid cell pulls each distribution from its upwind
+// neighbour; if that neighbour is solid, the distribution bounces back off the
+// wing and we take this cell's own opposite post-collision distribution instead.
+// Borders are clamped to equilibrium inflow at (u0, 0) — a steady wind tunnel.
+// Reads `coll` neighbours that straddle band boundaries, so each worker takes the
+// WHOLE collided grid by `ref` — the shared cross-task read.
+fn stream_band(coll: ref Vec[LbmNode], y0: i64, y1: i64, u0: f64, s: f64) -> Vec[LbmNode] {
     let w = grid_w();
     let h = grid_h();
     let mut next: Vec[LbmNode] = Vec.new();
-    let mut y = 0;
-    while y < h {
+    let mut y = y0;
+    while y < y1 {
         let mut x = 0;
         while x < w {
             if x == 0 or x == w - 1 or y == 0 or y == h - 1 {
@@ -219,12 +227,79 @@ pub fn init_grid() -> Vec[LbmNode] {
     grid
 }
 
-// Advance the fluid one LBM substep: collide, then stream. Takes ownership of the
-// old grid and returns the next one (double-buffered) — the canonical move that
-// carries simulation state from frame to frame.
-pub fn substep(grid: Vec[LbmNode], s: f64) -> Vec[LbmNode] with panics {
-    let coll = collide_all(grid);
-    stream(coll, inflow(), s)
+// Default worker count for the per-substep fan-out. The browser host passes the
+// machine's core count; the native oracle passes a fixed number. The result is
+// independent of the worker count — band partitioning never changes per-cell
+// math — so the two agree byte-for-byte.
+pub fn default_workers() -> i64 { 8 }
+
+// Fan the collide pass across `workers` row-bands. Each band is a spawned task
+// reading the one shared `grid` (cross-task read-only capture) and returning its
+// post-collision cells; the bands are joined in order and concatenated into the
+// full collided grid. This is the "where is the threading code?" core: a plain
+// sequential-looking split, the compiler runs the bands on the pool.
+fn fan_collide(grid: ref Vec[LbmNode], workers: i64) -> Vec[LbmNode] {
+    let h = grid_h();
+    let band = (h + workers - 1) / workers;
+    let mut pool: TaskGroup = TaskGroup.new();
+    let mut handles: Vec[TaskHandle[Vec[LbmNode]]] = Vec.new();
+    let mut k = 0;
+    while k < workers {
+        let y0 = k * band;
+        let mut y1 = y0 + band;
+        if y1 > h { y1 = h; }
+        if y0 < y1 {
+            handles.push(pool.spawn(|| collide_band(grid, y0, y1)));
+        }
+        k = k + 1;
+    }
+    let mut coll: Vec[LbmNode] = Vec.new();
+    for handle in handles {
+        let chunk: Vec[LbmNode] = handle.join();
+        for cell in chunk {
+            coll.push(cell);
+        }
+    }
+    coll
+}
+
+// Fan the stream pass across `workers` row-bands. Each band reads the one shared
+// collided grid (neighbours straddle band edges, so the whole grid is captured
+// read-only) and returns its rows of the next grid; joined in order, concatenated.
+fn fan_stream(coll: ref Vec[LbmNode], workers: i64, u0: f64, s: f64) -> Vec[LbmNode] {
+    let h = grid_h();
+    let band = (h + workers - 1) / workers;
+    let mut pool: TaskGroup = TaskGroup.new();
+    let mut handles: Vec[TaskHandle[Vec[LbmNode]]] = Vec.new();
+    let mut k = 0;
+    while k < workers {
+        let y0 = k * band;
+        let mut y1 = y0 + band;
+        if y1 > h { y1 = h; }
+        if y0 < y1 {
+            handles.push(pool.spawn(|| stream_band(coll, y0, y1, u0, s)));
+        }
+        k = k + 1;
+    }
+    let mut next: Vec[LbmNode] = Vec.new();
+    for handle in handles {
+        let chunk: Vec[LbmNode] = handle.join();
+        for cell in chunk {
+            next.push(cell);
+        }
+    }
+    next
+}
+
+// Advance the fluid one LBM substep: collide, then stream — each pass fanned out
+// across `workers` Web Worker / pool tasks. Takes ownership of the old grid and
+// returns the next one (double-buffered) — the canonical move that carries
+// simulation state from frame to frame. The collide pass joins before the stream
+// pass starts (stream reads the whole collided grid), so the two are sequenced
+// but each is internally parallel.
+pub fn substep(grid: Vec[LbmNode], s: f64, workers: i64) -> Vec[LbmNode] with panics {
+    let coll = fan_collide(grid, workers);
+    fan_stream(coll, workers, inflow(), s)
 }
 
 // Render the velocity field as vorticity (curl). Positive curl warms toward red,
