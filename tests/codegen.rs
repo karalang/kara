@@ -48380,4 +48380,74 @@ fn main() {
             assert_eq!(out, "true\nfalse\ntrue\ntrue\ntrue\nfalse\n");
         }
     }
+
+    // ── Shared-type heap-identity regression (B-2026-06-20-6) ────────
+    //
+    // Two distinct `shared enum`s whose heap layouts are STRUCTURALLY
+    // IDENTICAL (same payload word-count) must still receive DISTINCT LLVM
+    // heap `StructType`s. Before the fix, shared heap types were anonymous
+    // (`context.struct_type`), which LLVM uniques by structure — so two
+    // equal-width shared enums collapsed to one `StructType` object. The
+    // refcount-drop dispatch recovers a shared type's name from its heap
+    // type by object identity (`emit_rc_dec`, `struct_name_for_heap_type`),
+    // so the collision made `Vec[Alfa]`'s per-element rc-dec call the WRONG
+    // `__karac_rc_drop_<T>` (random, HashMap-order-dependent), corrupting the
+    // heap. This surfaced as the slice-3b self-host type-oracle double-free
+    // (`Pattern` collided with `TypeExpr`, both 12 payload words). Naming the
+    // heap types (`%karac.shared.<T>`) makes them identity-distinct.
+    //
+    // `Alfa` and `Bravo` here are deliberately layout-twins: each variant set
+    // is `{ Leaf(String), Node(struct { Vec[Self], String }) }`, so both heap
+    // layouts are `{ rc, tag, <Vec=3>, <String=3> }` — identical word-for-word.
+    #[test]
+    fn shared_enums_with_identical_layout_get_distinct_heap_types() {
+        let ir = ir_for(
+            "shared enum Alfa { ALeaf(String), ANode(NodeA) }\n\
+             shared enum Bravo { BLeaf(String), BNode(NodeB) }\n\
+             struct NodeA { kids: Vec[Alfa], name: String }\n\
+             struct NodeB { kids: Vec[Bravo], name: String }\n\
+             fn mk_a() -> Alfa { Alfa.ALeaf(\"payload-string-long-enough\".to_string()) }\n\
+             fn mk_b() -> Bravo { Bravo.BLeaf(\"payload-string-long-enough\".to_string()) }\n\
+             fn use_a() {\n\
+             \x20   let mut v: Vec[Alfa] = Vec.new();\n\
+             \x20   v.push(mk_a());\n\
+             \x20   v.push(mk_a());\n\
+             }\n\
+             fn use_b() {\n\
+             \x20   let mut v: Vec[Bravo] = Vec.new();\n\
+             \x20   v.push(mk_b());\n\
+             \x20   v.push(mk_b());\n\
+             }\n\
+             fn main() { use_a(); use_b(); }\n",
+        );
+
+        // Each shared enum owns a uniquely-NAMED heap struct type — the fix's
+        // mechanism. Anonymous (pre-fix) layouts would not appear by name and
+        // the two enums would share one `StructType`.
+        assert!(
+            ir.contains("%karac.shared.Alfa = type"),
+            "missing named heap type for Alfa — shared heap types must be \
+             named, not anonymous, so layout-twins stay identity-distinct\n{ir}"
+        );
+        assert!(
+            ir.contains("%karac.shared.Bravo = type"),
+            "missing named heap type for Bravo\n{ir}"
+        );
+
+        // Behavioral guarantee: a per-element rc-dec helper for one enum must
+        // dispatch to THAT enum's recursive drop, never the layout-twin's. A
+        // mismatch here is the exact heap-corrupting confusion the bug caused.
+        for (vec_elem, expected_drop) in [
+            ("__karac_vec_elem_rc_dec_Alfa", "@__karac_rc_drop_Alfa("),
+            ("__karac_vec_elem_rc_dec_Bravo", "@__karac_rc_drop_Bravo("),
+        ] {
+            if let Some(body) = function_body(&ir, vec_elem) {
+                assert!(
+                    body.contains(expected_drop),
+                    "{vec_elem} must call {expected_drop} (its OWN drop), not the \
+                     layout-twin's — heap-type collision regression\n--- body ---\n{body}"
+                );
+            }
+        }
+    }
 }

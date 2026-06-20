@@ -12158,4 +12158,54 @@ fn main() {
             "asan_string_eq_mismatched_len_no_overread_in_indexed_payload_match",
         );
     }
+
+    // Two `shared enum`s whose heap layouts are STRUCTURALLY IDENTICAL
+    // (`Alfa` and `Bravo` are variant-for-variant layout-twins: each is
+    // `{ Leaf(String), Node(struct { Vec[Self], String }) }`) must NOT share
+    // one LLVM heap `StructType`. They did before the fix — shared heap types
+    // were anonymous (`context.struct_type`), which LLVM uniques by structure
+    // — so the refcount-drop dispatch, which recovers a shared type's name
+    // from its heap type by object identity, confused the two: dropping a
+    // `Vec[Alfa]` element ran it through `__karac_rc_drop_Bravo` (or vice
+    // versa), reading the wrong variant tag/offsets and double-freeing. This
+    // was the slice-3b self-host type-oracle crash (B-2026-06-20-6,
+    // `Pattern` vs `TypeExpr`, both 12 payload words); fixed by giving each
+    // shared type a uniquely NAMED heap struct (`%karac.shared.<T>`). Here
+    // we BUILD and DROP many
+    // recursive trees of both twins (each `make_*(4)` nests `Vec[Self]`
+    // children that rc-dec on scope exit) and assert a clean ASAN run.
+    #[test]
+    fn asan_layout_twin_shared_enums_drop_through_correct_rc_drop() {
+        assert_clean_asan_run(
+            "shared enum Alfa { ALeaf(String), ANode(NodeA) }\n\
+             shared enum Bravo { BLeaf(String), BNode(NodeB) }\n\
+             struct NodeA { kids: Vec[Alfa], name: String }\n\
+             struct NodeB { kids: Vec[Bravo], name: String }\n\
+             fn make_a(d: i64) -> Alfa {\n\
+             \x20   if d <= 0 { return Alfa.ALeaf(\"alfa-leaf-payload-string-long\".to_string()); }\n\
+             \x20   let mut kids: Vec[Alfa] = Vec.new();\n\
+             \x20   kids.push(make_a(d - 1));\n\
+             \x20   kids.push(make_a(d - 1));\n\
+             \x20   Alfa.ANode(NodeA { kids: kids, name: \"alfa-node-name-payload\".to_string() })\n\
+             }\n\
+             fn make_b(d: i64) -> Bravo {\n\
+             \x20   if d <= 0 { return Bravo.BLeaf(\"bravo-leaf-payload-string-long\".to_string()); }\n\
+             \x20   let mut kids: Vec[Bravo] = Vec.new();\n\
+             \x20   kids.push(make_b(d - 1));\n\
+             \x20   kids.push(make_b(d - 1));\n\
+             \x20   Bravo.BNode(NodeB { kids: kids, name: \"bravo-node-name-payload\".to_string() })\n\
+             }\n\
+             fn main() {\n\
+             \x20   let mut i = 0;\n\
+             \x20   while i < 20 {\n\
+             \x20       let a = make_a(4);\n\
+             \x20       let b = make_b(4);\n\
+             \x20       i = i + 1;\n\
+             \x20   }\n\
+             \x20   println(\"done\");\n\
+             }\n",
+            &["done"],
+            "asan_layout_twin_shared_enums_drop_through_correct_rc_drop",
+        );
+    }
 }

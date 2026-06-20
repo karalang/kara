@@ -343,6 +343,42 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Build (or reuse) a UNIQUELY-NAMED LLVM struct type for a `shared` /
+    /// `par` struct or enum's heap layout (`{ i64 refcount, … }`).
+    ///
+    /// **Why named, not anonymous (`context.struct_type`).** LLVM uniques
+    /// anonymous *literal* struct types by structure, so two shared types
+    /// whose heap layouts are structurally identical — e.g. two shared enums
+    /// whose payload word-counts happen to match (`TypeExpr` and `Pattern`
+    /// both at 12 words) — would receive the SAME `StructType` object. The
+    /// refcount-drop dispatch recovers a shared type's surface name from its
+    /// heap `StructType` by object identity (`emit_rc_dec`'s
+    /// `info.heap_type == heap_type` scan, `struct_name_for_heap_type`), so a
+    /// collision made `__karac_rc_drop_<T>` resolve to whichever same-width
+    /// type came first in `shared_types`' (randomly-seeded) HashMap order —
+    /// dropping a `Vec[TypeExpr]` element through `__karac_rc_drop_Pattern`
+    /// and corrupting the heap (B-2026-06-20-6, slice-3b self-host regression).
+    /// A *named* struct type is identified by name, never deduped against a
+    /// structural twin, so every shared type owns a distinct heap
+    /// `StructType` and the identity-keyed reverse-lookups stay correct.
+    ///
+    /// Idempotent: a re-declaration of the same type (e.g. across merged
+    /// modules) reuses the already-created named type via `get_struct_type`
+    /// rather than minting a `.1`-suffixed twin.
+    fn named_shared_heap_type(
+        &self,
+        type_name: &str,
+        fields: &[BasicTypeEnum<'ctx>],
+    ) -> StructType<'ctx> {
+        let sym = format!("karac.shared.{type_name}");
+        if let Some(existing) = self.module.get_struct_type(&sym) {
+            return existing;
+        }
+        let ty = self.context.opaque_struct_type(&sym);
+        ty.set_body(fields, false);
+        ty
+    }
+
     /// Second struct declaration pass: construct the LLVM struct / shared
     /// heap types. MUST run after [`Self::register_struct_metadata`] AND
     /// after `declare_enums`, so enum-typed fields resolve through
@@ -466,7 +502,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let mut heap_fields: Vec<BasicTypeEnum<'ctx>> =
                     vec![self.context.i64_type().into()]; // refcount
                 heap_fields.extend_from_slice(&field_types);
-                let heap_type = self.context.struct_type(&heap_fields, false);
+                let heap_type = self.named_shared_heap_type(&s.name, &heap_fields);
 
                 self.shared_types.insert(
                     s.name.clone(),
@@ -3236,7 +3272,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // are atomic (see `SharedTypeInfo::is_par`).
                     let mut heap_fields: Vec<BasicTypeEnum<'ctx>> = vec![i64_t]; // refcount
                     heap_fields.extend_from_slice(&field_types); // tag + payload words
-                    let heap_type = self.context.struct_type(&heap_fields, false);
+                    let heap_type = self.named_shared_heap_type(&e.name, &heap_fields);
 
                     self.shared_types.insert(
                         e.name.clone(),
