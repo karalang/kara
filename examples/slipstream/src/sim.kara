@@ -1,0 +1,286 @@
+// Slipstream — the shared fluid kernel.
+//
+// A real-time 2D Lattice-Boltzmann (D2Q9) wind tunnel. Air streams left-to-right
+// past a tilted wing; a turbulent wake forms behind the trailing edge. This
+// module is pure simulation + rendering — no host imports, no `animation_frames`,
+// no `put_pixels` — so the *identical* kernel runs two ways: the native oracle
+// (`host_macos`/`host_linux`) checksums the framebuffer for the A/B reference,
+// and the browser host (`host_wasm`) drives it from the frame clock and blits it.
+// That is the "one source -> native + WASM, no port" claim (cf. Iris), applied to
+// the flagship — and the kernel's one new thing vs Fathom/Plume is that its grid
+// is **state carried and evolved across frames**, not recomputed from scratch.
+//
+// Direction numbering (D2Q9), screen y growing downward so "north" is -y:
+//   0 rest(0,0)  1 E(+1,0)  2 N(0,-1)  3 W(-1,0)  4 S(0,+1)
+//   5 NE(+1,-1)  6 NW(-1,-1)  7 SW(-1,+1)  8 SE(+1,+1)
+// Opposites: 1↔3, 2↔4, 5↔7, 6↔8.
+
+// Lattice geometry. Small grid, big display: the canvas is shown scaled up in
+// CSS (see index.html), so 256×96 cells of fluid fill a 1024×384 canvas. Even
+// width keeps a future two-cells-per-SIMD-lane inner loop clean.
+pub fn grid_w() -> i64 { 256 }
+pub fn grid_h() -> i64 { 96 }
+
+// Steady inflow speed (lattice units) and the BGK relaxation rate
+// omega = 1/tau, tau = 3*nu + 0.5 for kinematic viscosity nu. nu = 0.02 puts the
+// wake in the vortex-shedding regime at this geometry.
+pub fn inflow() -> f64 { 0.10 }
+pub fn omega() -> f64 { 1.0 / (3.0 * 0.02 + 0.5) }
+
+// Default wing slope (rise/run ≈ tan of the angle of attack). ~0.36 ≈ 20°, past
+// the stall angle, so the wake is already asymmetric in slice 1. Slope rather
+// than an angle because sin/cos are a tracked stdlib gap (cf. Plume).
+pub fn default_slope() -> f64 { 0.36 }
+
+// How many LBM substeps to advance per displayed frame.
+pub fn steps_per_frame() -> i64 { 6 }
+
+// One lattice cell: the nine D2Q9 distribution functions. Public because it
+// rides the kernel's public API (`init_grid`/`substep`/`render_fb`) as an opaque
+// state token — host code passes grids through, never reads the fields.
+pub struct LbmNode {
+    f0: f64, f1: f64, f2: f64, f3: f64, f4: f64,
+    f5: f64, f6: f64, f7: f64, f8: f64,
+}
+
+// Macroscopic velocity at a cell, for visualization.
+struct Vel { x: f64, y: f64 }
+
+// D2Q9 equilibrium distribution for density `rho`, velocity (ux, uy):
+// f_eq_i = w_i * rho * (1 + 3 e_i·u + 4.5 (e_i·u)^2 - 1.5 |u|^2).
+fn equil(ux: f64, uy: f64, rho: f64) -> LbmNode {
+    let usq = ux * ux + uy * uy;
+    let w0 = 4.0 / 9.0;
+    let ws = 1.0 / 9.0;
+    let wd = 1.0 / 36.0;
+    let e1 = ux;
+    let e2 = -uy;
+    let e3 = -ux;
+    let e4 = uy;
+    let e5 = ux - uy;
+    let e6 = -ux - uy;
+    let e7 = -ux + uy;
+    let e8 = ux + uy;
+    LbmNode {
+        f0: w0 * rho * (1.0 - 1.5 * usq),
+        f1: ws * rho * (1.0 + 3.0 * e1 + 4.5 * e1 * e1 - 1.5 * usq),
+        f2: ws * rho * (1.0 + 3.0 * e2 + 4.5 * e2 * e2 - 1.5 * usq),
+        f3: ws * rho * (1.0 + 3.0 * e3 + 4.5 * e3 * e3 - 1.5 * usq),
+        f4: ws * rho * (1.0 + 3.0 * e4 + 4.5 * e4 * e4 - 1.5 * usq),
+        f5: wd * rho * (1.0 + 3.0 * e5 + 4.5 * e5 * e5 - 1.5 * usq),
+        f6: wd * rho * (1.0 + 3.0 * e6 + 4.5 * e6 * e6 - 1.5 * usq),
+        f7: wd * rho * (1.0 + 3.0 * e7 + 4.5 * e7 * e7 - 1.5 * usq),
+        f8: wd * rho * (1.0 + 3.0 * e8 + 4.5 * e8 * e8 - 1.5 * usq),
+    }
+}
+
+// BGK collision: relax a cell toward local equilibrium by `omega`. Pure per-cell
+// — no neighbour reads — so it parallelizes trivially (slice 2).
+fn collide(n: LbmNode, om: f64) -> LbmNode {
+    let rho = n.f0 + n.f1 + n.f2 + n.f3 + n.f4 + n.f5 + n.f6 + n.f7 + n.f8;
+    if rho <= 0.0 {
+        return n;
+    }
+    let ux = (n.f1 + n.f5 + n.f8 - n.f3 - n.f6 - n.f7) / rho;
+    let uy = (n.f4 + n.f7 + n.f8 - n.f2 - n.f5 - n.f6) / rho;
+    let eq = equil(ux, uy, rho);
+    LbmNode {
+        f0: n.f0 + om * (eq.f0 - n.f0),
+        f1: n.f1 + om * (eq.f1 - n.f1),
+        f2: n.f2 + om * (eq.f2 - n.f2),
+        f3: n.f3 + om * (eq.f3 - n.f3),
+        f4: n.f4 + om * (eq.f4 - n.f4),
+        f5: n.f5 + om * (eq.f5 - n.f5),
+        f6: n.f6 + om * (eq.f6 - n.f6),
+        f7: n.f7 + om * (eq.f7 - n.f7),
+        f8: n.f8 + om * (eq.f8 - n.f8),
+    }
+}
+
+// Is cell (x, y) inside the wing? A thin plate of half-length `half_len`, centred
+// ~1/3 across, tilted by slope `s`. Solid if the projection onto the plate axis
+// is within ±half_len and the distance from the axis is within ±half_thick. Pure
+// geometry, sqrt only — no trig.
+pub fn is_solid(x: i64, y: i64, s: f64) -> bool {
+    let w = grid_w() as f64;
+    let h = grid_h() as f64;
+    let cx = w * 0.32;
+    let cy = h * 0.5;
+    let rx = (x as f64) - cx;
+    let ry = (y as f64) - cy;
+    let l = (1.0 + s * s).sqrt();
+    let ax = 1.0 / l;
+    let ay = s / l;
+    let nx = -s / l;
+    let ny = 1.0 / l;
+    let along = rx * ax + ry * ay;
+    let perp = rx * nx + ry * ny;
+    let aa = if along < 0.0 { -along } else { along };
+    let pp = if perp < 0.0 { -perp } else { perp };
+    let half_len = h * 0.22;
+    let half_thick = 1.6;
+    aa <= half_len and pp <= half_thick
+}
+
+fn idx(x: i64, y: i64, w: i64) -> i64 {
+    y * w + x
+}
+
+// Collide every cell: grid -> post-collision grid (fresh Vec).
+fn collide_all(grid: ref Vec[LbmNode]) -> Vec[LbmNode] {
+    let om = omega();
+    let n = grid_w() * grid_h();
+    let mut out: Vec[LbmNode] = Vec.new();
+    let mut c = 0;
+    while c < n {
+        out.push(collide(grid[c], om));
+        c = c + 1;
+    }
+    out
+}
+
+// Stream the post-collision grid into the next grid (pull scheme). Each interior
+// fluid cell pulls each distribution from its upwind neighbour; if that neighbour
+// is solid, the distribution bounces back off the wing and we take this cell's
+// own opposite post-collision distribution instead. Borders are clamped to
+// equilibrium inflow at (u0, 0) — a steady wind tunnel.
+fn stream(coll: ref Vec[LbmNode], u0: f64, s: f64) -> Vec[LbmNode] {
+    let w = grid_w();
+    let h = grid_h();
+    let mut next: Vec[LbmNode] = Vec.new();
+    let mut y = 0;
+    while y < h {
+        let mut x = 0;
+        while x < w {
+            if x == 0 or x == w - 1 or y == 0 or y == h - 1 {
+                next.push(equil(u0, 0.0, 1.0));
+            } else if is_solid(x, y, s) {
+                next.push(equil(0.0, 0.0, 1.0));
+            } else {
+                let c = coll[idx(x, y, w)];
+                let f1 = if is_solid(x - 1, y, s) { c.f3 } else { coll[idx(x - 1, y, w)].f1 };
+                let f2 = if is_solid(x, y + 1, s) { c.f4 } else { coll[idx(x, y + 1, w)].f2 };
+                let f3 = if is_solid(x + 1, y, s) { c.f1 } else { coll[idx(x + 1, y, w)].f3 };
+                let f4 = if is_solid(x, y - 1, s) { c.f2 } else { coll[idx(x, y - 1, w)].f4 };
+                let f5 = if is_solid(x - 1, y + 1, s) { c.f7 } else { coll[idx(x - 1, y + 1, w)].f5 };
+                let f6 = if is_solid(x + 1, y + 1, s) { c.f8 } else { coll[idx(x + 1, y + 1, w)].f6 };
+                let f7 = if is_solid(x + 1, y - 1, s) { c.f5 } else { coll[idx(x + 1, y - 1, w)].f7 };
+                let f8 = if is_solid(x - 1, y - 1, s) { c.f6 } else { coll[idx(x - 1, y - 1, w)].f8 };
+                next.push(LbmNode {
+                    f0: c.f0, f1: f1, f2: f2, f3: f3, f4: f4,
+                    f5: f5, f6: f6, f7: f7, f8: f8,
+                });
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    next
+}
+
+// Macroscopic velocity field from a grid, one Vel per cell.
+fn velocities(grid: ref Vec[LbmNode]) -> Vec[Vel] {
+    let n = grid_w() * grid_h();
+    let mut out: Vec[Vel] = Vec.new();
+    let mut c = 0;
+    while c < n {
+        let node = grid[c];
+        let rho = node.f0 + node.f1 + node.f2 + node.f3 + node.f4
+            + node.f5 + node.f6 + node.f7 + node.f8;
+        let ux = if rho > 0.0 {
+            (node.f1 + node.f5 + node.f8 - node.f3 - node.f6 - node.f7) / rho
+        } else { 0.0 };
+        let uy = if rho > 0.0 {
+            (node.f4 + node.f7 + node.f8 - node.f2 - node.f5 - node.f6) / rho
+        } else { 0.0 };
+        out.push(Vel { x: ux, y: uy });
+        c = c + 1;
+    }
+    out
+}
+
+fn to_byte(x: f64) -> u8 {
+    if x < 0.0 { return 0u8; }
+    if x > 255.0 { return 255u8; }
+    (x.trunc_to_i64()) as u8
+}
+
+// ---- public kernel API ------------------------------------------------------
+
+// A fresh grid filled with equilibrium inflow everywhere.
+pub fn init_grid() -> Vec[LbmNode] {
+    let n = grid_w() * grid_h();
+    let mut grid: Vec[LbmNode] = Vec.new();
+    let mut c = 0;
+    while c < n {
+        grid.push(equil(inflow(), 0.0, 1.0));
+        c = c + 1;
+    }
+    grid
+}
+
+// Advance the fluid one LBM substep: collide, then stream. Takes ownership of the
+// old grid and returns the next one (double-buffered) — the canonical move that
+// carries simulation state from frame to frame.
+pub fn substep(grid: Vec[LbmNode], s: f64) -> Vec[LbmNode] with panics {
+    let coll = collide_all(grid);
+    stream(coll, inflow(), s)
+}
+
+// Render the velocity field as vorticity (curl). Positive curl warms toward red,
+// negative cools toward blue, near-zero is a dark teal floor; the wing is grey.
+pub fn render_fb(grid: ref Vec[LbmNode], s: f64) -> Vec[u8] with panics {
+    let w = grid_w();
+    let h = grid_h();
+    let vel = velocities(grid);
+    let mut out: Vec[u8] = Vec.new();
+    let mut y = 0;
+    while y < h {
+        let mut x = 0;
+        while x < w {
+            if is_solid(x, y, s) {
+                out.push(150u8);
+                out.push(155u8);
+                out.push(165u8);
+                out.push(255u8);
+            } else if x == 0 or x == w - 1 or y == 0 or y == h - 1 {
+                out.push(12u8);
+                out.push(22u8);
+                out.push(34u8);
+                out.push(255u8);
+            } else {
+                let curl = (vel[idx(x + 1, y, w)].y - vel[idx(x - 1, y, w)].y)
+                    - (vel[idx(x, y + 1, w)].x - vel[idx(x, y - 1, w)].x);
+                let t = curl * 9.0;
+                let tc = if t > 1.0 { 1.0 } else { if t < -1.0 { -1.0 } else { t } };
+                let pos = if tc > 0.0 { tc } else { 0.0 };
+                let neg = if tc < 0.0 { -tc } else { 0.0 };
+                let mag = if tc < 0.0 { -tc } else { tc };
+                out.push(to_byte(18.0 + 235.0 * pos));
+                out.push(to_byte(28.0 + 70.0 * (1.0 - mag)));
+                out.push(to_byte(34.0 + 221.0 * neg));
+                out.push(255u8);
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    out
+}
+
+// Peak macroscopic speed over the grid — a blow-up canary for the oracle. A
+// stable LBM run stays comfortably below the lattice sound speed (~0.577); NaN or
+// divergence would push this far past it.
+pub fn peak_speed(grid: ref Vec[LbmNode]) -> f64 with panics {
+    let vel = velocities(grid);
+    let n = grid_w() * grid_h();
+    let mut peak = 0.0;
+    let mut c = 0;
+    while c < n {
+        let v = vel[c];
+        let sp = (v.x * v.x + v.y * v.y).sqrt();
+        if sp > peak { peak = sp; }
+        c = c + 1;
+    }
+    peak
+}

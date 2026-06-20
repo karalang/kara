@@ -1,0 +1,50 @@
+// Slipstream — the browser host layer (WASM).
+//
+// The browser half of "one source -> native + WASM". On `--target=wasm_browser`
+// the walker selects this `host` variant; `main.kara` calls `run()` and it drives
+// the live wind tunnel: a plain blocking render loop that advances the fluid a
+// few LBM substeps every frame and blits the vorticity field to a `<canvas>` —
+// with no `async`, no `await`, and no hand-written threading.
+//
+//   * `animation_frames()` (std.web.time) yields once per requestAnimationFrame;
+//     `frames.recv()` parks the worker until the host fires the next frame — no
+//     `await` (design.md § Async Host APIs on WASM).
+//   * `put_pixels` hands the framebuffer to JS for the `ctx.putImageData` blit;
+//     `Vec[u8].as_ptr()` is the FFI handoff. The call is synchronous, so the
+//     buffer never dangles while in use.
+//
+// The grid is carried across loop iterations — the state the demo is about. The
+// fluid math itself is in `sim.kara`, shared verbatim with the native oracle;
+// this file is only the browser I/O wrapper. Slice 1 is single-threaded; slice 2
+// fans collide+stream across the Web Worker pool with `TaskGroup.spawn`.
+
+import std.web.time.{animation_frames, Timer};
+import sim.{grid_w, grid_h, default_slope, steps_per_frame,
+    init_grid, substep, render_fb};
+
+// The canvas this program paints — a host capability reached via `put_pixels`.
+effect resource Display;
+
+// The framebuffer blit. JS provides the body (see index.html): it reads `len`
+// bytes of RGBA at `ptr` out of shared wasm memory and `ctx.putImageData`s them.
+host fn put_pixels(ptr: *const u8, len: i64, w: i64, h: i64) with writes(Display);
+
+pub fn run() with writes(Display, Timer) suspends panics {
+    let w = grid_w();
+    let h = grid_h();
+    let s = default_slope();
+    let spf = steps_per_frame();
+
+    let mut grid = init_grid();
+    let frames = animation_frames();
+    loop {
+        frames.recv();
+        let mut k = 0;
+        while k < spf {
+            grid = substep(grid, s);
+            k = k + 1;
+        }
+        let fb = render_fb(grid, s);
+        put_pixels(fb.as_ptr(), fb.len(), w, h);
+    }
+}

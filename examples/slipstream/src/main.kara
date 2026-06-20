@@ -1,0 +1,18 @@
+// Slipstream — the shared entry point.
+//
+// One package, one `main`, two targets. The same `karac build` on this source
+// tree produces a native binary (the checksum oracle) OR browser WASM (the live
+// wind tunnel) — only `--target` changes. The target-specific I/O lives in a
+// single `host` module that exists in platform-suffixed variants the walker
+// picks automatically (`host_wasm.kara` on the browser target,
+// `host_macos.kara` / `host_linux.kara` natively). The fluid kernel in
+// `sim.kara` is shared verbatim across both.
+//
+//   karac build                                                 # native oracle
+//   karac build --target=wasm_browser --features wasm-threads   # browser tunnel
+
+import host.{run};
+
+fn main() {
+    run();
+}

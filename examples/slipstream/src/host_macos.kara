@@ -1,0 +1,69 @@
+// Slipstream — the native host layer (macOS).
+//
+// The native half of "one source -> native + WASM". On a native target the
+// walker selects this `host` variant; `main.kara` calls `run()` and it advances
+// the wind tunnel a fixed number of LBM substeps from a deterministic start,
+// printing a framebuffer checksum at several milestones plus the peak speed.
+// Those checksums are the ground truth the browser build is verified against:
+// `verify_browser.mjs` runs the same fixed number of substeps in a real browser,
+// reads the canvas back, hashes it with the identical FNV-1a, and asserts a
+// match. If the native and wasm kernels ever diverged by a byte, the checksums
+// would not match — that is the proof that there is genuinely one kernel.
+//
+// The run is fully deterministic (no RNG, fixed slope), so the milestone
+// checksums are stable run-to-run; that they *differ* across milestones is the
+// evidence that the carried grid is genuinely evolving, and the bounded peak
+// speed is the canary that it is not blowing up.
+//
+// (This file and `host_linux.kara` are byte-identical — Kāra's platform suffixes
+// are exact tokens with no shared "unix", so the native driver is carried once
+// per native OS. The portable logic all lives in `sim.kara`.)
+
+import sim.{grid_w, grid_h, default_slope, steps_per_frame,
+    init_grid, substep, render_fb, peak_speed};
+
+// FNV-1a rolling checksum over the buffer bytes — order-sensitive, so any
+// per-pixel divergence changes it. Folded to 32-bit unsigned space so the
+// printed value matches the browser harness's JS hashing exactly.
+fn checksum(buf: ref Vec[u8]) -> i64 {
+    let mut h = 2166136261;
+    let n = buf.len();
+    let mut i = 0;
+    while i < n {
+        h = (h ^ (buf[i] as i64)).wrapping_mul(16777619);
+        h = h % 4294967296;
+        if h < 0 { h = h + 4294967296; }
+        i = i + 1;
+    }
+    h
+}
+
+pub fn run() with panics {
+    let w = grid_w();
+    let h = grid_h();
+    let s = default_slope();
+    let spf = steps_per_frame();
+    println(f"slipstream oracle: {w}x{h} D2Q9, {spf} substeps/frame, slope {s}");
+
+    let mut grid = init_grid();
+    // Milestones are in displayed-frame units: each frame is `spf` substeps.
+    let frames = [30, 60, 120];
+    let mut total_frames = 0;
+    let mut fi = 0;
+    while fi < 3 {
+        let target = frames[fi];
+        while total_frames < target {
+            let mut k = 0;
+            while k < spf {
+                grid = substep(grid, s);
+                k = k + 1;
+            }
+            total_frames = total_frames + 1;
+        }
+        let fb = render_fb(grid, s);
+        let c = checksum(fb);
+        let peak = peak_speed(grid);
+        println(f"frame {total_frames} checksum {c} peak_speed {peak}");
+        fi = fi + 1;
+    }
+}
