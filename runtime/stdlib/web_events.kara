@@ -265,6 +265,40 @@ pub fn clicks() -> Receiver[ClickEvent] with writes(Input) {
     rx
 }
 
+// Stream mouse double-click positions on a fresh channel, indefinitely — the
+// double-press sibling of `clicks`, carrying the same `ClickEvent` position
+// payload. A double-click is a distinct gesture from a single click (zoom-to-
+// point, open/activate), so draining a separate stream keeps the two intents
+// apart —
+//
+//     let dbls = dblclick();
+//     loop {
+//         let c = dbls.recv();
+//         zoom_to(c.x(), c.y());   // double-click to zoom toward that point
+//     }
+//
+// — no `await`, no `addEventListener` callback ceremony. Multi-shot and
+// coalesced exactly like `clicks` (the host feeds a fresh event only once the
+// previous one is drained). Listener registers on `opts.dblclickTarget` if
+// given, else the same canvas/`globalThis` the click/pointer streams use, so
+// the position shares their frame of reference (a browser fires `dblclick`
+// alongside the two `click`s, so a program draining both `clicks()` and
+// `dblclick()` sees each gesture in both — gate on whichever intent it wants).
+// Same `--features wasm-threads` requirement as the other host-async producers.
+//
+// Mechanism: `Sender.__schedule_dblclick` (a compiler builtin) clones the
+// sender's channel reference and hands the clone to the host's dblclick
+// listener, which owns it for the listener's lifetime.
+pub fn dblclick() -> Receiver[ClickEvent] with writes(Input) {
+    // Annotate the destructure so the channel element type is `ClickEvent` (the
+    // producer never `send`/`recv`s itself — the host fires the send — so there
+    // is no downstream channel op to infer the element from; an unannotated
+    // `Channel.new()` only type-checks under the interpreter).
+    let (tx, rx): (Sender[ClickEvent], Receiver[ClickEvent]) = Channel.new();
+    tx.__schedule_dblclick();
+    rx
+}
+
 // Stream key-*up* (key-release) events on a fresh channel, indefinitely — the
 // release-edge sibling of `keydown`, carrying the same `KeyEvent` payload. Pair
 // the two to track held-key state (press on `keydown`, clear on `keyup`):

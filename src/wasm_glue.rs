@@ -491,7 +491,9 @@ pub fn render_glue(
     // `__kara_keyup(chPtr: i64) -> ()` backs `std.web.events.keyup` (the
     // key-release sibling, the same 8-byte `KeyEvent` payload); `__kara_clicks(
     // chPtr: i64) -> ()` backs `std.web.events.clicks` (the discrete
-    // click-position sibling of `pointer_moves`, a 16-byte `ClickEvent` payload).
+    // click-position sibling of `pointer_moves`, a 16-byte `ClickEvent` payload);
+    // `__kara_dblclick(chPtr: i64) -> ()` backs `std.web.events.dblclick` (the
+    // double-press sibling of `clicks`, the same 16-byte `ClickEvent` payload).
     let builtin_sigs: &[&str] = if threads.is_some() {
         &[
             "{ name: \"__kara_timer_after\", params: [\"bigint\", \"bigint\"], ret: \"void\" }",
@@ -502,6 +504,7 @@ pub fn render_glue(
             "{ name: \"__kara_keydown\", params: [\"bigint\"], ret: \"void\" }",
             "{ name: \"__kara_keyup\", params: [\"bigint\"], ret: \"void\" }",
             "{ name: \"__kara_clicks\", params: [\"bigint\"], ret: \"void\" }",
+            "{ name: \"__kara_dblclick\", params: [\"bigint\"], ret: \"void\" }",
         ]
     } else {
         &[]
@@ -516,6 +519,7 @@ pub fn render_glue(
             "\"__kara_keydown\"",
             "\"__kara_keyup\"",
             "\"__kara_clicks\"",
+            "\"__kara_dblclick\"",
         ]
     } else {
         &[]
@@ -1855,6 +1859,35 @@ async function runThreaded(hostImpls = {}, opts = {}) {
       };
       target.addEventListener("click", onClick);
     };
+    // __kara_dblclick(chPtr: i64 [BigInt]) -> (): the double-press sibling of
+    // __kara_clicks — identical marshalling (the same 16-byte ClickEvent x,y
+    // payload), only the DOM event differs ("dblclick" vs "click"). Event source:
+    // `opts.dblclickTarget` (browser: the canvas; node test: an EventTarget it
+    // dispatches synthetic dblclicks on), else `globalThis` if it can
+    // addEventListener; no source → no-op (recv just blocks). A browser fires
+    // `dblclick` alongside the two `click`s, so a program draining both shares
+    // neither listener nor scratch contention (each producer reads the scratch
+    // synchronously inside channel_send). Not `{ passive }`; never preventDefaults.
+    builtinHostImpls["__kara_dblclick"] = (chPtr) => {
+      const ptr = Number(chPtr);
+      const target =
+        (opts && opts.dblclickTarget) ||
+        (typeof globalThis.addEventListener === "function" ? globalThis : null);
+      if (target === null) return;
+      // ClickEvent layout: { x: f64 @ 0, y: f64 @ 8 } = 16 bytes — kept in sync
+      // with runtime/stdlib/web_events.kara.
+      const scratch = serviceInstance.exports.karac_runtime_event_scratch();
+      const onDblClick = (e) => {
+        if (Number(serviceInstance.exports.karac_runtime_channel_pending(ptr)) !== 0) return;
+        // Re-derive the view each event: a shared Memory's `.buffer` may be
+        // replaced on grow, so a cached DataView could go stale.
+        const dv = new DataView(memory.buffer, scratch, 16);
+        dv.setFloat64(0, e.offsetX ?? e.clientX ?? 0, true);
+        dv.setFloat64(8, e.offsetY ?? e.clientY ?? 0, true);
+        serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 16n);
+      };
+      target.addEventListener("dblclick", onDblClick);
+    };
   }
   // host fns: stand up the worker→main proxy (shared control block + the
   // main-thread service loop). Needed when the program declares user host
@@ -2302,7 +2335,8 @@ mod tests {
              { name: \"__kara_wheel\", params: [\"bigint\"], ret: \"void\" }, \
              { name: \"__kara_keydown\", params: [\"bigint\"], ret: \"void\" }, \
              { name: \"__kara_keyup\", params: [\"bigint\"], ret: \"void\" }, \
-             { name: \"__kara_clicks\", params: [\"bigint\"], ret: \"void\" }];"
+             { name: \"__kara_clicks\", params: [\"bigint\"], ret: \"void\" }, \
+             { name: \"__kara_dblclick\", params: [\"bigint\"], ret: \"void\" }];"
         ));
         // The builtins are registered as builtins, and excluded from the
         // user contract (DECLARED_IMPORTS drives the missing-impl check and
@@ -2310,7 +2344,8 @@ mod tests {
         assert!(glue.contains(
             "const BUILTIN_HOST_FNS = [\"__kara_timer_after\", \"__kara_timer_every\", \
              \"__kara_animation_frames\", \"__kara_pointer_moves\", \"__kara_wheel\", \
-             \"__kara_keydown\", \"__kara_keyup\", \"__kara_clicks\"];"
+             \"__kara_keydown\", \"__kara_keyup\", \"__kara_clicks\", \
+             \"__kara_dblclick\"];"
         ));
         assert!(glue.contains("const DECLARED_IMPORTS = [\"report\", \"log_str\"];"));
         // Both halves of the proxy plus the worker-side wiring.
@@ -2352,6 +2387,9 @@ mod tests {
             "builtinHostImpls[\"__kara_clicks\"] = (chPtr) =>",
             "serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 16n);",
             "target.addEventListener(\"click\", onClick);",
+            // Double-press sibling: dblclick, same 16-byte ClickEvent payload.
+            "builtinHostImpls[\"__kara_dblclick\"] = (chPtr) =>",
+            "target.addEventListener(\"dblclick\", onDblClick);",
         ] {
             assert!(glue.contains(needle), "missing proxy machinery: {needle}");
         }
@@ -2367,7 +2405,8 @@ mod tests {
                 && !dts.contains("__kara_wheel")
                 && !dts.contains("__kara_keydown")
                 && !dts.contains("__kara_keyup")
-                && !dts.contains("__kara_clicks"),
+                && !dts.contains("__kara_clicks")
+                && !dts.contains("__kara_dblclick"),
             "builtin leaked into d.ts"
         );
     }
