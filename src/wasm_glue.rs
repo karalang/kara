@@ -493,7 +493,9 @@ pub fn render_glue(
     // chPtr: i64) -> ()` backs `std.web.events.clicks` (the discrete
     // click-position sibling of `pointer_moves`, a 16-byte `ClickEvent` payload);
     // `__kara_dblclick(chPtr: i64) -> ()` backs `std.web.events.dblclick` (the
-    // double-press sibling of `clicks`, the same 16-byte `ClickEvent` payload).
+    // double-press sibling of `clicks`, the same 16-byte `ClickEvent` payload);
+    // `__kara_resize(chPtr: i64) -> ()` backs `std.web.events.resize` (a 16-byte
+    // `ResizeEvent` of two `i64`s read off the window's `innerWidth`/`Height`).
     let builtin_sigs: &[&str] = if threads.is_some() {
         &[
             "{ name: \"__kara_timer_after\", params: [\"bigint\", \"bigint\"], ret: \"void\" }",
@@ -505,6 +507,7 @@ pub fn render_glue(
             "{ name: \"__kara_keyup\", params: [\"bigint\"], ret: \"void\" }",
             "{ name: \"__kara_clicks\", params: [\"bigint\"], ret: \"void\" }",
             "{ name: \"__kara_dblclick\", params: [\"bigint\"], ret: \"void\" }",
+            "{ name: \"__kara_resize\", params: [\"bigint\"], ret: \"void\" }",
         ]
     } else {
         &[]
@@ -520,6 +523,7 @@ pub fn render_glue(
             "\"__kara_keyup\"",
             "\"__kara_clicks\"",
             "\"__kara_dblclick\"",
+            "\"__kara_resize\"",
         ]
     } else {
         &[]
@@ -1888,6 +1892,43 @@ async function runThreaded(hostImpls = {}, opts = {}) {
       };
       target.addEventListener("dblclick", onDblClick);
     };
+    // __kara_resize(chPtr: i64 [BigInt]) -> (): a MULTI-SHOT window-dimension
+    // stream. Registers a "resize" listener; UNLIKE the pointer/click producers
+    // the payload does NOT come from the event object (a DOM "resize" event
+    // carries no coordinates) — it reads the *current* innerWidth/innerHeight off
+    // the target at dispatch time and marshals them as two little-endian i64s
+    // into the event-scratch buffer, then channel_send copies the 16-byte
+    // ResizeEvent payload (val_ptr=scratch, elem_size=16n). Coalesces like the
+    // others (feed a fresh size only once the worker drained the previous one),
+    // so a drag-resize burst collapses to the latest settled dimensions. Event
+    // source: `opts.resizeTarget` (browser: window; node test: an object with
+    // innerWidth/innerHeight it dispatches synthetic resizes on), else
+    // `globalThis` if it can addEventListener; no source → no-op (recv just
+    // blocks). Reads dims from the target, falling back to globalThis then 0.
+    builtinHostImpls["__kara_resize"] = (chPtr) => {
+      const ptr = Number(chPtr);
+      const target =
+        (opts && opts.resizeTarget) ||
+        (typeof globalThis.addEventListener === "function" ? globalThis : null);
+      if (target === null) return;
+      // ResizeEvent layout: { width: i64 @ 0, height: i64 @ 8 } = 16 bytes —
+      // kept in sync with runtime/stdlib/web_events.kara.
+      const scratch = serviceInstance.exports.karac_runtime_event_scratch();
+      const onResize = () => {
+        if (Number(serviceInstance.exports.karac_runtime_channel_pending(ptr)) !== 0) return;
+        // Re-derive the view each event: a shared Memory's `.buffer` may be
+        // replaced on grow, so a cached DataView could go stale.
+        const dv = new DataView(memory.buffer, scratch, 16);
+        // Dimensions come from the window/target, not the event (resize carries
+        // none); BigInt-floor to i64. Prefer the listening target's own dims.
+        const w = target.innerWidth ?? globalThis.innerWidth ?? 0;
+        const h = target.innerHeight ?? globalThis.innerHeight ?? 0;
+        dv.setBigInt64(0, BigInt(Math.trunc(w)), true);
+        dv.setBigInt64(8, BigInt(Math.trunc(h)), true);
+        serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 16n);
+      };
+      target.addEventListener("resize", onResize);
+    };
   }
   // host fns: stand up the worker→main proxy (shared control block + the
   // main-thread service loop). Needed when the program declares user host
@@ -2336,7 +2377,8 @@ mod tests {
              { name: \"__kara_keydown\", params: [\"bigint\"], ret: \"void\" }, \
              { name: \"__kara_keyup\", params: [\"bigint\"], ret: \"void\" }, \
              { name: \"__kara_clicks\", params: [\"bigint\"], ret: \"void\" }, \
-             { name: \"__kara_dblclick\", params: [\"bigint\"], ret: \"void\" }];"
+             { name: \"__kara_dblclick\", params: [\"bigint\"], ret: \"void\" }, \
+             { name: \"__kara_resize\", params: [\"bigint\"], ret: \"void\" }];"
         ));
         // The builtins are registered as builtins, and excluded from the
         // user contract (DECLARED_IMPORTS drives the missing-impl check and
@@ -2345,7 +2387,7 @@ mod tests {
             "const BUILTIN_HOST_FNS = [\"__kara_timer_after\", \"__kara_timer_every\", \
              \"__kara_animation_frames\", \"__kara_pointer_moves\", \"__kara_wheel\", \
              \"__kara_keydown\", \"__kara_keyup\", \"__kara_clicks\", \
-             \"__kara_dblclick\"];"
+             \"__kara_dblclick\", \"__kara_resize\"];"
         ));
         assert!(glue.contains("const DECLARED_IMPORTS = [\"report\", \"log_str\"];"));
         // Both halves of the proxy plus the worker-side wiring.
@@ -2390,6 +2432,10 @@ mod tests {
             // Double-press sibling: dblclick, same 16-byte ClickEvent payload.
             "builtinHostImpls[\"__kara_dblclick\"] = (chPtr) =>",
             "target.addEventListener(\"dblclick\", onDblClick);",
+            // Window-dimension producer: resize, 16-byte ResizeEvent (two i64s
+            // read off the window, not the event).
+            "builtinHostImpls[\"__kara_resize\"] = (chPtr) =>",
+            "target.addEventListener(\"resize\", onResize);",
         ] {
             assert!(glue.contains(needle), "missing proxy machinery: {needle}");
         }
@@ -2406,7 +2452,8 @@ mod tests {
                 && !dts.contains("__kara_keydown")
                 && !dts.contains("__kara_keyup")
                 && !dts.contains("__kara_clicks")
-                && !dts.contains("__kara_dblclick"),
+                && !dts.contains("__kara_dblclick")
+                && !dts.contains("__kara_resize"),
             "builtin leaked into d.ts"
         );
     }

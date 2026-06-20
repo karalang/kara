@@ -299,6 +299,59 @@ pub fn dblclick() -> Receiver[ClickEvent] with writes(Input) {
     rx
 }
 
+// The viewport's pixel dimensions after a window resize. Transparent two-field
+// struct: its physical layout (`width` at byte 0, `height` at byte 8 — two
+// `i64`s; 16 bytes total) is the contract the host glue marshals each `resize`
+// into before `channel_send` — keep the field order and types in sync with
+// `src/wasm_glue.rs` (`__kara_resize`). Unlike the pointer/click producers the
+// payload does NOT come from the event object (a DOM `resize` event carries no
+// coordinates); the host reads the *current* `innerWidth`/`innerHeight` off the
+// window at dispatch time, so the guest always sees the settled size.
+pub struct ResizeEvent {
+    width: i64,
+    height: i64,
+}
+
+impl ResizeEvent {
+    fn width(ref self) -> i64 {
+        self.width
+    }
+
+    fn height(ref self) -> i64 {
+        self.height
+    }
+}
+
+// Stream window-resize dimensions on a fresh channel, indefinitely. Returns the
+// receiving half; the waiting side writes a plain blocking loop —
+//
+//     let resizes = resize();
+//     loop {
+//         let r = resizes.recv();
+//         reflow_canvas(r.width(), r.height());   // re-fit to the new viewport
+//     }
+//
+// — no `await`, no `addEventListener` callback ceremony. Multi-shot and
+// coalesced exactly like the other producers (the host feeds a fresh size only
+// once the previous one is drained, so a drag-resize burst collapses to the
+// latest settled dimensions rather than accumulating every intermediate size).
+// Listener registers on `opts.resizeTarget` if given, else `globalThis`/window —
+// the DOM `resize` event fires on the window, so a demo needs no element. Same
+// `--features wasm-threads` requirement as the other host-async producers.
+//
+// Mechanism: `Sender.__schedule_resize` (a compiler builtin) clones the sender's
+// channel reference and hands the clone to the host's resize listener, which
+// owns it for the listener's lifetime.
+pub fn resize() -> Receiver[ResizeEvent] with writes(Input) {
+    // Annotate the destructure so the channel element type is `ResizeEvent` (the
+    // producer never `send`/`recv`s itself — the host fires the send — so there
+    // is no downstream channel op to infer the element from; an unannotated
+    // `Channel.new()` only type-checks under the interpreter).
+    let (tx, rx): (Sender[ResizeEvent], Receiver[ResizeEvent]) = Channel.new();
+    tx.__schedule_resize();
+    rx
+}
+
 // Stream key-*up* (key-release) events on a fresh channel, indefinitely — the
 // release-edge sibling of `keydown`, carrying the same `KeyEvent` payload. Pair
 // the two to track held-key state (press on `keydown`, clear on `keyup`):

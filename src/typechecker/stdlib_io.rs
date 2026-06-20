@@ -481,6 +481,7 @@ impl<'a> super::TypeChecker<'a> {
                 | "__schedule_keyup"
                 | "__schedule_clicks"
                 | "__schedule_dblclick"
+                | "__schedule_resize"
         ) {
             let resolved = resolve_type_var_top(&elem, &self.env.substitutions);
             let te = Self::type_to_type_expr(&resolved);
@@ -744,6 +745,22 @@ impl<'a> super::TypeChecker<'a> {
                     if !args.is_empty() {
                         self.type_error(
                             "Sender.__schedule_dblclick takes no arguments".to_string(),
+                            span.clone(),
+                            TypeErrorKind::WrongNumberOfArgs,
+                        );
+                    }
+                    Type::Unit
+                }
+                // Internal compiler builtin backing `std.web.events.resize`
+                // (window-dimension producer; non-unit `ResizeEvent` = two
+                // `i64`s payload). Borrows `self`, takes no argument, returns
+                // Unit; codegen clones the sender and hands it to the host resize
+                // listener. Kept out of ordinary reach by the `__` prefix + the
+                // `writes(Input)` gating on the `resize` wrapper.
+                "__schedule_resize" => {
+                    if !args.is_empty() {
+                        self.type_error(
+                            "Sender.__schedule_resize takes no arguments".to_string(),
                             span.clone(),
                             TypeErrorKind::WrongNumberOfArgs,
                         );

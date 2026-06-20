@@ -16989,6 +16989,172 @@ fn wasm_dblclick_sequential_target_rejected() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// End-to-end for `std.web.events.resize` on `wasm_browser --features
+/// wasm-threads`: a blocking `recv()` on the resize stream must wake when a host
+/// "resize" event fires, and the window's *current* dimensions (1024×768 — read
+/// off the target, NOT the event object) must round-trip across the service
+/// instance as the 16-byte `ResizeEvent` (two `i64`s). Sibling of
+/// `wasm_threads_clicks_payload_recv_e2e`; the guest loops until a valid payload
+/// is seen (the first parked recv's out-slot read can race under load) then
+/// prints `RESIZE_OK` — a zero-filled / torn floor would print `RESIZE_FAIL`.
+#[test]
+fn wasm_threads_resize_payload_recv_e2e() {
+    let tmp = wasm_test_dir("wtresize");
+    let path = tmp.join("rs.kara");
+    std::fs::write(
+        &path,
+        "import std.web.events.{resize, ResizeEvent};\n\n\
+         fn main() {\n    \
+             println(\"before\");\n    \
+             let rs = resize();\n    \
+             let mut ok = false;\n    \
+             let mut tries = 0;\n    \
+             // Loop until a valid payload is observed rather than trusting the\n    \
+             // very first recv (the first parked recv's out-slot read can race\n    \
+             // under load); the host re-dispatches the same event every tick.\n    \
+             loop {\n        \
+                 let r = rs.recv();\n        \
+                 if r.width() == 1024 and r.height() == 768 {\n            \
+                     ok = true;\n            \
+                     break;\n        \
+                 }\n        \
+                 tries = tries + 1;\n        \
+                 if tries >= 64 {\n            \
+                     break;\n        \
+                 }\n    \
+             }\n    \
+             if ok {\n        \
+                 println(\"RESIZE_OK\");\n    \
+             } else {\n        \
+                 println(\"RESIZE_FAIL\");\n    \
+             }\n    \
+             println(\"after\");\n}\n",
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--features=wasm-threads",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_threads_resize_payload_recv_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        out.status.success(),
+        "resize wasm-threads build failed: {stderr}"
+    );
+    assert!(tmp.join("rs.threads.wasm").exists());
+
+    let harness = tmp.join("harness.mjs");
+    std::fs::write(
+        &harness,
+        r#"import { run } from "./rs.js";
+// A node EventTarget stands in for the window; the resize event carries no
+// dimensions, so the guest reads innerWidth/innerHeight off the target — set
+// them to a fixed size the guest checks exactly.
+const target = new EventTarget();
+target.innerWidth = 1024;
+target.innerHeight = 768;
+let dispatched = 0;
+const iv = setInterval(() => { dispatched++; target.dispatchEvent(new Event("resize")); }, 12);
+const bail = setTimeout(() => { console.error("FAIL: recv never woke, dispatched=" + dispatched); process.exit(2); }, 8000);
+const h = await run({}, { resizeTarget: target });
+clearInterval(iv);
+clearTimeout(bail);
+if (h.threaded !== true) { console.error("FAIL: expected threaded pick"); process.exit(1); }
+console.log("RESIZE_HARNESS_OK dispatched=" + dispatched);
+process.exit(0);
+"#,
+    )
+    .unwrap();
+    let node = std::process::Command::new("node")
+        .arg(&harness)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: wasm_threads_resize_payload_recv_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let node_stdout = String::from_utf8_lossy(&node_out.stdout);
+    let node_stderr = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success(),
+        "resize harness failed under node: stdout={node_stdout} stderr={node_stderr}",
+    );
+    assert!(
+        node_stdout.contains("RESIZE_HARNESS_OK"),
+        "harness did not complete (recv woke): stdout={node_stdout} stderr={node_stderr}",
+    );
+    // Both dimensions crossed intact — a zero-filled / wrong-size floor would
+    // have printed RESIZE_FAIL.
+    assert!(
+        node_stdout.contains("RESIZE_OK") && !node_stdout.contains("RESIZE_FAIL"),
+        "exact window dims (1024, 768) ResizeEvent payload must round-trip host→wasm: stdout={node_stdout}",
+    );
+    let before = node_stdout.find("before");
+    let after = node_stdout.find("after");
+    assert!(
+        matches!((before, after), (Some(b), Some(a)) if b < a),
+        "guest must print before→after (recv blocked then woke): stdout={node_stdout}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The sequential-target gate for `resize`: built WITHOUT `--features
+/// wasm-threads` it is a hard compile error (codegen, pre-link) naming the
+/// flag — never a silent never-filling channel. Sibling of
+/// `wasm_dblclick_sequential_target_rejected`.
+#[test]
+fn wasm_resize_sequential_target_rejected() {
+    let tmp = wasm_test_dir("wtresizegate");
+    let path = tmp.join("rs.kara");
+    std::fs::write(
+        &path,
+        "import std.web.events.{resize, ResizeEvent};\n\n\
+         fn main() {\n    \
+             let rs = resize();\n    \
+             rs.recv();\n}\n",
+    )
+    .unwrap();
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--bindings=none",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_resize_sequential_target_rejected — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        !out.status.success(),
+        "sequential wasm resize producer must be rejected, but build succeeded: {stderr}"
+    );
+    assert!(
+        stderr.contains("requires `--features wasm-threads`"),
+        "gate must name the flag: {stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// Full-demo E2E for the Plume flow-field dogfood (`examples/plume/`): builds
 /// the shipped `plume.kara` for `wasm_browser --features wasm-threads` and runs
 /// it under node, exercising the whole front-end spine together — the blocking
