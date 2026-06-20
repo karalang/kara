@@ -487,7 +487,9 @@ pub fn render_glue(
     // `PointerEvent` payload (not a `()` tick) across the service instance;
     // `__kara_wheel(chPtr: i64) -> ()` backs `std.web.events.wheel` (same
     // non-unit spine, a 32-byte `WheelEvent` payload); `__kara_keydown(chPtr:
-    // i64) -> ()` backs `std.web.events.keydown` (an 8-byte `KeyEvent` payload).
+    // i64) -> ()` backs `std.web.events.keydown` (an 8-byte `KeyEvent` payload);
+    // `__kara_keyup(chPtr: i64) -> ()` backs `std.web.events.keyup` (the
+    // key-release sibling, the same 8-byte `KeyEvent` payload).
     let builtin_sigs: &[&str] = if threads.is_some() {
         &[
             "{ name: \"__kara_timer_after\", params: [\"bigint\", \"bigint\"], ret: \"void\" }",
@@ -496,6 +498,7 @@ pub fn render_glue(
             "{ name: \"__kara_pointer_moves\", params: [\"bigint\"], ret: \"void\" }",
             "{ name: \"__kara_wheel\", params: [\"bigint\"], ret: \"void\" }",
             "{ name: \"__kara_keydown\", params: [\"bigint\"], ret: \"void\" }",
+            "{ name: \"__kara_keyup\", params: [\"bigint\"], ret: \"void\" }",
         ]
     } else {
         &[]
@@ -508,6 +511,7 @@ pub fn render_glue(
             "\"__kara_pointer_moves\"",
             "\"__kara_wheel\"",
             "\"__kara_keydown\"",
+            "\"__kara_keyup\"",
         ]
     } else {
         &[]
@@ -1787,6 +1791,32 @@ async function runThreaded(hostImpls = {}, opts = {}) {
       };
       target.addEventListener("keydown", onKey);
     };
+    // __kara_keyup(chPtr: i64 [BigInt]) -> (): the key-RELEASE sibling of
+    // __kara_keydown — identical marshalling (the same 8-byte KeyEvent
+    // payload), only the DOM event differs ("keyup" vs "keydown"). The same
+    // `opts.keyTarget` serves both (distinct event types never cross-fire), so
+    // a program draining both keydown() and keyup() shares one source. The
+    // main-thread event-scratch buffer is reused per event and copied out
+    // synchronously by channel_send, so the two listeners never race over it.
+    builtinHostImpls["__kara_keyup"] = (chPtr) => {
+      const ptr = Number(chPtr);
+      const target =
+        (opts && opts.keyTarget) ||
+        (typeof globalThis.addEventListener === "function" ? globalThis : null);
+      if (target === null) return;
+      // KeyEvent layout: { key_code: i64 @ 0 } = 8 bytes — kept in sync with
+      // runtime/stdlib/web_events.kara.
+      const scratch = serviceInstance.exports.karac_runtime_event_scratch();
+      const onKey = (e) => {
+        if (Number(serviceInstance.exports.karac_runtime_channel_pending(ptr)) !== 0) return;
+        // Re-derive the view each event: a shared Memory's `.buffer` may be
+        // replaced on grow, so a cached DataView could go stale.
+        const dv = new DataView(memory.buffer, scratch, 8);
+        dv.setBigInt64(0, BigInt(e.keyCode ?? e.which ?? 0), true);
+        serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 8n);
+      };
+      target.addEventListener("keyup", onKey);
+    };
   }
   // host fns: stand up the worker→main proxy (shared control block + the
   // main-thread service loop). Needed when the program declares user host
@@ -2232,7 +2262,8 @@ mod tests {
              { name: \"__kara_animation_frames\", params: [\"bigint\"], ret: \"void\" }, \
              { name: \"__kara_pointer_moves\", params: [\"bigint\"], ret: \"void\" }, \
              { name: \"__kara_wheel\", params: [\"bigint\"], ret: \"void\" }, \
-             { name: \"__kara_keydown\", params: [\"bigint\"], ret: \"void\" }];"
+             { name: \"__kara_keydown\", params: [\"bigint\"], ret: \"void\" }, \
+             { name: \"__kara_keyup\", params: [\"bigint\"], ret: \"void\" }];"
         ));
         // The builtins are registered as builtins, and excluded from the
         // user contract (DECLARED_IMPORTS drives the missing-impl check and
@@ -2240,7 +2271,7 @@ mod tests {
         assert!(glue.contains(
             "const BUILTIN_HOST_FNS = [\"__kara_timer_after\", \"__kara_timer_every\", \
              \"__kara_animation_frames\", \"__kara_pointer_moves\", \"__kara_wheel\", \
-             \"__kara_keydown\"];"
+             \"__kara_keydown\", \"__kara_keyup\"];"
         ));
         assert!(glue.contains("const DECLARED_IMPORTS = [\"report\", \"log_str\"];"));
         // Both halves of the proxy plus the worker-side wiring.
@@ -2274,6 +2305,9 @@ mod tests {
             "builtinHostImpls[\"__kara_keydown\"] = (chPtr) =>",
             "serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 8n);",
             "target.addEventListener(\"keydown\", onKey);",
+            // Key-release sibling: keyup, same 8-byte KeyEvent payload.
+            "builtinHostImpls[\"__kara_keyup\"] = (chPtr) =>",
+            "target.addEventListener(\"keyup\", onKey);",
         ] {
             assert!(glue.contains(needle), "missing proxy machinery: {needle}");
         }
@@ -2287,7 +2321,8 @@ mod tests {
                 && !dts.contains("__kara_animation_frames")
                 && !dts.contains("__kara_pointer_moves")
                 && !dts.contains("__kara_wheel")
-                && !dts.contains("__kara_keydown"),
+                && !dts.contains("__kara_keydown")
+                && !dts.contains("__kara_keyup"),
             "builtin leaked into d.ts"
         );
     }

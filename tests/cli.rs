@@ -16419,6 +16419,157 @@ fn wasm_keydown_sequential_target_rejected() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// `std.web.events.keyup` end-to-end on `wasm_browser --features wasm-threads`:
+/// the key-release sibling of `keydown`, carrying the same 8-byte `KeyEvent`.
+/// A worker blocks in `keyup().recv()`, the host fires synthetic `keyup` events
+/// carrying a fixed `keyCode`, and the payload must round-trip host→wasm intact.
+/// Modeled on `wasm_threads_keydown_payload_recv_e2e`; the 8-byte single-i64
+/// payload is naturally atomic, so (unlike the multi-field pointer/wheel
+/// producers) there is no marshalling-tear race. Load-immune: `KEYUP_OK` prints
+/// only if the worker parked, the host fed the real payload, and it woke + read.
+#[test]
+fn wasm_threads_keyup_payload_recv_e2e() {
+    let tmp = wasm_test_dir("wtkeyup");
+    let path = tmp.join("ku.kara");
+    std::fs::write(
+        &path,
+        "import std.web.events.{keyup, KeyEvent};\n\n\
+         fn main() {\n    \
+             println(\"before\");\n    \
+             let keys = keyup();\n    \
+             let k = keys.recv();\n    \
+             if k.key_code() == 27 {\n        \
+                 println(\"KEYUP_OK\");\n    \
+             } else {\n        \
+                 println(\"KEYUP_FAIL\");\n    \
+             }\n    \
+             println(\"after\");\n}\n",
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--features=wasm-threads",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_threads_keyup_payload_recv_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        out.status.success(),
+        "keyup wasm-threads build failed: {stderr}"
+    );
+    assert!(tmp.join("ku.threads.wasm").exists());
+
+    let harness = tmp.join("harness.mjs");
+    std::fs::write(
+        &harness,
+        r#"import { run } from "./ku.js";
+// A node EventTarget stands in for the window; synthetic keyup events carry a
+// fixed keyCode (27 = Escape) the guest checks exactly.
+class KE extends Event {
+  constructor(code) { super("keyup"); this.keyCode = code; }
+}
+const target = new EventTarget();
+let dispatched = 0;
+const iv = setInterval(() => { dispatched++; target.dispatchEvent(new KE(27)); }, 12);
+const bail = setTimeout(() => { console.error("FAIL: recv never woke, dispatched=" + dispatched); process.exit(2); }, 8000);
+const h = await run({}, { keyTarget: target });
+clearInterval(iv);
+clearTimeout(bail);
+if (h.threaded !== true) { console.error("FAIL: expected threaded pick"); process.exit(1); }
+console.log("KEYUP_HARNESS_OK dispatched=" + dispatched);
+process.exit(0);
+"#,
+    )
+    .unwrap();
+    let node = std::process::Command::new("node")
+        .arg(&harness)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: wasm_threads_keyup_payload_recv_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let node_stdout = String::from_utf8_lossy(&node_out.stdout);
+    let node_stderr = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success(),
+        "keyup harness failed under node: stdout={node_stdout} stderr={node_stderr}",
+    );
+    assert!(
+        node_stdout.contains("KEYUP_HARNESS_OK"),
+        "harness did not complete (recv woke): stdout={node_stdout} stderr={node_stderr}",
+    );
+    // The key_code crossed intact — a zero-filled / wrong-size floor would have
+    // printed KEYUP_FAIL.
+    assert!(
+        node_stdout.contains("KEYUP_OK") && !node_stdout.contains("KEYUP_FAIL"),
+        "exact keyCode 27 (Escape) KeyEvent payload must round-trip host→wasm: stdout={node_stdout}",
+    );
+    let before = node_stdout.find("before");
+    let after = node_stdout.find("after");
+    assert!(
+        matches!((before, after), (Some(b), Some(a)) if b < a),
+        "guest must print before→after (recv blocked then woke): stdout={node_stdout}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The sequential-target gate for `keyup`: built WITHOUT `--features
+/// wasm-threads` it is a hard compile error (codegen, pre-link) naming the
+/// flag — never a silent never-filling channel. Sibling of
+/// `wasm_keydown_sequential_target_rejected`.
+#[test]
+fn wasm_keyup_sequential_target_rejected() {
+    let tmp = wasm_test_dir("wtkeyupgate");
+    let path = tmp.join("ku.kara");
+    std::fs::write(
+        &path,
+        "import std.web.events.{keyup, KeyEvent};\n\n\
+         fn main() {\n    \
+             let keys = keyup();\n    \
+             keys.recv();\n}\n",
+    )
+    .unwrap();
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--bindings=none",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_keyup_sequential_target_rejected — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        !out.status.success(),
+        "sequential wasm keyup producer must be rejected, but build succeeded: {stderr}"
+    );
+    assert!(
+        stderr.contains("requires `--features wasm-threads`"),
+        "gate must name the flag: {stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// Full-demo E2E for the Plume flow-field dogfood (`examples/plume/`): builds
 /// the shipped `plume.kara` for `wasm_browser --features wasm-threads` and runs
 /// it under node, exercising the whole front-end spine together — the blocking

@@ -210,3 +210,32 @@ pub fn keydown() -> Receiver[KeyEvent] with writes(Input) {
     tx.__schedule_keydown();
     rx
 }
+
+// Stream key-*up* (key-release) events on a fresh channel, indefinitely — the
+// release-edge sibling of `keydown`, carrying the same `KeyEvent` payload. Pair
+// the two to track held-key state (press on `keydown`, clear on `keyup`):
+//
+//     let downs = keydown();
+//     let ups = keyup();
+//     // … drain both; a key is held between its down and its matching up.
+//
+// — no `await`, no `addEventListener` callback ceremony. Multi-shot and
+// coalesced exactly like `keydown` (the host feeds a fresh event only once the
+// previous one is drained). Listener registers on `opts.keyTarget` if given,
+// else `globalThis`/window — keyboard events bubble to the window, so a demo
+// needs no element focus; the same target serves `keydown` and `keyup` (they
+// are distinct event types, so the two listeners never cross-fire). Same
+// `--features wasm-threads` requirement as the other host-async producers.
+//
+// Mechanism: `Sender.__schedule_keyup` (a compiler builtin) clones the
+// sender's channel reference and hands the clone to the host's keyup listener,
+// which owns it for the listener's lifetime.
+pub fn keyup() -> Receiver[KeyEvent] with writes(Input) {
+    // Annotate the destructure so the channel element type is `KeyEvent` (the
+    // producer never `send`/`recv`s itself — the host fires the send — so there
+    // is no downstream channel op to infer the element from; an unannotated
+    // `Channel.new()` only type-checks under the interpreter).
+    let (tx, rx): (Sender[KeyEvent], Receiver[KeyEvent]) = Channel.new();
+    tx.__schedule_keyup();
+    rx
+}

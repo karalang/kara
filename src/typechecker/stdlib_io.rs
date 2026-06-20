@@ -478,6 +478,7 @@ impl<'a> super::TypeChecker<'a> {
                 | "__schedule_pointer_moves"
                 | "__schedule_wheel"
                 | "__schedule_keydown"
+                | "__schedule_keyup"
         ) {
             let resolved = resolve_type_var_top(&elem, &self.env.substitutions);
             let te = Self::type_to_type_expr(&resolved);
@@ -692,6 +693,22 @@ impl<'a> super::TypeChecker<'a> {
                     if !args.is_empty() {
                         self.type_error(
                             "Sender.__schedule_keydown takes no arguments".to_string(),
+                            span.clone(),
+                            TypeErrorKind::WrongNumberOfArgs,
+                        );
+                    }
+                    Type::Unit
+                }
+                // Internal compiler builtin backing `std.web.events.keyup`
+                // (key-release sibling of `__schedule_keydown`; the same
+                // `KeyEvent` payload). Borrows `self`, takes no argument,
+                // returns Unit; codegen clones the sender and hands it to the
+                // host keyup listener. Kept out of ordinary reach by the `__`
+                // prefix + the `writes(Input)` gating on the `keyup` wrapper.
+                "__schedule_keyup" => {
+                    if !args.is_empty() {
+                        self.type_error(
+                            "Sender.__schedule_keyup takes no arguments".to_string(),
                             span.clone(),
                             TypeErrorKind::WrongNumberOfArgs,
                         );
