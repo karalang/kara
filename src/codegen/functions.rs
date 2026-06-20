@@ -527,6 +527,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.ref_params.clear();
         self.entry_slot_ref_vars.clear();
         self.owned_vecstr_params.clear();
+        self.for_loop_borrow_vars.clear();
         self.owned_struct_params.clear();
         self.rc_fallback_heap_types.clear();
         // Per-function reset of the name-keyed local-variable type side-

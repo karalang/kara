@@ -1130,6 +1130,7 @@ impl<'ctx> super::Codegen<'ctx> {
             PatternKind::Binding(name) => {
                 if let Some(elem_te) = self.var_elem_type_exprs.get(source_var).cloned() {
                     self.register_var_from_type_expr(name, &elem_te);
+                    self.mark_for_loop_borrow_if_heap(name);
                 }
             }
             // `for (k, v) in m` — only legal tuple iteration shape today
@@ -1139,15 +1140,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let PatternKind::Binding(k_name) = &pats[0].kind {
                     if let Some(k_te) = self.map_key_type_exprs.get(source_var).cloned() {
                         self.register_var_from_type_expr(k_name, &k_te);
+                        self.mark_for_loop_borrow_if_heap(k_name);
                     }
                 }
                 if let PatternKind::Binding(v_name) = &pats[1].kind {
                     if let Some(v_te) = self.var_elem_type_exprs.get(source_var).cloned() {
                         self.register_var_from_type_expr(v_name, &v_te);
+                        self.mark_for_loop_borrow_if_heap(v_name);
                     }
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Mark a `for`-loop element binding as a heap borrow needing a defensive
+    /// copy at retaining-consume sites (see `for_loop_borrow_vars`). Only
+    /// String / Vec (`{ptr,len,cap}`) elements qualify — scalars carry no
+    /// buffer to alias, so consuming them is a plain bit-copy.
+    pub(super) fn mark_for_loop_borrow_if_heap(&mut self, name: &str) {
+        if self.vec_elem_types.contains_key(name) {
+            self.for_loop_borrow_vars.insert(name.to_string());
         }
     }
 

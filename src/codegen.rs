@@ -1562,6 +1562,19 @@ pub(super) struct Codegen<'ctx> {
     /// recursion base case; `fn id(s: String) -> String { s }`).
     /// Cleared per-function alongside `ref_params`.
     pub(crate) owned_vecstr_params: HashSet<String>,
+    /// `for w in vec` loop-element bindings whose element is a heap
+    /// `{ptr,len,cap}` type (`String` / `Vec`). `for` over a Vec is
+    /// BORROW-iteration — the loop binds `w` to an ALIAS of `data[i]` and the
+    /// source Vec retains ownership (it is usable after the loop) — so a consume
+    /// site that RETAINS `w` (`m.entry(w)`, `v.push(w)`, `m.insert(w, ..)`) must
+    /// deep-copy it, exactly like an owned param: otherwise both the sink's
+    /// drop and the source Vec's drop free the same buffer (double-free; the
+    /// interpreter clones, so this was an A/B mismatch — B-2026-06-20-12).
+    /// `maybe_defensive_copy_param_arg` treats membership here the same as
+    /// `owned_vecstr_params`. Added by `register_for_loop_bindings` for heap
+    /// element types; removed when a later `let` rebinds the name (shadow); all
+    /// cleared per-function alongside `owned_vecstr_params`.
+    pub(crate) for_loop_borrow_vars: HashSet<String>,
     /// Owned (bare, non-ref) **struct** params with at least one heap
     /// (`Vec`/`String`) field. Same copy-model rationale as
     /// `owned_vecstr_params`, one level in: a by-value struct param is a
@@ -5027,6 +5040,7 @@ impl<'ctx> Codegen<'ctx> {
             ref_params: HashMap::new(),
             entry_slot_ref_vars: HashMap::new(),
             owned_vecstr_params: HashSet::new(),
+            for_loop_borrow_vars: HashSet::new(),
             owned_struct_params: HashSet::new(),
             fn_param_ref: HashMap::new(),
             extern_link_names: HashMap::new(),

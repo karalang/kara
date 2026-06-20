@@ -2012,9 +2012,12 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Defensive-copy shim for retaining consume sites: when `arg_expr`
     /// is a bare Identifier naming an owned String/Vec PARAMETER of the
-    /// current function (`owned_vecstr_params`), return a deep copy of
-    /// `val`; otherwise return `val` unchanged. See
-    /// `emit_vecstr_defensive_copy` for the ownership rationale.
+    /// current function (`owned_vecstr_params`) OR a heap `for`-loop element
+    /// borrow (`for_loop_borrow_vars`), return a deep copy of `val`; otherwise
+    /// return `val` unchanged. Both share the same ownership rationale: the
+    /// SOURCE (the caller's param buffer / the source Vec's element) retains the
+    /// scope-exit free, so a retaining-consume site must own a private copy
+    /// rather than alias it. See `emit_vecstr_defensive_copy`.
     pub(super) fn maybe_defensive_copy_param_arg(
         &mut self,
         arg_expr: &Expr,
@@ -2024,7 +2027,7 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Identifier(n) => n.clone(),
             _ => return val,
         };
-        if !self.owned_vecstr_params.contains(&name) {
+        if !self.owned_vecstr_params.contains(&name) && !self.for_loop_borrow_vars.contains(&name) {
             return val;
         }
         let elem_ty = match self.vec_elem_types.get(&name) {

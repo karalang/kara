@@ -5059,6 +5059,94 @@ fn main() {
         );
     }
 
+    // ── `for w in vec` heap element BORROW consumed by a retaining sink
+    //    (B-2026-06-20-12) ──
+    // `for` over a Vec is borrow-iteration: `w` aliases `data[i]` and the
+    // source Vec retains ownership (usable after the loop). A consume site that
+    // RETAINS `w` (entry/push/insert) must deep-copy it — else the sink's drop
+    // and the source Vec's drop free the same buffer (double-free; the
+    // interpreter clones, so this was an A/B mismatch). The fix marks heap
+    // for-loop element bindings (for_loop_borrow_vars) and routes them through
+    // the same defensive copy as owned params.
+
+    #[test]
+    fn asan_for_loop_string_elem_into_entry_counter_no_double_free() {
+        // The flagship histogram: `for w in words { *m.entry(w).or_insert(0) += 1 }`.
+        // Repeated keys exercise vacant (adopt the copy) + occupied (free the
+        // copy) paths; `words` stays live and frees its own elements once.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut words: Vec[String] = Vec.new();
+    words.push("alpha-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string());
+    words.push("beta-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string());
+    words.push("alpha-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string());
+    let mut m: Map[String, i64] = Map.new();
+    for w in words {
+        *m.entry(w).or_insert(0_i64) += 1_i64;
+    }
+    println(m.len());
+    println(words.len());
+}
+"#,
+            &["2", "3"],
+            "for_loop_string_elem_into_entry_counter_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_for_loop_string_elem_into_push_and_insert_no_double_free() {
+        // Same borrow-element copy at `Vec.push` and `Map.insert` consume sites.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut words: Vec[String] = Vec.new();
+    words.push("one-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string());
+    words.push("two-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string());
+    let mut out: Vec[String] = Vec.new();
+    let mut m: Map[String, i64] = Map.new();
+    for w in words {
+        out.push(w);
+    }
+    for w in out {
+        m.insert(w, 1_i64);
+    }
+    println(out.len());
+    println(m.len());
+    println(words.len());
+}
+"#,
+            &["2", "2", "2"],
+            "for_loop_string_elem_into_push_and_insert_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_for_loop_borrow_then_rebind_let_no_leak() {
+        // Shadow guard: after the loop, a `let w = <fresh owned>` reusing the
+        // loop var name must NOT be defensive-copied (the `let` clears stale
+        // for_loop_borrow_vars membership) — else the copy + source-suppress
+        // would orphan the fresh String (LSan-only leak; ≥36-byte payload).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut words: Vec[String] = Vec.new();
+    words.push("loopelem-aaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string());
+    let mut sink: Vec[String] = Vec.new();
+    for w in words {
+        sink.push(w);
+    }
+    let mut w = String.new();
+    w.push_str("rebound-owned-bbbbbbbbbbbbbbbbbbbbbbbb");
+    sink.push(w);
+    println(sink.len());
+}
+"#,
+            &["2"],
+            "for_loop_borrow_then_rebind_let_no_leak",
+        );
+    }
+
     #[test]
     fn asan_map_string_keys_no_leak() {
         // `Map[String, i64]` — the canonical `key_is_vec, !val_is_vec`

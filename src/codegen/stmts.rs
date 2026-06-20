@@ -1372,6 +1372,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Track Vec/String element types from type annotation or RHS.
                 if let PatternKind::Binding(var_name) = &pattern.kind {
                     let mut detected = false;
+                    // A `let` of this name creates a fresh owned/typed binding,
+                    // never a `for`-loop element borrow — clear any stale
+                    // `for_loop_borrow_vars` membership left by an earlier loop
+                    // var of the same name, else this binding would be wrongly
+                    // defensive-copied at consume sites (leak via the
+                    // source-suppress that pairs with the copy).
+                    self.for_loop_borrow_vars.remove(var_name);
                     // `let it = s.chars()` — codegen materializes the
                     // char-iterator as an eager `Vec[char]` snapshot (see the
                     // `chars()` intercept in `compile_method_call`), so register
