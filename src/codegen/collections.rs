@@ -1197,7 +1197,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // `vec_elem_types`; without this they'd fall through to the
         // "non-array type" error at the tail.
         if let ExprKind::Identifier(name) = &object.kind {
-            if self.soa_layouts.contains_key(name.as_str()) {
+            if self.active_soa_layout(name.as_str()).is_some() {
                 return self.compile_soa_index_read(name, index);
             }
         }
@@ -1976,9 +1976,7 @@ impl<'ctx> super::Codegen<'ctx> {
         index: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let soa = self
-            .soa_layouts
-            .get(name)
-            .cloned()
+            .active_soa_layout(name)
             .ok_or_else(|| format!("'{}' is not a SoA-laid-out collection", name))?;
         let slot = self
             .variables

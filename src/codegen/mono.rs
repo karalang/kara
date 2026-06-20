@@ -102,7 +102,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // keyed by param name. Slice 1 resolves every entry to `Aos`, so the
         // mangled name below is unchanged and the monomorph is byte-identical
         // to the name-keyed model.
-        let layout_subst = self.compute_call_layout_subst(&generic_fn);
+        let layout_subst = self.compute_call_layout_subst(&generic_fn, args);
 
         // Mangle a unique name for this specialization (e.g. `max$i64`).
         let mangled = self.mangle_mono_name(name, &generic_fn, &subst, &const_subst, &layout_subst);
@@ -586,16 +586,81 @@ impl<'ctx> super::Codegen<'ctx> {
         temp.into()
     }
 
+    /// Generate (declare + compile) a per-layout monomorph of a *non-generic*
+    /// function under `mangled`, with `layout_subst` active so its `Vec[E]`
+    /// params lower SoA against the caller's argument layout (slice 2). The
+    /// non-specialized (all-`Aos`) body was already compiled in the normal
+    /// module pass; this adds the SoA variant as a distinct symbol. Idempotent
+    /// via `generated_monos`. Mirrors `compile_generic_call`'s mono-entry
+    /// save/restore, with empty type/const substs (a non-generic callee has no
+    /// type/const params) — and restores even on error so a failed body can't
+    /// leave a half-swapped builder/var state behind.
+    pub(super) fn ensure_layout_mono_generated(
+        &mut self,
+        func: &Function,
+        mangled: &str,
+        layout_subst: HashMap<String, LayoutId>,
+    ) -> Result<(), String> {
+        if self.generated_monos.contains(mangled) {
+            return Ok(());
+        }
+        self.generated_monos.insert(mangled.to_string());
+
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let saved_vars = std::mem::take(&mut self.variables);
+        let saved_var_types = std::mem::take(&mut self.var_type_names);
+        let saved_tensor_infos = std::mem::take(&mut self.tensor_var_infos);
+        let saved_cleanup = std::mem::take(&mut self.scope_cleanup_actions);
+        let saved_cancel_ptr = self.branch_cancel_ptr.take();
+        let saved_loop_stack = std::mem::take(&mut self.loop_stack);
+        let saved_subst = std::mem::take(&mut self.type_subst);
+        let saved_const_subst = std::mem::take(&mut self.const_subst);
+        let saved_layout_subst = std::mem::replace(&mut self.layout_subst, layout_subst);
+
+        let result = self
+            .declare_mono_function(func, mangled)
+            .and_then(|_| self.compile_mono_function(func, mangled));
+
+        self.layout_subst = saved_layout_subst;
+        self.const_subst = saved_const_subst;
+        self.type_subst = saved_subst;
+        self.loop_stack = saved_loop_stack;
+        self.branch_cancel_ptr = saved_cancel_ptr;
+        self.scope_cleanup_actions = saved_cleanup;
+        self.tensor_var_infos = saved_tensor_infos;
+        self.var_type_names = saved_var_types;
+        self.variables = saved_vars;
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        result
+    }
+
     pub(super) fn declare_mono_function(
         &mut self,
         func: &Function,
         mangled: &str,
     ) -> Result<FunctionValue<'ctx>, String> {
-        let param_types: Vec<BasicMetadataTypeEnum<'ctx>> = func
+        let mut param_types: Vec<BasicMetadataTypeEnum<'ctx>> = func
             .params
             .iter()
             .map(|p| self.llvm_param_type(p))
             .collect();
+        // Per-layout-monomorphization (slice 2): a `Vec[E]` param whose active
+        // `LayoutId` (in the current monomorph's `layout_subst`) is `Soa` is
+        // passed as the 4-field SoA struct, not the AoS `{ptr,len,cap}` Vec —
+        // the caller holds that SoA struct for the argument binding. Mirrors
+        // the name-keyed by-value signature patch (functions.rs); keyed on the
+        // layout subst, not the param name, so it crosses call boundaries
+        // regardless of binding name. No-op outside a layout-monomorph.
+        for (i, p) in func.params.iter().enumerate() {
+            if let Some(soa) = self.active_param_soa_layout(p) {
+                let soa_ty = self.soa_vec_type(soa.num_groups, soa.cold_group.is_some());
+                param_types[i] = soa_ty.into();
+            }
+        }
 
         let fn_type = match self.llvm_return_type(&func.return_type) {
             Some(BasicTypeEnum::IntType(t)) => t.fn_type(&param_types, false),
@@ -679,6 +744,28 @@ impl<'ctx> super::Codegen<'ctx> {
         for (i, param) in func.params.iter().enumerate() {
             let param_name = self.param_name(param);
             let param_val = fn_val.get_nth_param(i as u32).unwrap();
+            // Per-layout-monomorphization (slice 2): a `Vec[E]` param whose
+            // active `LayoutId` is `Soa` arrives as the 4-field SoA struct
+            // (the signature was patched in `declare_mono_function`). Spill it
+            // to a slot typed as the SoA struct and register the binding so the
+            // body's access paths (`active_soa_layout`) lower SoA against it.
+            // Ownership is CALLER-RETAINS, mirroring the name-keyed by-value
+            // path (functions.rs): the callee borrows the moved-in 4-field
+            // header sharing the caller's group buffers, so NO `FreeSoaGroups`
+            // cleanup here — the caller's binding frees them exactly once.
+            if let Some(soa) = self.active_param_soa_layout(param) {
+                let soa_ty = self.soa_vec_type(soa.num_groups, soa.cold_group.is_some());
+                let alloca = self.create_entry_alloca(fn_val, &param_name, soa_ty.into());
+                self.builder.build_store(alloca, param_val).unwrap();
+                self.variables.insert(
+                    param_name.clone(),
+                    VarSlot {
+                        ptr: alloca,
+                        ty: soa_ty.into(),
+                    },
+                );
+                continue;
+            }
             let alloca = self.create_entry_alloca(fn_val, &param_name, param_val.get_type());
             self.builder.build_store(alloca, param_val).unwrap();
             // Track declared type name for struct/enum field resolution.
@@ -827,35 +914,41 @@ impl<'ctx> super::Codegen<'ctx> {
         const_subst: &HashMap<String, crate::prelude::ConstValue>,
         layout_subst: &HashMap<String, LayoutId>,
     ) -> String {
-        let params = match &func.generic_params {
-            Some(gp) => &gp.params,
-            None => return base.to_string(),
-        };
-
         let mut mangled = base.to_string();
-        for param in params {
-            // Const generics slice 1b: const params take priority over
-            // type subst when both maps are populated (the const_subst
-            // is keyed by formal name, the type subst doesn't carry
-            // const params).
-            if param.is_const {
-                if let Some(cv) = const_subst.get(&param.name) {
+        // Type / const generic axes (only for a generic function — a
+        // non-generic layout-monomorph has no `generic_params`).
+        if let Some(gp) = &func.generic_params {
+            for param in &gp.params {
+                // Const generics slice 1b: const params take priority over
+                // type subst when both maps are populated (the const_subst
+                // is keyed by formal name, the type subst doesn't carry
+                // const params).
+                if param.is_const {
+                    if let Some(cv) = const_subst.get(&param.name) {
+                        mangled.push('$');
+                        mangled.push_str(&const_value_to_mangle_str(cv));
+                    }
+                } else if let Some(ty) = subst.get(&param.name) {
                     mangled.push('$');
-                    mangled.push_str(&const_value_to_mangle_str(cv));
+                    mangled.push_str(&self.llvm_type_to_mangle_str(*ty));
                 }
-            } else if let Some(ty) = subst.get(&param.name) {
-                mangled.push('$');
-                mangled.push_str(&self.llvm_type_to_mangle_str(*ty));
             }
         }
-        // Per-layout-monomorphization axis: append a layout suffix for any
-        // value param carrying a non-`Aos` layout. Slice 1 always resolves to
-        // `Aos` (suffix `None`), so this loop is a no-op and the name is
-        // byte-identical to the type/const mangling above.
+        // Per-layout-monomorphization axis: append a per-param layout suffix
+        // for any value param carrying a non-`Aos` layout. Applies to generic
+        // and non-generic functions alike (slice 2 monomorphizes plain `Vec[E]`
+        // helpers per the caller's arg layout). The param NAME is part of the
+        // suffix (`$<param>_soa_<layout>`) so that two different layout
+        // assignments over the same params can't collide — e.g. `f(grid,plain)`
+        // (`$a_soa_grid`) vs `f(plain,grid)` (`$b_soa_grid`) are distinct
+        // monomorphs. An all-`Aos` call adds no suffix, so the symbol is
+        // unchanged for non-SoA code.
         for param in &func.params {
             if let Some(name) = param.name() {
                 if let Some(suffix) = layout_subst.get(name).and_then(LayoutId::mangle_suffix) {
                     mangled.push('$');
+                    mangled.push_str(name);
+                    mangled.push('_');
                     mangled.push_str(&suffix);
                 }
             }
@@ -867,25 +960,85 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (`docs/spikes/per-layout-monomorphization.md` §4.2): the `LayoutId` of
     /// each layout-carrying (`Vec[E]`) value param, keyed by param name. This
     /// is the layout half of the monomorph key fed to `mangle_mono_name` and
-    /// (from slice 2) to body lowering via `self.layout_subst`.
+    /// (slice 2) to body lowering via `self.layout_subst`.
     ///
-    /// **Slice 1 always yields `Aos`.** Every collection-typed param maps to
-    /// `LayoutId::Aos`, so `mangle_mono_name` adds no suffix and the monomorph
-    /// is byte-identical to the name-keyed model. Slice 2 inspects each
-    /// argument's root binding and returns `Soa(name)` when the root is a
-    /// `layout`-declared binding, superseding the name-keyed by-value path.
-    pub(super) fn compute_call_layout_subst(&self, func: &Function) -> HashMap<String, LayoutId> {
+    /// **Forward (arguments):** a param's `LayoutId` is the binding-site layout
+    /// of the matching argument's *root* — but only when the argument is a bare
+    /// binding (a whole `Vec[E]`). A projection (`grid[i]`, `g.field`) yields a
+    /// materialized AoS element/field, so it is `Aos`; nested layout-through-
+    /// aggregate flow is deferred (spike §8). When the matching argument's root
+    /// is a `layout`-declared / SoA-forwarded binding, the param is `Soa(name)`,
+    /// monomorphizing the callee against the caller's physical layout.
+    pub(super) fn compute_call_layout_subst(
+        &self,
+        func: &Function,
+        args: &[CallArg],
+    ) -> HashMap<String, LayoutId> {
         let mut layout_subst = HashMap::new();
-        for param in &func.params {
+        for (i, param) in func.params.iter().enumerate() {
             if !Self::param_is_layout_carrying(param) {
                 continue;
             }
             let Some(name) = param.name() else { continue };
-            // Slice 1: every argument resolves to `Aos`. Slice 2 replaces this
-            // with the argument-root binding-site layout.
-            layout_subst.insert(name.to_string(), LayoutId::Aos);
+            let layout = args
+                .get(i)
+                .map(|a| self.arg_root_layout_id(&a.value))
+                .unwrap_or(LayoutId::Aos);
+            layout_subst.insert(name.to_string(), layout);
         }
         layout_subst
+    }
+
+    /// The `LayoutId` an argument expression contributes to forward inference.
+    /// Only a bare binding (whole `Vec[E]`) carries its binding-site layout; any
+    /// other shape (projection, call result, literal) is `Aos` for the first
+    /// slices (top-level `Vec[E]` only — spike §8).
+    fn arg_root_layout_id(&self, expr: &Expr) -> LayoutId {
+        match &expr.kind {
+            ExprKind::Identifier(name) => self.active_layout_id(name),
+            _ => LayoutId::Aos,
+        }
+    }
+
+    /// The active physical layout of a binding in the current codegen context:
+    /// the per-call layout subst (a SoA-forwarded param in the active
+    /// monomorph) takes precedence, then the name-keyed `layout`-block origin
+    /// (`soa_layouts`), else `Aos`. This is the bridge that lets the
+    /// `LayoutId` model and the legacy name-keyed origin map coexist until the
+    /// origin map is reduced to declarations only (slice 5).
+    pub(super) fn active_layout_id(&self, binding_name: &str) -> LayoutId {
+        if let Some(layout) = self.layout_subst.get(binding_name) {
+            return layout.clone();
+        }
+        if self.soa_layouts.contains_key(binding_name) {
+            return LayoutId::Soa(binding_name.to_string());
+        }
+        LayoutId::Aos
+    }
+
+    /// The `SoaLayout` metadata for a binding whose active layout is `Soa`, or
+    /// `None` when it is `Aos`. Resolves the `Soa(<block-name>)` id through the
+    /// `soa_layouts` origin map. The single body-lowering trigger that replaces
+    /// the raw `soa_layouts.get(name)` / `.contains_key(name)` access checks, so
+    /// a mono SoA param (not itself a `layout`-block name) lowers SoA.
+    pub(super) fn active_soa_layout(&self, binding_name: &str) -> Option<super::state::SoaLayout> {
+        match self.active_layout_id(binding_name) {
+            LayoutId::Soa(block) => self.soa_layouts.get(&block).cloned(),
+            LayoutId::Aos => None,
+        }
+    }
+
+    /// The `SoaLayout` for a value param whose active `LayoutId` (in the current
+    /// monomorph's `layout_subst`) is `Soa` — drives the SoA param signature
+    /// and prologue in the mono path. Returns `None` outside a layout-monomorph
+    /// (empty `layout_subst`), so the normal `compile_function` pass is
+    /// unaffected and the name-keyed declaring-fn path still applies.
+    pub(super) fn active_param_soa_layout(&self, param: &Param) -> Option<super::state::SoaLayout> {
+        let name = param.name()?;
+        match self.layout_subst.get(name) {
+            Some(LayoutId::Soa(block)) => self.soa_layouts.get(block).cloned(),
+            _ => None,
+        }
     }
 
     /// Whether a value param's declared type is a layout-carrying collection —
@@ -893,7 +1046,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// can vary (`Aos` vs an SoA grouping). Borrow forms (`ref Vec[E]`) are
     /// out of scope for the first slices — the by-ref-reads path already
     /// derefs through the caller's SoA struct.
-    fn param_is_layout_carrying(param: &Param) -> bool {
+    pub(super) fn param_is_layout_carrying(param: &Param) -> bool {
         matches!(
             &param.ty.kind,
             TypeKind::Path(path) if path.segments.last().map(String::as_str) == Some("Vec")

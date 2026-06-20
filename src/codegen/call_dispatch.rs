@@ -12,6 +12,7 @@
 //! `EnumName.UnitVariant` identifier references).
 
 use crate::ast::*;
+use std::collections::HashMap;
 
 use inkwell::types::{BasicType, BasicTypeEnum};
 use inkwell::values::{
@@ -21,6 +22,7 @@ use inkwell::{AddressSpace, IntPredicate};
 
 use super::declarations::KARAC_PARK_ON_FD;
 use super::helpers::{expr_as_type_expr_codegen, match_with_provider_call, match_with_span_call};
+use super::state::LayoutId;
 
 impl<'ctx> super::Codegen<'ctx> {
     // ── Call ──────────────────────────────────────────────────────
@@ -352,14 +354,15 @@ impl<'ctx> super::Codegen<'ctx> {
         // bare identifier with explicit generic args). Extract the
         // name + explicit generic args so the generic-call path can
         // bind the user-supplied const-args into the mango key.
-        let (name, explicit_generic_args): (String, Option<Vec<GenericArg>>) = match &callee.kind {
-            ExprKind::Identifier(n) => (n.clone(), None),
-            ExprKind::Path {
-                segments,
-                generic_args: Some(ga),
-            } if segments.len() == 1 => (segments[0].clone(), Some(ga.clone())),
-            _ => return Ok(self.context.i64_type().const_int(0, false).into()),
-        };
+        let (mut name, explicit_generic_args): (String, Option<Vec<GenericArg>>) =
+            match &callee.kind {
+                ExprKind::Identifier(n) => (n.clone(), None),
+                ExprKind::Path {
+                    segments,
+                    generic_args: Some(ga),
+                } if segments.len() == 1 => (segments[0].clone(), Some(ga.clone())),
+                _ => return Ok(self.context.i64_type().const_int(0, false).into()),
+            };
 
         // `Vector[T, N](lane0, …)` SIMD construction (design.md § Portable
         // SIMD). Intercepted before the generic-fn path — `Vector` is a
@@ -920,6 +923,41 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_call(self.free_fn, &[state_ptr.into()], "")
                 .expect("call free on state struct");
             return Ok(call_result);
+        }
+
+        // Per-layout monomorphization (slice 2,
+        // `docs/spikes/per-layout-monomorphization.md`): when this is a known
+        // non-generic function and an argument carries a non-`Aos` layout at
+        // this call site (a SoA `Vec[E]` binding passed whole), retarget the
+        // call to an on-demand SoA monomorph whose matching params lower as the
+        // 4-field SoA struct. The mono symbol is `<name>$soa_<layout>`, and its
+        // ref/slice-elem ABI tables were registered under that mangled key by
+        // `declare_mono_function`, so the direct-call resolution below picks
+        // them up via the reassigned `name`. An all-`Aos` call adds no entry,
+        // so non-SoA code falls straight through to the original function.
+        //
+        // Cheap gate first: only a callee with a layout-carrying (`Vec[E]`)
+        // value param can ever specialize, so skip the AST clone for the common
+        // case (no `Vec` params) — most user calls pay only a HashMap lookup
+        // plus a param scan here.
+        let callee_may_specialize = self
+            .fn_asts
+            .get(&name)
+            .is_some_and(|f| f.params.iter().any(Self::param_is_layout_carrying));
+        if callee_may_specialize {
+            let callee_fn = self.fn_asts[&name].clone();
+            let layout_subst = self.compute_call_layout_subst(&callee_fn, args);
+            if layout_subst.values().any(|l| !matches!(l, LayoutId::Aos)) {
+                let mangled = self.mangle_mono_name(
+                    &name,
+                    &callee_fn,
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    &layout_subst,
+                );
+                self.ensure_layout_mono_generated(&callee_fn, &mangled, layout_subst)?;
+                name = mangled;
+            }
         }
 
         // An `unsafe extern` import declared with `#[link_name("symbol")]`

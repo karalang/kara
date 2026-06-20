@@ -476,7 +476,7 @@ impl<'ctx> super::Codegen<'ctx> {
         } = &object.kind
         {
             if let ExprKind::Identifier(soa_var) = &inner.kind {
-                if let Some(soa) = self.soa_layouts.get(soa_var.as_str()).cloned() {
+                if let Some(soa) = self.active_soa_layout(soa_var.as_str()) {
                     if let Some(names) = self.struct_field_names.get(&soa.struct_name) {
                         if let Some(fidx) = names.iter().position(|n| n == field) {
                             let soa_var = soa_var.clone();

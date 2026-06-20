@@ -17723,6 +17723,94 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_soa_by_value_param_caller_different_name() {
+        // Per-layout monomorphization slice 2: pass a SoA-laid-out `Vec[E]` BY
+        // VALUE to a helper whose param name does NOT match the layout block.
+        // The caller binding is `grid` (`layout grid`); the callee param is
+        // `data`. The name-keyed by-value path can't lower `data` SoA (no
+        // `layout data` block), so without slice 2 the caller marshals a
+        // 4-field SoA struct into a 3-field AoS param slot — an LLVM signature
+        // mismatch. Slice 2's forward layout-flow inference monomorphizes
+        // `process$soa_grid` with `data` lowered as the SoA struct, keyed on
+        // the caller's argument layout rather than the param name.
+        let out = run_program(
+            r#"
+struct E { x: f64, y: f64 }
+layout grid: Vec[E] { group g1 { x } group g2 { y } }
+fn process(data: Vec[E]) -> f64 {
+    let mut s = 0.0;
+    let mut i = 0;
+    while i < data.len() {
+        let e = data[i];
+        s = s + e.x + data[i].y;
+        i = i + 1;
+    }
+    s
+}
+fn main() {
+    let mut grid: Vec[E] = Vec.new();
+    grid.push(E { x: 1.0, y: 2.0 });
+    grid.push(E { x: 3.0, y: 4.0 });
+    grid.push(E { x: 5.0, y: 6.0 });
+    println(process(grid));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "21",
+                "SoA Vec by value into a differently-named param (layout-mono)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_soa_two_layouts_through_one_helper_distinct_monos() {
+        // Per-layout monomorphization slice 2 (collision-free mangling): two
+        // distinct `layout` blocks (`grid`, `coll`) over the same element type
+        // flow through ONE helper `process`. Each call monomorphizes a distinct
+        // symbol (`process$data_soa_grid`, `process$data_soa_coll`) — the param
+        // name is part of the layout mangle, so different layout assignments
+        // can't collide into one symbol. Both must compute correctly: grid sums
+        // (1+2)+(3+4)+(5+6)=21, coll sums (1+1)+(2+2)=6 — printed on two lines.
+        let out = run_program(
+            r#"
+struct E { x: f64, y: f64 }
+layout grid: Vec[E] { group g1 { x } group g2 { y } }
+layout coll: Vec[E] { group c1 { x } group c2 { y } }
+fn process(data: Vec[E]) -> f64 {
+    let mut s = 0.0;
+    let mut i = 0;
+    while i < data.len() {
+        s = s + data[i].x + data[i].y;
+        i = i + 1;
+    }
+    s
+}
+fn main() {
+    let mut grid: Vec[E] = Vec.new();
+    grid.push(E { x: 1.0, y: 2.0 });
+    grid.push(E { x: 3.0, y: 4.0 });
+    grid.push(E { x: 5.0, y: 6.0 });
+    let mut coll: Vec[E] = Vec.new();
+    coll.push(E { x: 1.0, y: 1.0 });
+    coll.push(E { x: 2.0, y: 2.0 });
+    println(process(grid));
+    println(process(coll));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "21\n6",
+                "two distinct layouts through one helper produce distinct correct monos"
+            );
+        }
+    }
+
     // ── String operators ──────────────────────────────────────────
 
     #[test]

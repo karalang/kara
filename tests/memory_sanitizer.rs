@@ -7512,6 +7512,52 @@ fn main() {
     }
 
     #[test]
+    fn asan_soa_by_value_param_caller_different_name_caller_retains() {
+        // Per-layout monomorphization slice 2: same caller-retains ownership as
+        // the sibling above, but the callee param (`rows`) does NOT match the
+        // `layout entities` block — the call is served by the on-demand layout
+        // monomorph `total$soa_entities` (forward layout-flow inference), not
+        // the name-keyed by-value path. The mono's SoA param prologue must keep
+        // CALLER-RETAINS (no callee-side FreeSoaGroups), so the caller's
+        // per-iteration `entities` frees both group buffers exactly once.
+        // Looped 20× so a per-call leak or double-free surfaces under LSan/ASAN.
+        assert_clean_asan_run(
+            r#"
+struct Entity { x: f64, y: f64, hp: i64 }
+layout entities: Vec[Entity] {
+    group physics { x, y }
+    group combat { hp }
+}
+fn total(rows: Vec[Entity]) -> i64 {
+    let mut t = 0;
+    let mut i = 0;
+    while i < rows.len() {
+        let e = rows[i];
+        t = t + e.hp;
+        i = i + 1;
+    }
+    t
+}
+fn main() {
+    let mut sum = 0;
+    let mut k = 0;
+    while k < 20 {
+        let mut entities: Vec[Entity] = Vec.new();
+        entities.push(Entity { x: 1.0, y: 2.0, hp: 100 });
+        entities.push(Entity { x: 3.0, y: 4.0, hp: 200 });
+        entities.push(Entity { x: 5.0, y: 6.0, hp: 300 });
+        sum = sum + total(entities);
+        k = k + 1;
+    }
+    println(sum);
+}
+"#,
+            &["12000"],
+            "soa_by_value_param_caller_different_name",
+        );
+    }
+
+    #[test]
     fn asan_soa_drop_with_cold_group_primitive() {
         // Cold group adds an extra buffer that pre-fix codegen never
         // freed (the cold pointer sits between the hot pointers and the

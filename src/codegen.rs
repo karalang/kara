@@ -1345,6 +1345,14 @@ pub(super) struct Codegen<'ctx> {
     // ── Generic monomorphization ──────────────────────────────────
     /// Generic function AST nodes keyed by name. Not compiled until instantiated.
     pub(crate) generic_fns: HashMap<String, Function>,
+    /// Non-generic top-level function AST nodes keyed by name. Retained so the
+    /// per-layout-monomorphization dispatch (slice 2) can compile an on-demand
+    /// SoA specialization of a plain `Vec[E]`-taking helper at a call site with
+    /// a SoA argument (`docs/spikes/per-layout-monomorphization.md`). The
+    /// non-specialized (all-`Aos`) function is still declared + compiled in the
+    /// normal module pass; this registry feeds only the layout-specialized
+    /// monomorphs.
+    pub(crate) fn_asts: HashMap<String, Function>,
     /// Already-generated monomorphizations (mangled name → done). Prevents duplicate codegen.
     pub(crate) generated_monos: HashSet<String>,
     /// Active type-parameter substitution during a monomorphization pass.
@@ -1365,16 +1373,10 @@ pub(super) struct Codegen<'ctx> {
     /// Per-layout-monomorphization axis: callee param NAME → the `LayoutId`
     /// of the caller's argument at the active call site
     /// (`docs/spikes/per-layout-monomorphization.md`). Saved/restored around
-    /// `compile_mono_function` exactly like `type_subst` / `const_subst`, and
-    /// fed to `mangle_mono_name` so each layout variant is a distinct LLVM
-    /// symbol.
-    ///
-    /// Slice 1 populates this only with `Aos` entries (so the mangled name is
-    /// unchanged and output is byte-identical); the body-lowering reads that
-    /// select the SoA access paths against the active layout arrive in slice
-    /// 2 — until then the field is written by the mono entry's save/restore
-    /// but not yet read.
-    #[allow(dead_code)] // slice 2 — SoA body-lowering reads this to pick the access paths.
+    /// `compile_mono_function` exactly like `type_subst` / `const_subst`, fed
+    /// to `mangle_mono_name` so each layout variant is a distinct LLVM symbol,
+    /// and read by `active_layout_id` / `active_param_soa_layout` to lower a
+    /// monomorph's SoA `Vec[E]` params and their access paths (slice 2).
     pub(crate) layout_subst: HashMap<String, LayoutId>,
     // ── Closure compilation ────────────────────────────────────────
     /// Monotonic counter used to generate unique closure function names.
@@ -4928,6 +4930,7 @@ impl<'ctx> Codegen<'ctx> {
             baked_display_enum_names: HashSet::new(),
             loop_stack: Vec::new(),
             generic_fns: HashMap::new(),
+            fn_asts: HashMap::new(),
             generated_monos: HashSet::new(),
             type_subst: HashMap::new(),
             const_subst: HashMap::new(),
@@ -6022,6 +6025,11 @@ impl<'ctx> Codegen<'ctx> {
                     self.generic_fns.insert(f.name.clone(), f.clone());
                 } else {
                     self.declare_function(f)?;
+                    // Retain the AST for on-demand per-layout monomorphization
+                    // (slice 2): a SoA argument at a call site compiles a layout
+                    // specialization of this body. The all-`Aos` body is the one
+                    // just declared and compiled in the normal pass.
+                    self.fn_asts.insert(f.name.clone(), f.clone());
                 }
             }
         }

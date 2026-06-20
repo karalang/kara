@@ -1989,7 +1989,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
                 // SoA layout methods
-                if let Some(soa) = self.soa_layouts.get(name.as_str()).cloned() {
+                if let Some(soa) = self.active_soa_layout(name.as_str()) {
                     return self.compile_soa_method(name, &soa, slot, method, args);
                 }
                 // Tensor instance methods — shape()/rank() read the

@@ -282,18 +282,16 @@ pub(crate) struct SoaLayout {
 /// distinct monomorphs (the "distinct monomorphs per grouping" invariant,
 /// design.md:5426).
 ///
-/// **Slice 1 is pure scaffolding:** layout-flow inference always yields `Aos`
-/// (`compute_call_layout_subst` populates only `Aos` entries), so the layout
-/// suffix is empty at every call and output is byte-identical to the
-/// name-keyed model. Slice 2 populates forward argument layouts (constructing
-/// `Soa`); slice 3 adds backward return-layout inference.
+/// Forward inference (`compute_call_layout_subst`, slice 2) reads each
+/// bare-binding argument's binding-site layout; an all-`Aos` call adds no
+/// mangle suffix, so non-SoA code is byte-identical to the name-keyed model.
+/// Slice 3 adds backward return-layout inference.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum LayoutId {
     /// Default array-of-structs: a `Vec[E]` is `{ ptr, len, cap }`.
     Aos,
     /// Struct-of-arrays, keyed by the originating `layout <name>` block (the
-    /// key into `soa_layouts`). Constructed starting in slice 2.
-    #[allow(dead_code)] // slice 2 — forward arg-layout inference constructs this.
+    /// key into `soa_layouts`).
     Soa(String),
 }
 
