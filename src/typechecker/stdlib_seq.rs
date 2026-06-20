@@ -349,12 +349,12 @@ impl<'a> super::TypeChecker<'a> {
                     args: vec![Type::Str],
                 }
             }
-            "starts_with" => {
-                // starts_with(prefix: String) -> bool. Returns true iff
-                // the receiver's bytes begin with prefix's bytes.
+            "starts_with" | "ends_with" => {
+                // starts_with(prefix: String) / ends_with(suffix: String) -> bool.
+                // True iff the receiver's bytes begin / end with the argument's.
                 if args.len() != 1 {
                     self.type_error(
-                        format!("'starts_with' expects 1 argument, found {}", args.len()),
+                        format!("'{method}' expects 1 argument, found {}", args.len()),
                         span.clone(),
                         TypeErrorKind::WrongNumberOfArgs,
                     );
@@ -366,7 +366,7 @@ impl<'a> super::TypeChecker<'a> {
                     if !is_str_like(&arg_ty) {
                         self.type_error(
                             format!(
-                                "'starts_with' expects a String prefix, found '{}'",
+                                "'{method}' expects a String argument, found '{}'",
                                 type_display(&arg_ty)
                             ),
                             args[0].value.span.clone(),

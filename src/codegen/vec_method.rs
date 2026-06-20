@@ -198,9 +198,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // prefix.data, prefix.len) == 0`. Uses the same `self.memcmp_fn`
             // declared in `Codegen::new` that `compile_string_binop` uses
             // for the `==` operator.
-            "starts_with" => {
+            "starts_with" | "ends_with" => {
                 if args.is_empty() {
-                    return Err("String.starts_with requires a prefix argument".to_string());
+                    return Err(format!("String.{method} requires an argument"));
                 }
                 let bool_t = self.context.bool_type();
                 let i32_t = self.context.i32_type();
@@ -263,14 +263,30 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_conditional_branch(has_len, cmp_bb, cont_bb)
                     .unwrap();
 
-                // memcmp(recv.data, prefix.data, prefix.len) — compare the
-                // first prefix.len bytes. memcmp returns 0 iff equal.
+                // Compare prefix.len bytes — the first ones for `starts_with`,
+                // the trailing ones (`recv.data + (recv_len - prefix_len)`) for
+                // `ends_with`. `has_len` (recv_len >= prefix_len) guards this
+                // block, so the byte offset is non-negative. memcmp returns 0
+                // iff equal.
                 self.builder.position_at_end(cmp_bb);
+                let cmp_ptr = if method == "ends_with" {
+                    let off = self
+                        .builder
+                        .build_int_sub(recv_len, prefix_len, "ew.off")
+                        .unwrap();
+                    unsafe {
+                        self.builder
+                            .build_gep(self.context.i8_type(), recv_data, &[off], "ew.cmp.ptr")
+                            .unwrap()
+                    }
+                } else {
+                    recv_data
+                };
                 let cmp_result = self
                     .builder
                     .build_call(
                         self.memcmp_fn,
-                        &[recv_data.into(), prefix_data.into(), prefix_len.into()],
+                        &[cmp_ptr.into(), prefix_data.into(), prefix_len.into()],
                         "sw.memcmp",
                     )
                     .unwrap()

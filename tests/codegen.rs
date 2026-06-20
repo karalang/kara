@@ -4126,6 +4126,25 @@ fn main() {
     }
 
     #[test]
+    fn e2e_string_ends_with() {
+        // `String.ends_with(suffix) -> bool` — memcmp of the trailing
+        // `suffix.len` bytes (the `recv.data + (recv_len - suffix_len)` offset).
+        // Empty suffix is always true; an over-long suffix is false (length
+        // guard). Must match `karac run`.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+             \x20   let s: String = \"hello world\";\n\
+             \x20   println(s.ends_with(\"world\"));\n\
+             \x20   println(s.ends_with(\"hello\"));\n\
+             \x20   println(s.ends_with(\"\"));\n\
+             \x20   println(s.ends_with(\"this is far too long to fit\"));\n\
+             }\n",
+        ) {
+            assert_eq!(out, "true\nfalse\ntrue\nfalse\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_borrow_return_if_multi_source() {
         // Tier 2 (B-2026-06-07-5): `longer`-style `if` over two `ref`
         // params returns a borrow from whichever branch runs — phi of

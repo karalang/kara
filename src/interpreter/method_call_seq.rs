@@ -109,16 +109,20 @@ impl<'a> super::Interpreter<'a> {
                     ),
                 });
             }
-            "starts_with" => {
-                // `String.starts_with(prefix: String) -> bool`. The
-                // typechecker arm in `infer_str_method` enforces the
-                // String-arg shape; this dispatch trusts the receiver
-                // is a Value::String and the single arg evaluates to
-                // one too.
+            "starts_with" | "ends_with" => {
+                // `String.starts_with(prefix) / ends_with(suffix) -> bool`. The
+                // typechecker arm in `infer_str_method` enforces the String-arg
+                // shape; this dispatch trusts the receiver is a Value::String and
+                // the single arg evaluates to one too.
                 if let (Value::String(s), [arg]) = (&obj, args) {
-                    let prefix_val = self.eval_expr_inner(&arg.value);
-                    if let Value::String(prefix) = prefix_val {
-                        return Some(Value::Bool(s.starts_with(prefix.as_str())));
+                    let needle_val = self.eval_expr_inner(&arg.value);
+                    if let Value::String(needle) = needle_val {
+                        let r = if method == "ends_with" {
+                            s.ends_with(needle.as_str())
+                        } else {
+                            s.starts_with(needle.as_str())
+                        };
+                        return Some(Value::Bool(r));
                     }
                 }
                 return None;
