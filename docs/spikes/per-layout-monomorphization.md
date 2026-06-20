@@ -1,7 +1,9 @@
 # Design spike — per-layout monomorphization (SoA across call boundaries)
 
-**Status:** 🟦 **IN PROGRESS — slice 1 landed (2026-06-20).** Decision recorded;
-slice 1 (the `LayoutId` axis scaffolding) is on `main`. The remaining slices are
+**Status:** 🟦 **IN PROGRESS — slices 1–2 landed (2026-06-20).** Slice 1 (the
+`LayoutId` axis scaffolding) and slice 2 (forward arg-layout monomorphization —
+a SoA `Vec[E]` passed by value to a helper is served by an on-demand layout
+monomorph, regardless of the param name) are on `main`. The remaining slices are
 a multi-slice Phase-11 effort gated on the full `tests/codegen.rs` suite + the
 Linux-LSan leak gate per slice. This file is the architecture of record; update
 its `Status:` line (and the `docs/spikes/README.md` row) as slices land. Tracks
@@ -167,10 +169,23 @@ existing `suppress_cleanup_for_tail_return` for AoS Vec).
    mangled name is unchanged and output is byte-identical — codegen E2E 1680/0,
    non-codegen suite 6693/0. The body-lowering reads (the SoA access-path
    trigger) and the `Soa` construction land in slice 2.
-2. **Forward arg-layout mono (supersede the by-value-params name-keying).** A
-   `Vec[E]` param is lowered per the *caller's* arg layout via the mono key, not
-   the param name. Retire the name-keyed by-value path once parity holds.
-   Regression: by-value param with a caller-different binding name.
+2. **Forward arg-layout mono (supersede the by-value-params name-keying).** ✅
+   **Landed 2026-06-20.** Forward layout-flow inference
+   (`compute_call_layout_subst` now reads each bare-binding argument's
+   binding-site layout via `active_layout_id`); a non-generic helper with a
+   non-`Aos` arg is routed (`call_dispatch.rs`) to an on-demand monomorph
+   (`fn_asts` registry + `ensure_layout_mono_generated`), with its `Vec[E]`
+   params lowered as the SoA struct in `declare_mono_function` /
+   `compile_mono_function` keyed on `layout_subst` (not the param name). The
+   body's SoA access triggers moved to `active_soa_layout` (the bridge over the
+   name-keyed origin). Mangling is per-param (`$<param>_soa_<layout>`), so two
+   different layout assignments over one helper can't collide. Caller-retains
+   ownership (LSan-clean). Codegen E2E 1683/0; non-codegen 6694/0; LSan
+   by-value (same-name + caller-different-name) 2/0. The name-keyed by-value
+   path is left in place (redundant but harmless) and retired in slice 5 once
+   the access-path lookups are reduced to origins. Regressions: by-value param
+   with a caller-different binding name; two distinct layouts through one
+   helper → distinct monos.
 3. **SoA returns (backward inference).** Return-layout from the receiving
    binding; return ABI + tail-return move-suppression. Regression:
    `init_grid()`-shape returning a SoA Vec bound by a differently-named local.

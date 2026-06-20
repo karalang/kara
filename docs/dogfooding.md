@@ -256,17 +256,26 @@ examples that show the interesting cases without being contrived.
 > `tests/codegen.rs::test_e2e_soa_by_value_param_read_across_function` +
 > `tests/memory_sanitizer.rs::asan_soa_by_value_param_caller_retains_no_leak_or_double_free`.
 >
+> **Per-layout monomorphization is now the vehicle** (design.md Feature 1 /
+> P1.5; ADR + slice plan in
+> [docs/spikes/per-layout-monomorphization.md](spikes/per-layout-monomorphization.md)).
+> Slices 1–2 landed (2026-06-20): by-value SoA `Vec[E]` params now cross
+> function boundaries **regardless of binding name** — a SoA argument routes to
+> an on-demand monomorph (`fn_asts` + `ensure_layout_mono_generated`) whose
+> `Vec[E]` params lower as the SoA struct, keyed on the caller's argument layout
+> rather than the param name. Differing-name and multi-buffer helpers (item 2
+> below) now share one helper, each call producing a distinct monomorph.
+>
 > **Remaining (what still blocks Slipstream from going full-SoA end-to-end):**
 > 1. **SoA return values** (`init_grid() -> Vec[LbmNode]`, `substep(...) ->
->    Vec[LbmNode]`): the return type is compiled AoS. The hard part is the
->    caller/callee *layout agreement* — a `-> Vec[E]` return has no binding name
->    to key on, and the receiving `let recv = f()` keys off `recv`'s layout, so a
->    differing name can't be reconciled without monomorphization (item 2).
-> 2. **Multi-buffer awkwardness:** `soa_layouts` is *name-keyed*, so each distinct
->    `Vec[LbmNode]` binding (`grid`, `coll`, `next`, …) needs its own `layout`
->    block. The fuller design is **per-layout monomorphization** (design.md
->    Feature 1 / P1.5, gated to Phase 11) — that subsumes both remaining items
->    (it gives returns a layout to agree on, and lets differing names share one).
+>    Vec[LbmNode]`): the return type is compiled AoS — slice 3. Backward
+>    layout-flow inference keys the return layout off the receiving `let recv =
+>    f()` binding (`recv`'s layout), with the SoA return ABI + tail-return
+>    move-suppression.
+> 2. ~~**Multi-buffer awkwardness**~~ (differing-name `Vec[LbmNode]` bindings
+>    sharing helpers) — **addressed by slice 2's forward inference**; the
+>    name-keyed `soa_layouts` lookups in the access paths are reduced to
+>    origins-only in slice 5.
 >
 > Land each step gated on the full `tests/codegen.rs` suite (1670 cases). Once the
 > by-value + return paths work, convert `examples/slipstream/src/sim.kara`'s
