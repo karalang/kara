@@ -184,6 +184,7 @@ impl<'a> super::Interpreter<'a> {
         if let ExprKind::Identifier(module) = &object.kind {
             match (module.as_str(), method) {
                 ("ast", "expr") => return self.eval_ast_expr_builder(args, span),
+                ("ast", "item") => return self.eval_ast_item_builder(args, span),
                 ("compiler", "error") => return self.eval_compiler_error(args, span),
                 _ => {}
             }

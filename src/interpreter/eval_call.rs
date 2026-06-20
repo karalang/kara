@@ -55,6 +55,7 @@ impl<'a> super::Interpreter<'a> {
             if segments.len() == 2 {
                 match (segments[0].as_str(), segments[1].as_str()) {
                     ("ast", "expr") => return self.eval_ast_expr_builder(args, span),
+                    ("ast", "item") => return self.eval_ast_item_builder(args, span),
                     ("compiler", "error") => return self.eval_compiler_error(args, span),
                     _ => {}
                 }

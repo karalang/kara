@@ -23,21 +23,31 @@
 //! same (lowered) tree the real interpreter would, and downstream phases
 //! see plain constants in place of every `comptime { ... }` node.
 //!
-//! ## Scope (slice 2)
+//! ## Scope
 //!
 //! - Evaluates `comptime { ... }` block expressions anywhere an expression
 //!   can appear (function bodies, `const` initializers, impl methods, …).
 //! - Folds scalar results (int / float / bool / char / string / unit) plus
 //!   homogeneous compound results (tuples, arrays / vecs) into literals.
+//! - Splices a generated `Expr` (`ast.expr(...)`, substrate 3) at the
+//!   comptime site instead of folding a constant.
+//! - Expands `#[derive(X)]` (substrate 4): each derive whose `derive_x`
+//!   comptime fn exists is invoked as `derive_x(T)` and the `Vec[Item]` it
+//!   returns is spliced into the module after the derive site. See
+//!   [`Folder::expand_derives`].
 //! - Surfaces a comptime panic as a compile error
 //!   (`E_COMPTIME_PANIC`), a non-terminating evaluation as
 //!   `E_COMPTIME_ITER_LIMIT_EXCEEDED` (enforced via a wall-clock guard on
 //!   the shared interpreter deadline hook), and a result shape that can't
 //!   be expressed as a literal as `E_COMPTIME_NON_FOLDABLE_RESULT`.
 //!
-//! Effect restriction (`E_RUNTIME_EFFECT_AT_COMPTIME`), `Type` reflection,
-//! the AST builder, and derive desugaring are later substrates and are not
-//! part of this pass.
+//! Because this pass runs after `resolve` / `typecheck`, derive-generated
+//! items are seen by the interpreter (dynamic dispatch) but not by name
+//! resolution: a generated *method* on the derived type is callable, while a
+//! generated top-level item referenced *by name* elsewhere would not resolve.
+//! Moving derive expansion ahead of resolution (so generated names resolve)
+//! is future work; the effect restriction (`E_RUNTIME_EFFECT_AT_COMPTIME`)
+//! is a later substrate and is not part of this pass.
 
 use std::time::{Duration, Instant};
 
@@ -71,8 +81,15 @@ pub struct ComptimeError {
 /// for `program`; it supplies the result type used to pick literal suffixes
 /// and to distinguish `Vec`-typed from `Array`-typed collection results.
 pub fn evaluate(program: &mut Program, typed: &TypeCheckResult) -> Vec<ComptimeError> {
-    // Fast path: no comptime nodes ⇒ no snapshot, no interpreter.
-    if !program_has_comptime(program) {
+    // Two kinds of work drive this pass: folding `comptime { ... }` blocks
+    // (substrates 1–3) and expanding `#[derive(X)]` attributes that resolve to
+    // a `comptime fn derive_x` (substrate 4).
+    let needs_fold = program_has_comptime(program);
+    let derive_fns = collect_derive_fns(program);
+    let needs_derive = !derive_fns.is_empty() && program_has_derive_to_expand(program, &derive_fns);
+
+    // Fast path: nothing to do ⇒ no snapshot, no interpreter.
+    if !needs_fold && !needs_derive {
         return Vec::new();
     }
 
@@ -99,10 +116,55 @@ pub fn evaluate(program: &mut Program, typed: &TypeCheckResult) -> Vec<ComptimeE
         typed,
         errors: Vec::new(),
     };
-    for item in &mut program.items {
-        folder.fold_item(item);
+    // Pass 1: fold `comptime { ... }` blocks in existing item bodies.
+    if needs_fold {
+        for item in &mut program.items {
+            folder.fold_item(item);
+        }
+    }
+    // Pass 2: derive desugaring — expand each `#[derive(X)]` whose `derive_x`
+    // comptime fn exists into the items that fn returns, spliced after the
+    // derive site. Spec: deferred.md § Comptime — Code generation and derive
+    // desugaring.
+    if needs_derive {
+        folder.expand_derives(program, &derive_fns);
     }
     folder.errors
+}
+
+/// Collect the names of every top-level `comptime fn derive_*` in `program`.
+/// These are the functions a `#[derive(X)]` attribute can dispatch to (lookup
+/// convention: `#[derive(TraitName)]` → `derive_<snake(TraitName)>`).
+fn collect_derive_fns(program: &Program) -> std::collections::HashSet<String> {
+    program
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(f) if f.is_comptime && f.name.starts_with("derive_") => {
+                Some(f.name.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// True if any struct/enum carries a `#[derive(X)]` whose `derive_x` comptime
+/// fn is present in `derive_fns`. Derives without a matching comptime fn (the
+/// built-in `Eq` / `Hash` / … handled natively today) do not trigger this pass.
+fn program_has_derive_to_expand(
+    program: &Program,
+    derive_fns: &std::collections::HashSet<String>,
+) -> bool {
+    program.items.iter().any(|item| {
+        let attrs = match item {
+            Item::StructDef(s) => &s.attributes,
+            Item::EnumDef(e) => &e.attributes,
+            _ => return false,
+        };
+        ordered_derived_traits(attrs)
+            .iter()
+            .any(|t| derive_fns.contains(&format!("derive_{}", to_snake_case(t))))
+    })
 }
 
 /// True if any item in the program contains a `comptime { ... }` node.
@@ -700,6 +762,244 @@ impl Folder<'_> {
             }),
         }
     }
+
+    /// Derive desugaring (substrate 4). For every struct/enum carrying a
+    /// `#[derive(X)]` whose `derive_x` comptime fn exists, evaluate
+    /// `derive_x(T)` and splice the returned `Vec[Item]` into the module
+    /// immediately after the derive site (source-order semantics: generated
+    /// items see items declared earlier, not later). Spec: deferred.md §
+    /// Comptime — Code generation and derive desugaring.
+    fn expand_derives(
+        &mut self,
+        program: &mut Program,
+        derive_fns: &std::collections::HashSet<String>,
+    ) {
+        // Plan first (immutable scan), splice after — so item indices stay
+        // valid while we evaluate, and the snapshot interpreter never sees the
+        // half-mutated program.
+        let mut planned: Vec<(usize, Vec<Item>)> = Vec::new();
+        for (idx, item) in program.items.iter().enumerate() {
+            let (type_name, attributes, site) = match item {
+                Item::StructDef(s) => (s.name.clone(), &s.attributes, s.span.clone()),
+                Item::EnumDef(e) => (e.name.clone(), &e.attributes, e.span.clone()),
+                _ => continue,
+            };
+            let traits = ordered_derived_traits(attributes);
+            let mut generated: Vec<Item> = Vec::new();
+            for trait_name in traits {
+                let fn_name = format!("derive_{}", to_snake_case(&trait_name));
+                // A derive without a backing comptime fn (the native built-ins:
+                // Eq / Hash / Display / …) is left to the existing handling —
+                // skip it here rather than erroring.
+                if !derive_fns.contains(&fn_name) {
+                    continue;
+                }
+                if let Some(items) = self.eval_derive_call(&fn_name, &type_name, &site) {
+                    generated.extend(items);
+                }
+            }
+            if !generated.is_empty() {
+                planned.push((idx, generated));
+            }
+        }
+
+        // Splice last-to-first so each insertion leaves earlier indices intact.
+        for (idx, items) in planned.into_iter().rev() {
+            let at = idx + 1;
+            for (k, it) in items.into_iter().enumerate() {
+                program.items.insert(at + k, it);
+            }
+        }
+    }
+
+    /// Evaluate `fn_name(type_name)` via the snapshot interpreter and extract
+    /// the returned `Vec[Item]`. Records (and returns `None` on) a panic, a
+    /// runaway loop, a `compiler.error`, or a non-`Vec[Item]` result. Mirrors
+    /// the per-evaluation state reset / guards of [`Self::eval_and_splice`].
+    fn eval_derive_call(
+        &mut self,
+        fn_name: &str,
+        type_name: &str,
+        site: &Span,
+    ) -> Option<Vec<Item>> {
+        // Build `derive_x(TypeName)`. The bare type-name argument evaluates to
+        // a `Type` pseudovalue (substrate 2), binding the `comptime T: Type`
+        // parameter. Synthesized directly rather than parsed — no string round
+        // trip, and the span is the derive site from the start.
+        let call = Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Identifier(fn_name.to_string()),
+                    span: site.clone(),
+                }),
+                args: vec![CallArg {
+                    label: None,
+                    mut_marker: false,
+                    value: Expr {
+                        kind: ExprKind::Identifier(type_name.to_string()),
+                        span: site.clone(),
+                    },
+                    span: site.clone(),
+                }],
+            },
+            span: site.clone(),
+        };
+
+        self.interp.pending_cf = None;
+        let errors_before = self.interp.runtime_errors.len();
+        let user_errors_before = self.interp.comptime_user_errors.len();
+        self.interp.timed_out = false;
+        self.interp
+            .set_test_deadline(Some(Instant::now() + COMPTIME_WALL_CLOCK_LIMIT));
+
+        let value = self.interp.eval_expr(&call);
+
+        self.interp.set_test_deadline(None);
+
+        // Drain `compiler.error(msg)` diagnostics raised while the derive ran.
+        for diag in self
+            .interp
+            .comptime_user_errors
+            .split_off(user_errors_before)
+        {
+            self.errors.push(ComptimeError {
+                message: format!("error[E_COMPTIME_ERROR]: {}", diag.message),
+                span: diag.span,
+            });
+        }
+
+        if self.interp.timed_out {
+            self.errors.push(ComptimeError {
+                message: format!(
+                    "error[E_COMPTIME_ITER_LIMIT_EXCEEDED]: derive `{fn_name}` did not terminate \
+                     within {}s (deferred.md § Comptime — Resource limits)",
+                    COMPTIME_WALL_CLOCK_LIMIT.as_secs()
+                ),
+                span: site.clone(),
+            });
+            return None;
+        }
+
+        if self.interp.runtime_errors.len() > errors_before {
+            let detail = self
+                .interp
+                .runtime_errors
+                .last()
+                .map(|e| e.message.clone())
+                .unwrap_or_else(|| "derive evaluation failed".to_string());
+            self.errors.push(ComptimeError {
+                message: format!("error[E_COMPTIME_PANIC]: derive `{fn_name}` panicked: {detail}"),
+                span: site.clone(),
+            });
+            return None;
+        }
+
+        self.items_from_derive_value(value, fn_name, site)
+    }
+
+    /// Interpret a derive fn's return value as a list of items. Accepts an
+    /// array/`Vec` of `AstItem`s (the `vec![ast.item(...)]` form) or a bare
+    /// single `AstItem`. Anything else is `E_COMPTIME_ERROR`.
+    fn items_from_derive_value(
+        &mut self,
+        value: Value,
+        fn_name: &str,
+        site: &Span,
+    ) -> Option<Vec<Item>> {
+        let mut out: Vec<Item> = Vec::new();
+        let elements: Vec<Value> = match value {
+            Value::AstItem(it) => return Some(vec![*it]),
+            Value::Array(rc) => rc.read().unwrap().clone(),
+            other => {
+                self.errors.push(ComptimeError {
+                    message: format!(
+                        "error[E_COMPTIME_ERROR]: derive `{fn_name}` must return `Vec[Item]` (a \
+                         list of `ast.item(...)` values), got `{}`",
+                        other.variant_name()
+                    ),
+                    span: site.clone(),
+                });
+                return None;
+            }
+        };
+        for v in elements {
+            match v {
+                Value::AstItem(it) => out.push(*it),
+                other => {
+                    self.errors.push(ComptimeError {
+                        message: format!(
+                            "error[E_COMPTIME_ERROR]: derive `{fn_name}` returned a `Vec` element \
+                             that is not an `Item` (expected `ast.item(...)`), got `{}`",
+                            other.variant_name()
+                        ),
+                        span: site.clone(),
+                    });
+                    return None;
+                }
+            }
+        }
+        Some(out)
+    }
+}
+
+/// Trait names from a declaration's `#[derive(...)]` attributes, in source
+/// order (the ordered analogue of the typechecker's `extract_derived_traits`).
+/// Order is preserved so the spliced impls land deterministically.
+fn ordered_derived_traits(attributes: &[Attribute]) -> Vec<String> {
+    let mut traits = Vec::new();
+    for attr in attributes {
+        if !attr.is_bare("derive") {
+            continue;
+        }
+        for arg in &attr.args {
+            let name = match &arg.value {
+                // `#[derive(Eq)]` — bare identifier.
+                Some(Expr {
+                    kind: ExprKind::Identifier(name),
+                    ..
+                }) => Some(name.clone()),
+                // `#[derive(Display(snake_case))]` — call form; take the callee.
+                Some(Expr {
+                    kind: ExprKind::Call { callee, .. },
+                    ..
+                }) => match &callee.kind {
+                    ExprKind::Identifier(name) => Some(name.clone()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(name) = name {
+                if !traits.contains(&name) {
+                    traits.push(name);
+                }
+            }
+        }
+    }
+    traits
+}
+
+/// Convert a trait name to its `derive_` fn suffix: `CamelCase` → `snake_case`.
+/// `Eq` → `eq`, `PartialEq` → `partial_eq`, `JSON` → `json`. An underscore is
+/// inserted before each uppercase letter that follows a lowercase letter or
+/// that begins a new word after a run of uppercase letters.
+fn to_snake_case(name: &str) -> String {
+    let chars: Vec<char> = name.chars().collect();
+    let mut out = String::with_capacity(name.len() + 4);
+    for (i, &c) in chars.iter().enumerate() {
+        if c.is_uppercase() {
+            let prev_lower =
+                i > 0 && (chars[i - 1].is_lowercase() || chars[i - 1].is_ascii_digit());
+            let next_lower = i + 1 < chars.len() && chars[i + 1].is_lowercase();
+            let after_upper_run = i > 0 && chars[i - 1].is_uppercase();
+            if i > 0 && (prev_lower || (after_upper_run && next_lower)) {
+                out.push('_');
+            }
+            out.extend(c.to_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 // ── Value → literal Expr folding ────────────────────────────────

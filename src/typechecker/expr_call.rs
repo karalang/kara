@@ -346,6 +346,13 @@ impl<'a> super::TypeChecker<'a> {
                     args: vec![],
                 })
             }
+            ("ast", "item") => {
+                expect_one_string(self, "ast.item");
+                Some(Type::Named {
+                    name: "Item".to_string(),
+                    args: vec![],
+                })
+            }
             ("compiler", "error") => {
                 expect_one_string(self, "compiler.error");
                 Some(Type::Unit)
@@ -354,7 +361,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.type_error(
                     format!(
                         "`{module}` has no comptime member `{member}`; this slice supports \
-                         `ast.expr(s)` and `compiler.error(msg)`"
+                         `ast.expr(s)`, `ast.item(s)` and `compiler.error(msg)`"
                     ),
                     span.clone(),
                     TypeErrorKind::TypeMismatch,

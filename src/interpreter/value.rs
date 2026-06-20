@@ -87,6 +87,14 @@ pub enum Value {
     /// constant. Comptime-only: like `TypeVal`, it never reaches the runtime
     /// program as a value.
     AstExpr(Box<crate::ast::Expr>),
+    /// An `Item` AST value — a comptime-only first-class fragment of code
+    /// produced by the item builder `ast.item(s)` (substrate 4, deferred.md §
+    /// Comptime — Code generation and derive desugaring). A `#[derive(X)]`
+    /// expands to a call to `derive_x(comptime T: Type) -> Vec[Item]`; the
+    /// returned `AstItem`s are spliced into the module after the derive site.
+    /// Comptime-only: like `TypeVal` / `AstExpr`, it never reaches the runtime
+    /// program as a value.
+    AstItem(Box<crate::ast::Item>),
     Tuple(Vec<Value>),
     /// Sequence storage shared between the source binding and any live
     /// slice views. `Arc<RwLock<...>>` is universal — every Array
@@ -735,6 +743,9 @@ impl std::fmt::Display for Value {
             // An `Expr` AST value — debug courtesy only; it is spliced as
             // code, not displayed.
             Value::AstExpr(_) => write!(f, "<ast expr>"),
+            // An `Item` AST value — debug courtesy only; it is spliced as
+            // code, not displayed.
+            Value::AstItem(_) => write!(f, "<ast item>"),
             // Debug-courtesy render: shape only (element dumps for large
             // tensors would flood output; `t[i, j]` reads individual
             // elements).
@@ -1066,6 +1077,7 @@ impl Value {
             Value::Unit => "Unit",
             Value::TypeVal(_) => "TypeVal",
             Value::AstExpr(_) => "AstExpr",
+            Value::AstItem(_) => "AstItem",
             Value::Tensor { .. } => "Tensor",
             Value::Tuple(_) => "Tuple",
             Value::Array(_) => "Array",
