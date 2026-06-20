@@ -516,6 +516,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.inline_option_map_payload_vars.clear();
         self.var_option_shared_heap.clear();
         self.ref_params.clear();
+        self.entry_slot_ref_vars.clear();
         self.owned_vecstr_params.clear();
         self.owned_struct_params.clear();
         self.rc_fallback_heap_types.clear();

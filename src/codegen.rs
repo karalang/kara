@@ -1541,6 +1541,15 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) slice_elem_types: HashMap<String, BasicTypeEnum<'ctx>>,
     /// Variables that are ref parameters (name → inner LLVM type for dereferencing).
     pub(crate) ref_params: HashMap<String, BasicTypeEnum<'ctx>>,
+    /// Locals bound to a `mut ref V` slot pointer returned by
+    /// `m.entry(k).or_insert(d)` / `or_insert_with(f)` — the two-step
+    /// `let r = m.entry(k).or_insert(0); *r += 1`. The binding's alloca holds
+    /// the raw slot pointer (`*mut V`); the value (name → V's LLVM type) drives
+    /// the deref-read (`*r`) and deref-write (`*r += 1` / `*r = v`). This is
+    /// the codegen analog of the interpreter's `Value::MapSlotRef`. Kept
+    /// separate from `ref_params` (immutable borrows, no write-through, and the
+    /// borrow path deliberately excludes `or_insert`).
+    pub(crate) entry_slot_ref_vars: HashMap<String, BasicTypeEnum<'ctx>>,
     /// Owned (bare `String` / `Vec[T]`, non-ref) parameters of the
     /// function currently being compiled. The call ABI passes these
     /// `{data, len, cap}` headers by value while the CALLER retains the
@@ -4996,6 +5005,7 @@ impl<'ctx> Codegen<'ctx> {
             slice_elem_types: HashMap::new(),
             fn_param_slice_elem: HashMap::new(),
             ref_params: HashMap::new(),
+            entry_slot_ref_vars: HashMap::new(),
             owned_vecstr_params: HashSet::new(),
             owned_struct_params: HashSet::new(),
             fn_param_ref: HashMap::new(),

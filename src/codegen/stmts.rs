@@ -1196,6 +1196,32 @@ impl<'ctx> super::Codegen<'ctx> {
                 // B-2026-06-07-5. Sits ahead of the value-oriented Vec/String
                 // tracking below, which would mis-handle the raw pointer.
                 if let PatternKind::Binding(var_name) = &pattern.kind {
+                    // `let r = m.entry(k).or_insert(d)` — bind `r` to the slot
+                    // pointer (`mut ref V`) and tag it in `entry_slot_ref_vars`
+                    // so `*r` reads / `*r += 1` / `*r = v` write through to the
+                    // live map slot (the two-step counter idiom; codegen analog
+                    // of the interpreter's `Value::MapSlotRef`). Sits ahead of
+                    // the value-oriented tracking below, which would mis-handle
+                    // the raw slot pointer.
+                    if let Some(map_name) = self.entry_chain_or_insert_map_name(value) {
+                        let val_ty = *self.map_val_types.get(&map_name).ok_or_else(|| {
+                            format!("entry let-binding: missing val type for '{}'", map_name)
+                        })?;
+                        let fn_val = self.current_fn.expect("let inside a function");
+                        let slot_ptr = self.compile_expr(value)?;
+                        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                        let alloca = self.create_entry_alloca(fn_val, var_name, ptr_ty.into());
+                        self.builder.build_store(alloca, slot_ptr).unwrap();
+                        self.variables.insert(
+                            var_name.clone(),
+                            VarSlot {
+                                ptr: alloca,
+                                ty: ptr_ty.into(),
+                            },
+                        );
+                        self.entry_slot_ref_vars.insert(var_name.clone(), val_ty);
+                        return Ok(());
+                    }
                     if let Some(inner_te) = self.ref_return_inner_for_call(value) {
                         let fn_val = self.current_fn.expect("let inside a function");
                         // Mark this as the one sanctioned borrow-return call
@@ -3323,6 +3349,33 @@ impl<'ctx> super::Codegen<'ctx> {
                 if self.try_emit_b2_link_store(target, value)? {
                     return Ok(());
                 }
+                // `*m.entry(k).or_insert(d) = v` — store through the entry slot
+                // pointer (compiled once, before the RHS). Mirrors the
+                // interpreter's MapSlotRef write for A/B parity. Scalar values
+                // store cleanly; for a heap value type the prior slot contents
+                // are not dropped here (this assign-through-entry shape is rare
+                // — counters use `+=`, per-key Vecs use `.push`).
+                if let ExprKind::Unary {
+                    op: crate::ast::UnaryOp::Deref,
+                    operand,
+                } = &target.kind
+                {
+                    if self.entry_chain_or_insert_map_name(operand).is_some() {
+                        let slot_ptr = self.compile_expr(operand)?.into_pointer_value();
+                        let v = self.compile_expr(value)?;
+                        self.builder.build_store(slot_ptr, v).unwrap();
+                        return Ok(());
+                    }
+                }
+                // `*r = v` / `r = v` where `r` is a let-bound entry slot ref:
+                // store through the slot pointer (two-step idiom, parity with
+                // the interpreter's MapSlotRef write).
+                if let Some(name) = self.entry_slot_ref_target(target) {
+                    let (slot_ptr, _val_ty) = self.entry_slot_ref_ptr(&name)?;
+                    let v = self.compile_expr(value)?;
+                    self.builder.build_store(slot_ptr, v).unwrap();
+                    return Ok(());
+                }
                 // Mirror the let-site convention: when the RHS is a
                 // `StructLiteral` (`emit_rc_alloc` returns rc=1) or a
                 // `Call` / `MethodCall` (callee transfers +1 via the
@@ -3783,6 +3836,46 @@ impl<'ctx> super::Codegen<'ctx> {
                     CompoundOp::Shl => BinOp::Shl,
                     CompoundOp::Shr => BinOp::Shr,
                 };
+                // `*r += rhs` / `r += rhs` where `r` is a let-bound entry slot
+                // ref (`let r = m.entry(k).or_insert(d)`): load the slot pointer
+                // from r's alloca, then load / apply / store back through it.
+                if let Some(name) = self.entry_slot_ref_target(target) {
+                    let (slot_ptr, val_ty) = self.entry_slot_ref_ptr(&name)?;
+                    let cur = self
+                        .builder
+                        .build_load(val_ty, slot_ptr, "entry.ref.cur")
+                        .unwrap();
+                    let rhs = self.compile_expr(value)?;
+                    let result = self.compile_binop(&binop, cur, rhs)?;
+                    self.builder.build_store(slot_ptr, result).unwrap();
+                    return Ok(());
+                }
+                // `*m.entry(k).or_insert(d) += rhs` — the canonical counter.
+                // The entry chain lowers to a slot pointer (`mut ref V`) with
+                // insert side effects, so compile it EXACTLY once, then load /
+                // apply / store back through that pointer. (Compiling via
+                // `compile_expr(target)` would either return the raw pointer or
+                // re-emit the entry call, double-inserting.)
+                if let ExprKind::Unary {
+                    op: crate::ast::UnaryOp::Deref,
+                    operand,
+                } = &target.kind
+                {
+                    if let Some(map_name) = self.entry_chain_or_insert_map_name(operand) {
+                        let val_ty = *self.map_val_types.get(&map_name).ok_or_else(|| {
+                            format!("entry compound-assign: missing val type for '{}'", map_name)
+                        })?;
+                        let slot_ptr = self.compile_expr(operand)?.into_pointer_value();
+                        let cur = self
+                            .builder
+                            .build_load(val_ty, slot_ptr, "entry.slot.cur")
+                            .unwrap();
+                        let rhs = self.compile_expr(value)?;
+                        let result = self.compile_binop(&binop, cur, rhs)?;
+                        self.builder.build_store(slot_ptr, result).unwrap();
+                        return Ok(());
+                    }
+                }
                 if let ExprKind::Identifier(name) = &target.kind {
                     // Slice 9: module-binding compound-assign loads
                     // through the global pointer (not the local
@@ -3829,6 +3922,26 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                     ExprKind::Index { object, index } => {
                         self.compile_index_store(object, index, result)?;
+                    }
+                    // `*x OP= rhs` for a value-represented `mut ref` (a closure
+                    // `and_modify` param or a CICO fn `mut ref` param): the
+                    // binding's alloca holds V directly, so store back to it —
+                    // identical to the deref-elided `x OP= rhs`, and the
+                    // writeback (closure exit / call site) propagates it. The
+                    // read above (`compile_expr(target)`) already loaded V via
+                    // `load_variable`. A pointer-represented `mut ref` (the rare
+                    // `let r = m.entry(k).or_insert(d)`) is NOT handled here: its
+                    // read yields a pointer and errors in `compile_binop` before
+                    // reaching this store.
+                    ExprKind::Unary {
+                        op: crate::ast::UnaryOp::Deref,
+                        operand,
+                    } => {
+                        if let ExprKind::Identifier(name) = &operand.kind {
+                            if let Some(slot) = self.variables.get(name).copied() {
+                                self.builder.build_store(slot.ptr, result).unwrap();
+                            }
+                        }
                     }
                     _ => {}
                 }

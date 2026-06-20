@@ -1031,6 +1031,112 @@ impl<'ctx> super::Codegen<'ctx> {
                 );
                 Ok(agg)
             }
+            "get_or" => {
+                if args.len() < 2 {
+                    return Err("Map.get_or requires a key and a default argument".to_string());
+                }
+                // Borrowed String-slice key (lookup-only, no retain — sound),
+                // mirroring `get`.
+                let key_val = match self.try_compile_borrowed_string_slice(&args[0].value)? {
+                    Some(v) => v,
+                    None => self.compile_expr(&args[0].value)?,
+                };
+                let fn_val = self.current_fn.unwrap();
+                let key_slot = self.create_entry_alloca(fn_val, "map.getor.key", key_ty);
+                let val_slot = self.create_entry_alloca(fn_val, "map.getor.val", val_ty);
+                self.builder.build_store(key_slot, key_val).unwrap();
+                let key_val_matches = key_val.get_type() == key_ty;
+                let found = if self.should_use_mono_map_for(key_ty, val_ty) && key_val_matches {
+                    let mono = self.get_or_emit_map_mono_methods(key_ty, val_ty);
+                    self.builder
+                        .build_call(
+                            mono.get_fn,
+                            &[map_handle.into(), key_val.into(), val_slot.into()],
+                            "map.getor.found",
+                        )
+                        .unwrap()
+                        .try_as_basic_value()
+                        .unwrap_basic()
+                        .into_int_value()
+                } else {
+                    self.builder
+                        .build_call(
+                            self.karac_map_get_fn,
+                            &[map_handle.into(), key_slot.into(), val_slot.into()],
+                            "map.getor.found",
+                        )
+                        .unwrap()
+                        .try_as_basic_value()
+                        .unwrap_basic()
+                        .into_int_value()
+                };
+
+                let found_bb = self
+                    .context
+                    .append_basic_block(fn_val, "map.getor.found.bb");
+                let default_bb = self
+                    .context
+                    .append_basic_block(fn_val, "map.getor.default.bb");
+                let merge_bb = self.context.append_basic_block(fn_val, "map.getor.merge");
+                self.builder
+                    .build_conditional_branch(found, found_bb, default_bb)
+                    .unwrap();
+
+                // Found — produce an OWNED copy of the stored value. `get_or`
+                // returns `V` (not a borrow), so a non-shared heap V (String /
+                // Vec / struct) is deep-cloned: returning an alias to the
+                // bucket's buffer would double-free with the map's drop at the
+                // caller's scope exit. A shared (RC) V clones shallowly (pointer
+                // copy) so it gets an rc_inc to own a balanced reference (same
+                // rationale as `get`). A scalar V's clone fn is a plain
+                // load+store. Mirrors the interpreter's `v.clone()`.
+                self.builder.position_at_end(found_bb);
+                let found_val = if let Some(v_te) = self.var_elem_type_exprs.get(var_name).cloned()
+                {
+                    let clone_fn = self.emit_clone_fn_for_type_expr(&v_te);
+                    let dst = self.create_entry_alloca(fn_val, "map.getor.clone", val_ty);
+                    // `emit_clone_fn_*` / `create_entry_alloca` may move the
+                    // builder; re-assert the found block before emitting here.
+                    self.builder.position_at_end(found_bb);
+                    self.builder
+                        .build_call(clone_fn, &[val_slot.into(), dst.into()], "map.getor.clone")
+                        .unwrap();
+                    let fv = self
+                        .builder
+                        .build_load(val_ty, dst, "map.getor.hit")
+                        .unwrap();
+                    if let TypeKind::Path(p) = &v_te.kind {
+                        if let Some(seg) = p.segments.last() {
+                            if let Some(info) = self.shared_types.get(seg.as_str()).cloned() {
+                                self.emit_refcount_inc(
+                                    "map.getor",
+                                    info.heap_type,
+                                    fv.into_pointer_value(),
+                                );
+                            }
+                        }
+                    }
+                    fv
+                } else {
+                    self.builder
+                        .build_load(val_ty, val_slot, "map.getor.hit")
+                        .unwrap()
+                };
+                let found_end_bb = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                // Not found — evaluate the default expression.
+                self.builder.position_at_end(default_bb);
+                let default_val = self.compile_expr(&args[1].value)?;
+                let default_end_bb = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                // Merge — phi between the hit value and the default.
+                self.builder.position_at_end(merge_bb);
+                let phi = self.builder.build_phi(val_ty, "map.getor.result").unwrap();
+                phi.add_incoming(&[(&found_val, found_end_bb), (&default_val, default_end_bb)]);
+                Ok(phi.as_basic_value())
+            }
             "remove" => {
                 if args.is_empty() {
                     return Err("Map.remove requires a key argument".to_string());

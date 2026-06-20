@@ -202,6 +202,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // locals at their `let` sites; swap out the caller's map and restore
             // below, parallel to `variables` / `ref_params`.
             let saved_binding_layouts = std::mem::take(&mut self.binding_layouts);
+            // Same isolation for the entry-slot-ref locals (the two-step
+            // `let r = m.entry(k).or_insert(d)` binding tag): a nested mono
+            // body must not see/clobber the outer function's tags.
+            let saved_entry_slot_ref_vars = std::mem::take(&mut self.entry_slot_ref_vars);
 
             // Declare then compile the specialization.
             self.declare_mono_function(&generic_fn, &mangled)?;
@@ -224,6 +228,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // Restore state.
             self.binding_layouts = saved_binding_layouts;
             self.ref_params = saved_ref_params;
+            self.entry_slot_ref_vars = saved_entry_slot_ref_vars;
             self.layout_subst = saved_layout_subst;
             self.const_subst = saved_const_subst;
             self.type_subst = saved_subst;
@@ -657,6 +662,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // after, so a mono's local can't leak its SoA-ness back to a same-named
         // caller binding.
         let saved_binding_layouts = std::mem::take(&mut self.binding_layouts);
+        let saved_entry_slot_ref_vars = std::mem::take(&mut self.entry_slot_ref_vars);
 
         let result = self
             .declare_mono_function(func, mangled)
@@ -664,6 +670,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.binding_layouts = saved_binding_layouts;
         self.ref_params = saved_ref_params;
+        self.entry_slot_ref_vars = saved_entry_slot_ref_vars;
         self.return_layout = saved_return_layout;
         self.layout_subst = saved_layout_subst;
         self.const_subst = saved_const_subst;

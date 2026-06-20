@@ -302,6 +302,96 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(Some(value))
     }
 
+    /// If `expr` is a Map entry chain terminating in `or_insert` /
+    /// `or_insert_with` (`m.entry(k){.and_modify(f)}*.or_insert(d)`), return
+    /// the root map's name. Those terminals lower to a slot pointer
+    /// (`mut ref V`), so the deref-write path (`*…or_insert(d) += rhs`,
+    /// `*…or_insert(d) = v`) uses this to confirm the shape and recover the
+    /// value type via `map_val_types`. `None` for any other shape.
+    pub(super) fn entry_chain_or_insert_map_name(&self, expr: &Expr) -> Option<String> {
+        let ExprKind::MethodCall { object, method, .. } = &expr.kind else {
+            return None;
+        };
+        if !matches!(method.as_str(), "or_insert" | "or_insert_with") {
+            return None;
+        }
+        // Peel `.and_modify(f)` wrappers down to the root `m.entry(k)`.
+        let mut current = object.as_ref();
+        loop {
+            let ExprKind::MethodCall {
+                object: inner,
+                method: m,
+                args: inner_args,
+                ..
+            } = &current.kind
+            else {
+                return None;
+            };
+            if m == "entry" && inner_args.len() == 1 {
+                if let ExprKind::Identifier(map_name) = &inner.kind {
+                    if self.map_key_types.contains_key(map_name.as_str()) {
+                        return Some(map_name.clone());
+                    }
+                }
+                return None;
+            } else if m == "and_modify" && inner_args.len() == 1 {
+                current = inner.as_ref();
+            } else {
+                return None;
+            }
+        }
+    }
+
+    /// If `target` is `r` or `*r` where `r` is a let-bound entry slot ref
+    /// (`let r = m.entry(k).or_insert(d)`, tagged in `entry_slot_ref_vars`),
+    /// return `r`. The assign / compound-assign deref-write paths use this to
+    /// redirect the store through the slot pointer rather than rebinding the
+    /// local. (A bare `mut ref V` read is not well-typed, so reads always come
+    /// through `*r`, handled in `compile_expr`'s Deref arm.)
+    pub(super) fn entry_slot_ref_target(&self, target: &Expr) -> Option<String> {
+        let name = match &target.kind {
+            ExprKind::Identifier(n) => n,
+            ExprKind::Unary {
+                op: UnaryOp::Deref,
+                operand,
+            } => match &operand.kind {
+                ExprKind::Identifier(n) => n,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        if self.entry_slot_ref_vars.contains_key(name) {
+            Some(name.clone())
+        } else {
+            None
+        }
+    }
+
+    /// Load the live slot pointer (`*mut V`) for a let-bound entry slot ref
+    /// `name`, plus V's LLVM type. The binding's alloca holds the slot pointer;
+    /// load it, ready for a deref-read or deref-write.
+    pub(super) fn entry_slot_ref_ptr(
+        &self,
+        name: &str,
+    ) -> Result<(PointerValue<'ctx>, BasicTypeEnum<'ctx>), String> {
+        let val_ty = *self
+            .entry_slot_ref_vars
+            .get(name)
+            .ok_or_else(|| format!("entry slot ref '{}' not tagged", name))?;
+        let slot = self
+            .variables
+            .get(name)
+            .copied()
+            .ok_or_else(|| format!("entry slot ref '{}' has no alloca", name))?;
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let slot_ptr = self
+            .builder
+            .build_load(ptr_ty, slot.ptr, "entry.ref.ptr")
+            .map_err(|e| e.to_string())?
+            .into_pointer_value();
+        Ok((slot_ptr, val_ty))
+    }
+
     /// Emit the entry-chain IR. Caller has already verified that
     /// `<map_name>` is a Map variable. Branches happen at every `and_modify`
     /// site and the terminal method, all sharing the slot pointer returned

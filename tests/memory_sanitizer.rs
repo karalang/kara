@@ -5338,6 +5338,63 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_map_entry_or_insert_counter_and_get_or_clean() {
+        // Tier D entry write-through end to end: `*m.entry(k).or_insert(0) += 1`
+        // builds a frequency table keyed by ≥36-byte Strings (LSan-visible if a
+        // key buffer leaked), then `get_or` reads the counts back. The map owns
+        // and frees each key exactly once; the scalar counter values carry no
+        // heap. No leak / double-free / UAF.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    let words = [
+        "alpha-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "beta-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "alpha-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "alpha-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ];
+    for w in words {
+        *m.entry(w.to_string()).or_insert(0_i64) += 1;
+    }
+    println(m.get_or("alpha-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(), 0_i64));
+    println(m.get_or("beta-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(), 0_i64));
+}
+"#,
+            &["3", "1"],
+            "map_entry_or_insert_counter_and_get_or_clean",
+        );
+    }
+
+    #[test]
+    fn asan_map_get_or_string_value_owned_copy_no_double_free() {
+        // `get_or` returns an OWNED `V`, so a heap V (String, ≥36 bytes) must be
+        // deep-cloned from the bucket on a hit — else the caller's scope-exit
+        // drop and the map's drop free the same buffer (double-free). The miss
+        // path returns the freshly-built default. Both bindings drop cleanly.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut m: Map[String, String] = Map.new();
+    let k = "key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
+    let v = "val-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string();
+    m.insert(k.clone(), v);
+    let hit = m.get_or(k.clone(), "dflt-cccccccccccccccccccccccccccccccc".to_string());
+    let miss = m.get_or("absent-dddddddddddddddddddddddddddddd".to_string(),
+                        "dflt-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee".to_string());
+    println(hit);
+    println(miss);
+}
+"#,
+            &[
+                "val-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "dflt-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            ],
+            "map_get_or_string_value_owned_copy_no_double_free",
+        );
+    }
+
     // ── Vec[Map] ownership: a Map moved into a Vec transfers ownership
     //    to the Vec (Cluster 1) ──
     // The headline bug: a `Map` pushed into a `Vec` aliased a handle still

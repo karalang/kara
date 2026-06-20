@@ -24496,6 +24496,74 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_map_entry_or_insert_deref_compound_assign_counter() {
+        // Tier D flagship: `*m.entry(k).or_insert(0) += 1` — the entry chain
+        // lowers to a slot pointer; the compound-assign loads / adds / stores
+        // back through it. `get_or` reads the result. A=3, B=2, C=1.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    let words = ["a", "b", "a", "c", "a", "b"];
+    for w in words {
+        *m.entry(w.to_string()).or_insert(0_i64) += 1;
+    }
+    println(m.get_or("a".to_string(), 0_i64));
+    println(m.get_or("b".to_string(), 0_i64));
+    println(m.get_or("c".to_string(), 0_i64));
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["3", "2", "1"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_map_entry_or_insert_two_step_mut_ref() {
+        // Two-step counter: bind the `mut ref V` to a local, then write through
+        // it. `*r += 1` and the deref-elided `r += 1` both store back to the
+        // slot; `*r` reads it. 10 → 11 → 12.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    let r = m.entry("a".to_string()).or_insert(10_i64);
+    *r += 1;
+    r += 1;
+    println(*r);
+    println(m.get_or("a".to_string(), 0_i64));
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["12", "12"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_map_get_or_hit_and_default() {
+        // `Map.get_or(k, default)` codegen: returns the stored value on a hit
+        // and the default on a miss.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("x".to_string(), 7_i64);
+    println(m.get_or("x".to_string(), -1_i64));
+    println(m.get_or("y".to_string(), -1_i64));
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["7", "-1"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_map_get_remove_with_vec_value_payload() {
         // Bisected from the LeetCode 3629 codegen-vs-interpreter divergence.
         // Pins `Map.get` and `Map.remove` returning `Option[Vec[i64]]`:

@@ -491,6 +491,20 @@ impl<'ctx> super::Codegen<'ctx> {
                             .map_err(|e| e.to_string())?;
                         return Ok(loaded);
                     }
+                    // `*r` where `r` is a let-bound entry slot ref
+                    // (`let r = m.entry(k).or_insert(d)`): r's alloca holds the
+                    // slot pointer (`*mut V`), so load the pointer then load V
+                    // through it (the two-step entry counter's read side).
+                    if let ExprKind::Identifier(name) = &operand.kind {
+                        if self.entry_slot_ref_vars.contains_key(name) {
+                            let (slot_ptr, val_ty) = self.entry_slot_ref_ptr(name)?;
+                            let v = self
+                                .builder
+                                .build_load(val_ty, slot_ptr, "entry.ref.deref")
+                                .map_err(|e| e.to_string())?;
+                            return Ok(v);
+                        }
+                    }
                     // `*r` for a `ref T` / `mut ref T` — `load_variable` already
                     // performs the two-step dereference (load alloca → load
                     // through ptr), so `compile_expr(operand)` already yields the
