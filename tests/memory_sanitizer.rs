@@ -12364,4 +12364,49 @@ fn main() {
             "asan_layout_twin_shared_enums_drop_through_correct_rc_drop",
         );
     }
+
+    /// Moving a heap field OUT of an owned by-value struct param (deep-copied at
+    /// entry, #14/#17) while the param's scope-exit `StructDrop` still freed that
+    /// field double-freed the moved-out buffer — surfaced by phase-12 selfhost
+    /// slice 3c-ii (`render_variant` / `render_struct_field`), minimal
+    /// `fn f(s: S) -> String { s.a }`. Exercises all three move-out shapes:
+    /// field-access return (`p.a`), destructure-then-return (`let Pair{a,b}=p; a`),
+    /// and a CONSUMED `Vec` field destructured from the param (`for t in tags`)
+    /// alongside a moved `String` field — in a loop with ≥36-byte payloads so a
+    /// leak (LSan) or double-free (ASAN) trips. Fixed by the `FieldAccess`
+    /// move-out suppressor arm + the callee-owned place-source struct-destructure
+    /// transfer (`zero_struct_field_move_cap`).
+    #[test]
+    fn asan_by_value_struct_field_moveout_no_double_free() {
+        assert_clean_asan_run(
+            "struct Pair { a: String, b: String }\n\
+             struct Node { tags: Vec[String], name: String }\n\
+             fn pick_a(p: Pair) -> String { p.a }\n\
+             fn pick_a_destructured(p: Pair) -> String { let Pair { a, b } = p; a }\n\
+             fn join_tags(n: Node) -> String {\n\
+             \x20   let Node { tags, name } = n;\n\
+             \x20   let mut out = name;\n\
+             \x20   for t in tags { out.push_str(t); }\n\
+             \x20   out\n\
+             }\n\
+             fn main() {\n\
+             \x20   let mut i = 0;\n\
+             \x20   while i < 50 {\n\
+             \x20       let p1 = Pair { a: \"pair-a-field-payload-long-enough-string\".to_string(), b: \"pair-b-field-payload-long-enough-string\".to_string() };\n\
+             \x20       let r1 = pick_a(p1);\n\
+             \x20       let p2 = Pair { a: \"destructure-a-payload-long-enough-string\".to_string(), b: \"destructure-b-payload-long-enough-string\".to_string() };\n\
+             \x20       let r2 = pick_a_destructured(p2);\n\
+             \x20       let mut tags: Vec[String] = Vec.new();\n\
+             \x20       tags.push(\"tag-element-payload-long-enough-string-one\".to_string());\n\
+             \x20       tags.push(\"tag-element-payload-long-enough-string-two\".to_string());\n\
+             \x20       let n = Node { tags: tags, name: \"node-name-payload-long-enough-string\".to_string() };\n\
+             \x20       let r3 = join_tags(n);\n\
+             \x20       i = i + 1;\n\
+             \x20   }\n\
+             \x20   println(\"done\");\n\
+             }\n",
+            &["done"],
+            "asan_by_value_struct_field_moveout_no_double_free",
+        );
+    }
 }

@@ -48616,4 +48616,36 @@ fn main() {
             }
         }
     }
+
+    /// Returning a heap field of an owned by-value struct param must zero that
+    /// field's `cap` in the SOURCE before the param's `StructDrop`, so the drop
+    /// skips the moved-out (returned) buffer — otherwise the returned `String`
+    /// is freed and then handed back (double-free / UAF). Regression for the
+    /// slice-3c by-value struct field move-out fix (the `FieldAccess` move-out
+    /// suppressor + `zero_struct_field_move_cap`). E2E coverage lives in
+    /// `tests/memory_sanitizer.rs::asan_by_value_struct_field_moveout_no_double_free`.
+    #[test]
+    fn struct_field_moveout_zeros_source_cap_before_drop() {
+        let ir = ir_for(
+            "struct Pair { a: String, b: String }\n\
+             fn f(p: Pair) -> String { p.a }\n\
+             fn main() { println(f(Pair { a: \"x\".to_string(), b: \"y\".to_string() })); }\n",
+        );
+        let body = function_body(&ir, "f").expect("fn f must be emitted");
+        let cap_zero = body.find("sfld.move.cap");
+        let drop_call = body.find("@__karac_drop_struct_Pair");
+        assert!(
+            cap_zero.is_some(),
+            "fn f must cap-zero the moved-out field in the source \
+             (FieldAccess move-out suppressor)\n--- body ---\n{body}"
+        );
+        assert!(
+            drop_call.is_some(),
+            "fn f must drop the callee-owned struct param\n--- body ---\n{body}"
+        );
+        assert!(
+            cap_zero < drop_call,
+            "the moved-field cap-zero must precede the struct drop\n--- body ---\n{body}"
+        );
+    }
 }

@@ -2500,6 +2500,64 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Zero the moved-out heap field `field` of struct `struct_name` (rooted at
+    /// `base_ptr`, which must hold the struct INLINE) so the struct's
+    /// `StructDrop` skips it — the single-field analog of `zero_struct_move_caps`,
+    /// used when ONE field is moved out of an owned struct via `FieldAccess`
+    /// (`return s.a` / `f(s.a)` / `let x = s.a`). Vec/String → `cap = 0`;
+    /// non-shared enum → live-variant payload caps; nested non-shared struct →
+    /// recurse. No-op for scalar / shared / Option / Result fields (the struct
+    /// drop already does the right thing for those).
+    pub(super) fn zero_struct_field_move_cap(
+        &self,
+        base_ptr: PointerValue<'ctx>,
+        struct_name: &str,
+        field: &str,
+    ) {
+        let Some(&st) = self.struct_types.get(struct_name) else {
+            return;
+        };
+        let Some(field_names) = self.struct_field_names.get(struct_name) else {
+            return;
+        };
+        let Some(idx) = field_names.iter().position(|n| n == field) else {
+            return;
+        };
+        let fname = self
+            .struct_field_type_names
+            .get(struct_name)
+            .and_then(|v| v.get(idx))
+            .and_then(|o| o.as_deref())
+            .unwrap_or("")
+            .to_string();
+        let Ok(field_ptr) = self
+            .builder
+            .build_struct_gep(st, base_ptr, idx as u32, "sfld.move.p")
+        else {
+            return;
+        };
+        let vec_ty = self.vec_struct_type();
+        let zero = self.context.i64_type().const_int(0, false);
+        if matches!(fname.as_str(), "Vec" | "VecDeque" | "String") {
+            if let Ok(cap_ptr) =
+                self.builder
+                    .build_struct_gep(vec_ty, field_ptr, 2, "sfld.move.cap")
+            {
+                let _ = self.builder.build_store(cap_ptr, zero);
+            }
+        } else if fname != "Option" && fname != "Result" {
+            if let Some(layout) = self.enum_layouts.get(fname.as_str()).cloned() {
+                if !layout.is_shared {
+                    self.zero_enum_payload_caps(field_ptr, &layout);
+                }
+            } else if self.struct_types.contains_key(fname.as_str())
+                && !self.shared_types.contains_key(fname.as_str())
+            {
+                self.zero_struct_move_caps(field_ptr, &fname);
+            }
+        }
+    }
+
     pub(super) fn suppress_source_vec_cleanup_for_arg_ex(
         &self,
         arg_expr: &Expr,
@@ -2541,6 +2599,39 @@ impl<'ctx> super::Codegen<'ctx> {
                                         self.context.i64_type().const_int(0, false),
                                     );
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+            return;
+        }
+        // Struct field move-out (`return s.a`, `f(s.a)`, `let x = s.a`): the
+        // heap field is moved into the consumer, but the OWNED struct `s` (a
+        // callee-owned by-value param deep-copied at entry — #14/#17 — or any
+        // local with a registered `StructDrop`) still frees that field at scope
+        // exit, a double-free (selfhost slice 3c-ii minimal:
+        // `fn f(s: S) -> String { s.a }`). Zero the moved field's `cap` (or its
+        // enum-payload / nested-struct caps) in the source so the struct drop
+        // skips it; the consumer is the sole owner. The struct counterpart of
+        // the `TupleIndex` arm above. Guarded to a struct held INLINE in the
+        // slot (`slot.ty == st`): a `ref Struct` param's slot holds a POINTER
+        // into the caller's frame and takes no ownership, so zeroing there would
+        // corrupt the caller. Shared (RC) structs are left to the refcount
+        // machinery.
+        if let ExprKind::FieldAccess { object, field } = &arg_expr.kind {
+            if let ExprKind::Identifier(s) = &object.kind {
+                if let (Some(slot), Some(struct_name)) = (
+                    self.variables.get(s.as_str()).copied(),
+                    self.var_type_names.get(s.as_str()).cloned(),
+                ) {
+                    if !self.shared_types.contains_key(struct_name.as_str()) {
+                        if let Some(&st) = self.struct_types.get(struct_name.as_str()) {
+                            if matches!(
+                                slot.ty,
+                                inkwell::types::BasicTypeEnum::StructType(held) if held == st
+                            ) {
+                                self.zero_struct_field_move_cap(slot.ptr, &struct_name, field);
                             }
                         }
                     }

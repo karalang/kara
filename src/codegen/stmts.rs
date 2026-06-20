@@ -4209,6 +4209,24 @@ impl<'ctx> super::Codegen<'ctx> {
     /// field offsets, so each field gets its own one-shot cleanup — no
     /// whole-value drop + cap-suppression dance (the enum B path needs that
     /// only because the live variant is dynamic).
+    /// True iff some in-scope cleanup frame holds a `StructDrop` whose
+    /// `struct_alloca` is `ptr` — i.e. the struct local/param rooted at `ptr`
+    /// owns its heap fields and will free them at scope exit (the callee-owned
+    /// param case, #14/#17). Used to distinguish a destructure whose source has
+    /// its OWN drop (transfer ownership to leaves) from one covered by a parent
+    /// drop (a match-binding payload — keep source-owns).
+    fn ptr_has_registered_struct_drop(&self, ptr: PointerValue<'ctx>) -> bool {
+        self.scope_cleanup_actions.iter().any(|frame| {
+            frame.iter().any(|a| {
+                matches!(
+                    a,
+                    super::state::CleanupAction::StructDrop { struct_alloca, .. }
+                        if *struct_alloca == ptr
+                )
+            })
+        })
+    }
+
     fn finish_owned_struct_destructure(
         &mut self,
         pattern: &Pattern,
@@ -4229,6 +4247,35 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(());
         };
         let fresh = self.expr_yields_fresh_owned_temp(value);
+
+        // Place-source (`let S { a, b } = s`) where the source struct `s` is
+        // CALLEE-OWNED — a bare by-value param deep-copied at entry (#14/#17
+        // `make_aggregate_param_callee_owned`), so it carries its OWN scope-exit
+        // `StructDrop`. The destructure bindings alias the source's (copied)
+        // fields, so the source's drop AND any binding move-out both free the
+        // same buffer — a double-free (selfhost slice 3c-ii: `render_variant`'s
+        // `let VariantNode { .. } = v` then a consumed `Vec` field, and the
+        // minimal `fn f(s: S) -> String { let S { a, b } = s; a }`). Transfer
+        // ownership of each Vec/String/non-shared-struct field to its leaf
+        // binding (track its own cleanup) and cap-zero that field in the source
+        // so the `StructDrop` skips it — the struct analog of
+        // `finish_place_source_tuple_destructure` (#21), extended to Vec/String
+        // leaves. Gated on the source carrying its OWN registered `StructDrop`,
+        // so a match-binding payload source (`match t { Foo(n) => { let Bar { .. }
+        // = n } }`, whose payload is freed by the enum's drop, NOT its own) keeps
+        // the proven source-owns behavior. Shared / Map / Set / enum / scalar
+        // fields stay on their existing paths (RC / handle / payload-overlay).
+        let callee_owned_src: Option<PointerValue<'ctx>> = if fresh {
+            None
+        } else if let ExprKind::Identifier(root) = &value.kind {
+            self.variables
+                .get(root.as_str())
+                .copied()
+                .filter(|slot| self.ptr_has_registered_struct_drop(slot.ptr))
+                .map(|slot| slot.ptr)
+        } else {
+            None
+        };
 
         for (idx, fname) in field_names.iter().enumerate() {
             let Some(field_te) = field_tes.get(idx).cloned() else {
@@ -4276,6 +4323,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 if fresh && self.destructure_field_needs_cleanup(&field_te) {
                     if let Some(slot) = self.variables.get(&name).copied() {
                         self.track_owned_destructure_field_cleanup(&name, slot.ptr, &field_te);
+                    }
+                } else if let Some(src_ptr) = callee_owned_src {
+                    // Callee-owned place source (see `callee_owned_src` above):
+                    // transfer Vec/String/non-shared-struct fields — the kinds
+                    // `zero_struct_field_move_cap` zeroes — to the leaf binding,
+                    // and cap-zero that field in the source so its `StructDrop`
+                    // skips it. Shared/Map/Set/enum/scalar fields stay on their
+                    // existing source-owns / RC / handle paths.
+                    let transferable = self.extract_vec_elem_type(&field_te).is_some()
+                        || self.is_string_type_expr(&field_te)
+                        || matches!(
+                            &field_te.kind,
+                            TypeKind::Path(p) if p.segments.last().is_some_and(|s|
+                                self.struct_types.contains_key(s.as_str())
+                                    && !self.shared_types.contains_key(s.as_str()))
+                        );
+                    if transferable {
+                        if let Some(slot) = self.variables.get(&name).copied() {
+                            self.track_owned_destructure_field_cleanup(&name, slot.ptr, &field_te);
+                        }
+                        self.zero_struct_field_move_cap(src_ptr, &struct_name, fname);
                     }
                 }
             } else if fresh && self.destructure_field_needs_cleanup(&field_te) {
