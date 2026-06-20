@@ -51,7 +51,7 @@ per-project sections below hold the design. Status legend: ✅ shipped ·
 |---|---|---|---|---|
 | **Parallax** | Auto-concurrency without `async`/coloring (fan-out + join) | ✅ shipped | auto-par codegen + HTTP FFI | 1 |
 | **Mend** | AI-first: structured compiler output as a machine fix-loop | ✅ shipped | `karac … --output=json` + `karac fix` | 1 |
-| **Slipstream** | Auto-concurrency + SoA layout + one source on CPU/GPU | ⬜ planned | Phase 11 (CPU) · Phase 10 (GPU) | 1 |
+| **Slipstream** | Auto-concurrency + SoA layout + one source on CPU/GPU | 🔨 browser edition shipped | browser LBM wind tunnel (slices 1–3: stateful grid + worker-pool fan-out + live angle-of-attack → stall) built — `examples/slipstream/`; native-SDL2 CPU Phase 11 · GPU Phase 10 still planned | 1 |
 | **Cartographer** | Effect graph as a live architecture artifact | ✅ shipped | whole-program query + live WASM studio (D3 + Monaco) + per-callee blocking attribution — all design points covered | 2 |
 | **Husk** | `kernel` profile — no heap/panic/std, MMIO, ISRs | ⬜ planned | v8 hardware gaps (`#[repr]`, `#[interrupt]`, asm) | 2 |
 | **Weave** | Refinement types + contracts + effects together | ✅ shipped (CSV cut) | refinement+contracts (CSV) · `Pool[T]`+TLS+tracing (service) | 2 |
@@ -193,6 +193,41 @@ examples that show the interesting cases without being contrived.
 ---
 
 ### Slipstream — Interactive Wind Tunnel
+
+> **Built (browser edition) — 2026-06-19.** Shipped at
+> [`examples/slipstream/`](../examples/slipstream/): the real-time LBM D2Q9 wind
+> tunnel on the wasm-threads front-end spine, one Kāra package built to both a
+> native checksum oracle and `--target=wasm_browser --features wasm-threads` from
+> the same source (the Iris one-source/two-target structure, platform-suffixed
+> `host` modules). Slice 1 — the D2Q9 kernel as a grid **carried and evolved
+> across frames** (the new load vs Fathom/Plume, which recompute statelessly),
+> rendered as vorticity; slice 2 — each substep's collide+stream passes **fanned
+> out across the Web Worker pool** via `TaskGroup.spawn`, every worker reading the
+> one shared grid; slice 3 — **live angle-of-attack** via the `std.web.events`
+> wheel/keydown event-data channels (rotate the wing past ~20° and the flow
+> separates into stall). The shared kernel runs both ways, so the native oracle's
+> framebuffer checksums are the A/B reference — and the parallel fan-out's
+> checksums are **byte-identical to the sequential kernel's** (the worker-pool
+> decomposition changes nothing about the result, only how it is computed).
+>
+> The dogfood drove one `karac` fix (the dogfood's job — cf.
+> `feedback_no_workarounds_fix_compiler`): **B-2026-06-19-11** — a heap value
+> captured **read-only by multiple sibling `TaskGroup.spawn` tasks** (the
+> canonical parallel-stencil shared-grid read) while the parent still owned it was
+> miscompiled into a double-free; the spawn lowering treated every capture as a
+> by-move transfer, so N tasks freed the one shared buffer N times (wrong results
+> + an allocator "failed to lock mutex" abort). Fixed in
+> `src/codegen/task_group.rs` by honouring the ownership pass's per-capture mode —
+> a borrowed capture stays owned by the parent and is freed once after the join
+> barrier (the same `Copy`-capture rule a `par {}` branch uses), only a moved
+> capture transfers to the task. Regressions:
+> `tests/memory_sanitizer.rs::asan_taskgroup_spawn_shared_{vec,string}_read_across_tasks_single_free`
+> (value correctness + ASAN; Linux LSan covers the leak arm). Real-browser
+> verified by the committed CDP harness `verify_browser.mjs` (isolated, render
+> loop advancing, canvas evolving, multi-hundred-frame soak clean, wheel angle
+> control moves the wing). Honest cuts (scalar inner kernel, keyboard/scroll
+> rather than an HTML slider, native-SDL2 CPU + GPU still Phase-11/10) are in the
+> example README.
 
 **Primary capability:** Auto-concurrency of sequential code; layout blocks for
 cache-efficient SoA access; same code runs on CPU and GPU.
@@ -1066,7 +1101,7 @@ the "Ready when" column notes the compiler capability each is gated on.
 | 4 | **Tangle** | Now (ownership inference + `karac query ownership` exist) | Proves the no-`'a` safety claim at the hard shapes. Cheap, pure Kāra, backs the README ownership section directly. |
 | 5 | **Weave** | ✅ CSV cut built 2026-06-13 (`examples/weave/`) — runs under `karac run` (interpreter) **and** `karac build`s to a native binary, output byte-identical. Service cut still gated on `Pool[T]` + TLS + tracing | Correctness story for data engineers. Complements the concurrency story. |
 | 6 | **Chronicle** | Self-hosting (Phase 10/12) | Self-hosting milestone. Marks Kāra as "a real language." |
-| 7 | **Slipstream** | CPU path after Phase 11 (long-tail stdlib + FFI); GPU path added later with no Kāra-source change | Visually striking, instantly explainable. |
+| 7 | **Slipstream** | Browser edition ✅ built 2026-06-19 (`examples/slipstream/`); native-SDL2 CPU path after Phase 11 (long-tail stdlib + FFI); GPU path added later with no Kāra-source change | Visually striking, instantly explainable. |
 | 8 | **Husk** | Hardware gaps from v8 (`#[repr]`, `#[interrupt]`, inline asm, `no_std`) | Systems credibility. Validates the `kernel` profile. |
 
 **Parallax** and **Mend** together are the minimum viable showcase — they
@@ -1090,10 +1125,15 @@ surface, so the track doubles as the consumer that justifies building it.
 `animation_frames` + the `Vec.as_ptr` blit handoff (the first event-stream
 producer + the framebuffer host fn). **Plume is built (2026-06-14)** — it drove
 the event-data (`Channel[T]`, `T != ()`) slice (`std.web.events.pointer_moves`)
-+ `f64.sqrt`, completing the interactive spine on top of Fathom's. So
-**Slipstream's wasm edition** is now unblocked on the front-end surface (it
-reuses the same `animation_frames` + event-data-channel + blit spine; its
-remaining gates are the LBM kernel + SIMD-128, not the event-stream wiring).
++ `f64.sqrt`, completing the interactive spine on top of Fathom's.
+**Slipstream's wasm edition is built (2026-06-19)** — the flagship of the track,
+reusing the same `animation_frames` + event-data-channel + blit spine with the
+full LBM D2Q9 kernel (a grid carried across frames), the collide+stream passes
+fanned across the Web Worker pool, and live angle-of-attack via the wheel/keydown
+channels. It drove the cross-task shared-capture fix **B-2026-06-19-11** (a
+read-only heap value captured by multiple sibling `spawn` tasks was a
+double-free). The remaining Slipstream gate is the SIMD-128 inner kernel, a pure
+demo-source follow-up (the `Vector[f64, 2]` lowering already ships).
 
 ---
 

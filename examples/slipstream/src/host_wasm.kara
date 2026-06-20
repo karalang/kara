@@ -9,16 +9,23 @@
 //   * `animation_frames()` (std.web.time) yields once per requestAnimationFrame;
 //     `frames.recv()` parks the worker until the host fires the next frame — no
 //     `await` (design.md § Async Host APIs on WASM).
+//   * `keydown()` / `wheel()` (std.web.events) are event-data channels: the
+//     wing's angle of attack is live input. The loop drains the latest with a
+//     NON-blocking `try_recv` each frame, so input never stalls the render.
+//     Up/Down arrows (or scroll) steepen / flatten the wing; `R` resets. Past
+//     the stall angle the flow separates and the wake explodes — that turns the
+//     demo into a tool, not a screensaver.
 //   * `put_pixels` hands the framebuffer to JS for the `ctx.putImageData` blit;
 //     `Vec[u8].as_ptr()` is the FFI handoff. The call is synchronous, so the
 //     buffer never dangles while in use.
 //
 // The grid is carried across loop iterations — the state the demo is about. The
 // fluid math itself is in `sim.kara`, shared verbatim with the native oracle;
-// this file is only the browser I/O wrapper. Slice 1 is single-threaded; slice 2
-// fans collide+stream across the Web Worker pool with `TaskGroup.spawn`.
+// this file is only the browser I/O wrapper. Each substep's collide+stream fan
+// out across the Web Worker pool with `TaskGroup.spawn`.
 
 import std.web.time.{animation_frames, Timer};
+import std.web.events.{keydown, KeyEvent, wheel, WheelEvent, Input};
 import sim.{grid_w, grid_h, default_slope, steps_per_frame, default_workers,
     init_grid, substep, render_fb};
 
@@ -29,17 +36,48 @@ effect resource Display;
 // bytes of RGBA at `ptr` out of shared wasm memory and `ctx.putImageData`s them.
 host fn put_pixels(ptr: *const u8, len: i64, w: i64, h: i64) with writes(Display);
 
-pub fn run() with writes(Display, Timer) suspends panics {
+// Wing slope (rise/run ≈ tan of the angle of attack), clamped to a usable range:
+// 0 is a flat plate aligned with the flow (attached), ~0.85 is a deep stall.
+fn clamp_slope(s: f64) -> f64 {
+    if s < 0.0 { return 0.0; }
+    if s > 0.85 { return 0.85; }
+    s
+}
+
+pub fn run() with writes(Display, Input, Timer) suspends panics {
     let w = grid_w();
     let h = grid_h();
-    let s = default_slope();
     let spf = steps_per_frame();
     let workers = default_workers();
 
+    let mut s = default_slope();
     let mut grid = init_grid();
     let frames = animation_frames();
+    let keys = keydown();
+    let wheels = wheel();
     loop {
         frames.recv();
+
+        // Live angle-of-attack control, drained non-blocking so the render keeps
+        // cadence whether or not anyone is touching it. Up/Down steepen / flatten
+        // the wing; `R` resets to the default angle.
+        match keys.try_recv() {
+            Some(ev) => {
+                let code = ev.key_code();
+                if code == 38 { s = clamp_slope(s + 0.05); }   // ArrowUp
+                if code == 40 { s = clamp_slope(s - 0.05); }   // ArrowDown
+                if code == 82 { s = default_slope(); }         // R
+            }
+            None => {}
+        }
+        // Scroll also rotates the wing: scroll up (delta_y < 0) steepens it.
+        match wheels.try_recv() {
+            Some(wv) => {
+                s = clamp_slope(s - wv.delta_y() * 0.0008);
+            }
+            None => {}
+        }
+
         let mut k = 0;
         while k < spf {
             grid = substep(grid, s, workers);

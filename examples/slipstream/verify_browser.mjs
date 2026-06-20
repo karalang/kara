@@ -277,9 +277,54 @@ async function main() {
   const [hLate, loL, hiL] = fpLate.split(":").map(Number);
   if (hiL - loL < 8) throw new Error(`canvas went blank/uniform during soak: ${fpLate}`);
 
+  // Angle-of-attack control: scroll steepens / flattens the wing. The wing draws
+  // as grey pixels (~150,155,165); the vertical extent of those pixels grows
+  // monotonically with the wing slope and is INDEPENDENT of the fluid evolution,
+  // so it isolates input-driven change from the constantly-moving wake. We drive
+  // it with WHEEL (not keydown): headless Chrome turns a few CDP key dispatches
+  // into a self-sustaining keydown flood that wedges the renderer (the
+  // documented Fathom artifact), whereas wheel events are clean. This proves the
+  // event-data channel (std.web.events.wheel) reaches the wasm render loop and
+  // moves the simulation's boundary.
+  stage("angle");
+  const wingHeight = () => evalJs(`(() => {
+    const c = document.getElementById('screen');
+    const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    let lo = 1e9, hi = -1;
+    for (let y = 0; y < c.height; y++) {
+      for (let x = 0; x < c.width; x++) {
+        const i = (y * c.width + x) * 4;
+        if (Math.abs(d[i]-150) < 10 && Math.abs(d[i+1]-155) < 10 && Math.abs(d[i+2]-165) < 10) {
+          if (y < lo) lo = y; if (y > hi) hi = y;
+        }
+      }
+    }
+    return hi < 0 ? 0 : (hi - lo + 1);
+  })()`);
+  const rect = await evalJs(`(() => { const r = document.getElementById('screen').getBoundingClientRect();
+    return { left: r.left, top: r.top, w: r.width, h: r.height }; })()`);
+  const wcx = Math.round(rect.left + rect.w / 2), wcy = Math.round(rect.top + rect.h / 2);
+  const wheelAt = (dy) => cdp.send("Input.dispatchMouseEvent",
+    { type: "mouseWheel", x: wcx, y: wcy, deltaX: 0, deltaY: dy }, sessionId, 60000);
+
+  const hMid = await wingHeight();
+  for (let i = 0; i < 6; i++) { await wheelAt(-240); await sleep(120); }  // steepen
+  await sleep(600);
+  const hSteep = await wingHeight();
+  for (let i = 0; i < 12; i++) { await wheelAt(240); await sleep(120); }  // flatten
+  await sleep(600);
+  const hFlat = await wingHeight();
+  if (!(hSteep > hMid + 2)) {
+    throw new Error(`scroll-up did not steepen the wing (grey height ${hMid} -> ${hSteep})`);
+  }
+  if (!(hFlat < hSteep - 2)) {
+    throw new Error(`scroll-down did not flatten the wing (grey height ${hSteep} -> ${hFlat})`);
+  }
+
   console.log(
     `PASS — isolated, frames ${f0}->${f1}->${fSoak}->${fAfter}, ` +
-    `content ${fpEarly} --evolves--> ${fpMid} --soak(${fAfter} frames)--> ${fpLate}`
+    `content ${fpEarly} --evolves--> ${fpMid} --soak(${fAfter} frames)--> ${fpLate}, ` +
+    `wing angle: grey-height ${hMid} --steepen--> ${hSteep} --flatten--> ${hFlat}`
   );
   clearTimeout(WATCHDOG);
   ws.close();
