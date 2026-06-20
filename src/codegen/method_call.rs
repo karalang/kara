@@ -1747,6 +1747,21 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // `char.to_digit(radix) -> Option[u32]` (typed in expr_method_call.rs):
+        // interpreter-complete (`karac run`), but the `Option[u32]` construction
+        // lowering (shared with the `checked_to_*` float→int follow-on) is not
+        // yet wired in codegen. Emit a clear, actionable error rather than
+        // falling through to "no handler" / a miscompile. Gated on a `char`
+        // receiver so a user `to_digit` on another type is unaffected.
+        if method == "to_digit" && args.len() == 1 && self.expr_is_char(object) {
+            return Err(
+                "`char.to_digit(radix)` is not yet supported under `karac build` (codegen); \
+                 it works under `karac run`. The `Option[u32]` construction lowering is a \
+                 tracked follow-on."
+                    .to_string(),
+            );
+        }
+
         // Unicode `char` classification predicates (phase-12 #13): `is_alphabetic`
         // / `is_numeric` / `is_alphanumeric` / `is_whitespace` → bool (i1). The
         // typechecker admits these only on a `char` receiver (lowered to i32), so

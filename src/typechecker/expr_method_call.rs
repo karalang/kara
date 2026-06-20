@@ -2478,6 +2478,43 @@ impl<'a> super::TypeChecker<'a> {
         {
             return Type::Bool;
         }
+        // `char.to_digit(radix) -> Option[u32]` (Rust's `char::to_digit`): the
+        // numeric value of `self` as a digit in `radix`, `None` if `self` is not
+        // a digit in that radix. `radix` is `u32` (a suffix-free literal
+        // promotes); an out-of-range radix (`< 2` or `> 36`) traps at run time,
+        // matching Rust's panic. Interpreter-complete; codegen emits an honest
+        // "not yet supported under `karac build`" error (the Option[u32]
+        // construction lowering is shared with the `checked_to_*` follow-on).
+        if method == "to_digit" && matches!(&receiver_for_lookup, Type::Char) {
+            if args.len() != 1 {
+                self.type_error(
+                    format!("to_digit expects 1 argument, got {}", args.len()),
+                    span.clone(),
+                    TypeErrorKind::WrongNumberOfArgs,
+                );
+                return Type::Error;
+            }
+            let u32_ty = Type::UInt(UIntSize::U32);
+            let arg = &args[0].value;
+            let arg_ty = self.infer_expr(arg);
+            if matches!(&arg.kind, ExprKind::Integer(_, None)) {
+                self.record_expr_type(&arg.span, &u32_ty);
+            } else if arg_ty != Type::Error && arg_ty != u32_ty {
+                self.type_error(
+                    format!(
+                        "to_digit expects a radix of type `u32`, got `{}` (cast with `as u32`)",
+                        type_display(&arg_ty)
+                    ),
+                    arg.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                return Type::Error;
+            }
+            return Type::Named {
+                name: "Option".to_string(),
+                args: vec![u32_ty],
+            };
+        }
         // `to_string()` on `String` (identity copy), on any `#[derive(Display)]`
         // / `impl Display` **struct**, and on an all-unit `#[derive(Display)]`
         // **enum** → `String`. The `Display` trait provides

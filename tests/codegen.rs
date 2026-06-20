@@ -1327,6 +1327,30 @@ fn main() {
         }
     }
 
+    /// `char.to_digit(radix)` is interpreter-complete but codegen emits an honest
+    /// "not yet supported under `karac build`" error (the Option[u32] construction
+    /// lowering is a tracked follow-on) rather than a miscompile / no-handler.
+    #[test]
+    fn char_to_digit_codegen_emits_honest_error() {
+        let mut parsed = karac::parse(
+            "fn main() { match '7'.to_digit(10) { Some(d) => println(d), None => println(0u32) } }",
+        );
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let err = compile_to_ir(&parsed.program, None, None)
+            .expect_err("char.to_digit should not yet lower under codegen");
+        assert!(
+            err.contains("to_digit") && err.contains("karac build"),
+            "expected an honest to_digit codegen diagnostic, got: {err}"
+        );
+    }
+
     /// Regression (B-2026-06-14-13): a `for <name> in xs` loop binding that
     /// SHARES A NAME with an earlier same-function `let <name>` must not be
     /// conflated with it by the ownership RC analysis. Here the spawn result

@@ -309,6 +309,56 @@ fn test_bit_intrinsics_width_correct() {
 }
 
 #[test]
+fn test_char_to_digit_some_none_and_radix() {
+    // `c.to_digit(radix) -> Option[u32]`: digit value in the given radix, None
+    // when not a digit. Radix is u32 (suffix-free literal promotes); 'a'/'z'
+    // count in hex/base-36.
+    let out = run("fn main() {\n\
+             match '7'.to_digit(10) { Some(d) => println(d), None => println(99u32) }\n\
+             match 'a'.to_digit(16) { Some(d) => println(d), None => println(99u32) }\n\
+             match 'z'.to_digit(36) { Some(d) => println(d), None => println(99u32) }\n\
+             match 'x'.to_digit(10) { Some(d) => println(d), None => println(99u32) }\n\
+             let r: u32 = 2;\n\
+             match '1'.to_digit(r) { Some(d) => println(d), None => println(99u32) }\n\
+         }");
+    assert_eq!(out, "7\n10\n35\n99\n1\n");
+}
+
+#[test]
+fn test_char_to_digit_radix_out_of_range_traps() {
+    // An out-of-range radix (> 36) traps, matching Rust's `char::to_digit` panic.
+    // The trap fires inside the `match` scrutinee — exercises the scrutinee-fault
+    // short-circuit (otherwise the poison value matches no Some/None arm and the
+    // tree-walker would hit a non-exhaustive `unreachable!`).
+    let errors = runtime_errors(
+        "fn main() { match '5'.to_digit(40) { Some(d) => println(d), None => println(0u32) } }",
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("radix")),
+        "expected a to_digit radix-range trap, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_faulting_match_scrutinee_propagates_not_ice() {
+    // Regression: a faulting expression in `match` scrutinee position (here an
+    // index-out-of-bounds) sets the control-flow fault and must propagate as a
+    // runtime error, NOT reach `eval_match`'s non-exhaustive `unreachable!`
+    // when the poison value matches no arm.
+    let errors = runtime_errors(
+        "fn main() {\n\
+         let v: Vec[i64] = Vec.new();\n\
+         match v[5] { 0 => println(1i64), 1 => println(2i64) }\n\
+         }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "expected an out-of-bounds runtime error from the faulting scrutinee"
+    );
+}
+
+#[test]
 fn test_narrow_int_in_range_does_not_trap() {
     // A narrow-int sum that fits the width is the value, no trap: `u8 97 + u8
     // 98 = 195` (≤ 255).

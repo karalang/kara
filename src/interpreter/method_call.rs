@@ -1070,6 +1070,28 @@ impl<'a> super::Interpreter<'a> {
         }
 
         // Unicode `char` classification predicates (phase-12 #13):
+        // `char.to_digit(radix) -> Option[u32]` (typed in expr_method_call.rs):
+        // Rust's `char::to_digit`. An out-of-range radix (< 2 or > 36) traps,
+        // matching Rust's panic; otherwise `Some(value)` when `self` is a digit
+        // in that radix, `None` when it isn't.
+        if method == "to_digit" && args.len() == 1 {
+            if let Value::Char(c) = &obj {
+                let c = *c;
+                if let Value::Int(radix) = self.eval_expr_inner(&args[0].value) {
+                    if !(2..=36).contains(&radix) {
+                        return self.record_runtime_error(
+                            format!("to_digit: radix must be in 2..=36, got {radix}"),
+                            span,
+                        );
+                    }
+                    return match c.to_digit(radix as u32) {
+                        Some(d) => some_int(d as i64),
+                        None => none_value(),
+                    };
+                }
+            }
+        }
+
         // `char.is_alphabetic()` / `is_numeric()` / `is_alphanumeric()` /
         // `is_whitespace()` → bool. The Unicode-aware companions of the ASCII
         // byte predicates above (codegen routes these through the

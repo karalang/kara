@@ -586,6 +586,15 @@ impl<'a> super::Interpreter<'a> {
             // Match
             ExprKind::Match { scrutinee, arms } => {
                 let val = self.eval_expr_inner(scrutinee);
+                // A faulted scrutinee (index OOB, div-by-zero, an in-scrutinee
+                // trap like `char.to_digit(bad_radix)`, …) sets `pending_cf` and
+                // yields a poison value that matches no real arm — don't run the
+                // match on it (which would hit `eval_match`'s non-exhaustive
+                // `unreachable!`); propagate the fault, mirroring the Binary /
+                // Unary operand-fault short-circuits above.
+                if self.pending_cf.is_some() {
+                    return val;
+                }
                 self.eval_match(&val, arms, &expr.span)
             }
 

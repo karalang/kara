@@ -27057,11 +27057,10 @@ fn int_pow_ok_on_every_width_with_u32_exponent() {
 fn int_pow_rejects_non_u32_exponent() {
     // A non-literal exponent of a different integer type is rejected with the
     // `cast with as u32` hint (matching Rust's `iN::pow(self, exp: u32)`).
-    let errs =
-        typecheck_errors("fn main() { let e: i64 = 5; let b: i64 = 2; let _ = b.pow(e); }");
+    let errs = typecheck_errors("fn main() { let e: i64 = 5; let b: i64 = 2; let _ = b.pow(e); }");
     assert!(
-        errs.iter().any(|e| e.to_string().contains("pow")
-            && e.to_string().contains("u32")),
+        errs.iter()
+            .any(|e| e.to_string().contains("pow") && e.to_string().contains("u32")),
         "expected a pow exponent-type error mentioning u32, got: {:?}",
         errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
     );
@@ -27078,6 +27077,30 @@ fn bit_intrinsics_return_u32_on_every_width() {
          let c: u64 = 1024; let _z: u32 = c.trailing_zeros();\n\
          let d: i64 = -1; let _w: u32 = d.count_ones();\n\
          }",
+    );
+}
+
+#[test]
+fn char_to_digit_returns_option_u32() {
+    // `c.to_digit(radix) -> Option[u32]`; radix is u32 (suffix-free literal
+    // promotes). The result binds to an `Option[u32]` annotation and matches.
+    typecheck_ok(
+        "fn main() {\n\
+         let o: Option[u32] = '7'.to_digit(10);\n\
+         match o { Some(d) => { let _x: u32 = d; }, None => {} }\n\
+         let r: u32 = 16; let _ = 'a'.to_digit(r);\n\
+         }",
+    );
+}
+
+#[test]
+fn char_to_digit_rejects_non_u32_radix() {
+    let errs = typecheck_errors("fn main() { let r: i64 = 10; let _ = '7'.to_digit(r); }");
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("to_digit") && e.to_string().contains("u32")),
+        "expected a to_digit radix-type error mentioning u32, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
     );
 }
 
