@@ -1992,6 +1992,20 @@ impl<'ctx> super::Codegen<'ctx> {
         let i64_t = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
 
+        // For a `ref Vec[E]` SoA param the slot's alloca holds a POINTER to the
+        // caller's SoA struct (not the struct itself), so deref once before
+        // GEPing the group/len fields. A by-value/`let` SoA binding's slot
+        // already IS the struct. This deref is what lets SoA cross a function
+        // boundary (the callee operates on the caller's existing SoA layout).
+        let soa_struct_ptr = if self.ref_params.contains_key(name) {
+            self.builder
+                .build_load(ptr_ty, slot.ptr, "soa.ref.deref")
+                .unwrap()
+                .into_pointer_value()
+        } else {
+            slot.ptr
+        };
+
         let elem_struct_ty = *self
             .struct_types
             .get(&soa.struct_name)
@@ -2001,7 +2015,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let idx_val = self.compile_expr(index)?.into_int_value();
         let len_ptr = self
             .builder
-            .build_struct_gep(soa_ty, slot.ptr, len_idx, "soa.len.ptr")
+            .build_struct_gep(soa_ty, soa_struct_ptr, len_idx, "soa.len.ptr")
             .unwrap();
         let len = self
             .builder
@@ -2035,7 +2049,12 @@ impl<'ctx> super::Codegen<'ctx> {
             let group_elem_ty = this.soa_group_elem_type(&soa.struct_name, group);
             let grp_ptr_ptr = this
                 .builder
-                .build_struct_gep(soa_ty, slot.ptr, struct_field_idx, &format!("{}.ptr", tag))
+                .build_struct_gep(
+                    soa_ty,
+                    soa_struct_ptr,
+                    struct_field_idx,
+                    &format!("{}.ptr", tag),
+                )
                 .unwrap();
             let grp_buf = this
                 .builder

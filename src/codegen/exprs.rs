@@ -2028,7 +2028,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
     pub(super) fn compile_soa_method(
         &mut self,
-        _var_name: &str,
+        var_name: &str,
         soa: &SoaLayout,
         slot: VarSlot<'ctx>,
         method: &str,
@@ -2041,11 +2041,25 @@ impl<'ctx> super::Codegen<'ctx> {
         let len_idx = Self::soa_len_index(soa.num_groups, has_cold);
         let cap_idx = Self::soa_cap_index(soa.num_groups, has_cold);
 
+        // A `ref`/`mut ref Vec[E]` SoA param's slot holds a POINTER to the
+        // caller's SoA struct; deref once so reads (`len`) and mutations
+        // (`push`/`pop`/`remove` through `mut ref`) act on the caller's struct.
+        // A by-value/`let` binding's slot already IS the struct. (Same boundary-
+        // crossing deref as `compile_soa_index_read`.)
+        let soa_struct_ptr = if self.ref_params.contains_key(var_name) {
+            self.builder
+                .build_load(ptr_ty, slot.ptr, "soa.ref.deref")
+                .unwrap()
+                .into_pointer_value()
+        } else {
+            slot.ptr
+        };
+
         match method {
             "len" => {
                 let len_ptr = self
                     .builder
-                    .build_struct_gep(soa_ty, slot.ptr, len_idx, "soa.len.ptr")
+                    .build_struct_gep(soa_ty, soa_struct_ptr, len_idx, "soa.len.ptr")
                     .unwrap();
                 let len = self.builder.build_load(i64_t, len_ptr, "soa.len").unwrap();
                 Ok(len)
@@ -2060,11 +2074,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Load len, cap.
                 let len_ptr = self
                     .builder
-                    .build_struct_gep(soa_ty, slot.ptr, len_idx, "soa.len.ptr")
+                    .build_struct_gep(soa_ty, soa_struct_ptr, len_idx, "soa.len.ptr")
                     .unwrap();
                 let cap_ptr = self
                     .builder
-                    .build_struct_gep(soa_ty, slot.ptr, cap_idx, "soa.cap.ptr")
+                    .build_struct_gep(soa_ty, soa_struct_ptr, cap_idx, "soa.cap.ptr")
                     .unwrap();
                 let len = self
                     .builder
@@ -2151,7 +2165,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         .builder
                         .build_struct_gep(
                             soa_ty,
-                            slot.ptr,
+                            soa_struct_ptr,
                             *struct_field_idx as u32,
                             &format!("g{}.ptr", struct_field_idx),
                         )
@@ -2189,7 +2203,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     let group_elem_ty = self.soa_group_elem_type(&soa.struct_name, group);
                     let grp_ptr_ptr = self
                         .builder
-                        .build_struct_gep(soa_ty, slot.ptr, gi as u32, &format!("g{}.ptr", gi))
+                        .build_struct_gep(
+                            soa_ty,
+                            soa_struct_ptr,
+                            gi as u32,
+                            &format!("g{}.ptr", gi),
+                        )
                         .unwrap();
                     let grp_buf = self
                         .builder
@@ -2221,7 +2240,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     let cold_elem_ty = self.soa_group_elem_type(&soa.struct_name, cold);
                     let cold_ptr_ptr = self
                         .builder
-                        .build_struct_gep(soa_ty, slot.ptr, cold_idx, "cold.ptr")
+                        .build_struct_gep(soa_ty, soa_struct_ptr, cold_idx, "cold.ptr")
                         .unwrap();
                     let cold_buf = self
                         .builder
@@ -2269,7 +2288,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let is_front = method == "pop_front";
                 let len_ptr = self
                     .builder
-                    .build_struct_gep(soa_ty, slot.ptr, len_idx, "soa.pop.len.ptr")
+                    .build_struct_gep(soa_ty, soa_struct_ptr, len_idx, "soa.pop.len.ptr")
                     .unwrap();
                 let len = self
                     .builder
@@ -2387,7 +2406,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let idx_val = self.compile_expr(&args[0].value)?.into_int_value();
                 let len_ptr = self
                     .builder
-                    .build_struct_gep(soa_ty, slot.ptr, len_idx, "soa.remove.len.ptr")
+                    .build_struct_gep(soa_ty, soa_struct_ptr, len_idx, "soa.remove.len.ptr")
                     .unwrap();
                 let len = self
                     .builder

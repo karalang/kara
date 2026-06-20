@@ -17525,6 +17525,51 @@ fn main() {
         }
     }
 
+    // Cross-function SoA read: a SoA-laid-out Vec passed BY REF into a helper
+    // function, read there via `.len()`, whole-element index (`let e = es[i]`),
+    // and direct indexed field access (`es[i].y`). Before the fix, a `ref` SoA
+    // param's slot holds a POINTER to the caller's SoA struct, but the SoA
+    // access paths (compile_soa_index_read / compile_soa_method) GEP'd the slot
+    // alloca directly — reading the pointer's bytes as group-ptrs/len → a garbage
+    // `len` and a SIGTRAP. The fix derefs the ref-param slot once before GEPing,
+    // so the callee operates on the caller's existing SoA layout. Surfaced by the
+    // Slipstream LBM dogfood (its kernel splits the grid across `ref Vec[LbmNode]`
+    // helpers). NOTE: by-value SoA params and SoA return values remain a separate
+    // (ABI-level) follow-on — this covers the by-ref read path only.
+    #[test]
+    fn test_e2e_soa_by_ref_param_read_across_function() {
+        let out = run_program(
+            r#"
+struct E { x: f64, y: f64 }
+layout es: Vec[E] { group g1 { x } group g2 { y } }
+fn sumall(es: ref Vec[E]) -> f64 {
+    let mut s = 0.0;
+    let mut i = 0;
+    while i < es.len() {
+        let e = es[i];
+        s = s + e.x + es[i].y;
+        i = i + 1;
+    }
+    s
+}
+fn main() {
+    let mut es: Vec[E] = Vec.new();
+    es.push(E { x: 1.0, y: 2.0 });
+    es.push(E { x: 3.0, y: 4.0 });
+    es.push(E { x: 5.0, y: 6.0 });
+    println(sumall(es));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "21",
+                "SoA Vec read by ref across a function boundary"
+            );
+        }
+    }
+
     // ── String operators ──────────────────────────────────────────
 
     #[test]
