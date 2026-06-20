@@ -501,7 +501,13 @@ pub fn render_glue(
     // payload; its listener preventDefaults the native menu); `__kara_focus(
     // chPtr: i64) -> ()` / `__kara_blur(chPtr: i64) -> ()` back
     // `std.web.events.focus` / `.blur` — the first UNIT-payload `events.*`
-    // producers (a 0-byte `()` token per focus/blur edge, no event-scratch).
+    // producers (a 0-byte `()` token per focus/blur edge, no event-scratch);
+    // `__kara_touchstart(chPtr: i64) -> ()` / `__kara_touchmove(chPtr: i64) ->
+    // ()` / `__kara_touchend(chPtr: i64) -> ()` back `std.web.events.touchstart`
+    // / `.touchmove` / `.touchend` — the touch (finger/pen) gesture family,
+    // each a 16-byte `TouchEvent` (two `f64`s, single primary touch) like
+    // `clicks`; `touchmove`'s listener is `{ passive: false }` + preventDefaults
+    // the page scroll during a drag.
     let builtin_sigs: &[&str] = if threads.is_some() {
         &[
             "{ name: \"__kara_timer_after\", params: [\"bigint\", \"bigint\"], ret: \"void\" }",
@@ -517,6 +523,9 @@ pub fn render_glue(
             "{ name: \"__kara_contextmenu\", params: [\"bigint\"], ret: \"void\" }",
             "{ name: \"__kara_focus\", params: [\"bigint\"], ret: \"void\" }",
             "{ name: \"__kara_blur\", params: [\"bigint\"], ret: \"void\" }",
+            "{ name: \"__kara_touchstart\", params: [\"bigint\"], ret: \"void\" }",
+            "{ name: \"__kara_touchmove\", params: [\"bigint\"], ret: \"void\" }",
+            "{ name: \"__kara_touchend\", params: [\"bigint\"], ret: \"void\" }",
         ]
     } else {
         &[]
@@ -536,6 +545,9 @@ pub fn render_glue(
             "\"__kara_contextmenu\"",
             "\"__kara_focus\"",
             "\"__kara_blur\"",
+            "\"__kara_touchstart\"",
+            "\"__kara_touchmove\"",
+            "\"__kara_touchend\"",
         ]
     } else {
         &[]
@@ -2012,6 +2024,112 @@ async function runThreaded(hostImpls = {}, opts = {}) {
       };
       target.addEventListener("blur", onBlur);
     };
+    // __kara_touchstart(chPtr: i64 [BigInt]) -> (): the finger-DOWN edge of a
+    // touch gesture — the touch analogue of pointerdown, carrying a 16-byte
+    // TouchEvent (the same two-f64 x,y layout as ClickEvent). Reads the PRIMARY
+    // touch (touches[0], falling back to changedTouches[0]) and converts to the
+    // element-relative frame via the target's getBoundingClientRect (matching
+    // pointer_moves/clicks); a node test target without a rect yields raw
+    // clientX/Y. Does NOT preventDefault (so the synthetic `click` a tap
+    // produces still fires — a program draining both clicks() and touchstart()
+    // sees the tap on both). Coalesces like the others. Event source:
+    // `opts.touchTarget`, else the same canvas/`globalThis` the pointer stream
+    // uses; no source → no-op (recv just blocks).
+    builtinHostImpls["__kara_touchstart"] = (chPtr) => {
+      const ptr = Number(chPtr);
+      const target =
+        (opts && opts.touchTarget) ||
+        (typeof globalThis.addEventListener === "function" ? globalThis : null);
+      if (target === null) return;
+      // TouchEvent layout: { x: f64 @ 0, y: f64 @ 8 } = 16 bytes — kept in sync
+      // with runtime/stdlib/web_events.kara.
+      const scratch = serviceInstance.exports.karac_runtime_event_scratch();
+      const onTouch = (e) => {
+        if (Number(serviceInstance.exports.karac_runtime_channel_pending(ptr)) !== 0) return;
+        // Primary touch: the on-surface point on a start, else the changed one.
+        const t = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0]);
+        if (!t) return;
+        // Element-relative coords via the target's rect when it has one (a real
+        // DOM element); a plain EventTarget (node test) has none → raw clientX/Y.
+        const rect =
+          typeof target.getBoundingClientRect === "function"
+            ? target.getBoundingClientRect()
+            : null;
+        // Re-derive the view each event: a shared Memory's `.buffer` may be
+        // replaced on grow, so a cached DataView could go stale.
+        const dv = new DataView(memory.buffer, scratch, 16);
+        dv.setFloat64(0, (t.clientX ?? 0) - (rect ? rect.left : 0), true);
+        dv.setFloat64(8, (t.clientY ?? 0) - (rect ? rect.top : 0), true);
+        serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 16n);
+      };
+      target.addEventListener("touchstart", onTouch);
+    };
+    // __kara_touchmove(chPtr: i64 [BigInt]) -> (): the finger-DRAG stream — the
+    // touch analogue of pointer_moves, same 16-byte TouchEvent payload. UNLIKE
+    // touchstart/touchend this listener is `{ passive: false }` and calls
+    // e.preventDefault() (BEFORE the coalescing early-out, so a move dropped as a
+    // sample still suppresses the scroll) so a drag does NOT scroll/rubber-band
+    // the page underneath the canvas — the same suppression contextmenu does for
+    // the native menu. Reads the PRIMARY touch in the element-relative frame.
+    // Event source: `opts.touchTarget`, else the same canvas/`globalThis` the
+    // pointer stream uses; no source → no-op.
+    builtinHostImpls["__kara_touchmove"] = (chPtr) => {
+      const ptr = Number(chPtr);
+      const target =
+        (opts && opts.touchTarget) ||
+        (typeof globalThis.addEventListener === "function" ? globalThis : null);
+      if (target === null) return;
+      // TouchEvent layout: { x: f64 @ 0, y: f64 @ 8 } = 16 bytes — kept in sync
+      // with runtime/stdlib/web_events.kara.
+      const scratch = serviceInstance.exports.karac_runtime_event_scratch();
+      const onTouch = (e) => {
+        // Suppress page scroll/zoom for every move regardless of coalescing.
+        if (typeof e.preventDefault === "function") e.preventDefault();
+        if (Number(serviceInstance.exports.karac_runtime_channel_pending(ptr)) !== 0) return;
+        const t = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0]);
+        if (!t) return;
+        const rect =
+          typeof target.getBoundingClientRect === "function"
+            ? target.getBoundingClientRect()
+            : null;
+        const dv = new DataView(memory.buffer, scratch, 16);
+        dv.setFloat64(0, (t.clientX ?? 0) - (rect ? rect.left : 0), true);
+        dv.setFloat64(8, (t.clientY ?? 0) - (rect ? rect.top : 0), true);
+        serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 16n);
+      };
+      target.addEventListener("touchmove", onTouch, { passive: false });
+    };
+    // __kara_touchend(chPtr: i64 [BigInt]) -> (): the finger-UP edge of a touch
+    // gesture — the touch analogue of pointerup, same 16-byte TouchEvent payload.
+    // On a release the live `touches` list is empty, so it reads the PRIMARY
+    // `changedTouches[0]` (the point that just left) in the element-relative
+    // frame. Does NOT preventDefault. Coalesces like the others. Event source:
+    // `opts.touchTarget`, else the same canvas/`globalThis`; no source → no-op.
+    builtinHostImpls["__kara_touchend"] = (chPtr) => {
+      const ptr = Number(chPtr);
+      const target =
+        (opts && opts.touchTarget) ||
+        (typeof globalThis.addEventListener === "function" ? globalThis : null);
+      if (target === null) return;
+      // TouchEvent layout: { x: f64 @ 0, y: f64 @ 8 } = 16 bytes — kept in sync
+      // with runtime/stdlib/web_events.kara.
+      const scratch = serviceInstance.exports.karac_runtime_event_scratch();
+      const onTouch = (e) => {
+        if (Number(serviceInstance.exports.karac_runtime_channel_pending(ptr)) !== 0) return;
+        // On release the finger has left `touches`, so prefer changedTouches[0].
+        const t = (e.changedTouches && e.changedTouches[0]) || (e.touches && e.touches[0]);
+        if (!t) return;
+        const rect =
+          typeof target.getBoundingClientRect === "function"
+            ? target.getBoundingClientRect()
+            : null;
+        const dv = new DataView(memory.buffer, scratch, 16);
+        dv.setFloat64(0, (t.clientX ?? 0) - (rect ? rect.left : 0), true);
+        dv.setFloat64(8, (t.clientY ?? 0) - (rect ? rect.top : 0), true);
+        serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 16n);
+      };
+      target.addEventListener("touchend", onTouch);
+    };
   }
   // host fns: stand up the worker→main proxy (shared control block + the
   // main-thread service loop). Needed when the program declares user host
@@ -2464,7 +2582,10 @@ mod tests {
              { name: \"__kara_resize\", params: [\"bigint\"], ret: \"void\" }, \
              { name: \"__kara_contextmenu\", params: [\"bigint\"], ret: \"void\" }, \
              { name: \"__kara_focus\", params: [\"bigint\"], ret: \"void\" }, \
-             { name: \"__kara_blur\", params: [\"bigint\"], ret: \"void\" }];"
+             { name: \"__kara_blur\", params: [\"bigint\"], ret: \"void\" }, \
+             { name: \"__kara_touchstart\", params: [\"bigint\"], ret: \"void\" }, \
+             { name: \"__kara_touchmove\", params: [\"bigint\"], ret: \"void\" }, \
+             { name: \"__kara_touchend\", params: [\"bigint\"], ret: \"void\" }];"
         ));
         // The builtins are registered as builtins, and excluded from the
         // user contract (DECLARED_IMPORTS drives the missing-impl check and
@@ -2474,7 +2595,8 @@ mod tests {
              \"__kara_animation_frames\", \"__kara_pointer_moves\", \"__kara_wheel\", \
              \"__kara_keydown\", \"__kara_keyup\", \"__kara_clicks\", \
              \"__kara_dblclick\", \"__kara_resize\", \"__kara_contextmenu\", \
-             \"__kara_focus\", \"__kara_blur\"];"
+             \"__kara_focus\", \"__kara_blur\", \"__kara_touchstart\", \
+             \"__kara_touchmove\", \"__kara_touchend\"];"
         ));
         assert!(glue.contains("const DECLARED_IMPORTS = [\"report\", \"log_str\"];"));
         // Both halves of the proxy plus the worker-side wiring.
@@ -2534,6 +2656,15 @@ mod tests {
             "target.addEventListener(\"focus\", onFocus);",
             "builtinHostImpls[\"__kara_blur\"] = (chPtr) =>",
             "target.addEventListener(\"blur\", onBlur);",
+            // Touch gesture family: touchstart/touchmove/touchend, 16-byte
+            // TouchEvent (two f64s); touchmove is { passive: false } +
+            // preventDefaults the page scroll during a drag.
+            "builtinHostImpls[\"__kara_touchstart\"] = (chPtr) =>",
+            "target.addEventListener(\"touchstart\", onTouch);",
+            "builtinHostImpls[\"__kara_touchmove\"] = (chPtr) =>",
+            "target.addEventListener(\"touchmove\", onTouch, { passive: false });",
+            "builtinHostImpls[\"__kara_touchend\"] = (chPtr) =>",
+            "target.addEventListener(\"touchend\", onTouch);",
         ] {
             assert!(glue.contains(needle), "missing proxy machinery: {needle}");
         }
@@ -2554,7 +2685,10 @@ mod tests {
                 && !dts.contains("__kara_resize")
                 && !dts.contains("__kara_contextmenu")
                 && !dts.contains("__kara_focus")
-                && !dts.contains("__kara_blur"),
+                && !dts.contains("__kara_blur")
+                && !dts.contains("__kara_touchstart")
+                && !dts.contains("__kara_touchmove")
+                && !dts.contains("__kara_touchend"),
             "builtin leaked into d.ts"
         );
     }

@@ -468,3 +468,138 @@ pub fn keyup() -> Receiver[KeyEvent] with writes(Input) {
     tx.__schedule_keyup();
     rx
 }
+
+// A touch (finger / pen) position, in CSS pixels relative to the listening
+// element. Transparent two-field struct: its physical layout (`x` at byte 0,
+// `y` at byte 8 — two `f64`s; 16 bytes total) is the contract the host glue
+// marshals each touch into before `channel_send` — keep the field order and
+// types in sync with `src/wasm_glue.rs` (`__kara_touchstart`/`touchmove`/
+// `touchend`). The coordinate frame matches `pointer_moves`/`clicks`
+// (element-relative, via the listening element's bounding rect), so a demo can
+// pan/draw on touch exactly as it steers on mouse hover.
+//
+// **Single primary touch (v1).** Each event reports only the *first* touch
+// point (`touches[0]`, or `changedTouches[0]` on a release) — enough for the
+// common pan/draw/tap gesture. Multi-touch (pinch-zoom, two-finger rotate)
+// needs a variable-length payload (an array of points), which the fixed-size
+// channel spine does not carry yet; it is a future extension (a `TouchEvent`
+// grown with an `id` field + a per-finger stream, or a length-prefixed
+// payload).
+pub struct TouchEvent {
+    x: f64,
+    y: f64,
+}
+
+impl TouchEvent {
+    fn x(ref self) -> f64 {
+        self.x
+    }
+
+    fn y(ref self) -> f64 {
+        self.y
+    }
+}
+
+// Stream touch-START positions on a fresh channel, indefinitely — the
+// finger-down edge of a touch gesture (the touch analogue of a `pointerdown`).
+// Returns the receiving half; the waiting side writes a plain blocking loop —
+//
+//     let starts = touchstart();
+//     loop {
+//         let t = starts.recv();
+//         begin_pan(t.x(), t.y());   // record the gesture's anchor point
+//     }
+//
+// — no `await`, no `addEventListener` callback ceremony. Multi-shot and
+// coalesced exactly like `pointer_moves`/`clicks` (the host feeds a fresh event
+// only once the previous one is drained). Reports the PRIMARY touch
+// (`touches[0]`) in the element-relative frame `pointer_moves`/`clicks` use.
+// The listener does NOT `preventDefault` (so the browser still synthesizes the
+// `click` a tap produces — a program draining both `clicks()` and
+// `touchstart()` sees the tap on both); pair it with `touchmove`, whose
+// listener *does* suppress the page scroll during a drag. Listener registers on
+// `opts.touchTarget` if given, else the same canvas/`globalThis` the pointer
+// stream uses. Same `--features wasm-threads` requirement as the other
+// host-async producers.
+//
+// Mechanism: `Sender.__schedule_touchstart` (a compiler builtin) clones the
+// sender's channel reference and hands the clone to the host's touchstart
+// listener, which owns it for the listener's lifetime.
+pub fn touchstart() -> Receiver[TouchEvent] with writes(Input) {
+    // Annotate the destructure so the channel element type is `TouchEvent` (the
+    // producer never `send`/`recv`s itself — the host fires the send — so there
+    // is no downstream channel op to infer the element from; an unannotated
+    // `Channel.new()` only type-checks under the interpreter).
+    let (tx, rx): (Sender[TouchEvent], Receiver[TouchEvent]) = Channel.new();
+    tx.__schedule_touchstart();
+    rx
+}
+
+// Stream touch-MOVE positions on a fresh channel, indefinitely — the
+// finger-drag stream (the touch analogue of `pointer_moves`). Returns the
+// receiving half; the waiting side writes a plain blocking loop —
+//
+//     let moves = touchmove();
+//     loop {
+//         let t = moves.recv();
+//         pan_to(t.x(), t.y());   // drag the view to follow the finger
+//     }
+//
+// — no `await`, no `addEventListener` callback ceremony. Multi-shot and
+// coalesced exactly like `pointer_moves` (a burst of moves between two `recv`s
+// collapses to the latest sample). Reports the PRIMARY touch (`touches[0]`) in
+// the element-relative frame. **The host listener is registered
+// `{ passive: false }` and calls `preventDefault()`** so a drag does NOT scroll
+// or rubber-band the page underneath the canvas — capturing the drag is the
+// whole point of the stream (the same suppression `contextmenu` does for the
+// native menu). A demo should ALSO set `touch-action: none` on its canvas so
+// the browser never starts its own scroll/zoom gesture before the first move.
+// Listener registers on `opts.touchTarget` if given, else the same
+// canvas/`globalThis` the pointer stream uses. Same `--features wasm-threads`
+// requirement as the other host-async producers.
+//
+// Mechanism: `Sender.__schedule_touchmove` (a compiler builtin) clones the
+// sender's channel reference and hands the clone to the host's touchmove
+// listener, which owns it for the listener's lifetime.
+pub fn touchmove() -> Receiver[TouchEvent] with writes(Input) {
+    // Annotate the destructure so the channel element type is `TouchEvent` (the
+    // producer never `send`/`recv`s itself — the host fires the send — so there
+    // is no downstream channel op to infer the element from; an unannotated
+    // `Channel.new()` only type-checks under the interpreter).
+    let (tx, rx): (Sender[TouchEvent], Receiver[TouchEvent]) = Channel.new();
+    tx.__schedule_touchmove();
+    rx
+}
+
+// Stream touch-END positions on a fresh channel, indefinitely — the finger-up
+// edge of a touch gesture (the touch analogue of `pointerup`). Returns the
+// receiving half; the waiting side writes a plain blocking loop —
+//
+//     let ends = touchend();
+//     loop {
+//         let t = ends.recv();
+//         end_pan(t.x(), t.y());   // commit / release the gesture
+//     }
+//
+// — no `await`, no `addEventListener` callback ceremony. Multi-shot and
+// coalesced exactly like `touchstart`. Because the finger has lifted, the
+// `touches` list is empty on a release, so the host reads the PRIMARY
+// `changedTouches[0]` (the point that just left) in the element-relative frame.
+// The listener does NOT `preventDefault`. Pair `touchstart`/`touchmove`/
+// `touchend` for a complete down→drag→up gesture (the touch counterpart of the
+// pointer-with-buttons drag). Listener registers on `opts.touchTarget` if given,
+// else the same canvas/`globalThis` the pointer stream uses. Same
+// `--features wasm-threads` requirement as the other host-async producers.
+//
+// Mechanism: `Sender.__schedule_touchend` (a compiler builtin) clones the
+// sender's channel reference and hands the clone to the host's touchend
+// listener, which owns it for the listener's lifetime.
+pub fn touchend() -> Receiver[TouchEvent] with writes(Input) {
+    // Annotate the destructure so the channel element type is `TouchEvent` (the
+    // producer never `send`/`recv`s itself — the host fires the send — so there
+    // is no downstream channel op to infer the element from; an unannotated
+    // `Channel.new()` only type-checks under the interpreter).
+    let (tx, rx): (Sender[TouchEvent], Receiver[TouchEvent]) = Channel.new();
+    tx.__schedule_touchend();
+    rx
+}

@@ -17526,6 +17526,294 @@ fn wasm_blur_sequential_target_rejected() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// End-to-end for the `std.web.events` touch family (`touchstart`/`touchmove`/
+/// `touchend`) on `wasm_browser --features wasm-threads`: a blocking `recv()`
+/// on each of the three streams must wake on the matching synthetic touch and
+/// the 16-byte `TouchEvent` (x, y) payload must round-trip host→wasm exactly.
+/// The touch trio is the mobile-input analogue of pointer-down/move/up; this
+/// proves the full down→drag→up gesture crosses the spine. Uses the now-standard
+/// loop-until-valid drain per stream (the first parked recv's out-slot read can
+/// race under load, width-independent). Sibling of
+/// `wasm_threads_focus_blur_recv_e2e`.
+#[test]
+fn wasm_threads_touch_payload_recv_e2e() {
+    let tmp = wasm_test_dir("wttouch");
+    let path = tmp.join("tc.kara");
+    std::fs::write(
+        &path,
+        "import std.web.events.{touchstart, touchmove, touchend, TouchEvent};\n\n\
+         fn main() {\n    \
+             println(\"before\");\n    \
+             let starts = touchstart();\n    \
+             let moves = touchmove();\n    \
+             let ends = touchend();\n    \
+             let mut ok_start = false;\n    \
+             let mut ok_move = false;\n    \
+             let mut ok_end = false;\n    \
+             // Loop until a valid payload is observed rather than trusting the\n    \
+             // first recv (the first parked recv's out-slot read can race under\n    \
+             // load); the host re-dispatches the same event every tick.\n    \
+             let mut tries = 0;\n    \
+             loop {\n        \
+                 let s = starts.recv();\n        \
+                 if s.x() == 10.0 and s.y() == 20.0 {\n            \
+                     ok_start = true;\n            \
+                     break;\n        \
+                 }\n        \
+                 tries = tries + 1;\n        \
+                 if tries >= 64 {\n            \
+                     break;\n        \
+                 }\n    \
+             }\n    \
+             tries = 0;\n    \
+             loop {\n        \
+                 let m = moves.recv();\n        \
+                 if m.x() == 30.0 and m.y() == 40.0 {\n            \
+                     ok_move = true;\n            \
+                     break;\n        \
+                 }\n        \
+                 tries = tries + 1;\n        \
+                 if tries >= 64 {\n            \
+                     break;\n        \
+                 }\n    \
+             }\n    \
+             tries = 0;\n    \
+             loop {\n        \
+                 let e = ends.recv();\n        \
+                 if e.x() == 50.0 and e.y() == 60.0 {\n            \
+                     ok_end = true;\n            \
+                     break;\n        \
+                 }\n        \
+                 tries = tries + 1;\n        \
+                 if tries >= 64 {\n            \
+                     break;\n        \
+                 }\n    \
+             }\n    \
+             if ok_start and ok_move and ok_end {\n        \
+                 println(\"TOUCH_OK\");\n    \
+             } else {\n        \
+                 println(\"TOUCH_FAIL\");\n    \
+             }\n    \
+             println(\"after\");\n}\n",
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--features=wasm-threads",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_threads_touch_payload_recv_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        out.status.success(),
+        "touch wasm-threads build failed: {stderr}"
+    );
+    assert!(tmp.join("tc.threads.wasm").exists());
+
+    let harness = tmp.join("harness.mjs");
+    std::fs::write(
+        &harness,
+        r#"import { run } from "./tc.js";
+// One node EventTarget stands in for the canvas; dispatch a synthetic touchstart,
+// touchmove and touchend each tick so the guest's three sequential recvs each
+// wake on their own stream. Each carries a single primary touch with fixed
+// coords; a plain EventTarget has no getBoundingClientRect, so the glue reports
+// the raw clientX/Y the guest checks exactly. On a release the live `touches`
+// list is empty (the finger lifted) — the position rides changedTouches[0].
+class TStart extends Event { constructor(x, y) { super("touchstart"); this.touches = [{ clientX: x, clientY: y }]; this.changedTouches = this.touches; } }
+class TMove extends Event { constructor(x, y) { super("touchmove"); this.touches = [{ clientX: x, clientY: y }]; this.changedTouches = this.touches; } }
+class TEnd extends Event { constructor(x, y) { super("touchend"); this.touches = []; this.changedTouches = [{ clientX: x, clientY: y }]; } }
+const target = new EventTarget();
+let dispatched = 0;
+const iv = setInterval(() => {
+  dispatched++;
+  target.dispatchEvent(new TStart(10, 20));
+  target.dispatchEvent(new TMove(30, 40));
+  target.dispatchEvent(new TEnd(50, 60));
+}, 12);
+const bail = setTimeout(() => { console.error("FAIL: recv never woke, dispatched=" + dispatched); process.exit(2); }, 8000);
+const h = await run({}, { touchTarget: target });
+clearInterval(iv);
+clearTimeout(bail);
+if (h.threaded !== true) { console.error("FAIL: expected threaded pick"); process.exit(1); }
+console.log("TOUCH_HARNESS_OK dispatched=" + dispatched);
+process.exit(0);
+"#,
+    )
+    .unwrap();
+    let node = std::process::Command::new("node")
+        .arg(&harness)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: wasm_threads_touch_payload_recv_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let node_stdout = String::from_utf8_lossy(&node_out.stdout);
+    let node_stderr = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success(),
+        "touch harness failed under node: stdout={node_stdout} stderr={node_stderr}",
+    );
+    assert!(
+        node_stdout.contains("TOUCH_HARNESS_OK"),
+        "harness did not complete (all three recvs woke): stdout={node_stdout} stderr={node_stderr}",
+    );
+    // All three streams woke and every coordinate crossed intact — a zero-filled
+    // / wrong-size / wrong-stream floor would have printed TOUCH_FAIL.
+    assert!(
+        node_stdout.contains("TOUCH_OK") && !node_stdout.contains("TOUCH_FAIL"),
+        "exact touchstart (10,20) / touchmove (30,40) / touchend (50,60) TouchEvent payloads must round-trip host→wasm: stdout={node_stdout}",
+    );
+    let before = node_stdout.find("before");
+    let after = node_stdout.find("after");
+    assert!(
+        matches!((before, after), (Some(b), Some(a)) if b < a),
+        "guest must print before→after (recvs blocked then woke): stdout={node_stdout}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The sequential-target gate for `touchstart`: built WITHOUT `--features
+/// wasm-threads` it is a hard compile error (codegen, pre-link) naming the flag
+/// — never a silent never-filling channel. Sibling of
+/// `wasm_clicks_sequential_target_rejected`.
+#[test]
+fn wasm_touchstart_sequential_target_rejected() {
+    let tmp = wasm_test_dir("wttouchstartgate");
+    let path = tmp.join("ts.kara");
+    std::fs::write(
+        &path,
+        "import std.web.events.{touchstart, TouchEvent};\n\n\
+         fn main() {\n    \
+             let starts = touchstart();\n    \
+             starts.recv();\n}\n",
+    )
+    .unwrap();
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--bindings=none",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_touchstart_sequential_target_rejected — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        !out.status.success(),
+        "sequential wasm touchstart producer must be rejected, but build succeeded: {stderr}"
+    );
+    assert!(
+        stderr.contains("requires `--features wasm-threads`"),
+        "gate must name the flag: {stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The sequential-target gate for `touchmove` (sibling of
+/// `wasm_touchstart_sequential_target_rejected`).
+#[test]
+fn wasm_touchmove_sequential_target_rejected() {
+    let tmp = wasm_test_dir("wttouchmovegate");
+    let path = tmp.join("tm.kara");
+    std::fs::write(
+        &path,
+        "import std.web.events.{touchmove, TouchEvent};\n\n\
+         fn main() {\n    \
+             let moves = touchmove();\n    \
+             moves.recv();\n}\n",
+    )
+    .unwrap();
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--bindings=none",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_touchmove_sequential_target_rejected — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        !out.status.success(),
+        "sequential wasm touchmove producer must be rejected, but build succeeded: {stderr}"
+    );
+    assert!(
+        stderr.contains("requires `--features wasm-threads`"),
+        "gate must name the flag: {stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The sequential-target gate for `touchend` (sibling of
+/// `wasm_touchstart_sequential_target_rejected`).
+#[test]
+fn wasm_touchend_sequential_target_rejected() {
+    let tmp = wasm_test_dir("wttouchendgate");
+    let path = tmp.join("te.kara");
+    std::fs::write(
+        &path,
+        "import std.web.events.{touchend, TouchEvent};\n\n\
+         fn main() {\n    \
+             let ends = touchend();\n    \
+             ends.recv();\n}\n",
+    )
+    .unwrap();
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--bindings=none",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_touchend_sequential_target_rejected — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        !out.status.success(),
+        "sequential wasm touchend producer must be rejected, but build succeeded: {stderr}"
+    );
+    assert!(
+        stderr.contains("requires `--features wasm-threads`"),
+        "gate must name the flag: {stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// Full-demo E2E for the Plume flow-field dogfood (`examples/plume/`): builds
 /// the shipped `plume.kara` for `wasm_browser --features wasm-threads` and runs
 /// it under node, exercising the whole front-end spine together — the blocking

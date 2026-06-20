@@ -47,6 +47,9 @@ impl<'ctx> super::Codegen<'ctx> {
             "__schedule_contextmenu" => self.compile_channel_schedule_contextmenu(object, args),
             "__schedule_focus" => self.compile_channel_schedule_focus(object, args),
             "__schedule_blur" => self.compile_channel_schedule_blur(object, args),
+            "__schedule_touchstart" => self.compile_channel_schedule_touchstart(object, args),
+            "__schedule_touchmove" => self.compile_channel_schedule_touchmove(object, args),
+            "__schedule_touchend" => self.compile_channel_schedule_touchend(object, args),
             // The dispatch gate in `compile_method_call` only routes the
             // methods above here.
             _ => unreachable!("compile_channel_method: unexpected method `{method}`"),
@@ -1172,6 +1175,235 @@ impl<'ctx> super::Codegen<'ctx> {
             AttributeLoc::Function,
             self.context
                 .create_string_attribute("wasm-import-name", "__kara_blur"),
+        );
+        f
+    }
+
+    /// `tx.__schedule_touchstart()` — the compiler builtin backing
+    /// `std.web.events.touchstart`. Identical shape to `__schedule_clicks`
+    /// (multi-shot, host owns the surviving cloned sender) and the same 16-byte
+    /// `TouchEvent` payload (two `f64`s — `x`, `y`); only the host event differs
+    /// (`touchstart`). Takes no argument. Same `--features wasm-threads` gate as
+    /// the other host-async producers.
+    fn compile_channel_schedule_touchstart(
+        &mut self,
+        object: &Expr,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if !args.is_empty() {
+            return Err("Sender.__schedule_touchstart expects no arguments".to_string());
+        }
+        if crate::target::active_target_is_wasm() && !crate::target::wasm_threads_enabled() {
+            return Err(
+                "std.web.events.touchstart (host-async input stream) requires `--features \
+                 wasm-threads` on this target: a sequential WASM build has no thread to block in \
+                 `recv` while the host event loop dispatches touchstart events, so the channel \
+                 could never be fed. Rebuild with `--target=wasm_browser --features wasm-threads` \
+                 (design.md § Scheduler contract on WASM — Realization status)."
+                    .to_string(),
+            );
+        }
+        // Clone first — the surviving reference keeps the channel open across
+        // every event (the local `tx` in `touchstart` drops at return).
+        let ch = self.compile_expr(object)?.into_pointer_value();
+        let clone_fn = self
+            .module
+            .get_function("karac_runtime_channel_clone")
+            .expect("karac_runtime_channel_clone declared in Codegen::new");
+        let cloned = self
+            .builder
+            .build_call(clone_fn, &[ch.into()], "touchstart.chan.clone")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let i64_ty = self.context.i64_type();
+        let ch_i64 = self
+            .builder
+            .build_ptr_to_int(cloned, i64_ty, "touchstart.chan.i64")
+            .unwrap();
+
+        let host_fn = self.get_or_declare_touchstart_import();
+        self.builder
+            .build_call(host_fn, &[ch_i64.into()], "touchstart.schedule")
+            .unwrap();
+        Ok(self.context.i64_type().const_zero().into())
+    }
+
+    /// Get-or-declare the `kara_host.__kara_touchstart(i64) -> ()` wasm import
+    /// (compiler-emitted, sibling of `__kara_clicks`; the channel handle crosses
+    /// as an `i64`). The element layout (`TouchEvent` = two `f64`s) is fixed and
+    /// known to the glue, so it is not passed across.
+    fn get_or_declare_touchstart_import(&self) -> inkwell::values::FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("__kara_touchstart") {
+            return f;
+        }
+        use inkwell::attributes::AttributeLoc;
+        let i64_ty = self.context.i64_type();
+        let fn_ty = self.context.void_type().fn_type(&[i64_ty.into()], false);
+        let f = self.module.add_function("__kara_touchstart", fn_ty, None);
+        f.add_attribute(
+            AttributeLoc::Function,
+            self.context
+                .create_string_attribute("wasm-import-module", "kara_host"),
+        );
+        f.add_attribute(
+            AttributeLoc::Function,
+            self.context
+                .create_string_attribute("wasm-import-name", "__kara_touchstart"),
+        );
+        f
+    }
+
+    /// `tx.__schedule_touchmove()` — the compiler builtin backing
+    /// `std.web.events.touchmove`, the finger-drag sibling of
+    /// `__schedule_touchstart` (the same 16-byte `TouchEvent` payload; only the
+    /// host event differs, `touchmove`, and its listener `{ passive: false }` +
+    /// preventDefaults the page scroll during a drag). Takes no argument. Same
+    /// `--features wasm-threads` gate as the other host-async producers.
+    fn compile_channel_schedule_touchmove(
+        &mut self,
+        object: &Expr,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if !args.is_empty() {
+            return Err("Sender.__schedule_touchmove expects no arguments".to_string());
+        }
+        if crate::target::active_target_is_wasm() && !crate::target::wasm_threads_enabled() {
+            return Err(
+                "std.web.events.touchmove (host-async input stream) requires `--features \
+                 wasm-threads` on this target: a sequential WASM build has no thread to block in \
+                 `recv` while the host event loop dispatches touchmove events, so the channel \
+                 could never be fed. Rebuild with `--target=wasm_browser --features wasm-threads` \
+                 (design.md § Scheduler contract on WASM — Realization status)."
+                    .to_string(),
+            );
+        }
+        // Clone first — the surviving reference keeps the channel open across
+        // every event (the local `tx` in `touchmove` drops at return).
+        let ch = self.compile_expr(object)?.into_pointer_value();
+        let clone_fn = self
+            .module
+            .get_function("karac_runtime_channel_clone")
+            .expect("karac_runtime_channel_clone declared in Codegen::new");
+        let cloned = self
+            .builder
+            .build_call(clone_fn, &[ch.into()], "touchmove.chan.clone")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let i64_ty = self.context.i64_type();
+        let ch_i64 = self
+            .builder
+            .build_ptr_to_int(cloned, i64_ty, "touchmove.chan.i64")
+            .unwrap();
+
+        let host_fn = self.get_or_declare_touchmove_import();
+        self.builder
+            .build_call(host_fn, &[ch_i64.into()], "touchmove.schedule")
+            .unwrap();
+        Ok(self.context.i64_type().const_zero().into())
+    }
+
+    /// Get-or-declare the `kara_host.__kara_touchmove(i64) -> ()` wasm import
+    /// (compiler-emitted, sibling of `__kara_touchstart`; the channel handle
+    /// crosses as an `i64`). The element layout (`TouchEvent` = two `f64`s) is
+    /// fixed and known to the glue, so it is not passed across.
+    fn get_or_declare_touchmove_import(&self) -> inkwell::values::FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("__kara_touchmove") {
+            return f;
+        }
+        use inkwell::attributes::AttributeLoc;
+        let i64_ty = self.context.i64_type();
+        let fn_ty = self.context.void_type().fn_type(&[i64_ty.into()], false);
+        let f = self.module.add_function("__kara_touchmove", fn_ty, None);
+        f.add_attribute(
+            AttributeLoc::Function,
+            self.context
+                .create_string_attribute("wasm-import-module", "kara_host"),
+        );
+        f.add_attribute(
+            AttributeLoc::Function,
+            self.context
+                .create_string_attribute("wasm-import-name", "__kara_touchmove"),
+        );
+        f
+    }
+
+    /// `tx.__schedule_touchend()` — the compiler builtin backing
+    /// `std.web.events.touchend`, the finger-up sibling of
+    /// `__schedule_touchstart` (the same 16-byte `TouchEvent` payload; only the
+    /// host event differs, `touchend`, whose position the glue reads from
+    /// `changedTouches[0]` since the live `touches` list is empty on release).
+    /// Takes no argument. Same `--features wasm-threads` gate as the other
+    /// host-async producers.
+    fn compile_channel_schedule_touchend(
+        &mut self,
+        object: &Expr,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if !args.is_empty() {
+            return Err("Sender.__schedule_touchend expects no arguments".to_string());
+        }
+        if crate::target::active_target_is_wasm() && !crate::target::wasm_threads_enabled() {
+            return Err(
+                "std.web.events.touchend (host-async input stream) requires `--features \
+                 wasm-threads` on this target: a sequential WASM build has no thread to block in \
+                 `recv` while the host event loop dispatches touchend events, so the channel \
+                 could never be fed. Rebuild with `--target=wasm_browser --features wasm-threads` \
+                 (design.md § Scheduler contract on WASM — Realization status)."
+                    .to_string(),
+            );
+        }
+        // Clone first — the surviving reference keeps the channel open across
+        // every event (the local `tx` in `touchend` drops at return).
+        let ch = self.compile_expr(object)?.into_pointer_value();
+        let clone_fn = self
+            .module
+            .get_function("karac_runtime_channel_clone")
+            .expect("karac_runtime_channel_clone declared in Codegen::new");
+        let cloned = self
+            .builder
+            .build_call(clone_fn, &[ch.into()], "touchend.chan.clone")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let i64_ty = self.context.i64_type();
+        let ch_i64 = self
+            .builder
+            .build_ptr_to_int(cloned, i64_ty, "touchend.chan.i64")
+            .unwrap();
+
+        let host_fn = self.get_or_declare_touchend_import();
+        self.builder
+            .build_call(host_fn, &[ch_i64.into()], "touchend.schedule")
+            .unwrap();
+        Ok(self.context.i64_type().const_zero().into())
+    }
+
+    /// Get-or-declare the `kara_host.__kara_touchend(i64) -> ()` wasm import
+    /// (compiler-emitted, sibling of `__kara_touchstart`; the channel handle
+    /// crosses as an `i64`). The element layout (`TouchEvent` = two `f64`s) is
+    /// fixed and known to the glue, so it is not passed across.
+    fn get_or_declare_touchend_import(&self) -> inkwell::values::FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("__kara_touchend") {
+            return f;
+        }
+        use inkwell::attributes::AttributeLoc;
+        let i64_ty = self.context.i64_type();
+        let fn_ty = self.context.void_type().fn_type(&[i64_ty.into()], false);
+        let f = self.module.add_function("__kara_touchend", fn_ty, None);
+        f.add_attribute(
+            AttributeLoc::Function,
+            self.context
+                .create_string_attribute("wasm-import-module", "kara_host"),
+        );
+        f.add_attribute(
+            AttributeLoc::Function,
+            self.context
+                .create_string_attribute("wasm-import-name", "__kara_touchend"),
         );
         f
     }

@@ -485,6 +485,9 @@ impl<'a> super::TypeChecker<'a> {
                 | "__schedule_contextmenu"
                 | "__schedule_focus"
                 | "__schedule_blur"
+                | "__schedule_touchstart"
+                | "__schedule_touchmove"
+                | "__schedule_touchend"
         ) {
             let resolved = resolve_type_var_top(&elem, &self.env.substitutions);
             let te = Self::type_to_type_expr(&resolved);
@@ -809,6 +812,46 @@ impl<'a> super::TypeChecker<'a> {
                     if !args.is_empty() {
                         self.type_error(
                             "Sender.__schedule_blur takes no arguments".to_string(),
+                            span.clone(),
+                            TypeErrorKind::WrongNumberOfArgs,
+                        );
+                    }
+                    Type::Unit
+                }
+                // Internal compiler builtins backing `std.web.events.touchstart`
+                // / `.touchmove` / `.touchend` — the touch (finger/pen) gesture
+                // family; each carries the same 16-byte `TouchEvent` (two `f64`s
+                // — `x`, `y`) payload as `ClickEvent` (sibling of
+                // `__schedule_pointer_moves`/`clicks`, single primary touch).
+                // Borrow `self`, take no argument, return Unit; codegen clones
+                // the sender and hands it to the host touch listener (touchmove
+                // additionally `{ passive: false }` + preventDefaults the page
+                // scroll during a drag). Kept out of ordinary reach by the `__`
+                // prefix + the `writes(Input)` gating on the wrappers.
+                "__schedule_touchstart" => {
+                    if !args.is_empty() {
+                        self.type_error(
+                            "Sender.__schedule_touchstart takes no arguments".to_string(),
+                            span.clone(),
+                            TypeErrorKind::WrongNumberOfArgs,
+                        );
+                    }
+                    Type::Unit
+                }
+                "__schedule_touchmove" => {
+                    if !args.is_empty() {
+                        self.type_error(
+                            "Sender.__schedule_touchmove takes no arguments".to_string(),
+                            span.clone(),
+                            TypeErrorKind::WrongNumberOfArgs,
+                        );
+                    }
+                    Type::Unit
+                }
+                "__schedule_touchend" => {
+                    if !args.is_empty() {
+                        self.type_error(
+                            "Sender.__schedule_touchend takes no arguments".to_string(),
                             span.clone(),
                             TypeErrorKind::WrongNumberOfArgs,
                         );
