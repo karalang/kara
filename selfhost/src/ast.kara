@@ -416,3 +416,77 @@ pub struct ContinueExpr {
     pub label: Option[String],
     pub span: Span,
 }
+
+// ── Type expressions (slice 3a) ── Mirrors `src/ast/types.rs::TypeKind` +
+// `PathExpr`, restricted to the forms the seed's `parse_type` reaches from a
+// type-prefix: paths (with type-only generic args), `ref`/`mut ref`/`weak`,
+// `mut Slice[T]`, raw pointers, tuples / unit / parenthesized, and `Fn(...) ->
+// R` / `OnceFn(...)` function types. DEFERRED to a later sub-slice (and so kept
+// out of the slice-3a corpus): `with EFFECT_LIST` effect specs on `Fn` types,
+// `dyn Trait` / `impl Trait`, const-generic args (`Array[T, 4]`) and shape
+// literals — all of which pull in the effect/expression grammar.
+//
+// Same DIRECT `shared enum` model as `Expr`: `TypeExpr` IS the recursive node,
+// every child edge a `TypeExpr` (RC handle = pointer) field; node structs embed
+// only scalars / `String` / `TypeExpr` pointers / `Vec[TypeExpr]` / `Span`. The
+// node structs are declared BEFORE the enum and forward-reference it — exactly
+// the working order `BinaryExpr` (decl'd before `Expr`) uses. Variant names are
+// `*Ty`-suffixed so their bare match arms never collide with `Expr`'s variants
+// (`Tuple` is already an `Expr` variant; `Error` already taken).
+
+// Single-inner wrapper node, shared by `ref T` / `mut ref T` / `mut Slice[T]` /
+// `weak T` — the variant tag distinguishes them. `inner` is the wrapped element
+// type (the `Box<TypeExpr>` analog).
+pub struct WrapType {
+    pub inner: TypeExpr,
+    pub span: Span,
+}
+
+// `*const T` / `*mut T`.
+pub struct PointerType {
+    pub is_mut: bool,
+    pub inner: TypeExpr,
+    pub span: Span,
+}
+
+// A path type: dotted segments + optional type-generic args. `generics` is
+// EMPTY when no `[...]` was written (the seed's `generic_args: None`); a
+// non-empty `generics` is the `Some([...])` form. Slice 3a never emits the
+// degenerate `Foo[]` (empty brackets), so "has generics" ≡ `generics.len() > 0`.
+pub struct PathType {
+    pub segments: Vec[String],
+    pub generics: Vec[TypeExpr],
+    pub span: Span,
+}
+
+// `(A, B, ...)` tuple type. `()` is `UnitTy`, not a zero-element `TupleTy`
+// (mirrors the seed's distinct `TypeKind::Unit`).
+pub struct TupleType {
+    pub elems: Vec[TypeExpr],
+    pub span: Span,
+}
+
+// `Fn(P...) [-> R]` / `OnceFn(P...) [-> R]`. `is_once` selects `OnceFn`. The
+// `with EFFECT_LIST` clause is deferred (see the module note above), so there
+// is no effect-spec field in slice 3a.
+pub struct FnTypeNode {
+    pub params: Vec[TypeExpr],
+    pub ret: Option[TypeExpr],
+    pub is_once: bool,
+    pub span: Span,
+}
+
+pub shared enum TypeExpr {
+    PathTy(PathType),
+    TupleTy(TupleType),
+    PtrTy(PointerType),
+    FnTy(FnTypeNode),
+    RefTy(WrapType),
+    MutRefTy(WrapType),
+    MutSliceTy(WrapType),
+    WeakTy(WrapType),
+    UnitTy(SpanNode),
+    // Error-recovery placeholder (`*Ty` suffix avoids colliding with `Expr`'s
+    // `Error` variant in bare match arms).
+    ErrTy(SpanNode),
+}

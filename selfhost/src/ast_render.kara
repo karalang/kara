@@ -32,6 +32,12 @@ import ast.{
     LoopExpr,
     BreakExpr,
     ContinueExpr,
+    TypeExpr,
+    WrapType,
+    PointerType,
+    PathType,
+    TupleType,
+    FnTypeNode,
 };
 
 // MUST stay identical to `escape_for_render` in `selfhost/src/main.kara` and
@@ -523,6 +529,139 @@ pub fn render_expr(e: Expr) -> String {
         }
         Error(n) => {
             out.push_str("(error");
+            out.push_str(span_str(n.span.offset, n.span.length));
+            out.push_str(")");
+        }
+    }
+    out
+}
+
+// ── Type-expression render (slice 3a) ──
+//
+// Heads: `(tpath SEG[.SEG]@o:l GEN...)`, `(tref @o:l T)`, `(tmutref @o:l T)`,
+// `(tmutslice @o:l T)`, `(tweak @o:l T)`, `(tptr mut|const @o:l T)`,
+// `(ttuple @o:l T...)`, `(tunit @o:l)`, `(tfn[once] @o:l P... (tret R)?)`,
+// `(terror @o:l)`. The Rust seed reproduces this exactly in
+// `tests/selfhost_parser_types.rs::render_rust_type`. Consumes the `TypeExpr`
+// by value (destructured per variant, like `render_expr`).
+pub fn render_type(t: TypeExpr) -> String {
+    let mut out = "".to_string();
+    match t {
+        PathTy(n) => {
+            let PathType {
+                segments,
+                generics,
+                span,
+            } = n;
+            out.push_str("(tpath ");
+            let mut i = 0;
+            for seg in segments {
+                if i > 0 {
+                    out.push_str(".");
+                }
+                out.push_str(seg);
+                i = i + 1;
+            }
+            out.push_str(span_str(span.offset, span.length));
+            for g in generics {
+                out.push_str(" ");
+                out.push_str(render_type(g));
+            }
+            out.push_str(")");
+        }
+        TupleTy(n) => {
+            let TupleType { elems, span } = n;
+            out.push_str("(ttuple");
+            out.push_str(span_str(span.offset, span.length));
+            for el in elems {
+                out.push_str(" ");
+                out.push_str(render_type(el));
+            }
+            out.push_str(")");
+        }
+        PtrTy(n) => {
+            let PointerType {
+                is_mut,
+                inner,
+                span,
+            } = n;
+            out.push_str("(tptr ");
+            if is_mut {
+                out.push_str("mut");
+            } else {
+                out.push_str("const");
+            }
+            out.push_str(span_str(span.offset, span.length));
+            out.push_str(" ");
+            out.push_str(render_type(inner));
+            out.push_str(")");
+        }
+        FnTy(n) => {
+            let FnTypeNode {
+                params,
+                ret,
+                is_once,
+                span,
+            } = n;
+            if is_once {
+                out.push_str("(tfnonce");
+            } else {
+                out.push_str("(tfn");
+            }
+            out.push_str(span_str(span.offset, span.length));
+            for p in params {
+                out.push_str(" ");
+                out.push_str(render_type(p));
+            }
+            match ret {
+                Some(r) => {
+                    out.push_str(" (tret ");
+                    out.push_str(render_type(r));
+                    out.push_str(")");
+                }
+                None => {}
+            }
+            out.push_str(")");
+        }
+        RefTy(n) => {
+            let WrapType { inner, span } = n;
+            out.push_str("(tref");
+            out.push_str(span_str(span.offset, span.length));
+            out.push_str(" ");
+            out.push_str(render_type(inner));
+            out.push_str(")");
+        }
+        MutRefTy(n) => {
+            let WrapType { inner, span } = n;
+            out.push_str("(tmutref");
+            out.push_str(span_str(span.offset, span.length));
+            out.push_str(" ");
+            out.push_str(render_type(inner));
+            out.push_str(")");
+        }
+        MutSliceTy(n) => {
+            let WrapType { inner, span } = n;
+            out.push_str("(tmutslice");
+            out.push_str(span_str(span.offset, span.length));
+            out.push_str(" ");
+            out.push_str(render_type(inner));
+            out.push_str(")");
+        }
+        WeakTy(n) => {
+            let WrapType { inner, span } = n;
+            out.push_str("(tweak");
+            out.push_str(span_str(span.offset, span.length));
+            out.push_str(" ");
+            out.push_str(render_type(inner));
+            out.push_str(")");
+        }
+        UnitTy(n) => {
+            out.push_str("(tunit");
+            out.push_str(span_str(n.span.offset, n.span.length));
+            out.push_str(")");
+        }
+        ErrTy(n) => {
+            out.push_str("(terror");
             out.push_str(span_str(n.span.offset, n.span.length));
             out.push_str(")");
         }

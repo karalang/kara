@@ -48,6 +48,12 @@ import ast.{
     LoopExpr,
     BreakExpr,
     ContinueExpr,
+    TypeExpr,
+    WrapType,
+    PointerType,
+    PathType,
+    TupleType,
+    FnTypeNode,
 };
 import lexer.lex_all;
 
@@ -1212,6 +1218,386 @@ impl Parser {
             first
         }
     }
+
+    // ── Type expressions (slice 3a) ──
+    //
+    // Mirrors `src/parser/types.rs::parse_type` + `parse_path_type`, and the
+    // type-arg half of `src/parser/generics.rs::parse_generic_type_args`.
+    // Token payloads are read consume-once (move-out at the leaf) or peeked
+    // non-destructively (`current_ident_matches`, mirroring the label peek in
+    // `current_is_known_label`). The corpus is well-formed, so the `[`/`(`/`]`
+    // consumers are best-effort (recovery lands with the diagnostics slice).
+
+    fn expect_lbracket(mut ref self) {
+        if self.pos < self.tokens.len() {
+            let ok = match self.tokens[self.pos].token {
+                LeftBracket => true,
+                _ => false,
+            };
+            if ok {
+                self.advance();
+            }
+        }
+    }
+
+    fn expect_lparen(mut ref self) {
+        if self.pos < self.tokens.len() {
+            let ok = match self.tokens[self.pos].token {
+                LeftParen => true,
+                _ => false,
+            };
+            if ok {
+                self.advance();
+            }
+        }
+    }
+
+    fn expect_ref(mut ref self) {
+        if self.pos < self.tokens.len() {
+            let ok = match self.tokens[self.pos].token {
+                Ref => true,
+                _ => false,
+            };
+            if ok {
+                self.advance();
+            }
+        }
+    }
+
+    // True iff the current token is an identifier whose name equals `target`.
+    // Non-consuming: the matched `n` is borrowed (passed to `dup_str`), never
+    // moved — exactly like `current_is_known_label`. The `dup_str` copy makes
+    // the comparison `String == String` (value/value); karac's value-vs-borrow
+    // `==` gap blocks comparing the borrowed `n` against an owned literal.
+    //
+    // Single-peek discipline: the SAME identifier token must be borrow-matched
+    // at most ONCE before it is consumed (moved or advanced past). Two
+    // borrow-matches of one identifier token followed by a consume trips a
+    // latent karac codegen double-free (a heap-corrupting payload free; see
+    // the phase-12 slice-3a notes). So `parse_type` binds the identifier once
+    // (its `Identifier(name)` arm) and dispatches `Fn`/`OnceFn`/path from that
+    // single bind — it never classifies via a separate peek-match. This helper
+    // is therefore used only for the single `Slice` lookahead (one match, then
+    // `advance`). Mirrors the seed, which reads the name once (`peek_token`).
+    fn current_ident_matches(ref self, target: String) -> bool {
+        if self.pos >= self.tokens.len() {
+            return false;
+        }
+        match self.tokens[self.pos].token {
+            Identifier(n) => {
+                let got = dup_str(n);
+                got == target
+            }
+            _ => false,
+        }
+    }
+
+    fn at_comma(ref self) -> bool {
+        if self.pos >= self.tokens.len() {
+            return false;
+        }
+        match self.tokens[self.pos].token {
+            Comma => true,
+            _ => false,
+        }
+    }
+
+    fn at_rbracket(ref self) -> bool {
+        if self.pos >= self.tokens.len() {
+            return false;
+        }
+        match self.tokens[self.pos].token {
+            RightBracket => true,
+            _ => false,
+        }
+    }
+
+    fn at_rparen(ref self) -> bool {
+        if self.pos >= self.tokens.len() {
+            return false;
+        }
+        match self.tokens[self.pos].token {
+            RightParen => true,
+            _ => false,
+        }
+    }
+
+    // `[T, U, ...]` — type-only generic args (const-arg / shape-literal forms
+    // are deferred to a later sub-slice). Mirrors the type-arg branch of
+    // `parse_generic_type_args`.
+    fn parse_generic_type_args(mut ref self) -> Vec[TypeExpr] {
+        self.expect_lbracket();
+        let mut args: Vec[TypeExpr] = Vec.new();
+        loop {
+            if self.is_at_end() {
+                break;
+            }
+            if self.at_rbracket() {
+                break;
+            }
+            let t = self.parse_type();
+            args.push(t);
+            if self.at_comma() {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        self.expect_rbracket();
+        args
+    }
+
+    // Finish a path type whose FIRST segment (`first`) the caller has already
+    // bound + consumed: `('.' Ident)* ['[' T, ... ']']`. Taking the first
+    // segment as a parameter (rather than re-reading it) is what keeps the
+    // identifier token matched exactly ONCE — see `parse_type`'s `Identifier`
+    // arm and the single-peek note on `current_ident_matches`. `start` is the
+    // first token's span; the PathType span covers segments + generic args
+    // (the seed's `span_from(start)`).
+    fn parse_path_type_from(mut ref self, start: Span, first: String) -> PathType {
+        let mut segs: Vec[String] = Vec.new();
+        segs.push(first);
+        loop {
+            let is_dot = if self.pos < self.tokens.len() {
+                match self.tokens[self.pos].token {
+                    Dot => true,
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            if not is_dot {
+                break;
+            }
+            self.advance(); // consume '.'
+            if self.pos >= self.tokens.len() {
+                break;
+            }
+            let got = match self.tokens[self.pos].token {
+                Identifier(name) => {
+                    segs.push(name);
+                    true
+                }
+                _ => false,
+            };
+            if got {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        let has_generics = if self.pos < self.tokens.len() {
+            match self.tokens[self.pos].token {
+                LeftBracket => true,
+                _ => false,
+            }
+        } else {
+            false
+        };
+        let mut generics: Vec[TypeExpr] = Vec.new();
+        if has_generics {
+            generics = self.parse_generic_type_args();
+        }
+        PathType {
+            segments: segs,
+            generics: generics,
+            span: self.span_from(start),
+        }
+    }
+
+    // `(P...) [-> R]` AFTER the leading `Fn` / `OnceFn` identifier has already
+    // been consumed by `parse_type`'s `Identifier` arm. `with EFFECT_LIST` is
+    // deferred — not consumed here.
+    fn parse_fn_type_rest(mut ref self, start: Span, is_once: bool) -> TypeExpr {
+        self.expect_lparen();
+        let mut params: Vec[TypeExpr] = Vec.new();
+        loop {
+            if self.is_at_end() {
+                break;
+            }
+            if self.at_rparen() {
+                break;
+            }
+            let p = self.parse_type();
+            params.push(p);
+            if self.at_comma() {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        self.expect_rparen();
+        let mut ret: Option[TypeExpr] = None;
+        let has_arrow = if self.pos < self.tokens.len() {
+            match self.tokens[self.pos].token {
+                Arrow => true,
+                _ => false,
+            }
+        } else {
+            false
+        };
+        if has_arrow {
+            self.advance(); // consume `->`
+            ret = Some(self.parse_type());
+        }
+        TypeExpr.FnTy(FnTypeNode {
+            params: params,
+            ret: ret,
+            is_once: is_once,
+            span: self.span_from(start),
+        })
+    }
+
+    // `()` unit / `(A, B, ...)` tuple / `(A)` parenthesized (the parens drop —
+    // the inner type is returned unchanged, span = inner's span). `(` is
+    // current (un-consumed). Mirrors the `LeftParen` arm of the seed.
+    fn parse_paren_type(mut ref self, start: Span) -> TypeExpr {
+        self.advance(); // consume `(`
+        if self.at_rparen() {
+            self.advance(); // consume `)`
+            return TypeExpr.UnitTy(SpanNode { span: self.span_from(start) });
+        }
+        let first = self.parse_type();
+        if self.at_comma() {
+            self.advance(); // consume the first comma
+            let mut elems: Vec[TypeExpr] = Vec.new();
+            elems.push(first);
+            loop {
+                if self.is_at_end() {
+                    break;
+                }
+                if self.at_rparen() {
+                    break;
+                }
+                let t = self.parse_type();
+                elems.push(t);
+                if self.at_comma() {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            self.expect_rparen();
+            TypeExpr.TupleTy(TupleType {
+                elems: elems,
+                span: self.span_from(start),
+            })
+        } else {
+            self.expect_rparen();
+            first
+        }
+    }
+
+    // The `parse_type` dispatch. Mirrors `src/parser/types.rs::parse_type`,
+    // ported arms only (see ast.kara's TypeExpr note for the deferred forms).
+    //
+    // ONE match of the leading token — each arm consumes + builds in place,
+    // exactly like `parse_prefix`. Crucially the `Identifier` arm binds the
+    // name ONCE and dispatches `Fn` / `OnceFn` / path from that single bind:
+    // peeking the same identifier token a second time (e.g. a separate
+    // classify-match) trips a latent karac codegen double-free (see the
+    // single-peek note on `current_ident_matches` and the slice-3a writeup).
+    fn parse_type(mut ref self) -> TypeExpr {
+        let start = self.current_span();
+        if self.pos >= self.tokens.len() {
+            return TypeExpr.ErrTy(SpanNode { span: self.span_from(start) });
+        }
+        match self.tokens[self.pos].token {
+            // `ref T`
+            Ref => {
+                self.advance();
+                let inner = self.parse_type();
+                TypeExpr.RefTy(WrapType {
+                    inner: inner,
+                    span: self.span_from(start),
+                })
+            }
+            // `mut ref T`  |  `mut Slice[T]`
+            Mut => {
+                self.advance(); // `mut`
+                if self.current_ident_matches("Slice".to_string()) {
+                    self.advance(); // `Slice`
+                    self.expect_lbracket();
+                    let elem = self.parse_type();
+                    self.expect_rbracket();
+                    TypeExpr.MutSliceTy(WrapType {
+                        inner: elem,
+                        span: self.span_from(start),
+                    })
+                } else {
+                    self.expect_ref(); // `ref`
+                    let inner = self.parse_type();
+                    TypeExpr.MutRefTy(WrapType {
+                        inner: inner,
+                        span: self.span_from(start),
+                    })
+                }
+            }
+            // `weak T`
+            Weak => {
+                self.advance();
+                let inner = self.parse_type();
+                TypeExpr.WeakTy(WrapType {
+                    inner: inner,
+                    span: self.span_from(start),
+                })
+            }
+            // `*const T` / `*mut T`
+            Star => {
+                self.advance(); // `*`
+                let mut is_mut = false;
+                if self.pos < self.tokens.len() {
+                    match self.tokens[self.pos].token {
+                        Mut => {
+                            is_mut = true;
+                            self.advance();
+                        }
+                        Const => {
+                            self.advance();
+                        }
+                        _ => {}
+                    }
+                }
+                let inner = self.parse_type();
+                TypeExpr.PtrTy(PointerType {
+                    is_mut: is_mut,
+                    inner: inner,
+                    span: self.span_from(start),
+                })
+            }
+            // `()` / `(A, B)` / `(A)`
+            LeftParen => self.parse_paren_type(start),
+            // `Self` path
+            SelfType => {
+                self.advance();
+                let p = self.parse_path_type_from(start, "Self".to_string());
+                TypeExpr.PathTy(p)
+            }
+            // `Fn(...) [-> R]` / `OnceFn(...) [-> R]` / dotted path (+ generics).
+            // The name is bound once here, then consumed; `parse_fn_type_rest`
+            // and `parse_path_type_from` continue WITHOUT re-reading this token.
+            Identifier(name) => {
+                self.advance(); // consume the identifier
+                let probe = dup_str(name);
+                if probe == "Fn".to_string() {
+                    self.parse_fn_type_rest(start, false)
+                } else {
+                    let probe2 = dup_str(name);
+                    if probe2 == "OnceFn".to_string() {
+                        self.parse_fn_type_rest(start, true)
+                    } else {
+                        let p = self.parse_path_type_from(start, name);
+                        TypeExpr.PathTy(p)
+                    }
+                }
+            }
+            // Error recovery: any token that can't start a type.
+            _ => {
+                self.advance();
+                TypeExpr.ErrTy(SpanNode { span: self.span_from(start) })
+            }
+        }
+    }
 }
 
 // Parse `src` as a single expression and return its AST root. The differential
@@ -1221,4 +1607,14 @@ pub fn parse_expr(src: String) -> Expr with panics {
     let toks = lex_all(src);
     let mut p = Parser.new(toks);
     p.parse_expr_bp(0)
+}
+
+// Parse `src` as a single bare type expression and return its AST root (slice
+// 3a). The differential oracle (`tests/selfhost_parser_types.rs`) wraps the
+// type as `const __t__: <src> = 0;` on the Rust seed side (a 13-byte prefix,
+// matching `parse_expr`'s OFFSET_SHIFT) and diffs the rendered `TypeExpr`.
+pub fn parse_type_str(src: String) -> TypeExpr with panics {
+    let toks = lex_all(src);
+    let mut p = Parser.new(toks);
+    p.parse_type()
 }
