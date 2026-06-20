@@ -1,15 +1,18 @@
 # Design spike — per-layout monomorphization (SoA across call boundaries)
 
-**Status:** 🟦 **IN PROGRESS — slices 1–3 landed (2026-06-20).** Slice 1 (the
+**Status:** 🟦 **IN PROGRESS — slices 1–4 landed (2026-06-20).** Slice 1 (the
 `LayoutId` axis scaffolding), slice 2 (forward arg-layout monomorphization — a
 SoA `Vec[E]` passed by value to a helper is served by an on-demand layout
-monomorph, regardless of the param name), and slice 3 (SoA returns — a helper
-that builds and returns a `Vec[E]` is monomorphized to *return* the receiving
+monomorph, regardless of the param name), slice 3 (SoA returns — a helper that
+builds and returns a `Vec[E]` is monomorphized to *return* the receiving
 binding's layout, so the returned local crosses the boundary even though it has
-no binding name to key on) are on `main`. The remaining slices are a multi-slice
-Phase-11 effort gated on the full `tests/codegen.rs` suite + the Linux-LSan leak
-gate per slice. This file is the architecture of record; update its `Status:`
-line (and the `docs/spikes/README.md` row) as slices land. Tracks
+no binding name to key on), and slice 4 (multi-buffer / differing-name kernels —
+forward inference extended to `ref`/`mut ref Vec[E]` borrow params, so multiple
+SoA buffers of one element type flow through shared by-ref helpers, each
+monomorphizing a distinct symbol) are on `main`. The remaining slices are a
+multi-slice Phase-11 effort gated on the full `tests/codegen.rs` suite + the
+Linux-LSan leak gate per slice. This file is the architecture of record; update
+its `Status:` line (and the `docs/spikes/README.md` row) as slices land. Tracks
 **[B-2026-06-19-14](../bug-ledger.jsonl)** (the `partial` SoA-across-functions
 entry) and design.md **Feature 1 / P1.5 (Phase 11)**.
 
@@ -207,8 +210,34 @@ existing `suppress_cleanup_for_tail_return` for AoS Vec).
    two distinct return-SoA monos; ASAN/LSan move-out ownership (caller-owns).
    Branch-leaf / multi-`return` returns degrade to AoS (spike §8), never
    miscompile.
-4. **Multi-buffer / differing-name kernels.** Multiple SoA bindings of one
-   element type through shared helpers; confirm distinct monomorphs.
+4. **Multiple SoA bindings of one element type through shared helpers;
+   confirm distinct monomorphs.** ✅ **Landed 2026-06-20.** Forward layout-flow
+   inference (slice 2) extended to the **borrow forms** `ref Vec[E]` /
+   `mut ref Vec[E]`, the way real multi-buffer kernels (`grid`, `coll`, `next`)
+   share helpers without moving the buffer. `param_is_layout_carrying` peels one
+   `ref`/`mut ref`, so a borrow `Vec[E]` param gates the dispatch and receives a
+   `layout_subst` entry from the caller's argument layout (driving the body's
+   SoA access paths via `active_soa_layout`). The by-value SoA *signature* patch
+   (`active_param_soa_layout`) is guarded to by-value only: a borrow param keeps
+   its pointer ABI (caller passes `&struct`; the mono body derefs once), so only
+   owned `Vec[E]` params' signatures become the 4-field SoA struct.
+   `compile_mono_function`'s prologue registers a SoA borrow param in
+   `ref_params` so `compile_soa_index_read` / `compile_soa_method` deref the slot
+   once before GEPing groups/len — the by-ref-reads discipline the mono path
+   otherwise omitted (without it the access path reads the pointer bytes as the
+   SoA struct → garbage len → SIGTRAP). `ref_params` is now save/restored
+   (`mem::take`) around both mono entry points so a mono's borrow param can't
+   leak into the caller's context. Per-param mangling (`$<param>_soa_<layout>`)
+   gives each buffer layout a distinct symbol (`total$data_soa_grid` vs
+   `total$data_soa_coll`) — the borrow analog of slice 2's by-value distinctness.
+   Regressions: by-ref read into a differently-named param; two SoA buffers
+   through one by-ref helper → distinct correct monos (proven by each reading its
+   OWN grouping correctly — a single shared body could not); mut-ref push (WRITE)
+   across a function with write-back through the deref'd pointer; ASAN/LSan
+   mut-ref borrow ownership (callee borrows, caller frees once). The whole-element
+   SoA *index*-store path (`grid[i] = E{…}`) is still unbuilt even
+   single-function, so a kernel that scatters whole elements by `mut ref` index
+   assignment remains a follow-on; push-based and field-level writes work.
 5. **Retire / bridge the name-keyed lookups** in the access paths; `soa_layouts`
    becomes origin-only. Borrow-checker cross-group disjointness facts audited.
 6. **Proof: convert `examples/slipstream/src/sim.kara`** to a `layout` block and
