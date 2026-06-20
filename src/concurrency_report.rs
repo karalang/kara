@@ -383,6 +383,7 @@ mod tests {
                 statement_spans: Vec::new(),
                 loop_reductions: Vec::new(),
                 serialization_points: Vec::new(),
+                reorder_opportunities: Vec::new(),
             },
         );
         let analysis = ConcurrencyAnalysis {

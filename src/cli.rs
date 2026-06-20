@@ -9020,12 +9020,13 @@ fn query_concurrency(pipeline: &Pipeline, function: &str, filename: &str) {
     match analysis.function_decisions.get(function) {
         Some(fc) => {
             println!(
-                "{{\"function\":{},\"total_statements\":{},\"statement_spans\":{},\"parallel_groups\":{},\"serialization_points\":{}}}",
+                "{{\"function\":{},\"total_statements\":{},\"statement_spans\":{},\"parallel_groups\":{},\"serialization_points\":{},\"reorder_opportunities\":{}}}",
                 json_string(function),
                 fc.total_statements,
                 crate::effect_graph::statement_spans_json(fc, filename),
                 crate::effect_graph::parallel_groups_json(fc),
                 crate::effect_graph::serialization_points_json(fc),
+                crate::effect_graph::reorder_opportunities_json(fc),
             );
         }
         None => {

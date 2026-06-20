@@ -1326,6 +1326,191 @@ fn chain() {{
     let _ = std::fs::remove_file(&file_path);
 }
 
+// ── Reorder-opportunity advisory ───────────────────────────────
+
+#[test]
+fn test_reorder_opportunity_flags_interleaved_pipelines() {
+    // Two independent dataflow chains written interleaved — the flagship
+    // shape the contiguous-only grouper handles suboptimally. Edges: 0→1
+    // (`a`) and 2→3 (`c`); 0∥2, 1∥3 are independent. Greedy grouping forms
+    // only the straddling pair {1,2}; the ideal is {0,2} then {1,3}. The
+    // advisory must surface both reorders deterministically so the agent
+    // can act on a sound signal instead of guessing. See
+    // phase-5-diagnostics.md "Contiguous-greedy grouping is suboptimal".
+    let analysis = analyze(
+        r#"
+        fn f1() -> i32 { 1 }
+        fn g1(x: i32) -> i32 { x + 1 }
+        fn f2() -> i32 { 2 }
+        fn g2(x: i32) -> i32 { x + 1 }
+        fn pipeline() {
+            let a = f1();
+            let b = g1(a);
+            let c = f2();
+            let d = g2(c);
+        }
+        "#,
+    );
+
+    let fc = get_function(&analysis, "pipeline");
+    let mut ops: Vec<(Vec<usize>, usize)> = fc
+        .reorder_opportunities
+        .iter()
+        .map(|o| (o.statement_indices.clone(), o.movable_statement))
+        .collect();
+    ops.sort();
+    // {0,2} (move the grouped stmt 2 left to the serial stmt 0) and {1,3}
+    // (move the grouped stmt 1 right to the serial stmt 3). Together they
+    // describe the optimal {0,2},{1,3} regrouping. The straddling-only pair
+    // {1,2} is NOT a reorder opportunity (it is already the emitted group),
+    // and {0,3} is absent (no single legal slide spans the gap).
+    assert_eq!(
+        ops,
+        vec![(vec![0, 2], 2), (vec![1, 3], 1)],
+        "interleaved pipelines must flag exactly the two reorderable pairs; got {:?}",
+        fc.reorder_opportunities,
+    );
+}
+
+#[test]
+fn test_reorder_opportunity_silent_on_pure_dependency_chain() {
+    // A straight dependency chain has no latent parallelism, so no reorder
+    // can expose any — the advisory must stay silent (no false positives).
+    let analysis = analyze(
+        r#"
+        fn f() -> i32 { 1 }
+        fn chain() {
+            let a = f();
+            let b = a + 1;
+            let c = b + 1;
+            let d = c + 1;
+        }
+        "#,
+    );
+
+    let fc = get_function(&analysis, "chain");
+    assert!(
+        fc.reorder_opportunities.is_empty(),
+        "a pure dependency chain offers no reorder opportunities; got {:?}",
+        fc.reorder_opportunities,
+    );
+}
+
+#[test]
+fn test_reorder_opportunity_excludes_console_output_mover() {
+    // A `println` is resourceless, so the dependency graph treats it as
+    // independent — but relocating it reorders observable output, which the
+    // effect surface would not catch. The advisory must therefore never
+    // propose a console statement as a mover. Here stmt 0 (`println`) is
+    // independent of stmt 2 with an otherwise-legal left/right slide; the
+    // console-output guard suppresses the opportunity. (The same shape with
+    // a non-console stmt 0 *does* flag — see
+    // `test_reorder_opportunity_flags_serial_statement_into_group`.)
+    let analysis = analyze(
+        r#"
+        fn f() -> i32 { 1 }
+        fn demo() {
+            println("x");
+            let a = f();
+            let b = a + 1;
+        }
+        "#,
+    );
+
+    let fc = get_function(&analysis, "demo");
+    assert!(
+        fc.reorder_opportunities.is_empty(),
+        "a console-output statement must not be proposed as a reorder mover; got {:?}",
+        fc.reorder_opportunities,
+    );
+}
+
+#[test]
+fn test_reorder_opportunity_flags_serial_statement_into_group() {
+    // The console-exclusion contrast: identical shape to the test above but
+    // with a plain (non-console) statement 0. Stmt 0 is serial and
+    // independent of stmt 2; moving it adjacent exposes a parallel pair, so
+    // the advisory flags {0,2} with stmt 0 as the mover.
+    let analysis = analyze(
+        r#"
+        fn f() -> i32 { 1 }
+        fn demo() {
+            let z = f();
+            let a = f();
+            let b = a + 1;
+        }
+        "#,
+    );
+
+    let fc = get_function(&analysis, "demo");
+    assert_eq!(
+        fc.reorder_opportunities.len(),
+        1,
+        "expected one opportunity"
+    );
+    let op = &fc.reorder_opportunities[0];
+    assert_eq!(op.statement_indices, vec![0, 2]);
+    assert_eq!(op.movable_statement, 0);
+}
+
+#[test]
+fn test_cli_query_concurrency_emits_reorder_opportunities() {
+    use std::io::Write;
+    use std::process::Command;
+
+    // End-to-end: the `reorder_opportunities` array surfaces on the machine
+    // query surface, self-locating via the same ordinal→`statement_spans`
+    // join as the other concurrency fields.
+    let dir = std::env::temp_dir();
+    let file_path = dir.join("test_concurrency_reorder_opportunities.kara");
+    {
+        let mut f = std::fs::File::create(&file_path).unwrap();
+        writeln!(
+            f,
+            r#"
+fn f1() -> i32 {{ 1 }}
+fn g1(x: i32) -> i32 {{ x + 1 }}
+fn f2() -> i32 {{ 2 }}
+fn g2(x: i32) -> i32 {{ x + 1 }}
+fn pipeline() {{
+    let a = f1();
+    let b = g1(a);
+    let c = f2();
+    let d = g2(c);
+}}
+"#
+        )
+        .unwrap();
+    }
+
+    let karac_bin = env!("CARGO_BIN_EXE_karac");
+    let output = Command::new(karac_bin)
+        .args([
+            "query",
+            "concurrency",
+            &format!("{}.pipeline", file_path.display()),
+        ])
+        .output()
+        .expect("failed to run karac");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert!(
+        stdout.contains("\"statements\":[0,2],\"movable_statement\":2"),
+        "reorder opportunity {{0,2}} (move stmt 2) must surface; stdout: {stdout}",
+    );
+    assert!(
+        stdout.contains("\"statements\":[1,3],\"movable_statement\":1"),
+        "reorder opportunity {{1,3}} (move stmt 1) must surface; stdout: {stdout}",
+    );
+
+    let _ = std::fs::remove_file(&file_path);
+}
+
 // ── Assign-target dependencies ─────────────────────────────────
 
 #[test]

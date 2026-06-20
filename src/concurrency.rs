@@ -312,6 +312,137 @@ fn expr_has_channel_op(expr: &Expr) -> bool {
     }
 }
 
+/// True iff `stmt` *syntactically* performs console output (`println` /
+/// `print` / `eprintln` / `eprint`) at its own expression level. Used only
+/// to keep such statements out of the reorder-opportunity advisory:
+/// relocating a console write changes observable output order, which
+/// `query effects` would not catch (console output is resourceless by
+/// design — see the auto-par ordered-output note in `find_parallel_groups`).
+///
+/// This is a best-effort **local** filter, not a soundness guarantee — it
+/// detects a direct console call in the statement's own expression tree but
+/// not output emitted transitively inside a called function (the same
+/// resourceless-console limitation the rest of the pass carries). The
+/// reorder advisory is scoped to data + resource-effect dependencies; the
+/// agent's verify loop is the backstop for observable-order changes. See the
+/// reorder-opportunity entry in phase-5-diagnostics.md.
+fn stmt_has_console_output(stmt: &Stmt) -> bool {
+    match &stmt.kind {
+        StmtKind::Let { value, .. }
+        | StmtKind::Assign { value, .. }
+        | StmtKind::CompoundAssign { value, .. }
+        | StmtKind::Expr(value) => expr_has_console_output(value),
+        StmtKind::LetElse {
+            value, else_block, ..
+        } => expr_has_console_output(value) || block_has_console_output(else_block),
+        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+            block_has_console_output(body)
+        }
+        StmtKind::LetUninit { .. } => false,
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
+    }
+}
+
+fn block_has_console_output(block: &Block) -> bool {
+    block.stmts.iter().any(stmt_has_console_output)
+        || block
+            .final_expr
+            .as_ref()
+            .is_some_and(|e| expr_has_console_output(e))
+}
+
+fn expr_has_console_output(expr: &Expr) -> bool {
+    /// `println` / `print` / `eprintln` / `eprint` — the console-writing
+    /// builtins whose call ordering is observable. A bare free-function
+    /// callee parses as either an `Identifier` or a single-segment `Path`.
+    fn is_console_callee(callee: &Expr) -> bool {
+        let name = match &callee.kind {
+            ExprKind::Identifier(name) => Some(name.as_str()),
+            ExprKind::Path { segments, .. } if segments.len() == 1 => Some(segments[0].as_str()),
+            _ => None,
+        };
+        matches!(name, Some("println" | "print" | "eprintln" | "eprint"))
+    }
+
+    match &expr.kind {
+        ExprKind::Call { callee, args } => {
+            is_console_callee(callee)
+                || expr_has_console_output(callee)
+                || args.iter().any(|a| expr_has_console_output(&a.value))
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            expr_has_console_output(object)
+                || args.iter().any(|a| expr_has_console_output(&a.value))
+        }
+        ExprKind::Block(b) => block_has_console_output(b),
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            expr_has_console_output(condition)
+                || block_has_console_output(then_block)
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|e| expr_has_console_output(e))
+        }
+        ExprKind::IfLet {
+            value,
+            then_block,
+            else_branch,
+            ..
+        } => {
+            expr_has_console_output(value)
+                || block_has_console_output(then_block)
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|e| expr_has_console_output(e))
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            expr_has_console_output(scrutinee)
+                || arms.iter().any(|a| expr_has_console_output(&a.body))
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => expr_has_console_output(condition) || block_has_console_output(body),
+        ExprKind::For { iterable, body, .. } => {
+            expr_has_console_output(iterable) || block_has_console_output(body)
+        }
+        ExprKind::Loop { body, .. } => block_has_console_output(body),
+        ExprKind::Binary { left, right, .. }
+        | ExprKind::Pipe { left, right }
+        | ExprKind::NilCoalesce { left, right } => {
+            expr_has_console_output(left) || expr_has_console_output(right)
+        }
+        ExprKind::Unary { operand, .. } => expr_has_console_output(operand),
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            expr_has_console_output(object)
+        }
+        ExprKind::Index { object, index } => {
+            expr_has_console_output(object) || expr_has_console_output(index)
+        }
+        ExprKind::Tuple(elems) => elems.iter().any(expr_has_console_output),
+        _ => false,
+    }
+}
+
+/// Whether a statement may participate in the reorder-opportunity advisory —
+/// the same parallel-eligibility guards `find_parallel_groups` applies to a
+/// group seed, plus a console-output exclusion (a console write must not be
+/// proposed as a mover; relocating it reorders observable output). A
+/// statement failing any guard can never auto-parallelize, so co-locating it
+/// with a sibling would be pointless. See
+/// [`ConcurrencyChecker::find_reorder_opportunities`].
+fn reorder_eligible(info: &StmtInfo) -> bool {
+    !info.has_early_exit
+        && !info.has_channel_op
+        && !info.has_console_output
+        && !info.is_seq
+        && (!effects_mark_coroutine_boundary(&info.effects) || info.is_timer_suspend)
+}
+
 // ── Result Types ───────────────────────────────────────────────
 
 /// The full result of concurrency analysis across all functions.
@@ -359,6 +490,35 @@ pub struct FunctionConcurrency {
     /// functions answers "which callers does function `f` block, and on
     /// what resource" — the Cartographer attribution view.
     pub serialization_points: Vec<SerializationPoint>,
+    /// Independent statement pairs the contiguous-only grouper could not
+    /// co-group *only because they are non-adjacent in source order* — a
+    /// legal reorder (permitted by the data + effect dependency graph)
+    /// would make them adjacent and let them parallelize. Each names the two
+    /// ordinals and which one can slide. This is the deterministic "a better
+    /// order exists" signal for the agent-driven reorder loop (option 1):
+    /// the agent acts on a sound dependency signal instead of guessing, then
+    /// re-runs `check` / `query` to confirm it helped and broke nothing. See
+    /// phase-5-diagnostics.md "Contiguous-greedy grouping is suboptimal".
+    pub reorder_opportunities: Vec<ReorderOpportunity>,
+}
+
+/// A pair of independent statements left unparallelized only by source
+/// ordering, surfaced by [`ConcurrencyChecker::find_reorder_opportunities`].
+/// See [`FunctionConcurrency::reorder_opportunities`].
+#[derive(Debug, Clone)]
+pub struct ReorderOpportunity {
+    /// The two independent statement ordinals, ascending. Index into
+    /// `statement_spans` to locate them.
+    pub statement_indices: Vec<usize>,
+    /// The ordinal (one of `statement_indices`) that can legally slide
+    /// adjacent to its partner — every statement it passes over is
+    /// dependency-independent of it, so the move preserves data + effect
+    /// ordering. The advisory reports the move but does not apply it.
+    pub movable_statement: usize,
+    /// Human-readable explanation, e.g. ``statements 0 and 2 are
+    /// independent but separated by statement 1; moving statement 2 adjacent
+    /// would let them parallelize``.
+    pub reason: String,
 }
 
 /// One reason two statements in a function body can't run in parallel —
@@ -581,6 +741,14 @@ struct StmtInfo {
     /// communication primitives whose ordering auto-par must not disturb.
     /// See `stmt_has_channel_op` and the `find_parallel_groups` guards.
     has_channel_op: bool,
+    /// Whether this statement *syntactically* performs console output
+    /// (`println` / `print` / `eprintln` / `eprint`). Used only by the
+    /// reorder-opportunity advisory to exclude such statements as movers —
+    /// relocating a console write reorders observable output, which the
+    /// effect surface (console output is resourceless) would not flag. A
+    /// best-effort local check, not interprocedural. See
+    /// `stmt_has_console_output`.
+    has_console_output: bool,
     /// Whether this statement is a direct, pure `sleep_ms(...)` timer-park
     /// call — the ONLY `suspends` form the auto-parallelizer overlaps (A2b).
     /// `suspends` is an execution verb (placement, not conflict — design.md
@@ -812,6 +980,7 @@ impl<'a> ConcurrencyChecker<'a> {
                 statement_spans: Vec::new(),
                 loop_reductions: Vec::new(),
                 serialization_points: Vec::new(),
+                reorder_opportunities: Vec::new(),
             };
         }
 
@@ -849,6 +1018,17 @@ impl<'a> ConcurrencyChecker<'a> {
         // be split across workers when the op is associative + commutative.
         let loop_reductions = self.recognize_reductions(func);
 
+        // Step 5: Flag parallelism left on the table purely by source
+        // ordering — independent statements the contiguous-only grouper
+        // could not co-group because they are non-adjacent, but a legal
+        // reorder would. Advisory only; consumes the same dependency graph.
+        let reorder_opportunities = self.find_reorder_opportunities(
+            &stmt_infos,
+            &has_edge,
+            total_statements,
+            &parallel_groups,
+        );
+
         let statement_spans = stmts.iter().map(|s| s.span.clone()).collect();
 
         FunctionConcurrency {
@@ -857,6 +1037,7 @@ impl<'a> ConcurrencyChecker<'a> {
             statement_spans,
             loop_reductions,
             serialization_points,
+            reorder_opportunities,
         }
     }
 
@@ -1438,6 +1619,7 @@ impl<'a> ConcurrencyChecker<'a> {
             is_seq,
             has_early_exit: stmt_has_early_exit(stmt),
             has_channel_op: stmt_has_channel_op(stmt),
+            has_console_output: stmt_has_console_output(stmt),
             is_timer_suspend: stmt_is_timer_suspend(stmt),
             is_constant_init: stmt_is_constant_init(stmt),
         };
@@ -1814,6 +1996,104 @@ impl<'a> ConcurrencyChecker<'a> {
         }
 
         groups
+    }
+
+    /// Flag parallelism the *contiguous-only* grouper leaves on the table:
+    /// pairs of mutually-independent statements that did not co-group only
+    /// because they are non-adjacent in source order, where a legal reorder
+    /// (one permitted by the data + effect dependency graph) would make them
+    /// adjacent. This is the deterministic "a better order exists" advisory
+    /// for the agent-driven reorder loop (phase-5-diagnostics.md option 1):
+    /// instead of *guessing* that a reorder helps, the agent reads a sound
+    /// dependency signal, applies it, and re-runs `check` / `query` to
+    /// confirm. No transformation happens here.
+    ///
+    /// A pair `(i, j)`, `i < j`, is reported when:
+    /// - they are independent (`!has_edge[i][j]`) — they *could* run in
+    ///   parallel;
+    /// - they are non-adjacent (`j > i + 1`) — adjacency is what the grouper
+    ///   already exploits, so only a gap represents missed parallelism;
+    /// - at least one of them is currently **serial** (not in a multi-stmt
+    ///   parallel group) — so acting on it adds parallelism rather than just
+    ///   reshuffling two already-parallel statements;
+    /// - both are parallel-eligible (the same seed guards `find_parallel_groups`
+    ///   applies: not an early-exit / channel-op / non-timer coroutine boundary
+    ///   / `seq` statement, and not a syntactic console write — see
+    ///   [`reorder_eligible`]); and
+    /// - a legal slide exists: either `j` moves left past every intervening
+    ///   statement (each independent of `j`) or `i` moves right past them
+    ///   (each independent of `i`). Each pairwise adjacent swap is between
+    ///   independent statements, so the whole slide preserves data + effect
+    ///   ordering.
+    ///
+    /// Soundness scope: the slide is proven safe against data + resource-effect
+    /// dependencies (the `has_edge` graph). Observable console-output ordering
+    /// is resourceless and only filtered syntactically (`has_console_output`);
+    /// output emitted transitively inside a callee is not modeled — the
+    /// agent's verification loop is the backstop, as for any source reorder.
+    fn find_reorder_opportunities(
+        &self,
+        infos: &[StmtInfo],
+        has_edge: &[Vec<bool>],
+        n: usize,
+        groups: &[ParallelGroup],
+    ) -> Vec<ReorderOpportunity> {
+        // A statement is "serial" unless it sits in an emitted (multi-stmt)
+        // parallel group.
+        let mut grouped = vec![false; n];
+        for g in groups {
+            for &idx in &g.statement_indices {
+                grouped[idx] = true;
+            }
+        }
+
+        let mut out = Vec::new();
+        for i in 0..n {
+            if !reorder_eligible(&infos[i]) {
+                continue;
+            }
+            // `j > i + 1`: adjacent independents are already the grouper's job.
+            for j in (i + 2)..n {
+                if !reorder_eligible(&infos[j]) {
+                    continue;
+                }
+                // Must be independent to ever parallelize.
+                if has_edge[i][j] {
+                    continue;
+                }
+                // Both already parallel → reshuffling them adds nothing.
+                if grouped[i] && grouped[j] {
+                    continue;
+                }
+                // A legal slide makes them adjacent. `j` slides left past
+                // (i, j) iff each intervening stmt is independent of `j`;
+                // symmetrically for `i` sliding right.
+                let between = (i + 1)..j;
+                let j_slides_left = between.clone().all(|k| !has_edge[j][k]);
+                let i_slides_right = between.clone().all(|k| !has_edge[i][k]);
+                let movable = if j_slides_left {
+                    j
+                } else if i_slides_right {
+                    i
+                } else {
+                    continue;
+                };
+                let stationary = if movable == j { i } else { j };
+                let reason = format!(
+                    "statements {i} and {j} are independent but separated by \
+                     {} intervening statement{}; moving statement {movable} adjacent \
+                     to statement {stationary} would let them parallelize",
+                    j - i - 1,
+                    if j - i - 1 == 1 { "" } else { "s" },
+                );
+                out.push(ReorderOpportunity {
+                    statement_indices: vec![i, j],
+                    movable_statement: movable,
+                    reason,
+                });
+            }
+        }
+        out
     }
 
     /// Generate a human-readable reason for why a group of statements can be parallelized.

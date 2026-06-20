@@ -190,6 +190,29 @@ pub(crate) fn serialization_points_json(fc: &FunctionConcurrency) -> String {
     format!("[{}]", entries.join(","))
 }
 
+/// Render a function's `reorder_opportunities` as a JSON array of
+/// `{"statements":[i,j],"movable_statement":m,"reason":…}` objects — the
+/// deterministic "a legal reorder would expose more parallelism here"
+/// advisory. `statements` are independent ordinals (index into
+/// `statement_spans`); `movable_statement` is the one that can slide
+/// adjacent to its partner.
+pub(crate) fn reorder_opportunities_json(fc: &FunctionConcurrency) -> String {
+    let entries: Vec<String> = fc
+        .reorder_opportunities
+        .iter()
+        .map(|op| {
+            let indices: Vec<String> = op.statement_indices.iter().map(|i| i.to_string()).collect();
+            format!(
+                "{{\"statements\":[{}],\"movable_statement\":{},\"reason\":{}}}",
+                indices.join(","),
+                op.movable_statement,
+                json_string(&op.reason),
+            )
+        })
+        .collect();
+    format!("[{}]", entries.join(","))
+}
+
 /// Build the whole-program effect-graph JSON envelope: effect-annotated
 /// nodes (one per source function) plus the directed call-graph edges.
 pub(crate) fn build_effect_graph_json(
@@ -250,13 +273,14 @@ pub(crate) fn build_concurrency_graph_json(
         .filter_map(|(key, node)| {
             analysis.function_decisions.get(key).map(|fc| {
                 format!(
-                    "{{\"function\":{},\"line\":{},\"total_statements\":{},\"statement_spans\":{},\"parallel_groups\":{},\"serialization_points\":{}}}",
+                    "{{\"function\":{},\"line\":{},\"total_statements\":{},\"statement_spans\":{},\"parallel_groups\":{},\"serialization_points\":{},\"reorder_opportunities\":{}}}",
                     json_string(key),
                     node.line,
                     fc.total_statements,
                     statement_spans_json(fc, scope),
                     parallel_groups_json(fc),
                     serialization_points_json(fc),
+                    reorder_opportunities_json(fc),
                 )
             })
         })
