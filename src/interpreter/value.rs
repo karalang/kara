@@ -79,6 +79,14 @@ pub enum Value {
     /// (`E_TYPE_VALUE_AT_RUNTIME`), and the comptime fold pass treats it as
     /// non-foldable, so it never reaches the runtime program.
     TypeVal(String),
+    /// An `Expr` AST value — a comptime-only first-class fragment of code
+    /// produced by the quasi-quote builder `ast.expr(s)` (substrate 3,
+    /// deferred.md § Comptime — AST builder API). When a `comptime { ... }`
+    /// block yields an `AstExpr`, the fold pass splices the contained
+    /// expression at the comptime site (code generation) rather than folding a
+    /// constant. Comptime-only: like `TypeVal`, it never reaches the runtime
+    /// program as a value.
+    AstExpr(Box<crate::ast::Expr>),
     Tuple(Vec<Value>),
     /// Sequence storage shared between the source binding and any live
     /// slice views. `Arc<RwLock<...>>` is universal — every Array
@@ -724,6 +732,9 @@ impl std::fmt::Display for Value {
             // A `Type` pseudovalue renders as its canonical name — a
             // debug courtesy; comptime code reads it via `.name()`.
             Value::TypeVal(name) => write!(f, "{}", name),
+            // An `Expr` AST value — debug courtesy only; it is spliced as
+            // code, not displayed.
+            Value::AstExpr(_) => write!(f, "<ast expr>"),
             // Debug-courtesy render: shape only (element dumps for large
             // tensors would flood output; `t[i, j]` reads individual
             // elements).
@@ -1054,6 +1065,7 @@ impl Value {
             Value::CStr(_) => "CStr",
             Value::Unit => "Unit",
             Value::TypeVal(_) => "TypeVal",
+            Value::AstExpr(_) => "AstExpr",
             Value::Tensor { .. } => "Tensor",
             Value::Tuple(_) => "Tuple",
             Value::Array(_) => "Array",

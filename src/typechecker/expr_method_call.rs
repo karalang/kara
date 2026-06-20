@@ -568,6 +568,19 @@ impl<'a> super::TypeChecker<'a> {
         // arms below.
         args_close_span: &Span,
     ) -> Type {
+        // Comptime stdlib modules (substrate 3): `ast.expr(s)` /
+        // `compiler.error(msg)` parse as method calls on the lowercase module
+        // identifier. Route them to the comptime-module typing (which gates on
+        // comptime context) before the receiver is typed as a value.
+        if let ExprKind::Identifier(module) = &object.kind {
+            if module == "ast" || module == "compiler" {
+                if let Some(ret) = self.comptime_module_call_type(module, method, args, span) {
+                    self.record_expr_type(span, &ret);
+                    return ret;
+                }
+            }
+        }
+
         // Fallible-allocation companions (phase-8-stdlib-floor item 2). A
         // `try_<base>` instance method on a builtin collection types
         // identically to its panicking `<base>` counterpart but returns

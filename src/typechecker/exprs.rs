@@ -2229,7 +2229,18 @@ impl<'a> super::TypeChecker<'a> {
                 self.comptime_depth += 1;
                 let ty = self.infer_block(block);
                 self.comptime_depth -= 1;
-                ty
+                // Substrate 3: when the block yields an `Expr` AST value (a
+                // quasi-quote like `ast.expr("x * 3")`), the fold pass splices
+                // the *generated code* — not an `Expr`-typed value — at this
+                // site. Its type is whatever the spliced code evaluates to,
+                // which can't be known before evaluation, so hand back a fresh
+                // inference var: an annotation or downstream use constrains it,
+                // and the interpreter (dynamically typed) does the real work.
+                if matches!(&ty, Type::Named { name, .. } if name == "Expr") {
+                    self.env.fresh_type_var()
+                } else {
+                    ty
+                }
             }
 
             ExprKind::If {

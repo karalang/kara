@@ -612,7 +612,7 @@ pub fn shift_expr_spans(e: &mut Expr, hole_offset: usize, hole_line: usize, hole
     });
 }
 
-fn visit_expr_spans_mut(e: &mut Expr, visit: &mut impl FnMut(&mut Span)) {
+pub fn visit_expr_spans_mut(e: &mut Expr, visit: &mut impl FnMut(&mut Span)) {
     visit(&mut e.span);
     match &mut e.kind {
         ExprKind::Integer(_, _)

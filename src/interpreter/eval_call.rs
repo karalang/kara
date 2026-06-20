@@ -48,6 +48,19 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // Comptime stdlib surface (substrate 3): `ast.expr(s)` quasi-quote
+        // builder and `compiler.error(msg)` compile-time diagnostic. The
+        // typechecker has validated these are comptime-only; dispatch here.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2 {
+                match (segments[0].as_str(), segments[1].as_str()) {
+                    ("ast", "expr") => return self.eval_ast_expr_builder(args, span),
+                    ("compiler", "error") => return self.eval_compiler_error(args, span),
+                    _ => {}
+                }
+            }
+        }
+
         // `with_provider[R](provider, closure)` — surface for scoped provider
         // injection (design.md § Provider-Rooted Resources). Parses today as
         // `Call(Index(Ident("with_provider"), <R>), [provider, closure])`

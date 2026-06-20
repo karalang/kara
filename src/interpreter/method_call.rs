@@ -176,6 +176,19 @@ impl<'a> super::Interpreter<'a> {
         // runs. See `int_width_at` below.
         args_close_span: &Span,
     ) -> Value {
+        // Comptime stdlib modules (substrate 3): `ast.expr(s)` and
+        // `compiler.error(msg)` parse as method calls on the lowercase module
+        // identifier. Intercept before the receiver is evaluated as a value
+        // (there is no `ast` / `compiler` binding). The typechecker has
+        // already gated these to comptime contexts.
+        if let ExprKind::Identifier(module) = &object.kind {
+            match (module.as_str(), method) {
+                ("ast", "expr") => return self.eval_ast_expr_builder(args, span),
+                ("compiler", "error") => return self.eval_compiler_error(args, span),
+                _ => {}
+            }
+        }
+
         // SIMD static constructor — `Vector[T, N].splat(x)`. The receiver is
         // the bare vector type-path (not a value), so intercept before the
         // generic eval below treats `Vector[T, N]` as a value. Broadcast the

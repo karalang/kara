@@ -7,6 +7,7 @@ use crate::token::Span;
 use crate::typechecker::TypeCheckResult;
 
 mod builtin;
+mod comptime_builtins;
 mod eval_call;
 mod eval_expr;
 mod eval_ops;
@@ -82,6 +83,12 @@ pub struct Interpreter<'a> {
     /// `record_runtime_error`; inspected by tests / CLI to surface program-level
     /// failures (div by zero, overflow, unwrap of None, index out of bounds, etc.).
     pub runtime_errors: Vec<RuntimeError>,
+    /// Comptime user diagnostics emitted via `compiler.error(msg)`
+    /// (substrate 3). Unlike `runtime_errors`, recording one does NOT set
+    /// `pending_cf` — `compiler.error` is a non-halting diagnostic effect, so
+    /// comptime evaluation continues. The comptime fold pass drains these into
+    /// `E_COMPTIME_ERROR` compile diagnostics after each block evaluation.
+    pub comptime_user_errors: Vec<RuntimeError>,
     /// Per-task stack of provider maps for `with_provider` (design.md §
     /// Provider-Rooted Resources > Runtime mechanics). Each frame binds
     /// `effect resource R` names (keyed by the resolver's fully-qualified
@@ -489,6 +496,7 @@ impl<'a> Interpreter<'a> {
             source_filename: String::new(),
             sequential_mode: false,
             runtime_errors: Vec::new(),
+            comptime_user_errors: Vec::new(),
             provider_stack: vec![HashMap::new()],
             active_span_stack: Vec::new(),
             tracing_min_level: 0,

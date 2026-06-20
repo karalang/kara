@@ -615,6 +615,7 @@ impl Folder<'_> {
         // Reset per-evaluation interpreter state and arm the wall-clock guard.
         self.interp.pending_cf = None;
         let errors_before = self.interp.runtime_errors.len();
+        let user_errors_before = self.interp.comptime_user_errors.len();
         self.interp.timed_out = false;
         self.interp
             .set_test_deadline(Some(Instant::now() + COMPTIME_WALL_CLOCK_LIMIT));
@@ -622,6 +623,21 @@ impl Folder<'_> {
         let value = self.interp.eval_expr(&wrapped);
 
         self.interp.set_test_deadline(None);
+
+        // Drain any `compiler.error(msg)` diagnostics emitted during this
+        // block's evaluation (substrate 3 — compile-time validation). These
+        // are non-halting: collect them and continue to the splice/fold below
+        // so a block that reports several issues surfaces all of them.
+        for diag in self
+            .interp
+            .comptime_user_errors
+            .split_off(user_errors_before)
+        {
+            self.errors.push(ComptimeError {
+                message: format!("error[E_COMPTIME_ERROR]: {}", diag.message),
+                span: diag.span,
+            });
+        }
 
         // Runaway evaluation hit the wall-clock guard.
         if self.interp.timed_out {
@@ -653,6 +669,16 @@ impl Folder<'_> {
                 ),
                 span,
             });
+            return;
+        }
+
+        // Code generation (substrate 3): when the block yields an `Expr` AST
+        // value (a quasi-quote `ast.expr(...)`), splice the *generated code*
+        // at the comptime site rather than folding a constant. The spliced
+        // expression is then evaluated/compiled in the surrounding scope, so
+        // it can reference runtime bindings.
+        if let Value::AstExpr(generated) = value {
+            *expr = *generated;
             return;
         }
 

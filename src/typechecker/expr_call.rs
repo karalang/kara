@@ -280,6 +280,90 @@ impl<'a> super::TypeChecker<'a> {
         Type::Tuple(elem_types)
     }
 
+    /// Type a call to the comptime stdlib modules `ast` / `compiler`
+    /// (substrate 3). Returns `Some(ret)` when `module` is a comptime module
+    /// (so the caller short-circuits normal dispatch), `None` otherwise.
+    ///
+    /// - `ast.expr(s: String) -> Expr` — quasi-quote AST builder.
+    /// - `compiler.error(msg: String) -> ()` — compile-time diagnostic.
+    ///
+    /// Both are comptime-only: a use at runtime is
+    /// `E_COMPTIME_MODULE_AT_RUNTIME`. Unknown members of a comptime module
+    /// are rejected here rather than falling through to the generic
+    /// (and confusing) "undefined function" path.
+    pub(super) fn comptime_module_call_type(
+        &mut self,
+        module: &str,
+        member: &str,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Option<Type> {
+        if module != "ast" && module != "compiler" {
+            return None;
+        }
+        // Infer args once up front (uniform with the rest of dispatch and so
+        // arg-internal diagnostics still fire on the error paths below).
+        let arg_tys: Vec<Type> = args.iter().map(|a| self.infer_expr(&a.value)).collect();
+
+        if self.comptime_depth == 0 {
+            self.type_error(
+                format!(
+                    "error[E_COMPTIME_MODULE_AT_RUNTIME]: the `{module}` module is only \
+                     available inside a `comptime` context (deferred.md § Comptime — Comptime \
+                     stdlib surface)"
+                ),
+                span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+            return Some(Type::Error);
+        }
+
+        // Shared one-`String`-argument validation.
+        let expect_one_string = |this: &mut Self, what: &str| {
+            if arg_tys.len() != 1 {
+                this.type_error(
+                    format!("`{what}` expects 1 argument, got {}", arg_tys.len()),
+                    span.clone(),
+                    TypeErrorKind::WrongNumberOfArgs,
+                );
+            } else if !matches!(arg_tys[0], Type::Str | Type::Error) {
+                this.type_error(
+                    format!(
+                        "`{what}` expects a `String` argument, got `{}`",
+                        type_display(&arg_tys[0])
+                    ),
+                    args[0].value.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+        };
+
+        match (module, member) {
+            ("ast", "expr") => {
+                expect_one_string(self, "ast.expr");
+                Some(Type::Named {
+                    name: "Expr".to_string(),
+                    args: vec![],
+                })
+            }
+            ("compiler", "error") => {
+                expect_one_string(self, "compiler.error");
+                Some(Type::Unit)
+            }
+            _ => {
+                self.type_error(
+                    format!(
+                        "`{module}` has no comptime member `{member}`; this slice supports \
+                         `ast.expr(s)` and `compiler.error(msg)`"
+                    ),
+                    span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                Some(Type::Error)
+            }
+        }
+    }
+
     pub(super) fn infer_call(&mut self, callee: &Expr, args: &[CallArg], span: &Span) -> Type {
         // Comptime `Type` reflection in the path-call form. `MyType.name()`,
         // `MyType.fields()`, … parse as `Call(Path([Type, method]))` (the
@@ -296,6 +380,23 @@ impl<'a> super::TypeChecker<'a> {
                 let ty = self.infer_type_reflection_method(&segments[1], args, span);
                 self.record_expr_type(span, &ty);
                 return ty;
+            }
+        }
+
+        // Comptime stdlib surface (substrate 3): the `compiler` and `ast`
+        // modules. `ast.expr(s)` is the quasi-quote AST builder (a string →
+        // `Expr` node, spliced at the comptime site); `compiler.error(msg)` is
+        // the compile-time validation diagnostic. Both are comptime-only —
+        // using them at runtime is `E_COMPTIME_MODULE_AT_RUNTIME`. Spec:
+        // deferred.md § Comptime — AST builder API / Comptime stdlib surface.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2 {
+                if let Some(ret) =
+                    self.comptime_module_call_type(&segments[0], &segments[1], args, span)
+                {
+                    self.record_expr_type(span, &ret);
+                    return ret;
+                }
             }
         }
 

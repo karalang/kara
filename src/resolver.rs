@@ -266,6 +266,16 @@ impl SymbolTable {
         // first-class values.
         push(self, "Type", SymbolKind::Primitive);
 
+        // Comptime stdlib surface (substrate 3): `compiler` and `ast` are
+        // comptime-only magic modules (`compiler.error(msg)`, `ast.expr(s)`),
+        // and `Expr` is the AST-node pseudotype the quasi-quote builder
+        // returns. Registered as always-visible names; the typechecker gates
+        // their use to comptime contexts. Spec: deferred.md § Comptime — AST
+        // builder API / Comptime stdlib surface.
+        push(self, "compiler", SymbolKind::Module);
+        push(self, "ast", SymbolKind::Module);
+        push(self, "Expr", SymbolKind::Primitive);
+
         // `process` is a built-in module (for `process::exit`). Not tracked
         // in `prelude.rs` because it is not part of the prelude per design —
         // it is a permanent magic module the resolver makes visible.
