@@ -67,6 +67,10 @@ import ast.{
     OrPattern,
     MatchArm,
     MatchExpr,
+    Item,
+    UseDeclNode,
+    ConstDeclNode,
+    TypeAliasNode,
 };
 import lexer.lex_all;
 
@@ -250,6 +254,19 @@ impl Parser {
         if self.pos < self.tokens.len() {
             let ok = match self.tokens[self.pos].token {
                 In => true,
+                _ => false,
+            };
+            if ok {
+                self.advance();
+            }
+        }
+    }
+
+    // Consume a `:` if present (well-formed item corpus; recovery later).
+    fn eat_colon(mut ref self) {
+        if self.pos < self.tokens.len() {
+            let ok = match self.tokens[self.pos].token {
+                Colon => true,
                 _ => false,
             };
             if ok {
@@ -1906,6 +1923,119 @@ impl Parser {
             span: self.span_from(start),
         })
     }
+
+    // ── Items (slice 3c) ──
+    //
+    // `parse_item` mirrors the seed's `src/parser/items.rs::parse_item`: it eats
+    // an optional `pub` first (so the per-item parser's `start` begins at the
+    // KEYWORD, matching the seed's span), then dispatches on the leading token.
+    // 3c-i routes only the leaf declarations (`use` / `const` / `type` alias);
+    // unrecognized leads recover as `Item.ErrItem`.
+
+    fn parse_item(mut ref self) -> Item {
+        // Visibility: `pub` only (private-by-default; the `private` keyword and
+        // attributes/doc-comments land with later increments).
+        let is_pub = if self.pos < self.tokens.len() {
+            match self.tokens[self.pos].token {
+                Pub => true,
+                _ => false,
+            }
+        } else {
+            false
+        };
+        if is_pub {
+            self.advance();
+        }
+        if self.pos >= self.tokens.len() {
+            return Item.ErrItem(SpanNode { span: self.current_span() });
+        }
+        match self.tokens[self.pos].token {
+            Use => self.parse_use_decl(is_pub),
+            Const => self.parse_const_decl(is_pub),
+            Type => self.parse_type_alias_decl(is_pub),
+            _ => {
+                let start = self.current_span();
+                self.advance();
+                Item.ErrItem(SpanNode { span: self.span_from(start) })
+            }
+        }
+    }
+
+    // A dotted path of bare identifiers (`a`, `a.b.c`). Mirrors the seed's
+    // `parse_path_segments` for the `use`-path shape (no generic args). Reads
+    // each segment via `take_member_name` (one match per token).
+    fn parse_dotted_path(mut ref self) -> Vec[String] {
+        let mut segs: Vec[String] = Vec.new();
+        let first = self.take_member_name();
+        segs.push(first);
+        loop {
+            let is_dot = if self.pos < self.tokens.len() {
+                match self.tokens[self.pos].token {
+                    Dot => true,
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            if not is_dot {
+                break;
+            }
+            self.advance(); // consume `.`
+            let nm = self.take_member_name();
+            segs.push(nm);
+        }
+        segs
+    }
+
+    // `use a.b.c;` — `start` is captured at `use` (the seed's `span_from`
+    // through the `;`).
+    fn parse_use_decl(mut ref self, is_pub: bool) -> Item {
+        let start = self.current_span();
+        self.advance(); // `use`
+        let segs = self.parse_dotted_path();
+        self.eat_semicolon();
+        Item.Use(UseDeclNode {
+            is_pub: is_pub,
+            segments: segs,
+            span: self.span_from(start),
+        })
+    }
+
+    // `const NAME: TYPE = VALUE;`
+    fn parse_const_decl(mut ref self, is_pub: bool) -> Item {
+        let start = self.current_span();
+        self.advance(); // `const`
+        let name = self.take_member_name();
+        self.eat_colon();
+        let ty = self.parse_type();
+        self.eat_equal();
+        let value = self.parse_expr_bp(0);
+        self.eat_semicolon();
+        Item.Const(ConstDeclNode {
+            is_pub: is_pub,
+            name: name,
+            ty: ty,
+            value: value,
+            span: self.span_from(start),
+        })
+    }
+
+    // `type NAME = TYPE;` — the no-generics form (3c-i). Generic params +
+    // `where` refinement land in 3c-v.
+    fn parse_type_alias_decl(mut ref self, is_pub: bool) -> Item {
+        let start = self.current_span();
+        self.advance(); // `type`
+        let name = self.take_member_name();
+        self.eat_equal();
+        let ty = self.parse_type();
+        self.eat_semicolon();
+        Item.TypeAlias(TypeAliasNode {
+            is_pub: is_pub,
+            name: name,
+            ty: ty,
+            span: self.span_from(start),
+        })
+    }
 }
 
 // Parse `src` as a single expression and return its AST root. The differential
@@ -1925,4 +2055,14 @@ pub fn parse_type_str(src: String) -> TypeExpr with panics {
     let toks = lex_all(src);
     let mut p = Parser.new(toks);
     p.parse_type()
+}
+
+// Parse `src` as a single top-level item and return its AST node (slice 3c).
+// The differential oracle (`tests/selfhost_parser_items.rs`) parses the SAME
+// bare source as a program on the Rust seed side and diffs the rendered item —
+// items are top-level, so there is no wrapper and the span offset shift is 0.
+pub fn parse_item_str(src: String) -> Item with panics {
+    let toks = lex_all(src);
+    let mut p = Parser.new(toks);
+    p.parse_item()
 }

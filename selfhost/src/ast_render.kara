@@ -45,6 +45,10 @@ import ast.{
     OrPattern,
     MatchArm,
     MatchExpr,
+    Item,
+    UseDeclNode,
+    ConstDeclNode,
+    TypeAliasNode,
 };
 
 // MUST stay identical to `escape_for_render` in `selfhost/src/main.kara` and
@@ -839,6 +843,88 @@ pub fn render_type(t: TypeExpr) -> String {
         }
         ErrTy(n) => {
             out.push_str("(terror");
+            out.push_str(span_str(n.span.offset, n.span.length));
+            out.push_str(")");
+        }
+    }
+    out
+}
+
+// ── Items (slice 3c) ── `(HEAD[ pub] [NAME]<span> CHILD...)`. The optional
+// ` pub` visibility flag sits right after the head; a named item (`const` /
+// `typealias`) prints ` NAME` before its span; embedded types/values reuse
+// `render_type` / `render_expr`. The Rust seed reproduces this exactly in
+// `tests/selfhost_parser_items.rs::render_rust_item`. Consumes the `Item`.
+
+// ` pub` when the item is public, else "" — the leading visibility flag.
+fn render_vis(is_pub: bool) -> String {
+    if is_pub {
+        " pub".to_string()
+    } else {
+        "".to_string()
+    }
+}
+
+pub fn render_item(item: Item) -> String {
+    let mut out = "".to_string();
+    match item {
+        Use(n) => {
+            let UseDeclNode {
+                is_pub,
+                segments,
+                span,
+            } = n;
+            out.push_str("(use");
+            out.push_str(render_vis(is_pub));
+            out.push_str(span_str(span.offset, span.length));
+            out.push_str(" ");
+            let mut i = 0;
+            for seg in segments {
+                if i > 0 {
+                    out.push_str(".");
+                }
+                out.push_str(seg);
+                i = i + 1;
+            }
+            out.push_str(")");
+        }
+        Const(n) => {
+            let ConstDeclNode {
+                is_pub,
+                name,
+                ty,
+                value,
+                span,
+            } = n;
+            out.push_str("(const");
+            out.push_str(render_vis(is_pub));
+            out.push_str(" ");
+            out.push_str(name);
+            out.push_str(span_str(span.offset, span.length));
+            out.push_str(" ");
+            out.push_str(render_type(ty));
+            out.push_str(" ");
+            out.push_str(render_expr(value));
+            out.push_str(")");
+        }
+        TypeAlias(n) => {
+            let TypeAliasNode {
+                is_pub,
+                name,
+                ty,
+                span,
+            } = n;
+            out.push_str("(typealias");
+            out.push_str(render_vis(is_pub));
+            out.push_str(" ");
+            out.push_str(name);
+            out.push_str(span_str(span.offset, span.length));
+            out.push_str(" ");
+            out.push_str(render_type(ty));
+            out.push_str(")");
+        }
+        ErrItem(n) => {
+            out.push_str("(erritem");
             out.push_str(span_str(n.span.offset, n.span.length));
             out.push_str(")");
         }

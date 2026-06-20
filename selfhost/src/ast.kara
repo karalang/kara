@@ -606,3 +606,58 @@ pub struct MatchExpr {
     pub arms: Vec[MatchArm],
     pub span: Span,
 }
+
+// ── Items (slice 3c) ── Mirrors `src/ast/items.rs::Item`, the top-level
+// declaration grammar the seed's `src/parser/items.rs` parses. `Item` is a
+// PLAIN enum (not `shared`): items are not recursively self-referential by
+// value — an `impl`/`trait` carries its members as their own structs in a `Vec`,
+// not as nested `Item`s — so no RC handle is needed (mirrors `Stmt`). Each
+// variant wraps a node struct for span fidelity and the no-direct-enum-payload
+// rule.
+//
+// The seed captures each item's `start` span AFTER any `pub`/`private` and
+// attributes are consumed (so the span begins at the leading KEYWORD —
+// `use`/`const`/`type` — not at `pub`), and `span_from(start)` extends it
+// through the trailing `;`/`}`. The port reproduces this: `parse_item` eats
+// `pub` first, then each per-item parser captures `start` at its keyword.
+//
+// 3c-i covers the leaf declarations whose sub-grammar is already ported
+// (`parse_type` + `parse_expr`): `use`, `const`, and the no-generics `type`
+// alias. DEFERRED to later 3c increments: struct/enum (3c-ii), fn (3c-iii),
+// trait/impl (3c-iv), generic params (3c-v); and kept out of the corpus
+// entirely for now — attributes, doc comments, `private`, effects/contracts,
+// `where` refinements, distinct types, layout, extern/host, unions, module
+// bindings, imports, test cases.
+
+// `[pub] use a.b.c;`
+pub struct UseDeclNode {
+    pub is_pub: bool,
+    pub segments: Vec[String],
+    pub span: Span,
+}
+
+// `[pub] const NAME: TYPE = VALUE;`
+pub struct ConstDeclNode {
+    pub is_pub: bool,
+    pub name: String,
+    pub ty: TypeExpr,
+    pub value: Expr,
+    pub span: Span,
+}
+
+// `[pub] type NAME = TYPE;` — slice 3c-i covers the no-generics form (the
+// optional `[T, ...]` generic params + `where` refinement land in 3c-v).
+pub struct TypeAliasNode {
+    pub is_pub: bool,
+    pub name: String,
+    pub ty: TypeExpr,
+    pub span: Span,
+}
+
+pub enum Item {
+    Use(UseDeclNode),
+    Const(ConstDeclNode),
+    TypeAlias(TypeAliasNode),
+    // Error-recovery placeholder (an unrecognized leading token / EOF).
+    ErrItem(SpanNode),
+}
