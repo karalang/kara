@@ -1977,10 +1977,17 @@ impl<'a> Interpreter<'a> {
                 op: crate::ast::UnaryOp::Deref,
                 operand,
             } => {
-                // `*r = v` — rebind `r` in the current scope (mut-ref params are
-                // local bindings written back at the call site, CICO).
                 if let ExprKind::Identifier(name) = &operand.kind {
+                    // `*r = v` — `Env::set` writes through a `SharedCell` /
+                    // `MapSlotRef` slot, or rebinds a plain CICO mut-ref local.
                     self.env.set(name, new_val);
+                } else if let Value::MapSlotRef { map_var, key } = self.eval_expr_inner(operand) {
+                    // `*<chain> = v` where the chain yields a `mut ref V` into a
+                    // Map slot (`*m.entry(k).or_insert(d) += 1`). Write through
+                    // to the live slot. Re-evaluating the chain is idempotent:
+                    // `or_insert` inserts-if-absent, so this second pass finds
+                    // the slot occupied and just hands back the same ref.
+                    self.env.write_map_slot(&map_var, &key, new_val);
                 }
                 true
             }

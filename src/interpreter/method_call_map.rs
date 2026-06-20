@@ -302,49 +302,40 @@ impl<'a> super::Interpreter<'a> {
                 }
             }
             "or_insert" => {
-                if let Value::Entry {
-                    map_var,
-                    key,
-                    slot_idx,
-                } = obj
-                {
+                if let Value::Entry { map_var, key, .. } = obj {
                     let default = args
                         .first()
                         .map(|a| self.eval_expr_inner(&a.value))
                         .unwrap_or(Value::Unit);
-                    return Some(self.entry_or_insert_value(map_var, *key, slot_idx, default));
+                    // Insert-if-absent, then hand back a `mut ref V` (MapSlotRef)
+                    // into the live slot so `*r += 1` / `.push(x)` write through.
+                    return Some(self.entry_or_insert_ref(map_var, *key, default));
                 }
             }
             "or_insert_with" => {
-                if let Value::Entry {
-                    map_var,
-                    key,
-                    slot_idx,
-                } = obj
-                {
-                    if slot_idx.is_some() {
-                        // Occupied — closure not invoked. Pull the existing
-                        // slot value out of the live Map (it may have been
-                        // mutated by an earlier chain step).
-                        if let Some(name) = map_var.as_deref() {
-                            if let Some(Value::Map(m)) = self.env.get(name) {
-                                if let Some(idx) = slot_idx {
-                                    if let Some((_, v)) = m.get(idx) {
-                                        return Some(v.clone());
-                                    }
-                                }
-                            }
-                        }
-                        return Some(Value::Unit);
+                if let Value::Entry { map_var, key, .. } = obj {
+                    // Occupancy is read from the live map by key — `slot_idx`
+                    // may be stale after an earlier chain step mutated the map.
+                    let occupied = match map_var.as_deref().and_then(|n| self.env.get(n)) {
+                        Some(Value::Map(pairs)) => pairs.iter().any(|(k, _)| *k == *key),
+                        _ => false,
+                    };
+                    if occupied {
+                        // Occupied — the closure is NOT invoked; return a ref to
+                        // the existing slot.
+                        return Some(match map_var {
+                            Some(name) => Value::MapSlotRef { map_var: name, key },
+                            None => Value::Unit,
+                        });
                     }
-                    // Vacant — invoke the no-arg closure to produce the
-                    // default value, then insert.
+                    // Vacant — invoke the no-arg closure to produce the default
+                    // value, insert it, and return a ref to the new slot.
                     let f = args
                         .first()
                         .map(|a| self.eval_expr_inner(&a.value))
                         .unwrap_or(Value::Unit);
                     let default = self.invoke_function_value(f, vec![]);
-                    return Some(self.entry_or_insert_value(map_var, *key, slot_idx, default));
+                    return Some(self.entry_or_insert_ref(map_var, *key, default));
                 }
             }
             "and_modify" => {

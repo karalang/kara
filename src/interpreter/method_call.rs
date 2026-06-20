@@ -654,6 +654,19 @@ impl<'a> super::Interpreter<'a> {
 
         let obj = self.eval_expr_inner(object);
 
+        // A `mut ref V` returned by `Map.entry(k).or_insert(d)` is a place-ref
+        // into the live Map slot. Method calls (`.push(x)`, …) dispatch on the
+        // underlying value, so resolve the ref here. For an Arc-backed element
+        // (e.g. `Vec`), the resolved clone shares storage with the slot, so an
+        // in-place mutation writes through to the map. (An identifier receiver
+        // bound to a `MapSlotRef` is already resolved by `Env::get`; only the
+        // bare `…or_insert(d).method()` chain reaches here as a raw ref.)
+        let obj = if let Value::MapSlotRef { map_var, key } = &obj {
+            self.env.read_map_slot(map_var, key)
+        } else {
+            obj
+        };
+
         // Comptime `Type` reflection (substrate 2): `MyType.name()`,
         // `.fields()`, `.variants()`, `.is_struct()`, … on a `Type`
         // pseudovalue. Dispatches against the typecheck result's

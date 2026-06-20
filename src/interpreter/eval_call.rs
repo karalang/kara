@@ -1647,19 +1647,20 @@ impl<'a> super::Interpreter<'a> {
     }
 
     /// Shared body for `Entry.or_insert(default)` and the vacant arm of
-    /// `Entry.or_insert_with(f)`. On Vacant, push the new (key, default)
-    /// pair onto the live Map (re-fetched by `map_var`) and write back.
-    /// On Occupied, return the existing slot value cloned. Either way,
-    /// returns the inserted-or-existing value as a Value (NOT a true
-    /// `mut ref V`); chained mutation through the return is only fully
-    /// supported by the codegen path. Returns `Value::Unit` if the entry
-    /// has no `map_var` (chain rooted at a non-identifier receiver) or
-    /// the binding doesn't resolve to a Map.
-    pub(crate) fn entry_or_insert_value(
+    /// `Entry.or_insert(default)` / `or_insert_with(f)`: ensure the slot for
+    /// `key` exists in the live Map named by `map_var` (inserting `default`
+    /// when the key is absent), then return a `Value::MapSlotRef` — a genuine
+    /// `mut ref V` into that slot. Write-through mutations applied to the ref
+    /// (`*r += 1`, `r += 1`, `*r = v`, or `.push(x)` on an Arc-backed element)
+    /// reach the map through `Env`'s `MapSlotRef` resolution (get/set choke
+    /// points). Returns `Value::Unit` when the entry has no `map_var` (chain
+    /// rooted at a non-identifier receiver) or the binding doesn't resolve to
+    /// a Map — the mutation is then unobservable, matching the prior
+    /// best-effort behaviour for that degenerate shape.
+    pub(crate) fn entry_or_insert_ref(
         &mut self,
         map_var: Option<String>,
         key: Value,
-        slot_idx: Option<usize>,
         default: Value,
     ) -> Value {
         let Some(name) = map_var else {
@@ -1668,14 +1669,14 @@ impl<'a> super::Interpreter<'a> {
         let Some(Value::Map(mut m)) = self.env.get(&name) else {
             return Value::Unit;
         };
-        if let Some(idx) = slot_idx {
-            if let Some((_, v)) = m.get(idx) {
-                return v.clone();
-            }
+        if !m.iter().any(|(k, _)| *k == key) {
+            m.push((key.clone(), default));
         }
-        m.push((key, default.clone()));
         self.env.set(&name, Value::Map(m));
-        default
+        Value::MapSlotRef {
+            map_var: name,
+            key: Box::new(key),
+        }
     }
 
     /// `collect_all_vec(fs)` — the gather-all-errors homogeneous parallel

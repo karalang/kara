@@ -487,36 +487,92 @@ impl Env {
     }
 
     pub(crate) fn set(&mut self, name: &str, val: Value) {
-        // Update in the nearest scope that has this name. If the existing
-        // slot is a `SharedCell` (a `mut ref` closure capture aliased back
-        // to the outer binding) the assignment writes through the cell so
-        // the outer binding observes the mutation.
+        // Update in the nearest scope that has this name. Two slot kinds
+        // redirect the write instead of overwriting the binding:
+        //   - `SharedCell`: a `mut ref` closure capture aliased back to the
+        //     outer binding — write through the cell so the outer binding
+        //     observes the mutation.
+        //   - `MapSlotRef`: a `mut ref V` into a Map slot, returned by
+        //     `Entry.or_insert` — write through to the live map slot so
+        //     `*r = v` / `r += 1` land in the map, not the local binding.
+        let mut redirect: Option<(String, Value)> = None;
         for scope in self.scopes.iter_mut().rev() {
             if let Some(slot) = scope.get_mut(name) {
-                if let Value::SharedCell(cell) = slot {
-                    *cell.lock().unwrap() = val;
-                } else {
-                    *slot = val;
+                match slot {
+                    Value::SharedCell(cell) => {
+                        *cell.lock().unwrap() = val;
+                        return;
+                    }
+                    Value::MapSlotRef { map_var, key } => {
+                        redirect = Some((map_var.clone(), (**key).clone()));
+                    }
+                    _ => {
+                        *slot = val;
+                        return;
+                    }
                 }
-                return;
+                break;
             }
+        }
+        if let Some((map_var, key)) = redirect {
+            self.write_map_slot(&map_var, &key, val);
+            return;
         }
         // If not found, define in current scope
         self.define(name.to_string(), val);
     }
 
-    /// Read a binding by name. Auto-derefs `SharedCell` so callers always
-    /// see the underlying value rather than the aliasing slot.
+    /// Read a binding by name. Auto-derefs `SharedCell` (a closure mut-ref
+    /// alias) and `MapSlotRef` (an `or_insert` mut-ref into a Map slot) so
+    /// callers always see the underlying value rather than the aliasing
+    /// slot / place-ref.
     pub(crate) fn get(&self, name: &str) -> Option<Value> {
         for scope in self.scopes.iter().rev() {
             if let Some(v) = scope.get(name) {
                 return Some(match v {
                     Value::SharedCell(cell) => cell.lock().unwrap().clone(),
+                    Value::MapSlotRef { map_var, key } => self.read_map_slot(map_var, key),
                     other => other.clone(),
                 });
             }
         }
         None
+    }
+
+    /// Resolve a `MapSlotRef` to the current value in its Map slot. Returns
+    /// `Value::Unit` if the binding is gone or the key is absent (a dangling
+    /// ref — `or_insert` always inserts, so this is defensive against a
+    /// `remove` racing a held ref).
+    pub(crate) fn read_map_slot(&self, map_var: &str, key: &Value) -> Value {
+        for scope in self.scopes.iter().rev() {
+            if let Some(slot) = scope.get(map_var) {
+                if let Value::Map(pairs) = slot {
+                    if let Some((_, v)) = pairs.iter().find(|(k, _)| k == key) {
+                        return v.clone();
+                    }
+                }
+                return Value::Unit;
+            }
+        }
+        Value::Unit
+    }
+
+    /// Write `val` through a `MapSlotRef` into its Map slot. Appends a new
+    /// `(key, val)` pair if the key is missing (defensive; `or_insert`
+    /// normally guarantees presence). No-op if the binding is gone.
+    pub(crate) fn write_map_slot(&mut self, map_var: &str, key: &Value, val: Value) {
+        for scope in self.scopes.iter_mut().rev() {
+            if let Some(slot) = scope.get_mut(map_var) {
+                if let Value::Map(pairs) = slot {
+                    if let Some((_, v)) = pairs.iter_mut().find(|(k, _)| k == key) {
+                        *v = val;
+                    } else {
+                        pairs.push((key.clone(), val));
+                    }
+                }
+                return;
+            }
+        }
     }
 
     /// For the user-`Drop` hook: report a binding's struct type name and,

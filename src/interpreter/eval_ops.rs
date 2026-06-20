@@ -55,6 +55,14 @@ impl<'a> super::Interpreter<'a> {
                     .collect();
                 Value::Vector(out)
             }
+            // `*<chain>` where the chain yields a `mut ref V` into a Map slot
+            // (`Map.entry(k).or_insert(d)`). Resolve the place-ref to the live
+            // slot value. (When the operand is a bound identifier, `Env::get`
+            // already resolved it before this point, so only the bare-chain
+            // case reaches here as a raw `MapSlotRef`.)
+            (UnaryOp::Deref, Value::MapSlotRef { map_var, key }) => {
+                self.env.read_map_slot(&map_var, &key)
+            }
             // In the tree-walk interpreter references are passed by value; `*r` is
             // a semantic no-op that returns the underlying value unchanged.
             (UnaryOp::Deref, v) => v,

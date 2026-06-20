@@ -300,6 +300,21 @@ pub enum Value {
         key: Box<Value>,
         slot_idx: Option<usize>,
     },
+    /// A live `mut ref V` into a `Map` value slot, returned by
+    /// `Entry.or_insert` / `or_insert_with`. Unlike `Entry` (a transient
+    /// cursor), this is a genuine place-reference: `or_insert` guarantees
+    /// the slot exists, then hands back this ref so write-through mutations
+    /// reach the map. `Env::get` resolves it to the live slot value
+    /// (auto-deref) and `Env::set` writes through to the slot — the same
+    /// choke-point treatment as [`Value::SharedCell`], so `*r += 1`,
+    /// `r += 1`, `*r = v`, and `.push(x)` (Arc-shared element storage) all
+    /// land in the map. `map_var` names the Map binding; `key` selects the
+    /// slot. Map *slots* never hold a `MapSlotRef` (it only ever lives in a
+    /// local binding or as a chain-temporary), so map reads stay pristine.
+    MapSlotRef {
+        map_var: String,
+        key: Box<Value>,
+    },
 }
 
 /// One mutable field on a `shared struct` instance. The spec
@@ -948,6 +963,11 @@ impl std::fmt::Display for Value {
                 let mv = map_var.as_deref().unwrap_or("?");
                 write!(f, "<{} entry for {} in {}>", occ, key, mv)
             }
+            // A place-ref is auto-deref'd by `Env::get` before reaching any
+            // value context, so this is defensive only.
+            Value::MapSlotRef { map_var, key } => {
+                write!(f, "<slot ref for {} in {}>", key, map_var)
+            }
             Value::File(_) => write!(f, "<File>"),
             Value::BufReader(_) => write!(f, "<BufReader>"),
             Value::BufWriter(_) => write!(f, "<BufWriter>"),
@@ -1100,6 +1120,7 @@ impl Value {
             Value::Receiver(_) => "Receiver",
             Value::SharedCell(_) => "SharedCell",
             Value::Entry { .. } => "Entry",
+            Value::MapSlotRef { .. } => "MapSlotRef",
             Value::File(_) => "File",
             Value::BufReader(_) => "BufReader",
             Value::BufWriter(_) => "BufWriter",

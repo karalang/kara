@@ -7412,6 +7412,81 @@ fn test_map_entry_and_modify_chain_with_or_insert() {
     assert_eq!(output, "3\n");
 }
 
+#[test]
+fn test_map_entry_or_insert_deref_compound_assign_writes_through() {
+    // Flagship counter idiom — `*m.entry(k).or_insert(0) += 1` must write
+    // through the returned `mut ref V` into the live slot, NOT into a detached
+    // clone. Three increments on a vacant-then-occupied key → 3. (Before the
+    // MapSlotRef fix the interpreter dropped the write and this read 0.)
+    let output = run("fn main() {\n\
+             let m: Map[String, i64] = Map.new();\n\
+             *m.entry(\"a\").or_insert(0_i64) += 1;\n\
+             *m.entry(\"a\").or_insert(0_i64) += 1;\n\
+             *m.entry(\"a\").or_insert(0_i64) += 1;\n\
+             match m.get(\"a\") {\n\
+                 Some(x) => println(x),\n\
+                 None => println(\"missing\"),\n\
+             }\n\
+         }");
+    assert_eq!(output, "3\n");
+}
+
+#[test]
+fn test_map_entry_or_insert_two_step_mut_ref_writes_through() {
+    // `let r = m.entry(k).or_insert(seed)` binds a `mut ref V`; both the
+    // explicit `*r += 1` and the deref-elided `r += 1` write through to the
+    // map slot. 10 → 11 → 12.
+    let output = run("fn main() {\n\
+             let m: Map[String, i64] = Map.new();\n\
+             let r = m.entry(\"a\").or_insert(10_i64);\n\
+             *r += 1;\n\
+             r += 1;\n\
+             match m.get(\"a\") {\n\
+                 Some(x) => println(x),\n\
+                 None => println(\"missing\"),\n\
+             }\n\
+         }");
+    assert_eq!(output, "12\n");
+}
+
+#[test]
+fn test_map_entry_or_insert_vec_push_writes_through() {
+    // The per-key-Vec append idiom (design.md): `m.entry(k).or_insert(Vec.new())
+    // .push(x)`. Pushed elements land in the map slot because the resolved
+    // ref shares the slot's Arc-backed storage. Distinct keys stay separate.
+    let output = run("fn main() {\n\
+             let m: Map[String, Vec[i64]] = Map.new();\n\
+             m.entry(\"x\").or_insert(Vec.new()).push(1_i64);\n\
+             m.entry(\"x\").or_insert(Vec.new()).push(2_i64);\n\
+             m.entry(\"y\").or_insert(Vec.new()).push(3_i64);\n\
+             match m.get(\"x\") {\n\
+                 Some(v) => println(v),\n\
+                 None => println(\"none\"),\n\
+             }\n\
+             match m.get(\"y\") {\n\
+                 Some(v) => println(v),\n\
+                 None => println(\"none\"),\n\
+             }\n\
+         }");
+    assert_eq!(output, "[1, 2]\n[3]\n");
+}
+
+#[test]
+fn test_map_entry_or_insert_get_returns_snapshot_not_ref() {
+    // A `MapSlotRef` must never escape the map into a user value: reading the
+    // slot back via `get` yields a plain snapshot. Mutating the map after the
+    // read does not retroactively change the captured value.
+    let output = run("fn main() {\n\
+             let m: Map[String, i64] = Map.new();\n\
+             *m.entry(\"a\").or_insert(0_i64) += 5;\n\
+             let snap = m.get_or(\"a\", -1);\n\
+             *m.entry(\"a\").or_insert(0_i64) += 100;\n\
+             println(snap);\n\
+             println(m.get_or(\"a\", -1));\n\
+         }");
+    assert_eq!(output, "5\n105\n");
+}
+
 // ── Clone trait surface (canonical: phase-8-stdlib-floor.md
 //    "Clone trait surface for collections") ────────────────────────
 
