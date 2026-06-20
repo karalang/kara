@@ -17657,6 +17657,7 @@ run({ put_pixels }, { pointerTarget: target }).catch((e) => {
 ///      compounding zoom makes the checksum diverge hugely from baseline,
 ///   3. switches to `contextmenu` (right-click) for another run — the view
 ///      backs out, diverging again from the zoomed checksum.
+///
 /// Each leg asserts the checksum moved; `FATHOM_OK` prints only if both did.
 /// One dropped/garbled coordinate read can't mask it — the cumulative zoom
 /// across the run dominates, so no loop-until-valid drain is needed here.
