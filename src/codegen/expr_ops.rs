@@ -2667,6 +2667,23 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_float_binop(op, lf, rf);
         }
 
+        // Shared-struct (reference-typed) equality. A `shared struct` is a heap
+        // RC POINTER, so it misses the struct-value path above. Structural
+        // `==` / `!=` is defined (design.md § Equality Semantics) and the
+        // interpreter implements it (eval_ops.rs), but the codegen field-walk
+        // through the pointer is a tracked follow-on — emit a clear, actionable
+        // error instead of the generic "non-comparable PointerType" below.
+        if matches!(op, BinOp::Eq | BinOp::NotEq)
+            && (lhs.is_pointer_value() || rhs.is_pointer_value())
+        {
+            return Err(
+                "structural `==`/`!=` on a `shared struct` is not yet supported under \
+                 `karac build` (codegen); it works under `karac run`. The field-wise \
+                 comparison lowering through the RC pointer is a tracked follow-on."
+                    .to_string(),
+            );
+        }
+
         // Heterogeneous-shape guard. The struct path above only fires
         // when BOTH operands are struct values; the float path covers
         // the mixed-float case. Everything else must arrive as an

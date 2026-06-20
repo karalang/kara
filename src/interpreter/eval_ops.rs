@@ -301,6 +301,18 @@ impl<'a> super::Interpreter<'a> {
             (BinOp::NotEq, l @ Value::Struct { .. }, r @ Value::Struct { .. }) => {
                 Value::Bool(l != r)
             }
+            // `shared struct` equality is structural (design.md § Equality
+            // Semantics): `Value`'s `PartialEq` recurses through the inner
+            // fields (`Arc::ptr_eq` fast path for identical allocations). The
+            // typechecker gates these on the operand deriving `Eq`, same as the
+            // plain-struct arms above; without them shared-struct `==` fell
+            // through to the `_` runtime-error arm.
+            (BinOp::Eq, l @ Value::SharedStruct(_), r @ Value::SharedStruct(_)) => {
+                Value::Bool(l == r)
+            }
+            (BinOp::NotEq, l @ Value::SharedStruct(_), r @ Value::SharedStruct(_)) => {
+                Value::Bool(l != r)
+            }
 
             // No valid program reaches here — the typechecker rejects every
             // ill-typed operand combination as a hard error. The one way in is

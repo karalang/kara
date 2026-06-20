@@ -2176,6 +2176,23 @@ fn test_user_drop_body_can_read_struct_fields() {
 // count without cloning so the test is exact.
 
 #[test]
+fn test_shared_struct_structural_equality() {
+    // `shared struct` `==`/`!=` is structural (design.md § Equality Semantics):
+    // it compares the inner fields, not Arc identity. Two separately-built P's
+    // with equal fields are ==; differing a field makes them !=.
+    let out = run("#[derive(Eq, PartialEq)]\n\
+         shared struct P { x: i64, y: i64 }\n\
+         fn main() {\n\
+             let a = P { x: 1, y: 2 };\n\
+             let b = P { x: 1, y: 2 };\n\
+             let c = P { x: 9, y: 2 };\n\
+             if a == b { println(\"eq\"); }\n\
+             if a != c { println(\"ne\"); }\n\
+         }");
+    assert_eq!(out, "eq\nne\n");
+}
+
+#[test]
 fn test_user_drop_shared_struct_fires_once() {
     let (output, _drops) = run_program_with_drops(
         "shared struct Res { id: i64 }\n\
