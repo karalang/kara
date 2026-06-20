@@ -8569,6 +8569,46 @@ fn main() {
     }
 
     #[test]
+    fn asan_soa_whole_element_index_store_no_overflow() {
+        // Follow-on (whole-element SoA index store `grid[i] = E { … }`): the
+        // pre-fix store wrote the full AoS element over a SINGLE group's narrower
+        // stride — a heap-buffer-overflow at the last element of every group
+        // buffer (write 40-byte Cell at offset i*16 into the `lo` group's
+        // 16-byte stride). ASAN flags the over-stride write directly; this is the
+        // regression guard for the silent-overflow class. Scatter all 8 elements
+        // by whole-element assignment each of 20 frames, then read back across
+        // both groups so a dropped/over-stride write also changes the sum. Cell
+        // is 40 bytes (two groups, both buffers past LSan's short-alloc blind
+        // spot). grid[i] = {i+1, …}: sum of `a` (i+1, i 0..8) = 36, ×20 = 720.
+        assert_clean_asan_run(
+            r#"
+struct Cell { a: f64, b: f64, c: f64, d: f64, e: f64 }
+layout grid: Vec[Cell] { group lo { a, b } group hi { c, d, e } }
+fn main() with panics {
+    let mut sum = 0.0;
+    let mut k = 0;
+    while k < 20 {
+        let mut grid: Vec[Cell] = Vec.new();
+        let mut i = 0;
+        while i < 8 { grid.push(Cell { a: 0.0, b: 0.0, c: 0.0, d: 0.0, e: 0.0 }); i = i + 1; }
+        let mut j = 0;
+        while j < grid.len() {
+            grid[j] = Cell { a: (j + 1) as f64, b: 1.0, c: 2.0, d: 3.0, e: 4.0 };
+            j = j + 1;
+        }
+        let mut r = 0;
+        while r < grid.len() { sum = sum + grid[r].a; r = r + 1; }
+        k = k + 1;
+    }
+    println(sum);
+}
+"#,
+            &["720"],
+            "soa_whole_element_index_store",
+        );
+    }
+
+    #[test]
     fn asan_shared_list_build_remove_repeat() {
         // Regression for the `shared struct` RC over-dec (2026-05-30): a
         // tail-cursor-built list, removed via `remove_nth_from_end`

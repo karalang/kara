@@ -18268,6 +18268,130 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_soa_whole_element_index_store() {
+        // Follow-on: WHOLE-element SoA index store `grid[i] = E { … }` (the
+        // scatter-by-assignment a stateful kernel writes, the sibling of the
+        // field-level store above). The RHS is the full AoS element; its fields
+        // must scatter into each group's OWN buffer at [i], strided by the group
+        // sub-struct — NOT written as one contiguous AoS element over group-0's
+        // narrower stride. Before `compile_soa_index_store` the store fell into
+        // `compile_vec_index_store`, which read the SoA 4-field struct's field-0
+        // (the x-group buffer) as an AoS `{ptr,len,cap}` data pointer and wrote
+        // 16-byte AoS elements over the 8-byte x-group stride — a silent heap
+        // overflow that scrambled every group (this program printed 3, not 36).
+        // grid[i] = {i+1, i*10}: (1+0)+(2+10)+(3+20) = 36.
+        let out = run_program(
+            r#"
+struct E { x: f64, y: f64 }
+layout grid: Vec[E] { group g1 { x } group g2 { y } }
+fn main() with panics {
+    let mut grid: Vec[E] = Vec.new();
+    grid.push(E { x: 0.0, y: 0.0 });
+    grid.push(E { x: 0.0, y: 0.0 });
+    grid.push(E { x: 0.0, y: 0.0 });
+    let mut i = 0;
+    while i < grid.len() {
+        grid[i] = E { x: (i + 1) as f64, y: (i * 10) as f64 };
+        i = i + 1;
+    }
+    let mut s = 0.0;
+    let mut j = 0;
+    while j < grid.len() { s = s + grid[j].x + grid[j].y; j = j + 1; }
+    println(s);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "36",
+                "whole-element SoA index-store must scatter fields into per-group buffers at [i]"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_soa_whole_element_index_store_mut_ref() {
+        // Follow-on: the exact shape the spike named as the open item — a kernel
+        // that scatters WHOLE elements by `mut ref Vec[E]` index assignment
+        // across a function boundary. The callee's slot holds a POINTER to the
+        // caller's SoA struct; `compile_soa_index_store` derefs once (via
+        // `ref_params`) before GEPing each group, so the writes land in the
+        // caller's buffers. Three fields across two groups (one multi-field hot
+        // group) proves the per-group decomposition crosses the boundary intact.
+        // ps[i] = {i+1, i+2, i+3}: (1+2+3)+(2+3+4) = 15.
+        let out = run_program(
+            r#"
+struct P { x: f64, y: f64, m: f64 }
+layout ps: Vec[P] { group pos { x, y } group mass { m } }
+fn scatter(ps: mut ref Vec[P]) {
+    let mut i = 0;
+    while i < ps.len() {
+        ps[i] = P { x: (i + 1) as f64, y: (i + 2) as f64, m: (i + 3) as f64 };
+        i = i + 1;
+    }
+}
+fn main() with panics {
+    let mut ps: Vec[P] = Vec.new();
+    ps.push(P { x: 0.0, y: 0.0, m: 0.0 });
+    ps.push(P { x: 0.0, y: 0.0, m: 0.0 });
+    scatter(mut ps);
+    let mut s = 0.0;
+    let mut j = 0;
+    while j < ps.len() { s = s + ps[j].x + ps[j].y + ps[j].m; j = j + 1; }
+    println(s);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "15",
+                "whole-element SoA scatter through `mut ref Vec[E]` must write the caller's groups"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_soa_whole_element_index_store_cold_group() {
+        // Follow-on: whole-element SoA index store into a layout WITH a cold
+        // group — the scatter must also reach the trailing cold allocation (the
+        // separate-malloc branch), not just the hot groups. `vy` lives in cold,
+        // `x`/`y` in one hot group, `vx` in another; `entities[j] = {j,j+1,j+2,
+        // j+3}` then reads back from every buffer. entities[4] -> 4,5,6,7;
+        // entities[2].vy -> 5.
+        let src = r#"
+struct Entity { x: i64, y: i64, vx: i64, vy: i64 }
+layout entities: Vec[Entity] {
+    group pos { x, y }
+    group vel { vx }
+    cold { vy }
+}
+fn main() with panics {
+    let mut entities: Vec[Entity] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 5 { entities.push(Entity { x: 0, y: 0, vx: 0, vy: 0 }); i = i + 1; }
+    let mut j: i64 = 0;
+    while j < 5 {
+        entities[j] = Entity { x: j, y: j + 1, vx: j + 2, vy: j + 3 };
+        j = j + 1;
+    }
+    let e = entities[4];
+    println(e.x); println(e.y); println(e.vx); println(e.vy);
+    println(entities[2].vy);
+}
+"#;
+        if let Some(out) = run_program(src) {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(
+                lines,
+                vec!["4", "5", "6", "7", "5"],
+                "whole-element SoA store must scatter into the cold buffer too"
+            );
+        }
+    }
+
     // ── SoA cross-function, slice 6 (Slipstream full-SoA proof) ────
 
     #[test]

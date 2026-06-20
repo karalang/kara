@@ -2289,6 +2289,166 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(())
     }
 
+    /// Whole-element SoA index store: `grid[i] = E { … }` where `grid` is a
+    /// SoA-laid-out `Vec[E]`. The RHS is the full AoS element struct; we scatter
+    /// its fields into each group's separate buffer at `[i]`, strided by that
+    /// group's sub-struct — the same decomposition `compile_soa_method`'s `push`
+    /// does at `len`, but at an arbitrary in-bounds index (no growth). Without
+    /// this the store falls into `compile_vec_index_store`, which reads the SoA
+    /// struct's field-0 (the first group buffer) as an AoS data pointer and
+    /// writes whole AoS elements over a single group's narrower stride — a silent
+    /// heap overflow that scrambles every group. Routed ahead of the Vec dispatch
+    /// in `compile_index_store`, gated on `active_soa_layout`.
+    ///
+    /// **Ownership.** Matches the rest of the SoA subsystem (push, field-store,
+    /// `FreeSoaGroups` cleanup): the element fields are POD — no per-element heap
+    /// drop anywhere — so the scatter is a plain overwrite. SoA elements with
+    /// heap fields (`String`/`Vec`) are an orthogonal gap shared by push and
+    /// scope cleanup, not introduced or widened here.
+    pub(super) fn compile_soa_index_store(
+        &mut self,
+        soa_name: &str,
+        index: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> Result<(), String> {
+        let soa = self
+            .active_soa_layout(soa_name)
+            .ok_or_else(|| format!("'{}' is not a SoA-laid-out collection", soa_name))?;
+        let slot = self
+            .variables
+            .get(soa_name)
+            .copied()
+            .ok_or_else(|| format!("Undefined SoA variable '{}' in index store", soa_name))?;
+
+        let has_cold = soa.cold_group.is_some();
+        let soa_ty = self.soa_vec_type(soa.num_groups, has_cold);
+        let len_idx = Self::soa_len_index(soa.num_groups, has_cold);
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+
+        // `ref`/`mut ref` SoA param: the slot holds a POINTER to the caller's
+        // SoA struct — deref once before GEPing group/len (same boundary-crossing
+        // deref as the field-store and read paths).
+        let soa_struct_ptr = if self.ref_params.contains_key(soa_name) {
+            self.builder
+                .build_load(ptr_ty, slot.ptr, "soa.ref.deref")
+                .unwrap()
+                .into_pointer_value()
+        } else {
+            slot.ptr
+        };
+
+        // Bounds check against len (mirror compile_soa_field_store): panic if
+        // idx >= len before any group write, so a stray index can't corrupt the
+        // group buffers half-way through the scatter.
+        let idx_val = self.compile_expr(index)?.into_int_value();
+        let len_ptr = self
+            .builder
+            .build_struct_gep(soa_ty, soa_struct_ptr, len_idx, "soa.istore.len.ptr")
+            .unwrap();
+        let len = self
+            .builder
+            .build_load(i64_t, len_ptr, "soa.istore.len")
+            .unwrap()
+            .into_int_value();
+        let fn_val = self.current_fn.unwrap();
+        let oob_bb = self.context.append_basic_block(fn_val, "soa.istore.oob");
+        let ok_bb = self.context.append_basic_block(fn_val, "soa.istore.ok");
+        let oob = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::UGE,
+                idx_val,
+                len,
+                "soa.istore.bounds",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(oob, oob_bb, ok_bb)
+            .unwrap();
+        self.builder.position_at_end(oob_bb);
+        self.emit_panic("index out of bounds");
+        self.builder.build_unreachable().unwrap();
+        self.builder.position_at_end(ok_bb);
+
+        // Decompose the AoS element struct into per-group sub-structs and store
+        // each at `group_buf[idx]` (identical decomposition to push's store
+        // block, just GEP'd by `idx` instead of `len`).
+        let elem_sv = val.into_struct_value();
+        for (gi, group) in soa.groups.iter().enumerate() {
+            let group_elem_ty = self.soa_group_elem_type(&soa.struct_name, group);
+            let grp_ptr_ptr = self
+                .builder
+                .build_struct_gep(
+                    soa_ty,
+                    soa_struct_ptr,
+                    gi as u32,
+                    &format!("soa.istore.g{}.ptr", gi),
+                )
+                .unwrap();
+            let grp_buf = self
+                .builder
+                .build_load(ptr_ty, grp_ptr_ptr, &format!("soa.istore.g{}.buf", gi))
+                .unwrap()
+                .into_pointer_value();
+            let dest = unsafe {
+                self.builder
+                    .build_gep(
+                        group_elem_ty,
+                        grp_buf,
+                        &[idx_val],
+                        &format!("soa.istore.g{}.dest", gi),
+                    )
+                    .unwrap()
+            };
+            let mut grp_val = group_elem_ty.get_undef();
+            for (fi, &src_idx) in group.field_indices.iter().enumerate() {
+                let field_val = self
+                    .builder
+                    .build_extract_value(elem_sv, src_idx as u32, "f")
+                    .unwrap();
+                grp_val = self
+                    .builder
+                    .build_insert_value(grp_val, field_val, fi as u32, "gf")
+                    .unwrap()
+                    .into_struct_value();
+            }
+            self.builder.build_store(dest, grp_val).unwrap();
+        }
+        if let Some(ref cold) = soa.cold_group.clone() {
+            let cold_idx = Self::soa_cold_ptr_index(soa.num_groups);
+            let cold_elem_ty = self.soa_group_elem_type(&soa.struct_name, cold);
+            let cold_ptr_ptr = self
+                .builder
+                .build_struct_gep(soa_ty, soa_struct_ptr, cold_idx, "soa.istore.cold.ptr")
+                .unwrap();
+            let cold_buf = self
+                .builder
+                .build_load(ptr_ty, cold_ptr_ptr, "soa.istore.cold.buf")
+                .unwrap()
+                .into_pointer_value();
+            let dest = unsafe {
+                self.builder
+                    .build_gep(cold_elem_ty, cold_buf, &[idx_val], "soa.istore.cold.dest")
+                    .unwrap()
+            };
+            let mut cold_val = cold_elem_ty.get_undef();
+            for (fi, &src_idx) in cold.field_indices.iter().enumerate() {
+                let field_val = self
+                    .builder
+                    .build_extract_value(elem_sv, src_idx as u32, "f")
+                    .unwrap();
+                cold_val = self
+                    .builder
+                    .build_insert_value(cold_val, field_val, fi as u32, "cf")
+                    .unwrap()
+                    .into_struct_value();
+            }
+            self.builder.build_store(dest, cold_val).unwrap();
+        }
+        Ok(())
+    }
+
     /// Compute the pointer to `vec_var[index]`'s element slot (the GEP
     /// into the Vec's heap buffer), with the same bounds-check elision as
     /// `compile_vec_index` — but WITHOUT the trailing load. Callers that
@@ -2812,6 +2972,21 @@ impl<'ctx> super::Codegen<'ctx> {
             if let Some(info) = self.tensor_var_infos.get(name.as_str()).cloned() {
                 let t_ptr = self.tensor_ptr_for_var(name)?;
                 return self.compile_tensor_index_store(t_ptr, &info, index, val);
+            }
+        }
+
+        // Whole-element SoA index store: `grid[i] = E { … }` where `grid` is
+        // SoA-laid-out. A SoA binding is ALSO registered in `vec_elem_types`
+        // (its declared element type), so this must precede the Vec dispatch
+        // below — otherwise the SoA 4-field struct slot is read as an AoS
+        // `{ptr,len,cap}` and the whole AoS element is written over one group's
+        // narrower stride (silent heap overflow). Gated on `active_soa_layout`,
+        // so a plain AoS Vec is untouched. Mirrors the SoA field-store intercept
+        // in `compile_field_store`.
+        if let ExprKind::Identifier(name) = &object.kind {
+            if self.active_soa_layout(name).is_some() {
+                let name = name.clone();
+                return self.compile_soa_index_store(&name, index, val);
             }
         }
 
