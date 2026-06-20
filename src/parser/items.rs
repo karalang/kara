@@ -342,6 +342,7 @@ impl super::Parser {
         // split, so downstream tools that re-parse without a resolver
         // still see the captured attribute.
         let is_track_caller = self.scan_track_caller_attr(&attributes);
+        let (inline_hint, is_cold) = self.scan_codegen_hint_attrs(&attributes);
         let deprecation = self.scan_deprecated_attr(&attributes);
         let unstable = self.scan_unstable_attr(&attributes);
         let lint_overrides = self.scan_lint_level_attrs(&attributes);
@@ -368,6 +369,8 @@ impl super::Parser {
             deprecation,
             unstable,
             is_track_caller,
+            inline_hint,
+            is_cold,
             lint_overrides,
             profile_compat,
             // FFI export ABI is attached by the module-scope `extern
@@ -489,6 +492,140 @@ impl super::Parser {
             }
         }
         present
+    }
+
+    /// Scan `attributes` for the codegen-hint attributes
+    /// (`#[inline]`, `#[inline(always)]`, `#[inline(never)]`, `#[cold]`)
+    /// and return the resolved `(inline_hint, is_cold)` pair. Mirrors
+    /// the `#[track_caller]` parser/resolver split: arg-shape and
+    /// intra-function conflicts are diagnosed here at parse so the user
+    /// sees the malformed/contradictory shape immediately; placement
+    /// (rejected on closures, foreign-fn decls, whole impl blocks, and
+    /// non-fn items) lives in the resolver/parser-expr layers.
+    ///
+    /// Diagnostics emitted here:
+    /// - `E_MALFORMED_ATTRIBUTE_ARGS` — `#[inline(foo)]`,
+    ///   `#[inline(always, never)]`, `#[inline = "x"]`, `#[cold(...)]`.
+    /// - `E_INLINE_HINT_CONFLICT` — two *different* inline-axis
+    ///   attributes on one function (e.g. `#[inline]` + `#[inline(never)]`).
+    ///   Repeating the *same* inline-axis attribute is tolerated here
+    ///   (the general attribute checker owns `E_DUPLICATE_ATTRIBUTE`).
+    /// - `E_COLD_INLINE_ALWAYS_CONFLICT` — `#[cold]` + `#[inline(always)]`.
+    ///   Every other `#[cold]` + inline combination is legal.
+    ///
+    /// See design.md § Codegen Hint Attributes.
+    pub(crate) fn scan_codegen_hint_attrs(
+        &mut self,
+        attributes: &[Attribute],
+    ) -> (Option<crate::ast::InlineHint>, bool) {
+        use crate::ast::{ExprKind, InlineHint};
+
+        // First inline-axis attribute seen, with its display form and span.
+        let mut inline: Option<(InlineHint, &'static str, Span)> = None;
+        // Span of the `#[inline(always)]` occurrence, for the cold conflict.
+        let mut always_span: Option<Span> = None;
+        let mut is_cold = false;
+
+        let display = |h: InlineHint| match h {
+            InlineHint::Default => "`#[inline]`",
+            InlineHint::Always => "`#[inline(always)]`",
+            InlineHint::Never => "`#[inline(never)]`",
+        };
+
+        for attr in attributes {
+            if attr.is_bare("inline") {
+                // Resolve the inline-axis variant from the arg shape.
+                let hint = if attr.string_value.is_some() {
+                    self.push_malformed_inline(&attr.span);
+                    continue;
+                } else if attr.args.is_empty() {
+                    InlineHint::Default
+                } else if attr.args.len() == 1 && attr.args[0].name.is_none() {
+                    match attr.args[0].value.as_ref().map(|e| &e.kind) {
+                        Some(ExprKind::Identifier(s)) if s == "always" => InlineHint::Always,
+                        Some(ExprKind::Identifier(s)) if s == "never" => InlineHint::Never,
+                        Some(ExprKind::Path { segments, .. })
+                            if segments.len() == 1 && segments[0] == "always" =>
+                        {
+                            InlineHint::Always
+                        }
+                        Some(ExprKind::Path { segments, .. })
+                            if segments.len() == 1 && segments[0] == "never" =>
+                        {
+                            InlineHint::Never
+                        }
+                        _ => {
+                            self.push_malformed_inline(&attr.span);
+                            continue;
+                        }
+                    }
+                } else {
+                    self.push_malformed_inline(&attr.span);
+                    continue;
+                };
+                if hint == InlineHint::Always {
+                    always_span = Some(attr.span.clone());
+                }
+                match &inline {
+                    None => inline = Some((hint, display(hint), attr.span.clone())),
+                    Some((prev, prev_disp, _)) if *prev != hint => {
+                        // Two different inline-axis attributes — mutually
+                        // exclusive. Anchor at the second; name both.
+                        self.errors.push(super::ParseError {
+                            message: format!(
+                                "error[E_INLINE_HINT_CONFLICT]: {prev_disp} and {} are \
+                                 mutually exclusive — keep only the inlining hint you mean",
+                                display(hint),
+                            ),
+                            span: attr.span.clone(),
+                        });
+                    }
+                    // Same inline-axis attribute repeated: tolerated here;
+                    // E_DUPLICATE_ATTRIBUTE belongs to the general checker.
+                    Some(_) => {}
+                }
+            } else if attr.is_bare("cold") {
+                if !attr.args.is_empty() || attr.string_value.is_some() {
+                    self.errors.push(super::ParseError {
+                        message: "error[E_MALFORMED_ATTRIBUTE_ARGS]: `#[cold]` accepts no \
+                                  arguments — write it as a bare `#[cold]`"
+                            .to_string(),
+                        span: attr.span.clone(),
+                    });
+                    continue;
+                }
+                is_cold = true;
+            }
+        }
+
+        // Cross-axis conflict: `#[cold]` + `#[inline(always)]`.
+        if is_cold {
+            if let Some(span) = always_span {
+                self.errors.push(super::ParseError {
+                    message: "error[E_COLD_INLINE_ALWAYS_CONFLICT]: `#[cold]` and \
+                              `#[inline(always)]` express opposite intents — a cold function \
+                              is rarely run, so force-inlining it everywhere contradicts the \
+                              hint. Keep `#[cold]` with `#[inline]`/`#[inline(never)]`, or drop \
+                              `#[cold]`"
+                        .to_string(),
+                    span,
+                });
+            }
+        }
+
+        (inline.map(|(h, _, _)| h), is_cold)
+    }
+
+    /// Push the shared `E_MALFORMED_ATTRIBUTE_ARGS` diagnostic for a
+    /// badly-shaped `#[inline(...)]` attribute.
+    fn push_malformed_inline(&mut self, span: &Span) {
+        self.errors.push(super::ParseError {
+            message: "error[E_MALFORMED_ATTRIBUTE_ARGS]: `#[inline]` takes no arguments or a \
+                      single `always` / `never` keyword — write `#[inline]`, \
+                      `#[inline(always)]`, or `#[inline(never)]`"
+                .to_string(),
+            span: span.clone(),
+        });
     }
 
     /// Scan `attributes` for `#[profile(P1, P2, ...)]` and return the

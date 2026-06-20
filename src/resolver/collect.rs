@@ -578,6 +578,67 @@ impl<'a> super::Resolver<'a> {
         }
     }
 
+    /// Reject the codegen-hint attributes (`#[inline]`,
+    /// `#[inline(always)]`, `#[inline(never)]`, `#[cold]`) on a position
+    /// where they are not valid. Mirrors [`Self::reject_track_caller_attr`]:
+    /// called once per non-fn item kind (struct, enum, union, trait
+    /// decl, trait alias, marker trait, impl block, module const, type
+    /// alias) and on their fields / variants. Function and impl-method
+    /// callers skip it — the hints are legal there. Foreign-function
+    /// *declarations* use [`Self::reject_codegen_hint_on_extern`]
+    /// instead, which carries the extern-specific diagnostic. Closures
+    /// are rejected earlier, at parse (`E_CODEGEN_HINT_ON_CLOSURE`).
+    ///
+    /// `target_kind` is the human-readable role name surfaced in the
+    /// message. See design.md § Codegen Hint Attributes > "Where they
+    /// may appear".
+    fn reject_codegen_hint_attrs(&mut self, attrs: &[Attribute], target_kind: &str) {
+        for attr in attrs {
+            if let Some(name) = attr.codegen_hint_name() {
+                self.errors.push(ResolveError {
+                    message: format!(
+                        "error[E_CODEGEN_HINT_INVALID_POSITION]: \
+                         `#[{name}]` is not valid on {target_kind}; codegen hints \
+                         attach to named functions — a free `fn`, an inherent or \
+                         trait-impl method, a trait method declaration, an \
+                         `extern \"C\" fn` definition, or a `Drop` destructor. To \
+                         hint every method of an `impl` block, annotate each method \
+                         (block-level shorthand is post-v1).",
+                    ),
+                    span: attr.span.clone(),
+                    kind: ResolveErrorKind::CodegenHintInvalidTarget,
+                    suggestion: None,
+                    replacement: None,
+                    stub_hint: None,
+                });
+            }
+        }
+    }
+
+    /// Reject the codegen-hint attributes on a foreign-function
+    /// declaration inside `unsafe extern { ... }`. There is no
+    /// Kāra-side body to inline, so the hints cannot apply.
+    fn reject_codegen_hint_on_extern(&mut self, attrs: &[Attribute]) {
+        for attr in attrs {
+            if let Some(name) = attr.codegen_hint_name() {
+                self.errors.push(ResolveError {
+                    message: format!(
+                        "error[E_CODEGEN_HINT_ON_EXTERN_DECL]: \
+                         `#[{name}]` cannot apply to a foreign-function declaration; \
+                         there is no Kāra-side body to inline. The hint belongs on a \
+                         Kāra function definition — including an `extern \"C\" fn name(...) \
+                         {{ ... }}` *definition* with a body.",
+                    ),
+                    span: attr.span.clone(),
+                    kind: ResolveErrorKind::CodegenHintOnExternDecl,
+                    suggestion: None,
+                    replacement: None,
+                    stub_hint: None,
+                });
+            }
+        }
+    }
+
     /// Reject `#[profile(...)]` placed on an item kind that doesn't
     /// support it. Slice 1+2 of v60 item entry at line 499 — the
     /// attribute asserts function-level profile compatibility and is
@@ -732,6 +793,7 @@ impl<'a> super::Resolver<'a> {
             self.reject_non_exhaustive_attr(&s.attributes, "private struct");
         }
         self.reject_track_caller_attr(&s.attributes, "struct");
+        self.reject_codegen_hint_attrs(&s.attributes, "struct");
         self.reject_profile_attr(&s.attributes, "struct");
         // Field-level `#[non_exhaustive]` is post-v1 (Rust accepts it
         // on fields too; we ship type-level only). Reject so users get
@@ -741,6 +803,7 @@ impl<'a> super::Resolver<'a> {
         for field in &s.fields {
             self.reject_non_exhaustive_attr(&field.attributes, "struct field");
             self.reject_track_caller_attr(&field.attributes, "struct field");
+            self.reject_codegen_hint_attrs(&field.attributes, "struct field");
             self.reject_profile_attr(&field.attributes, "struct field");
             self.reject_deprecated_on_field(&field.attributes);
         }
@@ -802,10 +865,12 @@ impl<'a> super::Resolver<'a> {
             }
         }
         self.reject_track_caller_attr(&u.attributes, "union");
+        self.reject_codegen_hint_attrs(&u.attributes, "union");
         self.reject_profile_attr(&u.attributes, "union");
         for field in &u.fields {
             self.reject_non_exhaustive_attr(&field.attributes, "union field");
             self.reject_track_caller_attr(&field.attributes, "union field");
+            self.reject_codegen_hint_attrs(&field.attributes, "union field");
             self.reject_profile_attr(&field.attributes, "union field");
             self.reject_deprecated_on_field(&field.attributes);
         }
@@ -830,6 +895,7 @@ impl<'a> super::Resolver<'a> {
             self.reject_non_exhaustive_attr(&e.attributes, "private enum");
         }
         self.reject_track_caller_attr(&e.attributes, "enum");
+        self.reject_codegen_hint_attrs(&e.attributes, "enum");
         self.reject_profile_attr(&e.attributes, "enum");
         // Variant-level attribute placement validation —
         // `#[track_caller]` and `#[non_exhaustive]` are rejected on
@@ -838,6 +904,7 @@ impl<'a> super::Resolver<'a> {
         // and so is not rejected here.
         for variant in &e.variants {
             self.reject_track_caller_attr(&variant.attributes, "enum variant");
+            self.reject_codegen_hint_attrs(&variant.attributes, "enum variant");
             self.reject_profile_attr(&variant.attributes, "enum variant");
             self.reject_non_exhaustive_attr(&variant.attributes, "enum variant");
         }
@@ -891,6 +958,7 @@ impl<'a> super::Resolver<'a> {
         self.check_compiler_builtin_attr(&t.attributes, t.stdlib_origin);
         self.reject_non_exhaustive_attr(&t.attributes, "trait");
         self.reject_track_caller_attr(&t.attributes, "trait");
+        self.reject_codegen_hint_attrs(&t.attributes, "trait");
         self.reject_profile_attr(&t.attributes, "trait");
         // Trait-method-level attribute placement validation —
         // `#[track_caller]` IS legal (propagates to impls), so the
@@ -945,6 +1013,7 @@ impl<'a> super::Resolver<'a> {
     fn collect_trait_alias(&mut self, t: &TraitAliasDef) {
         self.reject_non_exhaustive_attr(&t.attributes, "trait alias");
         self.reject_track_caller_attr(&t.attributes, "trait alias");
+        self.reject_codegen_hint_attrs(&t.attributes, "trait alias");
         self.reject_profile_attr(&t.attributes, "trait alias");
         match self.table.define(
             t.name.clone(),
@@ -963,6 +1032,7 @@ impl<'a> super::Resolver<'a> {
     fn collect_marker_trait(&mut self, t: &MarkerTraitDef) {
         self.reject_non_exhaustive_attr(&t.attributes, "marker trait");
         self.reject_track_caller_attr(&t.attributes, "marker trait");
+        self.reject_codegen_hint_attrs(&t.attributes, "marker trait");
         self.reject_profile_attr(&t.attributes, "marker trait");
         // Marker traits register in the trait namespace alongside ordinary
         // traits; no methods to track, so the symbol carries an empty
@@ -1000,6 +1070,7 @@ impl<'a> super::Resolver<'a> {
         self.check_compiler_builtin_attr(&imp.attributes, false);
         self.reject_non_exhaustive_attr(&imp.attributes, "impl block");
         self.reject_track_caller_attr(&imp.attributes, "impl block");
+        self.reject_codegen_hint_attrs(&imp.attributes, "impl block");
         self.reject_profile_attr(&imp.attributes, "impl block");
         self.reject_deprecated_on_impl(&imp.attributes);
         // Methods are registered in type_methods, not global scope.
@@ -1091,6 +1162,7 @@ impl<'a> super::Resolver<'a> {
         // share the same "target kind" message shape.
         self.reject_non_exhaustive_attr(&c.attributes, "module const");
         self.reject_track_caller_attr(&c.attributes, "module const");
+        self.reject_codegen_hint_attrs(&c.attributes, "module const");
         self.reject_profile_attr(&c.attributes, "module const");
         match self.table.define(
             c.name.clone(),
@@ -1178,6 +1250,7 @@ impl<'a> super::Resolver<'a> {
         // (non_exhaustive invalid).
         self.reject_non_exhaustive_attr(&t.attributes, "type alias");
         self.reject_track_caller_attr(&t.attributes, "type alias");
+        self.reject_codegen_hint_attrs(&t.attributes, "type alias");
         self.reject_profile_attr(&t.attributes, "type alias");
         match self.table.define(
             t.name.clone(),
@@ -1547,6 +1620,9 @@ impl<'a> super::Resolver<'a> {
     }
 
     fn collect_extern_function(&mut self, e: &ExternFunction) {
+        // Codegen hints have no Kāra-side body to attach to on a foreign
+        // import — reject them with the extern-specific diagnostic.
+        self.reject_codegen_hint_on_extern(&e.attributes);
         if let Err(err) = self.table.define(
             e.name.clone(),
             SymbolKind::ExternFunction,

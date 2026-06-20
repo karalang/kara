@@ -681,6 +681,20 @@ pub enum ResolveErrorKind {
     /// design.md § Error Handling > "Stdlib panic-emitters report the
     /// caller's source location". `E0240`.
     TrackCallerInvalidTarget,
+    /// A codegen-hint attribute (`#[inline]`, `#[inline(always)]`,
+    /// `#[inline(never)]`, `#[cold]`) placed on an item that is not an
+    /// inlinable function body — a struct/enum/union/trait/impl-block/
+    /// const/type-alias, an enum variant, a field, or an entire `impl`
+    /// block. The hints attach per named function (free `fn`, inherent
+    /// / trait-impl method, trait method declaration, `extern "C" fn`
+    /// definition, `Drop` destructor). See design.md § Codegen Hint
+    /// Attributes > "Where they may appear". `E_CODEGEN_HINT_INVALID_POSITION`.
+    CodegenHintInvalidTarget,
+    /// A codegen-hint attribute placed on a foreign-function
+    /// *declaration* inside `unsafe extern { ... }`. There is no
+    /// Kāra-side body to inline; the compiler cannot reach inside a
+    /// foreign symbol. `E_CODEGEN_HINT_ON_EXTERN_DECL`.
+    CodegenHintOnExternDecl,
     /// `#[profile(...)]` placed on a non-`fn` item. The attribute
     /// asserts per-function profile compatibility and is fn-only at
     /// v1. Module-level placement is part of the spec but blocked on

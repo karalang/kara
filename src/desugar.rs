@@ -20,8 +20,75 @@ use crate::token::Span;
 /// parallel/destructuring-assignment desugar.
 pub fn desugar_program(program: &mut Program) {
     synthesize_default_impls(program);
+    propagate_codegen_hints(program);
     desugar_impl_trait_args_in_program(program);
     desugar_multi_assign_in_program(program);
+}
+
+// ── Codegen-hint trait → impl propagation ────────────────────────
+//
+// A codegen-hint attribute (`#[inline]` / `#[inline(always)]` /
+// `#[inline(never)]` / `#[cold]`) on a trait *method declaration*
+// applies to every impl of that method unless the impl carries its own
+// override — last-writer-wins, paralleling `#[track_caller]` (design.md
+// § Codegen Hint Attributes > "Where they may appear"). The two axes
+// (inline / cold) propagate independently: an impl that sets only its
+// own `#[inline(never)]` still inherits the trait's `#[cold]`.
+//
+// Trait resolution at this pre-resolve stage is by name only — the last
+// segment of the impl's `trait_name` path matched against `TraitDef`s in
+// the same program. That covers same-program trait + impl (the common
+// case and the v1 floor); cross-package trait hints are not propagated
+// here (additive-later, alongside cross-package IR inlining).
+fn propagate_codegen_hints(program: &mut Program) {
+    use std::collections::HashMap;
+
+    // trait name → (method name → (inline_hint, is_cold)), only for
+    // trait methods that actually carry a hint.
+    let mut trait_hints: HashMap<String, HashMap<String, (Option<InlineHint>, bool)>> =
+        HashMap::new();
+    for item in &program.items {
+        if let Item::TraitDef(t) = item {
+            for ti in &t.items {
+                if let TraitItem::Method(m) = ti {
+                    if m.inline_hint.is_some() || m.is_cold {
+                        trait_hints
+                            .entry(t.name.clone())
+                            .or_default()
+                            .insert(m.name.clone(), (m.inline_hint, m.is_cold));
+                    }
+                }
+            }
+        }
+    }
+    if trait_hints.is_empty() {
+        return;
+    }
+
+    for item in &mut program.items {
+        let Item::ImplBlock(imp) = item else { continue };
+        let Some(trait_path) = &imp.trait_name else {
+            continue;
+        };
+        let Some(trait_name) = trait_path.segments.last() else {
+            continue;
+        };
+        let Some(methods) = trait_hints.get(trait_name) else {
+            continue;
+        };
+        for ii in &mut imp.items {
+            if let ImplItem::Method(m) = ii {
+                if let Some(&(hint, cold)) = methods.get(&m.name) {
+                    if m.inline_hint.is_none() {
+                        m.inline_hint = hint;
+                    }
+                    if !m.is_cold {
+                        m.is_cold = cold;
+                    }
+                }
+            }
+        }
+    }
 }
 
 // ── `#[derive(Default)]` → synthetic `default()` assoc fn ────────
@@ -273,6 +340,8 @@ fn make_default_impl(type_name: &str, body: Expr, span: Span) -> Item {
         deprecation: None,
         unstable: None,
         is_track_caller: false,
+        inline_hint: None,
+        is_cold: false,
         lint_overrides: Vec::new(),
         profile_compat: Vec::new(),
         abi: None,

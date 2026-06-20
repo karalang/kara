@@ -30,6 +30,40 @@ impl Attribute {
     pub fn is_bare(&self, name: &str) -> bool {
         self.path.len() == 1 && self.path[0] == name
     }
+
+    /// Return the display name (`"inline"`, `"inline(always)"`,
+    /// `"inline(never)"`, `"cold"`) iff this attribute is one of the
+    /// codegen-hint attributes (design.md § Codegen Hint Attributes),
+    /// else `None`. Classifies by surface shape only — arg-shape
+    /// validation and conflict detection live in the parser scan
+    /// (`scan_codegen_hint_attrs`); a malformed `#[inline(bogus)]`
+    /// still classifies as `"inline"` here so placement gates can name
+    /// it. Used by the resolver placement checks and the parser's
+    /// closure-position check.
+    pub fn codegen_hint_name(&self) -> Option<&'static str> {
+        use crate::ast::ExprKind;
+        if self.is_bare("cold") {
+            return Some("cold");
+        }
+        if self.is_bare("inline") {
+            if self.args.len() == 1 && self.args[0].name.is_none() {
+                let ident = match self.args[0].value.as_ref().map(|e| &e.kind) {
+                    Some(ExprKind::Identifier(s)) => Some(s.as_str()),
+                    Some(ExprKind::Path { segments, .. }) if segments.len() == 1 => {
+                        Some(segments[0].as_str())
+                    }
+                    _ => None,
+                };
+                return Some(match ident {
+                    Some("always") => "inline(always)",
+                    Some("never") => "inline(never)",
+                    _ => "inline",
+                });
+            }
+            return Some("inline");
+        }
+        None
+    }
 }
 
 #[derive(Debug, Clone)]

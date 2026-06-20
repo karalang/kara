@@ -648,7 +648,31 @@ impl super::Parser {
             Token::Pound => {
                 let attr_start = self.current_span();
                 let attributes = self.parse_attributes();
+                // A codegen-hint attribute (`#[inline]` / `#[inline(always)]`
+                // / `#[inline(never)]` / `#[cold]`) is only valid on a named
+                // function; a closure is not one (closures are inlined by the
+                // dispatch lowering). Detect the closure that follows and
+                // reject with the focused diagnostic, then recover by parsing
+                // the closure so the rest of the expression still parses.
+                let next_is_closure = self.peeks_closure_start();
+                let mut recover_closure = false;
                 for attr in &attributes {
+                    if next_is_closure {
+                        if let Some(name) = attr.codegen_hint_name() {
+                            recover_closure = true;
+                            self.errors.push(ParseError {
+                                message: format!(
+                                    "error[E_CODEGEN_HINT_ON_CLOSURE]: `#[{name}]` cannot \
+                                     apply to a closure; codegen hints attach to named \
+                                     functions. Closures are inlined by the dispatch \
+                                     lowering when they cross a closure-typed parameter — \
+                                     move the hint onto a named `fn` if you need it."
+                                ),
+                                span: attr.span.clone(),
+                            });
+                            continue;
+                        }
+                    }
                     if !attr.is_bare("par_unordered") {
                         let name = attr.path.join("::");
                         self.errors.push(ParseError {
@@ -661,6 +685,11 @@ impl super::Parser {
                             span: attr.span.clone(),
                         });
                     }
+                }
+                if recover_closure {
+                    // Attributes are consumed; re-enter the prefix parser to
+                    // parse the closure expression that follows.
+                    return self.parse_prefix();
                 }
                 match self.peek_token() {
                     Token::While => self.parse_while_expr_with_label_and_attrs(None, attributes),
@@ -1142,6 +1171,27 @@ impl super::Parser {
                 attributes,
             },
         })
+    }
+
+    /// True iff the token stream at the cursor begins a closure
+    /// expression — a bare `|` / `||`, or one of the capture-mode
+    /// prefixes (`own` / `ref` / `mut ref` / `move`) immediately
+    /// followed by `|` / `||`. Mirrors the closure-dispatch arms in
+    /// [`Self::parse_prefix`]; used to give a codegen hint placed in
+    /// front of a closure the focused `E_CODEGEN_HINT_ON_CLOSURE`
+    /// diagnostic instead of the generic loop-attribute error.
+    fn peeks_closure_start(&self) -> bool {
+        match self.peek_token() {
+            Token::Pipe | Token::PipePipe => true,
+            Token::Own | Token::Ref | Token::Move => {
+                matches!(self.peek_token_at(1), Token::Pipe | Token::PipePipe)
+            }
+            Token::Mut => {
+                matches!(self.peek_token_at(1), Token::Ref)
+                    && matches!(self.peek_token_at(2), Token::Pipe | Token::PipePipe)
+            }
+            _ => false,
+        }
     }
 
     fn parse_closure(

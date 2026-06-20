@@ -227,6 +227,24 @@ pub struct Function {
     /// attribute takes none — and the resolver rejects placement on
     /// items that are not `fn` declarations.
     pub is_track_caller: bool,
+    /// Inlining-axis codegen hint declared on this function —
+    /// `#[inline]` → `Some(InlineHint::Default)`, `#[inline(always)]` →
+    /// `Some(InlineHint::Always)`, `#[inline(never)]` →
+    /// `Some(InlineHint::Never)`, absent → `None`. The parser scan
+    /// validates the arg shape and rejects intra-axis conflicts
+    /// (`E_INLINE_HINT_CONFLICT`); codegen lowers the hint to the
+    /// matching LLVM function attribute (`inlinehint` / `alwaysinline`
+    /// / `noinline`). A hint on a trait method declaration propagates
+    /// to every impl method that does not set its own (see
+    /// [`crate::desugar`]). See design.md § Codegen Hint Attributes.
+    pub inline_hint: Option<InlineHint>,
+    /// `#[cold]` declared on this function — the hot/cold placement
+    /// axis, orthogonal to [`Function::inline_hint`]. Lowered to the
+    /// LLVM `cold` function attribute. `#[cold]` + `#[inline(always)]`
+    /// is rejected at parse (`E_COLD_INLINE_ALWAYS_CONFLICT`); every
+    /// other inline/cold combination is legal. Propagates from a trait
+    /// method declaration to non-overriding impls like `inline_hint`.
+    pub is_cold: bool,
     /// Lint-level overrides declared at this function via
     /// `#[allow(NAME)]` / `#[warn(NAME)]` / `#[deny(NAME)]` /
     /// `#[expect(NAME)]`. Each attribute produces one entry per
@@ -696,6 +714,32 @@ pub struct TraitMethod {
     /// explicitly drops it. Parsed here so the impl coherence pass
     /// can propagate the flag to impl methods (slice 4 codegen).
     pub is_track_caller: bool,
+    /// Inlining-axis codegen hint on this trait method declaration —
+    /// see [`Function::inline_hint`]. Propagates to every impl method
+    /// that does not declare its own inline hint (last-writer-wins,
+    /// parallels `#[track_caller]`); the propagation runs in
+    /// [`crate::desugar::propagate_codegen_hints`].
+    pub inline_hint: Option<InlineHint>,
+    /// `#[cold]` on this trait method declaration — see
+    /// [`Function::is_cold`]. Propagates to non-overriding impls.
+    pub is_cold: bool,
+}
+
+/// The inlining axis of the codegen-hint attributes (design.md §
+/// Codegen Hint Attributes). The three values are mutually exclusive —
+/// the parser rejects two inline-axis attributes on one function with
+/// `E_INLINE_HINT_CONFLICT`. Orthogonal to the `#[cold]` hot/cold axis,
+/// which lives in a separate `is_cold: bool`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InlineHint {
+    /// `#[inline]` — a non-binding suggestion to inline (LLVM `inlinehint`).
+    Default,
+    /// `#[inline(always)]` — inline at every site where technically
+    /// possible (LLVM `alwaysinline`).
+    Always,
+    /// `#[inline(never)]` — keep a real call frame at every site (LLVM
+    /// `noinline`).
+    Never,
 }
 
 // ── Impl Blocks ──────────────────────────────────────────────────

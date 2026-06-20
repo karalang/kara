@@ -347,6 +347,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let fn_val = self.module.add_function(&func.name, fn_type, linkage);
         self.apply_linker_attrs(fn_val, &func.attributes);
         self.emit_param_alias_attrs(fn_val, func);
+        self.emit_codegen_hint_attrs(fn_val, func);
 
         // Phase-7 line 5 sub-item 1 — hot-swap slot registration.
         // When `--enable-hot-swap` is active, every user-defined `pub fn`
@@ -433,6 +434,36 @@ impl<'ctx> super::Codegen<'ctx> {
             fn_val.add_attribute(
                 inkwell::attributes::AttributeLoc::Param(i as u32),
                 self.context.create_enum_attribute(noalias_kind, 0),
+            );
+        }
+    }
+
+    /// Lower the codegen-hint attributes (`#[inline]`,
+    /// `#[inline(always)]`, `#[inline(never)]`, `#[cold]`) to their LLVM
+    /// function-attribute equivalents. The inline axis maps
+    /// `Default → inlinehint`, `Always → alwaysinline`,
+    /// `Never → noinline`; `#[cold]` maps to `cold`. The two axes are
+    /// independent and both may be present (`#[cold] #[inline(never)]`
+    /// is the canonical "definitely cold, definitely out of line" pair).
+    /// These are advisory at the LLVM level — reported behavior, not
+    /// guaranteed semantics (design.md § Codegen Hint Attributes).
+    fn emit_codegen_hint_attrs(&self, fn_val: FunctionValue<'ctx>, func: &Function) {
+        let mut attrs: Vec<&'static str> = Vec::new();
+        match func.inline_hint {
+            Some(InlineHint::Default) => attrs.push("inlinehint"),
+            Some(InlineHint::Always) => attrs.push("alwaysinline"),
+            Some(InlineHint::Never) => attrs.push("noinline"),
+            None => {}
+        }
+        if func.is_cold {
+            attrs.push("cold");
+        }
+        for name in attrs {
+            let kind = inkwell::attributes::Attribute::get_named_enum_kind_id(name);
+            debug_assert!(kind != 0, "{name} attribute kind-id must resolve");
+            fn_val.add_attribute(
+                inkwell::attributes::AttributeLoc::Function,
+                self.context.create_enum_attribute(kind, 0),
             );
         }
     }

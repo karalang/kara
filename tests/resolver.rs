@@ -4032,27 +4032,23 @@ fn query_resolving_attribute_propagates_through_pipeline_without_diagnostic() {
 }
 
 #[test]
-fn query_resolution_conflict_inline_and_cold_on_same_fn() {
-    // Phase-8 stdlib-floor § Compiler queries channel sub-item 5.
-    // `#[inline]` + `#[cold]` resolve the same compiler query (the
-    // inlining-decision query, P1.3) in conflicting ways. Both
-    // attributes are individually recognized at v1 (reserved for
-    // semantic enforcement when P1.3 ships); the conflict diagnostic
-    // fires regardless.
-    let errors = resolve_errors("#[inline]\n#[cold]\nfn hot() {}\n");
-    let conflict = errors
-        .iter()
-        .find(|e| matches!(e.kind, ResolveErrorKind::QueryResolutionConflict))
-        .expect("expected E_QUERY_RESOLUTION_CONFLICT for #[inline] + #[cold]");
+fn inline_and_cold_on_same_fn_is_legal() {
+    // design.md § Codegen Hint Attributes makes `#[cold]` + `#[inline]`
+    // an explicitly legal combination ("definitely cold, but small
+    // enough to suggest inlining"). The codegen-hint semantics replace
+    // the old reserved `cold`↔`inline` query-conflict entry, so neither
+    // the query-conflict diagnostic nor any codegen-hint placement error
+    // may fire here.
+    let result = resolve_ok("#[inline]\n#[cold]\nfn hot() {}\n");
     assert!(
-        conflict.message.contains("`#[cold]`") && conflict.message.contains("`#[inline]`"),
-        "diagnostic should name both attributes; got: {}",
-        conflict.message,
-    );
-    assert!(
-        conflict.message.contains("E_QUERY_RESOLUTION_CONFLICT"),
-        "diagnostic should carry its error code in the message text; got: {}",
-        conflict.message,
+        !result.errors.iter().any(|e| matches!(
+            e.kind,
+            ResolveErrorKind::QueryResolutionConflict
+                | ResolveErrorKind::CodegenHintInvalidTarget
+                | ResolveErrorKind::CodegenHintOnExternDecl
+        )),
+        "#[inline] + #[cold] must resolve cleanly; got: {:?}",
+        result.errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
     );
 }
 
@@ -4705,5 +4701,150 @@ enum E { #[default] A, B }
         )),
         "expected no #[default] diagnostics, got: {:?}",
         result.errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+// ── Codegen hint attributes (#[inline] / #[cold]) — placement ──────
+//
+// design.md § Codegen Hint Attributes > "Where they may appear". The
+// resolver gates placement: hints are legal on functions, impl methods,
+// and trait method declarations; rejected on non-fn items
+// (E_CODEGEN_HINT_INVALID_POSITION), whole impl blocks, and foreign-fn
+// declarations (E_CODEGEN_HINT_ON_EXTERN_DECL). Closures are rejected
+// earlier at parse (covered in tests/parser.rs).
+
+fn has_codegen_hint_position_error(errs: &[ResolveError]) -> bool {
+    errs.iter().any(|e| {
+        matches!(
+            e.kind,
+            ResolveErrorKind::CodegenHintInvalidTarget | ResolveErrorKind::CodegenHintOnExternDecl
+        )
+    })
+}
+
+#[test]
+fn codegen_hint_accepted_on_function() {
+    let result = resolve_ok("#[inline]\n#[cold]\nfn f() {}\n");
+    assert!(!has_codegen_hint_position_error(&result.errors));
+}
+
+#[test]
+fn codegen_hint_accepted_on_impl_method() {
+    let parsed = parse(
+        "struct Foo { x: i64 }\n\
+         impl Foo { #[inline(always)] fn get(ref self) -> i64 { self.x } }",
+    );
+    assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+    let errs = resolve(&parsed.program).errors;
+    assert!(
+        !has_codegen_hint_position_error(&errs),
+        "impl method should accept codegen hints; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn codegen_hint_accepted_on_trait_method_decl() {
+    let parsed = parse("trait T { #[cold] fn slow(ref self); }");
+    assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+    let errs = resolve(&parsed.program).errors;
+    assert!(!has_codegen_hint_position_error(&errs));
+}
+
+#[test]
+fn inline_rejected_on_struct() {
+    let errs = resolve_errors("#[inline]\nstruct S { x: i64 }\n");
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == ResolveErrorKind::CodegenHintInvalidTarget
+                && e.message.contains("struct")),
+        "expected E_CODEGEN_HINT_INVALID_POSITION on struct; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn cold_rejected_on_enum() {
+    let errs = resolve_errors("#[cold]\nenum E { A, B }\n");
+    assert!(errs
+        .iter()
+        .any(|e| e.kind == ResolveErrorKind::CodegenHintInvalidTarget));
+}
+
+#[test]
+fn inline_rejected_on_whole_impl_block() {
+    let errs = resolve_errors(
+        "struct Foo { x: i64 }\n\
+         #[inline]\n\
+         impl Foo { fn get(ref self) -> i64 { self.x } }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == ResolveErrorKind::CodegenHintInvalidTarget
+                && e.message.contains("impl block")),
+        "expected E_CODEGEN_HINT_INVALID_POSITION on impl block; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn inline_rejected_on_extern_decl() {
+    let errs = resolve_errors("unsafe extern \"C\" {\n  #[inline] fn ext_fn(x: i64) -> i64;\n}");
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == ResolveErrorKind::CodegenHintOnExternDecl),
+        "expected E_CODEGEN_HINT_ON_EXTERN_DECL; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+// ── Codegen hint trait → impl propagation (desugar) ────────────────
+
+fn impl_method_hint(
+    prog: &karac::ast::Program,
+    method: &str,
+) -> (Option<karac::ast::InlineHint>, bool) {
+    use karac::ast::{ImplItem, Item};
+    for item in &prog.items {
+        if let Item::ImplBlock(imp) = item {
+            for ii in &imp.items {
+                if let ImplItem::Method(m) = ii {
+                    if m.name == method {
+                        return (m.inline_hint, m.is_cold);
+                    }
+                }
+            }
+        }
+    }
+    panic!("impl method `{method}` not found");
+}
+
+#[test]
+fn inline_hint_propagates_from_trait_to_impl() {
+    let (prog, _) = desugar_and_resolve_ok(
+        "trait Greet { #[inline] #[cold] fn hi(ref self); }\n\
+         struct P { x: i64 }\n\
+         impl Greet for P { fn hi(ref self) {} }",
+    );
+    let (hint, cold) = impl_method_hint(&prog, "hi");
+    assert_eq!(hint, Some(karac::ast::InlineHint::Default));
+    assert!(cold, "impl method should inherit trait's #[cold]");
+}
+
+#[test]
+fn impl_override_wins_over_trait_inline_hint() {
+    // The impl declares its own inline axis; it overrides the trait's
+    // (last-writer-wins). The cold axis, which the impl leaves unset,
+    // still inherits.
+    let (prog, _) = desugar_and_resolve_ok(
+        "trait Greet { #[inline] #[cold] fn hi(ref self); }\n\
+         struct P { x: i64 }\n\
+         impl Greet for P { #[inline(never)] fn hi(ref self) {} }",
+    );
+    let (hint, cold) = impl_method_hint(&prog, "hi");
+    assert_eq!(hint, Some(karac::ast::InlineHint::Never));
+    assert!(
+        cold,
+        "cold axis still inherited when impl only overrides inline axis"
     );
 }

@@ -154,17 +154,21 @@ const RECOGNIZED_BARE_ATTRIBUTES: &[&str] = &[
     "prefer_rc",
     "specialize",
     "fork_at",
-    // Phase-8 stdlib-floor § Compiler queries channel sub-item 5 —
-    // P1.3 codegen-query resolution surface (phase-7-codegen.md
-    // line 25). Recognized + reserved at v1; semantic enforcement
-    // lands with the codegen hooks in P1.3. Pairs with `cold` in
-    // the [`QUERY_RESOLUTION_CONFLICT_PAIRS`] table for the
-    // multi-resolution-conflict diagnostic.
+    // Codegen hint attributes (design.md § Codegen Hint Attributes;
+    // phase-8-stdlib-floor.md "Codegen hint attributes"). `inline` /
+    // `cold` carry real semantics now: the parser resolves them into
+    // `Function::inline_hint` / `Function::is_cold`, the resolver gates
+    // placement, and codegen lowers them to the LLVM `inlinehint` /
+    // `alwaysinline` / `noinline` / `cold` function attributes. Their
+    // conflict rules (`E_INLINE_HINT_CONFLICT` / `E_COLD_INLINE_ALWAYS_CONFLICT`)
+    // live in the parser scan and supersede the old reserved
+    // `cold`↔`inline` query-conflict entry — `#[cold]` + `#[inline]` is
+    // a legal combination. `likely` / `unlikely` (branch hints) remain
+    // reserved-only at v1.
     "inline",
     "cold",
     "likely",
     "unlikely",
-    "inline(never)",
 ];
 
 /// Phase-8 stdlib-floor § Compiler queries channel sub-item 5.
@@ -176,12 +180,16 @@ const RECOGNIZED_BARE_ATTRIBUTES: &[&str] = &[
 /// to consider permutations.
 ///
 /// Conflict pairs at v1:
-///   * `cold` ↔ `inline` — inlining-decision query. P1.3 catalogue
-///     entry, phase-7-codegen.md line 25.
 ///   * `no_rc` ↔ `prefer_rc` — RC-fallback query. P1.1 catalogue
 ///     entry, src/ownership.rs:360.
-const QUERY_RESOLUTION_CONFLICT_PAIRS: &[(&str, &str)] =
-    &[("cold", "inline"), ("no_rc", "prefer_rc")];
+///
+/// The `cold` ↔ `inline` pair that once lived here was removed when the
+/// codegen-hint attributes gained real semantics: `#[cold]` + `#[inline]`
+/// is a legal combination (design.md § Codegen Hint Attributes), and the
+/// contradictory pairs (`#[inline]`+`#[inline(never)]`,
+/// `#[cold]`+`#[inline(always)]`, …) are diagnosed in the parser scan
+/// with their own focused error codes.
+const QUERY_RESOLUTION_CONFLICT_PAIRS: &[(&str, &str)] = &[("no_rc", "prefer_rc")];
 
 /// Compiler-reserved namespaces — the *first segment* of a multi-segment
 /// attribute path that the compiler claims for its own use. Members of

@@ -11340,3 +11340,145 @@ fn test_fstring_interp_spans_have_correct_line_column() {
         "beta",
     );
 }
+
+// ── Codegen hint attributes (#[inline] / #[cold]) — parser ──────────
+//
+// design.md § Codegen Hint Attributes. The parser resolves the four
+// attributes into `Function::inline_hint` (the mutually-exclusive
+// inlining axis) and `Function::is_cold` (the hot/cold axis), validates
+// arg shapes, and diagnoses intra-function conflicts at parse:
+//   * E_INLINE_HINT_CONFLICT          — two different inline-axis attrs
+//   * E_COLD_INLINE_ALWAYS_CONFLICT   — #[cold] + #[inline(always)]
+//   * E_MALFORMED_ATTRIBUTE_ARGS      — bad arg shape
+//   * E_CODEGEN_HINT_ON_CLOSURE       — hint in front of a closure expr
+
+fn first_fn(source: &str) -> Function {
+    match &parse_ok(source).items[0] {
+        Item::Function(f) => f.clone(),
+        other => panic!("expected Function, got {other:?}"),
+    }
+}
+
+#[test]
+fn inline_bare_sets_default_hint() {
+    let f = first_fn("#[inline]\nfn f() {}");
+    assert_eq!(f.inline_hint, Some(InlineHint::Default));
+    assert!(!f.is_cold);
+}
+
+#[test]
+fn inline_always_sets_always_hint() {
+    let f = first_fn("#[inline(always)]\nfn f() {}");
+    assert_eq!(f.inline_hint, Some(InlineHint::Always));
+}
+
+#[test]
+fn inline_never_sets_never_hint() {
+    let f = first_fn("#[inline(never)]\nfn f() {}");
+    assert_eq!(f.inline_hint, Some(InlineHint::Never));
+}
+
+#[test]
+fn cold_sets_flag() {
+    let f = first_fn("#[cold]\nfn f() {}");
+    assert!(f.is_cold);
+    assert_eq!(f.inline_hint, None);
+}
+
+#[test]
+fn cold_plus_inline_never_both_set_no_error() {
+    // The canonical "definitely cold, definitely out of line" pairing.
+    let (prog, errors) = parse_with_errors("#[cold]\n#[inline(never)]\nfn f() {}");
+    assert!(errors.is_empty(), "unexpected parse errors: {errors:?}");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("expected Function");
+    };
+    assert!(f.is_cold);
+    assert_eq!(f.inline_hint, Some(InlineHint::Never));
+}
+
+#[test]
+fn no_codegen_hint_defaults_to_none() {
+    let f = first_fn("fn f() {}");
+    assert_eq!(f.inline_hint, None);
+    assert!(!f.is_cold);
+}
+
+#[test]
+fn inline_always_and_never_conflict() {
+    let (_, errors) = parse_with_errors("#[inline(always)]\n#[inline(never)]\nfn f() {}");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_INLINE_HINT_CONFLICT")),
+        "expected E_INLINE_HINT_CONFLICT; got: {errors:?}",
+    );
+}
+
+#[test]
+fn inline_and_inline_never_conflict() {
+    let (_, errors) = parse_with_errors("#[inline]\n#[inline(never)]\nfn f() {}");
+    let conflict = errors
+        .iter()
+        .find(|e| e.message.contains("E_INLINE_HINT_CONFLICT"))
+        .expect("expected E_INLINE_HINT_CONFLICT");
+    assert!(
+        conflict.message.contains("`#[inline]`") && conflict.message.contains("`#[inline(never)]`"),
+        "diagnostic should name both attributes; got: {}",
+        conflict.message,
+    );
+}
+
+#[test]
+fn cold_and_inline_always_conflict() {
+    let (_, errors) = parse_with_errors("#[cold]\n#[inline(always)]\nfn f() {}");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_COLD_INLINE_ALWAYS_CONFLICT")),
+        "expected E_COLD_INLINE_ALWAYS_CONFLICT; got: {errors:?}",
+    );
+}
+
+#[test]
+fn inline_with_bogus_arg_is_malformed() {
+    let (_, errors) = parse_with_errors("#[inline(sideways)]\nfn f() {}");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_MALFORMED_ATTRIBUTE_ARGS")),
+        "expected E_MALFORMED_ATTRIBUTE_ARGS; got: {errors:?}",
+    );
+}
+
+#[test]
+fn cold_with_args_is_malformed() {
+    let (_, errors) = parse_with_errors("#[cold(1)]\nfn f() {}");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_MALFORMED_ATTRIBUTE_ARGS")),
+        "expected E_MALFORMED_ATTRIBUTE_ARGS; got: {errors:?}",
+    );
+}
+
+#[test]
+fn inline_on_closure_rejected() {
+    let (_, errors) = parse_with_errors("fn f() { let g = #[inline] |x: i64| x; }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_CODEGEN_HINT_ON_CLOSURE")),
+        "expected E_CODEGEN_HINT_ON_CLOSURE; got: {errors:?}",
+    );
+}
+
+#[test]
+fn inline_on_trait_method_decl_sets_hint() {
+    let prog = parse_ok("trait T {\n  #[inline]\n  fn m(ref self);\n}");
+    let Item::TraitDef(t) = &prog.items[0] else {
+        panic!("expected TraitDef");
+    };
+    let m = trait_methods(t)[0];
+    assert_eq!(m.inline_hint, Some(InlineHint::Default));
+}

@@ -2752,6 +2752,12 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::resolver::ResolveErrorKind::ContinueOnBlockLabel => "E0238",
                 crate::resolver::ResolveErrorKind::NonExhaustiveInvalidTarget => "E0239",
                 crate::resolver::ResolveErrorKind::TrackCallerInvalidTarget => "E0240",
+                crate::resolver::ResolveErrorKind::CodegenHintInvalidTarget => {
+                    "E_CODEGEN_HINT_INVALID_POSITION"
+                }
+                crate::resolver::ResolveErrorKind::CodegenHintOnExternDecl => {
+                    "E_CODEGEN_HINT_ON_EXTERN_DECL"
+                }
                 crate::resolver::ResolveErrorKind::DeprecatedOnImpl => "E0241",
                 crate::resolver::ResolveErrorKind::DeprecatedOnField => "E0242",
                 crate::resolver::ResolveErrorKind::UnknownAttribute => "E0243",
@@ -7401,6 +7407,8 @@ fn resolve_error_code(kind: &ResolveErrorKind) -> &'static str {
         ResolveErrorKind::ContinueOnBlockLabel => "E0238",
         ResolveErrorKind::NonExhaustiveInvalidTarget => "E0239",
         ResolveErrorKind::TrackCallerInvalidTarget => "E0240",
+        ResolveErrorKind::CodegenHintInvalidTarget => "E_CODEGEN_HINT_INVALID_POSITION",
+        ResolveErrorKind::CodegenHintOnExternDecl => "E_CODEGEN_HINT_ON_EXTERN_DECL",
         ResolveErrorKind::DeprecatedOnImpl => "E0241",
         ResolveErrorKind::DeprecatedOnField => "E0242",
         ResolveErrorKind::UnknownAttribute => "E0243",
@@ -9859,6 +9867,8 @@ fn lower_test_case_to_function(tc: &crate::ast::TestCase, mangled_name: String) 
         deprecation: None,
         unstable: None,
         is_track_caller: false,
+        inline_hint: None,
+        is_cold: false,
         lint_overrides: Vec::new(),
         profile_compat: Vec::new(),
         abi: None,

@@ -1557,6 +1557,8 @@ fn stub_function(name: &str, span: &Span) -> Item {
         deprecation: None,
         unstable: None,
         is_track_caller: false,
+        inline_hint: None,
+        is_cold: false,
         lint_overrides: Vec::new(),
         profile_compat: Vec::new(),
         abi: None,
