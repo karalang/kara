@@ -1785,6 +1785,38 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_insert_value(agg, val, idx as u32, "field")
                     .unwrap()
                     .into_struct_value();
+                // Capture-inc for a non-fresh `Option[shared T]` field value —
+                // the non-shared peer of the shared-struct branch's inc above.
+                // An owned (non-`shared`) struct still carries an `Option[shared]`
+                // field by value (4-i64 conventional layout — niche-opt is a
+                // `shared`-only layout, so no niche path here). When the field
+                // value is an aliasing source (a local `tail` holding `Some(e)`,
+                // a param), the new struct becomes an independent owner of that
+                // inner chain and must inc; the source's own scope-exit
+                // `FreeInlineOptionPayload` dec then balances back to the
+                // construction-time count. Without it, `Block { tail: tail }`
+                // returned from a builder fn hands the caller an under-counted
+                // inner `Expr`, freed at end-of-builder-scope before the caller
+                // reads it (#48 — the self-hosted parser's value-struct `Block`
+                // tail SIGSEGV). Fresh values (`Some(node)`, a call move-out)
+                // already own their ref — skipped via `rhs_yields_fresh_ref`;
+                // a literal `None` has no inner to count.
+                let opt_inner_heap = self
+                    .struct_field_type_exprs
+                    .get(name)
+                    .and_then(|tes| tes.get(idx))
+                    .cloned()
+                    .and_then(|te| self.option_inner_shared_type_for_type_expr(&te))
+                    .map(|(_, info)| info.heap_type);
+                if let Some(inner_heap) = opt_inner_heap {
+                    let init_is_none = matches!(
+                        &field_init.value.kind,
+                        ExprKind::Identifier(n) if n == "None"
+                    );
+                    if !init_is_none && !self.rhs_yields_fresh_ref(&field_init.value) {
+                        self.emit_rc_inc_for_captured_option(val, inner_heap);
+                    }
+                }
                 // Move-aware suppression — same shape as the shared-
                 // struct branch above. The new struct aggregate carries
                 // the source's data pointer; suppress the source's

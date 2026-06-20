@@ -2363,6 +2363,53 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_owned_struct_option_shared_field_captured_from_builder() {
+        // #48 (phase-12 self-hosting, parser stage): an OWNED (non-`shared`)
+        // struct carrying an `Option[shared T]` field by value — the value-
+        // struct `Block { stmts, tail: Option[Expr], span }` shape — built in
+        // a helper and RETURNED, then wrapped in the shared enum and read,
+        // SIGSEGV'd at the tail read. The capture-inc for an `Option[shared]`
+        // field value was wired only into the SHARED-struct literal path
+        // (`compile_struct_init`); the non-shared path inserted the field
+        // without inc'ing, so the source local's scope-exit
+        // `FreeInlineOptionPayload` dec dropped the inner `Expr` to refcount 0
+        // and freed it before the caller read it (a use-after-free: the tail
+        // read garbage / crashed). `compile_struct_init`'s non-shared branch
+        // now mirrors the shared branch's `emit_rc_inc_for_captured_option`.
+        // The builder-fn return is essential to the repro — an inline literal
+        // in the same scope balances by luck; the cross-fn move exposes it.
+        if let Some(out) = run_program(
+            "struct Span { line: i64, column: i64, offset: i64, length: i64 }\n\
+             enum Stmt { Empty }\n\
+             shared enum Expr { Num(i64), Blk(Block), Error }\n\
+             struct Block { stmts: Vec[Stmt], tail: Option[Expr], span: Span }\n\
+             fn mk() -> Block {\n\
+                 let s: Vec[Stmt] = [];\n\
+                 let e = Expr.Num(7);\n\
+                 let tail: Option[Expr] = Some(e);\n\
+                 Block { stmts: s, tail: tail, span: Span { line: 0, column: 0, offset: 0, length: 5 } }\n\
+             }\n\
+             fn render_block(b: Block) -> String {\n\
+                 let Block { stmts, tail, span } = b;\n\
+                 match tail { Some(e) => render_expr(e), None => \"no-tail\".to_string() }\n\
+             }\n\
+             fn render_expr(e: Expr) -> String {\n\
+                 match e {\n\
+                     Num(n) => n.to_string(),\n\
+                     Blk(b) => render_block(b),\n\
+                     Error => \"error\".to_string(),\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let blk = mk();\n\
+                 println(render_expr(Expr.Blk(blk)));\n\
+             }",
+        ) {
+            assert_eq!(out, "7\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_match_variant_name_shared_across_enums_resolves_to_scrutinee() {
         // #39 (phase-12 self-hosting, parser stage): a bare variant name that
         // exists in MORE THAN ONE enum (`Float` in both a value `Tok` and a

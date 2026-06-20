@@ -2196,6 +2196,54 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_owned_struct_option_shared_field_captured_from_builder_no_uaf() {
+        // #48 (phase-12 self-hosting): an owned (non-`shared`) struct with an
+        // `Option[shared T]` field, built in a helper and returned, then read.
+        // The non-shared struct-literal path didn't capture-inc the field's
+        // inner RC handle (only the shared-struct path did), so the source
+        // local's scope-exit `FreeInlineOptionPayload` dec freed the inner
+        // `Expr` to refcount 0 before the caller read its tail — a
+        // heap-use-after-free (and an under-count → eventual double-free). The
+        // inner payload carries a ≥36-byte String so the freed-then-read access
+        // lands on a real heap block ASAN flags (and LSan would flag the leak
+        // if the count went the other way). Mirrors the codegen E2E
+        // `test_e2e_owned_struct_option_shared_field_captured_from_builder`.
+        assert_clean_asan_run(
+            r#"
+struct Span { line: i64, column: i64, offset: i64, length: i64 }
+enum Stmt { Empty }
+shared enum Expr { Str(String), Blk(Block), Error }
+struct Block { stmts: Vec[Stmt], tail: Option[Expr], span: Span }
+fn mk() -> Block {
+    let s: Vec[Stmt] = [];
+    let mut payload = String.new();
+    payload.push_str("owned-struct-option-shared-field-uaf-payload");
+    let e = Expr.Str(payload);
+    let tail: Option[Expr] = Some(e);
+    Block { stmts: s, tail: tail, span: Span { line: 0, column: 0, offset: 0, length: 5 } }
+}
+fn render_block(b: Block) -> String {
+    let Block { stmts, tail, span } = b;
+    match tail { Some(e) => render_expr(e), None => "no-tail".to_string() }
+}
+fn render_expr(e: Expr) -> String {
+    match e {
+        Str(s) => s,
+        Blk(b) => render_block(b),
+        Error => "error".to_string(),
+    }
+}
+fn main() {
+    let blk = mk();
+    println(render_expr(Expr.Blk(blk)));
+}
+"#,
+            &["owned-struct-option-shared-field-uaf-payload"],
+            "owned_struct_option_shared_field_captured_from_builder_no_uaf",
+        );
+    }
+
     // ── Vec: owned heap buffer, scope-exit free ───────────────────
     // Exercises `emit_scope_vec_cleanup` — the Vec's data pointer must be
     // freed when `v` goes out of scope at the end of `main`.
