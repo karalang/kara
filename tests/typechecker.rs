@@ -11134,6 +11134,66 @@ fn make[T: Default]() -> T {
     );
 }
 
+// ── `#[derive(Default)]` synthesizes `Type.default()` ───────────
+//
+// The synthesis runs in `desugar_program`, so these resolve-path tests
+// use the `typecheck_desugared_ok` helper (plain `typecheck_ok` skips
+// desugar and would never see the generated `default` assoc fn).
+
+#[test]
+fn test_derive_default_resolves_assoc_fn() {
+    // After desugar synthesis, `Config.default()` resolves and returns
+    // `Config` — no "no associated function 'default'" diagnostic.
+    typecheck_desugared_ok(
+        r#"
+#[derive(Default)]
+struct Config { timeout_ms: i64, verbose: bool, name: String }
+
+fn use_it() -> i64 {
+    let c = Config.default();
+    c.timeout_ms
+}
+"#,
+    );
+}
+
+#[test]
+fn test_derive_default_container_field_rejected() {
+    // A container/generic field type is out of v1 scope: the derive
+    // validator reports it cleanly rather than failing in codegen.
+    let errors = typecheck_errors(
+        r#"
+#[derive(Default)]
+struct Bad { items: Vec[i64] }
+"#,
+    );
+    assert!(
+        errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch
+            && e.message.contains("derives Default")
+            && e.message.contains("items")),
+        "expected clean non-Default field diagnostic, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_derive_default_non_default_field_rejected() {
+    // A nested struct field that is NOT itself Default is reported.
+    let errors = typecheck_errors(
+        r#"
+struct Plain { x: i64 }
+
+#[derive(Default)]
+struct Holder { p: Plain }
+"#,
+    );
+    assert!(
+        errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch
+            && e.message.contains("derives Default")
+            && e.message.contains("'p'")),
+        "expected non-Default field diagnostic for 'p', got: {errors:?}"
+    );
+}
+
 #[test]
 fn test_typeparam_assoc_fn_ambiguous_traits() {
     let errors = typecheck_errors(

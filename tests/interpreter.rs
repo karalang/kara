@@ -10266,6 +10266,108 @@ fn main() {
     assert_eq!(output, "5\n");
 }
 
+#[test]
+fn test_derive_default_struct_primitives() {
+    // `#[derive(Default)]` synthesizes `Config.default()` field-by-field:
+    // ints/floats → 0, bool → false, String → "". Book appendix C example.
+    let output = run(r#"
+#[derive(Default)]
+struct Config {
+    timeout_ms: i64,
+    ratio: f64,
+    verbose: bool,
+    name: String,
+    tag: char,
+}
+
+fn main() {
+    let c = Config.default();
+    println(c.timeout_ms);
+    println(c.ratio);
+    println(c.verbose);
+    println(c.name);
+    println(c.tag as i64);
+}
+"#);
+    assert_eq!(output, "0\n0\nfalse\n\n0\n");
+}
+
+#[test]
+fn test_derive_default_nested_struct() {
+    // A derive-Default field whose type also derives Default recurses
+    // through `Inner.default()` in declaration order.
+    let output = run(r#"
+#[derive(Default)]
+struct Inner { x: i64, y: i64 }
+
+#[derive(Default)]
+struct Outer { a: Inner, scale: i64 }
+
+fn main() {
+    let o = Outer.default();
+    println(o.a.x);
+    println(o.a.y);
+    println(o.scale);
+}
+"#);
+    assert_eq!(output, "0\n0\n0\n");
+}
+
+#[test]
+fn test_derive_default_enum_first_variant() {
+    // Enums default to the first declared variant, each field defaulted.
+    let output = run(r#"
+#[derive(Default)]
+enum Mode { Idle, Running(i64), Custom { level: i64 } }
+
+fn main() {
+    let m = Mode.default();
+    match m {
+        Mode.Idle => { println("idle"); }
+        Mode.Running(n) => { println(n); }
+        Mode.Custom { level } => { println(level); }
+    }
+}
+"#);
+    assert_eq!(output, "idle\n");
+}
+
+#[test]
+fn test_derive_default_enum_tuple_first_variant() {
+    // First variant carrying tuple fields → each tuple slot defaulted.
+    let output = run(r#"
+#[derive(Default)]
+enum Wrapped { Pair(i64, bool), Empty }
+
+fn main() {
+    let w = Wrapped.default();
+    match w {
+        Wrapped.Pair(n, b) => { println(n); println(b); }
+        Wrapped.Empty => { println("empty"); }
+    }
+}
+"#);
+    assert_eq!(output, "0\nfalse\n");
+}
+
+#[test]
+fn test_derive_default_user_impl_wins() {
+    // A hand-written `default` on a `#[derive(Default)]` type is not
+    // double-defined — the explicit impl is the one that runs.
+    let output = run(r#"
+#[derive(Default)]
+struct C { x: i64 }
+
+impl C { fn default() -> C { C { x: 99 } } }
+
+fn main() {
+    let c = C.default();
+    println(c.x);
+}
+"#);
+    assert_eq!(output, "99\n");
+}
+
 // ── Item 7: broad integration coverage ──────────────────────────
 
 #[test]

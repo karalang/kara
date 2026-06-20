@@ -78,6 +78,23 @@ mod codegen_tests {
         compile_to_ir(&parsed.program, None, None).expect("codegen failed")
     }
 
+    /// Like [`ir_for`] but runs `desugar_program` first, so AST-rewriting
+    /// pre-resolve passes (e.g. `#[derive(Default)]` → synthetic
+    /// `default()` impl) are reflected in the IR.
+    fn ir_for_desugared(src: &str) -> String {
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        karac::desugar_program(&mut parsed.program);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        compile_to_ir(&parsed.program, None, None).expect("codegen failed")
+    }
+
     /// Like [`ir_for`] but compiles with contract machinery stripped
     /// (design.md § Contracts: "stripped in release"). Race-free — forces the
     /// decision via the explicit codegen entry, not the process-global
@@ -17996,6 +18013,69 @@ fn main() {
         );
         if let Some(out) = out {
             assert_eq!(out.trim(), "99");
+        }
+    }
+
+    #[test]
+    fn test_ir_derive_default_assoc_fn_emitted() {
+        // `#[derive(Default)]` synthesizes an inherent `Config.default`
+        // impl in desugar; codegen emits it as the `Config.default`
+        // symbol, same as a hand-written impl.
+        let ir = ir_for_desugared(
+            r#"
+#[derive(Default)]
+struct Config { timeout_ms: i64, verbose: bool }
+fn main() {
+    let c = Config.default();
+    println(c.timeout_ms);
+}
+"#,
+        );
+        assert!(
+            ir.contains("@\"Config.default\"") || ir.contains("@Config.default"),
+            "expected synthesized Config.default in IR, got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_e2e_derive_default_struct() {
+        // End-to-end: derived `Config.default()` zero-fills primitive
+        // fields (book appendix C example).
+        let out = run_program(
+            r#"
+#[derive(Default)]
+struct Config { timeout_ms: i64, retries: i64, verbose: bool }
+fn main() {
+    let c = Config.default();
+    println(c.timeout_ms);
+    println(c.verbose);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "0\nfalse");
+        }
+    }
+
+    #[test]
+    fn test_e2e_derive_default_enum_first_variant() {
+        // Derived enum default selects the first declared variant.
+        let out = run_program(
+            r#"
+#[derive(Default)]
+enum Mode { Idle, Running(i64) }
+fn main() {
+    let m = Mode.default();
+    match m {
+        Mode.Idle => { println("idle"); }
+        Mode.Running(n) => { println(n); }
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "idle");
         }
     }
 

@@ -19,8 +19,294 @@ use crate::token::Span;
 /// Today: argument-position `impl Trait` desugar (slice 2) and
 /// parallel/destructuring-assignment desugar.
 pub fn desugar_program(program: &mut Program) {
+    synthesize_default_impls(program);
     desugar_impl_trait_args_in_program(program);
     desugar_multi_assign_in_program(program);
+}
+
+// ── `#[derive(Default)]` → synthetic `default()` assoc fn ────────
+//
+// `#[derive(Default)] struct Config { ... }` does not, on its own, give
+// the type a `Config.default()` associated function — the dispatch
+// machinery for `Type.default()` only fires against a real `default`
+// method in an impl block. This pass closes that gap by synthesizing an
+// inherent impl:
+//
+//     impl Config { fn default() -> Config { Config { f1: <d1>, ... } } }
+//
+// where each field initializer `<di>` is the field type's "zero-like"
+// value — `0` / `0.0` / `false` / `""` / `'\0'` for primitives, and a
+// recursive `FieldType.default()` call for a nested user type that also
+// carries a `default` (derive-synthesized or hand-written). Because the
+// synthesized body is built entirely from ordinary struct/enum-literal
+// and literal AST, every downstream phase (typecheck, interpreter,
+// codegen) handles it through already-tested paths — no per-backend
+// special-casing of `default`. Spec: book appendix C (`Default`):
+// "calls `.default()` on each field in declaration order and constructs
+// the struct. For enums, the first declared variant is used."
+//
+// Scope (v1 floor): primitives + nested user types. Generic types and
+// container/generic-argument field types (`Vec[T]`, `Option[T]`, tuples,
+// refs, arrays, …) are out of scope here — the pass declines to
+// synthesize for them, and the typechecker's `validate_derive_default`
+// emits the clean "field ... is not Default" diagnostic instead.
+fn synthesize_default_impls(program: &mut Program) {
+    use std::collections::HashSet;
+
+    // Names that will have a callable `default` — a non-generic
+    // struct/enum carrying `#[derive(Default)]`, or any type with a
+    // hand-written `default` method in an impl block. A nested field of
+    // such a type lowers to `FieldType.default()`; anything else is not
+    // (yet) defaultable and blocks synthesis for the enclosing type.
+    let mut defaultable: HashSet<String> = HashSet::new();
+    for item in &program.items {
+        match item {
+            Item::StructDef(s) if s.generic_params.is_none() && derives_default(&s.attributes) => {
+                defaultable.insert(s.name.clone());
+            }
+            Item::EnumDef(e) if e.generic_params.is_none() && derives_default(&e.attributes) => {
+                defaultable.insert(e.name.clone());
+            }
+            Item::ImplBlock(imp) => {
+                let provides_default = imp
+                    .items
+                    .iter()
+                    .any(|it| matches!(it, ImplItem::Method(m) if m.name == "default"));
+                if provides_default {
+                    if let Some(name) = type_leaf_name(&imp.target_type) {
+                        defaultable.insert(name);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Types that already have a hand-written `default` — never
+    // double-define (the user's impl wins; deriving on top is their
+    // call to make, and a redundant synthesized fn would collide).
+    let mut has_user_default: HashSet<String> = HashSet::new();
+    for item in &program.items {
+        if let Item::ImplBlock(imp) = item {
+            let provides_default = imp
+                .items
+                .iter()
+                .any(|it| matches!(it, ImplItem::Method(m) if m.name == "default"));
+            if provides_default {
+                if let Some(name) = type_leaf_name(&imp.target_type) {
+                    has_user_default.insert(name);
+                }
+            }
+        }
+    }
+
+    let mut synthesized: Vec<Item> = Vec::new();
+    for item in &program.items {
+        match item {
+            Item::StructDef(s)
+                if s.generic_params.is_none()
+                    && derives_default(&s.attributes)
+                    && !has_user_default.contains(&s.name) =>
+            {
+                if let Some(body) = struct_default_body(s, &defaultable) {
+                    synthesized.push(make_default_impl(&s.name, body, s.span.clone()));
+                }
+            }
+            Item::EnumDef(e)
+                if e.generic_params.is_none()
+                    && derives_default(&e.attributes)
+                    && !has_user_default.contains(&e.name) =>
+            {
+                if let Some(body) = enum_default_body(e, &defaultable) {
+                    synthesized.push(make_default_impl(&e.name, body, e.span.clone()));
+                }
+            }
+            _ => {}
+        }
+    }
+    program.items.extend(synthesized);
+}
+
+fn derives_default(attributes: &[Attribute]) -> bool {
+    crate::typechecker::extract_derived_traits(attributes).contains("Default")
+}
+
+/// Leaf type name of a single-segment, non-generic path type — the only
+/// shape `default()` synthesis recognizes. `None` for tuples, refs,
+/// arrays, generic-argument types, and multi-segment paths.
+fn type_leaf_name(ty: &TypeExpr) -> Option<String> {
+    if let TypeKind::Path(p) = &ty.kind {
+        if p.segments.len() == 1 && p.generic_args.is_none() {
+            return Some(p.segments[0].clone());
+        }
+    }
+    None
+}
+
+/// The default initializer expression for a field of type `ty`, or
+/// `None` when the type is outside this pass's v1 scope (containers,
+/// generics, tuples, refs, or a named type with no reachable `default`).
+fn default_field_expr(
+    ty: &TypeExpr,
+    defaultable: &std::collections::HashSet<String>,
+) -> Option<Expr> {
+    let span = ty.span.clone();
+    let name = type_leaf_name(ty)?;
+    let kind = match name.as_str() {
+        "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64" | "u128"
+        | "usize" => ExprKind::Integer(0, None),
+        "f32" | "f64" => ExprKind::Float(0.0, None),
+        "bool" => ExprKind::Bool(false),
+        "char" => ExprKind::CharLit('\0'),
+        "String" => ExprKind::StringLit(String::new()),
+        other if defaultable.contains(other) => ExprKind::Call {
+            callee: Box::new(Expr {
+                kind: ExprKind::Path {
+                    segments: vec![other.to_string(), "default".to_string()],
+                    generic_args: None,
+                },
+                span: span.clone(),
+            }),
+            args: Vec::new(),
+        },
+        _ => return None,
+    };
+    Some(Expr { kind, span })
+}
+
+/// `Name { f1: <d1>, ... }` literal for a derive-Default struct, or
+/// `None` when any field is out of scope.
+fn struct_default_body(
+    s: &StructDef,
+    defaultable: &std::collections::HashSet<String>,
+) -> Option<Expr> {
+    let mut fields = Vec::with_capacity(s.fields.len());
+    for f in &s.fields {
+        let value = default_field_expr(&f.ty, defaultable)?;
+        fields.push(FieldInit {
+            name: f.name.clone(),
+            value,
+            shorthand: false,
+            span: f.span.clone(),
+        });
+    }
+    Some(Expr {
+        kind: ExprKind::StructLiteral {
+            path: vec![s.name.clone()],
+            fields,
+            spread: None,
+        },
+        span: s.span.clone(),
+    })
+}
+
+/// Default literal for a derive-Default enum: the first declared
+/// variant, each of its fields defaulted. `None` when the enum has no
+/// variants or the first variant has an out-of-scope field.
+fn enum_default_body(e: &EnumDef, defaultable: &std::collections::HashSet<String>) -> Option<Expr> {
+    let first = e.variants.first()?;
+    let span = e.span.clone();
+    let path = vec![e.name.clone(), first.name.clone()];
+    let kind = match &first.kind {
+        VariantKind::Unit => ExprKind::Path {
+            segments: path,
+            generic_args: None,
+        },
+        VariantKind::Tuple(types) => {
+            let mut args = Vec::with_capacity(types.len());
+            for t in types {
+                args.push(CallArg {
+                    label: None,
+                    mut_marker: false,
+                    value: default_field_expr(t, defaultable)?,
+                    span: t.span.clone(),
+                });
+            }
+            ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Path {
+                        segments: path,
+                        generic_args: None,
+                    },
+                    span: span.clone(),
+                }),
+                args,
+            }
+        }
+        VariantKind::Struct(struct_fields) => {
+            let mut fields = Vec::with_capacity(struct_fields.len());
+            for f in struct_fields {
+                fields.push(FieldInit {
+                    name: f.name.clone(),
+                    value: default_field_expr(&f.ty, defaultable)?,
+                    shorthand: false,
+                    span: f.span.clone(),
+                });
+            }
+            ExprKind::StructLiteral {
+                path,
+                fields,
+                spread: None,
+            }
+        }
+    };
+    Some(Expr { kind, span })
+}
+
+/// Wrap a `default()` body expression in an inherent
+/// `impl Name { fn default() -> Name { <body> } }`. Non-`pub` so its
+/// effects are *inferred* (a `pub` fn would have to declare them, and a
+/// `String`-field default touches the allocator); this matches the
+/// single-program v1 scope where `Name.default()` is called in-crate.
+fn make_default_impl(type_name: &str, body: Expr, span: Span) -> Item {
+    let ret_ty = TypeExpr {
+        kind: TypeKind::Path(PathExpr {
+            segments: vec![type_name.to_string()],
+            generic_args: None,
+            span: span.clone(),
+        }),
+        span: span.clone(),
+    };
+    let func = Function {
+        span: span.clone(),
+        attributes: Vec::new(),
+        doc_comment: None,
+        is_pub: false,
+        is_private: false,
+        is_unsafe: false,
+        name: "default".to_string(),
+        generic_params: None,
+        params: Vec::new(),
+        self_param: None,
+        return_type: Some(ret_ty.clone()),
+        effects: None,
+        requires: Vec::new(),
+        ensures: Vec::new(),
+        where_clause: None,
+        body: Block {
+            stmts: Vec::new(),
+            final_expr: Some(Box::new(body)),
+            span: span.clone(),
+        },
+        stdlib_origin: false,
+        deprecation: None,
+        unstable: None,
+        is_track_caller: false,
+        lint_overrides: Vec::new(),
+        profile_compat: Vec::new(),
+        abi: None,
+    };
+    Item::ImplBlock(ImplBlock {
+        span: span.clone(),
+        attributes: Vec::new(),
+        generic_params: None,
+        trait_name: None,
+        target_type: ret_ty,
+        where_clause: None,
+        items: vec![ImplItem::Method(Box::new(func))],
+        lint_overrides: Vec::new(),
+        do_not_recommend: false,
+    })
 }
 
 // ── parallel / destructuring assignment desugar ─────────────────

@@ -724,7 +724,44 @@ impl<'a> super::TypeChecker<'a> {
         self.validate_derived_trait("Hash", |this, ty| this.type_supports_hash(ty));
         self.validate_derived_trait("Ord", |this, ty| this.type_supports_ord(ty));
         self.validate_derived_trait("PartialOrd", |this, ty| this.type_supports_partial_ord(ty));
+        self.validate_derived_trait("Default", |this, ty| this.type_supports_default(ty));
         self.validate_derive_display_on_enums();
+    }
+
+    /// Whether `ty` has a reachable `default()` — the predicate driving
+    /// the `#[derive(Default)]` field check. v1 floor scope: the scalar
+    /// primitives (every one has a zero-like value, floats included) plus
+    /// any named struct/enum that actually carries a `default` method
+    /// (derive-synthesized in [`crate::desugar`] or hand-written). Container
+    /// / generic-argument / tuple / ref field types are out of scope and
+    /// report cleanly here rather than failing deep in the synthesized
+    /// body. Permissive on inference/error types to avoid cascading.
+    pub(super) fn type_supports_default(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Refinement { base, .. } => self.type_supports_default(base),
+            Type::Int(_)
+            | Type::UInt(_)
+            | Type::Float(_)
+            | Type::Bool
+            | Type::Char
+            | Type::Str
+            | Type::Unit => true,
+            Type::Named { name, .. } | Type::Shared(name) => self.type_has_default_method(name),
+            Type::TypeVar(_) | Type::AssocProjection { .. } | Type::Error => true,
+            _ => false,
+        }
+    }
+
+    /// True when some impl of `name` (inherent or trait) exposes a
+    /// `default` associated function. The derive-synthesized inherent
+    /// impl is already present in `env.impls` by the time the recursive
+    /// derive validator runs, so this answers both the derived and the
+    /// hand-written case uniformly.
+    fn type_has_default_method(&self, name: &str) -> bool {
+        self.env
+            .impls
+            .iter()
+            .any(|imp| imp.target_type == name && imp.methods.contains_key("default"))
     }
 
     /// Compound-payload enum codegen (Slice CP, CP5 carve-out) —
