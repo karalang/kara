@@ -259,30 +259,35 @@ examples that show the interesting cases without being contrived.
 > **Per-layout monomorphization is now the vehicle** (design.md Feature 1 /
 > P1.5; ADR + slice plan in
 > [docs/spikes/per-layout-monomorphization.md](spikes/per-layout-monomorphization.md)).
-> Slices 1–2 landed (2026-06-20): by-value SoA `Vec[E]` params now cross
+> Slices 1–3 landed (2026-06-20): by-value SoA `Vec[E]` params now cross
 > function boundaries **regardless of binding name** — a SoA argument routes to
 > an on-demand monomorph (`fn_asts` + `ensure_layout_mono_generated`) whose
 > `Vec[E]` params lower as the SoA struct, keyed on the caller's argument layout
-> rather than the param name. Differing-name and multi-buffer helpers (item 2
-> below) now share one helper, each call producing a distinct monomorph.
+> rather than the param name — and a helper that **builds and returns** a
+> `Vec[E]` is monomorphized to *return* the receiving binding's layout (slice 3:
+> backward inference off `let recv = f()`, SoA return ABI + tail-return
+> move-suppression so the caller owns the buffers). Differing-name and
+> multi-buffer helpers (item 2 below) now share one helper, each call producing a
+> distinct monomorph.
 >
 > **Remaining (what still blocks Slipstream from going full-SoA end-to-end):**
-> 1. **SoA return values** (`init_grid() -> Vec[LbmNode]`, `substep(...) ->
->    Vec[LbmNode]`): the return type is compiled AoS — slice 3. Backward
->    layout-flow inference keys the return layout off the receiving `let recv =
->    f()` binding (`recv`'s layout), with the SoA return ABI + tail-return
->    move-suppression.
+> 1. ~~**SoA return values**~~ (`init_grid() -> Vec[LbmNode]`, `substep(...) ->
+>    Vec[LbmNode]`) — **landed in slice 3.** Backward layout-flow inference keys
+>    the return layout off the receiving `let recv = f()` binding; the return
+>    lowers to the SoA struct and the returned local moves out to the caller.
+>    Branch-leaf / multi-`return` returns still degrade to AoS (spike §8).
 > 2. ~~**Multi-buffer awkwardness**~~ (differing-name `Vec[LbmNode]` bindings
 >    sharing helpers) — **addressed by slice 2's forward inference**; the
 >    name-keyed `soa_layouts` lookups in the access paths are reduced to
 >    origins-only in slice 5.
 >
-> Land each step gated on the full `tests/codegen.rs` suite (1670 cases). Once the
-> by-value + return paths work, convert `examples/slipstream/src/sim.kara`'s
-> `Vec[LbmNode]` to a `layout` block and confirm the native oracle's checksums are
-> unchanged (SoA must be byte-identical to AoS) — that's the proof Slipstream
-> earns its "SoA layout" billing. Background in the user-memory
-> `soa_cross_function_partial`.
+> The remaining slices: 4 (multi-buffer / differing-name kernels confirm distinct
+> monomorphs), 5 (retire the name-keyed access-path lookups to origins-only), 6
+> (convert `examples/slipstream/src/sim.kara`'s `Vec[LbmNode]` to a `layout` block
+> and confirm the native oracle's checksums are unchanged — SoA must be
+> byte-identical to AoS, the proof Slipstream earns its "SoA layout" billing).
+> Land each gated on the full `tests/codegen.rs` suite + LSan. Background in the
+> user-memory `soa_cross_function_partial`.
 
 **Primary capability:** Auto-concurrency of sequential code; layout blocks for
 cache-efficient SoA access; same code runs on CPU and GPU.

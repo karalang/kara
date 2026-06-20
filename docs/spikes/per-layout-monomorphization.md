@@ -1,12 +1,15 @@
 # Design spike — per-layout monomorphization (SoA across call boundaries)
 
-**Status:** 🟦 **IN PROGRESS — slices 1–2 landed (2026-06-20).** Slice 1 (the
-`LayoutId` axis scaffolding) and slice 2 (forward arg-layout monomorphization —
-a SoA `Vec[E]` passed by value to a helper is served by an on-demand layout
-monomorph, regardless of the param name) are on `main`. The remaining slices are
-a multi-slice Phase-11 effort gated on the full `tests/codegen.rs` suite + the
-Linux-LSan leak gate per slice. This file is the architecture of record; update
-its `Status:` line (and the `docs/spikes/README.md` row) as slices land. Tracks
+**Status:** 🟦 **IN PROGRESS — slices 1–3 landed (2026-06-20).** Slice 1 (the
+`LayoutId` axis scaffolding), slice 2 (forward arg-layout monomorphization — a
+SoA `Vec[E]` passed by value to a helper is served by an on-demand layout
+monomorph, regardless of the param name), and slice 3 (SoA returns — a helper
+that builds and returns a `Vec[E]` is monomorphized to *return* the receiving
+binding's layout, so the returned local crosses the boundary even though it has
+no binding name to key on) are on `main`. The remaining slices are a multi-slice
+Phase-11 effort gated on the full `tests/codegen.rs` suite + the Linux-LSan leak
+gate per slice. This file is the architecture of record; update its `Status:`
+line (and the `docs/spikes/README.md` row) as slices land. Tracks
 **[B-2026-06-19-14](../bug-ledger.jsonl)** (the `partial` SoA-across-functions
 entry) and design.md **Feature 1 / P1.5 (Phase 11)**.
 
@@ -186,9 +189,24 @@ existing `suppress_cleanup_for_tail_return` for AoS Vec).
    the access-path lookups are reduced to origins. Regressions: by-value param
    with a caller-different binding name; two distinct layouts through one
    helper → distinct monos.
-3. **SoA returns (backward inference).** Return-layout from the receiving
-   binding; return ABI + tail-return move-suppression. Regression:
-   `init_grid()`-shape returning a SoA Vec bound by a differently-named local.
+3. **SoA returns (backward inference).** ✅ **Landed 2026-06-20.** The SoA
+   `let <recv> = <call>()` arm parks the receiving binding's layout in a
+   one-shot `pending_return_layout`; `compile_call` consumes it (scoped to the
+   call, before args compile) and — when the callee returns a `Vec[E]` — folds
+   it into the same `ensure_layout_mono_generated` entry as the forward arg
+   layouts, under a `return_layout` axis that adds a `$ret_soa_<name>` mangle
+   suffix. `declare_mono_function` lowers the return type to `soa_vec_type`;
+   `compile_mono_function` seeds the returned local(s) into `layout_subst`
+   (detected via the same tail analysis as `suppress_cleanup_for_tail_return`)
+   so the body's construction / pushes / tail all lower SoA, and
+   `suppress_soa_cleanup_for_tail_identifier` drops the returned local's
+   `FreeSoaGroups` so the move-out caller owns the buffers (no double-free, no
+   leak). The SoA-new let trigger moved to `active_soa_layout` so a seeded
+   returned local builds SoA. Regressions: `init_grid()`-shape returning a SoA
+   Vec bound by a differently-named local; one builder bound into two layouts →
+   two distinct return-SoA monos; ASAN/LSan move-out ownership (caller-owns).
+   Branch-leaf / multi-`return` returns degrade to AoS (spike §8), never
+   miscompile.
 4. **Multi-buffer / differing-name kernels.** Multiple SoA bindings of one
    element type through shared helpers; confirm distinct monomorphs.
 5. **Retire / bridge the name-keyed lookups** in the access paths; `soa_layouts`
