@@ -300,8 +300,8 @@ existing `suppress_cleanup_for_tail_return` for AoS Vec).
    codegen bug**: the per-group element address is mis-strided, so a store at
    index ≥ 1 is dropped (index 0 is correct). It is independent of slice 5 (the
    base compiler miscompiles it identically) and of the borrow checker (a codegen
-   address-arithmetic fault, not an aliasing-fact gap); tracked as its own
-   bug-ledger entry and a hard blocker for slice 6 (Slipstream's LBM kernel
+   address-arithmetic fault, not an aliasing-fact gap); tracked as
+   **B-2026-06-20-7** and a hard blocker for slice 6 (Slipstream's LBM kernel
    scatters field updates by index). Same family as the unbuilt whole-element
    index-store below.
 6. **Proof: convert `examples/slipstream/src/sim.kara`** to a `layout` block and
