@@ -24564,6 +24564,86 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_string_sort() {
+        // `Vec[String].sort()` codegen: bare `sort()` over String elements now
+        // lowers to the `karac_string_cmp` byte-lexicographic comparator (the
+        // default-order String thunk), where it previously errored "integer
+        // element types only". Ascending order, A/B with the interpreter.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    v.push("banana");
+    v.push("apple");
+    v.push("cherry");
+    v.sort();
+    for s in v {
+        println(s);
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["apple", "banana", "cherry"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_map_string_keys_sorted_report() {
+        // `Map[String,i64].keys()` + `Vec.sort()` — the canonical "ordered
+        // report from a hash map" idiom. Exercises BOTH fixes together: keys()
+        // deep-clones each String key into the result Vec (a shallow copy
+        // double-freed against the map at scope exit — it crashed before), and
+        // `.sort()` orders the String Vec. Counts read back with get_or.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("pear".to_string(), 3_i64);
+    m.insert("fig".to_string(), 1_i64);
+    m.insert("kiwi".to_string(), 2_i64);
+    let mut keys: Vec[String] = m.keys();
+    keys.sort();
+    for k in keys {
+        println(f"{k} {m.get_or(k.clone(), 0_i64)}");
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["fig 1", "kiwi 2", "pear 3"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_map_string_values_entries_owned() {
+        // `Map[String,String].values()` / `entries()` deep-clone each heap half
+        // into the result Vec (owned-Vec contract). Pre-fix the shallow copy
+        // aliased the map's buffers and double-freed at scope exit.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut m: Map[String, String] = Map.new();
+    m.insert("k1".to_string(), "alpha".to_string());
+    let vs: Vec[String] = m.values();
+    println(vs.len());
+    for v in vs { println(v); }
+    for pair in m.entries() {
+        let (a, b) = pair;
+        println(f"{a}={b}");
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["1", "alpha", "k1=alpha"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_map_get_remove_with_vec_value_payload() {
         // Bisected from the LeetCode 3629 codegen-vs-interpreter divergence.
         // Pins `Map.get` and `Map.remove` returning `Option[Vec[i64]]`:

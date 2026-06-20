@@ -5108,6 +5108,39 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_map_string_keys_values_entries_deep_copy_no_double_free() {
+        // `keys()` / `values()` / `entries()` over a `Map[String,String]`
+        // return OWNED Vecs whose heap halves are DEEP-CLONED from the bucket
+        // (B-2026-06-20-10). A shallow `{ptr,len,cap}` copy aliased the map's
+        // stored buffer, so the result Vec's scope-exit drop and the map's drop
+        // freed the same allocation — a double-free (it crashed `keys()` even
+        // before any read). ≥36-byte payloads; the result Vecs and the map all
+        // drop independently and cleanly.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut m: Map[String, String] = Map.new();
+    m.insert("key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+             "val-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string());
+    m.insert("key-cccccccccccccccccccccccccccccccccccc".to_string(),
+             "val-dddddddddddddddddddddddddddddddddddd".to_string());
+    let ks: Vec[String] = m.keys();
+    let vs: Vec[String] = m.values();
+    let es: Vec[(String, String)] = m.entries();
+    // Counts only — entries() order is non-deterministic; a clean exit proves
+    // no double-free (it crashed before any read pre-fix). Content correctness
+    // is covered by the codegen E2E `test_e2e_map_string_values_entries_owned`.
+    println(ks.len());
+    println(vs.len());
+    println(es.len());
+}
+"#,
+            &["2", "2", "2"],
+            "map_string_keys_values_entries_deep_copy_no_double_free",
+        );
+    }
+
     // ── Owned String/Vec PARAM moved into Map/Set insert (Cluster 1) ──
     // `m.insert(k, v)` / `set.insert(v)` where the key/value/element is an
     // owned `String`/`Vec` PARAMETER of the current function. Under the

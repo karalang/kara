@@ -12,7 +12,7 @@
 use crate::ast::*;
 
 use inkwell::types::{BasicType, BasicTypeEnum};
-use inkwell::values::BasicValueEnum;
+use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 use inkwell::AddressSpace;
 
 use super::state::VarSlot;
@@ -576,8 +576,31 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_conditional_branch(has_next, body_bb, exit_bb)
             .unwrap();
 
-        // body_bb: load key/val from slots, build the element value, write
-        // into buf[i], increment i.
+        // body_bb: deep-clone each key/val out-slot into buf[i], increment i.
+        //
+        // keys()/values()/entries() return an OWNED `Vec[K]` / `Vec[V]` /
+        // `Vec[(K,V)]`, so a heap (String/Vec/struct) half must be DEEP-CLONED
+        // into the result buffer: a shallow `{ptr,len,cap}` load+store would
+        // alias the map's stored buffer, and the result Vec's scope-exit drop
+        // would then free the same allocation as the map's drop — a double-free
+        // that crashed `Map[String,_].keys()` (B-2026-06-20-10) and mirrors the
+        // `get_or` owned-copy contract. `emit_clone_fn_for_type_expr` deep-
+        // clones String/Vec/struct, memcpys scalars, and pointer-copies shared
+        // (RC); when a half's K/V TypeExpr side-table entry is absent (an
+        // inferred map with no recorded TypeExpr) we fall back to the shallow
+        // load+store, the prior behavior — correct for scalars, the only
+        // regression-free option without the type.
+        self.builder.position_at_end(body_bb);
+        let key_te = self.map_key_type_exprs.get(var_name).cloned();
+        let val_te = self.var_elem_type_exprs.get(var_name).cloned();
+        // Emit (cached) clone fns first — `emit_clone_fn_for_type_expr` may move
+        // the builder into the synthesized fn, so re-assert `body_bb` after.
+        let key_clone = key_te
+            .as_ref()
+            .map(|te| self.emit_clone_fn_for_type_expr(te));
+        let val_clone = val_te
+            .as_ref()
+            .map(|te| self.emit_clone_fn_for_type_expr(te));
         self.builder.position_at_end(body_bb);
         let i_val = self
             .builder
@@ -589,41 +612,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_gep(elem_ty, buf, &[i_val], "kvg.elem.ptr")
                 .unwrap()
         };
-        let written: BasicValueEnum<'ctx> = match method {
-            "keys" => self
-                .builder
-                .build_load(key_ty, out_key, "kvg.k.load")
-                .unwrap(),
-            "values" => self
-                .builder
-                .build_load(val_ty, out_val, "kvg.v.load")
-                .unwrap(),
+        match method {
+            "keys" => self.kvg_emit_half(key_clone, key_ty, out_key, elem_ptr, "kvg.k"),
+            "values" => self.kvg_emit_half(val_clone, val_ty, out_val, elem_ptr, "kvg.v"),
             "entries" => {
                 let kv_struct_ty = self.context.struct_type(&[key_ty, val_ty], false);
-                let key_val = self
+                let k_dst = self
                     .builder
-                    .build_load(key_ty, out_key, "kvg.k.load")
+                    .build_struct_gep(kv_struct_ty, elem_ptr, 0, "kvg.kv.k")
                     .unwrap();
-                let val_val = self
+                let v_dst = self
                     .builder
-                    .build_load(val_ty, out_val, "kvg.v.load")
+                    .build_struct_gep(kv_struct_ty, elem_ptr, 1, "kvg.kv.v")
                     .unwrap();
-                let mut kv = kv_struct_ty.get_undef();
-                kv = self
-                    .builder
-                    .build_insert_value(kv, key_val, 0, "kv.k")
-                    .unwrap()
-                    .into_struct_value();
-                kv = self
-                    .builder
-                    .build_insert_value(kv, val_val, 1, "kv.v")
-                    .unwrap()
-                    .into_struct_value();
-                kv.into()
+                self.kvg_emit_half(key_clone, key_ty, out_key, k_dst, "kvg.kv.k");
+                self.kvg_emit_half(val_clone, val_ty, out_val, v_dst, "kvg.kv.v");
             }
             _ => unreachable!(),
-        };
-        self.builder.build_store(elem_ptr, written).unwrap();
+        }
         let i_next = self
             .builder
             .build_int_add(i_val, i64_t.const_int(1, false), "kvg.i.next")
@@ -655,6 +661,29 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_struct_value();
 
         Ok(vec_val.into())
+    }
+
+    /// `keys`/`values`/`entries` body helper: write one key or value half from
+    /// the iterator out-slot `src` into the result slot `dst`. Deep-clones via
+    /// `clone_fn` when the half's TypeExpr was available (the owned-Vec
+    /// contract — the result never aliases the map's stored buffer); otherwise
+    /// a shallow load+store (correct for scalars; the no-TypeExpr fallback).
+    fn kvg_emit_half(
+        &mut self,
+        clone_fn: Option<FunctionValue<'ctx>>,
+        ty: BasicTypeEnum<'ctx>,
+        src: PointerValue<'ctx>,
+        dst: PointerValue<'ctx>,
+        name: &str,
+    ) {
+        if let Some(cf) = clone_fn {
+            self.builder
+                .build_call(cf, &[src.into(), dst.into()], name)
+                .unwrap();
+        } else {
+            let v = self.builder.build_load(ty, src, name).unwrap();
+            self.builder.build_store(dst, v).unwrap();
+        }
     }
 
     /// Compile a method call on a `Map[K,V]` variable.

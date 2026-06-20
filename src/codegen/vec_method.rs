@@ -4376,21 +4376,26 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Err(format!("Vec.sort expects 0 arguments, got {}", args.len()));
                 }
                 // Bare `sort()` is `sort_by` with the natural ascending order.
-                // Only integer element types have a default comparator in
-                // codegen today — consistent with the signed `.cmp` lowering
-                // in method_call.rs. Other element types (floats, tuples,
-                // strings) must use `sort_by(|a, b| ...)` with an explicit
-                // comparator; the typechecker accepts them but the default
-                // ordering has no lowering yet, so error loudly here rather
-                // than silently leaving the Vec unsorted.
-                if !elem_ty.is_int_type() {
+                // Integer elements use the signed-compare thunk; String
+                // elements (the `{ptr,len,cap}` header) use the
+                // `karac_string_cmp` byte-lexicographic thunk — the same
+                // comparator `Vec.binary_search` / `sort_by` use for String
+                // keys (so `keys().sort()` over a `Map[String,_]` report is
+                // A/B-portable). Other element types (floats, tuples, user
+                // structs) must use `sort_by(|a, b| ...)` with an explicit
+                // comparator; their default ordering has no lowering yet, so
+                // error loudly rather than silently leaving the Vec unsorted.
+                let thunk = if elem_ty.is_int_type() {
+                    self.emit_default_sort_thunk(elem_ty)
+                } else if self.vec_elem_type_name(var_name).as_deref() == Some("String") {
+                    self.emit_default_sort_thunk_string()
+                } else {
                     return Err(
-                        "Vec.sort() in codegen supports only integer element types; \
+                        "Vec.sort() in codegen supports integer and String element types; \
                          use sort_by(|a, b| a.cmp(b)) for other element types"
                             .to_string(),
                     );
-                }
-                let thunk = self.emit_default_sort_thunk(elem_ty);
+                };
 
                 let data_ptr_ptr = self
                     .builder
@@ -5017,6 +5022,99 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_select(lt, neg_one, gt_sel, "cmp.sel")
             .unwrap()
+            .into_int_value();
+        self.builder.build_return(Some(&res)).unwrap();
+
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        thunk_fn
+    }
+
+    /// Default-order comparator thunk for `Vec[String].sort()`: each element is
+    /// the `{ptr, len, cap}` String header, compared byte-lexicographically via
+    /// the `karac_string_cmp` runtime fn (the same comparator
+    /// `Vec.binary_search` and the String-key `sort_by` path use). The
+    /// bare-`sort()` String analog of [`emit_default_sort_thunk`]. A `Vec[T]`
+    /// element can't reach here — `Vec[T]` is not `Ord`, so the typechecker only
+    /// admits `.sort()` on a String-element Vec among the heap `{ptr,len,cap}`
+    /// shapes (the sort arm gates on the `String` element type name).
+    pub(super) fn emit_default_sort_thunk_string(&mut self) -> FunctionValue<'ctx> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let vec_ty = self.vec_struct_type();
+
+        let id = self.closure_counter;
+        self.closure_counter += 1;
+        let name = format!("__sort_default_strcmp_{}", id);
+        let thunk_ty = i64_t.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
+        let thunk_fn = self
+            .module
+            .add_function(&name, thunk_ty, Some(Linkage::Internal));
+
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        self.current_fn = Some(thunk_fn);
+
+        let entry = self.context.append_basic_block(thunk_fn, "entry");
+        self.builder.position_at_end(entry);
+
+        // params: (ctx, *a, *b) — a/b point to the String header in the buffer.
+        let a_ptr = thunk_fn.get_nth_param(1).unwrap().into_pointer_value();
+        let b_ptr = thunk_fn.get_nth_param(2).unwrap().into_pointer_value();
+        let a = self
+            .builder
+            .build_load(vec_ty, a_ptr, "a.str")
+            .unwrap()
+            .into_struct_value();
+        let b = self
+            .builder
+            .build_load(vec_ty, b_ptr, "b.str")
+            .unwrap()
+            .into_struct_value();
+        let a_data = self
+            .builder
+            .build_extract_value(a, 0, "a.str.ptr")
+            .unwrap()
+            .into_pointer_value();
+        let a_len = self
+            .builder
+            .build_extract_value(a, 1, "a.str.len")
+            .unwrap()
+            .into_int_value();
+        let b_data = self
+            .builder
+            .build_extract_value(b, 0, "b.str.ptr")
+            .unwrap()
+            .into_pointer_value();
+        let b_len = self
+            .builder
+            .build_extract_value(b, 1, "b.str.len")
+            .unwrap()
+            .into_int_value();
+
+        let cmp_fn = self
+            .module
+            .get_function("karac_string_cmp")
+            .unwrap_or_else(|| {
+                let fn_ty = i64_t.fn_type(
+                    &[ptr_ty.into(), i64_t.into(), ptr_ty.into(), i64_t.into()],
+                    false,
+                );
+                self.module
+                    .add_function("karac_string_cmp", fn_ty, Some(Linkage::External))
+            });
+        let res = self
+            .builder
+            .build_call(
+                cmp_fn,
+                &[a_data.into(), a_len.into(), b_data.into(), b_len.into()],
+                "str.cmp",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
             .into_int_value();
         self.builder.build_return(Some(&res)).unwrap();
 
