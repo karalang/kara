@@ -8355,6 +8355,70 @@ fn main() {
         );
     }
 
+    /// A3a leak regression: two independent allocating calls (each builds a
+    /// fresh Vec) now AUTO-parallelize — `(Allocates,Allocates)` is no longer a
+    /// conflict. Each Vec is built in its own par branch, published to the
+    /// parent's slot, then MOVED into `sum` which owns and frees it at scope
+    /// exit. A wrongly-skipped or doubled free on the grouped branch's owned
+    /// buffer is exactly the leak/double-free class this gate exists for.
+    /// Threads the full pipeline (ownership + concurrency) so auto-par actually
+    /// fires — the default `None, None` harness leaves the grouping dead. Each
+    /// Vec carries 8 i64s (64 bytes), above the LSan reachability threshold, and
+    /// both are consumed (not live at exit), so a missing free is a detectable
+    /// non-reachable leak rather than one LSan masks.
+    #[test]
+    fn asan_auto_par_allocating_calls_clean() {
+        let label = "auto_par_allocating_calls";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan_with_full_pipeline(
+            r#"
+fn make(seed: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 8 {
+        v.push(seed + i);
+        i = i + 1;
+    }
+    return v;
+}
+fn sum(xs: Vec[i64]) -> i64 {
+    let mut t = 0;
+    let mut i = 0;
+    while i < 8 {
+        t = t + xs[i];
+        i = i + 1;
+    }
+    return t;
+}
+fn main() {
+    let a = make(100);
+    let b = make(200);
+    println(sum(a) + sum(b));
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             look for a LeakSanitizer report or double-free on a grouped \
+             branch's owned Vec buffer",
+            status.code()
+        );
+        // make(100)=sum 100..107=828; make(200)=sum 200..207=1628; total 2456.
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["2456"],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     /// Tensor heap lifecycle (phase-11 codegen core slice): one malloc'd
     /// `[rank][dims][data]` block per tensor, freed once at scope exit
     /// via `FreeTensor`'s null-guard. Exercises every ownership-transfer
