@@ -71,6 +71,11 @@ import ast.{
     UseDeclNode,
     ConstDeclNode,
     TypeAliasNode,
+    StructFieldNode,
+    StructDefNode,
+    VariantTag,
+    VariantNode,
+    EnumDefNode,
 };
 import lexer.lex_all;
 
@@ -1953,6 +1958,30 @@ impl Parser {
             Use => self.parse_use_decl(is_pub),
             Const => self.parse_const_decl(is_pub),
             Type => self.parse_type_alias_decl(is_pub),
+            Struct => self.parse_struct_def(is_pub, false, false),
+            Enum => self.parse_enum_def(is_pub, false, false),
+            Shared => self.parse_shared_or_par(is_pub, true, false),
+            Par => self.parse_shared_or_par(is_pub, false, true),
+            _ => {
+                let start = self.current_span();
+                self.advance();
+                Item.ErrItem(SpanNode { span: self.span_from(start) })
+            }
+        }
+    }
+
+    // `shared`/`par` prefix, then `struct` / `enum`. Mirrors the seed's
+    // `Token::Shared` / `Token::Par` dispatch arms: consume the modifier
+    // keyword, then route to the struct / enum parser (whose `start` is captured
+    // at its OWN keyword — the modifier does not shift the definition span).
+    fn parse_shared_or_par(mut ref self, is_pub: bool, is_shared: bool, is_par: bool) -> Item {
+        self.advance(); // consume `shared` / `par`
+        if self.pos >= self.tokens.len() {
+            return Item.ErrItem(SpanNode { span: self.current_span() });
+        }
+        match self.tokens[self.pos].token {
+            Struct => self.parse_struct_def(is_pub, is_shared, is_par),
+            Enum => self.parse_enum_def(is_pub, is_shared, is_par),
             _ => {
                 let start = self.current_span();
                 self.advance();
@@ -2035,6 +2064,167 @@ impl Parser {
             ty: ty,
             span: self.span_from(start),
         })
+    }
+
+    // `struct NAME { [pub] [mut] field: TYPE, ... }` — `start` at `struct`
+    // (3c-ii; generics + `where` deferred to 3c-v).
+    fn parse_struct_def(mut ref self, is_pub: bool, is_shared: bool, is_par: bool) -> Item {
+        let start = self.current_span();
+        self.advance(); // `struct`
+        let name = self.take_member_name();
+        self.expect_lbrace();
+        let fields = self.parse_struct_fields();
+        self.expect_rbrace();
+        Item.Struct(StructDefNode {
+            is_pub: is_pub,
+            is_shared: is_shared,
+            is_par: is_par,
+            name: name,
+            fields: fields,
+            span: self.span_from(start),
+        })
+    }
+
+    // `[pub] [mut] name: TYPE, ...` up to (not consuming) `}`. Mirrors the seed's
+    // `parse_struct_fields`: per-field span starts at the field (incl.
+    // `pub`/`mut`) and ends at its type. Also used for struct-form enum-variant
+    // payloads.
+    fn parse_struct_fields(mut ref self) -> Vec[StructFieldNode] {
+        let mut fields: Vec[StructFieldNode] = Vec.new();
+        loop {
+            if self.pos >= self.tokens.len() {
+                break;
+            }
+            if self.at_rbrace() {
+                break;
+            }
+            let start = self.current_span();
+            let is_pub = match self.tokens[self.pos].token {
+                Pub => true,
+                _ => false,
+            };
+            if is_pub {
+                self.advance();
+            }
+            let is_mut = if self.pos < self.tokens.len() {
+                match self.tokens[self.pos].token {
+                    Mut => true,
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            if is_mut {
+                self.advance();
+            }
+            let name = self.take_member_name();
+            self.eat_colon();
+            let ty = self.parse_type();
+            fields.push(StructFieldNode {
+                is_pub: is_pub,
+                is_mut: is_mut,
+                name: name,
+                ty: ty,
+                span: self.span_from(start),
+            });
+            if self.at_comma() {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        fields
+    }
+
+    // `enum NAME { VARIANT, ... }` — `start` at `enum` (3c-ii; generics deferred).
+    fn parse_enum_def(mut ref self, is_pub: bool, is_shared: bool, is_par: bool) -> Item {
+        let start = self.current_span();
+        self.advance(); // `enum`
+        let name = self.take_member_name();
+        self.expect_lbrace();
+        let mut variants: Vec[VariantNode] = Vec.new();
+        loop {
+            if self.pos >= self.tokens.len() {
+                break;
+            }
+            if self.at_rbrace() {
+                break;
+            }
+            let v = self.parse_variant();
+            variants.push(v);
+            if self.at_comma() {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        self.expect_rbrace();
+        Item.Enum(EnumDefNode {
+            is_pub: is_pub,
+            is_shared: is_shared,
+            is_par: is_par,
+            name: name,
+            variants: variants,
+            span: self.span_from(start),
+        })
+    }
+
+    // One enum variant: `NAME` (unit) / `NAME(T, ...)` (tuple) / `NAME { f: T, ... }`
+    // (struct). Mirrors the seed's `parse_variant`; `start` at the variant name.
+    fn parse_variant(mut ref self) -> VariantNode {
+        let start = self.current_span();
+        let name = self.take_member_name();
+        let mut tag = VariantTag.UnitV;
+        let mut tuple_types: Vec[TypeExpr] = Vec.new();
+        let mut fields: Vec[StructFieldNode] = Vec.new();
+        let is_brace = if self.pos < self.tokens.len() {
+            match self.tokens[self.pos].token {
+                LeftBrace => true,
+                _ => false,
+            }
+        } else {
+            false
+        };
+        let is_paren = if self.pos < self.tokens.len() {
+            match self.tokens[self.pos].token {
+                LeftParen => true,
+                _ => false,
+            }
+        } else {
+            false
+        };
+        if is_brace {
+            self.advance(); // `{`
+            fields = self.parse_struct_fields();
+            self.expect_rbrace();
+            tag = VariantTag.StructV;
+        } else if is_paren {
+            self.advance(); // `(`
+            loop {
+                if self.pos >= self.tokens.len() {
+                    break;
+                }
+                if self.at_rparen() {
+                    break;
+                }
+                let t = self.parse_type();
+                tuple_types.push(t);
+                if self.at_comma() {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            self.expect_rparen();
+            tag = VariantTag.TupleV;
+        }
+        VariantNode {
+            name: name,
+            tag: tag,
+            tuple_types: tuple_types,
+            fields: fields,
+            span: self.span_from(start),
+        }
     }
 }
 

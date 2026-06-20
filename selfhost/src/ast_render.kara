@@ -49,6 +49,11 @@ import ast.{
     UseDeclNode,
     ConstDeclNode,
     TypeAliasNode,
+    StructFieldNode,
+    StructDefNode,
+    VariantTag,
+    VariantNode,
+    EnumDefNode,
 };
 
 // MUST stay identical to `escape_for_render` in `selfhost/src/main.kara` and
@@ -865,6 +870,82 @@ fn render_vis(is_pub: bool) -> String {
     }
 }
 
+// ` pub`/` shared`/` par` modifier flags for a struct / enum, in that order.
+fn render_type_mods(is_pub: bool, is_shared: bool, is_par: bool) -> String {
+    let mut s = "".to_string();
+    if is_pub {
+        s.push_str(" pub");
+    }
+    if is_shared {
+        s.push_str(" shared");
+    }
+    if is_par {
+        s.push_str(" par");
+    }
+    s
+}
+
+// `(field[ pub][ mut] NAME<span> TYPE)`.
+fn render_struct_field(f: StructFieldNode) -> String {
+    let StructFieldNode {
+        is_pub,
+        is_mut,
+        name,
+        ty,
+        span,
+    } = f;
+    let mut out = "(field".to_string();
+    if is_pub {
+        out.push_str(" pub");
+    }
+    if is_mut {
+        out.push_str(" mut");
+    }
+    out.push_str(" ");
+    out.push_str(name);
+    out.push_str(span_str(span.offset, span.length));
+    out.push_str(" ");
+    out.push_str(render_type(ty));
+    out.push_str(")");
+    out
+}
+
+// `(variant NAME<span>)` (unit) / `(variant NAME<span> (vtuple TYPE...))` /
+// `(variant NAME<span> (vstruct FIELD...))`.
+fn render_variant(v: VariantNode) -> String {
+    let VariantNode {
+        name,
+        tag,
+        tuple_types,
+        fields,
+        span,
+    } = v;
+    let mut out = "(variant ".to_string();
+    out.push_str(name);
+    out.push_str(span_str(span.offset, span.length));
+    match tag {
+        UnitV => {}
+        TupleV => {
+            out.push_str(" (vtuple");
+            for t in tuple_types {
+                out.push_str(" ");
+                out.push_str(render_type(t));
+            }
+            out.push_str(")");
+        }
+        StructV => {
+            out.push_str(" (vstruct");
+            for f in fields {
+                out.push_str(" ");
+                out.push_str(render_struct_field(f));
+            }
+            out.push_str(")");
+        }
+    }
+    out.push_str(")");
+    out
+}
+
 pub fn render_item(item: Item) -> String {
     let mut out = "".to_string();
     match item {
@@ -921,6 +1002,46 @@ pub fn render_item(item: Item) -> String {
             out.push_str(span_str(span.offset, span.length));
             out.push_str(" ");
             out.push_str(render_type(ty));
+            out.push_str(")");
+        }
+        Struct(n) => {
+            let StructDefNode {
+                is_pub,
+                is_shared,
+                is_par,
+                name,
+                fields,
+                span,
+            } = n;
+            out.push_str("(struct");
+            out.push_str(render_type_mods(is_pub, is_shared, is_par));
+            out.push_str(" ");
+            out.push_str(name);
+            out.push_str(span_str(span.offset, span.length));
+            for f in fields {
+                out.push_str(" ");
+                out.push_str(render_struct_field(f));
+            }
+            out.push_str(")");
+        }
+        Enum(n) => {
+            let EnumDefNode {
+                is_pub,
+                is_shared,
+                is_par,
+                name,
+                variants,
+                span,
+            } = n;
+            out.push_str("(enum");
+            out.push_str(render_type_mods(is_pub, is_shared, is_par));
+            out.push_str(" ");
+            out.push_str(name);
+            out.push_str(span_str(span.offset, span.length));
+            for v in variants {
+                out.push_str(" ");
+                out.push_str(render_variant(v));
+            }
             out.push_str(")");
         }
         ErrItem(n) => {

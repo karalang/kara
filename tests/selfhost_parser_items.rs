@@ -62,6 +62,25 @@ const CORPUS: &[&str] = &[
     "type Ptr = *const u8;",
     "type Nested = Map[String, Vec[i64]];",
     "type Nothing = ();",
+    // `struct` definitions (no generics).
+    "struct Empty {}",
+    "struct Point { x: i64, y: i64 }",
+    "pub struct Named { pub name: String, age: i64 }",
+    "struct Mutable { mut count: i64 }",
+    "struct Mixed { pub mut head: i64, tail: Vec[i64] }",
+    "shared struct Node { value: i64, next: Option[Node] }",
+    "par struct Counter { mut hits: Atomic[i64] }",
+    "struct Trailing { a: i64, b: bool, }",
+    "struct Refs { left: ref i64, owner: Box[String] }",
+    // `enum` definitions (no generics).
+    "enum Color { Red, Green, Blue }",
+    "enum Shape { Circle(i64), Rect(i64, i64) }",
+    "enum Mixed2 { Unit, Pair(i64, bool), Named { x: i64, y: i64 } }",
+    "pub enum Opt { Some(i64), None }",
+    "shared enum Tree { Leaf(i64), Branch(Tree, Tree) }",
+    "par enum Msg { Ping, Data(Vec[u8]) }",
+    "enum One { Only }",
+    "enum WithTrailing { A, B, }",
 ];
 
 // ── Rust-side canonical render (must match `ast_render.kara`) ──
@@ -304,6 +323,73 @@ fn vis(is_pub: bool) -> &'static str {
     }
 }
 
+/// ` pub`/` shared`/` par` struct/enum modifier flags — must match
+/// `ast_render.kara::render_type_mods`.
+fn type_mods(is_pub: bool, is_shared: bool, is_par: bool) -> String {
+    let mut s = String::new();
+    if is_pub {
+        s.push_str(" pub");
+    }
+    if is_shared {
+        s.push_str(" shared");
+    }
+    if is_par {
+        s.push_str(" par");
+    }
+    s
+}
+
+/// `(field[ pub][ mut] NAME<span> TYPE)` — must match
+/// `ast_render.kara::render_struct_field`.
+fn render_rust_struct_field(f: &karac::ast::StructField) -> String {
+    let mut out = String::from("(field");
+    if f.is_pub {
+        out.push_str(" pub");
+    }
+    if f.is_mut {
+        out.push_str(" mut");
+    }
+    out.push(' ');
+    out.push_str(&f.name);
+    out.push_str(&span_item_off_len(f.span.offset, f.span.length));
+    out.push(' ');
+    out.push_str(&render_rust_type(&f.ty));
+    out.push(')');
+    out
+}
+
+/// `(variant NAME<span>[ (vtuple ...)|(vstruct ...)])` — must match
+/// `ast_render.kara::render_variant`.
+fn render_rust_variant(v: &karac::ast::Variant) -> String {
+    use karac::ast::VariantKind;
+    let mut out = format!(
+        "(variant {}{}",
+        v.name,
+        span_item_off_len(v.span.offset, v.span.length)
+    );
+    match &v.kind {
+        VariantKind::Unit => {}
+        VariantKind::Tuple(types) => {
+            out.push_str(" (vtuple");
+            for t in types {
+                out.push(' ');
+                out.push_str(&render_rust_type(t));
+            }
+            out.push(')');
+        }
+        VariantKind::Struct(fields) => {
+            out.push_str(" (vstruct");
+            for f in fields {
+                out.push(' ');
+                out.push_str(&render_rust_struct_field(f));
+            }
+            out.push(')');
+        }
+    }
+    out.push(')');
+    out
+}
+
 /// Item render — must match `ast_render.kara::render_item`.
 fn render_rust_item(item: &Item) -> String {
     match item {
@@ -338,8 +424,36 @@ fn render_rust_item(item: &Item) -> String {
                 render_rust_type(&t.ty)
             )
         }
+        Item::StructDef(s) => {
+            let mut out = format!(
+                "(struct{} {}{}",
+                type_mods(s.is_pub, s.is_shared, s.is_par),
+                s.name,
+                span_item_off_len(s.span.offset, s.span.length)
+            );
+            for f in &s.fields {
+                out.push(' ');
+                out.push_str(&render_rust_struct_field(f));
+            }
+            out.push(')');
+            out
+        }
+        Item::EnumDef(e) => {
+            let mut out = format!(
+                "(enum{} {}{}",
+                type_mods(e.is_pub, e.is_shared, e.is_par),
+                e.name,
+                span_item_off_len(e.span.offset, e.span.length)
+            );
+            for v in &e.variants {
+                out.push(' ');
+                out.push_str(&render_rust_variant(v));
+            }
+            out.push(')');
+            out
+        }
         other => panic!(
-            "render_rust_item: item {other:?} is outside parser slice 3c-i; \
+            "render_rust_item: item {other:?} is outside parser slice 3c-ii; \
              keep the corpus to the ported item forms or extend the renderer"
         ),
     }

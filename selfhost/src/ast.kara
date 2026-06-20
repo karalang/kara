@@ -654,10 +654,71 @@ pub struct TypeAliasNode {
     pub span: Span,
 }
 
+// ── Struct + enum definitions (slice 3c-ii) ──
+//
+// `[shared|par] struct NAME { [pub] [mut] field: TYPE, ... }` and
+// `[shared|par] enum NAME { Unit, Tuple(T, ...), Struct { f: T, ... }, ... }`.
+// The seed captures BOTH the struct's and the enum's span at their OWN keyword
+// (`struct`/`enum`) — the `shared`/`par` keyword is consumed by the dispatch but
+// does NOT shift the definition span (it is recorded separately in the seed's
+// `kind_keyword_span`, which the port omits). Generic params + `where` clauses
+// land in 3c-v.
+
+// `[pub] [mut] name: TYPE` — one named struct field (also reused for struct-form
+// enum-variant payloads). Span starts at the field (incl. `pub`/`mut`) and ends
+// at its type, mirroring the seed's `parse_struct_fields`.
+pub struct StructFieldNode {
+    pub is_pub: bool,
+    pub is_mut: bool,
+    pub name: String,
+    pub ty: TypeExpr,
+    pub span: Span,
+}
+
+pub struct StructDefNode {
+    pub is_pub: bool,
+    pub is_shared: bool,
+    pub is_par: bool,
+    pub name: String,
+    pub fields: Vec[StructFieldNode],
+    pub span: Span,
+}
+
+// The shape of an enum variant's payload. A payload-less plain enum (legal as a
+// struct field, like `BinOp`) used as a discriminator on `VariantNode` — this
+// sidesteps `E_ENUM_NESTED_ENUM_PAYLOAD` (an enum variant may not carry another
+// enum directly) that a `VariantKind`-with-payloads model would hit. The
+// applicable payload vector (`tuple_types` for `TupleV`, `fields` for `StructV`)
+// is populated per tag; the other stays empty.
+pub enum VariantTag {
+    UnitV,
+    TupleV,
+    StructV,
+}
+
+pub struct VariantNode {
+    pub name: String,
+    pub tag: VariantTag,
+    pub tuple_types: Vec[TypeExpr],
+    pub fields: Vec[StructFieldNode],
+    pub span: Span,
+}
+
+pub struct EnumDefNode {
+    pub is_pub: bool,
+    pub is_shared: bool,
+    pub is_par: bool,
+    pub name: String,
+    pub variants: Vec[VariantNode],
+    pub span: Span,
+}
+
 pub enum Item {
     Use(UseDeclNode),
     Const(ConstDeclNode),
     TypeAlias(TypeAliasNode),
+    Struct(StructDefNode),
+    Enum(EnumDefNode),
     // Error-recovery placeholder (an unrecognized leading token / EOF).
     ErrItem(SpanNode),
 }
