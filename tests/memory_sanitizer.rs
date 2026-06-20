@@ -3030,6 +3030,31 @@ fn main() {
         );
     }
 
+    // ── Shared struct structural `==` (C1, B-2026-06-19-9) ────────
+    // The field-walk comparator reads through the RC pointers (and a
+    // String field's heap buffer) but allocates nothing; this pins that
+    // it neither leaks nor double-frees the compared structs or their
+    // String fields when they drop. A ≥36-byte String field defeats LSan's
+    // short-string reachability blind spot (memory: lsan-reachability).
+    #[test]
+    fn asan_shared_struct_structural_eq_no_leak_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Eq, PartialEq)]
+shared struct Tag { id: i64, name: String }
+fn main() {
+    let a = Tag { id: 1, name: "shared-struct-eq-asan-payload-0001" };
+    let b = Tag { id: 1, name: "shared-struct-eq-asan-payload-0001" };
+    let c = Tag { id: 2, name: "shared-struct-eq-asan-payload-XXXX" };
+    if a == b { println("eq"); }
+    if a != c { println("ne"); }
+}
+"#,
+            &["eq", "ne"],
+            "shared_struct_structural_eq",
+        );
+    }
+
     // ── Shared struct alias: refcount goes to 2, then 0 ───────────
     // Binding `b = a` triggers `rc_inc`. Scope-exit runs `rc_dec` twice
     // (once per binding); only the last one should free. Catches bugs

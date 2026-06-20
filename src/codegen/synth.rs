@@ -727,6 +727,163 @@ impl<'ctx> super::Codegen<'ctx> {
         eq_fn
     }
 
+    /// Structural `==` for a `shared struct` value (C1, ledger B-2026-06-19-9).
+    /// A `shared struct` is an RC heap POINTER, so it misses the value-wise
+    /// `compile_struct_eq` path. This synthesizes `bool(ptr a_obj, ptr b_obj)`
+    /// taking the two RC pointers BY VALUE and comparing field-by-field through
+    /// the heap layout, matching the interpreter's structural `Value::SharedStruct`
+    /// equality: an `Arc::ptr_eq` identity fast-path, then a recursive field walk.
+    ///
+    /// Registered in the module BEFORE recursing into child eq fns so a
+    /// self-referential shared struct (`shared struct Node { next: Node }`)
+    /// resolves to this same cached fn rather than looping the emitter. (Runtime
+    /// cyclic *data* infinite-loops exactly as the interpreter's structural
+    /// compare does — A/B parity, not a new footgun.)
+    ///
+    /// Field dispatch: a nested `shared struct` field holds an 8-byte RC pointer
+    /// in its slot, so it's loaded and recursed structurally; every other field
+    /// kind (scalar / String / by-value struct / tuple / enum) goes through the
+    /// existing slot-based `emit_eq_fn_for_type_expr`, which loads + compares.
+    pub(super) fn emit_shared_struct_eq_fn(&mut self, struct_name: &str) -> FunctionValue<'ctx> {
+        let fn_name = format!("karac_sheq_{struct_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return f;
+        }
+        let info = self
+            .shared_types
+            .get(struct_name)
+            .expect("emit_shared_struct_eq_fn: shared type must be registered")
+            .clone();
+        let field_tes = self
+            .struct_field_type_exprs
+            .get(struct_name)
+            .cloned()
+            .expect("emit_shared_struct_eq_fn: struct fields must be registered");
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let bool_t = self.context.bool_type();
+        let i64_t = self.context.i64_type();
+
+        let saved_bb = self.builder.get_insert_block();
+        let eq_fn_ty = bool_t.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        // Register BEFORE recursing so a self-referential shared struct finds
+        // this fn cached instead of re-entering the emitter.
+        let eq_fn = self
+            .module
+            .add_function(&fn_name, eq_fn_ty, Some(Linkage::Internal));
+
+        let entry_bb = self.context.append_basic_block(eq_fn, "entry");
+        let walk_bb = self.context.append_basic_block(eq_fn, "walk");
+        let eq_ret_bb = self.context.append_basic_block(eq_fn, "eq");
+        let neq_bb = self.context.append_basic_block(eq_fn, "neq");
+
+        self.builder.position_at_end(eq_ret_bb);
+        self.builder
+            .build_return(Some(&bool_t.const_int(1, false)))
+            .unwrap();
+        self.builder.position_at_end(neq_bb);
+        self.builder
+            .build_return(Some(&bool_t.const_int(0, false)))
+            .unwrap();
+
+        // Entry: `Arc::ptr_eq` identity fast-path (also short-circuits a
+        // self-compare and a cycle that revisits the same allocation).
+        self.builder.position_at_end(entry_bb);
+        let a_obj = eq_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let b_obj = eq_fn.get_nth_param(1).unwrap().into_pointer_value();
+        let a_int = self
+            .builder
+            .build_ptr_to_int(a_obj, i64_t, "sheq.ai")
+            .unwrap();
+        let b_int = self
+            .builder
+            .build_ptr_to_int(b_obj, i64_t, "sheq.bi")
+            .unwrap();
+        let same = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, a_int, b_int, "sheq.same")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(same, eq_ret_bb, walk_bb)
+            .unwrap();
+
+        // Walk: field-by-field through the heap layout (skip the RC header via
+        // `base`).
+        self.builder.position_at_end(walk_bb);
+        let (gep_ty, base) = self.shared_gep_layout(struct_name, info.heap_type);
+        for (i, field_te) in field_tes.iter().enumerate() {
+            let idx = i as u32 + base;
+            let fa = self
+                .builder
+                .build_struct_gep(gep_ty, a_obj, idx, &format!("sheq.fa{i}"))
+                .unwrap();
+            let fb = self
+                .builder
+                .build_struct_gep(gep_ty, b_obj, idx, &format!("sheq.fb{i}"))
+                .unwrap();
+            // Nested shared-struct field: load the inner RC pointer and recurse
+            // structurally. Shared *enums* (out of C1 scope) fall to the
+            // slot-based dispatcher, which compares them by pointer identity.
+            let inner_shared: Option<String> = match &field_te.kind {
+                TypeKind::Path(p)
+                    if p.segments.len() == 1
+                        && self
+                            .shared_types
+                            .get(p.segments[0].as_str())
+                            .map(|si| !si.is_enum)
+                            .unwrap_or(false) =>
+                {
+                    Some(p.segments[0].clone())
+                }
+                _ => None,
+            };
+            let r = if let Some(inner) = inner_shared {
+                let inner_fn = self.emit_shared_struct_eq_fn(&inner);
+                let field_llvm = gep_ty.get_field_type_at_index(idx).unwrap();
+                let ia = self
+                    .builder
+                    .build_load(field_llvm, fa, &format!("sheq.ia{i}"))
+                    .unwrap()
+                    .into_pointer_value();
+                let ib = self
+                    .builder
+                    .build_load(field_llvm, fb, &format!("sheq.ib{i}"))
+                    .unwrap()
+                    .into_pointer_value();
+                self.builder
+                    .build_call(inner_fn, &[ia.into(), ib.into()], &format!("sheq.r{i}"))
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value()
+            } else {
+                let child = self.emit_eq_fn_for_type_expr(field_te);
+                self.builder
+                    .build_call(child, &[fa.into(), fb.into()], &format!("sheq.r{i}"))
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value()
+            };
+            let next_bb = self
+                .context
+                .append_basic_block(eq_fn, &format!("sheq.next{i}"));
+            self.builder
+                .build_conditional_branch(r, next_bb, neq_bb)
+                .unwrap();
+            self.builder.position_at_end(next_bb);
+        }
+        // All fields equal.
+        self.builder
+            .build_unconditional_branch(eq_ret_bb)
+            .unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        eq_fn
+    }
+
     /// Emit a per-field-recursive hash function for an n-tuple. Each field's
     /// hash is computed by recursing into `emit_hash_fn_for_type_expr` (so
     /// `(String, i64)` correctly hashes the String contents, not the struct

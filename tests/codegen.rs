@@ -8442,6 +8442,52 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_shared_struct_structural_equality() {
+        // C1 (B-2026-06-19-9): structural `==`/`!=` on `shared struct` values
+        // now lowers in codegen (was interpreter-only). Covers the direct
+        // scalar-field compare, the `Arc::ptr_eq` self-compare fast-path,
+        // nested shared-struct fields, and a String field — A/B parity with
+        // the interpreter test `test_shared_struct_structural_equality`.
+        let out = run_program(
+            r#"
+#[derive(Eq, PartialEq)]
+shared struct P { x: i64, y: i64 }
+#[derive(Eq, PartialEq)]
+shared struct Line { a: P, b: P, label: String }
+fn main() {
+    let a = P { x: 1, y: 2 };
+    let b = P { x: 1, y: 2 };
+    let c = P { x: 9, y: 2 };
+    if a == b { println("eq"); }
+    if a != c { println("ne"); }
+    if a == a { println("self"); }
+    let l1 = Line { a: P { x: 1, y: 2 }, b: P { x: 3, y: 4 }, label: "seg" };
+    let l2 = Line { a: P { x: 1, y: 2 }, b: P { x: 3, y: 4 }, label: "seg" };
+    let l3 = Line { a: P { x: 1, y: 2 }, b: P { x: 3, y: 9 }, label: "seg" };
+    let l4 = Line { a: P { x: 1, y: 2 }, b: P { x: 3, y: 4 }, label: "DIFF" };
+    if l1 == l2 { println("line-eq"); }
+    if l1 != l3 { println("line-ne-field"); }
+    if l1 != l4 { println("line-ne-string"); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(
+                lines,
+                vec![
+                    "eq",
+                    "ne",
+                    "self",
+                    "line-eq",
+                    "line-ne-field",
+                    "line-ne-string"
+                ]
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_shared_struct_alias() {
         let out = run_program(
             r#"

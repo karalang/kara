@@ -2709,19 +2709,23 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_float_binop(op, lf, rf);
         }
 
-        // Shared-struct (reference-typed) equality. A `shared struct` is a heap
-        // RC POINTER, so it misses the struct-value path above. Structural
-        // `==` / `!=` is defined (design.md § Equality Semantics) and the
-        // interpreter implements it (eval_ops.rs), but the codegen field-walk
-        // through the pointer is a tracked follow-on — emit a clear, actionable
-        // error instead of the generic "non-comparable PointerType" below.
+        // RC-pointer equality that the operator-site interception in
+        // `compile_expr`'s Binary arm did NOT already handle. A direct
+        // `shared struct == shared struct` is now field-walked there (C1,
+        // B-2026-06-19-9). What still reaches here is the residual RC-pointer
+        // shape codegen can't yet field-walk: a `shared enum` (tag+payload
+        // through the pointer), or a `shared struct` nested as a field of a
+        // by-value struct (no per-field type name at the `compile_struct_eq`
+        // recursion site). Emit a clear, actionable error rather than the
+        // generic "non-comparable PointerType" below.
         if matches!(op, BinOp::Eq | BinOp::NotEq)
             && (lhs.is_pointer_value() || rhs.is_pointer_value())
         {
             return Err(
-                "structural `==`/`!=` on a `shared struct` is not yet supported under \
-                 `karac build` (codegen); it works under `karac run`. The field-wise \
-                 comparison lowering through the RC pointer is a tracked follow-on."
+                "structural `==`/`!=` on this reference type is not yet supported under \
+                 `karac build` (codegen); it works under `karac run`. A direct \
+                 `shared struct` comparison is supported — the remaining gap is a \
+                 `shared enum`, or a `shared struct` nested inside a by-value struct."
                     .to_string(),
             );
         }

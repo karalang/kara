@@ -435,6 +435,43 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                     }
+                    // Shared-struct structural `==` / `!=` (C1, B-2026-06-19-9).
+                    // A `shared struct` is an RC heap pointer, so it misses the
+                    // value-wise struct path above; recover the struct name from
+                    // an operand and call a field-walk comparator through the
+                    // pointer (matching the interpreter's structural
+                    // `Value::SharedStruct` equality). Shared *enums* stay on the
+                    // honest-Err path in `compile_binop_typed` (out of scope).
+                    if matches!(op, BinOp::Eq | BinOp::NotEq)
+                        && (lhs.is_pointer_value() || rhs.is_pointer_value())
+                    {
+                        if let Some((name, info)) = self
+                            .shared_type_for_expr(left)
+                            .or_else(|| self.shared_type_for_expr(right))
+                        {
+                            if !info.is_enum
+                                && lhs.is_pointer_value()
+                                && rhs.is_pointer_value()
+                            {
+                                let eq_fn = self.emit_shared_struct_eq_fn(&name);
+                                let a = lhs.into_pointer_value();
+                                let b = rhs.into_pointer_value();
+                                let r = self
+                                    .builder
+                                    .build_call(eq_fn, &[a.into(), b.into()], "sheq.call")
+                                    .unwrap()
+                                    .try_as_basic_value()
+                                    .unwrap_basic()
+                                    .into_int_value();
+                                let out = if matches!(op, BinOp::NotEq) {
+                                    self.builder.build_not(r, "sheq.ne").unwrap()
+                                } else {
+                                    r
+                                };
+                                return Ok(out.into());
+                            }
+                        }
+                    }
                     self.compile_binop(op, lhs, rhs)
                 }
             },
