@@ -22,12 +22,17 @@
 //     it (the native context menu is suppressed for us). Each arrives as a
 //     typed channel the loop drains with a non-blocking `try_recv` each frame —
 //     live input, still no `await`, still no callback coloring.
+//   * `focus()` / `blur()` (std.web.events) gate the work: while the tab is
+//     unfocused (`blur`) the loop still spins and drains input, but SKIPS the
+//     parallel `render_frame` — a backgrounded tab stops driving the worker
+//     pool. `focus` resumes it. These are UNIT `()` channels: the token's mere
+//     arrival is the whole signal, no payload.
 //
 // Build:  karac build mandelbrot.kara --target=wasm_browser --features wasm-threads
 // Serve:  see README.md (needs COOP/COEP headers for SharedArrayBuffer).
 
 import std.web.time.{animation_frames};
-import std.web.events.{pointer_moves, PointerEvent, wheel, WheelEvent, keydown, KeyEvent, dblclick, contextmenu, ClickEvent};
+import std.web.events.{pointer_moves, PointerEvent, wheel, WheelEvent, keydown, KeyEvent, dblclick, contextmenu, ClickEvent, focus, blur};
 
 // The canvas this program paints. A user-defined host capability — like
 // `Dom` in examples/ssr_counter — reached through the `put_pixels` host fn.
@@ -198,6 +203,9 @@ fn main() {
     let mut cx = -0.75;
     let mut cy = 0.0;
     let mut scale = start_scale;
+    // Render gate: set while the tab is unfocused so the loop idles the worker
+    // pool (it keeps spinning and draining input, but skips `render_frame`).
+    let mut paused = false;
 
     let frames = animation_frames();
     let wheels = wheel();
@@ -205,6 +213,8 @@ fn main() {
     let keys = keydown();
     let dbls = dblclick();
     let rights = contextmenu();
+    let foc = focus();
+    let unfoc = blur();
 
     // Last pointer position (CSS px == internal px at 1:1), for the pan delta.
     let mut last_px = 0.0;
@@ -309,6 +319,28 @@ fn main() {
             None => {}
         }
 
-        render_frame(cx, cy, scale, workers);
+        // Focus / blur → gate the render. `blur()` (we lost focus) sets `paused`;
+        // `focus()` (we got it back) clears it. Both are UNIT `()` channels, so
+        // the match binds nothing — the token's arrival IS the signal. Drain
+        // `blur` first, then `focus`, so if both land in one frame `focus` wins
+        // and we keep painting. While paused the loop above still ran every
+        // input `try_recv` (cheap, keeps the view state live) — only the
+        // `render_frame` below, the parallel per-frame compute and the one real
+        // cost, is skipped, so an unfocused tab stops driving the worker pool.
+        // On `focus` the next frame paints the accumulated state at once. (A real
+        // browser also throttles `requestAnimationFrame` when the tab is hidden;
+        // this additionally idles a tab that is merely unfocused but visible.)
+        match unfoc.try_recv() {
+            Some(_) => { paused = true; }
+            None => {}
+        }
+        match foc.try_recv() {
+            Some(_) => { paused = false; }
+            None => {}
+        }
+
+        if not paused {
+            render_frame(cx, cy, scale, workers);
+        }
     }
 }

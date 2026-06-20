@@ -17770,6 +17770,141 @@ run({ put_pixels }, { dblclickTarget: target, contextmenuTarget: target }).catch
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// Fathom also wires the UNIT-payload `std.web.events` pair `focus()` / `blur()`
+/// to GATE the render: while the tab is unfocused the loop still spins and
+/// drains every input channel, but skips the parallel `render_frame` — so a
+/// backgrounded tab stops driving the worker pool. This is the demo-level proof
+/// the gate works end to end, and it exercises a property the click test can't:
+/// the ABSENCE of rendering.
+///
+/// Two complementary assertions, both leaning on Fathom's per-call `put_pixels`
+/// being the one and only "a frame was painted" signal:
+///   1. NEGATIVE — after a `blur`, `put_pixels` must not fire AT ALL across a
+///      600 ms window, even though `dblclick`s are dispatched the whole time
+///      (each would visibly zoom if rendered). If any frame paints while
+///      blurred, the gate leaked and we exit non-zero immediately.
+///   2. POSITIVE — the moment a `focus` arrives, the loop resumes and the very
+///      next `put_pixels` shows a view that MOVED off the pre-blur baseline:
+///      proof the loop kept draining input while paused (so the queued zoom
+///      accumulated) and that `focus` actually un-gated the render.
+///
+/// `FATHOM_PAUSE_OK` prints only if the pause held and the resume painted a
+/// changed frame; the 20 s bail catches "focus never resumed rendering".
+///
+/// Doubles as a bit-rot guard on the example source (built from the committed
+/// file, not an inline copy).
+#[test]
+fn fathom_example_focus_blur_pause_e2e() {
+    let tmp = wasm_test_dir("fathompause");
+    let path = tmp.join("mandelbrot.kara");
+    std::fs::write(&path, include_str!("../examples/fathom/mandelbrot.kara")).unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--features=wasm-threads",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: fathom_example_focus_blur_pause_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "fathom build failed: {stderr}");
+    assert!(tmp.join("mandelbrot.threads.wasm").exists());
+
+    let harness = tmp.join("harness.mjs");
+    std::fs::write(
+        &harness,
+        r#"import { run } from "./mandelbrot.js";
+// An off-centre point so a single zoom step shifts (cx, cy) too, not just
+// scale — the post-resume frame is then unmistakably different. CSS px ==
+// internal px at 1:1.
+const PX = 470, PY = 300;
+class Click extends Event {
+  constructor(type, x, y) { super(type, { cancelable: true }); this.offsetX = x; this.offsetY = y; }
+}
+// focus/blur are distinct DOM event types with no payload; the listeners read
+// only that they fired. One EventTarget stands in for the window.
+const target = new EventTarget();
+const bail = setTimeout(() => { console.error("FAIL: focus never resumed rendering"); process.exit(2); }, 20000);
+
+function sum(view) {
+  let s = 0;
+  for (let i = 0; i < view.length; i += 4) { s = (s * 31 + view[i] + view[i + 1] * 3 + view[i + 2] * 7) >>> 0; }
+  return s;
+}
+
+let frame = 0, baseline = 0, phase = "warmup", dblIv = null;
+function put_pixels(ptr, len, w, h, ctx) {
+  frame++;
+  const view = new Uint8Array(ctx.memory.buffer, Number(ptr), Number(len));
+  if (frame === 2) {
+    // Untouched view — it must have real structure (the set's classic shape),
+    // proving rendering works before we gate it.
+    let mn = 255, mx = 0;
+    for (let i = 0; i < view.length; i += 4) { const r = view[i]; if (r < mn) mn = r; if (r > mx) mx = r; }
+    if (mx - mn < 20) { console.error("FAIL: baseline framebuffer too uniform (mn=" + mn + " mx=" + mx + ")"); process.exit(3); }
+    baseline = sum(view);
+    // Enter the pause: blur now, then dispatch dblclicks throughout the window.
+    // The guest keeps looping and draining them (the view state zooms), but with
+    // the render gated NO further put_pixels must fire until we re-focus.
+    phase = "paused";
+    target.dispatchEvent(new Event("blur"));
+    dblIv = setInterval(() => target.dispatchEvent(new Click("dblclick", PX, PY)), 8);
+    setTimeout(() => { phase = "resumed"; target.dispatchEvent(new Event("focus")); }, 600);
+    return;
+  }
+  if (phase === "paused") {
+    // A frame painted while blurred → the render gate leaked.
+    console.error("FAIL: rendered a frame while blurred (frame=" + frame + ")");
+    if (dblIv !== null) clearInterval(dblIv);
+    clearTimeout(bail);
+    process.exit(4);
+  }
+  if (phase === "resumed") {
+    // First frame after focus: the queued zoom that accumulated during the
+    // pause must now be visible, so the view has moved off the baseline.
+    const s = sum(view);
+    if (dblIv !== null) clearInterval(dblIv);
+    clearTimeout(bail);
+    if (s === baseline) { console.error("FAIL: view unchanged after focus resume (sum=" + s + ")"); process.exit(5); }
+    console.log("FATHOM base=" + baseline + " resumed=" + s);
+    console.log("FATHOM_PAUSE_OK");
+    process.exit(0);
+  }
+}
+run({ put_pixels }, { dblclickTarget: target, focusTarget: target, blurTarget: target }).catch((e) => {
+  console.error("run failed: " + (e && e.message ? e.message : e));
+  process.exit(1);
+});
+"#,
+    )
+    .unwrap();
+    let node = std::process::Command::new("node")
+        .arg(&harness)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: fathom_example_focus_blur_pause_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let so = String::from_utf8_lossy(&node_out.stdout);
+    let se = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success() && so.contains("FATHOM_PAUSE_OK"),
+        "fathom pause harness failed under node: stdout={so} stderr={se}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// The sequential-target gate: the same host-async producer built WITHOUT
 /// `--features wasm-threads` is a hard compile error (codegen, pre-link),
 /// pointing at the flag — never a silent zero-value `recv`. Fires during

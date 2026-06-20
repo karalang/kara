@@ -41,14 +41,15 @@
     <code>async</code> and no threading code. <b>Scroll to zoom toward the
     cursor; drag to pan; double-click to dive IN, right-click to back OUT;
     arrow keys / <code>+</code> <code>-</code> / <code>R</code> from the
-    keyboard.</b></p>
+    keyboard.</b> Click away and rendering pauses; click back and it resumes —
+    an unfocused tab idles the worker pool instead of burning it.</p>
   <div id="stage">
     <canvas id="screen" width="640" height="420"></canvas>
     <div id="overlay">starting…</div>
   </div>
   <p id="note">Where is the threading code? There isn't any — the compiler
     found it. The render loop is a plain blocking
-    <code>loop { frames.recv(); /* drain wheel/pointer/keys/clicks */ render_frame(); }</code>;
+    <code>loop { frames.recv(); /* drain wheel/pointer/keys/clicks/focus */ if !paused { render_frame(); } }</code>;
     each frame's rows are split across a Web Worker pool by
     <code>TaskGroup.spawn</code>, and live scroll/pointer input arrives as
     channels drained with <code>try_recv</code> — no <code>await</code>.</p>
