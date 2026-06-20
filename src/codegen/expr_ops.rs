@@ -804,6 +804,27 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.try_compile_union_field_store(object, field, new_val) {
             return Ok(());
         }
+        // SoA indexed field store: `grid[i].field = X` where `grid` is a
+        // SoA-laid-out `Vec[E]` (B-2026-06-20-7). The field lives in ONE group's
+        // separate buffer at `[i]`, addressed by that group's sub-struct stride —
+        // not by striding the SoA struct as a contiguous AoS element. Routed
+        // before the indexed-shared / nested-plain-struct branches below, which
+        // would treat the SoA struct as AoS and write past the group buffer
+        // (index 0 coincidentally correct, index >= 1 a silent heap overflow).
+        // Gated on `active_soa_layout`, so a plain AoS Vec / shared-elem Vec is
+        // untouched.
+        if let ExprKind::Index {
+            object: inner,
+            index,
+        } = &object.kind
+        {
+            if let ExprKind::Identifier(soa_name) = &inner.kind {
+                if self.active_soa_layout(soa_name).is_some() {
+                    let soa_name = soa_name.clone();
+                    return self.compile_soa_field_store(&soa_name, index, field, new_val);
+                }
+            }
+        }
         // Indexed-shared-struct receiver: `nodes[i].field = X` where
         // `nodes: Vec[Shared(N)]`. Load the heap pointer at `nodes[i]`
         // (the element slot stores the RC pointer cast to its LLVM

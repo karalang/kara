@@ -7736,6 +7736,51 @@ fn main() {
     }
 
     #[test]
+    fn asan_soa_field_index_store_no_overflow() {
+        // B-2026-06-20-7: the buggy field-level SoA index-store strided the SoA
+        // struct as a contiguous AoS element, so a store at index >= 1 wrote PAST
+        // the target group's buffer — a heap-buffer-overflow ASAN catches. The
+        // fix addresses the field's own group buffer at [i] by the group
+        // sub-struct stride. This scatters field writes across BOTH groups
+        // (`physics.x` and `combat.hp`) at indices 0..2, then reads them back,
+        // looped 20x so any stray address trips ASAN. ≥36 bytes of live payload
+        // per element so a reachable leak isn't masked by LSan's blind spot.
+        assert_clean_asan_run(
+            r#"
+struct Body { x: f64, y: f64, hp: i64 }
+layout bodies: Vec[Body] {
+    group physics { x, y }
+    group combat { hp }
+}
+fn main() {
+    let mut sum = 0;
+    let mut k = 0;
+    while k < 20 {
+        let mut bodies: Vec[Body] = Vec.new();
+        bodies.push(Body { x: 1.0, y: 2.0, hp: 100 });
+        bodies.push(Body { x: 3.0, y: 4.0, hp: 200 });
+        bodies.push(Body { x: 5.0, y: 6.0, hp: 300 });
+        let mut i = 0;
+        while i < bodies.len() {
+            bodies[i].hp = bodies[i].hp + 1;
+            i = i + 1;
+        }
+        let mut j = 0;
+        while j < bodies.len() {
+            sum = sum + bodies[j].hp;
+            j = j + 1;
+        }
+        k = k + 1;
+    }
+    println(sum);
+}
+"#,
+            &["12060"],
+            "soa_field_index_store_no_overflow",
+        );
+    }
+
+    #[test]
     fn asan_soa_drop_with_cold_group_primitive() {
         // Cold group adds an extra buffer that pre-fix codegen never
         // freed (the cold pointer sits between the hot pointers and the

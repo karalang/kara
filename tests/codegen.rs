@@ -18223,6 +18223,51 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_soa_field_index_store_strided() {
+        // B-2026-06-20-7: field-level SoA index-store `bodies[i].field = expr`.
+        // The destination must address the field's OWN group buffer at [i], by
+        // the group sub-struct stride — not stride the SoA struct as a contiguous
+        // AoS element. Before the fix the store fell into the nested-plain-struct
+        // path which treated SoA as AoS: index 0 coincidentally hit group-0 slot
+        // 0, but index >= 1 wrote PAST the group buffer (a silent heap overflow),
+        // so the store was dropped. This exercises the `e.pos += e.vel` idiom
+        // (a field store whose RHS reads two OTHER groups of the same element) and
+        // reads back across a third group. bodies[0].x=0+1.5=1.5, bodies[1].x=
+        // 10+2.5=12.5; total = (1.5+100)+(12.5+50) = 164. A dropped index-1 store
+        // (the bug) would leave bodies[1].x=10 -> 161.5.
+        let out = run_program(
+            r#"
+struct Body { x: f64, vx: f64, health: f64 }
+layout bodies: Vec[Body] { group pos { x } group vel { vx } group hp { health } }
+fn main() {
+    let mut bodies: Vec[Body] = Vec.new();
+    bodies.push(Body { x: 0.0, vx: 1.5, health: 100.0 });
+    bodies.push(Body { x: 10.0, vx: 2.5, health: 50.0 });
+    let mut i = 0;
+    while i < bodies.len() {
+        bodies[i].x = bodies[i].x + bodies[i].vx;
+        i = i + 1;
+    }
+    let mut total = 0.0;
+    let mut j = 0;
+    while j < bodies.len() {
+        total = total + bodies[j].x + bodies[j].health;
+        j = j + 1;
+    }
+    println(total);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "164",
+                "field-level SoA index-store must persist at every index (cross-group write + read)"
+            );
+        }
+    }
+
     // ── String operators ──────────────────────────────────────────
 
     #[test]

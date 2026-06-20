@@ -2096,6 +2096,146 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(elem_val.into())
     }
 
+    /// Store `new_val` into a single field of a SoA-laid-out collection's
+    /// element: `soa_name[index].field = new_val` (B-2026-06-20-7). A field
+    /// write must target the ONE group buffer that owns `field`, at `[index]`,
+    /// using that group's sub-struct stride — NOT stride the SoA struct as if it
+    /// were a contiguous AoS element. The old code had no SoA branch, so this
+    /// store fell into the nested-plain-struct path which treated the SoA struct
+    /// as AoS (read group-0's pointer as the data ptr, strided by the full
+    /// element size): index 0 coincidentally hit group-0 slot 0, but index >= 1
+    /// landed past the group buffer (a silent heap overflow / dropped store).
+    /// Mirrors `compile_soa_index_read`'s group addressing for the destination of
+    /// exactly one field.
+    pub(super) fn compile_soa_field_store(
+        &mut self,
+        soa_name: &str,
+        index: &Expr,
+        field: &str,
+        new_val: BasicValueEnum<'ctx>,
+    ) -> Result<(), String> {
+        let soa = self
+            .active_soa_layout(soa_name)
+            .ok_or_else(|| format!("'{}' is not a SoA-laid-out collection", soa_name))?;
+        let slot = self
+            .variables
+            .get(soa_name)
+            .copied()
+            .ok_or_else(|| format!("Undefined SoA variable '{}' in field store", soa_name))?;
+
+        // The field's index in the element struct, then the group that owns it
+        // (a hot group keyed by its struct-field index, or the cold group whose
+        // pointer sits after all hot groups) and the field's position WITHIN that
+        // group's sub-struct.
+        let dst_idx = self
+            .struct_field_names
+            .get(&soa.struct_name)
+            .and_then(|names| names.iter().position(|n| n == field))
+            .ok_or_else(|| {
+                format!(
+                    "Unknown field '{}' on SoA element '{}'",
+                    field, soa.struct_name
+                )
+            })?;
+        let mut located: Option<(u32, usize, SoaGroup)> = None;
+        for (gi, group) in soa.groups.iter().enumerate() {
+            if let Some(fi) = group.field_indices.iter().position(|&x| x == dst_idx) {
+                located = Some((gi as u32, fi, group.clone()));
+                break;
+            }
+        }
+        if located.is_none() {
+            if let Some(cold) = &soa.cold_group {
+                if let Some(fi) = cold.field_indices.iter().position(|&x| x == dst_idx) {
+                    located = Some((Self::soa_cold_ptr_index(soa.num_groups), fi, cold.clone()));
+                }
+            }
+        }
+        let (grp_field_idx, within_group_idx, group) =
+            located.ok_or_else(|| format!("SoA field '{}' is not assigned to any group", field))?;
+
+        let has_cold = soa.cold_group.is_some();
+        let soa_ty = self.soa_vec_type(soa.num_groups, has_cold);
+        let len_idx = Self::soa_len_index(soa.num_groups, has_cold);
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+
+        // `ref`/`mut ref` SoA param: the slot holds a POINTER to the caller's
+        // SoA struct, so deref once before GEPing group/len (same as the read
+        // path — this is what lets a field store cross a function boundary).
+        let soa_struct_ptr = if self.ref_params.contains_key(soa_name) {
+            self.builder
+                .build_load(ptr_ty, slot.ptr, "soa.ref.deref")
+                .unwrap()
+                .into_pointer_value()
+        } else {
+            slot.ptr
+        };
+
+        // Bounds check against len (mirror compile_soa_index_read): panic if
+        // idx >= len — without it a stray index silently corrupts the heap.
+        let idx_val = self.compile_expr(index)?.into_int_value();
+        let len_ptr = self
+            .builder
+            .build_struct_gep(soa_ty, soa_struct_ptr, len_idx, "soa.fstore.len.ptr")
+            .unwrap();
+        let len = self
+            .builder
+            .build_load(i64_t, len_ptr, "soa.fstore.len")
+            .unwrap()
+            .into_int_value();
+        let fn_val = self.current_fn.unwrap();
+        let oob_bb = self.context.append_basic_block(fn_val, "soa.fstore.oob");
+        let ok_bb = self.context.append_basic_block(fn_val, "soa.fstore.ok");
+        let oob = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::UGE,
+                idx_val,
+                len,
+                "soa.fstore.bounds",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(oob, oob_bb, ok_bb)
+            .unwrap();
+        self.builder.position_at_end(oob_bb);
+        self.emit_panic("index out of bounds");
+        self.builder.build_unreachable().unwrap();
+        self.builder.position_at_end(ok_bb);
+
+        // Destination: group_buf[idx] (strided by the group sub-struct), then
+        // the field's within-group slot.
+        let group_elem_ty = self.soa_group_elem_type(&soa.struct_name, &group);
+        let grp_ptr_ptr = self
+            .builder
+            .build_struct_gep(soa_ty, soa_struct_ptr, grp_field_idx, "soa.fstore.gptr")
+            .unwrap();
+        let grp_buf = self
+            .builder
+            .build_load(ptr_ty, grp_ptr_ptr, "soa.fstore.buf")
+            .unwrap()
+            .into_pointer_value();
+        let elem_ptr = unsafe {
+            self.builder
+                .build_gep(group_elem_ty, grp_buf, &[idx_val], "soa.fstore.elem")
+                .unwrap()
+        };
+        let field_ptr = self
+            .builder
+            .build_struct_gep(
+                group_elem_ty,
+                elem_ptr,
+                within_group_idx as u32,
+                "soa.fstore.field",
+            )
+            .unwrap();
+        let new_val =
+            self.coerce_to_struct_field_ty(group_elem_ty, within_group_idx as u32, new_val);
+        self.builder.build_store(field_ptr, new_val).unwrap();
+        Ok(())
+    }
+
     /// Compute the pointer to `vec_var[index]`'s element slot (the GEP
     /// into the Vec's heap buffer), with the same bounds-check elision as
     /// `compile_vec_index` — but WITHOUT the trailing load. Callers that
