@@ -386,6 +386,60 @@ pub fn contextmenu() -> Receiver[ClickEvent] with writes(Input) {
     rx
 }
 
+// Stream window-focus-gained edges on a fresh channel, indefinitely — the
+// first **unit-payload** `events.*` producer. A DOM `focus` event carries no
+// data worth marshalling (the interesting bit is *that it happened*), so this
+// returns the receiving half of a `Channel[()]` — each `recv()` yields a bare
+// `()` token the moment the window/element gains focus, exactly like a
+// `time.every` tick but driven by an input event rather than a clock —
+//
+//     let gained = focus();
+//     let lost = blur();
+//     loop {
+//         gained.recv();   // window came back — resume the simulation
+//         resume();
+//         lost.recv();     // window went away — pause to save battery
+//         pause();
+//     }
+//
+// — no `await`, no `addEventListener` callback ceremony. Multi-shot and
+// coalesced exactly like the other producers (the host sends a fresh token only
+// once the previous one is drained, so a focus flurry collapses to a single
+// edge). Because the payload is `()` (a zero-byte `channel_send`), there is no
+// event-scratch marshalling and no out-slot payload to race — the lightest
+// producer on the spine. Listener registers on `opts.focusTarget` if given,
+// else `globalThis`/window. Same `--features wasm-threads` requirement as the
+// other host-async producers.
+//
+// Mechanism: `Sender.__schedule_focus` (a compiler builtin) clones the sender's
+// channel reference and hands the clone to the host's focus listener, which owns
+// it for the listener's lifetime.
+pub fn focus() -> Receiver[()] with writes(Input) {
+    let (tx, rx): (Sender[()], Receiver[()]) = Channel.new();
+    tx.__schedule_focus();
+    rx
+}
+
+// Stream window-focus-LOST edges on a fresh channel, indefinitely — the
+// focus-lost sibling of `focus`, the other half of window focus-state tracking.
+// Like `focus` this is a unit-payload `Channel[()]` producer: each `recv()`
+// yields a bare `()` the moment the window/element loses focus (a DOM `blur`).
+// Pair the two to gate background work (resume on `focus`, pause on `blur` — see
+// the example on `focus`). Multi-shot and coalesced exactly like `focus`;
+// `focus` and `blur` are distinct DOM events, so the two listeners never
+// cross-fire even when both register on the same target. Listener registers on
+// `opts.blurTarget` if given, else `globalThis`/window. Same
+// `--features wasm-threads` requirement as the other host-async producers.
+//
+// Mechanism: `Sender.__schedule_blur` (a compiler builtin) clones the sender's
+// channel reference and hands the clone to the host's blur listener, which owns
+// it for the listener's lifetime.
+pub fn blur() -> Receiver[()] with writes(Input) {
+    let (tx, rx): (Sender[()], Receiver[()]) = Channel.new();
+    tx.__schedule_blur();
+    rx
+}
+
 // Stream key-*up* (key-release) events on a fresh channel, indefinitely — the
 // release-edge sibling of `keydown`, carrying the same `KeyEvent` payload. Pair
 // the two to track held-key state (press on `keydown`, clear on `keyup`):

@@ -483,6 +483,8 @@ impl<'a> super::TypeChecker<'a> {
                 | "__schedule_dblclick"
                 | "__schedule_resize"
                 | "__schedule_contextmenu"
+                | "__schedule_focus"
+                | "__schedule_blur"
         ) {
             let resolved = resolve_type_var_top(&elem, &self.env.substitutions);
             let te = Self::type_to_type_expr(&resolved);
@@ -779,6 +781,34 @@ impl<'a> super::TypeChecker<'a> {
                     if !args.is_empty() {
                         self.type_error(
                             "Sender.__schedule_contextmenu takes no arguments".to_string(),
+                            span.clone(),
+                            TypeErrorKind::WrongNumberOfArgs,
+                        );
+                    }
+                    Type::Unit
+                }
+                // Internal compiler builtins backing `std.web.events.focus` /
+                // `std.web.events.blur` — the first unit-payload `events.*`
+                // producers (channel element `()`, a 0-byte send; sibling of
+                // `__schedule_animation_frames` but driven by a focus/blur
+                // listener). Borrow `self`, take no argument, return Unit; codegen
+                // clones the sender and hands it to the host listener. Kept out of
+                // ordinary reach by the `__` prefix + the `writes(Input)` gating on
+                // the `focus`/`blur` wrappers.
+                "__schedule_focus" => {
+                    if !args.is_empty() {
+                        self.type_error(
+                            "Sender.__schedule_focus takes no arguments".to_string(),
+                            span.clone(),
+                            TypeErrorKind::WrongNumberOfArgs,
+                        );
+                    }
+                    Type::Unit
+                }
+                "__schedule_blur" => {
+                    if !args.is_empty() {
+                        self.type_error(
+                            "Sender.__schedule_blur takes no arguments".to_string(),
                             span.clone(),
                             TypeErrorKind::WrongNumberOfArgs,
                         );

@@ -17334,6 +17334,198 @@ fn wasm_contextmenu_sequential_target_rejected() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// End-to-end for the `std.web.events.focus` / `.blur` PAIR on `wasm_browser
+/// --features wasm-threads` — the first UNIT-payload `events.*` producers (a
+/// 0-byte `()` token per edge, no event-scratch, like `every`/`animation_frames`
+/// but driven by a focus/blur listener). The guest drains BOTH streams: a
+/// blocking `focus().recv()` parks the worker until a host "focus" fires, then a
+/// `blur().recv()` until a "blur" fires — proving the two distinct DOM events
+/// wake their own channels without cross-firing on the shared target. There is
+/// no payload to validate (unit), so this asserts the ordering `before → FOCUS_OK
+/// → BLUR_OK → after`: a never-filling channel would hang (the 8s bail fires).
+#[test]
+fn wasm_threads_focus_blur_recv_e2e() {
+    let tmp = wasm_test_dir("wtfocusblur");
+    let path = tmp.join("fb.kara");
+    std::fs::write(
+        &path,
+        "import std.web.events.{focus, blur};\n\n\
+         fn main() {\n    \
+             println(\"before\");\n    \
+             let gained = focus();\n    \
+             let lost = blur();\n    \
+             gained.recv();\n    \
+             println(\"FOCUS_OK\");\n    \
+             lost.recv();\n    \
+             println(\"BLUR_OK\");\n    \
+             println(\"after\");\n}\n",
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--features=wasm-threads",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_threads_focus_blur_recv_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        out.status.success(),
+        "focus/blur wasm-threads build failed: {stderr}"
+    );
+    assert!(tmp.join("fb.threads.wasm").exists());
+
+    let harness = tmp.join("harness.mjs");
+    std::fs::write(
+        &harness,
+        r#"import { run } from "./fb.js";
+// One node EventTarget stands in for the window; dispatch BOTH a "focus" and a
+// "blur" each tick so the guest's two sequential recvs each wake on their own
+// event. focus/blur are distinct event types, so the listeners never cross-fire.
+const target = new EventTarget();
+let dispatched = 0;
+const iv = setInterval(() => {
+  dispatched++;
+  target.dispatchEvent(new Event("focus"));
+  target.dispatchEvent(new Event("blur"));
+}, 12);
+const bail = setTimeout(() => { console.error("FAIL: recv never woke, dispatched=" + dispatched); process.exit(2); }, 8000);
+const h = await run({}, { focusTarget: target, blurTarget: target });
+clearInterval(iv);
+clearTimeout(bail);
+if (h.threaded !== true) { console.error("FAIL: expected threaded pick"); process.exit(1); }
+console.log("FB_HARNESS_OK dispatched=" + dispatched);
+process.exit(0);
+"#,
+    )
+    .unwrap();
+    let node = std::process::Command::new("node")
+        .arg(&harness)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: wasm_threads_focus_blur_recv_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let node_stdout = String::from_utf8_lossy(&node_out.stdout);
+    let node_stderr = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success(),
+        "focus/blur harness failed under node: stdout={node_stdout} stderr={node_stderr}",
+    );
+    assert!(
+        node_stdout.contains("FB_HARNESS_OK"),
+        "harness did not complete (both recvs woke): stdout={node_stdout} stderr={node_stderr}",
+    );
+    // Both unit streams woke, in order: before → FOCUS_OK → BLUR_OK → after.
+    let before = node_stdout.find("before");
+    let focus_ok = node_stdout.find("FOCUS_OK");
+    let blur_ok = node_stdout.find("BLUR_OK");
+    let after = node_stdout.find("after");
+    assert!(
+        matches!((before, focus_ok, blur_ok, after), (Some(b), Some(f), Some(l), Some(a)) if b < f && f < l && l < a),
+        "guest must print before→FOCUS_OK→BLUR_OK→after (both unit recvs blocked then woke in order): stdout={node_stdout}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The sequential-target gate for `focus`: built WITHOUT `--features
+/// wasm-threads` it is a hard compile error (codegen, pre-link) naming the
+/// flag — never a silent never-filling channel. Sibling of
+/// `wasm_contextmenu_sequential_target_rejected`.
+#[test]
+fn wasm_focus_sequential_target_rejected() {
+    let tmp = wasm_test_dir("wtfocusgate");
+    let path = tmp.join("fo.kara");
+    std::fs::write(
+        &path,
+        "import std.web.events.{focus};\n\n\
+         fn main() {\n    \
+             let gained = focus();\n    \
+             gained.recv();\n}\n",
+    )
+    .unwrap();
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--bindings=none",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_focus_sequential_target_rejected — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        !out.status.success(),
+        "sequential wasm focus producer must be rejected, but build succeeded: {stderr}"
+    );
+    assert!(
+        stderr.contains("requires `--features wasm-threads`"),
+        "gate must name the flag: {stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The sequential-target gate for `blur` (sibling of
+/// `wasm_focus_sequential_target_rejected`).
+#[test]
+fn wasm_blur_sequential_target_rejected() {
+    let tmp = wasm_test_dir("wtblurgate");
+    let path = tmp.join("bl.kara");
+    std::fs::write(
+        &path,
+        "import std.web.events.{blur};\n\n\
+         fn main() {\n    \
+             let lost = blur();\n    \
+             lost.recv();\n}\n",
+    )
+    .unwrap();
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--bindings=none",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_blur_sequential_target_rejected — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        !out.status.success(),
+        "sequential wasm blur producer must be rejected, but build succeeded: {stderr}"
+    );
+    assert!(
+        stderr.contains("requires `--features wasm-threads`"),
+        "gate must name the flag: {stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// Full-demo E2E for the Plume flow-field dogfood (`examples/plume/`): builds
 /// the shipped `plume.kara` for `wasm_browser --features wasm-threads` and runs
 /// it under node, exercising the whole front-end spine together — the blocking

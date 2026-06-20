@@ -498,7 +498,10 @@ pub fn render_glue(
     // `ResizeEvent` of two `i64`s read off the window's `innerWidth`/`Height`);
     // `__kara_contextmenu(chPtr: i64) -> ()` backs `std.web.events.contextmenu`
     // (the right-click sibling of `clicks`, the same 16-byte `ClickEvent`
-    // payload; its listener preventDefaults the native menu).
+    // payload; its listener preventDefaults the native menu); `__kara_focus(
+    // chPtr: i64) -> ()` / `__kara_blur(chPtr: i64) -> ()` back
+    // `std.web.events.focus` / `.blur` — the first UNIT-payload `events.*`
+    // producers (a 0-byte `()` token per focus/blur edge, no event-scratch).
     let builtin_sigs: &[&str] = if threads.is_some() {
         &[
             "{ name: \"__kara_timer_after\", params: [\"bigint\", \"bigint\"], ret: \"void\" }",
@@ -512,6 +515,8 @@ pub fn render_glue(
             "{ name: \"__kara_dblclick\", params: [\"bigint\"], ret: \"void\" }",
             "{ name: \"__kara_resize\", params: [\"bigint\"], ret: \"void\" }",
             "{ name: \"__kara_contextmenu\", params: [\"bigint\"], ret: \"void\" }",
+            "{ name: \"__kara_focus\", params: [\"bigint\"], ret: \"void\" }",
+            "{ name: \"__kara_blur\", params: [\"bigint\"], ret: \"void\" }",
         ]
     } else {
         &[]
@@ -529,6 +534,8 @@ pub fn render_glue(
             "\"__kara_dblclick\"",
             "\"__kara_resize\"",
             "\"__kara_contextmenu\"",
+            "\"__kara_focus\"",
+            "\"__kara_blur\"",
         ]
     } else {
         &[]
@@ -1968,6 +1975,43 @@ async function runThreaded(hostImpls = {}, opts = {}) {
       };
       target.addEventListener("contextmenu", onContextMenu);
     };
+    // __kara_focus(chPtr: i64 [BigInt]) -> (): the first UNIT-payload event
+    // producer. Registers a "focus" listener; each focus edge sends a 0-byte
+    // `()` token (channel_send(ptr, 0, 0n) — NO event-scratch, like
+    // animation_frames/every, vs the click/pointer producers' scratch marshal).
+    // Coalesces via the pending-probe so a focus flurry collapses to one edge.
+    // Event source: `opts.focusTarget` (browser: window; node test: an
+    // EventTarget it dispatches synthetic focus events on), else `globalThis` if
+    // it can addEventListener; no source → no-op (recv just blocks).
+    builtinHostImpls["__kara_focus"] = (chPtr) => {
+      const ptr = Number(chPtr);
+      const target =
+        (opts && opts.focusTarget) ||
+        (typeof globalThis.addEventListener === "function" ? globalThis : null);
+      if (target === null) return;
+      const onFocus = () => {
+        if (Number(serviceInstance.exports.karac_runtime_channel_pending(ptr)) !== 0) return;
+        serviceInstance.exports.karac_runtime_channel_send(ptr, 0, 0n);
+      };
+      target.addEventListener("focus", onFocus);
+    };
+    // __kara_blur(chPtr: i64 [BigInt]) -> (): the focus-LOST sibling of
+    // __kara_focus — identical (a 0-byte `()` token per edge), only the DOM event
+    // differs ("blur" vs "focus"). `focus` and `blur` are distinct event types,
+    // so the two listeners never cross-fire on a shared target. Event source:
+    // `opts.blurTarget`, else `globalThis`; no source → no-op.
+    builtinHostImpls["__kara_blur"] = (chPtr) => {
+      const ptr = Number(chPtr);
+      const target =
+        (opts && opts.blurTarget) ||
+        (typeof globalThis.addEventListener === "function" ? globalThis : null);
+      if (target === null) return;
+      const onBlur = () => {
+        if (Number(serviceInstance.exports.karac_runtime_channel_pending(ptr)) !== 0) return;
+        serviceInstance.exports.karac_runtime_channel_send(ptr, 0, 0n);
+      };
+      target.addEventListener("blur", onBlur);
+    };
   }
   // host fns: stand up the worker→main proxy (shared control block + the
   // main-thread service loop). Needed when the program declares user host
@@ -2418,7 +2462,9 @@ mod tests {
              { name: \"__kara_clicks\", params: [\"bigint\"], ret: \"void\" }, \
              { name: \"__kara_dblclick\", params: [\"bigint\"], ret: \"void\" }, \
              { name: \"__kara_resize\", params: [\"bigint\"], ret: \"void\" }, \
-             { name: \"__kara_contextmenu\", params: [\"bigint\"], ret: \"void\" }];"
+             { name: \"__kara_contextmenu\", params: [\"bigint\"], ret: \"void\" }, \
+             { name: \"__kara_focus\", params: [\"bigint\"], ret: \"void\" }, \
+             { name: \"__kara_blur\", params: [\"bigint\"], ret: \"void\" }];"
         ));
         // The builtins are registered as builtins, and excluded from the
         // user contract (DECLARED_IMPORTS drives the missing-impl check and
@@ -2427,7 +2473,8 @@ mod tests {
             "const BUILTIN_HOST_FNS = [\"__kara_timer_after\", \"__kara_timer_every\", \
              \"__kara_animation_frames\", \"__kara_pointer_moves\", \"__kara_wheel\", \
              \"__kara_keydown\", \"__kara_keyup\", \"__kara_clicks\", \
-             \"__kara_dblclick\", \"__kara_resize\", \"__kara_contextmenu\"];"
+             \"__kara_dblclick\", \"__kara_resize\", \"__kara_contextmenu\", \
+             \"__kara_focus\", \"__kara_blur\"];"
         ));
         assert!(glue.contains("const DECLARED_IMPORTS = [\"report\", \"log_str\"];"));
         // Both halves of the proxy plus the worker-side wiring.
@@ -2481,6 +2528,12 @@ mod tests {
             "builtinHostImpls[\"__kara_contextmenu\"] = (chPtr) =>",
             "if (typeof e.preventDefault === \"function\") e.preventDefault();",
             "target.addEventListener(\"contextmenu\", onContextMenu);",
+            // First unit-payload event producers: focus/blur, 0-byte () token
+            // (no event-scratch).
+            "builtinHostImpls[\"__kara_focus\"] = (chPtr) =>",
+            "target.addEventListener(\"focus\", onFocus);",
+            "builtinHostImpls[\"__kara_blur\"] = (chPtr) =>",
+            "target.addEventListener(\"blur\", onBlur);",
         ] {
             assert!(glue.contains(needle), "missing proxy machinery: {needle}");
         }
@@ -2499,7 +2552,9 @@ mod tests {
                 && !dts.contains("__kara_clicks")
                 && !dts.contains("__kara_dblclick")
                 && !dts.contains("__kara_resize")
-                && !dts.contains("__kara_contextmenu"),
+                && !dts.contains("__kara_contextmenu")
+                && !dts.contains("__kara_focus")
+                && !dts.contains("__kara_blur"),
             "builtin leaked into d.ts"
         );
     }
