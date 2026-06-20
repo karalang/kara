@@ -2932,9 +2932,11 @@ impl<'a> CostEstimator<'a> {
             }
 
             // Blocks and other shape-passthrough nodes: cost of the contained block.
-            ExprKind::Block(b) | ExprKind::Unsafe(b) | ExprKind::Try(b) | ExprKind::Seq(b) => {
-                self.estimate_body(b)
-            }
+            ExprKind::Block(b)
+            | ExprKind::Comptime(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Seq(b) => self.estimate_body(b),
             ExprKind::Par(b) => self.estimate_body(b),
             ExprKind::Lock { body, .. } => self.estimate_body(body),
             ExprKind::LabeledBlock { body, .. } => self.estimate_body(body),

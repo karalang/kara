@@ -294,7 +294,11 @@ fn collect_callees_in_expr(
             collect_callees_in_expr(operand, known, methods, out);
         }
         ExprKind::Question(inner) => collect_callees_in_expr(inner, known, methods, out),
-        ExprKind::Block(b) | ExprKind::Try(b) | ExprKind::Seq(b) | ExprKind::Par(b) => {
+        ExprKind::Block(b)
+        | ExprKind::Comptime(b)
+        | ExprKind::Try(b)
+        | ExprKind::Seq(b)
+        | ExprKind::Par(b) => {
             collect_callees_in_block(b, known, methods, out);
         }
         ExprKind::Unsafe(b) => collect_callees_in_block(b, known, methods, out),

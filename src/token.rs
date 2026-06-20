@@ -74,6 +74,11 @@ pub enum Token {
     Import,
     Const,
     Type,
+    /// `comptime` — compile-time evaluation. Backs the `comptime fn`
+    /// declaration modifier, the `comptime { ... }` block expression, and
+    /// the `comptime` parameter prefix. Spec: design.md § Reserved-for-Future-Use
+    /// Keywords (graduating) + deferred.md § Comptime — AST→AST `comptime fn`.
+    Comptime,
     // Visibility
     Pub,
     Private,

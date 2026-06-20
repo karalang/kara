@@ -306,7 +306,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.collect_in_expr(object, out);
                 self.collect_in_expr(index, out);
             }
-            ExprKind::Block(b) => self.collect_in_block(b, out),
+            ExprKind::Block(b) | ExprKind::Comptime(b) => self.collect_in_block(b, out),
             ExprKind::If {
                 condition,
                 then_block,

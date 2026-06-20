@@ -187,6 +187,14 @@ pub struct Function {
     /// inside an `unsafe fn` body. Slice 1 only captures the surface
     /// marker; the lint that consumes it lands in slice 3.
     pub is_unsafe: bool,
+    /// `comptime fn ...` declaration marker. The function's body runs at
+    /// compile time when invoked from a comptime context (a `comptime { ... }`
+    /// block, a const-generic argument, or a default parameter value). A
+    /// `comptime fn` may take `comptime`-prefixed parameters and `Type`-typed
+    /// parameters. Slice 1 captures the surface marker only; the comptime
+    /// evaluator that consumes it lands in a later slice. Spec: deferred.md §
+    /// Comptime — AST→AST `comptime fn` (form 1, the declaration).
+    pub is_comptime: bool,
     pub name: String,
     pub generic_params: Option<GenericParams>,
     pub params: Vec<Param>,
@@ -302,6 +310,12 @@ pub struct Param {
     pub ty: TypeExpr,
     pub default_value: Option<Expr>,
     pub doc_comment: Option<String>,
+    /// `comptime`-prefixed parameter — the argument at the call site must be a
+    /// compile-time-known value. Only legal on a `comptime fn`'s parameter
+    /// list. Slice 1 captures the marker only; the typechecker rule (a
+    /// `comptime` param requires a comptime-known argument) lands with the
+    /// evaluator. Spec: deferred.md § Comptime (form 3, the parameter prefix).
+    pub is_comptime: bool,
 }
 
 impl Param {

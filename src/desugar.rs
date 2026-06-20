@@ -322,6 +322,7 @@ fn make_default_impl(type_name: &str, body: Expr, span: Span) -> Item {
         is_pub: false,
         is_private: false,
         is_unsafe: false,
+        is_comptime: false,
         name: "default".to_string(),
         generic_params: None,
         params: Vec::new(),
@@ -565,7 +566,7 @@ fn walk_expr(expr: &mut Expr) {
             walk_expr(object);
             walk_expr(index);
         }
-        ExprKind::Block(b) => walk_block(b),
+        ExprKind::Block(b) | ExprKind::Comptime(b) => walk_block(b),
         ExprKind::If {
             condition,
             then_block,

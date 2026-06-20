@@ -633,6 +633,27 @@ impl super::Parser {
                 })
             }
 
+            // `comptime { ... }` block expression (deferred.md § Comptime,
+            // form 2). The block runs at compile time and its value is
+            // spliced in. Only the block form is an expression — `comptime`
+            // not followed by `{` is a parse error here.
+            Token::Comptime => {
+                let start = self.current_span();
+                self.advance(); // consume `comptime`
+                if !self.check(&Token::LeftBrace) {
+                    self.error(
+                        "expected `{` after `comptime` — the comptime expression form is \
+                         `comptime { ... }`.",
+                    );
+                    return None;
+                }
+                let block = self.parse_block()?;
+                Some(Expr {
+                    span: self.span_from(&start),
+                    kind: ExprKind::Comptime(block),
+                })
+            }
+
             // Attribute-prefixed loop expression — `#[par_unordered] while
             // ... { }` / `#[par_unordered] for ... { }` / `#[par_unordered]
             // loop { }`. At Phase 1 the only recognised attribute name is

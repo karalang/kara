@@ -152,6 +152,7 @@ fn walk_expr(expr: &Expr, level: LintLevel, diags: &mut Vec<LintDiagnostic>) {
 fn walk_expr_children(expr: &Expr, level: LintLevel, diags: &mut Vec<LintDiagnostic>) {
     match &expr.kind {
         ExprKind::Block(block)
+        | ExprKind::Comptime(block)
         | ExprKind::Loop { body: block, .. }
         | ExprKind::LabeledBlock { body: block, .. }
         | ExprKind::Seq(block)

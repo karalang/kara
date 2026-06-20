@@ -388,6 +388,7 @@ fn render_rust(t: &SpannedToken) -> String {
         Token::Shared => "KW shared",
         Token::Layout => "KW layout",
         Token::Group => "KW group",
+        Token::Comptime => "KW comptime",
         Token::True => "KW true",
         Token::False => "KW false",
         Token::Alias => "KW alias",

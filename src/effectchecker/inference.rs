@@ -917,7 +917,7 @@ impl<'a> super::EffectChecker<'a> {
             ExprKind::Unary { operand, .. } => {
                 self.collect_calls_in_expr(operand, calls, bounds);
             }
-            ExprKind::Block(block) => {
+            ExprKind::Block(block) | ExprKind::Comptime(block) => {
                 for stmt in &block.stmts {
                     self.collect_calls_in_stmt(stmt, calls, bounds);
                 }

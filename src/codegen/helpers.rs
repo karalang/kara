@@ -335,6 +335,7 @@ pub(super) fn make_impl_method_function(type_name: &str, method: &Function) -> F
             ty,
             default_value: None,
             doc_comment: None,
+            is_comptime: false,
         };
         f.params.insert(0, self_param);
     }

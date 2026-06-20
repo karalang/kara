@@ -460,6 +460,7 @@ fn collect_par_in_expr(expr: &Expr, out: &mut Vec<(Block, Span)>) {
             }
         }
         ExprKind::Block(b)
+        | ExprKind::Comptime(b)
         | ExprKind::Unsafe(b)
         | ExprKind::Try(b)
         | ExprKind::Seq(b)
@@ -838,7 +839,7 @@ impl<'a> ModBindingSynthWalker<'a> {
                 self.walk_expr(object);
                 self.walk_expr(index);
             }
-            ExprKind::Block(b) => self.walk_block(b),
+            ExprKind::Block(b) | ExprKind::Comptime(b) => self.walk_block(b),
             ExprKind::If {
                 condition,
                 then_block,

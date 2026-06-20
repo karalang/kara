@@ -123,6 +123,12 @@ pub enum ExprKind {
 
     // Compound expressions
     Block(Block),
+    /// `comptime { ... }` — a block whose body is evaluated at compile time.
+    /// The block's value becomes a compile-time constant spliced in at the
+    /// use site. Carries the block verbatim; the comptime evaluator (a later
+    /// slice) runs it and substitutes the result. Spec: deferred.md §
+    /// Comptime — AST→AST `comptime fn` (form 2, the `comptime { ... }` block).
+    Comptime(Block),
     If {
         condition: Box<Expr>,
         then_block: Block,

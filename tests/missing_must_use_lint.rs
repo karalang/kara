@@ -122,6 +122,7 @@ impl<'a> FnSpec<'a> {
             is_pub: self.is_pub,
             is_private: false,
             is_unsafe: false,
+            is_comptime: false,
             name: self.name.to_string(),
             generic_params: None,
             params: Vec::new(),

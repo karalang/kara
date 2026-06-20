@@ -237,7 +237,9 @@ impl<'a> super::EffectChecker<'a> {
                     self.check_subtyping_in_expr_owned(arg.value);
                 }
             }
-            ExprKind::Block(block) => self.check_subtyping_in_block_owned(block),
+            ExprKind::Block(block) | ExprKind::Comptime(block) => {
+                self.check_subtyping_in_block_owned(block)
+            }
             ExprKind::If {
                 condition,
                 then_block,

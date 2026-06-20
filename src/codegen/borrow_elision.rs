@@ -317,6 +317,7 @@ impl ScanCtx<'_> {
                 self.scan_expr(object)
             }
             ExprKind::Block(b)
+            | ExprKind::Comptime(b)
             | ExprKind::Unsafe(b)
             | ExprKind::Try(b)
             | ExprKind::Seq(b)

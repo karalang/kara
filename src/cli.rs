@@ -1803,6 +1803,7 @@ impl YieldPointWalker<'_> {
                 self.walk_expr(index);
             }
             ExprKind::Block(b)
+            | ExprKind::Comptime(b)
             | ExprKind::Unsafe(b)
             | ExprKind::Try(b)
             | ExprKind::Seq(b)
@@ -2311,6 +2312,7 @@ impl StateStructLayoutWalker<'_> {
                 self.walk_expr(index);
             }
             ExprKind::Block(b)
+            | ExprKind::Comptime(b)
             | ExprKind::Unsafe(b)
             | ExprKind::Try(b)
             | ExprKind::Seq(b)
@@ -9853,6 +9855,7 @@ fn lower_test_case_to_function(tc: &crate::ast::TestCase, mangled_name: String) 
         is_pub: false,
         is_private: false,
         is_unsafe: false,
+        is_comptime: false,
         name: mangled_name,
         generic_params: None,
         params: Vec::new(),

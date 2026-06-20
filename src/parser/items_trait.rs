@@ -528,6 +528,29 @@ impl super::Parser {
                 } else {
                     false
                 };
+                // `comptime fn` inside an impl block mirrors the module-scope
+                // dispatch in `parse_item`: consume an optional `comptime`
+                // (outermost, before any `unsafe`) and thread it into
+                // `parse_function`. `comptime` not followed by `fn` /
+                // `unsafe fn` is rejected with a focused diagnostic.
+                let is_comptime = if self.check(&Token::Comptime) {
+                    let nxt = self.peek_token_at(1);
+                    if nxt == Token::Fn
+                        || (nxt == Token::Unsafe && self.peek_token_at(2) == Token::Fn)
+                    {
+                        self.advance(); // consume `comptime`
+                        true
+                    } else {
+                        self.error(
+                            "expected `fn` after `comptime` in impl block — `comptime` \
+                             may only prefix a `comptime fn` method declaration here.",
+                        );
+                        self.advance(); // consume `comptime` for recovery
+                        false
+                    }
+                } else {
+                    false
+                };
                 // `unsafe fn` inside an impl block mirrors the module-scope
                 // dispatch in `parse_item`: consume an optional `unsafe`
                 // before `fn` and thread it into `parse_function`. `unsafe`
@@ -549,7 +572,8 @@ impl super::Parser {
                 } else {
                     false
                 };
-                let method = self.parse_function(attrs, is_pub, is_private, is_unsafe)?;
+                let method =
+                    self.parse_function(attrs, is_pub, is_private, is_unsafe, is_comptime)?;
                 items.push(ImplItem::Method(Box::new(method)));
             }
         }

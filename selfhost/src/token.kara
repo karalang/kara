@@ -114,6 +114,8 @@ pub enum Token {
     // Layout
     Layout,
     Group,
+    // Comptime
+    Comptime,
     // Literals (keyword)
     True,
     False,

@@ -568,7 +568,7 @@ fn mono_scan_expr(e: &Expr, s: &mut MonotoneScan) {
             mono_scan_expr(object, s);
             mono_scan_expr(index, s);
         }
-        ExprKind::Block(b) => mono_scan_block(b, s),
+        ExprKind::Block(b) | ExprKind::Comptime(b) => mono_scan_block(b, s),
         ExprKind::If {
             condition,
             then_block,

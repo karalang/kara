@@ -474,7 +474,7 @@ impl<'a> Lowerer<'a> {
                 self.lower_expr(object);
                 self.lower_expr(index);
             }
-            ExprKind::Block(b) => self.lower_block(b),
+            ExprKind::Block(b) | ExprKind::Comptime(b) => self.lower_block(b),
             ExprKind::If {
                 condition,
                 then_block,

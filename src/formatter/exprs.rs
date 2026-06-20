@@ -193,6 +193,10 @@ impl super::Formatter {
                 self.write_str("]");
             }
             ExprKind::Block(block) => self.format_block(block),
+            ExprKind::Comptime(block) => {
+                self.write_str("comptime ");
+                self.format_block(block);
+            }
             ExprKind::If {
                 condition,
                 then_block,

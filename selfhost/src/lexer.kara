@@ -1439,7 +1439,8 @@ fn keyword_or_ident(text: String) -> Token {
         "virtual" => Token.Error("reserved keyword".to_string()),
         "async" => Token.Error("reserved keyword".to_string()),
         "await" => Token.Error("reserved keyword".to_string()),
-        "comptime" => Token.Error("reserved keyword".to_string()),
+        // `comptime` graduated to an active keyword (deferred.md § Comptime).
+        "comptime" => Token.Comptime,
         "pure" => Token.Error("reserved keyword".to_string()),
         "box" => Token.Error("reserved keyword".to_string()),
         _ => {

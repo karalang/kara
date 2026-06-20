@@ -711,7 +711,11 @@ impl<'a> OwnershipChecker<'a> {
                 self.scan_expr(object, ctx, scan);
                 self.scan_expr(index, ctx, scan);
             }
-            ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) | ExprKind::Try(b) => {
+            ExprKind::Block(b)
+            | ExprKind::Comptime(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b) => {
                 self.scan_block(b, ctx, scan);
             }
             ExprKind::If {
@@ -2225,7 +2229,11 @@ impl<'a> OwnershipChecker<'a> {
                     }
                 }
             }
-            ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) | ExprKind::Try(b) => {
+            ExprKind::Block(b)
+            | ExprKind::Comptime(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b) => {
                 self.cluster_verify_block(b, ctx, scan);
             }
             ExprKind::If {
@@ -2542,6 +2550,7 @@ fn walk_fn_exprs(block: &Block, f: &mut impl FnMut(&Expr, bool)) {
                 walk(index, false, f);
             }
             ExprKind::Block(b)
+            | ExprKind::Comptime(b)
             | ExprKind::Seq(b)
             | ExprKind::Unsafe(b)
             | ExprKind::Try(b)

@@ -1330,7 +1330,7 @@ fn test_v60_reserved_for_future_use_keywords() {
     // be rejected at the lexer level so they cannot be used as identifiers.
     for keyword in [
         "gen", "become", "do", "final", "override", "priv", "typeof", "virtual", "async", "await",
-        "comptime", "pure", "box",
+        "pure", "box",
     ] {
         let tokens = tokens_only(keyword);
         assert_eq!(
@@ -1344,6 +1344,28 @@ fn test_v60_reserved_for_future_use_keywords() {
             "expected reserved-keyword error for '{keyword}'",
         );
     }
+}
+
+#[test]
+fn test_comptime_lexes_as_keyword() {
+    // `comptime` graduated from reserved-for-future-use to an active keyword
+    // (deferred.md § Comptime — AST→AST `comptime fn`). It now tokenizes as
+    // `Token::Comptime` rather than the reserved-identifier error.
+    let tokens = tokens_only("comptime");
+    assert_eq!(tokens, vec![Token::Comptime, Token::EOF]);
+
+    // `r#comptime` still escapes it back to a plain identifier.
+    let raw = tokens_only("r#comptime");
+    assert_eq!(
+        raw,
+        vec![
+            Token::Identifier {
+                name: "comptime".to_string(),
+                raw: true,
+            },
+            Token::EOF,
+        ],
+    );
 }
 
 #[test]

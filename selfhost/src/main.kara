@@ -112,6 +112,7 @@ fn render(tok: SpannedToken) -> String {
         Shared => line.push_str("KW shared"),
         Layout => line.push_str("KW layout"),
         Group => line.push_str("KW group"),
+        Comptime => line.push_str("KW comptime"),
         True => line.push_str("KW true"),
         False => line.push_str("KW false"),
         Alias => line.push_str("KW alias"),

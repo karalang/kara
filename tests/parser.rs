@@ -11482,3 +11482,121 @@ fn inline_on_trait_method_decl_sets_hint() {
     let m = trait_methods(t)[0];
     assert_eq!(m.inline_hint, Some(InlineHint::Default));
 }
+
+// ── Comptime — front-end recognition (deferred.md § Comptime) ────
+//
+// Slice 1 parses the three comptime syntactic forms into the AST. The
+// compile-time evaluator that gives them meaning is a later slice; the
+// typechecker emits `E_COMPTIME_NOT_YET_IMPLEMENTED` at use sites for now.
+
+#[test]
+fn comptime_fn_declaration_sets_flag() {
+    let prog = parse_ok("comptime fn build() -> i64 { 42 }");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("expected Function");
+    };
+    assert_eq!(f.name, "build");
+    assert!(f.is_comptime, "comptime fn should set is_comptime");
+    assert!(!f.is_unsafe);
+}
+
+#[test]
+fn plain_fn_is_not_comptime() {
+    let prog = parse_ok("fn build() -> i64 { 42 }");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("expected Function");
+    };
+    assert!(!f.is_comptime);
+}
+
+#[test]
+fn pub_comptime_fn_keeps_both_markers() {
+    let prog = parse_ok("pub comptime fn build() -> i64 { 0 }");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("expected Function");
+    };
+    assert!(f.is_pub);
+    assert!(f.is_comptime);
+}
+
+#[test]
+fn comptime_unsafe_fn_sets_both_flags() {
+    let prog = parse_ok("comptime unsafe fn build() -> i64 { 0 }");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("expected Function");
+    };
+    assert!(f.is_comptime);
+    assert!(f.is_unsafe);
+}
+
+#[test]
+fn comptime_block_expression_parses() {
+    let prog = parse_ok("fn main() { let x = comptime { 1 + 2 }; }");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("expected Function");
+    };
+    let StmtKind::Let { value, .. } = &f.body.stmts[0].kind else {
+        panic!("expected let binding");
+    };
+    let ExprKind::Comptime(block) = &value.kind else {
+        panic!("expected ExprKind::Comptime, got {:?}", value.kind);
+    };
+    // The inner block carries the body verbatim — `1 + 2` is its trailing
+    // expression (no statements).
+    assert!(block.stmts.is_empty());
+    assert!(
+        matches!(
+            block.final_expr.as_deref().map(|e| &e.kind),
+            Some(ExprKind::Binary { .. })
+        ),
+        "expected `1 + 2` as the block's final expression",
+    );
+}
+
+#[test]
+fn comptime_parameter_prefix_sets_flag() {
+    let prog = parse_ok("comptime fn matrix(comptime kind: i64, rows: i64) -> i64 { 0 }");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("expected Function");
+    };
+    assert!(f.params[0].is_comptime, "first param should be comptime");
+    assert!(
+        !f.params[1].is_comptime,
+        "second param should not be comptime"
+    );
+}
+
+#[test]
+fn comptime_fn_in_impl_block_parses() {
+    let prog = parse_ok("impl Foo { comptime fn build() -> i64 { 0 } }");
+    let Item::ImplBlock(imp) = &prog.items[0] else {
+        panic!("expected ImplBlock");
+    };
+    let methods = impl_methods(imp);
+    assert!(
+        methods[0].is_comptime,
+        "impl `comptime fn` should set the flag"
+    );
+}
+
+#[test]
+fn comptime_without_fn_at_item_scope_errors() {
+    let (_prog, errors) = parse_with_errors("comptime struct S {}");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("expected `fn` after `comptime`")),
+        "expected an `expected fn after comptime` diagnostic; got: {errors:?}",
+    );
+}
+
+#[test]
+fn comptime_without_brace_in_expr_position_errors() {
+    let (_prog, errors) = parse_with_errors("fn main() { let x = comptime 5; }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("expected `{` after `comptime`")),
+        "expected an `expected {{ after comptime` diagnostic; got: {errors:?}",
+    );
+}

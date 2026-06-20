@@ -1357,6 +1357,8 @@ impl<'a> Lexer<'a> {
             // Layout
             "layout" => Token::Layout,
             "group" => Token::Group,
+            // Comptime — compile-time evaluation (see deferred.md § Comptime).
+            "comptime" => Token::Comptime,
             // Literals
             "true" => Token::True,
             "false" => Token::False,
@@ -1377,10 +1379,10 @@ impl<'a> Lexer<'a> {
                 "'bf16' is a reserved keyword for a future numeric type; not available until Phase 7".to_string(),
             ),
             // Reserved-for-future-use keywords — see design.md § Reserved-for-Future-Use Keywords.
-            "gen" | "become" | "do" | "final" | "override" | "priv" | "typeof"
-            | "virtual" | "async" | "await" | "comptime" | "pure" | "box" => Token::Error(
-                format!("'{text}' is reserved for future use and cannot be used as an identifier"),
-            ),
+            "gen" | "become" | "do" | "final" | "override" | "priv" | "typeof" | "virtual"
+            | "async" | "await" | "pure" | "box" => Token::Error(format!(
+                "'{text}' is reserved for future use and cannot be used as an identifier"
+            )),
             // Regular identifier
             _ => {
                 if is_reserved_fragment_specifier_namespace(text) {

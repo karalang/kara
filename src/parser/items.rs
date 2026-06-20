@@ -55,8 +55,36 @@ impl super::Parser {
 
         match self.peek_token() {
             Token::Fn => Some(Item::Function(
-                self.parse_function(attributes, is_pub, is_private, false)?,
+                self.parse_function(attributes, is_pub, is_private, false, false)?,
             )),
+            // `comptime fn ...` / `comptime unsafe fn ...` — the declaration
+            // form of the comptime keyword (deferred.md § Comptime, form 1).
+            // Mirrors the `unsafe`-dispatch shape above: peek past `comptime`
+            // and route to `parse_function` with `is_comptime = true`.
+            Token::Comptime => match self.peek_token_at(1) {
+                Token::Fn => {
+                    self.advance(); // consume `comptime`
+                    Some(Item::Function(self.parse_function(
+                        attributes, is_pub, is_private, false, true,
+                    )?))
+                }
+                Token::Unsafe if self.peek_token_at(2) == Token::Fn => {
+                    self.advance(); // consume `comptime`
+                    self.advance(); // consume `unsafe`
+                    Some(Item::Function(self.parse_function(
+                        attributes, is_pub, is_private, true, true,
+                    )?))
+                }
+                _ => {
+                    self.error(
+                        "expected `fn` after `comptime` at module scope — `comptime` may \
+                         only prefix a `comptime fn` declaration (or be used as a \
+                         `comptime { ... }` block expression / `comptime` parameter prefix).",
+                    );
+                    self.advance(); // consume `comptime` for recovery
+                    None
+                }
+            },
             Token::Struct => Some(Item::StructDef(
                 self.parse_struct_def(attributes, is_pub, is_private, false, false, None)?,
             )),
@@ -179,9 +207,9 @@ impl super::Parser {
                     }
                     Token::Fn => {
                         self.advance(); // consume `unsafe`
-                        Some(Item::Function(
-                            self.parse_function(attributes, is_pub, is_private, true)?,
-                        ))
+                        Some(Item::Function(self.parse_function(
+                            attributes, is_pub, is_private, true, false,
+                        )?))
                     }
                     _ => {
                         self.error(
@@ -294,6 +322,7 @@ impl super::Parser {
         is_pub: bool,
         is_private: bool,
         is_unsafe: bool,
+        is_comptime: bool,
     ) -> Option<Function> {
         let start = self.current_span();
         self.expect(&Token::Fn)?;
@@ -355,6 +384,7 @@ impl super::Parser {
             is_pub,
             is_private,
             is_unsafe,
+            is_comptime,
             name,
             generic_params,
             params,
@@ -459,7 +489,7 @@ impl super::Parser {
                 );
             }
         }
-        let mut func = self.parse_function(attributes, is_pub, is_private, false)?;
+        let mut func = self.parse_function(attributes, is_pub, is_private, false, false)?;
         func.abi = Some(abi);
         Some(func)
     }
@@ -1227,6 +1257,13 @@ impl super::Parser {
         self.collect_leading_doc_comments();
         let start = self.current_span();
 
+        // `comptime`-prefixed parameter — the call-site argument must be a
+        // compile-time-known value. Only meaningful on a `comptime fn`; the
+        // typechecker rule that enforces "comptime arg required" lands with
+        // the evaluator. Slice 1 records the marker here. Spec: deferred.md §
+        // Comptime (form 3, the parameter prefix).
+        let is_comptime = self.eat(&Token::Comptime);
+
         // Focused diagnostic for the anonymous-parameter shape — `fn f(Type)`
         // / `trait T { fn m(self, Type); }`. Try to recognize a TYPE in
         // parameter position with no preceding name+colon; if it succeeds,
@@ -1246,6 +1283,7 @@ impl super::Parser {
                 ty,
                 default_value: None,
                 doc_comment,
+                is_comptime,
             });
         }
 
@@ -1264,6 +1302,7 @@ impl super::Parser {
             ty,
             default_value,
             doc_comment,
+            is_comptime,
         })
     }
 

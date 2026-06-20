@@ -291,6 +291,7 @@ fn synth_main_function(body: Block) -> Function {
         is_pub: false,
         is_private: false,
         is_unsafe: false,
+        is_comptime: false,
         name: "main".to_string(),
         generic_params: None,
         params: Vec::new(),

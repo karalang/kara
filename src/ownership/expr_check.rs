@@ -683,7 +683,7 @@ impl<'a> super::OwnershipChecker<'a> {
                     self.record_slice_creation(&expr.span, object, false);
                 }
             }
-            ExprKind::Block(block) => {
+            ExprKind::Block(block) | ExprKind::Comptime(block) => {
                 self.check_block(block, states, param_types, param_usage);
             }
             ExprKind::If {

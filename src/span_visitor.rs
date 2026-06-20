@@ -347,7 +347,7 @@ fn visit_expr(e: &Expr, visit: &mut impl FnMut(&Span)) {
             visit_expr(object, visit);
             visit_expr(index, visit);
         }
-        ExprKind::Block(b) => visit_block(b, visit),
+        ExprKind::Block(b) | ExprKind::Comptime(b) => visit_block(b, visit),
         ExprKind::If {
             condition,
             then_block,
@@ -673,7 +673,7 @@ fn visit_expr_spans_mut(e: &mut Expr, visit: &mut impl FnMut(&mut Span)) {
             visit_expr_spans_mut(object, visit);
             visit_expr_spans_mut(index, visit);
         }
-        ExprKind::Block(b) => visit_block_spans_mut(b, visit),
+        ExprKind::Block(b) | ExprKind::Comptime(b) => visit_block_spans_mut(b, visit),
         ExprKind::If {
             condition,
             then_block,

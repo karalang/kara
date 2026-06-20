@@ -345,7 +345,7 @@ impl<'a> super::Resolver<'a> {
                 self.resolve_expr(index);
             }
 
-            ExprKind::Block(block) => {
+            ExprKind::Block(block) | ExprKind::Comptime(block) => {
                 self.resolve_block(block);
             }
 

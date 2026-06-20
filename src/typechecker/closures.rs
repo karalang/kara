@@ -404,7 +404,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.walk_capture_consume(index, CaptureWalkMode::Reading, outer, shadows, reason);
             }
 
-            ExprKind::Block(block) => {
+            ExprKind::Block(block) | ExprKind::Comptime(block) => {
                 self.walk_capture_consume_block(block, mode, outer, shadows, reason);
             }
             ExprKind::If {

@@ -311,6 +311,7 @@ fn walk_expr(expr: &Expr, lines: &[&str], level: LintLevel, diags: &mut Vec<Lint
             walk_block(block, lines, level, diags);
         }
         ExprKind::Block(block)
+        | ExprKind::Comptime(block)
         | ExprKind::Loop { body: block, .. }
         | ExprKind::LabeledBlock { body: block, .. }
         | ExprKind::Seq(block)
@@ -831,6 +832,7 @@ impl OpWalker<'_> {
                 self.walk_expr(object, in_unsafe);
             }
             ExprKind::Block(block)
+            | ExprKind::Comptime(block)
             | ExprKind::Loop { body: block, .. }
             | ExprKind::LabeledBlock { body: block, .. }
             | ExprKind::Seq(block)

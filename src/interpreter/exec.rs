@@ -704,7 +704,7 @@ pub(crate) fn collect_free_idents_expr(
             collect_free_idents_expr(object, bound, out);
             collect_free_idents_expr(index, bound, out);
         }
-        ExprKind::Block(b) => collect_free_idents_block(b, bound, out),
+        ExprKind::Block(b) | ExprKind::Comptime(b) => collect_free_idents_block(b, bound, out),
         ExprKind::If {
             condition,
             then_block,

@@ -2304,7 +2304,7 @@ impl<'a> ConcurrencyChecker<'a> {
                     }
                 }
             }
-            ExprKind::Block(block)
+            ExprKind::Block(block) | ExprKind::Comptime(block)
             | ExprKind::Unsafe(block)
             | ExprKind::Try(block)
             | ExprKind::Seq(block)
@@ -2713,6 +2713,7 @@ impl<'a> ConcurrencyChecker<'a> {
                 self.collect_expr_effects(operand, info);
             }
             ExprKind::Block(block)
+            | ExprKind::Comptime(block)
             | ExprKind::Unsafe(block)
             | ExprKind::Try(block)
             | ExprKind::Seq(block)

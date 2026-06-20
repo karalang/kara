@@ -91,6 +91,7 @@ fn make_function(name: &str, stdlib_origin: bool, is_pub: bool) -> Function {
         is_pub,
         is_private: false,
         is_unsafe: false,
+        is_comptime: false,
         name: name.to_string(),
         generic_params: None,
         params: Vec::new(),

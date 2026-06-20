@@ -460,6 +460,7 @@ impl Walker<'_> {
     fn walk_expr(&mut self, expr: &Expr) {
         match &expr.kind {
             ExprKind::Block(block)
+            | ExprKind::Comptime(block)
             | ExprKind::Unsafe(block)
             | ExprKind::Loop { body: block, .. }
             | ExprKind::LabeledBlock { body: block, .. }

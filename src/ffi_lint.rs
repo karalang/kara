@@ -217,6 +217,7 @@ fn walk_expr(
             walk_expr(right, level, ffi_fns, diags);
         }
         ExprKind::Block(block)
+        | ExprKind::Comptime(block)
         | ExprKind::Loop { body: block, .. }
         | ExprKind::LabeledBlock { body: block, .. }
         | ExprKind::Seq(block)

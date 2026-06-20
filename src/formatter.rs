@@ -274,6 +274,8 @@ pub(super) fn needs_raw_escape(name: &str) -> bool {
         | "unsafe" | "extern"
         // Shared / layout
         | "shared" | "layout" | "group"
+        // Comptime
+        | "comptime"
         // Bool literals
         | "true" | "false"
         // Providers / misc
@@ -282,7 +284,7 @@ pub(super) fn needs_raw_escape(name: &str) -> bool {
         | "f16" | "bf16"
         // Reserved-for-future-use keywords
         | "gen" | "become" | "do" | "final" | "override" | "priv" | "try"
-        | "typeof" | "virtual" | "async" | "await" | "comptime" | "pure" | "box"
+        | "typeof" | "virtual" | "async" | "await" | "pure" | "box"
     )
 }
 

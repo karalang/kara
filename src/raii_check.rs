@@ -941,6 +941,7 @@ impl StateFlowWalker<'_> {
                 self.walk_expr(index);
             }
             ExprKind::Block(b)
+            | ExprKind::Comptime(b)
             | ExprKind::Unsafe(b)
             | ExprKind::Try(b)
             | ExprKind::Seq(b)

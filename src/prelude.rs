@@ -1539,6 +1539,7 @@ fn stub_function(name: &str, span: &Span) -> Item {
         is_pub: true,
         is_private: false,
         is_unsafe: false,
+        is_comptime: false,
         name: name.to_string(),
         generic_params: None,
         params: Vec::new(),

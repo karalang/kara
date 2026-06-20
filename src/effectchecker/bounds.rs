@@ -360,6 +360,7 @@ impl<'a> super::EffectChecker<'a> {
                                 is_pub: t.is_pub,
                                 is_private: t.is_private,
                                 is_unsafe: false,
+                                is_comptime: false,
                                 name: m.name.clone(),
                                 generic_params: m.generic_params.clone(),
                                 params: m.params.clone(),

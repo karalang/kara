@@ -2212,6 +2212,25 @@ impl<'a> super::TypeChecker<'a> {
 
             // Compound
             ExprKind::Block(block) => self.infer_block(block),
+            // `comptime { ... }` — parsed and AST-recognized (slice 1), but the
+            // compile-time evaluator that runs the block and splices its
+            // constant result is a later slice. Gate at the use site with a
+            // focused diagnostic (mirrors the `E_DYN_TRAIT_NOT_IMPLEMENTED_YET`
+            // parsed-but-deferred pattern), then still infer the inner block so
+            // the surrounding expression gets a real type instead of cascading
+            // `Type::Error`s. Spec: deferred.md § Comptime — AST→AST `comptime fn`.
+            ExprKind::Comptime(block) => {
+                self.type_error(
+                    "error[E_COMPTIME_NOT_YET_IMPLEMENTED]: `comptime { ... }` is parsed but \
+                     the compile-time evaluator is not yet implemented; comptime ships as a \
+                     single post-v1 unit (evaluator, `Type` reflection, AST builder, derive \
+                     desugaring) per deferred.md § Comptime"
+                        .to_string(),
+                    expr.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                self.infer_block(block)
+            }
 
             ExprKind::If {
                 condition,

@@ -316,6 +316,7 @@ impl<'a> super::TypeChecker<'a> {
                         is_pub: false,
                         is_private: false,
                         is_unsafe: false,
+                        is_comptime: false,
                         name: method.name.clone(),
                         generic_params: method.generic_params.clone(),
                         params: method.params.clone(),
@@ -2221,6 +2222,7 @@ impl<'a> super::TypeChecker<'a> {
                 self.reject_module_binding_init(e, binding_name, "pipe expression");
             }
             ExprKind::Block(_)
+            | ExprKind::Comptime(_)
             | ExprKind::If { .. }
             | ExprKind::IfLet { .. }
             | ExprKind::Match { .. }

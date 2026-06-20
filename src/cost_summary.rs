@@ -353,6 +353,7 @@ fn walk_expr_for_with_provider(expr: &Expr, out: &mut Vec<WithProviderSite>) {
             }
         }
         ExprKind::Block(b)
+        | ExprKind::Comptime(b)
         | ExprKind::Unsafe(b)
         | ExprKind::Try(b)
         | ExprKind::Seq(b)
