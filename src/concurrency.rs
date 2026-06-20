@@ -1767,8 +1767,8 @@ impl<'a> ConcurrencyChecker<'a> {
 
         // Group 1: reads/writes — same category
         // Group 2: sends/receives — same category
-        // Group 3: allocates — informational, NOT a conflict (A3; design.md)
-        // Group 4: panics — self-conflict
+        // Group 3: allocates — informational, NOT a conflict (A3a; design.md)
+        // Group 4: panics — informational, NOT a conflict (A3b; design.md)
         // Group 5: blocks — execution verb, NOT a conflict (A1; design.md:5907)
         // Group 6: suspends — self-conflict (pending A2)
         // Cross-group: no conflict
@@ -1801,9 +1801,26 @@ impl<'a> ConcurrencyChecker<'a> {
             // that made the A1 `blocks` flip safe. Lifted in A3 (2026-06-19);
             // see phase-5-diagnostics.md.
             (Allocates, Allocates) => false,
-            // panics + panics = self-conflict (pending A3's panics half —
-            // needs the par-runtime branch-panic propagation verified first).
-            (Panics, Panics) => true,
+            // panics + panics = NO conflict. `panics` is *informational* too
+            // (design.md: only reads/writes + sends/receives drive conflict),
+            // and `effectchecker.rs::effects_conflict` already treats it as
+            // non-conflicting. This unblocks auto-par for ordinary arithmetic:
+            // `/` and `%` infer `panics` (the div/rem-by-zero guard), which is
+            // why `examples/parallax_lite` had to avoid them to keep its groups.
+            // Safe because a Kāra panic lowers to `emit_panic` = `printf` +
+            // `exit(1)` (`src/codegen/runtime.rs`), a direct process exit — NOT
+            // a Rust unwind. So a panic inside a `par_run` worker terminates the
+            // whole process fail-fast (identical to a sequential panic: the
+            // release runtime is built `panic = "abort"`, and worker-panic →
+            // process-abort is the documented intended `par {}` semantics, see
+            // the `[profile.release]` comment in Cargo.toml). No unwinding means
+            // no double-drop and nothing to "propagate" — the same worker-exit
+            // path already runs for explicit `par {}` and the A1/A3a groups.
+            // Like `allocates`, `panics` is NOT a coroutine boundary. The
+            // common case — a `/`/`%` that does not actually divide by zero —
+            // simply computes concurrently. Lifted in A3b (2026-06-19);
+            // see phase-5-diagnostics.md.
+            (Panics, Panics) => false,
             // blocks + blocks = NO conflict. Execution verbs answer PLACEMENT,
             // not conflict (design.md:5907/:5920) — two independent blocking
             // calls overlap on the blocking pool via the same `emit_par_run`

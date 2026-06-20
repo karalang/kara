@@ -11181,6 +11181,64 @@ fn main() {
     }
 
     #[test]
+    fn e2e_auto_par_panicking_calls_run_correctly() {
+        // A3b: two independent statements that each only `panics` (each calls a
+        // dividing helper — `/` infers `panics`) AUTO-parallelize now that the
+        // conflict model treats panics+panics as non-conflicting. Neither
+        // actually divides by zero, so this is the common, beneficial case:
+        // ordinary arithmetic runs concurrently. Pin output correctness.
+        if let Some(out) = run_program(
+            "fn divmod(n: i64, d: i64) -> i64 { return n / d; }\n\
+             fn main() {\n\
+                 let a = divmod(100, 5);\n\
+                 let b = divmod(200, 4);\n\
+                 println(a + b);\n\
+             }",
+        ) {
+            assert_eq!(
+                out, "70\n",
+                "auto-par panicking-effect calls must compute correctly; got:\n{out}"
+            );
+        }
+    }
+
+    #[test]
+    fn e2e_auto_par_branch_panic_fails_fast() {
+        // A3b soundness gate: when one of two grouped panic-capable statements
+        // ACTUALLY panics inside a `__par_branch` worker (here a real divide by
+        // zero), the program must FAIL FAST — a Kāra panic lowers to `exit(1)`
+        // (a direct process exit, not a Rust unwind), so the worker terminates
+        // the whole process. We assert a non-zero exit and the panic message,
+        // and the `output_with_hang_watchdog` wrapper makes this double as a
+        // deadlock guard: a regression that hung on the worker exit (e.g. exit
+        // while another thread holds the output lock) would trip the watchdog
+        // rather than pass.
+        if let Some(c) = run_program_capturing(
+            "fn divmod(n: i64, d: i64) -> i64 { return n / d; }\n\
+             fn main() {\n\
+                 let zero = 0;\n\
+                 let a = divmod(100, 5);\n\
+                 let b = divmod(200, zero);\n\
+                 println(a + b);\n\
+             }",
+        ) {
+            assert_eq!(
+                c.status.code(),
+                Some(1),
+                "a branch panic must fail fast with exit 1; stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+            assert!(
+                c.stdout.contains("division by zero"),
+                "expected the div-by-zero panic message; stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+        }
+    }
+
+    #[test]
     fn e2e_auto_par_channel_consumer_terminates() {
         // Regression (A2b): the producer/consumer channel program must TERMINATE
         // under default auto-par. `consume(rx)` carries a `suspends` effect (from

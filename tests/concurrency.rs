@@ -382,6 +382,64 @@ fn test_allocate_then_read_dependency_still_serializes() {
     );
 }
 
+// ── Independent panicking calls parallelize (A3b) ──────────────
+
+#[test]
+fn test_independent_panicking_calls_parallelize() {
+    // Two independent statements that each only `panics` (each calls a helper
+    // that divides — `/` infers `panics` via the div-by-zero guard). Before A3b
+    // the auto-par conflict model treated panics+panics as a conflict and
+    // serialized them; A3b lifts that — `panics` is *informational* (design.md:
+    // only reads/writes + sends/receives drive conflict), and a Kāra panic
+    // lowers to `exit(1)` (fail-fast process exit, not an unwind), so grouping
+    // two panic-capable statements is safe. This is what unblocks auto-par for
+    // ordinary arithmetic (the `examples/parallax_lite` `/`/`%` blocker).
+    let analysis = analyze(
+        r#"
+        fn divmod(n: i64, d: i64) -> i64 { return n / d; }
+        fn main() {
+            let a = divmod(100, 5);
+            let b = divmod(200, 4);
+        }
+        "#,
+    );
+
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(main_fc.total_statements, 2);
+    assert_eq!(
+        main_fc.parallel_groups.len(),
+        1,
+        "two independent panicking calls should parallelize (A3b), got {:?}",
+        main_fc.parallel_groups
+    );
+    let g = &main_fc.parallel_groups[0];
+    assert!(g.statement_indices.contains(&0) && g.statement_indices.contains(&1));
+}
+
+#[test]
+fn test_panic_then_dependency_still_serializes() {
+    // A3b is scoped to the effect graph: a data dependency between two
+    // panic-capable statements must still serialize them. Here the second div
+    // consumes the first's result (RAW), so the pair stays serial despite the
+    // panics flip.
+    let analysis = analyze(
+        r#"
+        fn divmod(n: i64, d: i64) -> i64 { return n / d; }
+        fn main() {
+            let a = divmod(100, 5);
+            let b = divmod(a, 2);
+        }
+        "#,
+    );
+
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc.parallel_groups.is_empty(),
+        "a RAW data dependency must serialize the pair despite the panics flip, got {:?}",
+        main_fc.parallel_groups
+    );
+}
+
 // ── Timer suspends parallelizes; other suspends stays serial (A2b) ─
 
 #[test]
