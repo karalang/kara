@@ -47704,13 +47704,21 @@ fn main() {
         assert!(ir.contains("@fact") && ir.contains("alwaysinline"));
     }
 
-    // NOTE: the "`#[inline(always)]` used through a function pointer still
-    // compiles" case from the checklist is not covered as an IR test yet —
-    // Kāra `fn(T) -> R` value/pointer types do not parse in the current
-    // compiler (a separate language feature). The attribute is emitted on
-    // the function definition regardless of how it is called, so the
-    // direct-call and recursive cases above exercise the lowering; add the
-    // indirect-call variant once `fn`-typed values land.
+    // NOTE: the checklist's "`#[inline(always)]` used through a function
+    // pointer still compiles" case has no IR test yet — but NOT for an
+    // attribute reason. The natural form
+    //   fn apply(f: Fn(i64) -> i64, x: i64) -> i64 { f(x) }
+    //   apply(doubler, 21)   // doubler is an #[inline(always)] fn
+    // parses and type-checks fine (Kāra's function type is the uppercase
+    // `Fn(...)` — design.md § First-Class Functions, syntax.md § 6.3), but
+    // fails codegen: `TypeKind::FnType` lowers to `i64` and a bare fn name
+    // lowers to a raw `ptr`, so the generic higher-order call mismatches at
+    // LLVM verification ("Call parameter type does not match"). That
+    // bare-named-fn → `Fn`-value codegen gap is tracked as B-2026-06-20-1
+    // (phase-7-codegen.md). The attribute itself is emitted on the function
+    // definition regardless of call shape — the direct-call and recursive
+    // cases above exercise the lowering; add the indirect-call variant once
+    // B-2026-06-20-1 lands.
 
     #[test]
     fn test_ir_cold_and_inline_never_coexist() {

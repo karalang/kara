@@ -89,11 +89,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **135 surfaced · 0 open · 131 fixed** (2026-05-20 → 2026-06-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **136 surfaced · 1 open · 131 fixed** (2026-05-20 → 2026-06-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-06-20-1 | 2026-06-20 | codegen | med | Passing a bare named `fn` as a first-class `Fn(...)` value miscompiles. `fn apply(f: Fn(i64)->i64, x: i64) -> i64 { f(x) }` called as `apply(doubler, 21)` (doubler a named fn) parses + type-checks fine, but codegen lowers `TypeKind::FnType` to the default `i64` (types_lowering.rs llvm_type_for_type_expr falls through) while a bare fn name lowers to a raw `ptr` (exprs.rs free-fn-as-value), so the higher-order call fails LLVM module verification: 'Call parameter type does not match function signature! ptr @doubler ... call i64 @apply(ptr @doubler, i64 21)'. Only the special-cased `Server.serve(handler)` dispatch works today (landed 2026-05-09, commit 60ce3a4); the general `Fn`-typed-parameter path is unsupported and was untracked. Workaround: wrap in a closure (`apply(|x| doubler(x), 21)`), which builds the {fn_ptr,env} fat pointer. Fix = lower FnType to the closure fat-pointer struct {ptr,ptr} and reify a bare fn name into {ptr, null-env} at Fn-typed arg sites (or have the Fn ABI accept a raw ptr). Surfaced writing the `#[inline(always)]`-through-fn-value IR test for the codegen-hint-attrs slice (phase-8-stdlib-floor.md line 775); the attribute itself emits correctly regardless of call shape, so only the indirect-call test is blocked. | phase-7-codegen.md |
 
 ### Fixed (131)
 
