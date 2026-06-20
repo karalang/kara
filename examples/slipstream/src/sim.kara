@@ -43,6 +43,21 @@ pub struct LbmNode {
     f5: f64, f6: f64, f7: f64, f8: f64,
 }
 
+// SoA memory layout for the grid. The nine distribution functions split into two
+// cache groups — the rest + cardinal directions (read together in collide) and
+// the diagonals — so each buffer is two parallel arrays instead of an array of
+// 72-byte cells. The carried `grid` plus the per-substep `coll`/`next` buffers
+// each ride this layout; the per-band chunks returned by the workers stay AoS,
+// since they cross the `TaskHandle[Vec[LbmNode]]` join boundary (a generic type,
+// no layout flow). Adding these blocks changes the *physical* memory layout
+// only — the layout flows through every `substep`/`render_fb` boundary by
+// per-layout monomorphization, and the native oracle's milestone checksums are
+// byte-identical to the array-of-structs build. (per-layout-monomorphization
+// spike, slice 6: Slipstream earns its "SoA layout" roster billing.)
+layout grid: Vec[LbmNode] { group lo { f0, f1, f2, f3, f4 } group hi { f5, f6, f7, f8 } }
+layout coll: Vec[LbmNode] { group lo { f0, f1, f2, f3, f4 } group hi { f5, f6, f7, f8 } }
+layout next: Vec[LbmNode] { group lo { f0, f1, f2, f3, f4 } group hi { f5, f6, f7, f8 } }
+
 // Macroscopic velocity at a cell, for visualization.
 struct Vel { x: f64, y: f64 }
 
@@ -155,15 +170,18 @@ fn collide_band(grid: ref Vec[LbmNode], y0: i64, y1: i64) -> Vec[LbmNode] {
 fn stream_band(coll: ref Vec[LbmNode], y0: i64, y1: i64, u0: f64, s: f64) -> Vec[LbmNode] {
     let w = grid_w();
     let h = grid_h();
-    let mut next: Vec[LbmNode] = Vec.new();
+    // Per-band chunk stays AoS (`out`, not the SoA `next`): it is returned
+    // through a `TaskHandle[Vec[LbmNode]]` join, which is generic and carries no
+    // layout, then concatenated into the SoA `next` by `fan_stream`'s push loop.
+    let mut out: Vec[LbmNode] = Vec.new();
     let mut y = y0;
     while y < y1 {
         let mut x = 0;
         while x < w {
             if x == 0 or x == w - 1 or y == 0 or y == h - 1 {
-                next.push(equil(u0, 0.0, 1.0));
+                out.push(equil(u0, 0.0, 1.0));
             } else if is_solid(x, y, s) {
-                next.push(equil(0.0, 0.0, 1.0));
+                out.push(equil(0.0, 0.0, 1.0));
             } else {
                 let c = coll[idx(x, y, w)];
                 let f1 = if is_solid(x - 1, y, s) { c.f3 } else { coll[idx(x - 1, y, w)].f1 };
@@ -174,7 +192,7 @@ fn stream_band(coll: ref Vec[LbmNode], y0: i64, y1: i64, u0: f64, s: f64) -> Vec
                 let f6 = if is_solid(x + 1, y + 1, s) { c.f8 } else { coll[idx(x + 1, y + 1, w)].f6 };
                 let f7 = if is_solid(x + 1, y - 1, s) { c.f5 } else { coll[idx(x + 1, y - 1, w)].f7 };
                 let f8 = if is_solid(x - 1, y - 1, s) { c.f6 } else { coll[idx(x - 1, y - 1, w)].f8 };
-                next.push(LbmNode {
+                out.push(LbmNode {
                     f0: c.f0, f1: f1, f2: f2, f3: f3, f4: f4,
                     f5: f5, f6: f6, f7: f7, f8: f8,
                 });
@@ -183,7 +201,7 @@ fn stream_band(coll: ref Vec[LbmNode], y0: i64, y1: i64, u0: f64, s: f64) -> Vec
         }
         y = y + 1;
     }
-    next
+    out
 }
 
 // Macroscopic velocity field from a grid, one Vel per cell.

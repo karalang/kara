@@ -745,18 +745,37 @@ impl<'ctx> super::Codegen<'ctx> {
             // recoverable. `Vec` / `String` / `Slice` etc. are unaffected:
             // their name string fully determines their (header-only) layout,
             // so they keep taking the fast `llvm_type_for_name` path.
-            let ty: BasicTypeEnum<'ctx> = match &field.type_name {
-                Some(name) if name_layout_needs_type_expr(name) => {
-                    lookup_param_type_expr(fn_ast, &field.name)
+            // SoA-carried local across a suspend: a `Vec[E]` binding whose name
+            // is a `layout` block (the browser render loop's `grid`/`coll`/`next`)
+            // is physically the 4-field SoA struct, not the AoS `{ptr,len,cap}`
+            // header. Size its state-struct field accordingly so the spill/restore
+            // across `frames.recv()` round-trips the full SoA value — otherwise
+            // the restored 3-field header is passed into `substep`'s 4-field SoA
+            // param (LLVM signature mismatch). The binding NAME is the layout
+            // origin (the same name-match `seed_binding_site_layout` uses at the
+            // `let`); `field.name` is that binding name.
+            let soa_field = if matches!(field.type_name.as_deref(), Some("Vec")) {
+                self.soa_layouts.get(&field.name).cloned()
+            } else {
+                None
+            };
+            let ty: BasicTypeEnum<'ctx> = if let Some(soa) = soa_field {
+                self.soa_vec_type(soa.num_groups, soa.cold_group.is_some())
+                    .into()
+            } else {
+                match &field.type_name {
+                    Some(name) if name_layout_needs_type_expr(name) => {
+                        lookup_param_type_expr(fn_ast, &field.name)
+                            .or_else(|| lookup_let_type_expr(fn_ast, &field.name))
+                            .map(|te| self.llvm_type_for_type_expr(&te))
+                            .unwrap_or_else(|| self.llvm_type_for_name(name))
+                    }
+                    Some(name) => self.llvm_type_for_name(name),
+                    None => lookup_param_type_expr(fn_ast, &field.name)
                         .or_else(|| lookup_let_type_expr(fn_ast, &field.name))
                         .map(|te| self.llvm_type_for_type_expr(&te))
-                        .unwrap_or_else(|| self.llvm_type_for_name(name))
+                        .unwrap_or_else(|| self.context.i64_type().into()),
                 }
-                Some(name) => self.llvm_type_for_name(name),
-                None => lookup_param_type_expr(fn_ast, &field.name)
-                    .or_else(|| lookup_let_type_expr(fn_ast, &field.name))
-                    .map(|te| self.llvm_type_for_type_expr(&te))
-                    .unwrap_or_else(|| self.context.i64_type().into()),
             };
             fields.push(ty);
         }

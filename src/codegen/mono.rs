@@ -206,6 +206,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // `let r = m.entry(k).or_insert(d)` binding tag): a nested mono
             // body must not see/clobber the outer function's tags.
             let saved_entry_slot_ref_vars = std::mem::take(&mut self.entry_slot_ref_vars);
+            let saved_soa_return_locals = std::mem::take(&mut self.soa_return_locals);
 
             // Declare then compile the specialization.
             self.declare_mono_function(&generic_fn, &mangled)?;
@@ -226,6 +227,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.emit_state_machine_helpers_for_mono(name, &mangled);
 
             // Restore state.
+            self.soa_return_locals = saved_soa_return_locals;
             self.binding_layouts = saved_binding_layouts;
             self.ref_params = saved_ref_params;
             self.entry_slot_ref_vars = saved_entry_slot_ref_vars;
@@ -663,11 +665,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // caller binding.
         let saved_binding_layouts = std::mem::take(&mut self.binding_layouts);
         let saved_entry_slot_ref_vars = std::mem::take(&mut self.entry_slot_ref_vars);
+        // Returned-local set is per-function; `compile_mono_function` repopulates
+        // it from this mono's body. Save/restore so it can't leak across the
+        // nested compile (mirrors `binding_layouts`).
+        let saved_soa_return_locals = std::mem::take(&mut self.soa_return_locals);
 
         let result = self
             .declare_mono_function(func, mangled)
             .and_then(|_| self.compile_mono_function(func, mangled));
 
+        self.soa_return_locals = saved_soa_return_locals;
         self.binding_layouts = saved_binding_layouts;
         self.ref_params = saved_ref_params;
         self.entry_slot_ref_vars = saved_entry_slot_ref_vars;
@@ -787,6 +794,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // (`mem::take`) at the mono entry point, so this fresh body starts empty
         // and seeds its own locals; `let`-site registrations land here.
         self.binding_layouts.clear();
+        // This mono's returned local(s) — so the origin name-match in
+        // `seed_binding_site_layout` is suppressed for them (their layout comes
+        // from `return_layout` / `layout_subst`, seeded just below). The caller's
+        // set was swapped out at the mono entry point.
+        self.soa_return_locals = self
+            .soa_return_local_names(&func.body)
+            .into_iter()
+            .collect();
         self.inline_option_payload_vars.clear();
         self.inline_result_payload_vars.clear();
         self.inline_option_map_payload_vars.clear();
@@ -959,7 +974,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (leak) or be suppressed without building SoA (type mismatch). Only a
     /// bare identifier qualifies; branch-leaf / multi-`return` returns are a
     /// follow-on slice (spike §8) — they degrade to AoS, never miscompile.
-    fn soa_return_local_names(&self, body: &Block) -> Vec<String> {
+    pub(super) fn soa_return_local_names(&self, body: &Block) -> Vec<String> {
         let mut names = Vec::new();
         let from_final = body.final_expr.as_deref();
         let from_last_stmt = body.stmts.last().and_then(|s| match &s.kind {
@@ -1184,8 +1199,18 @@ impl<'ctx> super::Codegen<'ctx> {
         binding_name: &str,
     ) -> Option<super::state::SoaLayout> {
         let layout = if let Some(layout) = self.layout_subst.get(binding_name) {
+            // A returned local seeded by a return-SoA mono, or a name the
+            // dispatch already laid out. Honored even for a returned local —
+            // this IS the return-mono's SoA seeding.
             layout.clone()
-        } else if self.soa_layouts.contains_key(binding_name) {
+        } else if self.soa_layouts.contains_key(binding_name)
+            && !self.soa_return_locals.contains(binding_name)
+        {
+            // Origin name-match — but NOT for a returned local. A returned
+            // local's layout is dictated by the function's `return_layout`
+            // (handled by the `layout_subst` arm above in a return-SoA mono);
+            // matching it by name here would lower the body SoA in the AoS base
+            // symbol / a forward-only mono, clashing with the AoS return type.
             LayoutId::Soa(binding_name.to_string())
         } else {
             LayoutId::Aos

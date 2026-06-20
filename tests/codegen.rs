@@ -18268,6 +18268,157 @@ fn main() {
         }
     }
 
+    // ── SoA cross-function, slice 6 (Slipstream full-SoA proof) ────
+
+    #[test]
+    fn test_e2e_soa_counted_loop_fill_returned() {
+        // Slice 6: a SoA `Vec[E]` filled by a COUNTED loop and returned. The
+        // `presize` lowering pass rewrites `let mut grid = Vec.new()` into
+        // `Vec.with_capacity(n)` when a `while i < n { grid.push(..) }` fills it
+        // (the `init_grid`/`fan_collide` shape). The SoA let path only recognized
+        // `Vec.new`, so the capacity-rewritten binding fell through to the AoS
+        // `{ptr,len,cap}` path while its layout was the 4-field SoA struct — an
+        // LLVM return-type / use-site mismatch. `is_vec_with_capacity_call` now
+        // routes it to the SoA constructor. build(3): x=0,1,2 y=0,2,4 → 9.
+        let out = run_program(
+            r#"
+struct E { x: f64, y: f64 }
+layout grid: Vec[E] { group g1 { x } group g2 { y } }
+fn build(n: i64) -> Vec[E] {
+    let mut grid: Vec[E] = Vec.new();
+    let mut i = 0;
+    while i < n { grid.push(E { x: i as f64, y: (i * 2) as f64 }); i = i + 1; }
+    grid
+}
+fn main() with panics {
+    let g: Vec[E] = build(3);
+    let mut s = 0.0;
+    let mut i = 0;
+    while i < g.len() { s = s + g[i].x + g[i].y; i = i + 1; }
+    println(s);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "9",
+                "SoA Vec filled by a counted loop (presize -> with_capacity) must lower SoA"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_soa_returned_local_name_matches_layout() {
+        // Slice 6: a builder whose RETURNED local is named after a `layout` block
+        // (`grid`). The base (AoS-return) symbol name-matched the local SoA in its
+        // body while its signature returned the AoS `{ptr,len,cap}` — a body/sig
+        // mismatch. The fix suppresses `seed_binding_site_layout`'s origin
+        // name-match for a returned local (its layout is the return mono's, not
+        // its name); the SoA-returning specialization is the `$ret_soa_grid` mono.
+        // make(): grid[0].x + grid[1].y = 1 + 4 = 5.
+        let out = run_program(
+            r#"
+struct E { x: f64, y: f64 }
+layout grid: Vec[E] { group g1 { x } group g2 { y } }
+fn make() -> Vec[E] {
+    let mut grid: Vec[E] = Vec.new();
+    grid.push(E { x: 1.0, y: 2.0 });
+    grid.push(E { x: 3.0, y: 4.0 });
+    grid
+}
+fn main() with panics {
+    let g: Vec[E] = make();
+    println(g[0].x + g[1].y);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "5",
+                "a returned local named like a layout block must stay base/sig-consistent"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_soa_reassign_carried_buffer() {
+        // Slice 6: the carried-grid double-buffer move `grid = bump(grid)` — a
+        // reassignment (not a `let`) of an existing SoA binding to a
+        // layout-returning call, the heart of a stateful sim's per-frame loop.
+        // The let arm had `compile_soa_let_from_call`; the assignment arm did not,
+        // so the call returned the AoS struct (no backward mono) and the 3-field
+        // value was stored into the 4-field SoA slot → garbage group pointers →
+        // SIGSEGV on the next index. `compile_soa_assign_from_call` parks the
+        // return layout, frees the OLD groups (caller-retains by-value param), and
+        // stores the new SoA header. Run twice (the loop shape): x0 1->3, x1 3->5
+        // → 8.
+        let out = run_program(
+            r#"
+struct E { x: f64, y: f64 }
+layout grid: Vec[E] { group g1 { x } group g2 { y } }
+fn bump(g: Vec[E]) -> Vec[E] {
+    let mut out: Vec[E] = Vec.new();
+    let mut i = 0;
+    while i < g.len() { let e = g[i]; out.push(E { x: e.x + 1.0, y: e.y }); i = i + 1; }
+    out
+}
+fn main() with panics {
+    let mut grid: Vec[E] = Vec.new();
+    grid.push(E { x: 1.0, y: 2.0 });
+    grid.push(E { x: 3.0, y: 4.0 });
+    grid = bump(grid);
+    grid = bump(grid);
+    println(grid[0].x + grid[1].x);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "8",
+                "SoA reassignment from a layout-returning call (carried-buffer double-buffer)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_soa_tail_call_soa_return() {
+        // Slice 6: a SoA-returning function whose body ENDS IN a layout-returning
+        // call (`substep`'s `fan_stream(coll, …)` shape). The tail-identifier
+        // return is seeded by `soa_return_local_names`; the tail-CALL had no
+        // path, so the callee returned AoS while the signature was SoA. The
+        // tail-call propagation in `compile_tail_final_expr` flows the function's
+        // return layout to the tail call. step()->bump(): r[0].x = 1 + 1 = 2.
+        let out = run_program(
+            r#"
+struct E { x: f64, y: f64 }
+layout grid: Vec[E] { group g1 { x } group g2 { y } }
+fn bump(g: Vec[E]) -> Vec[E] {
+    let mut out: Vec[E] = Vec.new();
+    let mut i = 0;
+    while i < g.len() { let e = g[i]; out.push(E { x: e.x + 1.0, y: e.y }); i = i + 1; }
+    out
+}
+fn step(g: Vec[E]) -> Vec[E] with panics { bump(g) }
+fn main() with panics {
+    let mut grid: Vec[E] = Vec.new();
+    grid.push(E { x: 1.0, y: 2.0 });
+    let r: Vec[E] = step(grid);
+    println(r[0].x);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "2",
+                "a SoA-returning fn whose tail is a layout-returning call must propagate the layout"
+            );
+        }
+    }
+
     // ── String operators ──────────────────────────────────────────
 
     #[test]

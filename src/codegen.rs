@@ -1594,6 +1594,22 @@ pub(super) struct Codegen<'ctx> {
     /// cleared at each function entry and save/restored (`mem::take`) around the
     /// mono entry points, exactly like `variables` / `ref_params`.
     pub(crate) binding_layouts: HashMap<String, LayoutId>,
+    /// Names of the current function's *returned* local bindings — the
+    /// tail-`return`ed bare `Vec[E]` identifiers (`soa_return_local_names`).
+    /// A returned local's physical layout is dictated by the function's
+    /// `return_layout` (the SoA-return monomorph seeds it in `layout_subst`),
+    /// NOT by a coincidental name match against a `layout` block. So
+    /// `seed_binding_site_layout`'s origin name-match fallback is suppressed for
+    /// any binding in this set: in the AoS base symbol (and forward-param-only
+    /// monos, where `return_layout` is `Aos`) a returned local stays AoS,
+    /// matching the AoS return type — without this, a builder whose returned
+    /// local is named like a layout block (`init_grid`'s `grid`,
+    /// `fan_collide`'s `coll`) lowered its body SoA while the base signature
+    /// returned the AoS `{ptr,len,cap}` struct (LLVM return-type mismatch). A
+    /// terminal (non-returned) local is unaffected, so single-function SoA
+    /// (`main`'s `entities`) still seeds by name. Set at each function entry
+    /// (base + every mono) and save/restored around the mono entry points.
+    pub(crate) soa_return_locals: std::collections::HashSet<String>,
     /// Function parameter ref-ness (function name → vec of is_ref per param).
     pub(crate) fn_param_ref: HashMap<String, Vec<bool>>,
     /// `unsafe extern` imports that carry `#[link_name("symbol")]`: maps the
@@ -5023,6 +5039,7 @@ impl<'ctx> Codegen<'ctx> {
             tail_ret_inner: None,
             soa_layouts: HashMap::new(),
             binding_layouts: HashMap::new(),
+            soa_return_locals: std::collections::HashSet::new(),
             scope_cleanup_actions: Vec::new(),
             pending_errdefer_payload: None,
             current_fn_err_payload_ty: None,
@@ -5841,6 +5858,38 @@ impl<'ctx> Codegen<'ctx> {
         // `compile_expr` → `compile_call` → `compile_generic_call`.
         // Cheap `Rc` clones flow to per-mono callers as they fire.
         self.program_snapshot = Some(Rc::new(program.clone()));
+        // Collect SoA `layout` blocks BEFORE the state-machine emission below:
+        // a persisted local that is SoA (a `layout`-named `Vec[E]` carried
+        // across a suspend, e.g. the browser render loop's `grid`) must size its
+        // state-struct field as the 4-field SoA struct, not the AoS
+        // `{ptr,len,cap}` Vec — and `emit_state_struct_types` /
+        // `emit_state_machine_state_{constructors,destructors}` consult
+        // `soa_layouts` to do so. Collected here too (kept below for the
+        // non-state-machine path's idempotent re-collect is harmless); without
+        // this the catalogue was empty during state-struct emission and an SoA
+        // carried-grid coroutine mis-sized its frame slot.
+        self.collect_soa_layouts(program);
+        // Pre-populate `fn_asts` BEFORE the state-machine emission below. The
+        // canonical population is in the declare loop (further down), but the
+        // state-machine passes — `emit_state_machine_state_{constructors,
+        // destructors}` — compile suspending-function bodies (the poll-fn), and
+        // those bodies' `let g = builder()` SoA-return inference consults
+        // `fn_asts` via `let_rhs_calls_layout_returning_fn`. With `fn_asts` still
+        // empty there, a `let grid = init_grid()` in the browser render loop was
+        // NOT recognized as a layout-returning call, so it kept the AoS
+        // `{ptr,len,cap}` slot while `seed_binding_site_layout` had already
+        // seeded the binding SoA — the call dispatch then routed `substep` to its
+        // SoA monomorph and passed the 3-field header into a 4-field param (LLVM
+        // signature mismatch). Seeding the AST map first makes the inference
+        // consistent across the state-machine body compiles and the normal pass.
+        // The later canonical insert is idempotent (same clones).
+        for item in &program.items {
+            if let Item::Function(f) = item {
+                if f.generic_params.is_none() {
+                    self.fn_asts.insert(f.name.clone(), f.clone());
+                }
+            }
+        }
         // Phase 6 line 26 slice 5: emit one `%kara.state.<fn_key>` LLVM
         // struct per entry in `program.state_struct_layouts` (populated
         // by the cli pipeline from slice 4). Must precede function-body

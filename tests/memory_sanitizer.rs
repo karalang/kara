@@ -8302,6 +8302,61 @@ fn main() {
     }
 
     #[test]
+    fn asan_soa_reassign_carried_buffer_no_leak_or_double_free() {
+        // Slice 6 (the carried-grid double-buffer): a SoA `grid` is built
+        // (`init()` returns a counted-loop-filled SoA Vec — the `with_capacity`
+        // form), then REASSIGNED each "frame" from a layout-returning call
+        // (`grid = bump(grid)`), the exact shape of a stateful sim's per-frame
+        // loop. `compile_soa_assign_from_call` frees the OLD group buffers (the
+        // by-value param is caller-retains, so the displaced buffers are owned
+        // here) before storing the new header; the binding's queued
+        // `FreeSoaGroups` frees the final frame's buffers at scope exit. Get the
+        // double-buffer accounting wrong and it's a double-free (free old AND
+        // scope-free the same buffers → ASAN) or a per-frame leak (never free the
+        // displaced buffers → LSan). The grid is rebuilt + reassigned 5× inside a
+        // 20× outer loop to amplify either; `Cell` is 40 bytes (two SoA groups,
+        // both group buffers well over LSan's short-allocation blind spot). Sum
+        // of `a` (0, bumped +1 ×5) over 8 cells × 20 = 800.
+        assert_clean_asan_run(
+            r#"
+struct Cell { a: f64, b: f64, c: f64, d: f64, e: f64 }
+layout grid: Vec[Cell] { group lo { a, b } group hi { c, d, e } }
+fn bump(g: Vec[Cell]) -> Vec[Cell] {
+    let mut out: Vec[Cell] = Vec.new();
+    let mut i = 0;
+    while i < g.len() {
+        let c = g[i];
+        out.push(Cell { a: c.a + 1.0, b: c.b, c: c.c, d: c.d, e: c.e });
+        i = i + 1;
+    }
+    out
+}
+fn init() -> Vec[Cell] {
+    let mut grid: Vec[Cell] = Vec.new();
+    let mut i = 0;
+    while i < 8 { grid.push(Cell { a: 0.0, b: 1.0, c: 2.0, d: 3.0, e: 4.0 }); i = i + 1; }
+    grid
+}
+fn main() {
+    let mut sum = 0.0;
+    let mut k = 0;
+    while k < 20 {
+        let mut grid: Vec[Cell] = init();
+        let mut f = 0;
+        while f < 5 { grid = bump(grid); f = f + 1; }
+        let mut i = 0;
+        while i < grid.len() { sum = sum + grid[i].a; i = i + 1; }
+        k = k + 1;
+    }
+    println(sum);
+}
+"#,
+            &["800"],
+            "soa_reassign_carried_buffer",
+        );
+    }
+
+    #[test]
     fn asan_shared_list_build_remove_repeat() {
         // Regression for the `shared struct` RC over-dec (2026-05-30): a
         // tail-cursor-built list, removed via `remove_nth_from_end`

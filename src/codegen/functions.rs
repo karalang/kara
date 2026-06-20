@@ -511,6 +511,15 @@ impl<'ctx> super::Codegen<'ctx> {
         // `variables`, so a `layout`-named local in one function can't bleed
         // its SoA-ness into a same-named binding in the next.
         self.binding_layouts.clear();
+        // The base symbol returns AoS (the declared `Vec[E]` lowers to
+        // `{ptr,len,cap}`); record its tail-returned local(s) so
+        // `seed_binding_site_layout` does NOT name-match them SoA — a returned
+        // local stays AoS here, matching the AoS return type. (A SoA-returning
+        // specialization is the `return_layout` mono, not this base symbol.)
+        self.soa_return_locals = self
+            .soa_return_local_names(&func.body)
+            .into_iter()
+            .collect();
         self.inline_option_payload_vars.clear();
         self.inline_result_payload_vars.clear();
         self.inline_option_map_payload_vars.clear();

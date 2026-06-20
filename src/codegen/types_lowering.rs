@@ -1178,6 +1178,28 @@ impl<'ctx> super::Codegen<'ctx> {
         false
     }
 
+    /// Recognise `Vec.with_capacity(n)` — the capacity-presized form of
+    /// `Vec.new()`. The `presize` lowering pass rewrites `let mut v = Vec.new()`
+    /// into this when `v` is filled by a simple counted loop (a single
+    /// unconditional `push` whose trip count is known), so a SoA-laid-out buffer
+    /// built that way (`init_grid`/`fan_collide`/`fan_stream`'s
+    /// `while … { v.push(..) }`) reaches the let arm as `with_capacity`, not
+    /// `new`. The SoA let path treats the two identically (the capacity is a
+    /// hint the lazily-grown SoA groups ignore); without recognising it here, a
+    /// SoA binding initialised in a counted loop fell through to the AoS
+    /// `{ptr,len,cap}` path while its declared/inferred layout was the 4-field
+    /// SoA struct — an LLVM return-type / use-site mismatch.
+    pub(super) fn is_vec_with_capacity_call(&self, expr: &Expr) -> bool {
+        if let ExprKind::Call { callee, .. } = &expr.kind {
+            if let ExprKind::Path { segments, .. } = &callee.kind {
+                return segments.len() == 2
+                    && segments[0] == "Vec"
+                    && segments[1] == "with_capacity";
+            }
+        }
+        false
+    }
+
     /// Recognise `Atomic.new(v)` — the constructor for the transparent
     /// `Atomic[T]` wrapper. Used by the let-binding registration in
     /// `compile_stmt(Let)` to set `var_type_names[a] = "Atomic"` so

@@ -88,6 +88,24 @@ impl<'ctx> super::Codegen<'ctx> {
             self.compiling_ref_return_let_rhs = prev;
             return v;
         }
+        // Tail-CALL SoA return propagation: in a SoA-returning monomorph whose
+        // body (or a tail branch) ENDS IN a layout-returning call — `substep`'s
+        // `fan_stream(coll, …)` — flow this function's return layout to that call
+        // so it is return-SoA monomorphized and yields the 4-field struct this
+        // function returns. The tail-IDENTIFIER case (`init_grid`'s trailing
+        // `grid`) is handled by `soa_return_local_names` seeding the local; this
+        // is its tail-CALL analog. Gated on no nearer context having already
+        // parked a layout (a `let`/assign RHS sets `pending_return_layout`
+        // itself) and on the callee actually returning a `Vec[E]`
+        // (`let_rhs_calls_layout_returning_fn` matches only a direct call, so
+        // `If`/`Match`/`Block` tails fall through to their own branch finals
+        // below and re-enter here per branch). Consumed by `compile_call`.
+        if matches!(self.return_layout, super::state::LayoutId::Soa(_))
+            && self.pending_return_layout.is_none()
+            && self.let_rhs_calls_layout_returning_fn(expr)
+        {
+            self.pending_return_layout = Some(self.return_layout.clone());
+        }
         let Some(inner) = tail_inner else {
             return self.compile_expr(expr);
         };
@@ -879,12 +897,31 @@ impl<'ctx> super::Codegen<'ctx> {
     /// caller drops the binding from the slot list, leaving it as a
     /// branch-local class-(i) binding instead.
     pub(super) fn infer_let_binding_llvm_type(&self, stmt: &Stmt) -> Option<BasicTypeEnum<'ctx>> {
-        let (ty_ann, value): (Option<&TypeExpr>, &Expr) = match &stmt.kind {
-            StmtKind::Let { ty, value, .. } | StmtKind::LetElse { ty, value, .. } => {
-                (ty.as_ref(), value)
+        let (pattern, ty_ann, value): (&Pattern, Option<&TypeExpr>, &Expr) = match &stmt.kind {
+            StmtKind::Let {
+                pattern, ty, value, ..
             }
+            | StmtKind::LetElse {
+                pattern, ty, value, ..
+            } => (pattern, ty.as_ref(), value),
             _ => return None,
         };
+        // SoA-laid-out binding: a `Vec[E]` local whose name is a `layout` block is
+        // physically the 4-field SoA struct, so its par-block / auto-par return
+        // slot (and the parent join-bind alloca) must be the SoA struct type, not
+        // the AoS `{ptr,len,cap}` header the `Vec[E]` annotation lowers to. The
+        // `suspends` browser render loop's `grid` is threaded through such a slot
+        // (the pool-driver boundary); without this it round-trips as a 3-field
+        // header and mismatches its SoA use sites (`substep`/`render_fb`). Checked
+        // before the annotation so the SoA type wins over the AoS `Vec[E]` lower.
+        if let PatternKind::Binding(name) = &pattern.kind {
+            if let Some(soa) = self.soa_layouts.get(name) {
+                return Some(
+                    self.soa_vec_type(soa.num_groups, soa.cold_group.is_some())
+                        .into(),
+                );
+            }
+        }
         if let Some(te) = ty_ann {
             return Some(self.llvm_type_for_type_expr(te));
         }
@@ -1639,7 +1676,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the origin map (slice 5).
                 if let PatternKind::Binding(var_name) = &pattern.kind {
                     if let Some(soa) = self.seed_binding_site_layout(var_name) {
-                        if self.is_vec_new_call(value) {
+                        // `Vec.new()` and its presize-rewritten form
+                        // `Vec.with_capacity(n)` (the `presize` lowering pass
+                        // turns a counted-loop fill into a capacity hint, e.g.
+                        // `init_grid`/`fan_collide`'s `while c < n { v.push(..) }`)
+                        // both build a fresh SoA header. The capacity is only a
+                        // hint — the SoA groups still grow lazily on push — so it
+                        // is dropped here (SoA pre-sizing is a perf follow-up);
+                        // what matters is the binding lowers SoA, not AoS, when
+                        // its initializer was capacity-rewritten.
+                        if self.is_vec_new_call(value) || self.is_vec_with_capacity_call(value) {
                             return self.compile_soa_new(var_name, &soa);
                         }
                         // Backward inference (slice 3): `let <recv> = <call>()`
@@ -3375,6 +3421,22 @@ impl<'ctx> super::Codegen<'ctx> {
                     let v = self.compile_expr(value)?;
                     self.builder.build_store(slot_ptr, v).unwrap();
                     return Ok(());
+                }
+                // SoA reassignment from a layout-returning call — the carried-
+                // grid double-buffer move `grid = substep(grid, …)` (the host's
+                // per-frame loop). The let arm has `compile_soa_let_from_call`;
+                // this is its assignment sibling. Without it the call returns the
+                // AoS `{ptr,len,cap}` struct (no backward mono fires, since
+                // `pending_return_layout` is parked only by the let path), and
+                // the 3-field value is stored into the existing 4-field SoA slot
+                // → garbage group pointers → SIGSEGV on the next index read.
+                if let ExprKind::Identifier(name) = &target.kind {
+                    if let Some(soa) = self.active_soa_layout(name) {
+                        if self.let_rhs_calls_layout_returning_fn(value) {
+                            let name = name.clone();
+                            return self.compile_soa_assign_from_call(&name, &soa, value);
+                        }
+                    }
                 }
                 // Mirror the let-site convention: when the RHS is a
                 // `StructLiteral` (`emit_rc_alloc` returns rc=1) or a

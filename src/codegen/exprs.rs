@@ -2120,6 +2120,113 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(())
     }
 
+    /// Assignment sibling of `compile_soa_let_from_call`: `grid = f(grid, …)`
+    /// where `grid` is an existing SoA binding and `f` returns a `Vec[E]` — the
+    /// carried-grid double-buffer move at the heart of a stateful sim
+    /// (`grid = substep(grid, s, workers)` each frame). Parks the binding's
+    /// layout in `pending_return_layout` so the callee is return-SoA
+    /// monomorphized (its result IS the 4-field struct), frees the OLD group
+    /// buffers, then stores the new struct into the SAME slot.
+    ///
+    /// **Ownership.** A by-value SoA param is caller-retains (the callee borrows
+    /// the moved-in header sharing the caller's group buffers — see
+    /// `compile_mono_function`'s prologue), so after the call the OLD buffers are
+    /// still live and owned here; the reassignment must free them or they leak
+    /// every frame. The call is compiled FIRST (it reads the old `grid` as its
+    /// argument), THEN the old groups are freed (read from the slot, which still
+    /// holds the old header — the fresh return shares no buffer with it), THEN
+    /// the new header overwrites the slot. The binding's queued `FreeSoaGroups`
+    /// (registered at its `let`, keyed by this alloca) fires once at scope exit,
+    /// reading whatever header the slot holds then — i.e. the final frame's
+    /// buffers — so there is no double-free and no per-frame leak.
+    pub(super) fn compile_soa_assign_from_call(
+        &mut self,
+        var_name: &str,
+        soa: &SoaLayout,
+        value: &Expr,
+    ) -> Result<(), String> {
+        let Some(slot) = self.variables.get(var_name).copied() else {
+            // No existing slot (shouldn't happen for a live SoA binding); fall
+            // back to the let-shape, which creates one.
+            return self.compile_soa_let_from_call(var_name, soa, value);
+        };
+        self.pending_return_layout = Some(self.active_layout_id(var_name));
+        let val = self.compile_expr(value)?;
+        self.pending_return_layout = None;
+
+        let has_cold = soa.cold_group.is_some();
+        let soa_ty = self.soa_vec_type(soa.num_groups, has_cold);
+        // Free the OLD group buffers (the header the slot currently holds),
+        // mirroring the `FreeSoaGroups` cleanup walker: cap > 0 guards that
+        // groups were actually allocated, then free each hot (+ optional cold)
+        // buffer in declaration order.
+        self.emit_free_soa_groups_inline(slot.ptr, soa_ty, soa.num_groups as u32, has_cold);
+        // Store the new header into the same slot; the binding's existing
+        // queued `FreeSoaGroups` will free THESE buffers at scope exit.
+        self.builder.build_store(slot.ptr, val).unwrap();
+        Ok(())
+    }
+
+    /// Inline cap-guarded free of an SoA value's group buffers, reading the
+    /// header from `soa_alloca`. Shares the shape of the `FreeSoaGroups` scope-
+    /// cleanup arm (runtime.rs) but emitted eagerly — used by the SoA
+    /// reassignment path to release the displaced (old) buffers.
+    pub(super) fn emit_free_soa_groups_inline(
+        &mut self,
+        soa_alloca: PointerValue<'ctx>,
+        soa_ty: inkwell::types::StructType<'ctx>,
+        num_hot_groups: u32,
+        has_cold: bool,
+    ) {
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let fn_val = self.current_fn.unwrap();
+        let cap_idx = num_hot_groups + if has_cold { 1 } else { 0 } + 1;
+        let cap_ptr = self
+            .builder
+            .build_struct_gep(soa_ty, soa_alloca, cap_idx, "soa.reassign.cap.ptr")
+            .unwrap();
+        let cap = self
+            .builder
+            .build_load(i64_t, cap_ptr, "soa.reassign.cap")
+            .unwrap()
+            .into_int_value();
+        let zero = i64_t.const_int(0, false);
+        let is_heap = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::UGT,
+                cap,
+                zero,
+                "soa.reassign.is_heap",
+            )
+            .unwrap();
+        let free_bb = self.context.append_basic_block(fn_val, "soa.reassign.free");
+        let cont_bb = self.context.append_basic_block(fn_val, "soa.reassign.cont");
+        self.builder
+            .build_conditional_branch(is_heap, free_bb, cont_bb)
+            .unwrap();
+
+        self.builder.position_at_end(free_bb);
+        let total_ptrs = num_hot_groups + if has_cold { 1 } else { 0 };
+        for gi in 0..total_ptrs {
+            let grp_ptr_ptr = self
+                .builder
+                .build_struct_gep(soa_ty, soa_alloca, gi, &format!("soa.reassign.g{}.ptr", gi))
+                .unwrap();
+            let grp_ptr = self
+                .builder
+                .build_load(ptr_ty, grp_ptr_ptr, &format!("soa.reassign.g{}.buf", gi))
+                .unwrap()
+                .into_pointer_value();
+            self.builder
+                .build_call(self.free_fn, &[grp_ptr.into()], "")
+                .unwrap();
+        }
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+        self.builder.position_at_end(cont_bb);
+    }
+
     pub(super) fn compile_soa_method(
         &mut self,
         var_name: &str,
