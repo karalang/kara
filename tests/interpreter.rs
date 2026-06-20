@@ -10429,11 +10429,13 @@ fn main() {
 }
 
 #[test]
-fn test_derive_default_enum_first_variant() {
-    // Enums default to the first declared variant, each field defaulted.
+fn test_derive_default_enum_marked_variant() {
+    // `#[derive(Default)]` constructs the `#[default]`-marked variant —
+    // not necessarily the first declared one. Here the marker is on a
+    // later variant to prove declaration order is irrelevant.
     let output = run(r#"
 #[derive(Default)]
-enum Mode { Idle, Running(i64), Custom { level: i64 } }
+enum Mode { Running(i64), #[default] Idle, Custom { level: i64 } }
 
 fn main() {
     let m = Mode.default();
@@ -10448,11 +10450,12 @@ fn main() {
 }
 
 #[test]
-fn test_derive_default_enum_tuple_first_variant() {
-    // First variant carrying tuple fields → each tuple slot defaulted.
+fn test_derive_default_enum_marked_unit_variant() {
+    // The marked variant must be field-less; here `Empty` is the
+    // default even though a payload-carrying variant precedes it.
     let output = run(r#"
 #[derive(Default)]
-enum Wrapped { Pair(i64, bool), Empty }
+enum Wrapped { Pair(i64, bool), #[default] Empty }
 
 fn main() {
     let w = Wrapped.default();
@@ -10462,7 +10465,7 @@ fn main() {
     }
 }
 "#);
-    assert_eq!(output, "0\nfalse\n");
+    assert_eq!(output, "empty\n");
 }
 
 #[test]
@@ -10481,6 +10484,26 @@ fn main() {
 }
 "#);
     assert_eq!(output, "99\n");
+}
+
+#[test]
+fn test_derive_default_enum_non_exhaustive_compose() {
+    // `#[non_exhaustive]` and `#[derive(Default)]` are orthogonal — the
+    // variant set may grow without changing the marked default.
+    let output = run(r#"
+#[non_exhaustive]
+#[derive(Default)]
+pub enum M { #[default] A, B }
+
+fn main() {
+    let m = M.default();
+    match m {
+        M.A => { println("a"); }
+        M.B => { println("b"); }
+    }
+}
+"#);
+    assert_eq!(output, "a\n");
 }
 
 // ── Item 7: broad integration coverage ──────────────────────────

@@ -724,8 +724,128 @@ impl<'a> super::TypeChecker<'a> {
         self.validate_derived_trait("Hash", |this, ty| this.type_supports_hash(ty));
         self.validate_derived_trait("Ord", |this, ty| this.type_supports_ord(ty));
         self.validate_derived_trait("PartialOrd", |this, ty| this.type_supports_partial_ord(ty));
-        self.validate_derived_trait("Default", |this, ty| this.type_supports_default(ty));
+        self.validate_derive_default();
         self.validate_derive_display_on_enums();
+    }
+
+    /// `#[derive(Default)]` validation. Unlike the structural derives
+    /// (`Eq` / `Ord` / …), Default's *enum* rule is not a field-shape
+    /// walk: the derived `default()` constructs exactly one
+    /// `#[default]`-marked, field-less variant, so only that variant
+    /// matters — the other variants' field types are irrelevant. The
+    /// struct rule is the usual "every field must be Default".
+    ///
+    /// Diagnostics (phase-8 stdlib-floor — `#[derive(Default)]` /
+    /// `#[default]` on enum variants):
+    ///   * `E_DERIVE_DEFAULT_MISSING_FIELD_DEFAULT` — a struct field
+    ///     whose type is not Default.
+    ///   * `E_DEFAULT_NO_VARIANT_MARKED` — a derive-Default enum with
+    ///     zero `#[default]` markers.
+    ///   * `E_DEFAULT_MULTIPLE_VARIANTS` — two or more markers.
+    ///   * `E_DEFAULT_VARIANT_HAS_PAYLOAD` — the single marked variant
+    ///     carries fields (tuple or struct form).
+    ///
+    /// The placement diagnostics (`#[default]` on a non-variant, on a
+    /// variant of a non-derive enum, or with arguments) are emitted
+    /// earlier by `crate::attribute_validator::validate_default_attribute`.
+    pub(super) fn validate_derive_default(&mut self) {
+        // Structs: every field must implement Default.
+        let structs: Vec<_> = self
+            .env
+            .structs
+            .iter()
+            .filter(|(_, info)| info.derived_traits.contains("Default"))
+            .map(|(name, info)| (name.clone(), info.clone()))
+            .collect();
+        for (name, info) in structs {
+            let struct_span = self.program.items.iter().find_map(|item| match item {
+                Item::StructDef(s) if s.name == name => Some(s.span.clone()),
+                _ => None,
+            });
+            let Some(struct_span) = struct_span else {
+                continue;
+            };
+            for (field_name, field_ty, _) in &info.fields {
+                if !self.type_supports_default(field_ty) {
+                    self.type_error(
+                        format!(
+                            "error[E_DERIVE_DEFAULT_MISSING_FIELD_DEFAULT]: cannot \
+                             #[derive(Default)] for '{}' — field '{}' of type '{}' does not \
+                             implement 'Default'",
+                            name,
+                            field_name,
+                            type_display(field_ty)
+                        ),
+                        struct_span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
+            }
+        }
+
+        // Enums: exactly one `#[default]`-marked, field-less variant.
+        // Variant attributes live on the AST, not the typed env, so read
+        // the enum decls directly.
+        let enums: Vec<EnumDef> = self
+            .program
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::EnumDef(e) if extract_derived_traits(&e.attributes).contains("Default") => {
+                    Some(e.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        for e in enums {
+            let marked: Vec<&Variant> = e
+                .variants
+                .iter()
+                .filter(|v| v.attributes.iter().any(|a| a.is_bare("default")))
+                .collect();
+            match marked.as_slice() {
+                [] => {
+                    self.type_error(
+                        format!(
+                            "error[E_DEFAULT_NO_VARIANT_MARKED]: #[derive(Default)] on enum \
+                             '{}' requires exactly one variant to be marked with #[default]; \
+                             add it to the variant that represents the starting state",
+                            e.name
+                        ),
+                        e.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
+                [only] => {
+                    if !matches!(only.kind, VariantKind::Unit) {
+                        self.type_error(
+                            format!(
+                                "error[E_DEFAULT_VARIANT_HAS_PAYLOAD]: #[default] on enum \
+                                 variant '{}' requires a field-less variant; either declare \
+                                 the marked variant as '{}' (no fields) or write a manual \
+                                 'impl {} {{ fn default() -> {} {{ ... }} }}' that constructs \
+                                 the desired starting state",
+                                only.name, only.name, e.name, e.name
+                            ),
+                            only.span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    }
+                }
+                [first, second, ..] => {
+                    self.type_error(
+                        format!(
+                            "error[E_DEFAULT_MULTIPLE_VARIANTS]: #[derive(Default)] on enum \
+                             '{}' requires exactly one variant marked with #[default]; found \
+                             markers on '{}' and '{}'",
+                            e.name, first.name, second.name
+                        ),
+                        e.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
+            }
+        }
     }
 
     /// Whether `ty` has a reachable `default()` — the predicate driving

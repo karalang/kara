@@ -4589,3 +4589,121 @@ fn test_add_visible() {
         result.errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
     );
 }
+
+// ── `#[default]` placement + arg-shape (phase-8 stdlib-floor) ────────
+//
+// `#[default]` is legal only on a unit enum variant under
+// `#[derive(Default)]`. `validate_default_attribute` (resolver pass 1.7)
+// emits the position / without-derive / malformed-args diagnostics; the
+// "exactly one field-less marker" rule is a typechecker concern tested
+// in tests/typechecker.rs.
+
+#[test]
+fn test_default_attr_on_struct_rejected() {
+    let errors = resolve_errors(
+        r#"
+#[default]
+struct S { x: i64 }
+"#,
+    );
+    assert!(
+        errors.iter().any(
+            |e| e.kind == ResolveErrorKind::DefaultAttributeInvalidPosition
+                && e.message.contains("E_DEFAULT_ATTRIBUTE_INVALID_POSITION")
+        ),
+        "expected E_DEFAULT_ATTRIBUTE_INVALID_POSITION, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_default_attr_on_struct_field_rejected() {
+    let errors = resolve_errors(
+        r#"
+struct S { #[default] x: i64 }
+"#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == ResolveErrorKind::DefaultAttributeInvalidPosition),
+        "expected invalid-position on a struct field, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_default_attr_on_fn_rejected() {
+    let errors = resolve_errors(
+        r#"
+#[default]
+fn f() {}
+"#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == ResolveErrorKind::DefaultAttributeInvalidPosition),
+        "expected invalid-position on a fn, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_default_attr_without_derive_rejected() {
+    let errors = resolve_errors(
+        r#"
+enum E { #[default] A, B }
+"#,
+    );
+    assert!(
+        errors.iter().any(
+            |e| e.kind == ResolveErrorKind::DefaultAttributeWithoutDerive
+                && e.message.contains("E_DEFAULT_ATTRIBUTE_WITHOUT_DERIVE")
+                && e.message.contains("`A`")
+        ),
+        "expected E_DEFAULT_ATTRIBUTE_WITHOUT_DERIVE naming variant A, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_default_attr_malformed_args_rejected() {
+    let errors = resolve_errors(
+        r#"
+#[derive(Default)]
+enum E { #[default(some)] A, B }
+"#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == ResolveErrorKind::MalformedAttributeArgs
+                && e.message.contains("E_MALFORMED_ATTRIBUTE_ARGS")),
+        "expected E_MALFORMED_ATTRIBUTE_ARGS, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_default_attr_on_marked_variant_accepted() {
+    // A well-formed `#[default]` on a unit variant under
+    // `#[derive(Default)]` produces no resolve-phase diagnostic.
+    let result = resolve_ok(
+        r#"
+#[derive(Default)]
+enum E { #[default] A, B }
+"#,
+    );
+    assert!(
+        !result.errors.iter().any(|e| matches!(
+            e.kind,
+            ResolveErrorKind::DefaultAttributeInvalidPosition
+                | ResolveErrorKind::DefaultAttributeWithoutDerive
+                | ResolveErrorKind::MalformedAttributeArgs
+                | ResolveErrorKind::UnknownAttribute
+        )),
+        "expected no #[default] diagnostics, got: {:?}",
+        result.errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}

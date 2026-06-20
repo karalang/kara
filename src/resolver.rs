@@ -736,6 +736,24 @@ pub enum ResolveErrorKind {
     /// inside a union still routes through the generic helper —
     /// the focused code is type-level only.
     UnionNonExhaustiveForbidden,
+    /// `#[default]` placed anywhere other than on a unit enum variant
+    /// under `#[derive(Default)]` — on a struct, struct field, function,
+    /// type alias, distinct type, trait, impl block, const, or extern
+    /// declaration. The position checker runs before the per-derive
+    /// validators so the diagnostic is location-focused rather than
+    /// coming out of the derive machinery. Mapped to
+    /// `E_DEFAULT_ATTRIBUTE_INVALID_POSITION`. Phase-8 stdlib-floor
+    /// item `#[derive(Default)]` / `#[default]` on enum variants.
+    DefaultAttributeInvalidPosition,
+    /// `#[default]` on an enum variant whose enclosing enum does not
+    /// carry `#[derive(Default)]` — the marker is inert without the
+    /// derive, so the dead annotation is rejected rather than silently
+    /// ignored. Mapped to `E_DEFAULT_ATTRIBUTE_WITHOUT_DERIVE`.
+    DefaultAttributeWithoutDerive,
+    /// `#[default(...)]` or `#[default = ...]` — the `#[default]`
+    /// attribute accepts no arguments. Mapped to
+    /// `E_MALFORMED_ATTRIBUTE_ARGS`.
+    MalformedAttributeArgs,
 }
 
 impl std::fmt::Display for ResolveError {
@@ -1011,6 +1029,14 @@ impl<'a> Resolver<'a> {
         // of the `#[diagnostic::*]` entry.
         self.errors
             .extend(crate::attribute_validator::validate_program_attributes(
+                self.program,
+            ));
+        // Pass 1.7: `#[default]` placement + arg-shape. `#[default]` is
+        // legal only on a unit enum variant under `#[derive(Default)]`;
+        // this emits the position / without-derive / malformed-args
+        // diagnostics before the per-derive validators run.
+        self.errors
+            .extend(crate::attribute_validator::validate_default_attribute(
                 self.program,
             ));
         // Pass 2: resolve all bodies

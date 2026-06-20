@@ -11169,7 +11169,7 @@ struct Bad { items: Vec[i64] }
     );
     assert!(
         errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch
-            && e.message.contains("derives Default")
+            && e.message.contains("E_DERIVE_DEFAULT_MISSING_FIELD_DEFAULT")
             && e.message.contains("items")),
         "expected clean non-Default field diagnostic, got: {errors:?}"
     );
@@ -11188,9 +11188,78 @@ struct Holder { p: Plain }
     );
     assert!(
         errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch
-            && e.message.contains("derives Default")
+            && e.message.contains("E_DERIVE_DEFAULT_MISSING_FIELD_DEFAULT")
             && e.message.contains("'p'")),
         "expected non-Default field diagnostic for 'p', got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_derive_default_enum_no_marker_rejected() {
+    // A derive-Default enum with no `#[default]` marker is rejected —
+    // the derive cannot pick a default without an explicit marker.
+    let errors = typecheck_errors(
+        r#"
+#[derive(Default)]
+enum E { A, B }
+"#,
+    );
+    assert!(
+        errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch
+            && e.message.contains("E_DEFAULT_NO_VARIANT_MARKED")),
+        "expected E_DEFAULT_NO_VARIANT_MARKED, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_derive_default_enum_multiple_markers_rejected() {
+    // Two `#[default]` markers — ambiguous, rejected naming both.
+    let errors = typecheck_errors(
+        r#"
+#[derive(Default)]
+enum E { #[default] A, #[default] B }
+"#,
+    );
+    assert!(
+        errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch
+            && e.message.contains("E_DEFAULT_MULTIPLE_VARIANTS")
+            && e.message.contains("'A'")
+            && e.message.contains("'B'")),
+        "expected E_DEFAULT_MULTIPLE_VARIANTS naming A and B, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_derive_default_enum_payload_marker_rejected() {
+    // The marked variant must be field-less; marking a tuple variant
+    // is rejected with the payload diagnostic.
+    let errors = typecheck_errors(
+        r#"
+#[derive(Default)]
+enum E { #[default] A(i32), B }
+"#,
+    );
+    assert!(
+        errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch
+            && e.message.contains("E_DEFAULT_VARIANT_HAS_PAYLOAD")
+            && e.message.contains("'A'")),
+        "expected E_DEFAULT_VARIANT_HAS_PAYLOAD for variant A, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_derive_default_enum_marked_unit_accepted() {
+    // A single field-less marker type-checks cleanly and the
+    // synthesized `E.default()` resolves to `E`.
+    typecheck_desugared_ok(
+        r#"
+#[derive(Default)]
+enum E { A(i32), #[default] B }
+
+fn use_it() -> E {
+    E.default()
+}
+"#,
     );
 }
 

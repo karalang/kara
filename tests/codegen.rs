@@ -18194,12 +18194,13 @@ fn main() {
     }
 
     #[test]
-    fn test_e2e_derive_default_enum_first_variant() {
-        // Derived enum default selects the first declared variant.
+    fn test_e2e_derive_default_enum_marked_variant() {
+        // Derived enum default selects the `#[default]`-marked variant,
+        // regardless of declaration order.
         let out = run_program(
             r#"
 #[derive(Default)]
-enum Mode { Idle, Running(i64) }
+enum Mode { Running(i64), #[default] Idle }
 fn main() {
     let m = Mode.default();
     match m {

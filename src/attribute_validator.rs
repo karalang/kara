@@ -91,6 +91,11 @@ const RECOGNIZED_BARE_ATTRIBUTES: &[&str] = &[
     "deprecated",
     "non_exhaustive",
     "track_caller",
+    // Phase-8 stdlib-floor — `#[default]` marks the unit enum variant a
+    // `#[derive(Default)]` enum constructs in its synthesized `default()`.
+    // Recognised here so it does not trip `E_UNKNOWN_ATTRIBUTE`; placement
+    // and arg-shape are enforced by `validate_default_attribute`.
+    "default",
     // Phase-8 line 49 — stdlib API stability marker. Use-site
     // emission of the `unstable_api` lint reads the symbol-table
     // payload populated from this attribute. At v1 the spec
@@ -238,6 +243,179 @@ pub fn validate_program_attributes(program: &Program) -> Vec<ResolveError> {
         visit_item(item, &mut errors);
     }
     errors
+}
+
+/// Phase-8 stdlib-floor — `#[default]` placement + arg-shape checker.
+///
+/// `#[default]` is legal **only** on a unit enum variant under
+/// `#[derive(Default)]`. This pass walks every attribute-bearing item
+/// and emits:
+///   * `E_MALFORMED_ATTRIBUTE_ARGS` for `#[default(...)]` / `#[default
+///     = ...]` (the attribute takes no arguments) — checked first, at
+///     every site, so a malformed-and-misplaced marker reports the
+///     shape problem rather than the position one;
+///   * `E_DEFAULT_ATTRIBUTE_INVALID_POSITION` for a well-formed
+///     `#[default]` anywhere other than an enum variant;
+///   * `E_DEFAULT_ATTRIBUTE_WITHOUT_DERIVE` for a well-formed
+///     `#[default]` on a variant whose enclosing enum does not carry
+///     `#[derive(Default)]`.
+///
+/// The "marked variant is field-less" and "exactly one marker" checks
+/// are derive-semantic and live in the typechecker's
+/// `validate_derive_default`; this pass is purely about where the
+/// attribute may appear and whether it is well-formed.
+pub fn validate_default_attribute(program: &Program) -> Vec<ResolveError> {
+    let mut errors = Vec::new();
+    for item in &program.items {
+        check_item_default(item, &mut errors);
+    }
+    errors
+}
+
+/// Emit `E_MALFORMED_ATTRIBUTE_ARGS` if `#[default]` carries arguments.
+/// Returns `true` when the attribute was malformed (so callers skip the
+/// position/derive checks — one diagnostic per marker).
+fn default_attr_malformed(attr: &Attribute, errors: &mut Vec<ResolveError>) -> bool {
+    if attr.args.is_empty() && attr.string_value.is_none() {
+        return false;
+    }
+    errors.push(ResolveError {
+        message: "error[E_MALFORMED_ATTRIBUTE_ARGS]: `#[default]` accepts no arguments — \
+                  write it as a bare `#[default]` on the unit enum variant that should be \
+                  the default."
+            .to_string(),
+        span: attr.span.clone(),
+        kind: ResolveErrorKind::MalformedAttributeArgs,
+        suggestion: None,
+        replacement: None,
+        stub_hint: None,
+    });
+    true
+}
+
+/// Report every well-formed `#[default]` in `attrs` as occupying an
+/// invalid position (any site that is not an enum variant). Malformed
+/// markers report the shape problem instead.
+fn report_default_invalid_position(attrs: &[Attribute], errors: &mut Vec<ResolveError>) {
+    for attr in attrs {
+        if !attr.is_bare("default") {
+            continue;
+        }
+        if default_attr_malformed(attr, errors) {
+            continue;
+        }
+        errors.push(ResolveError {
+            message: "error[E_DEFAULT_ATTRIBUTE_INVALID_POSITION]: `#[default]` is only valid \
+                      on a unit enum variant under `#[derive(Default)]`."
+                .to_string(),
+            span: attr.span.clone(),
+            kind: ResolveErrorKind::DefaultAttributeInvalidPosition,
+            suggestion: None,
+            replacement: None,
+            stub_hint: None,
+        });
+    }
+}
+
+fn check_item_default(item: &Item, errors: &mut Vec<ResolveError>) {
+    match item {
+        Item::EnumDef(e) => {
+            // `#[default]` on the enum decl itself is misplaced — it
+            // belongs on one of the variants.
+            report_default_invalid_position(&e.attributes, errors);
+            let enum_derives_default =
+                crate::typechecker::extract_derived_traits(&e.attributes).contains("Default");
+            for variant in &e.variants {
+                for attr in &variant.attributes {
+                    if !attr.is_bare("default") {
+                        continue;
+                    }
+                    if default_attr_malformed(attr, errors) {
+                        continue;
+                    }
+                    if !enum_derives_default {
+                        errors.push(ResolveError {
+                            message: format!(
+                                "error[E_DEFAULT_ATTRIBUTE_WITHOUT_DERIVE]: `#[default]` on \
+                                 variant `{}` requires the enclosing enum `{}` to carry \
+                                 `#[derive(Default)]` — add `#[derive(Default)]` to enum `{}`.",
+                                variant.name, e.name, e.name
+                            ),
+                            span: attr.span.clone(),
+                            kind: ResolveErrorKind::DefaultAttributeWithoutDerive,
+                            suggestion: None,
+                            replacement: None,
+                            stub_hint: None,
+                        });
+                    }
+                }
+                // A `#[default]` on a struct-variant *field* is misplaced.
+                if let VariantKind::Struct(fields) = &variant.kind {
+                    for f in fields {
+                        report_default_invalid_position(&f.attributes, errors);
+                    }
+                }
+            }
+        }
+        Item::StructDef(s) => {
+            report_default_invalid_position(&s.attributes, errors);
+            for field in &s.fields {
+                report_default_invalid_position(&field.attributes, errors);
+            }
+        }
+        Item::UnionDef(u) => {
+            report_default_invalid_position(&u.attributes, errors);
+            for field in &u.fields {
+                report_default_invalid_position(&field.attributes, errors);
+            }
+        }
+        Item::TraitDef(t) => {
+            report_default_invalid_position(&t.attributes, errors);
+            for ti in &t.items {
+                if let TraitItem::Method(m) = ti {
+                    report_default_invalid_position(&m.attributes, errors);
+                }
+            }
+        }
+        Item::ImplBlock(i) => {
+            report_default_invalid_position(&i.attributes, errors);
+            for ii in &i.items {
+                if let ImplItem::Method(m) = ii {
+                    report_default_invalid_position(&m.attributes, errors);
+                }
+            }
+        }
+        Item::ExternBlock(b) => {
+            report_default_invalid_position(&b.attributes, errors);
+            for it in &b.items {
+                match it {
+                    ExternItem::Function(f) => {
+                        report_default_invalid_position(&f.attributes, errors)
+                    }
+                    ExternItem::OpaqueType(o) => {
+                        report_default_invalid_position(&o.attributes, errors)
+                    }
+                }
+            }
+        }
+        Item::Function(f) => report_default_invalid_position(&f.attributes, errors),
+        Item::TraitAlias(t) => report_default_invalid_position(&t.attributes, errors),
+        Item::MarkerTrait(t) => report_default_invalid_position(&t.attributes, errors),
+        Item::ConstDecl(c) => report_default_invalid_position(&c.attributes, errors),
+        Item::ModuleBinding(b) => report_default_invalid_position(&b.attributes, errors),
+        Item::TestCase(t) => report_default_invalid_position(&t.attributes, errors),
+        Item::TypeAlias(t) => report_default_invalid_position(&t.attributes, errors),
+        Item::DistinctType(d) => report_default_invalid_position(&d.attributes, errors),
+        Item::ExternFunction(f) => report_default_invalid_position(&f.attributes, errors),
+        Item::LayoutDef(l) => report_default_invalid_position(&l.attributes, errors),
+        Item::EffectResource(_)
+        | Item::EffectGroup(_)
+        | Item::EffectVerbDecl(_)
+        | Item::UseDecl(_)
+        | Item::Import(_)
+        | Item::AliasDecl(_)
+        | Item::IndependentDecl(_) => {}
+    }
 }
 
 fn visit_attrs(attrs: &[Attribute], errors: &mut Vec<ResolveError>) {

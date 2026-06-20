@@ -2763,6 +2763,15 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::resolver::ResolveErrorKind::UnionNonExhaustiveForbidden => {
                     "E_UNION_NON_EXHAUSTIVE_FORBIDDEN"
                 }
+                crate::resolver::ResolveErrorKind::DefaultAttributeInvalidPosition => {
+                    "E_DEFAULT_ATTRIBUTE_INVALID_POSITION"
+                }
+                crate::resolver::ResolveErrorKind::DefaultAttributeWithoutDerive => {
+                    "E_DEFAULT_ATTRIBUTE_WITHOUT_DERIVE"
+                }
+                crate::resolver::ResolveErrorKind::MalformedAttributeArgs => {
+                    "E_MALFORMED_ATTRIBUTE_ARGS"
+                }
             };
             // Surface the machine-applicable replacement (when present)
             // alongside the human-readable suggestion. Consumers like
@@ -7399,6 +7408,9 @@ fn resolve_error_code(kind: &ResolveErrorKind) -> &'static str {
         ResolveErrorKind::UnknownProfile => "E0245",
         ResolveErrorKind::QueryResolutionConflict => "E_QUERY_RESOLUTION_CONFLICT",
         ResolveErrorKind::UnionNonExhaustiveForbidden => "E_UNION_NON_EXHAUSTIVE_FORBIDDEN",
+        ResolveErrorKind::DefaultAttributeInvalidPosition => "E_DEFAULT_ATTRIBUTE_INVALID_POSITION",
+        ResolveErrorKind::DefaultAttributeWithoutDerive => "E_DEFAULT_ATTRIBUTE_WITHOUT_DERIVE",
+        ResolveErrorKind::MalformedAttributeArgs => "E_MALFORMED_ATTRIBUTE_ARGS",
     }
 }
 

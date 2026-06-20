@@ -43,7 +43,10 @@ pub fn desugar_program(program: &mut Program) {
 // codegen) handles it through already-tested paths — no per-backend
 // special-casing of `default`. Spec: book appendix C (`Default`):
 // "calls `.default()` on each field in declaration order and constructs
-// the struct. For enums, the first declared variant is used."
+// the struct. For enums, the `#[default]`-marked variant is used" — a
+// `#[derive(Default)]` enum must mark exactly one field-less variant
+// with `#[default]` (enforced by the typechecker's
+// `validate_derive_default`); the synthesized body is `Enum.Variant`.
 //
 // Scope (v1 floor): primitives + nested user types. Generic types and
 // container/generic-argument field types (`Vec[T]`, `Option[T]`, tuples,
@@ -117,7 +120,7 @@ fn synthesize_default_impls(program: &mut Program) {
                     && derives_default(&e.attributes)
                     && !has_user_default.contains(&e.name) =>
             {
-                if let Some(body) = enum_default_body(e, &defaultable) {
+                if let Some(body) = enum_default_body(e) {
                     synthesized.push(make_default_impl(&e.name, body, e.span.clone()));
                 }
             }
@@ -200,57 +203,35 @@ fn struct_default_body(
     })
 }
 
-/// Default literal for a derive-Default enum: the first declared
-/// variant, each of its fields defaulted. `None` when the enum has no
-/// variants or the first variant has an out-of-scope field.
-fn enum_default_body(e: &EnumDef, defaultable: &std::collections::HashSet<String>) -> Option<Expr> {
-    let first = e.variants.first()?;
-    let span = e.span.clone();
-    let path = vec![e.name.clone(), first.name.clone()];
-    let kind = match &first.kind {
-        VariantKind::Unit => ExprKind::Path {
-            segments: path,
+/// Default literal for a derive-Default enum: the unique `#[default]`-
+/// marked, field-less variant, lowered to `Enum.Variant`. `None` when
+/// the marker rule is not satisfied (zero or multiple markers, or the
+/// marked variant carries a payload) — the typechecker's
+/// `validate_derive_default` emits the focused diagnostic for each of
+/// those cases, so declining here just suppresses a redundant
+/// synthesized impl, never a silent acceptance.
+fn enum_default_body(e: &EnumDef) -> Option<Expr> {
+    let mut marked = e
+        .variants
+        .iter()
+        .filter(|v| v.attributes.iter().any(|a| a.is_bare("default")));
+    let variant = marked.next()?;
+    // More than one marker — ambiguous, decline (typechecker reports).
+    if marked.next().is_some() {
+        return None;
+    }
+    // The marked variant must be field-less; a payload default is a
+    // typechecker error, not a synthesizable body.
+    if !matches!(variant.kind, VariantKind::Unit) {
+        return None;
+    }
+    Some(Expr {
+        kind: ExprKind::Path {
+            segments: vec![e.name.clone(), variant.name.clone()],
             generic_args: None,
         },
-        VariantKind::Tuple(types) => {
-            let mut args = Vec::with_capacity(types.len());
-            for t in types {
-                args.push(CallArg {
-                    label: None,
-                    mut_marker: false,
-                    value: default_field_expr(t, defaultable)?,
-                    span: t.span.clone(),
-                });
-            }
-            ExprKind::Call {
-                callee: Box::new(Expr {
-                    kind: ExprKind::Path {
-                        segments: path,
-                        generic_args: None,
-                    },
-                    span: span.clone(),
-                }),
-                args,
-            }
-        }
-        VariantKind::Struct(struct_fields) => {
-            let mut fields = Vec::with_capacity(struct_fields.len());
-            for f in struct_fields {
-                fields.push(FieldInit {
-                    name: f.name.clone(),
-                    value: default_field_expr(&f.ty, defaultable)?,
-                    shorthand: false,
-                    span: f.span.clone(),
-                });
-            }
-            ExprKind::StructLiteral {
-                path,
-                fields,
-                spread: None,
-            }
-        }
-    };
-    Some(Expr { kind, span })
+        span: e.span.clone(),
+    })
 }
 
 /// Wrap a `default()` body expression in an inherent
