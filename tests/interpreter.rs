@@ -216,6 +216,34 @@ fn test_narrow_int_overflow_traps() {
 }
 
 #[test]
+fn test_overflow_arith_methods_width_correct() {
+    // checked/saturating/overflowing _add/_sub/_mul are width-aware: the
+    // receiver's width (recovered from the typechecker) sizes the overflow
+    // check. i32 2e9+2e9 overflows (checked None / saturating MAX / overflowing
+    // wraps+flags); i64 stays exact; u8 sub underflows to 0; u32 mul overflows.
+    let out = run("fn main() {\n\
+             let a = 2000000000i32;\n\
+             match a.checked_add(2000000000i32) { Some(v) => println(v), None => println(-1i32) }\n\
+             match a.checked_add(100i32) { Some(v) => println(v), None => println(-1i32) }\n\
+             println(a.saturating_add(2000000000i32));\n\
+             let u: u8 = 3u8;\n\
+             println(u.saturating_sub(10u8));\n\
+             let pair = a.overflowing_add(2000000000i32);\n\
+             println(pair.0);\n\
+             if pair.1 { println(1i32); } else { println(0i32); }\n\
+             let big = 9000000000000000000i64;\n\
+             match big.checked_add(big) { Some(v) => println(v), None => println(-7i64) }\n\
+             let w: u32 = 4000000000u32;\n\
+             println(w.checked_mul(2u32).is_none());\n\
+             println(w.saturating_add(1000000000u32));\n\
+         }");
+    assert_eq!(
+        out,
+        "-1\n2000000100\n2147483647\n0\n-294967296\n1\n-7\ntrue\n4294967295\n"
+    );
+}
+
+#[test]
 fn test_narrow_int_in_range_does_not_trap() {
     // A narrow-int sum that fits the width is the value, no trap: `u8 97 + u8
     // 98 = 195` (≤ 255).

@@ -989,6 +989,28 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // Overflow-aware integer arithmetic — `{checked,saturating,overflowing}_{add,sub,mul}`.
+        // Width-correct: the receiver width comes from `expr_types[object.span]` (the same
+        // span→type source `narrow_oob` uses). `checked_*` → `Option[Self]` (None on
+        // overflow), `saturating_*` → `Self` (clamped), `overflowing_*` → `(Self, bool)`.
+        // 64-bit unsigned reinterprets the `Value::Int(i64)` two's-complement bits as `u64`
+        // (the model already stores unsigned values that way), so it is full-range correct.
+        if let Some((fam, op)) = parse_overflow_arith(method) {
+            if args.len() == 1 {
+                if let Value::Int(a) = &obj {
+                    let a = *a;
+                    // Width from the ARGUMENT's span: the typechecker pins the
+                    // arg to the receiver type, and the arg is a distinct leaf
+                    // expression — unlike the receiver, whose span a chained
+                    // `MethodCall` aliases (`x.checked_mul(y).is_none()`).
+                    let w = self.overflow_arg_width(&args[0].value);
+                    if let Value::Int(b) = self.eval_expr_inner(&args[0].value) {
+                        return eval_overflow_arith(fam, op, a, b, w);
+                    }
+                }
+            }
+        }
+
         // ASCII byte-classification predicates on integer scalars (the `u8`
         // bytes from `String.bytes()`): `is_ascii_digit` / `is_ascii_alphabetic`
         // / `is_ascii_hexdigit` → bool. Phase-8 floor for the self-hosting lexer
@@ -1308,6 +1330,175 @@ impl<'a> super::Interpreter<'a> {
             ),
             span,
         )
+    }
+
+    /// Recover the integer width for the overflow-arith methods from the
+    /// ARGUMENT's type in the typechecker's per-expression table (the same
+    /// `expr_types` source `narrow_oob` uses). The argument is type-pinned to the
+    /// receiver type by the typechecker, and — unlike the receiver — its span is
+    /// not aliased by a chained `MethodCall` (`x.checked_mul(y).is_none()`, whose
+    /// outer call would overwrite the receiver span's recorded type). Defaults to
+    /// signed 64-bit when the type is unknown, matching the interpreter's
+    /// i64-backed numeric model.
+    fn overflow_arg_width(&self, arg: &Expr) -> IntW {
+        use crate::typechecker::types::{IntSize, Type, UIntSize};
+        let key = crate::resolver::SpanKey::from_span(&arg.span);
+        match self.typecheck_result.expr_types.get(&key) {
+            Some(Type::Int(IntSize::I8)) => IntW::S(8),
+            Some(Type::Int(IntSize::I16)) => IntW::S(16),
+            Some(Type::Int(IntSize::I32)) => IntW::S(32),
+            Some(Type::UInt(UIntSize::U8)) => IntW::U(8),
+            Some(Type::UInt(UIntSize::U16)) => IntW::U(16),
+            Some(Type::UInt(UIntSize::U32)) => IntW::U(32),
+            // 64-bit unsigned (u64 / usize) is handled by reinterpreting the
+            // i64 bit pattern as u64 — full-range correct.
+            Some(Type::UInt(UIntSize::U64)) | Some(Type::UInt(UIntSize::Usize)) => IntW::U(64),
+            // i64 / isize / unknown → signed 64-bit.
+            _ => IntW::S(64),
+        }
+    }
+}
+
+/// The overflow-arith method family: return-shape selector.
+#[derive(Clone, Copy)]
+enum OvFam {
+    Checked,
+    Saturating,
+    Overflowing,
+}
+
+/// The overflow-arith operation.
+#[derive(Clone, Copy)]
+enum OvOp {
+    Add,
+    Sub,
+    Mul,
+}
+
+/// Receiver integer width: `S(bits)` signed, `U(bits)` unsigned.
+#[derive(Clone, Copy)]
+enum IntW {
+    S(u32),
+    U(u32),
+}
+
+/// Parse a `{checked,saturating,overflowing}_{add,sub,mul}` method name.
+fn parse_overflow_arith(method: &str) -> Option<(OvFam, OvOp)> {
+    let (fam, rest) = if let Some(r) = method.strip_prefix("checked_") {
+        (OvFam::Checked, r)
+    } else if let Some(r) = method.strip_prefix("saturating_") {
+        (OvFam::Saturating, r)
+    } else if let Some(r) = method.strip_prefix("overflowing_") {
+        (OvFam::Overflowing, r)
+    } else {
+        return None;
+    };
+    let op = match rest {
+        "add" => OvOp::Add,
+        "sub" => OvOp::Sub,
+        "mul" => OvOp::Mul,
+        _ => return None,
+    };
+    Some((fam, op))
+}
+
+fn some_int(v: i64) -> Value {
+    Value::EnumVariant {
+        enum_name: "Option".to_string(),
+        variant: "Some".to_string(),
+        data: EnumData::Tuple(vec![Value::Int(v)]),
+    }
+}
+
+fn none_value() -> Value {
+    Value::EnumVariant {
+        enum_name: "Option".to_string(),
+        variant: "None".to_string(),
+        data: EnumData::Unit,
+    }
+}
+
+/// Evaluate one overflow-aware integer operation at the receiver's width.
+/// Operands arrive as the interpreter's i64-backed `Value::Int`; signed widths
+/// and 64-bit unsigned compute exactly (i128 / u64), narrow unsigned widths use
+/// their `[0, 2^bits)` bounds.
+fn eval_overflow_arith(fam: OvFam, op: OvOp, a: i64, b: i64, w: IntW) -> Value {
+    // 64-bit unsigned: reinterpret the two's-complement bits as u64 (full range).
+    if let IntW::U(64) = w {
+        let (au, bu) = (a as u64, b as u64);
+        let (res, of) = match op {
+            OvOp::Add => au.overflowing_add(bu),
+            OvOp::Sub => au.overflowing_sub(bu),
+            OvOp::Mul => au.overflowing_mul(bu),
+        };
+        return match fam {
+            OvFam::Checked => {
+                if of {
+                    none_value()
+                } else {
+                    some_int(res as i64)
+                }
+            }
+            OvFam::Saturating => {
+                let s = if of {
+                    match op {
+                        OvOp::Sub => 0u64, // underflow → 0
+                        _ => u64::MAX,     // add/mul overflow → MAX
+                    }
+                } else {
+                    res
+                };
+                Value::Int(s as i64)
+            }
+            OvFam::Overflowing => Value::Tuple(vec![Value::Int(res as i64), Value::Bool(of)]),
+        };
+    }
+
+    // Signed widths (8/16/32/64) and narrow unsigned (8/16/32): exact in i128.
+    let (signed, bits) = match w {
+        IntW::S(b) => (true, b),
+        IntW::U(b) => (false, b),
+    };
+    let (lo, hi): (i128, i128) = if signed {
+        (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1)
+    } else {
+        (0, (1i128 << bits) - 1)
+    };
+    // Unsigned narrow values are stored non-negative; signed keep their sign.
+    let av = if signed {
+        a as i128
+    } else {
+        (a as u64) as i128
+    };
+    let bv = if signed {
+        b as i128
+    } else {
+        (b as u64) as i128
+    };
+    let r: i128 = match op {
+        OvOp::Add => av + bv,
+        OvOp::Sub => av - bv,
+        OvOp::Mul => av * bv,
+    };
+    let in_range = r >= lo && r <= hi;
+    match fam {
+        OvFam::Checked => {
+            if in_range {
+                some_int(r as i64)
+            } else {
+                none_value()
+            }
+        }
+        OvFam::Saturating => Value::Int(r.clamp(lo, hi) as i64),
+        OvFam::Overflowing => {
+            // Wrap into the width's value set, then back to signed range if signed.
+            let modulus = 1i128 << bits;
+            let mut wrapped = ((r % modulus) + modulus) % modulus;
+            if signed && wrapped > hi {
+                wrapped -= modulus;
+            }
+            Value::Tuple(vec![Value::Int(wrapped as i64), Value::Bool(!in_range)])
+        }
     }
 }
 

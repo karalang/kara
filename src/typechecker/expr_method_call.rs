@@ -2306,6 +2306,71 @@ impl<'a> super::TypeChecker<'a> {
             }
             return receiver_for_lookup.clone();
         }
+        // Overflow-aware integer arithmetic — `{checked,saturating,overflowing}_{add,sub,mul}`
+        // (design.md § Arithmetic Overflow): the explicit-overflow siblings of the
+        // checked `+`/`-`/`*` path. Unlike `wrapping_*` (64-bit only), these are
+        // defined on EVERY integer width: codegen is naturally width-aware (LLVM
+        // overflow/saturating intrinsics on the receiver's iN/uN type), and the
+        // interpreter recovers the receiver width from `expr_types` (the same
+        // span→type lookup `narrow_oob` uses). Return shapes:
+        //   checked_*      -> Option[Self]   (None on overflow)
+        //   saturating_*   -> Self           (clamped to iN::MAX/MIN / uN::MAX/0)
+        //   overflowing_*  -> (Self, bool)    (result + overflow flag)
+        // Both operands and the result are the receiver's type (same strict
+        // same-type / literal-promotion rule as `wrapping_*`). Backends:
+        // interpreter + codegen `method_call.rs`.
+        {
+            let checked = matches!(method, "checked_add" | "checked_sub" | "checked_mul");
+            let saturating = matches!(
+                method,
+                "saturating_add" | "saturating_sub" | "saturating_mul"
+            );
+            let overflowing = matches!(
+                method,
+                "overflowing_add" | "overflowing_sub" | "overflowing_mul"
+            );
+            if (checked || saturating || overflowing)
+                && matches!(&receiver_for_lookup, Type::Int(_) | Type::UInt(_))
+            {
+                if args.len() != 1 {
+                    self.type_error(
+                        format!("{method} expects 1 argument, got {}", args.len()),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    return Type::Error;
+                }
+                let arg = &args[0].value;
+                let arg_ty = self.infer_expr(arg);
+                // Suffix-free integer literal arg promotes to the receiver type
+                // (mirrors `wrapping_*`); otherwise it must match exactly.
+                if matches!(&arg.kind, ExprKind::Integer(_, None)) {
+                    self.record_expr_type(&arg.span, &receiver_for_lookup);
+                } else if arg_ty != Type::Error && arg_ty != receiver_for_lookup {
+                    self.type_error(
+                        format!(
+                            "{method} expects an argument of type `{}`, got `{}`",
+                            type_display(&receiver_for_lookup),
+                            type_display(&arg_ty)
+                        ),
+                        arg.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return Type::Error;
+                }
+                let self_ty = receiver_for_lookup.clone();
+                return if checked {
+                    Type::Named {
+                        name: "Option".to_string(),
+                        args: vec![self_ty],
+                    }
+                } else if saturating {
+                    self_ty
+                } else {
+                    Type::Tuple(vec![self_ty, Type::Bool])
+                };
+            }
+        }
         // Built-in `clone` / `to_string` on the scalar numeric + bool + char
         // primitives (all `Copy`). `clone` is identity → `Self`; `to_string`
         // renders the value → `String` (`Type::Str`). Like `abs`, these are

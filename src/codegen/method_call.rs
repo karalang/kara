@@ -1453,6 +1453,34 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(r.into());
         }
 
+        // Overflow-aware integer arithmetic — `{checked,saturating,overflowing}_{add,sub,mul}`.
+        // The typechecker accepts these on every integer width and the interpreter
+        // implements them width-correctly; the codegen lowering (width-specific
+        // `llvm.{s,u}{add,sub,mul}.with.overflow` / `.sat` intrinsics, building the
+        // `Option[Self]` / `(Self, bool)` / clamped `Self` result) is a tracked
+        // follow-on. Emit a clear, actionable error rather than falling through to
+        // a "method not found" / miscompile.
+        if args.len() == 1
+            && matches!(
+                method,
+                "checked_add"
+                    | "checked_sub"
+                    | "checked_mul"
+                    | "saturating_add"
+                    | "saturating_sub"
+                    | "saturating_mul"
+                    | "overflowing_add"
+                    | "overflowing_sub"
+                    | "overflowing_mul"
+            )
+        {
+            return Err(format!(
+                "`{method}` is not yet supported under `karac build` (codegen); it works \
+                 under `karac run`. The width-specific overflow-intrinsic lowering is a \
+                 tracked follow-on."
+            ));
+        }
+
         // ASCII byte-classification predicates on integer scalars (the `u8`
         // bytes from `String.bytes()`): `is_ascii_digit` / `is_ascii_alphabetic`
         // / `is_ascii_hexdigit` → bool (i1). Phase-8 floor for the self-hosting
