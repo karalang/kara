@@ -495,7 +495,10 @@ pub fn render_glue(
     // `__kara_dblclick(chPtr: i64) -> ()` backs `std.web.events.dblclick` (the
     // double-press sibling of `clicks`, the same 16-byte `ClickEvent` payload);
     // `__kara_resize(chPtr: i64) -> ()` backs `std.web.events.resize` (a 16-byte
-    // `ResizeEvent` of two `i64`s read off the window's `innerWidth`/`Height`).
+    // `ResizeEvent` of two `i64`s read off the window's `innerWidth`/`Height`);
+    // `__kara_contextmenu(chPtr: i64) -> ()` backs `std.web.events.contextmenu`
+    // (the right-click sibling of `clicks`, the same 16-byte `ClickEvent`
+    // payload; its listener preventDefaults the native menu).
     let builtin_sigs: &[&str] = if threads.is_some() {
         &[
             "{ name: \"__kara_timer_after\", params: [\"bigint\", \"bigint\"], ret: \"void\" }",
@@ -508,6 +511,7 @@ pub fn render_glue(
             "{ name: \"__kara_clicks\", params: [\"bigint\"], ret: \"void\" }",
             "{ name: \"__kara_dblclick\", params: [\"bigint\"], ret: \"void\" }",
             "{ name: \"__kara_resize\", params: [\"bigint\"], ret: \"void\" }",
+            "{ name: \"__kara_contextmenu\", params: [\"bigint\"], ret: \"void\" }",
         ]
     } else {
         &[]
@@ -524,6 +528,7 @@ pub fn render_glue(
             "\"__kara_clicks\"",
             "\"__kara_dblclick\"",
             "\"__kara_resize\"",
+            "\"__kara_contextmenu\"",
         ]
     } else {
         &[]
@@ -1929,6 +1934,40 @@ async function runThreaded(hostImpls = {}, opts = {}) {
       };
       target.addEventListener("resize", onResize);
     };
+    // __kara_contextmenu(chPtr: i64 [BigInt]) -> (): the right-click sibling of
+    // __kara_clicks — identical marshalling (the same 16-byte ClickEvent x,y
+    // payload), only the DOM event differs ("contextmenu" vs "click"). The one
+    // behavioral difference: the listener calls e.preventDefault() so the
+    // browser's native context menu does NOT pop up over the canvas — suppressing
+    // it is the whole point of capturing right-click in an app (the click/dblclick
+    // listeners never preventDefault). Event source: `opts.contextmenuTarget`
+    // (browser: the canvas; node test: an EventTarget it dispatches synthetic
+    // contextmenus on), else `globalThis` if it can addEventListener; no source →
+    // no-op (recv just blocks).
+    builtinHostImpls["__kara_contextmenu"] = (chPtr) => {
+      const ptr = Number(chPtr);
+      const target =
+        (opts && opts.contextmenuTarget) ||
+        (typeof globalThis.addEventListener === "function" ? globalThis : null);
+      if (target === null) return;
+      // ClickEvent layout: { x: f64 @ 0, y: f64 @ 8 } = 16 bytes — kept in sync
+      // with runtime/stdlib/web_events.kara.
+      const scratch = serviceInstance.exports.karac_runtime_event_scratch();
+      const onContextMenu = (e) => {
+        // Suppress the native menu regardless of coalescing — a right-click that
+        // arrives while the worker is still draining the previous one must still
+        // not pop the OS menu, so preventDefault BEFORE the pending-probe early-out.
+        if (typeof e.preventDefault === "function") e.preventDefault();
+        if (Number(serviceInstance.exports.karac_runtime_channel_pending(ptr)) !== 0) return;
+        // Re-derive the view each event: a shared Memory's `.buffer` may be
+        // replaced on grow, so a cached DataView could go stale.
+        const dv = new DataView(memory.buffer, scratch, 16);
+        dv.setFloat64(0, e.offsetX ?? e.clientX ?? 0, true);
+        dv.setFloat64(8, e.offsetY ?? e.clientY ?? 0, true);
+        serviceInstance.exports.karac_runtime_channel_send(ptr, scratch, 16n);
+      };
+      target.addEventListener("contextmenu", onContextMenu);
+    };
   }
   // host fns: stand up the worker→main proxy (shared control block + the
   // main-thread service loop). Needed when the program declares user host
@@ -2378,7 +2417,8 @@ mod tests {
              { name: \"__kara_keyup\", params: [\"bigint\"], ret: \"void\" }, \
              { name: \"__kara_clicks\", params: [\"bigint\"], ret: \"void\" }, \
              { name: \"__kara_dblclick\", params: [\"bigint\"], ret: \"void\" }, \
-             { name: \"__kara_resize\", params: [\"bigint\"], ret: \"void\" }];"
+             { name: \"__kara_resize\", params: [\"bigint\"], ret: \"void\" }, \
+             { name: \"__kara_contextmenu\", params: [\"bigint\"], ret: \"void\" }];"
         ));
         // The builtins are registered as builtins, and excluded from the
         // user contract (DECLARED_IMPORTS drives the missing-impl check and
@@ -2387,7 +2427,7 @@ mod tests {
             "const BUILTIN_HOST_FNS = [\"__kara_timer_after\", \"__kara_timer_every\", \
              \"__kara_animation_frames\", \"__kara_pointer_moves\", \"__kara_wheel\", \
              \"__kara_keydown\", \"__kara_keyup\", \"__kara_clicks\", \
-             \"__kara_dblclick\", \"__kara_resize\"];"
+             \"__kara_dblclick\", \"__kara_resize\", \"__kara_contextmenu\"];"
         ));
         assert!(glue.contains("const DECLARED_IMPORTS = [\"report\", \"log_str\"];"));
         // Both halves of the proxy plus the worker-side wiring.
@@ -2436,6 +2476,11 @@ mod tests {
             // read off the window, not the event).
             "builtinHostImpls[\"__kara_resize\"] = (chPtr) =>",
             "target.addEventListener(\"resize\", onResize);",
+            // Right-click sibling: contextmenu, same 16-byte ClickEvent payload;
+            // its listener preventDefaults the native menu.
+            "builtinHostImpls[\"__kara_contextmenu\"] = (chPtr) =>",
+            "if (typeof e.preventDefault === \"function\") e.preventDefault();",
+            "target.addEventListener(\"contextmenu\", onContextMenu);",
         ] {
             assert!(glue.contains(needle), "missing proxy machinery: {needle}");
         }
@@ -2453,7 +2498,8 @@ mod tests {
                 && !dts.contains("__kara_keyup")
                 && !dts.contains("__kara_clicks")
                 && !dts.contains("__kara_dblclick")
-                && !dts.contains("__kara_resize"),
+                && !dts.contains("__kara_resize")
+                && !dts.contains("__kara_contextmenu"),
             "builtin leaked into d.ts"
         );
     }

@@ -482,6 +482,7 @@ impl<'a> super::TypeChecker<'a> {
                 | "__schedule_clicks"
                 | "__schedule_dblclick"
                 | "__schedule_resize"
+                | "__schedule_contextmenu"
         ) {
             let resolved = resolve_type_var_top(&elem, &self.env.substitutions);
             let te = Self::type_to_type_expr(&resolved);
@@ -761,6 +762,23 @@ impl<'a> super::TypeChecker<'a> {
                     if !args.is_empty() {
                         self.type_error(
                             "Sender.__schedule_resize takes no arguments".to_string(),
+                            span.clone(),
+                            TypeErrorKind::WrongNumberOfArgs,
+                        );
+                    }
+                    Type::Unit
+                }
+                // Internal compiler builtin backing `std.web.events.contextmenu`
+                // (right-click sibling of `__schedule_clicks`; the same 16-byte
+                // `ClickEvent` payload). Borrows `self`, takes no argument,
+                // returns Unit; codegen clones the sender and hands it to the
+                // host contextmenu listener (which preventDefaults the native
+                // menu). Kept out of ordinary reach by the `__` prefix + the
+                // `writes(Input)` gating on the `contextmenu` wrapper.
+                "__schedule_contextmenu" => {
+                    if !args.is_empty() {
+                        self.type_error(
+                            "Sender.__schedule_contextmenu takes no arguments".to_string(),
                             span.clone(),
                             TypeErrorKind::WrongNumberOfArgs,
                         );

@@ -352,6 +352,40 @@ pub fn resize() -> Receiver[ResizeEvent] with writes(Input) {
     rx
 }
 
+// Stream right-click (context-menu) positions on a fresh channel, indefinitely,
+// carrying the same `ClickEvent` position payload as `clicks`. Right-click is a
+// distinct gesture (secondary action: erase, open a radial menu, sample a
+// color), so a separate stream keeps it apart from the primary `clicks` intent —
+//
+//     let rights = contextmenu();
+//     loop {
+//         let c = rights.recv();
+//         erase_at(c.x(), c.y());   // right-click to erase
+//     }
+//
+// — no `await`, no `addEventListener` callback ceremony. Multi-shot and
+// coalesced exactly like `clicks`. **The host listener calls `preventDefault()`**
+// so the browser's native context menu does NOT pop up over the canvas — that
+// suppression is the whole point of capturing right-click in an app, and it is
+// what distinguishes this producer from the `clicks`/`dblclick` listeners (which
+// never preventDefault). Listener registers on `opts.contextmenuTarget` if
+// given, else the same canvas/`globalThis` the click/pointer streams use, so the
+// position shares their frame of reference. Same `--features wasm-threads`
+// requirement as the other host-async producers.
+//
+// Mechanism: `Sender.__schedule_contextmenu` (a compiler builtin) clones the
+// sender's channel reference and hands the clone to the host's contextmenu
+// listener, which owns it for the listener's lifetime.
+pub fn contextmenu() -> Receiver[ClickEvent] with writes(Input) {
+    // Annotate the destructure so the channel element type is `ClickEvent` (the
+    // producer never `send`/`recv`s itself — the host fires the send — so there
+    // is no downstream channel op to infer the element from; an unannotated
+    // `Channel.new()` only type-checks under the interpreter).
+    let (tx, rx): (Sender[ClickEvent], Receiver[ClickEvent]) = Channel.new();
+    tx.__schedule_contextmenu();
+    rx
+}
+
 // Stream key-*up* (key-release) events on a fresh channel, indefinitely — the
 // release-edge sibling of `keydown`, carrying the same `KeyEvent` payload. Pair
 // the two to track held-key state (press on `keydown`, clear on `keyup`):

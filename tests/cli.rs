@@ -17155,6 +17155,185 @@ fn wasm_resize_sequential_target_rejected() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// End-to-end for `std.web.events.contextmenu` on `wasm_browser --features
+/// wasm-threads`: the right-click sibling of `clicks`, carrying the same 16-byte
+/// `ClickEvent` payload. A blocking `recv()` must wake on a host "contextmenu"
+/// event, the exact element-relative position (offsetX 310, offsetY 95) must
+/// round-trip, AND the listener must `preventDefault()` the native menu — the
+/// harness dispatches a *cancelable* event and asserts `dispatchEvent` returned
+/// false (i.e. the default was prevented). Sibling of
+/// `wasm_threads_clicks_payload_recv_e2e`; the guest loops until a valid payload
+/// is seen (recv-out-slot race) then prints `CTX_OK` — a zero/torn floor prints
+/// `CTX_FAIL`.
+#[test]
+fn wasm_threads_contextmenu_payload_recv_e2e() {
+    let tmp = wasm_test_dir("wtctxmenu");
+    let path = tmp.join("cm.kara");
+    std::fs::write(
+        &path,
+        "import std.web.events.{contextmenu, ClickEvent};\n\n\
+         fn main() {\n    \
+             println(\"before\");\n    \
+             let cm = contextmenu();\n    \
+             let mut ok = false;\n    \
+             let mut tries = 0;\n    \
+             // Loop until a valid payload is observed rather than trusting the\n    \
+             // very first recv (the first parked recv's out-slot read can race\n    \
+             // under load); the host re-dispatches the same event every tick.\n    \
+             loop {\n        \
+                 let c = cm.recv();\n        \
+                 if c.x() == 310.0 and c.y() == 95.0 {\n            \
+                     ok = true;\n            \
+                     break;\n        \
+                 }\n        \
+                 tries = tries + 1;\n        \
+                 if tries >= 64 {\n            \
+                     break;\n        \
+                 }\n    \
+             }\n    \
+             if ok {\n        \
+                 println(\"CTX_OK\");\n    \
+             } else {\n        \
+                 println(\"CTX_FAIL\");\n    \
+             }\n    \
+             println(\"after\");\n}\n",
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--features=wasm-threads",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_threads_contextmenu_payload_recv_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        out.status.success(),
+        "contextmenu wasm-threads build failed: {stderr}"
+    );
+    assert!(tmp.join("cm.threads.wasm").exists());
+
+    let harness = tmp.join("harness.mjs");
+    std::fs::write(
+        &harness,
+        r#"import { run } from "./cm.js";
+// A node EventTarget stands in for the canvas; synthetic contextmenu events are
+// CANCELABLE so the listener's preventDefault() is observable: dispatchEvent
+// returns false when the default was prevented.
+class CME extends Event {
+  constructor(x, y) { super("contextmenu", { cancelable: true }); this.offsetX = x; this.offsetY = y; }
+}
+const target = new EventTarget();
+let dispatched = 0, prevented = 0;
+const iv = setInterval(() => {
+  dispatched++;
+  const notCancelled = target.dispatchEvent(new CME(310, 95));
+  if (!notCancelled) prevented++;
+}, 12);
+const bail = setTimeout(() => { console.error("FAIL: recv never woke, dispatched=" + dispatched); process.exit(2); }, 8000);
+const h = await run({}, { contextmenuTarget: target });
+clearInterval(iv);
+clearTimeout(bail);
+if (h.threaded !== true) { console.error("FAIL: expected threaded pick"); process.exit(1); }
+console.log("CTX_HARNESS_OK dispatched=" + dispatched + " prevented=" + prevented);
+process.exit(0);
+"#,
+    )
+    .unwrap();
+    let node = std::process::Command::new("node")
+        .arg(&harness)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: wasm_threads_contextmenu_payload_recv_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let node_stdout = String::from_utf8_lossy(&node_out.stdout);
+    let node_stderr = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success(),
+        "contextmenu harness failed under node: stdout={node_stdout} stderr={node_stderr}",
+    );
+    assert!(
+        node_stdout.contains("CTX_HARNESS_OK"),
+        "harness did not complete (recv woke): stdout={node_stdout} stderr={node_stderr}",
+    );
+    // Position crossed intact — a zero-filled / wrong-size floor prints CTX_FAIL.
+    assert!(
+        node_stdout.contains("CTX_OK") && !node_stdout.contains("CTX_FAIL"),
+        "exact right-click position (310, 95) ClickEvent payload must round-trip host→wasm: stdout={node_stdout}",
+    );
+    // The listener must have preventDefault'd the native menu — `prevented` is
+    // bumped each time a cancelable contextmenu was cancelled. A listener that
+    // forgot preventDefault would leave `prevented=0`.
+    assert!(
+        !node_stdout.contains("prevented=0"),
+        "contextmenu listener must preventDefault the native menu (prevented should be > 0): stdout={node_stdout}",
+    );
+    let before = node_stdout.find("before");
+    let after = node_stdout.find("after");
+    assert!(
+        matches!((before, after), (Some(b), Some(a)) if b < a),
+        "guest must print before→after (recv blocked then woke): stdout={node_stdout}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The sequential-target gate for `contextmenu`: built WITHOUT `--features
+/// wasm-threads` it is a hard compile error (codegen, pre-link) naming the
+/// flag — never a silent never-filling channel. Sibling of
+/// `wasm_resize_sequential_target_rejected`.
+#[test]
+fn wasm_contextmenu_sequential_target_rejected() {
+    let tmp = wasm_test_dir("wtctxmenugate");
+    let path = tmp.join("cm.kara");
+    std::fs::write(
+        &path,
+        "import std.web.events.{contextmenu, ClickEvent};\n\n\
+         fn main() {\n    \
+             let cm = contextmenu();\n    \
+             cm.recv();\n}\n",
+    )
+    .unwrap();
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--bindings=none",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_contextmenu_sequential_target_rejected — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        !out.status.success(),
+        "sequential wasm contextmenu producer must be rejected, but build succeeded: {stderr}"
+    );
+    assert!(
+        stderr.contains("requires `--features wasm-threads`"),
+        "gate must name the flag: {stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// Full-demo E2E for the Plume flow-field dogfood (`examples/plume/`): builds
 /// the shipped `plume.kara` for `wasm_browser --features wasm-threads` and runs
 /// it under node, exercising the whole front-end spine together — the blocking
