@@ -211,6 +211,60 @@ pub fn keydown() -> Receiver[KeyEvent] with writes(Input) {
     rx
 }
 
+// A mouse-click position, in CSS pixels relative to the listening element.
+// Transparent two-field struct: its physical layout (`x` at byte 0, `y` at
+// byte 8 — two `f64`s; 16 bytes total) is the contract the host glue marshals
+// each `click` into before `channel_send` — keep the field order and types in
+// sync with `src/wasm_glue.rs` (`__kara_clicks`). These are the same
+// element-relative coordinates `pointer_moves` reports (`MouseEvent.offsetX/Y`),
+// so a demo can place/select at the clicked point exactly as it steers on hover.
+pub struct ClickEvent {
+    x: f64,
+    y: f64,
+}
+
+impl ClickEvent {
+    fn x(ref self) -> f64 {
+        self.x
+    }
+
+    fn y(ref self) -> f64 {
+        self.y
+    }
+}
+
+// Stream mouse-click positions on a fresh channel, indefinitely — the discrete
+// "where did the user click" sibling of the continuous `pointer_moves` stream.
+// Returns the receiving half; the waiting side writes a plain blocking loop —
+//
+//     let clicks = clicks();
+//     loop {
+//         let c = clicks.recv();
+//         place_seed(c.x(), c.y());   // drop a seed at the clicked point
+//     }
+//
+// — no `await`, no `addEventListener` callback ceremony. Multi-shot and
+// coalesced exactly like `pointer_moves` (the host feeds a fresh event only once
+// the previous one is drained — clicks rarely burst, but a double/triple click
+// still collapses to a sample rather than queuing). Listener registers on
+// `opts.clickTarget` if given, else the same canvas/`globalThis` the pointer
+// stream uses, so position coordinates share `pointer_moves`' frame of
+// reference. Same `--features wasm-threads` requirement as the other host-async
+// producers.
+//
+// Mechanism: `Sender.__schedule_clicks` (a compiler builtin) clones the sender's
+// channel reference and hands the clone to the host's click listener, which owns
+// it for the listener's lifetime.
+pub fn clicks() -> Receiver[ClickEvent] with writes(Input) {
+    // Annotate the destructure so the channel element type is `ClickEvent` (the
+    // producer never `send`/`recv`s itself — the host fires the send — so there
+    // is no downstream channel op to infer the element from; an unannotated
+    // `Channel.new()` only type-checks under the interpreter).
+    let (tx, rx): (Sender[ClickEvent], Receiver[ClickEvent]) = Channel.new();
+    tx.__schedule_clicks();
+    rx
+}
+
 // Stream key-*up* (key-release) events on a fresh channel, indefinitely — the
 // release-edge sibling of `keydown`, carrying the same `KeyEvent` payload. Pair
 // the two to track held-key state (press on `keydown`, clear on `keyup`):

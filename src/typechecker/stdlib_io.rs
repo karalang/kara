@@ -479,6 +479,7 @@ impl<'a> super::TypeChecker<'a> {
                 | "__schedule_wheel"
                 | "__schedule_keydown"
                 | "__schedule_keyup"
+                | "__schedule_clicks"
         ) {
             let resolved = resolve_type_var_top(&elem, &self.env.substitutions);
             let te = Self::type_to_type_expr(&resolved);
@@ -709,6 +710,23 @@ impl<'a> super::TypeChecker<'a> {
                     if !args.is_empty() {
                         self.type_error(
                             "Sender.__schedule_keyup takes no arguments".to_string(),
+                            span.clone(),
+                            TypeErrorKind::WrongNumberOfArgs,
+                        );
+                    }
+                    Type::Unit
+                }
+                // Internal compiler builtin backing `std.web.events.clicks`
+                // (discrete click-position sibling of `__schedule_pointer_moves`;
+                // non-unit `ClickEvent` = two `f64`s payload). Borrows `self`,
+                // takes no argument, returns Unit; codegen clones the sender and
+                // hands it to the host click listener. Kept out of ordinary reach
+                // by the `__` prefix + the `writes(Input)` gating on the `clicks`
+                // wrapper.
+                "__schedule_clicks" => {
+                    if !args.is_empty() {
+                        self.type_error(
+                            "Sender.__schedule_clicks takes no arguments".to_string(),
                             span.clone(),
                             TypeErrorKind::WrongNumberOfArgs,
                         );
