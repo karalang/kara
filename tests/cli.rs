@@ -17640,6 +17640,124 @@ run({ put_pixels }, { pointerTarget: target }).catch((e) => {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// Plume also wires `std.web.events.clicks()` — a click PINS a persistent,
+/// counter-rotating vortex at that point, wearing a steady cool glow (additive,
+/// not flow-modulated) so a placed swirl stays visible. This is the demo-level
+/// consumer of the `clicks` `ClickEvent` producer (the pointer drives a swirl
+/// that *follows* the cursor; a click drops one you *leave behind*).
+///
+/// Reuses Plume's gold-standard signal: a WITHIN-FRAME spatial diff, which is
+/// immune to the always-advancing `t` animation noise (you can't compare frames
+/// across `t`, but you can compare two regions of the SAME frame). The pinned
+/// glow weights the BLUE channel hardest (+200 at the core), so after a click at
+/// a point Q far from the cursor and the three fixed vortices, Q's neighbourhood
+/// is measurably bluer than a neutral far region. No pointer events are fed, so
+/// the only steerable warmth in play is the click's — `PLUME_CLICK_OK` prints
+/// only if near-Q blue beats the far reference by a clear margin.
+///
+/// Doubles as a bit-rot guard on the example source (built from the committed
+/// file, not an inline copy).
+#[test]
+fn plume_example_click_pinned_vortex_e2e() {
+    let tmp = wasm_test_dir("plumeclick");
+    let path = tmp.join("plume.kara");
+    std::fs::write(&path, include_str!("../examples/plume/plume.kara")).unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--features=wasm-threads",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: plume_example_click_pinned_vortex_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "plume build failed: {stderr}");
+    assert!(tmp.join("plume.threads.wasm").exists());
+
+    let harness = tmp.join("harness.mjs");
+    std::fs::write(
+        &harness,
+        r#"import { run } from "./plume.js";
+const W = 520, H = 340;
+// Click point Q: clear of the cursor's default centre (0.5,0.5) and the three
+// fixed vortices (0.25,0.32)/(0.74,0.66)/(0.50,0.85). 0.85,0.20 normalized.
+const QX = Math.round(0.85 * W), QY = Math.round(0.20 * H); // 442, 68
+// A neutral far reference, clear of Q, the centre, and the vortices.
+const FX = Math.round(0.15 * W), FY = Math.round(0.55 * H); // 78, 187
+// The clicks glue reads offsetX/offsetY first (clientX/Y is the fallback).
+class Click extends Event {
+  constructor(x, y) { super("click", { cancelable: true }); this.offsetX = x; this.offsetY = y; }
+}
+const target = new EventTarget();
+const iv = setInterval(() => target.dispatchEvent(new Click(QX, QY)), 10);
+const bail = setTimeout(() => { console.error("FAIL: too few frames rendered"); process.exit(2); }, 12000);
+
+// Average a colour channel over a window — averaging washes out the t-noise so
+// the steady additive glow stands out.
+function avgC(view, cx, cy, ch) {
+  let sum = 0, n = 0;
+  for (let dy = -10; dy <= 10; dy++) {
+    for (let dx = -10; dx <= 10; dx++) {
+      const x = cx + dx, y = cy + dy;
+      if (x < 0 || x >= W || y < 0 || y >= H) continue;
+      sum += view[(y * W + x) * 4 + ch]; n++;
+    }
+  }
+  return sum / n;
+}
+
+let frameCount = 0;
+function put_pixels(ptr, len, w, h, ctx) {
+  frameCount++;
+  // Assert on a settled frame (the click has been picked up by then).
+  if (frameCount === 10) {
+    const view = new Uint8Array(ctx.memory.buffer, Number(ptr), Number(len));
+    let mn = 255, mx = 0;
+    for (let i = 0; i < view.length; i += 4) { const b = view[i + 2]; if (b < mn) mn = b; if (b > mx) mx = b; }
+    if (mx - mn < 20) { console.error("FAIL: framebuffer too uniform (mn=" + mn + " mx=" + mx + ")"); process.exit(3); }
+    const nearB = avgC(view, QX, QY, 2);
+    const farB = avgC(view, FX, FY, 2);
+    console.log("PLUME_CLICK frames=" + frameCount + " nearB=" + nearB.toFixed(1) + " farB=" + farB.toFixed(1));
+    if (nearB <= farB + 20) { console.error("FAIL: pinned-vortex glow not placed (nearB=" + nearB.toFixed(1) + " farB=" + farB.toFixed(1) + ")"); process.exit(4); }
+    clearInterval(iv); clearTimeout(bail);
+    console.log("PLUME_CLICK_OK");
+    process.exit(0);
+  }
+}
+run({ put_pixels }, { clickTarget: target }).catch((e) => {
+  console.error("run failed: " + (e && e.message ? e.message : e));
+  process.exit(1);
+});
+"#,
+    )
+    .unwrap();
+    let node = std::process::Command::new("node")
+        .arg(&harness)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: plume_example_click_pinned_vortex_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let so = String::from_utf8_lossy(&node_out.stdout);
+    let se = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success() && so.contains("PLUME_CLICK_OK"),
+        "plume click harness failed under node: stdout={so} stderr={se}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// Fathom (examples/fathom/mandelbrot.kara) wires two newer `std.web.events`
 /// `ClickEvent` producers into the live render loop: `dblclick()` dives the
 /// view IN toward the clicked point, `contextmenu()` (right-click) backs it

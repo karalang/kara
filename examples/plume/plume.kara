@@ -13,7 +13,12 @@
 //   * `pointer_moves()` (std.web.events) is a `Channel[PointerEvent]` — the
 //     mouse position crosses host→wasm as a real struct payload. The loop
 //     drains the latest with a NON-blocking `try_recv` each frame, so input
-//     never stalls the render.
+//     never stalls the render. It steers a tight vortex that FOLLOWS the cursor.
+//   * `clicks()` (std.web.events) is a `Channel[ClickEvent]` — a click PINS a
+//     counter-rotating vortex at that point, with a steady cool glow so a placed
+//     swirl stays visible even where the streaks are dim. Latest click wins;
+//     drained the same non-blocking way. (Pointer = a swirl that follows you;
+//     click = a swirl you leave behind.)
 //   * `TaskGroup.spawn` splits the rows of each frame across the pool. Halve
 //     the pool and the framerate visibly halves — the parallelism is real.
 //   * `put_pixels` hands the framebuffer to JS for the `ctx.putImageData`
@@ -21,14 +26,15 @@
 //
 // The flow is a line-integral convolution: each pixel walks *upstream* through
 // a velocity field (a rightward drift + fixed background vortices + the
-// pointer's steerable vortex) and averages a noise texture along the path, so
-// bright streaks ride the streamlines. Pure f64 + `sqrt` — no trig, no GPU.
+// pointer's steerable vortex + the pinned click vortex) and averages a noise
+// texture along the path, so bright streaks ride the streamlines. Pure f64 +
+// `sqrt` — no trig, no GPU.
 //
 // Build:  karac build plume.kara --target=wasm_browser --features wasm-threads
 // Serve:  ./build.sh  (needs COOP/COEP headers for SharedArrayBuffer).
 
 import std.web.time.{animation_frames};
-import std.web.events.{pointer_moves, PointerEvent};
+import std.web.events.{pointer_moves, PointerEvent, clicks, ClickEvent};
 
 // The canvas this program paints — a host capability reached via `put_pixels`.
 effect resource Display;
@@ -58,8 +64,11 @@ fn vortex(u: f64, v: f64, cu: f64, cv: f64, str: f64, soft: f64, spin: f64) -> V
 
 // Flow velocity at normalized (u,v) ∈ [0,1]²: a rightward drift so the whole
 // field streams, three fixed background vortices that give the frame curl
-// everywhere, and the pointer's strong, tight, steerable vortex (pu,pv).
-fn field_at(u: f64, v: f64, pu: f64, pv: f64) -> V2 {
+// everywhere, the pointer's strong, tight, steerable vortex (pu,pv), and the
+// pinned click vortex (qu,qv) — counter-rotating so it reads as its own
+// structure, not a second cursor. Before the first click (qu,qv) sits off-
+// screen, where its 1/d² contribution is negligible.
+fn field_at(u: f64, v: f64, pu: f64, pv: f64, qu: f64, qv: f64) -> V2 {
     let mut vx = 0.16;
     let mut vy = 0.0;
     let a = vortex(u, v, 0.25, 0.32, 0.013, 0.022, 1.0);
@@ -70,6 +79,9 @@ fn field_at(u: f64, v: f64, pu: f64, pv: f64) -> V2 {
     let p = vortex(u, v, pu, pv, 0.024, 0.006, 1.0);
     vx = vx + p.x;
     vy = vy + p.y;
+    let q = vortex(u, v, qu, qv, 0.024, 0.006, -1.0);
+    vx = vx + q.x;
+    vy = vy + q.y;
     V2 { x: vx, y: vy }
 }
 
@@ -87,14 +99,14 @@ fn hash01(ix: i64, iy: i64) -> f64 {
 // the noise texture along the path. Streamlines threading the same cells
 // correlate into bright streaks aligned with the flow. Animate by sliding the
 // noise sample upstream with `t` (the drift carries the streaks along).
-fn brightness(u: f64, v: f64, pu: f64, pv: f64, t: f64) -> f64 {
+fn brightness(u: f64, v: f64, pu: f64, pv: f64, qu: f64, qv: f64, t: f64) -> f64 {
     let mut fu = u;
     let mut fv = v;
     let mut acc = 0.0;
     let steps = 18;
     let mut s = 0;
     while s < steps {
-        let vel = field_at(fu, fv, pu, pv);
+        let vel = field_at(fu, fv, pu, pv, qu, qv);
         let mag = (vel.x * vel.x + vel.y * vel.y).sqrt() + 0.00001;
         fu = fu - vel.x / mag * 0.013;
         fv = fv - vel.y / mag * 0.013;
@@ -119,7 +131,7 @@ fn to_byte(x: f64) -> u8 {
 
 // Render rows [y0, y1) into a fresh RGBA buffer. Per-task unit: each worker
 // owns its chunk's output and hands it back at join — no shared mutable buffer.
-fn render_rows(y0: i64, y1: i64, pu: f64, pv: f64, t: f64) -> Vec[u8] {
+fn render_rows(y0: i64, y1: i64, pu: f64, pv: f64, qu: f64, qv: f64, t: f64) -> Vec[u8] {
     let w = fb_width();
     let h = fb_height();
     let fw = w as f64;
@@ -129,15 +141,22 @@ fn render_rows(y0: i64, y1: i64, pu: f64, pv: f64, t: f64) -> Vec[u8] {
         let v = (y as f64) / fh;
         for x in 0..w {
             let u = (x as f64) / fw;
-            let c = brightness(u, v, pu, pv, t);
+            let c = brightness(u, v, pu, pv, qu, qv, t);
             // Blue→cyan→white streaks on a deep-blue floor; the pointer's
             // neighbourhood warms toward amber so the cursor's pull is visible.
             let du = u - pu;
             let dv = v - pv;
             let warm = 0.05 / (du * du + dv * dv + 0.05);
-            out.push(to_byte(c * 255.0 * 1.25 - 60.0 + warm * 200.0 * c));
-            out.push(to_byte(c * 220.0 + warm * 90.0 * c));
-            out.push(to_byte(40.0 + c * 215.0));
+            // The pinned click vortex wears a steady cool glow — additive, NOT
+            // flow-modulated (no `* c`), so a placed swirl reads even where the
+            // streaks are dim. Weighted toward blue, distinct from the pointer's
+            // amber. Negligible while (qu,qv) is parked off-screen.
+            let dqu = u - qu;
+            let dqv = v - qv;
+            let glow = 0.05 / (dqu * dqu + dqv * dqv + 0.05);
+            out.push(to_byte(c * 255.0 * 1.25 - 60.0 + warm * 200.0 * c + glow * 150.0));
+            out.push(to_byte(c * 220.0 + warm * 90.0 * c + glow * 175.0));
+            out.push(to_byte(40.0 + c * 215.0 + glow * 200.0));
             out.push(255u8);
         }
     }
@@ -147,7 +166,7 @@ fn render_rows(y0: i64, y1: i64, pu: f64, pv: f64, t: f64) -> Vec[u8] {
 // Compute one full frame across the worker pool, then blit. Rows split into
 // `workers` contiguous bands; each band is a spawned task; the TaskGroup joins
 // them in order and the bands concatenate into one framebuffer.
-fn render_frame(pu: f64, pv: f64, t: f64, workers: i64) with writes(Display) {
+fn render_frame(pu: f64, pv: f64, qu: f64, qv: f64, t: f64, workers: i64) with writes(Display) {
     let w = fb_width();
     let h = fb_height();
     let band = (h + workers - 1) / workers;
@@ -160,7 +179,7 @@ fn render_frame(pu: f64, pv: f64, t: f64, workers: i64) with writes(Display) {
         let mut y1 = y0 + band;
         if y1 > h { y1 = h; }
         if y0 < y1 {
-            let handle: TaskHandle[Vec[u8]] = pool.spawn(|| render_rows(y0, y1, pu, pv, t));
+            let handle: TaskHandle[Vec[u8]] = pool.spawn(|| render_rows(y0, y1, pu, pv, qu, qv, t));
             handles.push(handle);
         }
         k = k + 1;
@@ -185,10 +204,15 @@ fn main() {
     let workers = 8;
     let frames = animation_frames();
     let moves = pointer_moves();
+    let taps = clicks();
 
     // Pointer position in normalized coords; starts at screen centre.
     let mut pu = 0.5;
     let mut pv = 0.5;
+    // Pinned click vortex in normalized coords. Parked off-screen (-5, -5) until
+    // the first click, where its field + glow are negligible.
+    let mut qu = -5.0;
+    let mut qv = -5.0;
     let mut t = 0.0;
     loop {
         frames.recv();
@@ -201,7 +225,17 @@ fn main() {
             }
             None => {}
         }
-        render_frame(pu, pv, t, workers);
+        // Click → re-pin the persistent vortex at the click point. Latest click
+        // wins. `ClickEvent` carries element-relative CSS px == internal px at
+        // 1:1, normalized exactly like the pointer.
+        match taps.try_recv() {
+            Some(c) => {
+                qu = c.x() / (fb_width() as f64);
+                qv = c.y() / (fb_height() as f64);
+            }
+            None => {}
+        }
+        render_frame(pu, pv, qu, qv, t, workers);
         t = t + 0.004;
     }
 }

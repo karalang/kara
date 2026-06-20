@@ -35,15 +35,17 @@
   <p class="sub">A particle-flow field in one Kāra source — the per-frame
     compute fans out across every CPU core, in a browser tab, with no
     <code>async</code> and no threading code. <b>Move the mouse over the
-    canvas</b> to steer the flow.</p>
+    canvas</b> to steer the flow; <b>click</b> to pin a glowing swirl where you
+    leave it.</p>
   <div id="stage">
     <canvas id="screen" width="520" height="340"></canvas>
     <div id="overlay">starting…</div>
   </div>
-  <p id="note">The pointer arrives as a typed channel —
-    <code>Channel[PointerEvent]</code> — drained each frame with a plain
-    <code>try_recv</code>; no <code>addEventListener</code> callback in the Kāra
-    source. The render loop is a blocking
+  <p id="note">The pointer and clicks arrive as typed channels —
+    <code>Channel[PointerEvent]</code> and <code>Channel[ClickEvent]</code> —
+    each drained every frame with a plain <code>try_recv</code>; no
+    <code>addEventListener</code> callback in the Kāra source. The render loop is
+    a blocking
     <code>loop { frames.recv(); … }</code>; each frame's rows split across a Web
     Worker pool by <code>TaskGroup.spawn</code>.</p>
 
@@ -71,7 +73,7 @@
       `FPS:     <b>${fps.toFixed(0)}</b>\n` +
       `workers: <b>${workers}</b>\n` +
       `frames:  <b>${frames}</b>\n` +
-      `steer:   <b>move mouse</b>`;
+      `steer:   <b>move / click</b>`;
   }
   paintOverlay();
 
@@ -91,9 +93,10 @@
     }
   }
 
-  // `pointerTarget` is where std.web.events.pointer_moves() registers its
-  // listener — the canvas, so the guest receives canvas-relative coordinates.
-  run({ put_pixels }, { pointerTarget: canvas }).catch((e) => {
+  // `pointerTarget` / `clickTarget` are where std.web.events.pointer_moves() /
+  // clicks() register their listeners — the canvas, so the guest receives
+  // canvas-relative coordinates for both the steer and the pinned-vortex click.
+  run({ put_pixels }, { pointerTarget: canvas, clickTarget: canvas }).catch((e) => {
     // main() loops forever, so run() never resolves on success; a rejection
     // is a real failure (no SharedArrayBuffer / not cross-origin isolated).
     overlay.textContent = "error: " + (e && e.message ? e.message : e);
