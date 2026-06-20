@@ -27,12 +27,18 @@
 //     parallel `render_frame` — a backgrounded tab stops driving the worker
 //     pool. `focus` resumes it. These are UNIT `()` channels: the token's mere
 //     arrival is the whole signal, no payload.
+//   * `resize()` (std.web.events) makes the canvas responsive: each event
+//     carries the window's CURRENT `innerWidth`/`innerHeight` (read off the
+//     window, not the event — a DOM resize carries no dimensions), and the loop
+//     reflows the framebuffer to match. `scale` (complex units per pixel) is
+//     held fixed, so a bigger window simply reveals more of the plane. The
+//     framebuffer width/height are runtime state from here on, not constants.
 //
 // Build:  karac build mandelbrot.kara --target=wasm_browser --features wasm-threads
 // Serve:  see README.md (needs COOP/COEP headers for SharedArrayBuffer).
 
 import std.web.time.{animation_frames};
-import std.web.events.{pointer_moves, PointerEvent, wheel, WheelEvent, keydown, KeyEvent, dblclick, contextmenu, ClickEvent, focus, blur};
+import std.web.events.{pointer_moves, PointerEvent, wheel, WheelEvent, keydown, KeyEvent, dblclick, contextmenu, ClickEvent, focus, blur, resize, ResizeEvent};
 
 // The canvas this program paints. A user-defined host capability — like
 // `Dom` in examples/ssr_counter — reached through the `put_pixels` host fn.
@@ -45,14 +51,17 @@ effect resource Display;
 // JS has read the bytes), so the buffer never dangles while in use.
 host fn put_pixels(ptr: *const u8, len: i64, w: i64, h: i64) with writes(Display);
 
-// Frame geometry. Kept modest so a single worker still renders smoothly —
-// the pool then multiplies the framerate rather than rescuing it. The canvas
-// is displayed 1:1 (CSS size == internal size; see index.html), so a wheel /
-// pointer event's element-relative CSS pixel coordinates map straight onto
-// these internal pixels — no rescale in the math below. `fb_width` stays even
-// for the two-pixels-per-SIMD-pair inner loop.
-fn fb_width() -> i64 { 640 }
-fn fb_height() -> i64 { 420 }
+// The INITIAL frame geometry — the size before the first `resize` event. Kept
+// modest so a single worker still renders smoothly; the pool then multiplies
+// the framerate rather than rescuing it. After startup the live width/height
+// are runtime state (`cur_w`/`cur_h` in `main`), reflowed by `resize`, and the
+// threaded through `render_frame`/`render_rows`. The canvas is displayed 1:1
+// (CSS size == internal size; see index.html), so a wheel / pointer / click
+// event's element-relative CSS pixel coordinates map straight onto internal
+// pixels — no rescale in the math below. The width is always kept EVEN (the
+// resize handler floors it) for the two-pixels-per-SIMD-pair inner loop.
+fn default_width() -> i64 { 640 }
+fn default_height() -> i64 { 420 }
 fn max_iter() -> i64 { 200 }
 
 // Escape-time iteration count for the point (cr, ci): how many steps of
@@ -115,17 +124,16 @@ fn color_b(n: i64, max: i64) -> u8 {
 // Render rows [y0, y1) of the frame into a fresh RGBA buffer and return it.
 // This is the per-task unit: each spawned worker owns its chunk's output and
 // hands it back at join — no shared mutable buffer, so no aliasing question.
-fn render_rows(y0: i64, y1: i64, cx: f64, cy: f64, scale: f64) -> Vec[u8] {
-    let w = fb_width();
-    let h = fb_height();
+fn render_rows(y0: i64, y1: i64, w: i64, h: i64, cx: f64, cy: f64, scale: f64) -> Vec[u8] {
     let mx = max_iter();
     let half_w = (w as f64) / 2.0;
     let half_h = (h as f64) / 2.0;
     let mut out: Vec[u8] = Vec.new();
     for y in y0..y1 {
         let ci = cy + ((y as f64) - half_h) * scale;
-        // Two pixels per step — fb_width() is even, so each SIMD pair covers a
-        // full (x, x+1) column couple with no scalar remainder.
+        // Two pixels per step — `w` is even (the resize handler floors it), so
+        // each SIMD pair covers a full (x, x+1) column couple, no scalar
+        // remainder.
         let mut x = 0;
         while x < w {
             let cr0 = cx + ((x as f64) - half_w) * scale;
@@ -149,9 +157,7 @@ fn render_rows(y0: i64, y1: i64, cx: f64, cy: f64, scale: f64) -> Vec[u8] {
 // split into `workers` contiguous bands; each band is a spawned task. The
 // `TaskGroup` joins them in order at the end of the function, and the bands
 // are concatenated into one framebuffer for the single `put_pixels` call.
-fn render_frame(cx: f64, cy: f64, scale: f64, workers: i64) with writes(Display) {
-    let w = fb_width();
-    let h = fb_height();
+fn render_frame(w: i64, h: i64, cx: f64, cy: f64, scale: f64, workers: i64) with writes(Display) {
     let band = (h + workers - 1) / workers;
 
     let mut pool: TaskGroup = TaskGroup.new();
@@ -162,7 +168,7 @@ fn render_frame(cx: f64, cy: f64, scale: f64, workers: i64) with writes(Display)
         let mut y1 = y0 + band;
         if y1 > h { y1 = h; }
         if y0 < y1 {
-            let handle: TaskHandle[Vec[u8]] = pool.spawn(|| render_rows(y0, y1, cx, cy, scale));
+            let handle: TaskHandle[Vec[u8]] = pool.spawn(|| render_rows(y0, y1, w, h, cx, cy, scale));
             handles.push(handle);
         }
         k = k + 1;
@@ -190,16 +196,20 @@ fn render_frame(cx: f64, cy: f64, scale: f64, workers: i64) with writes(Display)
 // clock's `writes(Timer)` / `suspends` or the inputs' `writes(Input)`.
 fn main() {
     let workers = 8;
-    let w = fb_width();
-    let h = fb_height();
-    let half_w = (w as f64) / 2.0;
-    let half_h = (h as f64) / 2.0;
+
+    // Live framebuffer size — runtime state, reflowed by `resize`. Seeded from
+    // the initial geometry; `cur_w` is always kept even (the resize handler
+    // floors it) so the SIMD pair loop never has a scalar remainder.
+    let mut cur_w = default_width();
+    let mut cur_h = default_height();
 
     // View transform: (cx, cy) is the complex point at screen centre, `scale`
     // the complex-plane distance per pixel (so screen pixel (px, py) maps to
     // cx + (px - half_w) * scale, cy + (py - half_h) * scale — the same map
-    // render_rows uses). Start framed on the whole set.
-    let start_scale = 3.5 / (w as f64);
+    // render_rows uses). Start framed on the whole set. `start_scale` references
+    // the INITIAL width so 'R'-reset and the zoom ceiling keep a stable
+    // frame-the-whole-set reference even after the canvas reflows.
+    let start_scale = 3.5 / (default_width() as f64);
     let mut cx = -0.75;
     let mut cy = 0.0;
     let mut scale = start_scale;
@@ -215,6 +225,7 @@ fn main() {
     let rights = contextmenu();
     let foc = focus();
     let unfoc = blur();
+    let resizes = resize();
 
     // Last pointer position (CSS px == internal px at 1:1), for the pan delta.
     let mut last_px = 0.0;
@@ -223,6 +234,33 @@ fn main() {
 
     loop {
         frames.recv();
+
+        // Window resize → reflow the framebuffer to the window's CURRENT size.
+        // The DOM resize event carries no dimensions, so `ResizeEvent` is filled
+        // from the window's innerWidth/innerHeight at fire time, coalesced to the
+        // latest settled size. `scale` is held fixed, so a bigger window just
+        // reveals more of the plane — the natural reflow. Width is forced EVEN
+        // for the SIMD pair loop, and both dims are floored so a zero/garbage
+        // size can't make a degenerate buffer. Drained first so this frame's
+        // input math and render both see the new size.
+        match resizes.try_recv() {
+            Some(rz) => {
+                let mut nw = rz.width();
+                let mut nh = rz.height();
+                if nw < 2 { nw = 2; }
+                if nh < 1 { nh = 1; }
+                if nw % 2 == 1 { nw = nw - 1; }
+                cur_w = nw;
+                cur_h = nh;
+            }
+            None => {}
+        }
+
+        // Screen-centre half-extents for THIS frame's size — they shift whenever
+        // a resize changes (cur_w, cur_h), and every input handler below maps
+        // cursor coords through them.
+        let half_w = (cur_w as f64) / 2.0;
+        let half_h = (cur_h as f64) / 2.0;
 
         // Scroll → zoom toward the cursor: scale the view while holding the
         // complex point under the cursor fixed on screen. delta_y < 0 (scroll
@@ -340,7 +378,7 @@ fn main() {
         }
 
         if not paused {
-            render_frame(cx, cy, scale, workers);
+            render_frame(cur_w, cur_h, cx, cy, scale, workers);
         }
     }
 }

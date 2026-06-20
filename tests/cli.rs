@@ -17905,6 +17905,138 @@ run({ put_pixels }, { dblclickTarget: target, focusTarget: target, blurTarget: t
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// Fathom wires `std.web.events.resize()` to make the canvas RESPONSIVE: the
+/// framebuffer width/height became runtime state, and each `resize` reflows them
+/// to the window's current `innerWidth`/`innerHeight`. This is the demo-level
+/// proof — and it exercises a dimension the other Fathom tests don't: the
+/// framebuffer geometry itself changing mid-run, threaded through the SIMD
+/// render path and the `put_pixels` blit.
+///
+/// The signal is structural and exact: `put_pixels(ptr, len, w, h)` reports the
+/// frame's dimensions, so a reflow shows up as a changed `(w, h)` AND a changed
+/// `len` (= w*h*4). The harness drives the window dims through three sizes:
+///   1. baseline at the default 640x420 (asserts the frame has real structure),
+///   2. SHRINK to an ODD innerWidth 321x240 — the guest must floor the width to
+///      an even 320 (the SIMD pair loop's invariant), so `put_pixels` reports
+///      exactly 320x240 and len 320*240*4,
+///   3. GROW to 900x600 — `put_pixels` reports 900x600 and len 900*600*4.
+///
+/// Each post-reflow frame must also still render real structure at the new size
+/// (not a torn/zero buffer). `FATHOM_RESIZE_OK` prints only if all three legs
+/// match; the 20 s bail catches "a reflow never took".
+///
+/// Doubles as a bit-rot guard on the example source (built from the committed
+/// file, not an inline copy).
+#[test]
+fn fathom_example_resize_reflow_e2e() {
+    let tmp = wasm_test_dir("fathomresize");
+    let path = tmp.join("mandelbrot.kara");
+    std::fs::write(&path, include_str!("../examples/fathom/mandelbrot.kara")).unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--features=wasm-threads",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: fathom_example_resize_reflow_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "fathom build failed: {stderr}");
+    assert!(tmp.join("mandelbrot.threads.wasm").exists());
+
+    let harness = tmp.join("harness.mjs");
+    std::fs::write(
+        &harness,
+        r#"import { run } from "./mandelbrot.js";
+// One object stands in for the window: `resize` reads innerWidth/innerHeight
+// off it (the DOM resize event carries no dimensions), so we mutate these and
+// dispatch a bare "resize" to drive a reflow.
+const target = new EventTarget();
+target.innerWidth = 640;
+target.innerHeight = 420;
+const bail = setTimeout(() => { console.error("FAIL: a reflow never took"); process.exit(2); }, 20000);
+
+// Real structure at the current size = the frame isn't a torn/zero buffer.
+function nonUniform(view) {
+  let mn = 255, mx = 0;
+  for (let i = 0; i < view.length; i += 4) { const r = view[i]; if (r < mn) mn = r; if (r > mx) mx = r; }
+  return mx - mn >= 20;
+}
+
+let frame = 0, phase = "warmup", rzIv = null;
+function put_pixels(ptr, len, w, h, ctx) {
+  frame++;
+  w = Number(w); h = Number(h); len = Number(len);
+  const view = new Uint8Array(ctx.memory.buffer, Number(ptr), len);
+  if (phase === "warmup") {
+    if (frame < 2) return; // let the first frame settle
+    if (w !== 640 || h !== 420) { console.error("FAIL: default dims " + w + "x" + h); process.exit(3); }
+    if (len !== 640 * 420 * 4) { console.error("FAIL: default len " + len); process.exit(3); }
+    if (!nonUniform(view)) { console.error("FAIL: default frame too uniform"); process.exit(3); }
+    // SHRINK to an ODD width — the guest must floor it to an even 320.
+    phase = "shrink";
+    target.innerWidth = 321;
+    target.innerHeight = 240;
+    rzIv = setInterval(() => target.dispatchEvent(new Event("resize")), 10);
+    return;
+  }
+  if (phase === "shrink") {
+    if (w === 640) return; // pre-reflow frames still in flight
+    if (w !== 320 || h !== 240) { console.error("FAIL: shrink dims " + w + "x" + h + " (want 320x240, odd width must floor even)"); process.exit(4); }
+    if (len !== 320 * 240 * 4) { console.error("FAIL: shrink len " + len); process.exit(4); }
+    if (!nonUniform(view)) { console.error("FAIL: shrink frame too uniform"); process.exit(4); }
+    // GROW past the original size.
+    phase = "grow";
+    target.innerWidth = 900;
+    target.innerHeight = 600;
+    return;
+  }
+  if (phase === "grow") {
+    if (w !== 900) return; // wait for the grow to take
+    if (h !== 600) { console.error("FAIL: grow dims " + w + "x" + h); process.exit(5); }
+    if (len !== 900 * 600 * 4) { console.error("FAIL: grow len " + len); process.exit(5); }
+    if (!nonUniform(view)) { console.error("FAIL: grow frame too uniform"); process.exit(5); }
+    if (rzIv !== null) clearInterval(rzIv);
+    clearTimeout(bail);
+    console.log("FATHOM dims 640x420 -> 320x240 -> 900x600");
+    console.log("FATHOM_RESIZE_OK");
+    process.exit(0);
+  }
+}
+run({ put_pixels }, { resizeTarget: target }).catch((e) => {
+  console.error("run failed: " + (e && e.message ? e.message : e));
+  process.exit(1);
+});
+"#,
+    )
+    .unwrap();
+    let node = std::process::Command::new("node")
+        .arg(&harness)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: fathom_example_resize_reflow_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let so = String::from_utf8_lossy(&node_out.stdout);
+    let se = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success() && so.contains("FATHOM_RESIZE_OK"),
+        "fathom resize harness failed under node: stdout={so} stderr={se}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// The sequential-target gate: the same host-async producer built WITHOUT
 /// `--features wasm-threads` is a hard compile error (codegen, pre-link),
 /// pointing at the flag — never a silent zero-value `recv`. Fires during
