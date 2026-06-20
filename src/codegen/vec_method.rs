@@ -222,6 +222,298 @@ impl<'ctx> super::Codegen<'ctx> {
         out.into()
     }
 
+    /// The element type NAME of a `Vec`/`Slice` variable (`var_elem_type_exprs`
+    /// records the element `TypeExpr`), e.g. `"i64"` / `"u32"` / `"String"`.
+    /// `None` when the binding has no recorded element type or it isn't a plain
+    /// named type.
+    pub(super) fn vec_elem_type_name(&self, var_name: &str) -> Option<String> {
+        match self.var_elem_type_exprs.get(var_name).map(|te| &te.kind) {
+            Some(TypeKind::Path(p)) => p.segments.last().cloned(),
+            _ => None,
+        }
+    }
+
+    /// Three-way compare of an `elem` against the search `needle` for
+    /// `Vec.binary_search`, returning an i64 sign (`<0` / `0` / `>0`) consistent
+    /// with the interpreter's `value_compare`. Integer elements (any width,
+    /// signed or unsigned) widen to i64 and compare signed (uint values are
+    /// non-negative i64, matching the interpreter's signed `i64::cmp`); `String`
+    /// elements route through `karac_string_cmp` (the same byte-lexicographic
+    /// order). Other element types are an honest "not yet supported" error — the
+    /// interpreter still handles them under `karac run`. Emits no basic blocks
+    /// (pure data-flow), so the caller's bisection loop stays simple.
+    fn emit_binary_search_cmp(
+        &mut self,
+        elem_val: BasicValueEnum<'ctx>,
+        needle_val: BasicValueEnum<'ctx>,
+        elem_name: &str,
+    ) -> Result<IntValue<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let is_uint = matches!(elem_name, "u8" | "u16" | "u32" | "u64" | "usize");
+        let is_int = is_uint || matches!(elem_name, "i8" | "i16" | "i32" | "i64" | "isize");
+        if is_int {
+            let (BasicValueEnum::IntValue(a), BasicValueEnum::IntValue(b)) = (elem_val, needle_val)
+            else {
+                return Err("Vec.binary_search: integer element/needle expected".to_string());
+            };
+            let a = self.widen_int_to_i64(a.into(), is_uint);
+            let b = self.widen_int_to_i64(b.into(), is_uint);
+            let lt = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::SLT, a, b, "bs.lt")
+                .unwrap();
+            let gt = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::SGT, a, b, "bs.gt")
+                .unwrap();
+            let neg1 = i64_t.const_int((-1i64) as u64, true);
+            let pos1 = i64_t.const_int(1, false);
+            let zero = i64_t.const_zero();
+            let gt_sel = self
+                .builder
+                .build_select(gt, pos1, zero, "bs.gtsel")
+                .unwrap()
+                .into_int_value();
+            Ok(self
+                .builder
+                .build_select(lt, neg1, gt_sel, "bs.cmp")
+                .unwrap()
+                .into_int_value())
+        } else if elem_name == "String" {
+            let (BasicValueEnum::StructValue(a), BasicValueEnum::StructValue(b)) =
+                (elem_val, needle_val)
+            else {
+                return Err("Vec.binary_search: String element/needle expected".to_string());
+            };
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+            let a_ptr = self
+                .builder
+                .build_extract_value(a, 0, "bs.a.ptr")
+                .unwrap()
+                .into_pointer_value();
+            let a_len = self
+                .builder
+                .build_extract_value(a, 1, "bs.a.len")
+                .unwrap()
+                .into_int_value();
+            let b_ptr = self
+                .builder
+                .build_extract_value(b, 0, "bs.b.ptr")
+                .unwrap()
+                .into_pointer_value();
+            let b_len = self
+                .builder
+                .build_extract_value(b, 1, "bs.b.len")
+                .unwrap()
+                .into_int_value();
+            let cmp_fn = self
+                .module
+                .get_function("karac_string_cmp")
+                .unwrap_or_else(|| {
+                    let fn_ty = i64_t.fn_type(
+                        &[ptr_ty.into(), i64_t.into(), ptr_ty.into(), i64_t.into()],
+                        false,
+                    );
+                    self.module
+                        .add_function("karac_string_cmp", fn_ty, Some(Linkage::External))
+                });
+            Ok(self
+                .builder
+                .build_call(
+                    cmp_fn,
+                    &[a_ptr.into(), a_len.into(), b_ptr.into(), b_len.into()],
+                    "bs.scmp",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value())
+        } else {
+            Err(format!(
+                "`Vec.binary_search` on element type `{elem_name}` is not yet supported under \
+                 `karac build` (codegen); it works under `karac run`. Integer and String \
+                 element types are supported."
+            ))
+        }
+    }
+
+    /// Emit `binary_search(needle)` over a contiguous buffer `data` of `len`
+    /// elements (LLVM type `elem_ty`, Kāra type name `elem_name`), returning an
+    /// `Option[i64]` aggregate. Shared by the `Vec` and `Slice` receiver paths
+    /// (they differ only in how `data`/`len` are loaded from their headers).
+    ///
+    /// Replicates Rust's current `slice::binary_search_by` (branchless
+    /// narrow-to-`base`) EXACTLY — the textbook return-on-first-equal variant
+    /// picks a different index among duplicate keys, and the interpreter uses
+    /// std's, so codegen must match it:
+    ///   size = len; base = 0
+    ///   while size > 1 { half = size/2; mid = base + half;
+    ///       base = cmp(v[mid], x) > 0 ? base : mid; size -= half }
+    ///   cmp(v[base], x) == 0 ? Some(base) : None
+    pub(super) fn compile_binary_search(
+        &mut self,
+        data: PointerValue<'ctx>,
+        len: IntValue<'ctx>,
+        elem_ty: inkwell::types::BasicTypeEnum<'ctx>,
+        elem_name: &str,
+        needle_arg: &CallArg,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        // Evaluate the needle once, before the loop.
+        let needle_val = self.compile_expr(&needle_arg.value)?;
+
+        let fn_val = self.current_fn.unwrap();
+        let head_bb = self.context.append_basic_block(fn_val, "bs.head");
+        let body_bb = self.context.append_basic_block(fn_val, "bs.body");
+        let final_bb = self.context.append_basic_block(fn_val, "bs.final");
+        let found_bb = self.context.append_basic_block(fn_val, "bs.found");
+        let none_bb = self.context.append_basic_block(fn_val, "bs.none");
+        let merge_bb = self.context.append_basic_block(fn_val, "bs.merge");
+
+        let size_slot = self.create_entry_alloca(fn_val, "bs.size", i64_t.into());
+        let base_slot = self.create_entry_alloca(fn_val, "bs.base", i64_t.into());
+        self.builder.build_store(size_slot, len).unwrap();
+        self.builder
+            .build_store(base_slot, i64_t.const_zero())
+            .unwrap();
+        // Empty receiver → None (the loop + final load assume a valid base).
+        let is_empty = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                len,
+                i64_t.const_zero(),
+                "bs.empty",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_empty, none_bb, head_bb)
+            .unwrap();
+
+        // head: continue while size > 1.
+        self.builder.position_at_end(head_bb);
+        let size = self
+            .builder
+            .build_load(i64_t, size_slot, "bs.size.l")
+            .unwrap()
+            .into_int_value();
+        let cont = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::SGT,
+                size,
+                i64_t.const_int(1, false),
+                "bs.cont",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cont, body_bb, final_bb)
+            .unwrap();
+
+        // body: half = size/2; mid = base + half; base = cmp>0 ? base : mid;
+        //       size -= half.
+        self.builder.position_at_end(body_bb);
+        let size_b = self
+            .builder
+            .build_load(i64_t, size_slot, "bs.size.b")
+            .unwrap()
+            .into_int_value();
+        let base_b = self
+            .builder
+            .build_load(i64_t, base_slot, "bs.base.b")
+            .unwrap()
+            .into_int_value();
+        let half = self
+            .builder
+            .build_right_shift(size_b, i64_t.const_int(1, false), false, "bs.half")
+            .unwrap();
+        let mid = self.builder.build_int_add(base_b, half, "bs.mid").unwrap();
+        let elem_ptr = unsafe {
+            self.builder
+                .build_gep(elem_ty, data, &[mid], "bs.elem.p")
+                .unwrap()
+        };
+        let elem_val = self
+            .builder
+            .build_load(elem_ty, elem_ptr, "bs.elem")
+            .unwrap();
+        let sign = self.emit_binary_search_cmp(elem_val, needle_val, elem_name)?;
+        let is_gt = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::SGT,
+                sign,
+                i64_t.const_zero(),
+                "bs.is.gt",
+            )
+            .unwrap();
+        let new_base = self
+            .builder
+            .build_select(is_gt, base_b, mid, "bs.new.base")
+            .unwrap()
+            .into_int_value();
+        self.builder.build_store(base_slot, new_base).unwrap();
+        let new_size = self
+            .builder
+            .build_int_sub(size_b, half, "bs.new.size")
+            .unwrap();
+        self.builder.build_store(size_slot, new_size).unwrap();
+        self.builder.build_unconditional_branch(head_bb).unwrap();
+
+        // final: cmp(v[base], x) == 0 ? Some(base) : None.
+        self.builder.position_at_end(final_bb);
+        let base_f = self
+            .builder
+            .build_load(i64_t, base_slot, "bs.base.f")
+            .unwrap()
+            .into_int_value();
+        let elem_f_ptr = unsafe {
+            self.builder
+                .build_gep(elem_ty, data, &[base_f], "bs.elem.f.p")
+                .unwrap()
+        };
+        let elem_f = self
+            .builder
+            .build_load(elem_ty, elem_f_ptr, "bs.elem.f")
+            .unwrap();
+        let sign_f = self.emit_binary_search_cmp(elem_f, needle_val, elem_name)?;
+        let is_eq = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                sign_f,
+                i64_t.const_zero(),
+                "bs.is.eq",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_eq, found_bb, none_bb)
+            .unwrap();
+
+        // found: carry `base` into the Some phi.
+        self.builder.position_at_end(found_bb);
+        let found_base = self
+            .builder
+            .build_load(i64_t, base_slot, "bs.found.base")
+            .unwrap()
+            .into_int_value();
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        // none: not found.
+        self.builder.position_at_end(none_bb);
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        // merge: Some(found_base) from found_bb, None from none_bb.
+        self.builder.position_at_end(merge_bb);
+        let agg = self.build_option_some_via_phis(&[found_base], found_bb, none_bb, "bs.opt");
+        // A fresh-owned String needle temp (`v.binary_search(make_s())`) must be
+        // freed; a borrowed/literal needle is a no-op.
+        if needle_val.is_struct_value() {
+            self.free_fresh_owned_str_arg(&needle_arg.value, needle_val);
+        }
+        Ok(agg)
+    }
+
     pub(super) fn compile_vec_method(
         &mut self,
         var_name: &str,
@@ -4503,6 +4795,44 @@ impl<'ctx> super::Codegen<'ctx> {
                 // longer read.
                 self.free_fresh_owned_str_arg(&args[0].value, needle_val);
                 Ok(result)
+            }
+            // `Vec.binary_search(x) -> Option[i64]` — Some(index) of a matching
+            // element in the SORTED receiver, else None. Replicates Rust's
+            // `slice::binary_search_by` midpoint loop EXACTLY (mid = left +
+            // (right-left)/2, return on the first Equal mid) so the returned
+            // index matches the interpreter even when duplicate keys are present.
+            // The 3-way element compare (`emit_binary_search_cmp`) supports
+            // integer (any width, signed/unsigned) and String element types; on
+            // other element types it errors honestly (works under `karac run`).
+            "binary_search" => {
+                if args.len() != 1 {
+                    return Err("Vec.binary_search requires 1 argument".to_string());
+                }
+                let elem_name = self.vec_elem_type_name(var_name).ok_or_else(|| {
+                    "Vec.binary_search: could not resolve the element type in codegen".to_string()
+                })?;
+                // The `{ptr, len, cap}` header; binary_search reads {ptr, len}.
+                let data = {
+                    let p = self
+                        .builder
+                        .build_struct_gep(vec_ty, data_ptr, 0, "bs.data.p")
+                        .unwrap();
+                    self.builder
+                        .build_load(ptr_ty, p, "bs.data")
+                        .unwrap()
+                        .into_pointer_value()
+                };
+                let len = {
+                    let p = self
+                        .builder
+                        .build_struct_gep(vec_ty, data_ptr, 1, "bs.len.p")
+                        .unwrap();
+                    self.builder
+                        .build_load(i64_t, p, "bs.len")
+                        .unwrap()
+                        .into_int_value()
+                };
+                self.compile_binary_search(data, len, elem_ty, &elem_name, &args[0])
             }
             // `Vec.contains(x) -> bool` / `Slice.contains(x) -> bool` —
             // linear element scan. Each element is loaded and compared to

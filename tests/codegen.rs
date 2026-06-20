@@ -2970,6 +2970,44 @@ fn main() {
         }
     }
 
+    /// `Vec.binary_search(x) -> Option[i64]` codegen, mirroring the interpreter
+    /// (Rust's branchless `binary_search_by`). Covers found / not-found / empty,
+    /// unsigned (u8) and String element types, the Slice receiver, and — the
+    /// case that pins the exact algorithm — DUPLICATE keys (textbook
+    /// return-on-first-equal would pick a different index than std does).
+    #[test]
+    fn e2e_vec_binary_search_codegen() {
+        if let Some(out) = run_program(
+            "fn print_opt(o: Option[i64]) {\n\
+                 match o { Some(i) => println(i), None => println(-1i64) }\n\
+             }\n\
+             fn main() {\n\
+                 let v: Vec[i64] = vec![1, 3, 5, 7, 9, 11];\n\
+                 print_opt(v.binary_search(7));\n\
+                 print_opt(v.binary_search(1));\n\
+                 print_opt(v.binary_search(11));\n\
+                 print_opt(v.binary_search(4));\n\
+                 print_opt(v.binary_search(12));\n\
+                 let e: Vec[i64] = Vec.new();\n\
+                 print_opt(e.binary_search(5));\n\
+                 let u: Vec[u8] = vec![10u8, 50u8, 200u8, 250u8];\n\
+                 print_opt(u.binary_search(200u8));\n\
+                 print_opt(u.binary_search(99u8));\n\
+                 let s: Vec[String] = vec![\"apple\", \"banana\", \"cherry\"];\n\
+                 print_opt(s.binary_search(\"cherry\"));\n\
+                 print_opt(s.binary_search(\"fig\"));\n\
+                 let dup: Vec[i64] = vec![1, 2, 2, 2, 2, 3, 4];\n\
+                 print_opt(dup.binary_search(2));\n\
+                 let sl: Slice[i64] = v.as_slice();\n\
+                 print_opt(sl.binary_search(9));\n\
+             }",
+        ) {
+            // 7→3 1→0 11→5 miss miss empty→miss | u8 200→2 99→miss | cherry→2
+            // fig→miss | dup 2→4 (std's index) | slice 9→4
+            assert_eq!(out, "3\n0\n5\n-1\n-1\n-1\n2\n-1\n2\n-1\n4\n4\n");
+        }
+    }
+
     #[test]
     fn e2e_vec_contains_string_elem_codegen() {
         // `Vec[String].contains` routes element `==` through the struct/

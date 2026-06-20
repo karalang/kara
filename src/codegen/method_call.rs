@@ -2090,6 +2090,45 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .unwrap();
                             return Ok(val);
                         }
+                        // `Slice[T].binary_search(x) -> Option[i64]`. Same
+                        // algorithm as the Vec path; the only difference is the
+                        // 2-field `{ptr, len}` slice header (no `cap`). Shares
+                        // `compile_binary_search`, so the duplicate-key index
+                        // matches the interpreter exactly.
+                        "binary_search" => {
+                            if args.len() != 1 {
+                                return Err("Slice.binary_search requires 1 argument".to_string());
+                            }
+                            let elem_name = self.vec_elem_type_name(name).ok_or_else(|| {
+                                "Slice.binary_search: could not resolve the element type \
+                                 in codegen"
+                                    .to_string()
+                            })?;
+                            let elem_ty = *self.slice_elem_types.get(name.as_str()).unwrap();
+                            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                            let data = {
+                                let p = self
+                                    .builder
+                                    .build_struct_gep(slice_ty, slot.ptr, 0, "bs.s.data.p")
+                                    .unwrap();
+                                self.builder
+                                    .build_load(ptr_ty, p, "bs.s.data")
+                                    .unwrap()
+                                    .into_pointer_value()
+                            };
+                            let len = {
+                                let p = self
+                                    .builder
+                                    .build_struct_gep(slice_ty, slot.ptr, 1, "bs.s.len.p")
+                                    .unwrap();
+                                self.builder
+                                    .build_load(i64_t, p, "bs.s.len")
+                                    .unwrap()
+                                    .into_int_value()
+                            };
+                            return self
+                                .compile_binary_search(data, len, elem_ty, &elem_name, &args[0]);
+                        }
                         _ => {
                             return Err(format!(
                                 "codegen: no handler for slice method '{}' on '{}'",

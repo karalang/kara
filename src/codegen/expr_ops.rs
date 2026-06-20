@@ -2851,7 +2851,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// i64 (or wider) values pass through. Used by `compile_narrow_int_binop`
     /// to normalize operands that arrive at mixed LLVM widths (an i64-canonical
     /// local vs an i8 buffer element of the same Kāra type).
-    fn widen_int_to_i64(
+    pub(super) fn widen_int_to_i64(
         &self,
         val: BasicValueEnum<'ctx>,
         is_unsigned: bool,

@@ -992,6 +992,45 @@ fn main() {
         );
     }
 
+    // ── `Vec[String].binary_search(fresh_needle)` — needle-temp ownership ──
+    //
+    // `binary_search` itself allocates nothing (the `Option[i64]` result is
+    // scalar) and only READS the receiver's String elements (no free). The one
+    // ownership obligation is a FRESH-owned String needle passed directly
+    // (`v.binary_search(key.to_string())`): the search must free that temp
+    // exactly once (`free_fresh_owned_str_arg`), and must NOT free the borrowed
+    // receiver elements. Looped 1000× — LSan catches a per-iter needle leak,
+    // local ASAN a double-free of the needle or a receiver element. ≥36-byte
+    // payloads keep every String heap-allocated.
+    #[test]
+    fn asan_vec_binary_search_string_needle_no_leak_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 1000 {
+        let v: Vec[String] = vec![
+            "alpha_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bravo_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "delta_dddddddddddddddddddddddddddddddd",
+        ];
+        let key: String = "bravo_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        match v.binary_search(key.to_string()) {
+            Some(idx) => total = total + idx,
+            None => total = total + 100,
+        }
+        i = i + 1;
+    }
+    println(f"{total}");
+}
+"#,
+            // "bravo…" is element 1 every iteration → total = 1000.
+            &["1000"],
+            "vec_binary_search_string_needle_loop",
+        );
+    }
+
     // ── allocating String→String transforms — fresh-buffer ownership ──
     //
     // trim / to_lowercase / to_uppercase / replace each return a FRESH heap

@@ -4934,6 +4934,29 @@ fn test_slice_binary_search_found_and_not_found() {
 }
 
 #[test]
+fn test_vec_binary_search_duplicates_and_widths() {
+    // Pins the exact index `binary_search` returns among DUPLICATE keys (std's
+    // branchless `binary_search_by`, which codegen must match bit-for-bit), plus
+    // unsigned (u8 200 > i8 range) and String element ordering. See
+    // tests/codegen.rs::e2e_vec_binary_search_codegen for the A/B mirror.
+    let output = run("fn print_opt(o: Option[i64]) {\n\
+             match o { Some(i) => println(i), None => println(-1i64) }\n\
+         }\n\
+         fn main() {\n\
+             let dup: Vec[i64] = vec![1, 2, 2, 2, 2, 3, 4];\n\
+             print_opt(dup.binary_search(2));\n\
+             let alleq: Vec[i64] = vec![5, 5, 5, 5];\n\
+             print_opt(alleq.binary_search(5));\n\
+             let u: Vec[u8] = vec![10u8, 50u8, 200u8, 250u8];\n\
+             print_opt(u.binary_search(200u8));\n\
+             print_opt(u.binary_search(11u8));\n\
+             let s: Vec[String] = vec![\"apple\", \"banana\", \"cherry\"];\n\
+             print_opt(s.binary_search(\"banana\"));\n\
+         }");
+    assert_eq!(output, "4\n3\n2\n-1\n1\n");
+}
+
+#[test]
 fn test_slice_split_at() {
     let output = run("fn main() {
          let v = [1, 2, 3, 4];
