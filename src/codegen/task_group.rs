@@ -49,6 +49,8 @@
 
 use crate::ast::*;
 use crate::codegen::state::{CleanupAction, VarSlot};
+use crate::ownership::OwnershipMode;
+use crate::resolver::SpanKey;
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum};
 use inkwell::values::{BasicValueEnum, PointerValue};
 use inkwell::AddressSpace;
@@ -179,6 +181,50 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // 1. Collect captured free variables.
         let free_vars = self.collect_closure_free_vars(params, body);
+
+        // Per-capture move/borrow classification — the cross-task aliasing fix.
+        // A spawn closure captures its free vars; the wrapper/runtime treat a
+        // MOVED (owned) capture as transferred into the task — the blocking
+        // wrapper frees the heap buffer at task completion and the parent's
+        // scope-exit free is suppressed. But a capture the body only *borrows*
+        // (passes to a `ref` / `mut ref` param, reads a field) transfers no
+        // ownership: the parent keeps it and frees it exactly once, after the
+        // structured-concurrency join barrier — the same `Copy`-capture rule a
+        // `par {}` branch already uses for a shared `Vec`, and the borrow
+        // design.md § Structured Concurrency Lifetime Guarantees sanctions ("a
+        // parallel task may legally borrow a binding ... the task joins strictly
+        // before the cleanup fires"). Without this distinction a buffer captured
+        // by N sibling tasks is freed N times — a double-free / use-after-free
+        // (wrong reads plus an allocator "failed to lock mutex" abort).
+        //
+        // The ownership pass records the per-root capture mode in
+        // `closure_capture_paths`. A root is a borrow iff it appears there and
+        // every one of its paths is `Ref` / `MutRef` (no `Own`). Absent mode
+        // data we fall back to the historical move treatment (correct for the
+        // single-owner case, which is all the old path supported).
+        let borrow_roots: std::collections::HashSet<String> = {
+            let key = SpanKey::from_span(&closure_expr.span);
+            match self.closure_capture_paths.get(&key) {
+                Some(path_modes) => {
+                    let mut seen: std::collections::HashSet<&str> =
+                        std::collections::HashSet::new();
+                    let mut moved: std::collections::HashSet<&str> =
+                        std::collections::HashSet::new();
+                    for (path, mode) in path_modes {
+                        seen.insert(path.root.as_str());
+                        if matches!(mode, OwnershipMode::Own) {
+                            moved.insert(path.root.as_str());
+                        }
+                    }
+                    free_vars
+                        .iter()
+                        .filter(|v| seen.contains(v.as_str()) && !moved.contains(v.as_str()))
+                        .cloned()
+                        .collect()
+                }
+                None => std::collections::HashSet::new(),
+            }
+        };
 
         // 2. Build env struct type. Empty captures still need a non-zero
         //    type for malloc; insert a sentinel i8 in that case (same
@@ -342,13 +388,18 @@ impl<'ctx> super::Codegen<'ctx> {
                         } if *chan_alloca == parent_ptr => {
                             is_sender = Some(*s);
                         }
+                        // Only re-register the wrapper-side free for a MOVED
+                        // capture. A borrowed capture stays owned by the parent
+                        // (which frees it once after the join barrier), so the
+                        // task must not free it — otherwise N sibling tasks each
+                        // free the one shared buffer.
                         CleanupAction::FreeVecBuffer {
                             vec_alloca,
                             elem_ty,
                             elem_is_tensor,
                             elem_map_drop,
                             elem_agg_drop,
-                        } if *vec_alloca == parent_ptr => {
+                        } if *vec_alloca == parent_ptr && !borrow_roots.contains(var_name) => {
                             vec_caps.push((
                                 wrapper_ptr,
                                 *elem_ty,
@@ -549,7 +600,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 // same double-ownership hole for plain heap collections — the
                 // canonical `loop { let s = …; tg.spawn(|| use(s)) }`
                 // server-handler shape.
-                self.suppress_vec_buffer_drop_for_var(var_name);
+                //
+                // Only for a MOVED capture (or the coroutine spawn, which always
+                // takes the buffer by value and frees it at its own completion).
+                // A BORROWED capture on the blocking path is left owned by the
+                // parent — it frees the buffer once after the join barrier — so
+                // suppressing here would leak it, and N sibling borrows of the
+                // same buffer would each have freed it (double-free) had the
+                // wrapper re-registration above not also been skipped.
+                if use_coro_spawn || !borrow_roots.contains(var_name) {
+                    self.suppress_vec_buffer_drop_for_var(var_name);
+                }
             }
         }
 

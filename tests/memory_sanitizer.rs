@@ -11334,6 +11334,90 @@ fn main() {
         );
     }
 
+    // ── Cross-task shared (aliased) heap capture — read-only ───────
+    //
+    // The companion to the move cases above: here ONE heap buffer is captured
+    // by MULTIPLE sibling tasks that only *read* it (the closures pass it to a
+    // `ref` param), and the parent keeps owning it. This is the canonical
+    // parallel-stencil fan-out — split a shared input grid into bands, one task
+    // per band — and the shape the Slipstream LBM dogfood (examples/slipstream)
+    // drove out. Before the capture-mode fix in `codegen/task_group.rs`, the
+    // spawn lowering treated EVERY capture as a move: each task re-registered a
+    // free of the shared buffer and the parent's free was suppressed, so N
+    // tasks freed the one buffer N times — a double-free / use-after-free that
+    // produced wrong sums and an allocator "failed to lock mutex" abort. The
+    // fix: a borrowed capture stays owned by the parent (freed once after the
+    // join barrier, the same `Copy`-capture rule a `par {}` branch uses), so
+    // the buffer is freed exactly once. This asserts BOTH value-correctness
+    // (the band sums total 4950 = sum 0..99 — a miscompiled shared read returns
+    // garbage) AND ASAN/LSan cleanliness (no double-free, no leak). The Vec is
+    // 100×i64 = 800 bytes, well past any allocator-freelist threshold, so a
+    // leak regression surfaces on LSan.
+    #[test]
+    fn asan_taskgroup_spawn_shared_vec_read_across_tasks_single_free() {
+        assert_clean_asan_run(
+            r#"
+fn band_sum(data: ref Vec[i64], lo: i64, hi: i64) -> i64 {
+    let mut acc = 0;
+    let mut i = lo;
+    while i < hi { acc = acc + data[i]; i = i + 1; }
+    acc
+}
+fn main() with panics {
+    let mut data: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < 100 { data.push(i); i = i + 1; }
+    let mut pool: TaskGroup = TaskGroup.new();
+    let mut handles: Vec[TaskHandle[i64]] = Vec.new();
+    let mut k = 0;
+    while k < 4 {
+        let lo = k * 25;
+        let hi = lo + 25;
+        handles.push(pool.spawn(|| band_sum(data, lo, hi)));
+        k = k + 1;
+    }
+    let mut total = 0;
+    for h in handles { total = total + h.join(); }
+    if total == 4950 { println("total 4950"); } else { println("WRONG"); }
+}
+"#,
+            &["total 4950"],
+            "taskgroup_spawn_shared_vec_read_across_tasks",
+        );
+    }
+
+    // String variant of the shared read-only capture: three tasks each borrow
+    // the same captured `String` (a `ref` param compare). Same double-free class
+    // as the Vec case (the `{data,len,cap}` header is shared), and the same
+    // single-free expectation. Payload is >= 40 bytes so an LSan leak regression
+    // clears the reachable-short-String freelist threshold
+    // (`lsan-reachability-short-string-leaks`).
+    #[test]
+    fn asan_taskgroup_spawn_shared_string_read_across_tasks_single_free() {
+        assert_clean_asan_run(
+            r#"
+fn match_addr(addr: ref String) -> i64 {
+    if addr == "relay-upstream-host-127.0.0.1-port-9000-ok" { 1 } else { 0 }
+}
+fn main() with panics {
+    let addr: String = "relay-upstream-host-127.0.0.1-port-9000-ok";
+    let mut pool: TaskGroup = TaskGroup.new();
+    let mut handles: Vec[TaskHandle[i64]] = Vec.new();
+    let mut k = 0;
+    while k < 3 {
+        handles.push(pool.spawn(|| match_addr(addr)));
+        k = k + 1;
+    }
+    let mut hits = 0;
+    for h in handles { hits = hits + h.join(); }
+    if hits == 3 { println("hits 3"); } else { println("WRONG"); }
+}
+"#,
+            &["hits 3"],
+            "taskgroup_spawn_shared_string_read_across_tasks",
+        );
+    }
+
     // ── Relay per-request parse + atomic soak ─────────────────────
     //
     // High-volume leak stress for the exact allocation churn a Relay
