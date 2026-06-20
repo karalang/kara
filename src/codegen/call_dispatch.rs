@@ -2905,11 +2905,30 @@ impl<'ctx> super::Codegen<'ctx> {
         val: BasicValueEnum<'ctx>,
         num_words: usize,
     ) -> Result<Vec<inkwell::values::IntValue<'ctx>>, String> {
-        // Primitive fast path.
-        if num_words <= 1 {
+        // Primitive fast path — ONLY when `val` genuinely fits one word.
+        //
+        // #49 (phase-12 self-hosting): a struct whose enum-payload AREA was
+        // under-sized to 1 word still arrives here with a multi-word aggregate
+        // `val`. The canonical case is a struct whose only field is an
+        // `Option[T]`/`Result[T,E]` (`struct Block { tail: Option[Expr] }` used
+        // as `Expr.Blk(Block)`): `payload_word_count_for_type_expr` routes that
+        // Option field through the enum-in-enum carve-out and returns 1, so the
+        // variant's `field_word_offsets` hands us `num_words == 1` for a value
+        // whose real LLVM width is 4. Taking the scalar fast path then calls
+        // `coerce_to_i64` on the 4-word struct, which recurses into field 0 (a
+        // multi-field sub-struct) and collapses to `0` — the payload is silently
+        // dropped, and since the unpack/drop sites independently compute
+        // `llvm_type_word_count(T) > area` and treat it as BOXED, they `inttoptr`
+        // that `0` → null deref → SIGSEGV. Guarding the fast path on the value's
+        // real width lets a wide-but-undersized payload fall through to the
+        // decompose-and-box path below (`out.len() > num_words` → box), which is
+        // exactly what unpack (`reconstruct_payload_value`) and drop expect, so
+        // all three sites stay coherent. A genuine scalar (width ≤ 1) keeps the
+        // fast path.
+        if num_words <= 1 && Self::llvm_type_word_count(val.get_type()) <= 1 {
             return Ok(vec![self.coerce_to_i64(val)?]);
         }
-        let mut out: Vec<inkwell::values::IntValue<'ctx>> = Vec::with_capacity(num_words);
+        let mut out: Vec<inkwell::values::IntValue<'ctx>> = Vec::with_capacity(num_words.max(1));
         match val {
             BasicValueEnum::StructValue(sv) => {
                 let n_fields = sv.get_type().count_fields();

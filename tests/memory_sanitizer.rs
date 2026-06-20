@@ -2289,6 +2289,50 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_single_field_struct_option_payload_sizing_no_bad_access() {
+        // #49 (phase-12 self-hosting, found while minimizing #48): a struct
+        // whose ONLY field is an `Option[T]`, used as a shared-enum payload
+        // (`struct Block { tail: Option[Expr] }` in `Expr.Blk(Block)`). The
+        // variant's payload AREA is undersized to 1 word (the `Option` field
+        // hits the enum-in-enum carve-out in `payload_word_count_for_type_expr`),
+        // and `coerce_to_payload_words`'s scalar fast path (`num_words <= 1`)
+        // then collapsed the real 4-word `Block` value to `0` via `coerce_to_i64`
+        // — dropping the payload. Unpack/drop independently treat it as BOXED
+        // (`llvm_type_word_count(T) > area`) and `inttoptr` the `0`. With a heap
+        // String inner this manifests as a wild-pointer read/free ASAN flags
+        // (≥36-byte payload so it lands on instrumented heap); the value-correct
+        // form would SIGSEGV. The fix guards the fast path on the value's real
+        // width so the payload boxes (the proven-correct multi-field path) and
+        // pack/unpack/drop stay coherent. Mirrors the codegen E2E
+        // `test_e2e_single_field_struct_option_payload_sizing`.
+        assert_clean_asan_run(
+            r#"
+shared enum Expr { Str(String), Blk(Block), Error }
+struct Block { tail: Option[Expr] }
+fn render_block(b: Block) -> String {
+    let Block { tail } = b;
+    match tail { Some(e) => render_expr(e), None => "no-tail".to_string() }
+}
+fn render_expr(e: Expr) -> String {
+    match e {
+        Str(s) => s,
+        Blk(b) => render_block(b),
+        Error => "error".to_string(),
+    }
+}
+fn main() {
+    let mut payload = String.new();
+    payload.push_str("single-field-struct-option-payload-sizing-payload");
+    let blk = Block { tail: Some(Expr.Str(payload)) };
+    println(render_expr(Expr.Blk(blk)));
+}
+"#,
+            &["single-field-struct-option-payload-sizing-payload"],
+            "single_field_struct_option_payload_sizing_no_bad_access",
+        );
+    }
+
     // ── Vec: owned heap buffer, scope-exit free ───────────────────
     // Exercises `emit_scope_vec_cleanup` — the Vec's data pointer must be
     // freed when `v` goes out of scope at the end of `main`.

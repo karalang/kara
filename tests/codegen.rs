@@ -2517,6 +2517,50 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_single_field_struct_option_payload_sizing() {
+        // #49 (phase-12 self-hosting, found while minimizing #48): a struct
+        // whose ONLY field is an `Option[T]` (`struct Block { tail: Option[Expr] }`),
+        // used as a shared-enum variant payload (`Expr.Blk(Block)`), SIGSEGV'd.
+        // `payload_word_count_for_type_expr` routes the `Option` field through
+        // the enum-in-enum carve-out (returns 1, not Option's real 4-word LLVM
+        // width), so the variant's payload AREA is 1 word — which is fine on its
+        // own (multi-field `Block`s with the same undercount still heap-box,
+        // because their real width still exceeds the area). The actual bug was
+        // in `coerce_to_payload_words`: with `num_words == 1` it took the scalar
+        // fast path and called `coerce_to_i64` on the 4-word `Block` value, which
+        // recursed into field 0 (the multi-field Option sub-struct) and collapsed
+        // to `0` — silently dropping the payload. The unpack/drop sites
+        // independently compute `llvm_type_word_count(T) > area` and treat the
+        // payload as BOXED, so they `inttoptr` that `0` → null deref → SIGSEGV.
+        // The fix guards the fast path on the value's real width: a wide-but-
+        // undersized payload falls through to the decompose-and-box path, which
+        // is exactly what unpack and drop expect — all three sites coherent. The
+        // multi-field `Block` (`Vec[Stmt]` + `Option[Expr]` + `Span`) already
+        // boxed and is the regression peer (`test_e2e_owned_struct_option_shared_field_captured_from_builder`).
+        if let Some(out) = run_program(
+            "shared enum Expr { Num(i64), Blk(Block), Error }\n\
+             struct Block { tail: Option[Expr] }\n\
+             fn render_block(b: Block) -> String {\n\
+                 let Block { tail } = b;\n\
+                 match tail { Some(e) => render_expr(e), None => \"no-tail\".to_string() }\n\
+             }\n\
+             fn render_expr(e: Expr) -> String {\n\
+                 match e {\n\
+                     Num(n) => n.to_string(),\n\
+                     Blk(b) => render_block(b),\n\
+                     Error => \"error\".to_string(),\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let blk = Block { tail: Some(Expr.Num(7)) };\n\
+                 println(render_expr(Expr.Blk(blk)));\n\
+             }",
+        ) {
+            assert_eq!(out, "7\n");
+        }
+    }
+
+    #[test]
     fn test_e2e_match_variant_name_shared_across_enums_resolves_to_scrutinee() {
         // #39 (phase-12 self-hosting, parser stage): a bare variant name that
         // exists in MORE THAN ONE enum (`Float` in both a value `Tok` and a
