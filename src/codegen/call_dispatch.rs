@@ -2113,6 +2113,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 // elision of the dead store/free; JIT runs pre-O2 IR and
                 // exposes it.
                 self.suppress_map_cleanup_for_tail_identifier(name);
+                // Channel-end tail return: when the tail is a bare
+                // Identifier bound to a `Sender`/`Receiver`, the channel
+                // end is moved out as the return value — but `bind_pattern`
+                // queued a `DropChannelEnd` (refcount decrement) for it at
+                // the let/destructure site. Without this, that drop fires at
+                // this function's scope exit, decrementing the channel's
+                // `total` before the caller's binding receives it: a
+                // double-drop that frees the channel early under the
+                // caller's nose (the host-async `pointer_moves()`/`wheel()`/
+                // `keydown()` producers return `rx` this way, so the channel
+                // was being freed while the host listener still held a sender
+                // and kept calling `channel_send` on the freed pointer — the
+                // recv-out-slot corruption + spurious-close race). The caller
+                // fires the drop when its own binding goes out of scope.
+                // Mirrors the Vec/String/Map/user-Drop suppressions above.
+                self.suppress_channel_drop_for_var(name);
             }
             // (Option[shared T] tail FIELD returns — `fn f() ->
             // Option[T] { x.next }` — are compensated during body

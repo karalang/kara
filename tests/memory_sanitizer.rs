@@ -9446,6 +9446,73 @@ fn main() {
     }
 
     #[test]
+    fn asan_channel_end_returned_from_fn_single_free() {
+        // Regression for the channel-end MOVE-OUT-ON-RETURN double-drop
+        // (recv-out-slot-read-race root cause): a factory `fn mk() ->
+        // Receiver[T] { let (tx, rx) = Channel.new(); ...; rx }` returns the
+        // `Receiver` as its tail expression — moving it into the caller's
+        // binding. `bind_pattern` queues a `DropChannelEnd` for `rx` at the
+        // destructure site; without move-out suppression at the return, that
+        // drop fires at `mk`'s scope exit (decrementing the channel's `total`)
+        // AND again when the caller's `r` goes out of scope — a double-drop
+        // that frees the `KaracChannel` early. Here `mk` keeps a cloned sender
+        // alive across the return (mirroring the host-async `pointer_moves()`
+        // shape, where the host owns a clone), so the over-drop frees the
+        // channel while a live sender reference still points at it: ASAN flags
+        // the heap-use-after-free / double-free. With the fix, `mk` drops only
+        // its local `tx`, the caller's `r` drops `rx` once, and `s` (the
+        // surviving clone) drops last → exactly one free. Covers the tail-
+        // expression return; a sibling `return rx;` form is exercised below.
+        assert_clean_asan_run(
+            r#"
+fn mk() -> Receiver[i64] {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();
+    let keep = tx.clone();
+    keep.send(7);
+    tx.send(9);
+    rx
+}
+fn main() {
+    let r = mk();
+    println(r.recv());
+    println(r.recv());
+}
+"#,
+            &["7", "9"],
+            "channel_end_returned_from_fn_single_free",
+        );
+    }
+
+    #[test]
+    fn asan_channel_end_explicit_return_single_free() {
+        // Sibling of `asan_channel_end_returned_from_fn_single_free` for the
+        // explicit `return rx;` shape (vs the tail-expression form). Same
+        // move-out-on-return double-drop class; the suppression lives in the
+        // `ExprKind::Return` arm. `cond` is always true so `mk` always returns
+        // `rx` (the moved-out end) — a single free with the fix, an ASAN
+        // double-free without it.
+        assert_clean_asan_run(
+            r#"
+fn mk(cond: bool) -> Sender[i64] {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();
+    tx.send(11);
+    println(rx.recv());
+    if cond {
+        return tx;
+    }
+    tx
+}
+fn main() {
+    let s = mk(true);
+    s.send(22);
+}
+"#,
+            &["11"],
+            "channel_end_explicit_return_single_free",
+        );
+    }
+
+    #[test]
     fn asan_discarded_taskgroup_spawn_loop_eager_reap_no_double_free() {
         // B-2026-06-17-2 — the canonical server shape `loop { tg.spawn(|| …) }`
         // discards each child's `TaskHandle`. Codegen now marks the discarded

@@ -633,6 +633,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let ExprKind::Identifier(name) = &e.kind {
                         self.suppress_user_drop_for_var(name);
                         self.suppress_map_cleanup_for_tail_identifier(name);
+                        // Channel-end `return rx;`: the moved-out `Sender`/
+                        // `Receiver` is now the caller's; suppress the
+                        // binding's scope-exit `DropChannelEnd` so its
+                        // refcount decrement doesn't double-drop (sibling of
+                        // the tail-expression case in
+                        // `suppress_cleanup_for_tail_return`).
+                        self.suppress_channel_drop_for_var(name);
                     }
                     // Move-aware suppression for a DIRECT `return f"..."`: the
                     // returned String buffer IS the f-string accumulator, now
