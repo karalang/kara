@@ -449,6 +449,40 @@ pub fn build_program_tree_with(
         ));
     }
 
+    // #46: distinct `.kara` files each restart their byte offsets at 0, so
+    // two modules can mint spans with identical `(offset, length)` SpanKeys.
+    // The global `method_callee_types` side-table (and every other
+    // SpanKey-keyed table) is keyed on those offsets, so a collision lets
+    // one module's entry clobber another's — e.g. `lexer.kara`'s
+    // `"i8".to_string()` and `parser.kara`'s `self.parse_expr_bp(..)` both
+    // landing at local offset 23077 → codegen reads the wrong callee and
+    // miscompiles the method call. Rebase each non-synthetic module's span
+    // offsets into a disjoint global range so every SpanKey is unique;
+    // `line`/`column` stay file-local (diagnostics render those, not the raw
+    // offset), and f-string interpolation sub-spans — already rebased to
+    // file-local coordinates at parse time — shift uniformly with their
+    // module. Synthetic modules (prelude / gated stdlib) are skipped by every
+    // span-keyed pass via `is_synthetic`, so they keep base 0. A single-file
+    // build has one user module → base 0 → a no-op. Done after target-item
+    // stripping so only the live item set is walked.
+    let mut span_base: usize = 0;
+    for m in &mut modules {
+        if m.is_synthetic {
+            continue;
+        }
+        let mut max_end = span_base;
+        for item in &mut m.items {
+            crate::span_visitor::visit_item_spans_mut(item, &mut |s| {
+                s.offset += span_base;
+                max_end = max_end.max(s.offset + s.length);
+            });
+        }
+        // Next module starts past this one's highest used offset (+1 so
+        // adjacent ranges never touch). The gap is irrelevant — post-parse,
+        // offsets are opaque keys; only global uniqueness matters.
+        span_base = max_end + 1;
+    }
+
     let mut graph = ModuleGraph {
         edges: Vec::new(),
         by_path,

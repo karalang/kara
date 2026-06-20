@@ -1713,3 +1713,53 @@ fn xmod_imported_struct_field_type_resolves_transitively() {
         "imported struct field type must resolve transitively, not to prelude: {errs:?}"
     );
 }
+
+/// Regression for #46 (cross-module `SpanKey` collision). Distinct `.kara`
+/// files each restart their byte offsets at 0, so two byte-identical modules
+/// mint identical `(offset, length)` span keys. The global
+/// `method_callee_types` side-table (and every other `SpanKey`-keyed table)
+/// is keyed on those offsets, so a collision lets one module's method-call
+/// callee clobber the other's — miscompiling the call (the self-host bug:
+/// `lexer.kara`'s `"i8".to_string()` and `parser.kara`'s `self.parse_expr_bp`
+/// both at local offset 23077). `build_program_tree` rebases each
+/// non-synthetic module's span offsets into a disjoint global range; this
+/// asserts the two modules share no span key (pre-fix every key collides).
+#[test]
+fn build_tree_rebases_module_spans_globally_unique() {
+    let d = ScratchDir::new("span-rebase-46");
+    // Byte-identical bodies (a method call whose span keys `method_callee_types`)
+    // → every local span offset collides before the rebase.
+    let body = "pub fn f() -> String {\n    \"ab\".to_string()\n}\n";
+    d.write("src/main.kara", "fn main() {}\n");
+    d.write("src/a.kara", body);
+    d.write("src/b.kara", body);
+
+    let built = build_program_tree(&walked(d.root())).expect("build tree");
+
+    let keys_for = |seg: &str| -> std::collections::HashSet<(usize, usize)> {
+        let want = vec![seg.to_string()];
+        let m = built
+            .tree
+            .modules
+            .iter()
+            .find(|m| !m.is_synthetic && m.path == want)
+            .unwrap_or_else(|| panic!("module `{seg}` present"));
+        let mut set = std::collections::HashSet::new();
+        for it in &m.items {
+            karac::span_visitor::visit_item_spans(it, &mut |s| {
+                set.insert((s.offset, s.length));
+            });
+        }
+        set
+    };
+    let a = keys_for("a");
+    let b = keys_for("b");
+    assert!(!a.is_empty() && !b.is_empty(), "both modules carry spans");
+    let overlap: Vec<_> = a.intersection(&b).copied().collect();
+    assert!(
+        overlap.is_empty(),
+        "modules a and b share {} span key(s) after rebase (pre-fix: all collide): {:?}",
+        overlap.len(),
+        overlap,
+    );
+}

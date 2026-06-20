@@ -949,6 +949,300 @@ fn visit_pattern_spans_mut(p: &mut Pattern, visit: &mut impl FnMut(&mut Span)) {
     }
 }
 
+// ── Mutable item-level span walk (cross-module offset rebase) ──
+//
+// `visit_item_spans_mut` is the mutable twin of `visit_item_spans`
+// above, extended to FULL coverage (the immutable walker stops at a
+// type's outer span; this one recurses every type sub-span too). It
+// exists so `module::build_program_tree_with` can rebase every module's
+// file-local span offsets into a globally-unique range — distinct
+// `.kara` files each restart their byte offsets at 0, so two modules
+// can mint spans with identical `(offset, length)` SpanKeys, and the
+// global `method_callee_types` side-table (and every other SpanKey-keyed
+// table) then clobbers one module's entry with the other's
+// (B-2026-06-19 #46). Adding a per-module base offset makes every
+// SpanKey globally unique; `line`/`column` stay file-local (untouched),
+// which is what diagnostics render.
+//
+// Completeness matters here in a way it does not for the immutable
+// walker: a span this walk MISSES stays at its file-local offset and can
+// still collide. Mirror `visit_item_spans` arm-for-arm and recurse types
+// fully; reuse the existing `visit_*_spans_mut` expression/statement/
+// pattern walkers (kept in lockstep with the AST by the f-string rebase).
+pub fn visit_item_spans_mut(item: &mut Item, visit: &mut impl FnMut(&mut Span)) {
+    match item {
+        Item::Function(f) => visit_function_mut(f, visit),
+        Item::StructDef(s) => {
+            visit(&mut s.span);
+            for field in &mut s.fields {
+                visit(&mut field.span);
+                visit_type_spans_mut(&mut field.ty, visit);
+            }
+            for inv in s.invariants.iter_mut().chain(s.impl_invariants.iter_mut()) {
+                visit_expr_spans_mut(inv, visit);
+            }
+        }
+        Item::UnionDef(u) => {
+            visit(&mut u.span);
+            for field in &mut u.fields {
+                visit(&mut field.span);
+                visit_type_spans_mut(&mut field.ty, visit);
+            }
+        }
+        Item::EnumDef(e) => {
+            visit(&mut e.span);
+            for v in &mut e.variants {
+                visit(&mut v.span);
+                match &mut v.kind {
+                    crate::ast::VariantKind::Unit => {}
+                    crate::ast::VariantKind::Tuple(tys) => {
+                        for t in tys {
+                            visit_type_spans_mut(t, visit);
+                        }
+                    }
+                    crate::ast::VariantKind::Struct(fields) => {
+                        for f in fields {
+                            visit(&mut f.span);
+                            visit_type_spans_mut(&mut f.ty, visit);
+                        }
+                    }
+                }
+            }
+        }
+        Item::TraitDef(t) => {
+            visit(&mut t.span);
+            for ti in &mut t.items {
+                match ti {
+                    crate::ast::TraitItem::Method(m) => {
+                        visit(&mut m.span);
+                        for p in &mut m.params {
+                            visit_param_mut(p, visit);
+                        }
+                        if let Some(rt) = &mut m.return_type {
+                            visit_type_spans_mut(rt, visit);
+                        }
+                        for req in &mut m.requires {
+                            visit_expr_spans_mut(req, visit);
+                        }
+                        for ens in &mut m.ensures {
+                            visit_ensures_mut(ens, visit);
+                        }
+                        if let Some(body) = &mut m.body {
+                            visit_block_spans_mut(body, visit);
+                        }
+                    }
+                    crate::ast::TraitItem::AssocType(a) => {
+                        visit(&mut a.span);
+                    }
+                }
+            }
+        }
+        Item::TraitAlias(a) => visit(&mut a.span),
+        Item::MarkerTrait(m) => visit(&mut m.span),
+        Item::ImplBlock(b) => visit_impl_block_mut(b, visit),
+        Item::EffectResource(r) => visit(&mut r.span),
+        Item::EffectGroup(g) => visit(&mut g.span),
+        Item::EffectVerbDecl(v) => visit(&mut v.span),
+        Item::LayoutDef(l) => visit(&mut l.span),
+        Item::UseDecl(u) => visit(&mut u.span),
+        Item::Import(i) => visit(&mut i.span),
+        Item::ConstDecl(c) => {
+            visit(&mut c.span);
+            visit_type_spans_mut(&mut c.ty, visit);
+            visit_expr_spans_mut(&mut c.value, visit);
+        }
+        Item::ModuleBinding(b) => {
+            visit(&mut b.span);
+            if let Some(ty) = &mut b.ty {
+                visit_type_spans_mut(ty, visit);
+            }
+            visit_expr_spans_mut(&mut b.value, visit);
+        }
+        Item::TestCase(t) => {
+            visit(&mut t.span);
+            visit(&mut t.name_span);
+            visit_block_spans_mut(&mut t.body, visit);
+        }
+        Item::AliasDecl(a) => visit(&mut a.span),
+        Item::IndependentDecl(i) => visit(&mut i.span),
+        Item::ExternFunction(e) => {
+            visit(&mut e.span);
+            for p in &mut e.params {
+                visit_param_mut(p, visit);
+            }
+            if let Some(rt) = &mut e.return_type {
+                visit_type_spans_mut(rt, visit);
+            }
+        }
+        Item::ExternBlock(b) => {
+            visit(&mut b.span);
+            for it in &mut b.items {
+                match it {
+                    ExternItem::Function(e) => {
+                        visit(&mut e.span);
+                        for p in &mut e.params {
+                            visit_param_mut(p, visit);
+                        }
+                        if let Some(rt) = &mut e.return_type {
+                            visit_type_spans_mut(rt, visit);
+                        }
+                    }
+                    ExternItem::OpaqueType(o) => {
+                        visit(&mut o.span);
+                    }
+                }
+            }
+        }
+        Item::TypeAlias(a) => {
+            visit(&mut a.span);
+            visit_type_spans_mut(&mut a.ty, visit);
+            if let Some(r) = &mut a.refinement {
+                visit_expr_spans_mut(r, visit);
+            }
+        }
+        Item::DistinctType(d) => {
+            visit(&mut d.span);
+            visit_type_spans_mut(&mut d.base_type, visit);
+            if let Some(r) = &mut d.refinement {
+                visit_expr_spans_mut(r, visit);
+            }
+        }
+    }
+}
+
+fn visit_function_mut(f: &mut Function, visit: &mut impl FnMut(&mut Span)) {
+    visit(&mut f.span);
+    for p in &mut f.params {
+        visit_param_mut(p, visit);
+    }
+    if let Some(rt) = &mut f.return_type {
+        visit_type_spans_mut(rt, visit);
+    }
+    for req in &mut f.requires {
+        visit_expr_spans_mut(req, visit);
+    }
+    for ens in &mut f.ensures {
+        visit_ensures_mut(ens, visit);
+    }
+    visit_block_spans_mut(&mut f.body, visit);
+}
+
+fn visit_impl_block_mut(b: &mut ImplBlock, visit: &mut impl FnMut(&mut Span)) {
+    visit(&mut b.span);
+    visit_type_spans_mut(&mut b.target_type, visit);
+    for ii in &mut b.items {
+        match ii {
+            ImplItem::Method(m) => visit_function_mut(m, visit),
+            ImplItem::AssocType(a) => {
+                visit(&mut a.span);
+                visit_type_spans_mut(&mut a.ty, visit);
+            }
+        }
+    }
+}
+
+fn visit_param_mut(p: &mut Param, visit: &mut impl FnMut(&mut Span)) {
+    visit(&mut p.span);
+    visit_pattern_spans_mut(&mut p.pattern, visit);
+    visit_type_spans_mut(&mut p.ty, visit);
+    if let Some(d) = &mut p.default_value {
+        visit_expr_spans_mut(d, visit);
+    }
+}
+
+fn visit_ensures_mut(e: &mut EnsuresClause, visit: &mut impl FnMut(&mut Span)) {
+    visit(&mut e.span);
+    visit_expr_spans_mut(&mut e.body, visit);
+}
+
+/// Recurse every `Span` reachable from a type expression. Unlike the
+/// immutable `visit_type` (outer span only), this descends every nested
+/// type, the embedded const exprs (`Array` size, `GenericArg::Const`,
+/// shape dims), and path/generic-arg spans — so a rebase leaves no
+/// file-local offset behind to collide.
+fn visit_type_spans_mut(t: &mut TypeExpr, visit: &mut impl FnMut(&mut Span)) {
+    visit(&mut t.span);
+    match &mut t.kind {
+        crate::ast::TypeKind::Path(p) => visit_path_expr_mut(p, visit),
+        crate::ast::TypeKind::Tuple(tys) => {
+            for inner in tys {
+                visit_type_spans_mut(inner, visit);
+            }
+        }
+        crate::ast::TypeKind::Array { element, size } => {
+            visit_type_spans_mut(element, visit);
+            visit_expr_spans_mut(size, visit);
+        }
+        crate::ast::TypeKind::Pointer { inner, .. }
+        | crate::ast::TypeKind::Ref(inner)
+        | crate::ast::TypeKind::MutRef(inner)
+        | crate::ast::TypeKind::MutSlice(inner)
+        | crate::ast::TypeKind::Weak(inner) => visit_type_spans_mut(inner, visit),
+        crate::ast::TypeKind::FnType {
+            params,
+            return_type,
+            ..
+        } => {
+            for p in params {
+                visit_type_spans_mut(p, visit);
+            }
+            if let Some(rt) = return_type {
+                visit_type_spans_mut(rt, visit);
+            }
+        }
+        crate::ast::TypeKind::ImplTrait {
+            trait_path,
+            args,
+            span,
+            ..
+        } => {
+            visit(span);
+            visit_path_expr_mut(trait_path, visit);
+            for a in args {
+                visit_generic_arg_mut(a, visit);
+            }
+        }
+        crate::ast::TypeKind::Dyn {
+            trait_path,
+            args,
+            span,
+        } => {
+            visit(span);
+            visit_path_expr_mut(trait_path, visit);
+            for a in args {
+                visit_generic_arg_mut(a, visit);
+            }
+        }
+        crate::ast::TypeKind::Unit | crate::ast::TypeKind::Error => {}
+    }
+}
+
+fn visit_path_expr_mut(p: &mut crate::ast::PathExpr, visit: &mut impl FnMut(&mut Span)) {
+    visit(&mut p.span);
+    if let Some(args) = &mut p.generic_args {
+        for a in args {
+            visit_generic_arg_mut(a, visit);
+        }
+    }
+}
+
+fn visit_generic_arg_mut(a: &mut crate::ast::GenericArg, visit: &mut impl FnMut(&mut Span)) {
+    match a {
+        crate::ast::GenericArg::Type(t) => visit_type_spans_mut(t, visit),
+        crate::ast::GenericArg::Const(e) => visit_expr_spans_mut(e, visit),
+        crate::ast::GenericArg::Shape(s) => {
+            visit(&mut s.span);
+            for d in &mut s.dims {
+                match d {
+                    crate::ast::ShapeDim::Const(e) => visit_expr_spans_mut(e, visit),
+                    crate::ast::ShapeDim::Dynamic { span } => visit(span),
+                    crate::ast::ShapeDim::Splice { span, .. } => visit(span),
+                }
+            }
+        }
+    }
+}
+
 // ── ModuleSpanTable ────────────────────────────────────────────
 
 /// Lookup key for cross-module span → file resolution. Pulls all four
