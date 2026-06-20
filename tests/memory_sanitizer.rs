@@ -5753,6 +5753,130 @@ fn main() {
         );
     }
 
+    // ── Set INCOMING-element NO-ADOPT ownership (B-2026-06-20-12) ──
+    // Completes the map/set key-ownership class: B-2026-06-20-9 (c7b72bd4)
+    // fixed the INCOMING key for Map's no-adopt paths but never applied it to
+    // Set (`collections.rs` had zero `free_fresh_owned_str_arg` calls), and
+    // B-2026-06-20-10 (a1b59c5e) fixed only the STORED element on a present-key
+    // remove. The remaining gap is the INCOMING element argument: a fresh-owned
+    // temp (`s.remove("x".to_string())`) or a moved binding on a no-adopt path
+    // leaked one element buffer per call. Set lowers to `Map[T, ()]`, so these
+    // arms call `karac_map_remove_old` / `karac_map_contains` / `karac_map_entry`
+    // (insert). ≥36-byte elements per the LSan-reachability rule (LSan misses
+    // short, still-reachable String/Vec buffers).
+
+    #[test]
+    fn asan_set_remove_present_fresh_temp_element_no_leak() {
+        // `Set[String].remove(present)` with a fresh-temp element. TWO distinct
+        // buffers must be freed exactly once: the bucket's STORED element (via
+        // the runtime `drop_key` flag, B-2026-06-20-10) and the INCOMING fresh
+        // temp (via `free_fresh_owned_str_arg`, this fix). Pre-fix the incoming
+        // buffer leaked under the Linux LSan gate.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut s: Set[String] = Set.new();
+    s.insert("set-remove-element-aaaaaaaaaaaaaaaaaaaa".to_string());
+    if s.remove("set-remove-element-aaaaaaaaaaaaaaaaaaaa".to_string()) {
+        println("removed");
+    }
+    println(s.len());
+}
+"#,
+            &["removed", "0"],
+            "set_remove_present_fresh_temp_element_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_set_contains_present_fresh_temp_element_no_leak() {
+        // `Set[String].contains(present)` with a fresh-temp element. The lookup
+        // hashes/compares but never retains the incoming element, so the fresh
+        // temp must be freed after the call. Pre-fix it leaked one buffer per
+        // call (LSan-only).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut s: Set[String] = Set.new();
+    s.insert("set-contains-element-aaaaaaaaaaaaaaaaaa".to_string());
+    if s.contains("set-contains-element-aaaaaaaaaaaaaaaaaa".to_string()) {
+        println("present");
+    }
+    println(s.len());
+}
+"#,
+            &["present", "1"],
+            "set_contains_present_fresh_temp_element_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_set_insert_moved_binding_duplicate_element_no_leak() {
+        // Moved local binding element into `Set[String].insert` on the EXISTS
+        // (duplicate) path. `karac_map_insert_old` keeps the bucket's existing
+        // element and does NOT adopt the incoming one, while the insert arm
+        // suppressed the source binding's scope-exit free — so the incoming
+        // buffer is orphaned and now freed on the exists branch.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut s: Set[String] = Set.new();
+    let mut a1 = String.new();
+    a1.push_str("set-dup-element-aaaaaaaaaaaaaaaaaaaaaaaa");
+    s.insert(a1);
+    let mut a2 = String.new();
+    a2.push_str("set-dup-element-aaaaaaaaaaaaaaaaaaaaaaaa");
+    s.insert(a2);
+    println(s.len());
+}
+"#,
+            &["1"],
+            "set_insert_moved_binding_duplicate_element_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_set_remove_absent_fresh_temp_vec_element_no_leak() {
+        // `Set[Vec[i64]]` sibling on the lookup-only path: confirms the incoming
+        // free's vec-struct gate (`free_fresh_owned_str_arg` → `cap > 0` free)
+        // also fires for an actual `Vec` element, not just `String`. `make_vec()`
+        // returns a fresh-owned temp; `remove` looks it up (ABSENT here — note
+        // `Set[Vec]` does not dedupe equal-contents vecs, so an explicit miss
+        // isolates the INCOMING-element residual without depending on content
+        // equality) and never retains it, so the returned Vec buffer must be
+        // freed after the call. ≥6 i64s ⇒ a ≥48-byte data buffer (LSan misses
+        // sub-36-byte reachable buffers). Pre-fix it leaked one buffer per call.
+        assert_clean_asan_run(
+            r#"
+fn make_vec() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(701i64);
+    v.push(702i64);
+    v.push(703i64);
+    v.push(704i64);
+    v.push(705i64);
+    v.push(706i64);
+    v
+}
+
+fn main() {
+    let mut s: Set[Vec[i64]] = Set.new();
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1i64);
+    s.insert(a);
+    if s.remove(make_vec()) {
+        println("removed");
+    } else {
+        println("absent");
+    }
+    println(s.len());
+}
+"#,
+            &["absent", "1"],
+            "set_remove_absent_fresh_temp_vec_element_no_leak",
+        );
+    }
+
     // ── Vec[Map] ownership: a Map moved into a Vec transfers ownership
     //    to the Vec (Cluster 1) ──
     // The headline bug: a `Map` pushed into a `Vec` aliased a handle still

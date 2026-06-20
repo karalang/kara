@@ -134,6 +134,31 @@ impl<'ctx> super::Codegen<'ctx> {
                     .try_as_basic_value()
                     .unwrap_basic()
                     .into_int_value();
+                // Incoming-element NO-ADOPT free (B-2026-06-20-12, mirrors the
+                // `Map.insert` exists-path fix B-2026-06-20-9): on the EXISTS
+                // (duplicate) path `karac_map_insert_old` keeps the bucket's
+                // existing element and does NOT adopt the incoming one, while
+                // the consume-site dance above already either suppressed a moved
+                // source's scope-exit free or made a private defensive copy of an
+                // owned-param element — so the incoming `{ptr,len,cap}` buffer is
+                // orphaned and leaks (LSan-only, one buffer per duplicate insert).
+                // Free it on the EXISTS branch only: on the vacant branch the
+                // bucket adopted the buffer, so a free there would double-free.
+                // The vec-struct compile-time gate restricts this to heap
+                // (`Set[String]` / `Set[Vec[T]]`) elements; the `cap > 0` runtime
+                // guard inside `free_str_vec_buffer_if_heap` no-ops on a borrowed
+                // view / rodata literal.
+                if self.llvm_ty_is_vec_struct(elem_ty) {
+                    let exists_bb = self.context.append_basic_block(fn_val, "set.ins.exists");
+                    let cont_bb = self.context.append_basic_block(fn_val, "set.ins.cont");
+                    self.builder
+                        .build_conditional_branch(existed, exists_bb, cont_bb)
+                        .unwrap();
+                    self.builder.position_at_end(exists_bb);
+                    self.free_str_vec_buffer_if_heap(elem_val);
+                    self.builder.build_unconditional_branch(cont_bb).unwrap();
+                    self.builder.position_at_end(cont_bb);
+                }
                 // Set.insert returns true when the value was newly inserted
                 // (matches Rust HashSet::insert), so flip `existed`.
                 let one = bool_t.const_int(1, false);
@@ -161,6 +186,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap()
                     .try_as_basic_value()
                     .unwrap_basic();
+                // Lookup-only: `karac_map_contains` hashes/compares but never
+                // stores the incoming element, so free a fresh-owned-temp element
+                // (B-2026-06-20-12, mirrors `Map.contains_key` B-2026-06-20-9).
+                // No-ops on a moved binding (its own scope-exit free covers it) /
+                // non-Vec-String / borrowed view.
+                self.free_fresh_owned_str_arg(&args[0].value, elem_val);
                 Ok(found)
             }
             "remove" => {
@@ -197,6 +228,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap()
                     .try_as_basic_value()
                     .unwrap_basic();
+                // Lookup-only for the INCOMING element: `karac_map_remove_old`
+                // tombstones the bucket and (with `drop_key`) frees the bucket's
+                // STORED element, but never retains the incoming argument — so
+                // free a fresh-owned-temp element (B-2026-06-20-12, mirrors
+                // `Map.remove` B-2026-06-20-9). A distinct buffer from the stored
+                // one freed by `drop_key`; no-ops on a moved binding / non-Vec-
+                // String / borrowed view.
+                self.free_fresh_owned_str_arg(&args[0].value, elem_val);
                 Ok(existed)
             }
             "clear" => {
