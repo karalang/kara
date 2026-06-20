@@ -21,7 +21,9 @@
        onto internal pixels. The initial 640x420 is overridden on the fly when
        the guest's resize() reflows the framebuffer (see put_pixels below). */
     width: 640px; height: 420px; background: #000; cursor: grab;
-    /* Wheel-to-zoom only — don't let the scroll also pan the page. */
+    /* Wheel-to-zoom AND finger-pan: `touch-action: none` hands the touch drag to
+       the guest's touchmove pan instead of letting the browser scroll/zoom the
+       page underneath the canvas (and stops the wheel from paging too). */
     touch-action: none; overscroll-behavior: contain;
   }
   #overlay {
@@ -40,9 +42,10 @@
   <p class="sub">A Mandelbrot explorer in one Kāra source — the per-frame
     compute fans out across every CPU core, in a browser tab, with no
     <code>async</code> and no threading code. <b>Scroll to zoom toward the
-    cursor; drag to pan; double-click to dive IN, right-click to back OUT;
-    arrow keys / <code>+</code> <code>-</code> / <code>R</code> from the
-    keyboard.</b> Click away and rendering pauses; click back and it resumes —
+    cursor; drag — with a mouse or a finger — to pan; double-click to dive IN,
+    right-click to back OUT; arrow keys / <code>+</code> <code>-</code> /
+    <code>R</code> from the keyboard.</b> Click away and rendering pauses; click
+    back and it resumes —
     an unfocused tab idles the worker pool instead of burning it. Resize the
     window and the framebuffer reflows to fill it.</p>
   <div id="stage">
@@ -51,7 +54,7 @@
   </div>
   <p id="note">Where is the threading code? There isn't any — the compiler
     found it. The render loop is a plain blocking
-    <code>loop { frames.recv(); /* drain wheel/pointer/keys/clicks/focus/resize */ if !paused { render_frame(); } }</code>;
+    <code>loop { frames.recv(); /* drain wheel/pointer/touch/keys/clicks/focus/resize */ if !paused { render_frame(); } }</code>;
     each frame's rows are split across a Web Worker pool by
     <code>TaskGroup.spawn</code>, and live scroll/pointer input arrives as
     channels drained with <code>try_recv</code> — no <code>await</code>.</p>
@@ -112,7 +115,10 @@
 
   // `resizeTarget: window` feeds the guest's `resize()` stream — each window
   // resize reflows the framebuffer to the new innerWidth/innerHeight.
-  run({ put_pixels }, { resizeTarget: window }).catch((e) => {
+  // `touchTarget: canvas` points the touchstart/touchmove/touchend listeners at
+  // the canvas so a finger drag pans (element-relative coords match the 1:1
+  // pixel mapping); the pointer/wheel/click listeners already default to it.
+  run({ put_pixels }, { resizeTarget: window, touchTarget: canvas }).catch((e) => {
     // main() loops forever, so run() never resolves on success; a rejection
     // is a real failure (no SharedArrayBuffer / not cross-origin isolated).
     overlay.textContent = "error: " + (e && e.message ? e.message : e);

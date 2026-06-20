@@ -18176,6 +18176,148 @@ run({ put_pixels }, { dblclickTarget: target, contextmenuTarget: target }).catch
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// Fathom wires the newest `std.web.events` family — the touch gesture trio
+/// `touchstart()` / `touchmove()` / `touchend()` — into the live render loop as
+/// single-finger touch-PAN: `touchstart` records the finger's anchor and the
+/// view centre at grab, `touchmove` drags the view so the grabbed complex point
+/// tracks the finger (the SAME keep-the-point-fixed transform the pointer drag
+/// uses), `touchend` ends the gesture. This is the *demo-level* proof the touch
+/// producers drive a real app end to end — the mobile-input counterpart of the
+/// `dblclick`/`contextmenu` zoom test above, leaning on the same property.
+///
+/// The signal is clean because Fathom's render is **deterministic per view**:
+/// with no input, every frame is byte-identical (no animation phase). So a
+/// frame whose checksum MOVES off the no-input baseline can only mean a touch
+/// event crossed host→wasm, was `recv`d, and shifted (cx, cy). Crucially the
+/// view only moves in the `touchmove` handler (touchstart/touchend just toggle
+/// gesture state), so a moved checksum proves the *pan* fired. The harness:
+///   1. captures a baseline frame before dispatching anything (and asserts it
+///      has real structure, so rendering works at all),
+///   2. opens one gesture (`touchstart` at a fixed anchor) and then ramps a run
+///      of `touchmove`s farther out each tick — the anchor-based pan tracks the
+///      farthest move that lands, so the view marches monotonically off
+///      baseline (robust to a coalesced/dropped intermediate move), then ends
+///      the gesture with a `touchend` (exercising its `changedTouches[0]` glue
+///      path).
+///
+/// `FATHOM_TOUCH_OK` prints only if the panned frame moved off baseline; the
+/// 20 s bail catches "the pan never crossed". One dropped move can't mask it —
+/// the ramped drag's farthest landed sample dominates.
+///
+/// Doubles as a bit-rot guard on the example source (built from the committed
+/// file, not an inline copy).
+#[test]
+fn fathom_example_touch_pan_e2e() {
+    let tmp = wasm_test_dir("fathomtouch");
+    let path = tmp.join("mandelbrot.kara");
+    std::fs::write(&path, include_str!("../examples/fathom/mandelbrot.kara")).unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--features=wasm-threads",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: fathom_example_touch_pan_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "fathom build failed: {stderr}");
+    assert!(tmp.join("mandelbrot.threads.wasm").exists());
+
+    let harness = tmp.join("harness.mjs");
+    std::fs::write(
+        &harness,
+        r#"import { run } from "./mandelbrot.js";
+// Anchor (finger-down) point. CSS px == internal px at 1:1; a plain node
+// EventTarget has no getBoundingClientRect, so the glue reports raw clientX/Y
+// and the pan delta is exactly the dispatched delta.
+const AX = 160, AY = 120;
+// Synthetic touch events: a class extending Event carrying touches /
+// changedTouches arrays of { clientX, clientY } (the shape the touch glue
+// reads). touchstart/touchmove ride touches[0]; on a release the live touches
+// list is empty so touchend rides changedTouches[0].
+class TStart extends Event { constructor(x, y) { super("touchstart"); this.touches = [{ clientX: x, clientY: y }]; this.changedTouches = this.touches; } }
+class TMove extends Event { constructor(x, y) { super("touchmove", { cancelable: true }); this.touches = [{ clientX: x, clientY: y }]; this.changedTouches = this.touches; } }
+class TEnd extends Event { constructor(x, y) { super("touchend"); this.touches = []; this.changedTouches = [{ clientX: x, clientY: y }]; } }
+const target = new EventTarget();
+const bail = setTimeout(() => { console.error("FAIL: touch pan never crossed"); process.exit(2); }, 20000);
+
+// Cheap order-sensitive 32-bit checksum over the RGBA bytes. Two genuinely
+// different views collide with astronomically small probability.
+function sum(view) {
+  let s = 0;
+  for (let i = 0; i < view.length; i += 4) { s = (s * 31 + view[i] + view[i + 1] * 3 + view[i + 2] * 7) >>> 0; }
+  return s;
+}
+
+let frame = 0, baseline = 0, iv = null, started = false, step = 0;
+function put_pixels(ptr, len, w, h, ctx) {
+  frame++;
+  const view = new Uint8Array(ctx.memory.buffer, Number(ptr), Number(len));
+  if (frame === 2) {
+    // Untouched view — it must have real structure (the set's classic shape),
+    // proving rendering works before any input.
+    let mn = 255, mx = 0;
+    for (let i = 0; i < view.length; i += 4) { const r = view[i]; if (r < mn) mn = r; if (r > mx) mx = r; }
+    if (mx - mn < 20) { console.error("FAIL: baseline framebuffer too uniform (mn=" + mn + " mx=" + mx + ")"); process.exit(3); }
+    baseline = sum(view);
+    // Only NOW open the gesture, so the baseline is genuinely input-free. One
+    // touchstart (it stays pending until drained, so it can't be missed), then
+    // a touchmove farther out each tick — the loop's per-frame coalescing
+    // try_recv tracks the latest, and the anchor-based pan marches the view off
+    // baseline.
+    iv = setInterval(() => {
+      if (!started) { target.dispatchEvent(new TStart(AX, AY)); started = true; }
+      step++;
+      target.dispatchEvent(new TMove(AX + 6 * step, AY + 4 * step));
+    }, 8);
+  }
+  if (frame === 16) {
+    const panned = sum(view);
+    // Close the gesture (exercise the touchend changedTouches[0] glue path) and
+    // stop feeding input.
+    target.dispatchEvent(new TEnd(AX + 6 * step, AY + 4 * step));
+    if (iv !== null) clearInterval(iv);
+    clearTimeout(bail);
+    if (panned === baseline) { console.error("FAIL: touch pan did not move the view (sum=" + panned + ")"); process.exit(4); }
+    console.log("FATHOM base=" + baseline + " panned=" + panned);
+    console.log("FATHOM_TOUCH_OK");
+    process.exit(0);
+  }
+}
+run({ put_pixels }, { touchTarget: target }).catch((e) => {
+  console.error("run failed: " + (e && e.message ? e.message : e));
+  process.exit(1);
+});
+"#,
+    )
+    .unwrap();
+    let node = std::process::Command::new("node")
+        .arg(&harness)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: fathom_example_touch_pan_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let so = String::from_utf8_lossy(&node_out.stdout);
+    let se = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success() && so.contains("FATHOM_TOUCH_OK"),
+        "fathom touch-pan harness failed under node: stdout={so} stderr={se}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// Fathom also wires the UNIT-payload `std.web.events` pair `focus()` / `blur()`
 /// to GATE the render: while the tab is unfocused the loop still spins and
 /// drains every input channel, but skips the parallel `render_frame` — so a

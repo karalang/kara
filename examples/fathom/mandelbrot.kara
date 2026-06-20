@@ -22,6 +22,16 @@
 //     it (the native context menu is suppressed for us). Each arrives as a
 //     typed channel the loop drains with a non-blocking `try_recv` each frame —
 //     live input, still no `await`, still no callback coloring.
+//   * `touchstart()` / `touchmove()` / `touchend()` (std.web.events) add
+//     single-finger touch-pan — the mobile analogue of the pointer drag.
+//     `touchstart` records the finger's anchor and the view centre at grab,
+//     `touchmove` pans so the grabbed point stays under the finger (the SAME
+//     keep-the-point-fixed transform the pointer drag uses), `touchend` ends
+//     the gesture. `touchmove`'s host listener suppresses the page scroll and
+//     the canvas sets `touch-action: none`, so a drag pans the fractal instead
+//     of scrolling the page; touch and the mouse drag coexist. Single primary
+//     touch at v1 — no pinch-zoom (a multi-touch payload the fixed-size channel
+//     spine does not carry yet).
 //   * `focus()` / `blur()` (std.web.events) gate the work: while the tab is
 //     unfocused (`blur`) the loop still spins and drains input, but SKIPS the
 //     parallel `render_frame` — a backgrounded tab stops driving the worker
@@ -38,7 +48,7 @@
 // Serve:  see README.md (needs COOP/COEP headers for SharedArrayBuffer).
 
 import std.web.time.{animation_frames};
-import std.web.events.{pointer_moves, PointerEvent, wheel, WheelEvent, keydown, KeyEvent, dblclick, contextmenu, ClickEvent, focus, blur, resize, ResizeEvent};
+import std.web.events.{pointer_moves, PointerEvent, wheel, WheelEvent, keydown, KeyEvent, dblclick, contextmenu, ClickEvent, focus, blur, resize, ResizeEvent, touchstart, touchmove, touchend, TouchEvent};
 
 // The canvas this program paints. A user-defined host capability — like
 // `Dom` in examples/ssr_counter — reached through the `put_pixels` host fn.
@@ -226,11 +236,30 @@ fn main() {
     let foc = focus();
     let unfoc = blur();
     let resizes = resize();
+    let touch_starts = touchstart();
+    let touch_moves = touchmove();
+    let touch_ends = touchend();
 
     // Last pointer position (CSS px == internal px at 1:1), for the pan delta.
     let mut last_px = 0.0;
     let mut last_py = 0.0;
     let mut have_last = false;
+
+    // Single-finger touch-pan gesture state (the touchscreen analogue of the
+    // pointer drag, kept on its OWN variables so a finger and a mouse never
+    // fight over the view). On `touchstart` we record the finger's anchor
+    // (element-relative CSS px) AND the view centre at grab; `touchmove` then
+    // sets (cx, cy) to that grab centre minus the finger's TOTAL delta since the
+    // anchor, mapped through `scale` — the same keep-the-grabbed-point-fixed map
+    // the pointer drag uses, but expressed against the gesture's grab rather
+    // than the previous sample, so a coalesced/dropped move never accumulates
+    // drift. `touching` gates the move so a stray move outside a gesture is
+    // ignored.
+    let mut touching = false;
+    let mut touch_anchor_x = 0.0;
+    let mut touch_anchor_y = 0.0;
+    let mut touch_grab_cx = 0.0;
+    let mut touch_grab_cy = 0.0;
 
     loop {
         frames.recv();
@@ -295,6 +324,43 @@ fn main() {
                 last_py = p.y();
                 have_last = true;
             }
+            None => {}
+        }
+
+        // Touch drag → pan: the single-finger analogue of the pointer drag
+        // above, for a touchscreen. `touchstart` opens the gesture, recording
+        // the finger's anchor and the view centre at grab. `touchmove` pans —
+        // (cx, cy) is the grab centre minus the finger's total delta since the
+        // anchor, mapped through `scale`, so the complex point grabbed under the
+        // finger tracks it exactly (identical keep-the-point-fixed math to the
+        // pointer pan, anchored at the gesture's grab). `touchend` closes the
+        // gesture; the next `touchstart` begins a fresh grab. Three streams, one
+        // gesture: `touching` gates the move so a move outside a gesture is
+        // ignored, and the state is independent of the pointer drag's, so a
+        // mouse and a finger coexist without fighting. The host coalesces each
+        // stream, so the loop sees at most one of each per frame, drained with
+        // the same non-blocking `try_recv` as every other input.
+        match touch_starts.try_recv() {
+            Some(t) => {
+                touching = true;
+                touch_anchor_x = t.x();
+                touch_anchor_y = t.y();
+                touch_grab_cx = cx;
+                touch_grab_cy = cy;
+            }
+            None => {}
+        }
+        match touch_moves.try_recv() {
+            Some(t) => {
+                if touching {
+                    cx = touch_grab_cx - (t.x() - touch_anchor_x) * scale;
+                    cy = touch_grab_cy - (t.y() - touch_anchor_y) * scale;
+                }
+            }
+            None => {}
+        }
+        match touch_ends.try_recv() {
+            Some(_) => { touching = false; }
             None => {}
         }
 
