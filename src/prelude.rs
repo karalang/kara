@@ -270,6 +270,11 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "BoundedChannel",
     "OnFull",
     "ChannelError",
+    // `std.protobuf` (phase-8 P1) — proto3 wire format. `ProtoBuf` is the
+    // encoder namespace, `ProtoReader` the decode cursor. See
+    // `runtime/stdlib/protobuf.kara`.
+    "ProtoBuf",
+    "ProtoReader",
     // Phase 6 line 186 slice 1 — `TaskGroup` / `TaskHandle[T]` from
     // `runtime/stdlib/task_group.kara`. `TaskGroup` is the
     // scope-local fan-out container per design.md § Explicit
@@ -774,6 +779,13 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     (
         "bounded_channel.kara",
         include_str!("../runtime/stdlib/bounded_channel.kara"),
+    ),
+    // `std.protobuf` proto3 wire format (phase-8 P1) — slice 1: the pure-Kāra
+    // wire codec (`ProtoBuf` encoders + `ProtoReader` cursor). Schema-driven
+    // codegen (`#[derive(Message)]`, `.proto` comptime parsing) layers on top.
+    (
+        "protobuf.kara",
+        include_str!("../runtime/stdlib/protobuf.kara"),
     ),
     // `BufReader[R]` buffered reader wrapper (phase-8 Standard I/O
     // follow-up). Wraps a `File` reader (concretely, at v1) with an

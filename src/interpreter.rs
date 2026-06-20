@@ -663,21 +663,33 @@ impl<'a> Interpreter<'a> {
         type_name: &str,
         method: &str,
     ) -> Option<crate::ast::SelfParam> {
-        self.program.items.iter().find_map(|item| match item {
-            Item::ImplBlock(imp) => {
-                let target = match &imp.target_type.kind {
-                    TypeKind::Path(p) => p.segments.last().map(String::as_str),
-                    _ => None,
-                };
-                if target != Some(type_name) {
-                    return None;
+        fn find_in(items: &[Item], type_name: &str, method: &str) -> Option<crate::ast::SelfParam> {
+            items.iter().find_map(|item| match item {
+                Item::ImplBlock(imp) => {
+                    let target = match &imp.target_type.kind {
+                        TypeKind::Path(p) => p.segments.last().map(String::as_str),
+                        _ => None,
+                    };
+                    if target != Some(type_name) {
+                        return None;
+                    }
+                    imp.items.iter().find_map(|it| match it {
+                        ImplItem::Method(m) if m.name == method => m.self_param.clone(),
+                        _ => None,
+                    })
                 }
-                imp.items.iter().find_map(|it| match it {
-                    ImplItem::Method(m) if m.name == method => m.self_param.clone(),
-                    _ => None,
-                })
-            }
-            _ => None,
+                _ => None,
+            })
+        }
+        // The user program first, then the baked stdlib. Without the stdlib
+        // fallback a `mut ref self` method on a baked-stdlib struct (e.g.
+        // `ProtoReader.read_varint`) would not get its mutated receiver
+        // written back to the call-site binding — the stdlib impls live in
+        // `STDLIB_PROGRAMS`, not `self.program.items`.
+        find_in(&self.program.items, type_name, method).or_else(|| {
+            crate::prelude::STDLIB_PROGRAMS
+                .iter()
+                .find_map(|(_, p)| find_in(&p.items, type_name, method))
         })
     }
 

@@ -1,0 +1,259 @@
+//! Protocol Buffers wire format (proto3) — slice 1: the low-level wire codec.
+//!
+//! This is the foundation of `std.protobuf` (phase-8 floor: "protobuf — wire
+//! format + comptime codegen"). It implements the proto3 *wire format* — the
+//! byte-level encoding every message serializes down to — as ordinary Kāra
+//! code (no compiler intrinsic): base-128 varints, ZigZag signed mapping,
+//! field tags, length-delimited fields, and the fixed-width forms.
+//!
+//! Later slices layer the schema-driven codegen on top: `#[derive(Message)]`
+//! emits `encode` / `decode` / `merge` methods that call these primitives, and
+//! `.proto` schema parsing at comptime emits the message types themselves.
+//!
+//! ## Surface
+//!
+//! - `ProtoBuf` — a namespace of pure encoders, each returning a `Vec[u8]`:
+//!   `encode_varint` / `encode_tag` / `encode_len_delim` / `encode_string` /
+//!   `encode_fixed64` / `encode_fixed32`, plus the `zigzag_encode` /
+//!   `zigzag_decode` signed mapping and the `wire_*` wire-type constants.
+//! - `ProtoReader` — a cursor over a `Vec[u8]` that decodes one field at a
+//!   time, advancing as it goes: `read_varint` / `read_tag` / `read_zigzag` /
+//!   `read_len_delim` / `read_string` / `read_fixed64` / `read_fixed32`, with
+//!   `at_end` / `remaining` for framing.
+//!
+//! Encoding is pure; decoding allocates (`Vec[u8]` / `String`) — matching the
+//! spec's "pure on encode, allocates(Heap) on decode".
+
+// ── wire types (proto3) ─────────────────────────────────────────
+//
+// The 3-bit wire-type tag a field's key carries (`(field_number << 3) |
+// wire_type`). Exposed as a namespace of constants so generated code and
+// hand-written framing can name them instead of magic numbers.
+
+struct ProtoBuf {}
+
+impl ProtoBuf {
+    // Varint (int32/64, uint32/64, sint32/64, bool, enum).
+    fn wire_varint() -> i64 {
+        0
+    }
+    // 64-bit fixed (fixed64, sfixed64, double).
+    fn wire_fixed64() -> i64 {
+        1
+    }
+    // Length-delimited (string, bytes, embedded messages, packed repeated).
+    fn wire_len_delim() -> i64 {
+        2
+    }
+    // 32-bit fixed (fixed32, sfixed32, float).
+    fn wire_fixed32() -> i64 {
+        5
+    }
+
+    // ── varint ──────────────────────────────────────────────────
+
+    // Encode `value` as a base-128 varint (7 data bits per byte, high bit =
+    // continuation). The canonical proto encoding for every varint field.
+    fn encode_varint(value: u64) -> Vec[u8] {
+        let mut v = value;
+        let mut out = Vec.new();
+        loop {
+            if v < 128u64 {
+                out.push(v as u8);
+                break;
+            }
+            out.push(((v & 127u64) | 128u64) as u8);
+            v = v >> 7u64;
+        }
+        out
+    }
+
+    // ── zigzag (signed) ─────────────────────────────────────────
+
+    // Map a signed `i64` to the `u64` ZigZag form (`sint32`/`sint64`), so
+    // small-magnitude negatives encode as small varints: 0→0, -1→1, 1→2, ….
+    fn zigzag_encode(value: i64) -> u64 {
+        ((value << 1) ^ (value >> 63)) as u64
+    }
+
+    // Invert [`zigzag_encode`].
+    fn zigzag_decode(value: u64) -> i64 {
+        ((value >> 1u64) as i64) ^ (0 - ((value & 1u64) as i64))
+    }
+
+    // ── field tag ───────────────────────────────────────────────
+
+    // Encode a field key: `(field_number << 3) | wire_type`, as a varint.
+    fn encode_tag(field_number: i64, wire_type: i64) -> Vec[u8] {
+        ProtoBuf.encode_varint(((field_number << 3) | wire_type) as u64)
+    }
+
+    // ── length-delimited ────────────────────────────────────────
+
+    // Encode a length-delimited field: a varint byte count followed by the
+    // raw bytes. The framing for `string` / `bytes` / embedded messages.
+    fn encode_len_delim(data: Vec[u8]) -> Vec[u8] {
+        let mut out = ProtoBuf.encode_varint(data.len() as u64);
+        out.extend_from_slice(data);
+        out
+    }
+
+    // Encode a UTF-8 string as a length-delimited field.
+    fn encode_string(s: String) -> Vec[u8] {
+        let b = s.bytes();
+        let mut out = ProtoBuf.encode_varint(b.len() as u64);
+        out.extend_from_slice(b);
+        out
+    }
+
+    // ── fixed width (little-endian) ─────────────────────────────
+
+    // Encode a `u64` as 8 little-endian bytes (`fixed64` / `sfixed64`,
+    // and the bit-pattern of a `double`).
+    fn encode_fixed64(value: u64) -> Vec[u8] {
+        let mut v = value;
+        let mut out = Vec.new();
+        let mut i = 0;
+        while i < 8 {
+            out.push((v & 255u64) as u8);
+            v = v >> 8u64;
+            i = i + 1;
+        }
+        out
+    }
+
+    // Encode a `u32` as 4 little-endian bytes (`fixed32` / `sfixed32`,
+    // and the bit-pattern of a `float`).
+    fn encode_fixed32(value: u32) -> Vec[u8] {
+        let mut v = value as u64;
+        let mut out = Vec.new();
+        let mut i = 0;
+        while i < 4 {
+            out.push((v & 255u64) as u8);
+            v = v >> 8u64;
+            i = i + 1;
+        }
+        out
+    }
+}
+
+// ── reader ──────────────────────────────────────────────────────
+
+// A forward cursor over an encoded message. Each `read_*` consumes one wire
+// element and advances `pos`. Decoders drive it field-by-field: read a tag,
+// switch on its wire type, read the payload, repeat until `at_end`.
+struct ProtoReader {
+    bytes: Vec[u8],
+    pos: i64,
+}
+
+impl ProtoReader {
+    // Wrap an encoded byte buffer at offset 0.
+    fn new(bytes: Vec[u8]) -> ProtoReader {
+        ProtoReader { bytes: bytes, pos: 0 }
+    }
+
+    // Bytes left to read.
+    fn remaining(ref self) -> i64 {
+        self.bytes.len() - self.pos
+    }
+
+    // True once the whole buffer has been consumed.
+    fn at_end(ref self) -> bool {
+        self.pos >= self.bytes.len()
+    }
+
+    // Read a base-128 varint, advancing past its continuation bytes.
+    fn read_varint(mut ref self) -> u64 {
+        let mut result = 0u64;
+        let mut shift = 0u64;
+        loop {
+            let b = self.bytes[self.pos];
+            self.pos = self.pos + 1;
+            result = result | (((b & 127u8) as u64) << shift);
+            if (b & 128u8) == 0u8 {
+                break;
+            }
+            shift = shift + 7u64;
+        }
+        result
+    }
+
+    // Read a ZigZag-encoded signed varint.
+    fn read_zigzag(mut ref self) -> i64 {
+        ProtoBuf.zigzag_decode(self.read_varint())
+    }
+
+    // Read a field key, returning `(field_number, wire_type)`.
+    fn read_tag(mut ref self) -> (i64, i64) {
+        let key = self.read_varint() as i64;
+        (key >> 3, key & 7)
+    }
+
+    // Read a length-delimited field's raw bytes.
+    fn read_len_delim(mut ref self) -> Vec[u8] {
+        let len = self.read_varint() as i64;
+        let mut out = Vec.new();
+        let mut i = 0;
+        while i < len {
+            out.push(self.bytes[self.pos + i]);
+            i = i + 1;
+        }
+        self.pos = self.pos + len;
+        out
+    }
+
+    // Read a length-delimited UTF-8 string. Invalid UTF-8 decodes to `""`.
+    fn read_string(mut ref self) -> String {
+        let raw = self.read_len_delim();
+        match String.from_utf8(raw) {
+            Ok(s) => s,
+            Err(_) => "",
+        }
+    }
+
+    // Read 8 little-endian bytes as a `u64`.
+    fn read_fixed64(mut ref self) -> u64 {
+        let mut result = 0u64;
+        let mut shift = 0u64;
+        let mut i = 0;
+        while i < 8 {
+            result = result | ((self.bytes[self.pos + i] as u64) << shift);
+            shift = shift + 8u64;
+            i = i + 1;
+        }
+        self.pos = self.pos + 8;
+        result
+    }
+
+    // Read 4 little-endian bytes as a `u32`.
+    fn read_fixed32(mut ref self) -> u32 {
+        let mut result = 0u64;
+        let mut shift = 0u64;
+        let mut i = 0;
+        while i < 4 {
+            result = result | ((self.bytes[self.pos + i] as u64) << shift);
+            shift = shift + 8u64;
+            i = i + 1;
+        }
+        self.pos = self.pos + 4;
+        result as u32
+    }
+
+    // Skip a field whose `wire_type` is known (from a just-read tag) — for
+    // forward-compatible decoders that ignore unknown fields. Varint and
+    // fixed widths advance by their size; length-delimited reads its prefix.
+    // Returns the post-skip read position.
+    fn skip_field(mut ref self, wire_type: i64) -> i64 {
+        if wire_type == 0 {
+            let _v = self.read_varint();
+        } else if wire_type == 1 {
+            self.pos = self.pos + 8;
+        } else if wire_type == 2 {
+            let _b = self.read_len_delim();
+        } else if wire_type == 5 {
+            self.pos = self.pos + 4;
+        }
+        self.pos
+    }
+}
