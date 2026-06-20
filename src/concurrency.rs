@@ -1767,7 +1767,7 @@ impl<'a> ConcurrencyChecker<'a> {
 
         // Group 1: reads/writes — same category
         // Group 2: sends/receives — same category
-        // Group 3: allocates — self-conflict
+        // Group 3: allocates — informational, NOT a conflict (A3; design.md)
         // Group 4: panics — self-conflict
         // Group 5: blocks — execution verb, NOT a conflict (A1; design.md:5907)
         // Group 6: suspends — self-conflict (pending A2)
@@ -1788,8 +1788,21 @@ impl<'a> ConcurrencyChecker<'a> {
             // sends + receives = safe (same resource, different direction)
             (Sends, Receives) | (Receives, Sends) => false,
 
-            // Self-conflicts for singleton verbs
-            (Allocates, Allocates) => true,
+            // allocates + allocates = NO conflict. `allocates` is an
+            // *informational* resource verb (design.md: only reads/writes +
+            // sends/receives drive conflict) — the heap allocator is
+            // thread-safe, so two independent allocating statements may run
+            // concurrently. The diagnostics-side `effectchecker.rs::two_effects_conflict`
+            // already returns `false` here ("allocates, panics are
+            // informational"); this aligns the auto-par conflict model with it.
+            // Unlike `suspends`/network, `allocates` is NOT a coroutine
+            // boundary (`effects_mark_coroutine_boundary` excludes it), so the
+            // by-value double-drop hazard does not apply — the same reasoning
+            // that made the A1 `blocks` flip safe. Lifted in A3 (2026-06-19);
+            // see phase-5-diagnostics.md.
+            (Allocates, Allocates) => false,
+            // panics + panics = self-conflict (pending A3's panics half —
+            // needs the par-runtime branch-panic propagation verified first).
             (Panics, Panics) => true,
             // blocks + blocks = NO conflict. Execution verbs answer PLACEMENT,
             // not conflict (design.md:5907/:5920) — two independent blocking

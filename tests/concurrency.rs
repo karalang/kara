@@ -310,6 +310,78 @@ fn test_independent_blocking_calls_parallelize() {
     assert!(main_fc.parallel_groups[0].statement_indices.contains(&1));
 }
 
+// ── Independent allocating calls parallelize (A3) ──────────────
+
+#[test]
+fn test_independent_allocating_calls_parallelize() {
+    // Two independent statements that each only `allocates(Heap)` (each calls a
+    // Vec-building helper). Before A3 the auto-par conflict model wrongly
+    // treated allocates+allocates on the same `Heap` resource as a conflict and
+    // serialized them; A3 lifts that — `allocates` is an *informational* verb
+    // (design.md: only reads/writes + sends/receives drive conflict), the heap
+    // allocator is thread-safe, and the diagnostics-side `effects_conflict`
+    // already treats it as non-conflicting. The two calls write disjoint
+    // bindings (`a`, `b`) so there is no dataflow dependency either.
+    let analysis = analyze(
+        r#"
+        fn make() -> Vec[i64] {
+            let mut v: Vec[i64] = Vec.new();
+            v.push(1);
+            return v;
+        }
+        fn main() {
+            let a = make();
+            let b = make();
+        }
+        "#,
+    );
+
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(main_fc.total_statements, 2);
+    assert_eq!(
+        main_fc.parallel_groups.len(),
+        1,
+        "two independent allocating calls should parallelize (A3), got {:?}",
+        main_fc.parallel_groups
+    );
+    let g = &main_fc.parallel_groups[0];
+    assert!(g.statement_indices.contains(&0) && g.statement_indices.contains(&1));
+}
+
+#[test]
+fn test_allocate_then_read_dependency_still_serializes() {
+    // A3 only lifts the *effect-level* allocates+allocates conflict; it must NOT
+    // weaken dataflow serialization. Here the second statement reads `a`, the
+    // value the first produced (a RAW dependency), so the pair must stay serial
+    // even though both also `allocates(Heap)`. Pins that the flip is scoped to
+    // the effect graph and the data-dependency graph is untouched.
+    let analysis = analyze(
+        r#"
+        fn make() -> Vec[i64] {
+            let mut v: Vec[i64] = Vec.new();
+            v.push(1);
+            return v;
+        }
+        fn consume(xs: Vec[i64]) -> Vec[i64] {
+            let mut v: Vec[i64] = Vec.new();
+            v.push(xs.len());
+            return v;
+        }
+        fn main() {
+            let a = make();
+            let b = consume(a);
+        }
+        "#,
+    );
+
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc.parallel_groups.is_empty(),
+        "a RAW data dependency must serialize the pair despite the allocates flip, got {:?}",
+        main_fc.parallel_groups
+    );
+}
+
 // ── Timer suspends parallelizes; other suspends stays serial (A2b) ─
 
 #[test]

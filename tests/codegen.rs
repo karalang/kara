@@ -11153,6 +11153,34 @@ fn main() {
     }
 
     #[test]
+    fn e2e_auto_par_allocating_calls_run_correctly() {
+        // A3: two independent statements that each only `allocates(Heap)` (each
+        // builds a fresh Vec) AUTO-parallelize — the conflict model no longer
+        // treats allocates+allocates as a conflict (heap is thread-safe;
+        // `allocates` is informational per design.md). They run on the par
+        // fan-out path; pin that each branch's heap allocation is independent
+        // and the combined result is correct (no cross-branch corruption).
+        if let Some(out) = run_program(
+            "fn make(n: i64) -> Vec[i64] {\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 v.push(n);\n\
+                 v.push(n + 1);\n\
+                 return v;\n\
+             }\n\
+             fn main() {\n\
+                 let a = make(10);\n\
+                 let b = make(20);\n\
+                 println(a[0] + a[1] + b[0] + b[1]);\n\
+             }",
+        ) {
+            assert_eq!(
+                out, "62\n",
+                "auto-par allocating calls must each build their Vec correctly; got:\n{out}"
+            );
+        }
+    }
+
+    #[test]
     fn e2e_auto_par_channel_consumer_terminates() {
         // Regression (A2b): the producer/consumer channel program must TERMINATE
         // under default auto-par. `consume(rx)` carries a `suspends` effect (from
