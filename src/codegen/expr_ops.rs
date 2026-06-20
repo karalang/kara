@@ -3064,6 +3064,63 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(value)
     }
 
+    /// Non-trapping sibling of [`Self::emit_checked_int_arith`]: emit the
+    /// `llvm.{s,u}{op}.with.overflow.iN` intrinsic and return the
+    /// `(wrapped_result, did_overflow)` pair WITHOUT branching to a trap.
+    /// Drives the `{checked,saturating,overflowing}_{add,sub,mul}` method
+    /// lowering (C2, B-2026-06-19-10), which consume the overflow flag to build
+    /// `Option` / saturate / pack a tuple rather than panic. `lv`/`rv` must
+    /// already be coerced to the receiver's declared width `iN`; `wrapped` is
+    /// `iN`, `did_overflow` is `i1`.
+    pub(super) fn emit_overflow_intrinsic(
+        &mut self,
+        op_name: &str,
+        lv: inkwell::values::IntValue<'ctx>,
+        rv: inkwell::values::IntValue<'ctx>,
+        is_unsigned: bool,
+    ) -> Result<
+        (
+            inkwell::values::IntValue<'ctx>,
+            inkwell::values::IntValue<'ctx>,
+        ),
+        String,
+    > {
+        let sign = if is_unsigned { 'u' } else { 's' };
+        let name = format!("llvm.{sign}{op_name}.with.overflow");
+        let intrinsic = inkwell::intrinsics::Intrinsic::find(&name)
+            .ok_or_else(|| format!("{name} intrinsic must exist in LLVM"))?;
+        let decl = intrinsic
+            .get_declaration(&self.module, &[lv.get_type().into()])
+            .ok_or_else(|| {
+                format!(
+                    "{name} has no declaration for width {}",
+                    lv.get_type().get_bit_width()
+                )
+            })?;
+        let pair = self
+            .builder
+            .build_call(
+                decl,
+                &[lv.into(), rv.into()],
+                &format!("{op_name}.ovf.call"),
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_struct_value();
+        let wrapped = self
+            .builder
+            .build_extract_value(pair, 0, &format!("{op_name}.wrapped"))
+            .unwrap()
+            .into_int_value();
+        let overflowed = self
+            .builder
+            .build_extract_value(pair, 1, &format!("{op_name}.ovf"))
+            .unwrap()
+            .into_int_value();
+        Ok((wrapped, overflowed))
+    }
+
     /// Division/remainder guards — design.md § Arithmetic Overflow:
     /// `x / 0` and `x % 0` trap `division by zero`; signed
     /// `iN::MIN / -1` and `iN::MIN % -1` trap `integer overflow` (the

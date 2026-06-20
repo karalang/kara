@@ -874,9 +874,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.position_at_end(next_bb);
         }
         // All fields equal.
-        self.builder
-            .build_unconditional_branch(eq_ret_bb)
-            .unwrap();
+        self.builder.build_unconditional_branch(eq_ret_bb).unwrap();
 
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);

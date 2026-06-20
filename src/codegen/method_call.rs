@@ -1662,32 +1662,132 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(res.into());
         }
 
-        // Overflow-aware integer arithmetic — `{checked,saturating,overflowing}_{add,sub,mul}`.
-        // The typechecker accepts these on every integer width and the interpreter
-        // implements them width-correctly; the codegen lowering (width-specific
-        // `llvm.{s,u}{add,sub,mul}.with.overflow` / `.sat` intrinsics, building the
-        // `Option[Self]` / `(Self, bool)` / clamped `Self` result) is a tracked
-        // follow-on. Emit a clear, actionable error rather than falling through to
-        // a "method not found" / miscompile.
-        if args.len() == 1
-            && matches!(
-                method,
-                "checked_add"
-                    | "checked_sub"
-                    | "checked_mul"
-                    | "saturating_add"
-                    | "saturating_sub"
-                    | "saturating_mul"
-                    | "overflowing_add"
-                    | "overflowing_sub"
-                    | "overflowing_mul"
-            )
-        {
-            return Err(format!(
-                "`{method}` is not yet supported under `karac build` (codegen); it works \
-                 under `karac run`. The width-specific overflow-intrinsic lowering is a \
-                 tracked follow-on."
-            ));
+        // Overflow-aware integer arithmetic — `{checked,saturating,overflowing}_{add,sub,mul}`
+        // (C2, B-2026-06-19-10). Lowered at the receiver's DECLARED width via the
+        // `llvm.{s,u}{op}.with.overflow.iN` intrinsic (codegen widens narrow ints
+        // to i64 in value flow, so both operands are first truncated back to iN).
+        // The single `(wrapped, did_overflow)` pair feeds all three families,
+        // matching the interpreter's width-correct semantics bit-for-bit:
+        //   checked_*     -> `None` on overflow, else `Some(wrapped)` (Option[T])
+        //   saturating_*  -> `wrapped` unless overflow, then the saturation bound
+        //   overflowing_* -> `(wrapped, did_overflow)` tuple `(T, bool)`
+        if args.len() == 1 {
+            let fam_op = ["checked_", "saturating_", "overflowing_"]
+                .into_iter()
+                .find_map(|p| method.strip_prefix(p).map(|op| (p, op)))
+                .filter(|(_, op)| matches!(*op, "add" | "sub" | "mul"));
+            if let Some((fam, op)) = fam_op {
+                let (bits, unsigned) = self.receiver_int_kind(object, call_span, method);
+                let int_ty = self.int_type_for_bits(bits);
+                let i64_t = self.context.i64_type();
+
+                let recv_raw = self.compile_expr(object)?.into_int_value();
+                let recv = self.coerce_int_to(recv_raw, int_ty, unsigned);
+                let arg_raw = self.compile_expr(&args[0].value)?.into_int_value();
+                let arg = self.coerce_int_to(arg_raw, int_ty, unsigned);
+
+                let (wrapped, ovf) = self.emit_overflow_intrinsic(op, recv, arg, unsigned)?;
+
+                match fam {
+                    // overflowing_* -> `(T, bool)`: the tuple field for T is the
+                    // declared width iN (matching `llvm_type_for_type_expr` of the
+                    // `(T, bool)` tuple), the flag is the i1 overflow bit.
+                    "overflowing_" => {
+                        let bool_t = self.context.bool_type();
+                        let tup_ty = self
+                            .context
+                            .struct_type(&[int_ty.into(), bool_t.into()], false);
+                        let mut agg = tup_ty.get_undef();
+                        agg = self
+                            .builder
+                            .build_insert_value(agg, wrapped, 0, "ovf.tup.v")
+                            .unwrap()
+                            .into_struct_value();
+                        agg = self
+                            .builder
+                            .build_insert_value(agg, ovf, 1, "ovf.tup.f")
+                            .unwrap()
+                            .into_struct_value();
+                        return Ok(agg.into());
+                    }
+                    // checked_* -> `Option[T]`: None on overflow, else Some(wrapped).
+                    // The Some payload word is the result coerced to the i64-backed
+                    // Option payload slot (zext for unsigned, sext for signed).
+                    "checked_" => {
+                        let fn_val = self.current_fn.unwrap();
+                        let some_bb = self.context.append_basic_block(fn_val, "chk.some");
+                        let none_bb = self.context.append_basic_block(fn_val, "chk.none");
+                        let merge_bb = self.context.append_basic_block(fn_val, "chk.merge");
+                        self.builder
+                            .build_conditional_branch(ovf, none_bb, some_bb)
+                            .unwrap();
+
+                        self.builder.position_at_end(some_bb);
+                        let payload = self.coerce_int_to(wrapped, i64_t, unsigned);
+                        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                        self.builder.position_at_end(none_bb);
+                        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                        self.builder.position_at_end(merge_bb);
+                        let agg = self.build_option_some_via_phis(
+                            &[payload],
+                            some_bb,
+                            none_bb,
+                            "chk.opt",
+                        );
+                        return Ok(agg);
+                    }
+                    // saturating_* -> `T`: `wrapped` unless overflow, then clamp to
+                    // the saturation bound. Unsigned: sub underflows to 0, add/mul
+                    // overflow to UMAX. Signed: the bound is SMAX/SMIN by the sign
+                    // of the true result — for add/sub `a >= 0 ? SMAX : SMIN` (on
+                    // overflow the operands force that sign), for mul
+                    // `sign(a)==sign(b) ? SMAX : SMIN`. Matches Rust / the interp's
+                    // i128 clamp without needing a wider type (no `llvm.*mul.sat`).
+                    _ => {
+                        let zero = int_ty.const_zero();
+                        let bound = if unsigned {
+                            if op == "sub" {
+                                int_ty.const_zero()
+                            } else {
+                                int_ty.const_all_ones()
+                            }
+                        } else {
+                            let smax = int_ty.const_int(((1u128 << (bits - 1)) - 1) as u64, false);
+                            let smin = int_ty.const_int((1u128 << (bits - 1)) as u64, false);
+                            let pick_max = if op == "mul" {
+                                let sa = self
+                                    .builder
+                                    .build_int_compare(IntPredicate::SLT, recv, zero, "sat.sa")
+                                    .unwrap();
+                                let sb = self
+                                    .builder
+                                    .build_int_compare(IntPredicate::SLT, arg, zero, "sat.sb")
+                                    .unwrap();
+                                self.builder
+                                    .build_int_compare(IntPredicate::EQ, sa, sb, "sat.same")
+                                    .unwrap()
+                            } else {
+                                self.builder
+                                    .build_int_compare(IntPredicate::SGE, recv, zero, "sat.age")
+                                    .unwrap()
+                            };
+                            self.builder
+                                .build_select(pick_max, smax, smin, "sat.bound")
+                                .unwrap()
+                                .into_int_value()
+                        };
+                        let sat = self
+                            .builder
+                            .build_select(ovf, bound, wrapped, "sat.res")
+                            .unwrap()
+                            .into_int_value();
+                        let res = self.coerce_int_to(sat, i64_t, unsigned);
+                        return Ok(res.into());
+                    }
+                }
+            }
         }
 
         // ASCII byte-classification predicates on integer scalars (the `u8`

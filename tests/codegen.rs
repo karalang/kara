@@ -14389,6 +14389,63 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_overflow_arith_family() {
+        // C2 (B-2026-06-19-10): `{checked,saturating,overflowing}_{add,sub,mul}`
+        // now lower in codegen via `llvm.{s,u}{op}.with.overflow.iN`. This is the
+        // exact program (and expected output) of the interpreter test
+        // `test_checked_saturating_overflowing_arith` — A/B parity across all
+        // three families, widths (i32/i64/u8/u32), and signedness.
+        let out = run_program(
+            r#"
+fn main() {
+    let a = 2000000000i32;
+    match a.checked_add(2000000000i32) { Some(v) => println(v), None => println(-1i32) }
+    match a.checked_add(100i32) { Some(v) => println(v), None => println(-1i32) }
+    println(a.saturating_add(2000000000i32));
+    let u: u8 = 3u8;
+    println(u.saturating_sub(10u8));
+    let pair = a.overflowing_add(2000000000i32);
+    println(pair.0);
+    if pair.1 { println(1i32); } else { println(0i32); }
+    let big = 9000000000000000000i64;
+    match big.checked_add(big) { Some(v) => println(v), None => println(-7i64) }
+    let w: u32 = 4000000000u32;
+    println(w.checked_mul(2u32).is_none());
+    println(w.saturating_add(1000000000u32));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "-1\n2000000100\n2147483647\n0\n-294967296\n1\n-7\ntrue\n4294967295"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_overflow_arith_signed_saturating_signs() {
+        // The trickiest C2 path: signed saturating_{mul,sub,add} pick SMAX vs
+        // SMIN by the sign of the true result. Pins each branch in codegen.
+        let out = run_program(
+            r#"
+fn main() {
+    println((100i8).saturating_mul(2i8));
+    println((-100i8).saturating_mul(2i8));
+    println((-100i8).saturating_mul(-2i8));
+    println((100i8).saturating_mul(-2i8));
+    println((-100i8).saturating_sub(100i8));
+    println((100i8).saturating_sub(-100i8));
+    println((-100i8).saturating_add(-100i8));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "127\n-128\n127\n-128\n-128\n127\n-128");
+        }
+    }
+
+    #[test]
     fn test_e2e_wrapping_to_int_family() {
         // Modular truncation: 300 → 44 in i8, 256 → 0 / 257 → 1 in u8.
         let out = run_program(

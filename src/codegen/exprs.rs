@@ -449,10 +449,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             .shared_type_for_expr(left)
                             .or_else(|| self.shared_type_for_expr(right))
                         {
-                            if !info.is_enum
-                                && lhs.is_pointer_value()
-                                && rhs.is_pointer_value()
-                            {
+                            if !info.is_enum && lhs.is_pointer_value() && rhs.is_pointer_value() {
                                 let eq_fn = self.emit_shared_struct_eq_fn(&name);
                                 let a = lhs.into_pointer_value();
                                 let b = rhs.into_pointer_value();
