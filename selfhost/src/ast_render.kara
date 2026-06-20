@@ -101,17 +101,6 @@ fn span_str(off: i64, len: i64) -> String {
     s
 }
 
-// `span_str` of a `Span` read through a BORROW. Used at the sites that
-// destructure the node's `span` out by value (`let X { …, span } = n`): passing
-// `span.offset, span.length` as two owned args makes the ownership checker
-// treat the first field-arg as a move of the (non-`Copy`) `Span` root and flag
-// the second as a use-after-move; reading both fields off a `ref Span` here
-// never consumes the root. (Sites that read `n.span.offset` or pre-bind `off`/
-// `len` keep calling `span_str` directly — those forms don't trip it.)
-fn span_str_v(s: ref Span) -> String {
-    span_str(s.offset, s.length)
-}
-
 // `(arg[ :LABEL][ mut] @off:len VALUE)` — one call/method-call argument. The
 // Rust seed reproduces this in `tests/selfhost_parser.rs::render_rust_arg`.
 fn render_arg(a: CallArg) -> String {
@@ -134,7 +123,7 @@ fn render_arg(a: CallArg) -> String {
     if mut_marker {
         out.push_str(" mut");
     }
-    out.push_str(span_str_v(span));
+    out.push_str(span_str(span.offset, span.length));
     out.push_str(" ");
     out.push_str(render_expr(value));
     out.push_str(")");
@@ -160,7 +149,7 @@ fn render_stmt(s: Stmt) -> String {
             }
             out.push_str(" ");
             out.push_str(name);
-            out.push_str(span_str_v(span));
+            out.push_str(span_str(span.offset, span.length));
             out.push_str(" ");
             out.push_str(render_expr(value));
             out.push_str(")");
@@ -172,7 +161,7 @@ fn render_stmt(s: Stmt) -> String {
                 span,
             } = n;
             out.push_str("(assign");
-            out.push_str(span_str_v(span));
+            out.push_str(span_str(span.offset, span.length));
             out.push_str(" ");
             out.push_str(render_expr(target));
             out.push_str(" ");
@@ -182,7 +171,7 @@ fn render_stmt(s: Stmt) -> String {
         Exp(n) => {
             let ExprStmt { expr, span } = n;
             out.push_str("(exprstmt");
-            out.push_str(span_str_v(span));
+            out.push_str(span_str(span.offset, span.length));
             out.push_str(" ");
             out.push_str(render_expr(expr));
             out.push_str(")");
@@ -196,7 +185,7 @@ fn render_stmt(s: Stmt) -> String {
 fn render_block(b: Block) -> String {
     let Block { stmts, tail, span } = b;
     let mut out = "(block".to_string();
-    out.push_str(span_str_v(span));
+    out.push_str(span_str(span.offset, span.length));
     for s in stmts {
         out.push_str(" ");
         out.push_str(render_stmt(s));
@@ -310,7 +299,7 @@ pub fn render_expr(e: Expr) -> String {
             } = b;
             out.push_str("(binary ");
             out.push_str(binop_name(op));
-            out.push_str(span_str_v(span));
+            out.push_str(span_str(span.offset, span.length));
             out.push_str(" ");
             out.push_str(render_expr(left));
             out.push_str(" ");
@@ -342,7 +331,7 @@ pub fn render_expr(e: Expr) -> String {
             // Destructure so callee + args move out together (#34b).
             let CallExpr { callee, args, span } = c;
             out.push_str("(call");
-            out.push_str(span_str_v(span));
+            out.push_str(span_str(span.offset, span.length));
             out.push_str(" ");
             out.push_str(render_expr(callee));
             for a in args {
@@ -360,7 +349,7 @@ pub fn render_expr(e: Expr) -> String {
             } = m;
             out.push_str("(mcall ");
             out.push_str(method);
-            out.push_str(span_str_v(span));
+            out.push_str(span_str(span.offset, span.length));
             out.push_str(" ");
             out.push_str(render_expr(object));
             for a in args {
@@ -377,7 +366,7 @@ pub fn render_expr(e: Expr) -> String {
             } = f;
             out.push_str("(field ");
             out.push_str(field);
-            out.push_str(span_str_v(span));
+            out.push_str(span_str(span.offset, span.length));
             out.push_str(" ");
             out.push_str(render_expr(object));
             out.push_str(")");
@@ -399,7 +388,7 @@ pub fn render_expr(e: Expr) -> String {
                 span,
             } = ix;
             out.push_str("(index");
-            out.push_str(span_str_v(span));
+            out.push_str(span_str(span.offset, span.length));
             out.push_str(" ");
             out.push_str(render_expr(object));
             out.push_str(" ");
@@ -417,7 +406,7 @@ pub fn render_expr(e: Expr) -> String {
                 span,
             } = n;
             out.push_str("(if");
-            out.push_str(span_str_v(span));
+            out.push_str(span_str(span.offset, span.length));
             out.push_str(" ");
             out.push_str(render_expr(cond));
             out.push_str(" ");
@@ -434,7 +423,7 @@ pub fn render_expr(e: Expr) -> String {
         Return(n) => {
             let ReturnExpr { value, span } = n;
             out.push_str("(return");
-            out.push_str(span_str_v(span));
+            out.push_str(span_str(span.offset, span.length));
             match value {
                 Some(e) => {
                     out.push_str(" ");
