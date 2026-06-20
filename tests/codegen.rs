@@ -47156,6 +47156,29 @@ fn main() {
     }
 
     #[test]
+    fn e2e_vec_filled_2d_table_rows_independent() {
+        // Vec.filled(rows, Vec.filled(cols, x)) must give each row its OWN
+        // buffer. Before the per-slot deep-clone fix this AOT-SIGTRAPped (rows
+        // aliased one buffer → corruption + N-fold free). Write distinct values
+        // per cell and read several back.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let n = 3i64;\n\
+                 let mut dp: Vec[Vec[i64]] = Vec.filled(n, Vec.filled(n, 0i64));\n\
+                 let mut i = 0i64;\n\
+                 while i < n {\n\
+                     let mut j = 0i64;\n\
+                     while j < n { dp[i][j] = i * 10i64 + j; j = j + 1i64; }\n\
+                     i = i + 1i64;\n\
+                 }\n\
+                 println(f\"{dp[0][0]} {dp[1][2]} {dp[2][1]} {dp[0][2]}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "0 12 21 2\n");
+        }
+    }
+
+    #[test]
     fn e2e_multi_assign_swap_locals() {
         // `a, b = b, a;` evaluates both RHS before writing either target, so it
         // swaps. Parser-desugared to a temp-block of let/assign; this confirms

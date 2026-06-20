@@ -2239,23 +2239,25 @@ impl<'ctx> super::Codegen<'ctx> {
         // scope-exit cleanup `free`s a garbage pointer, and the binary
         // exits SIGTRAP / SIGSEGV.
         //
-        // Limitation: the per-slot store is `build_store(elem_ptr, val)`
-        // which is a bit-copy. For aggregate element types whose Kāra
-        // semantics need deep clone per slot (matches the interpreter's
-        // `deep_clone_value` fix at `beb7310` for nested-collection
-        // element types), the bit-copy aliases storage. The kata's
-        // `Vec.filled(cap + 1, Vec.new())` is safe because Vec.new
-        // returns an empty `{null, 0, 0}` aggregate — every slot points
-        // at null and the first `factors[j].push(...)` allocates a
-        // fresh buffer per row. Non-empty aggregate element types
-        // need a Clone-codegen upgrade (separate slice).
+        // Heap-backed element types (`Vec[Vec[_]]`, `Vec[String]`) deep-clone
+        // per slot — `build_vec_filled` moves `val` into slot 0 and clones it
+        // into the rest, so each row owns a distinct buffer (was a bit-copy that
+        // aliased one backing buffer across all N slots → corruption + N-fold
+        // free / AOT SIGTRAP, B-2026-06-19-8). The destination element TypeExpr
+        // is threaded via `pending_let_elem_type_expr`, consumed below before
+        // the fill argument is compiled so a nested inner `Vec.filled(...)`
+        // doesn't inherit this binding's element type.
         if type_name == "Vec" && method == "filled" {
             if args.len() < 2 {
                 return Err("Vec.filled requires 2 arguments (n, val)".to_string());
             }
+            // Consume the destination element TypeExpr BEFORE compiling the fill
+            // argument, so a nested inner `Vec.filled(...)` (compiled as that
+            // argument) does not inherit this outer binding's element type.
+            let elem_te = self.pending_let_elem_type_expr.take();
             let n = self.compile_expr(&args[0].value)?.into_int_value();
             let val = self.compile_expr(&args[1].value)?;
-            return self.build_vec_filled(n, val);
+            return self.build_vec_filled(n, val, elem_te);
         }
 
         // `Vec.from_slice(src: Slice[T]) -> Vec[T]` — bulk-copy a slice

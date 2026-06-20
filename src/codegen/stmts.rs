@@ -1738,6 +1738,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // from the annotation (or pattern_binding_inner_types
                 // for the no-annotation path). Cleared after compile.
                 let saved_pending_let_elem = self.pending_let_elem_type.take();
+                let saved_pending_let_elem_te = self.pending_let_elem_type_expr.take();
                 // Sibling threading for `Tensor.zeros/ones/full` in the
                 // RHS — those constructors can't recover the element
                 // type or rank from their `dims: Vec[i64]` argument;
@@ -1747,6 +1748,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let PatternKind::Binding(var_name) = &pattern.kind {
                     if let Some(&elem_ty) = self.vec_elem_types.get(var_name.as_str()) {
                         self.pending_let_elem_type = Some(elem_ty);
+                    }
+                    // TypeExpr sibling — lets `Vec.filled` deep-clone heap-backed
+                    // slot values (`Vec[Vec[_]]` / `Vec[String]`).
+                    if let Some(te) = self.var_elem_type_exprs.get(var_name.as_str()) {
+                        self.pending_let_elem_type_expr = Some(te.clone());
                     }
                     // Fallible-allocation constructor companions: a binding
                     // `let r: Result[Vec[T], AllocError] = Vec.try_with_capacity(n)`
@@ -1771,6 +1777,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 let val = self.compile_expr(value)?;
                 self.pending_let_elem_type = saved_pending_let_elem;
+                self.pending_let_elem_type_expr = saved_pending_let_elem_te;
                 self.pending_let_tensor_info = saved_pending_let_tensor;
                 // `let w = v[i]` over a heap-element `Vec` — deep-clone the shallow
                 // element so the binding owns a distinct buffer; without it both

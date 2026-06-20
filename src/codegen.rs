@@ -1495,6 +1495,14 @@ pub(super) struct Codegen<'ctx> {
     /// RHS, cleared just after. Read by `Vec.with_capacity` in
     /// `compile_assoc_call`.
     pub(crate) pending_let_elem_type: Option<BasicTypeEnum<'ctx>>,
+    /// Surface `TypeExpr` of the element type for the let-binding currently
+    /// being compiled — the `TypeExpr` sibling of `pending_let_elem_type`.
+    /// `Vec.filled(n, val)` reads this to decide whether each slot needs a deep
+    /// clone (heap-backed element types: `Vec[Vec[_]]`, `Vec[String]`) versus a
+    /// trivial bit-copy. Taken (not just read) at the start of the `filled` arm
+    /// — before the fill argument is compiled — so a nested inner
+    /// `Vec.filled(...)` does not inherit the outer binding's stale element type.
+    pub(crate) pending_let_elem_type_expr: Option<TypeExpr>,
     /// Per-variable Slice element type tracking (variable name → element LLVM type).
     /// Entries only exist for values whose LLVM representation is the
     /// 2-field slice struct `{ptr, i64}`; used to dispatch indexing and
@@ -4879,6 +4887,7 @@ impl<'ctx> Codegen<'ctx> {
             binsearch_assume_emitted: false,
             vec_elem_types: HashMap::new(),
             pending_let_elem_type: None,
+            pending_let_elem_type_expr: None,
             slice_elem_types: HashMap::new(),
             fn_param_slice_elem: HashMap::new(),
             ref_params: HashMap::new(),

@@ -535,22 +535,34 @@ impl<'ctx> super::Codegen<'ctx> {
     /// necessarily a compile-time constant). Shared by `Vec.filled(n, val)` and
     /// the `Vec[v; n]` repeat-literal form — both denote the same runtime fill.
     ///
-    /// Limitation (same as the `Vec.filled` arm it was extracted from): the
-    /// per-slot store is a bit-copy. For aggregate element types whose Kāra
-    /// semantics need a deep clone per slot the bit-copy aliases storage —
-    /// `Vec[Vec.new(); n]` is safe (every slot is the empty `{null, 0, 0}`
-    /// aggregate, and the first push per row allocates a fresh buffer), but
-    /// non-empty aggregate element types need a Clone-codegen upgrade (separate
-    /// slice). `free(malloc(0))` is well-defined, so `n == 0` is not special-cased.
+    /// Element ownership: for a **trivially copyable** element type (primitives,
+    /// flat structs) every slot is a bit-copy of `val` — correct because no slot
+    /// owns heap storage. For a **heap-backed** element type (`Vec[Vec[_]]`,
+    /// `Vec[String]`, …), a bit-copy would alias one backing buffer across all N
+    /// slots (corruption on write + an N-fold free on drop), so `elem_te` (the
+    /// destination element `TypeExpr`, threaded from the let binding) drives a
+    /// deep clone: `val` is **moved** into slot 0 and **cloned** into slots
+    /// `1..n` (the `vec![x; n]` discipline — N distinct buffers, `val` consumed,
+    /// no extra drop). When `elem_te` is absent (no annotation to recover the
+    /// element type) the bit-copy path is taken; that is still correct for the
+    /// trivial elements that dominate and degrades to the prior behavior for the
+    /// rare un-annotated nested-collection fill. `free(malloc(0))` is
+    /// well-defined, so `n == 0` is not special-cased.
     pub(super) fn build_vec_filled(
         &mut self,
         n: IntValue<'ctx>,
         val: BasicValueEnum<'ctx>,
+        elem_te: Option<TypeExpr>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let elem_ty = val.get_type();
         let elem_size = elem_ty.size_of().unwrap();
         let i64_t = self.context.i64_type();
         let fn_val = self.current_fn.unwrap();
+
+        let needs_clone = elem_te
+            .as_ref()
+            .map(|te| !super::vec_method::is_trivially_copyable_te(te))
+            .unwrap_or(false);
 
         let alloc_bytes = self
             .builder
@@ -564,7 +576,77 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap_basic()
             .into_pointer_value();
 
-        // Fill loop: for i in 0..n { buf[i] = val }
+        if needs_clone {
+            // Heap-backed element: move `val` into slot 0, deep-clone into the
+            // rest, so every slot owns a distinct buffer.
+            let clone_fn = self.emit_clone_fn_for_type_expr(elem_te.as_ref().unwrap());
+            let val_ptr = self.create_entry_alloca(fn_val, "filled.srcval", elem_ty);
+            self.builder.build_store(val_ptr, val).unwrap();
+
+            // slot[0] = val (the move), guarded by n != 0.
+            let zero = i64_t.const_int(0, false);
+            let n_nonzero = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::UGT, n, zero, "filled.nz")
+                .unwrap();
+            let move0_bb = self.context.append_basic_block(fn_val, "filled.move0");
+            let after0_bb = self.context.append_basic_block(fn_val, "filled.after0");
+            self.builder
+                .build_conditional_branch(n_nonzero, move0_bb, after0_bb)
+                .unwrap();
+            self.builder.position_at_end(move0_bb);
+            let slot0 = unsafe {
+                self.builder
+                    .build_gep(elem_ty, buf, &[zero], "filled.slot0.ptr")
+                    .unwrap()
+            };
+            self.builder.build_store(slot0, val).unwrap();
+            self.builder.build_unconditional_branch(after0_bb).unwrap();
+            self.builder.position_at_end(after0_bb);
+
+            // for i in 1..n { clone(val -> buf[i]) }
+            let counter = self.create_entry_alloca(fn_val, "filled.ci", i64_t.into());
+            self.builder
+                .build_store(counter, i64_t.const_int(1, false))
+                .unwrap();
+            let cond_bb = self.context.append_basic_block(fn_val, "filled.clone.cond");
+            let body_bb = self.context.append_basic_block(fn_val, "filled.clone.body");
+            let exit_bb = self.context.append_basic_block(fn_val, "filled.clone.exit");
+            self.builder.build_unconditional_branch(cond_bb).unwrap();
+            self.builder.position_at_end(cond_bb);
+            let cur = self
+                .builder
+                .build_load(i64_t, counter, "filled.clone.cur")
+                .unwrap()
+                .into_int_value();
+            let cond = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::ULT, cur, n, "filled.clone.lt")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(cond, body_bb, exit_bb)
+                .unwrap();
+            self.builder.position_at_end(body_bb);
+            let dst = unsafe {
+                self.builder
+                    .build_gep(elem_ty, buf, &[cur], "filled.clone.dst")
+                    .unwrap()
+            };
+            self.builder
+                .build_call(clone_fn, &[val_ptr.into(), dst.into()], "")
+                .unwrap();
+            let one = i64_t.const_int(1, false);
+            let next = self
+                .builder
+                .build_int_add(cur, one, "filled.clone.next")
+                .unwrap();
+            self.builder.build_store(counter, next).unwrap();
+            self.builder.build_unconditional_branch(cond_bb).unwrap();
+            self.builder.position_at_end(exit_bb);
+            return Ok(self.finish_vec_filled_agg(buf, n));
+        }
+
+        // Fill loop: for i in 0..n { buf[i] = val }  (trivial bit-copy)
         let counter = self.create_entry_alloca(fn_val, "filled.i", i64_t.into());
         self.builder
             .build_store(counter, i64_t.const_int(0, false))
@@ -603,6 +685,16 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(exit_bb);
 
+        Ok(self.finish_vec_filled_agg(buf, n))
+    }
+
+    /// Build the `{data=buf, len=n, cap=n}` Vec aggregate returned by
+    /// `build_vec_filled` (shared by the clone and bit-copy fill paths).
+    fn finish_vec_filled_agg(
+        &mut self,
+        buf: PointerValue<'ctx>,
+        n: IntValue<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
         // Build {data=buf, len=n, cap=n} aggregate.
         let vec_ty = self.vec_struct_type();
         let mut agg = vec_ty.get_undef();
@@ -621,7 +713,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_insert_value(agg, n, 2, "vec.cap")
             .unwrap()
             .into_struct_value();
-        Ok(agg.into())
+        agg.into()
     }
 
     /// Let-binding fast path for `let buf: Array[T, N] = [zero; N]`.
@@ -798,9 +890,12 @@ impl<'ctx> super::Codegen<'ctx> {
             // `Vec[v; n]` ≡ `Vec.filled(n, v)`. Compile `v` then `n` to preserve
             // source-order evaluation of side effects (the value precedes the
             // count in `[v; n]`), then delegate to the shared heap fill.
+            // Consume the destination element TypeExpr before compiling `v` so a
+            // nested repeat/`filled` value does not inherit a stale element type.
+            let elem_te = self.pending_let_elem_type_expr.take();
             let val = self.compile_expr(value)?;
             let n = self.compile_expr(count)?.into_int_value();
-            return self.build_vec_filled(n, val);
+            return self.build_vec_filled(n, val, elem_te);
         }
         let n = match &count.kind {
             ExprKind::Integer(n, _) if *n >= 0 => *n as u32,

@@ -11390,4 +11390,39 @@ fn main() {
             "vec_repeat_literal_fill_push_index",
         );
     }
+
+    /// `Vec.filled(rows, Vec.filled(cols, x))` — the canonical 2D DP table.
+    /// Before the per-slot deep-clone fix, codegen bit-copied the inner heap
+    /// Vec into every row, so all rows aliased ONE backing buffer: writes to
+    /// one row corrupted the others and the N rows N-fold-freed the same buffer
+    /// on drop (AOT SIGTRAP). ASAN must confirm each row owns a distinct buffer
+    /// — no aliasing (rows independent), no double-free, no leak. Inner rows
+    /// carry 5 i64s (40 bytes > the LSan short-alloc floor) so a wrongly-shared
+    /// or wrongly-freed row buffer is caught.
+    #[test]
+    fn asan_vec_filled_2d_rows_are_independent_buffers() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let rows = 4i64;
+    let cols = 5i64;
+    let mut dp: Vec[Vec[i64]] = Vec.filled(rows, Vec.filled(cols, 0i64));
+    let mut i = 0i64;
+    while i < rows {
+        let mut j = 0i64;
+        while j < cols {
+            dp[i][j] = i * 10i64 + j;
+            j = j + 1i64;
+        }
+        i = i + 1i64;
+    }
+    println(dp[0][0]);
+    println(dp[3][4]);
+    println(dp[2][3]);
+}
+"#,
+            &["0", "34", "23"],
+            "vec_filled_2d_rows_independent",
+        );
+    }
 }
