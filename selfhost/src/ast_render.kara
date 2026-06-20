@@ -38,6 +38,13 @@ import ast.{
     PathType,
     TupleType,
     FnTypeNode,
+    Pattern,
+    BindingPattern,
+    TuplePattern,
+    TupleVariantPattern,
+    OrPattern,
+    MatchArm,
+    MatchExpr,
 };
 
 // MUST stay identical to `escape_for_render` in `selfhost/src/main.kara` and
@@ -527,8 +534,178 @@ pub fn render_expr(e: Expr) -> String {
             out.push_str(span_str(span.offset, span.length));
             out.push_str(")");
         }
+        Match(m) => {
+            let MatchExpr {
+                scrutinee,
+                arms,
+                span,
+            } = m;
+            out.push_str("(match");
+            out.push_str(span_str(span.offset, span.length));
+            out.push_str(" ");
+            out.push_str(render_expr(scrutinee));
+            for a in arms {
+                out.push_str(" ");
+                out.push_str(render_match_arm(a));
+            }
+            out.push_str(")");
+        }
         Error(n) => {
             out.push_str("(error");
+            out.push_str(span_str(n.span.offset, n.span.length));
+            out.push_str(")");
+        }
+    }
+    out
+}
+
+// `(arm @off:len PATTERN (guard EXPR)? BODY)` — one match arm. The Rust seed
+// reproduces this in `tests/selfhost_parser.rs::render_rust_match_arm`.
+fn render_match_arm(a: MatchArm) -> String {
+    let MatchArm {
+        pattern,
+        guard,
+        body,
+        span,
+    } = a;
+    let mut out = "(arm".to_string();
+    out.push_str(span_str(span.offset, span.length));
+    out.push_str(" ");
+    out.push_str(render_pattern(pattern));
+    match guard {
+        Some(g) => {
+            out.push_str(" (guard ");
+            out.push_str(render_expr(g));
+            out.push_str(")");
+        }
+        None => {}
+    }
+    out.push_str(" ");
+    out.push_str(render_expr(body));
+    out.push_str(")");
+    out
+}
+
+// ── Pattern render (slice 3b) ── Heads: `(pwild @o:l)`, `(pbind NAME @o:l)`,
+// `(pint V[ SFX] @o:l)` / `pfloat` / `(pchar C @o:l)` / `(pstr S @o:l)` /
+// `(pbool true|false @o:l)` / `(pbyte B @o:l)`, `(ptuple @o:l P...)`,
+// `(pvariant PATH @o:l P...)`, `(por @o:l P...)`, `(perror @o:l)`. The Rust
+// seed reproduces this in `render_rust_pattern`.
+pub fn render_pattern(p: Pattern) -> String {
+    let mut out = "".to_string();
+    match p {
+        WildcardPat(n) => {
+            out.push_str("(pwild");
+            out.push_str(span_str(n.span.offset, n.span.length));
+            out.push_str(")");
+        }
+        BindingPat(n) => {
+            let BindingPattern { name, span } = n;
+            out.push_str("(pbind ");
+            out.push_str(name);
+            out.push_str(span_str(span.offset, span.length));
+            out.push_str(")");
+        }
+        IntPat(n) => {
+            let off = n.span.offset;
+            let len = n.span.length;
+            out.push_str("(pint ");
+            out.push_str(n.value.to_string());
+            if n.suffix.len() > 0 {
+                out.push_str(" ");
+                out.push_str(n.suffix);
+            }
+            out.push_str(span_str(off, len));
+            out.push_str(")");
+        }
+        FloatPat(n) => {
+            let off = n.span.offset;
+            let len = n.span.length;
+            out.push_str("(pfloat ");
+            out.push_str(n.value.to_string());
+            if n.suffix.len() > 0 {
+                out.push_str(" ");
+                out.push_str(n.suffix);
+            }
+            out.push_str(span_str(off, len));
+            out.push_str(")");
+        }
+        CharPat(n) => {
+            out.push_str("(pchar ");
+            let mut tmp = "".to_string();
+            tmp.push(n.value);
+            out.push_str(escape_for_render(tmp));
+            out.push_str(span_str(n.span.offset, n.span.length));
+            out.push_str(")");
+        }
+        StrPat(n) => {
+            let off = n.span.offset;
+            let len = n.span.length;
+            out.push_str("(pstr ");
+            out.push_str(escape_for_render(n.value));
+            out.push_str(span_str(off, len));
+            out.push_str(")");
+        }
+        BoolPat(n) => {
+            out.push_str("(pbool ");
+            if n.value {
+                out.push_str("true");
+            } else {
+                out.push_str("false");
+            }
+            out.push_str(span_str(n.span.offset, n.span.length));
+            out.push_str(")");
+        }
+        BytePat(n) => {
+            out.push_str("(pbyte ");
+            out.push_str(n.value.to_string());
+            out.push_str(span_str(n.span.offset, n.span.length));
+            out.push_str(")");
+        }
+        TuplePat(n) => {
+            let TuplePattern { elems, span } = n;
+            out.push_str("(ptuple");
+            out.push_str(span_str(span.offset, span.length));
+            for el in elems {
+                out.push_str(" ");
+                out.push_str(render_pattern(el));
+            }
+            out.push_str(")");
+        }
+        TupleVariantPat(n) => {
+            let TupleVariantPattern {
+                segments,
+                elems,
+                span,
+            } = n;
+            out.push_str("(pvariant ");
+            let mut i = 0;
+            for seg in segments {
+                if i > 0 {
+                    out.push_str(".");
+                }
+                out.push_str(seg);
+                i = i + 1;
+            }
+            out.push_str(span_str(span.offset, span.length));
+            for el in elems {
+                out.push_str(" ");
+                out.push_str(render_pattern(el));
+            }
+            out.push_str(")");
+        }
+        OrPat(n) => {
+            let OrPattern { alts, span } = n;
+            out.push_str("(por");
+            out.push_str(span_str(span.offset, span.length));
+            for el in alts {
+                out.push_str(" ");
+                out.push_str(render_pattern(el));
+            }
+            out.push_str(")");
+        }
+        ErrPat(n) => {
+            out.push_str("(perror");
             out.push_str(span_str(n.span.offset, n.span.length));
             out.push_str(")");
         }

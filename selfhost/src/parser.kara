@@ -54,6 +54,19 @@ import ast.{
     PathType,
     TupleType,
     FnTypeNode,
+    Pattern,
+    BindingPattern,
+    PatInt,
+    PatFloat,
+    PatChar,
+    PatStr,
+    PatBool,
+    PatByte,
+    TuplePattern,
+    TupleVariantPattern,
+    OrPattern,
+    MatchArm,
+    MatchExpr,
 };
 import lexer.lex_all;
 
@@ -1087,6 +1100,9 @@ impl Parser {
             // `if` / `if … else …` expression.
             If => self.parse_if(),
 
+            // `match scrutinee { PAT [if G] => BODY, … }` (slice 3b).
+            Match => self.parse_match(start),
+
             // Loops + loop control (slice 2b). `start` is the keyword span.
             While => self.parse_while(None, start),
             For => self.parse_for(None, start),
@@ -1597,6 +1613,298 @@ impl Parser {
                 TypeExpr.ErrTy(SpanNode { span: self.span_from(start) })
             }
         }
+    }
+
+    // ── Patterns + `match` (slice 3b) ──
+    //
+    // Mirrors the common subset of `src/parser/patterns.rs` (see ast.kara's
+    // Pattern note for the deferred forms). Same single-token-match discipline
+    // as `parse_type`: each token is matched once and the arm consumes + builds
+    // in place; the `Identifier` arm binds the name once, then decides
+    // binding-vs-tuple-variant by peeking the NEXT token (a different element).
+
+    fn at_rbrace(ref self) -> bool {
+        if self.pos >= self.tokens.len() {
+            return false;
+        }
+        match self.tokens[self.pos].token {
+            RightBrace => true,
+            _ => false,
+        }
+    }
+
+    fn expect_fatarrow(mut ref self) {
+        if self.pos < self.tokens.len() {
+            let ok = match self.tokens[self.pos].token {
+                FatArrow => true,
+                _ => false,
+            };
+            if ok {
+                self.advance();
+            }
+        }
+    }
+
+    // `parse_single_pattern [('|' parse_single_pattern)+]` — wraps an
+    // or-pattern only when ≥2 alternatives. Mirrors `parse_pattern`.
+    fn parse_pattern(mut ref self) -> Pattern {
+        let start = self.current_span();
+        let first = self.parse_single_pattern();
+        let has_pipe = if self.pos < self.tokens.len() {
+            match self.tokens[self.pos].token {
+                Pipe => true,
+                _ => false,
+            }
+        } else {
+            false
+        };
+        if not has_pipe {
+            return first;
+        }
+        let mut alts: Vec[Pattern] = Vec.new();
+        alts.push(first);
+        loop {
+            let is_pipe = if self.pos < self.tokens.len() {
+                match self.tokens[self.pos].token {
+                    Pipe => true,
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            if not is_pipe {
+                break;
+            }
+            self.advance(); // `|`
+            let p = self.parse_single_pattern();
+            alts.push(p);
+        }
+        Pattern.OrPat(OrPattern {
+            alts: alts,
+            span: self.span_from(start),
+        })
+    }
+
+    // One pattern atom. Mirrors `parse_single_pattern`'s ported arms.
+    fn parse_single_pattern(mut ref self) -> Pattern {
+        let start = self.current_span();
+        if self.pos >= self.tokens.len() {
+            return Pattern.ErrPat(SpanNode { span: self.span_from(start) });
+        }
+        match self.tokens[self.pos].token {
+            Underscore => {
+                self.advance();
+                Pattern.WildcardPat(SpanNode { span: self.span_from(start) })
+            }
+            True => {
+                self.advance();
+                Pattern.BoolPat(PatBool {
+                    value: true,
+                    span: self.span_from(start),
+                })
+            }
+            False => {
+                self.advance();
+                Pattern.BoolPat(PatBool {
+                    value: false,
+                    span: self.span_from(start),
+                })
+            }
+            Integer(v, sfx) => {
+                self.advance();
+                Pattern.IntPat(PatInt {
+                    value: v,
+                    suffix: sfx,
+                    span: self.span_from(start),
+                })
+            }
+            Float(v, sfx) => {
+                self.advance();
+                Pattern.FloatPat(PatFloat {
+                    value: v,
+                    suffix: sfx,
+                    span: self.span_from(start),
+                })
+            }
+            CharLiteral(c) => {
+                self.advance();
+                Pattern.CharPat(PatChar {
+                    value: c,
+                    span: self.span_from(start),
+                })
+            }
+            ByteLiteral(b) => {
+                self.advance();
+                Pattern.BytePat(PatByte {
+                    value: b,
+                    span: self.span_from(start),
+                })
+            }
+            StringLiteral(s) => {
+                self.advance();
+                Pattern.StrPat(PatStr {
+                    value: s,
+                    span: self.span_from(start),
+                })
+            }
+            MultiStringLiteral(s) => {
+                self.advance();
+                Pattern.StrPat(PatStr {
+                    value: s,
+                    span: self.span_from(start),
+                })
+            }
+            LeftParen => self.parse_tuple_pattern(start),
+            // Identifier: plain binding, or a single-segment tuple-variant
+            // `Name(...)`. `@` / range / struct / qualified-path forms are
+            // deferred (see ast.kara). The name is bound ONCE here; the
+            // binding-vs-variant choice peeks the NEXT token only.
+            Identifier(name) => {
+                self.advance(); // consume the identifier
+                let is_lparen = if self.pos < self.tokens.len() {
+                    match self.tokens[self.pos].token {
+                        LeftParen => true,
+                        _ => false,
+                    }
+                } else {
+                    false
+                };
+                if is_lparen {
+                    self.advance(); // `(`
+                    let mut elems: Vec[Pattern] = Vec.new();
+                    loop {
+                        if self.is_at_end() {
+                            break;
+                        }
+                        if self.at_rparen() {
+                            break;
+                        }
+                        let p = self.parse_pattern();
+                        elems.push(p);
+                        if self.at_comma() {
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                    self.expect_rparen();
+                    let mut segs: Vec[String] = Vec.new();
+                    segs.push(name);
+                    Pattern.TupleVariantPat(TupleVariantPattern {
+                        segments: segs,
+                        elems: elems,
+                        span: self.span_from(start),
+                    })
+                } else {
+                    Pattern.BindingPat(BindingPattern {
+                        name: name,
+                        span: self.span_from(start),
+                    })
+                }
+            }
+            _ => {
+                self.advance();
+                Pattern.ErrPat(SpanNode { span: self.span_from(start) })
+            }
+        }
+    }
+
+    // `(p0, p1, ...)` tuple pattern — `(p)` is a one-element tuple (the seed
+    // does NOT unwrap single-element paren patterns). `(` is current.
+    fn parse_tuple_pattern(mut ref self, start: Span) -> Pattern {
+        self.advance(); // `(`
+        let mut elems: Vec[Pattern] = Vec.new();
+        loop {
+            if self.is_at_end() {
+                break;
+            }
+            if self.at_rparen() {
+                break;
+            }
+            let p = self.parse_pattern();
+            elems.push(p);
+            if self.at_comma() {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        self.expect_rparen();
+        Pattern.TuplePat(TuplePattern {
+            elems: elems,
+            span: self.span_from(start),
+        })
+    }
+
+    // `match SCRUT { PAT [if GUARD] => BODY, ... }`. `match` is current; `start`
+    // is its span. Mirrors `parse_match_expr`: a non-block arm body needs a
+    // trailing comma, a block body does not.
+    fn parse_match(mut ref self, start: Span) -> Expr {
+        self.advance(); // `match`
+        let scrutinee = self.parse_expr_bp(0);
+        self.expect_lbrace();
+        let mut arms: Vec[MatchArm] = Vec.new();
+        loop {
+            if self.is_at_end() {
+                break;
+            }
+            if self.at_rbrace() {
+                break;
+            }
+            let arm_start = self.current_span();
+            let pattern = self.parse_pattern();
+            let mut guard: Option[Expr] = None;
+            let has_if = if self.pos < self.tokens.len() {
+                match self.tokens[self.pos].token {
+                    If => true,
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            if has_if {
+                self.advance(); // `if`
+                guard = Some(self.parse_expr_bp(0));
+            }
+            self.expect_fatarrow();
+            let body_is_block = if self.pos < self.tokens.len() {
+                match self.tokens[self.pos].token {
+                    LeftBrace => true,
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            let body = if body_is_block {
+                let blk = self.parse_block();
+                Expr.Blk(blk)
+            } else {
+                self.parse_expr_bp(0)
+            };
+            arms.push(MatchArm {
+                pattern: pattern,
+                guard: guard,
+                body: body,
+                span: self.span_from(arm_start),
+            });
+            let ate_comma = if self.at_comma() {
+                self.advance();
+                true
+            } else {
+                false
+            };
+            if not ate_comma {
+                if not body_is_block {
+                    break;
+                }
+            }
+        }
+        self.expect_rbrace();
+        Expr.Match(MatchExpr {
+            scrutinee: scrutinee,
+            arms: arms,
+            span: self.span_from(start),
+        })
     }
 }
 

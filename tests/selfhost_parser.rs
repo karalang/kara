@@ -17,7 +17,7 @@
 //! are wrapper-independent. The corpus is single-line, so the shift is a plain
 //! constant subtraction.
 
-use karac::ast::{BinOp, PatternKind};
+use karac::ast::{BinOp, LiteralPattern, MatchArm, Pattern, PatternKind};
 use karac::ast::{Block, CallArg, Expr, ExprKind, Item, Stmt, StmtKind, UnaryOp};
 use karac::token::{FloatSuffix, IntSuffix};
 use std::path::PathBuf;
@@ -175,6 +175,32 @@ const CORPUS: &[&str] = &[
     "outer: loop { break x }",
     "outer: loop { break a + b }",
     "row: while a { col: while b { break row } }",
+    // match + patterns (slice 3b core) — wildcard, binding, literals, tuple,
+    // single-segment tuple-variant, or-patterns, guards, block/non-block arms.
+    "match x { 1 => a }",
+    "match x { _ => a }",
+    "match x { y => y }",
+    "match x { 1 => a, 2 => b }",
+    "match x { 1 => a, _ => b }",
+    "match x { 0 => a, n => n }",
+    "match x { true => a, false => b }",
+    "match c { 'a' => 1, 'b' => 2, _ => 0 }",
+    "match s { \"hi\" => 1, _ => 0 }",
+    "match x { 1i32 => a, _ => b }",
+    "match opt { Some(y) => y, None => 0 }",
+    "match e { Foo(a) => a, Bar(b, c) => b, _ => 0 }",
+    "match p { (a, b) => a }",
+    "match p { (a, b, c) => a, _ => 0 }",
+    "match p { (x, y) => x + y, _ => 0 }",
+    "match n { 1 | 2 | 3 => a, _ => b }",
+    "match v { Some(a) | None => a, _ => b }",
+    "match x { 1 if a => b, _ => c }",
+    "match x { Some(n) if n > 0 => n, _ => 0 }",
+    "match x { 1 => { a }, 2 => { b } }",
+    "match x { 1 => { f(y); g(z) } _ => h }",
+    "match f(x) { 0 => a, _ => b }",
+    "match pair { (Some(a), b) => a, _ => 0 }",
+    "match x { n => match n { 0 => a, _ => b } }",
 ];
 
 // ── Rust-side canonical render (must match `ast_render.kara::render_expr`) ──
@@ -338,6 +364,94 @@ fn render_rust_block(b: &Block) -> String {
         out.push_str(&render_rust_expr(tail));
         out.push(')');
     }
+    out.push(')');
+    out
+}
+
+/// ` @<offset-shift>:<length>` for a pattern node — must match
+/// `ast_render.kara::render_pattern`'s span tags.
+fn pat_span(p: &Pattern) -> String {
+    format!(
+        " @{}:{}",
+        p.span.offset as i64 - OFFSET_SHIFT,
+        p.span.length
+    )
+}
+
+/// Must match `ast_render.kara::render_pattern` (slice-3b core forms).
+fn render_rust_pattern(p: &Pattern) -> String {
+    let sp = pat_span(p);
+    match &p.kind {
+        PatternKind::Wildcard => format!("(pwild{sp})"),
+        PatternKind::Binding(name) => format!("(pbind {name}{sp})"),
+        PatternKind::Literal(lit) => match lit {
+            LiteralPattern::Integer(v, sfx) => {
+                let lex = int_suffix_lex(*sfx);
+                if lex.is_empty() {
+                    format!("(pint {v}{sp})")
+                } else {
+                    format!("(pint {v} {lex}{sp})")
+                }
+            }
+            LiteralPattern::Float(v, sfx) => {
+                let lex = float_suffix_lex(*sfx);
+                if lex.is_empty() {
+                    format!("(pfloat {v}{sp})")
+                } else {
+                    format!("(pfloat {v} {lex}{sp})")
+                }
+            }
+            LiteralPattern::Char(c) => format!("(pchar {}{sp})", escape_for_render(&c.to_string())),
+            LiteralPattern::String(s) => format!("(pstr {}{sp})", escape_for_render(s)),
+            LiteralPattern::Bool(b) => format!("(pbool {b}{sp})"),
+        },
+        PatternKind::Tuple(elems) => {
+            let mut out = format!("(ptuple{sp}");
+            for el in elems {
+                out.push(' ');
+                out.push_str(&render_rust_pattern(el));
+            }
+            out.push(')');
+            out
+        }
+        PatternKind::TupleVariant { path, patterns } => {
+            let mut out = format!("(pvariant {}{sp}", path.join("."));
+            for el in patterns {
+                out.push(' ');
+                out.push_str(&render_rust_pattern(el));
+            }
+            out.push(')');
+            out
+        }
+        PatternKind::Or(alts) => {
+            let mut out = format!("(por{sp}");
+            for el in alts {
+                out.push(' ');
+                out.push_str(&render_rust_pattern(el));
+            }
+            out.push(')');
+            out
+        }
+        other => panic!(
+            "render_rust_pattern: PatternKind {other:?} is outside parser slice-3b core; \
+             keep the corpus to the ported pattern forms or extend the renderer"
+        ),
+    }
+}
+
+/// Must match `ast_render.kara::render_match_arm`.
+fn render_rust_match_arm(a: &MatchArm) -> String {
+    let mut out = String::from("(arm");
+    out.push_str(&span_tag(a.span.offset, a.span.length));
+    out.push(' ');
+    out.push_str(&render_rust_pattern(&a.pattern));
+    if let Some(g) = &a.guard {
+        out.push_str(" (guard ");
+        out.push_str(&render_rust_expr(g));
+        out.push(')');
+    }
+    out.push(' ');
+    out.push_str(&render_rust_expr(&a.body));
     out.push(')');
     out
 }
@@ -515,6 +629,15 @@ fn render_rust_expr(e: &Expr) -> String {
             let mut out = String::from("(continue");
             out.push_str(&render_rust_label(label));
             out.push_str(&sp);
+            out.push(')');
+            out
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            let mut out = format!("(match{sp} {}", render_rust_expr(scrutinee));
+            for a in arms {
+                out.push(' ');
+                out.push_str(&render_rust_match_arm(a));
+            }
             out.push(')');
             out
         }
