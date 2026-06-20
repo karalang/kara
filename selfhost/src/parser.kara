@@ -16,6 +16,7 @@ import token.{Token, SpannedToken};
 import ast.{
     Expr,
     expr_span,
+    is_loop_block_expr,
     BinOp,
     UnaryOp,
     IntLit,
@@ -42,6 +43,11 @@ import ast.{
     Block,
     IfExpr,
     ReturnExpr,
+    WhileExpr,
+    ForExpr,
+    LoopExpr,
+    BreakExpr,
+    ContinueExpr,
 };
 import lexer.lex_all;
 
@@ -188,6 +194,19 @@ impl Parser {
         }
     }
 
+    // Consume an `in` keyword if present (well-formed `for … in …` corpus).
+    fn eat_in(mut ref self) {
+        if self.pos < self.tokens.len() {
+            let ok = match self.tokens[self.pos].token {
+                In => true,
+                _ => false,
+            };
+            if ok {
+                self.advance();
+            }
+        }
+    }
+
     // ── Blocks + statements (slice 2a) ──
     //
     // `{ stmt* tail? }`. Mirrors `src/parser/stmts.rs::parse_block`, restricted
@@ -256,9 +275,19 @@ impl Parser {
                 stmts.push(Stmt.Exp(ExprStmt { expr: e, span: sp }));
                 continue;
             }
-            // No semicolon: the block's tail if we're at `}`, else a lenient
+            // No semicolon. A `while`/`for`/`loop` is a block-STATEMENT even
+            // when trailing (the seed's `is_block_expr`: such loops never become
+            // a block's tail / implicit value — `let x = loop { … };` is the
+            // value-producing form). Its statement span is the loop's own span.
+            let is_loopish = is_loop_block_expr(e);
+            if is_loopish {
+                let sp = expr_span(e);
+                stmts.push(Stmt.Exp(ExprStmt { expr: e, span: sp }));
+                continue;
+            }
+            // Otherwise: the block's tail if we're at `}`, else a lenient
             // expression-statement (recovery; the well-formed corpus hits the
-            // tail case).
+            // tail case). `if`/`break`/`continue` reach here and may be tails.
             let at_rb2 = if self.pos < self.tokens.len() {
                 match self.tokens[self.pos].token {
                     RightBrace => true,
@@ -350,6 +379,101 @@ impl Parser {
             let block = self.parse_block();
             Some(Expr.Blk(block))
         }
+    }
+
+    // ── Loops + loop control (slice 2b) ──
+    //
+    // Mirror `src/parser/exprs.rs`'s `parse_while_expr` / `parse_for_expr` /
+    // `Token::Loop` / `parse_break_args` / `parse_continue_label`. `while let`,
+    // `for`-pattern destructuring, and `match` are deferred to Slice 3; `for`
+    // binds a single identifier. The optional `label:` prefix is wired in a
+    // follow-on commit (the `loop_labels` disambiguation for `break label`).
+
+    // `while cond { … }`. Span covers the whole loop (keyword → body `}`).
+    fn parse_while(mut ref self) -> Expr {
+        let start = self.current_span();
+        self.advance(); // while
+        let cond = self.parse_expr_bp(0);
+        let body = self.parse_block();
+        Expr.While(WhileExpr {
+            label: None,
+            cond: cond,
+            body: body,
+            span: self.span_from(start),
+        })
+    }
+
+    // `for var in iter { … }` — `var` is a single identifier (slice 2b).
+    fn parse_for(mut ref self) -> Expr {
+        let start = self.current_span();
+        self.advance(); // for
+        let var = self.take_member_name();
+        self.eat_in();
+        let iter = self.parse_expr_bp(0);
+        let body = self.parse_block();
+        Expr.For(ForExpr {
+            label: None,
+            var: var,
+            iter: iter,
+            body: body,
+            span: self.span_from(start),
+        })
+    }
+
+    // `loop { … }` (infinite loop; exits via `break`).
+    fn parse_loop(mut ref self) -> Expr {
+        let start = self.current_span();
+        self.advance(); // loop
+        let body = self.parse_block();
+        Expr.Loop(LoopExpr {
+            label: None,
+            body: body,
+            span: self.span_from(start),
+        })
+    }
+
+    // `break [value]` — a value follows unless the next token closes the
+    // construct (`;` / `}` / `,`), exactly like `return`. Labels land with the
+    // follow-on `loop_labels` commit.
+    fn parse_break(mut ref self) -> Expr {
+        let start = self.current_span();
+        self.advance(); // break
+        let value = self.parse_break_value();
+        Expr.Break(BreakExpr {
+            label: None,
+            value: value,
+            span: self.span_from(start),
+        })
+    }
+
+    // The optional value after `break` — None when the next token closes the
+    // construct. Mirrors the seed's `parse_break_args` value tail (sans label).
+    fn parse_break_value(mut ref self) -> Option[Expr] {
+        let has_value = if self.pos < self.tokens.len() {
+            match self.tokens[self.pos].token {
+                Semicolon => false,
+                RightBrace => false,
+                Comma => false,
+                _ => true,
+            }
+        } else {
+            false
+        };
+        if has_value {
+            Some(self.parse_expr_bp(0))
+        } else {
+            None
+        }
+    }
+
+    // `continue` — takes no value. Labels land with the follow-on commit.
+    fn parse_continue(mut ref self) -> Expr {
+        let start = self.current_span();
+        self.advance(); // continue
+        Expr.Continue(ContinueExpr {
+            label: None,
+            span: self.span_from(start),
+        })
     }
 
     // ── Postfix builders (slice 2a) ──
@@ -843,6 +967,13 @@ impl Parser {
 
             // `if` / `if … else …` expression.
             If => self.parse_if(),
+
+            // Loops + loop control (slice 2b).
+            While => self.parse_while(),
+            For => self.parse_for(),
+            Loop => self.parse_loop(),
+            Break => self.parse_break(),
+            Continue => self.parse_continue(),
 
             // `return [value]`.
             Return => {

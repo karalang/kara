@@ -217,6 +217,16 @@ pub shared enum Expr {
     If(IfExpr),
     Return(ReturnExpr),
 
+    // Loops + loop control (slice 2b): `while` / `for` / `loop` / `break` /
+    // `continue`. `while let`, `for`-pattern destructuring, and `match` are
+    // deferred to the patterns slice (Slice 3); `for` binds a single identifier
+    // here, mirroring slice 2a's `let` convention.
+    While(WhileExpr),
+    For(ForExpr),
+    Loop(LoopExpr),
+    Break(BreakExpr),
+    Continue(ContinueExpr),
+
     // Error-recovery placeholder. Named `Error` (not `Err`) to match the seed
     // and avoid colliding with `Result.Err` in codegen's error-exit heuristic
     // (`is_error_exit_value` flags any `return` whose callee path ends in
@@ -263,7 +273,25 @@ pub fn expr_span(e: ref Expr) -> Span {
         Blk(n) => clone_span(n.span),
         If(n) => clone_span(n.span),
         Return(n) => clone_span(n.span),
+        While(n) => clone_span(n.span),
+        For(n) => clone_span(n.span),
+        Loop(n) => clone_span(n.span),
+        Break(n) => clone_span(n.span),
+        Continue(n) => clone_span(n.span),
         Error(n) => clone_span(n.span),
+    }
+}
+
+// The loop forms the seed's `src/parser/stmts.rs::is_block_expr` treats as
+// statements that never become a block's tail (`while` / `for` / `loop`). `if`,
+// `break`, and `continue` are deliberately EXCLUDED — they remain valid block
+// tails (`{ if a { b } else { c } }`, `loop { break }`), matching the seed.
+pub fn is_loop_block_expr(e: ref Expr) -> bool {
+    match e {
+        While(_) => true,
+        For(_) => true,
+        Loop(_) => true,
+        _ => false,
     }
 }
 
@@ -340,5 +368,51 @@ pub struct IfExpr {
 // `return [value];`
 pub struct ReturnExpr {
     pub value: Option[Expr],
+    pub span: Span,
+}
+
+// ── Loops + loop control (slice 2b) ──
+//
+// Each loop node embeds its `body` as a by-value `Block` (exactly like
+// `IfExpr.then_block`), so it exercises the same nested-heap-struct enum
+// pack/unpack as `If`. `label` is `Option[String]` for `'label:` loops;
+// `BreakExpr.value` is the `Option[Expr]` (an `Option[shared T]` field — the
+// #48 capture-inc shape, mirroring `ReturnExpr.value`).
+
+// `[label:] while cond { … }` — `while let` is deferred to Slice 3 (patterns).
+pub struct WhileExpr {
+    pub label: Option[String],
+    pub cond: Expr,
+    pub body: Block,
+    pub span: Span,
+}
+
+// `[label:] for var in iter { … }` — slice 2b restricts the binding to a single
+// identifier (`var`); full destructuring patterns land with Slice 3.
+pub struct ForExpr {
+    pub label: Option[String],
+    pub var: String,
+    pub iter: Expr,
+    pub body: Block,
+    pub span: Span,
+}
+
+// `[label:] loop { … }` (infinite; exits via `break`).
+pub struct LoopExpr {
+    pub label: Option[String],
+    pub body: Block,
+    pub span: Span,
+}
+
+// `break [label] [value]`.
+pub struct BreakExpr {
+    pub label: Option[String],
+    pub value: Option[Expr],
+    pub span: Span,
+}
+
+// `continue [label]`.
+pub struct ContinueExpr {
+    pub label: Option[String],
     pub span: Span,
 }

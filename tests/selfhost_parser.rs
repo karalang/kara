@@ -141,6 +141,27 @@ const CORPUS: &[&str] = &[
     "{ return; }",
     "return a + b",
     "{ let w = f(x); w.y }",
+    // Loops + loop control (slice 2b) — while / for / loop / break / continue.
+    // `while`/`for`/`loop` are block-STATEMENTS even when trailing (never a
+    // tail); `if`/`break`/`continue` remain valid tails.
+    "loop { break }",
+    "loop { break 42 }",
+    "loop { continue }",
+    "loop { break a + b }",
+    "loop { break (1 + 2) }",
+    "while a { b }",
+    "while a < b { c }",
+    "while a { b; c }",
+    "while c { break }",
+    "for x in xs { f(x) }",
+    "for i in ns { g(i); }",
+    "for i in r { continue }",
+    "loop { if done { break } }",
+    "loop { if a { break } else { continue } }",
+    "{ let mut i = 0; while i < n { i = i + 1; } }",
+    "{ for x in xs { f(x) } }",
+    "{ loop { break } x }",
+    "loop { while a { break } }",
 ];
 
 // ── Rust-side canonical render (must match `ast_render.kara::render_expr`) ──
@@ -225,6 +246,15 @@ fn span_str(e: &Expr) -> String {
         e.span.offset as i64 - OFFSET_SHIFT,
         e.span.length
     )
+}
+
+/// ` :LABEL` for a loop / break / continue label — must match
+/// `ast_render.kara::render_label`.
+fn render_rust_label(label: &Option<String>) -> String {
+    match label {
+        Some(l) => format!(" :{l}"),
+        None => String::new(),
+    }
 }
 
 /// `(arg[ :LABEL][ mut] @off:len VALUE)` — must match `ast_render.kara::render_arg`.
@@ -406,6 +436,72 @@ fn render_rust_expr(e: &Expr) -> String {
                 out.push(' ');
                 out.push_str(&render_rust_expr(v));
             }
+            out.push(')');
+            out
+        }
+        ExprKind::While {
+            label,
+            condition,
+            body,
+            ..
+        } => {
+            let mut out = String::from("(while");
+            out.push_str(&render_rust_label(label));
+            out.push_str(&sp);
+            out.push(' ');
+            out.push_str(&render_rust_expr(condition));
+            out.push(' ');
+            out.push_str(&render_rust_block(body));
+            out.push(')');
+            out
+        }
+        ExprKind::For {
+            label,
+            pattern,
+            iterable,
+            body,
+            ..
+        } => {
+            let var = match &pattern.kind {
+                PatternKind::Binding(n) => n.clone(),
+                other => panic!("slice-2b for pattern must be a plain binding, got {other:?}"),
+            };
+            let mut out = String::from("(for");
+            out.push_str(&render_rust_label(label));
+            out.push(' ');
+            out.push_str(&var);
+            out.push_str(&sp);
+            out.push(' ');
+            out.push_str(&render_rust_expr(iterable));
+            out.push(' ');
+            out.push_str(&render_rust_block(body));
+            out.push(')');
+            out
+        }
+        ExprKind::Loop { label, body, .. } => {
+            let mut out = String::from("(loop");
+            out.push_str(&render_rust_label(label));
+            out.push_str(&sp);
+            out.push(' ');
+            out.push_str(&render_rust_block(body));
+            out.push(')');
+            out
+        }
+        ExprKind::Break { label, value } => {
+            let mut out = String::from("(break");
+            out.push_str(&render_rust_label(label));
+            out.push_str(&sp);
+            if let Some(v) = value {
+                out.push(' ');
+                out.push_str(&render_rust_expr(v));
+            }
+            out.push(')');
+            out
+        }
+        ExprKind::Continue { label } => {
+            let mut out = String::from("(continue");
+            out.push_str(&render_rust_label(label));
+            out.push_str(&sp);
             out.push(')');
             out
         }

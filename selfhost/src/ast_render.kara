@@ -27,6 +27,11 @@ import ast.{
     Block,
     IfExpr,
     ReturnExpr,
+    WhileExpr,
+    ForExpr,
+    LoopExpr,
+    BreakExpr,
+    ContinueExpr,
 };
 
 // MUST stay identical to `escape_for_render` in `selfhost/src/main.kara` and
@@ -98,6 +103,20 @@ fn span_str(off: i64, len: i64) -> String {
     s.push_str(off.to_string());
     s.push_str(":");
     s.push_str(len.to_string());
+    s
+}
+
+// ` :LABEL` for a loop / break / continue label, else "" — mirrors the
+// `:LABEL` rendering of a labeled call argument. Consumes the `Option[String]`.
+fn render_label(label: Option[String]) -> String {
+    let mut s = "".to_string();
+    match label {
+        Some(l) => {
+            s.push_str(" :");
+            s.push_str(l);
+        }
+        None => {}
+    }
     s
 }
 
@@ -431,6 +450,75 @@ pub fn render_expr(e: Expr) -> String {
                 }
                 None => {}
             }
+            out.push_str(")");
+        }
+        While(n) => {
+            let WhileExpr {
+                label,
+                cond,
+                body,
+                span,
+            } = n;
+            out.push_str("(while");
+            out.push_str(render_label(label));
+            out.push_str(span_str(span.offset, span.length));
+            out.push_str(" ");
+            out.push_str(render_expr(cond));
+            out.push_str(" ");
+            out.push_str(render_block(body));
+            out.push_str(")");
+        }
+        For(n) => {
+            let ForExpr {
+                label,
+                var,
+                iter,
+                body,
+                span,
+            } = n;
+            out.push_str("(for");
+            out.push_str(render_label(label));
+            out.push_str(" ");
+            out.push_str(var);
+            out.push_str(span_str(span.offset, span.length));
+            out.push_str(" ");
+            out.push_str(render_expr(iter));
+            out.push_str(" ");
+            out.push_str(render_block(body));
+            out.push_str(")");
+        }
+        Loop(n) => {
+            let LoopExpr { label, body, span } = n;
+            out.push_str("(loop");
+            out.push_str(render_label(label));
+            out.push_str(span_str(span.offset, span.length));
+            out.push_str(" ");
+            out.push_str(render_block(body));
+            out.push_str(")");
+        }
+        Break(n) => {
+            let BreakExpr {
+                label,
+                value,
+                span,
+            } = n;
+            out.push_str("(break");
+            out.push_str(render_label(label));
+            out.push_str(span_str(span.offset, span.length));
+            match value {
+                Some(e) => {
+                    out.push_str(" ");
+                    out.push_str(render_expr(e));
+                }
+                None => {}
+            }
+            out.push_str(")");
+        }
+        Continue(n) => {
+            let ContinueExpr { label, span } = n;
+            out.push_str("(continue");
+            out.push_str(render_label(label));
+            out.push_str(span_str(span.offset, span.length));
             out.push_str(")");
         }
         Error(n) => {
