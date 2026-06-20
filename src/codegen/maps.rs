@@ -1071,6 +1071,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         .into_int_value()
                 };
 
+                // The lookup never stores the key, so a fresh-owned-temp key
+                // (`m.get_or(w.to_string(), d)`) must be freed — no-ops on a
+                // borrowed view (cap == 0) or a binding/literal key.
+                self.free_fresh_owned_str_arg(&args[0].value, key_val);
+
                 let found_bb = self
                     .context
                     .append_basic_block(fn_val, "map.getor.found.bb");

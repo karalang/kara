@@ -468,6 +468,35 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_pointer_value();
 
+        // Free a fresh-owned-temp key (`m.entry(w.to_string())`) when the
+        // runtime did NOT adopt its buffer: `karac_map_entry` bit-copies the
+        // key header into the bucket only on the VACANT insert, so on the
+        // OCCUPIED path the temp's buffer is orphaned; the `and_modify`
+        // lookup-only variant never stores the key, so it always orphans it.
+        // Without this the canonical counter `*m.entry(w.to_string())
+        // .or_insert(0) += 1` leaks one key buffer per repeated key (LSan).
+        // `free_fresh_owned_str_arg` no-ops on a borrowed view (cap == 0) and
+        // on non-Vec/String values, and the compile-time guard restricts this
+        // to fresh temps so a binding / literal key is untouched.
+        if self.expr_yields_fresh_owned_temp(key_expr)
+            || self.expr_is_fresh_owned_string_slice(key_expr)
+        {
+            let should_free_key = if terminal_method == "and_modify" {
+                self.context.bool_type().const_int(1, false)
+            } else {
+                occupied
+            };
+            let kf_free_bb = self.context.append_basic_block(fn_val, "entry.key.free");
+            let kf_cont_bb = self.context.append_basic_block(fn_val, "entry.key.cont");
+            self.builder
+                .build_conditional_branch(should_free_key, kf_free_bb, kf_cont_bb)
+                .unwrap();
+            self.builder.position_at_end(kf_free_bb);
+            self.free_fresh_owned_str_arg(key_expr, key_val);
+            self.builder.build_unconditional_branch(kf_cont_bb).unwrap();
+            self.builder.position_at_end(kf_cont_bb);
+        }
+
         // Inner `and_modify` closures — innermost first (chain order is
         // outermost-first; reverse to get execution order).
         for &am_closure in and_modify_closures.iter().rev() {
