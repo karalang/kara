@@ -51,7 +51,7 @@ per-project sections below hold the design. Status legend: ✅ shipped ·
 |---|---|---|---|---|
 | **Parallax** | Auto-concurrency without `async`/coloring (fan-out + join) | ✅ shipped | auto-par codegen + HTTP FFI | 1 |
 | **Mend** | AI-first: structured compiler output as a machine fix-loop | ✅ shipped | `karac … --output=json` + `karac fix` | 1 |
-| **Slipstream** | Auto-concurrency + SoA layout + one source on CPU/GPU | 🔨 browser edition shipped | browser LBM wind tunnel (slices 1–3: stateful grid + worker-pool fan-out + live angle-of-attack → stall) built — `examples/slipstream/`; native-SDL2 CPU Phase 11 · GPU Phase 10 still planned | 1 |
+| **Slipstream** | Auto-concurrency + SoA layout + one source on CPU/GPU | 🔨 browser edition shipped, full-SoA | browser LBM wind tunnel (stateful grid + worker-pool fan-out + live angle-of-attack → stall) built — `examples/slipstream/`; **carried grid is an SoA `layout` block, byte-identical AoS↔SoA native + runs SoA in-browser** (per-layout-monomorphization slice 6); native-SDL2 CPU Phase 11 · GPU Phase 10 still planned | 1 |
 | **Cartographer** | Effect graph as a live architecture artifact | ✅ shipped | whole-program query + live WASM studio (D3 + Monaco) + per-callee blocking attribution — all design points covered | 2 |
 | **Husk** | `kernel` profile — no heap/panic/std, MMIO, ISRs | ⬜ planned | v8 hardware gaps (`#[repr]`, `#[interrupt]`, asm) | 2 |
 | **Weave** | Refinement types + contracts + effects together | ✅ shipped (CSV cut) | refinement+contracts (CSV) · `Pool[T]`+TLS+tracing (service) | 2 |
@@ -229,10 +229,18 @@ examples that show the interesting cases without being contrived.
 > rather than an HTML slider, native-SDL2 CPU + GPU still Phase-11/10) are in the
 > example README.
 
-> **Open follow-up — finish the `SoA layout` half (the next agent's pickup).**
-> Slipstream's roster line bills it on *"SoA layout"*, but the demo currently
-> ships AoS (`Vec[LbmNode]`), because `layout`/SoA blocks did not cross function
-> boundaries and Slipstream's kernel is split across `ref Vec[LbmNode]` helpers.
+> **Landed — the `SoA layout` half is complete (slice 6, 2026-06-20).**
+> Slipstream's roster line bills it on *"SoA layout"*, and it now **ships SoA**:
+> `examples/slipstream/src/sim.kara`'s carried LBM grid (plus the per-substep
+> `coll`/`next` intermediates) is a `layout` block split into two cache groups,
+> the per-band chunks stay AoS (they cross the generic `TaskHandle[Vec[LbmNode]]`
+> join), and the **same kernel runs SoA on both targets**: the native oracle's
+> milestone framebuffer checksums are byte-identical AoS↔SoA (1582897806 /
+> 793640938 / 680974524) and the browser flagship runs on SoA in real headless
+> Chrome (`verify_browser.mjs` PASS — isolated, evolving, 370-frame soak,
+> wheel-angle control). Getting there started from a hard gap: `layout`/SoA
+> blocks did not cross function boundaries and Slipstream's kernel is split across
+> `ref Vec[LbmNode]` helpers.
 > Probing that gap drove **B-2026-06-19-14**: passing a SoA-laid-out `Vec` to
 > another function silently miscompiled (by-ref → garbage `len` → SIGTRAP;
 > by-value → LLVM verification failure), because callee params are compiled AoS.
@@ -299,22 +307,24 @@ examples that show the interesting cases without being contrived.
 >    carrier replaces them; the redundant by-value param ABI + its base-symbol
 >    footgun are retired; cross-group disjointness audited).
 >
-> The one remaining slice: 6 (convert `examples/slipstream/src/sim.kara`'s
-> `Vec[LbmNode]` to a `layout` block and confirm the native oracle's checksums
-> are unchanged — SoA must be byte-identical to AoS, the proof Slipstream earns
-> its "SoA layout" billing). The field-level SoA index-store blocker is now
-> **fixed** (B-2026-06-20-7, 38fb0b57): a direct field scatter `grid[i].field =
-> expr` was miscompiled for index ≥ 1 (the per-group destination address was
-> mis-strided, so the store was dropped; index 0 was coincidentally correct) —
-> pre-existing and orthogonal to the per-layout mono work, but the LBM kernel
-> relies on exactly this; `compile_soa_field_store` now addresses the field's own
-> group buffer at `[i]` by the group sub-struct stride. The whole-element SoA
+> **Slice 6 (the Slipstream full-SoA proof) — DONE (b9138d30).** Converting
+> `sim.kara`'s `Vec[LbmNode]` to a `layout` block and confirming byte-identical
+> checksums surfaced **five** more cross-function gaps, all fixed in the compiler
+> (no demo-side workarounds, per `feedback_no_workarounds_fix_compiler`):
+> the `with_capacity`-presized SoA constructor (a counted-loop fill is rewritten
+> `Vec.new()` → `Vec.with_capacity(n)`); the returned-local base-symbol name-match
+> clash (a builder whose returned local is named after a `layout` block); SoA
+> reassignment `grid = substep(grid, …)` (the carried-grid per-frame
+> double-buffer — frees the displaced groups, no leak/double-free, Linux-LSan
+> verified); tail-CALL SoA-return propagation (`substep`'s tail `fan_stream(coll,
+> …)`); and SoA carried across a **coroutine suspend** (the browser render loop's
+> `grid` across `frames.recv()` — state-struct field sizing + par-slot typing).
+> The earlier field-level SoA index-store fix (B-2026-06-20-7, 38fb0b57) and the
+> push / mut-ref-field-write-back paths all hold. The whole-element SoA
 > *index*-store (`grid[i] = E{…}`) is still unbuilt even single-function (a
-> distinct gap; the LBM kernel scatters individual fields, not whole elements).
-> Push-based writes, mut-ref field write-back, and `grid[i].field =` field
-> scatter all work now. Slice 6 (the Slipstream proof) is gated on the full
-> `tests/codegen.rs` suite + LSan. Background in the user-memory
-> `soa_cross_function_partial`.
+> distinct gap; the LBM kernel scatters individual fields, not whole elements);
+> branch-leaf / multi-`return` SoA returns degrade to AoS (never miscompile).
+> Background in the user-memory `soa_cross_function_partial`.
 
 **Primary capability:** Auto-concurrency of sequential code; layout blocks for
 cache-efficient SoA access; same code runs on CPU and GPU.

@@ -40,7 +40,13 @@ large-scale turbulence. Bring it back down and the flow reattaches.
 - **`src/sim.kara`** — the shared, pure fluid kernel. D2Q9 equilibrium, BGK
   collision, a pull-scheme streaming step with bounce-back off the wing and
   equilibrium inflow on the borders, and a vorticity (curl) renderer. No host
-  imports — the *identical* code runs native and in the browser.
+  imports — the *identical* code runs native and in the browser. The carried
+  grid is a **`layout` block (SoA)**: the nine distribution functions split into
+  two cache groups, so each buffer is two parallel arrays rather than an array of
+  72-byte cells. Adding the layout block changes only the *physical* memory
+  layout — the native oracle's milestone checksums are byte-identical to the
+  array-of-structs build, and the browser flagship runs on SoA too (the
+  per-layout-monomorphization spike's slice-6 proof).
 - **`src/host_macos.kara` / `src/host_linux.kara`** — the native oracle: runs a
   fixed, deterministic substep schedule and prints framebuffer checksums + peak
   speed at three milestones.

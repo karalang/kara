@@ -1,6 +1,6 @@
 # Design spike — per-layout monomorphization (SoA across call boundaries)
 
-**Status:** 🟦 **IN PROGRESS — slices 1–5 landed (2026-06-20).** Slice 1 (the
+**Status:** 🟩 **COMPLETE — slices 1–6 landed (2026-06-20).** Slice 1 (the
 `LayoutId` axis scaffolding), slice 2 (forward arg-layout monomorphization — a
 SoA `Vec[E]` passed by value to a helper is served by an on-demand layout
 monomorph, regardless of the param name), slice 3 (SoA returns — a helper that
@@ -9,16 +9,22 @@ binding's layout, so the returned local crosses the boundary even though it has
 no binding name to key on), slice 4 (multi-buffer / differing-name kernels —
 forward inference extended to `ref`/`mut ref Vec[E]` borrow params, so multiple
 SoA buffers of one element type flow through shared by-ref helpers, each
-monomorphizing a distinct symbol), and slice 5 (origin-only `soa_layouts` — the
+monomorphizing a distinct symbol), slice 5 (origin-only `soa_layouts` — the
 name-keyed access-path fallback is replaced by a per-binding `LayoutId` value
 carrier seeded at the binding site, and the redundant name-keyed by-value param
 ABI is retired, fixing the base-symbol footgun where a `Vec[E]` param named like
-a layout block lowered SoA by coincidence) are on `main`. The one remaining
-slice (6 — the Slipstream full-SoA proof) is gated on the full `tests/codegen.rs`
-suite + the Linux-LSan leak gate. This file is the architecture of record;
-update its `Status:` line (and the `docs/spikes/README.md` row) as slices land.
-Tracks **[B-2026-06-19-14](../bug-ledger.jsonl)** (the `partial`
-SoA-across-functions entry) and design.md **Feature 1 / P1.5 (Phase 11)**.
+a layout block lowered SoA by coincidence), and **slice 6 (the Slipstream
+full-SoA proof — `examples/slipstream/src/sim.kara`'s carried LBM grid is a
+`layout` block; the native oracle's milestone checksums are byte-identical
+AoS↔SoA and the browser flagship runs on SoA in real headless Chrome)** are on
+`main`. Slice 6 surfaced and fixed five more cross-function gaps (the
+`with_capacity`-presized SoA constructor, the returned-local base-symbol
+name-match clash, SoA reassignment `grid = substep(grid)`, tail-CALL SoA-return
+propagation, and SoA carried across a coroutine suspend — state-struct field +
+par-slot typing). This file is the architecture of record; update its `Status:`
+line (and the `docs/spikes/README.md` row) as slices land. Tracks
+**[B-2026-06-19-14](../bug-ledger.jsonl)** (the SoA-across-functions entry) and
+design.md **Feature 1 / P1.5 (Phase 11)**.
 
 Cross-refs: [design.md § Feature 1: Data Layout](../design.md), the Slipstream
 SoA follow-up in [dogfooding.md](../dogfooding.md), and the codegen follow-on
@@ -307,8 +313,47 @@ existing `suppress_cleanup_for_tail_return` for AoS Vec).
    index-store `grid[i] = E{…}` is still unbuilt (same family).
 6. **Proof: convert `examples/slipstream/src/sim.kara`** to a `layout` block and
    confirm the native oracle checksums are byte-identical AoS↔SoA — Slipstream
-   earns its "SoA layout" roster billing. The field-level SoA index-store blocker
-   (B-2026-06-20-7) is now fixed; this slice is the remaining work.
+   earns its "SoA layout" roster billing. **DONE.** The carried LBM grid (plus
+   the per-substep `coll`/`next` intermediates) is a `layout` block split into
+   two cache groups; the per-band chunks stay AoS (they cross the generic
+   `TaskHandle[Vec[LbmNode]]` join). The native oracle's milestone checksums are
+   byte-identical to the AoS build (1582897806 / 793640938 / 680974524) and the
+   browser flagship runs on SoA in real headless Chrome (`verify_browser.mjs`
+   PASS — isolated, evolving, 370-frame soak, wheel-angle control). The proof
+   surfaced **five** more cross-function gaps, all fixed in the compiler (no
+   demo-side workarounds, per the dogfooding charter):
+   - **`with_capacity` SoA constructor.** The `presize` lowering rewrites a
+     counted-loop-filled `Vec.new()` into `Vec.with_capacity(n)` (the
+     `init_grid`/`fan_collide` shape). The SoA let path matched only `Vec.new`,
+     so the rewritten binding kept the AoS `{ptr,len,cap}` slot under an SoA
+     layout — an LLVM type mismatch. `is_vec_with_capacity_call` routes it to
+     `compile_soa_new` (the capacity is a hint the lazily-grown groups drop).
+   - **Returned-local base-symbol clash.** A builder whose returned local is
+     named after a `layout` block (`init_grid`'s `grid`) name-matched its body
+     SoA while the AoS-return base symbol's signature returned the 3-field Vec.
+     A returned local's layout is the return mono's (`layout_subst`), not its
+     name — `soa_return_locals` suppresses the origin name-match for it.
+   - **SoA reassignment.** `grid = substep(grid, …)` (the carried-grid per-frame
+     double-buffer) had no backward-mono path on the assignment arm (only the
+     `let` arm did) — the call returned the AoS struct into the 4-field slot →
+     SIGSEGV. `compile_soa_assign_from_call` parks the return layout, frees the
+     OLD groups (the by-value param is caller-retains, so the displaced buffers
+     are owned here), then stores the new SoA header; the binding's queued
+     `FreeSoaGroups` frees the final frame at scope exit (no double-free/leak —
+     Linux-LSan verified).
+   - **Tail-CALL SoA-return propagation.** A SoA-returning fn whose body ENDS IN
+     a layout-returning call (`substep`'s `fan_stream(coll, …)`) returned AoS
+     while its signature was SoA. `compile_tail_final_expr` flows the function's
+     return layout to the tail call (the tail-IDENTIFIER analog of
+     `soa_return_local_names`).
+   - **SoA across a coroutine suspend** (the browser render loop's `grid` carried
+     across `frames.recv()`): collect `soa_layouts` and pre-populate `fn_asts`
+     **before** the state-machine emission (the poll-fn body's SoA-return
+     inference reads both); size an SoA persisted local's state-struct field as
+     the 4-field struct; type an SoA binding's par-block / auto-par return slot
+     SoA (`infer_let_binding_llvm_type`). Without the last one, the wasm-threads
+     driver threaded `grid` through an AoS return slot and mismatched its SoA
+     `substep` call.
 
 ## 6. Migration from the name-keyed model
 
