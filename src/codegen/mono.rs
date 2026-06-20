@@ -21,7 +21,7 @@ use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 
 use super::helpers::{const_value_from_literal_expr, const_value_to_mangle_str};
-use super::state::{MapMonoMethods, VarSlot};
+use super::state::{LayoutId, MapMonoMethods, VarSlot};
 
 impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn compile_generic_call(
@@ -96,8 +96,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // single pointer, so this consults no variable slots.
         self.emit_tensor_crossarg_dim_asserts(&generic_fn, args, &arg_vals)?;
 
+        // Per-layout-monomorphization axis — forward layout-flow inference
+        // (`docs/spikes/per-layout-monomorphization.md`). The layout half of
+        // the monomorph key: each layout-carrying param's active `LayoutId`,
+        // keyed by param name. Slice 1 resolves every entry to `Aos`, so the
+        // mangled name below is unchanged and the monomorph is byte-identical
+        // to the name-keyed model.
+        let layout_subst = self.compute_call_layout_subst(&generic_fn);
+
         // Mangle a unique name for this specialization (e.g. `max$i64`).
-        let mangled = self.mangle_mono_name(name, &generic_fn, &subst, &const_subst);
+        let mangled = self.mangle_mono_name(name, &generic_fn, &subst, &const_subst, &layout_subst);
 
         // Slice 8y: per-call-site decision on whether the caller
         // takes the state-machine intercept path or falls through to
@@ -167,6 +175,13 @@ impl<'ctx> super::Codegen<'ctx> {
             // can resolve const-param refs against it. Parallel to
             // `type_subst`'s save/restore.
             let saved_const_subst = std::mem::replace(&mut self.const_subst, const_subst.clone());
+            // Per-layout-monomorphization axis: thread the per-call layout
+            // substitution into the body-lowering pass. Parallel to
+            // `type_subst` / `const_subst`. Slice 1 always carries `Aos`
+            // entries, so body lowering (which doesn't yet consult this map)
+            // is unchanged; slice 2 reads it to select the SoA access paths.
+            let saved_layout_subst =
+                std::mem::replace(&mut self.layout_subst, layout_subst.clone());
 
             // Declare then compile the specialization.
             self.declare_mono_function(&generic_fn, &mangled)?;
@@ -187,6 +202,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.emit_state_machine_helpers_for_mono(name, &mangled);
 
             // Restore state.
+            self.layout_subst = saved_layout_subst;
             self.const_subst = saved_const_subst;
             self.type_subst = saved_subst;
             self.loop_stack = saved_loop_stack;
@@ -797,12 +813,19 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// Build a mangled name for a specialization, e.g. `max$i64` or `zip$i64$f64`.
+    ///
+    /// `layout_subst` adds the per-layout-monomorphization axis: a layout
+    /// suffix (`$soa_<name>`) for any layout-carrying value param whose active
+    /// `LayoutId` is non-`Aos`, so each layout variant is a distinct LLVM
+    /// symbol (`docs/spikes/per-layout-monomorphization.md` §4.3). `Aos`
+    /// contributes no suffix, so an all-`Aos` call keeps the existing symbol.
     pub(super) fn mangle_mono_name(
         &self,
         base: &str,
         func: &Function,
         subst: &HashMap<String, BasicTypeEnum<'ctx>>,
         const_subst: &HashMap<String, crate::prelude::ConstValue>,
+        layout_subst: &HashMap<String, LayoutId>,
     ) -> String {
         let params = match &func.generic_params {
             Some(gp) => &gp.params,
@@ -825,7 +848,56 @@ impl<'ctx> super::Codegen<'ctx> {
                 mangled.push_str(&self.llvm_type_to_mangle_str(*ty));
             }
         }
+        // Per-layout-monomorphization axis: append a layout suffix for any
+        // value param carrying a non-`Aos` layout. Slice 1 always resolves to
+        // `Aos` (suffix `None`), so this loop is a no-op and the name is
+        // byte-identical to the type/const mangling above.
+        for param in &func.params {
+            if let Some(name) = param.name() {
+                if let Some(suffix) = layout_subst.get(name).and_then(LayoutId::mangle_suffix) {
+                    mangled.push('$');
+                    mangled.push_str(&suffix);
+                }
+            }
+        }
         mangled
+    }
+
+    /// Forward layout-flow inference for a call
+    /// (`docs/spikes/per-layout-monomorphization.md` §4.2): the `LayoutId` of
+    /// each layout-carrying (`Vec[E]`) value param, keyed by param name. This
+    /// is the layout half of the monomorph key fed to `mangle_mono_name` and
+    /// (from slice 2) to body lowering via `self.layout_subst`.
+    ///
+    /// **Slice 1 always yields `Aos`.** Every collection-typed param maps to
+    /// `LayoutId::Aos`, so `mangle_mono_name` adds no suffix and the monomorph
+    /// is byte-identical to the name-keyed model. Slice 2 inspects each
+    /// argument's root binding and returns `Soa(name)` when the root is a
+    /// `layout`-declared binding, superseding the name-keyed by-value path.
+    pub(super) fn compute_call_layout_subst(&self, func: &Function) -> HashMap<String, LayoutId> {
+        let mut layout_subst = HashMap::new();
+        for param in &func.params {
+            if !Self::param_is_layout_carrying(param) {
+                continue;
+            }
+            let Some(name) = param.name() else { continue };
+            // Slice 1: every argument resolves to `Aos`. Slice 2 replaces this
+            // with the argument-root binding-site layout.
+            layout_subst.insert(name.to_string(), LayoutId::Aos);
+        }
+        layout_subst
+    }
+
+    /// Whether a value param's declared type is a layout-carrying collection —
+    /// a `Vec[E]` whose physical layout the per-layout-monomorphization axis
+    /// can vary (`Aos` vs an SoA grouping). Borrow forms (`ref Vec[E]`) are
+    /// out of scope for the first slices — the by-ref-reads path already
+    /// derefs through the caller's SoA struct.
+    fn param_is_layout_carrying(param: &Param) -> bool {
+        matches!(
+            &param.ty.kind,
+            TypeKind::Path(path) if path.segments.last().map(String::as_str) == Some("Vec")
+        )
     }
 
     /// Slice 0.a sub-step 2 — codegen monomorphization-request bound

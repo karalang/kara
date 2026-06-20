@@ -92,8 +92,8 @@ use helpers::{
     impl_target_name, make_impl_method_function, method_is_compiler_builtin, method_self_is_value,
 };
 use state::{
-    AssertedIndexBound, CleanupAction, EnumLayout, LoopFrame, MapMonoMethods, SharedTypeInfo,
-    SoaLayout, SpawnSiteRecord, VarSlot,
+    AssertedIndexBound, CleanupAction, EnumLayout, LayoutId, LoopFrame, MapMonoMethods,
+    SharedTypeInfo, SoaLayout, SpawnSiteRecord, VarSlot,
 };
 
 // ── Public API ─────────────────────────────────────────────────
@@ -1362,6 +1362,20 @@ pub(super) struct Codegen<'ctx> {
     /// extends the save/restore around `compile_mono_function` so the
     /// body lowering sees the same bindings.
     pub(crate) const_subst: HashMap<String, crate::prelude::ConstValue>,
+    /// Per-layout-monomorphization axis: callee param NAME → the `LayoutId`
+    /// of the caller's argument at the active call site
+    /// (`docs/spikes/per-layout-monomorphization.md`). Saved/restored around
+    /// `compile_mono_function` exactly like `type_subst` / `const_subst`, and
+    /// fed to `mangle_mono_name` so each layout variant is a distinct LLVM
+    /// symbol.
+    ///
+    /// Slice 1 populates this only with `Aos` entries (so the mangled name is
+    /// unchanged and output is byte-identical); the body-lowering reads that
+    /// select the SoA access paths against the active layout arrive in slice
+    /// 2 — until then the field is written by the mono entry's save/restore
+    /// but not yet read.
+    #[allow(dead_code)] // slice 2 — SoA body-lowering reads this to pick the access paths.
+    pub(crate) layout_subst: HashMap<String, LayoutId>,
     // ── Closure compilation ────────────────────────────────────────
     /// Monotonic counter used to generate unique closure function names.
     pub(crate) closure_counter: u32,
@@ -4917,6 +4931,7 @@ impl<'ctx> Codegen<'ctx> {
             generated_monos: HashSet::new(),
             type_subst: HashMap::new(),
             const_subst: HashMap::new(),
+            layout_subst: HashMap::new(),
             closure_counter: 0,
             indexed_elem_counter: 0,
             closure_fn_types: HashMap::new(),

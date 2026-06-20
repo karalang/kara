@@ -269,6 +269,46 @@ pub(crate) struct SoaLayout {
     pub(crate) num_groups: usize,
 }
 
+// ── Per-layout monomorphization axis ────────────────────────────
+
+/// Names the concrete physical layout of a `Vec[E]` / `Array[E, N]` binding at
+/// a codegen monomorph: either the default array-of-structs (`Aos`) or a
+/// struct-of-arrays origin keyed by the `layout <name>` block that declared it.
+///
+/// This is the value carrier for the per-layout-monomorphization axis
+/// (`docs/spikes/per-layout-monomorphization.md`). Distinct `layout` blocks —
+/// even structurally identical, even over the same element struct — get
+/// distinct `Soa(name)` values, so two groupings of one element type produce
+/// distinct monomorphs (the "distinct monomorphs per grouping" invariant,
+/// design.md:5426).
+///
+/// **Slice 1 is pure scaffolding:** layout-flow inference always yields `Aos`
+/// (`compute_call_layout_subst` populates only `Aos` entries), so the layout
+/// suffix is empty at every call and output is byte-identical to the
+/// name-keyed model. Slice 2 populates forward argument layouts (constructing
+/// `Soa`); slice 3 adds backward return-layout inference.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum LayoutId {
+    /// Default array-of-structs: a `Vec[E]` is `{ ptr, len, cap }`.
+    Aos,
+    /// Struct-of-arrays, keyed by the originating `layout <name>` block (the
+    /// key into `soa_layouts`). Constructed starting in slice 2.
+    #[allow(dead_code)] // slice 2 — forward arg-layout inference constructs this.
+    Soa(String),
+}
+
+impl LayoutId {
+    /// Mangling fragment for this layout, or `None` for the default `Aos`
+    /// (which contributes no suffix — so an all-`Aos` monomorph keeps the
+    /// existing symbol, and non-SoA code emits zero new symbols).
+    pub(crate) fn mangle_suffix(&self) -> Option<String> {
+        match self {
+            LayoutId::Aos => None,
+            LayoutId::Soa(name) => Some(format!("soa_{name}")),
+        }
+    }
+}
+
 // ── Scope cleanup action ────────────────────────────────────────
 
 /// Per-element drop classification for a `Vec[Map[K,V]]` / `Vec[Set[T]]`
@@ -1108,4 +1148,31 @@ pub(crate) struct MapMonoMethods<'ctx> {
     /// load on match. Mirrors the `KaracMap::lookup` /
     /// `KaracMap::get` shape from `runtime/src/map.rs`.
     pub(crate) get_fn: FunctionValue<'ctx>,
+}
+
+#[cfg(test)]
+mod layout_id_tests {
+    use super::LayoutId;
+
+    // Locks the per-layout-monomorphization symbol-naming contract that
+    // slices 2-3 build on (`docs/spikes/per-layout-monomorphization.md` §4.3):
+    // `Aos` contributes no mangle suffix (so an all-`Aos` monomorph keeps the
+    // existing symbol), and `Soa(name)` produces a stable `soa_<name>` fragment.
+    #[test]
+    fn mangle_suffix_contract() {
+        assert_eq!(LayoutId::Aos.mangle_suffix(), None);
+        assert_eq!(
+            LayoutId::Soa("entities".to_string()).mangle_suffix(),
+            Some("soa_entities".to_string())
+        );
+    }
+
+    // Distinct `layout` blocks (distinct names) yield distinct suffixes, so two
+    // groupings of one element type can't collide into one monomorph symbol.
+    #[test]
+    fn distinct_layout_names_distinct_suffixes() {
+        let a = LayoutId::Soa("grid".to_string()).mangle_suffix();
+        let b = LayoutId::Soa("coll".to_string()).mangle_suffix();
+        assert_ne!(a, b);
+    }
 }
