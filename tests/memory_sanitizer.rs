@@ -5395,6 +5395,269 @@ fn main() {
         );
     }
 
+    // ── Residual map-key no-adopt ownership (B-2026-06-20-9) ──
+    // Map key methods route the key buffer through ownership paths the
+    // fresh-temp-only handling of `B-2026-06-20-8` missed. `karac_map_entry`
+    // ADOPTS the key (bit-copies its `{ptr,len,cap}`) only on the VACANT
+    // insert; `and_modify`'s lookup variant, `get`/`get_or`/`remove`/
+    // `contains_key`, and `insert` on the EXISTS path never adopt. For a
+    // moved local binding / owned param / place key on a no-adopt path the
+    // buffer was orphaned (leak); on `entry`'s vacant path the key was adopted
+    // AND freed by the un-suppressed source (double-free). The fix mirrors
+    // `Map.insert`'s consume-site dance in the entry chain (suppress source +
+    // defensive-copy owned params + free on the no-adopt branch) and adds the
+    // fresh-temp key free to `get`/`remove`/`contains_key` and the exists-path
+    // key free to `insert`.
+
+    #[test]
+    fn asan_map_entry_moved_binding_key_no_double_free() {
+        // `entry().or_insert` VACANT path with a moved LOCAL String binding.
+        // The map adopts the buffer; the source binding's scope-exit free must
+        // be suppressed, else both free it (double-free — caught even on macOS
+        // ASAN without LSan).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    let mut k = String.new();
+    k.push_str("fresh-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    *m.entry(k).or_insert(0_i64) += 1_i64;
+    println(m.len());
+}
+"#,
+            &["1"],
+            "map_entry_moved_binding_key_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_map_entry_moved_binding_key_occupied_no_leak() {
+        // `entry().or_insert` OCCUPIED (no-adopt) path with a moved local
+        // binding (pre-inserted via `insert`). The entry chain frees the
+        // orphaned ≥36-byte key buffer (the source was suppressed).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("dup-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(), 5_i64);
+    let mut k = String.new();
+    k.push_str("dup-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    *m.entry(k).or_insert(0_i64) += 1_i64;
+    println(m.get_or("dup-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(), 0_i64));
+}
+"#,
+            &["6"],
+            "map_entry_moved_binding_key_occupied_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_map_entry_owned_param_key_no_double_free() {
+        // `entry().or_insert` with an OWNED String PARAM key, exercised on both
+        // the vacant (first call) and occupied (second call, same key) paths
+        // via a `mut ref Map`. The param key is defensive-copied so the bucket
+        // owns a private buffer; the caller frees the original. Vacant: copy
+        // adopted, original freed by caller (no double-free). Occupied: copy
+        // orphaned → freed by the entry chain, original freed by caller
+        // (no leak, no double-free). Churn between calls exposes a UAF if a
+        // bucket ever aliased a freed buffer.
+        assert_clean_asan_run(
+            r#"
+fn bump(m: mut ref Map[String, i64], k: String) {
+    *m.entry(k).or_insert(0_i64) += 1_i64;
+}
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    let mut a1 = String.new();
+    a1.push_str("param-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    bump(mut m, a1);
+    let mut a2 = String.new();
+    a2.push_str("param-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    bump(mut m, a2);
+    let mut churn: Vec[String] = Vec.new();
+    let mut i = 0i64;
+    while i < 16i64 {
+        let mut t = String.new();
+        t.push_str("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+        churn.push(t);
+        i = i + 1i64;
+    }
+    println(m.get_or("param-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(), 0_i64));
+}
+"#,
+            &["2"],
+            "map_entry_owned_param_key_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_map_entry_and_modify_moved_binding_key_no_leak() {
+        // Bare `entry().and_modify` (the lookup-only variant — NEVER adopts)
+        // with a moved local binding key, occupied. The entry chain always
+        // frees the orphaned key on this path.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("am-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(), 10_i64);
+    let mut k = String.new();
+    k.push_str("am-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    m.entry(k).and_modify(|v| { *v += 5_i64; });
+    println(m.get_or("am-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(), 0_i64));
+}
+"#,
+            &["15"],
+            "map_entry_and_modify_moved_binding_key_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_map_get_moved_binding_key_no_leak() {
+        // Moved local binding key into `get` (never adopts). `get` does NOT
+        // suppress the source, so the source binding's scope-exit free releases
+        // the buffer exactly once.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("look-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(), 9_i64);
+    let mut k = String.new();
+    k.push_str("look-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    match m.get(k) { Some(x) => println(x), None => println(-1_i64) }
+}
+"#,
+            &["9"],
+            "map_get_moved_binding_key_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_map_get_fresh_temp_key_no_leak() {
+        // Fresh-temp (`.clone()`) key into `get`. `get` now frees its
+        // fresh-temp key (mirroring `get_or`); pre-fix it leaked one buffer
+        // per call.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    let base = "clone-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
+    m.insert(base.clone(), 4_i64);
+    match m.get(base.clone()) { Some(x) => println(x), None => println(-1_i64) }
+}
+"#,
+            &["4"],
+            "map_get_fresh_temp_key_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_map_remove_contains_fresh_temp_key_no_leak() {
+        // Fresh-temp keys into `contains_key` (present) and `remove` (the
+        // incoming key argument), both lookup-only — neither retains the
+        // incoming key, so each now frees its fresh-temp key buffer. The
+        // `remove` here targets an ABSENT key (miss path) on purpose: a
+        // present-key `remove` tombstones the bucket WITHOUT freeing its
+        // *stored* key — a distinct, pre-existing leak that needs a runtime
+        // drop-flag ABI change (tracked separately), not the incoming-key
+        // residual this fix addresses.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    let base = "rc-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
+    m.insert(base.clone(), 7_i64);
+    if m.contains_key(base.clone()) {
+        println("present");
+    }
+    match m.remove("absent-key-bbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()) {
+        Some(x) => println(x),
+        None => println(-1_i64),
+    }
+    println(m.len());
+}
+"#,
+            &["present", "-1", "1"],
+            "map_remove_contains_fresh_temp_key_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_map_insert_moved_binding_duplicate_key_no_leak() {
+        // Moved local binding key into `insert` on the EXISTS (duplicate-key)
+        // path. `karac_map_insert_old` keeps the bucket's existing key and does
+        // not adopt the incoming one; `insert` suppressed the source — so the
+        // incoming buffer is orphaned and now freed on the exists branch.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    let mut k1 = String.new();
+    k1.push_str("ins-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    m.insert(k1, 1_i64);
+    let mut k2 = String.new();
+    k2.push_str("ins-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    m.insert(k2, 2_i64);
+    println(m.len());
+    println(m.get_or("ins-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(), 0_i64));
+}
+"#,
+            &["1", "2"],
+            "map_insert_moved_binding_duplicate_key_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_map_insert_owned_param_duplicate_key_no_leak() {
+        // Owned String PARAM key into `insert` on the EXISTS path via a
+        // `mut ref Map`. The defensive copy is orphaned on the exists branch
+        // and freed there; the caller frees each original param.
+        assert_clean_asan_run(
+            r#"
+fn store(m: mut ref Map[String, i64], k: String) {
+    m.insert(k, 1_i64);
+}
+
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    let mut a1 = String.new();
+    a1.push_str("ins-param-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    store(mut m, a1);
+    let mut a2 = String.new();
+    a2.push_str("ins-param-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    store(mut m, a2);
+    println(m.len());
+}
+"#,
+            &["1"],
+            "map_insert_owned_param_duplicate_key_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_map_insert_duplicate_heap_value_discarded_no_leak() {
+        // `Map[String, String]`, same key inserted twice with DISCARDED
+        // `Option[V]` results. On the second (exists) insert the displaced OLD
+        // String value is handed back as a `Some(old)` payload no one holds;
+        // the discarded-Option-value cleanup already releases it. Companion to
+        // the exists-path KEY free (the incoming duplicate key is freed by the
+        // new exists-branch handling). Confirms both the key and the displaced
+        // value are released exactly once on a duplicate heap-valued insert.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut m: Map[String, String] = Map.new();
+    let k = "vkey-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
+    m.insert(k.clone(), "first-vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv".to_string());
+    m.insert(k.clone(), "second-wwwwwwwwwwwwwwwwwwwwwwwwwwww".to_string());
+    println(m.get_or(k.clone(), "x".to_string()));
+}
+"#,
+            &["second-wwwwwwwwwwwwwwwwwwwwwwwwwwww"],
+            "map_insert_duplicate_heap_value_discarded_no_leak",
+        );
+    }
+
     // ── Vec[Map] ownership: a Map moved into a Vec transfers ownership
     //    to the Vec (Cluster 1) ──
     // The headline bug: a `Map` pushed into a `Vec` aliased a handle still

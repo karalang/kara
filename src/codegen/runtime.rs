@@ -1274,11 +1274,28 @@ impl<'ctx> super::Codegen<'ctx> {
         // `compile_inline_temp_vec_index` mints has no consuming binding). The
         // `cap > 0` guard below no-ops on a borrowed (cap == 0) view, so a place
         // expression / rodata literal is never double-freed.
-        if (!self.expr_yields_fresh_owned_temp(arg)
+        if !self.expr_yields_fresh_owned_temp(arg)
             && !self.expr_is_fresh_owned_string_slice(arg)
-            && !self.expr_is_inline_temp_vec_heap_index(arg))
-            || !self.llvm_ty_is_vec_struct(val.get_type())
+            && !self.expr_is_inline_temp_vec_heap_index(arg)
         {
+            return;
+        }
+        self.free_str_vec_buffer_if_heap(val);
+    }
+
+    /// Free a `{ptr, len, cap}` String/Vec buffer's heap allocation iff
+    /// `cap > 0` (the owned-buffer marker; a borrowed view / rodata literal has
+    /// `cap == 0` and is skipped), no-opping on a non-Vec/String-shaped value.
+    ///
+    /// The compile-time-gate-free core of [`free_fresh_owned_str_arg`]: callers
+    /// that have already established the value is a fresh-owned-or-suppressed
+    /// buffer (e.g. a moved-binding map key whose source `cap` was zeroed by
+    /// `suppress_source_vec_cleanup_for_arg`) route here directly, since the
+    /// fresh-temp expression gate would reject an `Identifier` / place-expr key.
+    /// The `cap > 0` runtime guard is the sole safety net, exactly as it is for
+    /// the fresh-temp path.
+    pub(super) fn free_str_vec_buffer_if_heap(&mut self, val: BasicValueEnum<'ctx>) {
+        if !self.llvm_ty_is_vec_struct(val.get_type()) {
             return;
         }
         let Some(fn_val) = self.current_fn else {

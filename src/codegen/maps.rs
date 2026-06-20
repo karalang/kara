@@ -862,6 +862,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_conditional_branch(existed, some_bb, none_bb)
                     .unwrap();
                 self.builder.position_at_end(some_bb);
+                // Existed (no-adopt) path: `karac_map_insert_old` kept the
+                // bucket's existing key and did NOT adopt the incoming one,
+                // while the owned path above already suppressed the source's
+                // scope-exit free — so the incoming key buffer is orphaned and
+                // leaks (B-2026-06-20-9; LSan-only, one buffer per duplicate
+                // key). Free it once here. `key_val` is `Some` only on the
+                // owned path (the borrowed slice path never adopts and leaves
+                // the caller's source intact); cap>0 / vec-struct guards no-op
+                // on a rodata literal or scalar key.
+                if let Some(kv) = key_val {
+                    self.free_str_vec_buffer_if_heap(kv);
+                }
                 let old_val = self
                     .builder
                     .build_load(val_ty, old_slot, "map.ins.old")
@@ -958,6 +970,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap_basic()
                         .into_int_value()
                 };
+
+                // The lookup never stores the key, so a fresh-owned-temp key
+                // (`m.get(w.to_string())`) must be freed — no-ops on a borrowed
+                // view (cap == 0) or a moved binding / literal key (the binding
+                // source's own scope-exit free covers those). Mirrors `get_or`;
+                // without it `get` leaked one key buffer per call (LSan).
+                self.free_fresh_owned_str_arg(&args[0].value, key_val);
 
                 let found_bb = self.context.append_basic_block(fn_val, "map.get.found.bb");
                 let notfound_bb = self
@@ -1166,6 +1185,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     .try_as_basic_value()
                     .unwrap_basic()
                     .into_int_value();
+                // `remove` looks the key up and tombstones the bucket; it never
+                // stores the incoming key, so a fresh-owned-temp key must be
+                // freed (no-ops on a borrowed view / moved binding / literal).
+                self.free_fresh_owned_str_arg(&args[0].value, key_val);
                 // Build Option[V]: Some(old) if found, None otherwise.
                 let found_bb = self.context.append_basic_block(fn_val, "map.rm.found");
                 let notfound_bb = self.context.append_basic_block(fn_val, "map.rm.notfound");
@@ -1217,6 +1240,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     .try_as_basic_value()
                     .unwrap_basic()
                     .into_int_value();
+                // Lookup-only; never stores the key, so free a fresh-owned-temp
+                // key (no-ops on a borrowed view / moved binding / literal).
+                self.free_fresh_owned_str_arg(&args[0].value, key_val);
                 Ok(found.into())
             }
             "clear" => {

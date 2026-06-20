@@ -435,7 +435,23 @@ impl<'ctx> super::Codegen<'ctx> {
         // Compile the key, store to alloca for the C ABI.
         let key_alloca = self.create_entry_alloca(fn_val, "entry.key", key_ty);
         let key_val = self.compile_expr(key_expr)?;
+        // Consume-site ownership dance, identical to `Map.insert`'s key arm:
+        // `karac_map_entry` ADOPTS the key's `{ptr,len,cap}` buffer on the
+        // VACANT insert, so the key is moved into the map. (1) Disarm an
+        // f-string key's staged accumulator; (2) deep-copy an owned String/Vec
+        // PARAM key so the bucket owns a private buffer (the caller still frees
+        // the original under the by-value header ABI); (3) suppress a moved
+        // local-binding / place source's scope-exit free. Without (2)/(3) a
+        // moved-binding or owned-param key DOUBLE-FREES on the vacant path —
+        // the map's drop and the source's drop both release the adopted buffer
+        // (B-2026-06-20-9; `B-2026-06-20-8` handled only fresh temps). All
+        // three no-op on a plain fresh temp / literal. `key_val` is captured
+        // before the suppress, so the bucket still receives the owned (cap>0)
+        // header.
+        self.suppress_fstr_acc_if_moved_out(key_expr);
+        let key_val = self.maybe_defensive_copy_param_arg(key_expr, key_val);
         self.builder.build_store(key_alloca, key_val).unwrap();
+        self.suppress_source_vec_cleanup_for_arg(key_expr);
 
         // Out-pointer alloca: the runtime writes the slot value-pointer into
         // this slot. The slot pointer is `*mut V` after the call.
@@ -468,19 +484,19 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_pointer_value();
 
-        // Free a fresh-owned-temp key (`m.entry(w.to_string())`) when the
-        // runtime did NOT adopt its buffer: `karac_map_entry` bit-copies the
-        // key header into the bucket only on the VACANT insert, so on the
-        // OCCUPIED path the temp's buffer is orphaned; the `and_modify`
-        // lookup-only variant never stores the key, so it always orphans it.
-        // Without this the canonical counter `*m.entry(w.to_string())
-        // .or_insert(0) += 1` leaks one key buffer per repeated key (LSan).
-        // `free_fresh_owned_str_arg` no-ops on a borrowed view (cap == 0) and
-        // on non-Vec/String values, and the compile-time guard restricts this
-        // to fresh temps so a binding / literal key is untouched.
-        if self.expr_yields_fresh_owned_temp(key_expr)
-            || self.expr_is_fresh_owned_string_slice(key_expr)
-        {
+        // Free the key buffer on the NO-ADOPT path. `karac_map_entry` adopts
+        // the key (bit-copies its `{ptr,len,cap}` into the bucket) only on the
+        // VACANT insert; the `and_modify` lookup variant never adopts. On the
+        // no-adopt path the key buffer is the caller's to release: the source
+        // binding's scope-exit free was just suppressed above, and a fresh temp
+        // has no source at all, so without this free the buffer leaks. The free
+        // is no longer gated to fresh temps (`B-2026-06-20-8`'s gate missed
+        // moved-binding / place keys — `let k = …; m.entry(k)` leaked on the
+        // occupied path); the vec-struct gate restricts the emitted diamond to
+        // String/Vec keys (scalar keys carry no heap), and the cap>0 guard
+        // inside `free_str_vec_buffer_if_heap` no-ops on a borrowed view /
+        // rodata literal.
+        if self.llvm_ty_is_vec_struct(key_val.get_type()) {
             let should_free_key = if terminal_method == "and_modify" {
                 self.context.bool_type().const_int(1, false)
             } else {
@@ -492,7 +508,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_conditional_branch(should_free_key, kf_free_bb, kf_cont_bb)
                 .unwrap();
             self.builder.position_at_end(kf_free_bb);
-            self.free_fresh_owned_str_arg(key_expr, key_val);
+            self.free_str_vec_buffer_if_heap(key_val);
             self.builder.build_unconditional_branch(kf_cont_bb).unwrap();
             self.builder.position_at_end(kf_cont_bb);
         }
