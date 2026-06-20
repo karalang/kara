@@ -27244,45 +27244,36 @@ fn unqualified_shared_struct_variant_construction_typechecks() {
 
 // ── Comptime — typechecker gate (slice 1b) ──────────────────────
 //
-// `comptime { ... }` is parsed (slice 1) but the compile-time evaluator
-// is a later slice. Until then the typechecker emits
-// `E_COMPTIME_NOT_YET_IMPLEMENTED` at every comptime-block use site, while
-// still inferring the inner block's type so the surrounding expression does
-// not cascade. Spec: deferred.md § Comptime — AST→AST `comptime fn`.
+// `comptime { ... }` typechecks as its inner block's type — the comptime
+// fold pass (slice 2, `crate::comptime`) later evaluates the block and
+// splices a literal of exactly that type, so the surrounding expression
+// checks identically whether it sees the `comptime` node or the constant.
+// The old `E_COMPTIME_NOT_YET_IMPLEMENTED` gate is retired now that the
+// evaluator exists. Spec: deferred.md § Comptime — "Implementation phases"
+// substrate 1.
 
 #[test]
-fn comptime_block_hits_not_yet_implemented_gate() {
+fn comptime_block_typechecks_without_gate() {
     let result = typecheck_desugared_result("fn main() { let x = comptime { 1 + 2 }; }");
     assert!(
-        result
+        !result
             .errors
             .iter()
-            .any(|e| e.message.contains("E_COMPTIME_NOT_YET_IMPLEMENTED")),
-        "expected E_COMPTIME_NOT_YET_IMPLEMENTED gate; got: {:?}",
+            .any(|e| e.message.contains("E_COMPTIME")),
+        "comptime block should typecheck cleanly now the evaluator exists; got: {:?}",
         result.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
 
 #[test]
 fn comptime_block_infers_inner_type_no_cascade() {
-    // The gate still infers the inner block's type (`i64` here), so the
-    // binding `x` is usable and we get exactly the gate diagnostic — not a
-    // pile of downstream type-mismatch cascade errors.
+    // The comptime block types as its inner block's type (`i64` here), so the
+    // binding `x` is usable as i64 downstream with no errors at all.
     let result =
         typecheck_desugared_result("fn main() { let x: i64 = comptime { 7 }; let _y = x + 1; }");
-    let gate_hits = result
-        .errors
-        .iter()
-        .filter(|e| e.message.contains("E_COMPTIME_NOT_YET_IMPLEMENTED"))
-        .count();
-    assert_eq!(gate_hits, 1, "expected exactly one gate diagnostic");
-    // No type-mismatch cascade from `x` being usable as i64.
     assert!(
-        !result
-            .errors
-            .iter()
-            .any(|e| e.message.contains("TypeMismatch") && !e.message.contains("E_COMPTIME")),
-        "unexpected cascade errors: {:?}",
+        result.errors.is_empty(),
+        "expected no typecheck errors; got: {:?}",
         result.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }

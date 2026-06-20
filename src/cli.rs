@@ -816,6 +816,14 @@ struct Pipeline {
     /// enforce it — the tree-walker never vectorizes, so the guarantee is
     /// vacuous there; it is a codegen/`check` surface.
     simd_errors: Option<Vec<crate::simd_report::SimdFinding>>,
+    /// Comptime fold diagnostics (`E_COMPTIME_PANIC` /
+    /// `E_COMPTIME_NON_FOLDABLE_RESULT` / `E_COMPTIME_ITER_LIMIT_EXCEEDED`).
+    /// Populated by [`Pipeline::lower`], which runs the comptime fold pass
+    /// (`crate::comptime`, substrate 1) right after operator lowering so the
+    /// AST every downstream phase consumes already has each `comptime { ... }`
+    /// block replaced by its folded constant. Merged into the final error
+    /// count + diagnostic output alongside the other post-typecheck checkers.
+    comptime_errors: Option<Vec<crate::comptime::ComptimeError>>,
     profile: crate::manifest::CompileProfile,
     /// Per-profile `[profile]`-table knob carrier from the manifest. Carries
     /// the active profile plus any typed knobs; threaded into the effect
@@ -848,6 +856,7 @@ impl Pipeline {
             provider_escape: None,
             raii_errors: None,
             simd_errors: None,
+            comptime_errors: None,
             profile: crate::manifest::CompileProfile::Default,
             profile_config: crate::manifest::ProfileConfig::default(),
             lint_overrides: crate::lints::CliLintOverrides::default(),
@@ -941,6 +950,12 @@ impl Pipeline {
     fn lower(&mut self) {
         if let Some(ref typed) = self.typed {
             crate::lower(&mut self.parsed.program, typed);
+            // Comptime fold (substrate 1): evaluate every `comptime { ... }`
+            // block at compile time and splice its constant result in place,
+            // so the interpreter / codegen see plain literals. Runs here, as
+            // part of "prepare the AST for downstream consumption", so every
+            // path that lowers (check / build / run) gets it uniformly.
+            self.comptime_errors = Some(crate::comptime::evaluate(&mut self.parsed.program, typed));
         }
     }
 
@@ -1133,7 +1148,17 @@ impl Pipeline {
         self.has_parse_errors()
             || self.has_resolve_errors()
             || self.has_type_errors()
+            || self.has_fatal_comptime_errors()
             || self.has_fatal_ownership_errors()
+    }
+
+    /// Comptime fold failures are fatal: a `comptime { ... }` block that
+    /// panicked, exceeded its resource ceiling, or produced a non-foldable
+    /// value has no constant to splice, so the interpreter / codegen would
+    /// otherwise consume an un-evaluated node (or a stale tree) and produce
+    /// misleading downstream diagnostics. Stop before execution.
+    fn has_fatal_comptime_errors(&self) -> bool {
+        self.comptime_errors.as_ref().is_some_and(|c| !c.is_empty())
     }
 
     /// Most ownership errors are advisory at the CLI layer (see the note on
@@ -1177,6 +1202,9 @@ impl Pipeline {
         }
         if let Some(ref s) = self.simd_errors {
             n += s.len();
+        }
+        if let Some(ref c) = self.comptime_errors {
+            n += c.len();
         }
         n
     }
@@ -1319,6 +1347,15 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
                 err.func_name,
                 err.message(),
                 err.help(),
+            ));
+        }
+    }
+    if let Some(ref comptime) = pipeline.comptime_errors {
+        for err in comptime {
+            // The message already carries its `error[E_COMPTIME_*]:` prefix.
+            out.push(format!(
+                "error[comptime]: {}:{}:{}: {}",
+                filename, err.span.line, err.span.column, err.message
             ));
         }
     }
@@ -3327,6 +3364,30 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
         }
     }
 
+    if let Some(ref comptime) = pipeline.comptime_errors {
+        for err in comptime {
+            id_counter += 1;
+            diags.add(DiagEntry {
+                id: &format!("d{id_counter}"),
+                severity: "error",
+                phase: "comptime",
+                code: "E_COMPTIME",
+                category: "comptime",
+                message: &err.message,
+                filename,
+                span: &err.span,
+                suggestion: None,
+                extra_json: None,
+                lint_name: None,
+                fix_it: None,
+                class: None,
+                expected: None,
+                got: None,
+                stub_hint_json: None,
+            });
+        }
+    }
+
     diags
 }
 
@@ -3749,6 +3810,7 @@ fn run_pipeline_jsonl(pipeline: &mut Pipeline) {
         ),
     );
 
+    let comptime_errors = pipeline.comptime_errors.as_ref().map_or(0, |c| c.len());
     let total = parse_errors
         + resolve_errors
         + type_errors
@@ -3756,7 +3818,8 @@ fn run_pipeline_jsonl(pipeline: &mut Pipeline) {
         + ownership_errors
         + escape_errors
         + raii_errors
-        + simd_errors;
+        + simd_errors
+        + comptime_errors;
     let effects = program_effects_json(pipeline);
     emit_jsonl_event(
         "build_complete",
@@ -4080,6 +4143,42 @@ fn cmd_run(
     // run-path RAII gate below was vacuously green) and the
     // `missing_track_caller` lint (reads `pipeline.effects`).
     pipeline.effectcheck();
+
+    // Comptime fold failures are run-fatal even on the lenient script path.
+    // A `comptime { ... }` block that panicked / overran its ceiling / had a
+    // non-foldable result was left un-spliced; the interpreter's defensive
+    // `Comptime` arm would re-evaluate it at runtime and either fault again
+    // or run effectful code at the wrong phase. Like the run-fatal type-error
+    // gate just below, this is an execution-soundness violation: abort rather
+    // than warn. (`comptime_errors` is populated by `lower()` above.)
+    if pipeline.has_fatal_comptime_errors() {
+        if let Some(ref comptime) = pipeline.comptime_errors {
+            match output {
+                OutputMode::Text => {
+                    for err in comptime {
+                        eprintln!(
+                            "error[comptime]: {}:{}:{}: {}",
+                            filename, err.span.line, err.span.column, err.message
+                        );
+                    }
+                }
+                OutputMode::Json => emit_json_output(&pipeline),
+                OutputMode::Jsonl => {
+                    for err in comptime {
+                        emit_jsonl_event(
+                            "diagnostic",
+                            &format!(
+                                "\"severity\":\"error\",\"phase\":\"comptime\",{},\"message\":{}",
+                                span_to_json(&err.span, filename),
+                                json_string(&err.message),
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+        process::exit(1);
+    }
 
     // Value-corrupting type errors are run-fatal even on the lenient
     // script path. The run-leniency decision downgrades most static-contract
@@ -6914,6 +7013,7 @@ fn run_multi_file_codegen(
         provider_escape: None,
         raii_errors: None,
         simd_errors: None,
+        comptime_errors: None,
         profile: crate::manifest::CompileProfile::Default,
         profile_config: crate::manifest::ProfileConfig::default(),
         lint_overrides: crate::lints::CliLintOverrides::default(),

@@ -1122,7 +1122,12 @@ impl<'a> Interpreter<'a> {
     }
 
     /// Register all top-level functions, structs, enums in the environment.
-    fn register_items(&mut self) {
+    ///
+    /// `pub(crate)` so the comptime fold pass (`crate::comptime`) can prime
+    /// a freshly-constructed interpreter with the same global environment
+    /// `run()` builds before evaluating a `comptime { ... }` block at
+    /// compile time — without invoking `main()`.
+    pub(crate) fn register_items(&mut self) {
         // Register prelude variants
         self.env.define(
             "None".to_string(),

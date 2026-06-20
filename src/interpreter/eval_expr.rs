@@ -164,6 +164,20 @@ impl<'a> super::Interpreter<'a> {
                 Err(cf) => self.set_cf(cf),
             },
 
+            // `comptime { ... }` — the compile-time fold pass
+            // (`crate::comptime`) normally replaces these nodes with the
+            // folded constant before the interpreter runs, so this arm is
+            // a defensive fallback for any node that survived folding
+            // (e.g. a non-foldable result the fold pass left in place, or
+            // a direct `eval_expr` on an unlowered tree). Evaluating the
+            // inner block inline yields the same value the fold pass would
+            // have produced — the tree-walk interpreter has no separate
+            // compile-time/run-time distinction.
+            ExprKind::Comptime(block) => match self.eval_block_inner(block) {
+                Ok(v) => v,
+                Err(cf) => self.set_cf(cf),
+            },
+
             // Tuple
             ExprKind::Tuple(exprs) => {
                 let vals: Vec<Value> = exprs.iter().map(|e| self.eval_expr_inner(e)).collect();

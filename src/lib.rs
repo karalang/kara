@@ -17,6 +17,7 @@ pub mod cli;
 pub mod codegen;
 pub mod codegen_queries;
 pub mod componentize;
+pub mod comptime;
 pub mod concurrency;
 pub mod concurrency_report;
 pub mod cost_summary;
@@ -239,6 +240,19 @@ pub fn typecheck_with_profile_config(
 /// effectcheck / ownership / interpret / codegen.
 pub fn lower(program: &mut Program, tc: &TypeCheckResult) {
     crate::lowering::lower_program(program, tc);
+}
+
+/// Evaluate every `comptime { ... }` block at compile time and splice the
+/// folded constant in place. Runs after [`lower`] so the comptime evaluator
+/// sees the same lowered tree the interpreter / codegen will, and so
+/// downstream phases see plain constants. Returns the comptime diagnostics
+/// (empty on success). Substrate 1 of the comptime feature — see
+/// [`crate::comptime`].
+pub fn comptime_eval(
+    program: &mut Program,
+    tc: &TypeCheckResult,
+) -> Vec<crate::comptime::ComptimeError> {
+    crate::comptime::evaluate(program, tc)
 }
 
 /// Check effects in a parsed program (default policy: `Declared`).
@@ -465,6 +479,7 @@ pub fn run_program_with_drops(source: &str) -> (Vec<String>, Vec<String>) {
         );
         let typed = typecheck(&parsed.program, &resolved);
         lower(&mut parsed.program, &typed);
+        comptime_eval(&mut parsed.program, &typed);
         let mut interp = interpreter::Interpreter::new(&parsed.program, &typed);
         interp.captured_output = Some(Vec::new());
         interp.run();
@@ -501,6 +516,7 @@ pub fn run_program_with_dbg(
         );
         let typed = typecheck(&parsed.program, &resolved);
         lower(&mut parsed.program, &typed);
+        comptime_eval(&mut parsed.program, &typed);
         let mut interp = interpreter::Interpreter::new(&parsed.program, &typed);
         interp.captured_output = Some(Vec::new());
         interp.captured_dbg = Some(Vec::new());
@@ -545,6 +561,9 @@ pub fn run_program_full(
         let typed = typecheck(&parsed.program, &resolved);
         // Operator lowering: rewrite Binary/Unary into trait-method calls.
         lower(&mut parsed.program, &typed);
+        // Comptime fold: evaluate `comptime { ... }` blocks at compile time
+        // and splice their constant results in before interpretation.
+        comptime_eval(&mut parsed.program, &typed);
         let mut interp = interpreter::Interpreter::new(&parsed.program, &typed);
         interp.captured_output = Some(Vec::new());
         interp.run();
