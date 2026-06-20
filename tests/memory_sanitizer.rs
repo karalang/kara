@@ -9559,6 +9559,81 @@ fn main() {
     }
 
     #[test]
+    fn asan_channel_end_let_rebind_single_free() {
+        // Regression for the channel-end LET-REBIND move double-drop — the
+        // let-binding sibling of `asan_channel_end_returned_from_fn_single_free`
+        // (which covers the tail-expression return) and
+        // `asan_channel_end_explicit_return_single_free` (the `return rx;` form).
+        // Here the `Receiver` is moved into a NEW `let` binding first
+        // (`let keep = rx;`), then that rebind is returned. The destructure
+        // queues a `DropChannelEnd` for `rx`; `bind_pattern` queues a SECOND for
+        // `keep`. Without move-suppression at the let-rebind, BOTH fire — `rx`'s
+        // at `mk`'s scope exit AND the caller's `r` at `main`'s — double-dropping
+        // the channel's refcount and freeing the `KaracChannel` early while the
+        // caller still reads from it: ASAN flags the heap-use-after-free /
+        // double-free. With the fix the source `rx`'s `DropChannelEnd` is
+        // suppressed, `keep` carries the single live drop (itself suppressed at
+        // the return as the new owner moves to `main`), and `main`'s `r` frees
+        // exactly once. The two buffered sends arrive in order → "7","9".
+        assert_clean_asan_run(
+            r#"
+fn mk() -> Receiver[i64] {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();
+    let keep = rx;
+    tx.send(7);
+    tx.send(9);
+    keep
+}
+fn main() {
+    let r = mk();
+    println(r.recv());
+    println(r.recv());
+}
+"#,
+            &["7", "9"],
+            "channel_end_let_rebind_single_free",
+        );
+    }
+
+    #[test]
+    fn asan_channel_end_let_rebind_branch_buried_no_leak() {
+        // Guards the BRANCH-BURIED corner of the let-rebind suppression: only
+        // ONE arm rebinds the channel end (`if cond { let keep = rx; ... }`),
+        // while the OTHER arm keeps using the source `rx`. A compile-time
+        // retraction of `rx`'s `DropChannelEnd` (the terminal-site
+        // `suppress_channel_drop_for_var`) would remove it unconditionally, so
+        // the non-rebinding `else` path would never drop `rx` and leak the
+        // `KaracChannel` (`total` stuck at 1) — caught by LeakSanitizer on Linux.
+        // The branch-safe in-slot null sentinel
+        // (`neutralize_moved_channel_end_slot`) only neutralizes `rx` on the path
+        // that actually executes the move, so BOTH arms free exactly once: no
+        // leak, no double-free. `cond` is exercised both ways from `main`.
+        // (On macOS — no LSan — this asserts the no-double-free / no-UAF half;
+        // the Linux LSan gate asserts the no-leak half.)
+        assert_clean_asan_run(
+            r#"
+fn pick(cond: bool) -> i64 {
+    let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();
+    tx.send(100);
+    if cond {
+        let keep = rx;
+        keep.recv()
+    } else {
+        rx.recv()
+    }
+}
+fn main() {
+    let a = pick(true);
+    let b = pick(false);
+    println(a + b);
+}
+"#,
+            &["200"],
+            "channel_end_let_rebind_branch_buried_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_discarded_taskgroup_spawn_loop_eager_reap_no_double_free() {
         // B-2026-06-17-2 — the canonical server shape `loop { tg.spawn(|| …) }`
         // discards each child's `TaskHandle`. Codegen now marks the discarded

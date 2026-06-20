@@ -3171,6 +3171,45 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // Channel-end move-rebind: `let keep = rx;` where the RHS is a
+                // bare Identifier naming a `Sender`/`Receiver` binding. The
+                // destructure (`let (tx, rx) = Channel.new()`) queued a
+                // `DropChannelEnd` for `rx`, and `bind_pattern` just queued a
+                // SECOND one for `keep` (`track_channel_var`, keyed on keep's
+                // alloca, fired because `keep`'s surface type is also a channel
+                // end). Both decrement the same channel refcount at scope exit —
+                // an over-drop that frees the `KaracChannel` early (the
+                // recv-out-slot race: a double-free / heap-UAF under ASAN). This
+                // is the let-rebind sibling of the move-out-on-return fix in the
+                // `ExprKind::Return` arm and `suppress_cleanup_for_tail_return`.
+                //
+                // Channel ends have no in-slot `cap = 0` sentinel like
+                // Vec/String, but `karac_runtime_channel_drop_*` are null-handle
+                // no-ops, so we synthesize one: `neutralize_moved_channel_end_slot`
+                // KEEPS `rx`'s queued `DropChannelEnd` and nulls `rx`'s slot at
+                // the move site, so the source drop no-ops at runtime — and only
+                // on the path that executed the move. A plain compile-time
+                // retraction (`suppress_channel_drop_for_var`, used at the
+                // terminal `return`/`spawn` move sites) would over-suppress a
+                // branch-buried rebind: `if c { let keep = rx } else { rx.recv() }`
+                // would leak the channel on the `else` arm. Gated to a bare
+                // Identifier RHS — a genuine move; `let tx2 = tx.clone()` is a
+                // MethodCall that mints a fresh refcount and MUST keep its own
+                // drop, so it is excluded. The destination surface-type check
+                // (`pattern_binding_types`) mirrors `bind_pattern`'s own
+                // registration gate, so source-neutralization and
+                // dest-registration are symmetric.
+                if let (PatternKind::Binding(_), ExprKind::Identifier(rhs_name)) =
+                    (&pattern.kind, &value.kind)
+                {
+                    let key = (pattern.span.offset, pattern.span.length);
+                    if matches!(
+                        self.pattern_binding_types.get(&key).map(String::as_str),
+                        Some("Sender") | Some("Receiver")
+                    ) {
+                        self.neutralize_moved_channel_end_slot(rhs_name);
+                    }
+                }
                 // Slice c-repl.B.5.1: REPL value-snapshot capture site.
                 // After the binding's slot is alloca'd + populated, copy
                 // the bound value into the cell-spanning

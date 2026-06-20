@@ -2836,6 +2836,47 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// **Branch-safe** channel-end move suppression for the `let keep = rx;`
+    /// rebind site. [`suppress_channel_drop_for_var`] retracts the queued
+    /// `DropChannelEnd` outright (compile-time) — correct at TERMINAL move sites
+    /// (`return rx`, `spawn` capture) where no other path still owns the source,
+    /// but WRONG for a branch-buried rebind: a `let keep = rx;` inside one arm of
+    /// an `if` would unconditionally remove `rx`'s drop, so the OTHER arm (which
+    /// never moved `rx`) leaks the `KaracChannel` at scope exit.
+    ///
+    /// Instead, KEEP the source's `DropChannelEnd` queued and neutralize it with
+    /// a runtime in-slot sentinel: store a null handle into the source slot at
+    /// the move site, so the (retained) drop loads null and no-ops — but only on
+    /// the path that actually executed the move (the store lives in that BB).
+    /// This is the channel analog of the Vec/String `cap = 0` sentinel
+    /// ([`zero_vec_alloca_cap`]); it works because `karac_runtime_channel_drop_*`
+    /// treat a null handle as a no-op. A channel end is affine, so the source is
+    /// never read again on the move path — nulling its slot is safe.
+    ///
+    /// Gated to a source that actually carries a queued `DropChannelEnd` (an
+    /// OWNER): a `ref Sender`/`ref Receiver` borrow has none, so this no-ops and
+    /// never nulls a borrow's slot. Mirrors `suppress_channel_drop_for_var`'s
+    /// "no channel cleanup queued → no-op" discipline.
+    pub(super) fn neutralize_moved_channel_end_slot(&self, name: &str) {
+        let Some(slot) = self.variables.get(name) else {
+            return;
+        };
+        let target = slot.ptr;
+        let has_queued_drop = self.scope_cleanup_actions.iter().any(|frame| {
+            frame.iter().any(|action| {
+                matches!(
+                    action,
+                    CleanupAction::DropChannelEnd { chan_alloca, .. } if *chan_alloca == target
+                )
+            })
+        });
+        if !has_queued_drop {
+            return;
+        }
+        let null = self.context.ptr_type(AddressSpace::default()).const_null();
+        let _ = self.builder.build_store(target, null);
+    }
+
     /// Heap-buffer sibling of [`suppress_user_drop_for_var`] /
     /// [`suppress_channel_drop_for_var`]: drop the parent's scope-exit
     /// `FreeVecBuffer` for a `String` / `Vec[T]` binding `name` whose
