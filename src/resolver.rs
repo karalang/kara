@@ -258,6 +258,14 @@ impl SymbolTable {
             push(self, name, SymbolKind::EffectResource);
         }
 
+        // `Type` is the built-in comptime pseudotype (substrate 2) — the type
+        // of a first-class type value. It appears in annotation position on
+        // `comptime T: Type` parameters and must resolve as a known type name;
+        // the typechecker maps it to the `Type` pseudotype and gates its use
+        // to comptime contexts. Spec: deferred.md § Comptime — Types as
+        // first-class values.
+        push(self, "Type", SymbolKind::Primitive);
+
         // `process` is a built-in module (for `process::exit`). Not tracked
         // in `prelude.rs` because it is not part of the prelude per design —
         // it is a permanent magic module the resolver makes visible.

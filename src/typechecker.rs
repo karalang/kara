@@ -1099,6 +1099,13 @@ pub struct TypeChecker<'a> {
     /// gate: a union field read with `unsafe_depth == 0` is rejected.
     /// Future slices for borrow / literal gating consult the same flag.
     pub(super) unsafe_depth: usize,
+    /// Lexical depth of enclosing comptime contexts — a `comptime { ... }`
+    /// block or a `comptime fn` body. Incremented on entry, decremented on
+    /// exit. Read by `resolve_identifier_type`: a bare type name used as a
+    /// value (a `Type` pseudovalue) is only legal at comptime, so one with
+    /// `comptime_depth == 0` is rejected with `E_TYPE_VALUE_AT_RUNTIME`.
+    /// Substrate 2 — deferred.md § Comptime — Types as first-class values.
+    pub(super) comptime_depth: usize,
     /// True while typechecking the immediate LHS of a `StmtKind::Assign`
     /// (`u.f = x`). The flag is set only at the topmost call into
     /// `infer_expr(target)`; `infer_field_access` captures it on entry
@@ -1355,6 +1362,7 @@ impl<'a> TypeChecker<'a> {
             expr_types: HashMap::new(),
             vector_method_receivers: HashMap::new(),
             unsafe_depth: 0,
+            comptime_depth: 0,
             assigning_lhs: false,
             borrow_context: None,
             current_return_type: None,

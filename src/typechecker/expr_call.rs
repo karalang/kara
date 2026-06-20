@@ -281,6 +281,24 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn infer_call(&mut self, callee: &Expr, args: &[CallArg], span: &Span) -> Type {
+        // Comptime `Type` reflection in the path-call form. `MyType.name()`,
+        // `MyType.fields()`, … parse as `Call(Path([Type, method]))` (the
+        // value-receiver form `t.name()` is handled in `infer_method_call`).
+        // Reserved only at comptime, and only when the head segment is a known
+        // type — outside comptime, an identically-named user associated fn
+        // still resolves below. Spec: deferred.md § Comptime — Reflection API.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2
+                && self.comptime_depth > 0
+                && Self::is_reflection_method(&segments[1])
+                && self.is_type_name(&segments[0])
+            {
+                let ty = self.infer_type_reflection_method(&segments[1], args, span);
+                self.record_expr_type(span, &ty);
+                return ty;
+            }
+        }
+
         // Fallible-allocation constructor companions (phase-8-stdlib-floor
         // item 2). `Type.try_with_capacity(n)` / `Vec.try_from_slice(src)` type
         // identically to their panicking `Type.<base>(...)` constructor but

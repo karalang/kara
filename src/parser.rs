@@ -116,6 +116,13 @@ pub struct Parser {
     /// `E_IMPL_TRAIT_IN_TRAIT_METHOD_ARG`). Empty stack means the
     /// current position is legal for `impl Trait`.
     pub(crate) impl_trait_block_stack: Vec<ImplTraitBlockReason>,
+    /// Suppresses the Value-class name lint on a parameter binding while
+    /// parsing a `comptime` parameter. A `comptime` param may bind a `Type`
+    /// pseudovalue, for which a Type-class name (`comptime T: Type`) is
+    /// idiomatic and spec-sanctioned (deferred.md § Comptime, form 3). Set
+    /// around the `parse_param_pattern` call for comptime params; the binding
+    /// case consults it instead of unconditionally requiring snake_case.
+    pub(crate) allow_type_class_param_name: bool,
 }
 
 /// Reason an `impl Trait` type expression is rejected at the current
@@ -151,6 +158,7 @@ impl Parser {
             fn_context_stack: Vec::new(),
             effect_var_stack: Vec::new(),
             impl_trait_block_stack: Vec::new(),
+            allow_type_class_param_name: false,
         }
     }
 

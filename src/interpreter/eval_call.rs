@@ -29,6 +29,25 @@ use super::value::{EnumData, Value};
 
 impl<'a> super::Interpreter<'a> {
     pub(crate) fn eval_call(&mut self, callee: &Expr, args: &[CallArg], span: &Span) -> Value {
+        // Comptime `Type` reflection in the path-call form: `MyType.fields()`,
+        // `MyType.name()`, … parse as `Call(Path([Type, method]))`. The
+        // typechecker has already validated this is a reflection call on a
+        // known type at comptime; dispatch on the head segment as a `Type`
+        // value. Substrate 2.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2
+                && Self::is_reflection_method_name(&segments[1])
+                && self.is_known_type_name(&segments[0])
+            {
+                return self.eval_type_reflection(
+                    &segments[0].clone(),
+                    &segments[1].clone(),
+                    args,
+                    span,
+                );
+            }
+        }
+
         // `with_provider[R](provider, closure)` — surface for scoped provider
         // injection (design.md § Provider-Rooted Resources). Parses today as
         // `Call(Index(Ident("with_provider"), <R>), [provider, closure])`

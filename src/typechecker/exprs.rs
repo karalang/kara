@@ -2220,7 +2220,16 @@ impl<'a> super::TypeChecker<'a> {
             // expression checks identically whether it sees the `comptime`
             // node or the folded constant. Spec: deferred.md § Comptime —
             // AST→AST `comptime fn`, "Implementation phases" substrate 1.
-            ExprKind::Comptime(block) => self.infer_block(block),
+            //
+            // The block body is a comptime context (substrate 2): a `Type`
+            // pseudovalue (a bare type name used as a value) is legal here,
+            // so bump `comptime_depth` for the duration of the block.
+            ExprKind::Comptime(block) => {
+                self.comptime_depth += 1;
+                let ty = self.infer_block(block);
+                self.comptime_depth -= 1;
+                ty
+            }
 
             ExprKind::If {
                 condition,

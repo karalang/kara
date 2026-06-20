@@ -266,6 +266,27 @@ impl<'a> super::TypeChecker<'a> {
             self.check_unstable_use_at(span, name);
             return ty;
         }
+        // Comptime `Type` pseudovalue (substrate 2): inside a comptime
+        // context, a bare struct / enum / union name used in *value* position
+        // is a `Type` value (`f(MyStruct)` into a `comptime T: Type` param,
+        // `let t = MyStruct; t.fields()`). The receiver form
+        // `MyStruct.method()` is intercepted earlier. Gated to comptime so
+        // runtime value uses of a (unit/empty) struct name are untouched at
+        // depth 0. Prelude type/module names are excluded. The
+        // `E_TYPE_VALUE_AT_RUNTIME` boundary is enforced precisely on runtime
+        // functions declaring a `Type` parameter (see `check_function`).
+        // Spec: deferred.md § Comptime — Types as first-class values.
+        if self.comptime_depth > 0
+            && !is_prelude_type_or_module_name(name)
+            && (self.env.structs.contains_key(name)
+                || self.env.enums.contains_key(name)
+                || self.env.unions.contains_key(name))
+        {
+            return Type::Named {
+                name: "Type".to_string(),
+                args: vec![],
+            };
+        }
         // Check enum variants (unit variants used as values; tuple variants
         // as constructor functions). Generic enums thread their declared
         // type parameters through the return type's `args` so call-site

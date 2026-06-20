@@ -1287,7 +1287,12 @@ impl super::Parser {
             });
         }
 
+        // A `comptime` param may bind a `Type` pseudovalue, so allow a
+        // Type-class binding name (`comptime T: Type`) without the snake_case
+        // lint. Scope the relaxation to just this pattern parse.
+        self.allow_type_class_param_name = is_comptime;
         let pattern = self.parse_param_pattern()?;
+        self.allow_type_class_param_name = false;
         self.expect(&Token::Colon)?;
         let ty = self.parse_type()?;
         let default_value = if self.eat(&Token::Equal) {
@@ -1442,7 +1447,11 @@ impl super::Parser {
                 } else {
                     // Simple binding
                     let name_span = self.span_from(&start);
-                    self.check_ident_class(&name, IdentClass::Value, "parameter", name_span);
+                    // A `comptime T: Type` param binds a `Type` value, so its
+                    // Type-class name is allowed (flag set by `parse_param`).
+                    if !self.allow_type_class_param_name {
+                        self.check_ident_class(&name, IdentClass::Value, "parameter", name_span);
+                    }
                     Some(Pattern {
                         kind: PatternKind::Binding(name),
                         span: self.span_from(&start),

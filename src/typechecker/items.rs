@@ -1359,6 +1359,26 @@ impl<'a> super::TypeChecker<'a> {
         // Validate and bind parameters
         for param in &f.params {
             let ty = self.lower_type_expr(&param.ty, &gp);
+            // `E_TYPE_VALUE_AT_RUNTIME` (substrate 2): a `Type` value is
+            // first-class only at comptime, so a runtime function may not
+            // declare a `Type` parameter. Legal only when the parameter is
+            // `comptime`-prefixed (`comptime T: Type`) or the whole function
+            // is a `comptime fn`. Spec: deferred.md § Comptime — Types as
+            // first-class values.
+            if !param.is_comptime
+                && !f.is_comptime
+                && matches!(&ty, Type::Named { name, args } if name == "Type" && args.is_empty())
+            {
+                self.type_error(
+                    "error[E_TYPE_VALUE_AT_RUNTIME]: a runtime function may not take a `Type` \
+                     parameter; `Type` values are first-class only at compile time — mark the \
+                     parameter `comptime` or the function `comptime fn` (deferred.md § Comptime \
+                     — Types as first-class values)"
+                        .to_string(),
+                    param.ty.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
             self.check_param_irrefutable(param, &ty);
             self.bind_pattern_types(&param.pattern, &ty);
         }
@@ -1425,10 +1445,21 @@ impl<'a> super::TypeChecker<'a> {
 
         // Type-check body — thread the expected return type through so that
         // a `.into()` in tail position can resolve against it.
+        //
+        // A `comptime fn` body is a comptime context (substrate 2): `Type`
+        // pseudovalues and the reflection API are legal inside it, so bump
+        // `comptime_depth` for the body check.
+        let comptime_fn = f.is_comptime;
+        if comptime_fn {
+            self.comptime_depth += 1;
+        }
         if f.body.final_expr.is_some() {
             self.check_block_against(&f.body, &return_type);
         } else {
             self.infer_block(&f.body);
+        }
+        if comptime_fn {
+            self.comptime_depth -= 1;
         }
 
         self.current_return_type = None;

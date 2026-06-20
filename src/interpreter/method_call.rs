@@ -635,6 +635,15 @@ impl<'a> super::Interpreter<'a> {
 
         let obj = self.eval_expr_inner(object);
 
+        // Comptime `Type` reflection (substrate 2): `MyType.name()`,
+        // `.fields()`, `.variants()`, `.is_struct()`, … on a `Type`
+        // pseudovalue. Dispatches against the typecheck result's
+        // struct/enum/union tables. Only reachable at comptime — the
+        // typechecker rejects a `Type` value at runtime.
+        if let Value::TypeVal(type_name) = &obj {
+            return self.eval_type_reflection(&type_name.clone(), method, args, span);
+        }
+
         // Fallible-allocation companions (phase-8-stdlib-floor item 2). A
         // `try_<base>` instance method on a builtin collection runs the
         // panicking `<base>` operation and wraps its result in `Result.Ok(_)`:

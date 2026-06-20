@@ -96,6 +96,15 @@ impl<'a> super::Interpreter<'a> {
             }
 
             ExprKind::Identifier(name) => self.env.get(name).unwrap_or_else(|| {
+                // A bare identifier that names a struct / enum / union, used in
+                // value position, is a `Type` pseudovalue (comptime reflection,
+                // substrate 2). It has no env binding — synthesize the
+                // `Value::TypeVal` so `MyType.fields()` etc. dispatch. The
+                // typechecker guarantees this only happens at comptime
+                // (`E_TYPE_VALUE_AT_RUNTIME` otherwise).
+                if self.is_known_type_name(name) {
+                    return Value::TypeVal(name.clone());
+                }
                 unreachable!(
                     "variable '{}' not found at {}:{}; should be caught by resolver",
                     name, expr.span.line, expr.span.column

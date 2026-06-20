@@ -70,6 +70,15 @@ pub enum Value {
     /// pointer at compiled mode (see `try_eval_seq_method`'s CStr arm).
     CStr(Arc<Vec<u8>>),
     Unit,
+    /// A `Type` pseudovalue — the comptime-only first-class type value
+    /// (deferred.md § Comptime — Types as first-class values). Carries the
+    /// canonical type name; the reflection API (`name()`, `fields()`,
+    /// `variants()`, `is_struct()`, …) dispatches on it during comptime
+    /// evaluation. A `TypeVal` only ever exists inside a `comptime` context
+    /// — the typechecker rejects one flowing to runtime
+    /// (`E_TYPE_VALUE_AT_RUNTIME`), and the comptime fold pass treats it as
+    /// non-foldable, so it never reaches the runtime program.
+    TypeVal(String),
     Tuple(Vec<Value>),
     /// Sequence storage shared between the source binding and any live
     /// slice views. `Arc<RwLock<...>>` is universal — every Array
@@ -700,6 +709,9 @@ impl std::fmt::Display for Value {
             // typecheck via `type_supports_display`).
             Value::CStr(bytes) => write!(f, "{}", String::from_utf8_lossy(bytes)),
             Value::Unit => write!(f, "()"),
+            // A `Type` pseudovalue renders as its canonical name — a
+            // debug courtesy; comptime code reads it via `.name()`.
+            Value::TypeVal(name) => write!(f, "{}", name),
             // Debug-courtesy render: shape only (element dumps for large
             // tensors would flood output; `t[i, j]` reads individual
             // elements).
@@ -1019,6 +1031,7 @@ impl Value {
             Value::String(_) => "String",
             Value::CStr(_) => "CStr",
             Value::Unit => "Unit",
+            Value::TypeVal(_) => "TypeVal",
             Value::Tensor { .. } => "Tensor",
             Value::Tuple(_) => "Tuple",
             Value::Array(_) => "Array",

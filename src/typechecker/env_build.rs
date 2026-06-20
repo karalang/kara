@@ -671,6 +671,53 @@ impl<'a> super::TypeChecker<'a> {
             );
         }
 
+        // Comptime reflection record types (substrate 2). `Type.fields()`
+        // returns `Vec[Field]` and `Type.variants()` returns `Vec[Variant]`;
+        // these intrinsic records expose the reflected metadata as ordinary
+        // values so plain field-access inference resolves `f.name` / `f.ty` /
+        // `v.field_count` with no special-casing. `Field.ty` is the `Type`
+        // pseudotype itself, so `field.ty.name()` chains. Spec: deferred.md
+        // § Comptime — Reflection API.
+        let type_pseudo = || Type::Named {
+            name: "Type".to_string(),
+            args: vec![],
+        };
+        self.env
+            .structs
+            .entry("Field".to_string())
+            .or_insert_with(|| StructInfo {
+                generic_params: vec![],
+                fields: vec![
+                    ("name".to_string(), Type::Str, true),
+                    ("ty".to_string(), type_pseudo(), true),
+                    ("is_pub".to_string(), Type::Bool, true),
+                ],
+                derived_traits: HashSet::new(),
+                no_rc: false,
+                is_shared: false,
+                is_par: false,
+                must_use_message: None,
+                is_non_exhaustive: false,
+                defining_stdlib_origin: true,
+            });
+        self.env
+            .structs
+            .entry("Variant".to_string())
+            .or_insert_with(|| StructInfo {
+                generic_params: vec![],
+                fields: vec![
+                    ("name".to_string(), Type::Str, true),
+                    ("field_count".to_string(), Type::Int(IntSize::I64), true),
+                ],
+                derived_traits: HashSet::new(),
+                no_rc: false,
+                is_shared: false,
+                is_par: false,
+                must_use_message: None,
+                is_non_exhaustive: false,
+                defining_stdlib_origin: true,
+            });
+
         // Iterator-element-type (`Item`) mappings for baked collection
         // types. The structs themselves are baked; the assoc-type
         // mapping has no syntactic representation in baked source.

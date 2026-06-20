@@ -33,6 +33,7 @@ mod method_call_seq;
 mod method_call_set;
 mod method_call_tensor;
 mod pattern_match;
+mod reflection;
 mod resource_method;
 mod value;
 

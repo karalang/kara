@@ -1,0 +1,164 @@
+//! Comptime `Type` reflection (substrate 2).
+//!
+//! Exercises the reflection API on a `Type` pseudovalue at comptime —
+//! `name()`, `is_struct()` / `is_enum()`, `fields()` (with `Field.name` /
+//! `Field.ty.name()`), `variants()` — both in the direct `TypeName.method()`
+//! form and through a `comptime fn(comptime T: Type)` parameter. Plus the
+//! `E_TYPE_VALUE_AT_RUNTIME` gate. Spec: deferred.md § Comptime — Types as
+//! first-class values / Reflection API.
+
+/// Typecheck a program (through desugar + resolve) and return the errors.
+fn typecheck_errors(source: &str) -> Vec<String> {
+    let mut parsed = karac::parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "parse errors: {:?}",
+        parsed.errors
+    );
+    karac::desugar_program(&mut parsed.program);
+    let resolved = karac::resolve(&parsed.program);
+    let typed = karac::typecheck(&parsed.program, &resolved);
+    typed
+        .errors
+        .iter()
+        .map(|e| e.message.clone())
+        .collect::<Vec<_>>()
+}
+
+// ── name() / is_struct() / is_enum() ────────────────────────────
+
+#[test]
+fn type_name_reflects() {
+    let src = "
+struct Point { x: i64, y: i64 }
+fn main() { println(comptime { Point.name() }); }";
+    assert_eq!(karac::run_program(src), vec!["Point\n"]);
+}
+
+#[test]
+fn is_struct_and_is_enum() {
+    let src = "
+struct Point { x: i64, y: i64 }
+enum Color { Red, Green, Blue }
+fn main() {
+    println(comptime { Point.is_struct() });
+    println(comptime { Point.is_enum() });
+    println(comptime { Color.is_enum() });
+}";
+    assert_eq!(karac::run_program(src), vec!["true\n", "false\n", "true\n"]);
+}
+
+// ── fields() ────────────────────────────────────────────────────
+
+#[test]
+fn fields_count() {
+    let src = "
+struct Point { x: i64, y: i64 }
+fn main() { println(comptime { Point.fields().len() }); }";
+    assert_eq!(karac::run_program(src), vec!["2\n"]);
+}
+
+#[test]
+fn fields_names_iterated() {
+    let src = "
+struct Point { x: i64, y: i64 }
+fn main() {
+    let names = comptime {
+        let mut s = \"\";
+        for f in Point.fields() { s = s + f.name + \";\"; }
+        s
+    };
+    println(names);
+}";
+    assert_eq!(karac::run_program(src), vec!["x;y;\n"]);
+}
+
+#[test]
+fn field_ty_name_chains() {
+    // `field.ty` is itself a `Type` value, so `field.ty.name()` chains.
+    let src = "
+struct Mixed { count: i64, label: String }
+fn main() {
+    let tys = comptime {
+        let mut s = \"\";
+        for f in Mixed.fields() { s = s + f.ty.name() + \";\"; }
+        s
+    };
+    println(tys);
+}";
+    // type_display renders i64 as `i64` and the string type as `String`.
+    assert_eq!(karac::run_program(src), vec!["i64;String;\n"]);
+}
+
+// ── variants() ──────────────────────────────────────────────────
+
+#[test]
+fn variants_count_and_names() {
+    let src = "
+enum Color { Red, Green, Blue }
+fn main() {
+    println(comptime { Color.variants().len() });
+    let names = comptime {
+        let mut s = \"\";
+        for v in Color.variants() { s = s + v.name + \";\"; }
+        s
+    };
+    println(names);
+}";
+    assert_eq!(karac::run_program(src), vec!["3\n", "Red;Green;Blue;\n"]);
+}
+
+// ── comptime fn with `comptime T: Type` parameter ───────────────
+
+#[test]
+fn comptime_fn_type_param() {
+    let src = "
+struct Point { x: i64, y: i64 }
+comptime fn field_count(comptime T: Type) -> usize { T.fields().len() }
+fn main() { println(comptime { field_count(Point) }); }";
+    assert_eq!(karac::run_program(src), vec!["2\n"]);
+}
+
+// ── E_TYPE_VALUE_AT_RUNTIME ─────────────────────────────────────
+
+#[test]
+fn type_value_at_runtime_is_error() {
+    // A runtime function may not take a `Type` parameter — `Type` values are
+    // first-class only at compile time.
+    let src = "
+struct Point { x: i64, y: i64 }
+fn describe(t: Type) -> i64 { 0 }
+fn main() {}";
+    let errs = typecheck_errors(src);
+    assert!(
+        errs.iter().any(|e| e.contains("E_TYPE_VALUE_AT_RUNTIME")),
+        "expected E_TYPE_VALUE_AT_RUNTIME; got: {errs:?}"
+    );
+}
+
+#[test]
+fn comptime_type_param_is_allowed() {
+    // The same `Type` parameter is fine when the parameter is `comptime`.
+    let src = "
+struct Point { x: i64, y: i64 }
+comptime fn describe(comptime T: Type) -> i64 { 0 }
+fn main() {}";
+    let errs = typecheck_errors(src);
+    assert!(
+        !errs.iter().any(|e| e.contains("E_TYPE_VALUE_AT_RUNTIME")),
+        "comptime Type param should be allowed; got: {errs:?}"
+    );
+}
+
+#[test]
+fn reflection_inside_comptime_is_clean() {
+    // The same reflection inside comptime must NOT trip the runtime gate.
+    let src = "
+struct Point { x: i64, y: i64 }
+fn main() { let _n = comptime { Point.name() }; }";
+    let errs = typecheck_errors(src);
+    assert!(
+        !errs.iter().any(|e| e.contains("E_TYPE_VALUE_AT_RUNTIME")),
+        "comptime reflection should not trip the runtime gate; got: {errs:?}"
+    );
+}

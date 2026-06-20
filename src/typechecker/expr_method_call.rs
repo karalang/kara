@@ -491,6 +491,66 @@ impl<'a> super::TypeChecker<'a> {
         substitute_type_params(&ret, &subs)
     }
 
+    /// True if `name` is a struct / enum / union known to the env — i.e. a
+    /// name that denotes a `Type` pseudovalue for comptime reflection.
+    pub(super) fn is_type_name(&self, name: &str) -> bool {
+        self.env.structs.contains_key(name)
+            || self.env.enums.contains_key(name)
+            || self.env.unions.contains_key(name)
+    }
+
+    /// The fixed set of comptime `Type`-reflection method names (substrate 2).
+    /// `size_of` / `align_of` / `methods` / `attributes` / `generic_args` are
+    /// later slices — they need the layout pass / impl-table threading.
+    pub(super) fn is_reflection_method(method: &str) -> bool {
+        matches!(
+            method,
+            "name" | "is_struct" | "is_enum" | "is_union" | "is_generic" | "fields" | "variants"
+        )
+    }
+
+    /// Result type of a comptime `Type`-reflection method. The caller has
+    /// already established the receiver is the `Type` pseudotype and the
+    /// method is in [`Self::is_reflection_method`]. Reflection methods take
+    /// no arguments — any supplied are inferred (for diagnostics) and an
+    /// arity error is emitted. `fields()` → `Vec[Field]`, `variants()` →
+    /// `Vec[Variant]` (the built-in record structs registered in
+    /// `register_compiler_intrinsic_env`). Spec: deferred.md § Comptime —
+    /// Reflection API.
+    pub(super) fn infer_type_reflection_method(
+        &mut self,
+        method: &str,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Type {
+        for arg in args {
+            self.infer_expr(&arg.value);
+        }
+        if !args.is_empty() {
+            self.type_error(
+                format!("reflection method `{method}` takes no arguments"),
+                span.clone(),
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+        }
+        let named = |n: &str| Type::Named {
+            name: n.to_string(),
+            args: vec![],
+        };
+        let vec_of = |el: Type| Type::Named {
+            name: "Vec".to_string(),
+            args: vec![el],
+        };
+        match method {
+            "name" => Type::Str,
+            "is_struct" | "is_enum" | "is_union" | "is_generic" => Type::Bool,
+            "fields" => vec_of(named("Field")),
+            "variants" => vec_of(named("Variant")),
+            // Unreachable: caller gates on `is_reflection_method`.
+            _ => Type::Error,
+        }
+    }
+
     pub(super) fn infer_method_call(
         &mut self,
         object: &Expr,
@@ -771,6 +831,18 @@ impl<'a> super::TypeChecker<'a> {
                         | "String"
                 );
             if is_known_type {
+                // Comptime `Type` reflection (substrate 2): `MyType.name()`,
+                // `.fields()`, `.variants()`, `.is_struct()`, … The reflection
+                // API is fixed by the language and only valid at comptime (a
+                // `Type` value cannot exist at runtime). Reserve the reflection
+                // method names when inside a comptime context; outside it, fall
+                // through so an identically-named user associated fn still
+                // resolves. Spec: deferred.md § Comptime — Reflection API.
+                if Self::is_reflection_method(method) && self.comptime_depth > 0 {
+                    let ty = self.infer_type_reflection_method(method, args, span);
+                    self.record_expr_type(span, &ty);
+                    return ty;
+                }
                 // Cancel-narrowing side-table: record `Type.method` for this
                 // call site so codegen can elide the par-branch cancel check
                 // when the resolved callee is provably non-effectful.
@@ -1100,6 +1172,19 @@ impl<'a> super::TypeChecker<'a> {
                 self.infer_expr(&arg.value);
             }
             return Type::Error;
+        }
+
+        // Comptime `Type` reflection on a `Type`-typed *value* receiver — a
+        // binding or `comptime T: Type` parameter holding a type value
+        // (`let t = MyStruct; t.fields()`, or `T.fields()` inside a
+        // `comptime fn f(comptime T: Type)`). The bare `TypeName.method()`
+        // form is handled by the associated-call intercept above; this arm
+        // covers the case where the receiver is a value of the `Type`
+        // pseudotype. Substrate 2.
+        if matches!(&obj_ty, Type::Named { name, .. } if name == "Type") {
+            let ty = self.infer_type_reflection_method(method, args, span);
+            self.record_expr_type(span, &ty);
+            return ty;
         }
 
         // Record the builtin-collection receiver name keyed by the method-call
