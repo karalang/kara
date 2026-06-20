@@ -10964,6 +10964,51 @@ fn main() {
     }
 
     #[test]
+    fn asan_shared_enum_struct_variant_whole_binding_readonly_no_leak() {
+        // B-2026-06-19-4 (the ledger's EXACT repro): a `shared enum E` whose
+        // struct-variant payload owns a String (`Ident(Id { name: String })`),
+        // bound WHOLE as `n` in a match arm that only READS it (`n.name.len()`)
+        // — NOT consumed, and NOT a child of a recursive box. This is the
+        // single-level direct case `render(make())` the sibling recursive test
+        // (`..._recursive_struct_payload_string_freed`) does not exercise: there
+        // the arm CONSUMES via `push_str(n.name)` and the leaf is a CHILD of a
+        // Binary box. Here `n` is a shallow by-value VIEW of the still-live RC
+        // box's inline payload; `bind_pattern_values` deliberately does NOT
+        // `track_struct_var` it for a shared-enum scrutinee (pattern_binding.rs,
+        // `!pattern_binding_scrutinee_is_shared_enum`), so the box's rc-drop
+        // walker is the SOLE owner of `name`'s buffer. The box-walk frees it
+        // (8a78ee6d / phase-12 #41: `type_expr_has_drop_heap` now flags a
+        // String-owning plain-struct payload walkable). Exactly one free → no
+        // leak (this test) and no double-free (the read-only binding never
+        // frees). ≥36 B name so the leak is unambiguous under LSan.
+        assert_clean_asan_run(
+            r#"
+struct Id { name: String, off: i64 }
+shared enum E { Ident(Id) }
+fn render(e: E) -> i64 {
+    match e {
+        Ident(n) => { n.name.len() }
+    }
+}
+fn make() -> E {
+    E.Ident(Id { name: "an_identifier_long_enough_to_force_heap".to_string(), off: 0 })
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 {
+        total = total + render(make());
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["780"],
+            "shared_enum_struct_variant_whole_binding_readonly",
+        );
+    }
+
+    #[test]
     fn asan_struct_field_vec_of_struct_with_enum_field_drop_no_leak() {
         // #35 (phase-12 self-hosting, parser stage): a `Vec[Sp]`
         // (`Sp { tok: Tk, off }`, heap enum `Tk`) held in a struct FIELD
