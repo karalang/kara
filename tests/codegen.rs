@@ -1261,6 +1261,72 @@ fn main() {
         }
     }
 
+    /// Integer `.pow(exp)` codegen: repeated-multiply loop, `u32` exponent,
+    /// `pow(0) == 1`, width-correct on narrow receivers. Mirrors the interpreter
+    /// (`tests/interpreter.rs::test_int_pow_values_and_zero_exponent`).
+    #[test]
+    fn e2e_int_pow_values() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 println(2i64.pow(10u32));\n\
+                 println(3i64.pow(0u32));\n\
+                 let e: u32 = 6;\n\
+                 println(2i64.pow(e));\n\
+                 let b: u64 = 1000000;\n\
+                 println(b.pow(2u32));\n\
+                 let x: u8 = 6;\n\
+                 println(x.pow(3u32));\n\
+             }",
+        ) {
+            assert_eq!(out, "1024\n1\n64\n1000000000000\n216\n");
+        }
+    }
+
+    /// `pow` traps `integer overflow` at the receiver width (same as `*`):
+    /// `u8 16^2 = 256` overflows u8 → exit 1, no silent widening to i64.
+    #[test]
+    fn e2e_int_pow_overflow_traps() {
+        if let Some(cap) =
+            run_program_capturing("fn main() { let x: u8 = 16; println(x.pow(2u32)); }")
+        {
+            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            // The AOT panic handler writes to stdout (`panic at … integer overflow`).
+            assert!(
+                cap.stdout.contains("integer overflow"),
+                "expected integer-overflow trap, got stdout={:?} stderr={:?}",
+                cap.stdout,
+                cap.stderr
+            );
+        }
+    }
+
+    /// Bit intrinsics codegen (`llvm.ctpop` / `llvm.ctlz` / `llvm.cttz`),
+    /// width-correct: narrow receivers are masked to their declared width, so a
+    /// signed `i8 -1` has 8 set bits and a zero `u8` has 8 leading/trailing
+    /// zeros — not the i64-widened 64. Mirrors the interpreter
+    /// (`tests/interpreter.rs::test_bit_intrinsics_width_correct`).
+    #[test]
+    fn e2e_bit_intrinsics_width_correct() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let b: u8 = 200;\n\
+                 println(b.count_ones());\n\
+                 let n: u64 = 1024;\n\
+                 println(n.leading_zeros());\n\
+                 println(n.trailing_zeros());\n\
+                 let z: u8 = 0;\n\
+                 println(z.leading_zeros());\n\
+                 println(z.trailing_zeros());\n\
+                 let neg: i8 = -1;\n\
+                 println(neg.count_ones());\n\
+                 let m: i32 = 1;\n\
+                 println(m.leading_zeros());\n\
+             }",
+        ) {
+            assert_eq!(out, "3\n53\n10\n8\n8\n8\n31\n");
+        }
+    }
+
     /// Regression (B-2026-06-14-13): a `for <name> in xs` loop binding that
     /// SHARES A NAME with an earlier same-function `let <name>` must not be
     /// conflated with it by the ownership RC analysis. Here the spawn result

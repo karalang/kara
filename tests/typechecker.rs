@@ -27038,6 +27038,49 @@ fn wrapping_arith_rejects_narrow_width() {
     );
 }
 
+// ── Integer .pow(exp) + bit intrinsics ───────────────────────────────────
+
+#[test]
+fn int_pow_ok_on_every_width_with_u32_exponent() {
+    // `pow` is defined on every integer width; the exponent is `u32`, and a
+    // suffix-free integer-literal exponent promotes to `u32`. Result is `Self`.
+    typecheck_ok(
+        "fn main() {\n\
+         let a: i64 = 2; let _r: i64 = a.pow(10);\n\
+         let b: u8 = 3; let _s: u8 = b.pow(2);\n\
+         let e: u32 = 5; let c: i32 = 2; let _t: i32 = c.pow(e);\n\
+         }",
+    );
+}
+
+#[test]
+fn int_pow_rejects_non_u32_exponent() {
+    // A non-literal exponent of a different integer type is rejected with the
+    // `cast with as u32` hint (matching Rust's `iN::pow(self, exp: u32)`).
+    let errs =
+        typecheck_errors("fn main() { let e: i64 = 5; let b: i64 = 2; let _ = b.pow(e); }");
+    assert!(
+        errs.iter().any(|e| e.to_string().contains("pow")
+            && e.to_string().contains("u32")),
+        "expected a pow exponent-type error mentioning u32, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn bit_intrinsics_return_u32_on_every_width() {
+    // count_ones / leading_zeros / trailing_zeros are defined on every integer
+    // width and return `u32` (the result binds to a `u32` annotation).
+    typecheck_ok(
+        "fn main() {\n\
+         let a: u8 = 200; let _x: u32 = a.count_ones();\n\
+         let b: i32 = 1; let _y: u32 = b.leading_zeros();\n\
+         let c: u64 = 1024; let _z: u32 = c.trailing_zeros();\n\
+         let d: i64 = -1; let _w: u32 = d.count_ones();\n\
+         }",
+    );
+}
+
 #[test]
 fn unqualified_struct_variant_construction_typechecks() {
     // B-2026-06-13-12: an UNQUALIFIED struct-variant construction

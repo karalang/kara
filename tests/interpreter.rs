@@ -244,6 +244,71 @@ fn test_overflow_arith_methods_width_correct() {
 }
 
 #[test]
+fn test_int_pow_values_and_zero_exponent() {
+    // `n.pow(k)` is repeated multiplication; `k` is `u32`. `pow(0)` is 1 for any
+    // base. Defined on every integer width (here i64 / u64).
+    let out = run("fn main() {\n\
+             println(2i64.pow(10u32));\n\
+             println(3i64.pow(0u32));\n\
+             println(5i64.pow(3u32));\n\
+             let e: u32 = 6;\n\
+             println(2i64.pow(e));\n\
+             let b: u64 = 1000000;\n\
+             println(b.pow(2u32));\n\
+         }");
+    assert_eq!(out, "1024\n1\n125\n64\n1000000000000\n");
+}
+
+#[test]
+fn test_int_pow_overflow_traps_at_receiver_width() {
+    // `pow` traps `integer overflow` at the receiver width, like the `*` it
+    // iterates: `u8 16^2 = 256` exceeds the u8 range and traps (it does not
+    // silently widen to i64).
+    let errors = runtime_errors("fn main() { let x: u8 = 16; println(x.pow(2u32)); }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("integer overflow")),
+        "expected u8 pow-overflow trap, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    // i64 10^19 overflows i64 (10^18 fits).
+    let errors = runtime_errors("fn main() { let b: i64 = 10; println(b.pow(19u32)); }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("integer overflow")),
+        "expected i64 pow-overflow trap, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_bit_intrinsics_width_correct() {
+    // count_ones / leading_zeros / trailing_zeros are width-dependent: they count
+    // within the receiver's bit width. A signed `iN`'s sign-extended model value
+    // is masked to width first (`i8 -1` has 8 set bits, not 64), and the all-zero
+    // value has `bits` leading/trailing zeros.
+    let out = run("fn main() {\n\
+             let b: u8 = 200;\n\
+             println(b.count_ones());\n\
+             let n: u64 = 1024;\n\
+             println(n.leading_zeros());\n\
+             println(n.trailing_zeros());\n\
+             let z: u8 = 0;\n\
+             println(z.leading_zeros());\n\
+             println(z.trailing_zeros());\n\
+             let neg: i8 = -1;\n\
+             println(neg.count_ones());\n\
+             let m: i32 = 1;\n\
+             println(m.leading_zeros());\n\
+             let w: u32 = 0;\n\
+             println(w.count_ones());\n\
+         }");
+    assert_eq!(out, "3\n53\n10\n8\n8\n8\n31\n0\n");
+}
+
+#[test]
 fn test_narrow_int_in_range_does_not_trap() {
     // A narrow-int sum that fits the width is the value, no trap: `u8 97 + u8
     // 98 = 195` (≤ 255).

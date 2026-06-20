@@ -437,7 +437,13 @@ impl<'a> super::TypeChecker<'a> {
                     span: callee.span.clone(),
                     kind: ExprKind::Identifier(segments[0].clone()),
                 };
-                let result = self.infer_method_call(&synth_object, &segments[1], args, span);
+                // No distinct close-paren leaf is reconstructed on this
+                // synthesized-`MethodCall` route (`local.method()` where `local`
+                // shadows a type name); `span` stands in for `args_close_span`.
+                // Integer receivers reach `pow` / the bit intrinsics through the
+                // postfix `MethodCall` path (with a real close-paren span), not
+                // this two-segment Path route, so the width stash is unaffected.
+                let result = self.infer_method_call(&synth_object, &segments[1], args, span, span);
                 self.path_call_method_dispatch
                     .insert(SpanKey::from_span(span));
                 return result;

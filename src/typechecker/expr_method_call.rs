@@ -497,6 +497,16 @@ impl<'a> super::TypeChecker<'a> {
         method: &str,
         args: &[CallArg],
         span: &Span,
+        // The closing-paren span of the call (`)` token). A leaf span that is
+        // NEVER aliased by an outer expr — unlike `span`, which the parser sets
+        // equal to the receiver's span, so the generic `infer_expr` post-record
+        // (and any outer chained `MethodCall`) clobbers `expr_types[span]` with
+        // the call's RESULT type. Receiver-width-dependent methods whose result
+        // type differs from the receiver (`count_ones`/`leading_zeros`/
+        // `trailing_zeros` → u32) stash the receiver type here so the
+        // interpreter can recover the exact width. See `pow` / the bit-intrinsic
+        // arms below.
+        args_close_span: &Span,
     ) -> Type {
         // Fallible-allocation companions (phase-8-stdlib-floor item 2). A
         // `try_<base>` instance method on a builtin collection types
@@ -509,7 +519,7 @@ impl<'a> super::TypeChecker<'a> {
         // define `try_push` / `try_clone` / … is never shadowed.
         if let Some(base) = crate::fallible_alloc::instance_companion_base(method) {
             if self.receiver_is_alloc_collection(object) {
-                let base_ret = self.infer_method_call(object, base, args, span);
+                let base_ret = self.infer_method_call(object, base, args, span, args_close_span);
                 if base_ret == Type::Error {
                     return Type::Error;
                 }
@@ -2370,6 +2380,61 @@ impl<'a> super::TypeChecker<'a> {
                     Type::Tuple(vec![self_ty, Type::Bool])
                 };
             }
+        }
+        // Integer `.pow(exp)` — `n.pow(k) -> Self`, the repeated-multiply power
+        // (design.md § Arithmetic). The exponent is `u32` (matching Rust's
+        // `iN::pow(self, exp: u32)`); a suffix-free integer-literal exponent is
+        // promoted to `u32`, otherwise it must already be `u32` (cast with
+        // `as u32`). Overflow TRAPS as `integer overflow` — the same app/lib
+        // behavior as the `*` operator it iterates. Defined on every integer
+        // width; the interpreter recovers the receiver width from the receiver
+        // type stashed at `args_close_span` (the non-aliased close-paren leaf)
+        // so the trap fires at the declared width. Backends: interpreter +
+        // codegen `method_call.rs`.
+        if method == "pow" && matches!(&receiver_for_lookup, Type::Int(_) | Type::UInt(_)) {
+            if args.len() != 1 {
+                self.type_error(
+                    format!("pow expects 1 argument, got {}", args.len()),
+                    span.clone(),
+                    TypeErrorKind::WrongNumberOfArgs,
+                );
+                return Type::Error;
+            }
+            let u32_ty = Type::UInt(UIntSize::U32);
+            let arg = &args[0].value;
+            let arg_ty = self.infer_expr(arg);
+            if matches!(&arg.kind, ExprKind::Integer(_, None)) {
+                self.record_expr_type(&arg.span, &u32_ty);
+            } else if arg_ty != Type::Error && arg_ty != u32_ty {
+                self.type_error(
+                    format!(
+                        "pow expects an exponent of type `u32`, got `{}` (cast with `as u32`)",
+                        type_display(&arg_ty)
+                    ),
+                    arg.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                return Type::Error;
+            }
+            self.record_expr_type(args_close_span, &receiver_for_lookup);
+            return receiver_for_lookup.clone();
+        }
+        // Bit intrinsics on integer scalars — `count_ones` / `leading_zeros` /
+        // `trailing_zeros` -> u32 (Rust's `iN::{count_ones,leading_zeros,
+        // trailing_zeros}`). All width-dependent: `leading_zeros` / `trailing_zeros`
+        // count within the receiver's bit width, and `count_ones` over its `bits`
+        // low bits (a signed `iN`'s sign-extended interpreter representation is
+        // masked to width first). The `u32` result differs from the receiver, so
+        // the generic `infer_expr` post-record clobbers `expr_types[receiver.span]`
+        // — the interpreter reads the receiver type stashed at the non-aliased
+        // `args_close_span` leaf instead. Effect-free; codegen lowers to the
+        // overloaded `llvm.ctpop` / `llvm.ctlz` / `llvm.cttz` intrinsics.
+        if args.is_empty()
+            && matches!(&receiver_for_lookup, Type::Int(_) | Type::UInt(_))
+            && matches!(method, "count_ones" | "leading_zeros" | "trailing_zeros")
+        {
+            self.record_expr_type(args_close_span, &receiver_for_lookup);
+            return Type::UInt(UIntSize::U32);
         }
         // Built-in `clone` / `to_string` on the scalar numeric + bool + char
         // primitives (all `Copy`). `clone` is identity → `Self`; `to_string`

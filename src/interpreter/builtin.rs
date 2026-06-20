@@ -204,7 +204,7 @@ impl<'a> super::Interpreter<'a> {
             // Render through the unified `to_string` dispatch so `println(x)`
             // honors a user `impl Display` (built-in types fall through to
             // `display_render` inside that dispatch). GAP-W4.
-            match self.eval_method_call(&arg.value, "to_string", &[], span) {
+            match self.eval_method_call(&arg.value, "to_string", &[], span, span) {
                 Value::String(s) => s,
                 other => self.display_render(&other),
             }

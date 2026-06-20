@@ -136,6 +136,88 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(phi.as_basic_value())
     }
 
+    /// Coerce an integer value to `target` width: truncate when wider, zero- or
+    /// sign-extend (per `unsigned`) when narrower, identity when equal.
+    pub(super) fn coerce_int_to(
+        &self,
+        v: inkwell::values::IntValue<'ctx>,
+        target: inkwell::types::IntType<'ctx>,
+        unsigned: bool,
+    ) -> inkwell::values::IntValue<'ctx> {
+        let sw = v.get_type().get_bit_width();
+        let tw = target.get_bit_width();
+        if sw == tw {
+            v
+        } else if sw > tw {
+            self.builder.build_int_truncate(v, target, "iw.tr").unwrap()
+        } else if unsigned {
+            self.builder.build_int_z_extend(v, target, "iw.zx").unwrap()
+        } else {
+            self.builder.build_int_s_extend(v, target, "iw.sx").unwrap()
+        }
+    }
+
+    /// Recover the receiver's declared integer width + signedness for a
+    /// width-dependent scalar method (`pow`, the bit intrinsics). Codegen widens
+    /// narrow integers to i64 in value flow, so the LLVM value type is unreliable;
+    /// the typechecker's `method_callee_types["<recv>.<method>"]` entry (keyed by
+    /// the call/receiver span) carries the exact source type. When an OUTER chained
+    /// call has clobbered that span's entry (its method segment no longer matches
+    /// `method`), fall back to the receiver expression's declared type / literal
+    /// suffix — matching the interpreter's non-aliased `args_close_span` recovery.
+    /// Defaults to signed 64-bit (the language's default integer).
+    fn receiver_int_kind(
+        &self,
+        object: &Expr,
+        call_span: &crate::token::Span,
+        method: &str,
+    ) -> (u32, bool) {
+        fn parse(name: &str) -> Option<(u32, bool)> {
+            Some(match name {
+                "i8" => (8, false),
+                "i16" => (16, false),
+                "i32" => (32, false),
+                "i64" | "isize" => (64, false),
+                "u8" => (8, true),
+                "u16" => (16, true),
+                "u32" => (32, true),
+                "u64" | "usize" => (64, true),
+                _ => return None,
+            })
+        }
+        if let Some(callee) = self
+            .method_callee_types
+            .get(&(call_span.offset, call_span.length))
+        {
+            if let Some((recv, m)) = callee.split_once('.') {
+                if m == method {
+                    if let Some(k) = parse(recv) {
+                        return k;
+                    }
+                }
+            }
+        }
+        if let Some(name) = self.type_name_of_expr(object) {
+            if let Some(k) = parse(&name) {
+                return k;
+            }
+        }
+        if let ExprKind::Integer(_, Some(suf)) = &object.kind {
+            use crate::token::IntSuffix::*;
+            return match suf {
+                I8 => (8, false),
+                I16 => (16, false),
+                I32 => (32, false),
+                I64 | I128 => (64, false),
+                U8 => (8, true),
+                U16 => (16, true),
+                U32 => (32, true),
+                U64 | U128 => (64, true),
+            };
+        }
+        (64, false)
+    }
+
     pub(super) fn compile_method_call(
         &mut self,
         object: &Expr,
@@ -1451,6 +1533,133 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             .unwrap();
             return Ok(r.into());
+        }
+
+        // Integer `.pow(exp)` (typed in expr_method_call.rs): `n.pow(k) -> Self`,
+        // a repeated-multiply loop whose body reuses the `*` operator's
+        // overflow-trapping multiply (`emit_checked_int_arith("mul", …)`), so an
+        // out-of-range partial product traps `integer overflow` at the receiver
+        // width exactly as `*` does. `acc` starts at 1; the `u32` exponent counts
+        // the multiplications (`acc *= base`, `exp` times). Both operands stay at
+        // the receiver's iN width; `exp == 0` yields `1`.
+        if method == "pow" && args.len() == 1 {
+            // Codegen widens narrow integers to i64 in value flow, so the receiver
+            // width is recovered from the typechecker's callee record, not the
+            // compiled value's type. The base is narrowed to that width so the
+            // per-step trap fires at the declared width; the result is re-extended
+            // to the i64-backed representation narrow integers flow in.
+            let (bits, unsigned) = self.receiver_int_kind(object, call_span, "pow");
+            let int_ty = self.int_type_for_bits(bits);
+            let i64_t = self.context.i64_type();
+            let base_raw = self.compile_expr(object)?.into_int_value();
+            let base = self.coerce_int_to(base_raw, int_ty, unsigned);
+            let exp = self.compile_expr(&args[0].value)?.into_int_value();
+            let exp_ty = exp.get_type();
+            let fn_val = self.current_fn.unwrap();
+
+            let acc_slot = self.create_entry_alloca(fn_val, "pow.acc", int_ty.into());
+            self.builder
+                .build_store(acc_slot, int_ty.const_int(1, false))
+                .unwrap();
+            let i_slot = self.create_entry_alloca(fn_val, "pow.i", exp_ty.into());
+            self.builder
+                .build_store(i_slot, exp_ty.const_zero())
+                .unwrap();
+
+            let cond_bb = self.context.append_basic_block(fn_val, "pow.cond");
+            let body_bb = self.context.append_basic_block(fn_val, "pow.body");
+            let exit_bb = self.context.append_basic_block(fn_val, "pow.exit");
+            self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+            // cond: i < exp (unsigned)
+            self.builder.position_at_end(cond_bb);
+            let i_cur = self
+                .builder
+                .build_load(exp_ty, i_slot, "pow.i.cur")
+                .unwrap()
+                .into_int_value();
+            let go = self
+                .builder
+                .build_int_compare(IntPredicate::ULT, i_cur, exp, "pow.lt")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(go, body_bb, exit_bb)
+                .unwrap();
+
+            // body: acc = checked_mul(acc, base); i += 1  (the trapping mul
+            // appends its own ok/trap blocks and leaves the builder on the ok
+            // continuation, where the loop's increment + back-branch are emitted).
+            self.builder.position_at_end(body_bb);
+            let acc_cur = self
+                .builder
+                .build_load(int_ty, acc_slot, "pow.acc.cur")
+                .unwrap()
+                .into_int_value();
+            let prod = self.emit_checked_int_arith("mul", acc_cur, base, unsigned)?;
+            self.builder.build_store(acc_slot, prod).unwrap();
+            let i_now = self
+                .builder
+                .build_load(exp_ty, i_slot, "pow.i.now")
+                .unwrap()
+                .into_int_value();
+            let i_next = self
+                .builder
+                .build_int_add(i_now, exp_ty.const_int(1, false), "pow.i.next")
+                .unwrap();
+            self.builder.build_store(i_slot, i_next).unwrap();
+            self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+            self.builder.position_at_end(exit_bb);
+            let acc_final = self
+                .builder
+                .build_load(int_ty, acc_slot, "pow.result")
+                .unwrap()
+                .into_int_value();
+            let result = self.coerce_int_to(acc_final, i64_t, unsigned);
+            return Ok(result.into());
+        }
+
+        // Bit intrinsics (typed in expr_method_call.rs): `count_ones` /
+        // `leading_zeros` / `trailing_zeros` -> u32, lowered to the overloaded
+        // `llvm.ctpop` / `llvm.ctlz` / `llvm.cttz` intrinsics. The receiver is
+        // narrowed to its declared width first (codegen widens narrow ints to
+        // i64, which would otherwise count over 64 bits); the intrinsic is then
+        // width-correct. `ctlz` / `cttz` take an `is_zero_poison` i1 (`false` →
+        // defined to return the bit width on a zero input, matching Rust and the
+        // interpreter). The non-negative count is z-extended to the i64-backed
+        // representation the `u32` result flows in.
+        if args.is_empty() && matches!(method, "count_ones" | "leading_zeros" | "trailing_zeros") {
+            let (bits, unsigned) = self.receiver_int_kind(object, call_span, method);
+            let int_ty = self.int_type_for_bits(bits);
+            let v_raw = self.compile_expr(object)?.into_int_value();
+            let v = self.coerce_int_to(v_raw, int_ty, unsigned);
+            let (base_name, is_clz_ctz) = match method {
+                "count_ones" => ("llvm.ctpop", false),
+                "leading_zeros" => ("llvm.ctlz", true),
+                "trailing_zeros" => ("llvm.cttz", true),
+                _ => unreachable!(),
+            };
+            let intrinsic = inkwell::intrinsics::Intrinsic::find(base_name)
+                .ok_or_else(|| format!("{base_name} intrinsic must exist in LLVM"))?;
+            let decl = intrinsic
+                .get_declaration(&self.module, &[int_ty.into()])
+                .ok_or_else(|| format!("{base_name} has no declaration for width {bits}"))?;
+            let raw = if is_clz_ctz {
+                let no_poison = self.context.bool_type().const_zero();
+                self.builder
+                    .build_call(decl, &[v.into(), no_poison.into()], "bitintr")
+            } else {
+                self.builder.build_call(decl, &[v.into()], "bitintr")
+            }
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+            let i64_t = self.context.i64_type();
+            // The count is non-negative and ≤ 64, so a zero-extend is always
+            // correct regardless of the receiver's signedness.
+            let res = self.coerce_int_to(raw, i64_t, true);
+            return Ok(res.into());
         }
 
         // Overflow-aware integer arithmetic — `{checked,saturating,overflowing}_{add,sub,mul}`.

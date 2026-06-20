@@ -2965,7 +2965,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `op_name` ∈ {"add", "sub", "mul"} — used for both the intrinsic
     /// name and IR labels (`add.chk` / `add.ovf.trap` / `add.ovf.ok`),
     /// which IR tests pin.
-    fn emit_checked_int_arith(
+    pub(super) fn emit_checked_int_arith(
         &mut self,
         op_name: &str,
         lv: inkwell::values::IntValue<'ctx>,

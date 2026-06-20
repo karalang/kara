@@ -163,6 +163,13 @@ impl<'a> super::Interpreter<'a> {
         method: &str,
         args: &[CallArg],
         span: &Span,
+        // Closing-paren leaf span of the call. The typechecker stashes the
+        // receiver type here for receiver-width-dependent methods whose result
+        // type differs from the receiver (`pow`, the bit intrinsics), because
+        // `span` aliases the receiver span and `expr_types[span]` has been
+        // clobbered with the call's result type by the time the interpreter
+        // runs. See `int_width_at` below.
+        args_close_span: &Span,
     ) -> Value {
         // SIMD static constructor — `Vector[T, N].splat(x)`. The receiver is
         // the bare vector type-path (not a value), so intercept before the
@@ -641,7 +648,7 @@ impl<'a> super::Interpreter<'a> {
         // `try_push` / `try_clone` / … is never shadowed.
         if value_is_alloc_collection(&obj) {
             if let Some(base) = crate::fallible_alloc::instance_companion_base(method) {
-                let base_val = self.eval_method_call(object, base, args, span);
+                let base_val = self.eval_method_call(object, base, args, span, args_close_span);
                 return result_ok(base_val);
             }
         }
@@ -1011,6 +1018,36 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // Integer `.pow(exp)` (typed in expr_method_call.rs): `n.pow(k) -> Self`,
+        // repeated multiplication that TRAPS `integer overflow` at the receiver
+        // width — the same app/lib trap as the `*` operator. The receiver width
+        // is read from the stash at `args_close_span` (the receiver's own span is
+        // clobbered to `Self` after typecheck, which happens to be correct here,
+        // but the close-paren leaf keeps recovery uniform with the bit intrinsics
+        // and robust under chaining). The exponent is `u32`; it is evaluated
+        // exactly once.
+        if method == "pow" && args.len() == 1 {
+            if let Value::Int(base) = &obj {
+                let base = *base;
+                if let Value::Int(exp) = self.eval_expr_inner(&args[0].value) {
+                    let w = self.int_width_at(args_close_span);
+                    return self.eval_int_pow(base, exp as u64, w, span);
+                }
+            }
+        }
+
+        // Bit intrinsics on integer scalars (typed in expr_method_call.rs):
+        // `count_ones` / `leading_zeros` / `trailing_zeros` -> u32, computed at
+        // the receiver width recovered from `args_close_span`. Signed `iN` values
+        // are sign-extended in the i64-backed model, so the value is masked to the
+        // width's low bits before counting.
+        if args.is_empty() && matches!(method, "count_ones" | "leading_zeros" | "trailing_zeros") {
+            if let Value::Int(n) = &obj {
+                let w = self.int_width_at(args_close_span);
+                return Value::Int(eval_bit_intrinsic(method, *n, w) as i64);
+            }
+        }
+
         // ASCII byte-classification predicates on integer scalars (the `u8`
         // bytes from `String.bytes()`): `is_ascii_digit` / `is_ascii_alphabetic`
         // / `is_ascii_hexdigit` → bool. Phase-8 floor for the self-hosting lexer
@@ -1341,8 +1378,17 @@ impl<'a> super::Interpreter<'a> {
     /// signed 64-bit when the type is unknown, matching the interpreter's
     /// i64-backed numeric model.
     fn overflow_arg_width(&self, arg: &Expr) -> IntW {
+        self.int_width_at(&arg.span)
+    }
+
+    /// Map the integer type recorded at `span` in the typechecker's `expr_types`
+    /// table to an `IntW` width. Shared width recovery for the overflow-arith
+    /// (argument span) and the `pow` / bit-intrinsic (close-paren `args_close_span`)
+    /// paths. Defaults to signed 64-bit when the type is unknown, matching the
+    /// interpreter's i64-backed numeric model.
+    fn int_width_at(&self, span: &Span) -> IntW {
         use crate::typechecker::types::{IntSize, Type, UIntSize};
-        let key = crate::resolver::SpanKey::from_span(&arg.span);
+        let key = crate::resolver::SpanKey::from_span(span);
         match self.typecheck_result.expr_types.get(&key) {
             Some(Type::Int(IntSize::I8)) => IntW::S(8),
             Some(Type::Int(IntSize::I16)) => IntW::S(16),
@@ -1356,6 +1402,85 @@ impl<'a> super::Interpreter<'a> {
             // i64 / isize / unknown → signed 64-bit.
             _ => IntW::S(64),
         }
+    }
+
+    /// Evaluate `base.pow(exp)` at the receiver width `w`, trapping
+    /// `integer overflow` (returning the runtime-error value) the moment a
+    /// partial result leaves the width's range — matching the `*` operator's
+    /// per-step trap. Square-and-multiply (O(log exp)); the intermediate squared
+    /// base never overflows when the final result is in range (its exponent
+    /// `2^k ≤ exp`), so checking it can't false-trap.
+    fn eval_int_pow(&mut self, base: i64, exp: u64, w: IntW, span: &Span) -> Value {
+        let (signed, bits) = match w {
+            IntW::S(b) => (true, b),
+            IntW::U(b) => (false, b),
+        };
+        let (lo, hi): (i128, i128) = if signed {
+            (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1)
+        } else {
+            (0, (1i128 << bits) - 1)
+        };
+        let base128: i128 = if signed {
+            base as i128
+        } else {
+            (base as u64) as i128
+        };
+        let in_range = |v: i128| v >= lo && v <= hi;
+        let mut acc: i128 = 1;
+        let mut b = base128;
+        let mut e = exp;
+        while e > 0 {
+            if e & 1 == 1 {
+                acc = match acc.checked_mul(b) {
+                    Some(v) if in_range(v) => v,
+                    _ => {
+                        return self.record_runtime_error("integer overflow".to_string(), span);
+                    }
+                };
+            }
+            e >>= 1;
+            if e > 0 {
+                b = match b.checked_mul(b) {
+                    Some(v) if in_range(v) => v,
+                    _ => {
+                        return self.record_runtime_error("integer overflow".to_string(), span);
+                    }
+                };
+            }
+        }
+        Value::Int(acc as i64)
+    }
+}
+
+/// Evaluate a width-correct bit intrinsic (`count_ones` / `leading_zeros` /
+/// `trailing_zeros`) on the i64-backed value `n` at receiver width `w`. Signed
+/// `iN` values are sign-extended in the model, so the value is masked to the
+/// width's low bits before counting; `leading/trailing_zeros` count within the
+/// width (`bits` on a zero input).
+fn eval_bit_intrinsic(method: &str, n: i64, w: IntW) -> u32 {
+    let bits = match w {
+        IntW::S(b) | IntW::U(b) => b,
+    };
+    let masked: u128 = if bits >= 64 {
+        (n as u64) as u128
+    } else {
+        ((n as u64) & ((1u64 << bits) - 1)) as u128
+    };
+    match method {
+        "count_ones" => masked.count_ones(),
+        // Leading zeros within the `bits`-wide value: the 128-bit count minus
+        // the high padding. For `masked == 0` this yields `bits`.
+        "leading_zeros" => masked.leading_zeros() - (128 - bits),
+        // Trailing zeros are width-independent for a non-zero value; the all-zero
+        // value has `bits` trailing zeros.
+        "trailing_zeros" => {
+            if masked == 0 {
+                bits
+            } else {
+                masked.trailing_zeros()
+            }
+        }
+        _ => unreachable!("non-bit-intrinsic method routed to eval_bit_intrinsic: {method}"),
     }
 }
 

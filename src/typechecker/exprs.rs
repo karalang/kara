@@ -1968,8 +1968,8 @@ impl<'a> super::TypeChecker<'a> {
                 method,
                 args,
                 turbofish: _,
-                args_close_span: _,
-            } => self.infer_method_call(object, method, args, &expr.span),
+                args_close_span,
+            } => self.infer_method_call(object, method, args, &expr.span, args_close_span),
 
             ExprKind::FieldAccess { object, field } => {
                 self.infer_field_access(object, field, &expr.span)

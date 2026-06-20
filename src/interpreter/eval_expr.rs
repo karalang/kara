@@ -52,7 +52,8 @@ impl<'a> super::Interpreter<'a> {
                             // exactly as an explicit `.to_string()` would;
                             // built-in types fall through to `display_render`
                             // inside that dispatch. GAP-W4.
-                            match self.eval_method_call(e, "to_string", &[], &expr.span) {
+                            match self.eval_method_call(e, "to_string", &[], &expr.span, &expr.span)
+                            {
                                 Value::String(s) => result.push_str(&s),
                                 other => result.push_str(&self.display_render(&other)),
                             }
@@ -535,8 +536,9 @@ impl<'a> super::Interpreter<'a> {
                 object,
                 method,
                 args,
+                args_close_span,
                 ..
-            } => self.eval_method_call(object, method, args, &expr.span),
+            } => self.eval_method_call(object, method, args, &expr.span, args_close_span),
 
             // If/else
             ExprKind::If {
