@@ -259,7 +259,7 @@ examples that show the interesting cases without being contrived.
 > **Per-layout monomorphization is now the vehicle** (design.md Feature 1 /
 > P1.5; ADR + slice plan in
 > [docs/spikes/per-layout-monomorphization.md](spikes/per-layout-monomorphization.md)).
-> Slices 1–4 landed (2026-06-20): by-value SoA `Vec[E]` params now cross
+> Slices 1–5 landed (2026-06-20): by-value SoA `Vec[E]` params now cross
 > function boundaries **regardless of binding name** — a SoA argument routes to
 > an on-demand monomorph (`fn_asts` + `ensure_layout_mono_generated`) whose
 > `Vec[E]` params lower as the SoA struct, keyed on the caller's argument layout
@@ -272,7 +272,17 @@ examples that show the interesting cases without being contrived.
 > the buffer: a borrow param keeps its pointer ABI and the mono body derefs once
 > (`ref_params`) to read/write the caller's SoA struct, so multiple SoA buffers
 > of one element type flow through one shared by-ref helper, each call producing a
-> distinct monomorph (`total$data_soa_grid` vs `total$data_soa_coll`).
+> distinct monomorph (`total$data_soa_grid` vs `total$data_soa_coll`). Slice 5
+> completes the cutover: a binding's physical layout is a **per-binding `LayoutId`
+> value carrier** (`binding_layouts`, seeded at the binding site), not a
+> name-keyed `soa_layouts` lookup — so `soa_layouts` is origin-only, the
+> redundant name-keyed by-value param ABI is retired, and a base symbol whose
+> `Vec[E]` param merely shares a name with a `layout` block no longer lowers SoA
+> by coincidence (the old footgun: an AoS arg into that base marshalled a 3-field
+> struct into a 4-field slot). The cross-group disjointness audit confirms the
+> layout-agnostic borrow checker (which sees a plain `Vec[Entity]`) needs no new
+> fact — groups partition fields, so cross-group borrows are already-disjoint
+> field places.
 >
 > **Remaining (what still blocks Slipstream from going full-SoA end-to-end):**
 > 1. ~~**SoA return values**~~ (`init_grid() -> Vec[LbmNode]`, `substep(...) ->
@@ -284,18 +294,24 @@ examples that show the interesting cases without being contrived.
 >    sharing helpers) — **landed: slice 2 (by-value) + slice 4 (`ref`/`mut ref`
 >    borrow forms).** Multiple SoA buffers of one element type now flow through
 >    shared helpers — by value or by reference — each call producing a distinct
->    monomorph. The name-keyed `soa_layouts` lookups in the access paths are
->    reduced to origins-only in slice 5.
+>    monomorph. The name-keyed `soa_layouts` lookups in the access paths were
+>    reduced to origins-only in **slice 5** (a per-binding `LayoutId` value
+>    carrier replaces them; the redundant by-value param ABI + its base-symbol
+>    footgun are retired; cross-group disjointness audited).
 >
-> The remaining slices: 5 (retire the name-keyed access-path lookups to
-> origins-only), 6 (convert `examples/slipstream/src/sim.kara`'s `Vec[LbmNode]`
-> to a `layout` block and confirm the native oracle's checksums are unchanged —
-> SoA must be byte-identical to AoS, the proof Slipstream earns its "SoA layout"
-> billing). The whole-element SoA *index*-store (`grid[i] = E{…}`) is still
-> unbuilt even single-function — a kernel that scatters whole elements by index
-> assignment is a follow-on; push-based and field-level writes work. Land each
-> gated on the full `tests/codegen.rs` suite + LSan. Background in the
-> user-memory `soa_cross_function_partial`.
+> The one remaining slice: 6 (convert `examples/slipstream/src/sim.kara`'s
+> `Vec[LbmNode]` to a `layout` block and confirm the native oracle's checksums
+> are unchanged — SoA must be byte-identical to AoS, the proof Slipstream earns
+> its "SoA layout" billing). **Slice 6 is blocked on a field-level SoA
+> index-store fix:** a direct field scatter `grid[i].field = expr` is miscompiled
+> for index ≥ 1 (the per-group element address is mis-strided, so the store is
+> dropped; index 0 is correct) — pre-existing and orthogonal to the per-layout
+> mono work, but the LBM kernel relies on exactly this. The whole-element SoA
+> *index*-store (`grid[i] = E{…}`) is likewise still unbuilt even
+> single-function. Push-based writes and mut-ref field write-back work; the
+> direct `vec[i].field =` index-store path is the gap. Land each gated on the
+> full `tests/codegen.rs` suite + LSan. Background in the user-memory
+> `soa_cross_function_partial`.
 
 **Primary capability:** Auto-concurrency of sequential code; layout blocks for
 cache-efficient SoA access; same code runs on CPU and GPU.

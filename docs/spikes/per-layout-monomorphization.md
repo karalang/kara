@@ -1,20 +1,24 @@
 # Design spike — per-layout monomorphization (SoA across call boundaries)
 
-**Status:** 🟦 **IN PROGRESS — slices 1–4 landed (2026-06-20).** Slice 1 (the
+**Status:** 🟦 **IN PROGRESS — slices 1–5 landed (2026-06-20).** Slice 1 (the
 `LayoutId` axis scaffolding), slice 2 (forward arg-layout monomorphization — a
 SoA `Vec[E]` passed by value to a helper is served by an on-demand layout
 monomorph, regardless of the param name), slice 3 (SoA returns — a helper that
 builds and returns a `Vec[E]` is monomorphized to *return* the receiving
 binding's layout, so the returned local crosses the boundary even though it has
-no binding name to key on), and slice 4 (multi-buffer / differing-name kernels —
+no binding name to key on), slice 4 (multi-buffer / differing-name kernels —
 forward inference extended to `ref`/`mut ref Vec[E]` borrow params, so multiple
 SoA buffers of one element type flow through shared by-ref helpers, each
-monomorphizing a distinct symbol) are on `main`. The remaining slices are a
-multi-slice Phase-11 effort gated on the full `tests/codegen.rs` suite + the
-Linux-LSan leak gate per slice. This file is the architecture of record; update
-its `Status:` line (and the `docs/spikes/README.md` row) as slices land. Tracks
-**[B-2026-06-19-14](../bug-ledger.jsonl)** (the `partial` SoA-across-functions
-entry) and design.md **Feature 1 / P1.5 (Phase 11)**.
+monomorphizing a distinct symbol), and slice 5 (origin-only `soa_layouts` — the
+name-keyed access-path fallback is replaced by a per-binding `LayoutId` value
+carrier seeded at the binding site, and the redundant name-keyed by-value param
+ABI is retired, fixing the base-symbol footgun where a `Vec[E]` param named like
+a layout block lowered SoA by coincidence) are on `main`. The one remaining
+slice (6 — the Slipstream full-SoA proof) is gated on the full `tests/codegen.rs`
+suite + the Linux-LSan leak gate. This file is the architecture of record;
+update its `Status:` line (and the `docs/spikes/README.md` row) as slices land.
+Tracks **[B-2026-06-19-14](../bug-ledger.jsonl)** (the `partial`
+SoA-across-functions entry) and design.md **Feature 1 / P1.5 (Phase 11)**.
 
 Cross-refs: [design.md § Feature 1: Data Layout](../design.md), the Slipstream
 SoA follow-up in [dogfooding.md](../dogfooding.md), and the codegen follow-on
@@ -238,20 +242,84 @@ existing `suppress_cleanup_for_tail_return` for AoS Vec).
    SoA *index*-store path (`grid[i] = E{…}`) is still unbuilt even
    single-function, so a kernel that scatters whole elements by `mut ref` index
    assignment remains a follow-on; push-based and field-level writes work.
-5. **Retire / bridge the name-keyed lookups** in the access paths; `soa_layouts`
-   becomes origin-only. Borrow-checker cross-group disjointness facts audited.
+5. **Retire / bridge the name-keyed lookups in the access paths; `soa_layouts`
+   becomes origin-only. Borrow-checker cross-group disjointness facts audited.**
+   ✅ **Landed 2026-06-20.** The access-path *trigger* — a binding's physical
+   layout — now reads a per-binding **value carrier** (`binding_layouts:
+   HashMap<String, LayoutId>`, §4.1's "the value carrier is a `LayoutId`
+   attached to bindings, not the binding name") instead of re-deriving SoA-ness
+   from the binding *name* against `soa_layouts` at each use. `active_layout_id`
+   reads `layout_subst` (mono params/returns) then `binding_layouts`
+   (in-function locals), with **no** `soa_layouts` fallback. The carrier is
+   seeded once, at the binding *site*, by the new `seed_binding_site_layout`
+   (the one sanctioned origin name-match — design.md's "layout binds to the
+   binding site"): the `let` arm resolves the binding's layout (`layout_subst`
+   for a return-SoA-seeded local, else the `layout`-block origin keyed by the
+   binding's own name) and records it; every downstream use reads the carrier.
+   The carrier is function-scoped — cleared at each function entry and
+   `mem::take`-save/restored around both mono entry points, exactly like
+   `variables` / `ref_params`. With this, `soa_layouts` is **origin-only**:
+   consulted to build the layout catalogue (`collect_soa_layouts`), to resolve a
+   `LayoutId::Soa(<block>)` to its struct shape, and at the binding site to match
+   a name to an origin — never as a per-use access-path trigger. The redundant
+   name-keyed by-value param ABI (`soa_value_param_layout`, slice-1/2 leftover)
+   is **retired**: the BASE symbol now lowers every `Vec[E]` param AoS, and a
+   SoA-laid-out argument is routed to a per-layout monomorph by the call
+   dispatch regardless of param name. That fixes a footgun — a base symbol whose
+   `Vec[E]` param merely *shared a name* with a `layout` block used to lower SoA
+   on the name alone, so calling it with an ordinary AoS `Vec[E]` marshalled a
+   3-field AoS struct into a 4-field SoA slot (LLVM "Call parameter type does not
+   match function signature"). Regression:
+   `test_e2e_soa_layout_named_param_base_is_aos_mono_is_soa` — one helper with a
+   `Vec[E]` param named `es` (matching `layout es`), called once with the SoA
+   binding `es` (→ SoA mono) and once with an AoS `plain` (→ AoS base), each
+   reading its own layout correctly.
+
+   **Cross-group disjointness audit.** The borrow checker is **layout-agnostic**
+   by the codegen-containment invariant: `ownership.rs` never imports
+   SoA/`layout` types and sees only a plain `Vec[Entity]`. Cross-group
+   disjointness (design.md:5425 — `mut ref entities[i].position` and
+   `ref entities[j].health` never alias) is therefore satisfied *by
+   construction*, not by a new SoA-specific fact: groups **partition** the
+   element's fields, so a cross-group pair is a *distinct-field* place pair,
+   which the checker already separates via the same place-disjointness rule it
+   uses for `mut ref user.a` + `ref user.b` (design.md:4943). SoA is purely a
+   codegen lowering of those already-disjoint field places onto separate
+   per-group buffers, which makes two checker-disjoint places *physically*
+   disjoint too — it never makes two checker-disjoint places alias. The one
+   genuinely SoA-specific borrow rule — `ref entities[i]` (a whole-element
+   reference) is a compile error because no contiguous element exists
+   (design.md:5424); whole-element use binds `let e = entities[i]`, an AoS copy —
+   lives at a different layer and is preserved (the index-read materializer is
+   untouched). Slice 5 changes only codegen's value carrier, leaving the checker
+   byte-identical, so every disjointness fact it had is preserved trivially. The
+   realized cross-group **read** surface is exercised by the existing tests
+   (`sumall` reads two groups in one expression). The cross-group **write**
+   surface via direct field-level index-store (`entities[i].position = …`, the
+   `e.position += e.velocity` idiom) has a **pre-existing, layout-agnostic-checker-orthogonal
+   codegen bug**: the per-group element address is mis-strided, so a store at
+   index ≥ 1 is dropped (index 0 is correct). It is independent of slice 5 (the
+   base compiler miscompiles it identically) and of the borrow checker (a codegen
+   address-arithmetic fault, not an aliasing-fact gap); tracked as its own
+   bug-ledger entry and a hard blocker for slice 6 (Slipstream's LBM kernel
+   scatters field updates by index). Same family as the unbuilt whole-element
+   index-store below.
 6. **Proof: convert `examples/slipstream/src/sim.kara`** to a `layout` block and
    confirm the native oracle checksums are byte-identical AoS↔SoA — Slipstream
-   earns its "SoA layout" roster billing.
+   earns its "SoA layout" roster billing. **Blocked** on the field-level SoA
+   index-store fix (see slice 5's audit note).
 
 ## 6. Migration from the name-keyed model
 
-The name-keyed model is not deleted up front — slices 2–3 build the mono path
-*beside* it and cut over once each shape reaches parity, so the suite never goes
-red. `soa_layouts` survives as the layout-origin map (§4.1); only the *lookup
-trigger* in the access paths moves (slice 5). The two shipped cross-function
-slices (by-ref reads, by-value params) are preserved by construction until their
-mono replacements pass the same regressions.
+The name-keyed model was not deleted up front — slices 2–4 built the mono path
+*beside* it and cut over once each shape reached parity, so the suite never went
+red. Slice 5 completed the cutover: `soa_layouts` survives as the layout-origin
+map (§4.1), but the *lookup trigger* in the access paths is gone — a binding's
+physical layout is the per-binding `binding_layouts` carrier (or `layout_subst`
+for mono params/returns), seeded once at the binding site. The redundant
+name-keyed by-value param ABI (`soa_value_param_layout`) is retired; the two
+originally-shipped cross-function shapes (by-ref reads, by-value params) are now
+served solely by the mono path.
 
 ## 7. Alternatives considered
 
