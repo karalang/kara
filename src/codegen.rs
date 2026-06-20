@@ -1569,7 +1569,7 @@ pub(super) struct Codegen<'ctx> {
     /// site that RETAINS `w` (`m.entry(w)`, `v.push(w)`, `m.insert(w, ..)`) must
     /// deep-copy it, exactly like an owned param: otherwise both the sink's
     /// drop and the source Vec's drop free the same buffer (double-free; the
-    /// interpreter clones, so this was an A/B mismatch — B-2026-06-20-12).
+    /// interpreter clones, so this was an A/B mismatch — B-2026-06-20-13).
     /// `maybe_defensive_copy_param_arg` treats membership here the same as
     /// `owned_vecstr_params`. Added by `register_for_loop_bindings` for heap
     /// element types; removed when a later `let` rebinds the name (shadow); all

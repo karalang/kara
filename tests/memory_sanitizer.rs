@@ -5060,7 +5060,7 @@ fn main() {
     }
 
     // ── `for w in vec` heap element BORROW consumed by a retaining sink
-    //    (B-2026-06-20-12) ──
+    //    (B-2026-06-20-13) ──
     // `for` over a Vec is borrow-iteration: `w` aliases `data[i]` and the
     // source Vec retains ownership (usable after the loop). A consume site that
     // RETAINS `w` (entry/push/insert) must deep-copy it — else the sink's drop
