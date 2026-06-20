@@ -1,11 +1,12 @@
 # Design spike — per-layout monomorphization (SoA across call boundaries)
 
-**Status:** ⬜ **SCOPED — ADR, not started (2026-06-20).** Decision recorded; the
-implementation is a multi-slice Phase-11 effort gated on the full
-`tests/codegen.rs` suite + the Linux-LSan leak gate per slice. This file is the
-architecture of record; update its `Status:` line (and the `docs/spikes/README.md`
-row) as slices land. Tracks **[B-2026-06-19-14](../bug-ledger.jsonl)** (the
-`partial` SoA-across-functions entry) and design.md **Feature 1 / P1.5 (Phase 11)**.
+**Status:** 🟦 **IN PROGRESS — slice 1 landed (2026-06-20).** Decision recorded;
+slice 1 (the `LayoutId` axis scaffolding) is on `main`. The remaining slices are
+a multi-slice Phase-11 effort gated on the full `tests/codegen.rs` suite + the
+Linux-LSan leak gate per slice. This file is the architecture of record; update
+its `Status:` line (and the `docs/spikes/README.md` row) as slices land. Tracks
+**[B-2026-06-19-14](../bug-ledger.jsonl)** (the `partial` SoA-across-functions
+entry) and design.md **Feature 1 / P1.5 (Phase 11)**.
 
 Cross-refs: [design.md § Feature 1: Data Layout](../design.md), the Slipstream
 SoA follow-up in [dogfooding.md](../dogfooding.md), and the codegen follow-on
@@ -155,11 +156,17 @@ existing `suppress_cleanup_for_tail_return` for AoS Vec).
 
 ## 5. Slice plan (each gated on full `tests/codegen.rs` + LSan)
 
-0. **(this ADR)** decision + invariants recorded.
-1. **Layout as a mono axis — representation + plumbing.** Introduce `LayoutId`,
-   the layout subst on the mono key, mangling suffix, and save/restore in the
-   mono entry. No behavior change yet: every call resolves to `Aos`, so output is
-   byte-identical to today. Pure scaffolding; the suite must stay 100% green.
+0. **(this ADR)** decision + invariants recorded. ✅
+1. **Layout as a mono axis — representation + plumbing.** ✅ **Landed
+   2026-06-20.** `LayoutId` (`Aos` | `Soa(<layout-block-name>)`) +
+   `mangle_suffix` in `state.rs`; `layout_subst` field on `Codegen`
+   saved/restored in `compile_generic_call`'s mono entry (parallel to
+   `type_subst`/`const_subst`); `compute_call_layout_subst` (forward inference,
+   returns `Aos` for every `Vec[E]` param for now); `mangle_mono_name` appends
+   the layout suffix. No behavior change: every call resolves to `Aos`, so the
+   mangled name is unchanged and output is byte-identical — codegen E2E 1680/0,
+   non-codegen suite 6693/0. The body-lowering reads (the SoA access-path
+   trigger) and the `Soa` construction land in slice 2.
 2. **Forward arg-layout mono (supersede the by-value-params name-keying).** A
    `Vec[E]` param is lowered per the *caller's* arg layout via the mono key, not
    the param name. Retire the name-keyed by-value path once parity holds.
