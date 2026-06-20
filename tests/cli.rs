@@ -15844,6 +15844,113 @@ process.exit(0);
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// Headline E2E for `std.web.time.every` (phase-10 host-async interval
+/// producer — the `after` arg-shape with the `animation_frames` multi-shot
+/// lifetime). A `ticks.recv()` parks the primary worker; a MAIN-THREAD
+/// `setInterval` feeds one `()` per period through the service instance,
+/// re-arming forever and never dropping its cloned sender — so the channel
+/// stays open across ticks (vs `after`, which fires once and closes).
+///
+/// Load-immune, same shape as the `animation_frames` test: receiving 3 ticks
+/// at a ~15ms period before `_start` returns means the worker parked in `recv`
+/// three times and was woken three times. A non-blocking `recv` (the
+/// sequential floor) would spin to completion in ~0ms; an elapsed ≳ a couple
+/// of periods is positive evidence of the park→feed→wake round-trip repeating.
+#[test]
+fn wasm_threads_every_recv_e2e() {
+    let tmp = wasm_test_dir("wtevery");
+    let path = tmp.join("every.kara");
+    std::fs::write(
+        &path,
+        "import std.web.time.{every, Duration};\n\n\
+         fn main() {\n    \
+             println(\"before\");\n    \
+             let ticks = every(Duration.ms(15));\n    \
+             let mut n = 0;\n    \
+             loop {\n        \
+                 ticks.recv();\n        \
+                 n = n + 1;\n        \
+                 if n >= 3 {\n            \
+                     break;\n        \
+                 }\n    \
+             }\n    \
+             println(\"after\");\n}\n",
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--features=wasm-threads",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_threads_every_recv_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        out.status.success(),
+        "every wasm-threads build failed: {stderr}"
+    );
+    assert!(tmp.join("every.threads.wasm").exists());
+
+    let harness = tmp.join("harness.mjs");
+    std::fs::write(
+        &harness,
+        r#"import { run } from "./every.js";
+const t0 = performance.now();
+const h = await run({});
+const elapsed = performance.now() - t0;
+if (h.threaded !== true) { console.error("FAIL: expected threaded pick"); process.exit(1); }
+// 3 ticks at a 15ms period ≈ ≥45ms; a non-blocking recv would finish in ~0ms.
+// Assert a couple of periods elapsed.
+if (elapsed < 25) {
+  console.error("FAIL: interval loop did not block per tick, elapsed=" + elapsed.toFixed(1) + "ms");
+  process.exit(1);
+}
+console.log("EVERY_OK elapsed=" + elapsed.toFixed(1) + "ms");
+// `every` is MULTI-SHOT: the host setInterval re-arms forever, so node's event
+// loop never drains on its own. Force-exit now that the assertions passed, else
+// this harness hangs and the test's `node` subprocess never returns.
+process.exit(0);
+"#,
+    )
+    .unwrap();
+    let node = std::process::Command::new("node")
+        .arg(&harness)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: wasm_threads_every_recv_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let node_stdout = String::from_utf8_lossy(&node_out.stdout);
+    let node_stderr = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success(),
+        "every harness failed under node: stdout={node_stdout} stderr={node_stderr}",
+    );
+    assert!(
+        node_stdout.contains("EVERY_OK"),
+        "missing EVERY_OK (per-tick recv blocked then woke): stdout={node_stdout} stderr={node_stderr}",
+    );
+    let before = node_stdout.find("before");
+    let after = node_stdout.find("after");
+    assert!(
+        matches!((before, after), (Some(b), Some(a)) if b < a),
+        "guest must print before→after (interval loop ran to break): stdout={node_stdout}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// Headline E2E for the first NON-UNIT host-async producer (phase-10
 /// `std.web.events.pointer_moves` — the `Channel[T]`, `T != ()` slice that
 /// Plume drives). A `moves.recv()` parks the primary worker; a MAIN-THREAD
@@ -16463,6 +16570,50 @@ fn wasm_time_after_sequential_target_rejected() {
     // rather than mis-assert a build failure.
     if let Some(reason) = wasm_build_skip_reason(&stderr) {
         eprintln!("skip: wasm_time_after_sequential_target_rejected — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        !out.status.success(),
+        "sequential wasm host-async producer must be rejected, but build succeeded: {stderr}"
+    );
+    assert!(
+        stderr.contains("requires `--features wasm-threads`"),
+        "gate must name the flag: {stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The sequential-target gate for `std.web.time.every` — sibling of
+/// `wasm_time_after_sequential_target_rejected`. The interval producer built
+/// WITHOUT `--features wasm-threads` is a hard compile error pointing at the
+/// flag, never a silent zero-value `recv`. Same no-`llvm` skip rationale.
+#[test]
+fn wasm_every_sequential_target_rejected() {
+    let tmp = wasm_test_dir("wteverygate");
+    let path = tmp.join("every.kara");
+    std::fs::write(
+        &path,
+        "import std.web.time.{every, Duration};\n\n\
+         fn main() {\n    \
+             let rx = every(Duration.ms(15));\n    \
+             rx.recv();\n}\n",
+    )
+    .unwrap();
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--bindings=none",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: wasm_every_sequential_target_rejected — {reason}");
         let _ = std::fs::remove_dir_all(&tmp);
         return;
     }

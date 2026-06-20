@@ -478,7 +478,9 @@ pub fn render_glue(
     // sequential WASM target can't host them (the codegen gate rejects the
     // producer pre-link), and a native/sequential build never wires a
     // service instance. `__kara_timer_after(chPtr: i64, ms: i64) -> ()`
-    // backs `std.web.time.after`; `__kara_animation_frames(chPtr: i64) -> ()`
+    // backs `std.web.time.after`; `__kara_timer_every(chPtr: i64, ms: i64) ->
+    // ()` backs `std.web.time.every` (a multi-shot `setInterval` loop);
+    // `__kara_animation_frames(chPtr: i64) -> ()`
     // backs `std.web.time.animation_frames` (a multi-shot rAF loop);
     // `__kara_pointer_moves(chPtr: i64) -> ()` backs
     // `std.web.events.pointer_moves` — the first non-unit producer: it sends a
@@ -489,6 +491,7 @@ pub fn render_glue(
     let builtin_sigs: &[&str] = if threads.is_some() {
         &[
             "{ name: \"__kara_timer_after\", params: [\"bigint\", \"bigint\"], ret: \"void\" }",
+            "{ name: \"__kara_timer_every\", params: [\"bigint\", \"bigint\"], ret: \"void\" }",
             "{ name: \"__kara_animation_frames\", params: [\"bigint\"], ret: \"void\" }",
             "{ name: \"__kara_pointer_moves\", params: [\"bigint\"], ret: \"void\" }",
             "{ name: \"__kara_wheel\", params: [\"bigint\"], ret: \"void\" }",
@@ -500,6 +503,7 @@ pub fn render_glue(
     let builtin_names: &[&str] = if threads.is_some() {
         &[
             "\"__kara_timer_after\"",
+            "\"__kara_timer_every\"",
             "\"__kara_animation_frames\"",
             "\"__kara_pointer_moves\"",
             "\"__kara_wheel\"",
@@ -1637,6 +1641,22 @@ async function runThreaded(hostImpls = {}, opts = {}) {
         serviceInstance.exports.karac_runtime_channel_drop_sender(ptr);
       }, Number(ms));
     };
+    // __kara_timer_every(chPtr: i64 [BigInt], ms: i64 [BigInt]) -> (): a
+    // MULTI-SHOT setInterval loop — the `after` arg-shape with the
+    // animation_frames lifetime. Each interval, if the worker has drained the
+    // previous tick (channel_pending == 0n), feed a fresh `()`. The pending
+    // probe coalesces — the channel holds at most one un-consumed tick — so a
+    // consumer slower than the period drops backlog rather than growing
+    // unbounded lag. The cloned sender is owned by the interval for its
+    // lifetime (never dropped, unlike __kara_timer_after's single fire).
+    builtinHostImpls["__kara_timer_every"] = (chPtr, ms) => {
+      const ptr = Number(chPtr);
+      setInterval(() => {
+        if (Number(serviceInstance.exports.karac_runtime_channel_pending(ptr)) === 0) {
+          serviceInstance.exports.karac_runtime_channel_send(ptr, 0, 0n);
+        }
+      }, Number(ms));
+    };
     // __kara_animation_frames(chPtr: i64 [BigInt]) -> (): a MULTI-SHOT
     // requestAnimationFrame loop. Each frame, if the worker has drained the
     // previous tick (channel_pending == 0n), feed a fresh `()`; then re-arm.
@@ -2208,6 +2228,7 @@ mod tests {
             "const HOST_FN_SIGS = [{ name: \"report\", params: [\"bigint\"], ret: \"bigint\" }, \
              { name: \"log_str\", params: [\"number\", \"bigint\"], ret: \"void\" }, \
              { name: \"__kara_timer_after\", params: [\"bigint\", \"bigint\"], ret: \"void\" }, \
+             { name: \"__kara_timer_every\", params: [\"bigint\", \"bigint\"], ret: \"void\" }, \
              { name: \"__kara_animation_frames\", params: [\"bigint\"], ret: \"void\" }, \
              { name: \"__kara_pointer_moves\", params: [\"bigint\"], ret: \"void\" }, \
              { name: \"__kara_wheel\", params: [\"bigint\"], ret: \"void\" }, \
@@ -2217,8 +2238,9 @@ mod tests {
         // user contract (DECLARED_IMPORTS drives the missing-impl check and
         // the d.ts).
         assert!(glue.contains(
-            "const BUILTIN_HOST_FNS = [\"__kara_timer_after\", \"__kara_animation_frames\", \
-             \"__kara_pointer_moves\", \"__kara_wheel\", \"__kara_keydown\"];"
+            "const BUILTIN_HOST_FNS = [\"__kara_timer_after\", \"__kara_timer_every\", \
+             \"__kara_animation_frames\", \"__kara_pointer_moves\", \"__kara_wheel\", \
+             \"__kara_keydown\"];"
         ));
         assert!(glue.contains("const DECLARED_IMPORTS = [\"report\", \"log_str\"];"));
         // Both halves of the proxy plus the worker-side wiring.
@@ -2234,6 +2256,8 @@ mod tests {
             "serviceInstance.exports.karac_runtime_service_stack_top()",
             "builtinHostImpls[\"__kara_timer_after\"] = (chPtr, ms) =>",
             "serviceInstance.exports.karac_runtime_channel_send(ptr, 0, 0n);",
+            // Multi-shot setInterval producer (sibling of after; coalesced).
+            "builtinHostImpls[\"__kara_timer_every\"] = (chPtr, ms) =>",
             // Multi-shot rAF producer + its coalescing pending-probe.
             "builtinHostImpls[\"__kara_animation_frames\"] = (chPtr) =>",
             "Number(serviceInstance.exports.karac_runtime_channel_pending(ptr)) === 0",
@@ -2259,6 +2283,7 @@ mod tests {
         let dts = render_dts(&fns, &[], "app.wasm", true);
         assert!(
             !dts.contains("__kara_timer_after")
+                && !dts.contains("__kara_timer_every")
                 && !dts.contains("__kara_animation_frames")
                 && !dts.contains("__kara_pointer_moves")
                 && !dts.contains("__kara_wheel")

@@ -473,6 +473,7 @@ impl<'a> super::TypeChecker<'a> {
                 | "try_recv"
                 | "clone"
                 | "__schedule_after"
+                | "__schedule_every"
                 | "__schedule_animation_frames"
                 | "__schedule_pointer_moves"
                 | "__schedule_wheel"
@@ -586,6 +587,31 @@ impl<'a> super::TypeChecker<'a> {
                     if args.len() != 1 {
                         self.type_error(
                             "Sender.__schedule_after expects exactly one argument (delay in ms)"
+                                .to_string(),
+                            span.clone(),
+                            TypeErrorKind::WrongNumberOfArgs,
+                        );
+                    } else {
+                        let at = self.infer_expr(&args[0].value);
+                        self.check_assignable(
+                            &Type::Int(IntSize::I64),
+                            &at,
+                            args[0].value.span.clone(),
+                        );
+                    }
+                    Type::Unit
+                }
+                // Internal compiler builtin backing `std.web.time.every`
+                // (phase-10 host-async interval producer). Borrows `self`,
+                // takes the period in milliseconds, returns Unit. Like
+                // `__schedule_after` but *multi-shot*: codegen hands the host a
+                // `setInterval` that re-feeds the channel every period and
+                // never drops its sender. Kept out of ordinary reach by the
+                // `__` prefix + the `writes(Timer)` gating on `every`.
+                "__schedule_every" => {
+                    if args.len() != 1 {
+                        self.type_error(
+                            "Sender.__schedule_every expects exactly one argument (period in ms)"
                                 .to_string(),
                             span.clone(),
                             TypeErrorKind::WrongNumberOfArgs,

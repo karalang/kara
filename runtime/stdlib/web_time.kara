@@ -96,3 +96,28 @@ pub fn animation_frames() -> Receiver[()] with writes(Timer) {
     tx.__schedule_animation_frames();
     rx
 }
+
+// A recurring wall-clock tick: send `()` every `duration`, indefinitely
+// (`setInterval`). Returns the receiving half; the waiting side writes a
+// plain blocking loop —
+//
+//     let ticks = every(Duration.secs(1));
+//     loop { ticks.recv(); on_second(); }
+//
+// — no `await`, no callback ceremony (design.md § Async Host APIs on WASM).
+// Like `animation_frames` (and unlike one-shot `after`), this is *multi-shot*:
+// the host keeps the `setInterval` armed and never drops its sender, so the
+// channel stays open for the life of the loop. The host coalesces — it feeds a
+// fresh tick only once the previous one is drained — so a consumer slower than
+// `duration` drops the backlog instead of accumulating unbounded lag.
+//
+// Mechanism: `Sender.__schedule_every` (a compiler builtin) clones the
+// sender's channel reference and hands the clone to the host's `setInterval`
+// registration, which owns it for the interval's lifetime. Same `--features
+// wasm-threads` requirement as `after`/`animation_frames` (a sequential build
+// has no thread to park in `recv` while the host event loop runs the timer).
+pub fn every(duration: Duration) -> Receiver[()] with writes(Timer) {
+    let (tx, rx): (Sender[()], Receiver[()]) = Channel.new();
+    tx.__schedule_every(duration.as_ms());
+    rx
+}
