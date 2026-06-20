@@ -7558,6 +7558,55 @@ fn main() {
     }
 
     #[test]
+    fn asan_soa_return_value_caller_owns_no_leak_or_double_free() {
+        // Per-layout monomorphization slice 3 (SoA returns): the OPPOSITE
+        // ownership of the by-value param. A builder `make_entities()` builds a
+        // SoA `Vec[Entity]` and RETURNS it — bound by a differently-named local
+        // `out` and received into the caller's `entities` (`layout entities`).
+        // The return is a MOVE OUT: the callee suppresses its own
+        // `FreeSoaGroups` for the returned local (it no longer owns the group
+        // buffers), and the caller's `entities` binding frees both buffers
+        // exactly once at scope exit. Get the ownership transfer wrong and it's
+        // either a double-free (callee frees + caller frees → ASAN) or a leak
+        // (neither frees → LSan). Looped 20× to amplify either. The struct
+        // carries ≥36 bytes of live payload across the groups so a reachable
+        // leak isn't masked by LSan's short-allocation blind spot.
+        assert_clean_asan_run(
+            r#"
+struct Entity { x: f64, y: f64, hp: i64 }
+layout entities: Vec[Entity] {
+    group physics { x, y }
+    group combat { hp }
+}
+fn make_entities() -> Vec[Entity] {
+    let mut out: Vec[Entity] = Vec.new();
+    out.push(Entity { x: 1.0, y: 2.0, hp: 100 });
+    out.push(Entity { x: 3.0, y: 4.0, hp: 200 });
+    out.push(Entity { x: 5.0, y: 6.0, hp: 300 });
+    out
+}
+fn main() {
+    let mut sum = 0;
+    let mut k = 0;
+    while k < 20 {
+        let entities: Vec[Entity] = make_entities();
+        let mut i = 0;
+        while i < entities.len() {
+            let e = entities[i];
+            sum = sum + e.hp;
+            i = i + 1;
+        }
+        k = k + 1;
+    }
+    println(sum);
+}
+"#,
+            &["12000"],
+            "soa_return_value_caller_owns",
+        );
+    }
+
+    #[test]
     fn asan_soa_drop_with_cold_group_primitive() {
         // Cold group adds an extra buffer that pre-fix codegen never
         // freed (the cold pointer sits between the hot pointers and the

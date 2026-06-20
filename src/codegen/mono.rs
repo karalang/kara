@@ -105,7 +105,17 @@ impl<'ctx> super::Codegen<'ctx> {
         let layout_subst = self.compute_call_layout_subst(&generic_fn, args);
 
         // Mangle a unique name for this specialization (e.g. `max$i64`).
-        let mangled = self.mangle_mono_name(name, &generic_fn, &subst, &const_subst, &layout_subst);
+        // A generic call carries no backward (return) layout inference yet —
+        // that path is the non-generic `ensure_layout_mono_generated` entry —
+        // so the return axis is `Aos` here.
+        let mangled = self.mangle_mono_name(
+            name,
+            &generic_fn,
+            &subst,
+            &const_subst,
+            &layout_subst,
+            &LayoutId::Aos,
+        );
 
         // Slice 8y: per-call-site decision on whether the caller
         // takes the state-machine intercept path or falls through to
@@ -588,7 +598,9 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Generate (declare + compile) a per-layout monomorph of a *non-generic*
     /// function under `mangled`, with `layout_subst` active so its `Vec[E]`
-    /// params lower SoA against the caller's argument layout (slice 2). The
+    /// params lower SoA against the caller's argument layout (slice 2) and
+    /// `return_layout` active so a non-`Aos` return lowers the LLVM return type
+    /// to the SoA struct and the returned local(s) build SoA (slice 3). The
     /// non-specialized (all-`Aos`) body was already compiled in the normal
     /// module pass; this adds the SoA variant as a distinct symbol. Idempotent
     /// via `generated_monos`. Mirrors `compile_generic_call`'s mono-entry
@@ -600,6 +612,7 @@ impl<'ctx> super::Codegen<'ctx> {
         func: &Function,
         mangled: &str,
         layout_subst: HashMap<String, LayoutId>,
+        return_layout: LayoutId,
     ) -> Result<(), String> {
         if self.generated_monos.contains(mangled) {
             return Ok(());
@@ -617,11 +630,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_subst = std::mem::take(&mut self.type_subst);
         let saved_const_subst = std::mem::take(&mut self.const_subst);
         let saved_layout_subst = std::mem::replace(&mut self.layout_subst, layout_subst);
+        let saved_return_layout = std::mem::replace(&mut self.return_layout, return_layout);
 
         let result = self
             .declare_mono_function(func, mangled)
             .and_then(|_| self.compile_mono_function(func, mangled));
 
+        self.return_layout = saved_return_layout;
         self.layout_subst = saved_layout_subst;
         self.const_subst = saved_const_subst;
         self.type_subst = saved_subst;
@@ -662,15 +677,29 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
-        let fn_type = match self.llvm_return_type(&func.return_type) {
-            Some(BasicTypeEnum::IntType(t)) => t.fn_type(&param_types, false),
-            Some(BasicTypeEnum::FloatType(t)) => t.fn_type(&param_types, false),
-            Some(BasicTypeEnum::PointerType(t)) => t.fn_type(&param_types, false),
-            Some(BasicTypeEnum::StructType(t)) => t.fn_type(&param_types, false),
-            Some(BasicTypeEnum::ArrayType(t)) => t.fn_type(&param_types, false),
-            Some(BasicTypeEnum::VectorType(t)) => t.fn_type(&param_types, false),
-            Some(BasicTypeEnum::ScalableVectorType(_)) | None => {
-                self.context.void_type().fn_type(&param_types, false)
+        // Per-layout-monomorphization backward axis (slice 3): a non-`Aos`
+        // return layout lowers the LLVM return type to the 4-field SoA struct
+        // (`soa_vec_type`), not the AoS `{ptr,len,cap}` the declared `Vec[E]`
+        // would give. The caller binds the result into its SoA slot; the body
+        // builds + returns the SoA struct. No-op outside a return-SoA mono.
+        let soa_return = match &self.return_layout {
+            LayoutId::Soa(block) => self.soa_layouts.get(block).cloned(),
+            LayoutId::Aos => None,
+        };
+        let fn_type = if let Some(soa) = soa_return {
+            let soa_ty = self.soa_vec_type(soa.num_groups, soa.cold_group.is_some());
+            soa_ty.fn_type(&param_types, false)
+        } else {
+            match self.llvm_return_type(&func.return_type) {
+                Some(BasicTypeEnum::IntType(t)) => t.fn_type(&param_types, false),
+                Some(BasicTypeEnum::FloatType(t)) => t.fn_type(&param_types, false),
+                Some(BasicTypeEnum::PointerType(t)) => t.fn_type(&param_types, false),
+                Some(BasicTypeEnum::StructType(t)) => t.fn_type(&param_types, false),
+                Some(BasicTypeEnum::ArrayType(t)) => t.fn_type(&param_types, false),
+                Some(BasicTypeEnum::VectorType(t)) => t.fn_type(&param_types, false),
+                Some(BasicTypeEnum::ScalableVectorType(_)) | None => {
+                    self.context.void_type().fn_type(&param_types, false)
+                }
             }
         };
 
@@ -808,6 +837,25 @@ impl<'ctx> super::Codegen<'ctx> {
             );
         }
 
+        // Per-layout-monomorphization backward axis (slice 3): in a return-SoA
+        // mono, seed the local(s) that flow to the return value with the
+        // receiving binding's layout, so the body's construction
+        // (`let out = Vec.new()`), mutation (`out.push(…)`), and tail
+        // (`out`) all lower SoA via `active_soa_layout` — and the returned
+        // value is the 4-field SoA struct the patched signature
+        // (`declare_mono_function`) returns. Seeding happens AFTER the param
+        // prologue so a returned local never shadows a SoA param's slot.
+        // No-op outside a return-SoA mono.
+        let ret_block = match &self.return_layout {
+            LayoutId::Soa(block) => Some(block.clone()),
+            LayoutId::Aos => None,
+        };
+        if let Some(block) = ret_block {
+            for name in self.soa_return_local_names(&func.body) {
+                self.layout_subst.insert(name, LayoutId::Soa(block.clone()));
+            }
+        }
+
         let result = self.compile_block(&func.body)?;
 
         if self
@@ -840,6 +888,35 @@ impl<'ctx> super::Codegen<'ctx> {
         self.scope_cleanup_actions.clear();
 
         Ok(())
+    }
+
+    /// The local binding name(s) that flow to this function's return value as
+    /// a bare `Vec[E]` identifier — used by the return-SoA monomorph path
+    /// (slice 3) to seed them with the receiving binding's layout so the body
+    /// builds + returns the SoA struct. Detection MIRRORS
+    /// `suppress_cleanup_for_tail_return`'s tail analysis (the block's
+    /// `final_expr`, or the last statement's `return <expr>;` value): seeding
+    /// and the matching move-out suppression must agree on the same name, or a
+    /// returned local would build SoA without its `FreeSoaGroups` suppressed
+    /// (leak) or be suppressed without building SoA (type mismatch). Only a
+    /// bare identifier qualifies; branch-leaf / multi-`return` returns are a
+    /// follow-on slice (spike §8) — they degrade to AoS, never miscompile.
+    fn soa_return_local_names(&self, body: &Block) -> Vec<String> {
+        let mut names = Vec::new();
+        let from_final = body.final_expr.as_deref();
+        let from_last_stmt = body.stmts.last().and_then(|s| match &s.kind {
+            StmtKind::Expr(e) => match &e.kind {
+                ExprKind::Return(Some(boxed)) => Some(boxed.as_ref()),
+                _ => Some(e),
+            },
+            _ => None,
+        });
+        if let Some(expr) = from_final.or(from_last_stmt) {
+            if let ExprKind::Identifier(name) = &expr.kind {
+                names.push(name.clone());
+            }
+        }
+        names
     }
 
     /// Infer the type-parameter substitution for a generic function call by
@@ -906,6 +983,9 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `LayoutId` is non-`Aos`, so each layout variant is a distinct LLVM
     /// symbol (`docs/spikes/per-layout-monomorphization.md` §4.3). `Aos`
     /// contributes no suffix, so an all-`Aos` call keeps the existing symbol.
+    /// `return_layout` adds the backward-inference axis (slice 3): a non-`Aos`
+    /// *return* layout appends a `$ret_soa_<name>` suffix, so a helper called
+    /// to return one layout vs. another (or vs. plain AoS) is a distinct symbol.
     pub(super) fn mangle_mono_name(
         &self,
         base: &str,
@@ -913,6 +993,7 @@ impl<'ctx> super::Codegen<'ctx> {
         subst: &HashMap<String, BasicTypeEnum<'ctx>>,
         const_subst: &HashMap<String, crate::prelude::ConstValue>,
         layout_subst: &HashMap<String, LayoutId>,
+        return_layout: &LayoutId,
     ) -> String {
         let mut mangled = base.to_string();
         // Type / const generic axes (only for a generic function — a
@@ -952,6 +1033,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     mangled.push_str(&suffix);
                 }
             }
+        }
+        // Per-layout-monomorphization backward axis (slice 3): a non-`Aos`
+        // return layout appends `$ret_soa_<name>`. Disjoint from the per-param
+        // `$<param>_soa_<name>` suffixes (the `ret` keyword can't be a param
+        // name), so a fn that both takes and returns SoA gets both.
+        if let Some(suffix) = return_layout.mangle_suffix() {
+            mangled.push_str("$ret_");
+            mangled.push_str(&suffix);
         }
         mangled
     }
@@ -1051,6 +1140,43 @@ impl<'ctx> super::Codegen<'ctx> {
             &param.ty.kind,
             TypeKind::Path(path) if path.segments.last().map(String::as_str) == Some("Vec")
         )
+    }
+
+    /// Whether a function's declared return type is a layout-carrying `Vec[E]`
+    /// — the backward-inference (slice 3) analog of `param_is_layout_carrying`.
+    /// Gates the return-SoA monomorph: only a function that returns a whole
+    /// `Vec[E]` can be specialized to return an SoA struct.
+    pub(super) fn return_is_layout_carrying(func: &Function) -> bool {
+        matches!(
+            func.return_type.as_ref().map(|t| &t.kind),
+            Some(TypeKind::Path(path)) if path.segments.last().map(String::as_str) == Some("Vec")
+        )
+    }
+
+    /// Whether a `let`-binding RHS is a direct call to a known user function
+    /// whose return type is a layout-carrying `Vec[E]` — the gate for the
+    /// backward-inference SoA-let path (slice 3). Matches `compile_call`'s
+    /// callee-name extraction (bare identifier / single-segment path), so the
+    /// callee resolved here is exactly the one the dispatch monomorphizes.
+    /// Excludes `Vec.new()` (a 2-segment `Vec::new` path handled by
+    /// `compile_soa_new`) and any non-`fn_asts` callee (intrinsics, generics),
+    /// keeping the SoA-let path in lockstep with the backward dispatch — so the
+    /// bound call result is always the SoA struct the slot expects.
+    pub(super) fn let_rhs_calls_layout_returning_fn(&self, value: &Expr) -> bool {
+        let ExprKind::Call { callee, .. } = &value.kind else {
+            return false;
+        };
+        let name = match &callee.kind {
+            ExprKind::Identifier(n) => n.as_str(),
+            ExprKind::Path {
+                segments,
+                generic_args: None,
+            } if segments.len() == 1 => segments[0].as_str(),
+            _ => return false,
+        };
+        self.fn_asts
+            .get(name)
+            .is_some_and(Self::return_is_layout_carrying)
     }
 
     /// Slice 0.a sub-step 2 — codegen monomorphization-request bound

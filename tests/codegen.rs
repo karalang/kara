@@ -17844,6 +17844,98 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_soa_return_value_caller_different_name() {
+        // Per-layout monomorphization slice 3 (SoA returns / backward
+        // inference): a helper `build_grid()` builds and RETURNS a `Vec[E]`,
+        // bound by the caller into a SoA `grid` (`layout grid`). The returned
+        // local is named `out` — a DIFFERENT name from both the layout block
+        // and the receiving binding — so the name-keyed model can't lower it
+        // SoA (no `layout out`). Backward inference reads the receiving
+        // binding's layout, monomorphizes `build_grid$ret_soa_grid` to return
+        // the 4-field SoA struct, seeds `out` as `Soa(grid)` so its
+        // construction/pushes/tail all lower SoA, and moves the buffers out to
+        // the caller (callee suppresses its own `FreeSoaGroups`). `main` reads
+        // through the SoA struct: (1+2)+(3+4)+(5+6) = 21.
+        let out = run_program(
+            r#"
+struct E { x: f64, y: f64 }
+layout grid: Vec[E] { group g1 { x } group g2 { y } }
+fn build_grid() -> Vec[E] {
+    let mut out: Vec[E] = Vec.new();
+    out.push(E { x: 1.0, y: 2.0 });
+    out.push(E { x: 3.0, y: 4.0 });
+    out.push(E { x: 5.0, y: 6.0 });
+    out
+}
+fn main() {
+    let grid: Vec[E] = build_grid();
+    let mut s = 0.0;
+    let mut i = 0;
+    while i < grid.len() {
+        s = s + grid[i].x + grid[i].y;
+        i = i + 1;
+    }
+    println(s);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "21",
+                "SoA Vec returned across a function boundary, bound by a differently-named local"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_soa_return_two_layouts_through_one_builder_distinct_monos() {
+        // Per-layout monomorphization slice 3 (backward distinctness): ONE
+        // no-arg builder `make()` is called twice, its result bound into two
+        // different SoA layouts (`grid`, `coll`). Each `let` monomorphizes a
+        // distinct return-SoA symbol (`make$ret_soa_grid`,
+        // `make$ret_soa_coll`) keyed on the receiving binding's layout — the
+        // backward analog of the forward two-layouts-through-one-helper test.
+        // Both must read correctly: grid (1+2)+(3+4)=10, coll the same data
+        // grouped differently → also 10. Printed on two lines.
+        let out = run_program(
+            r#"
+struct E { x: f64, y: f64 }
+layout grid: Vec[E] { group g1 { x } group g2 { y } }
+layout coll: Vec[E] { group c1 { x } group c2 { y } }
+fn make() -> Vec[E] {
+    let mut buf: Vec[E] = Vec.new();
+    buf.push(E { x: 1.0, y: 2.0 });
+    buf.push(E { x: 3.0, y: 4.0 });
+    buf
+}
+fn sum_grid(g: Vec[E]) -> f64 {
+    let mut s = 0.0;
+    let mut i = 0;
+    while i < g.len() {
+        s = s + g[i].x + g[i].y;
+        i = i + 1;
+    }
+    s
+}
+fn main() {
+    let grid: Vec[E] = make();
+    let coll: Vec[E] = make();
+    println(sum_grid(grid));
+    println(sum_grid(coll));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "10\n10",
+                "one builder bound into two layouts produces two distinct correct return-SoA monos"
+            );
+        }
+    }
+
     // ── String operators ──────────────────────────────────────────
 
     #[test]

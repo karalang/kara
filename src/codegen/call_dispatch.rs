@@ -954,26 +954,50 @@ impl<'ctx> super::Codegen<'ctx> {
         // them up via the reassigned `name`. An all-`Aos` call adds no entry,
         // so non-SoA code falls straight through to the original function.
         //
+        // Backward inference (slice 3): consume the one-shot return-layout the
+        // SoA `let <recv> = <call>()` arm parked here. It applies to THIS call
+        // only — `take` it before args are compiled (the arg loop runs further
+        // below), so a nested call inside an argument can't inherit it. Honored
+        // only when non-`Aos` AND the callee actually returns a `Vec[E]` (the
+        // backward monomorph lowers that return to the SoA struct).
+        let pending_ret = self.pending_return_layout.take();
+        let return_layout = pending_ret
+            .filter(|l| !matches!(l, LayoutId::Aos))
+            .filter(|_| {
+                self.fn_asts
+                    .get(&name)
+                    .is_some_and(Self::return_is_layout_carrying)
+            })
+            .unwrap_or(LayoutId::Aos);
+
         // Cheap gate first: only a callee with a layout-carrying (`Vec[E]`)
-        // value param can ever specialize, so skip the AST clone for the common
-        // case (no `Vec` params) — most user calls pay only a HashMap lookup
-        // plus a param scan here.
-        let callee_may_specialize = self
-            .fn_asts
-            .get(&name)
-            .is_some_and(|f| f.params.iter().any(Self::param_is_layout_carrying));
+        // value param OR a `Vec[E]` return can ever specialize, so skip the AST
+        // clone for the common case — most user calls pay only a HashMap lookup
+        // plus a param/return scan here.
+        let callee_may_specialize = self.fn_asts.get(&name).is_some_and(|f| {
+            f.params.iter().any(Self::param_is_layout_carrying)
+                || Self::return_is_layout_carrying(f)
+        });
         if callee_may_specialize {
             let callee_fn = self.fn_asts[&name].clone();
             let layout_subst = self.compute_call_layout_subst(&callee_fn, args);
-            if layout_subst.values().any(|l| !matches!(l, LayoutId::Aos)) {
+            let any_forward = layout_subst.values().any(|l| !matches!(l, LayoutId::Aos));
+            let any_backward = !matches!(return_layout, LayoutId::Aos);
+            if any_forward || any_backward {
                 let mangled = self.mangle_mono_name(
                     &name,
                     &callee_fn,
                     &HashMap::new(),
                     &HashMap::new(),
                     &layout_subst,
+                    &return_layout,
                 );
-                self.ensure_layout_mono_generated(&callee_fn, &mangled, layout_subst)?;
+                self.ensure_layout_mono_generated(
+                    &callee_fn,
+                    &mangled,
+                    layout_subst,
+                    return_layout,
+                )?;
                 name = mangled;
             }
         }
@@ -2185,6 +2209,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 // fires the drop when its own binding goes out of scope.
                 // Mirrors the Vec/String/Map/user-Drop suppressions above.
                 self.suppress_channel_drop_for_var(name);
+                // SoA move-out (per-layout-monomorphization slice 3): in a
+                // return-SoA monomorph the tail identifier's 4-field SoA
+                // struct — which shares the heap group buffers — is moved out
+                // as the return value, so drop its queued `FreeSoaGroups`. The
+                // caller's binding (which receives the struct) now owns the
+                // buffers and frees them once; without this the callee frees
+                // them at scope exit, leaving the caller's group pointers
+                // dangling (double-free / UAF). Gated on the active return
+                // layout so the non-mono / AoS-return tail is untouched — the
+                // SoA analog of the AoS Vec tail suppression above.
+                if matches!(self.return_layout, LayoutId::Soa(_)) {
+                    self.suppress_soa_cleanup_for_tail_identifier(name);
+                }
             }
             // (Option[shared T] tail FIELD returns — `fn f() ->
             // Option[T] { x.next }` — are compensated during body
@@ -2243,6 +2280,31 @@ impl<'ctx> super::Codegen<'ctx> {
             frame.retain(|action| match action {
                 crate::codegen::state::CleanupAction::FreeMapHandle { map_alloca, .. } => {
                     *map_alloca != slot_ptr
+                }
+                _ => true,
+            });
+        }
+    }
+
+    /// SoA move-out cleanup suppression (per-layout-monomorphization slice 3)
+    /// — drop any `FreeSoaGroups` whose `soa_alloca` matches the named
+    /// binding's slot, so a SoA-laid-out Vec moved out as a return value is no
+    /// longer freed by its origin binding. The SoA analog of
+    /// `suppress_map_cleanup_for_tail_identifier`: SoA cleanup is queue-driven
+    /// (no in-slot sentinel like Vec/String's `cap = 0` for the walker to
+    /// skip), so the action is removed directly, and from EVERY live frame —
+    /// the move site can fire while a transient inner scope sits above the
+    /// frame that owns the binding's `FreeSoaGroups`. The caller's binding for
+    /// the returned struct owns the group buffers and frees them once.
+    pub(super) fn suppress_soa_cleanup_for_tail_identifier(&mut self, name: &str) {
+        let slot_ptr = match self.variables.get(name) {
+            Some(s) => s.ptr,
+            None => return,
+        };
+        for frame in self.scope_cleanup_actions.iter_mut() {
+            frame.retain(|action| match action {
+                crate::codegen::state::CleanupAction::FreeSoaGroups { soa_alloca, .. } => {
+                    *soa_alloca != slot_ptr
                 }
                 _ => true,
             });

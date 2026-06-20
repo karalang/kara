@@ -2033,6 +2033,45 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(())
     }
 
+    /// Bind `let <var_name> = <call>()` where `var_name` is SoA and the callee
+    /// returns a `Vec[E]` (backward inference, slice 3). Parks the receiving
+    /// binding's layout in `pending_return_layout` so `compile_call` (which
+    /// `take`s it) monomorphizes the callee to RETURN the SoA struct, then
+    /// binds that struct into `var_name`'s SoA slot and tracks its group
+    /// buffers for scope-exit cleanup — the caller now owns them (the callee
+    /// suppressed its own `FreeSoaGroups` at the tail move-out). Mirrors
+    /// `compile_soa_new`'s slot setup, storing the call result instead of a
+    /// freshly-zeroed header. The let-arm gate
+    /// (`let_rhs_calls_layout_returning_fn`) guarantees the dispatch fires, so
+    /// `val` is the SoA struct the slot is typed for.
+    pub(super) fn compile_soa_let_from_call(
+        &mut self,
+        var_name: &str,
+        soa: &SoaLayout,
+        value: &Expr,
+    ) -> Result<(), String> {
+        self.pending_return_layout = Some(self.active_layout_id(var_name));
+        let val = self.compile_expr(value)?;
+        // `compile_call` already `take`s the pending layout; clear defensively
+        // so it can never leak into a later, unrelated call.
+        self.pending_return_layout = None;
+
+        let has_cold = soa.cold_group.is_some();
+        let soa_ty = self.soa_vec_type(soa.num_groups, has_cold);
+        let fn_val = self.current_fn.unwrap();
+        let alloca = self.create_entry_alloca(fn_val, var_name, soa_ty.into());
+        self.builder.build_store(alloca, val).unwrap();
+        self.variables.insert(
+            var_name.to_string(),
+            VarSlot {
+                ptr: alloca,
+                ty: soa_ty.into(),
+            },
+        );
+        self.track_soa_groups(alloca, soa_ty, soa.num_groups as u32, has_cold);
+        Ok(())
+    }
+
     pub(super) fn compile_soa_method(
         &mut self,
         var_name: &str,

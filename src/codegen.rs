@@ -1378,6 +1378,20 @@ pub(super) struct Codegen<'ctx> {
     /// and read by `active_layout_id` / `active_param_soa_layout` to lower a
     /// monomorph's SoA `Vec[E]` params and their access paths (slice 2).
     pub(crate) layout_subst: HashMap<String, LayoutId>,
+    /// Per-layout-monomorphization slice 3 — the active *return* layout of the
+    /// monomorph currently being compiled (`Aos` outside a return-SoA mono).
+    /// Saved/restored around the mono body like `layout_subst`; read by
+    /// `declare_mono_function` to lower the LLVM return type to the SoA struct
+    /// and by `compile_mono_function` to seed the returned local(s) as `Soa`
+    /// (`docs/spikes/per-layout-monomorphization.md` §4.5).
+    pub(crate) return_layout: LayoutId,
+    /// Backward-inference one-shot: the receiving binding's layout, set by the
+    /// SoA `let <name> = <call>()` arm just before the call's RHS is compiled
+    /// and consumed (`take`n) at the top of `compile_call`, so the callee is
+    /// monomorphized to *return* the receiving binding's physical layout
+    /// (`init_grid()`-shape returns, spike §4.2 backward). `None` for every
+    /// other call.
+    pub(crate) pending_return_layout: Option<LayoutId>,
     // ── Closure compilation ────────────────────────────────────────
     /// Monotonic counter used to generate unique closure function names.
     pub(crate) closure_counter: u32,
@@ -4935,6 +4949,8 @@ impl<'ctx> Codegen<'ctx> {
             type_subst: HashMap::new(),
             const_subst: HashMap::new(),
             layout_subst: HashMap::new(),
+            return_layout: LayoutId::Aos,
+            pending_return_layout: None,
             closure_counter: 0,
             indexed_elem_counter: 0,
             closure_fn_types: HashMap::new(),

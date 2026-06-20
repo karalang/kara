@@ -1601,12 +1601,23 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
-                // SoA layout: if variable matches a layout name and RHS is Vec::new(),
-                // produce the SoA struct type instead of the normal Vec.
+                // SoA layout: if the binding's active layout is SoA, build the
+                // SoA struct instead of the normal Vec. The trigger reads
+                // `active_soa_layout` (not the raw name-keyed `soa_layouts`) so
+                // it ALSO fires for a returned local seeded by a return-SoA
+                // monomorph (slice 3) — `let out = Vec.new()` inside an
+                // `init_grid()`-shape callee — not only a `layout`-block name.
                 if let PatternKind::Binding(var_name) = &pattern.kind {
-                    if let Some(soa) = self.soa_layouts.get(var_name.as_str()).cloned() {
+                    if let Some(soa) = self.active_soa_layout(var_name) {
                         if self.is_vec_new_call(value) {
                             return self.compile_soa_new(var_name, &soa);
+                        }
+                        // Backward inference (slice 3): `let <recv> = <call>()`
+                        // where `recv` is SoA and the callee returns a `Vec[E]`
+                        // — monomorphize the callee to RETURN the receiving
+                        // binding's layout and bind the resulting SoA struct.
+                        if self.let_rhs_calls_layout_returning_fn(value) {
+                            return self.compile_soa_let_from_call(var_name, &soa, value);
                         }
                     }
                 }
