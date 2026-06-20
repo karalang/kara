@@ -17640,6 +17640,135 @@ run({ put_pixels }, { pointerTarget: target }).catch((e) => {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// Fathom (examples/fathom/mandelbrot.kara) wires two newer `std.web.events`
+/// `ClickEvent` producers into the live render loop: `dblclick()` dives the
+/// view IN toward the clicked point, `contextmenu()` (right-click) backs it
+/// OUT. This is the *demo-level* proof they drive a real app end to end — not
+/// just the producer-level payload e2e in the host-async tests above.
+///
+/// The signal is clean because Fathom's render is **deterministic per view**:
+/// with no input, every frame is byte-identical (there is no animation phase,
+/// unlike Plume's `t`). So a frame whose checksum MOVES off the no-input
+/// baseline can only mean a click event crossed host→wasm, was `recv`d, and
+/// shifted (cx, cy, scale). The harness:
+///   1. captures a baseline frame before dispatching anything (and asserts it
+///      has real structure, so rendering works at all),
+///   2. fires `dblclick` at a fixed off-centre point for a run of frames — the
+///      compounding zoom makes the checksum diverge hugely from baseline,
+///   3. switches to `contextmenu` (right-click) for another run — the view
+///      backs out, diverging again from the zoomed checksum.
+/// Each leg asserts the checksum moved; `FATHOM_OK` prints only if both did.
+/// One dropped/garbled coordinate read can't mask it — the cumulative zoom
+/// across the run dominates, so no loop-until-valid drain is needed here.
+///
+/// Doubles as a bit-rot guard on the example source (built from the committed
+/// file, not an inline copy).
+#[test]
+fn fathom_example_dblclick_contextmenu_zoom_e2e() {
+    let tmp = wasm_test_dir("fathom");
+    let path = tmp.join("mandelbrot.kara");
+    std::fs::write(&path, include_str!("../examples/fathom/mandelbrot.kara")).unwrap();
+
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--target=wasm_browser",
+            "--features=wasm-threads",
+        ])
+        .current_dir(&tmp)
+        .env_remove("KARAC_RUNTIME")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = wasm_build_skip_reason(&stderr) {
+        eprintln!("skip: fathom_example_dblclick_contextmenu_zoom_e2e — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(out.status.success(), "fathom build failed: {stderr}");
+    assert!(tmp.join("mandelbrot.threads.wasm").exists());
+
+    let harness = tmp.join("harness.mjs");
+    std::fs::write(
+        &harness,
+        r#"import { run } from "./mandelbrot.js";
+const W = 640, H = 420;
+// An off-centre point so the zoom shifts (cx, cy) too, not just scale — the
+// frame change is then unmistakable. CSS px == internal px at 1:1.
+const PX = 470, PY = 300;
+// The dblclick/contextmenu glue reads offsetX/offsetY first (clientX/Y is the
+// fallback); cancelable so contextmenu's preventDefault has something to cancel.
+class Click extends Event {
+  constructor(type, x, y) { super(type, { cancelable: true }); this.offsetX = x; this.offsetY = y; }
+}
+const target = new EventTarget();
+const bail = setTimeout(() => { console.error("FAIL: too few frames rendered"); process.exit(2); }, 20000);
+
+// Cheap order-sensitive 32-bit checksum over the RGBA bytes. Two genuinely
+// different views collide with astronomically small probability.
+function sum(view) {
+  let s = 0;
+  for (let i = 0; i < view.length; i += 4) { s = (s * 31 + view[i] + view[i + 1] * 3 + view[i + 2] * 7) >>> 0; }
+  return s;
+}
+
+let frame = 0, baseline = 0, zoomed = 0, iv = null;
+function put_pixels(ptr, len, w, h, ctx) {
+  frame++;
+  const view = new Uint8Array(ctx.memory.buffer, Number(ptr), Number(len));
+  if (frame === 2) {
+    // Untouched view — it must have real structure (the set's classic shape).
+    let mn = 255, mx = 0;
+    for (let i = 0; i < view.length; i += 4) { const r = view[i]; if (r < mn) mn = r; if (r > mx) mx = r; }
+    if (mx - mn < 20) { console.error("FAIL: baseline framebuffer too uniform (mn=" + mn + " mx=" + mx + ")"); process.exit(3); }
+    baseline = sum(view);
+    // Only NOW start feeding input, so the baseline is genuinely input-free.
+    // One event per tick; the loop's per-frame coalescing try_recv tracks it.
+    iv = setInterval(() => {
+      if (frame < 16) target.dispatchEvent(new Click("dblclick", PX, PY));
+      else if (frame < 32) target.dispatchEvent(new Click("contextmenu", PX, PY));
+    }, 8);
+  }
+  if (frame === 16) {
+    zoomed = sum(view);
+    if (zoomed === baseline) { console.error("FAIL: dblclick did not change the view (sum=" + zoomed + ")"); process.exit(4); }
+  }
+  if (frame === 32) {
+    const backed = sum(view);
+    if (backed === zoomed) { console.error("FAIL: contextmenu did not change the view (sum=" + backed + ")"); process.exit(5); }
+    if (iv !== null) clearInterval(iv);
+    clearTimeout(bail);
+    console.log("FATHOM base=" + baseline + " zoomed=" + zoomed + " backed=" + backed);
+    console.log("FATHOM_OK");
+    process.exit(0);
+  }
+}
+run({ put_pixels }, { dblclickTarget: target, contextmenuTarget: target }).catch((e) => {
+  console.error("run failed: " + (e && e.message ? e.message : e));
+  process.exit(1);
+});
+"#,
+    )
+    .unwrap();
+    let node = std::process::Command::new("node")
+        .arg(&harness)
+        .current_dir(&tmp)
+        .output();
+    let Ok(node_out) = node else {
+        eprintln!("skip: fathom_example_dblclick_contextmenu_zoom_e2e — node not on PATH");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let so = String::from_utf8_lossy(&node_out.stdout);
+    let se = String::from_utf8_lossy(&node_out.stderr);
+    assert!(
+        node_out.status.success() && so.contains("FATHOM_OK"),
+        "fathom harness failed under node: stdout={so} stderr={se}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// The sequential-target gate: the same host-async producer built WITHOUT
 /// `--features wasm-threads` is a hard compile error (codegen, pre-link),
 /// pointing at the flag — never a silent zero-value `recv`. Fires during

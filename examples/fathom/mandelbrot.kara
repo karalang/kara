@@ -15,17 +15,19 @@
 //     parallelism is real, measurable, in a browser tab.
 //   * `put_pixels` hands the framebuffer's bytes to JS, which does the
 //     `ctx.putImageData` blit. `Vec[u8].as_ptr()` is the FFI handoff.
-//   * `wheel()`, `pointer_moves()`, and `keydown()` (std.web.events) make it
-//     interactive: scroll to zoom toward the cursor, drag to pan, arrow keys /
-//     `+`/`-` / `R` to pan-zoom-reset from the keyboard. Each arrives as a typed
-//     channel the loop drains with a non-blocking `try_recv` each frame — live
-//     input, still no `await`, still no callback coloring.
+//   * `wheel()`, `pointer_moves()`, `keydown()`, `dblclick()`, and
+//     `contextmenu()` (std.web.events) make it interactive: scroll to zoom
+//     toward the cursor, drag to pan, arrow keys / `+`/`-` / `R` from the
+//     keyboard, double-click to zoom IN on a point, right-click to zoom OUT on
+//     it (the native context menu is suppressed for us). Each arrives as a
+//     typed channel the loop drains with a non-blocking `try_recv` each frame —
+//     live input, still no `await`, still no callback coloring.
 //
 // Build:  karac build mandelbrot.kara --target=wasm_browser --features wasm-threads
 // Serve:  see README.md (needs COOP/COEP headers for SharedArrayBuffer).
 
 import std.web.time.{animation_frames};
-import std.web.events.{pointer_moves, PointerEvent, wheel, WheelEvent, keydown, KeyEvent};
+import std.web.events.{pointer_moves, PointerEvent, wheel, WheelEvent, keydown, KeyEvent, dblclick, contextmenu, ClickEvent};
 
 // The canvas this program paints. A user-defined host capability — like
 // `Dom` in examples/ssr_counter — reached through the `put_pixels` host fn.
@@ -201,6 +203,8 @@ fn main() {
     let wheels = wheel();
     let moves = pointer_moves();
     let keys = keydown();
+    let dbls = dblclick();
+    let rights = contextmenu();
 
     // Last pointer position (CSS px == internal px at 1:1), for the pan delta.
     let mut last_px = 0.0;
@@ -270,6 +274,37 @@ fn main() {
                     cy = 0.0;
                     scale = start_scale;
                 }
+            }
+            None => {}
+        }
+
+        // Double-click → zoom IN toward the clicked point. Same keep-the-point-
+        // fixed transform as the wheel handler (hold the complex point under the
+        // cursor still while `scale` shrinks), but a chunky discrete step so each
+        // double-click visibly dives in. `ClickEvent` carries element-relative
+        // CSS px == internal px at 1:1, so (x, y) drop straight into the map.
+        match dbls.try_recv() {
+            Some(c) => {
+                let f = 0.5;
+                cx = cx + (c.x() - half_w) * scale * (1.0 - f);
+                cy = cy + (c.y() - half_h) * scale * (1.0 - f);
+                scale = scale * f;
+                if scale < 0.0000000000001 { scale = 0.0000000000001; }
+            }
+            None => {}
+        }
+
+        // Right-click → zoom OUT at the clicked point: the exact inverse of the
+        // double-click dive (f = 2.0), ceilinged at the full-set view. The glue
+        // calls `preventDefault()` for us, so the native context menu never
+        // appears over the canvas — the right button is ours to repurpose.
+        match rights.try_recv() {
+            Some(c) => {
+                let f = 2.0;
+                cx = cx + (c.x() - half_w) * scale * (1.0 - f);
+                cy = cy + (c.y() - half_h) * scale * (1.0 - f);
+                scale = scale * f;
+                if scale > start_scale { scale = start_scale; }
             }
             None => {}
         }
