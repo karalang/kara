@@ -244,18 +244,29 @@ examples that show the interesting cases without being contrived.
 > in `src/codegen/exprs.rs`; regression
 > `tests/codegen.rs::test_e2e_soa_by_ref_param_read_across_function`).
 >
-> **Remaining (what blocks Slipstream from going full-SoA end-to-end):**
-> 1. **By-value SoA params** (`fn substep(grid: Vec[LbmNode], …)`): the callee
->    signature compiles the param as AoS → LLVM "Call parameter type does not
->    match function signature". Needs the param type compiled as the SoA struct,
->    the call site marshalling the SoA value, and the param prologue setting up
->    the SoA slot.
-> 2. **SoA return values** (`init_grid() -> Vec[LbmNode]`, `substep(...) ->
->    Vec[LbmNode]`): the return type is compiled AoS.
-> 3. **Multi-buffer awkwardness:** `soa_layouts` is *name-keyed*, so each distinct
+> **By-value params — DONE (74bbbef7, slice 1).** `fn substep(grid: Vec[LbmNode],
+> …)` now compiles the param as the SoA struct (`soa_value_param_layout` →
+> `declare_function` signature patch + a `compile_function` prologue that spills
+> the moved-in struct to a slot the access paths GEP directly). The caller passes
+> the matching SoA identifier, which `load_variable` already loads as that struct,
+> so no call-site marshalling is needed. Ownership is CALLER-RETAINS (like an
+> owned by-value AoS `Vec`/`String` param — no callee-side free), so it is
+> double-free-free; a callee that MUTATES a by-value Vec hits the pre-existing
+> AoS realloc-aliasing hazard, read-only use is fully correct. Regressions:
+> `tests/codegen.rs::test_e2e_soa_by_value_param_read_across_function` +
+> `tests/memory_sanitizer.rs::asan_soa_by_value_param_caller_retains_no_leak_or_double_free`.
+>
+> **Remaining (what still blocks Slipstream from going full-SoA end-to-end):**
+> 1. **SoA return values** (`init_grid() -> Vec[LbmNode]`, `substep(...) ->
+>    Vec[LbmNode]`): the return type is compiled AoS. The hard part is the
+>    caller/callee *layout agreement* — a `-> Vec[E]` return has no binding name
+>    to key on, and the receiving `let recv = f()` keys off `recv`'s layout, so a
+>    differing name can't be reconciled without monomorphization (item 2).
+> 2. **Multi-buffer awkwardness:** `soa_layouts` is *name-keyed*, so each distinct
 >    `Vec[LbmNode]` binding (`grid`, `coll`, `next`, …) needs its own `layout`
 >    block. The fuller design is **per-layout monomorphization** (design.md
->    Feature 1 / P1.5, gated to Phase 11) — that subsumes 1–3.
+>    Feature 1 / P1.5, gated to Phase 11) — that subsumes both remaining items
+>    (it gives returns a layout to agree on, and lets differing names share one).
 >
 > Land each step gated on the full `tests/codegen.rs` suite (1670 cases). Once the
 > by-value + return paths work, convert `examples/slipstream/src/sim.kara`'s
