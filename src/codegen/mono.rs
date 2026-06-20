@@ -192,6 +192,12 @@ impl<'ctx> super::Codegen<'ctx> {
             // is unchanged; slice 2 reads it to select the SoA access paths.
             let saved_layout_subst =
                 std::mem::replace(&mut self.layout_subst, layout_subst.clone());
+            // Slice 4: `compile_mono_function`'s prologue may register SoA
+            // borrow params in `ref_params` (a generic fn with a `ref Vec[E]`
+            // param whose binding-site layout is SoA). Swap it out for the mono
+            // body and restore below, like `variables` — see the matching note
+            // in `ensure_layout_mono_generated`.
+            let saved_ref_params = std::mem::take(&mut self.ref_params);
 
             // Declare then compile the specialization.
             self.declare_mono_function(&generic_fn, &mangled)?;
@@ -212,6 +218,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.emit_state_machine_helpers_for_mono(name, &mangled);
 
             // Restore state.
+            self.ref_params = saved_ref_params;
             self.layout_subst = saved_layout_subst;
             self.const_subst = saved_const_subst;
             self.type_subst = saved_subst;
@@ -631,11 +638,20 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_const_subst = std::mem::take(&mut self.const_subst);
         let saved_layout_subst = std::mem::replace(&mut self.layout_subst, layout_subst);
         let saved_return_layout = std::mem::replace(&mut self.return_layout, return_layout);
+        // Slice 4: the mono prologue now registers SoA `ref`/`mut ref Vec[E]`
+        // params in `ref_params` (so the access paths deref the slot once).
+        // `ref_params` is per-function state the caller doesn't otherwise swap
+        // out, so take it for the mono body (empty → the prologue rebuilds it
+        // for this mono's own params) and restore the caller's map after —
+        // mirroring the `variables` save/restore above. Without this a mono's
+        // ref param would mark a same-named caller binding as a borrow.
+        let saved_ref_params = std::mem::take(&mut self.ref_params);
 
         let result = self
             .declare_mono_function(func, mangled)
             .and_then(|_| self.compile_mono_function(func, mangled));
 
+        self.ref_params = saved_ref_params;
         self.return_layout = saved_return_layout;
         self.layout_subst = saved_layout_subst;
         self.const_subst = saved_const_subst;
@@ -797,6 +813,25 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             let alloca = self.create_entry_alloca(fn_val, &param_name, param_val.get_type());
             self.builder.build_store(alloca, param_val).unwrap();
+            // Per-layout-monomorphization (slice 4): a SoA-carrying `ref`/
+            // `mut ref Vec[E]` param arrives as a POINTER to the caller's SoA
+            // struct (the signature is the pointer ABI — `active_param_soa_layout`
+            // returned `None` for the borrow form, so the by-value SoA branch
+            // above was skipped). Register it in `ref_params` so the SoA access
+            // paths (`compile_soa_index_read` / `compile_soa_method`) deref the
+            // slot once before GEPing groups/len — exactly the by-ref-reads
+            // discipline `compile_function` applies, which the mono prologue
+            // otherwise omits. Guarded on `active_soa_layout` (true iff
+            // `layout_subst[param]` is `Soa`) so only SoA borrow params get the
+            // entry; an `Aos` ref Vec param is unaffected. Without this the
+            // access path reads the pointer bytes as the SoA struct → garbage
+            // len → SIGTRAP, the same silent miscompile the same-name by-ref
+            // path fixed for `compile_function`.
+            if self.active_soa_layout(&param_name).is_some() {
+                if let Some(inner_ty) = self.inner_type_of_ref(&param.ty) {
+                    self.ref_params.insert(param_name.clone(), inner_ty);
+                }
+            }
             // Track declared type name for struct/enum field resolution.
             if let TypeKind::Path(path) = &param.ty.kind {
                 if let Some(type_name) = path.segments.first() {
@@ -1123,6 +1158,17 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (empty `layout_subst`), so the normal `compile_function` pass is
     /// unaffected and the name-keyed declaring-fn path still applies.
     pub(super) fn active_param_soa_layout(&self, param: &Param) -> Option<super::state::SoaLayout> {
+        // By-value only (slice 4): a `ref`/`mut ref Vec[E]` SoA param keeps its
+        // pointer ABI — the caller passes `&struct` and the mono body derefs
+        // once through `ref_params` — so its *signature* is NOT patched to the
+        // SoA struct by value. Only an owned by-value `Vec[E]` param's
+        // signature becomes the 4-field SoA struct. (The param still carries a
+        // `Soa` entry in `layout_subst`, which drives the body's access paths
+        // via `active_soa_layout`; this guard only suppresses the signature
+        // rewrite for the borrow forms.)
+        if matches!(&param.ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)) {
+            return None;
+        }
         let name = param.name()?;
         match self.layout_subst.get(name) {
             Some(LayoutId::Soa(block)) => self.soa_layouts.get(block).cloned(),
@@ -1130,14 +1176,23 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    /// Whether a value param's declared type is a layout-carrying collection —
-    /// a `Vec[E]` whose physical layout the per-layout-monomorphization axis
-    /// can vary (`Aos` vs an SoA grouping). Borrow forms (`ref Vec[E]`) are
-    /// out of scope for the first slices — the by-ref-reads path already
-    /// derefs through the caller's SoA struct.
+    /// Whether a value-or-borrow param's declared type is a layout-carrying
+    /// collection — a `Vec[E]` (owned `Vec[E]`, `ref Vec[E]`, or
+    /// `mut ref Vec[E]`) whose physical layout the per-layout-monomorphization
+    /// axis can vary (`Aos` vs an SoA grouping). Peels one `ref`/`mut ref` so
+    /// borrow forms also gate the dispatch + populate `layout_subst` (slice 4:
+    /// a SoA buffer through a shared by-ref helper monomorphizes per the
+    /// caller's buffer layout, regardless of the param name). The *signature*
+    /// difference between owned and borrow forms is handled downstream by
+    /// `active_param_soa_layout` (by-value gets the SoA struct; borrow keeps
+    /// the pointer ABI and derefs in the body).
     pub(super) fn param_is_layout_carrying(param: &Param) -> bool {
+        let underlying = match &param.ty.kind {
+            TypeKind::Ref(inner) | TypeKind::MutRef(inner) => &inner.kind,
+            other => other,
+        };
         matches!(
-            &param.ty.kind,
+            underlying,
             TypeKind::Path(path) if path.segments.last().map(String::as_str) == Some("Vec")
         )
     }

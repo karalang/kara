@@ -17936,6 +17936,137 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_soa_by_ref_param_caller_different_name() {
+        // Per-layout monomorphization slice 4 (multi-buffer / differing-name,
+        // borrow form): a SoA-laid-out `Vec[E]` is read through a shared helper
+        // by `ref Vec[E]` whose param name (`data`) does NOT match the layout
+        // block (`grid`). The name-keyed by-ref-reads path can only lower a ref
+        // param SoA when the param name itself has a `layout` block, so without
+        // slice 4 `data` lowers AoS and reads the caller's SoA struct pointer as
+        // `{ptr,len,cap}` — garbage len → SIGTRAP / wrong output. Slice 4 makes
+        // a `ref Vec[E]` param layout-carrying: forward inference reads the
+        // argument's buffer layout and monomorphizes `sumall$data_soa_grid`,
+        // whose body derefs the pointer once (`ref_params`) and lowers SoA — the
+        // borrow analog of slice 2's by-value differently-named param.
+        let out = run_program(
+            r#"
+struct E { x: f64, y: f64 }
+layout grid: Vec[E] { group g1 { x } group g2 { y } }
+fn sumall(data: ref Vec[E]) -> f64 {
+    let mut s = 0.0;
+    let mut i = 0;
+    while i < data.len() {
+        let e = data[i];
+        s = s + e.x + data[i].y;
+        i = i + 1;
+    }
+    s
+}
+fn main() {
+    let mut grid: Vec[E] = Vec.new();
+    grid.push(E { x: 1.0, y: 2.0 });
+    grid.push(E { x: 3.0, y: 4.0 });
+    grid.push(E { x: 5.0, y: 6.0 });
+    println(sumall(grid));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "21",
+                "SoA Vec read by ref into a differently-named param (layout-mono borrow form)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_soa_two_buffers_through_one_ref_helper_distinct_monos() {
+        // Per-layout monomorphization slice 4 (multi-buffer distinctness, by
+        // ref): two distinct `layout` blocks (`grid`, `coll`) over one element
+        // type flow through ONE by-ref helper `total`. Each call monomorphizes a
+        // distinct symbol (`total$data_soa_grid`, `total$data_soa_coll`) keyed
+        // on the caller's buffer layout — the borrow analog of the by-value
+        // two-layouts-through-one-helper test. Both must read correctly through
+        // their OWN grouping: grid (1+2)+(3+4)=10, coll 10+20=30. A single
+        // shared body could not read both groupings — distinct correct results
+        // are the proof of distinct monomorphs.
+        let out = run_program(
+            r#"
+struct E { x: f64, y: f64 }
+layout grid: Vec[E] { group g1 { x } group g2 { y } }
+layout coll: Vec[E] { group c1 { x } group c2 { y } }
+fn total(data: ref Vec[E]) -> f64 {
+    let mut s = 0.0;
+    let mut i = 0;
+    while i < data.len() {
+        s = s + data[i].x + data[i].y;
+        i = i + 1;
+    }
+    s
+}
+fn main() {
+    let mut grid: Vec[E] = Vec.new();
+    grid.push(E { x: 1.0, y: 2.0 });
+    grid.push(E { x: 3.0, y: 4.0 });
+    let mut coll: Vec[E] = Vec.new();
+    coll.push(E { x: 10.0, y: 20.0 });
+    println(total(grid));
+    println(total(coll));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "10\n30",
+                "two SoA buffers through one by-ref helper produce distinct correct monos"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_soa_mut_ref_push_across_function() {
+        // Per-layout monomorphization slice 4 (multi-buffer WRITE, by mut ref):
+        // a differently-named SoA buffer is FILLED through a shared helper that
+        // takes `mut ref Vec[E]` and pushes. The push decomposes into per-group
+        // scatter + realloc, writing the new group pointers / len / cap back
+        // through the deref'd caller-struct pointer (`ref_params`), so after
+        // `fill(mut grid)` returns `main`'s `grid` owns the populated buffers.
+        // Borrow ownership: the callee only borrows (no `FreeSoaGroups` in the
+        // mono), `main`'s `grid` frees once. Reads back (1+2)+(3+4)+(5+6)=21.
+        let out = run_program(
+            r#"
+struct E { x: f64, y: f64 }
+layout grid: Vec[E] { group g1 { x } group g2 { y } }
+fn fill(buf: mut ref Vec[E]) {
+    buf.push(E { x: 1.0, y: 2.0 });
+    buf.push(E { x: 3.0, y: 4.0 });
+    buf.push(E { x: 5.0, y: 6.0 });
+}
+fn main() {
+    let mut grid: Vec[E] = Vec.new();
+    fill(mut grid);
+    let mut s = 0.0;
+    let mut i = 0;
+    while i < grid.len() {
+        s = s + grid[i].x + grid[i].y;
+        i = i + 1;
+    }
+    println(s);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "21",
+                "SoA Vec filled via a mut-ref helper across a function boundary (differently named)"
+            );
+        }
+    }
+
     // ── String operators ──────────────────────────────────────────
 
     #[test]

@@ -7607,6 +7607,56 @@ fn main() {
     }
 
     #[test]
+    fn asan_soa_mut_ref_fill_borrow_no_leak_or_double_free() {
+        // Per-layout monomorphization slice 4 (multi-buffer WRITE, by mut ref):
+        // a differently-named SoA buffer (`entities`, `layout entities`) is
+        // FILLED through a shared `fill(buf: mut ref Vec[Entity])` helper that
+        // pushes. The push reallocs each group buffer and writes the new
+        // pointers / len / cap back through the deref'd caller-struct pointer
+        // (`ref_params`). Ownership is BORROW: the mono must NOT queue a
+        // `FreeSoaGroups` for the `mut ref` param — only `main`'s `entities`
+        // binding owns the buffers and frees both groups once at scope exit.
+        // Get it wrong and it's a double-free (callee + caller both free → ASAN)
+        // or a leak (the realloc'd group buffers from a prior iteration never
+        // freed → LSan). Looped 20× — each iteration builds a fresh `entities`,
+        // fills it via mut-ref, reads it, drops it — to amplify either fault.
+        // ≥36 bytes of live payload per element across the groups so a reachable
+        // leak isn't masked by LSan's short-allocation blind spot.
+        assert_clean_asan_run(
+            r#"
+struct Entity { x: f64, y: f64, hp: i64 }
+layout entities: Vec[Entity] {
+    group physics { x, y }
+    group combat { hp }
+}
+fn fill(buf: mut ref Vec[Entity]) {
+    buf.push(Entity { x: 1.0, y: 2.0, hp: 100 });
+    buf.push(Entity { x: 3.0, y: 4.0, hp: 200 });
+    buf.push(Entity { x: 5.0, y: 6.0, hp: 300 });
+}
+fn main() {
+    let mut sum = 0;
+    let mut k = 0;
+    while k < 20 {
+        let mut entities: Vec[Entity] = Vec.new();
+        fill(mut entities);
+        let mut i = 0;
+        while i < entities.len() {
+            let e = entities[i];
+            sum = sum + e.hp;
+            i = i + 1;
+        }
+        k = k + 1;
+    }
+    println(sum);
+}
+"#,
+            &["12000"],
+            "soa_mut_ref_fill_borrow",
+        );
+    }
+
+    #[test]
     fn asan_soa_drop_with_cold_group_primitive() {
         // Cold group adds an extra buffer that pre-fix codegen never
         // freed (the cold pointer sits between the hot pointers and the
