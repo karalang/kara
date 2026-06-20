@@ -296,18 +296,19 @@ existing `suppress_cleanup_for_tail_return` for AoS Vec).
    realized cross-group **read** surface is exercised by the existing tests
    (`sumall` reads two groups in one expression). The cross-group **write**
    surface via direct field-level index-store (`entities[i].position = …`, the
-   `e.position += e.velocity` idiom) has a **pre-existing, layout-agnostic-checker-orthogonal
-   codegen bug**: the per-group element address is mis-strided, so a store at
-   index ≥ 1 is dropped (index 0 is correct). It is independent of slice 5 (the
-   base compiler miscompiles it identically) and of the borrow checker (a codegen
-   address-arithmetic fault, not an aliasing-fact gap); tracked as
-   **B-2026-06-20-7** and a hard blocker for slice 6 (Slipstream's LBM kernel
-   scatters field updates by index). Same family as the unbuilt whole-element
-   index-store below.
+   `e.position += e.velocity` idiom) surfaced a **pre-existing,
+   layout-agnostic-checker-orthogonal codegen bug** during this audit — the
+   per-group element address was mis-strided, so a store at index ≥ 1 was dropped
+   (index 0 coincidentally correct) — **now fixed in 38fb0b57** (B-2026-06-20-7,
+   `compile_soa_field_store`: the store-side mirror of `compile_soa_index_read`'s
+   group addressing). It was independent of slice 5 (the base compiler
+   miscompiled it identically) and of the borrow checker (a codegen
+   address-arithmetic fault, not an aliasing-fact gap). The whole-element
+   index-store `grid[i] = E{…}` is still unbuilt (same family).
 6. **Proof: convert `examples/slipstream/src/sim.kara`** to a `layout` block and
    confirm the native oracle checksums are byte-identical AoS↔SoA — Slipstream
-   earns its "SoA layout" roster billing. **Blocked** on the field-level SoA
-   index-store fix (see slice 5's audit note).
+   earns its "SoA layout" roster billing. The field-level SoA index-store blocker
+   (B-2026-06-20-7) is now fixed; this slice is the remaining work.
 
 ## 6. Migration from the name-keyed model
 

@@ -302,15 +302,18 @@ examples that show the interesting cases without being contrived.
 > The one remaining slice: 6 (convert `examples/slipstream/src/sim.kara`'s
 > `Vec[LbmNode]` to a `layout` block and confirm the native oracle's checksums
 > are unchanged — SoA must be byte-identical to AoS, the proof Slipstream earns
-> its "SoA layout" billing). **Slice 6 is blocked on a field-level SoA
-> index-store fix:** a direct field scatter `grid[i].field = expr` is miscompiled
-> for index ≥ 1 (the per-group element address is mis-strided, so the store is
-> dropped; index 0 is correct) — pre-existing and orthogonal to the per-layout
-> mono work, but the LBM kernel relies on exactly this. The whole-element SoA
-> *index*-store (`grid[i] = E{…}`) is likewise still unbuilt even
-> single-function. Push-based writes and mut-ref field write-back work; the
-> direct `vec[i].field =` index-store path is the gap. Land each gated on the
-> full `tests/codegen.rs` suite + LSan. Background in the user-memory
+> its "SoA layout" billing). The field-level SoA index-store blocker is now
+> **fixed** (B-2026-06-20-7, 38fb0b57): a direct field scatter `grid[i].field =
+> expr` was miscompiled for index ≥ 1 (the per-group destination address was
+> mis-strided, so the store was dropped; index 0 was coincidentally correct) —
+> pre-existing and orthogonal to the per-layout mono work, but the LBM kernel
+> relies on exactly this; `compile_soa_field_store` now addresses the field's own
+> group buffer at `[i]` by the group sub-struct stride. The whole-element SoA
+> *index*-store (`grid[i] = E{…}`) is still unbuilt even single-function (a
+> distinct gap; the LBM kernel scatters individual fields, not whole elements).
+> Push-based writes, mut-ref field write-back, and `grid[i].field =` field
+> scatter all work now. Slice 6 (the Slipstream proof) is gated on the full
+> `tests/codegen.rs` suite + LSan. Background in the user-memory
 > `soa_cross_function_partial`.
 
 **Primary capability:** Auto-concurrency of sequential code; layout blocks for
