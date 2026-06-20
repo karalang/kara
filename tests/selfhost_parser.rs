@@ -17,7 +17,8 @@
 //! are wrapper-independent. The corpus is single-line, so the shift is a plain
 //! constant subtraction.
 
-use karac::ast::{BinOp, CallArg, Expr, ExprKind, Item, StmtKind, UnaryOp};
+use karac::ast::{BinOp, PatternKind};
+use karac::ast::{Block, CallArg, Expr, ExprKind, Item, Stmt, StmtKind, UnaryOp};
 use karac::token::{FloatSuffix, IntSuffix};
 use std::path::PathBuf;
 
@@ -118,6 +119,28 @@ const CORPUS: &[&str] = &[
     "f(x: 1)",
     "g(a, b: 2)",
     "h(mut x)",
+    // Control flow (slice 2a) — blocks, statements, if/else, return.
+    "{ a }",
+    "{ 1 }",
+    "{ a; b }",
+    "{ a; b; c }",
+    "{ let x = 1; x }",
+    "{ let mut y = a; y = b; y }",
+    "{ let z = a + b; z }",
+    "{ f(x); g(y) }",
+    "{ a.b = c; a.b }",
+    "{ v[0] = x; v[0] }",
+    "if a { b }",
+    "if a { b } else { c }",
+    "if a { b } else if c { d } else { e }",
+    "if x < y { a } else { b }",
+    "if a { let p = b; p } else { c }",
+    "{ if a { b } else { c } }",
+    "{ let r = if a { b } else { c }; r }",
+    "{ return a; }",
+    "{ return; }",
+    "return a + b",
+    "{ let w = f(x); w.y }",
 ];
 
 // ── Rust-side canonical render (must match `ast_render.kara::render_expr`) ──
@@ -225,6 +248,57 @@ fn render_rust_arg(a: &CallArg) -> String {
     out
 }
 
+/// ` @<offset-shift>:<length>` for a raw (non-Expr) span — stmt/block heads.
+fn span_tag(offset: usize, length: usize) -> String {
+    format!(" @{}:{}", offset as i64 - OFFSET_SHIFT, length)
+}
+
+/// Must match `ast_render.kara::render_stmt`.
+fn render_rust_stmt(s: &Stmt) -> String {
+    let sp = span_tag(s.span.offset, s.span.length);
+    match &s.kind {
+        StmtKind::Let {
+            is_mut,
+            pattern,
+            value,
+            ..
+        } => {
+            let name = match &pattern.kind {
+                PatternKind::Binding(n) => n.clone(),
+                other => panic!("slice-2a let pattern must be a plain binding, got {other:?}"),
+            };
+            let m = if *is_mut { " mut" } else { "" };
+            format!("(let{m} {name}{sp} {})", render_rust_expr(value))
+        }
+        StmtKind::Assign { target, value } => format!(
+            "(assign{sp} {} {})",
+            render_rust_expr(target),
+            render_rust_expr(value)
+        ),
+        StmtKind::Expr(e) => format!("(exprstmt{sp} {})", render_rust_expr(e)),
+        other => panic!(
+            "render_rust_stmt: StmtKind {other:?} is outside parser slice 2a; \
+             keep the corpus to let/expr/assign statements or extend the renderer"
+        ),
+    }
+}
+
+/// Must match `ast_render.kara::render_block`.
+fn render_rust_block(b: &Block) -> String {
+    let mut out = format!("(block{}", span_tag(b.span.offset, b.span.length));
+    for s in &b.stmts {
+        out.push(' ');
+        out.push_str(&render_rust_stmt(s));
+    }
+    if let Some(tail) = &b.final_expr {
+        out.push_str(" (tail ");
+        out.push_str(&render_rust_expr(tail));
+        out.push(')');
+    }
+    out.push(')');
+    out
+}
+
 fn render_rust_expr(e: &Expr) -> String {
     let sp = span_str(e);
     match &e.kind {
@@ -308,6 +382,33 @@ fn render_rust_expr(e: &Expr) -> String {
             render_rust_expr(object),
             render_rust_expr(index)
         ),
+        ExprKind::Block(block) => render_rust_block(block),
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            let mut out = format!(
+                "(if{sp} {} {}",
+                render_rust_expr(condition),
+                render_rust_block(then_block)
+            );
+            if let Some(eb) = else_branch {
+                out.push(' ');
+                out.push_str(&render_rust_expr(eb));
+            }
+            out.push(')');
+            out
+        }
+        ExprKind::Return(value) => {
+            let mut out = format!("(return{sp}");
+            if let Some(v) = value {
+                out.push(' ');
+                out.push_str(&render_rust_expr(v));
+            }
+            out.push(')');
+            out
+        }
         other => panic!(
             "render_rust_expr: ExprKind {other:?} is outside parser slice 1; \
              keep the corpus to expression-core forms or extend the renderer"

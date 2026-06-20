@@ -178,6 +178,7 @@ pub struct IndexExpr {
     pub span: Span,
 }
 
+
 // The recursive expression node (RC-backed). Slice 1 covers literals,
 // identifiers, `self`/`Self`, unary, binary, grouping, and tuples; the
 // remaining forms (calls, indexing, control flow, …) land in later slices.
@@ -209,6 +210,12 @@ pub shared enum Expr {
     Field(FieldAccessExpr),
     TupleIdx(TupleIndexExpr),
     Index(IndexExpr),
+
+    // Control flow (slice 2a): block / if / return expressions. `Blk` (not
+    // `Block`) — the bare variant name would collide with the `Block` type.
+    Blk(Block),
+    If(IfExpr),
+    Return(ReturnExpr),
 
     // Error-recovery placeholder. Named `Error` (not `Err`) to match the seed
     // and avoid colliding with `Result.Err` in codegen's error-exit heuristic
@@ -253,6 +260,85 @@ pub fn expr_span(e: ref Expr) -> Span {
         Field(n) => clone_span(n.span),
         TupleIdx(n) => clone_span(n.span),
         Index(n) => clone_span(n.span),
+        Blk(n) => clone_span(n.span),
+        If(n) => clone_span(n.span),
+        Return(n) => clone_span(n.span),
         Error(n) => clone_span(n.span),
     }
+}
+
+// ── Statements + blocks (slice 2a) ── (declared AFTER `Expr` to keep the
+// typechecker's order-sensitive resolution happy — #46: the `Stmt`/`Block`
+// declarations placed BEFORE the `Expr` enum broke match-binding field
+// type resolution for the literal arms. A forward reference from `Expr`'s
+// `Blk`/`If`/`Return` variants to these node structs works; the reverse order
+// (a second enum + heap structs declared first) does not.)
+//
+// `Block` is a plain struct (its child edges are already pointers/heap —
+// `Vec[Stmt]` and `Option[Expr]` — so it carries no by-value recursive node and
+// needs no `shared`). `Stmt` is a plain enum; each variant wraps a node struct
+// (span fidelity + the no-direct-enum-payload rule). The recursive cycle
+// `Expr → Block → Stmt → Expr` is broken by the `Vec`/`Option`/`Expr`-pointer
+// edges, so no infinite size.
+
+// `target = value;`
+pub struct AssignStmt {
+    pub target: Expr,
+    pub value: Expr,
+    pub span: Span,
+}
+
+// `let [mut] name = value;` — slice 2a restricts the binding to a single
+// identifier; full patterns + `: T` annotations land with later slices.
+pub struct LetStmt {
+    pub is_mut: bool,
+    pub name: String,
+    pub value: Expr,
+    pub span: Span,
+}
+
+// `expr;` (expression statement). Wrapped (not a bare `Expr` payload) for span
+// fidelity and to keep every `Stmt` variant a node struct.
+pub struct ExprStmt {
+    pub expr: Expr,
+    pub span: Span,
+}
+
+// `Exp` (not `Expr`) for the expression-statement variant — a bare variant
+// name shares the scope with type names, and `Expr` is already a type.
+pub enum Stmt {
+    Let(LetStmt),
+    Assign(AssignStmt),
+    Exp(ExprStmt),
+}
+
+// A brace-delimited block: statements + an optional tail expression (the
+// block's value). Mirrors `ast::Block` (`stmts` + `final_expr`).
+//
+// A plain (by-value) struct, embedded directly in `IfExpr.then_block` and as the
+// `Expr.Blk(Block)` payload. A `Block` is a multi-word heap-bearing struct
+// (`Vec[Stmt]` + inline `Option[Expr]` + `Span` = 11 words), so embedding it in
+// a shared-enum payload exercises the nested-heap-struct enum pack/unpack — the
+// path #44 fixed (`coerce_to_payload_words` / `reconstruct_payload_value`
+// recurse by true word width). A value struct (not `shared`) keeps the renderer
+// on simple value semantics — `render_block` destructures the block by value.
+pub struct Block {
+    pub stmts: Vec[Stmt],
+    pub tail: Option[Expr],
+    pub span: Span,
+}
+
+// `if cond { … } [else …]`. `then_block` is a raw `Block`; `else_branch` is an
+// `Expr` (a wrapped `Block` for `else { … }`, or another `If` for `else if`).
+pub struct IfExpr {
+    pub cond: Expr,
+    pub then_block: Block,
+    pub else_branch: Option[Expr],
+    pub span: Span,
+}
+
+// `return [value];`
+pub struct ReturnExpr {
+    pub value: Option[Expr],
+    pub span: Span,
 }

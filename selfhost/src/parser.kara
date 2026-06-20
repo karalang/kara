@@ -35,6 +35,13 @@ import ast.{
     FieldAccessExpr,
     TupleIndexExpr,
     IndexExpr,
+    Stmt,
+    LetStmt,
+    AssignStmt,
+    ExprStmt,
+    Block,
+    IfExpr,
+    ReturnExpr,
 };
 import lexer.lex_all;
 
@@ -129,6 +136,219 @@ impl Parser {
             if is_rb {
                 self.advance();
             }
+        }
+    }
+
+    // Consume a `{` / `}` / `;` / `=` if present (well-formed corpus).
+    fn expect_lbrace(mut ref self) {
+        if self.pos < self.tokens.len() {
+            let ok = match self.tokens[self.pos].token {
+                LeftBrace => true,
+                _ => false,
+            };
+            if ok {
+                self.advance();
+            }
+        }
+    }
+
+    fn expect_rbrace(mut ref self) {
+        if self.pos < self.tokens.len() {
+            let ok = match self.tokens[self.pos].token {
+                RightBrace => true,
+                _ => false,
+            };
+            if ok {
+                self.advance();
+            }
+        }
+    }
+
+    fn eat_semicolon(mut ref self) {
+        if self.pos < self.tokens.len() {
+            let ok = match self.tokens[self.pos].token {
+                Semicolon => true,
+                _ => false,
+            };
+            if ok {
+                self.advance();
+            }
+        }
+    }
+
+    fn eat_equal(mut ref self) {
+        if self.pos < self.tokens.len() {
+            let ok = match self.tokens[self.pos].token {
+                Equal => true,
+                _ => false,
+            };
+            if ok {
+                self.advance();
+            }
+        }
+    }
+
+    // ── Blocks + statements (slice 2a) ──
+    //
+    // `{ stmt* tail? }`. Mirrors `src/parser/stmts.rs::parse_block`, restricted
+    // to the slice-2a statement forms (`let` / expr-stmt / assignment) and a
+    // value-producing tail. A trailing expression without `;` at `}` is the
+    // block's tail (only `while`/`for`/`loop` — not in 2a — become trailing
+    // expr-statements, per the seed's `is_block_expr`).
+    fn parse_block(mut ref self) -> Block {
+        let start = self.current_span();
+        self.expect_lbrace();
+        let mut stmts: Vec[Stmt] = Vec.new();
+        let mut tail: Option[Expr] = None;
+        loop {
+            if self.pos >= self.tokens.len() {
+                break;
+            }
+            let at_rb = match self.tokens[self.pos].token {
+                RightBrace => true,
+                _ => false,
+            };
+            if at_rb {
+                break;
+            }
+            let is_let = match self.tokens[self.pos].token {
+                Let => true,
+                _ => false,
+            };
+            if is_let {
+                let s = self.parse_let_statement();
+                stmts.push(s);
+                continue;
+            }
+            let e = self.parse_expr_bp(0);
+            // Assignment `target = value;` — the seed spans it at the target.
+            let is_assign = if self.pos < self.tokens.len() {
+                match self.tokens[self.pos].token {
+                    Equal => true,
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            if is_assign {
+                self.advance(); // =
+                let v = self.parse_expr_bp(0);
+                self.eat_semicolon();
+                let sp = expr_span(e);
+                stmts.push(Stmt.Assign(AssignStmt {
+                    target: e,
+                    value: v,
+                    span: sp,
+                }));
+                continue;
+            }
+            let has_semi = if self.pos < self.tokens.len() {
+                match self.tokens[self.pos].token {
+                    Semicolon => true,
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            if has_semi {
+                self.advance(); // ;
+                let sp = expr_span(e);
+                stmts.push(Stmt.Exp(ExprStmt { expr: e, span: sp }));
+                continue;
+            }
+            // No semicolon: the block's tail if we're at `}`, else a lenient
+            // expression-statement (recovery; the well-formed corpus hits the
+            // tail case).
+            let at_rb2 = if self.pos < self.tokens.len() {
+                match self.tokens[self.pos].token {
+                    RightBrace => true,
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            if at_rb2 {
+                tail = Some(e);
+                break;
+            } else {
+                let sp = expr_span(e);
+                stmts.push(Stmt.Exp(ExprStmt { expr: e, span: sp }));
+            }
+        }
+        self.expect_rbrace();
+        Block {
+            stmts: stmts,
+            tail: tail,
+            span: self.span_from(start),
+        }
+    }
+
+    // `let [mut] name = value;` — span covers the whole statement.
+    fn parse_let_statement(mut ref self) -> Stmt {
+        let start = self.current_span();
+        self.advance(); // let
+        let is_mut = match self.tokens[self.pos].token {
+            Mut => true,
+            _ => false,
+        };
+        if is_mut {
+            self.advance();
+        }
+        let name = self.take_member_name();
+        self.eat_equal();
+        let value = self.parse_expr_bp(0);
+        self.eat_semicolon();
+        Stmt.Let(LetStmt {
+            is_mut: is_mut,
+            name: name,
+            value: value,
+            span: self.span_from(start),
+        })
+    }
+
+    // `if cond { … } [else (if … | { … })]`. Span covers the whole `if`.
+    fn parse_if(mut ref self) -> Expr {
+        let start = self.current_span();
+        self.advance(); // if
+        let cond = self.parse_expr_bp(0);
+        let then_block = self.parse_block();
+        let else_branch = self.parse_else();
+        Expr.If(IfExpr {
+            cond: cond,
+            then_block: then_block,
+            else_branch: else_branch,
+            span: self.span_from(start),
+        })
+    }
+
+    // The optional `else` arm — `else if …` chains another `If`; `else { … }`
+    // wraps the block as an `Expr.Block` (span = block span, per the seed).
+    fn parse_else(mut ref self) -> Option[Expr] {
+        let has_else = if self.pos < self.tokens.len() {
+            match self.tokens[self.pos].token {
+                Else => true,
+                _ => false,
+            }
+        } else {
+            false
+        };
+        if not has_else {
+            return None;
+        }
+        self.advance(); // else
+        let is_if = if self.pos < self.tokens.len() {
+            match self.tokens[self.pos].token {
+                If => true,
+                _ => false,
+            }
+        } else {
+            false
+        };
+        if is_if {
+            Some(self.parse_if())
+        } else {
+            let block = self.parse_block();
+            Some(Expr.Blk(block))
         }
     }
 
@@ -613,6 +833,40 @@ impl Parser {
             SelfType => {
                 self.advance();
                 Expr.SelfTy(SpanNode { span: self.span_from(start) })
+            }
+
+            // Block expression `{ … }` — span is the block's own span.
+            LeftBrace => {
+                let block = self.parse_block();
+                Expr.Blk(block)
+            }
+
+            // `if` / `if … else …` expression.
+            If => self.parse_if(),
+
+            // `return [value]`.
+            Return => {
+                self.advance();
+                // A value follows unless the next token closes the construct.
+                let has_value = if self.pos < self.tokens.len() {
+                    match self.tokens[self.pos].token {
+                        Semicolon => false,
+                        RightBrace => false,
+                        Comma => false,
+                        _ => true,
+                    }
+                } else {
+                    false
+                };
+                let value = if has_value {
+                    Some(self.parse_expr_bp(0))
+                } else {
+                    None
+                };
+                Expr.Return(ReturnExpr {
+                    value: value,
+                    span: self.span_from(start),
+                })
             }
 
             // Grouping / tuple.
