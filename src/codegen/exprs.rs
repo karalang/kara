@@ -688,6 +688,21 @@ impl<'ctx> super::Codegen<'ctx> {
                         // the tail-expression case in
                         // `suppress_cleanup_for_tail_return`).
                         self.suppress_channel_drop_for_var(name);
+                        // SoA move-out at an EARLY `return a;` in a return-SoA
+                        // monomorph (the branch-leaf / multi-`return` follow-on):
+                        // the moved-out 4-field SoA struct — sharing the group
+                        // buffers — is now the caller's, so the source's
+                        // `FreeSoaGroups` must not free them on THIS path. Use a
+                        // runtime `cap = 0` sentinel (not the tail path's
+                        // compile-time frame removal): the early-return cleanup
+                        // frame is shared with the fall-through path, where `a` is
+                        // NOT returned and must still be freed — frame removal
+                        // would leak it there. Runs post-load (above), so the
+                        // returned struct keeps the real cap and the caller frees
+                        // once. Gated on the active return layout.
+                        if matches!(self.return_layout, super::state::LayoutId::Soa(_)) {
+                            self.neutralize_moved_soa_groups_slot(name);
+                        }
                     }
                     // Move-aware suppression for a DIRECT `return f"..."`: the
                     // returned String buffer IS the f-string accumulator, now

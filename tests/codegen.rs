@@ -18543,6 +18543,127 @@ fn main() with panics {
         }
     }
 
+    // ── SoA branch-leaf / multi-return (follow-on) ─────────────────
+
+    #[test]
+    fn test_e2e_soa_early_return_then_tail() {
+        // Follow-on (branch-leaf / multi-`return` SoA returns): a guard-clause
+        // helper — an EARLY `return a;` plus a tail `b`, the two flowing to a
+        // SoA return. `soa_return_local_names` previously caught only the single
+        // tail `b`, so the early `return a` lowered AoS against the SoA-patched
+        // return signature → LLVM "return type does not match operand type"
+        // verify failure. The recursive collector now seeds BOTH; the early
+        // return's branch-safe move-out (`neutralize_moved_soa_groups_slot`)
+        // keeps the fall-through free intact. pick(true) -> a -> 1 + 2 = 3.
+        let out = run_program(
+            r#"
+struct E { x: f64, y: f64 }
+layout grid: Vec[E] { group g1 { x } group g2 { y } }
+fn pick(flag: bool) -> Vec[E] {
+    let mut a: Vec[E] = Vec.new();
+    a.push(E { x: 1.0, y: 2.0 });
+    if flag {
+        return a;
+    }
+    let mut b: Vec[E] = Vec.new();
+    b.push(E { x: 3.0, y: 4.0 });
+    b
+}
+fn main() with panics {
+    let grid: Vec[E] = pick(true);
+    println(grid[0].x + grid[0].y);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "3",
+                "an early `return` SoA local must lower SoA like the tail (multi-return)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_soa_if_else_both_return() {
+        // Follow-on: BOTH arms of an if/else are explicit `return`s of distinct
+        // SoA locals — neither is the block's tail expression, so both rely on
+        // the recursive return collector. pick(true) -> a (1+2=3);
+        // pick(false) -> b (3+4=7).
+        let out = run_program(
+            r#"
+struct E { x: f64, y: f64 }
+layout grid: Vec[E] { group g1 { x } group g2 { y } }
+fn pick(flag: bool) -> Vec[E] {
+    if flag {
+        let mut a: Vec[E] = Vec.new();
+        a.push(E { x: 1.0, y: 2.0 });
+        return a;
+    } else {
+        let mut b: Vec[E] = Vec.new();
+        b.push(E { x: 3.0, y: 4.0 });
+        return b;
+    }
+}
+fn main() with panics {
+    let g1: Vec[E] = pick(true);
+    let g2: Vec[E] = pick(false);
+    println(g1[0].x + g1[0].y);
+    println(g2[0].x + g2[0].y);
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(
+                lines,
+                vec!["3", "7"],
+                "both explicit-`return` arms of an if/else must lower SoA"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_soa_branch_leaf_bare_tails() {
+        // Follow-on: branch-leaf BARE tails (`if flag { a } else { b }`, no
+        // `return` keyword) — the function value is the `If`, whose then/else
+        // tail leaves are the returned locals. The recursive collector reaches
+        // them through the branch blocks; before, only a directly-bare body
+        // `final_expr` qualified, so neither leaf seeded SoA. Same expectations
+        // as the explicit-return form: pick(true) -> 3, pick(false) -> 7.
+        let out = run_program(
+            r#"
+struct E { x: f64, y: f64 }
+layout grid: Vec[E] { group g1 { x } group g2 { y } }
+fn pick(flag: bool) -> Vec[E] {
+    if flag {
+        let mut a: Vec[E] = Vec.new();
+        a.push(E { x: 1.0, y: 2.0 });
+        a
+    } else {
+        let mut b: Vec[E] = Vec.new();
+        b.push(E { x: 3.0, y: 4.0 });
+        b
+    }
+}
+fn main() with panics {
+    let g1: Vec[E] = pick(true);
+    let g2: Vec[E] = pick(false);
+    println(g1[0].x + g1[0].y);
+    println(g2[0].x + g2[0].y);
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(
+                lines,
+                vec!["3", "7"],
+                "branch-leaf bare-tail SoA returns must lower SoA at every leaf"
+            );
+        }
+    }
+
     // ── String operators ──────────────────────────────────────────
 
     #[test]

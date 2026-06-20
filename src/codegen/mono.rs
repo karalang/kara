@@ -966,30 +966,109 @@ impl<'ctx> super::Codegen<'ctx> {
     /// The local binding name(s) that flow to this function's return value as
     /// a bare `Vec[E]` identifier — used by the return-SoA monomorph path
     /// (slice 3) to seed them with the receiving binding's layout so the body
-    /// builds + returns the SoA struct. Detection MIRRORS
-    /// `suppress_cleanup_for_tail_return`'s tail analysis (the block's
-    /// `final_expr`, or the last statement's `return <expr>;` value): seeding
-    /// and the matching move-out suppression must agree on the same name, or a
-    /// returned local would build SoA without its `FreeSoaGroups` suppressed
-    /// (leak) or be suppressed without building SoA (type mismatch). Only a
-    /// bare identifier qualifies; branch-leaf / multi-`return` returns are a
-    /// follow-on slice (spike §8) — they degrade to AoS, never miscompile.
+    /// builds + returns the SoA struct. Seeding and the matching move-out
+    /// suppression must agree on the same name set, or a returned local would
+    /// build SoA without its `FreeSoaGroups` suppressed (leak / UAF) or be
+    /// suppressed without building SoA (type mismatch).
+    ///
+    /// Collects EVERY bare-identifier return site, not just the single tail
+    /// (the branch-leaf / multi-`return` follow-on): every explicit
+    /// `return <id>;` reachable in the body (in any branch / loop / nested
+    /// block, but NOT inside a closure — its `return` exits the closure, not
+    /// this function) AND every tail leaf of a branch-bearing tail expression
+    /// (`if c { a } else { b }` contributes both `a` and `b`). Without the
+    /// extra sites a guard-clause helper (`if empty { return fallback; } …;
+    /// result`) lowered only `result` SoA, leaving the early `return fallback`
+    /// returning the AoS `{ptr,len,cap}` against the SoA-patched return
+    /// signature — an LLVM "return type does not match" verify failure.
     pub(super) fn soa_return_local_names(&self, body: &Block) -> Vec<String> {
         let mut names = Vec::new();
-        let from_final = body.final_expr.as_deref();
-        let from_last_stmt = body.stmts.last().and_then(|s| match &s.kind {
-            StmtKind::Expr(e) => match &e.kind {
-                ExprKind::Return(Some(boxed)) => Some(boxed.as_ref()),
-                _ => Some(e),
-            },
-            _ => None,
-        });
-        if let Some(expr) = from_final.or(from_last_stmt) {
-            if let ExprKind::Identifier(name) = &expr.kind {
-                names.push(name.clone());
+        self.collect_soa_return_idents_block(body, true, &mut names);
+        names.sort();
+        names.dedup();
+        names
+    }
+
+    /// Walk a block for return-position bare identifiers. `in_tail` marks
+    /// whether the block's *value* position is itself the function's return
+    /// value (so its tail leaf is a return site). Every statement is still
+    /// scanned for explicit `return <id>;` regardless of `in_tail`.
+    fn collect_soa_return_idents_block(
+        &self,
+        block: &Block,
+        in_tail: bool,
+        names: &mut Vec<String>,
+    ) {
+        let n = block.stmts.len();
+        for (i, stmt) in block.stmts.iter().enumerate() {
+            if let StmtKind::Expr(e) = &stmt.kind {
+                // The block's value is the last statement iff there is no
+                // `final_expr`; that position inherits `in_tail`. Every other
+                // statement is non-tail (scanned only for explicit returns).
+                let stmt_in_tail = in_tail && block.final_expr.is_none() && i + 1 == n;
+                self.collect_soa_return_idents_expr(e, stmt_in_tail, names);
             }
         }
-        names
+        if let Some(fe) = &block.final_expr {
+            self.collect_soa_return_idents_expr(fe, in_tail, names);
+        }
+    }
+
+    /// Walk an expression for return-position bare identifiers. `in_tail` ⇒
+    /// this expression is in the function's return/tail position, so a bare
+    /// `Identifier` here is a returned local. An explicit `return E` puts `E`
+    /// in return position regardless of `in_tail`. Branch-bearing forms recurse
+    /// with `in_tail` preserved on their value leaves; loops recurse with
+    /// `in_tail = false` (their value is `Unit`). Closures are a boundary —
+    /// their `return` exits the closure, not this function.
+    fn collect_soa_return_idents_expr(&self, expr: &Expr, in_tail: bool, names: &mut Vec<String>) {
+        match &expr.kind {
+            ExprKind::Identifier(name) if in_tail => {
+                names.push(name.clone());
+            }
+            ExprKind::Return(Some(boxed)) => {
+                self.collect_soa_return_idents_expr(boxed, true, names);
+            }
+            ExprKind::Return(None) => {}
+            ExprKind::Closure { .. } => {}
+            ExprKind::Block(b)
+            | ExprKind::LabeledBlock { body: b, .. }
+            | ExprKind::Unsafe(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Par(b)
+            | ExprKind::Try(b)
+            | ExprKind::Lock { body: b, .. }
+            | ExprKind::Providers { body: b, .. } => {
+                self.collect_soa_return_idents_block(b, in_tail, names);
+            }
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                self.collect_soa_return_idents_block(then_block, in_tail, names);
+                if let Some(eb) = else_branch {
+                    self.collect_soa_return_idents_expr(eb, in_tail, names);
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    self.collect_soa_return_idents_expr(&arm.body, in_tail, names);
+                }
+            }
+            ExprKind::While { body, .. }
+            | ExprKind::WhileLet { body, .. }
+            | ExprKind::For { body, .. }
+            | ExprKind::Loop { body, .. } => {
+                self.collect_soa_return_idents_block(body, false, names);
+            }
+            _ => {}
+        }
     }
 
     /// Infer the type-parameter substitution for a generic function call by

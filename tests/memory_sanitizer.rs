@@ -8609,6 +8609,103 @@ fn main() with panics {
     }
 
     #[test]
+    fn asan_soa_early_return_fall_through_no_leak_or_uaf() {
+        // Follow-on (branch-leaf / multi-`return` SoA returns): a return-SoA
+        // helper with an EARLY `return early;` guarded by a flag, then a tail
+        // `late`. Two ownership paths share one cleanup frame:
+        //   flag=true  → `early` moved out (must NOT be freed here — the caller
+        //                owns it; freeing pre-return is a UAF/double-free ASAN
+        //                catches), `late` never allocated.
+        //   flag=false → `early` allocated but NOT returned (must be freed at
+        //                scope exit — a compile-time cleanup removal would leak
+        //                it on this path; LSan catches), `late` moved out.
+        // The early move-out uses a runtime `cap = 0` sentinel
+        // (`neutralize_moved_soa_groups_slot`), branch-safe precisely because
+        // the frame is shared. Both paths run every iteration (×20); `Cell` is
+        // 40 bytes (two group buffers past LSan's short-alloc blind spot).
+        // g1[0].a (1.0) + g2[0].a (2.0) = 3.0 × 20 = 60.
+        assert_clean_asan_run(
+            r#"
+struct Cell { a: f64, b: f64, c: f64, d: f64, e: f64 }
+layout grid: Vec[Cell] { group lo { a, b } group hi { c, d, e } }
+fn build(v: f64) -> Vec[Cell] {
+    let mut g: Vec[Cell] = Vec.new();
+    let mut i = 0;
+    while i < 8 { g.push(Cell { a: v, b: 1.0, c: 2.0, d: 3.0, e: 4.0 }); i = i + 1; }
+    g
+}
+fn pick(flag: bool) -> Vec[Cell] {
+    let early: Vec[Cell] = build(1.0);
+    if flag {
+        return early;
+    }
+    let late: Vec[Cell] = build(2.0);
+    late
+}
+fn main() {
+    let mut sum = 0.0;
+    let mut k = 0;
+    while k < 20 {
+        let g1: Vec[Cell] = pick(true);
+        let g2: Vec[Cell] = pick(false);
+        sum = sum + g1[0].a + g2[0].a;
+        k = k + 1;
+    }
+    println(sum);
+}
+"#,
+            &["60"],
+            "soa_early_return_fall_through",
+        );
+    }
+
+    #[test]
+    fn asan_soa_branch_leaf_tail_returns_no_leak_or_uaf() {
+        // Follow-on sibling: branch-leaf BARE tails (`if flag { a } else { b }`,
+        // no `return` keyword) — both `a` and `b` are returned locals the
+        // recursive `soa_return_local_names` seeds SoA, and each block-scoped
+        // leaf is moved out of its branch as the function value. Get the
+        // per-branch move-out wrong and the unselected branch's buffers either
+        // free early (UAF, ASAN) or never (leak, LSan). pick(true)/pick(false)
+        // each iteration (×20); 40-byte Cell. g1[0].a (1.0) + g2[0].a (2.0) =
+        // 3.0 × 20 = 60.
+        assert_clean_asan_run(
+            r#"
+struct Cell { a: f64, b: f64, c: f64, d: f64, e: f64 }
+layout grid: Vec[Cell] { group lo { a, b } group hi { c, d, e } }
+fn fill(v: f64) -> Vec[Cell] {
+    let mut g: Vec[Cell] = Vec.new();
+    let mut i = 0;
+    while i < 8 { g.push(Cell { a: v, b: 1.0, c: 2.0, d: 3.0, e: 4.0 }); i = i + 1; }
+    g
+}
+fn pick(flag: bool) -> Vec[Cell] {
+    if flag {
+        let a: Vec[Cell] = fill(1.0);
+        a
+    } else {
+        let b: Vec[Cell] = fill(2.0);
+        b
+    }
+}
+fn main() {
+    let mut sum = 0.0;
+    let mut k = 0;
+    while k < 20 {
+        let g1: Vec[Cell] = pick(true);
+        let g2: Vec[Cell] = pick(false);
+        sum = sum + g1[0].a + g2[0].a;
+        k = k + 1;
+    }
+    println(sum);
+}
+"#,
+            &["60"],
+            "soa_branch_leaf_tail_returns",
+        );
+    }
+
+    #[test]
     fn asan_shared_list_build_remove_repeat() {
         // Regression for the `shared struct` RC over-dec (2026-05-30): a
         // tail-cursor-built list, removed via `remove_nth_from_end`

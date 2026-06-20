@@ -2311,6 +2311,45 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Branch-safe SoA move-out for an EARLY `return a;` of a SoA local: zero
+    /// the source's `cap` slot (a runtime store at the current — the return
+    /// branch's — insertion point) so its queued `FreeSoaGroups` no-ops on THIS
+    /// path (the cleanup's `cap > 0` guard reads the zeroed slot), while still
+    /// firing on the fall-through path where `a` is NOT returned and must be
+    /// freed. The runtime-sentinel analog of
+    /// `suppress_soa_cleanup_for_tail_identifier`'s compile-time frame removal:
+    /// at an early return the cleanup frame is shared with the non-returning
+    /// path, so frame removal would leak `a` there (the branch-buried-move
+    /// footgun — same reason the channel-end move uses a runtime null-sentinel,
+    /// not compile-time suppression). Emit it AFTER the return value is loaded
+    /// so the returned struct keeps the real `cap` and the caller frees the
+    /// group buffers exactly once. No-op when `name` is not a SoA local, or is a
+    /// `ref`/`mut ref` SoA param (a borrow never owns the buffers — and its slot
+    /// holds a pointer to the caller's struct, not the struct itself).
+    pub(super) fn neutralize_moved_soa_groups_slot(&mut self, name: &str) {
+        let soa = match self.active_soa_layout(name) {
+            Some(s) => s,
+            None => return,
+        };
+        if self.ref_params.contains_key(name) {
+            return;
+        }
+        let slot = match self.variables.get(name) {
+            Some(s) => *s,
+            None => return,
+        };
+        let has_cold = soa.cold_group.is_some();
+        let soa_ty = self.soa_vec_type(soa.num_groups, has_cold);
+        let cap_idx = Self::soa_cap_index(soa.num_groups, has_cold);
+        if let Ok(cap_ptr) =
+            self.builder
+                .build_struct_gep(soa_ty, slot.ptr, cap_idx, "soa.moveout.cap.suppress")
+        {
+            let zero = self.context.i64_type().const_int(0, false);
+            let _ = self.builder.build_store(cap_ptr, zero);
+        }
+    }
+
     /// Queue scope-exit cleanup for a `ref T` rvalue-arg temp materialized
     /// into `slot` (the `ref_rvalue_arg{i}` alloca). Generalizes the prior
     /// Vec/String-only `track_vec_var(slot, None)` (slice 2 part B):
