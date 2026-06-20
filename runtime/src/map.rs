@@ -116,6 +116,41 @@ impl KaracMap {
             .add(slot * (self.key_size + self.val_size) + self.key_size) as *const c_void
     }
 
+    /// Free the heap `{ptr, len, cap}` buffer whose 24-byte header starts at
+    /// `base`, when its `cap > 0` and data pointer is non-null. The canonical
+    /// "release one stored Vec/String field" primitive, shared by
+    /// `karac_map_free_with_drop_vec` (live-slot walk) and the `remove` /
+    /// `remove_old` tombstone paths (which must release the bucket's STORED
+    /// key/value the tombstone would otherwise orphan). The codegen-side
+    /// `drop_key` / `drop_val` flag asserts the field at `base` follows the
+    /// Vec/String layout (offset 0: 8-byte data ptr; offset 16: 8-byte cap) —
+    /// never call this on a scalar field.
+    #[inline]
+    unsafe fn free_heap_field(base: *const u8) {
+        let data_ptr = ptr::read_unaligned(base as *const *mut u8);
+        let cap = ptr::read_unaligned(base.add(16) as *const i64);
+        if cap > 0 && !data_ptr.is_null() {
+            free(data_ptr as *mut c_void);
+        }
+    }
+
+    /// Release the bucket's STORED key buffer at `slot` (see
+    /// `free_heap_field`). Caller must have established the key type is a heap
+    /// `{ptr,len,cap}` (codegen `drop_key != 0`).
+    #[inline]
+    unsafe fn free_stored_key(&self, slot: usize) {
+        Self::free_heap_field(self.key_ptr(slot) as *const u8);
+    }
+
+    /// Release the bucket's STORED value buffer at `slot` (see
+    /// `free_heap_field`). Caller must have established the value type is a
+    /// heap `{ptr,len,cap}` (codegen `drop_val != 0`). NOT used by
+    /// `karac_map_remove_old`, which MOVES the value out to the caller.
+    #[inline]
+    unsafe fn free_stored_val(&self, slot: usize) {
+        Self::free_heap_field(self.val_ptr(slot) as *const u8);
+    }
+
     // Find an occupied slot holding `key`. Returns Some(slot) or None.
     unsafe fn lookup(&self, key: *const c_void) -> Option<usize> {
         let hash = (self.hash_fn)(key);
@@ -199,8 +234,19 @@ impl KaracMap {
         }
     }
 
-    unsafe fn remove(&mut self, key: *const c_void) -> bool {
+    unsafe fn remove(&mut self, key: *const c_void, drop_key: bool, drop_val: bool) -> bool {
         if let Some(slot) = self.lookup(key) {
+            // The bool `remove` discards both halves, so free each heap
+            // `{ptr,len,cap}` the tombstone would orphan. `free-with-drop`
+            // only walks OCCUPIED slots, so a tombstoned buffer leaks
+            // otherwise. (The `remove_old` variant instead MOVES the value
+            // out to the caller and frees only the key.)
+            if drop_key {
+                self.free_stored_key(slot);
+            }
+            if drop_val {
+                self.free_stored_val(slot);
+            }
             *self.status.add(slot) = BUCKET_TOMBSTONE;
             self.len -= 1;
             self.tombstones += 1;
@@ -309,28 +355,15 @@ pub unsafe extern "C" fn karac_map_free_with_drop_vec(
     }
     let mut m = Box::from_raw(map as *mut KaracMap);
     if drop_key != 0 || drop_val != 0 {
-        let entry_stride = m.key_size + m.val_size;
         for slot in 0..m.capacity {
             if *m.status.add(slot) != BUCKET_OCCUPIED {
                 continue;
             }
             if drop_key != 0 {
-                // Key lives at kv + slot*stride.
-                let key_base = m.kv.add(slot * entry_stride);
-                let data_ptr = ptr::read_unaligned(key_base as *const *mut u8);
-                let cap = ptr::read_unaligned(key_base.add(16) as *const i64);
-                if cap > 0 && !data_ptr.is_null() {
-                    free(data_ptr as *mut c_void);
-                }
+                m.free_stored_key(slot);
             }
             if drop_val != 0 {
-                // Value lives at kv + slot*stride + key_size.
-                let val_base = m.kv.add(slot * entry_stride + m.key_size);
-                let data_ptr = ptr::read_unaligned(val_base as *const *mut u8);
-                let cap = ptr::read_unaligned(val_base.add(16) as *const i64);
-                if cap > 0 && !data_ptr.is_null() {
-                    free(data_ptr as *mut c_void);
-                }
+                m.free_stored_val(slot);
             }
         }
     }
@@ -475,19 +508,42 @@ pub unsafe extern "C" fn karac_map_get(
 }
 
 /// Returns `true` if the key was present and has been removed.
+///
+/// `drop_key` / `drop_val` (codegen-set; nonzero = "this half is a heap
+/// `{ptr,len,cap}` Vec/String") free the bucket's STORED key / value before
+/// the tombstone orphans them — `karac_map_free_with_drop_vec` only walks
+/// OCCUPIED slots, so a tombstoned buffer would leak. This variant discards
+/// both halves (the presence boolean carries no payload), so both may be
+/// freed; contrast `karac_map_remove_old`, which moves the value out and
+/// frees only the key. **Not currently wired by codegen** — `Map.remove` /
+/// `Set.remove` lower to `karac_map_remove_old` — but kept correct for the
+/// exported ABI (see `runtime/src/lib.rs` keep list).
 #[no_mangle]
-pub unsafe extern "C" fn karac_map_remove(map: *mut c_void, key: *const c_void) -> bool {
-    (*(map as *mut KaracMap)).remove(key)
+pub unsafe extern "C" fn karac_map_remove(
+    map: *mut c_void,
+    key: *const c_void,
+    drop_key: i32,
+    drop_val: i32,
+) -> bool {
+    (*(map as *mut KaracMap)).remove(key, drop_key != 0, drop_val != 0)
 }
 
 /// Removes `key`. If it existed, copies the **old** value into `out_old_val` and
 /// returns `true`. Returns `false` and leaves `out_old_val` untouched otherwise.
 /// Matches `Map.remove → Option[V]` semantics.
+///
+/// The value is MOVED OUT to the caller via `out_old_val` (the returned
+/// `Some(old)` owns its `{ptr,len,cap}` buffer now), so this variant frees
+/// ONLY the bucket's STORED key — never the value. `drop_key` (codegen-set;
+/// nonzero = "key is a heap `{ptr,len,cap}` Vec/String") gates that free; the
+/// tombstone would otherwise orphan the stored key buffer, since
+/// `karac_map_free_with_drop_vec` only walks OCCUPIED slots.
 #[no_mangle]
 pub unsafe extern "C" fn karac_map_remove_old(
     map: *mut c_void,
     key: *const c_void,
     out_old_val: *mut c_void,
+    drop_key: i32,
 ) -> bool {
     let m = &mut *(map as *mut KaracMap);
     if let Some(slot) = m.lookup(key) {
@@ -496,6 +552,9 @@ pub unsafe extern "C" fn karac_map_remove_old(
             out_old_val as *mut u8,
             m.val_size,
         );
+        if drop_key != 0 {
+            m.free_stored_key(slot);
+        }
         *m.status.add(slot) = BUCKET_TOMBSTONE;
         m.len -= 1;
         m.tombstones += 1;

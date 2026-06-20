@@ -5556,11 +5556,10 @@ fn main() {
         // Fresh-temp keys into `contains_key` (present) and `remove` (the
         // incoming key argument), both lookup-only — neither retains the
         // incoming key, so each now frees its fresh-temp key buffer. The
-        // `remove` here targets an ABSENT key (miss path) on purpose: a
-        // present-key `remove` tombstones the bucket WITHOUT freeing its
-        // *stored* key — a distinct, pre-existing leak that needs a runtime
-        // drop-flag ABI change (tracked separately), not the incoming-key
-        // residual this fix addresses.
+        // `remove` here targets an ABSENT key (miss path) on purpose, to
+        // isolate the INCOMING-key residual: the distinct present-key STORED
+        // key leak is exercised by the `asan_map_remove_present_*` tests below
+        // (closed by the drop-flag ABI in B-2026-06-20-10).
         assert_clean_asan_run(
             r#"
 fn main() {
@@ -5579,6 +5578,69 @@ fn main() {
 "#,
             &["present", "-1", "1"],
             "map_remove_contains_fresh_temp_key_no_leak",
+        );
+    }
+
+    // ── Present-key remove STORED key/value ownership (B-2026-06-20-10) ──
+    // Completes the map-key-ownership class B-2026-06-20-9 started. A
+    // present-key `remove` of a HEAP key tombstones the bucket, and
+    // `karac_map_free_with_drop_vec` only walks OCCUPIED slots — so the
+    // bucket's STORED key buffer was orphaned (leak) until the runtime
+    // learned to free it. `Map.remove` / `Set.remove` lower to
+    // `karac_map_remove_old`, which now takes a codegen-set `drop_key` flag
+    // (`llvm_ty_is_vec_struct(key_ty)`) and frees the stored key on the
+    // tombstone path — the value half is MOVED OUT to the caller, so it is
+    // never freed here. ≥36-byte keys per the LSan-reachability rule (LSan
+    // misses short, still-reachable String buffers).
+
+    #[test]
+    fn asan_map_remove_present_heap_key_no_leak() {
+        // `Map[String, i64].remove(present)` → Some. The incoming fresh-temp
+        // key is freed by the no-adopt path (B-2026-06-20-9); the bucket's
+        // STORED String key is freed by the runtime drop-flag (this fix).
+        // Pre-fix the stored key buffer leaked under the Linux LSan gate.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("present-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(), 7_i64);
+    match m.remove("present-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()) {
+        Some(x) => println(x),
+        None => println(-1_i64),
+    }
+    println(m.len());
+}
+"#,
+            &["7", "0"],
+            "map_remove_present_heap_key_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_map_remove_present_heap_key_and_vec_value_no_leak() {
+        // `Map[String, Vec[i64]].remove(present)` → Some(vec). Exercises BOTH
+        // sides at once: the STORED String key is freed by the drop-flag
+        // (this fix), while the Vec value is MOVED OUT into the match-arm
+        // binding and freed exactly once at arm exit (the runtime must NOT
+        // free a returned value). Pre-fix the stored key leaked; a naive
+        // "free both" runtime change would instead double-free the value.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut m: Map[String, Vec[i64]] = Map.new();
+    let mut v: Vec[i64] = Vec.new();
+    v.push(10_i64);
+    v.push(20_i64);
+    m.insert("vec-value-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(), v);
+    match m.remove("vec-value-key-aaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()) {
+        Some(got) => println(got.len()),
+        None => println(-1_i64),
+    }
+    println(m.len());
+}
+"#,
+            &["2", "0"],
+            "map_remove_present_heap_key_and_vec_value_no_leak",
         );
     }
 

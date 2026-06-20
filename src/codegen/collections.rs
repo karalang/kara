@@ -173,11 +173,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.build_store(elem_slot, elem_val).unwrap();
                 // val_size = 0 → dummy out slot is shared; contents irrelevant.
                 let dummy = self.create_entry_alloca(fn_val, "set.dummy", i8_t.into());
+                // `drop_key` releases the bucket's STORED element buffer (the
+                // tombstone would orphan it) when the element is a heap
+                // `{ptr,len,cap}`, e.g. `Set[String]` / `Set[Vec[T]]`. Set
+                // lowers to `Map[T, ()]` (val_size = 0), so there is no value
+                // half to drop.
+                let drop_key = self
+                    .context
+                    .i32_type()
+                    .const_int(u64::from(self.llvm_ty_is_vec_struct(elem_ty)), false);
                 let existed = self
                     .builder
                     .build_call(
                         self.karac_map_remove_old_fn,
-                        &[set_handle.into(), elem_slot.into(), dummy.into()],
+                        &[
+                            set_handle.into(),
+                            elem_slot.into(),
+                            dummy.into(),
+                            drop_key.into(),
+                        ],
                         "set.remove.existed",
                     )
                     .unwrap()

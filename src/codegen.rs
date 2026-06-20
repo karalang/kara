@@ -4700,10 +4700,14 @@ impl<'ctx> Codegen<'ctx> {
         let karac_map_get_fn =
             module.add_function("karac_map_get", map_get_ty, Some(Linkage::External));
 
-        // karac_map_remove_old(map: ptr, key: ptr, out_old_val: ptr) -> i1
+        // karac_map_remove_old(map: ptr, key: ptr, out_old_val: ptr, drop_key: i32) -> i1
+        // The value is moved out via out_old_val (caller owns it), so only the
+        // bucket's STORED key is freed; `drop_key` (nonzero = heap key) gates
+        // that free — the tombstone would otherwise orphan it.
+        let i32_md: BasicMetadataTypeEnum = context.i32_type().into();
         let map_remove_old_ty = context
             .bool_type()
-            .fn_type(&[ptr_md, ptr_md, ptr_md], false);
+            .fn_type(&[ptr_md, ptr_md, ptr_md, i32_md], false);
         let karac_map_remove_old_fn = module.add_function(
             "karac_map_remove_old",
             map_remove_old_ty,

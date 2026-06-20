@@ -1174,11 +1174,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 let key_slot = self.create_entry_alloca(fn_val, "map.remove.key", key_ty);
                 let old_slot = self.create_entry_alloca(fn_val, "map.remove.old", val_ty);
                 self.builder.build_store(key_slot, key_val).unwrap();
+                // `drop_key` releases the bucket's STORED key buffer (the
+                // tombstone would orphan it) when the key is a heap
+                // `{ptr,len,cap}`. The value is moved out into the returned
+                // `Some(old)`, so the runtime never frees it.
+                let drop_key = self
+                    .context
+                    .i32_type()
+                    .const_int(u64::from(self.llvm_ty_is_vec_struct(key_ty)), false);
                 let found = self
                     .builder
                     .build_call(
                         self.karac_map_remove_old_fn,
-                        &[map_handle.into(), key_slot.into(), old_slot.into()],
+                        &[
+                            map_handle.into(),
+                            key_slot.into(),
+                            old_slot.into(),
+                            drop_key.into(),
+                        ],
                         "map.remove.found",
                     )
                     .unwrap()
