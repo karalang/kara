@@ -2642,6 +2642,52 @@ impl<'ctx> super::Codegen<'ctx> {
                     // reaches here, not the free-fn `compile_call` path. Shared
                     // helper keeps both arg loops in lockstep.
                     self.track_inline_owned_aggregate_arg(val, &a.value);
+                    // Fresh-heap by-value arg materialization — the method-call
+                    // sibling of the #20 arm in `compile_call` (call_dispatch.rs).
+                    // A `String`/`Vec` produced by a Call/MethodCall (or a block /
+                    // inline-temp-Vec heap index) and passed DIRECTLY by value to a
+                    // method — `lx.ident_matches("Fn".to_string())` — has no
+                    // consuming binding, and an owned `String`/`Vec` by-value param
+                    // is NOT freed by the callee (it lands in `owned_vecstr_params`
+                    // for retaining-consume deep-copy, never a callee-side
+                    // `track_vec_var`), so the temp orphaned and leaked one buffer
+                    // per call (B-2026-06-20: the self-host string-eq method leak).
+                    // `materialize_owned_temp` self-guards on the Vec/String LLVM
+                    // shape (+ the `owned_temp_drops` hint for Map), so non-heap
+                    // args are a no-op; `rhs_stages_fstr_acc` excludes a struct/enum
+                    // `.to_string()` (its f-string acc already owns a caller-scope
+                    // cleanup). The free-fn arm's full rationale applies verbatim.
+                    let is_block_arg = matches!(
+                        &a.value.kind,
+                        ExprKind::Block(_)
+                            | ExprKind::Seq(_)
+                            | ExprKind::Unsafe(_)
+                            | ExprKind::LabeledBlock { .. }
+                    );
+                    let is_fresh_heap_call_arg = (self.expr_yields_fresh_owned_temp(&a.value)
+                        || self.expr_is_inline_temp_vec_heap_index(&a.value))
+                        && self.llvm_ty_is_vec_struct(val.get_type())
+                        && !self.rhs_stages_fstr_acc(&a.value);
+                    if is_block_arg || is_fresh_heap_call_arg {
+                        self.materialize_owned_temp(
+                            val,
+                            (a.value.span.offset, a.value.span.length),
+                        );
+                    }
+                    // A fresh bare-`shared` (RC-box) call / variant-ctor result
+                    // passed by value: the callee inc/decs net-zero, so the caller
+                    // still owns the temp's +1 and must release it — the bare-shared
+                    // sibling of the arm above (`fresh_arg_bare_shared_heap_type`
+                    // self-excludes a `g(make())` passthrough chain).
+                    if val.is_pointer_value() {
+                        if let Some(heap_type) = self.fresh_arg_bare_shared_heap_type(&a.value) {
+                            self.track_rc_var(
+                                "__owned_arg_tmp",
+                                val.into_pointer_value(),
+                                heap_type,
+                            );
+                        }
+                    }
                     compiled_args.push(val.into());
                 }
                 // Niche-ABI pack/unpack at the `obj.method(...)` boundary

@@ -13034,4 +13034,87 @@ fn main() {
             "asan_by_value_struct_field_moveout_no_double_free",
         );
     }
+
+    #[test]
+    fn asan_shared_enum_string_payload_moveout_no_double_free() {
+        // B-2026-06-20: moving a `String`/`Vec` payload OUT of a SHARED-enum RC
+        // box (`match e { S(s) => s }`, returned) only neutralized the LOCAL
+        // binding's cap — the box's payload words still pointed at the moved-out
+        // buffer, so the box's `__karac_rc_drop_<E>` (Vec/String arm frees
+        // `cap > 0`) re-freed it after the caller already had: a double-free.
+        // The minimal isolated shape (the recursive self-host render leak hit it
+        // nested, where the boxed-struct-drop gap masked it as a leak instead).
+        // Fixed by `suppress_shared_enum_payload_move_out`: zero the field's words
+        // in the BOX so its rc-drop skips the buffer the binding now owns. The
+        // ≥36-byte payload makes the (pre-fix) freed-then-freed buffer a real heap
+        // block ASAN flags; Linux LSan covers the symmetric no-leak arm.
+        assert_clean_asan_run(
+            r#"
+shared enum E { S(String), Other }
+fn get(e: E) -> String {
+    match e {
+        S(s) => s,
+        Other => "other".to_string(),
+    }
+}
+fn main() {
+    let e = E.S("shared-enum-moveout-payload-long-enough-string".to_string());
+    println(get(e));
+}
+"#,
+            &["shared-enum-moveout-payload-long-enough-string"],
+            "shared_enum_string_payload_moveout_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_shared_enum_boxed_struct_payload_moveout_no_double_free() {
+        // B-2026-06-20: a shared-enum variant whose struct payload is heap-BOXED
+        // (`Blk(Block)` / `Iff(IfNode)` — wider than the payload area). The box
+        // rc-drop must unbox + free the box AND reclaim its DIRECT Vec/String
+        // buffers and shared/`Option[shared]` children (the tests-1/2 leak), but
+        // must NOT recurse into a nested heap struct field that the match moved
+        // out (`let tb = nd.then_block`, freed by `tb`'s own drop) — re-freeing it
+        // double-frees. Pins the build + match + scope-exit drop of both the
+        // direct boxed payload and the nested (Iff) one with no double-free and no
+        // leak. The IR sibling of `test_e2e_shared_enum_payload_with_nested_heap_
+        // struct_field` (codegen.rs), under the LSan + ASAN gate.
+        assert_clean_asan_run(
+            "struct Span { a: i64, b: i64, c: i64, d: i64 }\n\
+             shared enum E { Lit(i64), Iff(IfNode), Blk(Block) }\n\
+             struct Block { stmts: Vec[i64], tail: Option[E], span: Span }\n\
+             struct IfNode { cond: E, then_block: Block, span: Span }\n\
+             fn mk_block(first: i64, sp: i64) -> Block {\n\
+             \x20   let mut s: Vec[i64] = Vec.new();\n\
+             \x20   s.push(first); s.push(first + 1);\n\
+             \x20   Block { stmts: s, tail: Some(E.Lit(99)), span: Span { a: sp, b: 0, c: 0, d: 0 } }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let be = E.Blk(mk_block(10, 1));\n\
+             \x20   match be {\n\
+             \x20       Lit(n) => println(n),\n\
+             \x20       Iff(nd) => println(nd.span.a),\n\
+             \x20       Blk(b) => {\n\
+             \x20           println(b.span.a);\n\
+             \x20           println(b.stmts[0]);\n\
+             \x20           println(b.stmts[1]);\n\
+             \x20           match b.tail { Some(t) => match t { Lit(v) => println(v), Iff(_) => println(-1), Blk(_) => println(-2) }, None => println(-3) }\n\
+             \x20       }\n\
+             \x20   }\n\
+             \x20   let ife = E.Iff(IfNode { cond: E.Lit(7), then_block: mk_block(20, 2), span: Span { a: 5, b: 0, c: 0, d: 0 } });\n\
+             \x20   match ife {\n\
+             \x20       Lit(n) => println(n),\n\
+             \x20       Iff(nd) => {\n\
+             \x20           println(nd.span.a);\n\
+             \x20           let tb = nd.then_block;\n\
+             \x20           println(tb.span.a);\n\
+             \x20           println(tb.stmts[0]);\n\
+             \x20       }\n\
+             \x20       Blk(_) => println(-9)\n\
+             \x20   }\n\
+             }",
+            &["1", "10", "11", "99", "5", "2", "20"],
+            "shared_enum_boxed_struct_payload_moveout_no_double_free",
+        );
+    }
 }

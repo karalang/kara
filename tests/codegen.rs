@@ -48880,4 +48880,85 @@ fn main() {
             "the moved-field cap-zero must precede the struct drop\n--- body ---\n{body}"
         );
     }
+
+    /// Moving a `String`/`Vec` payload OUT of a SHARED-enum box (`match e { S(s)
+    /// => s }`) must zero that field's words IN THE BOX so the box's
+    /// `__karac_rc_drop_<E>` skips the buffer the binding now owns — else the
+    /// returned String is freed by the caller AND re-freed by the box rc-drop
+    /// (double-free). Regression for `suppress_shared_enum_payload_move_out`
+    /// (B-2026-06-20). E2E ASAN coverage:
+    /// `memory_sanitizer::asan_shared_enum_string_payload_moveout_no_double_free`.
+    #[test]
+    fn shared_enum_string_payload_moveout_zeros_box_cap() {
+        let ir = ir_for(
+            "shared enum E { S(String), Other }\n\
+             fn get(e: E) -> String { match e { S(s) => s, Other => \"o\".to_string() } }\n\
+             fn main() { println(get(E.S(\"payload-string\".to_string()))); }\n",
+        );
+        let body = function_body(&ir, "get").expect("fn get must be emitted");
+        assert!(
+            body.contains("match.sh.suppress.wp"),
+            "the shared-enum String move-out must zero the box payload word(s) so \
+             the box rc-drop skips the moved-out buffer\n--- body ---\n{body}"
+        );
+    }
+
+    /// A shared-enum variant whose struct payload is heap-BOXED (wider than its
+    /// allotted payload words — `struct Block { tail: Option[Expr] }` used as
+    /// `Expr.Blk(Block)`, the enum-in-enum carve-out undersizing the area) must,
+    /// in `__karac_rc_drop_<E>`, DEREF word 0 to the box, walk it, then free the
+    /// box. Before the fix the struct arm always read the payload inline, so it
+    /// walked the box-POINTER word as the struct's first field (skip) and never
+    /// freed the box — leaking the box and its heap children. Regression for the
+    /// boxed-struct arm of `emit_shared_enum_field_drop` (B-2026-06-20). E2E:
+    /// `memory_sanitizer::asan_single_field_struct_option_payload_sizing_no_bad_access`.
+    #[test]
+    fn shared_enum_boxed_struct_payload_rc_drop_unboxes_and_frees() {
+        let ir = ir_for(
+            "shared enum Expr { Str(String), Blk(Block), Error }\n\
+             struct Block { tail: Option[Expr] }\n\
+             fn render_block(b: Block) -> String {\n\
+             \x20   let Block { tail } = b;\n\
+             \x20   match tail { Some(e) => render_expr(e), None => \"n\".to_string() }\n\
+             }\n\
+             fn render_expr(e: Expr) -> String {\n\
+             \x20   match e { Str(s) => s, Blk(b) => render_block(b), Error => \"e\".to_string() }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let blk = Block { tail: Some(Expr.Str(\"payload-string\".to_string())) };\n\
+             \x20   println(render_expr(Expr.Blk(blk)));\n\
+             }\n",
+        );
+        let drop_body = function_body(&ir, "__karac_rc_drop_Expr")
+            .expect("__karac_rc_drop_Expr must be emitted");
+        assert!(
+            drop_body.contains("nstr.box.p") && drop_body.contains("nstr.box.do"),
+            "the boxed-struct variant must unbox (inttoptr) its payload word and \
+             walk + free the heap box in the rc-drop\n--- drop body ---\n{drop_body}"
+        );
+    }
+
+    /// A fresh `String`/`Vec` temp passed DIRECTLY by value to a METHOD call has
+    /// no consuming binding, and an owned `String`/`Vec` by-value param is not
+    /// freed by the callee — so the caller must materialize it into an
+    /// `__owned_tmp` with a scope-exit free, exactly as the free-fn `compile_call`
+    /// path does. Before the fix only the free-fn path materialized; the method
+    /// path leaked one buffer per call (B-2026-06-20, the self-host string-eq
+    /// method leak). E2E:
+    /// `memory_sanitizer::asan_string_eq_mismatched_len_no_overread_in_indexed_payload_match`.
+    #[test]
+    fn method_call_fresh_string_temp_arg_materialized() {
+        let ir = ir_for(
+            "struct H { x: i64 }\n\
+             impl H { fn m(ref self, t: String) -> bool { t.len() > 0 } }\n\
+             fn main() { let h = H { x: 1 }; println(h.m(\"fresh-temp-arg\".to_string())); }\n",
+        );
+        let body = function_body(&ir, "main").expect("fn main must be emitted");
+        assert!(
+            body.contains("__owned_tmp"),
+            "a fresh String temp passed by value to a method call must be \
+             materialized into a caller-scope owned temp (freed at scope exit)\n\
+             --- body ---\n{body}"
+        );
+    }
 }

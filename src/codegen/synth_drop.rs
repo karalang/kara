@@ -372,6 +372,42 @@ impl<'ctx> super::Codegen<'ctx> {
         drop_fn: FunctionValue<'ctx>,
         owns_buffer_free: bool,
     ) {
+        self.emit_nested_struct_shared_rc_decs_ex(
+            struct_ptr,
+            struct_name,
+            drop_fn,
+            owns_buffer_free,
+            Some(owns_buffer_free),
+        );
+    }
+
+    /// As [`Self::emit_nested_struct_shared_rc_decs`], but `nested_buffer_free`
+    /// controls how a nested non-shared struct FIELD is recursed into:
+    ///   * `None` — do NOT recurse (skip the nested struct entirely).
+    ///   * `Some(b)` — recurse with `owns_buffer_free = b` (and the same
+    ///     `Some(b)` for deeper levels).
+    ///
+    /// The shared-enum-box BOXED-struct payload drop passes `Some(false)`: a
+    /// nested heap struct field of a boxed payload (`IfNode.then_block: Block`)
+    /// may be MOVED OUT by the match binding (`let tb = nd.then_block`), whose
+    /// own value-drop (`__karac_drop_struct_<S>`) frees that struct's Vec/String
+    /// BUFFERS — so re-freeing those through the box's rc-drop walk is a
+    /// double-free. But the value-drop does NOT rc-dec the moved struct's
+    /// `shared` / `Option[shared]` CHILDREN (those are RC-machinery), so the box
+    /// rc-drop must. `Some(false)` recurses to rc-dec exactly those children
+    /// while leaving the buffers to the move-out owner: no double-free, and the
+    /// moved-out struct's RC children are reclaimed (the leak the boxed-payload
+    /// path otherwise stranded). All other callers preserve the prior behavior
+    /// (`Some(owns_buffer_free)`): the in-place inline payload is solely
+    /// box-owned, no move-out, so buffers and children both flow to this walker.
+    pub(super) fn emit_nested_struct_shared_rc_decs_ex(
+        &mut self,
+        struct_ptr: PointerValue<'ctx>,
+        struct_name: &str,
+        drop_fn: FunctionValue<'ctx>,
+        owns_buffer_free: bool,
+        nested_buffer_free: Option<bool>,
+    ) {
         // B-2026-06-14-34 — two independent fixes over B-31, both required:
         //
         // (1) `drop_fn` is passed in EXPLICITLY (it used to read
@@ -742,26 +778,33 @@ impl<'ctx> super::Codegen<'ctx> {
                 let _ = cap;
                 continue;
             }
-            // Nested non-shared user struct → recurse into it in place.
-            if let TypeKind::Path(p) = &fte.kind {
-                if let Some(head) = p.segments.first() {
-                    if self.struct_types.contains_key(head.as_str())
-                        && !self.shared_types.contains_key(head.as_str())
-                    {
-                        if let Ok(field_ptr) =
-                            self.builder
-                                .build_struct_gep(st, struct_ptr, idx as u32, "nstr.nest.p")
+            // Nested non-shared user struct → recurse into it (unless
+            // `nested_buffer_free` is `None`). The recursion's buffer-ownership is
+            // the carried `nbf`, not this level's `owns_buffer_free`: the
+            // boxed-payload move-out case frees this level's direct buffers but
+            // must NOT free a moved-out nested struct's buffers (its move-out owner
+            // does) — only rc-dec its RC children. See the `_ex` doc.
+            if let Some(nbf) = nested_buffer_free {
+                if let TypeKind::Path(p) = &fte.kind {
+                    if let Some(head) = p.segments.first() {
+                        if self.struct_types.contains_key(head.as_str())
+                            && !self.shared_types.contains_key(head.as_str())
                         {
-                            let name = head.clone();
-                            // Recurse with the SAME buffer-ownership: a deeper
-                            // nested non-shared struct's Vec buffers are freed by
-                            // the same agent as this level's.
-                            self.emit_nested_struct_shared_rc_decs(
-                                field_ptr,
-                                &name,
-                                drop_fn,
-                                owns_buffer_free,
-                            );
+                            if let Ok(field_ptr) = self.builder.build_struct_gep(
+                                st,
+                                struct_ptr,
+                                idx as u32,
+                                "nstr.nest.p",
+                            ) {
+                                let name = head.clone();
+                                self.emit_nested_struct_shared_rc_decs_ex(
+                                    field_ptr,
+                                    &name,
+                                    drop_fn,
+                                    nbf,
+                                    Some(nbf),
+                                );
+                            }
                         }
                     }
                 }
@@ -2490,7 +2533,90 @@ impl<'ctx> super::Codegen<'ctx> {
                     && (self.struct_owns_shared_field(&sname, &mut Vec::new())
                         || self.type_expr_has_drop_heap(te))
                 {
-                    if let Ok(field_ptr) = self.builder.build_struct_gep(
+                    // Inline vs heap-BOXED, recomputed from the SAME predicate
+                    // `coerce_to_payload_words` boxes on (`llvm_type_word_count(T)
+                    // > area`): a struct payload wider than its allotted payload
+                    // words was malloc'd at construction and only its box pointer
+                    // lives in word 0 (the `Block` of `struct Block { tail:
+                    // Option[Expr] }` used as `Expr.Blk(Block)` — the Option field
+                    // hits the enum-in-enum carve-out, undersizing the area to 1
+                    // word while `Block` is 4). Before this, the struct arm ALWAYS
+                    // read the payload inline, so for a boxed payload it walked the
+                    // box-POINTER word as if it were the struct's first field (a
+                    // garbage tag → the recursion was skipped) and never freed the
+                    // box — leaking the box AND every heap child reachable through
+                    // it (B-2026-06-20: the self-host render leak). Box: deref word
+                    // 0 to the heap struct, walk it (frees its buffers + rc-decs its
+                    // shared/Option children), then free the box. Inline: walk in
+                    // place. Pack/unpack (`coerce_to_payload_words` /
+                    // `reconstruct_payload_value`) and now drop all agree on the
+                    // predicate, so the three stay coherent.
+                    let boxed = self
+                        .struct_types
+                        .get(&sname)
+                        .map(|st| Self::llvm_type_word_count((*st).into()) > num_words)
+                        .unwrap_or(false);
+                    if boxed {
+                        let wp = self
+                            .builder
+                            .build_struct_gep(
+                                enum_heap,
+                                p_arg,
+                                word_idx as u32,
+                                &format!("{label}.nstr.box.wp"),
+                            )
+                            .unwrap();
+                        let w = self
+                            .builder
+                            .build_load(i64_t, wp, &format!("{label}.nstr.box.w"))
+                            .unwrap()
+                            .into_int_value();
+                        let box_ptr = self
+                            .builder
+                            .build_int_to_ptr(w, ptr_ty, &format!("{label}.nstr.box.p"))
+                            .unwrap();
+                        let is_null = self
+                            .builder
+                            .build_is_null(box_ptr, &format!("{label}.nstr.box.isnull"))
+                            .unwrap();
+                        let do_bb = self
+                            .context
+                            .append_basic_block(drop_fn, &format!("{label}.nstr.box.do"));
+                        let skip_bb = self
+                            .context
+                            .append_basic_block(drop_fn, &format!("{label}.nstr.box.skip"));
+                        self.builder
+                            .build_conditional_branch(is_null, skip_bb, do_bb)
+                            .unwrap();
+                        self.builder.position_at_end(do_bb);
+                        // The box owns the struct's heap children (no
+                        // `__karac_drop_struct_<S>` runs here), so the walker frees
+                        // the boxed struct's DIRECT Vec/String buffers
+                        // (`owns_buffer_free=true`) and rc-decs its shared /
+                        // `Option[shared]` children; then free the heap box itself.
+                        // `nested_buffer_free = Some(false)`: a nested heap STRUCT
+                        // field of the boxed payload (`IfNode.then_block: Block`)
+                        // may be MOVED OUT by the match binding (`let tb =
+                        // nd.then_block`), whose own value-drop frees that struct's
+                        // BUFFERS — re-freeing them here double-frees (the
+                        // regression that surfaced
+                        // `test_e2e_shared_enum_payload_with_nested_heap_struct_field`).
+                        // So recurse to rc-dec the nested struct's RC children (the
+                        // value-drop does NOT) while leaving its buffers to the
+                        // move-out owner: no double-free, no stranded RC child.
+                        self.emit_nested_struct_shared_rc_decs_ex(
+                            box_ptr,
+                            &sname,
+                            drop_fn,
+                            true,
+                            Some(false),
+                        );
+                        self.builder
+                            .build_call(self.free_fn, &[box_ptr.into()], "")
+                            .unwrap();
+                        self.builder.build_unconditional_branch(skip_bb).unwrap();
+                        self.builder.position_at_end(skip_bb);
+                    } else if let Ok(field_ptr) = self.builder.build_struct_gep(
                         enum_heap,
                         p_arg,
                         word_idx as u32,

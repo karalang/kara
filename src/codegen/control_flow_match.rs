@@ -351,6 +351,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the source slot so the scrutinee's struct drop skips the buffer
                 // the new binding now owns.
                 self.suppress_destructured_struct_pattern_cleanup(scrutinee, &arm.pattern);
+                // Shared-enum analog: a `match e { S(s) => s }` over a SHARED
+                // enum box (`scrut` = the RC box pointer) that MOVES a Vec/String
+                // payload out into a binding must zero that field's `cap` word IN
+                // THE BOX, so the box's `__karac_rc_drop_<E>` (whose Vec/String
+                // arm frees `cap > 0`) skips the buffer the binding now owns —
+                // else the binding (or the value it's moved into, e.g. a returned
+                // String) frees it AND the box's eventual rc-drop frees it again
+                // (double-free; the untested `shared enum E { S(String) }` move-out
+                // shape). The other suppressors above bail on shared enums; this
+                // is their missing shared sibling. `scrut` is the box pointer for
+                // a shared scrutinee — a no-op pointer-shape / non-shared self-bail.
+                if let Some(en) = self.variant_pattern_enum_name(&arm.pattern) {
+                    if scrut.is_pointer_value() {
+                        self.suppress_shared_enum_payload_move_out(
+                            scrut.into_pointer_value(),
+                            &en,
+                            &arm.pattern,
+                        );
+                    }
+                }
             }
 
             let arm_val = self.compile_tail_final_expr(&arm.body, tail)?;
@@ -2581,6 +2601,106 @@ impl<'ctx> super::Codegen<'ctx> {
                     slot_ptr,
                     word_index,
                     "match.dest.suppress.wp",
+                ) {
+                    let _ = self.builder.build_store(word_ptr, zero);
+                }
+            }
+        }
+    }
+
+    /// Shared-enum analog of [`Self::suppress_destructured_enum_payload_cleanup_at`]
+    /// (which bails on `layout.is_shared`). When a `match` arm over a SHARED-enum
+    /// RC box (`box_ptr`) MOVES a `Vec`/`String` payload field out into a binding,
+    /// zero that field's payload words IN THE BOX so the box's
+    /// `__karac_rc_drop_<E>` (whose `Vec`/`String` arm in `emit_shared_enum_field_drop`
+    /// frees `cap > 0`) skips the buffer the binding now owns. Without it the
+    /// binding (or a value it is moved into — a returned `String`) frees the buffer
+    /// AND the box's eventual rc-drop frees it again → double-free (the basic
+    /// `match e { S(s) => s }` over `shared enum E { S(String) }`).
+    ///
+    /// Only `EnumDropKind::VecOrString` fields directly inline in the box payload
+    /// are touched: a shared-handle payload is rc-managed (the arm rc-incs it on
+    /// extraction, the box rc-decs it), and a `NestedStruct` payload (inline or
+    /// heap-boxed) is freed by the box drop's struct recursion — neither aliases a
+    /// buffer the binding owns. The heap-word index mirrors
+    /// `emit_shared_enum_rc_drop_fn`'s `start_word + 2` (the `{rc, tag}` prefix).
+    pub(super) fn suppress_shared_enum_payload_move_out(
+        &self,
+        box_ptr: PointerValue<'ctx>,
+        enum_name: &str,
+        pattern: &Pattern,
+    ) {
+        let layout = match self.enum_layouts.get(enum_name) {
+            Some(l) => l.clone(),
+            None => return,
+        };
+        if !layout.is_shared {
+            return;
+        }
+        let heap_type = match self.shared_types.get(enum_name) {
+            Some(i) => i.heap_type,
+            None => return,
+        };
+        let variant_name = match &pattern.kind {
+            PatternKind::TupleVariant { path, .. } | PatternKind::Struct { path, .. } => {
+                match path.last() {
+                    Some(n) => n.as_str(),
+                    None => return,
+                }
+            }
+            _ => return,
+        };
+        let drop_kinds = match layout.field_drop_kinds.get(variant_name) {
+            Some(k) => k,
+            None => return,
+        };
+        let offsets = match layout.field_word_offsets.get(variant_name) {
+            Some(o) => o,
+            None => return,
+        };
+        // Declared-position indices of the payload fields this pattern *consumes*
+        // (moves into a binding) — same derivation as the non-shared suppressor.
+        let consumed_positions: Vec<usize> = match &pattern.kind {
+            PatternKind::TupleVariant { patterns, .. } => patterns
+                .iter()
+                .enumerate()
+                .filter(|(_, sub)| pattern_consumes_field(sub))
+                .map(|(i, _)| i)
+                .collect(),
+            PatternKind::Struct { fields, .. } => {
+                let field_names =
+                    match self.enum_variant_struct_field_names(enum_name, variant_name) {
+                        Some(n) => n,
+                        None => return,
+                    };
+                fields
+                    .iter()
+                    .filter(|fp| fp.pattern.as_ref().is_none_or(pattern_consumes_field))
+                    .filter_map(|fp| field_names.iter().position(|n| n == &fp.name))
+                    .collect()
+            }
+            _ => return,
+        };
+        let i64_t = self.context.i64_type();
+        let zero = i64_t.const_int(0, false);
+        for &pos in &consumed_positions {
+            if !matches!(
+                drop_kinds.get(pos),
+                Some(super::state::EnumDropKind::VecOrString)
+            ) {
+                continue;
+            }
+            let (start_word, num_words) = match offsets.get(pos) {
+                Some(o) => *o,
+                None => continue,
+            };
+            for w in 0..num_words {
+                let word_index = (start_word + 2 + w) as u32;
+                if let Ok(word_ptr) = self.builder.build_struct_gep(
+                    heap_type,
+                    box_ptr,
+                    word_index,
+                    "match.sh.suppress.wp",
                 ) {
                     let _ = self.builder.build_store(word_ptr, zero);
                 }
