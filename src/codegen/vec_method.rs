@@ -145,6 +145,83 @@ impl<'ctx> super::Codegen<'ctx> {
         self.build_nonshared_enum_value("Result", "Err", &[alloc_err])
     }
 
+    /// Load `{data, len}` (fields 0 and 1) from a `{ptr, len, cap}` String
+    /// struct at `data_ptr`. `tag` prefixes the IR value names.
+    fn load_string_data_len(
+        &self,
+        vec_ty: inkwell::types::StructType<'ctx>,
+        data_ptr: PointerValue<'ctx>,
+        tag: &str,
+    ) -> (PointerValue<'ctx>, IntValue<'ctx>) {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let data_p = self
+            .builder
+            .build_struct_gep(vec_ty, data_ptr, 0, &format!("{tag}.recv.ptr.p"))
+            .unwrap();
+        let data = self
+            .builder
+            .build_load(ptr_ty, data_p, &format!("{tag}.recv.ptr"))
+            .unwrap()
+            .into_pointer_value();
+        let len_p = self
+            .builder
+            .build_struct_gep(vec_ty, data_ptr, 1, &format!("{tag}.recv.len.p"))
+            .unwrap();
+        let len = self
+            .builder
+            .build_load(i64_t, len_p, &format!("{tag}.recv.len"))
+            .unwrap()
+            .into_int_value();
+        (data, len)
+    }
+
+    /// Call an allocating String→String runtime helper whose final parameter is
+    /// an `*mut i64 out_len` and which returns the fresh buffer pointer, then
+    /// build the `{ptr, out_len, out_len}` (cap == len) String aggregate. `args`
+    /// are the helper's leading parameters (the out-len slot is appended here).
+    fn build_string_xform_result(
+        &self,
+        func: FunctionValue<'ctx>,
+        mut args: Vec<BasicMetadataValueEnum<'ctx>>,
+        name: &str,
+    ) -> BasicValueEnum<'ctx> {
+        let i64_t = self.context.i64_type();
+        let fn_val = self.current_fn.unwrap();
+        let out_len_slot = self.create_entry_alloca(fn_val, "xform.outlen", i64_t.into());
+        args.push(out_len_slot.into());
+        let new_ptr = self
+            .builder
+            .build_call(func, &args, name)
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let new_len = self
+            .builder
+            .build_load(i64_t, out_len_slot, "xform.len")
+            .unwrap()
+            .into_int_value();
+        let str_ty = self.vec_struct_type();
+        let mut out = str_ty.get_undef();
+        out = self
+            .builder
+            .build_insert_value(out, new_ptr, 0, "xform.ptr")
+            .unwrap()
+            .into_struct_value();
+        out = self
+            .builder
+            .build_insert_value(out, new_len, 1, "xform.len.f")
+            .unwrap()
+            .into_struct_value();
+        out = self
+            .builder
+            .build_insert_value(out, new_len, 2, "xform.cap")
+            .unwrap()
+            .into_struct_value();
+        out.into()
+    }
+
     pub(super) fn compile_vec_method(
         &mut self,
         var_name: &str,
@@ -1037,6 +1114,74 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(str_ty, result_slot, "ss.load")
                     .unwrap();
                 Ok(result)
+            }
+            // Allocating String→String transforms via the runtime helpers
+            // (`karac_string_{trim,to_lowercase,to_uppercase}`), which compute the
+            // identical full-Unicode result as the interpreter's Rust stdlib —
+            // the only way to keep the two backends bit-identical on Unicode case
+            // mapping / whitespace without shipping Unicode tables into codegen.
+            // Each returns a fresh `{ptr, out_len, out_len}` String (null + 0 for
+            // an empty result, which becomes `{null, 0, 0}`).
+            "trim" | "to_lowercase" | "to_uppercase" => {
+                let (recv_data, recv_len) = self.load_string_data_len(vec_ty, data_ptr, "sx");
+                let func = match method {
+                    "trim" => self.karac_string_trim_fn,
+                    "to_lowercase" => self.karac_string_to_lowercase_fn,
+                    "to_uppercase" => self.karac_string_to_uppercase_fn,
+                    _ => unreachable!(),
+                };
+                Ok(self.build_string_xform_result(
+                    func,
+                    vec![recv_data.into(), recv_len.into()],
+                    "str.xform",
+                ))
+            }
+            // `String.replace(from, to) -> String` via `karac_string_replace`
+            // (Rust `str::replace`). Receiver + both args are passed as
+            // `(ptr, len)` pairs.
+            "replace" => {
+                if args.len() != 2 {
+                    return Err("String.replace requires (from, to) arguments".to_string());
+                }
+                let (recv_data, recv_len) = self.load_string_data_len(vec_ty, data_ptr, "rp");
+                let (from_data, from_len) = {
+                    let s = self.compile_expr(&args[0].value)?.into_struct_value();
+                    (
+                        self.builder
+                            .build_extract_value(s, 0, "rp.from.ptr")
+                            .unwrap()
+                            .into_pointer_value(),
+                        self.builder
+                            .build_extract_value(s, 1, "rp.from.len")
+                            .unwrap()
+                            .into_int_value(),
+                    )
+                };
+                let (to_data, to_len) = {
+                    let s = self.compile_expr(&args[1].value)?.into_struct_value();
+                    (
+                        self.builder
+                            .build_extract_value(s, 0, "rp.to.ptr")
+                            .unwrap()
+                            .into_pointer_value(),
+                        self.builder
+                            .build_extract_value(s, 1, "rp.to.len")
+                            .unwrap()
+                            .into_int_value(),
+                    )
+                };
+                Ok(self.build_string_xform_result(
+                    self.karac_string_replace_fn,
+                    vec![
+                        recv_data.into(),
+                        recv_len.into(),
+                        from_data.into(),
+                        from_len.into(),
+                        to_data.into(),
+                        to_len.into(),
+                    ],
+                    "str.replace",
+                ))
             }
             // `String.repeat(n) -> String` — receiver bytes concatenated `n`
             // times into one fresh allocation; `n <= 0` yields the empty String

@@ -304,6 +304,42 @@ impl<'a> super::Interpreter<'a> {
                 }
                 return None;
             }
+            "trim" | "to_lowercase" | "to_uppercase" => {
+                // Allocating String→String (typed in stdlib_seq.rs). Direct Rust
+                // stdlib so the interpreter and the codegen runtime helpers
+                // (`karac_string_{trim,to_lowercase,to_uppercase}`) compute the
+                // identical full-Unicode result. Only a String receiver reaches
+                // here (the SIMD vector path runs earlier; non-String falls
+                // through to None).
+                if let Value::String(s) = &obj {
+                    let r = match method {
+                        "trim" => s.trim().to_string(),
+                        "to_lowercase" => s.to_lowercase(),
+                        "to_uppercase" => s.to_uppercase(),
+                        _ => unreachable!(),
+                    };
+                    return Some(Value::String(r));
+                }
+                return None;
+            }
+            "replace" => {
+                // `String.replace(from, to) -> String` (typed in stdlib_seq.rs):
+                // every non-overlapping `from` replaced with `to`, Rust
+                // `str::replace`. The SIMD `Vector.replace` is dispatched by
+                // `try_eval_vector_method`, which runs BEFORE this handler, so a
+                // Vector receiver never reaches here — the String guard plus the
+                // None fall-through keeps a non-String `replace` unhandled.
+                if let Value::String(s) = &obj {
+                    if let [from_a, to_a] = args {
+                        let from_v = self.eval_expr_inner(&from_a.value);
+                        let to_v = self.eval_expr_inner(&to_a.value);
+                        if let (Value::String(from), Value::String(to)) = (from_v, to_v) {
+                            return Some(Value::String(s.replace(&from, &to)));
+                        }
+                    }
+                }
+                return None;
+            }
             "as_slice" | "as_slice_mut" => {
                 // Slice 3 — produce a Value::Slice that shares the
                 // source's `Arc<RwLock<Vec<Value>>>` storage. Mutation

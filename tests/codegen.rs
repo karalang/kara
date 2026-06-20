@@ -3038,6 +3038,35 @@ fn main() {
         }
     }
 
+    /// Allocating String→String methods (`trim` / `replace` / `to_lowercase` /
+    /// `to_uppercase`) lowered through the `karac_string_*` runtime helpers, so
+    /// codegen computes the byte-identical full-Unicode result as the
+    /// interpreter (tests/interpreter.rs::test_string_trim_replace_case_interpreter)
+    /// — including length-changing case maps (`ß` → `SS`) and Unicode `é`.
+    #[test]
+    fn e2e_string_trim_replace_case_codegen() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let s: String = \"  Hello World  \";\n\
+                 println(s.trim());\n\
+                 println(s);\n\
+                 println(\"HeLLo\".to_lowercase());\n\
+                 println(\"HeLLo\".to_uppercase());\n\
+                 println(\"a-b-c\".replace(\"-\", \"+\"));\n\
+                 println(\"aaa\".replace(\"a\", \"bb\"));\n\
+                 println(\"straße\".to_uppercase());\n\
+                 println(\"café\".to_uppercase());\n\
+                 println(\"   \".trim());\n\
+                 println(\"Hello World\".to_lowercase().replace(\" \", \"_\"));\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "Hello World\n  Hello World  \nhello\nHELLO\na+b+c\nbbbbbb\nSTRASSE\nCAFÉ\n\nhello_world\n"
+            );
+        }
+    }
+
     #[test]
     fn e2e_string_method_nonident_receiver_codegen() {
         // String collection methods on a NON-identifier receiver — a string

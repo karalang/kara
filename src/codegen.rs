@@ -2510,6 +2510,16 @@ pub(super) struct Codegen<'ctx> {
     /// non-allocating slice; returns `data + start`. Backs borrowed
     /// `{ptr, len, cap=0}` String views used as non-retained map keys.
     pub(crate) karac_string_slice_borrow_fn: FunctionValue<'ctx>,
+    /// Allocating String→String transforms (full Unicode, matching the
+    /// interpreter's Rust stdlib). Each `(data, len, *mut out_len) -> ptr`
+    /// returns a fresh NUL-terminated buffer and writes the result byte length
+    /// to `out_len` (null + 0 for an empty result). See `runtime/src/clone.rs`.
+    pub(crate) karac_string_to_lowercase_fn: FunctionValue<'ctx>,
+    pub(crate) karac_string_to_uppercase_fn: FunctionValue<'ctx>,
+    pub(crate) karac_string_trim_fn: FunctionValue<'ctx>,
+    /// `karac_string_replace(data, len, from, from_len, to, to_len, *mut out_len)
+    /// -> ptr` — every `from` replaced with `to` (Rust `str::replace`).
+    pub(crate) karac_string_replace_fn: FunctionValue<'ctx>,
     /// Per-type clone function cache. Keyed on the canonical mangled type
     /// name (`display_mangle_te`). Each emitted fn has signature
     /// `void karac_clone_<typename>(*const T src, *mut T dst)` — caller
@@ -4768,6 +4778,36 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // Allocating String→String transforms (full Unicode, matching the
+        // interpreter). `(data: ptr, len: i64, out_len: ptr) -> ptr`: returns a
+        // fresh NUL-terminated buffer, writes the result byte length to `out_len`.
+        let string_xform_ty = ptr_type.fn_type(&[ptr_md, i64_ty, ptr_md], false);
+        let karac_string_to_lowercase_fn = module.add_function(
+            "karac_string_to_lowercase",
+            string_xform_ty,
+            Some(Linkage::External),
+        );
+        let karac_string_to_uppercase_fn = module.add_function(
+            "karac_string_to_uppercase",
+            string_xform_ty,
+            Some(Linkage::External),
+        );
+        let karac_string_trim_fn = module.add_function(
+            "karac_string_trim",
+            string_xform_ty,
+            Some(Linkage::External),
+        );
+        // karac_string_replace(data, len, from, from_len, to, to_len, out_len) -> ptr
+        let string_replace_ty = ptr_type.fn_type(
+            &[ptr_md, i64_ty, ptr_md, i64_ty, ptr_md, i64_ty, ptr_md],
+            false,
+        );
+        let karac_string_replace_fn = module.add_function(
+            "karac_string_replace",
+            string_replace_ty,
+            Some(Linkage::External),
+        );
+
         // ── Error return trace runtime ────────────────────────────────
         // karac_error_trace_push(file_ptr: ptr, file_len: i64, line: i32, col: i32) -> void
         let i32_ty = context.i32_type();
@@ -5045,6 +5085,10 @@ impl<'ctx> Codegen<'ctx> {
             karac_string_clone_fn,
             karac_string_slice_fn,
             karac_string_slice_borrow_fn,
+            karac_string_to_lowercase_fn,
+            karac_string_to_uppercase_fn,
+            karac_string_trim_fn,
+            karac_string_replace_fn,
             clone_fn_cache: HashMap::new(),
             try_clone_fn_cache: HashMap::new(),
             drop_fn_cache: HashMap::new(),

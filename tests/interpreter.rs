@@ -9625,6 +9625,32 @@ fn test_string_substring_interpreter() {
 }
 
 #[test]
+fn test_string_trim_replace_case_interpreter() {
+    // Allocating String→String methods (full Unicode, Rust stdlib): trim,
+    // replace, to_lowercase, to_uppercase. The case methods can change byte
+    // length (`ß` → `SS`); trim is whitespace-only and leaves the receiver
+    // untouched (returns a fresh owned copy). Mirrored A/B by
+    // tests/codegen.rs::e2e_string_trim_replace_case_codegen.
+    let output = run(r#"fn main() {
+            let s: String = "  Hello World  ";
+            println(s.trim());
+            println(s);
+            println("HeLLo".to_lowercase());
+            println("HeLLo".to_uppercase());
+            println("a-b-c".replace("-", "+"));
+            println("aaa".replace("a", "bb"));
+            println("straße".to_uppercase());
+            println("café".to_uppercase());
+            println("   ".trim());
+            println("Hello World".to_lowercase().replace(" ", "_"));
+        }"#);
+    assert_eq!(
+        output,
+        "Hello World\n  Hello World  \nhello\nHELLO\na+b+c\nbbbbbb\nSTRASSE\nCAFÉ\n\nhello_world\n"
+    );
+}
+
+#[test]
 fn test_string_substring_two_arg_interpreter() {
     // Two-arg `substring(start, end)` (byte range `[start, end)`): prefix /
     // suffix / empty-when-equal / inverted-bounds (end<start) / end-clamped /

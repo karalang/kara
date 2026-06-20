@@ -164,6 +164,121 @@ pub unsafe extern "C" fn karac_string_slice(
     new_data
 }
 
+/// Allocate a fresh NUL-terminated heap buffer holding `bytes`, write its
+/// length to `*out_len`, and return the buffer pointer. Empty input returns
+/// `null` + `*out_len == 0` (the `karac_string_slice` empty convention; codegen
+/// builds a `{null, 0, 0}` String). The buffer contract matches
+/// `karac_string_slice`: `cap == len`, the allocation is `len + 1` bytes.
+///
+/// # Safety
+/// `out_len` must point to a writable `i64`.
+unsafe fn alloc_string_result(bytes: &[u8], out_len: *mut i64) -> *mut u8 {
+    let n = bytes.len();
+    *out_len = n as i64;
+    if n == 0 {
+        return ptr::null_mut();
+    }
+    let layout = Layout::array::<u8>(n + 1).unwrap();
+    let new_data = alloc(layout);
+    ptr::copy_nonoverlapping(bytes.as_ptr(), new_data, n);
+    *new_data.add(n) = 0;
+    new_data
+}
+
+/// Borrow `(data, len)` as a `&str`. The Kāra String invariant guarantees valid
+/// UTF-8, so this never fails in practice; on the impossible invalid-UTF-8 path
+/// it fatally exits rather than returning silently-wrong bytes.
+///
+/// # Safety
+/// `data` must point to a readable buffer of at least `len` bytes when `len > 0`.
+unsafe fn str_from_raw<'a>(data: *const u8, len: i64) -> &'a str {
+    let bytes: &[u8] = if len <= 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(data, len as usize)
+    };
+    match std::str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => {
+            crate::fatal::eprint_fmt(format_args!(
+                "runtime error: internal: String buffer was not valid UTF-8\n"
+            ));
+            std::process::exit(1);
+        }
+    }
+}
+
+/// `String.to_lowercase()` — full Unicode lowercase (Rust `str::to_lowercase`),
+/// matching the interpreter exactly. Returns a fresh owned buffer (the mapping
+/// can change the byte length, e.g. `İ` → `i̇`).
+///
+/// # Safety
+/// `data`/`len` are a Kāra String body; `out_len` must be writable. See
+/// [`alloc_string_result`].
+#[no_mangle]
+pub unsafe extern "C" fn karac_string_to_lowercase(
+    data: *const u8,
+    len: i64,
+    out_len: *mut i64,
+) -> *mut u8 {
+    let lowered = str_from_raw(data, len).to_lowercase();
+    alloc_string_result(lowered.as_bytes(), out_len)
+}
+
+/// `String.to_uppercase()` — full Unicode uppercase (Rust `str::to_uppercase`;
+/// e.g. `ß` → `SS`). Mirror of [`karac_string_to_lowercase`].
+///
+/// # Safety
+/// See [`karac_string_to_lowercase`].
+#[no_mangle]
+pub unsafe extern "C" fn karac_string_to_uppercase(
+    data: *const u8,
+    len: i64,
+    out_len: *mut i64,
+) -> *mut u8 {
+    let upped = str_from_raw(data, len).to_uppercase();
+    alloc_string_result(upped.as_bytes(), out_len)
+}
+
+/// `String.trim()` — strip leading and trailing Unicode whitespace (Rust
+/// `str::trim`), returning a fresh OWNED copy of the trimmed range (Kāra's trim
+/// allocates rather than borrowing a view).
+///
+/// # Safety
+/// See [`karac_string_to_lowercase`].
+#[no_mangle]
+pub unsafe extern "C" fn karac_string_trim(
+    data: *const u8,
+    len: i64,
+    out_len: *mut i64,
+) -> *mut u8 {
+    let trimmed = str_from_raw(data, len).trim();
+    alloc_string_result(trimmed.as_bytes(), out_len)
+}
+
+/// `String.replace(from, to)` — replace every non-overlapping occurrence of
+/// `from` with `to` (Rust `str::replace`). Returns a fresh owned buffer.
+///
+/// # Safety
+/// `data`/`from`/`to` are Kāra String bodies (their `*_len` byte counts);
+/// `out_len` must be writable. See [`alloc_string_result`].
+#[no_mangle]
+pub unsafe extern "C" fn karac_string_replace(
+    data: *const u8,
+    len: i64,
+    from: *const u8,
+    from_len: i64,
+    to: *const u8,
+    to_len: i64,
+    out_len: *mut i64,
+) -> *mut u8 {
+    let haystack = str_from_raw(data, len);
+    let from_s = str_from_raw(from, from_len);
+    let to_s = str_from_raw(to, to_len);
+    let replaced = haystack.replace(from_s, to_s);
+    alloc_string_result(replaced.as_bytes(), out_len)
+}
+
 /// Borrowed (non-allocating) sibling of `karac_string_slice`: validates the
 /// `start..end` range against `(data, len)` with the *identical* bounds and
 /// UTF-8 char-boundary checks (same fatal `exit(1)` messages), then returns a

@@ -27174,6 +27174,44 @@ fn char_to_digit_rejects_non_u32_radix() {
 }
 
 #[test]
+fn string_trim_replace_case_return_string() {
+    // trim/to_lowercase/to_uppercase take no args and return String; replace
+    // takes two String args and returns String. All bind to a String.
+    typecheck_ok(
+        "fn main() {\n\
+         let s: String = \"  x  \";\n\
+         let _a: String = s.trim();\n\
+         let _b: String = s.to_lowercase();\n\
+         let _c: String = s.to_uppercase();\n\
+         let _d: String = s.replace(\"x\", \"y\");\n\
+         }",
+    );
+}
+
+#[test]
+fn string_trim_rejects_arguments() {
+    let errs = typecheck_errors("fn main() { let s: String = \"x\"; let _ = s.trim(\"y\"); }");
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("trim") && e.to_string().contains("no arguments")),
+        "expected a trim no-arguments error, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn string_replace_rejects_non_string_arg() {
+    let errs =
+        typecheck_errors("fn main() { let s: String = \"x\"; let _ = s.replace(\"x\", 5); }");
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("replace") && e.to_string().contains("String")),
+        "expected a replace String-argument error, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn unqualified_struct_variant_construction_typechecks() {
     // B-2026-06-13-12: an UNQUALIFIED struct-variant construction
     // `Variant { .. }` (no `Enum.` qualifier) must typecheck. Pre-fix the

@@ -442,6 +442,62 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Str
             }
+            "trim" | "to_lowercase" | "to_uppercase" => {
+                // trim() -> String: a fresh owned copy with leading/trailing
+                // Unicode whitespace removed (Rust `str::trim`, owned rather
+                // than a borrowed view). to_lowercase()/to_uppercase() -> String:
+                // full Unicode case mapping (Rust `str::to_{lower,upper}case`,
+                // which can change byte length — `ß`→`SS`). All three allocate a
+                // new String and match the interpreter's Rust-stdlib semantics
+                // exactly (codegen routes through `karac_string_{trim,
+                // to_lowercase,to_uppercase}` so the two backends never diverge).
+                if !args.is_empty() {
+                    self.type_error(
+                        format!("'{method}' takes no arguments, found {}", args.len()),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                }
+                Type::Str
+            }
+            "replace" => {
+                // replace(from: String, to: String) -> String: every
+                // non-overlapping occurrence of `from` replaced with `to`
+                // (Rust `str::replace`). Allocating String→String. Both
+                // arguments are String/str-like. (SIMD `Vector.replace` is a
+                // distinct lane-replace handled on the vector receiver path.)
+                if args.len() != 2 {
+                    self.type_error(
+                        format!(
+                            "'replace' expects 2 arguments (from, to), found {}",
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    for arg in args {
+                        let arg_ty = self.infer_expr(&arg.value);
+                        if !is_str_like(&arg_ty) && arg_ty != Type::Error {
+                            self.type_error(
+                                format!(
+                                    "'replace' expects String arguments, found '{}'",
+                                    type_display(&arg_ty)
+                                ),
+                                arg.value.span.clone(),
+                                TypeErrorKind::TypeMismatch,
+                            );
+                        }
+                    }
+                }
+                Type::Str
+            }
             "push_str" => {
                 // push_str(other: String) -> (). Mutating append; receiver
                 // must be a mutable binding (ownership.rs classifies this
