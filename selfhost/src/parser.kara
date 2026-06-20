@@ -74,18 +74,17 @@ impl Parser {
         Parser { tokens: tokens, pos: 0, loop_labels: Vec.new() }
     }
 
-    // True iff `name` is currently an in-scope loop label. Compares against an
-    // owned copy of `name` (karac does not yet compare `String` with
-    // `ref String` directly — a value-vs-borrow `==` ergonomic gap).
+    // True iff `name` is currently an in-scope loop label. The owned stack
+    // entries compare directly against the borrowed `name` — comparison
+    // operators auto-deref reference operands (`String == ref String`).
     fn label_known(ref self, name: ref String) -> bool {
-        let target = dup_str(name);
         let mut i = 0;
         let mut found = false;
         loop {
             if i >= self.loop_labels.len() {
                 break;
             }
-            if self.loop_labels[i] == target {
+            if self.loop_labels[i] == name {
                 found = true;
                 break;
             }

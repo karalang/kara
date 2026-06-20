@@ -27277,3 +27277,44 @@ fn comptime_block_infers_inner_type_no_cascade() {
         result.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
+
+// ── Comparison auto-derefs reference operands ───────────────────
+// `==` / `!=` / ordering accept a value compared against a borrow of
+// the same type (`String == ref String`). Before the fix the operator
+// arms compared the raw operand types and rejected the pair with
+// `cannot compare 'String' and 'ref String'`, forcing self-hosted code
+// (e.g. `parser.kara::label_known`) to make a move-free owned copy. The
+// arms now strip outer `ref`/`mut ref` from both sides first.
+
+#[test]
+fn compare_value_against_borrow_of_same_type_ok() {
+    // Value-vs-borrow and borrow-vs-value, `==` / `!=`, plus an ordering
+    // op, across String and a scalar — all well-formed now.
+    typecheck_ok(
+        "fn s_eq(a: String, b: ref String) -> bool { return a == b }\n\
+         fn s_eq_rev(a: ref String, b: String) -> bool { return a == b }\n\
+         fn s_ne(a: String, b: ref String) -> bool { return a != b }\n\
+         fn s_lt(a: String, b: ref String) -> bool { return a < b }\n\
+         fn i_eq(a: i64, b: ref i64) -> bool { return a == b }\n\
+         fn i_lt(a: ref i64, b: i64) -> bool { return a < b }\n",
+    );
+}
+
+#[test]
+fn compare_both_borrowed_same_type_ok() {
+    // Both operands borrowed (`ref String == ref String`) also strips to
+    // the underlying type on each side.
+    typecheck_ok("fn s_eq(a: ref String, b: ref String) -> bool { return a == b }\n");
+}
+
+#[test]
+fn compare_borrow_against_unrelated_type_still_rejected() {
+    // Auto-deref must not paper over a genuine mismatch: `ref String` vs
+    // `i64` still fails after stripping the reference.
+    let errors = typecheck_errors("fn bad(a: ref String, b: i64) -> bool { return a == b }\n");
+    assert!(
+        errors.iter().any(|e| e.message.contains("cannot compare")),
+        "expected a 'cannot compare' error; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}

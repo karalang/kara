@@ -2622,6 +2622,24 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `usize.lt(a, b)` lowers to `icmp ult` rather than `icmp slt` — without
     /// which LLVM emits the signed-aware `subs + cinc + asr` mid-point
     /// computation for `(lo + hi) / 2` shapes even on `u`-typed sources.
+    /// Load a borrowed comparison operand (`ref T`, an opaque pointer) through
+    /// to its pointee, using the sibling operand's LLVM type as the pointee
+    /// type. Used by `compile_binop_typed`'s comparison auto-deref — see the
+    /// rationale there. If `operand` is not actually a pointer the value is
+    /// returned unchanged (defensive; callers gate on `is_pointer_value`).
+    fn load_ref_operand(
+        &self,
+        operand: BasicValueEnum<'ctx>,
+        pointee_ty: BasicTypeEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        if !operand.is_pointer_value() {
+            return operand;
+        }
+        self.builder
+            .build_load(pointee_ty, operand.into_pointer_value(), "cmp.ref.deref")
+            .unwrap()
+    }
+
     pub(super) fn compile_binop_typed(
         &mut self,
         op: &BinOp,
@@ -2629,6 +2647,30 @@ impl<'ctx> super::Codegen<'ctx> {
         rhs: BasicValueEnum<'ctx>,
         is_unsigned: bool,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // Comparison auto-deref: the typechecker (`infer_binary`) accepts a
+        // value compared against a borrow of the same type (`String ==
+        // ref String`) by stripping references from the operand types. A
+        // `ref T` operand that reaches here as a raw pointer (rather than
+        // already deref'd by `load_variable`'s ref-param path) must be loaded
+        // through to its pointee before the value-wise compare. We only fire
+        // when EXACTLY ONE side is a pointer and the sibling is a concrete
+        // value (struct / int / float): that sibling's LLVM type IS the
+        // pointee type, so the load is well-typed. A both-pointer pair is
+        // left untouched — that is the `shared struct` RC-pointer case the
+        // dedicated arm below diagnoses, not a borrowed scalar/string.
+        let (lhs, rhs) = if matches!(
+            op,
+            BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq
+        ) {
+            match (lhs.is_pointer_value(), rhs.is_pointer_value()) {
+                (true, false) => (self.load_ref_operand(lhs, rhs.get_type()), rhs),
+                (false, true) => (lhs, self.load_ref_operand(rhs, lhs.get_type())),
+                _ => (lhs, rhs),
+            }
+        } else {
+            (lhs, rhs)
+        };
+
         // SIMD vector path: element-wise arithmetic on `<N x T>` operands
         // (design.md § Portable SIMD). Checked before the scalar paths since a
         // VectorValue would panic in `into_int_value()` / `to_float`. The

@@ -35,6 +35,18 @@ use super::types::{
 };
 use super::TypeErrorKind;
 
+/// Auto-deref reference operands for comparison operators (`==`, `!=`,
+/// `<`, `<=`, `>`, `>=`): comparing a value against a borrow of the same
+/// type (`String == ref String`) is well-formed because the comparison
+/// only reads through the borrow. Recurses through nested `ref` / `mut ref`
+/// (mirrors `stdlib_seq::is_str_like`).
+fn strip_refs_for_compare(ty: &Type) -> &Type {
+    match ty {
+        Type::Ref(inner) | Type::MutRef(inner) => strip_refs_for_compare(inner),
+        _ => ty,
+    }
+}
+
 /// The `[elem, shape]` generic-arg list of a `Tensor[T, Shape]` type,
 /// peeling one `ref` / `mut ref`. `None` for any non-tensor type. Used by
 /// `infer_binary` to route element-wise tensor arithmetic and by the
@@ -1163,7 +1175,12 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
             BinOp::Eq | BinOp::NotEq => {
-                if !types_compatible(&left_ty, &right_ty) {
+                // Comparison auto-derefs reference operands so a value can be
+                // compared against a borrow of the same type (`String ==
+                // ref String`); the comparison only reads through the borrow.
+                let cmp_left = strip_refs_for_compare(&left_ty);
+                let cmp_right = strip_refs_for_compare(&right_ty);
+                if !types_compatible(cmp_left, cmp_right) {
                     self.type_error(
                         format!(
                             "cannot compare '{}' and '{}'",
@@ -1173,11 +1190,11 @@ impl<'a> super::TypeChecker<'a> {
                         span.clone(),
                         TypeErrorKind::InvalidBinaryOp,
                     );
-                } else if !self.type_supports_partial_eq(&left_ty) {
+                } else if !self.type_supports_partial_eq(cmp_left) {
                     self.type_error(
                         format!(
                             "type '{}' does not implement Eq; add #[derive(Eq)] to use == or !=",
-                            type_display(&left_ty)
+                            type_display(cmp_left)
                         ),
                         span.clone(),
                         TypeErrorKind::InvalidBinaryOp,
@@ -1186,7 +1203,10 @@ impl<'a> super::TypeChecker<'a> {
                 Type::Bool
             }
             BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq => {
-                if !types_compatible(&left_ty, &right_ty) {
+                // See `Eq` arm: reference operands auto-deref for comparison.
+                let cmp_left = strip_refs_for_compare(&left_ty);
+                let cmp_right = strip_refs_for_compare(&right_ty);
+                if !types_compatible(cmp_left, cmp_right) {
                     self.type_error(
                         format!(
                             "cannot compare '{}' and '{}'",
@@ -1196,8 +1216,8 @@ impl<'a> super::TypeChecker<'a> {
                         span.clone(),
                         TypeErrorKind::InvalidBinaryOp,
                     );
-                } else if matches!(&left_ty, Type::Named { name, .. } if self.env.distinct_types.contains_key(name))
-                    && !self.type_supports_partial_ord(&left_ty)
+                } else if matches!(cmp_left, Type::Named { name, .. } if self.env.distinct_types.contains_key(name))
+                    && !self.type_supports_partial_ord(cmp_left)
                 {
                     // Distinct types are opaque — ordering comparisons require
                     // an explicit `#[derive(Ord)]` (design.md § Distinct Types:
@@ -1207,7 +1227,7 @@ impl<'a> super::TypeChecker<'a> {
                         format!(
                             "type '{}' does not implement Ord; add #[derive(Ord)] to use \
                              <, <=, >, or >=",
-                            type_display(&left_ty)
+                            type_display(cmp_left)
                         ),
                         span.clone(),
                         TypeErrorKind::InvalidBinaryOp,

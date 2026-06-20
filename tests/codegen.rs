@@ -47982,4 +47982,43 @@ fn main() {
             "trait inline hint should reach impl method IR:\n{ir}"
         );
     }
+
+    // ── Comparison auto-derefs reference operands ───────────────────
+    // The typechecker now accepts `value == borrow` of the same type
+    // (`String == ref String`). At codegen, `load_variable` already
+    // derefs ref-param / ref-bound-local operands to their pointee value
+    // before the value-wise compare, and `compile_binop_typed` additionally
+    // loads a borrowed operand that reaches it as a raw pointer. This E2E
+    // pins the runtime truth values across both operand orders and `==` /
+    // `!=` / `<`, for `String` and a scalar — the shape the self-hosted
+    // parser's `label_known` lookup needs (was worked around with `dup_str`).
+    #[test]
+    fn e2e_compare_value_against_borrow_of_same_type() {
+        if let Some(out) = run_program(
+            "fn s_eq_rb(a: ref String, b: String) -> bool { return a == b }\n\
+             fn s_eq_br(a: String, b: ref String) -> bool { return a == b }\n\
+             fn s_ne_rb(a: ref String, b: String) -> bool { return a != b }\n\
+             fn s_lt_rb(a: ref String, b: String) -> bool { return a < b }\n\
+             fn i_eq_rb(a: ref i64, b: i64) -> bool { return a == b }\n\
+             fn main() {\n\
+             \x20   let key: String = \"hello\";\n\
+             \x20   let same: String = \"hello\";\n\
+             \x20   let diff: String = \"world\";\n\
+             \x20   let apple: String = \"apple\";\n\
+             \x20   let world2: String = \"world\";\n\
+             \x20   println(s_eq_rb(key, same));\n\
+             \x20   println(s_eq_br(apple, key));\n\
+             \x20   println(s_ne_rb(key, diff));\n\
+             \x20   println(s_lt_rb(key, world2));\n\
+             \x20   let n: i64 = 42i64;\n\
+             \x20   println(i_eq_rb(n, 42i64));\n\
+             \x20   println(i_eq_rb(n, 7i64));\n\
+             }\n",
+        ) {
+            // s_eq_rb(\"hello\",\"hello\")=true; s_eq_br(\"apple\",&\"hello\")=false;
+            // s_ne_rb(\"hello\",\"world\")=true; s_lt_rb(\"hello\",\"world\")=true;
+            // i_eq_rb(42,42)=true; i_eq_rb(42,7)=false.
+            assert_eq!(out, "true\nfalse\ntrue\ntrue\ntrue\nfalse\n");
+        }
+    }
 }
