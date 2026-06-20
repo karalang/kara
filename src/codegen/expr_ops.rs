@@ -3755,12 +3755,29 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_int_compare(IntPredicate::EQ, l_len, r_len, "len_eq")
                     .unwrap();
-                // memcmp the data.
+                // memcmp the data over min(l_len, r_len) — NEVER `l_len`
+                // unconditionally: when `l_len > r_len` that reads past the
+                // (shorter) right buffer's end, a heap-buffer-overflow ASAN
+                // flags (and a latent OOB read in release). The `len_eq` AND
+                // below already forces the unequal-length case to `false`, so
+                // clamping the compare span to the shorter string is both
+                // memory-safe and semantics-preserving (when lengths match,
+                // `min_len == l_len == r_len`, identical to the old code).
+                // Mirrors the `Lt/Gt` arm, which already clamps to `min_len`.
+                let l_shorter = self
+                    .builder
+                    .build_int_compare(IntPredicate::ULT, l_len, r_len, "l_shorter")
+                    .unwrap();
+                let min_len = self
+                    .builder
+                    .build_select(l_shorter, l_len, r_len, "min_len")
+                    .unwrap()
+                    .into_int_value();
                 let cmp_result = self
                     .builder
                     .build_call(
                         self.memcmp_fn,
-                        &[l_ptr.into(), r_ptr.into(), l_len.into()],
+                        &[l_ptr.into(), r_ptr.into(), min_len.into()],
                         "memcmp",
                     )
                     .unwrap()

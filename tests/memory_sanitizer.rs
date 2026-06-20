@@ -11951,4 +11951,87 @@ fn main() {
             "vec_filled_2d_rows_independent",
         );
     }
+
+    // ── `String ==` / `!=` must clamp its memcmp span to min(len) ──
+    //
+    // The equality path used to `memcmp(l_ptr, r_ptr, l_len)` unconditionally
+    // (the `Lt/Gt` path already clamped to `min_len`). When `l_len > r_len`
+    // that reads past the end of the SHORTER right buffer — a heap-buffer-
+    // overflow (ASAN-caught here, a latent OOB read in release). The
+    // `len_eq && data_eq` AND already makes unequal-length operands compare
+    // `false`, so clamping the compare span to `min(l_len, r_len)` is both
+    // memory-safe and semantics-preserving.
+    //
+    // This surfaced during phase-12 self-hosting slice 3a: the parser's
+    // `current_ident_matches` borrow-matches the `String` payload out of an
+    // indexed place (`self.tokens[self.pos].token`) and compares it against a
+    // short keyword (`dup_str(n) == "Fn"`). A type name longer than the keyword
+    // (`l_len > r_len`) overran the keyword literal's buffer. It was originally
+    // mis-attributed to a double-free of the borrowed payload; the borrow-match
+    // itself is sound (the indexed enum scrutinee is deep-cloned, so the bound
+    // payload owns an independent buffer freed exactly once). The faithful
+    // failing shape is reproduced below: a multi-variant enum whose `String`
+    // payload is borrow-matched out of a `Vec` element a struct owns, then
+    // compared against shorter literals. The payloads share a prefix with the
+    // shorter literal (`"OnceFnHandler"` vs `"OnceFn"`) so the read runs past
+    // the short buffer's end rather than stopping at a leading mismatch.
+    #[test]
+    fn asan_string_eq_mismatched_len_no_overread_in_indexed_payload_match() {
+        assert_clean_asan_run(
+            r#"
+enum Tok {
+    KwFn,
+    KwOnceFn,
+    Ident(String),
+    Punct(String),
+    Eof,
+}
+struct Span { line: i64, col: i64 }
+struct SpannedTok { tok: Tok, span: Span }
+struct Lexer { toks: Vec[SpannedTok], pos: i64 }
+
+fn dup_str(s: ref String) -> String {
+    let mut out = "".to_string();
+    out.push_str(s);
+    out
+}
+
+impl Lexer {
+    // Borrow-match the payload out of an indexed place, then compare it (by an
+    // owned dup) against a SHORTER literal. The dup's length exceeds the
+    // literal's, so the pre-fix `memcmp(.., l_len)` overran the literal buffer.
+    fn ident_matches(ref self, target: String) -> bool {
+        match self.toks[self.pos].tok {
+            Ident(n) => {
+                let got = dup_str(n);
+                got == target
+            }
+            _ => false,
+        }
+    }
+}
+
+fn mk(name: String) -> SpannedTok {
+    SpannedTok { tok: Tok.Ident(name), span: Span { line: 1, col: 1 } }
+}
+
+fn main() {
+    let mut toks = Vec.new();
+    toks.push(mk("OnceFnHandler".to_string()));
+    toks.push(mk("FnPtrFactory".to_string()));
+    let lx = Lexer { toks: toks, pos: 0 };
+    // Long payload (shares a prefix with the short literal) vs short keyword:
+    // the comparison span must clamp to the keyword length, not the payload's.
+    let m_fn = lx.ident_matches("Fn".to_string());
+    let m_once = lx.ident_matches("OnceFn".to_string());
+    let m_exact = lx.ident_matches("OnceFnHandler".to_string());
+    println(m_fn);
+    println(m_once);
+    println(m_exact);
+}
+"#,
+            &["false", "false", "true"],
+            "asan_string_eq_mismatched_len_no_overread_in_indexed_payload_match",
+        );
+    }
 }
