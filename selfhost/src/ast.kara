@@ -713,12 +713,52 @@ pub struct EnumDefNode {
     pub span: Span,
 }
 
+// ── Functions (slice 3c-iii) ── `[pub] fn NAME(self?, name: TYPE, ...) [-> R]
+// { body }`. Span starts at `fn` (after `pub`, like the other items) and ends at
+// the body's `}`. The receiver mode is a payload-less plain enum field (legal,
+// like `BinOp` / `VariantTag`); `NoSelf` is the free-function case. DEFERRED:
+// `unsafe`/`comptime` markers, generic params (3c-v), default param values,
+// non-identifier param patterns + `mut` bindings, and the effect (`with`) /
+// contract (`requires`/`ensures`) / `where` clauses.
+
+// The receiver mode of a function — the seed's `Option<SelfParam>` flattened
+// (`NoSelf` ≡ `None`). `self` is the owned/consuming receiver; `RefSelf` /
+// `MutRefSelf` are the two borrow forms (`own self` is rejected by the seed).
+pub enum SelfMode {
+    NoSelf,
+    OwnedSelf,
+    RefSelf,
+    MutRefSelf,
+}
+
+// `name: TYPE` — one (non-self) parameter. Span covers the name through its
+// type, mirroring the seed's `parse_param`.
+pub struct FnParamNode {
+    pub name: String,
+    pub ty: TypeExpr,
+    pub span: Span,
+}
+
+pub struct FnDefNode {
+    pub is_pub: bool,
+    pub name: String,
+    pub self_mode: SelfMode,
+    pub params: Vec[FnParamNode],
+    pub ret: Option[TypeExpr],
+    pub body: Block,
+    pub span: Span,
+}
+
 pub enum Item {
     Use(UseDeclNode),
     Const(ConstDeclNode),
     TypeAlias(TypeAliasNode),
     Struct(StructDefNode),
     Enum(EnumDefNode),
+    // `Func` (not `Fn`) — a bare `Fn` match-arm variant collides with the `Fn`
+    // function-type keyword (the `Fn(...)` type), mirroring why `Block`/`Tuple`
+    // got renamed (`Blk`/`TupleTy`).
+    Func(FnDefNode),
     // Error-recovery placeholder (an unrecognized leading token / EOF).
     ErrItem(SpanNode),
 }

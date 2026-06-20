@@ -54,6 +54,9 @@ import ast.{
     VariantTag,
     VariantNode,
     EnumDefNode,
+    SelfMode,
+    FnParamNode,
+    FnDefNode,
 };
 
 // MUST stay identical to `escape_for_render` in `selfhost/src/main.kara` and
@@ -870,6 +873,30 @@ fn render_vis(is_pub: bool) -> String {
     }
 }
 
+// ` self`/` refself`/` mutrefself` receiver flag, else "" (free function).
+fn render_self_mode(m: SelfMode) -> String {
+    let mut s = "".to_string();
+    match m {
+        NoSelf => {}
+        OwnedSelf => s.push_str(" self"),
+        RefSelf => s.push_str(" refself"),
+        MutRefSelf => s.push_str(" mutrefself"),
+    }
+    s
+}
+
+// `(param NAME<span> TYPE)`.
+fn render_fn_param(p: FnParamNode) -> String {
+    let FnParamNode { name, ty, span } = p;
+    let mut out = "(param ".to_string();
+    out.push_str(name);
+    out.push_str(span_str(span.offset, span.length));
+    out.push_str(" ");
+    out.push_str(render_type(ty));
+    out.push_str(")");
+    out
+}
+
 // ` pub`/` shared`/` par` modifier flags for a struct / enum, in that order.
 fn render_type_mods(is_pub: bool, is_shared: bool, is_par: bool) -> String {
     let mut s = "".to_string();
@@ -1042,6 +1069,40 @@ pub fn render_item(item: Item) -> String {
                 out.push_str(" ");
                 out.push_str(render_variant(v));
             }
+            out.push_str(")");
+        }
+        Func(n) => {
+            let FnDefNode {
+                is_pub,
+                name,
+                self_mode,
+                params,
+                ret,
+                body,
+                span,
+            } = n;
+            out.push_str("(fn");
+            out.push_str(render_vis(is_pub));
+            out.push_str(" ");
+            out.push_str(name);
+            out.push_str(span_str(span.offset, span.length));
+            out.push_str(render_self_mode(self_mode));
+            out.push_str(" (params");
+            for p in params {
+                out.push_str(" ");
+                out.push_str(render_fn_param(p));
+            }
+            out.push_str(")");
+            match ret {
+                Some(r) => {
+                    out.push_str(" (ret ");
+                    out.push_str(render_type(r));
+                    out.push_str(")");
+                }
+                None => {}
+            }
+            out.push_str(" ");
+            out.push_str(render_block(body));
             out.push_str(")");
         }
         ErrItem(n) => {

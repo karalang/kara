@@ -76,6 +76,9 @@ import ast.{
     VariantTag,
     VariantNode,
     EnumDefNode,
+    SelfMode,
+    FnParamNode,
+    FnDefNode,
 };
 import lexer.lex_all;
 
@@ -1962,6 +1965,7 @@ impl Parser {
             Enum => self.parse_enum_def(is_pub, false, false),
             Shared => self.parse_shared_or_par(is_pub, true, false),
             Par => self.parse_shared_or_par(is_pub, false, true),
+            Fn => self.parse_fn_def(is_pub),
             _ => {
                 let start = self.current_span();
                 self.advance();
@@ -2225,6 +2229,152 @@ impl Parser {
             fields: fields,
             span: self.span_from(start),
         }
+    }
+
+    // `fn NAME(self?, name: TYPE, ...) [-> R] { body }` — `start` at `fn`
+    // (3c-iii; generics + effects/contracts/`where` deferred).
+    fn parse_fn_def(mut ref self, is_pub: bool) -> Item {
+        let start = self.current_span();
+        self.advance(); // `fn`
+        let name = self.take_member_name();
+        self.expect_lparen();
+        let self_mode = self.parse_self_mode();
+        let params = self.parse_fn_params();
+        self.expect_rparen();
+        let mut ret: Option[TypeExpr] = None;
+        let has_arrow = if self.pos < self.tokens.len() {
+            match self.tokens[self.pos].token {
+                Arrow => true,
+                _ => false,
+            }
+        } else {
+            false
+        };
+        if has_arrow {
+            self.advance(); // `->`
+            ret = Some(self.parse_type());
+        }
+        let body = self.parse_block();
+        Item.Func(FnDefNode {
+            is_pub: is_pub,
+            name: name,
+            self_mode: self_mode,
+            params: params,
+            ret: ret,
+            body: body,
+            span: self.span_from(start),
+        })
+    }
+
+    // The optional leading receiver: `self` / `ref self` / `mut ref self`,
+    // consuming the receiver tokens (and a trailing comma) when present. Mirrors
+    // the seed's `try_parse_self_param`. A param never starts with a receiver
+    // keyword (params are `name: TYPE`), so an un-matched `ref`/`mut` is left for
+    // `parse_fn_params` (the well-formed corpus only writes `ref`/`mut ref` as a
+    // receiver here).
+    fn parse_self_mode(mut ref self) -> SelfMode {
+        if self.pos >= self.tokens.len() {
+            return SelfMode.NoSelf;
+        }
+        let is_self = match self.tokens[self.pos].token {
+            SelfValue => true,
+            _ => false,
+        };
+        if is_self {
+            self.advance(); // `self`
+            if self.at_comma() {
+                self.advance();
+            }
+            return SelfMode.OwnedSelf;
+        }
+        let is_ref = match self.tokens[self.pos].token {
+            Ref => true,
+            _ => false,
+        };
+        if is_ref {
+            let next_self = if self.pos + 1 < self.tokens.len() {
+                match self.tokens[self.pos + 1].token {
+                    SelfValue => true,
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            if next_self {
+                self.advance(); // `ref`
+                self.advance(); // `self`
+                if self.at_comma() {
+                    self.advance();
+                }
+                return SelfMode.RefSelf;
+            }
+            return SelfMode.NoSelf;
+        }
+        let is_mut = match self.tokens[self.pos].token {
+            Mut => true,
+            _ => false,
+        };
+        if is_mut {
+            let next_ref = if self.pos + 1 < self.tokens.len() {
+                match self.tokens[self.pos + 1].token {
+                    Ref => true,
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            let next_self = if self.pos + 2 < self.tokens.len() {
+                match self.tokens[self.pos + 2].token {
+                    SelfValue => true,
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            if next_ref {
+                if next_self {
+                    self.advance(); // `mut`
+                    self.advance(); // `ref`
+                    self.advance(); // `self`
+                    if self.at_comma() {
+                        self.advance();
+                    }
+                    return SelfMode.MutRefSelf;
+                }
+            }
+            return SelfMode.NoSelf;
+        }
+        SelfMode.NoSelf
+    }
+
+    // `name: TYPE, ...` up to (not consuming) `)`. 3c-iii binds a single
+    // identifier per param (the seed's full pattern / default-value forms are
+    // deferred). A trailing comma is allowed (the loop re-checks `)`).
+    fn parse_fn_params(mut ref self) -> Vec[FnParamNode] {
+        let mut params: Vec[FnParamNode] = Vec.new();
+        loop {
+            if self.pos >= self.tokens.len() {
+                break;
+            }
+            if self.at_rparen() {
+                break;
+            }
+            let start = self.current_span();
+            let name = self.take_member_name();
+            self.eat_colon();
+            let ty = self.parse_type();
+            params.push(FnParamNode {
+                name: name,
+                ty: ty,
+                span: self.span_from(start),
+            });
+            if self.at_comma() {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        params
     }
 }
 

@@ -23,7 +23,10 @@
 //! `where` refinements, distinct types, layout, extern/host, unions, module
 //! bindings, imports, test cases.
 
-use karac::ast::{BinOp, Expr, ExprKind, GenericArg, Item, TypeExpr, TypeKind, UnaryOp};
+use karac::ast::{
+    BinOp, Block, Expr, ExprKind, GenericArg, Item, Param, PatternKind, SelfParam, Stmt, StmtKind,
+    TypeExpr, TypeKind, UnaryOp,
+};
 use karac::token::{FloatSuffix, IntSuffix};
 use std::path::PathBuf;
 
@@ -81,6 +84,28 @@ const CORPUS: &[&str] = &[
     "par enum Msg { Ping, Data(Vec[u8]) }",
     "enum One { Only }",
     "enum WithTrailing { A, B, }",
+    // `fn` definitions (no generics / effects / contracts). Bodies stay within
+    // the slice-2 expr surface (literals / ident / unary / binary / tuple as
+    // tail or let/expr-stmt values) so the items oracle's compact expr renderer
+    // suffices.
+    "fn noop() {}",
+    "fn answer() -> i64 { 42 }",
+    "pub fn id(x: i64) -> i64 { x }",
+    "fn add(a: i64, b: i64) -> i64 { a + b }",
+    "fn make_pair(x: i64, y: bool) -> (i64, bool) { (x, y) }",
+    "fn takes_ref(s: ref String) {}",
+    "fn many(a: i64, b: String, c: Vec[i64]) {}",
+    "fn trailing(a: i64,) {}",
+    "fn with_let() -> i64 { let y = 1; y }",
+    "fn stmt_only() { x; }",
+    "fn ret_named() -> String { greeting }",
+    "fn higher(f: Fn(i64) -> bool) {}",
+    // Receiver forms (the parser accepts a receiver on any fn; self-validity is
+    // a resolver check, not a parse error).
+    "fn consume(self) {}",
+    "fn read(ref self) -> i64 { 0 }",
+    "fn write(mut ref self, n: i64) {}",
+    "fn read_arg(ref self, x: i64) -> i64 { x }",
 ];
 
 // ── Rust-side canonical render (must match `ast_render.kara`) ──
@@ -390,6 +415,88 @@ fn render_rust_variant(v: &karac::ast::Variant) -> String {
     out
 }
 
+/// ` @<offset>:<length>` for a statement / block span.
+fn span_tag(off: usize, len: usize) -> String {
+    format!(" @{}:{}", off as i64 - OFFSET_SHIFT, len)
+}
+
+/// Statement render — must match `ast_render.kara::render_stmt`.
+fn render_rust_stmt(s: &Stmt) -> String {
+    let sp = span_tag(s.span.offset, s.span.length);
+    match &s.kind {
+        StmtKind::Let {
+            is_mut,
+            pattern,
+            value,
+            ..
+        } => {
+            let name = match &pattern.kind {
+                PatternKind::Binding(n) => n.clone(),
+                other => {
+                    panic!("slice-3c fn-body let pattern must be a plain binding, got {other:?}")
+                }
+            };
+            let m = if *is_mut { " mut" } else { "" };
+            format!("(let{m} {name}{sp} {})", render_rust_expr(value))
+        }
+        StmtKind::Assign { target, value } => format!(
+            "(assign{sp} {} {})",
+            render_rust_expr(target),
+            render_rust_expr(value)
+        ),
+        StmtKind::Expr(e) => format!("(exprstmt{sp} {})", render_rust_expr(e)),
+        other => panic!(
+            "render_rust_stmt: StmtKind {other:?} is outside the slice-3c fn-body \
+             surface; keep bodies to let/expr/assign statements or extend the renderer"
+        ),
+    }
+}
+
+/// Block render — must match `ast_render.kara::render_block`.
+fn render_rust_block(b: &Block) -> String {
+    let mut out = format!("(block{}", span_tag(b.span.offset, b.span.length));
+    for s in &b.stmts {
+        out.push(' ');
+        out.push_str(&render_rust_stmt(s));
+    }
+    if let Some(tail) = &b.final_expr {
+        out.push_str(" (tail ");
+        out.push_str(&render_rust_expr(tail));
+        out.push(')');
+    }
+    out.push(')');
+    out
+}
+
+/// ` self`/` refself`/` mutrefself` receiver flag — must match
+/// `ast_render.kara::render_self_mode`.
+fn render_self_mode(sp: &Option<SelfParam>) -> &'static str {
+    match sp {
+        None => "",
+        Some(SelfParam::Owned) => " self",
+        Some(SelfParam::Ref) => " refself",
+        Some(SelfParam::MutRef) => " mutrefself",
+    }
+}
+
+/// `(param NAME<span> TYPE)` — must match `ast_render.kara::render_fn_param`.
+fn render_rust_fn_param(p: &Param) -> String {
+    let name = match &p.pattern.kind {
+        PatternKind::Binding(n) => n.clone(),
+        other => panic!("slice-3c-iii param must be a plain binding, got {other:?}"),
+    };
+    assert!(
+        p.default_value.is_none(),
+        "slice-3c-iii fn corpus must not carry default parameter values"
+    );
+    format!(
+        "(param {}{} {})",
+        name,
+        span_item_off_len(p.span.offset, p.span.length),
+        render_rust_type(&p.ty)
+    )
+}
+
 /// Item render — must match `ast_render.kara::render_item`.
 fn render_rust_item(item: &Item) -> String {
     match item {
@@ -452,8 +559,45 @@ fn render_rust_item(item: &Item) -> String {
             out.push(')');
             out
         }
+        Item::Function(f) => {
+            assert!(
+                f.generic_params.is_none(),
+                "slice-3c-iii fn corpus must not carry generic params"
+            );
+            assert!(
+                f.effects.is_none()
+                    && f.requires.is_empty()
+                    && f.ensures.is_empty()
+                    && f.where_clause.is_none()
+                    && !f.is_unsafe
+                    && !f.is_comptime,
+                "slice-3c-iii fn corpus must not carry effects / contracts / where / \
+                 unsafe / comptime"
+            );
+            let mut out = format!(
+                "(fn{} {}{}{} (params",
+                vis(f.is_pub),
+                f.name,
+                span_item_off_len(f.span.offset, f.span.length),
+                render_self_mode(&f.self_param),
+            );
+            for p in &f.params {
+                out.push(' ');
+                out.push_str(&render_rust_fn_param(p));
+            }
+            out.push(')');
+            if let Some(r) = &f.return_type {
+                out.push_str(" (ret ");
+                out.push_str(&render_rust_type(r));
+                out.push(')');
+            }
+            out.push(' ');
+            out.push_str(&render_rust_block(&f.body));
+            out.push(')');
+            out
+        }
         other => panic!(
-            "render_rust_item: item {other:?} is outside parser slice 3c-ii; \
+            "render_rust_item: item {other:?} is outside parser slice 3c-iii; \
              keep the corpus to the ported item forms or extend the renderer"
         ),
     }
