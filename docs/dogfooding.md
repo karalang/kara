@@ -229,6 +229,41 @@ examples that show the interesting cases without being contrived.
 > rather than an HTML slider, native-SDL2 CPU + GPU still Phase-11/10) are in the
 > example README.
 
+> **Open follow-up — finish the `SoA layout` half (the next agent's pickup).**
+> Slipstream's roster line bills it on *"SoA layout"*, but the demo currently
+> ships AoS (`Vec[LbmNode]`), because `layout`/SoA blocks did not cross function
+> boundaries and Slipstream's kernel is split across `ref Vec[LbmNode]` helpers.
+> Probing that gap drove **B-2026-06-19-14**: passing a SoA-laid-out `Vec` to
+> another function silently miscompiled (by-ref → garbage `len` → SIGTRAP;
+> by-value → LLVM verification failure), because callee params are compiled AoS.
+> **Done so far (b5e0fc58):** the by-ref *read* path now works — a SoA `Vec`
+> passed by `ref` into a helper reads correctly via `.len()`, whole-element index
+> (`let e = es[i]`), and direct indexed field access (`es[i].f`). The fix derefs
+> a `ref`/`mut ref` param's slot once before GEPing the SoA struct
+> (`compile_soa_index_read` in `src/codegen/collections.rs`, `compile_soa_method`
+> in `src/codegen/exprs.rs`; regression
+> `tests/codegen.rs::test_e2e_soa_by_ref_param_read_across_function`).
+>
+> **Remaining (what blocks Slipstream from going full-SoA end-to-end):**
+> 1. **By-value SoA params** (`fn substep(grid: Vec[LbmNode], …)`): the callee
+>    signature compiles the param as AoS → LLVM "Call parameter type does not
+>    match function signature". Needs the param type compiled as the SoA struct,
+>    the call site marshalling the SoA value, and the param prologue setting up
+>    the SoA slot.
+> 2. **SoA return values** (`init_grid() -> Vec[LbmNode]`, `substep(...) ->
+>    Vec[LbmNode]`): the return type is compiled AoS.
+> 3. **Multi-buffer awkwardness:** `soa_layouts` is *name-keyed*, so each distinct
+>    `Vec[LbmNode]` binding (`grid`, `coll`, `next`, …) needs its own `layout`
+>    block. The fuller design is **per-layout monomorphization** (design.md
+>    Feature 1 / P1.5, gated to Phase 11) — that subsumes 1–3.
+>
+> Land each step gated on the full `tests/codegen.rs` suite (1670 cases). Once the
+> by-value + return paths work, convert `examples/slipstream/src/sim.kara`'s
+> `Vec[LbmNode]` to a `layout` block and confirm the native oracle's checksums are
+> unchanged (SoA must be byte-identical to AoS) — that's the proof Slipstream
+> earns its "SoA layout" billing. Background in the user-memory
+> `soa_cross_function_partial`.
+
 **Primary capability:** Auto-concurrency of sequential code; layout blocks for
 cache-efficient SoA access; same code runs on CPU and GPU.
 
