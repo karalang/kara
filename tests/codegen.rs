@@ -12354,6 +12354,39 @@ fn main() {
     }
 
     #[test]
+    fn test_sorted_map_codegen_rejected_interpreter_only() {
+        // B3: `SortedMap` is interpreter-only in v1 (like `SortedSet`, it has no
+        // B-tree-map runtime/codegen lowering). `karac build` must fail loud at
+        // the constructor with an actionable interpreter-only message rather than
+        // fall through to the generic "no handler for method" codegen-bug error.
+        let mut parsed = karac::parse(
+            "fn main() {\n\
+                 let mut m: SortedMap[i64, String] = SortedMap.new();\n\
+                 let _ = m.insert(1_i64, \"one\");\n\
+             }",
+        );
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        assert!(
+            typed.errors.is_empty(),
+            "SortedMap should typecheck (interpreter-complete): {:?}",
+            typed.errors
+        );
+        karac::lower(&mut parsed.program, &typed);
+        let err = compile_to_ir(&parsed.program, None, None)
+            .expect_err("SortedMap codegen must fail loud (interpreter-only)");
+        assert!(
+            err.contains("SortedMap") && err.contains("interpreter-only"),
+            "expected the SortedMap interpreter-only message, got: {err}"
+        );
+    }
+
+    #[test]
     fn test_try_companion_constructors_codegen_all_implemented() {
         // Every recognized static-constructor `try_*` companion now codegens
         // (Vec.try_from_slice + Vec/VecDeque/String.try_with_capacity), so none

@@ -2198,6 +2198,24 @@ pub(crate) fn stdlib_method_self_borrow_kind(key: &str) -> Option<BorrowKind> {
         // Map[K, V] read methods.
         "Map.len" | "Map.is_empty" | "Map.contains_key" | "Map.get" | "Map.get_or" | "Map.iter"
         | "Map.keys" | "Map.values" | "Map.entries" | "Map.clone" => ImmRef,
+        // SortedMap[K, V] mutating methods.
+        "SortedMap.insert" | "SortedMap.remove" | "SortedMap.clear" | "SortedMap.merge" => MutRef,
+        // SortedMap[K, V] read methods (incl. the ordered queries).
+        "SortedMap.len"
+        | "SortedMap.is_empty"
+        | "SortedMap.contains_key"
+        | "SortedMap.get"
+        | "SortedMap.get_or"
+        | "SortedMap.iter"
+        | "SortedMap.keys"
+        | "SortedMap.values"
+        | "SortedMap.entries"
+        | "SortedMap.clone"
+        | "SortedMap.min"
+        | "SortedMap.max"
+        | "SortedMap.range"
+        | "SortedMap.floor"
+        | "SortedMap.ceiling" => ImmRef,
         // Set[T] / SortedSet[T] mutating methods.
         "Set.insert" | "Set.remove" | "Set.clear" | "SortedSet.insert" | "SortedSet.remove"
         | "SortedSet.clear" => MutRef,

@@ -180,6 +180,17 @@ pub(crate) fn deep_clone_value(v: &Value) -> Value {
                 .map(|(k, val)| (deep_clone_value(k), deep_clone_value(val)))
                 .collect(),
         ),
+        Value::SortedMap(entries) => Value::SortedMap(
+            entries
+                .iter()
+                .map(|(k, val)| {
+                    (
+                        super::value::OrdValue(deep_clone_value(&k.0)),
+                        deep_clone_value(val),
+                    )
+                })
+                .collect(),
+        ),
         Value::Tuple(items) => Value::Tuple(items.iter().map(deep_clone_value).collect()),
         Value::Struct { name, fields } => Value::Struct {
             name: name.clone(),
@@ -211,6 +222,8 @@ pub(crate) fn deep_clone_value(v: &Value) -> Value {
         // Primitives, String, SortedSet (primitive-keyed), and the
         // reference-semantics types (SharedStruct, Sender, Receiver,
         // SharedCell, Atomic) all clone correctly under the derive.
+        // (SortedMap is materialized explicitly above so collection *values*
+        // get fresh storage rather than an aliased Arc bump.)
         _ => v.clone(),
     }
 }

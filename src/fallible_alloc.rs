@@ -32,8 +32,8 @@ pub const TRY_ALLOC_INSTANCE_BASES: &[&str] = &[
     "push_back",         // VecDeque.push_back
     "push_front",        // VecDeque.push_front
     "extend_from_slice", // Vec.extend_from_slice
-    "insert",            // Map.insert, Set.insert, SortedSet.insert
-    "clone",             // Vec/String/Map/Set/SortedSet/VecDeque.clone
+    "insert",            // Map.insert, Set.insert, SortedSet.insert, SortedMap.insert
+    "clone",             // Vec/String/Map/SortedMap/Set/SortedSet/VecDeque.clone
 ];
 
 /// Static constructors whose `Type.try_<base>(...)` companion returns

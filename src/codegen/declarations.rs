@@ -3306,7 +3306,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // 2-word aggregates: { ptr, i64 len }
                     "Slice" => 2,
                     // Heap-pointer handles; one word.
-                    "Map" | "Set" | "SortedSet" => 1,
+                    "Map" | "Set" | "SortedSet" | "SortedMap" => 1,
                     // Single-word primitives.
                     "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize"
                     | "isize" | "f32" | "f64" | "bool" | "char" | "Unit" => 1,

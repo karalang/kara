@@ -2007,6 +2007,11 @@ impl<'a> super::TypeChecker<'a> {
                 let element = type_args.first().cloned().unwrap_or(Type::Error);
                 return self.infer_sorted_set_method(&element, method, args, span);
             }
+            if name == "SortedMap" {
+                let key = type_args.first().cloned().unwrap_or(Type::Error);
+                let value = type_args.get(1).cloned().unwrap_or(Type::Error);
+                return self.infer_sorted_map_method(&key, &value, method, args, span);
+            }
             if name == "Set" {
                 let element = type_args.first().cloned().unwrap_or(Type::Error);
                 return self.infer_set_method(&element, method, args, span);
@@ -4203,7 +4208,7 @@ impl<'a> super::TypeChecker<'a> {
                 Type::Named { name, .. }
                     if matches!(
                         name.as_str(),
-                        "Vec" | "VecDeque" | "Map" | "Set" | "SortedSet"
+                        "Vec" | "VecDeque" | "Map" | "SortedMap" | "Set" | "SortedSet"
                     ) =>
                 {
                     Some(name.clone())

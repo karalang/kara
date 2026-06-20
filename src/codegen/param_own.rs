@@ -290,8 +290,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     "String" | "Vec" | "VecDeque" => true,
                     "Slice" => true,
                     // Heap the outer-buffer copy can't duplicate → bail.
-                    "Map" | "HashMap" | "Set" | "HashSet" | "SortedSet" | "BTreeMap"
-                    | "BTreeSet" => false,
+                    "Map" | "HashMap" | "Set" | "HashSet" | "SortedSet" | "SortedMap"
+                    | "BTreeMap" | "BTreeSet" => false,
                     // HTTP side-table handle structs (see emit_struct_drop_synthesis).
                     "Response" | "RequestBuilder" => false,
                     // Type-erased Option/Result: their payloads carry no static

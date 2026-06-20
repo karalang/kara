@@ -6651,6 +6651,179 @@ fn test_sorted_set_string_elements() {
     assert_eq!(output, "apple\nbanana\ncherry\n");
 }
 
+// ── SortedMap[K, V] stdlib methods (B3) ─────────────────────────────────────
+
+#[test]
+fn test_sorted_map_new_and_len() {
+    let output = run("fn main() {\n\
+             let m: SortedMap[i64, String] = SortedMap.new();\n\
+             println(f\"{m.len()}\");\n\
+             println(f\"{m.is_empty()}\");\n\
+         }");
+    assert_eq!(output, "0\ntrue\n");
+}
+
+#[test]
+fn test_sorted_map_insert_get_contains() {
+    // insert returns Option[V] (old value); duplicate-key insert overwrites
+    // and returns the previous value wrapped in Some.
+    let output = run("fn main() {\n\
+             let m: SortedMap[i64, String] = SortedMap.new();\n\
+             match m.insert(1_i64, \"one\") { Some(p) => println(p), None => println(\"none\") }\n\
+             match m.insert(1_i64, \"ONE\") { Some(p) => println(p), None => println(\"none\") }\n\
+             match m.get(1_i64) { Some(v) => println(v), None => println(\"missing\") }\n\
+             println(f\"{m.contains_key(1_i64)}\");\n\
+             println(f\"{m.contains_key(2_i64)}\");\n\
+             println(f\"{m.len()}\");\n\
+         }");
+    assert_eq!(output, "none\none\nONE\ntrue\nfalse\n1\n");
+}
+
+#[test]
+fn test_sorted_map_remove() {
+    let output = run("fn main() {\n\
+             let m: SortedMap[i64, String] = SortedMap.new();\n\
+             m.insert(5_i64, \"five\");\n\
+             match m.remove(5_i64) { Some(v) => println(v), None => println(\"none\") }\n\
+             match m.remove(5_i64) { Some(v) => println(v), None => println(\"none\") }\n\
+             println(f\"{m.is_empty()}\");\n\
+         }");
+    assert_eq!(output, "five\nnone\ntrue\n");
+}
+
+#[test]
+fn test_sorted_map_ordered_iteration() {
+    // Insertion out of order; keys/values/entries and `for` all yield
+    // ascending key order.
+    let output = run("fn main() {\n\
+             let m: SortedMap[i64, String] = SortedMap.new();\n\
+             m.insert(3_i64, \"c\");\n\
+             m.insert(1_i64, \"a\");\n\
+             m.insert(2_i64, \"b\");\n\
+             for k in m.keys() { print(f\"{k}\"); }\n\
+             println(\"\");\n\
+             for v in m.values() { print(v); }\n\
+             println(\"\");\n\
+             for pair in m { print(f\"{pair.0}={pair.1};\"); }\n\
+             println(\"\");\n\
+         }");
+    assert_eq!(output, "123\nabc\n1=a;2=b;3=c;\n");
+}
+
+#[test]
+fn test_sorted_map_min_max() {
+    let output = run("fn main() {\n\
+             let m: SortedMap[i64, String] = SortedMap.new();\n\
+             m.insert(5_i64, \"five\");\n\
+             m.insert(1_i64, \"one\");\n\
+             m.insert(9_i64, \"nine\");\n\
+             match m.min() { Some(p) => println(f\"{p.0}:{p.1}\"), None => println(\"empty\") }\n\
+             match m.max() { Some(p) => println(f\"{p.0}:{p.1}\"), None => println(\"empty\") }\n\
+         }");
+    assert_eq!(output, "1:one\n9:nine\n");
+}
+
+#[test]
+fn test_sorted_map_min_max_empty() {
+    let output = run("fn main() {\n\
+             let m: SortedMap[i64, String] = SortedMap.new();\n\
+             match m.min() { Some(p) => println(f\"{p.0}\"), None => println(\"empty\") }\n\
+             match m.max() { Some(p) => println(f\"{p.0}\"), None => println(\"empty\") }\n\
+         }");
+    assert_eq!(output, "empty\nempty\n");
+}
+
+#[test]
+fn test_sorted_map_floor_ceiling() {
+    // floor: largest key <= k; ceiling: smallest key >= k. Probe an
+    // absent key between entries, the exact key, and out-of-range bounds.
+    let output = run("fn main() {\n\
+             let m: SortedMap[i64, String] = SortedMap.new();\n\
+             m.insert(10_i64, \"ten\");\n\
+             m.insert(20_i64, \"twenty\");\n\
+             m.insert(30_i64, \"thirty\");\n\
+             match m.floor(15_i64)   { Some(p) => println(f\"{p.0}\"), None => println(\"none\") }\n\
+             match m.ceiling(15_i64) { Some(p) => println(f\"{p.0}\"), None => println(\"none\") }\n\
+             match m.floor(20_i64)   { Some(p) => println(f\"{p.0}\"), None => println(\"none\") }\n\
+             match m.ceiling(20_i64) { Some(p) => println(f\"{p.0}\"), None => println(\"none\") }\n\
+             match m.floor(5_i64)    { Some(p) => println(f\"{p.0}\"), None => println(\"none\") }\n\
+             match m.ceiling(35_i64) { Some(p) => println(f\"{p.0}\"), None => println(\"none\") }\n\
+         }");
+    assert_eq!(output, "10\n20\n20\n20\nnone\nnone\n");
+}
+
+#[test]
+fn test_sorted_map_range() {
+    // Inclusive [lo, hi]; inverted bounds yield empty.
+    let output = run("fn main() {\n\
+             let m: SortedMap[i64, String] = SortedMap.new();\n\
+             m.insert(10_i64, \"a\");\n\
+             m.insert(20_i64, \"b\");\n\
+             m.insert(30_i64, \"c\");\n\
+             println(f\"{m.range(10_i64, 25_i64).len()}\");\n\
+             println(f\"{m.range(10_i64, 30_i64).len()}\");\n\
+             println(f\"{m.range(25_i64, 15_i64).len()}\");\n\
+             for pair in m.range(15_i64, 30_i64) { print(f\"{pair.0};\"); }\n\
+             println(\"\");\n\
+         }");
+    assert_eq!(output, "2\n3\n0\n20;30;\n");
+}
+
+#[test]
+fn test_sorted_map_get_or() {
+    let output = run("fn main() {\n\
+             let m: SortedMap[String, i64] = SortedMap.new();\n\
+             m.insert(\"a\", 1_i64);\n\
+             let hit = m.get_or(\"a\", 0_i64);\n\
+             let miss = m.get_or(\"z\", 99_i64);\n\
+             println(f\"{hit}\");\n\
+             println(f\"{miss}\");\n\
+         }");
+    assert_eq!(output, "1\n99\n");
+}
+
+#[test]
+fn test_sorted_map_string_keys_sorted() {
+    let output = run("fn main() {\n\
+             let m: SortedMap[String, i64] = SortedMap.new();\n\
+             m.insert(\"banana\", 2_i64);\n\
+             m.insert(\"apple\", 1_i64);\n\
+             m.insert(\"cherry\", 3_i64);\n\
+             for k in m.keys() { println(k); }\n\
+         }");
+    assert_eq!(output, "apple\nbanana\ncherry\n");
+}
+
+#[test]
+fn test_sorted_map_clone_independence_and_clear() {
+    let output = run("fn main() {\n\
+             let m: SortedMap[i64, i64] = SortedMap.new();\n\
+             m.insert(1_i64, 10_i64);\n\
+             m.insert(2_i64, 20_i64);\n\
+             let c = m.clone();\n\
+             m.clear();\n\
+             println(f\"{m.len()}\");\n\
+             println(f\"{c.len()}\");\n\
+         }");
+    assert_eq!(output, "0\n2\n");
+}
+
+#[test]
+fn test_sorted_map_merge_last_writer_wins() {
+    let output = run("fn main() {\n\
+             let a: SortedMap[i64, i64] = SortedMap.new();\n\
+             a.insert(1_i64, 100_i64);\n\
+             a.insert(2_i64, 200_i64);\n\
+             let b: SortedMap[i64, i64] = SortedMap.new();\n\
+             b.insert(2_i64, 999_i64);\n\
+             b.insert(3_i64, 300_i64);\n\
+             let merged = a.merge(b);\n\
+             println(f\"{merged.get_or(2_i64, 0_i64)}\");\n\
+             println(f\"{merged.len()}\");\n\
+         }");
+    assert_eq!(output, "999\n3\n");
+}
+
 // ── Channel[T] / Sender[T] / Receiver[T] ──────────────────────────────────────
 
 #[test]

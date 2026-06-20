@@ -678,8 +678,8 @@ impl<'a> super::TypeChecker<'a> {
                         name: collection.to_string(),
                         args: vec![self.env.fresh_type_var()],
                     }),
-                    "Map" => Some(Type::Named {
-                        name: "Map".to_string(),
+                    "Map" | "SortedMap" => Some(Type::Named {
+                        name: collection.to_string(),
                         args: vec![self.env.fresh_type_var(), self.env.fresh_type_var()],
                     }),
                     // `String.new()` has no syntactic stdlib declaration

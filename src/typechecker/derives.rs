@@ -304,7 +304,7 @@ impl<'a> super::TypeChecker<'a> {
                 "Vec" | "Option" | "SortedSet" | "Set" if args.len() == 1 => {
                     self.type_supports_display(&args[0])
                 }
-                "Map" | "Result" if args.len() == 2 => {
+                "Map" | "SortedMap" | "Result" if args.len() == 2 => {
                     self.type_supports_display(&args[0]) && self.type_supports_display(&args[1])
                 }
                 _ => {
@@ -459,7 +459,14 @@ impl<'a> super::TypeChecker<'a> {
                 // shape). User-defined types require `#[derive(Clone)]`.
                 if matches!(
                     name.as_str(),
-                    "Option" | "Result" | "Vec" | "VecDeque" | "Map" | "Set" | "SortedSet"
+                    "Option"
+                        | "Result"
+                        | "Vec"
+                        | "VecDeque"
+                        | "Map"
+                        | "SortedMap"
+                        | "Set"
+                        | "SortedSet"
                 ) {
                     return args.iter().all(|a| self.type_supports_clone(a));
                 }
@@ -532,7 +539,14 @@ impl<'a> super::TypeChecker<'a> {
             Type::Named { name, args } => {
                 if matches!(
                     name.as_str(),
-                    "Option" | "Result" | "Vec" | "VecDeque" | "Map" | "Set" | "SortedSet"
+                    "Option"
+                        | "Result"
+                        | "Vec"
+                        | "VecDeque"
+                        | "Map"
+                        | "SortedMap"
+                        | "Set"
+                        | "SortedSet"
                 ) {
                     return args.iter().all(|a| self.type_supports_debug(a));
                 }
@@ -1203,8 +1217,8 @@ impl<'a> super::TypeChecker<'a> {
         match ty {
             Type::Str => true,
             Type::Named { name, args } => match name.as_str() {
-                "Vec" | "VecDeque" | "Map" | "Set" | "SortedSet" | "TreeMap" | "TreeSet"
-                | "Box" | "String" => true,
+                "Vec" | "VecDeque" | "Map" | "SortedMap" | "Set" | "SortedSet" | "TreeMap"
+                | "TreeSet" | "Box" | "String" => true,
                 "Rc" | "Arc" | "Weak" => false,
                 "Option" | "Result" => args.iter().any(|a| self.clone_allocates(a, visiting)),
                 other => {

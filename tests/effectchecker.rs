@@ -3891,6 +3891,21 @@ fn test_sorted_set_new_infers_allocates_heap() {
 }
 
 #[test]
+fn test_sorted_map_new_infers_allocates_heap() {
+    // SortedMap.new() allocates the B-tree backing store (B3).
+    let result = effectcheck_ok("fn make_map() { let m: SortedMap[i64, i64] = SortedMap.new(); }");
+    let inferred = result.inferred_effects.get("make_map").unwrap();
+    assert!(
+        inferred
+            .effects
+            .iter()
+            .any(|e| e.effect.verb == EffectVerbKind::Allocates && e.effect.resource == "Heap"),
+        "Expected allocates(Heap) for SortedMap.new(), got: {:?}",
+        inferred.effects
+    );
+}
+
+#[test]
 fn test_channel_new_infers_allocates_heap() {
     // Channel.new() allocates the shared queue.
     let result = effectcheck_ok(

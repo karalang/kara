@@ -445,8 +445,8 @@ pub enum TypeErrorKind {
     /// a supertrait of `Foo`. See design.md § Trait Constraints (Supertraits).
     MissingSupertrait,
     /// A type argument does not satisfy the required trait bound (e.g. T in
-    /// `SortedSet[T]` must implement `Ord`; K in `Map[K, V]` must implement
-    /// `Hash + Eq`).
+    /// `SortedSet[T]` and K in `SortedMap[K, V]` must implement `Ord`; K in
+    /// `Map[K, V]` must implement `Hash + Eq`).
     TraitBoundNotSatisfied,
     /// `T.method(...)` where T is a generic type parameter and two or more of
     /// its bound traits declare an associated function with that name. The
@@ -2744,7 +2744,7 @@ impl<'a> TypeChecker<'a> {
     /// diagnostic fires — there is no silent fall-through.
     ///
     /// Used by phase-8-floor arms (String, Slice, Map, Entry, SortedSet,
-    /// Set, Iterator, Sender, Receiver). Phase-11 arms keep using
+    /// SortedMap, Set, Iterator, Sender, Receiver). Phase-11 arms keep using
     /// `handle_unknown_method` until their floor lands.
     /// See phase-4-interpreter.md § Method Resolution Step 7(d).
     fn require_known_method(

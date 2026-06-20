@@ -446,6 +446,245 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// Infer the return type of a method call on `SortedMap[K, V]`.
+    /// `key` is K, `val` is V from the receiver's type arguments. Called from
+    /// `infer_method_call` when the object type is
+    /// `Type::Named { name: "SortedMap", ... }`. The key→value sibling of
+    /// `SortedSet`: core map surface plus the ordered queries
+    /// (`min` / `max` / `range` / `floor` / `ceiling`).
+    pub(super) fn infer_sorted_map_method(
+        &mut self,
+        key: &Type,
+        val: &Type,
+        method: &str,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Type {
+        // K: Ord bound — SortedMap requires a total order on its key type.
+        if !self.type_supports_ord(key) {
+            self.type_error(
+                format!(
+                    "SortedMap[{}, ...]: key type does not implement `Ord`; \
+                     only types with a total order (integers, bool, char, String, \
+                     or structs/enums with `#[derive(Ord)]`) can be SortedMap keys",
+                    type_display(key)
+                ),
+                span.clone(),
+                TypeErrorKind::TraitBoundNotSatisfied,
+            );
+        }
+        let k = key.clone();
+        let v = val.clone();
+        let option_v = Type::Named {
+            name: "Option".to_string(),
+            args: vec![v.clone()],
+        };
+        let tuple_kv = Type::Tuple(vec![k.clone(), v.clone()]);
+        let option_kv = Type::Named {
+            name: "Option".to_string(),
+            args: vec![tuple_kv.clone()],
+        };
+        let vec_k = Type::Named {
+            name: "Vec".to_string(),
+            args: vec![k.clone()],
+        };
+        let vec_v = Type::Named {
+            name: "Vec".to_string(),
+            args: vec![v.clone()],
+        };
+        let vec_kv = Type::Named {
+            name: "Vec".to_string(),
+            args: vec![tuple_kv],
+        };
+        let sorted_map_kv = Type::Named {
+            name: "SortedMap".to_string(),
+            args: vec![k.clone(), v.clone()],
+        };
+
+        match method {
+            "len" => {
+                if !args.is_empty() {
+                    self.type_error(
+                        "SortedMap.len() takes no arguments".to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                Type::Int(IntSize::I64)
+            }
+            "is_empty" => {
+                if !args.is_empty() {
+                    self.type_error(
+                        "SortedMap.is_empty() takes no arguments".to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                Type::Bool
+            }
+            "contains_key" => {
+                for arg in args {
+                    let at = self.infer_expr(&arg.value);
+                    self.check_assignable(&k, &at, arg.value.span.clone());
+                }
+                Type::Bool
+            }
+            "get" => {
+                for arg in args {
+                    let at = self.infer_expr(&arg.value);
+                    self.check_assignable(&k, &at, arg.value.span.clone());
+                }
+                option_v
+            }
+            "get_or" => {
+                if let Some(key_arg) = args.first() {
+                    let kt = self.infer_expr(&key_arg.value);
+                    self.check_assignable(&k, &kt, key_arg.value.span.clone());
+                }
+                if let Some(default_arg) = args.get(1) {
+                    let dt = self.infer_expr(&default_arg.value);
+                    self.check_assignable(&v, &dt, default_arg.value.span.clone());
+                }
+                v
+            }
+            "insert" => {
+                if let Some(key_arg) = args.first() {
+                    let kt = self.infer_expr(&key_arg.value);
+                    self.check_assignable(&k, &kt, key_arg.value.span.clone());
+                }
+                if let Some(val_arg) = args.get(1) {
+                    let vt = self.infer_expr(&val_arg.value);
+                    self.check_assignable(&v, &vt, val_arg.value.span.clone());
+                }
+                option_v
+            }
+            "remove" => {
+                for arg in args {
+                    let at = self.infer_expr(&arg.value);
+                    self.check_assignable(&k, &at, arg.value.span.clone());
+                }
+                option_v
+            }
+            "keys" => {
+                if !args.is_empty() {
+                    self.type_error(
+                        "SortedMap.keys() takes no arguments".to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                vec_k
+            }
+            "values" => {
+                if !args.is_empty() {
+                    self.type_error(
+                        "SortedMap.values() takes no arguments".to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                vec_v
+            }
+            "entries" => {
+                if !args.is_empty() {
+                    self.type_error(
+                        "SortedMap.entries() takes no arguments".to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                vec_kv
+            }
+            "merge" => {
+                for arg in args {
+                    let at = self.infer_expr(&arg.value);
+                    self.check_assignable(&sorted_map_kv, &at, arg.value.span.clone());
+                }
+                sorted_map_kv
+            }
+            "clear" => {
+                if !args.is_empty() {
+                    self.type_error(
+                        "SortedMap.clear() takes no arguments".to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                Type::Unit
+            }
+            "min" | "max" => {
+                if !args.is_empty() {
+                    self.type_error(
+                        format!("SortedMap.{}() takes no arguments", method),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                option_kv
+            }
+            "floor" | "ceiling" => {
+                if args.len() != 1 {
+                    self.type_error(
+                        format!(
+                            "SortedMap.{}() expects 1 argument, found {}",
+                            method,
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                for arg in args {
+                    let at = self.infer_expr(&arg.value);
+                    self.check_assignable(&k, &at, arg.value.span.clone());
+                }
+                option_kv
+            }
+            "range" => {
+                if args.len() != 2 {
+                    self.type_error(
+                        format!(
+                            "SortedMap.range() expects 2 arguments, found {}",
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                for arg in args {
+                    let at = self.infer_expr(&arg.value);
+                    self.check_assignable(&k, &at, arg.value.span.clone());
+                }
+                vec_kv
+            }
+            _ => self.require_known_method(
+                "SortedMap",
+                method,
+                &[
+                    "ceiling",
+                    "clear",
+                    "contains_key",
+                    "entries",
+                    "floor",
+                    "get",
+                    "get_or",
+                    "insert",
+                    "is_empty",
+                    "keys",
+                    "len",
+                    "max",
+                    "merge",
+                    "min",
+                    "range",
+                    "remove",
+                    "values",
+                ],
+                args,
+                span,
+            ),
+        }
+    }
+
     /// Infer the return type of a method call on `Set[T: Hash + Eq]`.
     /// Hash set with O(1) average insert/remove/contains. Enforces the
     /// `T: Hash + Eq` bound the same way `Map[K, V]` checks `K: Hash + Eq`.

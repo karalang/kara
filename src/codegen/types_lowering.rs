@@ -143,7 +143,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 // Map[K,V] and Set[T] are opaque heap pointers managed by the
                 // karac_map_* runtime functions.
-                if name == "Map" || name == "Set" || name == "SortedSet" {
+                if name == "Map" || name == "Set" || name == "SortedSet" || name == "SortedMap" {
                     return self.context.ptr_type(AddressSpace::default()).into();
                 }
                 // HTTP handler ABI trampoline (2026-05-09, F2): `Request` is

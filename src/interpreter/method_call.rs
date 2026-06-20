@@ -81,7 +81,12 @@ pub(crate) mod test_probe {
 fn value_is_alloc_collection(v: &Value) -> bool {
     matches!(
         v,
-        Value::Array(_) | Value::Map(_) | Value::Set(_) | Value::SortedSet(_) | Value::String(_)
+        Value::Array(_)
+            | Value::Map(_)
+            | Value::Set(_)
+            | Value::SortedSet(_)
+            | Value::SortedMap(_)
+            | Value::String(_)
     )
 }
 
@@ -873,7 +878,11 @@ impl<'a> super::Interpreter<'a> {
         // (B-2026-06-07-4a). The post-map guards below borrow `&obj`.
         if matches!(
             obj,
-            Value::Map(_) | Value::SortedSet(_) | Value::Set(_) | Value::Entry { .. }
+            Value::Map(_)
+                | Value::SortedSet(_)
+                | Value::SortedMap(_)
+                | Value::Set(_)
+                | Value::Entry { .. }
         ) {
             if let Some(v) =
                 self.try_eval_map_method(method, object, clone_receiver(&obj), args, span)

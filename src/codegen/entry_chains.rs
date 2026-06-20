@@ -144,8 +144,8 @@ impl<'ctx> super::Codegen<'ctx> {
     /// which writes `cloned` into dst on success / records the failing byte
     /// count on OOM, then phi-merges the two `Result` aggregates.
     ///
-    /// Map/Set/SortedSet-bearing receivers are interpreter-only in v1 (their
-    /// fallible clone needs a fallible `karac_map_*` runtime API, the same
+    /// Map/Set/SortedSet/SortedMap-bearing receivers are interpreter-only in v1
+    /// (their fallible clone needs a fallible `karac_map_*` runtime API, the same
     /// blocker as `try_insert`); those are rejected loudly here.
     pub(super) fn try_compile_try_clone(
         &mut self,
@@ -160,7 +160,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         if !Self::type_expr_try_clone_supported(&te) {
             return Err(format!(
-                "codegen: `{name_owned}.try_clone()` on a Map/Set/SortedSet-bearing collection \
+                "codegen: `{name_owned}.try_clone()` on a Map/Set/SortedSet/SortedMap-bearing collection \
                  is interpreter-only in v1; its codegen lowering is phase-8-stdlib-floor item 8 \
                  (blocked on a fallible `karac_map_*` runtime API, shared with `try_insert`). \
                  Run under `karac run`, or use the panicking `.clone()` under `karac build`."

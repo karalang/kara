@@ -115,6 +115,7 @@ impl<'a> super::TypeChecker<'a> {
                             ("VecDeque", Type::Named { name, .. }) => name == "VecDeque",
                             ("Set", Type::Named { name, .. }) => name == "Set",
                             ("SortedSet", Type::Named { name, .. }) => name == "SortedSet",
+                            ("SortedMap", Type::Named { name, .. }) => name == "SortedMap",
                             ("Map", Type::Named { name, .. }) => name == "Map",
                             _ => false,
                         };

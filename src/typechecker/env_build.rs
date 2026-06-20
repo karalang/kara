@@ -741,6 +741,17 @@ impl<'a> super::TypeChecker<'a> {
                 where_clause: None,
             },
         );
+        // SortedMap yields `(K, V)` tuples in ascending key order, same Item
+        // shape as Map.
+        self.env.impl_assoc_types.insert(
+            ("SortedMap".to_string(), "Item".to_string()),
+            ImplAssocTypeEntry {
+                ty: Type::Tuple(vec![k(), v()]),
+                gat_params: vec![],
+                param_bound_traits: Vec::new(),
+                where_clause: None,
+            },
+        );
 
         // `LinesIter` (phase-8 `BufReader.lines()` slice) — its element type
         // is concretely `Result[String, IoError]`, so the `Item` binding

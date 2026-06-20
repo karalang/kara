@@ -742,6 +742,11 @@ impl<'a> super::Interpreter<'a> {
                     Value::Tuple(v) => v,
                     // SortedSet iterates in ascending key order
                     Value::SortedSet(s) => s.into_keys().map(|k| k.0).collect(),
+                    // SortedMap iterates as (key, value) tuples in ascending key order
+                    Value::SortedMap(m) => m
+                        .into_iter()
+                        .map(|(k, v)| Value::Tuple(vec![k.0, v]))
+                        .collect(),
                     // Set iterates in insertion order
                     Value::Set(s) => s,
                     // Map iterates as (key, value) tuples in insertion order

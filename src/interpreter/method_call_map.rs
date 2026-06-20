@@ -37,15 +37,35 @@ impl<'a> super::Interpreter<'a> {
                         None => default,
                     });
                 }
+                if let Value::SortedMap(ref m) = obj {
+                    let key = args
+                        .first()
+                        .map(|a| self.eval_expr_inner(&a.value))
+                        .unwrap_or(Value::Unit);
+                    let default = args
+                        .get(1)
+                        .map(|a| self.eval_expr_inner(&a.value))
+                        .unwrap_or(Value::Unit);
+                    return Some(match m.get(&OrdValue(key)) {
+                        Some(v) => v.clone(),
+                        None => default,
+                    });
+                }
             }
             "keys" => {
                 if let Value::Map(ref m) = obj {
                     return Some(Value::array_of(m.iter().map(|(k, _)| k.clone()).collect()));
                 }
+                if let Value::SortedMap(ref m) = obj {
+                    return Some(Value::array_of(m.keys().map(|k| k.0.clone()).collect()));
+                }
             }
             "values" => {
                 if let Value::Map(ref m) = obj {
                     return Some(Value::array_of(m.iter().map(|(_, v)| v.clone()).collect()));
+                }
+                if let Value::SortedMap(ref m) = obj {
+                    return Some(Value::array_of(m.values().cloned().collect()));
                 }
             }
             "entries" => {
@@ -53,6 +73,13 @@ impl<'a> super::Interpreter<'a> {
                     return Some(Value::array_of(
                         m.iter()
                             .map(|(k, v)| Value::Tuple(vec![k.clone(), v.clone()]))
+                            .collect(),
+                    ));
+                }
+                if let Value::SortedMap(ref m) = obj {
+                    return Some(Value::array_of(
+                        m.iter()
+                            .map(|(k, v)| Value::Tuple(vec![k.0.clone(), v.clone()]))
                             .collect(),
                     ));
                 }
@@ -73,6 +100,26 @@ impl<'a> super::Interpreter<'a> {
                             }
                         }
                         return Some(Value::Map(result));
+                    }
+                }
+                if let Value::SortedMap(ref base) = obj {
+                    let other = args
+                        .first()
+                        .map(|a| self.eval_expr_inner(&a.value))
+                        .unwrap_or_else(|| Value::SortedMap(std::collections::BTreeMap::new()));
+                    if let Value::SortedMap(other_entries) = other {
+                        // BTreeMap.insert overwrites — `other`'s value wins on a
+                        // key collision, matching Map.merge's last-writer rule.
+                        // `OrdValue` keys carry interior mutability via the
+                        // value Arc; the BTree never re-hashes on it, so the
+                        // mutable-key-type lint is a false positive (same
+                        // suppression as SortedSet's set ops).
+                        #[allow(clippy::mutable_key_type)]
+                        let mut result = base.clone();
+                        for (k, v) in other_entries {
+                            result.insert(k, v);
+                        }
+                        return Some(Value::SortedMap(result));
                     }
                 }
             }
@@ -107,6 +154,30 @@ impl<'a> super::Interpreter<'a> {
                     };
                     if let ExprKind::Identifier(name) = &object.kind {
                         self.env.set(name, Value::Map(m));
+                    }
+                    return Some(old);
+                }
+                if let Value::SortedMap(mut m) = obj {
+                    // SortedMap.insert(key, value) -> Option[V] (old value),
+                    // mirroring Map.insert. `val` is the already-evaluated key.
+                    let value = args
+                        .get(1)
+                        .map(|a| self.eval_expr_inner(&a.value))
+                        .unwrap_or(Value::Unit);
+                    let old = match m.insert(OrdValue(val), value) {
+                        Some(prev) => Value::EnumVariant {
+                            enum_name: "Option".to_string(),
+                            variant: "Some".to_string(),
+                            data: EnumData::Tuple(vec![prev]),
+                        },
+                        None => Value::EnumVariant {
+                            enum_name: "Option".to_string(),
+                            variant: "None".to_string(),
+                            data: EnumData::Unit,
+                        },
+                    };
+                    if let ExprKind::Identifier(name) = &object.kind {
+                        self.env.set(name, Value::SortedMap(m));
                     }
                     return Some(old);
                 }
@@ -150,6 +221,25 @@ impl<'a> super::Interpreter<'a> {
                     };
                     if let ExprKind::Identifier(name) = &object.kind {
                         self.env.set(name, Value::Map(m));
+                    }
+                    return Some(old);
+                }
+                if let Value::SortedMap(mut m) = obj {
+                    // SortedMap.remove(key) -> Option[V] (old value), mirroring Map.remove.
+                    let old = match m.remove(&OrdValue(val)) {
+                        Some(prev) => Value::EnumVariant {
+                            enum_name: "Option".to_string(),
+                            variant: "Some".to_string(),
+                            data: EnumData::Tuple(vec![prev]),
+                        },
+                        None => Value::EnumVariant {
+                            enum_name: "Option".to_string(),
+                            variant: "None".to_string(),
+                            data: EnumData::Unit,
+                        },
+                    };
+                    if let ExprKind::Identifier(name) = &object.kind {
+                        self.env.set(name, Value::SortedMap(m));
                     }
                     return Some(old);
                 }

@@ -826,7 +826,9 @@ pub(super) fn iterator_item_type_for(ty: &Type) -> Option<Type> {
         Type::Slice { element, .. } => Some((**element).clone()),
         Type::Named { name, args } => match name.as_str() {
             "Vec" | "Set" | "SortedSet" | "VecDeque" if args.len() == 1 => Some(args[0].clone()),
-            "Map" if args.len() == 2 => Some(Type::Tuple(vec![args[0].clone(), args[1].clone()])),
+            "Map" | "SortedMap" if args.len() == 2 => {
+                Some(Type::Tuple(vec![args[0].clone(), args[1].clone()]))
+            }
             // `Range` / `RangeInclusive` are Iterators — `(0..n).iter()` is
             // a redundant pass-through that yields the bound element type.
             "Range" | "RangeInclusive" if args.len() == 1 => Some(args[0].clone()),
@@ -854,7 +856,9 @@ pub(super) fn clone_self_type_for(ty: &Type) -> Option<Type> {
         Type::Array { .. } => Some(ty.clone()),
         Type::Vector { .. } => Some(ty.clone()),
         Type::Named { name, args: _ } => match name.as_str() {
-            "Vec" | "Set" | "SortedSet" | "VecDeque" | "Map" | "TreeMap" => Some(ty.clone()),
+            "Vec" | "Set" | "SortedSet" | "VecDeque" | "Map" | "SortedMap" | "TreeMap" => {
+                Some(ty.clone())
+            }
             _ => None,
         },
         Type::Ref(inner) | Type::MutRef(inner) => clone_self_type_for(inner),

@@ -9777,6 +9777,126 @@ fn test_sorted_set_string_element() {
     typecheck_ok("fn f(s: SortedSet[String]) -> bool { s.is_empty() }");
 }
 
+// ── SortedMap[K, V] method typechecking (B3) ────────────────────────────────
+
+#[test]
+fn test_sorted_map_len_returns_i64() {
+    typecheck_ok("fn f(m: SortedMap[i64, String]) -> i64 { m.len() }");
+}
+
+#[test]
+fn test_sorted_map_is_empty_returns_bool() {
+    typecheck_ok("fn f(m: SortedMap[i64, String]) -> bool { m.is_empty() }");
+}
+
+#[test]
+fn test_sorted_map_contains_key_returns_bool() {
+    typecheck_ok("fn f(m: SortedMap[i64, String]) -> bool { m.contains_key(1_i64) }");
+}
+
+#[test]
+fn test_sorted_map_get_returns_option_v() {
+    typecheck_ok("fn f(m: SortedMap[i64, String]) -> Option[String] { m.get(1_i64) }");
+}
+
+#[test]
+fn test_sorted_map_get_or_returns_v() {
+    typecheck_ok("fn f(m: SortedMap[i64, String]) -> String { m.get_or(1_i64, \"x\") }");
+}
+
+#[test]
+fn test_sorted_map_insert_returns_option_old() {
+    typecheck_ok("fn f(m: SortedMap[i64, String]) -> Option[String] { m.insert(1_i64, \"x\") }");
+}
+
+#[test]
+fn test_sorted_map_remove_returns_option_v() {
+    typecheck_ok("fn f(m: SortedMap[i64, String]) -> Option[String] { m.remove(1_i64) }");
+}
+
+#[test]
+fn test_sorted_map_keys_values_entries() {
+    typecheck_ok("fn f(m: SortedMap[i64, String]) -> Vec[i64] { m.keys() }");
+    typecheck_ok("fn f(m: SortedMap[i64, String]) -> Vec[String] { m.values() }");
+    typecheck_ok("fn f(m: SortedMap[i64, String]) -> Vec[(i64, String)] { m.entries() }");
+}
+
+#[test]
+fn test_sorted_map_merge_returns_self() {
+    typecheck_ok(
+        "fn f(a: SortedMap[i64, i64], b: SortedMap[i64, i64]) -> SortedMap[i64, i64] { a.merge(b) }",
+    );
+}
+
+#[test]
+fn test_sorted_map_min_max_return_option_pair() {
+    typecheck_ok("fn f(m: SortedMap[i64, String]) -> Option[(i64, String)] { m.min() }");
+    typecheck_ok("fn f(m: SortedMap[i64, String]) -> Option[(i64, String)] { m.max() }");
+}
+
+#[test]
+fn test_sorted_map_floor_ceiling_return_option_pair() {
+    typecheck_ok("fn f(m: SortedMap[i64, String]) -> Option[(i64, String)] { m.floor(1_i64) }");
+    typecheck_ok("fn f(m: SortedMap[i64, String]) -> Option[(i64, String)] { m.ceiling(1_i64) }");
+}
+
+#[test]
+fn test_sorted_map_range_returns_vec_pair() {
+    typecheck_ok("fn f(m: SortedMap[i64, String]) -> Vec[(i64, String)] { m.range(1_i64, 9_i64) }");
+}
+
+#[test]
+fn test_sorted_map_type_in_annotation() {
+    typecheck_ok(
+        "fn f() -> i64 {\n\
+             let m: SortedMap[i64, String] = SortedMap.new();\n\
+             m.len()\n\
+         }",
+    );
+}
+
+#[test]
+fn test_sorted_map_string_key() {
+    typecheck_ok("fn f(m: SortedMap[String, i64]) -> bool { m.is_empty() }");
+}
+
+#[test]
+fn test_sorted_map_key_must_implement_ord() {
+    // A non-derived distinct type has no Ord — rejected as a SortedMap key,
+    // mirroring the SortedSet element bound.
+    let errors = typecheck_errors(
+        "distinct type Unordered = i64;\n\
+         fn f(m: SortedMap[Unordered, i64]) -> i64 { m.len() }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("does not implement `Ord`")),
+        "expected Ord bound rejection on SortedMap key, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
+fn test_sorted_map_unknown_method_now_errors() {
+    let errors = typecheck_errors(
+        "fn main() { let m: SortedMap[i64, i64] = SortedMap.new(); m.totally_bogus(); }",
+    );
+    let msg = errors
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join(" | ");
+    assert!(
+        msg.contains("'SortedMap'") && msg.contains("'totally_bogus'"),
+        "expected NoMethodFound on SortedMap, got: {msg}"
+    );
+}
+
 // ── Channel[T] / Sender[T] / Receiver[T] typechecking ─────────────────────────
 
 #[test]

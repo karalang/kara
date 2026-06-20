@@ -411,6 +411,9 @@ impl<'a> super::Interpreter<'a> {
                 "SortedSet.new" => {
                     return Value::SortedSet(BTreeMap::new());
                 }
+                "SortedMap.new" => {
+                    return Value::SortedMap(BTreeMap::new());
+                }
                 "Set.new" => {
                     return Value::Set(Vec::new());
                 }

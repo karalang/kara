@@ -872,7 +872,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
     // ── Fallible (try_clone) fn framework (mirror of clone, but i1 + cleanup) ──
 
-    /// True when `te`'s type tree contains no `Map`/`Set`/`SortedSet` node —
+    /// True when `te`'s type tree contains no `Map`/`Set`/`SortedSet`/`SortedMap` node —
     /// i.e. every allocation in its deep clone is a plain buffer that
     /// `karac_alloc_fallible` covers. `try_clone` codegen is emitted only for
     /// supported trees; Map/Set-bearing types need a fallible `karac_map_*`
@@ -885,7 +885,7 @@ impl<'ctx> super::Codegen<'ctx> {
             TypeKind::Path(p) => {
                 let head = p.segments.first().map(String::as_str);
                 match head {
-                    Some("Map") | Some("Set") | Some("SortedSet") => false,
+                    Some("Map") | Some("Set") | Some("SortedSet") | Some("SortedMap") => false,
                     Some("Vec") | Some("VecDeque") => p
                         .generic_args
                         .as_ref()

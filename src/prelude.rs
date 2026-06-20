@@ -97,6 +97,7 @@ pub const PRELUDE_TYPES: &[&str] = &[
     // resolve without an import. See `runtime/stdlib/exitcode.kara`.
     "ExitCode",
     "SortedSet",
+    "SortedMap",
     "Channel",
     "Sender",
     "Receiver",
@@ -594,6 +595,10 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     (
         "sorted_set.kara",
         include_str!("../runtime/stdlib/sorted_set.kara"),
+    ),
+    (
+        "sorted_map.kara",
+        include_str!("../runtime/stdlib/sorted_map.kara"),
     ),
     (
         "channel.kara",
@@ -1488,7 +1493,7 @@ fn stub_generics(name: &str, span: &Span) -> Option<GenericParams> {
             &["T"]
         }
         "Result" => &["T", "E"],
-        "Map" | "Entry" => &["K", "V"],
+        "Map" | "Entry" | "SortedMap" => &["K", "V"],
         _ => return None,
     };
     Some(GenericParams {

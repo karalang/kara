@@ -55,6 +55,10 @@ impl<'a> super::Interpreter<'a> {
                     .iter()
                     .map(|(k, v)| Value::Tuple(vec![k.clone(), v.clone()]))
                     .collect(),
+                Value::SortedMap(m) => m
+                    .iter()
+                    .map(|(k, v)| Value::Tuple(vec![k.0.clone(), v.clone()]))
+                    .collect(),
                 _ => unreachable!(
                     "{}() receiver at {}:{} was Value::{}; \
                      either an interpreter codepath produced the wrong receiver variant \

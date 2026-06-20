@@ -43,6 +43,7 @@ pub(super) fn builtin_collection_name(ty: &Type) -> Option<&'static str> {
             "Vec" => Some("Vec"),
             "VecDeque" => Some("VecDeque"),
             "Map" => Some("Map"),
+            "SortedMap" => Some("SortedMap"),
             "Set" => Some("Set"),
             "SortedSet" => Some("SortedSet"),
             _ => None,

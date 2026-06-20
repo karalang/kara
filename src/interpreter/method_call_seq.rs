@@ -35,6 +35,7 @@ impl<'a> super::Interpreter<'a> {
                     Value::CStr(b) => Value::Int(b.len() as i64),
                     Value::Map(m) => Value::Int(m.len() as i64),
                     Value::SortedSet(s) => Value::Int(s.len() as i64),
+                    Value::SortedMap(m) => Value::Int(m.len() as i64),
                     Value::Set(s) => Value::Int(s.len() as i64),
                     // Note: Map also handled via Map.len() match above
                     _ => unreachable!(
@@ -553,6 +554,9 @@ impl<'a> super::Interpreter<'a> {
                 if let Value::Map(ref m) = obj {
                     return Some(Value::Bool(m.is_empty()));
                 }
+                if let Value::SortedMap(ref m) = obj {
+                    return Some(Value::Bool(m.is_empty()));
+                }
                 if let Value::CStr(ref b) = obj {
                     return Some(Value::Bool(b.is_empty()));
                 }
@@ -744,6 +748,24 @@ impl<'a> super::Interpreter<'a> {
                         },
                     });
                 }
+                if let Value::SortedMap(ref m) = obj {
+                    let key = args
+                        .first()
+                        .map(|a| self.eval_expr_inner(&a.value))
+                        .unwrap_or(Value::Unit);
+                    return Some(match m.get(&OrdValue(key)) {
+                        Some(v) => Value::EnumVariant {
+                            enum_name: "Option".to_string(),
+                            variant: "Some".to_string(),
+                            data: EnumData::Tuple(vec![v.clone()]),
+                        },
+                        None => Value::EnumVariant {
+                            enum_name: "Option".to_string(),
+                            variant: "None".to_string(),
+                            data: EnumData::Unit,
+                        },
+                    });
+                }
                 if let Value::Struct { ref name, .. } = obj {
                     if name == "Client" {
                         let url = args
@@ -798,6 +820,13 @@ impl<'a> super::Interpreter<'a> {
                         .map(|a| self.eval_expr_inner(&a.value))
                         .unwrap_or(Value::Unit);
                     return Some(Value::Bool(m.iter().any(|(k, _)| *k == key)));
+                }
+                if let Value::SortedMap(ref m) = obj {
+                    let key = args
+                        .first()
+                        .map(|a| self.eval_expr_inner(&a.value))
+                        .unwrap_or(Value::Unit);
+                    return Some(Value::Bool(m.contains_key(&OrdValue(key))));
                 }
             }
             "binary_search" => {
@@ -1164,6 +1193,7 @@ impl<'a> super::Interpreter<'a> {
                     Value::Map(m) => return Some(Value::Map(m.clone())),
                     Value::Set(s) => return Some(Value::Set(s.clone())),
                     Value::SortedSet(s) => return Some(Value::SortedSet(s.clone())),
+                    Value::SortedMap(m) => return Some(Value::SortedMap(m.clone())),
                     _ => {}
                 }
             }

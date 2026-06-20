@@ -1,7 +1,8 @@
-//! Set / SortedSet method dispatch — the bodies of the `clear`/`min`/
-//! `max`/`union`/`intersection`/`difference` arms lifted out of
-//! `eval_method_call`. Receivers are `Value::Set` / `Value::SortedSet`
-//! / `Value::Map`.
+//! Set / SortedSet / SortedMap method dispatch — the bodies of the
+//! `clear`/`min`/`max`/`union`/`intersection`/`difference` arms (Set/SortedSet)
+//! and the `clear`/`min`/`max`/`range`/`floor`/`ceiling` arms (SortedMap, B3)
+//! lifted out of `eval_method_call`. Receivers are `Value::Set` /
+//! `Value::SortedSet` / `Value::SortedMap` / `Value::Map`.
 
 use std::collections::BTreeMap;
 
@@ -9,6 +10,24 @@ use crate::ast::*;
 use crate::token::Span;
 
 use super::value::{EnumData, OrdValue, Value};
+
+/// Wrap an optional payload in the `Option` enum `Value` — `Some(v)` when
+/// present, `None` otherwise. Shared by the SortedSet / SortedMap ordered
+/// queries (`min` / `max` / `floor` / `ceiling`) that each return `Option[…]`.
+fn option_of(payload: Option<Value>) -> Value {
+    match payload {
+        Some(v) => Value::EnumVariant {
+            enum_name: "Option".to_string(),
+            variant: "Some".to_string(),
+            data: EnumData::Tuple(vec![v]),
+        },
+        None => Value::EnumVariant {
+            enum_name: "Option".to_string(),
+            variant: "None".to_string(),
+            data: EnumData::Unit,
+        },
+    }
+}
 
 impl<'a> super::Interpreter<'a> {
     pub(super) fn try_eval_set_method(
@@ -27,37 +46,91 @@ impl<'a> super::Interpreter<'a> {
                     }
                     return Some(Value::Unit);
                 }
+                if let Value::SortedMap(_) = obj {
+                    if let ExprKind::Identifier(name) = &object.kind {
+                        self.env.set(name, Value::SortedMap(BTreeMap::new()));
+                    }
+                    return Some(Value::Unit);
+                }
             }
             "min" => {
                 if let Value::SortedSet(ref set) = obj {
-                    return Some(match set.keys().next() {
-                        Some(k) => Value::EnumVariant {
-                            enum_name: "Option".to_string(),
-                            variant: "Some".to_string(),
-                            data: EnumData::Tuple(vec![k.0.clone()]),
-                        },
-                        None => Value::EnumVariant {
-                            enum_name: "Option".to_string(),
-                            variant: "None".to_string(),
-                            data: EnumData::Unit,
-                        },
-                    });
+                    return Some(option_of(set.keys().next().map(|k| k.0.clone())));
+                }
+                if let Value::SortedMap(ref map) = obj {
+                    // SortedMap.min() -> Option[(K, V)] — first entry in key order.
+                    return Some(option_of(
+                        map.iter()
+                            .next()
+                            .map(|(k, v)| Value::Tuple(vec![k.0.clone(), v.clone()])),
+                    ));
                 }
             }
             "max" => {
                 if let Value::SortedSet(ref set) = obj {
-                    return Some(match set.keys().next_back() {
-                        Some(k) => Value::EnumVariant {
-                            enum_name: "Option".to_string(),
-                            variant: "Some".to_string(),
-                            data: EnumData::Tuple(vec![k.0.clone()]),
-                        },
-                        None => Value::EnumVariant {
-                            enum_name: "Option".to_string(),
-                            variant: "None".to_string(),
-                            data: EnumData::Unit,
-                        },
-                    });
+                    return Some(option_of(set.keys().next_back().map(|k| k.0.clone())));
+                }
+                if let Value::SortedMap(ref map) = obj {
+                    // SortedMap.max() -> Option[(K, V)] — last entry in key order.
+                    return Some(option_of(
+                        map.iter()
+                            .next_back()
+                            .map(|(k, v)| Value::Tuple(vec![k.0.clone(), v.clone()])),
+                    ));
+                }
+            }
+            // SortedMap.range(lo, hi) -> Vec[(K, V)] — entries whose key lies in
+            // the INCLUSIVE interval [lo, hi], in ascending key order. An empty
+            // or inverted interval yields the empty vec.
+            "range" => {
+                if let Value::SortedMap(ref map) = obj {
+                    let lo = args
+                        .first()
+                        .map(|a| self.eval_expr_inner(&a.value))
+                        .unwrap_or(Value::Unit);
+                    let hi = args
+                        .get(1)
+                        .map(|a| self.eval_expr_inner(&a.value))
+                        .unwrap_or(Value::Unit);
+                    let (lo, hi) = (OrdValue(lo), OrdValue(hi));
+                    let items: Vec<Value> = if lo > hi {
+                        Vec::new()
+                    } else {
+                        map.range(lo..=hi)
+                            .map(|(k, v)| Value::Tuple(vec![k.0.clone(), v.clone()]))
+                            .collect()
+                    };
+                    return Some(Value::array_of(items));
+                }
+            }
+            // SortedMap.floor(k) -> Option[(K, V)] — entry with the largest key
+            // <= k (the key itself when present). None if every key exceeds k.
+            "floor" => {
+                if let Value::SortedMap(ref map) = obj {
+                    let key = args
+                        .first()
+                        .map(|a| self.eval_expr_inner(&a.value))
+                        .unwrap_or(Value::Unit);
+                    return Some(option_of(
+                        map.range(..=OrdValue(key))
+                            .next_back()
+                            .map(|(k, v)| Value::Tuple(vec![k.0.clone(), v.clone()])),
+                    ));
+                }
+            }
+            // SortedMap.ceiling(k) -> Option[(K, V)] — entry with the smallest
+            // key >= k (the key itself when present). None if every key is below k.
+            "ceiling" => {
+                if let Value::SortedMap(ref map) = obj {
+                    let key = args
+                        .first()
+                        .map(|a| self.eval_expr_inner(&a.value))
+                        .unwrap_or(Value::Unit);
+                    return Some(option_of(
+                        map.range(OrdValue(key)..)
+                            .next()
+                            .map(|(k, v)| Value::Tuple(vec![k.0.clone(), v.clone()])),
+                    ));
                 }
             }
             "union" => {

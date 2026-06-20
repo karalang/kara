@@ -71,6 +71,24 @@ pub(super) fn value_compare(a: &Value, b: &Value) -> std::cmp::Ordering {
                 })
                 .unwrap_or_else(|| ak.len().cmp(&bk.len()))
         }
+        // Two SortedMaps: lexicographic over their ascending (key, value) pairs
+        (Value::SortedMap(a), Value::SortedMap(b)) => a
+            .iter()
+            .zip(b.iter())
+            .find_map(|((ak, av), (bk, bv))| {
+                let k_ord = value_compare(&ak.0, &bk.0);
+                if k_ord != Ordering::Equal {
+                    Some(k_ord)
+                } else {
+                    let v_ord = value_compare(av, bv);
+                    if v_ord != Ordering::Equal {
+                        Some(v_ord)
+                    } else {
+                        None
+                    }
+                }
+            })
+            .unwrap_or_else(|| a.len().cmp(&b.len())),
         // Cross-variant ordering by discriminant index
         _ => value_discriminant(a).cmp(&value_discriminant(b)),
     }
@@ -88,6 +106,7 @@ pub(super) fn value_discriminant(v: &Value) -> u8 {
         Value::Unit => 7,
         Value::Map(_) => 12,
         Value::SortedSet(_) => 9,
+        Value::SortedMap(_) => 14,
         Value::Set(_) => 13,
         Value::Sender(_) => 10,
         Value::Receiver(_) => 11,

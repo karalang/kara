@@ -1,0 +1,10 @@
+// runtime/stdlib/sorted_map.kara
+//
+// B3 (kata-gap backlog). B-tree-backed ordered map, the key→value
+// sibling of `SortedSet`. The hardcoded registration declares two type
+// params K, V (without the `K: Ord` bound, which is enforced by
+// `infer_sorted_map_method` rather than at the type level). Methods stay
+// programmatic — the empty struct is a marker the typechecker / interpreter
+// dispatch through, exactly like `SortedSet` and `Map`.
+
+struct SortedMap[=K, =V] { }

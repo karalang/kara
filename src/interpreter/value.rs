@@ -189,6 +189,12 @@ pub enum Value {
     /// BTreeMap provides O(log n) insert/remove/contains with iteration in
     /// ascending key order. The () value makes it a set (not a map).
     SortedSet(BTreeMap<OrdValue, ()>),
+    /// SortedMap[K: Ord, V] — B-tree–backed ordered map (B3). The key→value
+    /// sibling of `SortedSet`: keys are `OrdValue` (sorted via `value_compare`)
+    /// and each maps to an arbitrary `Value`. Iteration / `keys` / `values` /
+    /// `entries` yield in ascending key order, and the ordered queries
+    /// (`min` / `max` / `range` / `floor` / `ceiling`) ride the B-tree cursor.
+    SortedMap(BTreeMap<OrdValue, Value>),
     /// Set[T: Hash + Eq] — hash set backed by a Vec for interpreter simplicity.
     /// O(n) lookup is fine for testing; the typechecker enforces Hash + Eq.
     Set(Vec<Value>),
@@ -500,6 +506,12 @@ impl PartialEq for Value {
             }
             (Value::SortedSet(a), Value::SortedSet(b)) => {
                 a.len() == b.len() && a.keys().zip(b.keys()).all(|(x, y)| x == y)
+            }
+            (Value::SortedMap(a), Value::SortedMap(b)) => {
+                a.len() == b.len()
+                    && a.iter()
+                        .zip(b.iter())
+                        .all(|((ak, av), (bk, bv))| ak == bk && av == bv)
             }
             (Value::Set(a), Value::Set(b)) => a.len() == b.len() && a.iter().all(|x| b.contains(x)),
             // Channel ends compare by pointer identity — two Senders are equal
@@ -863,6 +875,16 @@ impl std::fmt::Display for Value {
                 }
                 write!(f, "}}")
             }
+            Value::SortedMap(map) => {
+                write!(f, "SortedMap{{")?;
+                for (i, (k, v)) in map.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}: {}", k.0, v)?;
+                }
+                write!(f, "}}")
+            }
             Value::Set(elems) => {
                 write!(f, "Set{{")?;
                 for (i, v) in elems.iter().enumerate() {
@@ -1047,6 +1069,7 @@ impl Value {
             Value::Atomic(_) => "Atomic",
             Value::Mutex(_) => "Mutex",
             Value::SortedSet(_) => "SortedSet",
+            Value::SortedMap(_) => "SortedMap",
             Value::Set(_) => "Set",
             Value::Iterator { .. } => "Iterator",
             Value::Sender(_) => "Sender",
@@ -1150,6 +1173,13 @@ impl Value {
             Value::SortedSet(set) => {
                 let inner: Vec<String> = set.keys().map(|k| k.0.debug_fmt()).collect();
                 format!("SortedSet{{{}}}", inner.join(", "))
+            }
+            Value::SortedMap(map) => {
+                let inner: Vec<String> = map
+                    .iter()
+                    .map(|(k, v)| format!("{}: {}", k.0.debug_fmt(), v.debug_fmt()))
+                    .collect();
+                format!("SortedMap{{{}}}", inner.join(", "))
             }
             Value::Set(elems) => {
                 let inner: Vec<String> = elems.iter().map(|v| v.debug_fmt()).collect();

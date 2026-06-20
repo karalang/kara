@@ -459,6 +459,7 @@ impl<'a> super::Resolver<'a> {
                     "VecDeque" => Some("VecDeque[…]".to_string()),
                     "TreeMap" => Some("TreeMap[…, …]".to_string()),
                     "SortedSet" => Some("SortedSet[…]".to_string()),
+                    "SortedMap" => Some("SortedMap[…, …]".to_string()),
                     _ => {
                         for item in &self.program.items {
                             match item {
