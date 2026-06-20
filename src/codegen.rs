@@ -65,6 +65,7 @@ mod provider;
 mod reduce;
 mod refinement;
 mod runtime;
+mod shadow;
 mod state;
 mod stmts;
 mod synth;
@@ -1692,6 +1693,17 @@ pub(super) struct Codegen<'ctx> {
     /// borrow-returning call result is a tracked Tier-1.5 follow-on
     /// (B-2026-06-07-5).
     pub(crate) compiling_ref_return_let_rhs: bool,
+    /// Set by the `StmtKind::Let` arm around its `bind_pattern` call for a
+    /// type-changing shadow (`let s = "x"; let s = s.len();`). The Let arm
+    /// manages the rebound name's per-variable sidecar metadata itself via
+    /// the take/restore dance in `shadow.rs` (it must keep the OLD class
+    /// tags live while the RHS may still reference the old binding, then
+    /// install pure-NEW tags before the bind). `bind_pattern`'s own
+    /// rebind-purge would wipe those just-installed NEW tags, so it skips
+    /// the purge while this flag is set. For-loop / match-arm / destructure
+    /// callers leave it `false` — they re-register the new binding's
+    /// metadata *after* `bind_pattern`, so the purge there is exactly right.
+    pub(crate) suppress_shadow_metadata_purge: bool,
     /// Set by `compile_match` when the scrutinee is a borrow-returning
     /// call (`Map.get`, `Vec.first`, ...) — used by `bind_pattern_values`
     /// to suppress `track_vec_var` for the bound name, since the payload
@@ -4910,6 +4922,7 @@ impl<'ctx> Codegen<'ctx> {
             main_returns_exitcode: false,
             current_fn_returns_ref: false,
             compiling_ref_return_let_rhs: false,
+            suppress_shadow_metadata_purge: false,
             pattern_binding_is_borrow: false,
             pattern_binding_scrutinee_is_option_result: false,
             pattern_binding_scrutinee_is_shared_enum: false,

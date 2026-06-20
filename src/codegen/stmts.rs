@@ -1270,6 +1270,23 @@ impl<'ctx> super::Codegen<'ctx> {
                         return Ok(());
                     }
                 }
+                // Type-changing shadow dance (step 1 of 3 — clean slate).
+                // If this `let` re-binds a single name already in scope, lift
+                // the old binding's per-variable sidecar metadata out of the
+                // maps so the registration block below writes the NEW binding's
+                // class tags onto a clean slate — identical to a fresh binding
+                // of the same type. This also fixes latent rebind false-gates
+                // (e.g. the `map_key_types.contains_key(var_name)` guard on the
+                // `Map.new()` fast path below would otherwise fire for a
+                // non-map rebind of a name that used to hold a map). The lifted
+                // metadata is reinstated in step 2 for the value-compile, then
+                // discarded in step 3. The borrow-return shadow path above has
+                // already returned, so this only runs for value-bound lets.
+                let shadow_name: Option<String> = match &pattern.kind {
+                    PatternKind::Binding(n) if self.variables.contains_key(n) => Some(n.clone()),
+                    _ => None,
+                };
+                let mut shadow_old_meta = shadow_name.as_ref().map(|n| self.take_var_metadata(n));
                 // Record the binding's instantiated generic-enum type
                 // (`Option[String]`, `Result[_, String]`) keyed by *variable
                 // name* so heap-payload enum `==` (`compile_enum_eq`) can
@@ -1775,7 +1792,32 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.pending_let_tensor_info = Some(info.clone());
                     }
                 }
+                // Type-changing shadow dance (step 2 of 3 — old tags for the
+                // RHS). The pending-let derivation above has already read the
+                // NEW binding's element/tensor info from the maps into locals;
+                // now stash the NEW per-variable metadata and reinstate the OLD
+                // so the RHS sees the previous binding's class while it
+                // compiles — `let s = s.to_vec()` (String→Vec) must dispatch
+                // `s` as the old String. No-op for a non-shadow let.
+                let shadow_new_meta = shadow_name.as_ref().map(|n| {
+                    let new_meta = self.take_var_metadata(n);
+                    if let Some(old) = shadow_old_meta.take() {
+                        self.restore_var_metadata(n, old);
+                    }
+                    new_meta
+                });
                 let val = self.compile_expr(value)?;
+                // Type-changing shadow dance (step 3 of 3 — pure-new tags).
+                // The RHS is compiled; drop the OLD metadata and reinstate the
+                // NEW binding's class tags so every later use of the new
+                // binding — and the scope-exit drop registration via the
+                // `track_*` calls below — dispatches correctly. The bind at the
+                // bottom of the arm runs under `suppress_shadow_metadata_purge`
+                // so `bind_pattern` does not re-purge what was just installed.
+                if let (Some(n), Some(new_meta)) = (shadow_name.as_ref(), shadow_new_meta) {
+                    self.forget_var_metadata(n);
+                    self.restore_var_metadata(n, new_meta);
+                }
                 self.pending_let_elem_type = saved_pending_let_elem;
                 self.pending_let_elem_type_expr = saved_pending_let_elem_te;
                 self.pending_let_tensor_info = saved_pending_let_tensor;
@@ -2332,7 +2374,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     })?;
                     self.bind_slice_pattern(prefix, rest, suffix, &src, false)?;
                 } else {
-                    self.bind_pattern(pattern, val)?;
+                    // For a type-changing shadow the dance above already
+                    // installed the new binding's pure metadata; tell
+                    // `bind_pattern` not to re-purge it. Non-shadow lets and
+                    // destructures leave the flag false (the latter rely on
+                    // `bind_pattern`'s purge + their own post-bind
+                    // re-registration). Reset before the `?` so an error can't
+                    // leak the flag into later compilation.
+                    self.suppress_shadow_metadata_purge = shadow_name.is_some();
+                    let bind_res = self.bind_pattern(pattern, val);
+                    self.suppress_shadow_metadata_purge = false;
+                    bind_res?;
                     // `let Point { items, count } = …` — `bind_pattern` only
                     // allocas the field bindings; it registers neither method
                     // dispatch nor scope-exit cleanup for them, so destructured
@@ -3774,54 +3826,38 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<(), String> {
         match &pattern.kind {
             PatternKind::Binding(name) => {
-                // Type-changing-shadow guard. A `let` that re-binds a name
-                // already in scope reuses the old name's sidecar metadata
-                // (`string_vars`, `vec_elem_types`, …, all keyed by variable
-                // name); when the new binding has a different type, a later
-                // use is mis-dispatched against the old type and traps at
-                // runtime. The resolver and interpreter support such shadows
-                // (design.md § Variables > Shadowing); the AOT backend's
-                // metadata-purge is a tracked follow-up (phase-5-diagnostics.md
-                // "codegen type-changing-shadow"). Until it lands, reject with
-                // a clean compile error rather than emitting a trapping binary.
+                // Type-changing shadow purge. A `let` / for-loop / match-arm /
+                // destructure binding that re-binds a name already in scope
+                // must not inherit the old binding's per-variable sidecar
+                // metadata (`string_vars`, `vec_elem_types`, …, all keyed by
+                // variable name); when the new binding has a different
+                // type/class, a stale tag mis-dispatches a later use and traps
+                // at runtime. The resolver and interpreter support such shadows
+                // (design.md § Variables > Shadowing).
                 //
-                // The trap is narrow: it fires only when the *old* binding
-                // carries heap-collection / string class metadata (keyed by
-                // variable name) that the *new* value can't inhabit. A plain
-                // rebind whose old slot has no such metadata is harmless — the
-                // new binding simply overwrites the slot. In particular,
-                // codegen's `variables` map is function-flat, so an out-of-scope
-                // match-arm payload (`Some(x) => …`, x: i64) lingers under the
-                // same name; a later `let x = <struct>` must still compile.
-                // So we do NOT key off a bare LLVM-type change.
+                // `bind_pattern` is the single choke point for every binding
+                // form, so purging here covers for-loop / match-arm / slice /
+                // destructure shadows: those callers re-register the new
+                // binding's metadata *after* `bind_pattern`
+                // (`register_for_loop_bindings`, the match-arm payload
+                // registration, `finish_owned_*_destructure`), so a full purge
+                // here is exactly right for them.
                 //
-                // We fire when the old binding is string/collection-tagged and
-                // the new value is a scalar (int/float/bool) — a scalar can
-                // never be a String/Vec/Map/Set, so the stale tag would
-                // mis-dispatch a later use and trap (e.g. `let s = "x";
-                // let s = s.len();`). Same-class shadows (`let s = "a";
-                // let s = "b";`, `let v = vec1; let v = vec2;`) keep working.
-                // Best-effort: a same-layout cross-class shadow (String↔Vec,
-                // both `{ptr,i64,i64}` and both tagged) is not distinguished
-                // here — that, and the full metadata-purge, are the tracked
-                // follow-up slice.
-                if self.variables.contains_key(name) {
-                    let new_ty = val.get_type();
-                    let old_is_string_like = self.string_vars.contains(name);
-                    let old_is_collection = self.vec_elem_types.contains_key(name)
-                        || self.slice_elem_types.contains_key(name)
-                        || self.map_key_types.contains_key(name)
-                        || self.set_elem_types.contains_key(name);
-                    let new_is_scalar = !new_ty.is_struct_type() && !new_ty.is_pointer_type();
-                    if (old_is_string_like || old_is_collection) && new_is_scalar {
-                        return Err(format!(
-                            "shadowing local `{}` with a value of a different type is not yet \
-                             supported by the AOT backend (the interpreter supports it); rename \
-                             the new binding or keep the same type. Tracked as a \
-                             phase-5-diagnostics follow-up.",
-                            name
-                        ));
-                    }
+                // The `StmtKind::Let` arm is the exception: it writes the new
+                // binding's metadata *before* `bind_pattern` and runs its own
+                // take/restore dance (`shadow.rs`) to keep the OLD tags live
+                // while the RHS may still reference the old binding
+                // (`let s = s.len()`), then installs pure-NEW tags before the
+                // bind. It sets `suppress_shadow_metadata_purge` so this purge
+                // does not wipe those just-installed NEW tags.
+                //
+                // LeakSanitizer-safe: scope-exit drops are queued as
+                // `CleanupAction`s keyed by the binding's alloca at bind time
+                // (`scope_cleanup_actions`), not re-derived from these maps at
+                // drain time, so the old binding still drops after its
+                // name-metadata is forgotten.
+                if !self.suppress_shadow_metadata_purge && self.variables.contains_key(name) {
+                    self.forget_var_metadata(name);
                 }
                 let fn_val = self.current_fn.unwrap();
                 let alloca = self.create_entry_alloca(fn_val, name, val.get_type());

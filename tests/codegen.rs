@@ -36275,6 +36275,159 @@ fn main() {
         assert_eq!(output, "7\n100\n");
     }
 
+    // ── Type-changing shadows (phase-5-diagnostics "codegen
+    //    type-changing-shadow"). A `let` that re-binds an in-scope name with
+    //    a different type/class used to be rejected by a `bind_pattern` guard
+    //    because the per-variable sidecar metadata (string/collection class
+    //    tags) survived the rebind and mis-dispatched a later use. The
+    //    `shadow.rs` take/restore dance now purges the old tags. Each test
+    //    soft-skips when the runtime archive is unavailable (run_program ->
+    //    None), matching the rest of the E2E suite. ──
+
+    #[test]
+    fn test_e2e_shadow_string_to_int_via_old_binding() {
+        // `let s = s.len()` — collection→scalar shadow whose RHS references
+        // the OLD binding. The dance must keep `s` dispatching as a String
+        // while the RHS compiles, then drop the String tag so `println(s)`
+        // formats an i64 (not a String, which would trap).
+        if let Some(out) = run_program(
+            "fn main() {\n\
+             let s = \"hello\";\n\
+             let s = s.len();\n\
+             println(s);\n\
+             }",
+        ) {
+            assert_eq!(out, "5\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_shadow_int_to_string() {
+        // int→String shadow. The new String tag must be installed; the old
+        // (absent) scalar metadata leaves nothing to purge.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+             let s = 5i64;\n\
+             let s = \"world\";\n\
+             println(s);\n\
+             }",
+        ) {
+            assert_eq!(out, "world\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_shadow_string_to_vec_chars_references_old() {
+        // String→Vec[char] shadow whose RHS (`s.chars()`) dispatches on the
+        // OLD String binding. Same-layout cross-class ({ptr,i64,i64}); the
+        // dance is what lets `chars()` see a String while `s.len()` after the
+        // rebind sees the new Vec[char].
+        if let Some(out) = run_program(
+            "fn main() {\n\
+             let s = \"abc\";\n\
+             let s = s.chars();\n\
+             println(s.len());\n\
+             }",
+        ) {
+            assert_eq!(out, "3\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_shadow_collection_to_scalar() {
+        // Vec→scalar shadow with RHS referencing the old Vec. The old
+        // `vec_elem_types` tag must be purged so `println(v)` formats an i64.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.push(10i64);\n\
+             v.push(20i64);\n\
+             v.push(30i64);\n\
+             let v = v.len();\n\
+             println(v);\n\
+             }",
+        ) {
+            assert_eq!(out, "3\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_shadow_vec_to_string() {
+        // Vec→String shadow (same layout, opposite direction). The old
+        // collection tags must be gone so `s` dispatches as a String.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+             let mut s: Vec[i64] = Vec.new();\n\
+             s.push(1i64);\n\
+             let s = \"done\";\n\
+             println(s);\n\
+             println(s.len());\n\
+             }",
+        ) {
+            assert_eq!(out, "done\n4\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_shadow_struct_a_to_struct_b() {
+        // struct-A→struct-B shadow. `var_type_names` / field metadata for the
+        // old struct must be replaced so `p.<field>` resolves against B.
+        if let Some(out) = run_program(
+            "struct A { x: i64 }\n\
+             struct B { y: i64 }\n\
+             fn main() {\n\
+             let p = A { x: 1i64 };\n\
+             let p = B { y: 2i64 };\n\
+             println(p.y);\n\
+             }",
+        ) {
+            assert_eq!(out, "2\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_shadow_in_for_loop_over_collection_var() {
+        // A for-loop binding that shadows an in-scope String with a scalar
+        // element. The purge lives in `bind_pattern` (the for-loop's choke
+        // point), so the loop var `s` dispatches as i64 inside the body even
+        // though an outer `s` was a String — `sum + s` and `println(s)` both
+        // treat `s` as i64. (This program did not compile before the fix: the
+        // old `bind_pattern` guard rejected the scalar-over-String rebind.
+        // Codegen's function-flat `variables` map does not restore the outer
+        // `s` after the loop, an orthogonal pre-existing scoping limitation,
+        // so the test asserts only the in-loop dispatch.)
+        if let Some(out) = run_program(
+            "fn main() {\n\
+             let s = \"outer\";\n\
+             let mut sum = 0i64;\n\
+             for s in [1i64, 2i64, 3i64] {\n\
+                 println(s);\n\
+                 sum = sum + s;\n\
+             }\n\
+             println(sum);\n\
+             }",
+        ) {
+            assert_eq!(out, "1\n2\n3\n6\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_shadow_same_class_still_works() {
+        // Regression guard: a same-class shadow (String→String) must keep
+        // working — the dance is a no-op-equivalent when the class is
+        // unchanged (old tags purged, identical new tags reinstalled).
+        if let Some(out) = run_program(
+            "fn main() {\n\
+             let s = \"first\";\n\
+             let s = \"second\";\n\
+             println(s);\n\
+             println(s.len());\n\
+             }",
+        ) {
+            assert_eq!(out, "second\n6\n");
+        }
+    }
+
     #[test]
     fn test_ir_modbind_emits_internal_global() {
         // The lowered IR contains the global with `internal` linkage

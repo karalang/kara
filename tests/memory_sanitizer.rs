@@ -366,6 +366,51 @@ fn main() {
         );
     }
 
+    /// Type-changing shadow (phase-5-diagnostics "codegen
+    /// type-changing-shadow"): `let v = v.len()` rebinds a heap `Vec` to a
+    /// scalar. The shadow dance purges `v`'s `vec_elem_types` tag so the new
+    /// i64 binding dispatches correctly — but the OLD Vec's scope-exit free
+    /// MUST still fire. Scope-exit drops are queued by alloca at bind time
+    /// (`scope_cleanup_actions`), not re-derived from the purged name-maps, so
+    /// forgetting the metadata cannot drop the cleanup. If it could, the
+    /// 128-byte buffer (16 i64s — well past the ≥36-byte LSan reachability
+    /// floor) would leak. ASAN must report clean: no leak, no double-free.
+    #[test]
+    fn asan_type_changing_shadow_vec_to_scalar_frees_old_buffer() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0i64;
+    while i < 16i64 { v.push(i * 7i64); i = i + 1i64; }
+    let v = v.len();
+    println(v);
+}
+"#,
+            &["16"],
+            "type_changing_shadow_vec_to_scalar",
+        );
+    }
+
+    /// String sibling of the Vec shadow above: a ≥36-byte heap `String`
+    /// (40 chars, past the SSO/short-string window LSan can't see) rebound to
+    /// the scalar `s.len()`. The old String's buffer must still drop after the
+    /// `string_vars` tag is purged. ASAN must report clean.
+    #[test]
+    fn asan_type_changing_shadow_string_to_scalar_frees_old_buffer() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let s = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let s = s.len();
+    println(s);
+}
+"#,
+            &["40"],
+            "type_changing_shadow_string_to_scalar",
+        );
+    }
+
     /// Borrow-elision negative: each `r` is moved into `keep`, so the gate must
     /// KEEP the deep clone — `r` owns an independent buffer that outlives `out`.
     /// ASAN confirms no use-after-free (a mis-borrowed `r` would dangle once
