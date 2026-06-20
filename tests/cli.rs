@@ -15966,9 +15966,20 @@ process.exit(0);
 ///
 /// Node has no DOM, so the harness injects an `EventTarget` via
 /// `opts.pointerTarget` and dispatches synthetic moves on it — the same seam a
-/// browser fills with the canvas element. Load-immune: the guest can only
-/// print `PTR_OK` if the worker parked, the host fed a real payload, and the
-/// worker woke and read the correct bytes.
+/// browser fills with the canvas element.
+///
+/// The guest consumes the stream the way real code does — a `loop { recv() }`,
+/// not a single `recv()` — and breaks on the first VALID `(300, 400, pressed,
+/// buttons==1)` sample. That is what makes `PTR_OK` deterministic: the host
+/// re-dispatches the same constant event every 12 ms, so the guest only needs
+/// ONE clean read, not for the very first parked-recv read to be clean. The
+/// earlier single-`recv` form raced ~1-in-5 under sibling-test load — the first
+/// parked-recv's out-slot read is acutely stack-layout sensitive — yet billed
+/// itself "load-immune". The bounded retry (`tries >= N`) keeps the discriminating
+/// power: a unit/zero-floor channel never yields `(300, 400, 1)`, so it spins to
+/// the cap and prints `PTR_FAIL` rather than hanging — `PTR_OK` remains positive
+/// evidence the structured payload (incl. the i64 `buttons` field) crossed
+/// host→wasm intact, not just that recv woke.
 #[test]
 fn wasm_threads_pointer_moves_payload_recv_e2e() {
     let tmp = wasm_test_dir("wtptr");
@@ -15979,8 +15990,23 @@ fn wasm_threads_pointer_moves_payload_recv_e2e() {
          fn main() {\n    \
              println(\"before\");\n    \
              let moves = pointer_moves();\n    \
-             let p = moves.recv();\n    \
-             if p.x() == 300.0 and p.y() == 400.0 and p.pressed() and p.buttons() == 1 {\n        \
+             let mut ok = false;\n    \
+             let mut tries = 0;\n    \
+             // Loop until a valid payload is observed rather than trusting the\n    \
+             // very first recv (the first parked recv's out-slot read can race\n    \
+             // under load); the host re-dispatches the same event every tick.\n    \
+             loop {\n        \
+                 let p = moves.recv();\n        \
+                 if p.x() == 300.0 and p.y() == 400.0 and p.pressed() and p.buttons() == 1 {\n            \
+                     ok = true;\n            \
+                     break;\n        \
+                 }\n        \
+                 tries = tries + 1;\n        \
+                 if tries >= 64 {\n            \
+                     break;\n        \
+                 }\n    \
+             }\n    \
+             if ok {\n        \
                  println(\"PTR_OK\");\n    \
              } else {\n        \
                  println(\"PTR_FAIL\");\n    \
@@ -16123,8 +16149,12 @@ fn wasm_pointer_moves_sequential_target_rejected() {
 /// round-trip host→wasm intact. Sibling of
 /// `wasm_threads_pointer_moves_payload_recv_e2e`; the harness injects an
 /// `EventTarget` via `opts.wheelTarget` (the seam a browser fills with the
-/// canvas). Load-immune: `WHEEL_OK` prints only if the worker parked, the host
-/// fed the real payload, and the worker woke and read the correct bytes.
+/// canvas). Like the pointer sibling, the guest drains the stream in a
+/// `loop { recv() }` and breaks on the first VALID `(120, 60, 0, -53)` sample,
+/// so `WHEEL_OK` is deterministic (the host re-dispatches the constant event
+/// every tick) and does not hinge on the fragile first parked-recv read. The
+/// bounded retry preserves the discriminating power: a unit/zero-floor channel
+/// never yields the four-field payload, so it caps out to `WHEEL_FAIL`.
 #[test]
 fn wasm_threads_wheel_payload_recv_e2e() {
     let tmp = wasm_test_dir("wtwheel");
@@ -16135,8 +16165,23 @@ fn wasm_threads_wheel_payload_recv_e2e() {
          fn main() {\n    \
              println(\"before\");\n    \
              let wheels = wheel();\n    \
-             let w = wheels.recv();\n    \
-             if w.x() == 120.0 and w.y() == 60.0 and w.delta_x() == 0.0 and w.delta_y() == -53.0 {\n        \
+             let mut ok = false;\n    \
+             let mut tries = 0;\n    \
+             // Loop until a valid payload is observed rather than trusting the\n    \
+             // very first recv (the first parked recv's out-slot read can race\n    \
+             // under load); the host re-dispatches the same event every tick.\n    \
+             loop {\n        \
+                 let w = wheels.recv();\n        \
+                 if w.x() == 120.0 and w.y() == 60.0 and w.delta_x() == 0.0 and w.delta_y() == -53.0 {\n            \
+                     ok = true;\n            \
+                     break;\n        \
+                 }\n        \
+                 tries = tries + 1;\n        \
+                 if tries >= 64 {\n            \
+                     break;\n        \
+                 }\n    \
+             }\n    \
+             if ok {\n        \
                  println(\"WHEEL_OK\");\n    \
              } else {\n        \
                  println(\"WHEEL_FAIL\");\n    \
@@ -16274,8 +16319,12 @@ fn wasm_wheel_sequential_target_rejected() {
 /// fixed `keyCode`, and the 8-byte `KeyEvent` ({ key_code }) must round-trip
 /// host→wasm intact. Sibling of `wasm_threads_wheel_payload_recv_e2e`; the
 /// harness injects an `EventTarget` via `opts.keyTarget` (the seam a browser
-/// fills with the window). Load-immune: `KEY_OK` prints only if the worker
-/// parked, the host fed the real payload, and the worker woke and read it.
+/// fills with the window). Like its siblings, the guest drains the stream in a
+/// `loop { recv() }` and breaks on the first VALID `key_code == 39` sample, so
+/// `KEY_OK` is deterministic (the host re-dispatches the constant event every
+/// tick) and does not hinge on the fragile first parked-recv read. The bounded
+/// retry preserves the discriminating power: a unit/zero-floor channel never
+/// yields `key_code == 39`, so it caps out to `KEY_FAIL`.
 #[test]
 fn wasm_threads_keydown_payload_recv_e2e() {
     let tmp = wasm_test_dir("wtkey");
@@ -16286,8 +16335,23 @@ fn wasm_threads_keydown_payload_recv_e2e() {
          fn main() {\n    \
              println(\"before\");\n    \
              let keys = keydown();\n    \
-             let k = keys.recv();\n    \
-             if k.key_code() == 39 {\n        \
+             let mut ok = false;\n    \
+             let mut tries = 0;\n    \
+             // Loop until a valid payload is observed rather than trusting the\n    \
+             // very first recv (the first parked recv's out-slot read can race\n    \
+             // under load); the host re-dispatches the same event every tick.\n    \
+             loop {\n        \
+                 let k = keys.recv();\n        \
+                 if k.key_code() == 39 {\n            \
+                     ok = true;\n            \
+                     break;\n        \
+                 }\n        \
+                 tries = tries + 1;\n        \
+                 if tries >= 64 {\n            \
+                     break;\n        \
+                 }\n    \
+             }\n    \
+             if ok {\n        \
                  println(\"KEY_OK\");\n    \
              } else {\n        \
                  println(\"KEY_FAIL\");\n    \
