@@ -90,6 +90,9 @@ fn walk_block(block: &Block, level: LintLevel, diags: &mut Vec<LintDiagnostic>) 
 
 fn walk_stmt(stmt: &Stmt, level: LintLevel, diags: &mut Vec<LintDiagnostic>) {
     match &stmt.kind {
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
         StmtKind::Let { value, .. } => walk_expr(value, level, diags),
         StmtKind::LetUninit { .. } => {}
         StmtKind::LetElse {

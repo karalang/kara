@@ -2728,6 +2728,9 @@ impl<'a> CostEstimator<'a> {
 
     fn estimate_stmt(&mut self, stmt: &Stmt) -> u64 {
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
                 1u64.saturating_add(self.estimate_expr(value))
             }
@@ -3388,6 +3391,9 @@ fn modulo_arms_match(
 /// conservative call is near zero on the kata surface).
 fn collect_mutated_vec_names_in_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
     match &stmt.kind {
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
         StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } | StmtKind::Expr(value) => {
             collect_mutated_vec_names_in_expr(value, out);
         }
@@ -3554,6 +3560,9 @@ fn collect_modulo_index_sites_in_stmt(
     out: &mut Vec<HoistableModuloBound>,
 ) {
     match &stmt.kind {
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
         StmtKind::Let { value, .. }
         | StmtKind::LetElse { value, .. }
         | StmtKind::Expr(value)
@@ -3762,6 +3771,9 @@ fn block_has_early_exit(block: &Block) -> bool {
 
 fn stmt_has_early_exit(stmt: &Stmt) -> bool {
     match &stmt.kind {
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
         StmtKind::Let { value, .. }
         | StmtKind::Assign { value, .. }
         | StmtKind::CompoundAssign { value, .. }
@@ -3889,6 +3901,9 @@ impl MemoryBoundDetector {
 
     fn visit_stmt(&mut self, stmt: &Stmt) {
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => self.visit_expr(value),
             StmtKind::Assign { target, value } => {
                 self.visit_expr(target);

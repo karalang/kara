@@ -50,6 +50,9 @@ impl<'a> super::Resolver<'a> {
 
     pub(crate) fn resolve_stmt(&mut self, stmt: &Stmt) {
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let {
                 is_mut,
                 pattern,

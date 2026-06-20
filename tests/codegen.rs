@@ -3835,6 +3835,9 @@ fn main() {
             }
             panic!("{}", msg);
         }
+        // Mirror the real CLI pipeline: desugar (impl-Trait args,
+        // parallel assignment, …) runs between parse and resolve.
+        karac::desugar_program(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -21162,6 +21165,9 @@ fn main() {
             }
             panic!("{}", msg);
         }
+        // Mirror the real CLI pipeline: desugar (impl-Trait args,
+        // parallel assignment, …) runs between parse and resolve.
+        karac::desugar_program(&mut parsed.program);
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
@@ -47062,6 +47068,35 @@ fn main() {
              }",
         ) {
             assert_eq!(out, "3 1 2\n");
+        }
+    }
+
+    #[test]
+    fn e2e_multi_assign_nested_in_control_flow() {
+        // Exercises the desugar walker's recursion: parallel assignments nested
+        // inside a while loop, an if branch, and a block-expr must all expand.
+        // A bubble-sort pass (swap in a loop) plus a conditional swap.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 v.push(3i64); v.push(1i64); v.push(2i64);\n\
+                 let n = v.len();\n\
+                 let mut i = 0i64;\n\
+                 while i < n {\n\
+                     let mut j = 0i64;\n\
+                     while j + 1i64 < n {\n\
+                         if v[j] > v[j + 1i64] {\n\
+                             v[j], v[j + 1i64] = v[j + 1i64], v[j];\n\
+                         }\n\
+                         j = j + 1i64;\n\
+                     }\n\
+                     i = i + 1i64;\n\
+                 }\n\
+                 let extra = { let mut p = 9i64; let mut q = 8i64; p, q = q, p; p - q };\n\
+                 println(f\"{v[0]} {v[1]} {v[2]} {extra}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "1 2 3 -1\n");
         }
     }
 }

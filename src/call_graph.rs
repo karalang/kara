@@ -198,6 +198,9 @@ fn collect_callees_in_stmt(
     out: &mut BTreeSet<String>,
 ) {
     match &stmt.kind {
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
         StmtKind::Let { value, .. } => collect_callees_in_expr(value, known, methods, out),
         StmtKind::LetUninit { .. } => {}
         StmtKind::LetElse {

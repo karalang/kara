@@ -460,14 +460,11 @@ impl super::Parser {
     /// `t1, t2, ... = v1, v2, ...;`, entered with the first target `first`
     /// already parsed and the cursor sitting on the first comma.
     ///
-    /// Desugars in the parser (rather than via a dedicated `StmtKind`) into a
-    /// block-expr statement that evaluates every right-hand value (left to
-    /// right) into a fresh temporary and then writes each left-hand target —
-    /// so `a, b = b, a` swaps. A dedicated AST node would force a match arm in
-    /// ~140 exhaustive `StmtKind` sites across every phase; the synthesized
-    /// `let` / `Assign` / `Block` nodes are the already-tested canonical form.
-    /// The temporaries carry a `__karac_pa_<offset>_<i>` name that user code
-    /// cannot collide with and live only inside the synthesized block's scope.
+    /// Produces a [`StmtKind::MultiAssign`] node. The [`crate::desugar`] pass
+    /// rewrites it (before resolve) into a block-expr of `let`-temps + single
+    /// `Assign`s that evaluates every right-hand value left-to-right before
+    /// writing any target — so `a, b = b, a` swaps. Keeping the surface node
+    /// lets the formatter round-trip the comma syntax verbatim.
     fn finish_multi_assign(&mut self, first: Expr) -> Option<Stmt> {
         let start = first.span.clone();
         let mut targets = vec![first];
@@ -492,58 +489,10 @@ impl super::Parser {
             );
             return None;
         }
-        Some(self.build_parallel_assign(targets, values, span))
-    }
-
-    /// Build the block-expr statement that a parallel assignment desugars to:
-    /// `{ let _t0 = v0; …; let _tn = vn; target0 = _t0; …; targetn = _tn; }`.
-    /// Evaluating all values into temporaries before writing any target is what
-    /// gives `a, b = b, a` its swap semantics.
-    fn build_parallel_assign(&self, targets: Vec<Expr>, values: Vec<Expr>, span: Span) -> Stmt {
-        let n = targets.len();
-        let mut stmts: Vec<Stmt> = Vec::with_capacity(n * 2);
-        let mut temp_names: Vec<String> = Vec::with_capacity(n);
-        for (i, value) in values.into_iter().enumerate() {
-            let name = format!("__karac_pa_{}_{}", span.offset, i);
-            let vspan = value.span.clone();
-            temp_names.push(name.clone());
-            stmts.push(Stmt {
-                span: vspan.clone(),
-                kind: StmtKind::Let {
-                    is_mut: false,
-                    pattern: Pattern {
-                        kind: PatternKind::Binding(name),
-                        span: vspan,
-                    },
-                    ty: None,
-                    value,
-                },
-            });
-        }
-        for (target, name) in targets.into_iter().zip(temp_names) {
-            let tspan = target.span.clone();
-            stmts.push(Stmt {
-                span: tspan.clone(),
-                kind: StmtKind::Assign {
-                    target,
-                    value: Expr {
-                        kind: ExprKind::Identifier(name),
-                        span: tspan,
-                    },
-                },
-            });
-        }
-        Stmt {
-            span: span.clone(),
-            kind: StmtKind::Expr(Expr {
-                kind: ExprKind::Block(Block {
-                    stmts,
-                    final_expr: None,
-                    span: span.clone(),
-                }),
-                span,
-            }),
-        }
+        Some(Stmt {
+            span,
+            kind: StmtKind::MultiAssign { targets, values },
+        })
     }
 
     fn parse_let_statement(&mut self) -> Option<Stmt> {

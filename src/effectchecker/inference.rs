@@ -632,6 +632,9 @@ impl<'a> super::EffectChecker<'a> {
         bounds: &HashMap<String, Vec<TraitBound>>,
     ) {
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { value, .. } => self.collect_calls_in_expr(value, calls, bounds),
             StmtKind::LetUninit { .. } => {}
             StmtKind::LetElse {

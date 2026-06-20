@@ -49,6 +49,9 @@ impl<'a> super::EffectChecker<'a> {
 
     fn check_with_e_in_stmt(&mut self, stmt: &Stmt) {
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { value, .. } => self.check_with_e_in_expr(value),
             StmtKind::LetUninit { .. } => {}
             StmtKind::LetElse {

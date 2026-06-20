@@ -337,6 +337,9 @@ pub(crate) fn compute_block_last_use(block: &Block) -> HashMap<String, usize> {
     for (idx, stmt) in block.stmts.iter().enumerate() {
         let mut idents: Vec<String> = Vec::new();
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             // A defer/errdefer body executes at scope exit. Any
             // binding it references must remain live until then —
             // pin those to `scope_exit`.
@@ -582,6 +585,9 @@ pub(crate) fn collect_free_idents_block(
     let snapshot = bound.clone();
     for stmt in &block.stmts {
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { pattern, value, .. } => {
                 collect_free_idents_expr(value, bound, out);
                 add_pattern_bindings(pattern, bound);

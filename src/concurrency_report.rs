@@ -169,6 +169,9 @@ fn render_function(
 /// rather than panicking.
 fn render_call_expr(stmt: &Stmt) -> String {
     let expr = match &stmt.kind {
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
         StmtKind::Expr(e) => e,
         StmtKind::Let { value, .. } => value,
         StmtKind::LetElse { value, .. } => value,

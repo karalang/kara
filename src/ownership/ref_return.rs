@@ -646,6 +646,9 @@ fn collect_ref_locals(block: &Block, ref_fns: &HashSet<String>, out: &mut HashSe
 
 fn collect_ref_locals_in_stmt(stmt: &Stmt, ref_fns: &HashSet<String>, out: &mut HashSet<String>) {
     match &stmt.kind {
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
         StmtKind::Let { value, .. }
         | StmtKind::LetElse { value, .. }
         | StmtKind::Expr(value)
@@ -674,6 +677,9 @@ fn collect_return_exprs_in_block<'e>(block: &'e Block, out: &mut Vec<&'e Expr>) 
 
 fn collect_return_exprs_in_stmt<'e>(stmt: &'e Stmt, out: &mut Vec<&'e Expr>) {
     match &stmt.kind {
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
         StmtKind::Let { value, .. }
         | StmtKind::LetElse { value, .. }
         | StmtKind::Expr(value)

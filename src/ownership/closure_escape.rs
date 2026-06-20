@@ -141,6 +141,9 @@ impl<'a> super::OwnershipChecker<'a> {
     fn collect_closure_let_bindings(block: &Block, out: &mut HashMap<String, Vec<SpanKey>>) {
         for stmt in &block.stmts {
             match &stmt.kind {
+                StmtKind::MultiAssign { .. } => unreachable!(
+                    "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+                ),
                 StmtKind::Let { pattern, value, .. } => {
                     // First walk into the RHS for any nested let
                     // bindings (e.g., `let h = { let inner = ||...;
@@ -259,6 +262,9 @@ impl<'a> super::OwnershipChecker<'a> {
     ) {
         for stmt in &block.stmts {
             match &stmt.kind {
+                StmtKind::MultiAssign { .. } => unreachable!(
+                    "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+                ),
                 StmtKind::Let { value, .. } => {
                     Self::collect_escaping_closures_in_expr(value, closure_lets, out);
                 }
@@ -545,6 +551,9 @@ impl<'a> super::OwnershipChecker<'a> {
 
     fn walk_stmt_for_calls(stmt: &Stmt, visit: &mut impl FnMut(&Expr, &[CallArg])) {
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { value, .. } => Self::walk_expr_for_calls(value, visit),
             StmtKind::LetUninit { .. } => {}
             StmtKind::LetElse {

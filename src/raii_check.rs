@@ -833,6 +833,9 @@ impl StateFlowWalker<'_> {
 
     fn walk_stmt(&mut self, stmt: &Stmt) {
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { value, pattern, .. } => {
                 self.walk_expr(value);
                 for (name, span) in pattern.binding_name_spans() {

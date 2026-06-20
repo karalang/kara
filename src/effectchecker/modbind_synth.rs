@@ -416,6 +416,9 @@ fn collect_par_blocks_in_block(block: &Block) -> Vec<(Block, Span)> {
 
 fn collect_par_in_stmt(stmt: &Stmt, out: &mut Vec<(Block, Span)>) {
     match &stmt.kind {
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
         StmtKind::Let { value, .. }
         | StmtKind::Assign { value, .. }
         | StmtKind::CompoundAssign { value, .. }
@@ -721,6 +724,9 @@ impl<'a> ModBindingSynthWalker<'a> {
 
     fn walk_stmt(&mut self, stmt: &Stmt) {
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { pattern, value, .. } => {
                 self.walk_expr(value);
                 for name in pattern.binding_names() {

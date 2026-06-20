@@ -309,6 +309,9 @@ impl Walker<'_> {
 
     fn walk_stmt(&mut self, stmt: &Stmt) {
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
                 self.walk_expr(value);
             }

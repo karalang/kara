@@ -345,6 +345,9 @@ fn collect_let_in_stmt(
     classify: impl Fn(&str) -> Option<BindingKind> + Copy,
 ) {
     match &stmt.kind {
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
         StmtKind::Let { pattern, value, .. } | StmtKind::LetElse { pattern, value, .. } => {
             record_pattern_bindings(pattern, pbt, out, classify);
             collect_let_in_expr(value, pbt, out, classify);
@@ -499,6 +502,9 @@ fn scan_stmt_for_par_conflicts(
     fix_diffs: &mut HashMap<SpanKey, Vec<TextEdit>>,
 ) {
     match &stmt.kind {
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
         StmtKind::Let { value, .. } => {
             scan_expr_for_par_conflicts(
                 value,
@@ -1664,6 +1670,9 @@ fn collect_typed_bindings_in_stmt(
     out: &mut Vec<String>,
 ) {
     match &stmt.kind {
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
         StmtKind::Let {
             pattern, ty, value, ..
         } => {
@@ -1816,6 +1825,9 @@ fn collect_par_body_spans_in_block(block: &Block, out: &mut Vec<(usize, usize)>)
 
 fn collect_par_body_spans_in_stmt(stmt: &Stmt, out: &mut Vec<(usize, usize)>) {
     match &stmt.kind {
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
         StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
             collect_par_body_spans_in_expr(value, out);
         }
@@ -2024,6 +2036,9 @@ fn collect_lock_block_writes_in_stmt(
     out: &mut Vec<TextEdit>,
 ) {
     match &stmt.kind {
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
         StmtKind::Assign { target, value } => {
             if let Some(field) = matched_self_field_access(target, binding_name, mut_fields) {
                 if atomic_fields.contains(field) {
@@ -2511,6 +2526,9 @@ fn collect_atomic_disqualifying_writes_in_stmt(
     disqualified: &mut HashSet<String>,
 ) {
     match &stmt.kind {
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
         StmtKind::CompoundAssign { target, value, .. } => {
             if let Some(field) = matched_self_field_access(target, binding_name, candidate_fields) {
                 disqualified.insert(field.clone());
@@ -3145,6 +3163,9 @@ fn collect_lock_block_reads_in_stmt(
     out: &mut Vec<TextEdit>,
 ) {
     match &stmt.kind {
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
         StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
             // Skip both target+value when target's binding root is the
             // migrating binding — the write-wrap (or Atomic store
@@ -3407,6 +3428,9 @@ fn collect_identifier_uses_in_stmt(
     out: &mut HashMap<String, Span>,
 ) {
     match &stmt.kind {
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
         StmtKind::Let { value, .. } => {
             collect_identifier_uses_in_expr(
                 value,
@@ -3906,6 +3930,9 @@ fn build_closure_bindings_stmt(
     out: &mut ClosureBindings,
 ) {
     match &stmt.kind {
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
         StmtKind::Let { pattern, value, .. } => {
             if matches!(value.kind, ExprKind::Closure { .. }) {
                 if let Some(captures) = closure_captures.get(&SpanKey::from_span(&value.span)) {

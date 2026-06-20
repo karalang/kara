@@ -270,6 +270,14 @@ fn visit_stmt(s: &Stmt, visit: &mut impl FnMut(&Span)) {
             visit_expr(target, visit);
             visit_expr(value, visit);
         }
+        StmtKind::MultiAssign { targets, values } => {
+            for t in targets {
+                visit_expr(t, visit);
+            }
+            for v in values {
+                visit_expr(v, visit);
+            }
+        }
         StmtKind::CompoundAssign { target, value, .. } => {
             visit_expr(target, visit);
             visit_expr(value, visit);
@@ -859,6 +867,14 @@ fn visit_stmt_spans_mut(s: &mut Stmt, visit: &mut impl FnMut(&mut Span)) {
         StmtKind::Assign { target, value } => {
             visit_expr_spans_mut(target, visit);
             visit_expr_spans_mut(value, visit);
+        }
+        StmtKind::MultiAssign { targets, values } => {
+            for t in targets {
+                visit_expr_spans_mut(t, visit);
+            }
+            for v in values {
+                visit_expr_spans_mut(v, visit);
+            }
         }
         StmtKind::CompoundAssign { target, value, .. } => {
             visit_expr_spans_mut(target, visit);

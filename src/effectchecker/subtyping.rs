@@ -46,6 +46,9 @@ impl<'a> super::EffectChecker<'a> {
 
     fn check_subtyping_in_stmt_owned(&mut self, stmt: Stmt) {
         match stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { value, .. } => self.check_subtyping_in_expr_owned(value),
             StmtKind::LetUninit { .. } => {}
             StmtKind::LetElse {

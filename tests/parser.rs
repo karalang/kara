@@ -402,25 +402,20 @@ fn test_assignment() {
 }
 
 #[test]
-fn test_multi_assign_desugars_to_temp_block() {
-    // `a, b = b, a;` is parser-desugared into a block-expr statement that
-    // evaluates both RHS into temporaries, then writes both targets — the
-    // swap-correct lowering. Shape: 2 `let`s followed by 2 `Assign`s.
+fn test_multi_assign_parses_to_node() {
+    // `a, b = b, a;` parses to a first-class `StmtKind::MultiAssign` node (the
+    // desugar pass — not the parser — later expands it; the node round-trips
+    // through the formatter). Targets and values are preserved in order.
     let prog = parse_ok("fn main() { let mut a = 1; let mut b = 2; a, b = b, a; }");
     if let Item::Function(f) = &prog.items[0] {
         assert_eq!(f.body.stmts.len(), 3);
-        let StmtKind::Expr(Expr {
-            kind: ExprKind::Block(block),
-            ..
-        }) = &f.body.stmts[2].kind
-        else {
-            panic!("expected multi-assign to desugar to a block-expr statement");
+        let StmtKind::MultiAssign { targets, values } = &f.body.stmts[2].kind else {
+            panic!("expected a MultiAssign node");
         };
-        assert_eq!(block.stmts.len(), 4, "two let-temps + two assigns");
-        assert!(matches!(block.stmts[0].kind, StmtKind::Let { .. }));
-        assert!(matches!(block.stmts[1].kind, StmtKind::Let { .. }));
-        assert!(matches!(block.stmts[2].kind, StmtKind::Assign { .. }));
-        assert!(matches!(block.stmts[3].kind, StmtKind::Assign { .. }));
+        assert_eq!(targets.len(), 2);
+        assert_eq!(values.len(), 2);
+        assert!(matches!(&targets[0].kind, ExprKind::Identifier(n) if n == "a"));
+        assert!(matches!(&values[0].kind, ExprKind::Identifier(n) if n == "b"));
     }
 }
 
@@ -430,14 +425,11 @@ fn test_multi_assign_three_way() {
     let prog =
         parse_ok("fn main() { let mut x = 1; let mut y = 2; let mut z = 3; x, y, z = z, x, y; }");
     if let Item::Function(f) = &prog.items[0] {
-        let StmtKind::Expr(Expr {
-            kind: ExprKind::Block(block),
-            ..
-        }) = &f.body.stmts[3].kind
-        else {
-            panic!("expected block-expr statement");
+        let StmtKind::MultiAssign { targets, values } = &f.body.stmts[3].kind else {
+            panic!("expected a MultiAssign node");
         };
-        assert_eq!(block.stmts.len(), 6, "three let-temps + three assigns");
+        assert_eq!(targets.len(), 3);
+        assert_eq!(values.len(), 3);
     }
 }
 
@@ -453,6 +445,46 @@ fn test_multi_assign_arity_mismatch_is_error() {
         "expected an arity-mismatch parse error, got: {:?}",
         result.errors
     );
+}
+
+#[test]
+fn test_multi_assign_formatter_round_trips() {
+    // The formatter skips the desugar pass, so it prints the surface
+    // comma syntax verbatim rather than the expanded temp-block.
+    let prog = parse_ok("fn main() {\n    let mut a = 1;\n    let mut b = 2;\n    a, b = b, a;\n}");
+    let out = karac::formatter::format_program(&prog);
+    assert!(
+        out.contains("a, b = b, a;"),
+        "formatter should round-trip parallel assignment; got:\n{out}"
+    );
+    assert!(
+        !out.contains("__karac_pa_"),
+        "formatter must not leak desugar temporaries; got:\n{out}"
+    );
+}
+
+#[test]
+fn test_multi_assign_desugar_expands_to_temp_block() {
+    // The desugar pass (between parse and resolve) rewrites the MultiAssign
+    // node into a block-expr of 2 let-temps + 2 assigns; no node survives.
+    let mut prog = parse_ok("fn main() { let mut a = 1; let mut b = 2; a, b = b, a; }");
+    karac::desugar_program(&mut prog);
+    if let Item::Function(f) = &prog.items[0] {
+        assert!(
+            !matches!(f.body.stmts[2].kind, StmtKind::MultiAssign { .. }),
+            "MultiAssign must be gone after desugar"
+        );
+        let StmtKind::Expr(Expr {
+            kind: ExprKind::Block(block),
+            ..
+        }) = &f.body.stmts[2].kind
+        else {
+            panic!("expected the desugared block-expr statement");
+        };
+        assert_eq!(block.stmts.len(), 4, "two let-temps + two assigns");
+        assert!(matches!(block.stmts[0].kind, StmtKind::Let { .. }));
+        assert!(matches!(block.stmts[2].kind, StmtKind::Assign { .. }));
+    }
 }
 
 #[test]

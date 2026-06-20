@@ -316,6 +316,9 @@ fn walk_block_for_with_provider(block: &crate::ast::Block, out: &mut Vec<WithPro
 
 fn walk_stmt_for_with_provider(stmt: &Stmt, out: &mut Vec<WithProviderSite>) {
     match &stmt.kind {
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
         StmtKind::Let { value, .. } => walk_expr_for_with_provider(value, out),
         StmtKind::LetUninit { .. } => {}
         StmtKind::LetElse {

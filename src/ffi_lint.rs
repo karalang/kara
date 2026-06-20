@@ -157,6 +157,9 @@ fn walk_stmt(
     diags: &mut Vec<FfiFloatEqDiagnostic>,
 ) {
     match &stmt.kind {
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
         StmtKind::Let { value, .. } => walk_expr(value, level, ffi_fns, diags),
         StmtKind::LetUninit { .. } => {}
         StmtKind::LetElse {

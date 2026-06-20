@@ -540,6 +540,9 @@ fn collect_captures_block(
     shadows.push(HashSet::new());
     for stmt in &block.stmts {
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { pattern, value, .. } => {
                 collect_captures_expr(value, outer, shadows, out, seen);
                 if let Some(top) = shadows.last_mut() {

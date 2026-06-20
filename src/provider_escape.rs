@@ -194,6 +194,9 @@ fn compute_escapable_caps(program: &Program) -> HashMap<String, Vec<String>> {
 fn collect_closure_resource_refs_in_block(block: &Block, out: &mut Vec<String>) {
     for stmt in &block.stmts {
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { value, .. } => collect_closure_resource_refs_in_expr(value, out),
             StmtKind::LetUninit { .. } => {}
             StmtKind::LetElse {
@@ -464,6 +467,9 @@ impl<'a> EscapeChecker<'a> {
 
     fn visit_stmt(&mut self, stmt: &Stmt, in_escape: bool) {
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { pattern, value, .. } => {
                 self.visit_expr(value, false);
                 // Record the binding. Simple name patterns are tracked in
@@ -1362,6 +1368,9 @@ fn collect_resource_refs(expr: &Expr, out: &mut Vec<String>) {
 fn collect_block_resource_refs(block: &Block, out: &mut Vec<String>) {
     for stmt in &block.stmts {
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { value, .. } => collect_resource_refs(value, out),
             StmtKind::LetUninit { .. } => {}
             StmtKind::LetElse {

@@ -711,6 +711,9 @@ impl<'a> super::Interpreter<'a> {
     #[allow(clippy::result_large_err)]
     fn eval_stmt_cf(&mut self, stmt: &Stmt) -> EvalResult {
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let {
                 pattern, ty, value, ..
             } => {

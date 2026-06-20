@@ -2431,6 +2431,9 @@ impl<'a> super::TypeChecker<'a> {
             return self.infer_expr(expr);
         }
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let {
                 is_mut: _,
                 pattern,

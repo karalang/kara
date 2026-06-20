@@ -111,6 +111,9 @@ fn expr_is_constant_init(expr: &Expr) -> bool {
 /// verification.
 fn stmt_has_early_exit(stmt: &Stmt) -> bool {
     match &stmt.kind {
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
         StmtKind::Let { value, .. }
         | StmtKind::Assign { value, .. }
         | StmtKind::CompoundAssign { value, .. }
@@ -211,6 +214,9 @@ fn expr_has_early_exit(expr: &Expr) -> bool {
 /// resolve (e.g. nested inside `println(rx.recv())`).
 fn stmt_has_channel_op(stmt: &Stmt) -> bool {
     match &stmt.kind {
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
         StmtKind::Let { value, .. }
         | StmtKind::Assign { value, .. }
         | StmtKind::CompoundAssign { value, .. }
@@ -1059,6 +1065,9 @@ impl<'a> ConcurrencyChecker<'a> {
         let mut reduction: Option<(String, ReductionOp)> = None;
         for stmt in &body.stmts {
             match &stmt.kind {
+                StmtKind::MultiAssign { .. } => unreachable!(
+                    "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+                ),
                 StmtKind::Assign { target, value } => {
                     let name = identifier_name(target)?;
                     if let_introduced.contains(&name) {
@@ -1434,6 +1443,9 @@ impl<'a> ConcurrencyChecker<'a> {
         };
 
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { pattern, value, .. } => {
                 // The pattern defines variables
                 self.collect_pattern_bindings(pattern, &mut info.defines);
@@ -2305,6 +2317,9 @@ impl<'a> ConcurrencyChecker<'a> {
     fn collect_block_reads(&self, block: &Block, reads: &mut HashSet<String>) {
         for stmt in &block.stmts {
             match &stmt.kind {
+                StmtKind::MultiAssign { .. } => unreachable!(
+                    "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+                ),
                 StmtKind::Let { value, .. } => self.collect_expr_reads(value, reads),
                 StmtKind::LetUninit { .. } => {}
                 StmtKind::LetElse {
@@ -2553,6 +2568,9 @@ impl<'a> ConcurrencyChecker<'a> {
     fn collect_block_effects(&self, block: &Block, info: &mut StmtInfo) {
         for stmt in &block.stmts {
             match &stmt.kind {
+                StmtKind::MultiAssign { .. } => unreachable!(
+                    "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+                ),
                 StmtKind::Let { value, .. } => self.collect_expr_effects(value, info),
                 StmtKind::LetUninit { .. } => {}
                 StmtKind::LetElse {

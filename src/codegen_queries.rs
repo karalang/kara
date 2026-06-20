@@ -254,6 +254,9 @@ fn walk_stmt_for_calls(
     counts: &mut HashMap<String, usize>,
 ) {
     match &stmt.kind {
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
         StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
             walk_expr_for_calls(value, loop_depth, targets, counts);
         }
@@ -452,6 +455,9 @@ fn walk_block_for_branch_hints(block: &Block, def_path: &DefPath, out: &mut Vec<
 
 fn walk_stmt_for_branch_hints(stmt: &Stmt, def_path: &DefPath, out: &mut Vec<CompilerQuery>) {
     match &stmt.kind {
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
         StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
             walk_expr_for_branch_hints(value, def_path, out);
         }

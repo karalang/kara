@@ -282,6 +282,9 @@ fn walk_block(block: &Block, lines: &[&str], level: LintLevel, diags: &mut Vec<L
 
 fn walk_stmt(stmt: &Stmt, lines: &[&str], level: LintLevel, diags: &mut Vec<LintDiagnostic>) {
     match &stmt.kind {
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
         StmtKind::Let { value, .. } => walk_expr(value, lines, level, diags),
         StmtKind::LetUninit { .. } => {}
         StmtKind::LetElse {
@@ -647,6 +650,9 @@ impl OpWalker<'_> {
 
     fn walk_stmt(&mut self, stmt: &Stmt, in_unsafe: bool) {
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { value, .. } => self.walk_expr(value, in_unsafe),
             StmtKind::LetUninit { .. } => {}
             StmtKind::LetElse {

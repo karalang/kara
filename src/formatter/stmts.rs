@@ -104,6 +104,23 @@ impl super::Formatter {
                 self.format_expr(value);
                 self.write_str(";\n");
             }
+            StmtKind::MultiAssign { targets, values } => {
+                self.write_indent();
+                for (i, target) in targets.iter().enumerate() {
+                    if i > 0 {
+                        self.write_str(", ");
+                    }
+                    self.format_expr(target);
+                }
+                self.write_str(" = ");
+                for (i, value) in values.iter().enumerate() {
+                    if i > 0 {
+                        self.write_str(", ");
+                    }
+                    self.format_expr(value);
+                }
+                self.write_str(";\n");
+            }
             StmtKind::CompoundAssign { target, op, value } => {
                 self.write_indent();
                 self.format_expr(target);

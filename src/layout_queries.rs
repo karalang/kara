@@ -131,6 +131,9 @@ fn walk_block(
 ) {
     for stmt in &block.stmts {
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
                 walk_expr(value, def_path, tc, covered, out)
             }
@@ -279,6 +282,9 @@ fn collect_field_reads(
     ) {
         for stmt in &block.stmts {
             match &stmt.kind {
+                StmtKind::MultiAssign { .. } => unreachable!(
+                    "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+                ),
                 StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
                     visit_expr(value, elem, fields, out)
                 }

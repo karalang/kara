@@ -404,6 +404,9 @@ fn mono_scan_block(b: &Block, s: &mut MonotoneScan) {
 
 fn mono_scan_stmt(stmt: &Stmt, s: &mut MonotoneScan) {
     match &stmt.kind {
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
         StmtKind::Let { pattern, value, .. } => {
             // A body-local `let x` shadows (or re-initializes) the name —
             // by-name tracking can no longer tell the bindings apart.

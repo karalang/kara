@@ -265,6 +265,9 @@ impl<'a> UseClassifier<'a> {
 
     fn walk_stmt(&mut self, stmt: &Stmt) {
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { pattern, value, .. } => {
                 // Round 12.18: record the local's type by name BEFORE
                 // walking the value, using the value-span (which is

@@ -103,6 +103,9 @@ impl<'a> super::TypeChecker<'a> {
 
     fn collect_in_stmt(&self, s: &Stmt, out: &mut Vec<AllocSite>) {
         match &s.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { value, .. } => self.collect_in_expr(value, out),
             StmtKind::LetUninit { .. } => {}
             StmtKind::LetElse {

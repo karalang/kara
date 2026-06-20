@@ -133,6 +133,9 @@ impl ScanCtx<'_> {
             return;
         }
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { pattern, value, .. } => {
                 // A shadow-rebind of either name changes what the name refers to
                 // for the remaining scope — bail rather than reason about it.
@@ -494,6 +497,9 @@ fn mentions_rec(expr: &Expr, name: &str, found: &mut bool) {
 /// reaches `let r = v[i]` bindings declared inside loops / conditionals.
 fn stmt_walk_nested_blocks(stmt: &Stmt, out: &mut HashSet<SpanKey>) {
     match &stmt.kind {
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
         StmtKind::Let { value, .. } => expr_walk_nested_blocks(value, out),
         StmtKind::LetElse {
             value, else_block, ..

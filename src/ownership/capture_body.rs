@@ -254,6 +254,9 @@ impl<'a> super::OwnershipChecker<'a> {
 
     fn walk_capture_body_stmt(&self, stmt: &Stmt, usage: &mut HashMap<String, CaptureBodyUsage>) {
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { value, .. } => {
                 self.walk_capture_body_expr(value, usage);
             }
@@ -738,6 +741,9 @@ impl<'a> super::OwnershipChecker<'a> {
         reasons: &mut HashMap<String, WholeRootCaptureReason>,
     ) {
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { value, .. } => {
                 Self::walk_capture_paths_expr(value, pre_live, paths, reasons);
             }
@@ -1073,6 +1079,9 @@ impl<'a> super::OwnershipChecker<'a> {
         mutated: &mut HashSet<CapturePath>,
     ) {
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { value, .. } => {
                 self.walk_capture_path_mutations_expr(value, pre_live, paths, mutated);
             }

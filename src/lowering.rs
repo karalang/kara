@@ -377,6 +377,9 @@ impl<'a> Lowerer<'a> {
 
     fn lower_stmt(&mut self, stmt: &mut Stmt) {
         match &mut stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
                 self.lower_expr(value);
                 if let StmtKind::LetElse { else_block, .. } = &mut stmt.kind {

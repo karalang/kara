@@ -1744,7 +1744,7 @@ x, y, z = z, x, y;                 // n-ary rotate
 
 Every right-hand value is evaluated left-to-right into a temporary **before any** target is written, which is what makes `a, b = b, a` a true swap. The two sides must list the same number of elements (a mismatch is a parse error). Each target follows the place-expression rule above (so the swapped locals must be `let mut`). This is the in-place idiom that swap-based sorts and permutation enumerators rely on.
 
-Mechanically it desugars to a temp-block of `let`s + single assignments (`{ let _t0 = v0; let _t1 = v1; a = _t0; b = _t1; }`); for that reason `karac fmt` currently re-prints a parallel assignment in that expanded form rather than round-tripping the comma syntax verbatim.
+Parallel assignment is a first-class statement (`StmtKind::MultiAssign`), so `karac fmt` round-trips the comma syntax verbatim. The `desugar` pass (between parse and resolve) lowers it to a temp-block of `let`s + single assignments (`{ let _t0 = v0; let _t1 = v1; a = _t0; b = _t1; }`) — evaluating all values before any target write — so every phase from the resolver onward sees only ordinary `let` / `=` nodes.
 
 ### 5.14 Range Expressions
 

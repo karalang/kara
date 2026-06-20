@@ -190,6 +190,9 @@ pub(crate) fn scan_stmt_for_par_uses(
     promoted: &mut HashSet<String>,
 ) {
     match &stmt.kind {
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
         StmtKind::Let {
             pattern, value, ty, ..
         } => {

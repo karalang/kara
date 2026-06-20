@@ -328,6 +328,9 @@ impl<'a> OwnershipChecker<'a> {
 
     fn collect_candidates_in_stmt(&self, stmt: &Stmt, scan: &mut ElisionScan) {
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { pattern, value, .. } => {
                 if let PatternKind::Binding(name) = &pattern.kind {
                     let rebound = !scan.bound_names.insert(name.clone());
@@ -468,6 +471,9 @@ impl<'a> OwnershipChecker<'a> {
 
     fn scan_stmt(&self, stmt: &Stmt, ctx: Ctx, scan: &mut ElisionScan) {
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
                 // The candidate's own birth literal carries no candidate
                 // mentions (it doesn't exist yet, and eligible structs
@@ -1708,6 +1714,9 @@ impl<'a> OwnershipChecker<'a> {
         }
         // Recurse for nested lets (loop bodies, branches).
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
                 self.cluster_collect_expr(value, scan)
             }
@@ -1903,6 +1912,9 @@ impl<'a> OwnershipChecker<'a> {
 
     fn cluster_verify_stmt(&self, stmt: &Stmt, ctx: ClusterCtx, scan: &mut ClusterScan) {
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let {
                 pattern, value, ty, ..
             } => {
@@ -2632,6 +2644,9 @@ fn walk_fn_exprs(block: &Block, f: &mut impl FnMut(&Expr, bool)) {
     }
     for stmt in &block.stmts {
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { value, .. } => walk(value, false, f),
             StmtKind::LetElse {
                 value, else_block, ..
@@ -3108,6 +3123,9 @@ fn collect_adoption_candidates(
     }
     for stmt in &block.stmts {
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { pattern, value, .. } => {
                 if let (PatternKind::Binding(name), ExprKind::Call { callee, .. }) =
                     (&pattern.kind, &value.kind)
@@ -3189,6 +3207,9 @@ fn collect_struct_literal_types(block: &Block, f: &mut impl FnMut(&str)) {
     }
     for stmt in &block.stmts {
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => walk_expr(value, f),
             StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
                 walk_expr(target, f);
@@ -3382,6 +3403,9 @@ impl B2Rec<'_> {
 
     fn walk_stmt(&mut self, stmt: &Stmt) {
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
                 self.note_link_read(value);
                 self.walk_expr(value);

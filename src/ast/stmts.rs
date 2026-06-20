@@ -59,6 +59,20 @@ pub enum StmtKind {
         target: Expr,
         value: Expr,
     },
+    /// Parallel / destructuring assignment: `t1, t2, ... = v1, v2, ...;`.
+    /// All `values` are evaluated (left-to-right) into temporaries before any
+    /// `target` is written, so `a, b = b, a` swaps. `targets.len() ==
+    /// values.len()` is enforced by the parser.
+    ///
+    /// This is surface syntax: the [`crate::desugar`] pass (between parse and
+    /// resolve) rewrites every `MultiAssign` into a block-expr statement of
+    /// `let`-temps + single `Assign`s, so no phase from the resolver onward
+    /// ever observes it. It survives to the **formatter** only (which skips
+    /// the desugar pass to round-trip source verbatim).
+    MultiAssign {
+        targets: Vec<Expr>,
+        values: Vec<Expr>,
+    },
     CompoundAssign {
         target: Expr,
         op: CompoundOp,

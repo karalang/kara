@@ -50,6 +50,9 @@ impl<'a> super::OwnershipChecker<'a> {
         param_usage: &mut HashMap<String, ParamUsage>,
     ) {
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { pattern, value, .. } => {
                 // If the RHS is a closure, detect once-callability before
                 // processing so we can check which outer bindings it consumed.

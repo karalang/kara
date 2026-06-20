@@ -1695,6 +1695,9 @@ impl YieldPointWalker<'_> {
     fn walk_stmt(&mut self, stmt: &crate::ast::Stmt) {
         use crate::ast::StmtKind;
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { value, pattern, .. } => {
                 // Walk the value FIRST — yield points in the RHS see the
                 // pre-binding scope. Then introduce the pattern's bindings
@@ -2201,6 +2204,9 @@ impl StateStructLayoutWalker<'_> {
     fn walk_stmt(&mut self, stmt: &crate::ast::Stmt) {
         use crate::ast::StmtKind;
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { value, pattern, .. } => {
                 self.walk_expr(value);
                 for (name, span) in pattern.binding_name_spans() {

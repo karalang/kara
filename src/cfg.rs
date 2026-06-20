@@ -576,6 +576,9 @@ impl<'a> CfgBuilder<'a> {
         loops: &[LoopFrame],
     ) -> BlockId {
         match &stmt.kind {
+            StmtKind::MultiAssign { .. } => unreachable!(
+                "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+            ),
             StmtKind::Let { pattern, value, .. } => {
                 // Lower the RHS — it may consume / read bindings — then
                 // the let binding is just a definition (no use of itself).

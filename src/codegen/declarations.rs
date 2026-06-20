@@ -4774,6 +4774,9 @@ fn find_let_binding_in_stmt<'a>(
     field_name: &str,
 ) -> Option<(Option<&'a TypeExpr>, Option<&'a Expr>)> {
     match &stmt.kind {
+        StmtKind::MultiAssign { .. } => unreachable!(
+            "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
+        ),
         StmtKind::Let {
             pattern, ty, value, ..
         } => {
