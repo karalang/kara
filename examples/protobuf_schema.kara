@@ -23,15 +23,24 @@ const SCHEMA: String = "
         string zip = 2;
     }
 
+    // A proto enum becomes a Kāra `enum` (UPPER_SNAKE → PascalCase), encoded
+    // as a varint of the variant's declaration index.
+    enum Tier {
+        TIER_FREE = 0;
+        TIER_PRO = 1;
+        TIER_ENTERPRISE = 2;
+    }
+
     // A message-typed field nests `Address` as a length-delimited sub-message;
     // `repeated` fields become `Vec[...]` (packed for the numeric `seats`, one
-    // length-delimited field per `members` string).
+    // length-delimited field per `members` string); an enum field is a varint.
     message Team {
         string title = 1;
         uint32 size = 2;
         Address office = 3;
         repeated string members = 4;
         repeated int64 seats = 5;
+        Tier tier = 6;
     }
 ";
 
@@ -51,8 +60,10 @@ fn main() {
         office: Address { city: "London", zip: "NW1" },
         members: ["Ada", "Grace", "Alan"],
         seats: [11, 12, 13, 14],
+        tier: Tier.TierPro,
     };
     let rt = Team.decode(t.encode());
     println(f"team={rt.title} size={rt.size} city={rt.office.city} zip={rt.office.zip}");
     println(f"members={rt.members} seats={rt.seats}");
+    println(match rt.tier { Tier.TierFree => "free", Tier.TierPro => "pro", Tier.TierEnterprise => "ent" });
 }

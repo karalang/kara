@@ -462,6 +462,89 @@ fn main() {}
     );
 }
 
+// ── enums ───────────────────────────────────────────────────────
+
+#[test]
+fn derive_enum_field_roundtrip() {
+    // An enum field is a proto3 enum: a varint of the variant's 0-based
+    // declaration index.
+    let src = r#"
+enum Status { Pending, Active, Closed }
+
+#[derive(Message)]
+struct Task { id: i64, status: Status }
+
+fn main() {
+    let t = Task { id: 5, status: Status.Active };
+    let back = Task.decode(t.encode());
+    println(back.id);
+    println(match back.status { Status.Pending => "p", Status.Active => "a", Status.Closed => "c" });
+}
+"#;
+    assert_eq!(run(src), vec!["5\n", "a\n"]);
+}
+
+#[test]
+fn derive_enum_zero_default() {
+    // proto3 enum fields default to the zero (first) variant.
+    let src = r#"
+enum Status { Pending, Active, Closed }
+
+#[derive(Message)]
+struct Task { status: Status }
+
+fn main() {
+    let d = Task.decode(Vec.new());
+    println(match d.status { Status.Pending => "p", _ => "?" });
+}
+"#;
+    assert_eq!(run(src), vec!["p\n"]);
+}
+
+#[test]
+fn derive_enum_wire_is_varint() {
+    // The enum field occupies a wire-type-0 (varint) field carrying the index.
+    let src = r#"
+enum Status { Pending, Active, Closed }
+
+#[derive(Message)]
+struct Task { status: Status }
+
+fn main() {
+    let t = Task { status: Status.Closed };
+    let mut r = ProtoReader.new(t.encode());
+    let (fld, wire) = r.read_tag();
+    println(fld);
+    println(wire);
+    println(r.read_varint());
+}
+"#;
+    assert_eq!(run(src), vec!["1\n", "0\n", "2\n"]);
+}
+
+#[test]
+fn derive_enum_typecheck_clean() {
+    let src = r#"
+enum Status { Pending, Active }
+
+#[derive(Message)]
+struct Task { status: Status }
+
+fn main() {
+    let t = Task { status: Status.Active };
+    let back = Task.decode(t.encode());
+    println(match back.status { Status.Active => "a", _ => "?" });
+}
+"#;
+    let errs = typecheck_errors(src);
+    assert!(
+        !errs
+            .iter()
+            .any(|e| e.contains("no method") || e.contains("no associated function")),
+        "enum derive methods must typecheck clean; got: {errs:?}"
+    );
+}
+
 // ── nested messages ─────────────────────────────────────────────
 
 #[test]

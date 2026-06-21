@@ -509,16 +509,19 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
         // delimited sub-message via its own derived `encode`/`decode`. It must
         // itself derive `Message`; a plain struct has no codec to delegate to.
         let nested = f.ty.is_struct();
+        // An enum field is a proto3 enum: a varint of the variant's 0-based
+        // declaration index (so the enum's variant order is its wire numbering).
+        let is_enum = f.ty.is_enum();
         if nested and not f.ty.derives("Message") {
             compiler.error(
                 "derive(Message): nested field `" + fname + "` has type `" + tn
                     + "`, which does not derive(Message)",
             );
         }
-        if not proto_supported(tn) and not nested and not repeated {
+        if not proto_supported(tn) and not nested and not repeated and not is_enum {
             compiler.error(
                 "derive(Message): field `" + fname + "` has unsupported type `" + tn
-                    + "` (proto3 v1 supports i32/i64/u32/u64/bool/String/Vec[u8], nested messages, and repeated `Vec[T]`)",
+                    + "` (proto3 v1 supports i32/i64/u32/u64/bool/String/Vec[u8], nested messages, enums, and repeated `Vec[T]`)",
             );
         }
         let tag = f"{idx}";
@@ -550,6 +553,31 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
             efield = proto_encode_repeated(idx, fname, etn, is_msg);
             dec_body = proto_decode_repeated(fname, etn, is_msg);
             mrg_body = proto_decode_repeated("self." + fname, etn, is_msg);
+        } else if is_enum {
+            // Build a `match` mapping each variant to its index for encode, and
+            // an `if`-chain mapping an index back to a variant for decode. The
+            // zero variant (index 0) is both the default and the unknown-value
+            // fallback (proto3 enum semantics).
+            let mut firstv = "";
+            let mut m = "match self." + fname + " { ";
+            let mut chain = "";
+            let mut k = 0;
+            for v in f.ty.variants() {
+                let vn = v.name;
+                if k == 0 {
+                    firstv = "" + vn;
+                }
+                m = m + tn + "." + vn + " => " + f"{k}" + "u64, ";
+                chain = chain + "if ev == " + f"{k}" + "u64 { " + tn + "." + vn + " } else ";
+                k = k + 1;
+            }
+            m = m + "}";
+            chain = chain + "{ " + tn + "." + firstv + " }";
+            dflt = tn + "." + firstv;
+            efield = "out.extend_from_slice(ProtoBuf.encode_tag(" + tag
+                + ", 0)); out.extend_from_slice(ProtoBuf.encode_varint(" + m + "));";
+            dec_body = "let ev = reader.read_varint(); " + fname + " = " + chain + ";";
+            mrg_body = "let ev = reader.read_varint(); self." + fname + " = " + chain + ";";
         } else {
             // Nested: read a length-delimited blob and decode it; default is the
             // decode of empty bytes (every field at its proto3 zero value).
@@ -617,12 +645,15 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
 // message — and `repeated TYPE name = N;` fields, mapped to `Vec[TYPE]`. Field
 // numbers must be contiguous `1..N` (declaration-order tagging — per-field
 // number overrides need reflection support that doesn't exist yet). `syntax` /
-// `package` / `option` / `import` statements are skipped; enums, `map`,
-// `oneof`, and `sint*` / `fixed*` / floating types are not yet supported.
+// `package` / `option` / `import` statements are skipped; `map`, `oneof`, and
+// `sint*` / `fixed*` / floating types are not yet supported (nor `repeated`
+// enums). Enum declarations map to Kāra `enum`s (UPPER_SNAKE → PascalCase),
+// with contiguous `0..N` values matching declaration order.
 
 // Split proto3 source into a flat token stream. `{` `}` `;` `=` are each their
-// own token; runs of any other non-whitespace are one token. Uses `substring`
-// for single-char access so no byte→char conversion is needed.
+// own token; runs of any other non-whitespace are one token. `//` line comments
+// and `/* */` block comments are stripped. Uses `substring` for single-char
+// access so no byte→char conversion is needed.
 comptime fn proto_tokenize(src: String) -> Vec[String] {
     let mut tokens = Vec.new();
     let n = src.len();
@@ -630,7 +661,28 @@ comptime fn proto_tokenize(src: String) -> Vec[String] {
     let mut start = 0 - 1;
     while i < n {
         let ch = src.substring(i, i + 1);
-        if ch == "{" or ch == "}" or ch == ";" or ch == "=" {
+        let nx = if i + 1 < n { src.substring(i + 1, i + 2) } else { "" };
+        if ch == "/" and nx == "/" {
+            // Line comment: flush any pending token, skip to end of line.
+            if start >= 0 {
+                tokens.push(src.substring(start, i));
+                start = 0 - 1;
+            }
+            while i < n and src.substring(i, i + 1) != "\n" {
+                i = i + 1;
+            }
+        } else if ch == "/" and nx == "*" {
+            // Block comment: flush, skip past the closing `*/`.
+            if start >= 0 {
+                tokens.push(src.substring(start, i));
+                start = 0 - 1;
+            }
+            i = i + 2;
+            while i + 1 < n and not (src.substring(i, i + 1) == "*" and src.substring(i + 1, i + 2) == "/") {
+                i = i + 1;
+            }
+            i = i + 1;
+        } else if ch == "{" or ch == "}" or ch == ";" or ch == "=" {
             if start >= 0 {
                 tokens.push(src.substring(start, i));
                 start = 0 - 1;
@@ -666,20 +718,75 @@ comptime fn proto_atoi(s: String) -> i64 {
     v
 }
 
-// Scan the token stream for every `message NAME` declaration and collect the
-// names. Run before field parsing so a field may reference a message declared
-// later in the schema (forward references), and so a message-typed field is
-// told apart from a genuine unsupported scalar.
+// Scan the token stream for every `message NAME` / `enum NAME` declaration and
+// collect the names. Run before field parsing so a field may reference a type
+// declared later in the schema (forward references), and so a field of a
+// declared type is told apart from a genuine unsupported scalar.
 comptime fn proto_collect_messages(toks: Vec[String], n: i64) -> Vec[String] {
     let mut names = Vec.new();
     let mut i = 0;
     while i < n {
-        if toks[i] == "message" and i + 1 < n {
+        if (toks[i] == "message" or toks[i] == "enum") and i + 1 < n {
             names.push(toks[i + 1]);
         }
         i = i + 1;
     }
     names
+}
+
+// Convert a proto `UPPER_SNAKE` enum constant to Kāra's required PascalCase
+// variant name (`HTTP_GET` → `HttpGet`). Underscores delimit words; each word
+// is capitalized, the rest lowercased. ASCII identifiers only (proto names).
+comptime fn proto_pascal_case(s: String) -> String {
+    let mut out = "";
+    let mut at_word_start = true;
+    let mut j = 0;
+    while j < s.len() {
+        let ch = s.substring(j, j + 1);
+        if ch == "_" {
+            at_word_start = true;
+        } else if at_word_start {
+            out = out + ch.to_uppercase();
+            at_word_start = false;
+        } else {
+            out = out + ch.to_lowercase();
+        }
+        j = j + 1;
+    }
+    out
+}
+
+// Order enum variants by their proto value into a `V0, V1, ...` body,
+// validating contiguous `0..count` (proto3 enums start at 0; the derive uses
+// declaration order as the wire number, so order must match the values).
+comptime fn proto_order_enum_variants(name: String, vals: Vec[i64], vnames: Vec[String]) -> String {
+    let count = vals.len();
+    let mut body = "";
+    let mut k = 0;
+    while k < count {
+        let mut found = 0 - 1;
+        let mut j = 0;
+        while j < count {
+            if vals[j] == k {
+                found = j;
+            }
+            j = j + 1;
+        }
+        if found < 0 {
+            compiler.error(
+                "proto enum '" + name + "': values must be contiguous 0.." + f"{count - 1}"
+                    + " (no value " + f"{k}" + ")",
+            );
+            k = count;
+        } else {
+            if k > 0 {
+                body = body + ", ";
+            }
+            body = body + vnames[found];
+            k = k + 1;
+        }
+    }
+    body
 }
 
 // True when `name` is one of the schema's declared message types.
@@ -817,6 +924,36 @@ comptime fn proto_parse_schema(src: String) -> Vec[Item] {
                 if not bad {
                     let body = proto_order_fields(name, fnums, fdecls);
                     items.push(ast.item("#[derive(Message)] struct " + name + " { " + body + " }"));
+                }
+            }
+        } else if t == "enum" {
+            if i + 2 >= n {
+                compiler.error("proto: truncated `enum` declaration");
+                i = n;
+            } else {
+                let ename = toks[i + 1];
+                i = i + 3;
+                let mut vals = Vec.new();
+                let mut vnames = Vec.new();
+                let mut ebad = false;
+                while i < n and toks[i] != "}" {
+                    // `VARIANT = N;` is a 4-token entry.
+                    if i + 3 >= n {
+                        compiler.error("proto enum '" + ename + "': malformed variant declaration");
+                        ebad = true;
+                        i = n;
+                    } else {
+                        vnames.push(proto_pascal_case(toks[i]));
+                        vals.push(proto_atoi(toks[i + 2]));
+                        i = i + 4;
+                    }
+                }
+                if i < n {
+                    i = i + 1;
+                }
+                if not ebad {
+                    let ebody = proto_order_enum_variants(ename, vals, vnames);
+                    items.push(ast.item("enum " + ename + " { " + ebody + " }"));
                 }
             }
         } else if t == "syntax" or t == "package" or t == "option" or t == "import" {

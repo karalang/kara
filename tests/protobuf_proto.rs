@@ -280,6 +280,78 @@ fn main() {
 }
 
 #[test]
+fn proto_enum_roundtrip() {
+    // A `.proto` enum becomes a Kāra `enum` (UPPER_SNAKE variants converted to
+    // PascalCase), and an enum-typed field round-trips as a varint.
+    let src = r#"
+#[proto_schema]
+const SCHEMA: String = "
+    syntax = \"proto3\";
+    enum Priority {
+        PRIORITY_LOW = 0;
+        PRIORITY_HIGH = 1;
+        PRIORITY_CRITICAL = 2;
+    }
+    message Ticket { string title = 1; Priority prio = 2; }
+";
+
+fn main() {
+    let t = Ticket { title: "bug", prio: Priority.PriorityHigh };
+    let back = Ticket.decode(t.encode());
+    println(back.title);
+    println(match back.prio {
+        Priority.PriorityLow => "low",
+        Priority.PriorityHigh => "high",
+        Priority.PriorityCritical => "critical",
+    });
+}
+"#;
+    assert_eq!(run(src), vec!["bug\n", "high\n"]);
+}
+
+#[test]
+fn proto_comments_are_stripped() {
+    // `//` line and `/* */` block comments are ignored — including ones that
+    // contain proto keywords like `message` or `enum`.
+    let src = r#"
+#[proto_schema]
+const SCHEMA: String = "
+    // this message describes a user; enum-like words here are ignored
+    message User {
+        string name = 1; /* the display name */
+        int64 id = 2;    // a unique id
+    }
+";
+
+fn main() {
+    let u = User { name: "z", id: 9 };
+    let back = User.decode(u.encode());
+    println(back.name);
+    println(back.id);
+}
+"#;
+    assert_eq!(run(src), vec!["z\n", "9\n"]);
+}
+
+#[test]
+fn proto_enum_noncontiguous_values_error() {
+    // proto3 enums must start at 0 and the v1 mapping requires contiguous
+    // values (declaration order is the wire numbering).
+    let src = r#"
+#[proto_schema]
+const SCHEMA: String = "enum E { A = 0; B = 2; }";
+fn main() {}
+"#;
+    let diags = schema_diags(src);
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.contains("E_COMPTIME_ERROR") && d.contains("contiguous")),
+        "expected a contiguous-enum-value diagnostic; got: {diags:?}"
+    );
+}
+
+#[test]
 fn proto_unsupported_type_errors() {
     // `float` is not in the v1 scalar set; the pure-Kāra parser reports it.
     let src = r#"
