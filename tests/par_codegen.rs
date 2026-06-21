@@ -951,6 +951,43 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_auto_par_map_histogram_then_keys_no_race() {
+        // `for w in words { *m.entry(w).or_insert(0) += 1 }` WRITES the map,
+        // then `m.keys()` reads it. Auto-par must serialize the loop against the
+        // read — pre-fix the loop's writes(m) was invisible (a deref-of-method-
+        // chain assign target recorded no write), so the loop and keys() were
+        // parallelized and raced on the map (crash / garbled output under the
+        // DEFAULT auto-par build; B-2026-06-20-16). End-to-end over the whole
+        // word-frequency cascade (moved-loop-elem copy, keys deep-copy, String
+        // sort, and this auto-par serialization); deterministic sorted report.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut words: Vec[String] = Vec.new();
+    words.push("ccc-key".to_string());
+    words.push("aaa-key".to_string());
+    words.push("ccc-key".to_string());
+    words.push("bbb-key".to_string());
+    words.push("aaa-key".to_string());
+    words.push("ccc-key".to_string());
+    let mut m: Map[String, i64] = Map.new();
+    for w in words {
+        *m.entry(w).or_insert(0_i64) += 1_i64;
+    }
+    let mut ks: Vec[String] = m.keys();
+    ks.sort();
+    for k in ks {
+        println(f"{k}={m.get_or(k.clone(), 0_i64)}");
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "aaa-key=2\nbbb-key=1\nccc-key=3\n");
+        }
+    }
+
     /// Slice 1b (Phase 7 — Par codegen: cancellation and error
     /// propagation, 2026-05-20). A par-block with Result-typed
     /// branches AND a join expression emits a parent-side err-walk

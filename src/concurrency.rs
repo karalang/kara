@@ -2231,6 +2231,28 @@ impl<'a> ConcurrencyChecker<'a> {
             ExprKind::Index { object, .. } => {
                 self.collect_assign_target_defines(object, defines);
             }
+            ExprKind::Unary {
+                op: UnaryOp::Deref,
+                operand,
+            } => {
+                // `*place = …` / `*place += …` writes THROUGH the deref, so the
+                // mutated state is rooted at the operand's root. Critically,
+                // `*m.entry(k).or_insert(d) += 1` writes the MAP `m`: without
+                // recording it, the auto-par dependency check saw a `for`-loop
+                // histogram body as not writing the map, then parallelized the
+                // loop against a later `m.keys()` read — a read-after-write race
+                // on the map (B-2026-06-20-16). A `*ref += …` on a mut-ref local
+                // records the binding, which is conservative (it actually writes
+                // the pointee) and so always sound for the parallel-safety gate.
+                self.collect_assign_target_defines(operand, defines);
+            }
+            ExprKind::MethodCall { object, .. } => {
+                // A method-chain PLACE target — `m.entry(k).or_insert(d)`,
+                // `v.get_mut(i)` — is rooted at the receiver; record it so a
+                // write through the returned slot serializes against sibling
+                // reads of the same container.
+                self.collect_assign_target_defines(object, defines);
+            }
             _ => {}
         }
     }

@@ -102,6 +102,42 @@ fn test_data_dependency_serializes() {
     );
 }
 
+// ── A map-mutating loop serializes against a later read of the map ──
+
+#[test]
+fn test_map_mutating_loop_serializes_against_later_read() {
+    // `for x in xs { *m.entry(x).or_insert(0) += 1 }` writes the map `m`
+    // through a deref-of-method-chain target; the later `let ks = m.keys()`
+    // reads it. That read-after-write must serialize the loop against the read.
+    // Pre-fix the loop's writes(m) was INVISIBLE — `collect_assign_target_defines`
+    // had no `Deref` / `MethodCall` arm, so a `*chain += …` target recorded no
+    // write — and auto-par grouped the loop with `keys()` and raced on the map
+    // under `karac build` (B-2026-06-20-16).
+    let analysis = analyze_lowered(
+        r#"
+        fn main() {
+            let mut m: Map[i64, i64] = Map.new();
+            let xs = [1, 2, 1];
+            for x in xs {
+                *m.entry(x).or_insert(0_i64) += 1_i64;
+            }
+            let ks = m.keys();
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    // 0=let m, 1=let xs, 2=for-loop (writes m), 3=let ks (reads m).
+    assert_eq!(main_fc.total_statements, 4);
+    for g in &main_fc.parallel_groups {
+        let si = &g.statement_indices;
+        assert!(
+            !(si.contains(&2) && si.contains(&3)),
+            "map-mutating loop (2) and m.keys() (3) must not be co-parallelized; got {:?}",
+            si
+        );
+    }
+}
+
 // ── Effect conflict forces serialization ───────────────────────
 
 #[test]
