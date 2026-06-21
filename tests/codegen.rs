@@ -20067,6 +20067,107 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_set_vec_dedup_by_content() {
+        // `Set[Vec[T]]` has HashSet value semantics: two equal-CONTENTS vecs
+        // collapse to one element (B-2026-06-20-15). Before this fix the
+        // typechecker rejected `Vec` as un-`Hash + Eq` (hard error in the
+        // codegen path), and even past that gate codegen synthesized a
+        // hash/eq over the `{ptr,len,cap}` HEADER (pointer identity), so two
+        // equal-contents vecs landed in different buckets → `len() == 2`. The
+        // interpreter (GC-by-Value-clone, structural `Value` eq) always
+        // deduped, so this was a silent A/B divergence; codegen now walks the
+        // element contents (`karac_hash_Vec_<elem>` / `karac_eq_Vec_<elem>`)
+        // to match. Exercises insert dedup, a distinct-contents non-merge,
+        // `contains`/`remove` over the same content eq, and the
+        // same-prefix-different-length non-equality.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut s: Set[Vec[i64]] = Set.new();
+    let mut a: Vec[i64] = Vec.new();
+    a.push(101i64); a.push(102i64); a.push(103i64);
+    s.insert(a);
+    let mut b: Vec[i64] = Vec.new();
+    b.push(101i64); b.push(102i64); b.push(103i64);
+    s.insert(b);
+    println(s.len());           // 1 — deduped by content
+    let mut c: Vec[i64] = Vec.new();
+    c.push(101i64); c.push(102i64); c.push(999i64);
+    s.insert(c);
+    println(s.len());           // 2 — distinct contents stay separate
+    let mut probe: Vec[i64] = Vec.new();
+    probe.push(101i64); probe.push(102i64); probe.push(103i64);
+    println(s.contains(probe)); // true
+    let mut rem: Vec[i64] = Vec.new();
+    rem.push(101i64); rem.push(102i64); rem.push(103i64);
+    println(s.remove(rem));     // true
+    println(s.len());           // 1
+    let mut u: Set[Vec[i64]] = Set.new();
+    let mut p: Vec[i64] = Vec.new(); p.push(7i64);
+    u.insert(p);
+    let mut q: Vec[i64] = Vec.new(); q.push(7i64); q.push(7i64);
+    u.insert(q);
+    println(u.len());           // 2 — same prefix, different length ≠ equal
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "1\n2\ntrue\ntrue\n1\n2");
+        }
+    }
+
+    #[test]
+    fn test_e2e_set_string_dedup_companion() {
+        // Companion to `test_e2e_set_vec_dedup_by_content`: `Set[String]` is
+        // the already-working content-dedup path (String hash/eq walk the
+        // bytes), kept alongside the Vec test so a regression in the shared
+        // `emit_hash_fn_for_type_expr` / `emit_eq_fn_for_type_expr` dispatch
+        // surfaces on both element kinds (B-2026-06-20-15).
+        let out = run_program(
+            r#"
+fn main() {
+    let mut s: Set[String] = Set.new();
+    s.insert("alpha");
+    s.insert("alpha");
+    s.insert("beta");
+    println(s.len());            // 2
+    println(s.contains("alpha")); // true
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "2\ntrue");
+        }
+    }
+
+    #[test]
+    fn test_e2e_map_vec_key_dedup_by_content() {
+        // The same hash/eq dispatch fix that fixes `Set[Vec[T]]` also makes a
+        // `Vec[T]` MAP KEY behave by content: re-inserting an equal-contents
+        // key overwrites the existing entry rather than adding a second bucket
+        // (`len() == 1`), and a content-equal `get_or` probe finds it
+        // (B-2026-06-20-15). `Set` lowers to `Map[T, ()]`, so both share the
+        // per-element hash/eq emitters.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut m: Map[Vec[i64], i64] = Map.new();
+    let mut k1: Vec[i64] = Vec.new(); k1.push(1i64); k1.push(2i64);
+    m.insert(k1, 10);
+    let mut k2: Vec[i64] = Vec.new(); k2.push(1i64); k2.push(2i64);
+    m.insert(k2, 20);           // same key by content → overwrites
+    println(m.len());           // 1
+    let mut probe: Vec[i64] = Vec.new(); probe.push(1i64); probe.push(2i64);
+    println(m.get_or(probe, -1)); // 20
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "1\n20");
+        }
+    }
+
+    #[test]
     fn test_e2e_map_set_moved_into_returned_enum_variant_no_uaf() {
         // Non-vacuous UAF gate (phase-6 line 562): a `Map`/`Set` local moved
         // into a returned enum variant (`return Some(m)`) must NOT be freed at

@@ -119,6 +119,16 @@ impl<'a> super::TypeChecker<'a> {
             Type::Vector { element, .. } => self.type_supports_eq(element),
             Type::Slice { element, .. } => self.type_supports_eq(element),
             Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_eq(inner),
+            // `Vec[T]` has value (content) equality when `T` does — element-wise
+            // compare, like the `Array`/`Slice` arms above. The built-in `Vec`
+            // is registered in `env.structs` with no derived traits, so without
+            // this arm it falls through to the generic `Named` lookup below and
+            // (wrongly) reports `Vec` as un-`Eq`, blocking `Set[Vec[T]]` /
+            // `Map[Vec[T], _]`. Codegen's per-element `karac_eq_Vec_<elem>`
+            // walks the contents to match the interpreter (B-2026-06-20-15).
+            Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
+                self.type_supports_eq(&args[0])
+            }
             Type::Named { name, .. } => {
                 if let Some(info) = self.env.structs.get(name) {
                     info.derived_traits.contains("Eq")
@@ -173,6 +183,15 @@ impl<'a> super::TypeChecker<'a> {
             Type::Vector { element, .. } => self.type_supports_hash(element),
             Type::Slice { element, .. } => self.type_supports_hash(element),
             Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_hash(inner),
+            // `Vec[T]` hashes by content when `T` does — element-wise, like the
+            // `Array`/`Slice` arms above. Without this arm the built-in `Vec`
+            // (registered in `env.structs` with no derived traits) falls through
+            // to the generic `Named` lookup below and reports `Vec` as un-`Hash`,
+            // blocking `Set[Vec[T]]` / `Map[Vec[T], _]`. Codegen's per-element
+            // `karac_hash_Vec_<elem>` walks the contents to match (B-2026-06-20-15).
+            Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
+                self.type_supports_hash(&args[0])
+            }
             Type::Named { name, .. } => {
                 if let Some(info) = self.env.structs.get(name) {
                     info.derived_traits.contains("Hash")

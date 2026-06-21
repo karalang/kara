@@ -5059,6 +5059,43 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_set_vec_duplicate_element_dedup_no_leak_no_double_free() {
+        // NEW ownership surface opened by the `Set[Vec[T]]` content-dedup fix
+        // (B-2026-06-20-15): once two equal-CONTENTS vecs collapse, the second
+        // `insert` takes the EXISTS (duplicate) path of `karac_map_insert_old`,
+        // which keeps the bucket's existing element and does NOT adopt the
+        // incoming one — so the incoming `{ptr,len,cap}` buffer must be freed
+        // exactly once on the exists branch (B-2026-06-20-12's diamond), while
+        // the bucket's adopted (first) buffer is freed exactly once at set drop.
+        // Before this fix the dedup never happened (every insert was a fresh
+        // bucket), so this exists-branch path was unreachable for `Set[Vec]`.
+        // `b` is a moved local binding: its source scope-exit free is suppressed
+        // (so it can't double-free with the exists-branch free) and the vacant
+        // case would adopt it (so the exists-branch free can't run there). ≥6
+        // i64s ⇒ a ≥48-byte data buffer (LSan misses sub-36-byte reachable
+        // buffers). Must be clean under BOTH macOS ASAN (no double-free) and the
+        // Linux LSan gate (no leak).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut s: Set[Vec[i64]] = Set.new();
+    let mut a: Vec[i64] = Vec.new();
+    a.push(601i64); a.push(602i64); a.push(603i64);
+    a.push(604i64); a.push(605i64); a.push(606i64);
+    s.insert(a);
+    let mut b: Vec[i64] = Vec.new();
+    b.push(601i64); b.push(602i64); b.push(603i64);
+    b.push(604i64); b.push(605i64); b.push(606i64);
+    s.insert(b);
+    println(s.len());
+}
+"#,
+            &["1"],
+            "set_vec_duplicate_element_dedup_no_leak_no_double_free",
+        );
+    }
+
     // ── `for w in vec` heap element BORROW consumed by a retaining sink
     //    (B-2026-06-20-13) ──
     // `for` over a Vec is borrow-iteration: `w` aliases `data[i]` and the
@@ -5928,12 +5965,14 @@ fn main() {
         // `Set[Vec[i64]]` sibling on the lookup-only path: confirms the incoming
         // free's vec-struct gate (`free_fresh_owned_str_arg` → `cap > 0` free)
         // also fires for an actual `Vec` element, not just `String`. `make_vec()`
-        // returns a fresh-owned temp; `remove` looks it up (ABSENT here — note
-        // `Set[Vec]` does not dedupe equal-contents vecs, so an explicit miss
-        // isolates the INCOMING-element residual without depending on content
-        // equality) and never retains it, so the returned Vec buffer must be
-        // freed after the call. ≥6 i64s ⇒ a ≥48-byte data buffer (LSan misses
-        // sub-36-byte reachable buffers). Pre-fix it leaked one buffer per call.
+        // returns a fresh-owned temp; `remove` looks it up (ABSENT here — the
+        // element `[701..706]` differs in both length and contents from the
+        // set's lone `[1]`, so the explicit miss isolates the INCOMING-element
+        // residual without depending on content equality, independent of the
+        // `Set[Vec]` content-dedup now in place via B-2026-06-20-15) and never
+        // retains it, so the returned Vec buffer must be freed after the call.
+        // ≥6 i64s ⇒ a ≥48-byte data buffer (LSan misses sub-36-byte reachable
+        // buffers). Pre-fix it leaked one buffer per call.
         assert_clean_asan_run(
             r#"
 fn make_vec() -> Vec[i64] {

@@ -509,6 +509,26 @@ impl<'ctx> super::Codegen<'ctx> {
             TypeKind::Tuple(elems) if !elems.is_empty() => {
                 self.emit_hash_fn_for_tuple(&type_name, elems)
             }
+            // `Vec[T]` element/key: CONTENT hash that walks the elements.
+            // The `_ =>` byte-loop fallback hashes the `{ptr,len,cap}` HEADER
+            // (pointer identity), so two equal-contents vecs hash unequally
+            // and `Set[Vec[T]]` / `Map[Vec[T], _]` never dedupe by value
+            // (B-2026-06-20-15). Keyed on a richer name (`karac_hash_Vec_<elem>`)
+            // than the shallow `mangled_type_name` "Vec", so distinct element
+            // types don't share one body.
+            TypeKind::Path(p) if p.segments.len() == 1 && p.segments[0] == "Vec" => {
+                match p.generic_args.as_ref().and_then(|a| a.first()) {
+                    Some(GenericArg::Type(elem_te)) => {
+                        let elem_te = elem_te.clone();
+                        self.emit_hash_fn_for_vec(&elem_te)
+                    }
+                    // No element TypeExpr recorded — header byte-loop fallback.
+                    _ => {
+                        let key_ty = self.llvm_type_for_type_expr(te);
+                        self.emit_hash_fn_for_type(&type_name, key_ty)
+                    }
+                }
+            }
             // User-struct path: dispatch to per-field hash (mirrors the
             // tuple shape) when the path resolves to a registered
             // struct. The byte-loop fallback in `emit_hash_fn_for_type`
@@ -546,6 +566,23 @@ impl<'ctx> super::Codegen<'ctx> {
             TypeKind::Tuple(elems) if !elems.is_empty() => {
                 self.emit_eq_fn_for_tuple(&type_name, elems)
             }
+            // `Vec[T]` element/key: CONTENT equality (length, then element-wise).
+            // The `_ =>` byte-loop fallback compares the `{ptr,len,cap}` HEADER
+            // (pointer identity), so two equal-contents vecs compare unequal —
+            // the `Set[Vec[T]]` dedup bug (B-2026-06-20-15). See
+            // `emit_hash_fn_for_type_expr`'s sibling Vec arm.
+            TypeKind::Path(p) if p.segments.len() == 1 && p.segments[0] == "Vec" => {
+                match p.generic_args.as_ref().and_then(|a| a.first()) {
+                    Some(GenericArg::Type(elem_te)) => {
+                        let elem_te = elem_te.clone();
+                        self.emit_eq_fn_for_vec(&elem_te)
+                    }
+                    _ => {
+                        let key_ty = self.llvm_type_for_type_expr(te);
+                        self.emit_eq_fn_for_type(&type_name, key_ty)
+                    }
+                }
+            }
             TypeKind::Path(p)
                 if p.segments.len() == 1
                     && self.struct_field_type_exprs.contains_key(&p.segments[0])
@@ -559,6 +596,308 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.emit_eq_fn_for_type(&type_name, key_ty)
             }
         }
+    }
+
+    /// Emit (or reuse) `karac_hash_Vec_<elem>(*const Vec) -> i64` — a
+    /// CONTENT hash for a `Vec[T]` element/key. Walks `0..len` calling the
+    /// per-element hash fn (through the type-expr dispatcher, so a
+    /// `Vec[String]` / `Vec[Vec[i64]]` element recurses correctly) and folds
+    /// each element hash into the FxHash tail-mix `state = state.rotate_left(5)
+    /// ^ x; state *= SEED`, seeded with `len` so length is part of the digest
+    /// (matching Rust's `Hash for [T]`) and equal-content vecs hash equal.
+    ///
+    /// The byte-loop fallback in `emit_hash_fn_for_type` would hash the
+    /// `{ptr,len,cap}` HEADER (pointer identity), so two equal-contents vecs
+    /// land in different buckets and `Set[Vec[T]]` never dedupes — the
+    /// `B-2026-06-20-15` bug. Mirrors `emit_vec_clone_fn`'s struct-GEP +
+    /// per-element-loop shape; the eq sibling is `emit_eq_fn_for_vec`.
+    pub(super) fn emit_hash_fn_for_vec(&mut self, elem_te: &TypeExpr) -> FunctionValue<'ctx> {
+        let elem_name = Self::display_mangle_te(elem_te);
+        let fn_name = format!("karac_hash_Vec_{elem_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return f;
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i8_t = self.context.i8_type();
+        let i64_t = self.context.i64_type();
+        let vec_ty = self.vec_struct_type();
+        let elem_ty = self.llvm_type_for_type_expr(elem_te);
+        // Recurse first — emit may switch the builder's insert block.
+        let elem_hash = self.emit_hash_fn_for_type_expr(elem_te);
+
+        let saved_bb = self.builder.get_insert_block();
+        let hash_fn_ty = i64_t.fn_type(&[ptr_ty.into()], false);
+        let hash_fn = self
+            .module
+            .add_function(&fn_name, hash_fn_ty, Some(Linkage::Internal));
+
+        let entry_bb = self.context.append_basic_block(hash_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let key_ptr = hash_fn.get_nth_param(0).unwrap().into_pointer_value();
+
+        // Load src.{data, len} from the {ptr,len,cap} header.
+        let data_pp = self
+            .builder
+            .build_struct_gep(vec_ty, key_ptr, 0, "v.data.pp")
+            .unwrap();
+        let data_ptr = self
+            .builder
+            .build_load(ptr_ty, data_pp, "v.data")
+            .unwrap()
+            .into_pointer_value();
+        let len_p = self
+            .builder
+            .build_struct_gep(vec_ty, key_ptr, 1, "v.len.p")
+            .unwrap();
+        let len = self
+            .builder
+            .build_load(i64_t, len_p, "v.len")
+            .unwrap()
+            .into_int_value();
+
+        // Element stride in bytes.
+        let raw_size = elem_ty
+            .size_of()
+            .unwrap_or_else(|| i64_t.const_int(8, false));
+        let elem_size = if raw_size.get_type().get_bit_width() == 64 {
+            raw_size
+        } else {
+            self.builder
+                .build_int_z_extend(raw_size, i64_t, "esz64")
+                .unwrap()
+        };
+
+        let seed = i64_t.const_int(Self::FXHASH_SEED, false);
+        let rotate_amt = i64_t.const_int(Self::FXHASH_ROTATE, false);
+        let rotate_inv = i64_t.const_int(64 - Self::FXHASH_ROTATE, false);
+
+        // Seed state with len: rotate_left(0, 5) = 0, so mix(0, len) collapses
+        // to `len * SEED` (same shape the inline primitive fast path uses).
+        let init_state = self.builder.build_int_mul(len, seed, "v.h.init").unwrap();
+
+        // Loop i in 0..len: state = mix(state, elem_hash(data + i*size)).
+        let pre_bb = self.builder.get_insert_block().unwrap();
+        let hdr_bb = self.context.append_basic_block(hash_fn, "v.h.hdr");
+        let bdy_bb = self.context.append_basic_block(hash_fn, "v.h.bdy");
+        let exit_bb = self.context.append_basic_block(hash_fn, "v.h.exit");
+        self.builder.build_unconditional_branch(hdr_bb).unwrap();
+
+        self.builder.position_at_end(hdr_bb);
+        let i_phi = self.builder.build_phi(i64_t, "v.h.i").unwrap();
+        let state_phi = self.builder.build_phi(i64_t, "v.h.state").unwrap();
+        i_phi.add_incoming(&[(&i64_t.const_zero(), pre_bb)]);
+        state_phi.add_incoming(&[(&init_state, pre_bb)]);
+        let i_val = i_phi.as_basic_value().into_int_value();
+        let state = state_phi.as_basic_value().into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i_val, len, "v.h.cond")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cond, bdy_bb, exit_bb)
+            .unwrap();
+
+        self.builder.position_at_end(bdy_bb);
+        let offset = self
+            .builder
+            .build_int_mul(i_val, elem_size, "v.h.off")
+            .unwrap();
+        let elem_ptr = unsafe {
+            self.builder
+                .build_gep(i8_t, data_ptr, &[offset], "v.h.ep")
+                .unwrap()
+        };
+        let elem_h = self
+            .builder
+            .build_call(elem_hash, &[elem_ptr.into()], "v.h.eh")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let shl = self
+            .builder
+            .build_left_shift(state, rotate_amt, "v.h.shl")
+            .unwrap();
+        let shr = self
+            .builder
+            .build_right_shift(state, rotate_inv, false, "v.h.shr")
+            .unwrap();
+        let rotated = self.builder.build_or(shl, shr, "v.h.rot").unwrap();
+        let xored = self.builder.build_xor(rotated, elem_h, "v.h.xor").unwrap();
+        let new_state = self.builder.build_int_mul(xored, seed, "v.h.mul").unwrap();
+        let i_next = self
+            .builder
+            .build_int_add(i_val, i64_t.const_int(1, false), "v.h.i1")
+            .unwrap();
+        i_phi.add_incoming(&[(&i_next, bdy_bb)]);
+        state_phi.add_incoming(&[(&new_state, bdy_bb)]);
+        self.builder.build_unconditional_branch(hdr_bb).unwrap();
+
+        self.builder.position_at_end(exit_bb);
+        self.builder.build_return(Some(&state)).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        hash_fn
+    }
+
+    /// Emit (or reuse) `karac_eq_Vec_<elem>(*const Vec, *const Vec) -> i1` —
+    /// CONTENT equality for a `Vec[T]` element/key: compare lengths, then each
+    /// element via the per-element eq fn (recurses through the dispatcher, so a
+    /// `Vec[String]` / nested `Vec[Vec[_]]` element compares by content too).
+    /// The byte-loop fallback in `emit_eq_fn_for_type` compares the
+    /// `{ptr,len,cap}` HEADER (pointer identity) — the `Set[Vec[T]]` dedup bug
+    /// (B-2026-06-20-15). Mirror of the `String` eq shape, element-typed; the
+    /// hash sibling is `emit_hash_fn_for_vec`.
+    pub(super) fn emit_eq_fn_for_vec(&mut self, elem_te: &TypeExpr) -> FunctionValue<'ctx> {
+        let elem_name = Self::display_mangle_te(elem_te);
+        let fn_name = format!("karac_eq_Vec_{elem_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return f;
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i8_t = self.context.i8_type();
+        let i64_t = self.context.i64_type();
+        let bool_t = self.context.bool_type();
+        let vec_ty = self.vec_struct_type();
+        let elem_ty = self.llvm_type_for_type_expr(elem_te);
+        // Recurse first — emit may switch the builder's insert block.
+        let elem_eq = self.emit_eq_fn_for_type_expr(elem_te);
+
+        let saved_bb = self.builder.get_insert_block();
+        let eq_fn_ty = bool_t.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let eq_fn = self
+            .module
+            .add_function(&fn_name, eq_fn_ty, Some(Linkage::Internal));
+
+        let entry_bb = self.context.append_basic_block(eq_fn, "entry");
+        let neq_bb = self.context.append_basic_block(eq_fn, "neq");
+        let loop_hdr = self.context.append_basic_block(eq_fn, "eq.hdr");
+        let loop_bdy = self.context.append_basic_block(eq_fn, "eq.bdy");
+        let loop_exit = self.context.append_basic_block(eq_fn, "eq.exit");
+
+        // neq: lengths differ or an element mismatched → false.
+        self.builder.position_at_end(neq_bb);
+        self.builder
+            .build_return(Some(&bool_t.const_int(0, false)))
+            .unwrap();
+
+        // entry: load both lens + data ptrs; equal len → loop, else → neq.
+        self.builder.position_at_end(entry_bb);
+        let a_ptr = eq_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let b_ptr = eq_fn.get_nth_param(1).unwrap().into_pointer_value();
+
+        let la_p = self
+            .builder
+            .build_struct_gep(vec_ty, a_ptr, 1, "la.p")
+            .unwrap();
+        let lb_p = self
+            .builder
+            .build_struct_gep(vec_ty, b_ptr, 1, "lb.p")
+            .unwrap();
+        let len_a = self
+            .builder
+            .build_load(i64_t, la_p, "la")
+            .unwrap()
+            .into_int_value();
+        let len_b = self
+            .builder
+            .build_load(i64_t, lb_p, "lb")
+            .unwrap()
+            .into_int_value();
+        let da_p = self
+            .builder
+            .build_struct_gep(vec_ty, a_ptr, 0, "da.p")
+            .unwrap();
+        let db_p = self
+            .builder
+            .build_struct_gep(vec_ty, b_ptr, 0, "db.p")
+            .unwrap();
+        let data_a = self
+            .builder
+            .build_load(ptr_ty, da_p, "da")
+            .unwrap()
+            .into_pointer_value();
+        let data_b = self
+            .builder
+            .build_load(ptr_ty, db_p, "db")
+            .unwrap()
+            .into_pointer_value();
+        let raw_size = elem_ty
+            .size_of()
+            .unwrap_or_else(|| i64_t.const_int(8, false));
+        let elem_size = if raw_size.get_type().get_bit_width() == 64 {
+            raw_size
+        } else {
+            self.builder
+                .build_int_z_extend(raw_size, i64_t, "esz64")
+                .unwrap()
+        };
+        let len_eq = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, len_a, len_b, "len.eq")
+            .unwrap();
+        let entry_end = self.builder.get_insert_block().unwrap();
+        self.builder
+            .build_conditional_branch(len_eq, loop_hdr, neq_bb)
+            .unwrap();
+
+        // hdr: i in 0..len_a ? compare element : all-equal → true.
+        self.builder.position_at_end(loop_hdr);
+        let i_phi = self.builder.build_phi(i64_t, "eq.i").unwrap();
+        i_phi.add_incoming(&[(&i64_t.const_zero(), entry_end)]);
+        let i_val = i_phi.as_basic_value().into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i_val, len_a, "eq.cond")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cond, loop_bdy, loop_exit)
+            .unwrap();
+
+        self.builder.position_at_end(loop_bdy);
+        let offset = self
+            .builder
+            .build_int_mul(i_val, elem_size, "eq.off")
+            .unwrap();
+        let ea = unsafe {
+            self.builder
+                .build_gep(i8_t, data_a, &[offset], "eq.ea")
+                .unwrap()
+        };
+        let eb = unsafe {
+            self.builder
+                .build_gep(i8_t, data_b, &[offset], "eq.eb")
+                .unwrap()
+        };
+        let r = self
+            .builder
+            .build_call(elem_eq, &[ea.into(), eb.into()], "eq.r")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let i_next = self
+            .builder
+            .build_int_add(i_val, i64_t.const_int(1, false), "eq.i1")
+            .unwrap();
+        i_phi.add_incoming(&[(&i_next, loop_bdy)]);
+        self.builder
+            .build_conditional_branch(r, loop_hdr, neq_bb)
+            .unwrap();
+
+        self.builder.position_at_end(loop_exit);
+        self.builder
+            .build_return(Some(&bool_t.const_int(1, false)))
+            .unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        eq_fn
     }
 
     /// Per-field-recursive hash for a registered user struct. Uses the

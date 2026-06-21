@@ -5275,6 +5275,51 @@ fn test_distinct_hash_with_derive_ok() {
 }
 
 #[test]
+fn test_set_and_map_accept_vec_element_when_inner_hash_eq() {
+    // `Vec[T]` satisfies `Hash + Eq` (by content) when `T` does — so a
+    // `Set[Vec[i64]]` element and a `Vec[i64]` Map key typecheck (B-2026-06-20-15).
+    // The built-in `Vec` is registered with no derived traits, so before the
+    // dedicated `Vec` arm in `type_supports_hash`/`type_supports_eq` it fell to
+    // the generic `Named` lookup and was (wrongly) reported as un-`Hash + Eq`,
+    // a hard error in the codegen path. Codegen walks the contents to match.
+    typecheck_ok(
+        "fn f() {
+             let mut s: Set[Vec[i64]] = Set.new();
+             let mut a: Vec[i64] = Vec.new(); a.push(1i64);
+             s.insert(a);
+             let mut m: Map[Vec[i64], i64] = Map.new();
+             let mut k: Vec[i64] = Vec.new(); k.push(1i64);
+             m.insert(k, 9i64);
+         }",
+    );
+}
+
+#[test]
+fn test_set_rejects_vec_element_when_inner_not_hash_eq() {
+    // The `Vec` arm recurses into the element: `Vec[f64]` is NOT `Hash + Eq`
+    // because `f64` follows IEEE 754 (`NaN != NaN`), so `Set[Vec[f64]]` must
+    // still be rejected — the fix admits `Vec` by content, not unconditionally.
+    let errors = typecheck_errors(
+        "fn f() {
+             let mut s: Set[Vec[f64]] = Set.new();
+             let mut a: Vec[f64] = Vec.new(); a.push(1.0f64);
+             s.insert(a);
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("Hash") || e.to_string().contains("Eq")),
+        "expected a Hash/Eq gate on a `Set[Vec[f64]]` element, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
 fn test_distinct_display_requires_derive() {
     let errors = typecheck_errors(
         "distinct type UserId = i64;
