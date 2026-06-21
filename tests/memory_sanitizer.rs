@@ -4889,6 +4889,178 @@ fn main() {
         );
     }
 
+    // ── Map.remove heap-VALUE move-out under churn (2026-06-20) ───
+    // The VALUE side of the `Map.remove` ownership class: `Map.remove`
+    // moves the bucket's `{ptr,len,cap}` Vec/String value OUT (bitwise
+    // copy into the `Some(old)` payload) and tombstones the slot WITHOUT
+    // freeing it — the match binding becomes the sole owner and frees it
+    // once at arm exit, while the eventual `karac_map_free_with_drop_vec`
+    // walks only OCCUPIED slots (the tombstoned ones are skipped). The
+    // stored-KEY side was fixed in B-2026-06-20-10 (the `drop_key` ABI).
+    //
+    // B-2026-06-20-14 logged an INTERMITTENT, seed-flavoured SEGV for
+    // `asan_match_arm_vec_binding_freed_on_arm_exit` (below) on this same
+    // value path. A follow-up audit (this batch) found the emitted IR for
+    // that shape is single-owner and provably correct — one `@free` per
+    // removed value, guarded by `cap > 0`, and the scope-exit map-free
+    // touches no tombstoned slot — with no HashMap-order-dependent
+    // decision anywhere in the path (no shared types are involved). Across
+    // ~2400 real Linux ASAN+LSan runs (verified positive control) it did
+    // not reproduce. The original symptom is consistent with a transient
+    // stale-archive ABI mismatch during the `drop_key` rollout (codegen
+    // passing the 4th arg to a not-yet-rebuilt 3-arg `karac_map_remove_old`
+    // → garbage register), not a latent codegen bug. These three churn
+    // stress cases lock the value path down permanently: large heap churn
+    // exhausts the ASAN quarantine, so any real double-free/UAF surfaces as
+    // a live-chunk corruption rather than a benign quarantined catch.
+
+    #[test]
+    fn asan_map_remove_vec_value_moveout_under_churn() {
+        // Vec[i64] value, repeatedly grown then removed-and-bound across
+        // 200 keys × 20 generations — the core move-out-then-free path at
+        // a scale that cycles the allocator.
+        assert_clean_asan_run(
+            r#"
+fn inner() -> i64 {
+    let mut bucket: Map[i64, Vec[i64]] = Map.new();
+    let mut i = 0i64;
+    while i < 200 {
+        let mut j = 0i64;
+        while j < 20 {
+            bucket.entry(i).or_insert(Vec.new()).push(i + j);
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    let mut acc = 0i64;
+    let mut k = 0i64;
+    while k < 200 {
+        match bucket.remove(k) {
+            Some(indices) => {
+                acc = acc + indices.len();
+            },
+            None => {},
+        }
+        k = k + 1;
+    }
+    acc
+}
+fn main() {
+    let mut s = 0i64;
+    let mut iter = 0i64;
+    while iter < 20 {
+        s = s + inner();
+        iter = iter + 1;
+    }
+    println(s);
+}
+"#,
+            &["80000"],
+            "map_remove_vec_value_moveout_under_churn",
+        );
+    }
+
+    #[test]
+    fn asan_map_remove_vec_value_indexed_readback() {
+        // Read every element of the moved-out Vec INSIDE the arm before it
+        // is freed — exercises the reconstructed `{ptr,len,cap}` binding's
+        // data buffer for reads, not just `len()`, under heap churn.
+        assert_clean_asan_run(
+            r#"
+fn inner() -> i64 {
+    let mut bucket: Map[i64, Vec[i64]] = Map.new();
+    let mut i = 0i64;
+    while i < 100 {
+        let mut j = 0i64;
+        while j < 16 {
+            bucket.entry(i).or_insert(Vec.new()).push(i * 16i64 + j);
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    let mut total = 0i64;
+    let mut k = 0i64;
+    while k < 100 {
+        match bucket.remove(k) {
+            Some(indices) => {
+                let mut p = 0i64;
+                while p < indices.len() {
+                    total = total + indices[p];
+                    p = p + 1;
+                }
+            },
+            None => {},
+        }
+        k = k + 1;
+    }
+    total
+}
+fn main() {
+    let mut s = 0i64;
+    let mut iter = 0i64;
+    while iter < 20 {
+        s = s + inner();
+        iter = iter + 1;
+    }
+    println(s);
+}
+"#,
+            &["25584000"],
+            "map_remove_vec_value_indexed_readback",
+        );
+    }
+
+    #[test]
+    fn asan_map_remove_string_key_vec_value_both_heap_halves() {
+        // Heap KEY (String) + heap VALUE (Vec): the `drop_key=1` stored-key
+        // free (B-2026-06-20-10) and the moved-out value free must each
+        // fire exactly once, with no cross-talk, under churn.
+        assert_clean_asan_run(
+            r#"
+fn keyfor(n: i64) -> String {
+    let mut s = "k".to_string();
+    s.push_str(n.to_string());
+    s
+}
+fn inner() -> i64 {
+    let mut bucket: Map[String, Vec[i64]] = Map.new();
+    let mut i = 0i64;
+    while i < 120 {
+        let mut j = 0i64;
+        while j < 12 {
+            bucket.entry(keyfor(i)).or_insert(Vec.new()).push(i + j);
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    let mut acc = 0i64;
+    let mut k = 0i64;
+    while k < 120 {
+        match bucket.remove(keyfor(k)) {
+            Some(indices) => {
+                acc = acc + indices.len();
+            },
+            None => {},
+        }
+        k = k + 1;
+    }
+    acc
+}
+fn main() {
+    let mut s = 0i64;
+    let mut iter = 0i64;
+    while iter < 15 {
+        s = s + inner();
+        iter = iter + 1;
+    }
+    println(s);
+}
+"#,
+            &["21600"],
+            "map_remove_string_key_vec_value_both_heap_halves",
+        );
+    }
+
     #[test]
     fn asan_match_arm_vec_move_out_no_double_free() {
         // Canonical `Option<Vec>::unwrap_or_default` shape: the arm binding
