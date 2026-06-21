@@ -1390,20 +1390,23 @@ layout entities: Vec[Entity] {
     );
 }
 
-// ── Heap-owning fields in SoA layouts (rejected) ──────────────
-// SoA push currently `memcpy`s field bits into per-group buffers;
-// read materialization (`compile_soa_index_read`) memcpys them
-// back; per-element drop for heap-owning fields isn't implemented.
-// Allowing a `String` / `Vec` / `Map` / `Set` field today silently
-// produces either a leak (if push suppression fires) or a double-
-// free (if it doesn't). Rejecting at layout validation gives a
-// focused diagnostic at the use site instead of silent UB. Tracker
-// entry: phase-7-codegen.md § *SoA drop semantics > Per-element
-// destructor calls for heap-bearing element fields*.
+// ── Heap-owning fields in SoA layouts ─────────────────────────
+// `String` and `Vec[POD]` element fields ARE supported: codegen
+// synthesizes `__karac_soa_drop_<layout>` to free each live
+// element's String/Vec buffers at scope exit, on overwrite, and on
+// the carried-grid reassignment (`src/codegen/runtime.rs`
+// `emit_soa_drop_fn`). The remaining heap types stay rejected at
+// layout validation because the per-element drop doesn't cover them:
+// `Map` / `Set` / `VecDeque` / `Sorted*` (opaque handles),
+// `Vec[heap T]` (the drop frees only a Vec field's OUTER buffer,
+// not its elements), and `shared struct` / `shared enum` (RC).
 
 #[test]
-fn test_layout_rejects_string_field_in_group() {
-    let errors = resolve_errors(
+fn test_layout_accepts_string_field_in_group() {
+    // String is now supported in SoA layouts — codegen drops each
+    // element's String buffer. All fields are assigned, so no error
+    // (heap-rejection or unassigned) should fire.
+    resolve_ok(
         r#"
 struct Entity { x: f64, name: String }
 layout entities: Vec[Entity] {
@@ -1412,19 +1415,14 @@ layout entities: Vec[Entity] {
 }
 "#,
     );
-    assert!(
-        errors
-            .iter()
-            .any(|e| e.message.contains("heap-owning type (String)")
-                && e.message.contains("group 'meta'")),
-        "expected heap-owning String rejection, got: {:?}",
-        errors
-    );
 }
 
 #[test]
-fn test_layout_rejects_vec_field_in_group() {
-    let errors = resolve_errors(
+fn test_layout_accepts_vec_pod_field_in_group() {
+    // `Vec[bool]` — a Vec over a POD element — is supported: the
+    // per-element drop frees the field's outer buffer (no element
+    // recursion needed, since `bool` carries no heap).
+    resolve_ok(
         r#"
 struct Grid { width: i64, cells: Vec[bool] }
 layout grids: Vec[Grid] {
@@ -1433,12 +1431,28 @@ layout grids: Vec[Grid] {
 }
 "#,
     );
+}
+
+#[test]
+fn test_layout_rejects_vec_of_heap_field_in_group() {
+    // `Vec[String]` — a Vec whose ELEMENTS carry heap — stays
+    // rejected: the SoA per-element drop frees only the Vec field's
+    // outer buffer (one-level), so its element Strings would leak.
+    let errors = resolve_errors(
+        r#"
+struct Doc { id: i64, lines: Vec[String] }
+layout docs: Vec[Doc] {
+    group ids { id }
+    group text { lines }
+}
+"#,
+    );
     assert!(
         errors
             .iter()
-            .any(|e| e.message.contains("heap-owning type (Vec[…])")
-                && e.message.contains("group 'bulk'")),
-        "expected heap-owning Vec rejection, got: {:?}",
+            .any(|e| e.message.contains("Vec of heap-owning String")
+                && e.message.contains("group 'text'")),
+        "expected Vec-of-heap rejection, got: {:?}",
         errors
     );
 }
@@ -1464,8 +1478,10 @@ layout indexes: Vec[Index] {
 }
 
 #[test]
-fn test_layout_rejects_heap_field_in_cold_section() {
-    let errors = resolve_errors(
+fn test_layout_accepts_string_field_in_cold_section() {
+    // A String in the cold section is supported — the cold group's
+    // buffer is walked by the same per-element drop as the hot groups.
+    resolve_ok(
         r#"
 struct Entity { x: f64, label: String }
 layout entities: Vec[Entity] {
@@ -1474,19 +1490,14 @@ layout entities: Vec[Entity] {
 }
 "#,
     );
-    assert!(
-        errors
-            .iter()
-            .any(|e| e.message.contains("cold section: field 'label'")
-                && e.message.contains("heap-owning type (String)")),
-        "expected cold-section String rejection, got: {:?}",
-        errors
-    );
 }
 
 #[test]
-fn test_layout_rejects_tuple_containing_string() {
-    let errors = resolve_errors(
+fn test_layout_accepts_tuple_containing_string() {
+    // `(i64, String)` — an inline tuple whose only heap leaf is a
+    // String — is supported: `emit_aggregate_heap_field_frees`
+    // recurses the tuple and frees the nested String per element.
+    resolve_ok(
         r#"
 struct Entity { x: f64, tag: (i64, String) }
 layout entities: Vec[Entity] {
@@ -1494,13 +1505,6 @@ layout entities: Vec[Entity] {
     group meta { tag }
 }
 "#,
-    );
-    assert!(
-        errors.iter().any(|e| e
-            .message
-            .contains("heap-owning type (tuple containing String)")),
-        "expected tuple-of-String rejection, got: {:?}",
-        errors
     );
 }
 

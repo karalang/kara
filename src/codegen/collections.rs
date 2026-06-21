@@ -2283,6 +2283,41 @@ impl<'ctx> super::Codegen<'ctx> {
                 "soa.fstore.field",
             )
             .unwrap();
+        // Drop the OLD field value if it owns heap (String/Vec) before the
+        // store overwrites it — else `grid[i].f = v` over a heap field leaks
+        // the displaced buffer. A direct String/Vec field (`{ptr,len,cap}`)
+        // frees its old `.data` cap-guarded; a nested tuple/struct field
+        // recurses via `emit_aggregate_heap_field_frees`; a POD field skips.
+        // The new value is moved in (a fresh/owned RHS); a named-binding
+        // String/Vec RHS is suppressed by the assignment site's move
+        // machinery, as for the AoS field store.
+        if let Some(inkwell::types::BasicTypeEnum::StructType(fst)) =
+            group_elem_ty.get_field_type_at_index(within_group_idx as u32)
+        {
+            if fst == self.vec_struct_type() {
+                let data_pp = self
+                    .builder
+                    .build_struct_gep(fst, field_ptr, 0, "soa.fstore.old.data.pp")
+                    .unwrap();
+                let old_data = self
+                    .builder
+                    .build_load(ptr_ty, data_pp, "soa.fstore.old.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let cap_pp = self
+                    .builder
+                    .build_struct_gep(fst, field_ptr, 2, "soa.fstore.old.cap.pp")
+                    .unwrap();
+                let old_cap = self
+                    .builder
+                    .build_load(i64_t, cap_pp, "soa.fstore.old.cap")
+                    .unwrap()
+                    .into_int_value();
+                self.emit_free_if_cap_positive(old_data, old_cap);
+            } else if self.aggregate_has_heap_field(fst) {
+                self.emit_aggregate_heap_field_frees(field_ptr, fst);
+            }
+        }
         let new_val =
             self.coerce_to_struct_field_ty(group_elem_ty, within_group_idx as u32, new_val);
         self.builder.build_store(field_ptr, new_val).unwrap();
@@ -2370,6 +2405,19 @@ impl<'ctx> super::Codegen<'ctx> {
         self.emit_panic("index out of bounds");
         self.builder.build_unreachable().unwrap();
         self.builder.position_at_end(ok_bb);
+
+        // Drop the OLD element's heap (String/Vec) fields before the scatter
+        // overwrites them — else `grid[i] = E{..}` over a heap-bearing element
+        // leaks the displaced buffers. `idx < len` is guaranteed by the bounds
+        // check above; `soa_heap_groups` is empty for a POD element struct, so
+        // this is no-op IR there (byte-identical whole-element store). The new
+        // element's fields are MOVED in by the scatter (a struct-literal RHS
+        // owns its buffers outright; a named-binding RHS is cap-zeroed at the
+        // assignment site in `stmts.rs`, mirroring push's move-in suppression).
+        let heap_groups = self.soa_heap_groups(&soa);
+        if !heap_groups.is_empty() {
+            self.emit_soa_drop_element_at(soa_struct_ptr, soa_ty, idx_val, &heap_groups);
+        }
 
         // Decompose the AoS element struct into per-group sub-structs and store
         // each at `group_buf[idx]` (identical decomposition to push's store

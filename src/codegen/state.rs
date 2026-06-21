@@ -503,6 +503,15 @@ pub(crate) enum CleanupAction<'ctx> {
         /// `true` when the layout has a cold group — its pointer lives
         /// at struct field index `num_hot_groups` (just before `len`).
         has_cold: bool,
+        /// `Some` when the element struct has heap (String/Vec) fields:
+        /// the synthesized `__karac_soa_drop_<layout>(*mut SoaStruct)` that
+        /// frees every live element's String/Vec buffers BEFORE the group
+        /// buffers are released. `None` for a fully-POD layout — the cleanup
+        /// arm then emits exactly the pre-heap-field group-buffer frees, so
+        /// POD SoA codegen is byte-identical. Called inside the `cap > 0`
+        /// guard (a moved-out / empty header has `cap == 0`, so the drop is
+        /// skipped — the move recipient owns and frees the elements).
+        soa_drop_fn: Option<FunctionValue<'ctx>>,
     },
     /// Free an owned `Map[K,V]` / `Set[T]` handle. Routes to
     /// `karac_map_free_with_drop_vec(handle, key_is_vec, val_is_vec)` when
@@ -914,6 +923,10 @@ pub(crate) enum SlotOwnership<'ctx> {
         soa_struct_ty: StructType<'ctx>,
         num_hot_groups: u32,
         has_cold: bool,
+        /// The synthesized per-element heap-field drop fn (`None` for a POD
+        /// layout) — carried so a SoA binding transferred into a `par` branch
+        /// still drops its String/Vec elements at the branch's scope exit.
+        soa_drop_fn: Option<FunctionValue<'ctx>>,
     },
 }
 

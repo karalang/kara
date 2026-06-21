@@ -1848,6 +1848,16 @@ pub(super) struct Codegen<'ctx> {
     /// with no heap-owning fields don't get an entry (the synthesis fn returns
     /// `None`) and don't reach `CleanupAction::StructDrop`.
     pub(crate) struct_drop_fns: HashMap<String, FunctionValue<'ctx>>,
+    /// One per-element heap-field drop fn per SoA `layout` block that has at
+    /// least one String/Vec-bearing group, keyed by the layout name. The fn
+    /// takes `*mut SoaStruct` and, for every live element `[0, len)`, frees
+    /// each heap group's String/Vec field buffers (cap-guarded, recursing
+    /// nested tuples/structs) — the SoA analog of `struct_drop_fns`, called
+    /// from the `FreeSoaGroups` cleanup arm and the reassignment inline-free
+    /// before the group buffers themselves are released. A fully-POD layout
+    /// gets no entry (`emit_soa_drop_fn` returns `None`) and emits exactly the
+    /// pre-heap-field cleanup IR (the Slipstream native-oracle invariant).
+    pub(crate) soa_drop_fns: HashMap<String, FunctionValue<'ctx>>,
     /// Per-user-type lazy drop-wrapper cache (type name →
     /// `karac_drop_<Type>` `FunctionValue`). Populated by
     /// `emit_user_drop_wrappers` for every type in
@@ -5068,6 +5078,7 @@ impl<'ctx> Codegen<'ctx> {
             match_scrutinee_enum_hint: None,
             enum_drop_fns: HashMap::new(),
             struct_drop_fns: HashMap::new(),
+            soa_drop_fns: HashMap::new(),
             user_drop_wrapper_fns: HashMap::new(),
             rc_drop_fns: HashMap::new(),
             question_conversions: HashMap::new(),

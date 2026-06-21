@@ -18664,6 +18664,150 @@ fn main() with panics {
         }
     }
 
+    // ── SoA heap-field (String / Vec) elements ────────────────────
+    // String and Vec[POD] element fields are now supported in SoA
+    // layouts. The element's heap fields live in their own group
+    // buffer (scattered like every SoA field); push moves them in,
+    // index/field stores drop-then-overwrite, and scope cleanup +
+    // carried-grid reassignment free each live element's buffers via
+    // the synthesized `__karac_soa_drop_<layout>`. These tests cover
+    // functional correctness; the leak/UAF guards live in
+    // `tests/memory_sanitizer.rs` (`asan_soa_string_field_*`).
+
+    #[test]
+    fn test_e2e_soa_string_field_push_read() {
+        // A SoA element with a heap String field in its own group.
+        // Push three elements with `f"..."` (heap, cap > 0) names plus a
+        // numeric `id` in a separate group, then read both back — the
+        // String header must scatter into the names group and the id into
+        // the ids group, each readable independently.
+        let out = run_program(
+            r#"
+struct Cell { id: i64, name: String }
+layout cells: Vec[Cell] { group ids { id } group names { name } }
+fn main() with panics {
+    let mut cells: Vec[Cell] = Vec.new();
+    let mut i = 0;
+    while i < 3 {
+        cells.push(Cell { id: i, name: f"soa-element-heap-owning-string-payload-{i}" });
+        i = i + 1;
+    }
+    println(cells[1].name);
+    println(cells[2].id);
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(
+                lines,
+                vec!["soa-element-heap-owning-string-payload-1", "2"],
+                "SoA String field must scatter/read independently of the numeric group"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_soa_string_field_whole_element_store() {
+        // Whole-element overwrite `cells[i] = Cell { … }` over a String
+        // field: the old element's String buffer is dropped, the new
+        // element's String moved in. Read back the rewritten name.
+        let out = run_program(
+            r#"
+struct Cell { id: i64, name: String }
+layout cells: Vec[Cell] { group ids { id } group names { name } }
+fn main() with panics {
+    let mut cells: Vec[Cell] = Vec.new();
+    cells.push(Cell { id: 0, name: f"initial-placeholder-heap-string-value-{0}" });
+    cells.push(Cell { id: 1, name: f"initial-placeholder-heap-string-value-{1}" });
+    let mut i = 0;
+    while i < cells.len() {
+        cells[i] = Cell { id: i + 10, name: f"rewritten-soa-heap-string-element-{i}" };
+        i = i + 1;
+    }
+    println(cells[0].name);
+    println(cells[1].id);
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(
+                lines,
+                vec!["rewritten-soa-heap-string-element-0", "11"],
+                "whole-element SoA store must overwrite the String field (drop old, move new)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_soa_string_field_field_store() {
+        // Field-level store `cells[i].name = f"…"` over a heap String:
+        // the displaced buffer is freed and the new one stored in place,
+        // leaving the other group (id) untouched.
+        let out = run_program(
+            r#"
+struct Cell { id: i64, name: String }
+layout cells: Vec[Cell] { group ids { id } group names { name } }
+fn main() with panics {
+    let mut cells: Vec[Cell] = Vec.new();
+    cells.push(Cell { id: 7, name: f"original-soa-heap-string-payload-{0}" });
+    cells[0].name = f"replacement-soa-heap-string-payload-{0}";
+    println(cells[0].name);
+    println(cells[0].id);
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(
+                lines,
+                vec!["replacement-soa-heap-string-payload-0", "7"],
+                "SoA field store must replace only the named String field"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_soa_vec_pod_field_compiles_and_runs() {
+        // A `Vec[i64]` (Vec over a POD element) field in a SoA layout now
+        // compiles (was rejected at layout validation) and runs cleanly — the
+        // pushed Vec headers are stored into the `bulk` group and freed by the
+        // synthesized per-element drop at scope exit. Asserts on a PRIMITIVE
+        // read (`rows[i].tag`); the Vec field's *content* read-back is a
+        // separate read-path concern (per-field method/index on a SoA heap
+        // field needs the field's address — see the leak coverage in
+        // `tests/memory_sanitizer.rs::asan_soa_vec_pod_field_no_leak`).
+        let out = run_program(
+            r#"
+struct Row { tag: i64, data: Vec[i64] }
+layout rows: Vec[Row] { group tags { tag } group bulk { data } }
+fn make(n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n { v.push(i * 2); i = i + 1; }
+    v
+}
+fn main() with panics {
+    let mut rows: Vec[Row] = Vec.new();
+    rows.push(Row { tag: 1, data: make(3) });
+    rows.push(Row { tag: 2, data: make(5) });
+    let mut s = 0;
+    let mut i = 0;
+    while i < rows.len() { s = s + rows[i].tag; i = i + 1; }
+    println(s);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "3",
+                "SoA Vec[POD] field must compile, store, and drop cleanly"
+            );
+        }
+    }
+
     // ── String operators ──────────────────────────────────────────
 
     #[test]

@@ -11,7 +11,7 @@
 use crate::ast::*;
 
 use inkwell::types::BasicTypeEnum;
-use inkwell::values::{BasicValueEnum, PointerValue};
+use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 use inkwell::AddressSpace;
 
 use super::state::{SoaGroup, SoaLayout, VarSlot};
@@ -2092,7 +2092,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // through `FreeSoaGroups` rather than `FreeVecBuffer` — the
         // latter would interpret the SoA alloca as `{ptr,len,cap}` and
         // both mis-read the cap slot and free only `g0`.
-        self.track_soa_groups(alloca, soa_ty, soa.num_groups as u32, has_cold);
+        let soa_drop_fn = self.emit_soa_drop_fn(soa);
+        self.track_soa_groups(alloca, soa_ty, soa.num_groups as u32, has_cold, soa_drop_fn);
         Ok(())
     }
 
@@ -2131,7 +2132,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 ty: soa_ty.into(),
             },
         );
-        self.track_soa_groups(alloca, soa_ty, soa.num_groups as u32, has_cold);
+        let soa_drop_fn = self.emit_soa_drop_fn(soa);
+        self.track_soa_groups(alloca, soa_ty, soa.num_groups as u32, has_cold, soa_drop_fn);
         Ok(())
     }
 
@@ -2173,9 +2175,19 @@ impl<'ctx> super::Codegen<'ctx> {
         let soa_ty = self.soa_vec_type(soa.num_groups, has_cold);
         // Free the OLD group buffers (the header the slot currently holds),
         // mirroring the `FreeSoaGroups` cleanup walker: cap > 0 guards that
-        // groups were actually allocated, then free each hot (+ optional cold)
-        // buffer in declaration order.
-        self.emit_free_soa_groups_inline(slot.ptr, soa_ty, soa.num_groups as u32, has_cold);
+        // groups were actually allocated, then drop each live element's heap
+        // (String/Vec) fields and free each hot (+ optional cold) buffer in
+        // declaration order. Without the per-element drop, every frame's old
+        // elements' String/Vec buffers leak on the carried-grid double-buffer
+        // (`grid = substep(grid)`) — the per-frame analog of the scope leak.
+        let soa_drop_fn = self.emit_soa_drop_fn(soa);
+        self.emit_free_soa_groups_inline(
+            slot.ptr,
+            soa_ty,
+            soa.num_groups as u32,
+            has_cold,
+            soa_drop_fn,
+        );
         // Store the new header into the same slot; the binding's existing
         // queued `FreeSoaGroups` will free THESE buffers at scope exit.
         self.builder.build_store(slot.ptr, val).unwrap();
@@ -2192,6 +2204,7 @@ impl<'ctx> super::Codegen<'ctx> {
         soa_ty: inkwell::types::StructType<'ctx>,
         num_hot_groups: u32,
         has_cold: bool,
+        soa_drop_fn: Option<FunctionValue<'ctx>>,
     ) {
         let i64_t = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -2223,6 +2236,15 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
 
         self.builder.position_at_end(free_bb);
+        // Drop each live element's heap (String/Vec) fields BEFORE the buffers
+        // that hold them are freed. `None` for a POD layout (no IR — the
+        // reassignment stays byte-identical). The loop is `[0, len)`, so a
+        // `cap > 0`, `len == 0` header is a no-op.
+        if let Some(drop_fn) = soa_drop_fn {
+            self.builder
+                .build_call(drop_fn, &[soa_alloca.into()], "")
+                .unwrap();
+        }
         let total_ptrs = num_hot_groups + if has_cold { 1 } else { 0 };
         for gi in 0..total_ptrs {
             let grp_ptr_ptr = self
@@ -2488,6 +2510,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 let new_len = self.builder.build_int_add(cur_len, one, "new_len").unwrap();
                 self.builder.build_store(len_ptr, new_len).unwrap();
 
+                // Move-in of a NAMED owned struct binding
+                // (`let c = Cell{..}; grid.push(c)`): the scatter above bit-
+                // copied `c`'s fields — including any String/Vec buffer pointer
+                // — into the group buffers, so the SoA Vec now owns them. Zero
+                // the source binding's heap-field caps so its own `StructDrop`
+                // no-ops on the `cap > 0` guard; otherwise both the source's
+                // drop and the SoA cleanup free the same buffer (a double-free
+                // ASAN catches). A struct-literal / temporary arg has no source
+                // slot and is skipped; `zero_struct_move_caps` is itself a no-op
+                // for a fully-POD element struct. The AoS-push peer of this is
+                // `suppress_source_vec_cleanup_for_arg`.
+                if let ExprKind::Identifier(src) = &args[0].value.kind {
+                    if !self.ref_params.contains_key(src) {
+                        if let Some(src_slot) = self.variables.get(src).copied() {
+                            self.zero_struct_move_caps(src_slot.ptr, &soa.struct_name);
+                        }
+                    }
+                }
+
                 Ok(self.context.i64_type().const_int(0, false).into())
             }
             // `pop` / `pop_back` / `pop_front` return `Option[Entity]`;
@@ -2496,10 +2537,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // at the removal index from every group buffer into an AoS
             // element struct (the inverse of push's decompose-and-
             // scatter), optionally memmove each group's tail left, then
-            // decrement the shared `len`. Heap-owning element fields
-            // are rejected at layout validation (`src/resolver/collect.rs`),
-            // so the scatter read can safely treat field bits as
-            // owned-copy without aliasing concerns.
+            // decrement the shared `len`. The scatter-read is a pure bit-
+            // copy that MOVES the element out: its String/Vec buffer
+            // pointers transfer to the returned AoS struct (the caller's
+            // binding drops them), and the now-decremented `len` excludes
+            // the vacated slot from the per-element drop loop, so the SoA
+            // cleanup frees each remaining buffer exactly once — no leak,
+            // no double-free. (For a shift, the duplicate header left in the
+            // old tail slot sits beyond `len` and is likewise never freed.)
             "pop" | "pop_back" | "pop_front" => {
                 let is_front = method == "pop_front";
                 let len_ptr = self

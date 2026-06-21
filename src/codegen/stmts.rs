@@ -3840,6 +3840,27 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 } else if let ExprKind::FieldAccess { object, field } = &target.kind {
                     self.compile_field_store(object, field, val, rhs_is_fresh)?;
+                    // `cells[i].name = f"…"` — a heap String field store on a
+                    // SoA element whose RHS is an f-string. `compile_soa_field_store`
+                    // MOVES the f-string's buffer header into the group slot
+                    // (and drops the old one), so the accumulator's own
+                    // `FreeVecBuffer` (registered in the InterpolatedStringLit
+                    // arm) must be neutralized — else both it and the SoA
+                    // per-element drop free the same buffer (a double-free / the
+                    // SIGTRAP this guards). The struct-literal field form is
+                    // already covered by `suppress_fstr_acc_if_moved_out`; this
+                    // is the direct-field-store peer. Gated to a SoA element
+                    // field target so AoS field stores keep their existing
+                    // (copy-based) acc handling.
+                    if let Some(acc) = staged_fstr_acc {
+                        if let ExprKind::Index { object: base, .. } = &object.kind {
+                            if let ExprKind::Identifier(soa_name) = &base.kind {
+                                if self.active_soa_layout(soa_name).is_some() {
+                                    self.zero_vec_alloca_cap(acc);
+                                }
+                            }
+                        }
+                    }
                 } else if let ExprKind::Index { object, index } = &target.kind {
                     self.compile_index_store(object, index, val)?;
                     // A tracked Vec/String binding moved into an OWNING Vec's
@@ -3863,6 +3884,27 @@ impl<'ctx> super::Codegen<'ctx> {
                             && !self.map_key_types.contains_key(container.as_str());
                         if owns_heap_elem {
                             self.suppress_source_vec_cleanup_for_arg(value);
+                        }
+                    }
+                    // Whole-element SoA store of a NAMED owned struct binding
+                    // (`grid[i] = c`): the scatter in `compile_soa_index_store`
+                    // MOVED `c`'s fields — including any String/Vec buffer
+                    // pointer — into the group buffers, so the SoA Vec owns
+                    // them. Zero `c`'s heap-field caps so its `StructDrop`
+                    // no-ops; otherwise both `c`'s drop and the SoA cleanup free
+                    // the same buffer (a double-free ASAN catches). A struct-
+                    // literal RHS has no source slot and is skipped; this is the
+                    // SoA peer of push's move-in suppression and the
+                    // `out[j] = nb` Vec[Vec] case above.
+                    if let ExprKind::Identifier(container) = &object.kind {
+                        if let Some(soa) = self.active_soa_layout(container) {
+                            if let ExprKind::Identifier(src) = &value.kind {
+                                if !self.ref_params.contains_key(src) {
+                                    if let Some(src_slot) = self.variables.get(src).copied() {
+                                        self.zero_struct_move_caps(src_slot.ptr, &soa.struct_name);
+                                    }
+                                }
+                            }
                         }
                     }
                 } else if let ExprKind::Unary {

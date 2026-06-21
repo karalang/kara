@@ -8656,7 +8656,9 @@ fn main() {
         // later free, so a wrong shift pointer / wrong byte count
         // would surface as ASAN heap-buffer-overflow or UAF. Two hot
         // groups exercise the per-group shift loop. (Primitive fields
-        // only — heap-owning fields are rejected at layout validation.)
+        // here; the heap-field SoA element drops are covered by the
+        // dedicated `asan_soa_string_field_*` / `asan_soa_vec_pod_field_*`
+        // tests above.)
         //
         // The struct is 4 i64 words (`label` in a cold group): `pop()`
         // returns `Option[Entity]`, whose payload area is only 3 words, so
@@ -8913,6 +8915,249 @@ fn main() {
 "#,
             &["60"],
             "soa_branch_leaf_tail_returns",
+        );
+    }
+
+    // ── SoA heap-field (String / Vec) element drops ───────────────
+    // String / Vec[POD] element fields are now allowed in SoA layouts.
+    // Their per-element heap buffers are freed by the synthesized
+    // `__karac_soa_drop_<layout>` at scope exit, on overwrite (index /
+    // field store drop-old), and on the carried-grid reassignment. Each
+    // String payload is ≥36 bytes so a missed free is past LSan's
+    // short-allocation reachability blind spot. All paths run ×20 frames
+    // to amplify a per-frame leak; the Linux-CI LSan job is the gate.
+
+    #[test]
+    fn asan_soa_string_field_scope_cleanup_no_leak() {
+        // The CORE leak fix: a SoA Vec whose element has a heap String
+        // field, built fresh each frame and dropped at scope exit. Pre-fix
+        // the FreeSoaGroups cleanup freed only the group buffers (POD
+        // assumption), leaking every element's String payload — 8 × 20 =
+        // 160 heap strings. Reads only the primitive `id` (the heap field
+        // read-back is a separate read-path concern). Sum of ids =
+        // 28/frame × 20 = 560.
+        assert_clean_asan_run(
+            r#"
+struct Cell { id: i64, name: String }
+layout cells: Vec[Cell] { group ids { id } group names { name } }
+fn main() with panics {
+    let mut total = 0;
+    let mut k = 0;
+    while k < 20 {
+        let mut cells: Vec[Cell] = Vec.new();
+        let mut i = 0;
+        while i < 8 {
+            cells.push(Cell { id: i, name: f"soa-heap-owning-string-payload-element-{i}" });
+            i = i + 1;
+        }
+        let mut j = 0;
+        while j < cells.len() { total = total + cells[j].id; j = j + 1; }
+        k = k + 1;
+    }
+    println(total);
+}
+"#,
+            &["560"],
+            "soa_string_field_scope_cleanup",
+        );
+    }
+
+    #[test]
+    fn asan_soa_string_field_index_store_overwrite_no_leak() {
+        // Whole-element overwrite `cells[i] = Cell { … }` over a String
+        // field: `compile_soa_index_store` drops the OLD element's String
+        // buffer before scattering the new one. Pre-fix the old "initial-…"
+        // strings leaked (8 × 20 = 160). After overwrite ids = i+10, so the
+        // sum = (28 + 80)/frame × 20 = 2160.
+        assert_clean_asan_run(
+            r#"
+struct Cell { id: i64, name: String }
+layout cells: Vec[Cell] { group ids { id } group names { name } }
+fn main() with panics {
+    let mut total = 0;
+    let mut k = 0;
+    while k < 20 {
+        let mut cells: Vec[Cell] = Vec.new();
+        let mut i = 0;
+        while i < 8 {
+            cells.push(Cell { id: i, name: f"initial-soa-heap-string-payload-element-{i}" });
+            i = i + 1;
+        }
+        let mut j = 0;
+        while j < cells.len() {
+            cells[j] = Cell { id: j + 10, name: f"rewritten-soa-heap-string-payload-element-{j}" };
+            j = j + 1;
+        }
+        let mut r = 0;
+        while r < cells.len() { total = total + cells[r].id; r = r + 1; }
+        k = k + 1;
+    }
+    println(total);
+}
+"#,
+            &["2160"],
+            "soa_string_field_index_store_overwrite",
+        );
+    }
+
+    #[test]
+    fn asan_soa_string_field_field_store_overwrite_no_leak() {
+        // Field-level overwrite `cells[i].name = f"…"` over a heap String:
+        // `compile_soa_field_store` frees the displaced buffer before the
+        // store, and the f-string accumulator's own cleanup is suppressed
+        // (else the acc + the SoA drop double-free — the SIGTRAP guard).
+        // Pre-fix the old "initial-…" strings leaked. ids unchanged
+        // (i = 0..8), sum = 28/frame × 20 = 560.
+        assert_clean_asan_run(
+            r#"
+struct Cell { id: i64, name: String }
+layout cells: Vec[Cell] { group ids { id } group names { name } }
+fn main() with panics {
+    let mut total = 0;
+    let mut k = 0;
+    while k < 20 {
+        let mut cells: Vec[Cell] = Vec.new();
+        let mut i = 0;
+        while i < 8 {
+            cells.push(Cell { id: i, name: f"initial-soa-heap-string-payload-element-{i}" });
+            i = i + 1;
+        }
+        let mut j = 0;
+        while j < cells.len() {
+            cells[j].name = f"replaced-soa-heap-string-payload-element-{j}";
+            j = j + 1;
+        }
+        let mut r = 0;
+        while r < cells.len() { total = total + cells[r].id; r = r + 1; }
+        k = k + 1;
+    }
+    println(total);
+}
+"#,
+            &["560"],
+            "soa_string_field_field_store_overwrite",
+        );
+    }
+
+    #[test]
+    fn asan_soa_string_field_reassign_carried_no_leak() {
+        // Carried-grid double-buffer (`cells = rebuild(cells)`) where the
+        // element has a heap String field: the reassignment's inline
+        // group-buffer free must FIRST drop the old generation's String
+        // payloads (via the synthesized drop fn), else every rebuilt frame
+        // leaks the prior generation's strings. The by-value param is
+        // caller-retains, so the old buffers are owned at the assignment
+        // and the displaced strings are this site's to free. Rebuilt 5×
+        // per frame × 20. `id` is bumped +1 each rebuild: final id = i + 5,
+        // sum = (28 + 40)/frame × 20 = 1360.
+        assert_clean_asan_run(
+            r#"
+struct Cell { id: i64, name: String }
+layout cells: Vec[Cell] { group ids { id } group names { name } }
+fn rebuild(src: Vec[Cell]) -> Vec[Cell] {
+    let mut dst: Vec[Cell] = Vec.new();
+    let mut i = 0;
+    while i < src.len() {
+        dst.push(Cell { id: src[i].id + 1, name: f"rebuilt-soa-heap-string-payload-element-{i}" });
+        i = i + 1;
+    }
+    dst
+}
+fn init() -> Vec[Cell] {
+    let mut cells: Vec[Cell] = Vec.new();
+    let mut i = 0;
+    while i < 8 {
+        cells.push(Cell { id: i, name: f"initial-soa-heap-string-payload-element-{i}" });
+        i = i + 1;
+    }
+    cells
+}
+fn main() with panics {
+    let mut total = 0;
+    let mut k = 0;
+    while k < 20 {
+        let mut cells: Vec[Cell] = init();
+        let mut f = 0;
+        while f < 5 { cells = rebuild(cells); f = f + 1; }
+        let mut j = 0;
+        while j < cells.len() { total = total + cells[j].id; j = j + 1; }
+        k = k + 1;
+    }
+    println(total);
+}
+"#,
+            &["1360"],
+            "soa_string_field_reassign_carried",
+        );
+    }
+
+    #[test]
+    fn asan_soa_string_push_named_binding_no_double_free() {
+        // Move-in of a NAMED owned struct binding into push
+        // (`let c = Cell{…}; cells.push(c)`): push bit-copies `c`'s String
+        // header into the group buffer, so the SoA Vec owns it. Without the
+        // move-in cap-zero, `c`'s own StructDrop AND the SoA cleanup free
+        // the same buffer — a double-free ASAN catches on every host (not a
+        // leak, so even the macOS run flags it). Sum of ids = 560.
+        assert_clean_asan_run(
+            r#"
+struct Cell { id: i64, name: String }
+layout cells: Vec[Cell] { group ids { id } group names { name } }
+fn main() with panics {
+    let mut total = 0;
+    let mut k = 0;
+    while k < 20 {
+        let mut cells: Vec[Cell] = Vec.new();
+        let mut i = 0;
+        while i < 8 {
+            let c: Cell = Cell { id: i, name: f"named-binding-soa-heap-string-payload-{i}" };
+            cells.push(c);
+            i = i + 1;
+        }
+        let mut j = 0;
+        while j < cells.len() { total = total + cells[j].id; j = j + 1; }
+        k = k + 1;
+    }
+    println(total);
+}
+"#,
+            &["560"],
+            "soa_string_push_named_binding",
+        );
+    }
+
+    #[test]
+    fn asan_soa_vec_pod_field_no_leak() {
+        // A `Vec[i64]` (Vec over a POD element) SoA field: the per-element
+        // drop frees each element's outer Vec buffer at scope exit. Each
+        // `make(12)` is a 96-byte buffer (past LSan's blind spot); 8 per
+        // frame × 20 = 160 buffers that pre-fix leaked. Sum of `tag` = 560.
+        assert_clean_asan_run(
+            r#"
+struct Row { tag: i64, data: Vec[i64] }
+layout rows: Vec[Row] { group tags { tag } group bulk { data } }
+fn make(n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0;
+    while i < n { v.push(i); i = i + 1; }
+    v
+}
+fn main() with panics {
+    let mut total = 0;
+    let mut k = 0;
+    while k < 20 {
+        let mut rows: Vec[Row] = Vec.new();
+        let mut i = 0;
+        while i < 8 { rows.push(Row { tag: i, data: make(12) }); i = i + 1; }
+        let mut j = 0;
+        while j < rows.len() { total = total + rows[j].tag; j = j + 1; }
+        k = k + 1;
+    }
+    println(total);
+}
+"#,
+            &["560"],
+            "soa_vec_pod_field",
         );
     }
 

@@ -474,11 +474,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 soa_struct_ty,
                 num_hot_groups,
                 has_cold,
+                soa_drop_fn,
             } => CleanupAction::FreeSoaGroups {
                 soa_alloca: parent_alloca,
                 soa_struct_ty,
                 num_hot_groups,
                 has_cold,
+                soa_drop_fn,
             },
         };
         if let Some(frame) = self.scope_cleanup_actions.last_mut() {
@@ -2076,10 +2078,12 @@ impl<'ctx> super::Codegen<'ctx> {
                                 soa_struct_ty,
                                 num_hot_groups,
                                 has_cold,
+                                soa_drop_fn,
                             } if Some(*soa_alloca) == local_ptr => Some(SlotOwnership::Soa {
                                 soa_struct_ty: *soa_struct_ty,
                                 num_hot_groups: *num_hot_groups,
                                 has_cold: *has_cold,
+                                soa_drop_fn: *soa_drop_fn,
                             }),
                             _ => None,
                         };

@@ -1673,6 +1673,7 @@ impl<'ctx> super::Codegen<'ctx> {
         soa_struct_ty: StructType<'ctx>,
         num_hot_groups: u32,
         has_cold: bool,
+        soa_drop_fn: Option<FunctionValue<'ctx>>,
     ) {
         if let Some(frame) = self.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::FreeSoaGroups {
@@ -1680,8 +1681,194 @@ impl<'ctx> super::Codegen<'ctx> {
                 soa_struct_ty,
                 num_hot_groups,
                 has_cold,
+                soa_drop_fn,
             });
         }
+    }
+
+    /// The subset of an SoA layout's group buffers (hot, then optional cold)
+    /// whose element sub-struct carries at least one String/Vec (heap) field,
+    /// each paired with its struct-field index in the SoA header and its
+    /// element LLVM type. EMPTY for a fully-POD layout. Drives both the
+    /// per-element drop synthesis and the single-element overwrite drops; an
+    /// empty result means none of those are ever emitted (POD byte-identical).
+    pub(super) fn soa_heap_groups(
+        &self,
+        soa: &crate::codegen::state::SoaLayout,
+    ) -> Vec<(u32, StructType<'ctx>)> {
+        let mut out = Vec::new();
+        for (gi, group) in soa.groups.iter().enumerate() {
+            let elem_ty = self.soa_group_elem_type(&soa.struct_name, group);
+            if self.aggregate_has_heap_field(elem_ty) {
+                out.push((gi as u32, elem_ty));
+            }
+        }
+        if let Some(cold) = &soa.cold_group {
+            let elem_ty = self.soa_group_elem_type(&soa.struct_name, cold);
+            if self.aggregate_has_heap_field(elem_ty) {
+                // The cold-group pointer sits at struct field `num_groups`,
+                // right after every hot-group pointer (see `compile_soa_method`).
+                out.push((soa.num_groups as u32, elem_ty));
+            }
+        }
+        out
+    }
+
+    /// Free the heap (String/Vec) field buffers of the SoA element at `idx`
+    /// across every heap-bearing group. Reads each group's buffer pointer from
+    /// the header at `soa_struct_ptr`, strides to `[idx]` by the group's
+    /// sub-struct, and runs `emit_aggregate_heap_field_frees` over it
+    /// (cap-guarded per field, recursing nested tuples/structs). Straight-line
+    /// — no loop. The caller guarantees `idx < len` and that the groups were
+    /// allocated. Used as the loop body of the synthesized whole-vec drop fn
+    /// and directly by the overwrite paths (whole-element / field store
+    /// drop-old).
+    pub(super) fn emit_soa_drop_element_at(
+        &mut self,
+        soa_struct_ptr: PointerValue<'ctx>,
+        soa_ty: StructType<'ctx>,
+        idx: IntValue<'ctx>,
+        heap_groups: &[(u32, StructType<'ctx>)],
+    ) {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        for &(field_idx, elem_ty) in heap_groups {
+            let grp_ptr_ptr = self
+                .builder
+                .build_struct_gep(soa_ty, soa_struct_ptr, field_idx, "soa.drop.gptr")
+                .unwrap();
+            let grp_buf = self
+                .builder
+                .build_load(ptr_ty, grp_ptr_ptr, "soa.drop.buf")
+                .unwrap()
+                .into_pointer_value();
+            let elem_ptr = unsafe {
+                self.builder
+                    .build_gep(elem_ty, grp_buf, &[idx], "soa.drop.elem")
+                    .unwrap()
+            };
+            self.emit_aggregate_heap_field_frees(elem_ptr, elem_ty);
+        }
+    }
+
+    /// Synthesize (or fetch from cache) the per-element heap-field drop fn for
+    /// an SoA `layout`: `__karac_soa_drop_<layout>(*mut SoaStruct)`. Returns
+    /// `None` when the element struct is fully POD (no String/Vec field in any
+    /// group) — the caller then queues no drop and the cleanup arm stays
+    /// byte-identical to the pre-heap-field state.
+    ///
+    /// The fn loops every live element `[0, len)` and frees each heap group's
+    /// String/Vec buffers via `emit_soa_drop_element_at`. It is the SoA peer of
+    /// `emit_struct_drop_synthesis`: the AoS path lays an element out
+    /// contiguously and calls `__karac_drop_struct_<T>` per element, whereas a
+    /// SoA element's fields are scattered across the per-group buffers, so the
+    /// drop walks groups-then-elements instead. Same one-level discipline: a
+    /// `Vec[T]` field's OUTER buffer is freed, not its elements (rejected at
+    /// layout validation precisely so that remainder can't arise).
+    ///
+    /// Synthesis sets `current_fn` to the new fn (the cap-guard blocks
+    /// `emit_aggregate_heap_field_frees` appends read it) and restores the
+    /// builder's prior insert point — the same scaffolding
+    /// `emit_struct_drop_synthesis` uses.
+    pub(super) fn emit_soa_drop_fn(
+        &mut self,
+        soa: &crate::codegen::state::SoaLayout,
+    ) -> Option<FunctionValue<'ctx>> {
+        if let Some(f) = self.soa_drop_fns.get(&soa.name) {
+            return Some(*f);
+        }
+        let heap_groups = self.soa_heap_groups(soa);
+        if heap_groups.is_empty() {
+            return None;
+        }
+
+        let has_cold = soa.cold_group.is_some();
+        let soa_ty = self.soa_vec_type(soa.num_groups, has_cold);
+        let len_idx = Self::soa_len_index(soa.num_groups, has_cold);
+
+        let fn_name = format!("__karac_soa_drop_{}", soa.name);
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.soa_drop_fns.insert(soa.name.clone(), f);
+            return Some(f);
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let void_ty = self.context.void_type();
+
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+
+        let drop_fn_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        let drop_fn = self.module.add_function(
+            &fn_name,
+            drop_fn_ty,
+            Some(inkwell::module::Linkage::Internal),
+        );
+        self.soa_drop_fns.insert(soa.name.clone(), drop_fn);
+        self.current_fn = Some(drop_fn);
+
+        let entry_bb = self.context.append_basic_block(drop_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let p_arg = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+
+        // Counted loop over live elements [0, len). The whole-vec drop is only
+        // ever called inside a `cap > 0` guard, so `len` is the live count and
+        // every group buffer is allocated.
+        let len_ptr = self
+            .builder
+            .build_struct_gep(soa_ty, p_arg, len_idx, "soa.drop.len.ptr")
+            .unwrap();
+        let len = self
+            .builder
+            .build_load(i64_t, len_ptr, "soa.drop.len")
+            .unwrap()
+            .into_int_value();
+        let i_slot = self.builder.build_alloca(i64_t, "soa.drop.i").unwrap();
+        self.builder
+            .build_store(i_slot, i64_t.const_int(0, false))
+            .unwrap();
+        let cond_bb = self.context.append_basic_block(drop_fn, "soa.drop.cond");
+        let body_bb = self.context.append_basic_block(drop_fn, "soa.drop.body");
+        let done_bb = self.context.append_basic_block(drop_fn, "soa.drop.done");
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.builder.position_at_end(cond_bb);
+        let i = self
+            .builder
+            .build_load(i64_t, i_slot, "soa.drop.iv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, len, "soa.drop.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, body_bb, done_bb)
+            .unwrap();
+
+        self.builder.position_at_end(body_bb);
+        let i = self
+            .builder
+            .build_load(i64_t, i_slot, "soa.drop.iv2")
+            .unwrap()
+            .into_int_value();
+        self.emit_soa_drop_element_at(p_arg, soa_ty, i, &heap_groups);
+        let next = self
+            .builder
+            .build_int_add(i, i64_t.const_int(1, false), "soa.drop.inc")
+            .unwrap();
+        self.builder.build_store(i_slot, next).unwrap();
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.builder.position_at_end(done_bb);
+        self.builder.build_return(None).unwrap();
+
+        // Restore the caller's insert point + current fn.
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        self.current_fn = saved_fn;
+        Some(drop_fn)
     }
 
     /// Emit a runtime zero-store to a Vec/String alloca's `cap` field
@@ -4205,6 +4392,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 soa_struct_ty,
                 num_hot_groups,
                 has_cold,
+                soa_drop_fn,
             } => {
                 // cap > 0 ⇒ groups were allocated. Read cap via the SoA
                 // struct type so the GEP lands on the actual cap slot
@@ -4232,6 +4420,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
 
                 self.builder.position_at_end(free_bb);
+                // Per-element heap-field drop FIRST (before the buffers that
+                // hold those elements are freed): for a layout whose element
+                // struct carries String/Vec fields, call the synthesized
+                // `__karac_soa_drop_<layout>` over the live range. `None` for a
+                // POD layout, so this emits no IR there — byte-identical
+                // cleanup. The fn loops `[0, len)`, so a `cap > 0` header whose
+                // `len == 0` is a no-op too.
+                if let Some(drop_fn) = soa_drop_fn {
+                    self.builder
+                        .build_call(*drop_fn, &[(*soa_alloca).into()], "")
+                        .unwrap();
+                }
                 // Free each hot group buffer in declaration order, then the
                 // cold buffer if present. Each group is its own malloc
                 // (see `compile_soa_method`'s push-grow loop); a single

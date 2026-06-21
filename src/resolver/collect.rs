@@ -278,7 +278,7 @@ impl<'a> super::Resolver<'a> {
                                 stub_hint: None,
                             });
                         } else if let Some(ty) = field_types.get(field.as_str()) {
-                            if let Some(why) = self.layout_field_heap_reason(ty) {
+                            if let Some(why) = self.layout_field_unsupported_reason(ty) {
                                 self.errors.push(ResolveError {
                                     message: format!(
                                         "layout '{}' group '{}': field '{}' has heap-owning type ({}), \
@@ -288,10 +288,10 @@ impl<'a> super::Resolver<'a> {
                                     span: span.clone(),
                                     kind: ResolveErrorKind::UndefinedField,
                                     suggestion: Some(
-                                        "move the field outside the layout block (it will fall back to AoS) \
-                                         or store it via a separate Vec; SoA push / materialize / drop for \
-                                         heap-owning fields is tracked under 'SoA drop semantics' in the \
-                                         phase-7 codegen tracker"
+                                        "String and Vec[POD] fields ARE supported in SoA layouts; \
+                                         Map/Set/VecDeque, Vec of heap elements, and shared types are not yet — \
+                                         move the field outside the layout block (it will fall back to AoS) \
+                                         or store it via a separate Vec"
                                             .to_string(),
                                     ),
                                     replacement: None,
@@ -359,7 +359,7 @@ impl<'a> super::Resolver<'a> {
                                 stub_hint: None,
                             });
                         } else if let Some(ty) = field_types.get(field.as_str()) {
-                            if let Some(why) = self.layout_field_heap_reason(ty) {
+                            if let Some(why) = self.layout_field_unsupported_reason(ty) {
                                 self.errors.push(ResolveError {
                                     message: format!(
                                         "layout '{}' cold section: field '{}' has heap-owning type ({}), \
@@ -369,10 +369,10 @@ impl<'a> super::Resolver<'a> {
                                     span: span.clone(),
                                     kind: ResolveErrorKind::UndefinedField,
                                     suggestion: Some(
-                                        "move the field outside the layout block (it will fall back to AoS) \
-                                         or store it via a separate Vec; SoA push / materialize / drop for \
-                                         heap-owning fields is tracked under 'SoA drop semantics' in the \
-                                         phase-7 codegen tracker"
+                                        "String and Vec[POD] fields ARE supported in SoA layouts; \
+                                         Map/Set/VecDeque, Vec of heap elements, and shared types are not yet — \
+                                         move the field outside the layout block (it will fall back to AoS) \
+                                         or store it via a separate Vec"
                                             .to_string(),
                                     ),
                                     replacement: None,
@@ -486,6 +486,77 @@ impl<'a> super::Resolver<'a> {
             }
             TypeKind::Array { element, .. } => self
                 .layout_field_heap_reason(element)
+                .map(|r| format!("Array of {r}")),
+            _ => None,
+        }
+    }
+
+    /// The subset of [`layout_field_heap_reason`] that STILL rejects a layout
+    /// field at validation. As of the SoA heap-field-element work,
+    /// `String` and `Vec[T]` over a non-heap `T` are *supported* in SoA
+    /// layouts: codegen synthesizes `__karac_soa_drop_<layout>` to free each
+    /// live element's String/Vec buffers at scope exit, on overwrite, and on
+    /// the carried-grid reassignment (`src/codegen/runtime.rs`
+    /// `emit_soa_drop_fn`). The remaining heap types stay rejected here because
+    /// SoA's per-element drop doesn't yet cover them:
+    ///
+    /// - `Map` / `Set` / `VecDeque` / `Sorted*` / `TreeMap` — opaque handles
+    ///   needing a per-element handle free not wired into the SoA cleanup.
+    /// - `Vec[heap T]` — the drop frees a Vec field's OUTER buffer but not its
+    ///   ELEMENTS (one-level drop, matching the RC-fallback-box / tuple-drain
+    ///   precedent), so a `Vec[String]` field would leak its element strings.
+    /// - `shared struct` / `shared enum` — RC types needing `rc_dec`, not a
+    ///   buffer free.
+    ///
+    /// `String`, `Vec[POD]`, and inline tuples / arrays whose every heap leaf
+    /// is one of those return `None` (supported — the codegen aggregate walk
+    /// recurses them). A named non-shared struct field returns `None` too (its
+    /// own heap is reached by the recursive aggregate drop), exactly as it did
+    /// before this change.
+    fn layout_field_unsupported_reason(&self, ty: &TypeExpr) -> Option<String> {
+        match &ty.kind {
+            TypeKind::Path(p) => {
+                let seg = p.segments.first()?.as_str();
+                match seg {
+                    // Now supported — codegen frees each element's String buffer.
+                    "String" => None,
+                    // `Vec[POD]` supported (outer buffer freed per element);
+                    // `Vec[heap]` still leaks its elements, so stays rejected.
+                    "Vec" => {
+                        let elem = p.generic_args.as_ref().and_then(|args| {
+                            args.iter().find_map(|g| match g {
+                                GenericArg::Type(t) => Some(t),
+                                _ => None,
+                            })
+                        });
+                        match elem {
+                            Some(t) => self
+                                .layout_field_heap_reason(t)
+                                .map(|r| format!("Vec of heap-owning {r}")),
+                            // Unparameterized `Vec` — outer-buffer free is always
+                            // correct, so treat as POD-element.
+                            None => None,
+                        }
+                    }
+                    // Still-unsupported heap handle types — reuse the descriptions.
+                    "Map" | "Set" | "VecDeque" | "TreeMap" | "SortedSet" | "SortedMap" => {
+                        self.layout_field_heap_reason(ty)
+                    }
+                    // Primitives → None; shared struct/enum → Some (via the
+                    // `program.items` lookup in `layout_field_heap_reason`).
+                    _ => self.layout_field_heap_reason(ty),
+                }
+            }
+            TypeKind::Tuple(elems) => {
+                for el in elems {
+                    if let Some(reason) = self.layout_field_unsupported_reason(el) {
+                        return Some(format!("tuple containing {reason}"));
+                    }
+                }
+                None
+            }
+            TypeKind::Array { element, .. } => self
+                .layout_field_unsupported_reason(element)
                 .map(|r| format!("Array of {r}")),
             _ => None,
         }
