@@ -1027,6 +1027,16 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap_or_default();
         let mut compiled_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
         for (i, a) in args.iter().enumerate() {
+            // B-2026-06-20-1: a bare named `fn` passed to a `Fn(...)`-typed
+            // parameter is reified into the closure fat-pointer ABI
+            // (`{trampoline, null env}`) so it dispatches through the callee's
+            // env-first indirect call. Returns `None` for any other arg shape,
+            // which then compiles normally below. Without this the bare fn name
+            // lowers to a raw `ptr` and mismatches the fat-pointer param slot.
+            if let Some(fat) = self.reify_named_fn_as_fn_value(&name, i, &a.value) {
+                compiled_args.push(fat.into());
+                continue;
+            }
             let is_ref = ref_flags.get(i).copied().unwrap_or(false);
             if is_ref {
                 // `ref Slice[T]` / `mut ref Slice[T]` param fed an `Array[T, N]`:

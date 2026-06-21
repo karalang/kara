@@ -206,6 +206,17 @@ impl<'ctx> super::Codegen<'ctx> {
             // (wasm32 pointers are i32-width scalars, not i64).
             TypeKind::Pointer { .. } => self.context.ptr_type(AddressSpace::default()).into(),
             TypeKind::MutSlice(_) => self.slice_struct_type().into(),
+            // A first-class `Fn(...)` / `OnceFn(...)` value is represented by
+            // the same `{fn_ptr, env_ptr}` closure fat-pointer struct as a
+            // closure literal (`closure_value_type`). Without this arm the
+            // type fell through to the `i64` default, so a `Fn`-typed
+            // parameter / field / local slot was mis-sized at 8 bytes while a
+            // closure value (or a reified bare fn name) is a 16-byte fat
+            // pointer — a higher-order call (`apply(doubler, x)` against
+            // `fn apply(f: Fn(i64)->i64, …)`) then failed LLVM module
+            // verification: "Call parameter type does not match function
+            // signature" (B-2026-06-20-1).
+            TypeKind::FnType { .. } => self.closure_value_type().into(),
             _ => self.context.i64_type().into(),
         }
     }

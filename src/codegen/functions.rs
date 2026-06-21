@@ -721,6 +721,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(inner_ty) = self.inner_type_of_ref(&param.ty) {
                     self.ref_params.insert(param_name.clone(), inner_ty);
                 }
+                // B-2026-06-20-1: a `Fn(...)`-typed parameter is a closure fat
+                // pointer (lowered by `llvm_type_for_type_expr`'s `FnType`
+                // arm). Register its env-first closure-call ABI fn type so a
+                // body call `f(x)` routes through `compile_closure_call` (an
+                // indirect call through the fat pointer) instead of the
+                // unknown-callee fall-through. A bare named fn passed in for
+                // `f` is reified into a matching `{trampoline, null}` fat
+                // pointer at the call site (`reify_named_fn_as_fn_value`).
+                if let TypeKind::FnType {
+                    params,
+                    return_type,
+                    ..
+                } = &param.ty.kind
+                {
+                    let fn_type = self.closure_abi_fn_type(params, return_type.as_deref());
+                    self.closure_fn_types.insert(param_name.clone(), fn_type);
+                }
                 // Register collection / String / struct side-tables for the
                 // parameter. Mirrors the let-binding registration in
                 // `compile_stmt(StmtKind::Let)` so every `ref T` /

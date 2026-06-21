@@ -8103,6 +8103,31 @@ fn main() {
         );
     }
 
+    // ── first-class fn values (B-2026-06-20-1) ───────────────────
+
+    #[test]
+    fn asan_named_fn_value_heap_arg_no_leak() {
+        // B-2026-06-20-1: a bare named `fn` passed in `Fn(...)` position is
+        // reified into a `{trampoline, null env}` fat pointer. The trampoline
+        // is a transparent env-ignoring forwarder, so a heap-carrying
+        // (String) arg moved through the higher-order call must be owned and
+        // freed exactly once — no leak, no double-free. A ≥36-byte payload
+        // keeps the buffer off the short-String reachable path so LSan sees a
+        // genuine leak if one is introduced.
+        assert_clean_asan_run(
+            r#"
+fn shout(s: String) -> String { f"{s}!" }
+fn apply(f: Fn(String) -> String, x: String) -> String { f(x) }
+fn main() {
+    let r = apply(shout, "hello-this-is-a-fairly-long-payload-string");
+    println(r);
+}
+"#,
+            &["hello-this-is-a-fairly-long-payload-string!"],
+            "named_fn_value_heap_arg_no_leak",
+        );
+    }
+
     // ── while let / let else drop paths (phase-6 line 489) ───────
 
     #[test]

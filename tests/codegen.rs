@@ -7800,6 +7800,94 @@ fn main() {
         );
     }
 
+    /// B-2026-06-20-1: a bare named `fn` passed as a first-class `Fn(...)`
+    /// value. `apply(doubler, 21)` must lower the `Fn(i64)->i64` parameter to
+    /// the closure fat-pointer ABI and reify the bare fn name into a
+    /// `{trampoline, null-env}` fat pointer, so the higher-order call runs.
+    /// Previously the `Fn`-typed param lowered to `i64` while the bare fn name
+    /// lowered to a raw `ptr`, failing LLVM module verification.
+    #[test]
+    fn fn_value_named_fn_as_fn_typed_param_runs() {
+        let out = run_program(
+            "fn doubler(n: i64) -> i64 { n * 2i64 }\n\
+             fn apply(f: Fn(i64) -> i64, x: i64) -> i64 { f(x) }\n\
+             fn main() { println(f\"{apply(doubler, 21i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// Multi-arg + float `Fn(...)` parameters: the env-first trampoline ABI
+    /// forwards every user arg, regardless of arity or scalar width.
+    #[test]
+    fn fn_value_fn_typed_param_multiarg_and_float_run() {
+        let multiarg = run_program(
+            "fn combine(a: i64, b: i64) -> i64 { a * 10i64 + b }\n\
+             fn apply2(f: Fn(i64, i64) -> i64, x: i64, y: i64) -> i64 { f(x, y) }\n\
+             fn main() { println(f\"{apply2(combine, 4i64, 2i64)}\"); }\n",
+        );
+        assert_eq!(multiarg.as_deref(), Some("42\n"));
+
+        let float = run_program(
+            "fn half(x: f64) -> f64 { x / 2.0 }\n\
+             fn applyf(f: Fn(f64) -> f64, x: f64) -> f64 { f(x) }\n\
+             fn main() { println(f\"{applyf(half, 84.0)}\"); }\n",
+        );
+        assert_eq!(float.as_deref(), Some("42\n"));
+    }
+
+    /// The same bare fn passed in `Fn(...)` position at two call sites reuses a
+    /// single memoized trampoline (one `define` of `__karac_fnval_doubler`),
+    /// and both higher-order calls run.
+    #[test]
+    fn fn_value_named_fn_reused_across_call_sites() {
+        let src = "fn doubler(n: i64) -> i64 { n * 2i64 }\n\
+                   fn apply(f: Fn(i64) -> i64, x: i64) -> i64 { f(x) }\n\
+                   fn main() {\n\
+                       let a = apply(doubler, 10i64);\n\
+                       let b = apply(doubler, 11i64);\n\
+                       println(f\"{a + b}\");\n\
+                   }\n";
+        assert_eq!(run_program(src).as_deref(), Some("42\n"));
+        let ir = ir_for(src);
+        let tramp_defs = ir
+            .lines()
+            .filter(|l| l.starts_with("define") && l.contains("@__karac_fnval_doubler"))
+            .count();
+        assert_eq!(
+            tramp_defs, 1,
+            "trampoline must be synthesized exactly once (memoized):\n{ir}"
+        );
+    }
+
+    /// Bonus path the same fix enables: a closure *literal* flowing into a
+    /// `Fn(...)` parameter slot. The param now lowers to the fat-pointer ABI
+    /// and the body call routes through the indirect-call path, so the closure
+    /// value passes through and runs (no reify needed — it is already a fat
+    /// pointer).
+    #[test]
+    fn fn_value_closure_literal_into_fn_typed_param_run() {
+        let out = run_program(
+            "fn apply(f: Fn(i64) -> i64, x: i64) -> i64 { f(x) }\n\
+             fn main() { println(f\"{apply(|n| n * 2i64, 21i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// The reify path synthesizes a per-fn env-ignoring trampoline so the bare
+    /// fn name conforms to the env-first closure-call ABI.
+    #[test]
+    fn test_ir_fn_value_named_fn_reified_trampoline() {
+        let ir = ir_for(
+            "fn doubler(n: i64) -> i64 { n * 2i64 }\n\
+             fn apply(f: Fn(i64) -> i64, x: i64) -> i64 { f(x) }\n\
+             fn main() { let r = apply(doubler, 21i64); println(f\"{r}\"); }\n",
+        );
+        assert!(
+            ir.contains("__karac_fnval_doubler"),
+            "should synthesize an env-ignoring trampoline for the bare fn value:\n{ir}"
+        );
+    }
+
     #[test]
     fn test_ir_closure_no_captures() {
         let ir = ir_for(

@@ -15,8 +15,8 @@ use crate::resolver::SpanKey;
 use crate::token::Span;
 use std::collections::{HashMap, HashSet};
 
-use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, StructType};
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum};
+use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, FunctionType, StructType};
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue};
 use inkwell::AddressSpace;
 
 use super::state::VarSlot;
@@ -78,6 +78,157 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn closure_value_type(&self) -> StructType<'ctx> {
         let ptr = self.context.ptr_type(AddressSpace::default());
         self.context.struct_type(&[ptr.into(), ptr.into()], false)
+    }
+
+    /// Build the LLVM function type for the env-first closure-call ABI of a
+    /// surface `Fn(P0, P1, …) -> R` annotation: `R (ptr env, P0, P1, …)`. The
+    /// leading `ptr` is the captured-environment pointer every closure body
+    /// (and every reified-fn trampoline) receives as its first parameter; a
+    /// missing / `unit` return lowers to `void` (mirroring `declare_function`
+    /// for a no-return fn, and matched by `compile_closure_call`'s void arm).
+    ///
+    /// Used both to register a `Fn`-typed parameter in `closure_fn_types` (so a
+    /// body call `f(x)` becomes an indirect call) and to type the synthesized
+    /// trampoline in `reify_named_fn_as_fn_value` — building both from the same
+    /// annotation guarantees the indirect-call signature and the trampoline
+    /// signature agree (B-2026-06-20-1).
+    pub(super) fn closure_abi_fn_type(
+        &self,
+        params: &[TypeExpr],
+        return_type: Option<&TypeExpr>,
+    ) -> FunctionType<'ctx> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let mut param_tys: Vec<BasicMetadataTypeEnum<'ctx>> = vec![ptr_ty.into()];
+        for t in params {
+            param_tys.push(BasicMetadataTypeEnum::from(self.llvm_type_for_type_expr(t)));
+        }
+        match return_type.map(|t| self.llvm_type_for_type_expr(t)) {
+            Some(BasicTypeEnum::IntType(t)) => t.fn_type(&param_tys, false),
+            Some(BasicTypeEnum::FloatType(t)) => t.fn_type(&param_tys, false),
+            Some(BasicTypeEnum::PointerType(t)) => t.fn_type(&param_tys, false),
+            Some(BasicTypeEnum::StructType(t)) => t.fn_type(&param_tys, false),
+            Some(BasicTypeEnum::ArrayType(t)) => t.fn_type(&param_tys, false),
+            Some(BasicTypeEnum::VectorType(t)) => t.fn_type(&param_tys, false),
+            Some(BasicTypeEnum::ScalableVectorType(_)) | None => {
+                self.context.void_type().fn_type(&param_tys, false)
+            }
+        }
+    }
+
+    /// B-2026-06-20-1: reify a bare named `fn` passed in `Fn(...)`-typed
+    /// argument position into a closure fat-pointer value `{ trampoline, null
+    /// env }`, so it dispatches through the same env-first indirect-call ABI as
+    /// a closure literal. Returns `None` (caller compiles the arg normally)
+    /// unless `arg` is a bare identifier that names a free fn (not a shadowing
+    /// local / const) AND the callee's parameter `idx` is `Fn(...)`-typed.
+    ///
+    /// A bare fn name otherwise lowers to a raw `ptr` (`@doubler`), which fails
+    /// LLVM module verification against the fat-pointer parameter slot.
+    pub(super) fn reify_named_fn_as_fn_value(
+        &mut self,
+        callee: &str,
+        idx: usize,
+        arg: &Expr,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let ExprKind::Identifier(fn_name) = &arg.kind else {
+            return None;
+        };
+        // A local binding or const-generic substitution of the same name is a
+        // real value (it shadows the free fn), not a fn-value reify.
+        if self.variables.contains_key(fn_name.as_str())
+            || self.const_subst.contains_key(fn_name.as_str())
+        {
+            return None;
+        }
+        // The callee's parameter `idx` must be `Fn(...)`-typed. Clone the
+        // annotation so the immutable `fn_asts` borrow is released before the
+        // `&mut self` trampoline emission below.
+        let (ann_params, ann_ret) = {
+            let func = self.fn_asts.get(callee)?;
+            let param = func.params.get(idx)?;
+            match &param.ty.kind {
+                TypeKind::FnType {
+                    params,
+                    return_type,
+                    ..
+                } => (params.clone(), return_type.as_deref().cloned()),
+                _ => return None,
+            }
+        };
+        let target = self.module.get_function(fn_name)?;
+
+        let tramp_name = format!("__karac_fnval_{}", fn_name);
+        let tramp = match self.module.get_function(&tramp_name) {
+            Some(t) => t,
+            None => {
+                self.emit_fn_value_trampoline(&tramp_name, target, &ann_params, ann_ret.as_ref())
+            }
+        };
+
+        // Build the fat pointer `{ trampoline_ptr, null }` — null env because a
+        // free fn captures nothing.
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let fat_ty = self.closure_value_type();
+        let mut fat = fat_ty.get_undef();
+        fat = self
+            .builder
+            .build_insert_value(
+                fat,
+                tramp.as_global_value().as_pointer_value(),
+                0,
+                "fnval_fn",
+            )
+            .unwrap()
+            .into_struct_value();
+        fat = self
+            .builder
+            .build_insert_value(fat, ptr_ty.const_null(), 1, "fnval_env")
+            .unwrap()
+            .into_struct_value();
+        Some(fat.into())
+    }
+
+    /// Synthesize a per-fn env-ignoring trampoline `__karac_fnval_<name>` with
+    /// the env-first closure-call ABI: it drops the leading env pointer and
+    /// forwards the remaining args to `target`, returning its result. This lets
+    /// a plain free fn (whose real signature has no env parameter) be invoked
+    /// through the same indirect-call shape as a closure body. Memoized by the
+    /// caller via `module.get_function`.
+    fn emit_fn_value_trampoline(
+        &mut self,
+        tramp_name: &str,
+        target: FunctionValue<'ctx>,
+        ann_params: &[TypeExpr],
+        ann_ret: Option<&TypeExpr>,
+    ) -> FunctionValue<'ctx> {
+        let saved_bb = self.builder.get_insert_block();
+        let tramp_ty = self.closure_abi_fn_type(ann_params, ann_ret);
+        let tramp = self.module.add_function(tramp_name, tramp_ty, None);
+        let entry = self.context.append_basic_block(tramp, "entry");
+        self.builder.position_at_end(entry);
+
+        // Forward the user args (params 1..) to the target; param 0 (env) is
+        // ignored — a free fn captures nothing.
+        let fwd: Vec<BasicMetadataValueEnum<'ctx>> = tramp
+            .get_params()
+            .into_iter()
+            .skip(1)
+            .map(BasicMetadataValueEnum::from)
+            .collect();
+        let call = self.builder.build_call(target, &fwd, "fnval_fwd").unwrap();
+        let ret_val = call.try_as_basic_value();
+        if ann_ret.is_some() && !ret_val.is_instruction() {
+            self.builder
+                .build_return(Some(&ret_val.unwrap_basic()))
+                .unwrap();
+        } else {
+            self.builder.build_return(None).unwrap();
+        }
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        tramp
     }
 
     /// Compile `|params| body` into a fat-pointer value `{ fn_ptr, env_ptr }`.
