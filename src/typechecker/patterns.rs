@@ -1171,11 +1171,33 @@ impl<'a> super::TypeChecker<'a> {
                 span,
             },
             Type::TypeParam(name) => path(name, vec![]),
+            // Function / OnceFunction → `Fn(..)` / `OnceFn(..)` so a fn-value's
+            // signature round-trips (B-2026-06-21-3): codegen lowers the
+            // resulting `FnType` to the closure fat pointer and reads the
+            // params/return to build the env-first indirect-call signature. The
+            // `Unit` return round-trips as `TypeKind::Unit`, which
+            // `closure_abi_fn_type` maps to a `void` return.
+            Type::Function {
+                params,
+                return_type,
+            }
+            | Type::OnceFunction {
+                params,
+                return_type,
+            } => TypeExpr {
+                kind: TypeKind::FnType {
+                    params: params.iter().map(Self::type_to_type_expr).collect(),
+                    return_type: Some(Box::new(Self::type_to_type_expr(return_type))),
+                    effect_spec: None,
+                    is_once: matches!(ty, Type::OnceFunction { .. }),
+                },
+                span,
+            },
             // Fallback for shapes that don't have a clean TypeExpr round-trip
-            // (TypeVar, Function, OnceFunction, Pointer, AssocProjection,
-            // Error). The element-type registration use case never sees
-            // these as Vec[T] / Slice[T] inner types in a well-typed
-            // program, so falling back to Error → i64 lowering is safe.
+            // (TypeVar, Pointer, AssocProjection, Error). The element-type
+            // registration use case never sees these as Vec[T] / Slice[T] inner
+            // types in a well-typed program, so falling back to Error → i64
+            // lowering is safe.
             _ => TypeExpr {
                 kind: TypeKind::Error,
                 span,

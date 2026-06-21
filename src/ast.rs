@@ -283,6 +283,15 @@ pub type TaskJoinReturnTypesTable = std::collections::HashMap<(usize, usize), Ty
 /// route through this span table). Empty unless the lowering pass ran.
 pub type RefReturnInnerTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
 
+/// Side-table populated by the lowering pass from `TypeCheckResult.expr_types`:
+/// for every expression whose Kāra type is a function type (`Fn(...)` /
+/// `OnceFn(...)`), maps its span `(offset, length)` to the equivalent `FnType`
+/// `TypeExpr`. Lets codegen recover a first-class fn value's signature from the
+/// expression alone — e.g. an un-annotated `let g = h.f;` / `let g = v[0];`
+/// reading a `Fn(..)`-typed struct field or `Vec` element — so the binding can
+/// be registered in `closure_fn_types` for indirect calls (B-2026-06-21-3).
+pub type FnValueTypedExprsTable = std::collections::HashMap<(usize, usize), TypeExpr>;
+
 /// Side-table populated by the lowering pass from the typechecker's
 /// `pattern_binding_types` map. Maps each pattern-binding's span (offset,
 /// length) to the canonical surface type name (e.g. `"MyError"`). Used by
@@ -528,6 +537,12 @@ pub struct Program {
     /// the same `{ptr, i64, i64}` LLVM struct shape without taking a
     /// `TypeCheckResult` dependency.
     pub string_typed_exprs: StringTypedExprsTable,
+    /// Set by the lowering pass from `TypeCheckResult.expr_types`: for every
+    /// `Fn(..)` / `OnceFn(..)`-typed expression, its `FnType` `TypeExpr`. Lets
+    /// codegen register an un-annotated fn-value binding (`let g = h.f;`) in
+    /// `closure_fn_types` so a later `g(x)` lowers to an indirect call
+    /// (B-2026-06-21-3). See [`FnValueTypedExprsTable`].
+    pub fn_value_typed_exprs: FnValueTypedExprsTable,
     /// Set by the lowering pass from `TypeCheckResult.expr_types`: for
     /// every `Tensor[T, Shape]`-typed expression with statically-known
     /// rank, its element type + static dims. See [`TensorTypedExprsTable`].

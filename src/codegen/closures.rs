@@ -102,6 +102,13 @@ impl<'ctx> super::Codegen<'ctx> {
         for t in params {
             param_tys.push(BasicMetadataTypeEnum::from(self.llvm_type_for_type_expr(t)));
         }
+        // A `unit` return (`Fn(..) -> ()`, or the typechecker's `Type::Unit`
+        // round-tripped to `TypeKind::Unit`) is `void`, matching how a
+        // no-return target lowers and how `compile_closure_call` treats a void
+        // result — without this it would lower to `i64` and mismatch.
+        if return_type.is_none() || matches!(return_type.map(|t| &t.kind), Some(TypeKind::Unit)) {
+            return self.context.void_type().fn_type(&param_tys, false);
+        }
         match return_type.map(|t| self.llvm_type_for_type_expr(t)) {
             Some(BasicTypeEnum::IntType(t)) => t.fn_type(&param_tys, false),
             Some(BasicTypeEnum::FloatType(t)) => t.fn_type(&param_tys, false),
@@ -286,6 +293,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Some(self.closure_abi_fn_type(params, return_type.as_deref()));
                 }
             }
+        }
+        // General fallback (B-2026-06-21-3): the typechecker typed the RHS
+        // expression as a function — recover its `FnType` from the lowering
+        // pass's `fn_value_typed_exprs` span table. Covers an un-annotated fn
+        // value read from a struct field (`let g = h.f`), a `Vec[Fn]` element
+        // (`let g = v[0]`), a method call, etc. — any inferred fn-value binding
+        // whose RHS shape the cases above don't special-case.
+        if let Some(TypeKind::FnType {
+            params,
+            return_type,
+            ..
+        }) = self
+            .fn_value_typed_exprs
+            .get(&(value.span.offset, value.span.length))
+            .map(|t| &t.kind)
+        {
+            return Some(self.closure_abi_fn_type(params, return_type.as_deref()));
         }
         None
     }

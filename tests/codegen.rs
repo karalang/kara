@@ -7836,11 +7836,42 @@ fn main() {
         assert_eq!(out.as_deref(), Some("42\n"));
     }
 
+    /// B-2026-06-21-3: an **un-annotated** fn value read out of a struct field
+    /// (`let g = h.f;`, no `: Fn(..)`) and called. The lowering pass records the
+    /// field-read expression's inferred `Fn(..)` type in `fn_value_typed_exprs`,
+    /// so `let_binding_fn_value_type` registers `g` in `closure_fn_types` and
+    /// `g(x)` lowers to an indirect call. Before this it fell through to the
+    /// unknown-callee path and silently returned 0.
+    #[test]
+    fn fn_value_struct_field_unannotated_extraction() {
+        let out = run_program(
+            "fn doubler(n: i64) -> i64 { n * 2i64 }\n\
+             struct H { f: Fn(i64) -> i64 }\n\
+             fn main() { let h = H { f: doubler }; let g = h.f; println(f\"{g(21i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// B-2026-06-21-3: the same, un-annotated, from a `Vec[Fn(..)]` element.
+    #[test]
+    fn fn_value_vec_element_unannotated_extraction() {
+        let out = run_program(
+            "fn doubler(n: i64) -> i64 { n * 2i64 }\n\
+             fn main() {\n\
+                 let mut v: Vec[Fn(i64) -> i64] = Vec.new();\n\
+                 v.push(doubler);\n\
+                 let g = v[0];\n\
+                 println(f\"{g(21i64)}\");\n\
+             }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
     /// B-2026-06-21-2: a fn value stored in a struct field (`H { f: doubler }`)
     /// — the field initializer lowers to a fat pointer matching the
-    /// `f: Fn(...)` field slot. Reading it back and calling needs an explicit
-    /// `Fn(...)` annotation on the extracting `let` (so `closure_fn_types` is
-    /// registered); un-annotated `let g = h.f` is the documented residual.
+    /// `f: Fn(...)` field slot. The explicit-annotation extraction path
+    /// (`let g: Fn(..) = h.f`); the un-annotated form is covered above
+    /// (B-2026-06-21-3).
     #[test]
     fn fn_value_struct_field_annotated_extraction() {
         let out = run_program(

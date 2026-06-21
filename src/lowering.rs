@@ -130,6 +130,28 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             }
         })
         .collect();
+    // For every `Fn(..)` / `OnceFn(..)`-typed expression, record its `FnType`
+    // TypeExpr so codegen can recover a first-class fn value's signature from
+    // the expression alone — e.g. an un-annotated `let g = h.f;` reading a
+    // `Fn(..)`-typed struct field — and register the binding for indirect calls
+    // (B-2026-06-21-3). A borrow-wrapped fn value (`ref Fn(..)`) unwraps to the
+    // same callable signature.
+    program.fn_value_typed_exprs = tc
+        .expr_types
+        .iter()
+        .filter_map(|(k, ty)| {
+            let core = match ty {
+                Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+                other => other,
+            };
+            match core {
+                Type::Function { .. } | Type::OnceFunction { .. } => {
+                    Some(((k.0, k.1), TypeChecker::type_to_type_expr(core)))
+                }
+                _ => None,
+            }
+        })
+        .collect();
     // Sibling to `string_typed_exprs`: for every `Tensor[T, Shape]`-typed
     // expression whose rank is statically known (concrete `Type::Shape`,
     // no `...` splice), record the element type (as a TypeExpr, lowered

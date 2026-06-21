@@ -1982,6 +1982,13 @@ pub(super) struct Codegen<'ctx> {
     /// dispatch arm — `String` and `Vec[u8]` are indistinguishable from
     /// the LLVM value alone, so the span-set is what tells them apart.
     pub(crate) string_typed_exprs: HashSet<(usize, usize)>,
+    /// Per-expression `Fn(..)` / `OnceFn(..)` signature (as a `FnType`
+    /// TypeExpr), from `Program.fn_value_typed_exprs` (lowering pass, from
+    /// `TypeCheckResult.expr_types`). Keyed by the expression's
+    /// `(span.offset, span.length)`. Lets `let_binding_fn_value_type` register
+    /// an un-annotated fn-value binding (`let g = h.f;`) in `closure_fn_types`
+    /// so `g(x)` lowers to an indirect call (B-2026-06-21-3).
+    pub(crate) fn_value_typed_exprs: HashMap<(usize, usize), TypeExpr>,
     /// Per-expression Tensor type info (element TypeExpr + static dims),
     /// keyed by `(span.offset, span.length)`. Populated from
     /// `Program.tensor_typed_exprs` (lowering pass, from
@@ -5102,6 +5109,7 @@ impl<'ctx> Codegen<'ctx> {
             ref_return_inner_types: HashMap::new(),
             user_ref_method_names: std::collections::HashSet::new(),
             string_typed_exprs: HashSet::new(),
+            fn_value_typed_exprs: HashMap::new(),
             tensor_typed_exprs: HashMap::new(),
             tensor_var_infos: HashMap::new(),
             pending_let_tensor_info: None,
@@ -5983,6 +5991,7 @@ impl<'ctx> Codegen<'ctx> {
         // LLVM struct shape is identical to `Vec[u8]` and a few other
         // 3-word types, so the value alone can't distinguish them.
         self.string_typed_exprs = program.string_typed_exprs.clone();
+        self.fn_value_typed_exprs = program.fn_value_typed_exprs.clone();
         // Sibling: per-span Tensor element-type + static-dims info for
         // construction / let-registration / indexing dispatch (see
         // `src/codegen/tensor.rs`).
