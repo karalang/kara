@@ -218,8 +218,19 @@ existing `suppress_cleanup_for_tail_return` for AoS Vec).
    returned local builds SoA. Regressions: `init_grid()`-shape returning a SoA
    Vec bound by a differently-named local; one builder bound into two layouts →
    two distinct return-SoA monos; ASAN/LSan move-out ownership (caller-owns).
-   Branch-leaf / multi-`return` returns degrade to AoS (spike §8), never
-   miscompile.
+   Branch-leaf / multi-`return` returns landed as a **follow-on** (2026-06-20):
+   `soa_return_local_names` now recursively collects every bare-identifier
+   return site (each explicit `return <id>;` in any branch / loop / nested
+   block — not inside a closure — plus every tail leaf of a branch-bearing tail
+   `if c { a } else { b }`), so each return value lowers SoA against the patched
+   signature. (Before the follow-on these multi-site returns were a hard LLVM
+   "return type does not match" verify failure, not the silent AoS degrade this
+   note once assumed.) Early-return move-out uses a branch-safe runtime
+   `cap = 0` sentinel (`neutralize_moved_soa_groups_slot`), not the tail path's
+   compile-time `FreeSoaGroups` frame removal — the early-return frame is shared
+   with the fall-through path where the local is NOT returned and must still be
+   freed (the branch-buried-move footgun). Tests: 3 codegen E2E + 2 ASAN/LSan
+   (early-return fall-through, branch-leaf tails — both paths exercised).
 4. **Multiple SoA bindings of one element type through shared helpers;
    confirm distinct monomorphs.** ✅ **Landed 2026-06-20.** Forward layout-flow
    inference (slice 2) extended to the **borrow forms** `ref Vec[E]` /
@@ -245,9 +256,19 @@ existing `suppress_cleanup_for_tail_return` for AoS Vec).
    OWN grouping correctly — a single shared body could not); mut-ref push (WRITE)
    across a function with write-back through the deref'd pointer; ASAN/LSan
    mut-ref borrow ownership (callee borrows, caller frees once). The whole-element
-   SoA *index*-store path (`grid[i] = E{…}`) is still unbuilt even
-   single-function, so a kernel that scatters whole elements by `mut ref` index
-   assignment remains a follow-on; push-based and field-level writes work.
+   SoA *index*-store path (`grid[i] = E{…}`) landed as a **follow-on**
+   (2026-06-20): `compile_soa_index_store` scatters the RHS element struct's
+   fields into each group's own buffer at `[i]` (strided by the group sub-struct
+   — the same decomposition `push` does at `len`, with a leading bounds-check and
+   no growth), dispatched ahead of the AoS Vec path on `active_soa_layout` and
+   deref'ing a `ref`/`mut ref` param slot via `ref_params` so the scatter crosses
+   a function boundary (the `mut ref` index-assignment kernel). Before it, the
+   store fell into `compile_vec_index_store` and wrote whole AoS elements over one
+   group's narrower stride — a silent heap-buffer-overflow. Tests: 3 codegen E2E
+   (single-fn, `mut ref` cross-function, cold-group) + 1 ASAN overflow guard. POD
+   elements only, matching the rest of the SoA subsystem (push / field-store /
+   `FreeSoaGroups` all assume POD; SoA elements with heap fields stay an
+   orthogonal gap shared across those paths).
 5. **Retire / bridge the name-keyed lookups in the access paths; `soa_layouts`
    becomes origin-only. Borrow-checker cross-group disjointness facts audited.**
    ✅ **Landed 2026-06-20.** The access-path *trigger* — a binding's physical
@@ -310,7 +331,9 @@ existing `suppress_cleanup_for_tail_return` for AoS Vec).
    group addressing). It was independent of slice 5 (the base compiler
    miscompiled it identically) and of the borrow checker (a codegen
    address-arithmetic fault, not an aliasing-fact gap). The whole-element
-   index-store `grid[i] = E{…}` is still unbuilt (same family).
+   index-store `grid[i] = E{…}` (same family, the scatter sibling of the
+   field-level store) landed as a follow-on — see slice 4's closing note
+   (`compile_soa_index_store`).
 6. **Proof: convert `examples/slipstream/src/sim.kara`** to a `layout` block and
    confirm the native oracle checksums are byte-identical AoS↔SoA — Slipstream
    earns its "SoA layout" roster billing. **DONE.** The carried LBM grid (plus

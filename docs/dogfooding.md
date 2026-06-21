@@ -320,11 +320,18 @@ examples that show the interesting cases without being contrived.
 > …)`); and SoA carried across a **coroutine suspend** (the browser render loop's
 > `grid` across `frames.recv()` — state-struct field sizing + par-slot typing).
 > The earlier field-level SoA index-store fix (B-2026-06-20-7, 38fb0b57) and the
-> push / mut-ref-field-write-back paths all hold. The whole-element SoA
-> *index*-store (`grid[i] = E{…}`) is still unbuilt even single-function (a
-> distinct gap; the LBM kernel scatters individual fields, not whole elements);
-> branch-leaf / multi-`return` SoA returns degrade to AoS (never miscompile).
-> Background in the user-memory `soa_cross_function_partial`.
+> push / mut-ref-field-write-back paths all hold. Two **further follow-ons landed
+> 2026-06-20** (commits c74752f6 + 3ccab359), closing the SoA write/return
+> surface: the **whole-element SoA index-store** `grid[i] = E{…}`
+> (`compile_soa_index_store` — scatter the RHS element's fields into each group
+> buffer at `[i]`; works single-function and through a `mut ref Vec[E]` param;
+> pre-fix it fell into the AoS path → heap overflow) and **branch-leaf /
+> multi-`return` SoA returns** (a guard-clause `if empty { return fallback; } …;
+> result`, if/else of two `return`s, or branch-leaf bare tails — every
+> bare-identifier return site now lowers SoA against the patched signature; these
+> were actually a hard LLVM verify failure, not a silent AoS degrade). Native
+> oracle stayed byte-identical across both. Background in the user-memory
+> `soa_cross_function_partial`.
 
 **Primary capability:** Auto-concurrency of sequential code; layout blocks for
 cache-efficient SoA access; same code runs on CPU and GPU.
