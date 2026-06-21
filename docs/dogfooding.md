@@ -330,8 +330,18 @@ examples that show the interesting cases without being contrived.
 > result`, if/else of two `return`s, or branch-leaf bare tails — every
 > bare-identifier return site now lowers SoA against the patched signature; these
 > were actually a hard LLVM verify failure, not a silent AoS degrade). Native
-> oracle stayed byte-identical across both. Background in the user-memory
-> `soa_cross_function_partial`.
+> oracle stayed byte-identical across both. A third follow-on landed **2026-06-20**
+> (B-2026-06-20-16, `b83e11fc`): SoA elements with **heap (`String` / `Vec[POD]`)
+> fields** — previously rejected wholesale at layout validation — now compile and
+> drop leak-free. A synthesized per-layout `__karac_soa_drop_<layout>` frees each
+> live element's String/Vec buffers at scope exit, on overwrite (index / field
+> store drop-old), and on the carried-grid reassignment, with move-in cap-zeroing
+> for named-binding / f-string sources; it's `None` for a POD layout so that path
+> stays byte-identical (the Slipstream oracle held). Linux-LSan green (21/21,
+> ≥36-byte payloads ×20 frames). Still rejected: `Map`/`Set`/`Vec[heap]`/shared
+> element fields; and reading a heap field *back* as a method receiver / index base
+> (`grid[i].name.len()`) is the remaining SoA read-path follow-up. Background in the
+> user-memory `soa_cross_function_partial`.
 
 **Primary capability:** Auto-concurrency of sequential code; layout blocks for
 cache-efficient SoA access; same code runs on CPU and GPU.
