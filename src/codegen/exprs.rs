@@ -1797,6 +1797,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     // Mirrors the enum-variant constructor pattern
                     // already wired at `try_compile_enum_variant`.
                     self.suppress_source_vec_cleanup_for_arg(&field_init.value);
+                    // Boxed / inline-heap `Option`/`Result` binding moved whole
+                    // into this shared-struct field — see the non-shared peer
+                    // below for the rationale.
+                    self.suppress_inline_option_result_binding_move(&field_init.value);
                     // Map/Set sibling of the Vec suppression: a `Map`/`Set`
                     // local moved into this field hands the handle to the
                     // struct, so drop the source's scope-exit `FreeMapHandle`
@@ -1897,6 +1901,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 // StructDrop skips it (the new literal is the sole owner). The
                 // whole-Identifier suppress above doesn't reach a FieldAccess.
                 self.suppress_struct_field_move_into_literal(&field_init.value);
+                // Boxed / inline-heap `Option`/`Result` binding moved whole into
+                // this field: the field now owns the box / inline buffer, so
+                // neutralize the source binding's `FreeInlineOptionPayload` /
+                // `FreeInlineResultPayload` (which the `Vec`/`Map`/`fstr`
+                // suppressors above don't cover). Without it, `TraitMethodNode {
+                // body, .. }` for `let mut body = Some(parse_block())` frees the
+                // boxed `Block` at the builder's scope exit while the returned
+                // node still references it → UAF (selfhost slice 3c-iv).
+                self.suppress_inline_option_result_binding_move(&field_init.value);
                 // Map/Set sibling of the Vec suppression (see the shared-struct
                 // branch above): a moved-in `Map`/`Set` local's source free is
                 // dropped so the struct's owner is the sole freer.

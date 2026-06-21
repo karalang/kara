@@ -13710,4 +13710,49 @@ fn main() {
             "shared_enum_boxed_struct_payload_moveout_no_double_free",
         );
     }
+
+    /// slice-3c-iv: a heap-BOXED `Option[Wide]` local moved whole into a
+    /// struct literal (`Holder { body: body }` for `let mut body =
+    /// Some(mk_wide())`) must transfer the box's ownership to the new struct.
+    /// Before the fix the builder fn's `BoxedEnumDrop` freed the box at scope
+    /// exit while the returned `Holder` still referenced it — a use-after-free
+    /// the reader then dereferenced (selfhost slice 3c-iv's `parse_trait_method`
+    /// → `render_block` garbage / SIGSEGV). The boxed `Wide` owns a ≥36-byte
+    /// `String` so a wrongly-freed-or-leaked box is visible to LSan (Linux) and
+    /// the UAF read is caught by macOS ASAN; the 50-iter loop forces allocator
+    /// reuse so a dangling box reads back corrupted.
+    #[test]
+    fn asan_boxed_option_moved_into_struct_literal_no_uaf() {
+        assert_clean_asan_run(
+            "struct Wide { tag: i64, payload: String }\n\
+             struct Holder { name: String, body: Option[Wide] }\n\
+             fn mk_wide() -> Wide {\n\
+             \x20   Wide { tag: 7, payload: \"boxed-option-payload-string-long-enough-aaaa\".to_string() }\n\
+             }\n\
+             fn build() -> Holder {\n\
+             \x20   let mut body: Option[Wide] = None;\n\
+             \x20   body = Some(mk_wide());\n\
+             \x20   Holder { name: \"holder-name-payload-string-long-enough\".to_string(), body: body }\n\
+             }\n\
+             fn read(h: Holder) -> i64 {\n\
+             \x20   let Holder { name, body } = h;\n\
+             \x20   let n = name.len() as i64;\n\
+             \x20   match body {\n\
+             \x20       Some(w) => { let Wide { tag, payload } = w; tag + (payload.len() as i64) + n }\n\
+             \x20       None => n,\n\
+             \x20   }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let mut acc = 0i64;\n\
+             \x20   let mut i = 0;\n\
+             \x20   while i < 50 {\n\
+             \x20       acc = acc + read(build());\n\
+             \x20       i = i + 1;\n\
+             \x20   }\n\
+             \x20   println(acc);\n\
+             }\n",
+            &["4450"],
+            "asan_boxed_option_moved_into_struct_literal_no_uaf",
+        );
+    }
 }

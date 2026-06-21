@@ -521,6 +521,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_iter()
             .collect();
         self.inline_option_payload_vars.clear();
+        self.boxed_enum_payload_vars.clear();
         self.inline_result_payload_vars.clear();
         self.inline_option_map_payload_vars.clear();
         self.var_option_shared_heap.clear();

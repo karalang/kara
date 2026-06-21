@@ -1815,6 +1815,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `suppress_source_vec_cleanup_for_arg` for the
                 // shape-detection path.
                 self.suppress_source_vec_cleanup_for_arg(&arg.value);
+                // Boxed / inline-heap `Option`/`Result` binding moved whole into
+                // this shared tuple-variant payload — mirrors the struct-literal
+                // / struct-variant field-init paths.
+                self.suppress_inline_option_result_binding_move(&arg.value);
                 // Map/Set sibling of the Vec suppression: a `Map`/`Set`
                 // local moved into this variant hands its handle to the
                 // enum payload, so drop the source's scope-exit
@@ -1886,6 +1890,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // `cap` so its scope-exit `FreeVecBuffer` becomes a no-op.
             // The new enum binding owns the buffer.
             self.suppress_source_vec_cleanup_for_arg(&arg.value);
+            // Boxed / inline-heap `Option`/`Result` binding moved whole into
+            // this non-shared tuple-variant payload — see the shared-enum
+            // branch above and the struct-literal field-init paths.
+            self.suppress_inline_option_result_binding_move(&arg.value);
             // Map/Set sibling of the Vec suppression — see the shared-enum
             // branch above. A `Map`/`Set` local moved into this variant
             // hands its handle to the enum payload, so drop the source's
@@ -2068,6 +2076,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.builder.build_store(word_ptr, w).unwrap();
                 }
                 self.suppress_source_vec_cleanup_for_arg(&init.value);
+                // Boxed / inline-heap `Option`/`Result` binding moved whole into
+                // this shared-enum struct-variant field — mirrors the
+                // struct-literal field-init paths (`compile_struct_init`).
+                self.suppress_inline_option_result_binding_move(&init.value);
                 if let ExprKind::Identifier(n) = &init.value.kind {
                     let n = n.clone();
                     self.suppress_map_cleanup_for_tail_identifier(&n);
@@ -2110,6 +2122,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // String moved into a struct-variant payload (`E.NoAt { value:
             // email }`), the Weave dogfood's `ParseError` corruption.
             self.suppress_source_vec_cleanup_for_arg(&init.value);
+            // Boxed / inline-heap `Option`/`Result` binding moved whole into
+            // this non-shared enum struct-variant field — mirrors the
+            // struct-literal field-init paths (`compile_struct_init`).
+            self.suppress_inline_option_result_binding_move(&init.value);
             if let ExprKind::Identifier(n) = &init.value.kind {
                 let n = n.clone();
                 self.suppress_map_cleanup_for_tail_identifier(&n);

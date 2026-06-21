@@ -2804,6 +2804,51 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Suppress the scope-exit `FreeInlineOptionPayload` /
+    /// `FreeInlineResultPayload` of an `Option`/`Result` BINDING that has just
+    /// been MOVED whole into a struct-literal / enum-variant field
+    /// (`TraitMethodNode { body: body }`, where `body: Option[Block]`). Unlike
+    /// the `match`-arm suppressors above (which bind the payload OUT and zero
+    /// just the inline `cap` word), a whole-value move hands the entire
+    /// `Option`/`Result` — tag AND payload (an inline `{ptr,len,cap}` heap
+    /// buffer OR a heap-boxed wide payload whose box pointer sits in word 1) —
+    /// to the destination aggregate, which now solely owns it. Zero the source
+    /// slot outright so BOTH guard shapes skip: the boxed cleanup's
+    /// `tag == Some` check (word 0) and the inline cleanup's `cap > 0` check
+    /// (word 3) both read zero. Gated on the binding carrying one of these
+    /// inline/boxed cleanups (`inline_{option,result}_payload_vars`); a
+    /// `shared`-inner `Option[shared T]` is NOT in those sets — it stays on the
+    /// rc inc/dec balance the field-init paths already emit, untouched here.
+    /// Surfaced by selfhost slice 3c-iv: `let mut body = Some(parse_block());
+    /// TraitMethodNode { body, .. }` double-freed the boxed `Block` (the source
+    /// binding's box drop + the returned node's downstream owner) → UAF.
+    pub(super) fn suppress_inline_option_result_binding_move(&self, value: &Expr) {
+        let ExprKind::Identifier(name) = &value.kind else {
+            return;
+        };
+        let in_option = self.inline_option_payload_vars.contains(name.as_str());
+        let in_result = self.inline_result_payload_vars.contains(name.as_str());
+        // `boxed_enum_payload_vars` covers the heap-BOXED wide payload
+        // (`Option[Block]`) whose `BoxedEnumDrop` guards on `tag == Some`; the
+        // two inline sets cover the inline `{ptr,len,cap}` heap payload whose
+        // free guards on `cap > 0`. Zeroing the whole slot below neutralizes
+        // every shape's guard at once.
+        let in_boxed = self.boxed_enum_payload_vars.contains(name.as_str());
+        if !in_option && !in_result && !in_boxed {
+            return;
+        }
+        let Some(slot) = self.variables.get(name.as_str()).copied() else {
+            return;
+        };
+        let layout_name = if in_result { "Result" } else { "Option" };
+        let Some(layout) = self.enum_layouts.get(layout_name) else {
+            return;
+        };
+        let _ = self
+            .builder
+            .build_store(slot.ptr, layout.llvm_type.const_zero());
+    }
+
     /// `Option[Map]`/`Option[Set]` sibling of
     /// `suppress_inline_option_payload_cleanup`. The inline handle payload
     /// has no `cap` word to zero, so a `match`/`if let` arm that binds the

@@ -966,6 +966,16 @@ pub(super) struct Codegen<'ctx> {
     /// word to zero, unlike the Vec case) so the scope-exit free skips. See
     /// B-2026-06-10-6's `Option[Map]` follow-on.
     pub(crate) inline_option_map_payload_vars: std::collections::HashSet<String>,
+    /// Names of `Option`/`Result` bindings whose wide payload was heap-BOXED
+    /// (`track_boxed_enum_var` registered a `CleanupAction::BoxedEnumDrop` —
+    /// `Option[Block]` and other `Option[Wide]` / `Result[Wide,_]`). The
+    /// boxed sibling of `inline_option_payload_vars`: when such a binding is
+    /// moved WHOLE into a struct-literal / enum-variant field, the field now
+    /// owns the box, so the source slot must be zeroed (`BoxedEnumDrop` guards
+    /// on `tag == Some` at word 0) — otherwise the source frees the box the
+    /// destination still references downstream → UAF (selfhost slice 3c-iv:
+    /// `TraitMethodNode { body, .. }` for `let mut body = Some(parse_block())`).
+    pub(crate) boxed_enum_payload_vars: std::collections::HashSet<String>,
     /// Refinement type alias name → its base `TypeExpr` (`type Email =
     /// String where …` → the `String` type expr). Populated from the
     /// program's `Item::TypeAlias`es that carry a `where` predicate.
@@ -4973,6 +4983,7 @@ impl<'ctx> Codegen<'ctx> {
             inline_option_payload_vars: std::collections::HashSet::new(),
             inline_result_payload_vars: std::collections::HashSet::new(),
             inline_option_map_payload_vars: std::collections::HashSet::new(),
+            boxed_enum_payload_vars: std::collections::HashSet::new(),
             refinement_bases: HashMap::new(),
             refinement_generic_params: HashMap::new(),
             distinct_bases: HashMap::new(),

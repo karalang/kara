@@ -803,6 +803,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_iter()
             .collect();
         self.inline_option_payload_vars.clear();
+        self.boxed_enum_payload_vars.clear();
         self.inline_result_payload_vars.clear();
         self.inline_option_map_payload_vars.clear();
         // Function-level scope-cleanup frame for owned locals (`Tensor` /

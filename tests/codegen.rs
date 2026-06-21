@@ -49451,4 +49451,56 @@ fn main() {
              --- body ---\n{body}"
         );
     }
+
+    /// slice-3c-iv boxed-`Option`-binding move-into-literal fix: a wide
+    /// (heap-boxed) `Option[Wide]` LOCAL moved whole into a struct-literal
+    /// field must have its source slot zeroed so the binding's
+    /// `BoxedEnumDrop` no-ops — the returned struct now solely owns the box.
+    /// Without it the builder frees the box at scope exit while the returned
+    /// value still references it (UAF; selfhost slice 3c-iv's
+    /// `TraitMethodNode { body, .. }` for `let mut body = Some(parse_block())`).
+    /// E2E coverage: `tests/memory_sanitizer.rs::asan_boxed_option_moved_into_struct_literal_no_uaf`.
+    #[test]
+    fn boxed_option_binding_moved_into_literal_zeroes_source() {
+        // A `let mut body = None; if … { body = Some(mk()) }` binding registers
+        // a scope-exit `BoxedEnumDrop` (the box may or may not exist at the end
+        // — a definite `let body = Some(mk())` is instead a proven move-out with
+        // no drop). Moving that binding into `Holder { body }` must therefore
+        // ZERO the source slot so the still-emitted drop no-ops — mirrors
+        // selfhost `parse_trait_method`'s `let mut body … TraitMethodNode{body}`.
+        let ir = ir_for(
+            "struct Wide { a: i64, b: i64, c: i64, d: i64, e: String }\n\
+             struct Holder { tag: i64, body: Option[Wide] }\n\
+             fn mk() -> Wide { Wide { a: 1, b: 2, c: 3, d: 4, e: \"x\".to_string() } }\n\
+             fn build(flag: bool) -> Holder {\n\
+             \x20   let mut body: Option[Wide] = None;\n\
+             \x20   if flag { body = Some(mk()); }\n\
+             \x20   Holder { tag: 0, body: body }\n\
+             }\n\
+             fn main() { let h = build(true); println(h.tag); }\n",
+        );
+        let body = function_body(&ir, "build").expect("fn build must be emitted");
+        // The box is constructed (Option[Wide] is wide → heap-boxed) and a
+        // scope-exit BoxedEnumDrop guards on the tag (`boxdrop` / inner
+        // `__karac_drop_struct_Wide`).
+        let inner_drop = body
+            .find("@__karac_drop_struct_Wide")
+            .or_else(|| body.find("boxdrop"));
+        assert!(
+            inner_drop.is_some(),
+            "Option[Wide] must heap-box and register a BoxedEnumDrop\n--- body ---\n{body}"
+        );
+        // The move-suppression zeroes the source Option slot so that drop reads
+        // `tag == None` and skips the free the returned Holder now owns.
+        let src_zero = body.find("store { i64, i64, i64, i64 } zeroinitializer, ptr %body");
+        assert!(
+            src_zero.is_some(),
+            "moving the boxed `body` into `Holder {{ .. }}` must zero the source \
+             Option slot so its BoxedEnumDrop no-ops\n--- body ---\n{body}"
+        );
+        assert!(
+            src_zero < inner_drop,
+            "source-zero must precede the boxed payload's drop\n--- body ---\n{body}"
+        );
+    }
 }

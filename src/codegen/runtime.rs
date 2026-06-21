@@ -1041,6 +1041,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 some_tag,
             });
         }
+        // Track the binding so a whole-value move into a struct-literal /
+        // enum-variant field can neutralize this box drop (the move target
+        // becomes the box's sole owner) — see
+        // `suppress_inline_option_result_binding_move`.
+        self.boxed_enum_payload_vars.insert(name.to_string());
     }
 
     /// Zero-init an `Option[T]` slot at the top of the current
