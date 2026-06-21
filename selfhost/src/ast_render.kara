@@ -60,6 +60,8 @@ import ast.{
     TraitMethodNode,
     TraitDefNode,
     ImplBlockNode,
+    GenericParamNode,
+    GenericParamsNode,
 };
 
 // MUST stay identical to `escape_for_render` in `selfhost/src/main.kara` and
@@ -915,6 +917,30 @@ fn render_type_mods(is_pub: bool, is_shared: bool, is_par: bool) -> String {
     s
 }
 
+// ` (generics<span> (gp NAME<span>)...)` for an item's `[T, U, ...]` clause, or
+// "" when absent. The clause span is the `[...]` extent; each param's span is
+// its bare identifier (slice 3c-v ports type params only).
+fn render_generics(g: Option[GenericParamsNode]) -> String {
+    let mut s = "".to_string();
+    match g {
+        Some(gp) => {
+            let GenericParamsNode { params, span } = gp;
+            s.push_str(" (generics");
+            s.push_str(span_str(span.offset, span.length));
+            for p in params {
+                let GenericParamNode { name, span } = p;
+                s.push_str(" (gp ");
+                s.push_str(name);
+                s.push_str(span_str(span.offset, span.length));
+                s.push_str(")");
+            }
+            s.push_str(")");
+        }
+        None => {}
+    }
+    s
+}
+
 // `(field[ pub][ mut] NAME<span> TYPE)`.
 fn render_struct_field(f: StructFieldNode) -> String {
     let StructFieldNode {
@@ -983,6 +1009,7 @@ fn render_fn_def_node(n: FnDefNode) -> String {
     let FnDefNode {
         is_pub,
         name,
+        generics,
         self_mode,
         params,
         ret,
@@ -994,6 +1021,7 @@ fn render_fn_def_node(n: FnDefNode) -> String {
     out.push_str(" ");
     out.push_str(name);
     out.push_str(span_str(span.offset, span.length));
+    out.push_str(render_generics(generics));
     out.push_str(render_self_mode(self_mode));
     out.push_str(" (params");
     for p in params {
@@ -1021,6 +1049,7 @@ fn render_fn_def_node(n: FnDefNode) -> String {
 fn render_trait_method(m: TraitMethodNode) -> String {
     let TraitMethodNode {
         name,
+        generics,
         self_mode,
         params,
         ret,
@@ -1030,6 +1059,7 @@ fn render_trait_method(m: TraitMethodNode) -> String {
     let mut out = "(tmethod ".to_string();
     out.push_str(name);
     out.push_str(span_str(span.offset, span.length));
+    out.push_str(render_generics(generics));
     out.push_str(render_self_mode(self_mode));
     out.push_str(" (params");
     for p in params {
@@ -1102,6 +1132,7 @@ pub fn render_item(item: Item) -> String {
             let TypeAliasNode {
                 is_pub,
                 name,
+                generics,
                 ty,
                 span,
             } = n;
@@ -1110,6 +1141,7 @@ pub fn render_item(item: Item) -> String {
             out.push_str(" ");
             out.push_str(name);
             out.push_str(span_str(span.offset, span.length));
+            out.push_str(render_generics(generics));
             out.push_str(" ");
             out.push_str(render_type(ty));
             out.push_str(")");
@@ -1120,6 +1152,7 @@ pub fn render_item(item: Item) -> String {
                 is_shared,
                 is_par,
                 name,
+                generics,
                 fields,
                 span,
             } = n;
@@ -1128,6 +1161,7 @@ pub fn render_item(item: Item) -> String {
             out.push_str(" ");
             out.push_str(name);
             out.push_str(span_str(span.offset, span.length));
+            out.push_str(render_generics(generics));
             for f in fields {
                 out.push_str(" ");
                 out.push_str(render_struct_field(f));
@@ -1140,6 +1174,7 @@ pub fn render_item(item: Item) -> String {
                 is_shared,
                 is_par,
                 name,
+                generics,
                 variants,
                 span,
             } = n;
@@ -1148,6 +1183,7 @@ pub fn render_item(item: Item) -> String {
             out.push_str(" ");
             out.push_str(name);
             out.push_str(span_str(span.offset, span.length));
+            out.push_str(render_generics(generics));
             for v in variants {
                 out.push_str(" ");
                 out.push_str(render_variant(v));
@@ -1161,6 +1197,7 @@ pub fn render_item(item: Item) -> String {
             let TraitDefNode {
                 is_pub,
                 name,
+                generics,
                 methods,
                 span,
             } = n;
@@ -1169,6 +1206,7 @@ pub fn render_item(item: Item) -> String {
             out.push_str(" ");
             out.push_str(name);
             out.push_str(span_str(span.offset, span.length));
+            out.push_str(render_generics(generics));
             for m in methods {
                 out.push_str(" ");
                 out.push_str(render_trait_method(m));
@@ -1177,6 +1215,7 @@ pub fn render_item(item: Item) -> String {
         }
         Impl(n) => {
             let ImplBlockNode {
+                generics,
                 trait_ty,
                 target_ty,
                 methods,
@@ -1184,6 +1223,7 @@ pub fn render_item(item: Item) -> String {
             } = n;
             out.push_str("(impl");
             out.push_str(span_str(span.offset, span.length));
+            out.push_str(render_generics(generics));
             match trait_ty {
                 Some(t) => {
                     out.push_str(" (trait ");

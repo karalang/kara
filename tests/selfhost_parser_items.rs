@@ -13,19 +13,20 @@
 //! directly. ([`OFFSET_SHIFT`] is kept as a named 0 for symmetry with the
 //! sibling oracles.)
 //!
-//! ## Coverage (through slice 3c-iv)
+//! ## Coverage (through slice 3c-v)
 //!
-//! `use` / `const` / no-generics `type` alias (3c-i), struct + enum (3c-ii),
-//! free functions (3c-iii), and `trait` + `impl` blocks (3c-iv). DEFERRED to
-//! later 3c increments (kept out of the corpus): generic params (3c-v); and
-//! entirely out of scope for now — supertraits, trait aliases, associated
-//! types, attributes, doc comments, `private`, effects/contracts, `where`
-//! refinements, `unsafe`/`comptime` markers, distinct types, layout,
-//! extern/host, unions, module bindings, imports, test cases.
+//! `use` / `const` / `type` alias (3c-i), struct + enum (3c-ii), free functions
+//! (3c-iii), `trait` + `impl` blocks (3c-iv), and bare `[T, U]` generic params
+//! across every item form (3c-v). Entirely out of scope for now (kept out of
+//! the corpus): trait bounds (`[T: Ord]`), variance / const / shape-variadic /
+//! effect generic params, supertraits, trait aliases, associated types,
+//! attributes, doc comments, `private`, effects/contracts, `where` refinements,
+//! `unsafe`/`comptime` markers, distinct types, layout, extern/host, unions,
+//! module bindings, imports, test cases.
 
 use karac::ast::{
-    BinOp, Block, Expr, ExprKind, GenericArg, Item, Param, PatternKind, SelfParam, Stmt, StmtKind,
-    TypeExpr, TypeKind, UnaryOp,
+    BinOp, Block, Expr, ExprKind, GenericArg, GenericParams, Item, Param, PatternKind, SelfParam,
+    Stmt, StmtKind, TypeExpr, TypeKind, UnaryOp,
 };
 use karac::token::{FloatSuffix, IntSuffix};
 use std::path::PathBuf;
@@ -125,6 +126,27 @@ const CORPUS: &[&str] = &[
     "impl Display for Point {}",
     "impl Show for Counter { fn show(ref self) -> String { greeting } }",
     "impl Eq for Pair { fn eq(ref self, x: i64) -> bool { true } }",
+    // Generic params `[T, U]` across every item form (slice 3c-v). Bare type
+    // params only — bounds / variance / const / effect / `where` are deferred.
+    // Param names are upper-case (Type ident-class, like the seed expects);
+    // bodies stay within the slice-2 expr surface.
+    "type Wrapper[T] = Vec[T];",
+    "pub type Bimap[K, V] = Map[K, V];",
+    "struct Holder[T] { value: T }",
+    "struct Pair2[A, B] { first: A, second: B }",
+    "pub struct Triple[A, B, C] { a: A, b: B, c: C }",
+    "shared struct GNode[T] { value: T, next: Option[T] }",
+    "enum Maybe[T] { Just(T), Nothing }",
+    "enum Either[L, R] { Left(L), Right(R) }",
+    "fn ident[T](x: T) -> T { x }",
+    "pub fn first[A, B](a: A, b: B) -> A { a }",
+    "fn count[T](items: Vec[T]) -> i64 { 0 }",
+    "trait Container[T] { fn get(ref self) -> T; }",
+    "pub trait Mapper[A, B] { fn map(ref self, x: A) -> B; }",
+    "trait Producer { fn make[T]() -> T; }",
+    "impl[T] Holder[T] {}",
+    "impl[T] Holder[T] { fn get(ref self) -> i64 { 0 } }",
+    "impl[A, B] Show for Pair2[A, B] { fn show(ref self) -> String { greeting } }",
 ];
 
 // ── Rust-side canonical render (must match `ast_render.kara`) ──
@@ -519,11 +541,38 @@ fn render_rust_fn_param(p: &Param) -> String {
 /// `(fn ...)` render of a seed `Function` — must match
 /// `ast_render.kara::render_fn_def_node`. Shared by the `Function` item arm and
 /// impl-method rendering.
-fn render_rust_fn(f: &karac::ast::Function) -> String {
+/// ` (generics<span> (gp NAME<span>)...)` for an item's `[T, ...]` clause, or
+/// "" when absent — must match `ast_render.kara::render_generics`. Slice 3c-v
+/// is bare type params only, so every richer form is asserted absent.
+fn render_rust_generics(g: &Option<GenericParams>) -> String {
+    let Some(gp) = g else {
+        return String::new();
+    };
     assert!(
-        f.generic_params.is_none(),
-        "slice-3c fn corpus must not carry generic params"
+        gp.effect_params.is_empty(),
+        "slice-3c-v generic-params corpus must not carry effect params"
     );
+    let mut out = format!(
+        " (generics{}",
+        span_item_off_len(gp.span.offset, gp.span.length)
+    );
+    for p in &gp.params {
+        assert!(
+            p.bounds.is_empty() && !p.is_const && !p.is_variadic_shape && p.variance_span.is_none(),
+            "slice-3c-v generic params must be bare type params \
+             (no bounds / const / shape-variadic / variance markers)"
+        );
+        out.push_str(&format!(
+            " (gp {}{})",
+            p.name,
+            span_item_off_len(p.span.offset, p.span.length)
+        ));
+    }
+    out.push(')');
+    out
+}
+
+fn render_rust_fn(f: &karac::ast::Function) -> String {
     assert!(
         f.effects.is_none()
             && f.requires.is_empty()
@@ -534,10 +583,11 @@ fn render_rust_fn(f: &karac::ast::Function) -> String {
         "slice-3c fn corpus must not carry effects / contracts / where / unsafe / comptime"
     );
     let mut out = format!(
-        "(fn{} {}{}{} (params",
+        "(fn{} {}{}{}{} (params",
         vis(f.is_pub),
         f.name,
         span_item_off_len(f.span.offset, f.span.length),
+        render_rust_generics(&f.generic_params),
         render_self_mode(&f.self_param),
     );
     for p in &f.params {
@@ -561,10 +611,6 @@ fn render_rust_fn(f: &karac::ast::Function) -> String {
 /// signature omits the trailing block.
 fn render_rust_trait_method(m: &karac::ast::TraitMethod) -> String {
     assert!(
-        m.generic_params.is_none(),
-        "slice-3c-iv trait-method corpus must not carry generic params"
-    );
-    assert!(
         m.effects.is_none()
             && m.requires.is_empty()
             && m.ensures.is_empty()
@@ -573,9 +619,10 @@ fn render_rust_trait_method(m: &karac::ast::TraitMethod) -> String {
         "slice-3c-iv trait-method corpus must not carry effects / contracts / where / unsafe"
     );
     let mut out = format!(
-        "(tmethod {}{}{} (params",
+        "(tmethod {}{}{}{} (params",
         m.name,
         span_item_off_len(m.span.offset, m.span.length),
+        render_rust_generics(&m.generic_params),
         render_self_mode(&m.self_param),
     );
     for p in &m.params {
@@ -633,24 +680,22 @@ fn render_rust_item(item: &Item) -> String {
             )
         }
         Item::TypeAlias(t) => {
-            assert!(
-                t.generic_params.is_none(),
-                "slice-3c-i type-alias corpus must not carry generic params"
-            );
             format!(
-                "(typealias{} {}{} {})",
+                "(typealias{} {}{}{} {})",
                 vis(t.is_pub),
                 t.name,
                 span_item_off_len(t.span.offset, t.span.length),
+                render_rust_generics(&t.generic_params),
                 render_rust_type(&t.ty)
             )
         }
         Item::StructDef(s) => {
             let mut out = format!(
-                "(struct{} {}{}",
+                "(struct{} {}{}{}",
                 type_mods(s.is_pub, s.is_shared, s.is_par),
                 s.name,
-                span_item_off_len(s.span.offset, s.span.length)
+                span_item_off_len(s.span.offset, s.span.length),
+                render_rust_generics(&s.generic_params)
             );
             for f in &s.fields {
                 out.push(' ');
@@ -661,10 +706,11 @@ fn render_rust_item(item: &Item) -> String {
         }
         Item::EnumDef(e) => {
             let mut out = format!(
-                "(enum{} {}{}",
+                "(enum{} {}{}{}",
                 type_mods(e.is_pub, e.is_shared, e.is_par),
                 e.name,
-                span_item_off_len(e.span.offset, e.span.length)
+                span_item_off_len(e.span.offset, e.span.length),
+                render_rust_generics(&e.generic_params)
             );
             for v in &e.variants {
                 out.push(' ');
@@ -676,10 +722,6 @@ fn render_rust_item(item: &Item) -> String {
         Item::Function(f) => render_rust_fn(f),
         Item::TraitDef(t) => {
             assert!(
-                t.generic_params.is_none(),
-                "slice-3c-iv trait corpus must not carry generic params"
-            );
-            assert!(
                 t.supertraits.is_empty()
                     && t.trait_effects.is_none()
                     && t.where_clause.is_none()
@@ -687,10 +729,11 @@ fn render_rust_item(item: &Item) -> String {
                 "slice-3c-iv trait corpus must not carry supertraits / effects / where / private"
             );
             let mut out = format!(
-                "(trait{} {}{}",
+                "(trait{} {}{}{}",
                 vis(t.is_pub),
                 t.name,
-                span_item_off_len(t.span.offset, t.span.length)
+                span_item_off_len(t.span.offset, t.span.length),
+                render_rust_generics(&t.generic_params)
             );
             for it in &t.items {
                 match it {
@@ -709,10 +752,14 @@ fn render_rust_item(item: &Item) -> String {
         }
         Item::ImplBlock(b) => {
             assert!(
-                b.generic_params.is_none() && b.where_clause.is_none(),
-                "slice-3c-iv impl corpus must not carry generic params / where"
+                b.where_clause.is_none(),
+                "slice-3c-iv impl corpus must not carry a where clause"
             );
-            let mut out = format!("(impl{}", span_item_off_len(b.span.offset, b.span.length));
+            let mut out = format!(
+                "(impl{}{}",
+                span_item_off_len(b.span.offset, b.span.length),
+                render_rust_generics(&b.generic_params)
+            );
             if let Some(tp) = &b.trait_name {
                 out.push_str(" (trait ");
                 out.push_str(&render_rust_trait_path(tp));

@@ -82,6 +82,8 @@ import ast.{
     TraitMethodNode,
     TraitDefNode,
     ImplBlockNode,
+    GenericParamNode,
+    GenericParamsNode,
 };
 import lexer.lex_all;
 
@@ -2060,29 +2062,79 @@ impl Parser {
         })
     }
 
-    // `type NAME = TYPE;` — the no-generics form (3c-i). Generic params +
-    // `where` refinement land in 3c-v.
+    // `[T, U, ...]` bare generic type-param list, or `None` when no `[` follows.
+    // Slice 3c-v ports only the bare form: each param is an identifier (the
+    // param's span is just its name); the clause span runs from `[` through `]`.
+    // Bounds (`[T: Ord]`), variance / const / shape-variadic / effect params,
+    // and `where` are DEFERRED (kept out of the corpus). Mirrors the seed's
+    // `parse_optional_generic_params`.
+    fn parse_optional_generics(mut ref self) -> Option[GenericParamsNode] {
+        let at_bracket = if self.pos < self.tokens.len() {
+            match self.tokens[self.pos].token {
+                LeftBracket => true,
+                _ => false,
+            }
+        } else {
+            false
+        };
+        if not at_bracket {
+            return None;
+        }
+        let start = self.current_span();
+        self.advance(); // `[`
+        let mut params: Vec[GenericParamNode] = Vec.new();
+        loop {
+            if self.pos >= self.tokens.len() {
+                break;
+            }
+            if self.at_rbracket() {
+                break;
+            }
+            let pstart = self.current_span();
+            let name = self.take_member_name();
+            params.push(GenericParamNode {
+                name: name,
+                span: self.span_from(pstart),
+            });
+            if self.at_comma() {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        self.expect_rbracket();
+        Some(GenericParamsNode {
+            params: params,
+            span: self.span_from(start),
+        })
+    }
+
+    // `type NAME[T, ...] = TYPE;` — 3c-i covered the no-generics form; 3c-v adds
+    // the optional generics clause (`where` refinement still deferred).
     fn parse_type_alias_decl(mut ref self, is_pub: bool) -> Item {
         let start = self.current_span();
         self.advance(); // `type`
         let name = self.take_member_name();
+        let generics = self.parse_optional_generics();
         self.eat_equal();
         let ty = self.parse_type();
         self.eat_semicolon();
         Item.TypeAlias(TypeAliasNode {
             is_pub: is_pub,
             name: name,
+            generics: generics,
             ty: ty,
             span: self.span_from(start),
         })
     }
 
-    // `struct NAME { [pub] [mut] field: TYPE, ... }` — `start` at `struct`
-    // (3c-ii; generics + `where` deferred to 3c-v).
+    // `struct NAME[T, ...] { [pub] [mut] field: TYPE, ... }` — `start` at
+    // `struct` (3c-ii; generics added in 3c-v, `where` still deferred).
     fn parse_struct_def(mut ref self, is_pub: bool, is_shared: bool, is_par: bool) -> Item {
         let start = self.current_span();
         self.advance(); // `struct`
         let name = self.take_member_name();
+        let generics = self.parse_optional_generics();
         self.expect_lbrace();
         let fields = self.parse_struct_fields();
         self.expect_rbrace();
@@ -2091,6 +2143,7 @@ impl Parser {
             is_shared: is_shared,
             is_par: is_par,
             name: name,
+            generics: generics,
             fields: fields,
             span: self.span_from(start),
         })
@@ -2147,11 +2200,13 @@ impl Parser {
         fields
     }
 
-    // `enum NAME { VARIANT, ... }` — `start` at `enum` (3c-ii; generics deferred).
+    // `enum NAME[T, ...] { VARIANT, ... }` — `start` at `enum` (3c-ii; generics
+    // added in 3c-v).
     fn parse_enum_def(mut ref self, is_pub: bool, is_shared: bool, is_par: bool) -> Item {
         let start = self.current_span();
         self.advance(); // `enum`
         let name = self.take_member_name();
+        let generics = self.parse_optional_generics();
         self.expect_lbrace();
         let mut variants: Vec[VariantNode] = Vec.new();
         loop {
@@ -2175,6 +2230,7 @@ impl Parser {
             is_shared: is_shared,
             is_par: is_par,
             name: name,
+            generics: generics,
             variants: variants,
             span: self.span_from(start),
         })
@@ -2252,6 +2308,7 @@ impl Parser {
         let start = self.current_span();
         self.advance(); // `fn`
         let name = self.take_member_name();
+        let generics = self.parse_optional_generics();
         self.expect_lparen();
         let self_mode = self.parse_self_mode();
         let params = self.parse_fn_params();
@@ -2273,6 +2330,7 @@ impl Parser {
         FnDefNode {
             is_pub: is_pub,
             name: name,
+            generics: generics,
             self_mode: self_mode,
             params: params,
             ret: ret,
@@ -2288,6 +2346,7 @@ impl Parser {
         let start = self.current_span();
         self.advance(); // `trait`
         let name = self.take_member_name();
+        let generics = self.parse_optional_generics();
         self.expect_lbrace();
         let mut methods: Vec[TraitMethodNode] = Vec.new();
         loop {
@@ -2304,6 +2363,7 @@ impl Parser {
         Item.Trait(TraitDefNode {
             is_pub: is_pub,
             name: name,
+            generics: generics,
             methods: methods,
             span: self.span_from(start),
         })
@@ -2316,6 +2376,7 @@ impl Parser {
         let start = self.current_span();
         self.advance(); // `fn`
         let name = self.take_member_name();
+        let generics = self.parse_optional_generics();
         self.expect_lparen();
         let self_mode = self.parse_self_mode();
         let params = self.parse_fn_params();
@@ -2349,6 +2410,7 @@ impl Parser {
         }
         TraitMethodNode {
             name: name,
+            generics: generics,
             self_mode: self_mode,
             params: params,
             ret: ret,
@@ -2363,6 +2425,7 @@ impl Parser {
     fn parse_impl_block(mut ref self) -> Item {
         let start = self.current_span();
         self.advance(); // `impl`
+        let generics = self.parse_optional_generics();
         let first_ty = self.parse_type();
         let is_for = if self.pos < self.tokens.len() {
             match self.tokens[self.pos].token {
@@ -2405,6 +2468,7 @@ impl Parser {
         }
         self.expect_rbrace();
         Item.Impl(ImplBlockNode {
+            generics: generics,
             trait_ty: trait_ty,
             target_ty: target_ty,
             methods: methods,

@@ -645,11 +645,30 @@ pub struct ConstDeclNode {
     pub span: Span,
 }
 
-// `[pub] type NAME = TYPE;` — slice 3c-i covers the no-generics form (the
-// optional `[T, ...]` generic params + `where` refinement land in 3c-v).
+// ── Generic parameters (slice 3c-v) ── `[T, U, ...]` on struct / enum / fn /
+// trait / impl / type-alias declarations. Slice 3c-v ports the BARE type-param
+// form only; DEFERRED (kept out of the corpus): trait bounds (`[T: Ord]`),
+// variance markers (`+T`/`-T`/`=T`), const params (`[const N: usize]`),
+// shape-variadic (`[...S]`), effect params (`[with E]` / `[E: Effect]`), and
+// `where` refinements. A bare type param's span (mirroring the seed's
+// `GenericParam.span`) is just its identifier; the clause's span (the seed's
+// `GenericParams.span`) starts at `[` and ends at `]`.
+pub struct GenericParamNode {
+    pub name: String,
+    pub span: Span,
+}
+
+pub struct GenericParamsNode {
+    pub params: Vec[GenericParamNode],
+    pub span: Span,
+}
+
+// `[pub] type NAME[T, ...] = TYPE;` — slice 3c-i covered the no-generics form;
+// 3c-v adds the optional `generics` clause (`where` refinement still deferred).
 pub struct TypeAliasNode {
     pub is_pub: bool,
     pub name: String,
+    pub generics: Option[GenericParamsNode],
     pub ty: TypeExpr,
     pub span: Span,
 }
@@ -680,6 +699,7 @@ pub struct StructDefNode {
     pub is_shared: bool,
     pub is_par: bool,
     pub name: String,
+    pub generics: Option[GenericParamsNode],
     pub fields: Vec[StructFieldNode],
     pub span: Span,
 }
@@ -709,6 +729,7 @@ pub struct EnumDefNode {
     pub is_shared: bool,
     pub is_par: bool,
     pub name: String,
+    pub generics: Option[GenericParamsNode],
     pub variants: Vec[VariantNode],
     pub span: Span,
 }
@@ -742,6 +763,7 @@ pub struct FnParamNode {
 pub struct FnDefNode {
     pub is_pub: bool,
     pub name: String,
+    pub generics: Option[GenericParamsNode],
     pub self_mode: SelfMode,
     pub params: Vec[FnParamNode],
     pub ret: Option[TypeExpr],
@@ -762,6 +784,7 @@ pub struct FnDefNode {
 // `pub` governs the whole surface), mirroring the seed's `TraitMethod`.
 pub struct TraitMethodNode {
     pub name: String,
+    pub generics: Option[GenericParamsNode],
     pub self_mode: SelfMode,
     pub params: Vec[FnParamNode],
     pub ret: Option[TypeExpr],
@@ -772,6 +795,7 @@ pub struct TraitMethodNode {
 pub struct TraitDefNode {
     pub is_pub: bool,
     pub name: String,
+    pub generics: Option[GenericParamsNode],
     pub methods: Vec[TraitMethodNode],
     pub span: Span,
 }
@@ -781,7 +805,11 @@ pub struct TraitDefNode {
 // parsed as a `TypeExpr`). Impl methods are always-bodied free functions, so
 // they reuse `FnDefNode` directly (the seed reuses `Function` here too). The
 // span starts at `impl` and ends at the body's `}`.
+// `impl[T, ...] TYPE { ... }` / `impl[T, ...] TRAIT for TYPE { ... }` — the
+// generics clause (when present) sits right after `impl`, before the trait /
+// target type, mirroring the seed's `parse_impl_block`.
 pub struct ImplBlockNode {
+    pub generics: Option[GenericParamsNode],
     pub trait_ty: Option[TypeExpr],
     pub target_ty: TypeExpr,
     pub methods: Vec[FnDefNode],
