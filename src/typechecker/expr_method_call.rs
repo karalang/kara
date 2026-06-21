@@ -2918,7 +2918,12 @@ impl<'a> super::TypeChecker<'a> {
                     self.env.impls.iter().any(|imp| {
                         imp.target_type == type_name && imp.methods.contains_key(method)
                     });
-                if is_user_defined || method_on_other_specialization {
+                // A comptime-derived type (e.g. `#[derive(Message)]`) gains
+                // methods only after typecheck, so its method set is open here —
+                // suppress the not-found diagnostic for such types.
+                if (is_user_defined || method_on_other_specialization)
+                    && !self.type_has_comptime_derive(&type_name)
+                {
                     let candidates = self.env.collect_method_names(&type_name, &[]);
                     let candidate_refs: Vec<&str> = candidates.iter().map(String::as_str).collect();
                     let mut msg = format!("no method '{}' on type '{}'", method, type_name);

@@ -168,8 +168,17 @@ pub fn resolve(program: &Program) -> ResolveResult {
 /// parameters (slice 2 of the `impl Trait` epic). Drivers in `lib.rs` and
 /// `cli.rs` call this between [`parse`] and [`resolve`]; the formatter
 /// path deliberately skips it so `impl Trait` round-trips verbatim.
-pub fn desugar_program(program: &mut Program) {
+pub fn desugar_program(program: &mut Program) -> Vec<crate::comptime::ComptimeError> {
     crate::desugar::desugar_program(program);
+    // Pre-resolve comptime item expansion: `#[proto_schema]` consts become the
+    // message `struct` types their `.proto` text declares, spliced before name
+    // resolution so the rest of the program can reference them (protobuf slice
+    // 3). A no-op (cheap scan) when no such const is present. Returned
+    // diagnostics let callers that surface comptime errors render them; the
+    // in-process test/runtime cores ignore them (the generated types still
+    // splice on the happy path), mirroring how the post-resolve comptime fold
+    // pass's diagnostics are handled.
+    crate::comptime::expand_proto_schemas(program)
 }
 
 /// Type-check a parsed and resolved program.

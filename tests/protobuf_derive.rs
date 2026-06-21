@@ -34,6 +34,23 @@ fn comptime_diags(source: &str) -> Vec<String> {
         .collect()
 }
 
+/// Typecheck error messages (through desugar + resolve), as `karac check` sees
+/// them — used to assert that calls to derive-generated methods don't trip the
+/// "no method" / "no associated function" diagnostic before the comptime pass
+/// has synthesized them.
+fn typecheck_errors(source: &str) -> Vec<String> {
+    let mut parsed = karac::parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "parse errors: {:?}",
+        parsed.errors
+    );
+    karac::desugar_program(&mut parsed.program);
+    let resolved = karac::resolve(&parsed.program);
+    let typed = karac::typecheck(&parsed.program, &resolved);
+    typed.errors.iter().map(|e| e.message.clone()).collect()
+}
+
 // ── round trips ─────────────────────────────────────────────────
 
 #[test]
@@ -284,5 +301,52 @@ fn main() {}
         comptime_diags(src).is_empty(),
         "unexpected diagnostics: {:?}",
         comptime_diags(src)
+    );
+}
+
+// ── typecheck visibility (karac check / build) ──────────────────
+
+#[test]
+fn derive_methods_typecheck_clean() {
+    // The derive's `encode`/`decode`/`merge` are synthesized after typecheck, so
+    // calling them must not trip "no method" / "no associated function" — that
+    // would make `karac check`/`build` reject a correct program. A comptime-
+    // backed `#[derive]` marks the type's method set open.
+    let src = r#"
+#[derive(Message)]
+struct Person { name: String, age: i64 }
+
+fn main() {
+    let p = Person { name: "Ada", age: 36 };
+    let bytes = p.encode();
+    let mut q = Person.decode(bytes);
+    q.merge(p.encode());
+}
+"#;
+    let errs = typecheck_errors(src);
+    assert!(
+        !errs
+            .iter()
+            .any(|e| e.contains("no method") || e.contains("no associated function")),
+        "derive methods must typecheck clean; got: {errs:?}"
+    );
+}
+
+#[test]
+fn non_derived_type_still_reports_missing_method() {
+    // The suppression is scoped to comptime-derived types — a plain struct still
+    // reports a genuinely missing method.
+    let src = r#"
+struct Plain { x: i64 }
+fn main() {
+    let p = Plain { x: 1 };
+    let _ = p.encode();
+}
+"#;
+    let errs = typecheck_errors(src);
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("no method") && e.contains("encode")),
+        "a missing method on a non-derived type must still be reported; got: {errs:?}"
     );
 }

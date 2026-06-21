@@ -441,3 +441,183 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
         + mrg + " } }";
     [ast.item("impl " + n + " { " + encode_fn + " " + decode_fn + " " + merge_fn + " }")]
 }
+
+// ── .proto schema → message types (slice 3) ──────────────────────
+//
+// A pure-Kāra proto3 parser, run at comptime: it turns the text of a `.proto`
+// schema into Kāra `struct` definitions that carry `#[derive(Message)]`, so the
+// slice-2 derive then supplies their `encode` / `decode` / `merge` methods. It
+// is driven by the `#[proto_schema]` attribute on a module-level `const` whose
+// value is the schema string; the compiler expands that const into the emitted
+// types *before* name resolution, so the rest of the program can name them.
+//
+// v1 scope (matches the slice-2 field set): proto3 `message` blocks with scalar
+// fields of type string / bytes / int32 / int64 / uint32 / uint64 / bool. Field
+// numbers must be contiguous `1..N` (declaration-order tagging — per-field
+// number overrides need reflection support that doesn't exist yet). `syntax` /
+// `package` / `option` / `import` statements are skipped; nested messages,
+// enums, `repeated`, `map`, `oneof`, and `sint*` / `fixed*` / floating types are
+// not yet supported.
+
+// Split proto3 source into a flat token stream. `{` `}` `;` `=` are each their
+// own token; runs of any other non-whitespace are one token. Uses `substring`
+// for single-char access so no byte→char conversion is needed.
+comptime fn proto_tokenize(src: String) -> Vec[String] {
+    let mut tokens = Vec.new();
+    let n = src.len();
+    let mut i = 0;
+    let mut start = 0 - 1;
+    while i < n {
+        let ch = src.substring(i, i + 1);
+        if ch == "{" or ch == "}" or ch == ";" or ch == "=" {
+            if start >= 0 {
+                tokens.push(src.substring(start, i));
+                start = 0 - 1;
+            }
+            tokens.push(ch);
+        } else if ch == " " or ch == "\t" or ch == "\n" or ch == "\r" {
+            if start >= 0 {
+                tokens.push(src.substring(start, i));
+                start = 0 - 1;
+            }
+        } else {
+            if start < 0 {
+                start = i;
+            }
+        }
+        i = i + 1;
+    }
+    if start >= 0 {
+        tokens.push(src.substring(start, n));
+    }
+    tokens
+}
+
+// Parse a run of ASCII digits into an i64 (proto field numbers).
+comptime fn proto_atoi(s: String) -> i64 {
+    let mut v = 0;
+    let b = s.bytes();
+    let mut i = 0;
+    while i < b.len() {
+        v = v * 10 + ((b[i] - 48u8) as i64);
+        i = i + 1;
+    }
+    v
+}
+
+// Map a proto3 scalar type name to its Kāra type, or "" if unsupported.
+comptime fn proto_map_type(t: String) -> String {
+    if t == "string" {
+        "String"
+    } else if t == "bytes" {
+        "Vec[u8]"
+    } else if t == "int32" {
+        "i32"
+    } else if t == "int64" {
+        "i64"
+    } else if t == "uint32" {
+        "u32"
+    } else if t == "uint64" {
+        "u64"
+    } else if t == "bool" {
+        "bool"
+    } else {
+        ""
+    }
+}
+
+// Order the collected fields by proto field number into a `name: Type, ...`
+// struct body, validating that the numbers form a contiguous `1..N` (so the
+// slice-2 derive's declaration-order tagging matches the schema's numbers).
+comptime fn proto_order_fields(name: String, fnums: Vec[i64], fdecls: Vec[String]) -> String {
+    let count = fnums.len();
+    let mut body = "";
+    let mut k = 1;
+    while k <= count {
+        let mut found = 0 - 1;
+        let mut j = 0;
+        while j < count {
+            if fnums[j] == k {
+                found = j;
+            }
+            j = j + 1;
+        }
+        if found < 0 {
+            compiler.error(
+                "proto message '" + name + "': field numbers must be contiguous 1.." + f"{count}"
+                    + " (no field numbered " + f"{k}" + ")",
+            );
+            k = count + 1;
+        } else {
+            if k > 1 {
+                body = body + ", ";
+            }
+            body = body + fdecls[found];
+            k = k + 1;
+        }
+    }
+    body
+}
+
+// Parse a whole proto3 schema into the `Vec[Item]` of `#[derive(Message)]`
+// structs it declares. The entry point the `#[proto_schema]` expansion calls.
+comptime fn proto_parse_schema(src: String) -> Vec[Item] {
+    let toks = proto_tokenize(src);
+    let n = toks.len();
+    let mut items = Vec.new();
+    let mut i = 0;
+    while i < n {
+        let t = toks[i];
+        if t == "message" {
+            if i + 2 >= n {
+                compiler.error("proto: truncated `message` declaration");
+                i = n;
+            } else {
+                let name = toks[i + 1];
+                i = i + 3;
+                let mut fnums = Vec.new();
+                let mut fdecls = Vec.new();
+                let mut bad = false;
+                while i < n and toks[i] != "}" {
+                    if i + 4 >= n {
+                        compiler.error("proto message '" + name + "': malformed field declaration");
+                        bad = true;
+                        i = n;
+                    } else {
+                        let ptype = toks[i];
+                        let fname = toks[i + 1];
+                        let numtok = toks[i + 3];
+                        let ktype = proto_map_type(ptype);
+                        if ktype == "" {
+                            compiler.error(
+                                "proto message '" + name + "': unsupported field type '" + ptype
+                                    + "' (v1 supports string/bytes/int32/int64/uint32/uint64/bool)",
+                            );
+                            bad = true;
+                        }
+                        fnums.push(proto_atoi(numtok));
+                        fdecls.push(fname + ": " + ktype);
+                        i = i + 5;
+                    }
+                }
+                if i < n {
+                    i = i + 1;
+                }
+                if not bad {
+                    let body = proto_order_fields(name, fnums, fdecls);
+                    items.push(ast.item("#[derive(Message)] struct " + name + " { " + body + " }"));
+                }
+            }
+        } else if t == "syntax" or t == "package" or t == "option" or t == "import" {
+            while i < n and toks[i] != ";" {
+                i = i + 1;
+            }
+            if i < n {
+                i = i + 1;
+            }
+        } else {
+            i = i + 1;
+        }
+    }
+    items
+}

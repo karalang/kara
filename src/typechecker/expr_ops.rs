@@ -515,6 +515,10 @@ impl<'a> super::TypeChecker<'a> {
             // `RandomSource.next()` all break at typecheck.
             if self.is_known_type_name(type_name)
                 && !crate::prelude::PRELUDE_EFFECT_RESOURCES.contains(&type_name.as_str())
+                // A comptime-derived type's associated fns (e.g. a derived
+                // `decode`) are synthesized after typecheck — its surface is
+                // open, so don't claim the function is missing.
+                && !self.type_has_comptime_derive(type_name)
             {
                 self.type_error(
                     format!(
@@ -604,6 +608,45 @@ impl<'a> super::TypeChecker<'a> {
             || self.env.structs.contains_key(name)
             || crate::prelude::PRELUDE_PRIMITIVES.contains(&name)
             || crate::prelude::PRELUDE_TYPES.contains(&name)
+    }
+
+    /// True when the struct/enum `type_name` carries a `#[derive(X)]` whose
+    /// `derive_<snake(X)>` is a comptime fn (in the user program or the baked
+    /// stdlib) — i.e. a comptime-backed derive that synthesizes methods *after*
+    /// typecheck (e.g. `#[derive(Message)]` → `encode`/`decode`/`merge`).
+    ///
+    /// Such a type has an **open** method set the typechecker can't enumerate
+    /// (the methods don't exist yet at this phase — the comptime pass adds them
+    /// later), so method / associated-function resolution must not report its
+    /// members as missing. Mirrors `comptime::collect_derive_fns`'s lookup.
+    /// The trade-off — a typo'd method on a comptime-derived type isn't flagged
+    /// at typecheck — is the price of the post-typecheck expansion model and is
+    /// caught when the generated impl fails to provide it.
+    pub(super) fn type_has_comptime_derive(&self, type_name: &str) -> bool {
+        let traits = match self.env.structs.get(type_name) {
+            Some(s) => &s.derived_traits,
+            None => match self.env.enums.get(type_name) {
+                Some(e) => &e.derived_traits,
+                None => return false,
+            },
+        };
+        if traits.is_empty() {
+            return false;
+        }
+        let is_comptime_derive_fn = |fn_name: &str| -> bool {
+            let in_items = |items: &[Item]| {
+                items
+                    .iter()
+                    .any(|it| matches!(it, Item::Function(f) if f.is_comptime && f.name == fn_name))
+            };
+            in_items(&self.program.items)
+                || crate::prelude::STDLIB_PROGRAMS
+                    .iter()
+                    .any(|(_, p)| in_items(&p.items))
+        };
+        traits.iter().any(|t| {
+            is_comptime_derive_fn(&format!("derive_{}", crate::comptime::to_snake_case(t)))
+        })
     }
 
     /// Predicate for the uppercase-receiver method-dispatch rewrite in

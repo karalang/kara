@@ -1,0 +1,40 @@
+// Protocol Buffers from a `.proto` schema — comptime codegen, no external tool.
+//
+// A `#[proto_schema]` const holds proto3 schema text. At compile time the
+// stdlib's pure-Kāra parser turns each `message` into a `struct` carrying
+// `#[derive(Message)]`, which in turn generates `encode` / `decode` / `merge`
+// over the proto3 wire format. The whole pipeline is comptime: nothing here
+// shells out to `protoc`, and the parser/codegen add nothing to the binary.
+//
+//   karac run examples/protobuf_schema.kara
+
+#[proto_schema]
+const SCHEMA: String = "
+    syntax = \"proto3\";
+
+    message Person {
+        string name = 1;
+        int64 age = 2;
+        bool active = 3;
+    }
+
+    message Team {
+        string title = 1;
+        uint32 size = 2;
+    }
+";
+
+fn main() {
+    // `Person` / `Team` exist as ordinary types: the schema expanded before
+    // name resolution, so they resolve like hand-written structs.
+    let p = Person { name: "Ada", age: 36, active: true };
+    let wire = p.encode();
+    println(f"encoded Person in {wire.len()} bytes");
+
+    let back = Person.decode(wire);
+    println(f"name={back.name} age={back.age} active={back.active}");
+
+    let t = Team { title: "Compilers", size: 4u32 };
+    let rt = Team.decode(t.encode());
+    println(f"team={rt.title} size={rt.size}");
+}

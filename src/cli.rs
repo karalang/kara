@@ -891,7 +891,16 @@ impl Pipeline {
             &mut self.parsed.program,
             crate::target::active_target(),
         );
-        crate::desugar_program(&mut self.parsed.program);
+        // `desugar_program` also runs the pre-resolve `#[proto_schema]`
+        // expansion (protobuf slice 3); its diagnostics (malformed `.proto`,
+        // unsupported field types) join the comptime-error channel so they
+        // render and gate exactly like the post-resolve fold pass's.
+        let schema_diags = crate::desugar_program(&mut self.parsed.program);
+        if !schema_diags.is_empty() {
+            self.comptime_errors
+                .get_or_insert_with(Vec::new)
+                .extend(schema_diags);
+        }
         // Single-file mode infers the test-file flag from the filename
         // suffix — multi-module flows route through `resolve_modules`
         // and read it off `Module.is_test_file`. Phase-5-diagnostics
@@ -955,7 +964,10 @@ impl Pipeline {
             // so the interpreter / codegen see plain literals. Runs here, as
             // part of "prepare the AST for downstream consumption", so every
             // path that lowers (check / build / run) gets it uniformly.
-            self.comptime_errors = Some(crate::comptime::evaluate(&mut self.parsed.program, typed));
+            let fold_errors = crate::comptime::evaluate(&mut self.parsed.program, typed);
+            self.comptime_errors
+                .get_or_insert_with(Vec::new)
+                .extend(fold_errors);
         }
     }
 

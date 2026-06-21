@@ -80,6 +80,79 @@ pub struct ComptimeError {
 /// diagnostics produced (empty on success). `typed` is the typecheck result
 /// for `program`; it supplies the result type used to pick literal suffixes
 /// and to distinguish `Vec`-typed from `Array`-typed collection results.
+/// Pre-resolve expansion of `#[proto_schema]` module-level `const`s into the
+/// message `struct` types their `.proto` text declares (protobuf slice 3).
+///
+/// Unlike [`evaluate`] (which runs after `resolve`/`typecheck` and so can only
+/// emit *methods* that dispatch dynamically), this pass runs **before**
+/// resolution: the structs it splices must be visible to name resolution so the
+/// rest of the program can reference them. The `.proto` parser itself is
+/// ordinary stdlib comptime Kāra (`proto_parse_schema` in `protobuf.kara`); this
+/// function just drives it. Each emitted struct carries `#[derive(Message)]`, so
+/// the later [`evaluate`] derive pass supplies its `encode`/`decode`/`merge`.
+///
+/// To evaluate the parser it needs an interpreter, which needs a typecheck
+/// context — so it runs `resolve` + `typecheck` on the current program
+/// internally. Forward references to the not-yet-generated message types make
+/// those passes report (non-fatal) errors, which is fine: the parser comptime fn
+/// only touches string literals + `ast.item`, never the user types. After
+/// splicing, the outer pipeline resolves/typechecks the expanded program
+/// cleanly. No `#[proto_schema]` const ⇒ this is a cheap scan and a no-op.
+pub fn expand_proto_schemas(program: &mut Program) -> Vec<ComptimeError> {
+    // Plan the work from the un-mutated program: (item index, schema-text expr).
+    let planned_consts: Vec<(usize, Expr)> = program
+        .items
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, item)| match item {
+            Item::ConstDecl(c) if c.attributes.iter().any(|a| a.is_bare("proto_schema")) => {
+                Some((idx, c.value.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    if planned_consts.is_empty() {
+        return Vec::new();
+    }
+
+    // Build an evaluation context. `resolve`/`typecheck` here see the forward
+    // references to the soon-to-be-generated types and report errors; those are
+    // discarded — only the schema parser runs, and it needs none of that info.
+    let resolved = crate::resolve(program);
+    let typed = crate::typecheck(program, &resolved);
+    let snapshot = program.clone();
+    let mut interp = Interpreter::new(&snapshot, &typed);
+    interp.register_items();
+    interp.captured_output = Some(Vec::new());
+    let mut folder = Folder {
+        interp,
+        typed: &typed,
+        errors: Vec::new(),
+    };
+
+    // Evaluate each schema, then splice last-to-first so earlier indices stay
+    // valid. Each `#[proto_schema]` const is replaced by the items it expands to.
+    let mut planned_items: Vec<(usize, Vec<Item>)> = Vec::new();
+    for (idx, value) in planned_consts {
+        let site = value.span.clone();
+        if let Some(items) = folder.eval_schema_const(&value, &site) {
+            planned_items.push((idx, items));
+        } else {
+            // On error, drop the const but emit nothing — the recorded
+            // diagnostic carries the reason.
+            planned_items.push((idx, Vec::new()));
+        }
+    }
+    let errors = folder.errors;
+    for (idx, items) in planned_items.into_iter().rev() {
+        program.items.remove(idx);
+        for (k, it) in items.into_iter().enumerate() {
+            program.items.insert(idx + k, it);
+        }
+    }
+    errors
+}
+
 pub fn evaluate(program: &mut Program, typed: &TypeCheckResult) -> Vec<ComptimeError> {
     // Two kinds of work drive this pass: folding `comptime { ... }` blocks
     // (substrates 1–3) and expanding `#[derive(X)]` attributes that resolve to
@@ -852,7 +925,40 @@ impl Folder<'_> {
             },
             span: site.clone(),
         };
+        self.run_items_call(&call, &format!("derive `{fn_name}`"), site)
+    }
 
+    /// Expand one `#[proto_schema]` const: evaluate the stdlib
+    /// `proto_parse_schema(<schema text>)` parser on the const's value and
+    /// return the message-type items it produced. `value` is the const's
+    /// initializer expression (the `.proto` source string), reused verbatim as
+    /// the call argument. Protobuf slice 3.
+    fn eval_schema_const(&mut self, value: &Expr, site: &Span) -> Option<Vec<Item>> {
+        let call = Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Identifier("proto_parse_schema".to_string()),
+                    span: site.clone(),
+                }),
+                args: vec![CallArg {
+                    label: None,
+                    mut_marker: false,
+                    value: value.clone(),
+                    span: site.clone(),
+                }],
+            },
+            span: site.clone(),
+        };
+        self.run_items_call(&call, "proto schema", site)
+    }
+
+    /// Evaluate a synthesized comptime call expected to return `Vec[Item]`,
+    /// applying the shared per-evaluation guards (state reset, wall-clock
+    /// deadline, `compiler.error` draining, panic / timeout reporting) and
+    /// interpreting the result via [`Self::items_from_derive_value`]. `what`
+    /// names the construct for diagnostics (e.g. ``derive `derive_x` `` or
+    /// `proto schema`). Shared by derive expansion and `#[proto_schema]`.
+    fn run_items_call(&mut self, call: &Expr, what: &str, site: &Span) -> Option<Vec<Item>> {
         self.interp.pending_cf = None;
         let errors_before = self.interp.runtime_errors.len();
         let user_errors_before = self.interp.comptime_user_errors.len();
@@ -860,11 +966,11 @@ impl Folder<'_> {
         self.interp
             .set_test_deadline(Some(Instant::now() + COMPTIME_WALL_CLOCK_LIMIT));
 
-        let value = self.interp.eval_expr(&call);
+        let value = self.interp.eval_expr(call);
 
         self.interp.set_test_deadline(None);
 
-        // Drain `compiler.error(msg)` diagnostics raised while the derive ran.
+        // Drain `compiler.error(msg)` diagnostics raised while it ran.
         for diag in self
             .interp
             .comptime_user_errors
@@ -879,7 +985,7 @@ impl Folder<'_> {
         if self.interp.timed_out {
             self.errors.push(ComptimeError {
                 message: format!(
-                    "error[E_COMPTIME_ITER_LIMIT_EXCEEDED]: derive `{fn_name}` did not terminate \
+                    "error[E_COMPTIME_ITER_LIMIT_EXCEEDED]: {what} did not terminate \
                      within {}s (deferred.md § Comptime — Resource limits)",
                     COMPTIME_WALL_CLOCK_LIMIT.as_secs()
                 ),
@@ -894,24 +1000,25 @@ impl Folder<'_> {
                 .runtime_errors
                 .last()
                 .map(|e| e.message.clone())
-                .unwrap_or_else(|| "derive evaluation failed".to_string());
+                .unwrap_or_else(|| "evaluation failed".to_string());
             self.errors.push(ComptimeError {
-                message: format!("error[E_COMPTIME_PANIC]: derive `{fn_name}` panicked: {detail}"),
+                message: format!("error[E_COMPTIME_PANIC]: {what} panicked: {detail}"),
                 span: site.clone(),
             });
             return None;
         }
 
-        self.items_from_derive_value(value, fn_name, site)
+        self.items_from_derive_value(value, what, site)
     }
 
-    /// Interpret a derive fn's return value as a list of items. Accepts an
-    /// array/`Vec` of `AstItem`s (the `vec![ast.item(...)]` form) or a bare
-    /// single `AstItem`. Anything else is `E_COMPTIME_ERROR`.
+    /// Interpret an item-emitting comptime call's return value as a list of
+    /// items. Accepts an array/`Vec` of `AstItem`s (the `vec![ast.item(...)]`
+    /// form) or a bare single `AstItem`. Anything else is `E_COMPTIME_ERROR`.
+    /// `what` names the construct for diagnostics (derive or proto schema).
     fn items_from_derive_value(
         &mut self,
         value: Value,
-        fn_name: &str,
+        what: &str,
         site: &Span,
     ) -> Option<Vec<Item>> {
         let mut out: Vec<Item> = Vec::new();
@@ -921,7 +1028,7 @@ impl Folder<'_> {
             other => {
                 self.errors.push(ComptimeError {
                     message: format!(
-                        "error[E_COMPTIME_ERROR]: derive `{fn_name}` must return `Vec[Item]` (a \
+                        "error[E_COMPTIME_ERROR]: {what} must return `Vec[Item]` (a \
                          list of `ast.item(...)` values), got `{}`",
                         other.variant_name()
                     ),
@@ -936,7 +1043,7 @@ impl Folder<'_> {
                 other => {
                     self.errors.push(ComptimeError {
                         message: format!(
-                            "error[E_COMPTIME_ERROR]: derive `{fn_name}` returned a `Vec` element \
+                            "error[E_COMPTIME_ERROR]: {what} returned a `Vec` element \
                              that is not an `Item` (expected `ast.item(...)`), got `{}`",
                             other.variant_name()
                         ),
@@ -990,7 +1097,7 @@ fn ordered_derived_traits(attributes: &[Attribute]) -> Vec<String> {
 /// `Eq` → `eq`, `PartialEq` → `partial_eq`, `JSON` → `json`. An underscore is
 /// inserted before each uppercase letter that follows a lowercase letter or
 /// that begins a new word after a run of uppercase letters.
-fn to_snake_case(name: &str) -> String {
+pub(crate) fn to_snake_case(name: &str) -> String {
     let chars: Vec<char> = name.chars().collect();
     let mut out = String::with_capacity(name.len() + 4);
     for (i, &c) in chars.iter().enumerate() {
