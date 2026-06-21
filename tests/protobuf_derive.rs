@@ -545,6 +545,108 @@ fn main() {
     );
 }
 
+// ── maps ────────────────────────────────────────────────────────
+
+#[test]
+fn derive_map_scalar_roundtrip() {
+    // A `Map[K, V]` field is a proto3 map: repeated key/value entry messages.
+    let src = r#"
+#[derive(Message)]
+struct Doc { counts: Map[String, i64] }
+
+fn main() {
+    let mut counts: Map[String, i64] = Map.new();
+    counts.insert("a", 1);
+    counts.insert("b", -2);
+    let d = Doc { counts: counts };
+    let back = Doc.decode(d.encode());
+    println(back.counts.len());
+    println(match back.counts.get("a") { Option.Some(x) => x, Option.None => -100 });
+    println(match back.counts.get("b") { Option.Some(x) => x, Option.None => -100 });
+}
+"#;
+    assert_eq!(run(src), vec!["2\n", "1\n", "-2\n"]);
+}
+
+#[test]
+fn derive_map_message_value_roundtrip() {
+    let src = r#"
+#[derive(Message)]
+struct Inner { v: i64 }
+
+#[derive(Message)]
+struct Doc { parts: Map[String, Inner] }
+
+fn main() {
+    let mut parts: Map[String, Inner] = Map.new();
+    parts.insert("x", Inner { v: 99 });
+    let d = Doc { parts: parts };
+    let back = Doc.decode(d.encode());
+    println(back.parts.len());
+    println(match back.parts.get("x") { Option.Some(p) => p.v, Option.None => -1 });
+}
+"#;
+    assert_eq!(run(src), vec!["1\n", "99\n"]);
+}
+
+#[test]
+fn derive_map_merge_last_write_wins() {
+    // Merge inserts each entry; a repeated key takes the merged-in value.
+    let src = r#"
+#[derive(Message)]
+struct D { m: Map[String, i64] }
+
+fn main() {
+    let mut base: Map[String, i64] = Map.new();
+    base.insert("a", 1);
+    let mut acc = D { m: base };
+    let mut other: Map[String, i64] = Map.new();
+    other.insert("a", 9);
+    other.insert("b", 2);
+    acc.merge(D { m: other }.encode());
+    println(acc.m.len());
+    println(match acc.m.get("a") { Option.Some(x) => x, Option.None => -1 });
+    println(match acc.m.get("b") { Option.Some(x) => x, Option.None => -1 });
+}
+"#;
+    assert_eq!(run(src), vec!["2\n", "9\n", "2\n"]);
+}
+
+#[test]
+fn derive_map_empty_is_omitted() {
+    let src = r#"
+#[derive(Message)]
+struct D { m: Map[String, i64] }
+
+fn main() {
+    let d = D { m: Map.new() };
+    println(d.encode().len());
+    let back = D.decode(d.encode());
+    println(back.m.len());
+}
+"#;
+    assert_eq!(run(src), vec!["0\n", "0\n"]);
+}
+
+#[test]
+fn derive_map_non_message_value_errors() {
+    let src = r#"
+struct Plain { v: i64 }
+
+#[derive(Message)]
+struct D { m: Map[String, Plain] }
+
+fn main() {}
+"#;
+    let diags = comptime_diags(src);
+    assert!(
+        diags.iter().any(|d| d.contains("E_COMPTIME_ERROR")
+            && d.contains("does not derive(Message)")
+            && d.contains("m")),
+        "expected a map-value-non-message diagnostic; got: {diags:?}"
+    );
+}
+
 // ── nested messages ─────────────────────────────────────────────
 
 #[test]

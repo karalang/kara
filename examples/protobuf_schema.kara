@@ -41,6 +41,8 @@ const SCHEMA: String = "
         repeated string members = 4;
         repeated int64 seats = 5;
         Tier tier = 6;
+        // `map<K, V>` → a `Map[K, V]` field (repeated key/value entries).
+        map<string, int64> kudos = 7;
     }
 ";
 
@@ -54,6 +56,9 @@ fn main() {
     let back = Person.decode(wire);
     println(f"name={back.name} age={back.age} active={back.active}");
 
+    let mut kudos: Map[String, i64] = Map.new();
+    kudos.insert("Ada", 3);
+    kudos.insert("Grace", 5);
     let t = Team {
         title: "Compilers",
         size: 4u32,
@@ -61,9 +66,12 @@ fn main() {
         members: ["Ada", "Grace", "Alan"],
         seats: [11, 12, 13, 14],
         tier: Tier.TierPro,
+        kudos: kudos,
     };
     let rt = Team.decode(t.encode());
     println(f"team={rt.title} size={rt.size} city={rt.office.city} zip={rt.office.zip}");
     println(f"members={rt.members} seats={rt.seats}");
     println(match rt.tier { Tier.TierFree => "free", Tier.TierPro => "pro", Tier.TierEnterprise => "ent" });
+    let grace = match rt.kudos.get("Grace") { Option.Some(x) => x, Option.None => 0 };
+    println(f"kudos.Grace={grace} kudos.size={rt.kudos.len()}");
 }

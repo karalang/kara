@@ -184,6 +184,31 @@ fn main() { println(comptime { P.element_type().name() }); }";
     assert_eq!(karac::run_program(src), vec!["P\n"]);
 }
 
+#[test]
+fn key_type_and_value_type_peel_two_args() {
+    // `key_type()` / `value_type()` peel the 1st / 2nd top-level generic arg,
+    // respecting nested `<…>` so a `Vec` value keeps its comma-free form.
+    let src = "
+struct Inner { v: i64 }
+struct H { a: Map[String, i64], b: Map[i32, Inner], c: Map[String, Vec[u8]] }
+fn main() {
+    let r = comptime {
+        let mut s = \"\";
+        for f in H.fields() {
+            s = s + f.ty.key_type().name() + \"=>\" + f.ty.value_type().name();
+            if f.ty.value_type().is_struct() { s = s + \"*\"; }
+            s = s + \";\";
+        }
+        s
+    };
+    println(r);
+}";
+    assert_eq!(
+        karac::run_program(src),
+        vec!["String=>i64;i32=>Inner*;String=>Vec<u8>;\n"]
+    );
+}
+
 // ── comptime fn with `comptime T: Type` parameter ───────────────
 
 #[test]

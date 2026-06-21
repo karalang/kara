@@ -280,6 +280,39 @@ fn main() {
 }
 
 #[test]
+fn proto_map_field_roundtrip() {
+    // `map<K, V> name = N;` maps to a `Map[K, V]` field — scalar and nested-
+    // message values round-trip end to end.
+    let src = r#"
+#[proto_schema]
+const SCHEMA: String = "
+    syntax = \"proto3\";
+    message Point { int64 x = 1; int64 y = 2; }
+    message Doc {
+        string title = 1;
+        map<string, int64> counts = 2;
+        map<int32, Point> points = 3;
+    }
+";
+
+fn main() {
+    let mut counts: Map[String, i64] = Map.new();
+    counts.insert("a", 10);
+    counts.insert("b", 20);
+    let mut points: Map[i32, Point] = Map.new();
+    points.insert(1, Point { x: 5, y: 6 });
+    let d = Doc { title: "t", counts: counts, points: points };
+    let back = Doc.decode(d.encode());
+    println(back.title);
+    println(back.counts.len());
+    println(match back.counts.get("a") { Option.Some(x) => x, Option.None => -1 });
+    println(match back.points.get(1) { Option.Some(p) => p.x, Option.None => -1 });
+}
+"#;
+    assert_eq!(run(src), vec!["t\n", "2\n", "10\n", "5\n"]);
+}
+
+#[test]
 fn proto_enum_roundtrip() {
     // A `.proto` enum becomes a Kāra `enum` (UPPER_SNAKE variants converted to
     // PascalCase), and an enum-typed field round-trips as a varint.

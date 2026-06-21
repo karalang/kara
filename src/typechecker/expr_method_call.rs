@@ -514,6 +514,8 @@ impl<'a> super::TypeChecker<'a> {
                 | "variants"
                 | "derives"
                 | "element_type"
+                | "key_type"
+                | "value_type"
         )
     }
 
@@ -575,7 +577,9 @@ impl<'a> super::TypeChecker<'a> {
             // `element_type()` peels one generic argument (e.g. `Vec[T]` → `T`)
             // and yields it as a `Type` pseudovalue, so a derive can reflect on
             // a repeated field's element. A non-generic type returns itself.
-            "element_type" => named("Type"),
+            // `key_type()` / `value_type()` peel the 1st / 2nd argument of a
+            // two-parameter type like `Map[K, V]`.
+            "element_type" | "key_type" | "value_type" => named("Type"),
             // Unreachable: caller gates on `is_reflection_method`.
             _ => Type::Error,
         }

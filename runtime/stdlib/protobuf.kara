@@ -31,7 +31,8 @@
 //!   nested messages — a field whose struct type itself derives `Message`,
 //!   encoded as a length-delimited sub-message — and `repeated` fields
 //!   (`Vec[T]`): packed for scalar numerics, one length-delimited field per
-//!   element for `String` / `bytes` / nested messages.
+//!   element for `String` / `bytes` / nested messages — and `Map[K, V]` fields
+//!   (proto3 `map`), wire-equivalent to repeated key/value entry messages.
 //!
 //! Encoding is pure; decoding allocates (`Vec[u8]` / `String`) — matching the
 //! spec's "pure on encode, allocates(Heap) on decode".
@@ -490,6 +491,93 @@ comptime fn proto_decode_repeated(target: String, etn: String, is_msg: bool) -> 
     }
 }
 
+// ── map fields (slice 7) ─────────────────────────────────────────
+//
+// A `Map[K, V]` field is a proto3 `map` — wire-equivalent to a repeated entry
+// message `{ K key = 1; V value = 2; }`, one length-delimited field per entry.
+// Keys are scalar (string / integral); values are scalar / string / bytes or a
+// nested message. Decode/merge insert each entry (last write wins, per proto3).
+
+// Append the scalar `expr` of type `tn` to `buf` as field `fnum` — the scalar
+// encode logic, parameterized by buffer name and value expression so it serves
+// both map keys (field 1) and map values (field 2).
+comptime fn proto_encode_scalar_one(buf: String, fnum: i64, expr: String, tn: String) -> String {
+    let tag = f"{fnum}";
+    if tn == "String" {
+        buf + ".extend_from_slice(ProtoBuf.encode_tag(" + tag + ", 2)); " + buf
+            + ".extend_from_slice(ProtoBuf.encode_varint(" + expr + ".bytes().len() as u64)); " + buf
+            + ".extend_from_slice(" + expr + ".bytes());"
+    } else if tn == "Vec<u8>" {
+        buf + ".extend_from_slice(ProtoBuf.encode_tag(" + tag + ", 2)); " + buf
+            + ".extend_from_slice(ProtoBuf.encode_varint(" + expr + ".len() as u64)); " + buf
+            + ".extend_from_slice(" + expr + ");"
+    } else if tn == "bool" {
+        buf + ".extend_from_slice(ProtoBuf.encode_tag(" + tag + ", 0)); " + buf
+            + ".extend_from_slice(ProtoBuf.encode_varint(if " + expr + " { 1u64 } else { 0u64 }));"
+    } else if tn == "u64" {
+        buf + ".extend_from_slice(ProtoBuf.encode_tag(" + tag + ", 0)); " + buf
+            + ".extend_from_slice(ProtoBuf.encode_varint(" + expr + "));"
+    } else if tn == "u32" {
+        buf + ".extend_from_slice(ProtoBuf.encode_tag(" + tag + ", 0)); " + buf
+            + ".extend_from_slice(ProtoBuf.encode_varint(" + expr + " as u64));"
+    } else if tn == "i64" {
+        buf + ".extend_from_slice(ProtoBuf.encode_tag(" + tag + ", 0)); " + buf
+            + ".extend_from_slice(ProtoBuf.encode_varint_i64(" + expr + "));"
+    } else {
+        buf + ".extend_from_slice(ProtoBuf.encode_tag(" + tag + ", 0)); " + buf
+            + ".extend_from_slice(ProtoBuf.encode_varint_i64(" + expr + " as i64));"
+    }
+}
+
+// The expression reading one scalar of type `tn` from reader `rn` (cast to the
+// declared type), for map keys/values read from an entry sub-reader.
+comptime fn proto_read_scalar_one(rn: String, tn: String) -> String {
+    if tn == "String" {
+        rn + ".read_string()"
+    } else if tn == "Vec<u8>" {
+        rn + ".read_len_delim()"
+    } else if tn == "bool" {
+        rn + ".read_varint() != 0u64"
+    } else if tn == "u64" {
+        rn + ".read_varint()"
+    } else if tn == "u32" {
+        rn + ".read_varint() as u32"
+    } else if tn == "i64" {
+        rn + ".read_varint() as i64"
+    } else {
+        rn + ".read_varint() as i32"
+    }
+}
+
+// The body run when a map field's tag matches: decode one entry sub-message
+// (key=1, value=2) and insert it into `target` (the decode local or `self.f`).
+// `via_writeback` selects read-modify-writeback (`let t = place; t.insert(..);
+// place = t;`) instead of a direct `place.insert(..)`. Merge needs it because a
+// mutating method on a `Map` *field* through `mut ref self` does not persist
+// (Map values are stored inline, not shared like `Vec`) — but field assignment
+// does; decode targets a local and inserts directly.
+comptime fn proto_map_decode(
+    target: String,
+    tag: String,
+    kdflt: String,
+    vdflt: String,
+    kread: String,
+    vread: String,
+    via_writeback: bool,
+) -> String {
+    let prefix = "let mut sub" + tag + " = ProtoReader.new(reader.read_len_delim()); let mut mk"
+        + tag + " = " + kdflt + "; let mut mv" + tag + " = " + vdflt + "; while not sub" + tag
+        + ".at_end() { let (sf, sw) = sub" + tag + ".read_tag(); if sf == 1 { mk" + tag + " = "
+        + kread + "; } else if sf == 2 { mv" + tag + " = " + vread + "; } else { sub" + tag
+        + ".skip_field(sw); } } ";
+    if via_writeback {
+        prefix + "let mut emt" + tag + " = " + target + "; emt" + tag + ".insert(mk" + tag + ", mv"
+            + tag + "); " + target + " = emt" + tag + ";"
+    } else {
+        prefix + target + ".insert(mk" + tag + ", mv" + tag + ");"
+    }
+}
+
 // Emit `impl T { encode / decode / merge }` for a `#[derive(Message)]` struct.
 comptime fn derive_message(comptime T: Type) -> Vec[Item] {
     let n = T.name();
@@ -505,6 +593,8 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
         let tn = f.ty.name();
         // A `Vec[T]` field (element other than `u8`) is a repeated field.
         let repeated = tn.starts_with("Vec<") and tn != "Vec<u8>";
+        // A `Map[K, V]` field is a proto3 map (repeated key/value entries).
+        let is_map = tn.starts_with("Map<");
         // A struct-typed field is a nested message — encoded as a length-
         // delimited sub-message via its own derived `encode`/`decode`. It must
         // itself derive `Message`; a plain struct has no codec to delegate to.
@@ -518,10 +608,10 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
                     + "`, which does not derive(Message)",
             );
         }
-        if not proto_supported(tn) and not nested and not repeated and not is_enum {
+        if not proto_supported(tn) and not nested and not repeated and not is_enum and not is_map {
             compiler.error(
                 "derive(Message): field `" + fname + "` has unsupported type `" + tn
-                    + "` (proto3 v1 supports i32/i64/u32/u64/bool/String/Vec[u8], nested messages, enums, and repeated `Vec[T]`)",
+                    + "` (proto3 v1 supports i32/i64/u32/u64/bool/String/Vec[u8], nested messages, enums, repeated `Vec[T]`, and `Map[K,V]`)",
             );
         }
         let tag = f"{idx}";
@@ -533,7 +623,56 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
         let mut efield = "";
         let mut dec_body = "";
         let mut mrg_body = "";
-        if repeated {
+        if is_map {
+            let kt = f.ty.key_type();
+            let vt = f.ty.value_type();
+            let ktn = kt.name();
+            let vtn = vt.name();
+            let vmsg = vt.is_struct();
+            if not proto_supported(ktn) {
+                compiler.error(
+                    "derive(Message): map field `" + fname + "` has unsupported key type `" + ktn
+                        + "`",
+                );
+            }
+            if vmsg and not vt.derives("Message") {
+                compiler.error(
+                    "derive(Message): map field `" + fname + "` has message value type `" + vtn
+                        + "`, which does not derive(Message)",
+                );
+            }
+            if not vmsg and not proto_supported(vtn) {
+                compiler.error(
+                    "derive(Message): map field `" + fname + "` has unsupported value type `" + vtn
+                        + "`",
+                );
+            }
+            dflt = "Map.new()";
+            let buf = "me" + tag;
+            let kenc = proto_encode_scalar_one(buf, 1, "e" + tag + ".0", ktn);
+            let venc = if vmsg {
+                "let mv" + tag + " = e" + tag + ".1.encode(); " + buf
+                    + ".extend_from_slice(ProtoBuf.encode_tag(2, 2)); " + buf
+                    + ".extend_from_slice(ProtoBuf.encode_varint(mv" + tag + ".len() as u64)); " + buf
+                    + ".extend_from_slice(mv" + tag + ");"
+            } else {
+                proto_encode_scalar_one(buf, 2, "e" + tag + ".1", vtn)
+            };
+            efield = "for e" + tag + " in self." + fname + ".entries() { let mut " + buf
+                + " = Vec.new(); " + kenc + " " + venc + " out.extend_from_slice(ProtoBuf.encode_tag("
+                + tag + ", 2)); out.extend_from_slice(ProtoBuf.encode_varint(" + buf
+                + ".len() as u64)); out.extend_from_slice(" + buf + "); }";
+            let kdflt = proto_default(ktn);
+            let vdflt = if vmsg { vtn + ".decode(Vec.new())" } else { proto_default(vtn) };
+            let kread = proto_read_scalar_one("sub" + tag, ktn);
+            let vread = if vmsg {
+                vtn + ".decode(sub" + tag + ".read_len_delim())"
+            } else {
+                proto_read_scalar_one("sub" + tag, vtn)
+            };
+            dec_body = proto_map_decode(fname, tag, kdflt, vdflt, kread, vread, false);
+            mrg_body = proto_map_decode("self." + fname, tag, kdflt, vdflt, kread, vread, true);
+        } else if repeated {
             let et = f.ty.element_type();
             let etn = et.name();
             let is_msg = et.is_struct();
@@ -645,10 +784,11 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
 // message — and `repeated TYPE name = N;` fields, mapped to `Vec[TYPE]`. Field
 // numbers must be contiguous `1..N` (declaration-order tagging — per-field
 // number overrides need reflection support that doesn't exist yet). `syntax` /
-// `package` / `option` / `import` statements are skipped; `map`, `oneof`, and
-// `sint*` / `fixed*` / floating types are not yet supported (nor `repeated`
-// enums). Enum declarations map to Kāra `enum`s (UPPER_SNAKE → PascalCase),
-// with contiguous `0..N` values matching declaration order.
+// `package` / `option` / `import` statements are skipped; `oneof` and `sint*` /
+// `fixed*` / floating types are not yet supported (nor `repeated` enums, nor
+// enum map values). `map<K, V> name = N;` maps to a `Map[K, V]` field. Enum
+// declarations map to Kāra `enum`s (UPPER_SNAKE → PascalCase), with contiguous
+// `0..N` values matching declaration order.
 
 // Split proto3 source into a flat token stream. `{` `}` `;` `=` are each their
 // own token; runs of any other non-whitespace are one token. `//` line comments
@@ -682,7 +822,10 @@ comptime fn proto_tokenize(src: String) -> Vec[String] {
                 i = i + 1;
             }
             i = i + 1;
-        } else if ch == "{" or ch == "}" or ch == ";" or ch == "=" {
+        } else if ch == "{" or ch == "}" or ch == ";" or ch == "=" or ch == "<" or ch == ">"
+            or ch == "," {
+            // `<` `>` `,` are their own tokens too — they appear only in
+            // `map<K, V>` field declarations within the v1 scope.
             if start >= 0 {
                 tokens.push(src.substring(start, i));
                 start = 0 - 1;
@@ -893,29 +1036,56 @@ comptime fn proto_parse_schema(src: String) -> Vec[Item] {
                 while i < n and toks[i] != "}" {
                     // `repeated TYPE name = N;` is a 6-token field; a plain
                     // field is 5. Skip the `repeated` label and wrap the mapped
-                    // element type in `Vec[...]`.
-                    let rep = toks[i] == "repeated";
-                    let base = if rep { i + 1 } else { i };
-                    if base + 4 >= n {
-                        compiler.error("proto message '" + name + "': malformed field declaration");
-                        bad = true;
-                        i = n;
-                    } else {
-                        let ptype = toks[base];
-                        let fname = toks[base + 1];
-                        let numtok = toks[base + 3];
-                        let inner = proto_resolve_type(ptype, msgs);
-                        if inner == "" {
+                    // element type in `Vec[...]`. A `map<K, V> name = N;` field
+                    // is 10 tokens (`<` `>` `,` are their own tokens).
+                    if toks[i] == "map" {
+                        if i + 9 >= n {
                             compiler.error(
-                                "proto message '" + name + "': unsupported field type '" + ptype
-                                    + "' (v1 supports string/bytes/int32/int64/uint32/uint64/bool and nested message types)",
+                                "proto message '" + name + "': malformed map field declaration",
                             );
                             bad = true;
+                            i = n;
+                        } else {
+                            let kk = proto_resolve_type(toks[i + 2], msgs);
+                            let vv = proto_resolve_type(toks[i + 4], msgs);
+                            if kk == "" or vv == "" {
+                                compiler.error(
+                                    "proto message '" + name
+                                        + "': unsupported map key/value type in field '"
+                                        + toks[i + 6] + "'",
+                                );
+                                bad = true;
+                            }
+                            fnums.push(proto_atoi(toks[i + 8]));
+                            fdecls.push(toks[i + 6] + ": Map[" + kk + ", " + vv + "]");
+                            i = i + 10;
                         }
-                        let ktype = if rep { "Vec[" + inner + "]" } else { inner };
-                        fnums.push(proto_atoi(numtok));
-                        fdecls.push(fname + ": " + ktype);
-                        i = if rep { i + 6 } else { i + 5 };
+                    } else {
+                        let rep = toks[i] == "repeated";
+                        let base = if rep { i + 1 } else { i };
+                        if base + 4 >= n {
+                            compiler.error(
+                                "proto message '" + name + "': malformed field declaration",
+                            );
+                            bad = true;
+                            i = n;
+                        } else {
+                            let ptype = toks[base];
+                            let fname = toks[base + 1];
+                            let numtok = toks[base + 3];
+                            let inner = proto_resolve_type(ptype, msgs);
+                            if inner == "" {
+                                compiler.error(
+                                    "proto message '" + name + "': unsupported field type '" + ptype
+                                        + "' (v1 supports string/bytes/int32/int64/uint32/uint64/bool and nested message types)",
+                                );
+                                bad = true;
+                            }
+                            let ktype = if rep { "Vec[" + inner + "]" } else { inner };
+                            fnums.push(proto_atoi(numtok));
+                            fdecls.push(fname + ": " + ktype);
+                            i = if rep { i + 6 } else { i + 5 };
+                        }
                     }
                 }
                 if i < n {

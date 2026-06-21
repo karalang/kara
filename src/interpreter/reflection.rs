@@ -21,6 +21,41 @@ use super::Interpreter;
 use crate::ast::CallArg;
 use crate::token::Span;
 
+/// Peel the `n`th generic argument out of a type's display name, splitting on
+/// top-level commas so nested generics are respected: `nth_type_arg("Map<String,
+/// Vec<i64>>", 1)` → `Some("Vec<i64>")`. Returns `None` if the name has no
+/// `<…>` or fewer than `n+1` arguments.
+fn nth_type_arg(name: &str, n: usize) -> Option<String> {
+    let lt = name.find('<')?;
+    let gt = name.rfind('>')?;
+    if gt <= lt + 1 {
+        return None;
+    }
+    let inner = &name[lt + 1..gt];
+    let mut depth = 0i32;
+    let mut parts: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for c in inner.chars() {
+        match c {
+            '<' => {
+                depth += 1;
+                cur.push(c);
+            }
+            '>' => {
+                depth -= 1;
+                cur.push(c);
+            }
+            ',' if depth == 0 => {
+                parts.push(cur.trim().to_string());
+                cur.clear();
+            }
+            _ => cur.push(c),
+        }
+    }
+    parts.push(cur.trim().to_string());
+    parts.get(n).cloned()
+}
+
 impl Interpreter<'_> {
     /// The reflection method names recognized on a `Type` pseudovalue. Kept
     /// in sync with the typechecker's `is_reflection_method`.
@@ -36,6 +71,8 @@ impl Interpreter<'_> {
                 | "variants"
                 | "derives"
                 | "element_type"
+                | "key_type"
+                | "value_type"
         )
     }
 
@@ -102,15 +139,12 @@ impl Interpreter<'_> {
             // returning it as a `Type` pseudovalue. A non-generic name is
             // returned unchanged, so a derive can call it unconditionally and
             // then dispatch on the result's `name()` / `is_struct()`.
-            "element_type" => {
-                let inner = type_name
-                    .find('<')
-                    .and_then(|lt| type_name.rfind('>').map(|gt| (lt, gt)))
-                    .filter(|(lt, gt)| gt > lt)
-                    .map(|(lt, gt)| type_name[lt + 1..gt].trim().to_string())
-                    .unwrap_or_else(|| type_name.to_string());
-                Value::TypeVal(inner)
-            }
+            // `key_type()` / `value_type()` peel the 1st / 2nd top-level
+            // argument of a two-parameter type like `Map<K, V>` (commas inside
+            // nested `<…>` are respected, so `Map<String, Vec<i64>>` works).
+            "element_type" => Value::TypeVal(nth_type_arg(type_name, 0).unwrap_or(type_name.to_string())),
+            "key_type" => Value::TypeVal(nth_type_arg(type_name, 0).unwrap_or(type_name.to_string())),
+            "value_type" => Value::TypeVal(nth_type_arg(type_name, 1).unwrap_or(type_name.to_string())),
             "is_generic" => {
                 let generic = tc
                     .struct_info
@@ -130,7 +164,7 @@ impl Interpreter<'_> {
                 format!(
                     "unknown comptime reflection method `{other}` on type `{type_name}`; \
                      this slice supports name / is_struct / is_enum / is_union / \
-                     is_generic / fields / variants / derives / element_type"
+                     is_generic / fields / variants / derives / element_type / key_type / value_type"
                 ),
                 span,
             ),
