@@ -7806,6 +7806,49 @@ fn main() {
     /// `{trampoline, null-env}` fat pointer, so the higher-order call runs.
     /// Previously the `Fn`-typed param lowered to `i64` while the bare fn name
     /// lowered to a raw `ptr`, failing LLVM module verification.
+    /// B-2026-06-21-1 (sibling of B-2026-06-20-1): a bare named `fn` bound to a
+    /// local first — `let g = doubler;` — then (a) passed to a `Fn(...)`-typed
+    /// parameter and (b) called directly through the local. Both forms, and the
+    /// `Fn(...)`-annotated binding, must reify the fn name into the closure
+    /// fat-pointer ABI + register the local in `closure_fn_types`. Before this
+    /// the local held a raw `ptr`: the pass-to-param form failed LLVM
+    /// verification and the direct call silently returned 0.
+    #[test]
+    fn fn_value_let_bound_named_fn_passed_and_called() {
+        let out = run_program(
+            "fn doubler(n: i64) -> i64 { n * 2i64 }\n\
+             fn apply(f: Fn(i64) -> i64, x: i64) -> i64 { f(x) }\n\
+             fn main() {\n\
+                 let g = doubler;\n\
+                 let h: Fn(i64) -> i64 = doubler;\n\
+                 println(f\"{apply(g, 10i64)}\");\n\
+                 println(f\"{h(11i64)}\");\n\
+             }\n",
+        );
+        assert_eq!(out.as_deref(), Some("20\n22\n"));
+    }
+
+    /// A let-bound fn value and a direct-argument reify of the same fn share one
+    /// memoized `__karac_fnval_<name>` trampoline (a single `define`).
+    #[test]
+    fn fn_value_let_and_arg_reify_share_one_trampoline() {
+        let ir = ir_for(
+            "fn doubler(n: i64) -> i64 { n * 2i64 }\n\
+             fn apply(f: Fn(i64) -> i64, x: i64) -> i64 { f(x) }\n\
+             fn main() {\n\
+                 let g = doubler;\n\
+                 let a = apply(g, 1i64);\n\
+                 let b = apply(doubler, 2i64);\n\
+                 println(f\"{a + b}\");\n\
+             }\n",
+        );
+        let tramp_defs = ir
+            .lines()
+            .filter(|l| l.starts_with("define") && l.contains("@__karac_fnval_doubler"))
+            .count();
+        assert_eq!(tramp_defs, 1, "expected one memoized trampoline:\n{ir}");
+    }
+
     #[test]
     fn fn_value_named_fn_as_fn_typed_param_runs() {
         let out = run_program(
@@ -49280,21 +49323,33 @@ fn main() {
         assert!(ir.contains("@fact") && ir.contains("alwaysinline"));
     }
 
-    // NOTE: the checklist's "`#[inline(always)]` used through a function
-    // pointer still compiles" case has no IR test yet — but NOT for an
-    // attribute reason. The natural form
-    //   fn apply(f: Fn(i64) -> i64, x: i64) -> i64 { f(x) }
-    //   apply(doubler, 21)   // doubler is an #[inline(always)] fn
-    // parses and type-checks fine (Kāra's function type is the uppercase
-    // `Fn(...)` — design.md § First-Class Functions, syntax.md § 6.3), but
-    // fails codegen: `TypeKind::FnType` lowers to `i64` and a bare fn name
-    // lowers to a raw `ptr`, so the generic higher-order call mismatches at
-    // LLVM verification ("Call parameter type does not match"). That
-    // bare-named-fn → `Fn`-value codegen gap is tracked as B-2026-06-20-1
-    // (phase-7-codegen.md). The attribute itself is emitted on the function
-    // definition regardless of call shape — the direct-call and recursive
-    // cases above exercise the lowering; add the indirect-call variant once
-    // B-2026-06-20-1 lands.
+    // The checklist's "`#[inline(always)]` used through a function pointer
+    // still compiles" case — unblocked once the bare-named-fn → `Fn`-value
+    // codegen gap (B-2026-06-20-1) landed; the indirect-call variant is the
+    // test below. Kāra's function type is the uppercase `Fn(...)` (design.md §
+    // First-Class Functions, syntax.md § 6.3); a bare named fn passed to a
+    // `Fn(...)` parameter now reifies into the closure fat-pointer ABI, so the
+    // higher-order call compiles and the attribute still rides on the function
+    // definition regardless of call shape.
+    #[test]
+    fn test_ir_inline_always_through_fn_value_compiles() {
+        let ir = ir_for(
+            "#[inline(always)]\n\
+             fn doubler(n: i64) -> i64 { n * 2i64 }\n\
+             fn apply(f: Fn(i64) -> i64, x: i64) -> i64 { f(x) }\n\
+             fn main() { let r = apply(doubler, 21i64); println(f\"{r}\"); }",
+        );
+        // The attribute is emitted on the definition regardless of call shape,
+        // and the indirect higher-order call now compiles (no verifier error).
+        assert!(
+            ir.contains("@doubler") && ir.contains("alwaysinline"),
+            "expected alwaysinline on the fn-value target:\n{ir}"
+        );
+        assert!(
+            ir.contains("@__karac_fnval_doubler"),
+            "expected the reified fn-value trampoline:\n{ir}"
+        );
+    }
 
     #[test]
     fn test_ir_cold_and_inline_never_coexist() {

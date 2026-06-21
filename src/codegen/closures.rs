@@ -119,8 +119,8 @@ impl<'ctx> super::Codegen<'ctx> {
     /// argument position into a closure fat-pointer value `{ trampoline, null
     /// env }`, so it dispatches through the same env-first indirect-call ABI as
     /// a closure literal. Returns `None` (caller compiles the arg normally)
-    /// unless `arg` is a bare identifier that names a free fn (not a shadowing
-    /// local / const) AND the callee's parameter `idx` is `Fn(...)`-typed.
+    /// unless `arg` is a bare identifier that names a free fn AND the callee's
+    /// parameter `idx` is `Fn(...)`-typed.
     ///
     /// A bare fn name otherwise lowers to a raw `ptr` (`@doubler`), which fails
     /// LLVM module verification against the fat-pointer parameter slot.
@@ -133,36 +133,43 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::Identifier(fn_name) = &arg.kind else {
             return None;
         };
-        // A local binding or const-generic substitution of the same name is a
-        // real value (it shadows the free fn), not a fn-value reify.
-        if self.variables.contains_key(fn_name.as_str())
-            || self.const_subst.contains_key(fn_name.as_str())
-        {
+        // Gate: the callee's parameter `idx` must be `Fn(...)`-typed. (The
+        // shared `reify_named_fn_value` separately rejects a name shadowed by a
+        // higher-precedence binding.)
+        let is_fn_param = self
+            .fn_asts
+            .get(callee)
+            .and_then(|f| f.params.get(idx))
+            .is_some_and(|p| matches!(p.ty.kind, TypeKind::FnType { .. }));
+        if !is_fn_param {
             return None;
         }
-        // The callee's parameter `idx` must be `Fn(...)`-typed. Clone the
-        // annotation so the immutable `fn_asts` borrow is released before the
-        // `&mut self` trampoline emission below.
-        let (ann_params, ann_ret) = {
-            let func = self.fn_asts.get(callee)?;
-            let param = func.params.get(idx)?;
-            match &param.ty.kind {
-                TypeKind::FnType {
-                    params,
-                    return_type,
-                    ..
-                } => (params.clone(), return_type.as_deref().cloned()),
-                _ => return None,
-            }
-        };
-        let target = self.module.get_function(fn_name)?;
+        self.reify_named_fn_value(fn_name).map(|(fat, _)| fat)
+    }
 
-        let tramp_name = format!("__karac_fnval_{}", fn_name);
+    /// B-2026-06-21-1: reify a bare identifier that names a free `fn` into a
+    /// closure fat-pointer value `{ trampoline, null env }` plus the env-first
+    /// `FunctionType` of that trampoline (for `closure_fn_types`). Shared by the
+    /// `Fn`-typed argument-site reify above and the `let f = some_fn` binding
+    /// path (`compile_stmt`), so a fn value works whether passed directly,
+    /// bound to a local first, or called through that local.
+    ///
+    /// Returns `None` unless `name` resolves to a module function and is not
+    /// shadowed by a higher-precedence binding — mirroring the resolution order
+    /// of `compile_expr`'s `Identifier` arm (const-subst / local / module `let`
+    /// / unit enum variant / top-level const all win over a free fn).
+    pub(super) fn reify_named_fn_value(
+        &mut self,
+        name: &str,
+    ) -> Option<(BasicValueEnum<'ctx>, FunctionType<'ctx>)> {
+        if !self.name_resolves_to_free_fn(name) {
+            return None;
+        }
+        let target = self.module.get_function(name)?;
+        let tramp_name = format!("__karac_fnval_{}", name);
         let tramp = match self.module.get_function(&tramp_name) {
             Some(t) => t,
-            None => {
-                self.emit_fn_value_trampoline(&tramp_name, target, &ann_params, ann_ret.as_ref())
-            }
+            None => self.emit_fn_value_trampoline(&tramp_name, target),
         };
 
         // Build the fat pointer `{ trampoline_ptr, null }` — null env because a
@@ -185,24 +192,66 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_insert_value(fat, ptr_ty.const_null(), 1, "fnval_env")
             .unwrap()
             .into_struct_value();
-        Some(fat.into())
+        Some((fat.into(), tramp.get_type()))
     }
 
-    /// Synthesize a per-fn env-ignoring trampoline `__karac_fnval_<name>` with
-    /// the env-first closure-call ABI: it drops the leading env pointer and
-    /// forwards the remaining args to `target`, returning its result. This lets
-    /// a plain free fn (whose real signature has no env parameter) be invoked
-    /// through the same indirect-call shape as a closure body. Memoized by the
-    /// caller via `module.get_function`.
+    /// `true` when `name` would resolve to a free `fn` in `compile_expr`'s
+    /// `Identifier` arm — i.e. it names a module function and is NOT shadowed by
+    /// any higher-precedence binding (const-generic subst, local, module `let`,
+    /// unit enum variant, or top-level `const`). Side-effect free: it inspects
+    /// membership tables only, never `try_load_module_binding` /
+    /// `try_unit_enum_variant` (those emit IR).
+    fn name_resolves_to_free_fn(&self, name: &str) -> bool {
+        if self.variables.contains_key(name)
+            || self.const_subst.contains_key(name)
+            || self.consts.contains_key(name)
+            || self.module_bindings.contains_key(name)
+        {
+            return false;
+        }
+        // Unit enum variant (zero payload fields under some enum layout).
+        let is_unit_variant = self.enum_layouts.values().any(|layout| {
+            layout.tags.contains_key(name)
+                && layout.field_counts.get(name).copied().unwrap_or(0) == 0
+        });
+        if is_unit_variant {
+            return false;
+        }
+        self.module.get_function(name).is_some()
+    }
+
+    /// Synthesize a per-fn env-ignoring trampoline `__karac_fnval_<name>` whose
+    /// signature is the env-first wrap of `target`'s own signature
+    /// (`R (ptr env, P0, P1, …)`): it drops the leading env pointer and forwards
+    /// the remaining args to `target`, returning its result. This lets a plain
+    /// free fn (whose real signature has no env parameter) be invoked through
+    /// the same indirect-call shape as a closure body. Deriving the signature
+    /// from `target` (not from a `Fn(...)` annotation) keeps the one memoized
+    /// `__karac_fnval_<name>` definition consistent across every reify site.
+    /// Memoized by the caller via `module.get_function`.
     fn emit_fn_value_trampoline(
         &mut self,
         tramp_name: &str,
         target: FunctionValue<'ctx>,
-        ann_params: &[TypeExpr],
-        ann_ret: Option<&TypeExpr>,
     ) -> FunctionValue<'ctx> {
         let saved_bb = self.builder.get_insert_block();
-        let tramp_ty = self.closure_abi_fn_type(ann_params, ann_ret);
+
+        let target_ty = target.get_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let mut param_tys: Vec<BasicMetadataTypeEnum<'ctx>> = vec![ptr_ty.into()];
+        // `FunctionType::get_param_types` already yields `BasicMetadataTypeEnum`.
+        param_tys.extend(target_ty.get_param_types());
+        let tramp_ty = match target_ty.get_return_type() {
+            Some(BasicTypeEnum::IntType(t)) => t.fn_type(&param_tys, false),
+            Some(BasicTypeEnum::FloatType(t)) => t.fn_type(&param_tys, false),
+            Some(BasicTypeEnum::PointerType(t)) => t.fn_type(&param_tys, false),
+            Some(BasicTypeEnum::StructType(t)) => t.fn_type(&param_tys, false),
+            Some(BasicTypeEnum::ArrayType(t)) => t.fn_type(&param_tys, false),
+            Some(BasicTypeEnum::VectorType(t)) => t.fn_type(&param_tys, false),
+            Some(BasicTypeEnum::ScalableVectorType(_)) | None => {
+                self.context.void_type().fn_type(&param_tys, false)
+            }
+        };
         let tramp = self.module.add_function(tramp_name, tramp_ty, None);
         let entry = self.context.append_basic_block(tramp, "entry");
         self.builder.position_at_end(entry);
@@ -217,7 +266,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .collect();
         let call = self.builder.build_call(target, &fwd, "fnval_fwd").unwrap();
         let ret_val = call.try_as_basic_value();
-        if ann_ret.is_some() && !ret_val.is_instruction() {
+        if target_ty.get_return_type().is_some() && !ret_val.is_instruction() {
             self.builder
                 .build_return(Some(&ret_val.unwrap_basic()))
                 .unwrap();

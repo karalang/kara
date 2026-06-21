@@ -8128,6 +8128,29 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_let_bound_fn_value_heap_arg_no_leak() {
+        // B-2026-06-21-1: the same transparent-trampoline guarantee through a
+        // fn value bound to a LOCAL first (`let g = shout`) and then passed to a
+        // `Fn(...)` parameter. The reified fat pointer's env is null and the
+        // trampoline is a module global (no heap), so the only heap is the
+        // String arg — it must move through and free exactly once. ≥36-byte
+        // payload to defeat the short-String reachable-leak blind spot.
+        assert_clean_asan_run(
+            r#"
+fn shout(s: String) -> String { f"{s}!" }
+fn apply(f: Fn(String) -> String, x: String) -> String { f(x) }
+fn main() {
+    let g = shout;
+    let r = apply(g, "hello-this-is-a-fairly-long-payload-string");
+    println(r);
+}
+"#,
+            &["hello-this-is-a-fairly-long-payload-string!"],
+            "let_bound_fn_value_heap_arg_no_leak",
+        );
+    }
+
     // ── while let / let else drop paths (phase-6 line 489) ───────
 
     #[test]
