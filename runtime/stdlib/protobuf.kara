@@ -27,9 +27,11 @@
 //!   `fn encode(ref self) -> Vec[u8]`, `fn decode(bytes: Vec[u8]) -> Self`, and
 //!   `fn merge(mut ref self, bytes: Vec[u8])`. Field numbers are 1-based
 //!   declaration order. Supported field types (v1): `i32` / `i64` / `u32` /
-//!   `u64` / `bool` (varint), `String` / `Vec[u8]` (length-delimited), and
+//!   `u64` / `bool` (varint), `String` / `Vec[u8]` (length-delimited),
 //!   nested messages — a field whose struct type itself derives `Message`,
-//!   encoded as a length-delimited sub-message.
+//!   encoded as a length-delimited sub-message — and `repeated` fields
+//!   (`Vec[T]`): packed for scalar numerics, one length-delimited field per
+//!   element for `String` / `bytes` / nested messages.
 //!
 //! Encoding is pure; decoding allocates (`Vec[u8]` / `String`) — matching the
 //! spec's "pure on encode, allocates(Heap) on decode".
@@ -400,6 +402,94 @@ comptime fn proto_encode_nested(idx: i64, fname: String) -> String {
         + ".len() as u64)); out.extend_from_slice(m" + tag + ");"
 }
 
+// ── repeated fields (slice 5) ────────────────────────────────────
+//
+// A field of type `Vec[T]` (any element but `u8` — `Vec[u8]` is `bytes`) is a
+// proto3 `repeated` field. Scalar numerics are *packed*: all elements go in one
+// length-delimited field as concatenated varints. `String` / `bytes` / nested
+// messages are *not* packed: each element is its own length-delimited field
+// repeating the same tag. Decode accepts both forms for numerics (proto3
+// readers must), and on `merge`/`decode` repeated elements accumulate (push).
+
+// The `Vec[u8]` expression encoding one packed numeric element `x` of type `etn`
+// as a varint (the same signed/unsigned rules the scalar path uses).
+comptime fn proto_encode_elem_varint(x: String, etn: String) -> String {
+    if etn == "bool" {
+        "ProtoBuf.encode_varint(if " + x + " { 1u64 } else { 0u64 })"
+    } else if etn == "u64" {
+        "ProtoBuf.encode_varint(" + x + ")"
+    } else if etn == "u32" {
+        "ProtoBuf.encode_varint(" + x + " as u64)"
+    } else if etn == "i64" {
+        "ProtoBuf.encode_varint_i64(" + x + ")"
+    } else {
+        "ProtoBuf.encode_varint_i64(" + x + " as i64)"
+    }
+}
+
+// The expression reading one packed numeric element of type `etn` from the
+// reader named `rn` (the outer `reader`, or a `sub` reader over a packed blob).
+comptime fn proto_read_elem(rn: String, etn: String) -> String {
+    if etn == "bool" {
+        rn + ".read_varint() != 0u64"
+    } else if etn == "u64" {
+        rn + ".read_varint()"
+    } else if etn == "u32" {
+        rn + ".read_varint() as u32"
+    } else if etn == "i64" {
+        rn + ".read_varint() as i64"
+    } else {
+        rn + ".read_varint() as i32"
+    }
+}
+
+// The statement(s) that append a repeated field (number `idx`, element type
+// `etn`, `is_msg` = element is a nested message) to `out`. Packed numerics emit
+// nothing for an empty vector (proto3 omits empty packed fields).
+comptime fn proto_encode_repeated(idx: i64, fname: String, etn: String, is_msg: bool) -> String {
+    let tag = f"{idx}";
+    let elem = "self." + fname + "[i" + tag + "]";
+    let hdr = "let mut i" + tag + " = 0; while i" + tag + " < self." + fname + ".len() { ";
+    let step = " i" + tag + " = i" + tag + " + 1; }";
+    if is_msg {
+        hdr + "let mb" + tag + " = " + elem + ".encode(); out.extend_from_slice(ProtoBuf.encode_tag("
+            + tag + ", 2)); out.extend_from_slice(ProtoBuf.encode_varint(mb" + tag
+            + ".len() as u64)); out.extend_from_slice(mb" + tag + ");" + step
+    } else if etn == "String" {
+        hdr + "out.extend_from_slice(ProtoBuf.encode_tag(" + tag
+            + ", 2)); out.extend_from_slice(ProtoBuf.encode_varint(" + elem
+            + ".bytes().len() as u64)); out.extend_from_slice(" + elem + ".bytes());" + step
+    } else if etn == "Vec<u8>" {
+        hdr + "out.extend_from_slice(ProtoBuf.encode_tag(" + tag
+            + ", 2)); out.extend_from_slice(ProtoBuf.encode_varint(" + elem
+            + ".len() as u64)); out.extend_from_slice(" + elem + ");" + step
+    } else {
+        "if not self." + fname + ".is_empty() { let mut p" + tag + " = Vec.new(); " + hdr
+            + "p" + tag + ".extend_from_slice(" + proto_encode_elem_varint(elem, etn) + ");" + step
+            + " out.extend_from_slice(ProtoBuf.encode_tag(" + tag
+            + ", 2)); out.extend_from_slice(ProtoBuf.encode_varint(p" + tag
+            + ".len() as u64)); out.extend_from_slice(p" + tag + "); }"
+    }
+}
+
+// The body run when a repeated field's tag matches: push the wire element onto
+// `target` (the decode local `fname`, or `self.fname` in merge). Numerics
+// accept the packed form (wire type 2, loop a sub-reader) or a lone unpacked
+// element; `String` / `bytes` / messages push one length-delimited value.
+comptime fn proto_decode_repeated(target: String, etn: String, is_msg: bool) -> String {
+    if is_msg {
+        target + ".push(" + etn + ".decode(reader.read_len_delim()));"
+    } else if etn == "String" {
+        target + ".push(reader.read_string());"
+    } else if etn == "Vec<u8>" {
+        target + ".push(reader.read_len_delim());"
+    } else {
+        "if wire == 2 { let mut sub = ProtoReader.new(reader.read_len_delim()); while not sub.at_end() { "
+            + target + ".push(" + proto_read_elem("sub", etn) + "); } } else { " + target + ".push("
+            + proto_read_elem("reader", etn) + "); }"
+    }
+}
+
 // Emit `impl T { encode / decode / merge }` for a `#[derive(Message)]` struct.
 comptime fn derive_message(comptime T: Type) -> Vec[Item] {
     let n = T.name();
@@ -413,6 +503,8 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
     for f in T.fields() {
         let fname = f.name;
         let tn = f.ty.name();
+        // A `Vec[T]` field (element other than `u8`) is a repeated field.
+        let repeated = tn.starts_with("Vec<") and tn != "Vec<u8>";
         // A struct-typed field is a nested message — encoded as a length-
         // delimited sub-message via its own derived `encode`/`decode`. It must
         // itself derive `Message`; a plain struct has no codec to delegate to.
@@ -423,36 +515,67 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
                     + "`, which does not derive(Message)",
             );
         }
-        if not proto_supported(tn) and not nested {
+        if not proto_supported(tn) and not nested and not repeated {
             compiler.error(
                 "derive(Message): field `" + fname + "` has unsupported type `" + tn
-                    + "` (proto3 v1 supports i32/i64/u32/u64/bool/String/Vec[u8] and nested messages)",
+                    + "` (proto3 v1 supports i32/i64/u32/u64/bool/String/Vec[u8], nested messages, and repeated `Vec[T]`)",
             );
         }
         let tag = f"{idx}";
         let cond = "field == " + tag;
-        // Nested: read a length-delimited blob and decode it; default is the
-        // decode of empty bytes (every field at its proto3 zero value).
-        let read = if nested {
-            tn + ".decode(reader.read_len_delim())"
+        // Per-field: the default binding, the encode statement, and the bodies
+        // that run when the tag matches in decode (target = local `fname`) and
+        // in merge (target = `self.fname`).
+        let mut dflt = "";
+        let mut efield = "";
+        let mut dec_body = "";
+        let mut mrg_body = "";
+        if repeated {
+            let et = f.ty.element_type();
+            let etn = et.name();
+            let is_msg = et.is_struct();
+            if is_msg and not et.derives("Message") {
+                compiler.error(
+                    "derive(Message): repeated field `" + fname + "` has element type `" + etn
+                        + "`, which does not derive(Message)",
+                );
+            }
+            if not is_msg and not proto_supported(etn) {
+                compiler.error(
+                    "derive(Message): repeated field `" + fname + "` has unsupported element type `"
+                        + etn + "`",
+                );
+            }
+            dflt = "Vec.new()";
+            efield = proto_encode_repeated(idx, fname, etn, is_msg);
+            dec_body = proto_decode_repeated(fname, etn, is_msg);
+            mrg_body = proto_decode_repeated("self." + fname, etn, is_msg);
         } else {
-            proto_read_expr(tn)
-        };
-        let dflt = if nested { tn + ".decode(Vec.new())" } else { proto_default(tn) };
-        let efield = if nested {
-            proto_encode_nested(idx, fname)
-        } else {
-            proto_encode_field(idx, fname, tn)
-        };
+            // Nested: read a length-delimited blob and decode it; default is the
+            // decode of empty bytes (every field at its proto3 zero value).
+            let read = if nested {
+                tn + ".decode(reader.read_len_delim())"
+            } else {
+                proto_read_expr(tn)
+            };
+            dflt = if nested { tn + ".decode(Vec.new())" } else { proto_default(tn) };
+            efield = if nested {
+                proto_encode_nested(idx, fname)
+            } else {
+                proto_encode_field(idx, fname, tn)
+            };
+            dec_body = fname + " = " + read + ";";
+            mrg_body = "self." + fname + " = " + read + ";";
+        }
         enc = enc + efield + " ";
         decls = decls + "let mut " + fname + " = " + dflt + "; ";
         if first {
-            dec = "if " + cond + " { " + fname + " = " + read + "; }";
-            mrg = "if " + cond + " { self." + fname + " = " + read + "; }";
+            dec = "if " + cond + " { " + dec_body + " }";
+            mrg = "if " + cond + " { " + mrg_body + " }";
             first = false;
         } else {
-            dec = dec + " else if " + cond + " { " + fname + " = " + read + "; }";
-            mrg = mrg + " else if " + cond + " { self." + fname + " = " + read + "; }";
+            dec = dec + " else if " + cond + " { " + dec_body + " }";
+            mrg = mrg + " else if " + cond + " { " + mrg_body + " }";
         }
         ctor = ctor + fname + ": " + fname + ", ";
         idx = idx + 1;
@@ -491,11 +614,11 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
 // fields of type string / bytes / int32 / int64 / uint32 / uint64 / bool, plus
 // nested message fields — a field whose type is another `message` in the same
 // schema (forward references included), encoded as a length-delimited sub-
-// message. Field numbers must be contiguous `1..N` (declaration-order tagging —
-// per-field number overrides need reflection support that doesn't exist yet).
-// `syntax` / `package` / `option` / `import` statements are skipped; enums,
-// `repeated`, `map`, `oneof`, and `sint*` / `fixed*` / floating types are not
-// yet supported.
+// message — and `repeated TYPE name = N;` fields, mapped to `Vec[TYPE]`. Field
+// numbers must be contiguous `1..N` (declaration-order tagging — per-field
+// number overrides need reflection support that doesn't exist yet). `syntax` /
+// `package` / `option` / `import` statements are skipped; enums, `map`,
+// `oneof`, and `sint*` / `fixed*` / floating types are not yet supported.
 
 // Split proto3 source into a flat token stream. `{` `}` `;` `=` are each their
 // own token; runs of any other non-whitespace are one token. Uses `substring`
@@ -661,25 +784,31 @@ comptime fn proto_parse_schema(src: String) -> Vec[Item] {
                 let mut fdecls = Vec.new();
                 let mut bad = false;
                 while i < n and toks[i] != "}" {
-                    if i + 4 >= n {
+                    // `repeated TYPE name = N;` is a 6-token field; a plain
+                    // field is 5. Skip the `repeated` label and wrap the mapped
+                    // element type in `Vec[...]`.
+                    let rep = toks[i] == "repeated";
+                    let base = if rep { i + 1 } else { i };
+                    if base + 4 >= n {
                         compiler.error("proto message '" + name + "': malformed field declaration");
                         bad = true;
                         i = n;
                     } else {
-                        let ptype = toks[i];
-                        let fname = toks[i + 1];
-                        let numtok = toks[i + 3];
-                        let ktype = proto_resolve_type(ptype, msgs);
-                        if ktype == "" {
+                        let ptype = toks[base];
+                        let fname = toks[base + 1];
+                        let numtok = toks[base + 3];
+                        let inner = proto_resolve_type(ptype, msgs);
+                        if inner == "" {
                             compiler.error(
                                 "proto message '" + name + "': unsupported field type '" + ptype
                                     + "' (v1 supports string/bytes/int32/int64/uint32/uint64/bool and nested message types)",
                             );
                             bad = true;
                         }
+                        let ktype = if rep { "Vec[" + inner + "]" } else { inner };
                         fnums.push(proto_atoi(numtok));
                         fdecls.push(fname + ": " + ktype);
-                        i = i + 5;
+                        i = if rep { i + 6 } else { i + 5 };
                     }
                 }
                 if i < n {

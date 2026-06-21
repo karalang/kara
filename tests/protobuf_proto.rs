@@ -223,6 +223,63 @@ fn main() {
 }
 
 #[test]
+fn proto_repeated_fields_roundtrip() {
+    // `repeated TYPE name = N;` maps to a `Vec[KaraType]` field across scalar,
+    // string, and nested-message element types — end-to-end round trip.
+    let src = r#"
+#[proto_schema]
+const SCHEMA: String = "
+    syntax = \"proto3\";
+    message Point { int64 x = 1; int64 y = 2; }
+    message Path {
+        string name = 1;
+        repeated int64 marks = 2;
+        repeated string labels = 3;
+        repeated Point points = 4;
+    }
+";
+
+fn main() {
+    let p = Path {
+        name: "route",
+        marks: [3, -4, 5],
+        labels: ["a", "b"],
+        points: [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }],
+    };
+    let back = Path.decode(p.encode());
+    println(back.name);
+    println(back.marks.len());
+    println(back.marks[1]);
+    println(back.labels[0]);
+    println(back.points.len());
+    println(back.points[1].y);
+}
+"#;
+    assert_eq!(
+        run(src),
+        vec!["route\n", "3\n", "-4\n", "a\n", "2\n", "4\n"]
+    );
+}
+
+#[test]
+fn proto_repeated_bytes_roundtrip() {
+    // `repeated bytes` is `Vec[Vec[u8]]` — the element maps through `bytes`.
+    let src = r#"
+#[proto_schema]
+const SCHEMA: String = "message Blobs { repeated bytes chunks = 1; }";
+
+fn main() {
+    let b = Blobs { chunks: [[1u8, 2u8], [9u8]] };
+    let back = Blobs.decode(b.encode());
+    println(back.chunks.len());
+    println(back.chunks[0].len());
+    println(back.chunks[1][0]);
+}
+"#;
+    assert_eq!(run(src), vec!["2\n", "2\n", "9\n"]);
+}
+
+#[test]
 fn proto_unsupported_type_errors() {
     // `float` is not in the v1 scalar set; the pure-Kāra parser reports it.
     let src = r#"

@@ -266,6 +266,202 @@ fn main() {
     );
 }
 
+// ── repeated fields ─────────────────────────────────────────────
+
+#[test]
+fn derive_repeated_scalar_roundtrip() {
+    // Packed numeric repeated field round-trips, including a negative element.
+    let src = r#"
+#[derive(Message)]
+struct Bag { nums: Vec[i64] }
+
+fn main() {
+    let b = Bag { nums: [1, -2, 300, 0] };
+    let back = Bag.decode(b.encode());
+    println(back.nums.len());
+    println(back.nums[0]);
+    println(back.nums[1]);
+    println(back.nums[2]);
+    println(back.nums[3]);
+}
+"#;
+    assert_eq!(run(src), vec!["4\n", "1\n", "-2\n", "300\n", "0\n"]);
+}
+
+#[test]
+fn derive_repeated_bool_and_string_and_bytes_roundtrip() {
+    let src = r#"
+#[derive(Message)]
+struct Bag { flags: Vec[bool], tags: Vec[String], blobs: Vec[Vec[u8]] }
+
+fn main() {
+    let b = Bag { flags: [true, false, true], tags: ["a", "bb"], blobs: [[1u8, 2u8], [9u8]] };
+    let back = Bag.decode(b.encode());
+    println(back.flags[0]);
+    println(back.flags[2]);
+    println(back.tags[0]);
+    println(back.tags[1]);
+    println(back.blobs.len());
+    println(back.blobs[0].len());
+    println(back.blobs[1][0]);
+}
+"#;
+    assert_eq!(
+        run(src),
+        vec!["true\n", "true\n", "a\n", "bb\n", "2\n", "2\n", "9\n"]
+    );
+}
+
+#[test]
+fn derive_repeated_message_roundtrip() {
+    let src = r#"
+#[derive(Message)]
+struct Item { v: i64 }
+
+#[derive(Message)]
+struct Bag { items: Vec[Item] }
+
+fn main() {
+    let b = Bag { items: [Item { v: 7 }, Item { v: -8 }] };
+    let back = Bag.decode(b.encode());
+    println(back.items.len());
+    println(back.items[0].v);
+    println(back.items[1].v);
+}
+"#;
+    assert_eq!(run(src), vec!["2\n", "7\n", "-8\n"]);
+}
+
+#[test]
+fn derive_repeated_empty_is_omitted() {
+    // proto3 omits an empty repeated field entirely; decode restores an empty
+    // vector.
+    let src = r#"
+#[derive(Message)]
+struct Bag { nums: Vec[i64], tags: Vec[String] }
+
+fn main() {
+    let b = Bag { nums: [], tags: [] };
+    println(b.encode().len());
+    let back = Bag.decode(b.encode());
+    println(back.nums.len());
+    println(back.tags.len());
+}
+"#;
+    assert_eq!(run(src), vec!["0\n", "0\n", "0\n"]);
+}
+
+#[test]
+fn derive_repeated_merge_appends() {
+    // Merging concatenates repeated elements onto the existing ones.
+    let src = r#"
+#[derive(Message)]
+struct Bag { nums: Vec[i64], tags: Vec[String] }
+
+fn main() {
+    let mut acc = Bag { nums: [1, 2], tags: ["x"] };
+    let more = Bag { nums: [3], tags: ["y", "z"] };
+    acc.merge(more.encode());
+    println(acc.nums.len());
+    println(acc.nums[2]);
+    println(acc.tags.len());
+    println(acc.tags[2]);
+}
+"#;
+    assert_eq!(run(src), vec!["3\n", "3\n", "3\n", "z\n"]);
+}
+
+#[test]
+fn derive_repeated_scalar_is_packed_single_field() {
+    // A packed repeated numeric occupies ONE length-delimited field (wire type
+    // 2), while a repeated string repeats its tag per element.
+    let src = r#"
+#[derive(Message)]
+struct M { nums: Vec[i64], tags: Vec[String] }
+
+fn main() {
+    let m = M { nums: [10, 20, 30], tags: ["p", "q"] };
+    let mut r = ProtoReader.new(m.encode());
+    let mut desc = "";
+    while not r.at_end() {
+        let (fld, wire) = r.read_tag();
+        desc = desc + f"({fld},{wire})";
+        let _ = r.skip_field(wire);
+    }
+    println(desc);
+}
+"#;
+    assert_eq!(run(src), vec!["(1,2)(2,2)(2,2)\n"]);
+}
+
+#[test]
+fn derive_repeated_numeric_decodes_unpacked_form() {
+    // proto3 readers must accept the non-packed wire form for numeric repeated
+    // fields too (each element its own wire-type-0 field).
+    let src = r#"
+#[derive(Message)]
+struct M { nums: Vec[i64] }
+
+fn main() {
+    let mut bytes = Vec.new();
+    bytes.extend_from_slice(ProtoBuf.encode_tag(1, 0));
+    bytes.extend_from_slice(ProtoBuf.encode_varint_i64(5));
+    bytes.extend_from_slice(ProtoBuf.encode_tag(1, 0));
+    bytes.extend_from_slice(ProtoBuf.encode_varint_i64(-6));
+    let back = M.decode(bytes);
+    println(back.nums.len());
+    println(back.nums[0]);
+    println(back.nums[1]);
+}
+"#;
+    assert_eq!(run(src), vec!["2\n", "5\n", "-6\n"]);
+}
+
+#[test]
+fn derive_repeated_typecheck_clean() {
+    let src = r#"
+#[derive(Message)]
+struct Item { v: i64 }
+
+#[derive(Message)]
+struct Bag { nums: Vec[i64], items: Vec[Item] }
+
+fn main() {
+    let b = Bag { nums: [1], items: [Item { v: 2 }] };
+    let back = Bag.decode(b.encode());
+    println(back.nums.len());
+}
+"#;
+    let errs = typecheck_errors(src);
+    assert!(
+        !errs
+            .iter()
+            .any(|e| e.contains("no method") || e.contains("no associated function")),
+        "repeated derive methods must typecheck clean; got: {errs:?}"
+    );
+}
+
+#[test]
+fn derive_repeated_non_message_element_errors() {
+    // A repeated field of structs that don't derive `Message` is rejected with a
+    // clear diagnostic.
+    let src = r#"
+struct Plain { v: i64 }
+
+#[derive(Message)]
+struct Bag { items: Vec[Plain] }
+
+fn main() {}
+"#;
+    let diags = comptime_diags(src);
+    assert!(
+        diags.iter().any(|d| d.contains("E_COMPTIME_ERROR")
+            && d.contains("does not derive(Message)")
+            && d.contains("items")),
+        "expected a repeated-non-message diagnostic; got: {diags:?}"
+    );
+}
+
 // ── nested messages ─────────────────────────────────────────────
 
 #[test]

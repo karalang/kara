@@ -152,6 +152,38 @@ fn main() { let _ = comptime { P.derives() }; }";
     );
 }
 
+// ── element_type() ──────────────────────────────────────────────
+
+#[test]
+fn element_type_peels_one_generic_arg() {
+    // `element_type()` of a field's `Vec[T]` type yields `T` as a `Type`, with
+    // `is_struct()` distinguishing a message element from a scalar.
+    let src = "
+struct Inner { v: i64 }
+struct Holder { nums: Vec[i64], items: Vec[Inner], raw: Vec[u8] }
+fn main() {
+    let r = comptime {
+        let mut s = \"\";
+        for f in Holder.fields() {
+            s = s + f.ty.element_type().name();
+            if f.ty.element_type().is_struct() { s = s + \"*\"; }
+            s = s + \";\";
+        }
+        s
+    };
+    println(r);
+}";
+    assert_eq!(karac::run_program(src), vec!["i64;Inner*;u8;\n"]);
+}
+
+#[test]
+fn element_type_of_non_generic_is_identity() {
+    let src = "
+struct P { x: i64 }
+fn main() { println(comptime { P.element_type().name() }); }";
+    assert_eq!(karac::run_program(src), vec!["P\n"]);
+}
+
 // ── comptime fn with `comptime T: Type` parameter ───────────────
 
 #[test]

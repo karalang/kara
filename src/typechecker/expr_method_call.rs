@@ -513,6 +513,7 @@ impl<'a> super::TypeChecker<'a> {
                 | "fields"
                 | "variants"
                 | "derives"
+                | "element_type"
         )
     }
 
@@ -571,6 +572,10 @@ impl<'a> super::TypeChecker<'a> {
             "is_struct" | "is_enum" | "is_union" | "is_generic" => Type::Bool,
             "fields" => vec_of(named("Field")),
             "variants" => vec_of(named("Variant")),
+            // `element_type()` peels one generic argument (e.g. `Vec[T]` → `T`)
+            // and yields it as a `Type` pseudovalue, so a derive can reflect on
+            // a repeated field's element. A non-generic type returns itself.
+            "element_type" => named("Type"),
             // Unreachable: caller gates on `is_reflection_method`.
             _ => Type::Error,
         }

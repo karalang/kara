@@ -23,11 +23,15 @@ const SCHEMA: String = "
         string zip = 2;
     }
 
-    // A message-typed field nests `Address` as a length-delimited sub-message.
+    // A message-typed field nests `Address` as a length-delimited sub-message;
+    // `repeated` fields become `Vec[...]` (packed for the numeric `seats`, one
+    // length-delimited field per `members` string).
     message Team {
         string title = 1;
         uint32 size = 2;
         Address office = 3;
+        repeated string members = 4;
+        repeated int64 seats = 5;
     }
 ";
 
@@ -45,7 +49,10 @@ fn main() {
         title: "Compilers",
         size: 4u32,
         office: Address { city: "London", zip: "NW1" },
+        members: ["Ada", "Grace", "Alan"],
+        seats: [11, 12, 13, 14],
     };
     let rt = Team.decode(t.encode());
     println(f"team={rt.title} size={rt.size} city={rt.office.city} zip={rt.office.zip}");
+    println(f"members={rt.members} seats={rt.seats}");
 }

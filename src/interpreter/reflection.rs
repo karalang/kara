@@ -35,6 +35,7 @@ impl Interpreter<'_> {
                 | "fields"
                 | "variants"
                 | "derives"
+                | "element_type"
         )
     }
 
@@ -96,6 +97,20 @@ impl Interpreter<'_> {
                     .unwrap_or(false);
                 Value::Bool(has)
             }
+            // `T.element_type()` peels one generic argument from the type's
+            // display name (`Vec<i64>` → `i64`, `Vec<Vec<u8>>` → `Vec<u8>`),
+            // returning it as a `Type` pseudovalue. A non-generic name is
+            // returned unchanged, so a derive can call it unconditionally and
+            // then dispatch on the result's `name()` / `is_struct()`.
+            "element_type" => {
+                let inner = type_name
+                    .find('<')
+                    .and_then(|lt| type_name.rfind('>').map(|gt| (lt, gt)))
+                    .filter(|(lt, gt)| gt > lt)
+                    .map(|(lt, gt)| type_name[lt + 1..gt].trim().to_string())
+                    .unwrap_or_else(|| type_name.to_string());
+                Value::TypeVal(inner)
+            }
             "is_generic" => {
                 let generic = tc
                     .struct_info
@@ -115,7 +130,7 @@ impl Interpreter<'_> {
                 format!(
                     "unknown comptime reflection method `{other}` on type `{type_name}`; \
                      this slice supports name / is_struct / is_enum / is_union / \
-                     is_generic / fields / variants / derives"
+                     is_generic / fields / variants / derives / element_type"
                 ),
                 span,
             ),
