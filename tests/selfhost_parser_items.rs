@@ -13,15 +13,15 @@
 //! directly. ([`OFFSET_SHIFT`] is kept as a named 0 for symmetry with the
 //! sibling oracles.)
 //!
-//! ## Coverage (slice 3c-i)
+//! ## Coverage (through slice 3c-iv)
 //!
-//! The leaf declarations whose sub-grammar is already ported (`parse_type` +
-//! `parse_expr`): `use`, `const`, and the no-generics `type` alias. DEFERRED to
-//! later 3c increments (kept out of the corpus): struct/enum (3c-ii), fn
-//! (3c-iii), trait/impl (3c-iv), generic params (3c-v); and entirely out of
-//! scope for now — attributes, doc comments, `private`, effects/contracts,
-//! `where` refinements, distinct types, layout, extern/host, unions, module
-//! bindings, imports, test cases.
+//! `use` / `const` / no-generics `type` alias (3c-i), struct + enum (3c-ii),
+//! free functions (3c-iii), and `trait` + `impl` blocks (3c-iv). DEFERRED to
+//! later 3c increments (kept out of the corpus): generic params (3c-v); and
+//! entirely out of scope for now — supertraits, trait aliases, associated
+//! types, attributes, doc comments, `private`, effects/contracts, `where`
+//! refinements, `unsafe`/`comptime` markers, distinct types, layout,
+//! extern/host, unions, module bindings, imports, test cases.
 
 use karac::ast::{
     BinOp, Block, Expr, ExprKind, GenericArg, Item, Param, PatternKind, SelfParam, Stmt, StmtKind,
@@ -106,6 +106,25 @@ const CORPUS: &[&str] = &[
     "fn read(ref self) -> i64 { 0 }",
     "fn write(mut ref self, n: i64) {}",
     "fn read_arg(ref self, x: i64) -> i64 { x }",
+    // `trait` definitions (no generics / supertraits / effects). Method bodies
+    // stay within the slice-2 expr surface (default bodies are optional).
+    "trait Empty {}",
+    "trait Greet { fn hello(ref self) -> String; }",
+    "trait Animal { fn name(ref self) -> String; fn legs(ref self) -> i64 { 4 } }",
+    "pub trait Show { fn show(ref self) -> String; }",
+    "trait Factory { fn make() -> i64; }",
+    "trait Accum { fn add(ref self, x: i64) -> i64; fn reset(mut ref self); }",
+    "trait Defaulted { fn unit(ref self) {} }",
+    // `impl` blocks — inherent and `Trait for Type`. Method bodies stay within
+    // the slice-2 expr surface.
+    "impl Point {}",
+    "impl Counter { fn get(ref self) -> i64 { 0 } }",
+    "impl Counter { pub fn reset(mut ref self) {} }",
+    "impl Calc { fn add(ref self, a: i64, b: i64) -> i64 { a + b } }",
+    "impl Pair { fn first(ref self) -> i64 { 0 } fn second(ref self) -> i64 { 0 } }",
+    "impl Display for Point {}",
+    "impl Show for Counter { fn show(ref self) -> String { greeting } }",
+    "impl Eq for Pair { fn eq(ref self, x: i64) -> bool { true } }",
 ];
 
 // ── Rust-side canonical render (must match `ast_render.kara`) ──
@@ -497,6 +516,101 @@ fn render_rust_fn_param(p: &Param) -> String {
     )
 }
 
+/// `(fn ...)` render of a seed `Function` — must match
+/// `ast_render.kara::render_fn_def_node`. Shared by the `Function` item arm and
+/// impl-method rendering.
+fn render_rust_fn(f: &karac::ast::Function) -> String {
+    assert!(
+        f.generic_params.is_none(),
+        "slice-3c fn corpus must not carry generic params"
+    );
+    assert!(
+        f.effects.is_none()
+            && f.requires.is_empty()
+            && f.ensures.is_empty()
+            && f.where_clause.is_none()
+            && !f.is_unsafe
+            && !f.is_comptime,
+        "slice-3c fn corpus must not carry effects / contracts / where / unsafe / comptime"
+    );
+    let mut out = format!(
+        "(fn{} {}{}{} (params",
+        vis(f.is_pub),
+        f.name,
+        span_item_off_len(f.span.offset, f.span.length),
+        render_self_mode(&f.self_param),
+    );
+    for p in &f.params {
+        out.push(' ');
+        out.push_str(&render_rust_fn_param(p));
+    }
+    out.push(')');
+    if let Some(r) = &f.return_type {
+        out.push_str(" (ret ");
+        out.push_str(&render_rust_type(r));
+        out.push(')');
+    }
+    out.push(' ');
+    out.push_str(&render_rust_block(&f.body));
+    out.push(')');
+    out
+}
+
+/// `(tmethod ...)` render of a seed `TraitMethod` — must match
+/// `ast_render.kara::render_trait_method`. The body is optional: a required
+/// signature omits the trailing block.
+fn render_rust_trait_method(m: &karac::ast::TraitMethod) -> String {
+    assert!(
+        m.generic_params.is_none(),
+        "slice-3c-iv trait-method corpus must not carry generic params"
+    );
+    assert!(
+        m.effects.is_none()
+            && m.requires.is_empty()
+            && m.ensures.is_empty()
+            && m.where_clause.is_none()
+            && !m.is_unsafe,
+        "slice-3c-iv trait-method corpus must not carry effects / contracts / where / unsafe"
+    );
+    let mut out = format!(
+        "(tmethod {}{}{} (params",
+        m.name,
+        span_item_off_len(m.span.offset, m.span.length),
+        render_self_mode(&m.self_param),
+    );
+    for p in &m.params {
+        out.push(' ');
+        out.push_str(&render_rust_fn_param(p));
+    }
+    out.push(')');
+    if let Some(r) = &m.return_type {
+        out.push_str(" (ret ");
+        out.push_str(&render_rust_type(r));
+        out.push(')');
+    }
+    if let Some(b) = &m.body {
+        out.push(' ');
+        out.push_str(&render_rust_block(b));
+    }
+    out.push(')');
+    out
+}
+
+/// `(tpath SEGMENTS<span>)` render of an impl's trait path (a `PathExpr`). The
+/// selfhost side stores the trait as a `TypeExpr` path, so this must match
+/// `render_rust_type`'s `TypeKind::Path` arm for a no-generics path.
+fn render_rust_trait_path(p: &karac::ast::PathExpr) -> String {
+    assert!(
+        p.generic_args.is_none(),
+        "slice-3c-iv impl trait path must not carry generic args"
+    );
+    format!(
+        "(tpath {}{})",
+        p.segments.join("."),
+        span_item_off_len(p.span.offset, p.span.length)
+    )
+}
+
 /// Item render — must match `ast_render.kara::render_item`.
 fn render_rust_item(item: &Item) -> String {
     match item {
@@ -559,45 +673,71 @@ fn render_rust_item(item: &Item) -> String {
             out.push(')');
             out
         }
-        Item::Function(f) => {
+        Item::Function(f) => render_rust_fn(f),
+        Item::TraitDef(t) => {
             assert!(
-                f.generic_params.is_none(),
-                "slice-3c-iii fn corpus must not carry generic params"
+                t.generic_params.is_none(),
+                "slice-3c-iv trait corpus must not carry generic params"
             );
             assert!(
-                f.effects.is_none()
-                    && f.requires.is_empty()
-                    && f.ensures.is_empty()
-                    && f.where_clause.is_none()
-                    && !f.is_unsafe
-                    && !f.is_comptime,
-                "slice-3c-iii fn corpus must not carry effects / contracts / where / \
-                 unsafe / comptime"
+                t.supertraits.is_empty()
+                    && t.trait_effects.is_none()
+                    && t.where_clause.is_none()
+                    && !t.is_private,
+                "slice-3c-iv trait corpus must not carry supertraits / effects / where / private"
             );
             let mut out = format!(
-                "(fn{} {}{}{} (params",
-                vis(f.is_pub),
-                f.name,
-                span_item_off_len(f.span.offset, f.span.length),
-                render_self_mode(&f.self_param),
+                "(trait{} {}{}",
+                vis(t.is_pub),
+                t.name,
+                span_item_off_len(t.span.offset, t.span.length)
             );
-            for p in &f.params {
-                out.push(' ');
-                out.push_str(&render_rust_fn_param(p));
+            for it in &t.items {
+                match it {
+                    karac::ast::TraitItem::Method(m) => {
+                        out.push(' ');
+                        out.push_str(&render_rust_trait_method(m));
+                    }
+                    other => panic!(
+                        "slice-3c-iv trait body must be methods only (no associated types), \
+                         got {other:?}"
+                    ),
+                }
             }
             out.push(')');
-            if let Some(r) = &f.return_type {
-                out.push_str(" (ret ");
-                out.push_str(&render_rust_type(r));
+            out
+        }
+        Item::ImplBlock(b) => {
+            assert!(
+                b.generic_params.is_none() && b.where_clause.is_none(),
+                "slice-3c-iv impl corpus must not carry generic params / where"
+            );
+            let mut out = format!("(impl{}", span_item_off_len(b.span.offset, b.span.length));
+            if let Some(tp) = &b.trait_name {
+                out.push_str(" (trait ");
+                out.push_str(&render_rust_trait_path(tp));
                 out.push(')');
             }
-            out.push(' ');
-            out.push_str(&render_rust_block(&f.body));
+            out.push_str(" (target ");
+            out.push_str(&render_rust_type(&b.target_type));
+            out.push(')');
+            for it in &b.items {
+                match it {
+                    karac::ast::ImplItem::Method(f) => {
+                        out.push(' ');
+                        out.push_str(&render_rust_fn(f));
+                    }
+                    other => panic!(
+                        "slice-3c-iv impl body must be methods only (no associated types), \
+                         got {other:?}"
+                    ),
+                }
+            }
             out.push(')');
             out
         }
         other => panic!(
-            "render_rust_item: item {other:?} is outside parser slice 3c-iii; \
+            "render_rust_item: item {other:?} is outside parser slice 3c-iv; \
              keep the corpus to the ported item forms or extend the renderer"
         ),
     }

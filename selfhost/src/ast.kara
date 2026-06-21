@@ -749,6 +749,45 @@ pub struct FnDefNode {
     pub span: Span,
 }
 
+// ── Traits + impls (slice 3c-iv) ── `trait NAME { method... }` and
+// `impl TYPE { ... }` / `impl TRAIT for TYPE { ... }`. DEFERRED: supertraits
+// (`trait Foo: Bar`), trait aliases (`trait Foo = ...`), associated types
+// (`type X;` / `type X = ...`), trait-level effect ceilings, generic params
+// (3c-v), `where` refinements, attributes / doc comments, and the
+// `unsafe`/`comptime` method markers.
+
+// One trait method. Unlike a free `fn`, the body is OPTIONAL: `None` is a
+// required signature (`fn m(...);`), `Some` is a provided default body
+// (`fn m(...) { ... }`). Trait methods carry no visibility (the trait's own
+// `pub` governs the whole surface), mirroring the seed's `TraitMethod`.
+pub struct TraitMethodNode {
+    pub name: String,
+    pub self_mode: SelfMode,
+    pub params: Vec[FnParamNode],
+    pub ret: Option[TypeExpr],
+    pub body: Option[Block],
+    pub span: Span,
+}
+
+pub struct TraitDefNode {
+    pub is_pub: bool,
+    pub name: String,
+    pub methods: Vec[TraitMethodNode],
+    pub span: Span,
+}
+
+// `impl TYPE { ... }` (inherent — `trait_ty` is `None`) or
+// `impl TRAIT for TYPE { ... }` (`trait_ty` is `Some`, holding the trait path
+// parsed as a `TypeExpr`). Impl methods are always-bodied free functions, so
+// they reuse `FnDefNode` directly (the seed reuses `Function` here too). The
+// span starts at `impl` and ends at the body's `}`.
+pub struct ImplBlockNode {
+    pub trait_ty: Option[TypeExpr],
+    pub target_ty: TypeExpr,
+    pub methods: Vec[FnDefNode],
+    pub span: Span,
+}
+
 pub enum Item {
     Use(UseDeclNode),
     Const(ConstDeclNode),
@@ -759,6 +798,8 @@ pub enum Item {
     // function-type keyword (the `Fn(...)` type), mirroring why `Block`/`Tuple`
     // got renamed (`Blk`/`TupleTy`).
     Func(FnDefNode),
+    Trait(TraitDefNode),
+    Impl(ImplBlockNode),
     // Error-recovery placeholder (an unrecognized leading token / EOF).
     ErrItem(SpanNode),
 }

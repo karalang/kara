@@ -79,6 +79,9 @@ import ast.{
     SelfMode,
     FnParamNode,
     FnDefNode,
+    TraitMethodNode,
+    TraitDefNode,
+    ImplBlockNode,
 };
 import lexer.lex_all;
 
@@ -1966,6 +1969,10 @@ impl Parser {
             Shared => self.parse_shared_or_par(is_pub, true, false),
             Par => self.parse_shared_or_par(is_pub, false, true),
             Fn => self.parse_fn_def(is_pub),
+            Trait => self.parse_trait_def(is_pub),
+            // `impl` carries no visibility — the seed's `Token::Impl` arm ignores
+            // a leading `pub`; an inherent/trait impl is governed by its members.
+            Impl => self.parse_impl_block(),
             _ => {
                 let start = self.current_span();
                 self.advance();
@@ -2234,6 +2241,14 @@ impl Parser {
     // `fn NAME(self?, name: TYPE, ...) [-> R] { body }` — `start` at `fn`
     // (3c-iii; generics + effects/contracts/`where` deferred).
     fn parse_fn_def(mut ref self, is_pub: bool) -> Item {
+        Item.Func(self.parse_fn_def_node(is_pub))
+    }
+
+    // The function node itself (no `Item` wrapper), shared by the free-function
+    // path (`parse_fn_def`) and impl-method parsing (`parse_impl_block`). `start`
+    // is captured at `fn` (after any `pub`), so the span matches the seed's
+    // `Function` span (which excludes the visibility keyword).
+    fn parse_fn_def_node(mut ref self, is_pub: bool) -> FnDefNode {
         let start = self.current_span();
         self.advance(); // `fn`
         let name = self.take_member_name();
@@ -2255,13 +2270,144 @@ impl Parser {
             ret = Some(self.parse_type());
         }
         let body = self.parse_block();
-        Item.Func(FnDefNode {
+        FnDefNode {
             is_pub: is_pub,
             name: name,
             self_mode: self_mode,
             params: params,
             ret: ret,
             body: body,
+            span: self.span_from(start),
+        }
+    }
+
+    // `trait NAME { method... }`. Methods are required signatures (`fn m(...);`)
+    // or default bodies (`fn m(...) { ... }`); `parse_trait_method` returns the
+    // optional-body node. `start` is captured at `trait` (after any `pub`).
+    fn parse_trait_def(mut ref self, is_pub: bool) -> Item {
+        let start = self.current_span();
+        self.advance(); // `trait`
+        let name = self.take_member_name();
+        self.expect_lbrace();
+        let mut methods: Vec[TraitMethodNode] = Vec.new();
+        loop {
+            if self.pos >= self.tokens.len() {
+                break;
+            }
+            if self.at_rbrace() {
+                break;
+            }
+            let m = self.parse_trait_method();
+            methods.push(m);
+        }
+        self.expect_rbrace();
+        Item.Trait(TraitDefNode {
+            is_pub: is_pub,
+            name: name,
+            methods: methods,
+            span: self.span_from(start),
+        })
+    }
+
+    // One trait method: `fn NAME(self?, params) [-> R]` then either `;` (required
+    // signature → `body: None`) or `{ ... }` (default body → `body: Some`). Span
+    // starts at `fn`, mirroring the seed's `parse_trait_method`.
+    fn parse_trait_method(mut ref self) -> TraitMethodNode {
+        let start = self.current_span();
+        self.advance(); // `fn`
+        let name = self.take_member_name();
+        self.expect_lparen();
+        let self_mode = self.parse_self_mode();
+        let params = self.parse_fn_params();
+        self.expect_rparen();
+        let mut ret: Option[TypeExpr] = None;
+        let has_arrow = if self.pos < self.tokens.len() {
+            match self.tokens[self.pos].token {
+                Arrow => true,
+                _ => false,
+            }
+        } else {
+            false
+        };
+        if has_arrow {
+            self.advance(); // `->`
+            ret = Some(self.parse_type());
+        }
+        let has_body = if self.pos < self.tokens.len() {
+            match self.tokens[self.pos].token {
+                LeftBrace => true,
+                _ => false,
+            }
+        } else {
+            false
+        };
+        let mut body: Option[Block] = None;
+        if has_body {
+            body = Some(self.parse_block());
+        } else {
+            self.eat_semicolon();
+        }
+        TraitMethodNode {
+            name: name,
+            self_mode: self_mode,
+            params: params,
+            ret: ret,
+            body: body,
+            span: self.span_from(start),
+        }
+    }
+
+    // `impl TYPE { ... }` (inherent) or `impl TRAIT for TYPE { ... }`. The first
+    // parsed type is the trait when a `for` follows, otherwise the target. Each
+    // body item is an optionally-`pub` free function (reusing `parse_fn_def_node`).
+    fn parse_impl_block(mut ref self) -> Item {
+        let start = self.current_span();
+        self.advance(); // `impl`
+        let first_ty = self.parse_type();
+        let is_for = if self.pos < self.tokens.len() {
+            match self.tokens[self.pos].token {
+                For => true,
+                _ => false,
+            }
+        } else {
+            false
+        };
+        let mut trait_ty: Option[TypeExpr] = None;
+        // `first_ty` is consumed exactly once: it becomes the trait (when `for`
+        // follows) or the target (otherwise).
+        let target_ty = if is_for {
+            self.advance(); // `for`
+            trait_ty = Some(first_ty);
+            self.parse_type()
+        } else {
+            first_ty
+        };
+        self.expect_lbrace();
+        let mut methods: Vec[FnDefNode] = Vec.new();
+        loop {
+            if self.pos >= self.tokens.len() {
+                break;
+            }
+            if self.at_rbrace() {
+                break;
+            }
+            // Optional `pub` on the method (private-by-default, like module
+            // scope); `comptime`/`unsafe` markers are deferred.
+            let m_pub = match self.tokens[self.pos].token {
+                Pub => true,
+                _ => false,
+            };
+            if m_pub {
+                self.advance();
+            }
+            let m = self.parse_fn_def_node(m_pub);
+            methods.push(m);
+        }
+        self.expect_rbrace();
+        Item.Impl(ImplBlockNode {
+            trait_ty: trait_ty,
+            target_ty: target_ty,
+            methods: methods,
             span: self.span_from(start),
         })
     }

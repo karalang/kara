@@ -57,6 +57,9 @@ import ast.{
     SelfMode,
     FnParamNode,
     FnDefNode,
+    TraitMethodNode,
+    TraitDefNode,
+    ImplBlockNode,
 };
 
 // MUST stay identical to `escape_for_render` in `selfhost/src/main.kara` and
@@ -973,6 +976,86 @@ fn render_variant(v: VariantNode) -> String {
     out
 }
 
+// `(fn[ pub] NAME<span>[ self|refself|mutrefself] (params ...) [(ret T)] BLOCK)`
+// — the always-bodied free-function / impl-method render. Shared by the `Func`
+// item arm and `render_item`'s `Impl` arm.
+fn render_fn_def_node(n: FnDefNode) -> String {
+    let FnDefNode {
+        is_pub,
+        name,
+        self_mode,
+        params,
+        ret,
+        body,
+        span,
+    } = n;
+    let mut out = "(fn".to_string();
+    out.push_str(render_vis(is_pub));
+    out.push_str(" ");
+    out.push_str(name);
+    out.push_str(span_str(span.offset, span.length));
+    out.push_str(render_self_mode(self_mode));
+    out.push_str(" (params");
+    for p in params {
+        out.push_str(" ");
+        out.push_str(render_fn_param(p));
+    }
+    out.push_str(")");
+    match ret {
+        Some(r) => {
+            out.push_str(" (ret ");
+            out.push_str(render_type(r));
+            out.push_str(")");
+        }
+        None => {}
+    }
+    out.push_str(" ");
+    out.push_str(render_block(body));
+    out.push_str(")");
+    out
+}
+
+// `(tmethod NAME<span>[ self|...] (params ...) [(ret T)] [BLOCK])`. A required
+// signature (no body) omits the trailing block; a default body appends it — the
+// two are unambiguous since an empty default body still renders `(block)`.
+fn render_trait_method(m: TraitMethodNode) -> String {
+    let TraitMethodNode {
+        name,
+        self_mode,
+        params,
+        ret,
+        body,
+        span,
+    } = m;
+    let mut out = "(tmethod ".to_string();
+    out.push_str(name);
+    out.push_str(span_str(span.offset, span.length));
+    out.push_str(render_self_mode(self_mode));
+    out.push_str(" (params");
+    for p in params {
+        out.push_str(" ");
+        out.push_str(render_fn_param(p));
+    }
+    out.push_str(")");
+    match ret {
+        Some(r) => {
+            out.push_str(" (ret ");
+            out.push_str(render_type(r));
+            out.push_str(")");
+        }
+        None => {}
+    }
+    match body {
+        Some(b) => {
+            out.push_str(" ");
+            out.push_str(render_block(b));
+        }
+        None => {}
+    }
+    out.push_str(")");
+    out
+}
+
 pub fn render_item(item: Item) -> String {
     let mut out = "".to_string();
     match item {
@@ -1072,37 +1155,50 @@ pub fn render_item(item: Item) -> String {
             out.push_str(")");
         }
         Func(n) => {
-            let FnDefNode {
+            out.push_str(render_fn_def_node(n));
+        }
+        Trait(n) => {
+            let TraitDefNode {
                 is_pub,
                 name,
-                self_mode,
-                params,
-                ret,
-                body,
+                methods,
                 span,
             } = n;
-            out.push_str("(fn");
+            out.push_str("(trait");
             out.push_str(render_vis(is_pub));
             out.push_str(" ");
             out.push_str(name);
             out.push_str(span_str(span.offset, span.length));
-            out.push_str(render_self_mode(self_mode));
-            out.push_str(" (params");
-            for p in params {
+            for m in methods {
                 out.push_str(" ");
-                out.push_str(render_fn_param(p));
+                out.push_str(render_trait_method(m));
             }
             out.push_str(")");
-            match ret {
-                Some(r) => {
-                    out.push_str(" (ret ");
-                    out.push_str(render_type(r));
+        }
+        Impl(n) => {
+            let ImplBlockNode {
+                trait_ty,
+                target_ty,
+                methods,
+                span,
+            } = n;
+            out.push_str("(impl");
+            out.push_str(span_str(span.offset, span.length));
+            match trait_ty {
+                Some(t) => {
+                    out.push_str(" (trait ");
+                    out.push_str(render_type(t));
                     out.push_str(")");
                 }
                 None => {}
             }
-            out.push_str(" ");
-            out.push_str(render_block(body));
+            out.push_str(" (target ");
+            out.push_str(render_type(target_ty));
+            out.push_str(")");
+            for m in methods {
+                out.push_str(" ");
+                out.push_str(render_fn_def_node(m));
+            }
             out.push_str(")");
         }
         ErrItem(n) => {
