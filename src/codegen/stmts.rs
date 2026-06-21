@@ -1233,38 +1233,38 @@ impl<'ctx> super::Codegen<'ctx> {
                 // B-2026-06-07-5. Sits ahead of the value-oriented Vec/String
                 // tracking below, which would mis-handle the raw pointer.
                 if let PatternKind::Binding(var_name) = &pattern.kind {
-                    // B-2026-06-21-1: `let f = some_free_fn` (annotated `Fn(...)`
-                    // or inferred) binds a first-class fn value. Reify the bare
-                    // fn name into a `{trampoline, null env}` closure fat pointer
-                    // and register the binding in `closure_fn_types`, so both
-                    // `apply(f, x)` (pass to a `Fn`-typed param) and `f(x)`
-                    // (direct call through the local) work — the sibling of
-                    // B-2026-06-20-1's direct-argument case. Without this the
-                    // binding held a raw `ptr`: passing it to a fat-pointer param
-                    // failed LLVM verification, and a direct call fell through to
-                    // the unknown-callee path (silently returned 0). The fat
-                    // pointer's env is null and the trampoline is a module
-                    // global, so the binding owns no heap — no scope cleanup
-                    // needed, hence the early return. Sits ahead of the
-                    // value-oriented tracking below (a raw fn ptr would mislead
-                    // it). `reify_named_fn_value` self-guards on the resolution
-                    // precedence, so a shadowing local / const / variant / module
-                    // binding of the same name falls through to the normal path.
-                    if let ExprKind::Identifier(fn_name) = &value.kind {
-                        if let Some((fat, fn_type)) = self.reify_named_fn_value(fn_name) {
-                            let fn_val = self.current_fn.expect("let inside a function");
-                            let alloca = self.create_entry_alloca(fn_val, var_name, fat.get_type());
-                            self.builder.build_store(alloca, fat).unwrap();
-                            self.variables.insert(
-                                var_name.clone(),
-                                VarSlot {
-                                    ptr: alloca,
-                                    ty: fat.get_type(),
-                                },
-                            );
-                            self.closure_fn_types.insert(var_name.clone(), fn_type);
-                            return Ok(());
-                        }
+                    // First-class fn-value binding (B-2026-06-20-1 / -06-21-1 /
+                    // -06-21-2). When this `let` binds a fn value — an explicit
+                    // `Fn(...)` annotation, a bare free-fn name, or a call whose
+                    // callee returns `Fn(...)` — store the closure fat pointer
+                    // the RHS now produces (a bare fn name lowers to one via the
+                    // free-fn-as-value source arm) and register the local in
+                    // `closure_fn_types`, so both `apply(f, x)` (pass to a
+                    // `Fn`-typed param) and `f(x)` (direct call through the
+                    // local) work. Without this the binding held a raw `ptr`:
+                    // passing it to a fat-pointer param failed LLVM verification,
+                    // and a direct call fell through to the unknown-callee path
+                    // (silently returned 0). The fat pointer's env is null and
+                    // the trampoline is a module global, so the binding owns no
+                    // heap — no scope cleanup, hence the early return. Sits ahead
+                    // of the value-oriented tracking below (a fat pointer would
+                    // mislead it). `let_binding_fn_value_type` returns `None`
+                    // (falls through to the normal path) unless this really is a
+                    // fn-value binding whose signature is recoverable here.
+                    if let Some(fn_type) = self.let_binding_fn_value_type(ty.as_ref(), value) {
+                        let fat = self.compile_expr(value)?;
+                        let fn_val = self.current_fn.expect("let inside a function");
+                        let alloca = self.create_entry_alloca(fn_val, var_name, fat.get_type());
+                        self.builder.build_store(alloca, fat).unwrap();
+                        self.variables.insert(
+                            var_name.clone(),
+                            VarSlot {
+                                ptr: alloca,
+                                ty: fat.get_type(),
+                            },
+                        );
+                        self.closure_fn_types.insert(var_name.clone(), fn_type);
+                        return Ok(());
                     }
                     // `let r = m.entry(k).or_insert(d)` — bind `r` to the slot
                     // pointer (`mut ref V`) and tag it in `entry_slot_ref_vars`

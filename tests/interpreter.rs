@@ -35,6 +35,41 @@ fn test_integer_arithmetic() {
     assert_eq!(run("fn main() { println(1 + 2); }"), "3\n");
 }
 
+// ── First-class fn values (parity with codegen B-2026-06-20-1 / -06-21-*) ──
+// The tree-walking interpreter already handles named fn values as args, as
+// `let` bindings, and as return values — these lock that in as regression
+// cover so `karac run` and `karac build` stay at parity on the surface the
+// codegen slices closed.
+
+#[test]
+fn fn_value_passed_to_param() {
+    assert_eq!(
+        run("fn doubler(n: i64) -> i64 { n * 2 }\n\
+             fn apply(f: Fn(i64) -> i64, x: i64) -> i64 { f(x) }\n\
+             fn main() { println(apply(doubler, 21)); }\n"),
+        "42\n"
+    );
+}
+
+#[test]
+fn fn_value_let_bound_then_called() {
+    assert_eq!(
+        run("fn doubler(n: i64) -> i64 { n * 2 }\n\
+             fn main() { let f = doubler; println(f(21)); }\n"),
+        "42\n"
+    );
+}
+
+#[test]
+fn fn_value_returned_then_called() {
+    assert_eq!(
+        run("fn doubler(n: i64) -> i64 { n * 2 }\n\
+             fn pick() -> Fn(i64) -> i64 { doubler }\n\
+             fn main() { let f = pick(); println(f(21)); }\n"),
+        "42\n"
+    );
+}
+
 // ── Same-scope `let` shadowing (design.md § Variables > Shadowing) ──
 
 #[test]

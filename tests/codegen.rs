@@ -7806,6 +7806,67 @@ fn main() {
     /// `{trampoline, null-env}` fat pointer, so the higher-order call runs.
     /// Previously the `Fn`-typed param lowered to `i64` while the bare fn name
     /// lowered to a raw `ptr`, failing LLVM module verification.
+    /// B-2026-06-21-2: a `fn` body that *returns* a first-class `Fn(...)` value
+    /// (`fn pick() -> Fn(i64)->i64 { doubler }`). The bare fn name in return-tail
+    /// position now lowers to a closure fat pointer (the free-fn-as-value source
+    /// arm), matching the `{ptr,ptr}` return slot; `let f = pick()` registers
+    /// `f` in `closure_fn_types` from `pick`'s declared `Fn(...)` return type, so
+    /// the direct call through it works. Before: `ret ptr @doubler` vs `{ptr,ptr}`
+    /// verifier error.
+    #[test]
+    fn fn_value_returned_then_called() {
+        let out = run_program(
+            "fn doubler(n: i64) -> i64 { n * 2i64 }\n\
+             fn pick() -> Fn(i64) -> i64 { doubler }\n\
+             fn main() { let f = pick(); println(f\"{f(21i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// A returned fn value passed straight into a `Fn(...)` parameter — the call
+    /// result is already a fat pointer, so it flows through with no reify.
+    #[test]
+    fn fn_value_returned_passed_directly() {
+        let out = run_program(
+            "fn doubler(n: i64) -> i64 { n * 2i64 }\n\
+             fn pick() -> Fn(i64) -> i64 { doubler }\n\
+             fn apply(f: Fn(i64) -> i64, x: i64) -> i64 { f(x) }\n\
+             fn main() { println(f\"{apply(pick(), 21i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// B-2026-06-21-2: a fn value stored in a struct field (`H { f: doubler }`)
+    /// — the field initializer lowers to a fat pointer matching the
+    /// `f: Fn(...)` field slot. Reading it back and calling needs an explicit
+    /// `Fn(...)` annotation on the extracting `let` (so `closure_fn_types` is
+    /// registered); un-annotated `let g = h.f` is the documented residual.
+    #[test]
+    fn fn_value_struct_field_annotated_extraction() {
+        let out = run_program(
+            "fn doubler(n: i64) -> i64 { n * 2i64 }\n\
+             struct H { f: Fn(i64) -> i64 }\n\
+             fn main() { let h = H { f: doubler }; let g: Fn(i64) -> i64 = h.f; println(f\"{g(21i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// B-2026-06-21-2: a fn value stored in a `Vec[Fn(...)]` element, extracted
+    /// with an explicit annotation and called.
+    #[test]
+    fn fn_value_vec_element_annotated_extraction() {
+        let out = run_program(
+            "fn doubler(n: i64) -> i64 { n * 2i64 }\n\
+             fn main() {\n\
+                 let mut v: Vec[Fn(i64) -> i64] = Vec.new();\n\
+                 v.push(doubler);\n\
+                 let g: Fn(i64) -> i64 = v[0];\n\
+                 println(f\"{g(21i64)}\");\n\
+             }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
     /// B-2026-06-21-1 (sibling of B-2026-06-20-1): a bare named `fn` bound to a
     /// local first — `let g = doubler;` — then (a) passed to a `Fn(...)`-typed
     /// parameter and (b) called directly through the local. Both forms, and the

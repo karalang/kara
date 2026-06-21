@@ -325,19 +325,27 @@ impl<'ctx> super::Codegen<'ctx> {
                     Ok(ev)
                 } else if let Some(const_value) = self.consts.get(name).cloned() {
                     self.compile_expr(&const_value)
-                } else if let Some(fv) = self.module.get_function(name) {
-                    // Free fn name → fn pointer. The LLVM type is
-                    // `ptr` at this layer; downstream consumers (FFI
-                    // dispatchers like `Server.serve`) use it as a
-                    // typed indirect-call target. v1 doesn't yet track
-                    // the fn's source-level signature on the resulting
-                    // value — direct calls through such a binding (e.g.
-                    // `let f = target; f()`) are not supported and
-                    // would fall through to the generic call path's
-                    // unknown-callee branch. The intended consumer is
-                    // free-fn-as-`Fn`-arg dispatch (Server.serve and
-                    // similar FFI extern hookups).
-                    Ok(fv.as_global_value().as_pointer_value().into())
+                } else if self.module.get_function(name).is_some() {
+                    // Free fn name as a first-class value → a `{trampoline,
+                    // null env}` closure fat pointer (B-2026-06-21-2), the same
+                    // representation as a closure literal and as the
+                    // argument-site / let-binding reifies (B-2026-06-20-1 /
+                    // -06-21-1). Producing the fat pointer HERE — the one
+                    // free-fn-as-value source — makes a bare fn name lower
+                    // correctly in every value position at once: a `Fn(...)`
+                    // return tail (`fn pick() -> Fn(..) { doubler }`), a struct
+                    // field initializer (`H { f: doubler }`), a `Vec[Fn(..)]`
+                    // element (`v.push(doubler)`), and a `let` RHS. Before this
+                    // it emitted a raw `ptr`, which mismatched the 16-byte
+                    // fat-pointer slot those positions expect (verifier error or
+                    // — through a local — a silent wrong call). `Server.serve`
+                    // resolves its handler name independently via
+                    // `resolve_free_fn_for_handler_arg` (it never reaches this
+                    // arm), so its raw-fn-ptr FFI ABI is unaffected.
+                    let (fat, _) = self
+                        .reify_named_fn_value(name)
+                        .expect("a resolved module fn reifies to a fn value");
+                    Ok(fat)
                 } else {
                     self.load_variable(name)
                 }

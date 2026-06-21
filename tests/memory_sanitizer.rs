@@ -8151,6 +8151,29 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_returned_fn_value_heap_arg_no_leak() {
+        // B-2026-06-21-2: a fn value flowed through a `-> Fn(...)` return, then
+        // invoked on a heap (String) arg. The returned value is a heap-free fat
+        // pointer (null env, module-global trampoline); the only heap is the
+        // String arg, which must move through the transparent trampoline and
+        // free exactly once. ≥36-byte payload to defeat the short-String
+        // reachable-leak blind spot.
+        assert_clean_asan_run(
+            r#"
+fn shout(s: String) -> String { f"{s}!" }
+fn pick() -> Fn(String) -> String { shout }
+fn main() {
+    let f = pick();
+    let r = f("hello-this-is-a-fairly-long-payload-string");
+    println(r);
+}
+"#,
+            &["hello-this-is-a-fairly-long-payload-string!"],
+            "returned_fn_value_heap_arg_no_leak",
+        );
+    }
+
     // ── while let / let else drop paths (phase-6 line 489) ───────
 
     #[test]

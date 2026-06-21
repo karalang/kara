@@ -220,6 +220,76 @@ impl<'ctx> super::Codegen<'ctx> {
         self.module.get_function(name).is_some()
     }
 
+    /// The env-first closure-call ABI `FunctionType` for `target`:
+    /// `R (ptr env, P0, P1, …)` — `target`'s own signature with a leading env
+    /// pointer prepended. This is the type of `target`'s reify trampoline and
+    /// the `closure_fn_types` entry for any binding that holds `target` as a
+    /// fn value.
+    fn env_first_fn_type(&self, target: FunctionValue<'ctx>) -> FunctionType<'ctx> {
+        let target_ty = target.get_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let mut param_tys: Vec<BasicMetadataTypeEnum<'ctx>> = vec![ptr_ty.into()];
+        // `FunctionType::get_param_types` already yields `BasicMetadataTypeEnum`.
+        param_tys.extend(target_ty.get_param_types());
+        match target_ty.get_return_type() {
+            Some(BasicTypeEnum::IntType(t)) => t.fn_type(&param_tys, false),
+            Some(BasicTypeEnum::FloatType(t)) => t.fn_type(&param_tys, false),
+            Some(BasicTypeEnum::PointerType(t)) => t.fn_type(&param_tys, false),
+            Some(BasicTypeEnum::StructType(t)) => t.fn_type(&param_tys, false),
+            Some(BasicTypeEnum::ArrayType(t)) => t.fn_type(&param_tys, false),
+            Some(BasicTypeEnum::VectorType(t)) => t.fn_type(&param_tys, false),
+            Some(BasicTypeEnum::ScalableVectorType(_)) | None => {
+                self.context.void_type().fn_type(&param_tys, false)
+            }
+        }
+    }
+
+    /// If `let <name>[: ty] = value` binds a first-class fn value, return the
+    /// env-first closure `FunctionType` to register in `closure_fn_types` (so a
+    /// later `name(args)` lowers to an indirect call through the fat pointer).
+    /// Recognizes, in precedence order: an explicit `Fn(...)` / `OnceFn(...)`
+    /// annotation; a bare free-fn-name RHS; and a call whose callee's declared
+    /// return type is `Fn(...)` (so `let f = pick()` where `pick -> Fn(..)`
+    /// works un-annotated). Returns `None` when the binding is not a fn value,
+    /// or when its signature can't be recovered at this layer — e.g. an
+    /// un-annotated field/index read of a `Fn(..)` value, which still needs an
+    /// explicit `let g: Fn(..) = h.f;` annotation (B-2026-06-21-2 residual).
+    pub(super) fn let_binding_fn_value_type(
+        &self,
+        ty: Option<&TypeExpr>,
+        value: &Expr,
+    ) -> Option<FunctionType<'ctx>> {
+        if let Some(TypeKind::FnType {
+            params,
+            return_type,
+            ..
+        }) = ty.map(|t| &t.kind)
+        {
+            return Some(self.closure_abi_fn_type(params, return_type.as_deref()));
+        }
+        if let ExprKind::Identifier(n) = &value.kind {
+            if self.name_resolves_to_free_fn(n) {
+                return self
+                    .module
+                    .get_function(n)
+                    .map(|t| self.env_first_fn_type(t));
+            }
+        }
+        if let ExprKind::Call { callee, .. } = &value.kind {
+            if let ExprKind::Identifier(callee_name) = &callee.kind {
+                if let Some(TypeKind::FnType {
+                    params,
+                    return_type,
+                    ..
+                }) = self.fn_return_type_exprs.get(callee_name).map(|t| &t.kind)
+                {
+                    return Some(self.closure_abi_fn_type(params, return_type.as_deref()));
+                }
+            }
+        }
+        None
+    }
+
     /// Synthesize a per-fn env-ignoring trampoline `__karac_fnval_<name>` whose
     /// signature is the env-first wrap of `target`'s own signature
     /// (`R (ptr env, P0, P1, …)`): it drops the leading env pointer and forwards
@@ -235,23 +305,7 @@ impl<'ctx> super::Codegen<'ctx> {
         target: FunctionValue<'ctx>,
     ) -> FunctionValue<'ctx> {
         let saved_bb = self.builder.get_insert_block();
-
-        let target_ty = target.get_type();
-        let ptr_ty = self.context.ptr_type(AddressSpace::default());
-        let mut param_tys: Vec<BasicMetadataTypeEnum<'ctx>> = vec![ptr_ty.into()];
-        // `FunctionType::get_param_types` already yields `BasicMetadataTypeEnum`.
-        param_tys.extend(target_ty.get_param_types());
-        let tramp_ty = match target_ty.get_return_type() {
-            Some(BasicTypeEnum::IntType(t)) => t.fn_type(&param_tys, false),
-            Some(BasicTypeEnum::FloatType(t)) => t.fn_type(&param_tys, false),
-            Some(BasicTypeEnum::PointerType(t)) => t.fn_type(&param_tys, false),
-            Some(BasicTypeEnum::StructType(t)) => t.fn_type(&param_tys, false),
-            Some(BasicTypeEnum::ArrayType(t)) => t.fn_type(&param_tys, false),
-            Some(BasicTypeEnum::VectorType(t)) => t.fn_type(&param_tys, false),
-            Some(BasicTypeEnum::ScalableVectorType(_)) | None => {
-                self.context.void_type().fn_type(&param_tys, false)
-            }
-        };
+        let tramp_ty = self.env_first_fn_type(target);
         let tramp = self.module.add_function(tramp_name, tramp_ty, None);
         let entry = self.context.append_basic_block(tramp, "entry");
         self.builder.position_at_end(entry);
@@ -266,7 +320,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .collect();
         let call = self.builder.build_call(target, &fwd, "fnval_fwd").unwrap();
         let ret_val = call.try_as_basic_value();
-        if target_ty.get_return_type().is_some() && !ret_val.is_instruction() {
+        if target.get_type().get_return_type().is_some() && !ret_val.is_instruction() {
             self.builder
                 .build_return(Some(&ret_val.unwrap_basic()))
                 .unwrap();
