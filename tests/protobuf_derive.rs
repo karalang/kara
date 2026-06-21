@@ -266,17 +266,138 @@ fn main() {
     );
 }
 
+// ── nested messages ─────────────────────────────────────────────
+
+#[test]
+fn derive_nested_message_roundtrip() {
+    // A struct-typed field whose type also derives `Message` is encoded as a
+    // length-delimited sub-message and round-trips, including a negative scalar
+    // inside the nested value.
+    let src = r#"
+#[derive(Message)]
+struct Inner { label: String, score: i64 }
+
+#[derive(Message)]
+struct Outer { id: i64, child: Inner, tag: String }
+
+fn main() {
+    let o = Outer { id: 7, child: Inner { label: "hi", score: -3 }, tag: "z" };
+    let back = Outer.decode(o.encode());
+    println(back.id);
+    println(back.child.label);
+    println(back.child.score);
+    println(back.tag);
+}
+"#;
+    assert_eq!(run(src), vec!["7\n", "hi\n", "-3\n", "z\n"]);
+}
+
+#[test]
+fn derive_nested_message_multi_level_roundtrip() {
+    // Nesting composes: a message field can itself contain a message field.
+    let src = r#"
+#[derive(Message)]
+struct A { v: i64 }
+
+#[derive(Message)]
+struct B { a: A, name: String }
+
+#[derive(Message)]
+struct C { b: B, k: i64 }
+
+fn main() {
+    let c = C { b: B { a: A { v: 42 }, name: "deep" }, k: 9 };
+    let back = C.decode(c.encode());
+    println(back.k);
+    println(back.b.name);
+    println(back.b.a.v);
+}
+"#;
+    assert_eq!(run(src), vec!["9\n", "deep\n", "42\n"]);
+}
+
+#[test]
+fn derive_nested_decode_empty_yields_default_nested() {
+    // Decoding empty bytes leaves a nested field at its proto3 zero value — the
+    // decode of empty bytes, i.e. every sub-field defaulted.
+    let src = r#"
+#[derive(Message)]
+struct Inner { label: String, score: i64 }
+
+#[derive(Message)]
+struct Outer { id: i64, child: Inner }
+
+fn main() {
+    let o = Outer.decode(Vec.new());
+    println(o.id);
+    println(o.child.label == "");
+    println(o.child.score);
+}
+"#;
+    assert_eq!(run(src), vec!["0\n", "true\n", "0\n"]);
+}
+
+#[test]
+fn derive_nested_wire_is_length_delimited_submessage() {
+    // The nested field is written with wire type 2 (length-delimited), and the
+    // payload is exactly the nested message's own encoding — a `ProtoReader`
+    // peels the outer frame, then decodes the inner blob.
+    let src = r#"
+#[derive(Message)]
+struct Inner { score: i64 }
+
+#[derive(Message)]
+struct Outer { child: Inner }
+
+fn main() {
+    let o = Outer { child: Inner { score: 5 } };
+    let mut reader = ProtoReader.new(o.encode());
+    let (field, wire) = reader.read_tag();
+    println(field);
+    println(wire);
+    let blob = reader.read_len_delim();
+    println(reader.at_end());
+    let inner = Inner.decode(blob);
+    println(inner.score);
+}
+"#;
+    assert_eq!(run(src), vec!["1\n", "2\n", "true\n", "5\n"]);
+}
+
+#[test]
+fn derive_nested_typecheck_clean() {
+    let src = r#"
+#[derive(Message)]
+struct Inner { v: i64 }
+
+#[derive(Message)]
+struct Outer { inner: Inner }
+
+fn main() {
+    let o = Outer { inner: Inner { v: 1 } };
+    let back = Outer.decode(o.encode());
+    println(back.inner.v);
+}
+"#;
+    let errs = typecheck_errors(src);
+    assert!(
+        !errs
+            .iter()
+            .any(|e| e.contains("no method") || e.contains("no associated function")),
+        "nested derive methods must typecheck clean; got: {errs:?}"
+    );
+}
+
 // ── diagnostics ─────────────────────────────────────────────────
 
 #[test]
 fn derive_unsupported_field_type_errors() {
-    // A field whose type isn't a supported proto3 scalar (here a nested struct)
-    // raises a `compiler.error` from `derive_message`.
+    // A field whose type isn't a supported proto3 scalar (here a float, which
+    // v1 doesn't encode) and isn't a nested message raises a `compiler.error`
+    // from `derive_message`.
     let src = r#"
-struct Inner { v: i64 }
-
 #[derive(Message)]
-struct Outer { id: i64, inner: Inner }
+struct Outer { id: i64, weight: f64 }
 
 fn main() {}
 "#;
@@ -284,8 +405,31 @@ fn main() {}
     assert!(
         diags.iter().any(|d| d.contains("E_COMPTIME_ERROR")
             && d.contains("unsupported type")
-            && d.contains("inner")),
+            && d.contains("weight")),
         "expected an unsupported-field diagnostic; got: {diags:?}"
+    );
+}
+
+#[test]
+fn derive_nested_non_message_struct_errors() {
+    // A struct-typed field is treated as a nested message, but only a struct
+    // that itself derives `Message` has the codec to delegate to. Nesting a
+    // plain struct must raise a clear `compiler.error` (not the generic
+    // unsupported-type one).
+    let src = r#"
+struct Plain { v: i64 }
+
+#[derive(Message)]
+struct Outer { id: i64, inner: Plain }
+
+fn main() {}
+"#;
+    let diags = comptime_diags(src);
+    assert!(
+        diags.iter().any(|d| d.contains("E_COMPTIME_ERROR")
+            && d.contains("does not derive(Message)")
+            && d.contains("inner")),
+        "expected a nested-non-message diagnostic; got: {diags:?}"
     );
 }
 

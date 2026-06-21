@@ -177,6 +177,52 @@ fn main() {
 // ── diagnostics ─────────────────────────────────────────────────
 
 #[test]
+fn proto_nested_message_field_roundtrip() {
+    // A field whose type is another message declared in the same schema is a
+    // nested message — the parser maps it to that struct and the derive encodes
+    // it as a length-delimited sub-message. End-to-end round trip.
+    let src = r#"
+#[proto_schema]
+const SCHEMA: String = "
+    syntax = \"proto3\";
+    message Address { string city = 1; string zip = 2; }
+    message Person { string name = 1; Address addr = 2; int64 age = 3; }
+";
+
+fn main() {
+    let p = Person { name: "Ada", addr: Address { city: "London", zip: "NW1" }, age: 36 };
+    let q = Person.decode(p.encode());
+    println(q.name);
+    println(q.addr.city);
+    println(q.addr.zip);
+    println(q.age);
+}
+"#;
+    assert_eq!(run(src), vec!["Ada\n", "London\n", "NW1\n", "36\n"]);
+}
+
+#[test]
+fn proto_nested_message_forward_reference() {
+    // A message field may reference a message declared later in the schema — the
+    // parser collects all message names before resolving field types.
+    let src = r#"
+#[proto_schema]
+const SCHEMA: String = "
+    message Outer { Inner child = 1; int64 id = 2; }
+    message Inner { int64 v = 1; }
+";
+
+fn main() {
+    let o = Outer { child: Inner { v: 99 }, id: 4 };
+    let back = Outer.decode(o.encode());
+    println(back.child.v);
+    println(back.id);
+}
+"#;
+    assert_eq!(run(src), vec!["99\n", "4\n"]);
+}
+
+#[test]
 fn proto_unsupported_type_errors() {
     // `float` is not in the v1 scalar set; the pure-Kāra parser reports it.
     let src = r#"

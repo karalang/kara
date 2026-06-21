@@ -27,7 +27,9 @@
 //!   `fn encode(ref self) -> Vec[u8]`, `fn decode(bytes: Vec[u8]) -> Self`, and
 //!   `fn merge(mut ref self, bytes: Vec[u8])`. Field numbers are 1-based
 //!   declaration order. Supported field types (v1): `i32` / `i64` / `u32` /
-//!   `u64` / `bool` (varint), `String` / `Vec[u8]` (length-delimited).
+//!   `u64` / `bool` (varint), `String` / `Vec[u8]` (length-delimited), and
+//!   nested messages — a field whose struct type itself derives `Message`,
+//!   encoded as a length-delimited sub-message.
 //!
 //! Encoding is pure; decoding allocates (`Vec[u8]` / `String`) — matching the
 //! spec's "pure on encode, allocates(Heap) on decode".
@@ -386,6 +388,18 @@ comptime fn proto_encode_field(idx: i64, fname: String, tn: String) -> String {
     }
 }
 
+// A nested message field (type `tn` itself derives `Message`) is written as a
+// length-delimited sub-message (wire type 2): its tag, then the byte length of
+// the nested encoding, then those bytes. `self.fname.encode()` returns an owned
+// `Vec[u8]`; bind it to a per-field temp (`m<idx>`, a fresh identifier) so the
+// length and the payload read the same encoding without re-encoding.
+comptime fn proto_encode_nested(idx: i64, fname: String) -> String {
+    let tag = f"{idx}";
+    "let m" + tag + " = self." + fname + ".encode(); out.extend_from_slice(ProtoBuf.encode_tag("
+        + tag + ", 2)); out.extend_from_slice(ProtoBuf.encode_varint(m" + tag
+        + ".len() as u64)); out.extend_from_slice(m" + tag + ");"
+}
+
 // Emit `impl T { encode / decode / merge }` for a `#[derive(Message)]` struct.
 comptime fn derive_message(comptime T: Type) -> Vec[Item] {
     let n = T.name();
@@ -399,17 +413,39 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
     for f in T.fields() {
         let fname = f.name;
         let tn = f.ty.name();
-        if not proto_supported(tn) {
+        // A struct-typed field is a nested message — encoded as a length-
+        // delimited sub-message via its own derived `encode`/`decode`. It must
+        // itself derive `Message`; a plain struct has no codec to delegate to.
+        let nested = f.ty.is_struct();
+        if nested and not f.ty.derives("Message") {
+            compiler.error(
+                "derive(Message): nested field `" + fname + "` has type `" + tn
+                    + "`, which does not derive(Message)",
+            );
+        }
+        if not proto_supported(tn) and not nested {
             compiler.error(
                 "derive(Message): field `" + fname + "` has unsupported type `" + tn
-                    + "` (proto3 v1 supports i32/i64/u32/u64/bool/String/Vec[u8])",
+                    + "` (proto3 v1 supports i32/i64/u32/u64/bool/String/Vec[u8] and nested messages)",
             );
         }
         let tag = f"{idx}";
         let cond = "field == " + tag;
-        let read = proto_read_expr(tn);
-        enc = enc + proto_encode_field(idx, fname, tn) + " ";
-        decls = decls + "let mut " + fname + " = " + proto_default(tn) + "; ";
+        // Nested: read a length-delimited blob and decode it; default is the
+        // decode of empty bytes (every field at its proto3 zero value).
+        let read = if nested {
+            tn + ".decode(reader.read_len_delim())"
+        } else {
+            proto_read_expr(tn)
+        };
+        let dflt = if nested { tn + ".decode(Vec.new())" } else { proto_default(tn) };
+        let efield = if nested {
+            proto_encode_nested(idx, fname)
+        } else {
+            proto_encode_field(idx, fname, tn)
+        };
+        enc = enc + efield + " ";
+        decls = decls + "let mut " + fname + " = " + dflt + "; ";
         if first {
             dec = "if " + cond + " { " + fname + " = " + read + "; }";
             mrg = "if " + cond + " { self." + fname + " = " + read + "; }";
@@ -452,12 +488,14 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
 // types *before* name resolution, so the rest of the program can name them.
 //
 // v1 scope (matches the slice-2 field set): proto3 `message` blocks with scalar
-// fields of type string / bytes / int32 / int64 / uint32 / uint64 / bool. Field
-// numbers must be contiguous `1..N` (declaration-order tagging — per-field
-// number overrides need reflection support that doesn't exist yet). `syntax` /
-// `package` / `option` / `import` statements are skipped; nested messages,
-// enums, `repeated`, `map`, `oneof`, and `sint*` / `fixed*` / floating types are
-// not yet supported.
+// fields of type string / bytes / int32 / int64 / uint32 / uint64 / bool, plus
+// nested message fields — a field whose type is another `message` in the same
+// schema (forward references included), encoded as a length-delimited sub-
+// message. Field numbers must be contiguous `1..N` (declaration-order tagging —
+// per-field number overrides need reflection support that doesn't exist yet).
+// `syntax` / `package` / `option` / `import` statements are skipped; enums,
+// `repeated`, `map`, `oneof`, and `sint*` / `fixed*` / floating types are not
+// yet supported.
 
 // Split proto3 source into a flat token stream. `{` `}` `;` `=` are each their
 // own token; runs of any other non-whitespace are one token. Uses `substring`
@@ -503,6 +541,49 @@ comptime fn proto_atoi(s: String) -> i64 {
         i = i + 1;
     }
     v
+}
+
+// Scan the token stream for every `message NAME` declaration and collect the
+// names. Run before field parsing so a field may reference a message declared
+// later in the schema (forward references), and so a message-typed field is
+// told apart from a genuine unsupported scalar.
+comptime fn proto_collect_messages(toks: Vec[String], n: i64) -> Vec[String] {
+    let mut names = Vec.new();
+    let mut i = 0;
+    while i < n {
+        if toks[i] == "message" and i + 1 < n {
+            names.push(toks[i + 1]);
+        }
+        i = i + 1;
+    }
+    names
+}
+
+// True when `name` is one of the schema's declared message types.
+comptime fn proto_is_message(name: String, msgs: Vec[String]) -> bool {
+    let mut i = 0;
+    let mut found = false;
+    while i < msgs.len() {
+        if msgs[i] == name {
+            found = true;
+        }
+        i = i + 1;
+    }
+    found
+}
+
+// Resolve a proto field type to its Kāra type: a scalar via [`proto_map_type`],
+// or a nested message (mapped to its own struct name — the derive encodes it as
+// a length-delimited sub-message), or "" if neither.
+comptime fn proto_resolve_type(ptype: String, msgs: Vec[String]) -> String {
+    let scalar = proto_map_type(ptype);
+    if scalar != "" {
+        scalar
+    } else if proto_is_message(ptype, msgs) {
+        ptype
+    } else {
+        ""
+    }
 }
 
 // Map a proto3 scalar type name to its Kāra type, or "" if unsupported.
@@ -564,6 +645,7 @@ comptime fn proto_order_fields(name: String, fnums: Vec[i64], fdecls: Vec[String
 comptime fn proto_parse_schema(src: String) -> Vec[Item] {
     let toks = proto_tokenize(src);
     let n = toks.len();
+    let msgs = proto_collect_messages(toks, n);
     let mut items = Vec.new();
     let mut i = 0;
     while i < n {
@@ -587,11 +669,11 @@ comptime fn proto_parse_schema(src: String) -> Vec[Item] {
                         let ptype = toks[i];
                         let fname = toks[i + 1];
                         let numtok = toks[i + 3];
-                        let ktype = proto_map_type(ptype);
+                        let ktype = proto_resolve_type(ptype, msgs);
                         if ktype == "" {
                             compiler.error(
                                 "proto message '" + name + "': unsupported field type '" + ptype
-                                    + "' (v1 supports string/bytes/int32/int64/uint32/uint64/bool)",
+                                    + "' (v1 supports string/bytes/int32/int64/uint32/uint64/bool and nested message types)",
                             );
                             bad = true;
                         }

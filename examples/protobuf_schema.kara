@@ -18,15 +18,22 @@ const SCHEMA: String = "
         bool active = 3;
     }
 
+    message Address {
+        string city = 1;
+        string zip = 2;
+    }
+
+    // A message-typed field nests `Address` as a length-delimited sub-message.
     message Team {
         string title = 1;
         uint32 size = 2;
+        Address office = 3;
     }
 ";
 
 fn main() {
-    // `Person` / `Team` exist as ordinary types: the schema expanded before
-    // name resolution, so they resolve like hand-written structs.
+    // `Person` / `Team` / `Address` exist as ordinary types: the schema expanded
+    // before name resolution, so they resolve like hand-written structs.
     let p = Person { name: "Ada", age: 36, active: true };
     let wire = p.encode();
     println(f"encoded Person in {wire.len()} bytes");
@@ -34,7 +41,11 @@ fn main() {
     let back = Person.decode(wire);
     println(f"name={back.name} age={back.age} active={back.active}");
 
-    let t = Team { title: "Compilers", size: 4u32 };
+    let t = Team {
+        title: "Compilers",
+        size: 4u32,
+        office: Address { city: "London", zip: "NW1" },
+    };
     let rt = Team.decode(t.encode());
-    println(f"team={rt.title} size={rt.size}");
+    println(f"team={rt.title} size={rt.size} city={rt.office.city} zip={rt.office.zip}");
 }

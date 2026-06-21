@@ -108,6 +108,50 @@ fn main() {
     assert_eq!(karac::run_program(src), vec!["3\n", "Red;Green;Blue;\n"]);
 }
 
+// ── derives() ───────────────────────────────────────────────────
+
+#[test]
+fn derives_reflects_declared_traits() {
+    let src = "
+#[derive(Eq)]
+struct P { x: i64 }
+struct Q { y: i64 }
+fn main() {
+    println(comptime { P.derives(\"Eq\") });
+    println(comptime { P.derives(\"Hash\") });
+    println(comptime { Q.derives(\"Eq\") });
+}";
+    assert_eq!(
+        karac::run_program(src),
+        vec!["true\n", "false\n", "false\n"]
+    );
+}
+
+#[test]
+fn derives_via_comptime_fn_param() {
+    let src = "
+#[derive(Eq)]
+struct P { x: i64 }
+comptime fn is_eq(comptime T: Type) -> bool { T.derives(\"Eq\") }
+fn main() { println(comptime { is_eq(P) }); }";
+    assert_eq!(karac::run_program(src), vec!["true\n"]);
+}
+
+#[test]
+fn derives_arity_error() {
+    // `derives` needs exactly one argument; calling it with none is an arity
+    // error from the typechecker.
+    let src = "
+struct P { x: i64 }
+fn main() { let _ = comptime { P.derives() }; }";
+    let errs = typecheck_errors(src);
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("derives") && e.contains("one argument")),
+        "expected a derives arity error; got: {errs:?}"
+    );
+}
+
 // ── comptime fn with `comptime T: Type` parameter ───────────────
 
 #[test]

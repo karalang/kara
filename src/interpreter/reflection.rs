@@ -27,7 +27,14 @@ impl Interpreter<'_> {
     pub(crate) fn is_reflection_method_name(method: &str) -> bool {
         matches!(
             method,
-            "name" | "is_struct" | "is_enum" | "is_union" | "is_generic" | "fields" | "variants"
+            "name"
+                | "is_struct"
+                | "is_enum"
+                | "is_union"
+                | "is_generic"
+                | "fields"
+                | "variants"
+                | "derives"
         )
     }
 
@@ -49,11 +56,12 @@ impl Interpreter<'_> {
         args: &[CallArg],
         span: &Span,
     ) -> Value {
-        // All reflection methods are zero-arg; still evaluate any args for
-        // their side effects / to stay uniform with the rest of dispatch.
-        for a in args {
-            self.eval_expr_inner(&a.value);
-        }
+        // Evaluate every argument (for side effects, and so `derives` can read
+        // its trait-name operand). All methods but `derives` are nullary.
+        let arg_vals: Vec<Value> = args
+            .iter()
+            .map(|a| self.eval_expr_inner(&a.value))
+            .collect();
 
         let tc = self.typecheck_result;
         match method {
@@ -61,6 +69,33 @@ impl Interpreter<'_> {
             "is_struct" => Value::Bool(tc.struct_info.contains_key(type_name)),
             "is_enum" => Value::Bool(tc.enum_info.contains_key(type_name)),
             "is_union" => Value::Bool(tc.union_info.contains_key(type_name)),
+            // `T.derives("Trait")` — true when the struct/enum was declared with
+            // `#[derive(Trait)]` (including comptime-backed derives such as
+            // `Message`). Lets a derive validate that a nested field type is
+            // itself a derived message before emitting code that calls its
+            // generated methods.
+            "derives" => {
+                let trait_name = match arg_vals.first() {
+                    Some(Value::String(s)) => s.clone(),
+                    _ => {
+                        return self.record_runtime_error(
+                            "reflection method `derives` expects a `String` trait name".to_string(),
+                            span,
+                        )
+                    }
+                };
+                let has = tc
+                    .struct_info
+                    .get(type_name)
+                    .map(|s| s.derived_traits.contains(&trait_name))
+                    .or_else(|| {
+                        tc.enum_info
+                            .get(type_name)
+                            .map(|e| e.derived_traits.contains(&trait_name))
+                    })
+                    .unwrap_or(false);
+                Value::Bool(has)
+            }
             "is_generic" => {
                 let generic = tc
                     .struct_info
@@ -80,7 +115,7 @@ impl Interpreter<'_> {
                 format!(
                     "unknown comptime reflection method `{other}` on type `{type_name}`; \
                      this slice supports name / is_struct / is_enum / is_union / \
-                     is_generic / fields / variants"
+                     is_generic / fields / variants / derives"
                 ),
                 span,
             ),

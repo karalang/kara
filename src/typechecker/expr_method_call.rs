@@ -505,7 +505,14 @@ impl<'a> super::TypeChecker<'a> {
     pub(super) fn is_reflection_method(method: &str) -> bool {
         matches!(
             method,
-            "name" | "is_struct" | "is_enum" | "is_union" | "is_generic" | "fields" | "variants"
+            "name"
+                | "is_struct"
+                | "is_enum"
+                | "is_union"
+                | "is_generic"
+                | "fields"
+                | "variants"
+                | "derives"
         )
     }
 
@@ -523,8 +530,26 @@ impl<'a> super::TypeChecker<'a> {
         args: &[CallArg],
         span: &Span,
     ) -> Type {
-        for arg in args {
-            self.infer_expr(&arg.value);
+        let arg_tys: Vec<Type> = args.iter().map(|arg| self.infer_expr(&arg.value)).collect();
+        // `derives(trait_name)` is the one reflection method that takes an
+        // argument — a single `String` naming the trait. Every other method
+        // is nullary.
+        if method == "derives" {
+            if arg_tys.len() != 1 {
+                self.type_error(
+                    "reflection method `derives` takes exactly one argument (the trait name)"
+                        .to_string(),
+                    span.clone(),
+                    TypeErrorKind::WrongNumberOfArgs,
+                );
+            } else if !matches!(arg_tys[0], Type::Str | Type::Error) {
+                self.type_error(
+                    "reflection method `derives` expects a `String` trait name".to_string(),
+                    span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+            return Type::Bool;
         }
         if !args.is_empty() {
             self.type_error(
