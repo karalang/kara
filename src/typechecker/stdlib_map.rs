@@ -7,10 +7,37 @@
 use crate::ast::*;
 use crate::token::Span;
 
+use super::inference::{resolve_type_var_top, unify_types};
 use super::types::{type_display, IntSize, Type};
 use super::TypeErrorKind;
 
 impl<'a> super::TypeChecker<'a> {
+    /// Check a `Map`/`SortedMap` key or value argument against the
+    /// receiver's slot type, back-propagating the argument type into any
+    /// unsolved slot typevar *before* the assignability check.
+    ///
+    /// `Map.new()` mints the receiver as `Map[?K, ?V]` (two fresh
+    /// typevars). Without the `unify_types` step a subsequent `.insert(k,
+    /// v)` / `.get(k)` would only `check_assignable(?K, ConcreteK)`, which
+    /// reports a spurious `expected '?K', found 'ConcreteK'` mismatch and
+    /// leaves the binding's K/V unresolved — so the inferred `Map[?K, ?V]`
+    /// later clashes with an annotated `Map[K, V]` field/param at the use
+    /// site. Pinning K/V here mirrors how `Vec.new()` + `.push()` pins the
+    /// element type (`expr_method_call.rs`). Resolving `slot` after
+    /// unification keeps the assignability check from comparing the
+    /// now-stale typevar against the (just-pinned) argument type.
+    fn check_map_slot_arg(&mut self, slot: &Type, arg: &CallArg) {
+        let arg_ty = self.infer_expr(&arg.value);
+        unify_types(
+            slot,
+            &arg_ty,
+            &mut self.env.substitutions,
+            &mut self.env.const_substitutions,
+        );
+        let resolved_slot = resolve_type_var_top(slot, &self.env.substitutions);
+        self.check_assignable(&resolved_slot, &arg_ty, arg.value.span.clone());
+    }
+
     /// Infer the return type of a method call on `Map[K, V]`.
     /// `key` is K, `val` is V from the receiver's type arguments.
     pub(super) fn infer_map_method(
@@ -44,10 +71,6 @@ impl<'a> super::TypeChecker<'a> {
         }
         let k = key.clone();
         let v = val.clone();
-        let option_v = Type::Named {
-            name: "Option".to_string(),
-            args: vec![v.clone()],
-        };
         let vec_k = Type::Named {
             name: "Vec".to_string(),
             args: vec![k.clone()],
@@ -89,46 +112,54 @@ impl<'a> super::TypeChecker<'a> {
             }
             "contains_key" => {
                 for arg in args {
-                    let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&k, &at, arg.value.span.clone());
+                    self.check_map_slot_arg(&k, arg);
                 }
                 Type::Bool
             }
             "get" => {
                 for arg in args {
-                    let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&k, &at, arg.value.span.clone());
+                    self.check_map_slot_arg(&k, arg);
                 }
-                option_v
+                // Re-read V through the substitutions: a sibling `insert`
+                // may have pinned it, and even a lone `get(k)` on a fresh
+                // `Map.new()` should surface the resolved value type.
+                let resolved_v = resolve_type_var_top(&v, &self.env.substitutions);
+                Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![resolved_v],
+                }
             }
             "get_or" => {
                 if let Some(key_arg) = args.first() {
-                    let kt = self.infer_expr(&key_arg.value);
-                    self.check_assignable(&k, &kt, key_arg.value.span.clone());
+                    self.check_map_slot_arg(&k, key_arg);
                 }
                 if let Some(default_arg) = args.get(1) {
-                    let dt = self.infer_expr(&default_arg.value);
-                    self.check_assignable(&v, &dt, default_arg.value.span.clone());
+                    self.check_map_slot_arg(&v, default_arg);
                 }
-                v
+                resolve_type_var_top(&v, &self.env.substitutions)
             }
             "insert" => {
                 if let Some(key_arg) = args.first() {
-                    let kt = self.infer_expr(&key_arg.value);
-                    self.check_assignable(&k, &kt, key_arg.value.span.clone());
+                    self.check_map_slot_arg(&k, key_arg);
                 }
                 if let Some(val_arg) = args.get(1) {
-                    let vt = self.infer_expr(&val_arg.value);
-                    self.check_assignable(&v, &vt, val_arg.value.span.clone());
+                    self.check_map_slot_arg(&v, val_arg);
                 }
-                option_v
+                let resolved_v = resolve_type_var_top(&v, &self.env.substitutions);
+                Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![resolved_v],
+                }
             }
             "remove" => {
                 for arg in args {
-                    let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&k, &at, arg.value.span.clone());
+                    self.check_map_slot_arg(&k, arg);
                 }
-                option_v
+                let resolved_v = resolve_type_var_top(&v, &self.env.substitutions);
+                Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![resolved_v],
+                }
             }
             "keys" => {
                 if !args.is_empty() {
@@ -475,10 +506,6 @@ impl<'a> super::TypeChecker<'a> {
         }
         let k = key.clone();
         let v = val.clone();
-        let option_v = Type::Named {
-            name: "Option".to_string(),
-            args: vec![v.clone()],
-        };
         let tuple_kv = Type::Tuple(vec![k.clone(), v.clone()]);
         let option_kv = Type::Named {
             name: "Option".to_string(),
@@ -524,46 +551,54 @@ impl<'a> super::TypeChecker<'a> {
             }
             "contains_key" => {
                 for arg in args {
-                    let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&k, &at, arg.value.span.clone());
+                    self.check_map_slot_arg(&k, arg);
                 }
                 Type::Bool
             }
             "get" => {
                 for arg in args {
-                    let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&k, &at, arg.value.span.clone());
+                    self.check_map_slot_arg(&k, arg);
                 }
-                option_v
+                // Re-read V through the substitutions: a sibling `insert`
+                // may have pinned it, and even a lone `get(k)` on a fresh
+                // `Map.new()` should surface the resolved value type.
+                let resolved_v = resolve_type_var_top(&v, &self.env.substitutions);
+                Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![resolved_v],
+                }
             }
             "get_or" => {
                 if let Some(key_arg) = args.first() {
-                    let kt = self.infer_expr(&key_arg.value);
-                    self.check_assignable(&k, &kt, key_arg.value.span.clone());
+                    self.check_map_slot_arg(&k, key_arg);
                 }
                 if let Some(default_arg) = args.get(1) {
-                    let dt = self.infer_expr(&default_arg.value);
-                    self.check_assignable(&v, &dt, default_arg.value.span.clone());
+                    self.check_map_slot_arg(&v, default_arg);
                 }
-                v
+                resolve_type_var_top(&v, &self.env.substitutions)
             }
             "insert" => {
                 if let Some(key_arg) = args.first() {
-                    let kt = self.infer_expr(&key_arg.value);
-                    self.check_assignable(&k, &kt, key_arg.value.span.clone());
+                    self.check_map_slot_arg(&k, key_arg);
                 }
                 if let Some(val_arg) = args.get(1) {
-                    let vt = self.infer_expr(&val_arg.value);
-                    self.check_assignable(&v, &vt, val_arg.value.span.clone());
+                    self.check_map_slot_arg(&v, val_arg);
                 }
-                option_v
+                let resolved_v = resolve_type_var_top(&v, &self.env.substitutions);
+                Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![resolved_v],
+                }
             }
             "remove" => {
                 for arg in args {
-                    let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&k, &at, arg.value.span.clone());
+                    self.check_map_slot_arg(&k, arg);
                 }
-                option_v
+                let resolved_v = resolve_type_var_top(&v, &self.env.substitutions);
+                Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![resolved_v],
+                }
             }
             "keys" => {
                 if !args.is_empty() {

@@ -714,6 +714,82 @@ fn test_map_entry_arity_error() {
     );
 }
 
+// ── Map.new() K/V back-inference from insert/get (mirrors
+//    Vec.new() + push element-type pinning) ──────────────────────────
+
+#[test]
+fn test_map_new_insert_infers_field_type() {
+    // An *unannotated* `let mut m = Map.new();` followed by `.insert(k, v)`
+    // must pin the receiver's K/V from the inserted argument types — exactly
+    // like `Vec.new()` + `.push()` — so the inferred `Map[?K, ?V]` resolves
+    // to `Map[String, i64]` and is assignable to the annotated struct field.
+    // Before the back-propagation fix this reported a spurious
+    // `expected '?K', found 'String'` at the insert and a
+    // `Map[String, i64]` vs `Map[?K, ?V]` mismatch at the struct literal.
+    typecheck_ok(
+        "struct S { m: Map[String, i64] }\n\
+         fn main() {\n\
+             let mut m = Map.new();\n\
+             m.insert(\"a\", 1);\n\
+             let s = S { m: m };\n\
+             let _ = s.m.len();\n\
+         }",
+    );
+}
+
+#[test]
+fn test_map_new_get_pins_key_and_resolves_value() {
+    // A lone `.get(k)` on a fresh `Map.new()` pins K from the key argument
+    // and surfaces the resolved `Option[V]` return; the field assignment
+    // would mismatch on `Map[?K, ?V]` if K/V stayed unsolved.
+    typecheck_ok(
+        "struct S { m: Map[String, i64] }\n\
+         fn main() {\n\
+             let mut m = Map.new();\n\
+             m.insert(\"a\", 1);\n\
+             let _v: Option[i64] = m.get(\"a\");\n\
+             let s = S { m: m };\n\
+             let _ = s.m.contains_key(\"a\");\n\
+         }",
+    );
+}
+
+#[test]
+fn test_map_new_insert_conflicting_value_type_rejected() {
+    // Once the first `insert` pins V = i64, a later `insert` with a
+    // String value is a real TypeMismatch — the back-propagation must not
+    // erase legitimate checking, only resolve the typevar first.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let mut m = Map.new();\n\
+             m.insert(\"a\", 1);\n\
+             m.insert(\"b\", \"oops\");\n\
+             let _ = m.len();\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "expected TypeMismatch when a later insert's value type conflicts \
+         with the pinned V, got {:?}",
+        errors
+    );
+}
+
+#[test]
+fn test_sorted_map_new_insert_infers_field_type() {
+    // SortedMap shares the identical insert/get inference path, so the
+    // unannotated `SortedMap.new()` + insert must pin K/V the same way.
+    typecheck_ok(
+        "struct S { m: SortedMap[String, i64] }\n\
+         fn main() {\n\
+             let mut m = SortedMap.new();\n\
+             m.insert(\"a\", 1);\n\
+             let s = S { m: m };\n\
+             let _ = s.m.len();\n\
+         }",
+    );
+}
+
 // ── Clone trait surface (canonical: phase-8-stdlib-floor.md
 //    "Clone trait surface for collections") ─────────────────────────
 

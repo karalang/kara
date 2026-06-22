@@ -214,6 +214,32 @@ mod codegen_tests {
     }
 
     #[test]
+    fn e2e_unannotated_map_new_insert_infers_field_type() {
+        // Motivating case (protobuf `map<K,V>` construction): an
+        // *unannotated* `let mut m = Map.new()` whose K/V are pinned only by
+        // the subsequent `.insert(k, v)` calls, then moved into a typed
+        // `Map[String, i64]` struct field and read back. Before the
+        // typechecker back-propagation fix this failed `karac check` (the
+        // inferred `Map[?K, ?V]` clashed with the annotated field); this
+        // guards that the whole pipeline — inference → codegen → runtime —
+        // handles the inferred-receiver form identically to the annotated one.
+        if let Some(out) = run_program(
+            "struct S { m: Map[String, i64] }\n\
+             fn main() {\n\
+                 let mut m = Map.new();\n\
+                 m.insert(\"a\", 1);\n\
+                 m.insert(\"b\", 2);\n\
+                 let s = S { m: m };\n\
+                 println(s.m.len());\n\
+                 match s.m.get(\"a\") { Some(v) => println(v), None => println(-1) }\n\
+                 match s.m.get(\"b\") { Some(v) => println(v), None => println(-1) }\n\
+             }",
+        ) {
+            assert_eq!(out, "2\n1\n2\n");
+        }
+    }
+
+    #[test]
     fn ir_borrowed_string_slice_map_key_uses_borrow_externs() {
         // Regression guard that the allocation-free path actually fires: a
         // String-slice key in get/insert must lower to the non-allocating
