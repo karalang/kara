@@ -474,6 +474,33 @@ fn main() {
 }
 
 #[test]
+fn proto_enum_in_repeated_and_map_roundtrip() {
+    // A schema enum used as a `repeated` element and as a `map` value rides the
+    // composite-position codec end to end.
+    let src = r#"
+#[proto_schema]
+const SCHEMA: String = "
+    enum Color { COLOR_RED = 0; COLOR_GREEN = 1; COLOR_BLUE = 2; }
+    message Palette {
+        repeated Color swatches = 1;
+        map<string, Color> named = 2;
+    }
+";
+
+fn main() {
+    let mut named: Map[String, Color] = Map.new();
+    named.insert("sky", Color.ColorBlue);
+    let p = Palette { swatches: [Color.ColorRed, Color.ColorBlue], named: named };
+    let back = Palette.decode(p.encode());
+    println(back.swatches.len());
+    println(match back.swatches[1] { Color.ColorBlue => "blue", _ => "?" });
+    println(match back.named.get("sky") { Option.Some(c) => match c { Color.ColorBlue => "blue", _ => "?" }, Option.None => "none" });
+}
+"#;
+    assert_eq!(run(src), vec!["2\n", "blue\n", "blue\n"]);
+}
+
+#[test]
 fn proto_comments_are_stripped() {
     // `//` line and `/* */` block comments are ignored — including ones that
     // contain proto keywords like `message` or `enum`.

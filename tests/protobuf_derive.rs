@@ -545,6 +545,102 @@ fn main() {
     );
 }
 
+// ── enum in composite positions (repeated / map) ────────────────
+
+#[test]
+fn derive_repeated_enum_roundtrip() {
+    // `repeated MyEnum` packs each variant index as a varint and round-trips,
+    // including the zero variant.
+    let src = r#"
+enum Color { Red, Green, Blue }
+
+#[derive(Message)]
+struct Pal { colors: Vec[Color] }
+
+fn main() {
+    let p = Pal { colors: [Color.Red, Color.Blue, Color.Green, Color.Red] };
+    let back = Pal.decode(p.encode());
+    println(back.colors.len());
+    println(match back.colors[1] { Color.Blue => "blue", _ => "?" });
+    println(match back.colors[2] { Color.Green => "green", _ => "?" });
+    println(match back.colors[3] { Color.Red => "red", _ => "?" });
+}
+"#;
+    assert_eq!(run(src), vec!["4\n", "blue\n", "green\n", "red\n"]);
+}
+
+#[test]
+fn derive_repeated_enum_is_packed_single_field() {
+    // Repeated enums pack into ONE length-delimited (wire 2) field: 3 small
+    // indices → 3 single-byte varints.
+    let src = r#"
+enum Color { Red, Green, Blue }
+
+#[derive(Message)]
+struct Pal { colors: Vec[Color] }
+
+fn main() {
+    let mut r = ProtoReader.new(Pal { colors: [Color.Red, Color.Green, Color.Blue] }.encode());
+    let (f, w) = r.read_tag();
+    let blob = r.read_len_delim();
+    println(f);
+    println(w);
+    println(blob.len());
+    println(r.at_end());
+}
+"#;
+    assert_eq!(run(src), vec!["1\n", "2\n", "3\n", "true\n"]);
+}
+
+#[test]
+fn derive_repeated_enum_unknown_index_falls_back_to_zero() {
+    // proto3 maps an unknown enum number to the zero variant; an out-of-range
+    // packed index decodes to variant 0.
+    let src = r#"
+enum Color { Red, Green, Blue }
+
+#[derive(Message)]
+struct Pal { colors: Vec[Color] }
+
+fn main() {
+    let mut blob = Vec.new();
+    blob.extend_from_slice(ProtoBuf.encode_varint(1u64));
+    blob.extend_from_slice(ProtoBuf.encode_varint(99u64));
+    let mut buf = Vec.new();
+    buf.extend_from_slice(ProtoBuf.encode_tag(1, 2));
+    buf.extend_from_slice(ProtoBuf.encode_varint(blob.len() as u64));
+    buf.extend_from_slice(blob);
+    let back = Pal.decode(buf);
+    println(back.colors.len());
+    println(match back.colors[0] { Color.Green => "green", _ => "?" });
+    println(match back.colors[1] { Color.Red => "red(fallback)", _ => "?" });
+}
+"#;
+    assert_eq!(run(src), vec!["2\n", "green\n", "red(fallback)\n"]);
+}
+
+#[test]
+fn derive_map_enum_value_roundtrip() {
+    // A `Map[K, MyEnum]` value rides the varint-index path through the entry.
+    let src = r#"
+enum Color { Red, Green, Blue }
+
+#[derive(Message)]
+struct Doc { tints: Map[String, Color] }
+
+fn main() {
+    let mut tints: Map[String, Color] = Map.new();
+    tints.insert("sky", Color.Blue);
+    tints.insert("grass", Color.Green);
+    let back = Doc.decode(Doc { tints: tints }.encode());
+    println(back.tints.len());
+    println(match back.tints.get("sky") { Option.Some(c) => match c { Color.Blue => "blue", _ => "?" }, Option.None => "none" });
+    println(match back.tints.get("grass") { Option.Some(c) => match c { Color.Green => "green", _ => "?" }, Option.None => "none" });
+}
+"#;
+    assert_eq!(run(src), vec!["2\n", "blue\n", "green\n"]);
+}
+
 // ── float / double ──────────────────────────────────────────────
 
 #[test]

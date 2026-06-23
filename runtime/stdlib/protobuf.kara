@@ -474,12 +474,27 @@ comptime fn proto_read_elem(rn: String, etn: String) -> String {
 // The statement(s) that append a repeated field (number `idx`, element type
 // `etn`, `is_msg` = element is a nested message) to `out`. Packed numerics emit
 // nothing for an empty vector (proto3 omits empty packed fields).
-comptime fn proto_encode_repeated(idx: i64, fname: String, etn: String, is_msg: bool) -> String {
+comptime fn proto_encode_repeated(
+    idx: i64,
+    fname: String,
+    etn: String,
+    is_msg: bool,
+    is_enum: bool,
+    evnames: Vec[String],
+) -> String {
     let tag = f"{idx}";
     let elem = "self." + fname + "[i" + tag + "]";
     let hdr = "let mut i" + tag + " = 0; while i" + tag + " < self." + fname + ".len() { ";
     let step = " i" + tag + " = i" + tag + " + 1; }";
-    if is_msg {
+    if is_enum {
+        // Packed enums: each element's variant index as a concatenated varint.
+        "if not self." + fname + ".is_empty() { let mut p" + tag + " = Vec.new(); " + hdr
+            + "p" + tag + ".extend_from_slice(ProtoBuf.encode_varint("
+            + proto_enum_to_index(elem, etn, evnames) + "));" + step
+            + " out.extend_from_slice(ProtoBuf.encode_tag(" + tag
+            + ", 2)); out.extend_from_slice(ProtoBuf.encode_varint(p" + tag
+            + ".len() as u64)); out.extend_from_slice(p" + tag + "); }"
+    } else if is_msg {
         hdr + "let mb" + tag + " = " + elem + ".encode(); out.extend_from_slice(ProtoBuf.encode_tag("
             + tag + ", 2)); out.extend_from_slice(ProtoBuf.encode_varint(mb" + tag
             + ".len() as u64)); out.extend_from_slice(mb" + tag + ");" + step
@@ -519,8 +534,21 @@ comptime fn proto_encode_repeated(idx: i64, fname: String, etn: String, is_msg: 
 // `target` (the decode local `fname`, or `self.fname` in merge). Numerics
 // accept the packed form (wire type 2, loop a sub-reader) or a lone unpacked
 // element; `String` / `bytes` / messages push one length-delimited value.
-comptime fn proto_decode_repeated(target: String, etn: String, is_msg: bool) -> String {
-    if is_msg {
+comptime fn proto_decode_repeated(
+    target: String,
+    etn: String,
+    is_msg: bool,
+    is_enum: bool,
+    evnames: Vec[String],
+) -> String {
+    if is_enum {
+        // Accept packed (wire 2, a blob of index varints) or a lone unpacked
+        // enum value (wire 0); each index maps back through the variant chain.
+        "if wire == 2 { let mut sub = ProtoReader.new(reader.read_len_delim()); while not sub.at_end() { let ev = sub.read_varint(); "
+            + target + ".push(" + proto_index_to_enum("ev", etn, evnames)
+            + "); } } else { let ev = reader.read_varint(); " + target + ".push("
+            + proto_index_to_enum("ev", etn, evnames) + "); }"
+    } else if is_msg {
         target + ".push(" + etn + ".decode(reader.read_len_delim()));"
     } else if etn == "String" {
         target + ".push(reader.read_string());"
@@ -708,6 +736,38 @@ comptime fn proto_wire_is_known(wire: String) -> bool {
         or wire == "sfixed32" or wire == "sfixed64"
 }
 
+// ── enum value codec (shared) ────────────────────────────────────
+//
+// A proto3 enum encodes as a varint of the variant's 0-based declaration index.
+// These two helpers build the encode `match` and the decode `if`-chain from the
+// enum name `en` and its variant names `vnames` (declaration order = wire
+// numbering), so the plain enum field, repeated enums, enum map values, and enum
+// oneof payloads all share one definition of the mapping.
+
+// The `match` expression mapping an enum value `expr` to its `u64` wire index.
+comptime fn proto_enum_to_index(expr: String, en: String, vnames: Vec[String]) -> String {
+    let mut m = "match " + expr + " { ";
+    let mut k = 0;
+    while k < vnames.len() {
+        m = m + en + "." + vnames[k] + " => " + f"{k}" + "u64, ";
+        k = k + 1;
+    }
+    m + "}"
+}
+
+// The parenthesized `if`-chain mapping a wire index `idx` (a bound local, read
+// once by the caller) back to a variant of `en`. Variant 0 is both the proto3
+// default and the unknown-value fallback.
+comptime fn proto_index_to_enum(idx: String, en: String, vnames: Vec[String]) -> String {
+    let mut chain = "(";
+    let mut k = 0;
+    while k < vnames.len() {
+        chain = chain + "if " + idx + " == " + f"{k}" + "u64 { " + en + "." + vnames[k] + " } else ";
+        k = k + 1;
+    }
+    chain + "{ " + en + "." + vnames[0] + " })"
+}
+
 // Emit `impl T { encode / decode / merge }` for a `#[derive(Message)]` struct.
 comptime fn derive_message(comptime T: Type) -> Vec[Item] {
     let n = T.name();
@@ -781,6 +841,13 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
             let ktn = kt.name();
             let vtn = vt.name();
             let vmsg = vt.is_struct();
+            let venum = vt.is_enum();
+            let mut vvnames = Vec.new();
+            if venum {
+                for vv in vt.variants() {
+                    vvnames.push(vv.name);
+                }
+            }
             if not proto_supported(ktn) {
                 compiler.error(
                     "derive(Message): map field `" + fname + "` has unsupported key type `" + ktn
@@ -793,7 +860,7 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
                         + "`, which does not derive(Message)",
                 );
             }
-            if not vmsg and not proto_supported(vtn) and not proto_is_float(vtn) {
+            if not vmsg and not venum and not proto_supported(vtn) and not proto_is_float(vtn) {
                 compiler.error(
                     "derive(Message): map field `" + fname + "` has unsupported value type `" + vtn
                         + "`",
@@ -807,6 +874,10 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
                     + ".extend_from_slice(ProtoBuf.encode_tag(2, 2)); " + buf
                     + ".extend_from_slice(ProtoBuf.encode_varint(mv" + tag + ".len() as u64)); " + buf
                     + ".extend_from_slice(mv" + tag + ");"
+            } else if venum {
+                buf + ".extend_from_slice(ProtoBuf.encode_tag(2, 0)); " + buf
+                    + ".extend_from_slice(ProtoBuf.encode_varint("
+                    + proto_enum_to_index("e" + tag + ".1", vtn, vvnames) + "));"
             } else {
                 proto_encode_scalar_one(buf, 2, "e" + tag + ".1", vtn)
             };
@@ -815,10 +886,21 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
                 + tag + ", 2)); out.extend_from_slice(ProtoBuf.encode_varint(" + buf
                 + ".len() as u64)); out.extend_from_slice(" + buf + "); }";
             let kdflt = proto_default(ktn);
-            let vdflt = if vmsg { vtn + ".decode(Vec.new())" } else { proto_default(vtn) };
+            let vdflt = if vmsg {
+                vtn + ".decode(Vec.new())"
+            } else if venum {
+                vtn + "." + vvnames[0]
+            } else {
+                proto_default(vtn)
+            };
             let kread = proto_read_scalar_one("sub" + tag, ktn);
             let vread = if vmsg {
                 vtn + ".decode(sub" + tag + ".read_len_delim())"
+            } else if venum {
+                // Bind the index once (the chain references it repeatedly), then
+                // map it back to a variant — a block expression as the value.
+                "{ let mev" + tag + " = sub" + tag + ".read_varint(); "
+                    + proto_index_to_enum("mev" + tag, vtn, vvnames) + " }"
             } else {
                 proto_read_scalar_one("sub" + tag, vtn)
             };
@@ -828,22 +910,29 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
             let et = f.ty.element_type();
             let etn = et.name();
             let is_msg = et.is_struct();
+            let eis_enum = et.is_enum();
+            let mut evnames = Vec.new();
+            if eis_enum {
+                for v in et.variants() {
+                    evnames.push(v.name);
+                }
+            }
             if is_msg and not et.derives("Message") {
                 compiler.error(
                     "derive(Message): repeated field `" + fname + "` has element type `" + etn
                         + "`, which does not derive(Message)",
                 );
             }
-            if not is_msg and not proto_supported(etn) and not proto_is_float(etn) {
+            if not is_msg and not eis_enum and not proto_supported(etn) and not proto_is_float(etn) {
                 compiler.error(
                     "derive(Message): repeated field `" + fname + "` has unsupported element type `"
                         + etn + "`",
                 );
             }
             dflt = "Vec.new()";
-            efield = proto_encode_repeated(idx, fname, etn, is_msg);
-            dec_body = proto_decode_repeated(fname, etn, is_msg);
-            mrg_body = proto_decode_repeated("self." + fname, etn, is_msg);
+            efield = proto_encode_repeated(idx, fname, etn, is_msg, eis_enum, evnames);
+            dec_body = proto_decode_repeated(fname, etn, is_msg, eis_enum, evnames);
+            mrg_body = proto_decode_repeated("self." + fname, etn, is_msg, eis_enum, evnames);
         } else if is_oneof {
             // A oneof: an enum with payload variants. Each non-unit case has its
             // own proto field number (assigned by declaration order, starting at
@@ -887,30 +976,21 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
             efield = m;
             oneof_n = fnum - idx;
         } else if is_enum {
-            // Build a `match` mapping each variant to its index for encode, and
-            // an `if`-chain mapping an index back to a variant for decode. The
-            // zero variant (index 0) is both the default and the unknown-value
-            // fallback (proto3 enum semantics).
-            let mut firstv = "";
-            let mut m = "match self." + fname + " { ";
-            let mut chain = "";
-            let mut k = 0;
+            // A plain enum field: a varint of the variant's 0-based declaration
+            // index (the shared `proto_enum_to_index` / `proto_index_to_enum`
+            // codec — variant 0 is the proto3 default + unknown-value fallback).
+            let mut vnames = Vec.new();
             for v in f.ty.variants() {
-                let vn = v.name;
-                if k == 0 {
-                    firstv = "" + vn;
-                }
-                m = m + tn + "." + vn + " => " + f"{k}" + "u64, ";
-                chain = chain + "if ev == " + f"{k}" + "u64 { " + tn + "." + vn + " } else ";
-                k = k + 1;
+                vnames.push(v.name);
             }
-            m = m + "}";
-            chain = chain + "{ " + tn + "." + firstv + " }";
-            dflt = tn + "." + firstv;
+            dflt = tn + "." + vnames[0];
             efield = "out.extend_from_slice(ProtoBuf.encode_tag(" + tag
-                + ", 0)); out.extend_from_slice(ProtoBuf.encode_varint(" + m + "));";
-            dec_body = "let ev = reader.read_varint(); " + fname + " = " + chain + ";";
-            mrg_body = "let ev = reader.read_varint(); self." + fname + " = " + chain + ";";
+                + ", 0)); out.extend_from_slice(ProtoBuf.encode_varint("
+                + proto_enum_to_index("self." + fname, tn, vnames) + "));";
+            dec_body = "let ev = reader.read_varint(); " + fname + " = "
+                + proto_index_to_enum("ev", tn, vnames) + ";";
+            mrg_body = "let ev = reader.read_varint(); self." + fname + " = "
+                + proto_index_to_enum("ev", tn, vnames) + ";";
         } else {
             // A `#[karac::proto(<wire>)]` attribute on an integer field selects
             // a ZigZag / fixed-width encoding (sint*/fixed*/sfixed*) that the
@@ -1014,7 +1094,7 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
 // numbers must be contiguous `1..N` (declaration-order tagging — per-field
 // number overrides need reflection support that doesn't exist yet). `syntax` /
 // `package` / `option` / `import` statements are skipped; not yet supported:
-// `repeated` enums, enum map values, message/enum oneof payloads.
+// message/enum oneof payloads.
 // `double`/`float` → `f64`/`f32`; `sint*`/`fixed*`/`sfixed*` lower to a base int
 // type plus a `#[karac::proto(<wire>)]` attribute; `oneof NAME {...}` becomes a
 // `<Msg><Name>` enum with a `NotSet` default + one payload variant per case. `map<K, V> name = N;` maps to a `Map[K, V]` field. Enum

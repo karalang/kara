@@ -46,11 +46,13 @@ const SCHEMA: String = "
         map<string, int64> kudos = 7;
         // `repeated double` → `Vec[f64]`, packed as concatenated fixed64s.
         repeated double ratings = 8;
+        // `repeated <enum>` → `Vec[Tier]`, packed as concatenated index varints.
+        repeated Tier history = 9;
         // A `oneof` → a `TeamContact` enum with a `NotSet` default and one
         // payload variant per case.
         oneof contact {
-            string email = 9;
-            int64 phone = 10;
+            string email = 10;
+            int64 phone = 11;
         }
     }
 ";
@@ -77,11 +79,13 @@ fn main() {
         tier: Tier.TierPro,
         kudos: kudos,
         ratings: [4.5, 5.0, 3.5],
+        history: [Tier.TierFree, Tier.TierPro],
         contact: TeamContact.Email("team@compilers.dev"),
     };
     let rt = Team.decode(t.encode());
     println(f"team={rt.title} size={rt.size} city={rt.office.city} zip={rt.office.zip}");
     println(f"members={rt.members} seats={rt.seats} ratings={rt.ratings}");
+    println(f"history.len={rt.history.len()}");
     println(match rt.tier { Tier.TierFree => "free", Tier.TierPro => "pro", Tier.TierEnterprise => "ent" });
     let grace = match rt.kudos.get("Grace") { Option.Some(x) => x, Option.None => 0 };
     println(f"kudos.Grace={grace} kudos.size={rt.kudos.len()}");
