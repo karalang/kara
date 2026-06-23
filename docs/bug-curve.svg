@@ -1,25 +1,25 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="720" height="300" font-family="monospace" font-size="12">
 <rect width="720" height="300" fill="white"/>
-<polyline fill="none" stroke="#e8730a" stroke-width="2" points="40.0,258.6 137.0,257.2 389.1,250.2 408.5,248.8 427.9,246.0 447.3,236.2 466.7,223.6 486.1,203.9 505.5,175.9 524.8,131.1 544.2,121.3 563.6,119.9 583.0,107.3 602.4,90.4 621.8,70.8 641.2,47.0 660.6,42.8 680.0,40.0"/>
+<polyline fill="none" stroke="#e8730a" stroke-width="2" points="40.0,258.6 137.0,257.2 389.1,250.3 408.5,248.9 427.9,246.1 447.3,236.3 466.7,223.8 486.1,204.3 505.5,176.5 524.8,131.9 544.2,122.2 563.6,120.8 583.0,108.2 602.4,91.5 621.8,72.0 641.2,48.4 660.6,44.2 680.0,40.0"/>
 <circle cx="40.0" cy="258.6" r="2.5" fill="#e8730a"/>
 <circle cx="137.0" cy="257.2" r="2.5" fill="#e8730a"/>
-<circle cx="389.1" cy="250.2" r="2.5" fill="#e8730a"/>
-<circle cx="408.5" cy="248.8" r="2.5" fill="#e8730a"/>
-<circle cx="427.9" cy="246.0" r="2.5" fill="#e8730a"/>
-<circle cx="447.3" cy="236.2" r="2.5" fill="#e8730a"/>
-<circle cx="466.7" cy="223.6" r="2.5" fill="#e8730a"/>
-<circle cx="486.1" cy="203.9" r="2.5" fill="#e8730a"/>
-<circle cx="505.5" cy="175.9" r="2.5" fill="#e8730a"/>
-<circle cx="524.8" cy="131.1" r="2.5" fill="#e8730a"/>
-<circle cx="544.2" cy="121.3" r="2.5" fill="#e8730a"/>
-<circle cx="563.6" cy="119.9" r="2.5" fill="#e8730a"/>
-<circle cx="583.0" cy="107.3" r="2.5" fill="#e8730a"/>
-<circle cx="602.4" cy="90.4" r="2.5" fill="#e8730a"/>
-<circle cx="621.8" cy="70.8" r="2.5" fill="#e8730a"/>
-<circle cx="641.2" cy="47.0" r="2.5" fill="#e8730a"/>
-<circle cx="660.6" cy="42.8" r="2.5" fill="#e8730a"/>
+<circle cx="389.1" cy="250.3" r="2.5" fill="#e8730a"/>
+<circle cx="408.5" cy="248.9" r="2.5" fill="#e8730a"/>
+<circle cx="427.9" cy="246.1" r="2.5" fill="#e8730a"/>
+<circle cx="447.3" cy="236.3" r="2.5" fill="#e8730a"/>
+<circle cx="466.7" cy="223.8" r="2.5" fill="#e8730a"/>
+<circle cx="486.1" cy="204.3" r="2.5" fill="#e8730a"/>
+<circle cx="505.5" cy="176.5" r="2.5" fill="#e8730a"/>
+<circle cx="524.8" cy="131.9" r="2.5" fill="#e8730a"/>
+<circle cx="544.2" cy="122.2" r="2.5" fill="#e8730a"/>
+<circle cx="563.6" cy="120.8" r="2.5" fill="#e8730a"/>
+<circle cx="583.0" cy="108.2" r="2.5" fill="#e8730a"/>
+<circle cx="602.4" cy="91.5" r="2.5" fill="#e8730a"/>
+<circle cx="621.8" cy="72.0" r="2.5" fill="#e8730a"/>
+<circle cx="641.2" cy="48.4" r="2.5" fill="#e8730a"/>
+<circle cx="660.6" cy="44.2" r="2.5" fill="#e8730a"/>
 <circle cx="680.0" cy="40.0" r="2.5" fill="#e8730a"/>
 <text x="40" y="288">2026-05-20</text>
 <text x="610" y="288">2026-06-22</text>
-<text x="40" y="20">cumulative bugs surfaced: 157</text>
+<text x="40" y="20">cumulative bugs surfaced: 158</text>
 </svg>
