@@ -93,6 +93,56 @@ mod codegen_tests {
         assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
     }
 
+    /// B-2026-06-22-2 residual close-out: a capturing closure stored into a
+    /// LOCAL aggregate that is then returned via an identifier
+    /// (`let h = H { f: |x| x+k }; h`) was the last silent miscompile the
+    /// return-position-only guard missed — it built and ran, printing garbage
+    /// (`0`) instead of `x+k`. The source-ordered `capturing_vars` builder now
+    /// marks `h`, so the `Identifier`-return arm fires.
+    #[test]
+    fn escaping_capturing_closure_local_struct_then_return_is_rejected() {
+        let err = ir_result(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> H { let h = H { f: |x| x + k }; h }\n\
+             fn main() { let r = make(10i64); println(f\"{(r.f)(5i64)}\"); }\n",
+        )
+        .expect_err("a capturing closure stored in a local struct then returned must be rejected");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
+    /// Same residual through an identifier chain: the closure is bound to a
+    /// local, that local is stored in a struct bound to a second local, and the
+    /// second local is returned. Source-order processing propagates the
+    /// capturing mark `g` → `h`.
+    #[test]
+    fn escaping_capturing_closure_local_identifier_chain_is_rejected() {
+        let err = ir_result(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> H { let g: Fn(i64) -> i64 = |x| x + k; let h = H { f: g }; h }\n\
+             fn main() { let r = make(10i64); println(f\"{(r.f)(5i64)}\"); }\n",
+        )
+        .expect_err(
+            "a capturing closure chained through locals into a returned struct must be rejected",
+        );
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
+    /// Adversarial for the residual close-out: a NON-capturing closure stored
+    /// in a local aggregate then returned must STILL compile — the strengthened
+    /// `capturing_vars` builder must only mark *capturing* bindings, so it never
+    /// rejects this sound shape.
+    #[test]
+    fn non_capturing_closure_local_struct_then_return_still_ok() {
+        assert!(
+            ir_result(
+                "struct H { f: Fn(i64) -> i64 }\n\
+                 fn make() -> H { let h = H { f: |x| x * 2i64 }; h }\n"
+            )
+            .is_ok(),
+            "non-capturing closure stored in a local struct then returned should compile"
+        );
+    }
+
     /// Adversarial: a NON-capturing closure in the same positions must still
     /// compile (the guard fires only on captures).
     #[test]

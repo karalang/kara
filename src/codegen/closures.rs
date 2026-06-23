@@ -99,10 +99,15 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Deliberately one-sided so it never rejects a SOUND program: it fires only
     /// on a *capturing* closure in *return* position; a non-capturing closure
     /// (null env), same-frame use, and pass-down-by-`Fn(..)`-param are all
-    /// unaffected. Pure-AST, run once per function before codegen. (Narrower
-    /// residual still tracked under the epic: a capturing closure stored into a
-    /// LOCAL struct/`Vec` that is then returned via an identifier — that needs
-    /// container-escape tracking, i.e. the escape-analysis slice.)
+    /// unaffected. Pure-AST, run once per function before codegen. Covers the
+    /// local-then-return form too — a capturing closure stored into a LOCAL
+    /// aggregate (`let h = H { f: |x| x+k }; h`) or chained through identifiers
+    /// (`let g = |x| x+k; let h = H { f: g }; h`) — via the source-ordered
+    /// `capturing_vars` builder below. (Narrower residuals still tracked under
+    /// the epic, needing the projection / mutation tracking of the escape-
+    /// analysis slice: a returned field projection `return h.f`, and a closure
+    /// pushed into a container that then escapes — `let v = Vec.new();
+    /// v.push(|x| x+k); v`.)
     pub(super) fn reject_escaping_capturing_closure(&self, func: &Function) -> Result<(), String> {
         // Names whose capture would dangle on escape: the function's params +
         // its top-level `let` bindings (the scope visible at a return).
@@ -122,16 +127,30 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => {}
             }
         }
-        // Top-level locals bound directly to a capturing-closure literal.
+        // Top-level locals whose initializer resolves to a capturing closure —
+        // directly (`let f = |x| x+k`), through an aggregate literal
+        // (`let h = H { f: |x| x+k }`), or through an identifier chain
+        // (`let g = |x| x+k; let h = H { f: g }`). Processed in SOURCE ORDER so
+        // an identifier on a later RHS resolves against the set built from the
+        // earlier `let`s. Reuses `tail_escapes_capturing_closure` as the
+        // "does this expr produce a capturing closure" predicate — the shapes
+        // that count as an escape in return position are exactly those that make
+        // a binding capture one. Mirrors the ownership pass's
+        // `collect_closure_let_bindings` (`closure_escape.rs`); that pass fires
+        // only on REF captures (a dangling borrow), so the OWN-capture escape it
+        // soundly admits — but codegen's stack env cannot yet support — must be
+        // caught here.
         let mut capturing_vars: HashSet<String> = HashSet::new();
         for stmt in &func.body.stmts {
-            if let StmtKind::Let { pattern, value, .. } = &stmt.kind {
-                if let ExprKind::Closure { params, body, .. } = &value.kind {
-                    if self.closure_literal_captures(params, body, &outer) {
-                        for n in pattern.binding_names() {
-                            capturing_vars.insert(n);
-                        }
-                    }
+            let (pattern, value) = match &stmt.kind {
+                StmtKind::Let { pattern, value, .. } | StmtKind::LetElse { pattern, value, .. } => {
+                    (pattern, value)
+                }
+                _ => continue,
+            };
+            if self.tail_escapes_capturing_closure(value, &outer, &capturing_vars) {
+                for n in pattern.binding_names() {
+                    capturing_vars.insert(n);
                 }
             }
         }
@@ -222,17 +241,36 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Match { arms, .. } => arms
                 .iter()
                 .any(|a| self.tail_escapes_capturing_closure(&a.body, outer, capturing_vars)),
-            // Returning an aggregate LITERAL that directly holds a capturing
-            // closure escapes it too (`return H { f: |x| x+k }`, `return (clo,
-            // 1)`, `return [clo]`). The local-then-return form (`let h = H{f:
-            // clo}; return h`) needs container-escape tracking and stays a
-            // tracked residual.
+            // An aggregate LITERAL that holds a capturing closure escapes it
+            // (`return H { f: |x| x+k }`, `return (clo, 1)`, `return [clo]`,
+            // `return Vec[clo]`, map / repeat literals, a struct `..spread`).
+            // The local-then-return form (`let h = H { f: clo }; return h`) is
+            // ALSO covered: the `capturing_vars` builder runs this same
+            // predicate over each `let` RHS, so `h` is marked and the
+            // `Identifier` arm fires on the returned `h`. Mirrors the ownership
+            // pass's `collect_escape_target` (`closure_escape.rs`) literal set.
             ExprKind::Tuple(elems) | ExprKind::ArrayLiteral(elems) => elems
                 .iter()
                 .any(|e| self.tail_escapes_capturing_closure(e, outer, capturing_vars)),
-            ExprKind::StructLiteral { fields, .. } => fields
+            ExprKind::PrefixCollectionLiteral { items, .. } => items
                 .iter()
-                .any(|f| self.tail_escapes_capturing_closure(&f.value, outer, capturing_vars)),
+                .any(|e| self.tail_escapes_capturing_closure(e, outer, capturing_vars)),
+            // Only `value` can hold a closure — `count` is a compile-time int.
+            ExprKind::RepeatLiteral { value, .. } => {
+                self.tail_escapes_capturing_closure(value, outer, capturing_vars)
+            }
+            ExprKind::MapLiteral(pairs) => pairs.iter().any(|(k, v)| {
+                self.tail_escapes_capturing_closure(k, outer, capturing_vars)
+                    || self.tail_escapes_capturing_closure(v, outer, capturing_vars)
+            }),
+            ExprKind::StructLiteral { fields, spread, .. } => {
+                fields
+                    .iter()
+                    .any(|f| self.tail_escapes_capturing_closure(&f.value, outer, capturing_vars))
+                    || spread.as_deref().is_some_and(|s| {
+                        self.tail_escapes_capturing_closure(s, outer, capturing_vars)
+                    })
+            }
             _ => false,
         }
     }
