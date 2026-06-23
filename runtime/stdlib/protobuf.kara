@@ -953,17 +953,55 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
                 if pt == "" {
                     m = m + en + "." + vn + " => {}, ";
                 } else {
-                    if not proto_supported(pt) and not proto_is_float(pt) {
+                    // The payload may itself be a nested message (length-delimited
+                    // sub-message) or an enum (varint index) — reflect on it via
+                    // `payload_ty` — or a scalar/float.
+                    let pty = v.payload_ty;
+                    let pmsg = pty.is_struct();
+                    let penum = pty.is_enum();
+                    let mut pvn = Vec.new();
+                    if penum {
+                        for pv2 in pty.variants() {
+                            pvn.push(pv2.name);
+                        }
+                    }
+                    if pmsg and not pty.derives("Message") {
+                        compiler.error(
+                            "derive(Message): oneof case `" + vn + "` of `" + fname
+                                + "` has message payload type `" + pt
+                                + "`, which does not derive(Message)",
+                        );
+                    }
+                    if not pmsg and not penum and not proto_supported(pt) and not proto_is_float(pt) {
                         compiler.error(
                             "derive(Message): oneof case `" + vn + "` of `" + fname
                                 + "` has unsupported payload type `" + pt
-                                + "` (v1 oneof payloads: i32/i64/u32/u64/bool/f32/f64/String/Vec[u8])",
+                                + "` (v1 oneof payloads: i32/i64/u32/u64/bool/f32/f64/String/Vec[u8], nested messages, enums)",
                         );
                     }
                     let tagn = f"{fnum}";
-                    m = m + en + "." + vn + "(pv) => { " + proto_encode_scalar_one("out", fnum, "pv", pt)
-                        + " }, ";
-                    let read = proto_read_scalar_one("reader", pt);
+                    // Per-case encode (inside the `match` arm, payload bound `pv`).
+                    let menc = if pmsg {
+                        "let mo" + tagn + " = pv.encode(); out.extend_from_slice(ProtoBuf.encode_tag("
+                            + tagn + ", 2)); out.extend_from_slice(ProtoBuf.encode_varint(mo" + tagn
+                            + ".len() as u64)); out.extend_from_slice(mo" + tagn + ");"
+                    } else if penum {
+                        "out.extend_from_slice(ProtoBuf.encode_tag(" + tagn
+                            + ", 0)); out.extend_from_slice(ProtoBuf.encode_varint("
+                            + proto_enum_to_index("pv", pt, pvn) + "));"
+                    } else {
+                        proto_encode_scalar_one("out", fnum, "pv", pt)
+                    };
+                    m = m + en + "." + vn + "(pv) => { " + menc + " }, ";
+                    // Per-case decode (constructs the variant from the wire value).
+                    let read = if pmsg {
+                        pt + ".decode(reader.read_len_delim())"
+                    } else if penum {
+                        "{ let pev" + tagn + " = reader.read_varint(); "
+                            + proto_index_to_enum("pev" + tagn, pt, pvn) + " }"
+                    } else {
+                        proto_read_scalar_one("reader", pt)
+                    };
                     oneof_conds.push("field == " + tagn);
                     oneof_decbs.push(fname + " = " + en + "." + vn + "(" + read + ");");
                     oneof_mrgbs.push("self." + fname + " = " + en + "." + vn + "(" + read + ");");
@@ -1093,8 +1131,7 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
 // message — and `repeated TYPE name = N;` fields, mapped to `Vec[TYPE]`. Field
 // numbers must be contiguous `1..N` (declaration-order tagging — per-field
 // number overrides need reflection support that doesn't exist yet). `syntax` /
-// `package` / `option` / `import` statements are skipped; not yet supported:
-// message/enum oneof payloads.
+// `package` / `option` / `import` statements are skipped.
 // `double`/`float` → `f64`/`f32`; `sint*`/`fixed*`/`sfixed*` lower to a base int
 // type plus a `#[karac::proto(<wire>)]` attribute; `oneof NAME {...}` becomes a
 // `<Msg><Name>` enum with a `NotSet` default + one payload variant per case. `map<K, V> name = N;` maps to a `Map[K, V]` field. Enum

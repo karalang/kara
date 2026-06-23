@@ -234,6 +234,11 @@ impl Interpreter<'_> {
                 let mut fields: HashMap<String, Value> = HashMap::new();
                 fields.insert("name".to_string(), Value::String(vname.clone()));
                 fields.insert("field_count".to_string(), Value::Int(field_count as i64));
+                // `payload_ty` is the same type name as a `Type` pseudovalue, so
+                // comptime code can reflect ON the payload (`v.payload_ty.is_enum()`
+                // / `.variants()`) — empty for a non-single-tuple variant, which
+                // looks up as a non-struct/non-enum.
+                fields.insert("payload_ty".to_string(), Value::TypeVal(payload.clone()));
                 fields.insert("payload".to_string(), Value::String(payload));
                 Value::Struct {
                     name: "Variant".to_string(),

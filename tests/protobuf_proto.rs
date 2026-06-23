@@ -364,6 +364,37 @@ fn main() {
 }
 
 #[test]
+fn proto_oneof_message_payload_roundtrip() {
+    // A `.proto` oneof case may carry a nested message payload (encoded as a
+    // length-delimited sub-message), round-tripping like a scalar case.
+    let src = r#"
+#[proto_schema]
+const SCHEMA: String = "
+    message Loc { string city = 1; int64 zip = 2; }
+    message Event {
+        int64 id = 1;
+        oneof body {
+            Loc place = 2;
+            string note = 3;
+        }
+    }
+";
+
+fn main() {
+    let e = Event { id: 5, body: EventBody.Place(Loc { city: "Rome", zip: 1 }) };
+    let back = Event.decode(e.encode());
+    println(back.id);
+    println(match back.body {
+        EventBody.Place(l) => f"{l.city}/{l.zip}",
+        EventBody.Note(s) => f"note {s}",
+        EventBody.NotSet => "notset",
+    });
+}
+"#;
+    assert_eq!(run(src), vec!["5\n", "Rome/1\n"]);
+}
+
+#[test]
 fn proto_oneof_noncontiguous_case_numbers_error() {
     // Oneof case numbers must continue the message's field numbering (here `id`
     // is 1, so cases must be 2, 3 — a gap at 2 is rejected).

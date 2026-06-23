@@ -720,6 +720,7 @@ impl<'a> super::TypeChecker<'a> {
                     ("name".to_string(), Type::Str, true),
                     ("field_count".to_string(), Type::Int(IntSize::I64), true),
                     ("payload".to_string(), Type::Str, true),
+                    ("payload_ty".to_string(), type_pseudo(), true),
                 ],
                 field_attrs: std::collections::HashMap::new(),
                 derived_traits: HashSet::new(),

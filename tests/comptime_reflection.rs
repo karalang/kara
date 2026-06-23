@@ -128,6 +128,35 @@ fn main() {
     );
 }
 
+#[test]
+fn variant_payload_ty_reflects_on_the_payload_type() {
+    // `Variant.payload_ty` is the payload as a `Type` pseudovalue, so comptime
+    // code can reflect on it (`is_struct` / `is_enum` / `variants`).
+    let src = "
+struct Inner { v: i64 }
+enum Tint { Red, Green }
+enum E { None, Msg(Inner), Hue(Tint), Num(i64) }
+fn main() {
+    let r = comptime {
+        let mut s = \"\";
+        for v in E.variants() {
+            if v.payload != \"\" {
+                s = s + v.name + \":\" + v.payload_ty.name();
+                if v.payload_ty.is_struct() { s = s + \"(struct)\"; }
+                if v.payload_ty.is_enum() { s = s + \"(enum,\" + f\"{v.payload_ty.variants().len()}\" + \")\"; }
+                s = s + \";\";
+            }
+        }
+        s
+    };
+    println(r);
+}";
+    assert_eq!(
+        karac::run_program(src),
+        vec!["Msg:Inner(struct);Hue:Tint(enum,2);Num:i64;\n"]
+    );
+}
+
 // ── derives() ───────────────────────────────────────────────────
 
 #[test]

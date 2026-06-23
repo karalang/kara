@@ -1044,7 +1044,9 @@ fn main() {
 }
 
 #[test]
-fn derive_oneof_unsupported_payload_errors() {
+fn derive_oneof_message_payload_not_deriving_message_errors() {
+    // A struct oneof payload that does not itself derive `Message` is rejected
+    // with the message-payload diagnostic.
     let src = r#"
 struct Inner { v: i64 }
 
@@ -1057,11 +1059,78 @@ fn main() {}
 "#;
     let diags = comptime_diags(src);
     assert!(
+        diags.iter().any(|d| d.contains("E_COMPTIME_ERROR")
+            && d.contains("does not derive(Message)")
+            && d.contains("Msg")),
+        "expected a message-payload-non-derive diagnostic; got: {diags:?}"
+    );
+}
+
+#[test]
+fn derive_oneof_unsupported_payload_errors() {
+    // A payload that is neither scalar/float, message, nor enum (here a `Map`) is
+    // rejected as unsupported.
+    let src = r#"
+#[derive(Message)]
+struct E { body: Choice }
+
+enum Choice { NotSet, M(Map[String, i64]) }
+
+fn main() {}
+"#;
+    let diags = comptime_diags(src);
+    assert!(
         diags
             .iter()
             .any(|d| d.contains("E_COMPTIME_ERROR") && d.contains("unsupported payload type")),
         "expected an unsupported-oneof-payload diagnostic; got: {diags:?}"
     );
+}
+
+#[test]
+fn derive_oneof_message_payload_roundtrip() {
+    // A oneof case may carry a nested message (length-delimited sub-message).
+    let src = r#"
+#[derive(Message)]
+struct Addr { city: String, zip: i64 }
+
+enum Body { NotSet, Loc(Addr), Note(String) }
+
+#[derive(Message)]
+struct Evt { id: i64, body: Body }
+
+fn main() {
+    let e = Evt { id: 7, body: Body.Loc(Addr { city: "London", zip: 9 }) };
+    let back = Evt.decode(e.encode());
+    println(back.id);
+    println(match back.body { Body.Loc(a) => f"{a.city}/{a.zip}", _ => "?" });
+    let e2 = Evt { id: 8, body: Body.Note("hi") };
+    println(match Evt.decode(e2.encode()).body { Body.Note(s) => s, _ => "?" });
+}
+"#;
+    assert_eq!(run(src), vec!["7\n", "London/9\n", "hi\n"]);
+}
+
+#[test]
+fn derive_oneof_enum_payload_roundtrip() {
+    // A oneof case may carry an enum payload (varint index). The inner enum must
+    // be `shared` to satisfy the one-level nested-enum-payload rule.
+    let src = r#"
+shared enum Color { Red, Green, Blue }
+
+enum Body { NotSet, Tint(Color), Note(String) }
+
+#[derive(Message)]
+struct Evt { body: Body }
+
+fn main() {
+    let back = Evt.decode(Evt { body: Body.Tint(Color.Blue) }.encode());
+    println(match back.body { Body.Tint(c) => match c { Color.Blue => "blue", Color.Green => "green", Color.Red => "red" }, _ => "?" });
+    let n = Evt.decode(Evt { body: Body.Note("x") }.encode());
+    println(match n.body { Body.Note(s) => s, _ => "?" });
+}
+"#;
+    assert_eq!(run(src), vec!["blue\n", "x\n"]);
 }
 
 // ── nested messages ─────────────────────────────────────────────

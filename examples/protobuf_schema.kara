@@ -49,10 +49,12 @@ const SCHEMA: String = "
         // `repeated <enum>` → `Vec[Tier]`, packed as concatenated index varints.
         repeated Tier history = 9;
         // A `oneof` → a `TeamContact` enum with a `NotSet` default and one
-        // payload variant per case.
+        // payload variant per case. A case may carry a nested message (`mail`,
+        // a length-delimited sub-message) as well as a scalar.
         oneof contact {
             string email = 10;
             int64 phone = 11;
+            Address mail = 12;
         }
     }
 ";
@@ -80,7 +82,7 @@ fn main() {
         kudos: kudos,
         ratings: [4.5, 5.0, 3.5],
         history: [Tier.TierFree, Tier.TierPro],
-        contact: TeamContact.Email("team@compilers.dev"),
+        contact: TeamContact.Mail(Address { city: "Cambridge", zip: "CB2" }),
     };
     let rt = Team.decode(t.encode());
     println(f"team={rt.title} size={rt.size} city={rt.office.city} zip={rt.office.zip}");
@@ -89,5 +91,5 @@ fn main() {
     println(match rt.tier { Tier.TierFree => "free", Tier.TierPro => "pro", Tier.TierEnterprise => "ent" });
     let grace = match rt.kudos.get("Grace") { Option.Some(x) => x, Option.None => 0 };
     println(f"kudos.Grace={grace} kudos.size={rt.kudos.len()}");
-    println(match rt.contact { TeamContact.Email(e) => f"email {e}", TeamContact.Phone(p) => f"phone {p}", TeamContact.NotSet => "no contact" });
+    println(match rt.contact { TeamContact.Email(e) => f"email {e}", TeamContact.Phone(p) => f"phone {p}", TeamContact.Mail(a) => f"mail {a.city} {a.zip}", TeamContact.NotSet => "no contact" });
 }
