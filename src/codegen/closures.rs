@@ -80,6 +80,139 @@ impl<'ctx> super::Codegen<'ctx> {
         self.context.struct_type(&[ptr.into(), ptr.into()], false)
     }
 
+    // ── Escaping-capturing-closure guard (B-2026-06-22-2, heap-env epic Slice 0) ──
+
+    /// Reject a closure that captures one of this function's locals/params and
+    /// then ESCAPES via the function's return value (its tail expression). A
+    /// closure's captured environment is a stack alloca in the defining frame
+    /// (the heap-closure-environment feature is not yet implemented), so a
+    /// returned capturing closure reads freed memory after the frame exits — a
+    /// silent wrong-output miscompile (`fn make(k){ |x| x+k }` returns garbage,
+    /// not `x+k`). This guard turns that into an honest compile error.
+    ///
+    /// Deliberately narrow so it never rejects a SOUND program: a non-capturing
+    /// closure (null env), a closure used within the same frame, and a closure
+    /// passed DOWN by `Fn(..)` parameter (the frame stays live across the call)
+    /// are all unaffected. Pure-AST, run once per function before codegen.
+    /// (Residuals still tracked under the epic: an explicit mid-body `return
+    /// <capturing closure>`, and a capturing closure stored into an escaping
+    /// struct/Vec.)
+    pub(super) fn reject_escaping_capturing_closure(&self, func: &Function) -> Result<(), String> {
+        let Some(tail) = func.body.final_expr.as_deref() else {
+            return Ok(());
+        };
+        // Names whose capture would dangle on escape: the function's params +
+        // its top-level `let` bindings (the scope visible at the body tail).
+        let mut outer: HashSet<String> = func
+            .params
+            .iter()
+            .flat_map(|p| p.pattern.binding_names())
+            .collect();
+        for stmt in &func.body.stmts {
+            match &stmt.kind {
+                StmtKind::Let { pattern, .. } | StmtKind::LetElse { pattern, .. } => {
+                    outer.extend(pattern.binding_names());
+                }
+                StmtKind::LetUninit { name, .. } => {
+                    outer.insert(name.clone());
+                }
+                _ => {}
+            }
+        }
+        // Top-level locals bound directly to a capturing-closure literal.
+        let mut capturing_vars: HashSet<String> = HashSet::new();
+        for stmt in &func.body.stmts {
+            if let StmtKind::Let { pattern, value, .. } = &stmt.kind {
+                if let ExprKind::Closure { params, body, .. } = &value.kind {
+                    if self.closure_literal_captures(params, body, &outer) {
+                        for n in pattern.binding_names() {
+                            capturing_vars.insert(n);
+                        }
+                    }
+                }
+            }
+        }
+        if self.tail_escapes_capturing_closure(tail, &outer, &capturing_vars) {
+            return Err(
+                "error[E_ESCAPING_CLOSURE_NOT_YET]: returning a closure that captures a \
+                 local variable is not yet supported — the closure's captured environment lives \
+                 on the returning function's stack frame, which is freed when it returns (it \
+                 would read garbage). Tracked as the heap-closure-environment epic \
+                 (B-2026-06-22-2). Workaround: return a non-capturing closure or a named `fn`, or \
+                 pass the closure down by a `Fn(..)` parameter instead of returning it."
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
+
+    /// `true` when closure-literal `|params| body` captures at least one name in
+    /// `outer` (a local/param of the enclosing function). Syntactic: the body's
+    /// referenced names, minus the closure's own params and its inner `let`
+    /// bindings, intersected with `outer`.
+    fn closure_literal_captures(
+        &self,
+        params: &[ClosureParam],
+        body: &Expr,
+        outer: &HashSet<String>,
+    ) -> bool {
+        let param_names: HashSet<String> = params
+            .iter()
+            .flat_map(|p| p.pattern.binding_names())
+            .collect();
+        let mut refs = HashSet::new();
+        let mut inner = HashSet::new();
+        self.refs_in_expr(body, &mut refs, &mut inner);
+        refs.iter()
+            .any(|n| !param_names.contains(n) && !inner.contains(n) && outer.contains(n))
+    }
+
+    /// `true` when the tail expression `expr` (a function's return value)
+    /// evaluates to a capturing closure — directly, through an identifier bound
+    /// to one, or through the tail of a nested block / `if` / `match` /
+    /// labeled block. Does NOT recurse into nested closure bodies (their tail
+    /// is the inner closure's return, not this function's).
+    fn tail_escapes_capturing_closure(
+        &self,
+        expr: &Expr,
+        outer: &HashSet<String>,
+        capturing_vars: &HashSet<String>,
+    ) -> bool {
+        match &expr.kind {
+            ExprKind::Closure { params, body, .. } => {
+                self.closure_literal_captures(params, body, outer)
+            }
+            ExprKind::Identifier(n) => capturing_vars.contains(n),
+            ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::LabeledBlock { body: b, .. } => b
+                .final_expr
+                .as_deref()
+                .is_some_and(|t| self.tail_escapes_capturing_closure(t, outer, capturing_vars)),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                let then_bad = then_block
+                    .final_expr
+                    .as_deref()
+                    .is_some_and(|t| self.tail_escapes_capturing_closure(t, outer, capturing_vars));
+                let else_bad = else_branch
+                    .as_deref()
+                    .is_some_and(|e| self.tail_escapes_capturing_closure(e, outer, capturing_vars));
+                then_bad || else_bad
+            }
+            ExprKind::Match { arms, .. } => arms
+                .iter()
+                .any(|a| self.tail_escapes_capturing_closure(&a.body, outer, capturing_vars)),
+            _ => false,
+        }
+    }
+
     /// Build the LLVM function type for the env-first closure-call ABI of a
     /// surface `Fn(P0, P1, …) -> R` annotation: `R (ptr env, P0, P1, …)`. The
     /// leading `ptr` is the captured-environment pointer every closure body

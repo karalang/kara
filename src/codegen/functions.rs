@@ -482,6 +482,12 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     pub(super) fn compile_function(&mut self, func: &Function) -> Result<(), String> {
+        // Heap-closure-env epic Slice 0 (B-2026-06-22-2): refuse to emit a
+        // function that RETURNS a closure capturing one of its locals — the
+        // captured env is a stack alloca that dangles once the frame exits, a
+        // silent miscompile. Honest compile error until heap envs land. Pure
+        // pre-check; no IR emitted yet.
+        self.reject_escaping_capturing_closure(func)?;
         // Slice c-repl.B.4: `func.name == "main"` may have been
         // registered under a different LLVM symbol via
         // `main_symbol_override` (e.g. `cell_main_<id>` for REPL

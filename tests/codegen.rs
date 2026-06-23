@@ -65,6 +65,70 @@ mod codegen_tests {
     use karac::codegen::compile_to_ir;
 
     /// Parse a snippet, run resolve+typecheck+lowering, then compile to LLVM IR.
+    /// Codegen result (Ok IR / Err diagnostic) without the `ir_for` panic.
+    fn ir_result(src: &str) -> Result<String, String> {
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        compile_to_ir(&parsed.program, None, None)
+    }
+
+    // ── Heap-closure-env epic Slice 0 (B-2026-06-22-2) ──
+    // A capturing closure that ESCAPES via return is rejected with an honest
+    // diagnostic (its stack env would dangle); sound closure uses keep working.
+
+    #[test]
+    fn escaping_capturing_closure_returned_is_rejected() {
+        let err = ir_result(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let f = make(10i64); println(f\"{f(5i64)}\"); }\n",
+        )
+        .expect_err("a returned capturing closure must be rejected, not silently miscompiled");
+        assert!(
+            err.contains("E_ESCAPING_CLOSURE_NOT_YET"),
+            "wrong diagnostic: {err}"
+        );
+    }
+
+    #[test]
+    fn escaping_capturing_closure_via_let_is_rejected() {
+        let err = ir_result(
+            "fn make(k: i64) -> Fn(i64) -> i64 { let f = |x| x + k; f }\n\
+             fn main() { let g = make(10i64); println(f\"{g(5i64)}\"); }\n",
+        )
+        .expect_err("a returned capturing closure bound to a local must be rejected");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
+    /// A NON-capturing closure returned is sound (null env) — must still compile
+    /// and run (this is the B-2026-06-21-2 path; the guard must not touch it).
+    #[test]
+    fn non_capturing_closure_returned_still_runs() {
+        let out = run_program(
+            "fn pick() -> Fn(i64) -> i64 { |x| x * 2i64 }\n\
+             fn main() { let f = pick(); println(f\"{f(21i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// A capturing closure used WITHIN the same frame (called locally, and
+    /// passed DOWN by a `Fn(..)` parameter) is sound — the frame stays live —
+    /// and must keep working.
+    #[test]
+    fn capturing_closure_same_frame_and_passed_down_still_run() {
+        let local = run_program(
+            "fn main() { let base = 10i64; let f = |x| x + base; println(f\"{f(5i64)}\"); }\n",
+        );
+        assert_eq!(local.as_deref(), Some("15\n"));
+        let passed = run_program(
+            "fn apply(f: Fn(i64) -> i64, x: i64) -> i64 { f(x) }\n\
+             fn main() { let base = 10i64; println(f\"{apply(|x| x + base, 5i64)}\"); }\n",
+        );
+        assert_eq!(passed.as_deref(), Some("15\n"));
+    }
+
     fn ir_for(src: &str) -> String {
         let mut parsed = karac::parse(src);
         assert!(
