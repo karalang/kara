@@ -677,6 +677,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // name is the user-facing `func.name`. `func.span.line` is 1-indexed.
         self.di_enter_function(fn_val, &func.name, func.span.line as u32);
 
+        // Run the Map/Set module-binding static-init prologue before any
+        // user statement. `__karac_static_init` was declared (signature
+        // only) in `declare_module_bindings`; its body is filled at
+        // `finalize_module_binding_static_init` after all bodies compile.
+        // Placed after `di_enter_function` so the call carries a valid
+        // `!dbg` location when debug info is on. `main` only.
+        if func.name == "main" {
+            if let Some(init_fn) = self.static_init_fn {
+                self.builder.build_call(init_fn, &[], "").unwrap();
+            }
+        }
+
         // A2 slice 2b.3: for a coroutine-compiled network-boundary fn, emit the
         // coro ramp prologue (coro.id/begin + completion slot + shared exit
         // blocks) at the top of entry, before param allocas — this sets

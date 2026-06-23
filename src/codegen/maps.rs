@@ -18,6 +18,105 @@ use inkwell::AddressSpace;
 use super::state::VarSlot;
 
 impl<'ctx> super::Codegen<'ctx> {
+    /// Construct an empty Map/Set runtime handle for `var_name` and
+    /// return the opaque `ptr`. Computes the key/val element sizes and
+    /// emits (or reuses) the per-key-type hash/eq fns from the side
+    /// tables `register_var_from_type_expr` / the local-binding paths
+    /// seed under `var_name`, then calls `karac_map_new`. `is_set`
+    /// selects the Set shape (`val_size = 0`, element type read from
+    /// `set_elem_*` rather than `map_key_*` / `map_val_*`).
+    ///
+    /// Pure handle construction — no alloca, no `self.variables`
+    /// registration, no scope-exit cleanup tracking. Callers layer
+    /// those on: `compile_map_new_stmt` / `compile_set_new_stmt` for a
+    /// local `let`, and `finalize_module_binding_static_init` for a
+    /// module-scope binding (which stores the handle into a global and
+    /// never frees it — the binding lives for the whole process).
+    pub(super) fn build_map_new_handle(
+        &mut self,
+        var_name: &str,
+        is_set: bool,
+    ) -> PointerValue<'ctx> {
+        let i64_t = self.context.i64_type();
+
+        // Element type + (key_size, val_size). Set is the `Map[T, ()]`
+        // bucket with the value side stripped (`val_size = 0`).
+        let (key_ty, val_size) = if is_set {
+            let elem_ty = self
+                .set_elem_types
+                .get(var_name)
+                .copied()
+                .unwrap_or(i64_t.into());
+            (elem_ty, i64_t.const_int(0, false))
+        } else {
+            let key_ty = self
+                .map_key_types
+                .get(var_name)
+                .copied()
+                .unwrap_or(i64_t.into());
+            let val_ty = self
+                .map_val_types
+                .get(var_name)
+                .copied()
+                .unwrap_or(i64_t.into());
+            let val_size = val_ty
+                .size_of()
+                .unwrap_or_else(|| i64_t.const_int(8, false));
+            (key_ty, val_size)
+        };
+        let key_size = key_ty
+            .size_of()
+            .unwrap_or_else(|| i64_t.const_int(8, false));
+
+        // Emit (or reuse) hash/eq functions for the concrete key type.
+        // Prefer the TypeExpr-aware path so compound key shapes (tuples, …)
+        // compose correctly via per-field recursion. The plain
+        // `emit_hash_fn_for_type` path is the fallback for code paths that
+        // never registered a `TypeExpr` for the variable. Set elements are
+        // the key of the underlying bucket, so they consult the `set_elem_*`
+        // tables.
+        let key_te = if is_set {
+            self.set_elem_type_exprs.get(var_name).cloned()
+        } else {
+            self.map_key_type_exprs.get(var_name).cloned()
+        };
+        let (hash_fn, eq_fn) = if let Some(key_te) = key_te {
+            (
+                self.emit_hash_fn_for_type_expr(&key_te),
+                self.emit_eq_fn_for_type_expr(&key_te),
+            )
+        } else {
+            let type_name = if is_set {
+                self.set_elem_type_names.get(var_name).cloned()
+            } else {
+                self.map_key_type_names.get(var_name).cloned()
+            }
+            .unwrap_or_else(|| "i64".to_string());
+            (
+                self.emit_hash_fn_for_type(&type_name, key_ty),
+                self.emit_eq_fn_for_type(&type_name, key_ty),
+            )
+        };
+        let hash_fn_ptr = hash_fn.as_global_value().as_pointer_value();
+        let eq_fn_ptr = eq_fn.as_global_value().as_pointer_value();
+
+        self.builder
+            .build_call(
+                self.karac_map_new_fn,
+                &[
+                    key_size.into(),
+                    val_size.into(),
+                    hash_fn_ptr.into(),
+                    eq_fn_ptr.into(),
+                ],
+                if is_set { "set.new" } else { "map.new" },
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value()
+    }
+
     /// Emit `karac_map_new`, alloca a ptr slot to hold the opaque handle, and
     /// register a scope-exit `karac_map_free` cleanup action.
     /// Called from `compile_stmt` when the RHS is `Map.new()`.
@@ -36,54 +135,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .copied()
             .unwrap_or(i64_t.into());
 
-        let key_size = key_ty
-            .size_of()
-            .unwrap_or_else(|| i64_t.const_int(8, false));
-        let val_size = val_ty
-            .size_of()
-            .unwrap_or_else(|| i64_t.const_int(8, false));
-
-        // Emit (or reuse) hash/eq functions for the concrete key type.
-        // Prefer the TypeExpr-aware path so compound key shapes (tuples, …)
-        // compose correctly via per-field recursion. The plain
-        // `emit_hash_fn_for_type` path is the fallback for code paths that
-        // never registered a `TypeExpr` for the variable.
-        let (hash_fn, eq_fn) = if let Some(key_te) = self.map_key_type_exprs.get(var_name).cloned()
-        {
-            (
-                self.emit_hash_fn_for_type_expr(&key_te),
-                self.emit_eq_fn_for_type_expr(&key_te),
-            )
-        } else {
-            let type_name = self
-                .map_key_type_names
-                .get(var_name)
-                .cloned()
-                .unwrap_or_else(|| "i64".to_string());
-            (
-                self.emit_hash_fn_for_type(&type_name, key_ty),
-                self.emit_eq_fn_for_type(&type_name, key_ty),
-            )
-        };
-        let hash_fn_ptr = hash_fn.as_global_value().as_pointer_value();
-        let eq_fn_ptr = eq_fn.as_global_value().as_pointer_value();
-
-        let map_handle = self
-            .builder
-            .build_call(
-                self.karac_map_new_fn,
-                &[
-                    key_size.into(),
-                    val_size.into(),
-                    hash_fn_ptr.into(),
-                    eq_fn_ptr.into(),
-                ],
-                "map.new",
-            )
-            .unwrap()
-            .try_as_basic_value()
-            .unwrap_basic()
-            .into_pointer_value();
+        let map_handle = self.build_map_new_handle(var_name, /* is_set = */ false);
 
         let fn_val = self.current_fn.unwrap();
         let slot_ptr = self.create_entry_alloca(fn_val, &format!("{var_name}.slot"), ptr_ty.into());
@@ -144,49 +196,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .copied()
             .unwrap_or(i64_t.into());
 
-        let elem_size = elem_ty
-            .size_of()
-            .unwrap_or_else(|| i64_t.const_int(8, false));
-        let val_size = i64_t.const_int(0, false);
-
-        // Hash/eq fns for the element type. Prefer the TypeExpr-aware path
-        // so compound element shapes (tuples, …) compose correctly.
-        let (hash_fn, eq_fn) =
-            if let Some(elem_te) = self.set_elem_type_exprs.get(var_name).cloned() {
-                (
-                    self.emit_hash_fn_for_type_expr(&elem_te),
-                    self.emit_eq_fn_for_type_expr(&elem_te),
-                )
-            } else {
-                let type_name = self
-                    .set_elem_type_names
-                    .get(var_name)
-                    .cloned()
-                    .unwrap_or_else(|| "i64".to_string());
-                (
-                    self.emit_hash_fn_for_type(&type_name, elem_ty),
-                    self.emit_eq_fn_for_type(&type_name, elem_ty),
-                )
-            };
-        let hash_fn_ptr = hash_fn.as_global_value().as_pointer_value();
-        let eq_fn_ptr = eq_fn.as_global_value().as_pointer_value();
-
-        let set_handle = self
-            .builder
-            .build_call(
-                self.karac_map_new_fn,
-                &[
-                    elem_size.into(),
-                    val_size.into(),
-                    hash_fn_ptr.into(),
-                    eq_fn_ptr.into(),
-                ],
-                "set.new",
-            )
-            .unwrap()
-            .try_as_basic_value()
-            .unwrap_basic()
-            .into_pointer_value();
+        let set_handle = self.build_map_new_handle(var_name, /* is_set = */ true);
 
         let fn_val = self.current_fn.unwrap();
         let slot_ptr = self.create_entry_alloca(fn_val, &format!("{var_name}.slot"), ptr_ty.into());
@@ -320,10 +330,10 @@ impl<'ctx> super::Codegen<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
 
-        self.variables
-            .get(name)
-            .copied()
-            .ok_or_else(|| format!("unknown map variable '{name}' in index-store"))?;
+        // No `self.variables` precheck: `get_data_ptr` below gates
+        // existence and resolves module-binding globals too (a
+        // module-scope `Map.new()` handle lives in a global, not
+        // `self.variables`).
         // Use `get_data_ptr` so `mut ref Map[K,V]` params unwrap one
         // ref-level before the handle load. Owned bindings yield
         // `slot.ptr` directly.
@@ -385,10 +395,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
 
-        self.variables
-            .get(name)
-            .copied()
-            .ok_or_else(|| format!("unknown map variable '{name}' in index expression"))?;
+        // No `self.variables` precheck: `get_data_ptr` below gates
+        // existence and resolves module-binding globals too.
         // Use `get_data_ptr` so `mut ref Map[K,V]` params unwrap one
         // ref-level before the handle load. Owned bindings yield
         // `slot.ptr` directly.
@@ -470,10 +478,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let vec_ty = self.vec_struct_type();
         let fn_val = self.current_fn.unwrap();
 
-        self.variables
-            .get(var_name)
-            .copied()
-            .ok_or_else(|| format!("unknown map variable '{var_name}'"))?;
+        // No `self.variables` precheck: `get_data_ptr` below gates
+        // existence and resolves module-binding globals too.
         // Use `get_data_ptr` so `mut ref Map[K,V]` params unwrap one
         // ref-level before the handle load. Owned bindings yield
         // `slot.ptr` directly.
@@ -696,10 +702,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
 
-        self.variables
-            .get(var_name)
-            .copied()
-            .ok_or_else(|| format!("unknown map variable '{var_name}'"))?;
+        // No `self.variables` precheck: `get_data_ptr` below gates
+        // existence and resolves module-binding globals too.
 
         // Load the opaque map handle. `get_data_ptr` returns the alloca
         // for owned Map params/locals (alloca holds the handle), or the

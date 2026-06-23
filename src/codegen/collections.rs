@@ -40,10 +40,10 @@ impl<'ctx> super::Codegen<'ctx> {
         let bool_t = self.context.bool_type();
         let i8_t = self.context.i8_type();
 
-        self.variables
-            .get(var_name)
-            .copied()
-            .ok_or_else(|| format!("unknown set variable '{var_name}'"))?;
+        // No `self.variables` precheck: `get_data_ptr` below gates
+        // existence and resolves module-binding globals too (a
+        // module-scope `Set.new()` handle lives in a global, not
+        // `self.variables`).
         // Use `get_data_ptr` so `mut ref Set[T]` params unwrap one
         // ref-level before the handle load. Owned bindings yield
         // `slot.ptr` directly. Mirrors the Map-side fix.

@@ -5357,6 +5357,37 @@ fn main() {
     }
 
     #[test]
+    fn asan_module_scope_map_string_keys_no_double_free() {
+        // Module-scope `Map.new()` (phase-8-stdlib-floor.md "Map.new() /
+        // Set.new() as module-binding initialisers"). The handle lives in
+        // a global filled by the `__karac_static_init` prologue and is
+        // intentionally NEVER freed — a module binding lives for the whole
+        // process, so there is no scope-exit `karac_map_free`. The handle
+        // (and every heap key buffer it owns) stays reachable through the
+        // global at exit, so LSan must NOT report it (Linux CI), and ASAN
+        // must see no double-free / UAF here. Heap String keys exercise
+        // the key_is_vec path under the static-init handle.
+        assert_clean_asan_run(
+            r#"
+let mut REGISTRY: Map[String, i64] = Map.new();
+fn put(k: String, v: i64) { REGISTRY.insert(k, v); }
+fn main() {
+    let mut k1 = String.new();
+    k1.push_str("alpha-key-with-long-padding-to-exceed-sso-buffer");
+    put(k1, 1i64);
+    let mut k2 = String.new();
+    k2.push_str("beta-key-with-long-padding-to-exceed-sso-buffer");
+    put(k2, 2i64);
+    println(REGISTRY.get("alpha-key-with-long-padding-to-exceed-sso-buffer").unwrap_or(0i64));
+    println(REGISTRY.len());
+}
+"#,
+            &["1", "2"],
+            "module_scope_map_string_keys_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_map_string_keys_no_leak() {
         // `Map[String, i64]` — the canonical `key_is_vec, !val_is_vec`
         // shape. Pre-fix the key buffers leaked because the val-only

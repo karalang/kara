@@ -100,6 +100,34 @@ impl<'ctx> super::Codegen<'ctx> {
                 Item::ModuleBinding(b) => b,
                 _ => continue,
             };
+            // `Map.new()` / `Set.new()` are NOT compile-time constants:
+            // `karac_map_new` installs per-instance hash seeds + a vtable
+            // before any op can run. Emit a placeholder `null` `ptr`
+            // global (always non-constant — the prologue writes it once,
+            // even for an immutable `let`) and defer the real
+            // `karac_map_new(...)` to `__karac_static_init`, which runs
+            // before `main`'s body. `#[thread_local]` is intentionally
+            // not honored for these: the prologue initialises only the
+            // main thread's instance (a thread-local Map handle would
+            // need per-thread init — out of scope for the v1 floor).
+            if let Some(is_set) = module_binding_is_map_set_new(b) {
+                let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                let global = self.module.add_global(ptr_ty, None, &b.name);
+                global.set_initializer(&ptr_ty.const_null());
+                global.set_constant(false);
+                global.set_linkage(Linkage::Internal);
+                self.module_bindings.insert(
+                    b.name.clone(),
+                    ModuleBindingInfo {
+                        global,
+                        llvm_ty: ptr_ty.into(),
+                        is_mut: b.is_mut,
+                        declared_type: b.ty.clone(),
+                    },
+                );
+                self.map_set_module_inits.push((b.name.clone(), is_set));
+                continue;
+            }
             let Some((llvm_ty, initializer)) = self.module_binding_init(b) else {
                 // Initializer shape not supported yet — skip emission.
                 // The typechecker rejects any shape outside the permitted
@@ -126,6 +154,75 @@ impl<'ctx> super::Codegen<'ctx> {
                     declared_type: b.ty.clone(),
                 },
             );
+        }
+
+        // Declare (signature only) the static-init prologue if any
+        // Map/Set module binding needs runtime initialisation. The body
+        // is filled in at `finalize_module_binding_static_init` once all
+        // type metadata is available; `main`'s entry emits a forward
+        // `call` to it (a valid LLVM reference to an internal fn defined
+        // later in the same module).
+        if !self.map_set_module_inits.is_empty() && self.static_init_fn.is_none() {
+            let void_ty = self.context.void_type();
+            let fn_ty = void_ty.fn_type(&[], false);
+            let f = self
+                .module
+                .add_function("__karac_static_init", fn_ty, Some(Linkage::Internal));
+            self.static_init_fn = Some(f);
+        }
+    }
+
+    /// Fill in the `__karac_static_init` body declared by
+    /// `declare_module_bindings`: for each `Map.new()` / `Set.new()`
+    /// module binding, build a fresh runtime handle (`karac_map_new`)
+    /// and store it into the binding's global. Runs after all function
+    /// bodies are compiled — so struct/enum type metadata is fully
+    /// populated — and before module verification. The handle is never
+    /// freed: a module binding lives for the whole process. No-op when
+    /// no Map/Set module binding exists.
+    ///
+    /// `main`'s entry emits a forward `call void @__karac_static_init()`
+    /// (see `compile_function`), so this prologue runs before any user
+    /// statement observes the global.
+    pub(crate) fn finalize_module_binding_static_init(&mut self) {
+        let Some(init_fn) = self.static_init_fn else {
+            return;
+        };
+        let inits = self.map_set_module_inits.clone();
+
+        let prev_block = self.builder.get_insert_block();
+        let prev_fn = self.current_fn;
+        let entry = self.context.append_basic_block(init_fn, "entry");
+        self.builder.position_at_end(entry);
+        self.current_fn = Some(init_fn);
+
+        for (name, is_set) in inits {
+            // Reseed the per-binding key/val type side tables from the
+            // declared annotation so `build_map_new_handle` computes the
+            // right element sizes + hash/eq fns. `compile_function`
+            // clears these per function and finalize runs after the last
+            // body, so re-register explicitly here.
+            let declared = self
+                .module_bindings
+                .get(&name)
+                .and_then(|i| i.declared_type.clone());
+            if let Some(te) = declared {
+                self.register_var_from_type_expr(&name, &te);
+            }
+            let global_ptr = self
+                .module_bindings
+                .get(&name)
+                .map(|i| i.global.as_pointer_value());
+            let handle = self.build_map_new_handle(&name, is_set);
+            if let Some(gp) = global_ptr {
+                self.builder.build_store(gp, handle).unwrap();
+            }
+        }
+        self.builder.build_return(None).unwrap();
+
+        self.current_fn = prev_fn;
+        if let Some(bb) = prev_block {
+            self.builder.position_at_end(bb);
         }
     }
 
@@ -489,6 +586,33 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_store(info.global.as_pointer_value(), val)
             .ok();
         true
+    }
+}
+
+/// `Some(is_set)` when the binding's initializer is a zero-arg
+/// `Map.new()` (`Some(false)`) or `Set.new()` (`Some(true)`) call.
+/// These need a runtime initialiser — `karac_map_new` installs
+/// per-instance hash seeds + a vtable — so they take the
+/// placeholder-global + static-init-prologue path rather than the
+/// const-init lowering. Mirrors the typechecker's
+/// `module_binding_call_is_special_form` Map/Set arm.
+fn module_binding_is_map_set_new(b: &ModuleBinding) -> Option<bool> {
+    let ExprKind::Call { callee, args } = &b.value.kind else {
+        return None;
+    };
+    if !args.is_empty() {
+        return None;
+    }
+    let ExprKind::Path { segments, .. } = &callee.kind else {
+        return None;
+    };
+    if segments.len() != 2 || segments[1] != "new" {
+        return None;
+    }
+    match segments[0].as_str() {
+        "Map" => Some(false),
+        "Set" => Some(true),
+        _ => None,
     }
 }
 

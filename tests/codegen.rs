@@ -38619,6 +38619,135 @@ fn main() {
         assert_eq!(output, "64 7 9\n");
     }
 
+    // ── Map.new() / Set.new() as module-binding initialisers
+    //    (phase-8-stdlib-floor.md "Map.new() / Set.new() as module-binding
+    //    initialisers"). Unlike Vec.new(), the empty value is NOT a
+    //    zero-shaped constant — `karac_map_new` installs hash seeds + a
+    //    vtable — so codegen emits a placeholder `null` ptr global and fills
+    //    it from a `__karac_static_init` prologue that runs before main's
+    //    body. Each test asserts the typecheck gate is CLEAN (run_program
+    //    ignores typecheck errors, so runtime output alone passes vacuously)
+    //    AND the binary produces the right values. ──
+
+    #[test]
+    fn test_e2e_modbind_map_new_insert_and_get() {
+        // Module-scope `Map.new()`: insert in one fn, read in another —
+        // the handle lives in a global filled by the static-init prologue,
+        // so the write is observable across calls.
+        let src = "let mut REGISTRY: Map[String, i64] = Map.new();\n\
+                   fn put() { REGISTRY.insert(\"answer\", 42); }\n\
+                   fn main() {\n\
+                       put();\n\
+                       println(REGISTRY.get(\"answer\").unwrap_or(0));\n\
+                       println(REGISTRY.get(\"missing\").unwrap_or(-1));\n\
+                   }";
+        let parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        assert!(
+            typed.errors.is_empty(),
+            "module-scope Map.new() must typecheck clean, got: {:?}",
+            typed.errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+        );
+        let output = run_program(src).expect("compile + run failed");
+        assert_eq!(output, "42\n-1\n");
+    }
+
+    #[test]
+    fn test_e2e_modbind_map_new_int_keys() {
+        // Int-keyed module-scope Map — a different hash/eq emission path
+        // (i64 key vs the String key above). Two inserts + an overwrite to
+        // prove the single global handle persists across writes.
+        let src = "let mut SCORES: Map[i64, i64] = Map.new();\n\
+                   fn main() {\n\
+                       SCORES.insert(1, 10);\n\
+                       SCORES.insert(2, 20);\n\
+                       SCORES.insert(1, 11);\n\
+                       println(SCORES.get(1).unwrap_or(0));\n\
+                       println(SCORES.get(2).unwrap_or(0));\n\
+                   }";
+        let parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        assert!(
+            typed.errors.is_empty(),
+            "int-keyed module-scope Map.new() must typecheck clean, got: {:?}",
+            typed.errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+        );
+        let output = run_program(src).expect("compile + run failed");
+        assert_eq!(output, "11\n20\n");
+    }
+
+    #[test]
+    fn test_e2e_modbind_set_new_insert_and_contains() {
+        // Module-scope `Set.new()`: insert in one fn, query membership in
+        // main. Set reuses `karac_map_new` with val_size = 0.
+        let src = "let mut SEEN: Set[i64] = Set.new();\n\
+                   fn mark() { SEEN.insert(7); }\n\
+                   fn main() {\n\
+                       mark();\n\
+                       SEEN.insert(9);\n\
+                       println(SEEN.contains(7));\n\
+                       println(SEEN.contains(9));\n\
+                       println(SEEN.contains(3));\n\
+                   }";
+        let parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        assert!(
+            typed.errors.is_empty(),
+            "module-scope Set.new() must typecheck clean, got: {:?}",
+            typed.errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+        );
+        let output = run_program(src).expect("compile + run failed");
+        assert_eq!(output, "true\ntrue\nfalse\n");
+    }
+
+    #[test]
+    fn test_e2e_modbind_two_distinct_maps_independent() {
+        // Two distinct module-scope Map bindings each get their own global
+        // handle filled by the prologue; a write to one doesn't leak into
+        // the other (the static-init emits one karac_map_new per binding).
+        let src = "let mut A: Map[i64, i64] = Map.new();\n\
+                   let mut B: Map[i64, i64] = Map.new();\n\
+                   fn main() {\n\
+                       A.insert(1, 100);\n\
+                       B.insert(1, 200);\n\
+                       println(A.get(1).unwrap_or(0));\n\
+                       println(B.get(1).unwrap_or(0));\n\
+                   }";
+        let parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        assert!(
+            typed.errors.is_empty(),
+            "two module-scope Maps must typecheck clean, got: {:?}",
+            typed.errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+        );
+        let output = run_program(src).expect("compile + run failed");
+        assert_eq!(output, "100\n200\n");
+    }
+
     // ── Type-changing shadows (phase-5-diagnostics "codegen
     //    type-changing-shadow"). A `let` that re-binds an in-scope name with
     //    a different type/class used to be rejected by a `bind_pattern` guard

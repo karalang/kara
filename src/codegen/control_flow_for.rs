@@ -1375,10 +1375,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let i64_t = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
 
-        self.variables
-            .get(var_name)
-            .copied()
-            .ok_or_else(|| format!("unknown map variable '{var_name}'"))?;
+        // No `self.variables` precheck: `get_data_ptr` below gates
+        // existence and resolves module-binding globals too.
         // Use `get_data_ptr` so `for (k, v) in mut_ref_map` unwraps one
         // ref-level before the handle load. Owned bindings yield
         // `slot.ptr` directly.
@@ -1495,10 +1493,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let i8_t = self.context.i8_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
 
-        self.variables
-            .get(var_name)
-            .copied()
-            .ok_or_else(|| format!("unknown set variable '{var_name}'"))?;
+        // No `self.variables` precheck: `get_data_ptr` below gates
+        // existence and resolves module-binding globals too.
         // Use `get_data_ptr` so `for x in mut_ref_set` unwraps one
         // ref-level before the handle load. Owned bindings yield
         // `slot.ptr` directly.

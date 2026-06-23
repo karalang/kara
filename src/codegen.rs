@@ -2124,6 +2124,22 @@ pub(super) struct Codegen<'ctx> {
     /// mutation is observable across functions and `#[thread_local]`
     /// gets the per-task disjoint instance.
     pub(crate) module_bindings: HashMap<String, module_bindings::ModuleBindingInfo<'ctx>>,
+    /// Module bindings initialised by `Map.new()` / `Set.new()`, in
+    /// declaration order. Their globals are emitted as a placeholder
+    /// `null` `ptr` (the empty Map/Set is NOT a zero-shaped constant —
+    /// `karac_map_new` installs hash seeds + a vtable), and filled by
+    /// the `__karac_static_init` prologue that runs before `main`'s
+    /// body. `bool` is `true` for `Set.new()` (val_size = 0). Populated
+    /// by `declare_module_bindings`; consumed by
+    /// `finalize_module_binding_static_init`.
+    pub(crate) map_set_module_inits: Vec<(String, bool)>,
+    /// The synthesized `void __karac_static_init()` function, declared
+    /// in `declare_module_bindings` when `map_set_module_inits` is
+    /// non-empty so `main`'s entry can emit a forward `call` to it, and
+    /// filled in at `finalize_module_binding_static_init` once all type
+    /// metadata is available. `None` when no Map/Set module binding
+    /// exists.
+    pub(crate) static_init_fn: Option<FunctionValue<'ctx>>,
     /// Source filename threaded in from the CLI (`compile_to_object_with_options`
     /// / `compile_to_ir_with_options`). When `Some`, `emit_error_trace_push`
     /// emits a deduped global string and passes its `(ptr, len)` to the runtime
@@ -5125,6 +5141,8 @@ impl<'ctx> Codegen<'ctx> {
             pattern_binding_borrow_modes: HashMap::new(),
             consts: HashMap::new(),
             module_bindings: HashMap::new(),
+            map_set_module_inits: Vec::new(),
+            static_init_fn: None,
             source_filename: None,
             source_filename_global: None,
             source_text: None,
@@ -6416,6 +6434,10 @@ impl<'ctx> Codegen<'ctx> {
             self.emit_spawn_sites_metadata();
         }
         self.finalize_hot_swap_table();
+        // Fill the `__karac_static_init` body now that all function
+        // bodies are compiled and every struct/enum type is registered.
+        // `main`'s entry already emitted the forward `call` to it.
+        self.finalize_module_binding_static_init();
 
         // Phase-10 WASM build path: wasi-libc's `crt1-command.o` enters at
         // `_start → __main_void`; libc's own (weak, arg-gathering)
