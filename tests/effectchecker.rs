@@ -181,6 +181,60 @@ fn test_interner_intern_infers_allocates_heap() {
 }
 
 #[test]
+fn test_oncelock_methods_infer_no_substrate_effect() {
+    // Unlike Arena/Interner, the OnceLock/OnceCell methods seed NO
+    // substrate effect: an empty cell is a const-init constant (no
+    // allocation), and `set` parks an already-built value (interior
+    // mutation, not a fresh allocation). So a fn that only constructs,
+    // sets, reads, and queries a cell infers an empty effect set.
+    let result = effectcheck_ok(
+        "fn use_cell() {\n\
+         let cell: OnceLock[i64] = OnceLock.new();\n\
+         let _ = cell.set(5);\n\
+         let _seen = cell.is_set();\n\
+         }",
+    );
+    let inferred = result.inferred_effects.get("use_cell").unwrap();
+    assert!(
+        !inferred
+            .effects
+            .iter()
+            .any(|e| e.effect.verb == EffectVerbKind::Allocates),
+        "OnceLock new/set/is_set must NOT seed allocates(Heap) (const cell + \
+         interior mutation), got: {:?}",
+        inferred.effects
+    );
+}
+
+#[test]
+fn test_oncelock_get_or_init_propagates_closure_alloc() {
+    // `get_or_init` itself seeds nothing, but its init closure's effects
+    // are attributed to the caller through the ordinary closure-argument
+    // walk: an allocating closure (`Vec.new` + `push`) surfaces
+    // allocates(Heap) on the enclosing fn (plan sub-item 8).
+    let result = effectcheck_ok(
+        "fn lazy() {\n\
+         let cell: OnceLock[Vec[i64]] = OnceLock.new();\n\
+         let _v = cell.get_or_init(|| {\n\
+         let mut out: Vec[i64] = Vec.new();\n\
+         out.push(1);\n\
+         out\n\
+         });\n\
+         }",
+    );
+    let inferred = result.inferred_effects.get("lazy").unwrap();
+    assert!(
+        inferred
+            .effects
+            .iter()
+            .any(|e| e.effect.verb == EffectVerbKind::Allocates),
+        "get_or_init's allocating init closure should propagate \
+         allocates(Heap) to the caller, got: {:?}",
+        inferred.effects
+    );
+}
+
+#[test]
 fn test_function_with_declared_effects() {
     effectcheck_ok(
         "effect resource UserDB;\n\
