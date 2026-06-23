@@ -65,6 +65,55 @@ mod codegen_tests {
     use karac::codegen::compile_to_ir;
 
     /// Parse a snippet, run resolve+typecheck+lowering, then compile to LLVM IR.
+    /// B-2026-06-22-2 Slice 0 follow-up: the escaping-capturing-closure guard
+    /// also covers an explicit mid-body `return <capturing closure>` and a
+    /// capturing closure returned inside an aggregate literal — both were
+    /// silent miscompiles that the tail-only guard missed.
+    #[test]
+    fn escaping_capturing_closure_explicit_return_is_rejected() {
+        let err = ir_result(
+            "fn make(k: i64, c: bool) -> Fn(i64) -> i64 {\n\
+                 if c { return |x| x + k; }\n\
+                 |x| x - k\n\
+             }\n\
+             fn main() { let f = make(10i64, true); println(f\"{f(5i64)}\"); }\n",
+        )
+        .expect_err("explicit `return <capturing closure>` must be rejected");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
+    #[test]
+    fn escaping_capturing_closure_in_struct_literal_is_rejected() {
+        let err = ir_result(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> H { H { f: |x| x + k } }\n\
+             fn main() { let h = make(10i64); println(f\"{(h.f)(5i64)}\"); }\n",
+        )
+        .expect_err("a capturing closure returned inside a struct literal must be rejected");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
+    /// Adversarial: a NON-capturing closure in the same positions must still
+    /// compile (the guard fires only on captures).
+    #[test]
+    fn non_capturing_closure_explicit_return_and_struct_still_ok() {
+        assert!(
+            ir_result(
+                "fn make(c: bool) -> Fn(i64) -> i64 { if c { return |x| x + 1i64; } |x| x - 1i64 }\n"
+            )
+            .is_ok(),
+            "non-capturing explicit return should compile"
+        );
+        assert!(
+            ir_result(
+                "struct H { f: Fn(i64) -> i64 }\n\
+                 fn make() -> H { H { f: |x| x * 2i64 } }\n"
+            )
+            .is_ok(),
+            "non-capturing closure in a struct literal should compile"
+        );
+    }
+
     /// Codegen result (Ok IR / Err diagnostic) without the `ir_for` panic.
     fn ir_result(src: &str) -> Result<String, String> {
         let mut parsed = karac::parse(src);

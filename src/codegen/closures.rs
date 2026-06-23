@@ -83,26 +83,29 @@ impl<'ctx> super::Codegen<'ctx> {
     // ── Escaping-capturing-closure guard (B-2026-06-22-2, heap-env epic Slice 0) ──
 
     /// Reject a closure that captures one of this function's locals/params and
-    /// then ESCAPES via the function's return value (its tail expression). A
-    /// closure's captured environment is a stack alloca in the defining frame
-    /// (the heap-closure-environment feature is not yet implemented), so a
-    /// returned capturing closure reads freed memory after the frame exits — a
-    /// silent wrong-output miscompile (`fn make(k){ |x| x+k }` returns garbage,
-    /// not `x+k`). This guard turns that into an honest compile error.
+    /// then ESCAPES via the function's return value. A closure's captured
+    /// environment is a stack alloca in the defining frame (the
+    /// heap-closure-environment feature is not yet implemented), so a returned
+    /// capturing closure reads freed memory after the frame exits — a silent
+    /// wrong-output miscompile (`fn make(k){ |x| x+k }` returns garbage, not
+    /// `x+k`). This guard turns that into an honest compile error.
     ///
-    /// Deliberately narrow so it never rejects a SOUND program: a non-capturing
-    /// closure (null env), a closure used within the same frame, and a closure
-    /// passed DOWN by `Fn(..)` parameter (the frame stays live across the call)
-    /// are all unaffected. Pure-AST, run once per function before codegen.
-    /// (Residuals still tracked under the epic: an explicit mid-body `return
-    /// <capturing closure>`, and a capturing closure stored into an escaping
-    /// struct/Vec.)
+    /// Covers every return point: the body tail AND every explicit `return e`
+    /// (not inside a nested closure), where the returned value is — directly,
+    /// through an identifier bound to one, through a block/`if`/`match` tail, or
+    /// through an aggregate literal (`return H { f: |x| x+k }`) — a capturing
+    /// closure.
+    ///
+    /// Deliberately one-sided so it never rejects a SOUND program: it fires only
+    /// on a *capturing* closure in *return* position; a non-capturing closure
+    /// (null env), same-frame use, and pass-down-by-`Fn(..)`-param are all
+    /// unaffected. Pure-AST, run once per function before codegen. (Narrower
+    /// residual still tracked under the epic: a capturing closure stored into a
+    /// LOCAL struct/`Vec` that is then returned via an identifier — that needs
+    /// container-escape tracking, i.e. the escape-analysis slice.)
     pub(super) fn reject_escaping_capturing_closure(&self, func: &Function) -> Result<(), String> {
-        let Some(tail) = func.body.final_expr.as_deref() else {
-            return Ok(());
-        };
         // Names whose capture would dangle on escape: the function's params +
-        // its top-level `let` bindings (the scope visible at the body tail).
+        // its top-level `let` bindings (the scope visible at a return).
         let mut outer: HashSet<String> = func
             .params
             .iter()
@@ -132,7 +135,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
-        if self.tail_escapes_capturing_closure(tail, &outer, &capturing_vars) {
+        // Every return point: the body tail + every explicit `return e` not
+        // inside a nested closure.
+        let mut return_values: Vec<&Expr> = Vec::new();
+        if let Some(tail) = func.body.final_expr.as_deref() {
+            return_values.push(tail);
+        }
+        self.collect_outer_return_values(&func.body, &mut return_values);
+        if return_values
+            .iter()
+            .any(|e| self.tail_escapes_capturing_closure(e, &outer, &capturing_vars))
+        {
             return Err(
                 "error[E_ESCAPING_CLOSURE_NOT_YET]: returning a closure that captures a \
                  local variable is not yet supported — the closure's captured environment lives \
@@ -209,7 +222,96 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Match { arms, .. } => arms
                 .iter()
                 .any(|a| self.tail_escapes_capturing_closure(&a.body, outer, capturing_vars)),
+            // Returning an aggregate LITERAL that directly holds a capturing
+            // closure escapes it too (`return H { f: |x| x+k }`, `return (clo,
+            // 1)`, `return [clo]`). The local-then-return form (`let h = H{f:
+            // clo}; return h`) needs container-escape tracking and stays a
+            // tracked residual.
+            ExprKind::Tuple(elems) | ExprKind::ArrayLiteral(elems) => elems
+                .iter()
+                .any(|e| self.tail_escapes_capturing_closure(e, outer, capturing_vars)),
+            ExprKind::StructLiteral { fields, .. } => fields
+                .iter()
+                .any(|f| self.tail_escapes_capturing_closure(&f.value, outer, capturing_vars)),
             _ => false,
+        }
+    }
+
+    /// Collect every `return <value>` reachable from `block` WITHOUT entering a
+    /// nested closure body (a `return` inside a closure returns from the
+    /// closure, not the enclosing function). Best-effort over the common
+    /// control-flow containers; a container this doesn't recurse into only
+    /// UNDER-collects (a narrower residual) — it can never make the guard
+    /// falsely reject a sound program.
+    fn collect_outer_return_values<'a>(&self, block: &'a Block, out: &mut Vec<&'a Expr>) {
+        for stmt in &block.stmts {
+            match &stmt.kind {
+                StmtKind::Expr(e) | StmtKind::Let { value: e, .. } => {
+                    self.collect_returns_in_expr(e, out)
+                }
+                StmtKind::LetElse {
+                    value, else_block, ..
+                } => {
+                    self.collect_returns_in_expr(value, out);
+                    self.collect_outer_return_values(else_block, out);
+                }
+                StmtKind::Assign { value, .. } | StmtKind::CompoundAssign { value, .. } => {
+                    self.collect_returns_in_expr(value, out)
+                }
+                StmtKind::MultiAssign { values, .. } => {
+                    for v in values {
+                        self.collect_returns_in_expr(v, out);
+                    }
+                }
+                StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                    self.collect_outer_return_values(body, out)
+                }
+                StmtKind::LetUninit { .. } => {}
+            }
+        }
+        if let Some(t) = &block.final_expr {
+            self.collect_returns_in_expr(t, out);
+        }
+    }
+
+    /// Recursive companion to [`collect_outer_return_values`] over an `Expr`.
+    /// Stops at `Closure` bodies. Non-exhaustive on purpose (see that method).
+    fn collect_returns_in_expr<'a>(&self, expr: &'a Expr, out: &mut Vec<&'a Expr>) {
+        match &expr.kind {
+            ExprKind::Return(Some(e)) => {
+                out.push(e);
+                self.collect_returns_in_expr(e, out);
+            }
+            ExprKind::Block(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Comptime(b)
+            | ExprKind::LabeledBlock { body: b, .. } => self.collect_outer_return_values(b, out),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                self.collect_outer_return_values(then_block, out);
+                if let Some(e) = else_branch {
+                    self.collect_returns_in_expr(e, out);
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for a in arms {
+                    self.collect_returns_in_expr(&a.body, out);
+                }
+            }
+            ExprKind::While { body, .. }
+            | ExprKind::WhileLet { body, .. }
+            | ExprKind::For { body, .. }
+            | ExprKind::Loop { body, .. } => self.collect_outer_return_values(body, out),
+            // Do NOT recurse into `Closure` — its `return` is the closure's.
+            _ => {}
         }
     }
 
