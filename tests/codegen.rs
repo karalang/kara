@@ -164,6 +164,67 @@ mod codegen_tests {
         );
     }
 
+    /// B-2026-06-22-2 residual close-out: a capturing closure stored in a local
+    /// struct then projected back out and returned (`let h = H { f: |x| x+k };
+    /// return h.f`) was the last *silent* miscompile the guard missed — it built
+    /// and ran, printing garbage (`-1`) instead of `x+k`. The `capturing_fields`
+    /// builder now records that `h.f` holds a capturing closure, so the
+    /// `FieldAccess` return arm fires.
+    #[test]
+    fn escaping_capturing_closure_field_projection_is_rejected() {
+        let err = ir_result(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { let h = H { f: |x| x + k }; return h.f; }\n\
+             fn main() { let g = make(21i64); println(f\"{g(21i64)}\"); }\n",
+        )
+        .expect_err("projecting a captured closure field out of a local struct must be rejected");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
+    /// Same projection reached as the bare function TAIL (no explicit `return`)
+    /// and through an identifier-chained field init — both must still reject.
+    #[test]
+    fn escaping_capturing_closure_field_projection_tail_and_chain_is_rejected() {
+        let tail = ir_result(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { let h = H { f: |x| x + k }; h.f }\n",
+        )
+        .expect_err("a capturing closure field projected as the tail must be rejected");
+        assert!(tail.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {tail}");
+        let chain = ir_result(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { let g: Fn(i64) -> i64 = |x| x + k; let h = H { f: g }; h.f }\n",
+        )
+        .expect_err("a chained capturing closure field projection must be rejected");
+        assert!(chain.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {chain}");
+    }
+
+    /// Adversarial for the field-projection guard's PRECISION: it must not
+    /// over-reject. (a) Projecting a NON-capturing closure field out of a local
+    /// struct is sound (null env) and must compile. (b) A struct that has a
+    /// capturing closure field AND a plain field must still let you return the
+    /// *other*, non-closure field — `capturing_fields` records only `f`, so
+    /// `return h.g` (an i64) is untouched.
+    #[test]
+    fn field_projection_guard_does_not_over_reject() {
+        assert!(
+            ir_result(
+                "struct H { f: Fn(i64) -> i64 }\n\
+                 fn make() -> Fn(i64) -> i64 { let h = H { f: |x| x * 2i64 }; h.f }\n"
+            )
+            .is_ok(),
+            "projecting a NON-capturing closure field must compile"
+        );
+        assert!(
+            ir_result(
+                "struct H { f: Fn(i64) -> i64, g: i64 }\n\
+                 fn make(k: i64) -> i64 { let h = H { f: |x| x + k, g: 99i64 }; h.g }\n"
+            )
+            .is_ok(),
+            "returning a non-closure field of a struct that also has a capturing closure field must compile"
+        );
+    }
+
     /// Codegen result (Ok IR / Err diagnostic) without the `ir_for` panic.
     fn ir_result(src: &str) -> Result<String, String> {
         let mut parsed = karac::parse(src);

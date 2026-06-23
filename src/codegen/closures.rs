@@ -103,11 +103,14 @@ impl<'ctx> super::Codegen<'ctx> {
     /// local-then-return form too — a capturing closure stored into a LOCAL
     /// aggregate (`let h = H { f: |x| x+k }; h`) or chained through identifiers
     /// (`let g = |x| x+k; let h = H { f: g }; h`) — via the source-ordered
-    /// `capturing_vars` builder below. (Narrower residuals still tracked under
-    /// the epic, needing the projection / mutation tracking of the escape-
-    /// analysis slice: a returned field projection `return h.f`, and a closure
-    /// pushed into a container that then escapes — `let v = Vec.new();
-    /// v.push(|x| x+k); v`.)
+    /// `capturing_vars` builder below. The FIELD-PROJECTION form is also covered
+    /// (`let h = H { f: |x| x+k }; return h.f`): the parallel `capturing_fields`
+    /// builder records which fields of a local struct binding hold a capturing
+    /// closure, so the `FieldAccess` arm rejects exactly those projections while
+    /// leaving a sound `return h.other_field` to compile. (One narrower residual
+    /// still tracked under the epic, needing the container-mutation tracking of
+    /// the escape-analysis slice: a closure pushed into a container that then
+    /// escapes — `let v = Vec.new(); v.push(|x| x+k); v`.)
     pub(super) fn reject_escaping_capturing_closure(&self, func: &Function) -> Result<(), String> {
         // Names whose capture would dangle on escape: the function's params +
         // its top-level `let` bindings (the scope visible at a return).
@@ -141,6 +144,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // soundly admits — but codegen's stack env cannot yet support — must be
         // caught here.
         let mut capturing_vars: HashSet<String> = HashSet::new();
+        // Per-binding field map: a local struct binding name → the set of its
+        // field names whose struct-literal initializer was a capturing closure.
+        // Lets a later `return h.f` be rejected precisely — only the capturing
+        // field projects a dangling stack env; `return h.other_field` stays
+        // sound. Built in the SAME source-order pass so a field initialized from
+        // an earlier-bound capturing local (`H { f: g }`) resolves.
+        let mut capturing_fields: HashMap<String, HashSet<String>> = HashMap::new();
         for stmt in &func.body.stmts {
             let (pattern, value) = match &stmt.kind {
                 StmtKind::Let { pattern, value, .. } | StmtKind::LetElse { pattern, value, .. } => {
@@ -148,9 +158,37 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 _ => continue,
             };
-            if self.tail_escapes_capturing_closure(value, &outer, &capturing_vars) {
+            if self.tail_escapes_capturing_closure(
+                value,
+                &outer,
+                &capturing_vars,
+                &capturing_fields,
+            ) {
                 for n in pattern.binding_names() {
                     capturing_vars.insert(n);
+                }
+            }
+            // Record per-field capture for a direct struct-literal initializer
+            // bound to a single name (`let h = H { f: |x| x+k, g: 1 }`): mark
+            // only the closure-bearing fields. Other initializer shapes (a block
+            // tail, a call returning a struct, a multi-name pattern) are left
+            // untracked — a sound under-approximation that defers, never
+            // falsely rejects.
+            if let ExprKind::StructLiteral { fields, .. } = &value.kind {
+                if let [binding] = pattern.binding_names().as_slice() {
+                    for fi in fields {
+                        if self.tail_escapes_capturing_closure(
+                            &fi.value,
+                            &outer,
+                            &capturing_vars,
+                            &capturing_fields,
+                        ) {
+                            capturing_fields
+                                .entry(binding.clone())
+                                .or_default()
+                                .insert(fi.name.clone());
+                        }
+                    }
                 }
             }
         }
@@ -161,10 +199,9 @@ impl<'ctx> super::Codegen<'ctx> {
             return_values.push(tail);
         }
         self.collect_outer_return_values(&func.body, &mut return_values);
-        if return_values
-            .iter()
-            .any(|e| self.tail_escapes_capturing_closure(e, &outer, &capturing_vars))
-        {
+        if return_values.iter().any(|e| {
+            self.tail_escapes_capturing_closure(e, &outer, &capturing_vars, &capturing_fields)
+        }) {
             return Err(
                 "error[E_ESCAPING_CLOSURE_NOT_YET]: returning a closure that captures a \
                  local variable is not yet supported — the closure's captured environment lives \
@@ -209,16 +246,18 @@ impl<'ctx> super::Codegen<'ctx> {
         expr: &Expr,
         outer: &HashSet<String>,
         capturing_vars: &HashSet<String>,
+        capturing_fields: &HashMap<String, HashSet<String>>,
     ) -> bool {
         match &expr.kind {
             ExprKind::Closure { params, body, .. } => {
                 self.closure_literal_captures(params, body, outer)
             }
             ExprKind::Identifier(n) => capturing_vars.contains(n),
-            ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::LabeledBlock { body: b, .. } => b
-                .final_expr
-                .as_deref()
-                .is_some_and(|t| self.tail_escapes_capturing_closure(t, outer, capturing_vars)),
+            ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::LabeledBlock { body: b, .. } => {
+                b.final_expr.as_deref().is_some_and(|t| {
+                    self.tail_escapes_capturing_closure(t, outer, capturing_vars, capturing_fields)
+                })
+            }
             ExprKind::If {
                 then_block,
                 else_branch,
@@ -229,18 +268,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 else_branch,
                 ..
             } => {
-                let then_bad = then_block
-                    .final_expr
-                    .as_deref()
-                    .is_some_and(|t| self.tail_escapes_capturing_closure(t, outer, capturing_vars));
-                let else_bad = else_branch
-                    .as_deref()
-                    .is_some_and(|e| self.tail_escapes_capturing_closure(e, outer, capturing_vars));
+                let then_bad = then_block.final_expr.as_deref().is_some_and(|t| {
+                    self.tail_escapes_capturing_closure(t, outer, capturing_vars, capturing_fields)
+                });
+                let else_bad = else_branch.as_deref().is_some_and(|e| {
+                    self.tail_escapes_capturing_closure(e, outer, capturing_vars, capturing_fields)
+                });
                 then_bad || else_bad
             }
-            ExprKind::Match { arms, .. } => arms
-                .iter()
-                .any(|a| self.tail_escapes_capturing_closure(&a.body, outer, capturing_vars)),
+            ExprKind::Match { arms, .. } => arms.iter().any(|a| {
+                self.tail_escapes_capturing_closure(
+                    &a.body,
+                    outer,
+                    capturing_vars,
+                    capturing_fields,
+                )
+            }),
             // An aggregate LITERAL that holds a capturing closure escapes it
             // (`return H { f: |x| x+k }`, `return (clo, 1)`, `return [clo]`,
             // `return Vec[clo]`, map / repeat literals, a struct `..spread`).
@@ -249,27 +292,56 @@ impl<'ctx> super::Codegen<'ctx> {
             // predicate over each `let` RHS, so `h` is marked and the
             // `Identifier` arm fires on the returned `h`. Mirrors the ownership
             // pass's `collect_escape_target` (`closure_escape.rs`) literal set.
-            ExprKind::Tuple(elems) | ExprKind::ArrayLiteral(elems) => elems
-                .iter()
-                .any(|e| self.tail_escapes_capturing_closure(e, outer, capturing_vars)),
-            ExprKind::PrefixCollectionLiteral { items, .. } => items
-                .iter()
-                .any(|e| self.tail_escapes_capturing_closure(e, outer, capturing_vars)),
+            ExprKind::Tuple(elems) | ExprKind::ArrayLiteral(elems) => elems.iter().any(|e| {
+                self.tail_escapes_capturing_closure(e, outer, capturing_vars, capturing_fields)
+            }),
+            ExprKind::PrefixCollectionLiteral { items, .. } => items.iter().any(|e| {
+                self.tail_escapes_capturing_closure(e, outer, capturing_vars, capturing_fields)
+            }),
             // Only `value` can hold a closure — `count` is a compile-time int.
             ExprKind::RepeatLiteral { value, .. } => {
-                self.tail_escapes_capturing_closure(value, outer, capturing_vars)
+                self.tail_escapes_capturing_closure(value, outer, capturing_vars, capturing_fields)
             }
             ExprKind::MapLiteral(pairs) => pairs.iter().any(|(k, v)| {
-                self.tail_escapes_capturing_closure(k, outer, capturing_vars)
-                    || self.tail_escapes_capturing_closure(v, outer, capturing_vars)
+                self.tail_escapes_capturing_closure(k, outer, capturing_vars, capturing_fields)
+                    || self.tail_escapes_capturing_closure(
+                        v,
+                        outer,
+                        capturing_vars,
+                        capturing_fields,
+                    )
             }),
             ExprKind::StructLiteral { fields, spread, .. } => {
-                fields
-                    .iter()
-                    .any(|f| self.tail_escapes_capturing_closure(&f.value, outer, capturing_vars))
-                    || spread.as_deref().is_some_and(|s| {
-                        self.tail_escapes_capturing_closure(s, outer, capturing_vars)
-                    })
+                fields.iter().any(|f| {
+                    self.tail_escapes_capturing_closure(
+                        &f.value,
+                        outer,
+                        capturing_vars,
+                        capturing_fields,
+                    )
+                }) || spread.as_deref().is_some_and(|s| {
+                    self.tail_escapes_capturing_closure(s, outer, capturing_vars, capturing_fields)
+                })
+            }
+            // A field PROJECTION off a local struct binding whose initializer
+            // stored a capturing closure in *that* field — `return h.f` /
+            // `h.f` as the tail, after `let h = H { f: |x| x+k };`. The
+            // closure's env lives on this frame's stack, so projecting it out
+            // and returning it dangles exactly like returning the whole struct
+            // (`return h`, already caught by the `Identifier` arm). Precise by
+            // construction: `capturing_fields[base]` holds ONLY the fields whose
+            // initializer was a capturing closure, so a sound `return
+            // h.other_field` (a non-closure field, or a non-capturing closure
+            // field) is left to compile. The base must be a plain local
+            // identifier; a deeper projection (`a.b.f`) or a projection off a
+            // by-value param is a narrower residual the escape-analysis slice
+            // still owns — under-approximating here is sound (it never falsely
+            // rejects), it just defers those shapes.
+            ExprKind::FieldAccess { object, field } => {
+                matches!(&object.kind, ExprKind::Identifier(base)
+                    if capturing_fields
+                        .get(base)
+                        .is_some_and(|fs| fs.contains(field)))
             }
             _ => false,
         }
