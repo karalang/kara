@@ -34,6 +34,8 @@
 //!   (`Vec[T]`): packed for scalar numerics, one length-delimited field per
 //!   element for `String` / `bytes` / nested messages — and `Map[K, V]` fields
 //!   (proto3 `map`), wire-equivalent to repeated key/value entry messages.
+//!   A `oneof` maps to an enum field with payload variants (each case its own
+//!   field number); `sint*`/`fixed*` use a `#[karac::proto(<wire>)]` attribute.
 //!
 //! Encoding is pure; decoding allocates (`Vec[u8]` / `String`) — matching the
 //! spec's "pure on encode, allocates(Heap) on decode".
@@ -689,6 +691,17 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
         // An enum field is a proto3 enum: a varint of the variant's 0-based
         // declaration index (so the enum's variant order is its wire numbering).
         let is_enum = f.ty.is_enum();
+        // An enum *with payload variants* is a proto3 `oneof` instead — each
+        // case carries a value and has its own field number.
+        let mut has_payload = false;
+        if is_enum {
+            for v in f.ty.variants() {
+                if v.payload != "" {
+                    has_payload = true;
+                }
+            }
+        }
+        let is_oneof = is_enum and has_payload;
         if nested and not f.ty.derives("Message") {
             compiler.error(
                 "derive(Message): nested field `" + fname + "` has type `" + tn
@@ -711,6 +724,14 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
         let mut efield = "";
         let mut dec_body = "";
         let mut mrg_body = "";
+        // A oneof field (enum with payload variants) dispatches over MULTIPLE
+        // field numbers — one per case — so it contributes a list of decode
+        // arms rather than a single one. `oneof_n` (> 0) marks it and counts
+        // the field numbers it occupies.
+        let mut oneof_n = 0;
+        let mut oneof_conds = Vec.new();
+        let mut oneof_decbs = Vec.new();
+        let mut oneof_mrgbs = Vec.new();
         if is_map {
             let kt = f.ty.key_type();
             let vt = f.ty.value_type();
@@ -780,6 +801,48 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
             efield = proto_encode_repeated(idx, fname, etn, is_msg);
             dec_body = proto_decode_repeated(fname, etn, is_msg);
             mrg_body = proto_decode_repeated("self." + fname, etn, is_msg);
+        } else if is_oneof {
+            // A oneof: an enum with payload variants. Each non-unit case has its
+            // own proto field number (assigned by declaration order, starting at
+            // this field's `idx`); the leading unit variant is the unset
+            // default. Encode = a `match` over the cases; decode = one dispatch
+            // arm per case constructing the variant.
+            let en = tn;
+            let mut firstv = "";
+            let mut m = "match self." + fname + " { ";
+            let mut k = 0;
+            let mut fnum = idx;
+            for v in f.ty.variants() {
+                let vn = v.name;
+                let pt = v.payload;
+                if k == 0 {
+                    firstv = "" + vn;
+                }
+                if pt == "" {
+                    m = m + en + "." + vn + " => {}, ";
+                } else {
+                    if not proto_supported(pt) {
+                        compiler.error(
+                            "derive(Message): oneof case `" + vn + "` of `" + fname
+                                + "` has unsupported payload type `" + pt
+                                + "` (v1 oneof payloads: i32/i64/u32/u64/bool/String/Vec[u8])",
+                        );
+                    }
+                    let tagn = f"{fnum}";
+                    m = m + en + "." + vn + "(pv) => { " + proto_encode_scalar_one("out", fnum, "pv", pt)
+                        + " }, ";
+                    let read = proto_read_scalar_one("reader", pt);
+                    oneof_conds.push("field == " + tagn);
+                    oneof_decbs.push(fname + " = " + en + "." + vn + "(" + read + ");");
+                    oneof_mrgbs.push("self." + fname + " = " + en + "." + vn + "(" + read + ");");
+                    fnum = fnum + 1;
+                }
+                k = k + 1;
+            }
+            m = m + "}";
+            dflt = en + "." + firstv;
+            efield = m;
+            oneof_n = fnum - idx;
         } else if is_enum {
             // Build a `match` mapping each variant to its index for encode, and
             // an `if`-chain mapping an index back to a variant for decode. The
@@ -842,16 +905,33 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
         }
         enc = enc + efield + " ";
         decls = decls + "let mut " + fname + " = " + dflt + "; ";
-        if first {
-            dec = "if " + cond + " { " + dec_body + " }";
-            mrg = "if " + cond + " { " + mrg_body + " }";
-            first = false;
+        if oneof_n > 0 {
+            // One dispatch arm per oneof case (each its own field number).
+            let mut j = 0;
+            while j < oneof_conds.len() {
+                if first {
+                    dec = "if " + oneof_conds[j] + " { " + oneof_decbs[j] + " }";
+                    mrg = "if " + oneof_conds[j] + " { " + oneof_mrgbs[j] + " }";
+                    first = false;
+                } else {
+                    dec = dec + " else if " + oneof_conds[j] + " { " + oneof_decbs[j] + " }";
+                    mrg = mrg + " else if " + oneof_conds[j] + " { " + oneof_mrgbs[j] + " }";
+                }
+                j = j + 1;
+            }
+            idx = idx + oneof_n;
         } else {
-            dec = dec + " else if " + cond + " { " + dec_body + " }";
-            mrg = mrg + " else if " + cond + " { " + mrg_body + " }";
+            if first {
+                dec = "if " + cond + " { " + dec_body + " }";
+                mrg = "if " + cond + " { " + mrg_body + " }";
+                first = false;
+            } else {
+                dec = dec + " else if " + cond + " { " + dec_body + " }";
+                mrg = mrg + " else if " + cond + " { " + mrg_body + " }";
+            }
+            idx = idx + 1;
         }
         ctor = ctor + fname + ": " + fname + ", ";
-        idx = idx + 1;
     }
     ctor = ctor + "}";
     // Close the field-dispatch with the forward-compatible unknown-field skip.
@@ -890,10 +970,11 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
 // message — and `repeated TYPE name = N;` fields, mapped to `Vec[TYPE]`. Field
 // numbers must be contiguous `1..N` (declaration-order tagging — per-field
 // number overrides need reflection support that doesn't exist yet). `syntax` /
-// `package` / `option` / `import` statements are skipped; `oneof` is not yet
-// supported (nor `repeated` enums/floats, nor enum/float map values). `double` /
-// `float` map to `f64` / `f32`; `sint*` / `fixed*` / `sfixed*` lower to their
-// base int type plus a `#[karac::proto(<wire>)]` attribute the derive reads. `map<K, V> name = N;` maps to a `Map[K, V]` field. Enum
+// `package` / `option` / `import` statements are skipped; not yet supported:
+// `repeated` enums/floats, enum/float map values, message oneof payloads.
+// `double`/`float` → `f64`/`f32`; `sint*`/`fixed*`/`sfixed*` lower to a base int
+// type plus a `#[karac::proto(<wire>)]` attribute; `oneof NAME {...}` becomes a
+// `<Msg><Name>` enum with a `NotSet` default + one payload variant per case. `map<K, V> name = N;` maps to a `Map[K, V]` field. Enum
 // declarations map to Kāra `enum`s (UPPER_SNAKE → PascalCase), with contiguous
 // `0..N` values matching declaration order.
 
@@ -1150,6 +1231,44 @@ comptime fn proto_order_fields(name: String, fnums: Vec[i64], fdecls: Vec[String
     body
 }
 
+// Build a oneof enum body (`NotSet, Case0(Type0), ...`) ordering the cases by
+// their proto field number, which must be contiguous starting at `base` (the
+// message's first free field number, so the derive's declaration-order tagging
+// of the enum's payload variants matches the schema's numbers).
+comptime fn proto_order_oneof(
+    ename: String,
+    base: i64,
+    onums: Vec[i64],
+    onames: Vec[String],
+    otypes: Vec[String],
+) -> String {
+    let count = onums.len();
+    let mut body = "NotSet";
+    let mut k = 0;
+    while k < count {
+        let want = base + k;
+        let mut found = 0 - 1;
+        let mut j = 0;
+        while j < count {
+            if onums[j] == want {
+                found = j;
+            }
+            j = j + 1;
+        }
+        if found < 0 {
+            compiler.error(
+                "proto oneof '" + ename + "': case numbers must be contiguous starting at "
+                    + f"{base}" + " (no case numbered " + f"{want}" + ")",
+            );
+            k = count;
+        } else {
+            body = body + ", " + onames[found] + "(" + otypes[found] + ")";
+            k = k + 1;
+        }
+    }
+    body
+}
+
 // Parse a whole proto3 schema into the `Vec[Item]` of `#[derive(Message)]`
 // structs it declares. The entry point the `#[proto_schema]` expansion calls.
 comptime fn proto_parse_schema(src: String) -> Vec[Item] {
@@ -1175,7 +1294,54 @@ comptime fn proto_parse_schema(src: String) -> Vec[Item] {
                     // field is 5. Skip the `repeated` label and wrap the mapped
                     // element type in `Vec[...]`. A `map<K, V> name = N;` field
                     // is 10 tokens (`<` `>` `,` are their own tokens).
-                    if toks[i] == "map" {
+                    if toks[i] == "oneof" {
+                        // `oneof NAME { TYPE field = N; ... }` → a Kāra enum
+                        // `<Msg><Name>` with a `NotSet` default + one payload
+                        // variant per case, and a struct field of that enum.
+                        let oneof_name = toks[i + 1];
+                        let ename = name + proto_pascal_case(oneof_name);
+                        let mut j = i + 3;
+                        let mut onums = Vec.new();
+                        let mut onames = Vec.new();
+                        let mut otypes = Vec.new();
+                        while j < n and toks[j] != "}" {
+                            if j + 4 >= n {
+                                compiler.error(
+                                    "proto message '" + name + "': malformed oneof case",
+                                );
+                                bad = true;
+                                j = n;
+                            } else {
+                                let ck = proto_resolve_type(toks[j], msgs);
+                                if ck == "" {
+                                    compiler.error(
+                                        "proto oneof '" + ename + "': unsupported case type '"
+                                            + toks[j] + "'",
+                                    );
+                                    bad = true;
+                                }
+                                onums.push(proto_atoi(toks[j + 3]));
+                                onames.push(proto_pascal_case(toks[j + 1]));
+                                otypes.push(ck);
+                                j = j + 5;
+                            }
+                        }
+                        if j < n {
+                            j = j + 1;
+                        }
+                        // Cases are numbered contiguously after the regular
+                        // fields, so the oneof field sits at struct position
+                        // (regular count + 1) and the derive tags its variants
+                        // from there.
+                        let base = fnums.len() + 1;
+                        if not bad {
+                            let ebody = proto_order_oneof(ename, base, onums, onames, otypes);
+                            items.push(ast.item("enum " + ename + " { " + ebody + " }"));
+                        }
+                        fnums.push(base);
+                        fdecls.push(oneof_name + ": " + ename);
+                        i = j;
+                    } else if toks[i] == "map" {
                         if i + 9 >= n {
                             compiler.error(
                                 "proto message '" + name + "': malformed map field declaration",

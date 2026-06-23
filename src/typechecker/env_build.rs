@@ -719,6 +719,7 @@ impl<'a> super::TypeChecker<'a> {
                 fields: vec![
                     ("name".to_string(), Type::Str, true),
                     ("field_count".to_string(), Type::Int(IntSize::I64), true),
+                    ("payload".to_string(), Type::Str, true),
                 ],
                 field_attrs: std::collections::HashMap::new(),
                 derived_traits: HashSet::new(),

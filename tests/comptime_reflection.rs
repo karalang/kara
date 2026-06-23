@@ -108,6 +108,26 @@ fn main() {
     assert_eq!(karac::run_program(src), vec!["3\n", "Red;Green;Blue;\n"]);
 }
 
+#[test]
+fn variant_payload_reflects_single_tuple_type() {
+    // `Variant.payload` is the type name of a single-field tuple variant's
+    // payload, or "" for a unit / multi-field variant.
+    let src = "
+enum E { None, Num(i64), Text(String), Pair(i64, i64) }
+fn main() {
+    let r = comptime {
+        let mut s = \"\";
+        for v in E.variants() { s = s + v.name + \"=\" + v.payload + \";\"; }
+        s
+    };
+    println(r);
+}";
+    assert_eq!(
+        karac::run_program(src),
+        vec!["None=;Num=i64;Text=String;Pair=;\n"]
+    );
+}
+
 // ── derives() ───────────────────────────────────────────────────
 
 #[test]

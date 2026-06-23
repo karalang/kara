@@ -210,7 +210,10 @@ impl Interpreter<'_> {
     }
 
     /// Build the `Vec[Variant]` for an enum — one `Variant { name,
-    /// field_count }` record per variant. Empty for a non-enum.
+    /// field_count, payload }` record per variant. `payload` is the type name
+    /// of a single-field tuple variant's payload (`A(i32)` → `"i32"`), or ""
+    /// for a unit variant or a multi-field / struct variant. Empty for a
+    /// non-enum.
     fn reflect_variants(&self, type_name: &str) -> Vec<Value> {
         let tc = self.typecheck_result;
         let Some(e) = tc.enum_info.get(type_name) else {
@@ -224,9 +227,14 @@ impl Interpreter<'_> {
                     VariantTypeInfo::Tuple(tys) => tys.len(),
                     VariantTypeInfo::Struct(fs) => fs.len(),
                 };
+                let payload = match vinfo {
+                    VariantTypeInfo::Tuple(tys) if tys.len() == 1 => type_display(&tys[0]),
+                    _ => String::new(),
+                };
                 let mut fields: HashMap<String, Value> = HashMap::new();
                 fields.insert("name".to_string(), Value::String(vname.clone()));
                 fields.insert("field_count".to_string(), Value::Int(field_count as i64));
+                fields.insert("payload".to_string(), Value::String(payload));
                 Value::Struct {
                     name: "Variant".to_string(),
                     fields,

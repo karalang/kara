@@ -769,6 +769,100 @@ fn main() {}
     );
 }
 
+// ── oneof ───────────────────────────────────────────────────────
+
+#[test]
+fn derive_oneof_roundtrip() {
+    // An enum field with payload variants is a oneof: each case has its own
+    // field number (assigned from the field's position) and round-trips.
+    let src = r#"
+enum Payload { NotSet, Num(i64), Text(String), Flag(bool) }
+
+#[derive(Message)]
+struct Event { id: i64, body: Payload }
+
+fn main() {
+    let e1 = Event { id: 1, body: Payload.Num(42) };
+    let b1 = Event.decode(e1.encode());
+    println(b1.id);
+    println(match b1.body { Payload.Num(x) => x, _ => -1 });
+
+    let e2 = Event { id: 2, body: Payload.Text("hi") };
+    let b2 = Event.decode(e2.encode());
+    println(match b2.body { Payload.Text(s) => s, _ => "?" });
+
+    let e3 = Event { id: 3, body: Payload.Flag(true) };
+    let b3 = Event.decode(e3.encode());
+    println(match b3.body { Payload.Flag(f) => f, _ => false });
+}
+"#;
+    assert_eq!(run(src), vec!["1\n", "42\n", "hi\n", "true\n"]);
+}
+
+#[test]
+fn derive_oneof_unset_default() {
+    let src = r#"
+enum Payload { NotSet, Num(i64) }
+
+#[derive(Message)]
+struct Event { body: Payload }
+
+fn main() {
+    let d = Event.decode(Vec.new());
+    println(match d.body { Payload.NotSet => "unset", _ => "?" });
+    // Unset encodes nothing.
+    println(Event { body: Payload.NotSet }.encode().len());
+}
+"#;
+    assert_eq!(run(src), vec!["unset\n", "0\n"]);
+}
+
+#[test]
+fn derive_oneof_cases_have_distinct_field_numbers() {
+    // The oneof cases occupy field numbers continuing the message's numbering:
+    // `id` is 1, so `Num`/`Text` are 2/3.
+    let src = r#"
+enum P { NotSet, Num(i64), Text(String) }
+
+#[derive(Message)]
+struct E { id: i64, body: P }
+
+fn main() {
+    let mut r = ProtoReader.new(E { id: 9, body: P.Text("x") }.encode());
+    let mut d = "";
+    while not r.at_end() {
+        let (f, w) = r.read_tag();
+        d = d + f"({f},{w})";
+        let _ = r.skip_field(w);
+    }
+    println(d);
+}
+"#;
+    // id → field 1 wire 0; Text → field 3 wire 2.
+    assert_eq!(run(src), vec!["(1,0)(3,2)\n"]);
+}
+
+#[test]
+fn derive_oneof_unsupported_payload_errors() {
+    let src = r#"
+struct Inner { v: i64 }
+
+#[derive(Message)]
+struct E { body: Choice }
+
+enum Choice { NotSet, Msg(Inner) }
+
+fn main() {}
+"#;
+    let diags = comptime_diags(src);
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.contains("E_COMPTIME_ERROR") && d.contains("unsupported payload type")),
+        "expected an unsupported-oneof-payload diagnostic; got: {diags:?}"
+    );
+}
+
 // ── nested messages ─────────────────────────────────────────────
 
 #[test]

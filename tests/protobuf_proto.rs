@@ -297,6 +297,58 @@ fn main() {
 }
 
 #[test]
+fn proto_oneof_roundtrip() {
+    // A `.proto` `oneof` becomes a Kāra enum `<Msg><Name>` with a `NotSet`
+    // default + one payload variant per case; the field round-trips.
+    let src = r#"
+#[proto_schema]
+const SCHEMA: String = "
+    message Event {
+        int64 id = 1;
+        oneof body {
+            int64 num = 2;
+            string text = 3;
+            bool flag = 4;
+        }
+    }
+";
+
+fn main() {
+    let e = Event { id: 7, body: EventBody.Text("hi") };
+    let back = Event.decode(e.encode());
+    println(back.id);
+    println(match back.body {
+        EventBody.Num(x) => f"num {x}",
+        EventBody.Text(s) => f"text {s}",
+        EventBody.Flag(b) => f"flag {b}",
+        EventBody.NotSet => "notset",
+    });
+}
+"#;
+    assert_eq!(run(src), vec!["7\n", "text hi\n"]);
+}
+
+#[test]
+fn proto_oneof_noncontiguous_case_numbers_error() {
+    // Oneof case numbers must continue the message's field numbering (here `id`
+    // is 1, so cases must be 2, 3 — a gap at 2 is rejected).
+    let src = r#"
+#[proto_schema]
+const SCHEMA: String = "
+    message E { int64 id = 1; oneof c { int64 a = 3; int64 b = 4; } }
+";
+fn main() {}
+"#;
+    let diags = schema_diags(src);
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.contains("E_COMPTIME_ERROR") && d.contains("contiguous")),
+        "expected a contiguous-oneof-case diagnostic; got: {diags:?}"
+    );
+}
+
+#[test]
 fn proto_wire_override_types_roundtrip() {
     // `sint*` / `fixed*` / `sfixed*` lower to base int types plus a
     // `#[karac::proto(...)]` attribute and round-trip with the right encoding.
