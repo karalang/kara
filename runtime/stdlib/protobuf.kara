@@ -736,6 +736,30 @@ comptime fn proto_wire_is_known(wire: String) -> bool {
         or wire == "sfixed32" or wire == "sfixed64"
 }
 
+// ── per-field number override (slice 14) ────────────────────────
+//
+// By default a field's proto number is its 1-based declaration index. A
+// `#[karac::field(N)]` attribute overrides it, so a hand-written struct can
+// match an existing wire schema whose numbers are sparse / out of order (and
+// the `.proto` parser uses it to lower non-contiguous schemas). Overrides do
+// not apply to a `oneof` field (its cases are numbered positionally).
+
+// The explicit proto number from a `#[karac::field(N)]` attribute, or 0 (= use
+// the positional index) if the field carries none. Entries render as
+// `"karac::field(5)"`.
+comptime fn proto_field_number_override(attrs: Vec[String]) -> i64 {
+    let mut found = 0;
+    let mut i = 0;
+    while i < attrs.len() {
+        let a = attrs[i];
+        if a.starts_with("karac::field(") and a.substring(a.len() - 1, a.len()) == ")" {
+            found = proto_atoi(a.substring(13, a.len() - 1));
+        }
+        i = i + 1;
+    }
+    found
+}
+
 // ── enum value codec (shared) ────────────────────────────────────
 //
 // A proto3 enum encodes as a varint of the variant's 0-based declaration index.
@@ -818,7 +842,12 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
                     + "` (proto3 v1 supports i32/i64/u32/u64/bool/f32/f64/String/Vec[u8], nested messages, enums, repeated `Vec[T]`, and `Map[K,V]`)",
             );
         }
-        let tag = f"{idx}";
+        // The field's proto number: an explicit `#[karac::field(N)]` override,
+        // else the positional index. A oneof keeps positional numbering (its
+        // cases span consecutive numbers from `idx`).
+        let fnov = proto_field_number_override(f.attrs);
+        let wnum = if fnov > 0 and not is_oneof { fnov } else { idx };
+        let tag = f"{wnum}";
         let cond = "field == " + tag;
         // Per-field: the default binding, the encode statement, and the bodies
         // that run when the tag matches in decode (target = local `fname`) and
@@ -930,7 +959,7 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
                 );
             }
             dflt = "Vec.new()";
-            efield = proto_encode_repeated(idx, fname, etn, is_msg, eis_enum, evnames);
+            efield = proto_encode_repeated(wnum, fname, etn, is_msg, eis_enum, evnames);
             dec_body = proto_decode_repeated(fname, etn, is_msg, eis_enum, evnames);
             mrg_body = proto_decode_repeated("self." + fname, etn, is_msg, eis_enum, evnames);
         } else if is_oneof {
@@ -1043,7 +1072,7 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
                 }
                 let read = proto_read_override(wire);
                 dflt = proto_default(tn);
-                efield = proto_encode_override(idx, fname, wire);
+                efield = proto_encode_override(wnum, fname, wire);
                 dec_body = fname + " = " + read + ";";
                 mrg_body = "self." + fname + " = " + read + ";";
             } else {
@@ -1056,9 +1085,9 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
                 };
                 dflt = if nested { tn + ".decode(Vec.new())" } else { proto_default(tn) };
                 efield = if nested {
-                    proto_encode_nested(idx, fname)
+                    proto_encode_nested(wnum, fname)
                 } else {
-                    proto_encode_field(idx, fname, tn)
+                    proto_encode_field(wnum, fname, tn)
                 };
                 dec_body = fname + " = " + read + ";";
                 mrg_body = "self." + fname + " = " + read + ";";
@@ -1129,8 +1158,11 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
 // nested message fields — a field whose type is another `message` in the same
 // schema (forward references included), encoded as a length-delimited sub-
 // message — and `repeated TYPE name = N;` fields, mapped to `Vec[TYPE]`. Field
-// numbers must be contiguous `1..N` (declaration-order tagging — per-field
-// number overrides need reflection support that doesn't exist yet). `syntax` /
+// numbers may be sparse / out of order: a non-contiguous run lowers each field
+// with an explicit `#[karac::field(N)]` so the derive tags it by its schema
+// number (a contiguous `1..N` run keeps the simpler declaration-order tagging).
+// A message that mixes a `oneof` with non-contiguous numbers is unsupported —
+// oneof case numbering is positional. `syntax` /
 // `package` / `option` / `import` statements are skipped.
 // `double`/`float` → `f64`/`f32`; `sint*`/`fixed*`/`sfixed*` lower to a base int
 // type plus a `#[karac::proto(<wire>)]` attribute; `oneof NAME {...}` becomes a
@@ -1358,6 +1390,62 @@ comptime fn proto_wire_base(t: String) -> String {
     }
 }
 
+// True when `fnums` is exactly the gapless set {1, 2, …, count} — the case the
+// positional derive tagging handles without per-field overrides.
+comptime fn proto_is_contiguous(fnums: Vec[i64]) -> bool {
+    let count = fnums.len();
+    let mut k = 1;
+    let mut ok = true;
+    while k <= count {
+        let mut found = false;
+        let mut j = 0;
+        while j < count {
+            if fnums[j] == k {
+                found = true;
+            }
+            j = j + 1;
+        }
+        if not found {
+            ok = false;
+        }
+        k = k + 1;
+    }
+    ok
+}
+
+// Emit the struct body for a message whose field numbers are NOT a gapless
+// `1..N` run: each field keeps declaration order but carries an explicit
+// `#[karac::field(N)]` so the derive tags it by its schema number rather than
+// its position. Validates the numbers are positive and distinct.
+comptime fn proto_explicit_fields(name: String, fnums: Vec[i64], fdecls: Vec[String]) -> String {
+    let count = fnums.len();
+    let mut body = "";
+    let mut k = 0;
+    while k < count {
+        if fnums[k] < 1 {
+            compiler.error(
+                "proto message '" + name + "': field number must be >= 1 (field '" + fdecls[k]
+                    + "')",
+            );
+        }
+        let mut j = 0;
+        while j < k {
+            if fnums[j] == fnums[k] {
+                compiler.error(
+                    "proto message '" + name + "': duplicate field number " + f"{fnums[k]}",
+                );
+            }
+            j = j + 1;
+        }
+        if k > 0 {
+            body = body + ", ";
+        }
+        body = body + "#[karac::field(" + f"{fnums[k]}" + ")] " + fdecls[k];
+        k = k + 1;
+    }
+    body
+}
+
 // Order the collected fields by proto field number into a `name: Type, ...`
 // struct body, validating that the numbers form a contiguous `1..N` (so the
 // slice-2 derive's declaration-order tagging matches the schema's numbers).
@@ -1449,6 +1537,7 @@ comptime fn proto_parse_schema(src: String) -> Vec[Item] {
                 let mut fnums = Vec.new();
                 let mut fdecls = Vec.new();
                 let mut bad = false;
+                let mut has_oneof = false;
                 while i < n and toks[i] != "}" {
                     // `repeated TYPE name = N;` is a 6-token field; a plain
                     // field is 5. Skip the `repeated` label and wrap the mapped
@@ -1500,6 +1589,7 @@ comptime fn proto_parse_schema(src: String) -> Vec[Item] {
                         }
                         fnums.push(base);
                         fdecls.push(oneof_name + ": " + ename);
+                        has_oneof = true;
                         i = j;
                     } else if toks[i] == "map" {
                         if i + 9 >= n {
@@ -1569,7 +1659,15 @@ comptime fn proto_parse_schema(src: String) -> Vec[Item] {
                     i = i + 1;
                 }
                 if not bad {
-                    let body = proto_order_fields(name, fnums, fdecls);
+                    // Contiguous `1..N` (with or without a oneof) keeps the
+                    // positional path. A non-contiguous run with no oneof lowers
+                    // via explicit `#[karac::field(N)]` per field; non-contiguous
+                    // WITH a oneof is unsupported and errors in `proto_order_*`.
+                    let body = if has_oneof or proto_is_contiguous(fnums) {
+                        proto_order_fields(name, fnums, fdecls)
+                    } else {
+                        proto_explicit_fields(name, fnums, fdecls)
+                    };
                     items.push(ast.item("#[derive(Message)] struct " + name + " { " + body + " }"));
                 }
             }

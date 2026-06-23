@@ -592,12 +592,40 @@ fn main() {}
 }
 
 #[test]
-fn proto_noncontiguous_field_numbers_error() {
-    // Field numbers 1 and 3 (gap at 2) are rejected — declaration-order tagging
-    // requires contiguous 1..N in v1.
+fn proto_noncontiguous_field_numbers_roundtrip() {
+    // Sparse / out-of-order field numbers (gap at 2, then 17) lower each field
+    // with an explicit `#[karac::field(N)]` and round-trip on the schema numbers.
     let src = r#"
 #[proto_schema]
-const SCHEMA: String = "message M { int64 a = 1; int64 b = 3; }";
+const SCHEMA: String = "message M { string name = 3; int64 id = 17; bool on = 1; }";
+
+fn main() {
+    let m = M { name: "Ada", id: 99, on: true };
+    let mut r = ProtoReader.new(m.encode());
+    let mut desc = "";
+    while not r.at_end() {
+        let (f, w) = r.read_tag();
+        desc = desc + f"({f})";
+        let _ = r.skip_field(w);
+    }
+    println(desc);
+    let back = M.decode(m.encode());
+    println(back.name);
+    println(back.id);
+    println(back.on);
+}
+"#;
+    // Wire field numbers follow the schema, not declaration position.
+    assert_eq!(run(src), vec!["(3)(17)(1)\n", "Ada\n", "99\n", "true\n"]);
+}
+
+#[test]
+fn proto_noncontiguous_field_numbers_with_oneof_errors() {
+    // A `oneof` numbers its cases positionally, so it can't combine with a
+    // non-contiguous regular-field layout — that is rejected.
+    let src = r#"
+#[proto_schema]
+const SCHEMA: String = "message E { int64 a = 1; int64 b = 4; oneof c { string s = 5; } }";
 fn main() {}
 "#;
     let diags = schema_diags(src);
@@ -605,7 +633,7 @@ fn main() {}
         diags
             .iter()
             .any(|d| d.contains("E_COMPTIME_ERROR") && d.contains("contiguous")),
-        "expected a contiguous-field-number diagnostic; got: {diags:?}"
+        "expected a contiguous diagnostic for oneof + non-contiguous; got: {diags:?}"
     );
 }
 

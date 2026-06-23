@@ -86,6 +86,12 @@ pub(super) fn render_attribute(attr: &Attribute) -> String {
                     arg_names.push(name.clone());
                 }
             }
+            // Integer-literal args (e.g. `#[karac::field(5)]`) render as the
+            // decimal value, so comptime reflection can read a field number.
+            Some(Expr {
+                kind: ExprKind::Integer(value, _),
+                ..
+            }) => arg_names.push(value.to_string()),
             _ => {}
         }
     }

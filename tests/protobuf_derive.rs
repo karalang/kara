@@ -868,6 +868,83 @@ fn main() {}
     );
 }
 
+// ── per-field number override (#[karac::field(N)]) ──────────────
+
+#[test]
+fn derive_field_number_override_roundtrip() {
+    // `#[karac::field(N)]` sets a field's wire number; an unmarked field keeps
+    // its positional number. Numbers may be sparse / out of order.
+    let src = r#"
+#[derive(Message)]
+struct Sparse {
+    #[karac::field(5)] name: String,
+    #[karac::field(17)] id: i64,
+    active: bool,
+}
+
+fn main() {
+    let s = Sparse { name: "Ada", id: 99, active: true };
+    let mut r = ProtoReader.new(s.encode());
+    let mut desc = "";
+    while not r.at_end() {
+        let (f, w) = r.read_tag();
+        desc = desc + f"({f})";
+        let _ = r.skip_field(w);
+    }
+    println(desc);
+    let back = Sparse.decode(s.encode());
+    println(back.name);
+    println(back.id);
+    println(back.active);
+}
+"#;
+    // name → 5, id → 17, active → positional 3.
+    assert_eq!(run(src), vec!["(5)(17)(3)\n", "Ada\n", "99\n", "true\n"]);
+}
+
+#[test]
+fn derive_field_number_override_decodes_by_number() {
+    // Decode keys off the overridden number, not declaration position: a buffer
+    // carrying field 17 populates the `#[karac::field(17)]` field.
+    let src = r#"
+#[derive(Message)]
+struct Sparse {
+    #[karac::field(5)] name: String,
+    #[karac::field(17)] id: i64,
+}
+
+fn main() {
+    let mut buf = Vec.new();
+    buf.extend_from_slice(ProtoBuf.encode_tag(17, 0));
+    buf.extend_from_slice(ProtoBuf.encode_varint(42u64));
+    let back = Sparse.decode(buf);
+    println(back.id);
+    println(back.name.len());
+}
+"#;
+    assert_eq!(run(src), vec!["42\n", "0\n"]);
+}
+
+#[test]
+fn derive_field_number_override_composes_with_wire_override() {
+    // A field may carry both a number override and a wire override.
+    let src = r#"
+#[derive(Message)]
+struct M { #[karac::field(9)] #[karac::proto(sint64)] v: i64 }
+
+fn main() {
+    let back = M.decode(M { v: 0 - 5 }.encode());
+    println(back.v);
+    let mut r = ProtoReader.new(M { v: 0 - 5 }.encode());
+    let (f, w) = r.read_tag();
+    println(f);
+    println(w);
+}
+"#;
+    // field 9, wire 0 (varint); sint64 zigzag round-trips -5.
+    assert_eq!(run(src), vec!["-5\n", "9\n", "0\n"]);
+}
+
 // ── maps ────────────────────────────────────────────────────────
 
 #[test]

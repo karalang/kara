@@ -57,6 +57,13 @@ const SCHEMA: String = "
             Address mail = 12;
         }
     }
+
+    // Field numbers may be sparse / out of order — each is lowered with an
+    // explicit `#[karac::field(N)]`, so declaration order is free.
+    message Ping {
+        string host = 3;
+        int64 count = 1;
+    }
 ";
 
 fn main() {
@@ -92,4 +99,8 @@ fn main() {
     let grace = match rt.kudos.get("Grace") { Option.Some(x) => x, Option.None => 0 };
     println(f"kudos.Grace={grace} kudos.size={rt.kudos.len()}");
     println(match rt.contact { TeamContact.Email(e) => f"email {e}", TeamContact.Phone(p) => f"phone {p}", TeamContact.Mail(a) => f"mail {a.city} {a.zip}", TeamContact.NotSet => "no contact" });
+
+    // Sparse field numbers (3, 1) round-trip on their schema numbers.
+    let pong = Ping.decode(Ping { host: "localhost", count: 7 }.encode());
+    println(f"ping host={pong.host} count={pong.count}");
 }

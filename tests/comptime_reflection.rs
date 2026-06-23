@@ -287,6 +287,23 @@ fn main() {
     );
 }
 
+#[test]
+fn field_attrs_renders_integer_argument() {
+    // An integer-literal attribute argument (e.g. `#[karac::field(5)]`) renders
+    // with its decimal value, so comptime code can read a field number.
+    let src = "
+struct S { #[karac::field(5)] x: i64, y: i64 }
+fn main() {
+    let r = comptime {
+        let mut s = \"\";
+        for f in S.fields() { for a in f.attrs { s = s + f.name + \"=\" + a + \";\"; } }
+        s
+    };
+    println(r);
+}";
+    assert_eq!(karac::run_program(src), vec!["x=karac::field(5);\n"]);
+}
+
 // ── comptime fn with `comptime T: Type` parameter ───────────────
 
 #[test]
