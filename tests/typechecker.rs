@@ -26302,6 +26302,64 @@ fn test_column_transform_arity_checked() {
     );
 }
 
+#[test]
+fn test_column_3vl_arithmetic_and_comparison_typing() {
+    // `+ - * /` -> Column[T]; `== != < <= > >=` -> Column[bool]; scalar
+    // broadcast + Q4 literal promotion; unary '-' -> Column[T].
+    typecheck_ok(
+        "fn main() {\n\
+             let a: Column[i64] = Column.from_vec([1i64]);\n\
+             let b: Column[i64] = Column.from_vec([2i64]);\n\
+             let s: Column[i64] = a + b;\n\
+             let p: Column[i64] = a * 2;\n\
+             let q: Column[i64] = 3 + b;\n\
+             let neg: Column[i64] = -a;\n\
+             let lt: Column[bool] = a < b;\n\
+             let eq: Column[bool] = a == b;\n\
+             let _ = (s, p, q, neg, lt, eq);\n\
+         }",
+    );
+}
+
+#[test]
+fn test_column_arith_result_is_column_not_bool() {
+    // `a + b` is Column[i64], not bool / Column[bool].
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let a: Column[i64] = Column.from_vec([1i64]);\n\
+             let b: Column[i64] = Column.from_vec([2i64]);\n\
+             let bad: bool = a + b;\n\
+         }",
+    );
+    assert!(!errors.is_empty(), "expected Column[i64]-vs-bool mismatch");
+}
+
+#[test]
+fn test_column_binop_error_cases() {
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let a: Column[i64] = Column.from_vec([1i64]);\n\
+             let s: Column[String] = Column.from_vec([\"x\"]);\n\
+             let bad_mix = a + s;\n\
+             let bad_arith = s * s;\n\
+             let bad_op = a % a;\n\
+         }",
+    );
+    for needle in [
+        // element types differ (col-col).
+        "share an element type",
+        // arithmetic on a non-numeric element.
+        "requires a numeric element type",
+        // operator not defined on Column.
+        "not defined on Column",
+    ] {
+        assert!(
+            errors.iter().any(|e| e.message.contains(needle)),
+            "missing '{needle}' in {errors:?}",
+        );
+    }
+}
+
 // ── Effect-resource dispatch types untyped `let` bindings ─────────
 //
 // bugs.md "Untyped `let` from an effect-resource method call doesn't

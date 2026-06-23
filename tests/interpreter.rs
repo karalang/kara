@@ -17205,6 +17205,90 @@ fn test_column_from_iter_nullable() {
     assert_eq!(out, "3\n1\ntrue\n1\n-1\n");
 }
 
+// ── Column[T] slice 3 — three-valued-logic arithmetic / comparison ──
+
+#[test]
+fn test_column_arith_null_propagation() {
+    // a + b: a valid+b valid -> sum; either null -> null result slot.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let a: Column[i64] = Column.from_iter_nullable([Some(10i64), None, Some(30i64)]);\n\
+             let b: Column[i64] = Column.from_iter_nullable([Some(1i64), Some(2i64), None]);\n\
+             let r = a + b;\n\
+             for x in r.iter() { match x { Some(v) => { println(v); } None => { println(-1i64); } } }\n\
+         }",
+    );
+    assert_eq!(out, "11\n-1\n-1\n");
+}
+
+#[test]
+fn test_column_scalar_broadcast_and_neg() {
+    // Scalar broadcast keeps nulls null; unary '-' negates valid slots only.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let a: Column[i64] = Column.from_iter_nullable([Some(10i64), None, Some(30i64)]);\n\
+             let m = a * 2i64;\n\
+             for x in m.iter() { match x { Some(v) => { println(v); } None => { println(-1i64); } } }\n\
+             let n = -a;\n\
+             for x in n.iter() { match x { Some(v) => { println(v); } None => { println(-1i64); } } }\n\
+         }",
+    );
+    assert_eq!(out, "20\n-1\n60\n-10\n-1\n-30\n");
+}
+
+#[test]
+fn test_column_comparison_is_three_valued() {
+    // a == b yields a Column[bool] with nulls where either side is null —
+    // NOT false. The headline 3VL rule: null == null = null.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let a: Column[i64] = Column.from_iter_nullable([Some(10i64), None, Some(30i64)]);\n\
+             let b: Column[i64] = Column.from_iter_nullable([Some(1i64), Some(2i64), None]);\n\
+             let cmp = a == b;\n\
+             for x in cmp.iter() { match x { Some(v) => { println(v); } None => { println(\"null\"); } } }\n\
+             let n: Column[i64] = Column.from_iter_nullable([None, Some(5i64)]);\n\
+             let eq = n == n;\n\
+             for x in eq.iter() { match x { Some(v) => { println(v); } None => { println(\"null\"); } } }\n\
+         }",
+    );
+    // a==b: 10==1 -> false; null; null. n==n: null==null -> null; 5==5 -> true.
+    assert_eq!(out, "false\nnull\nnull\nnull\ntrue\n");
+}
+
+#[test]
+fn test_column_div_by_zero_in_valid_slot_traps() {
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let a: Column[i64] = Column.from_vec([10i64, 20i64]);\n\
+             let b: Column[i64] = Column.from_vec([2i64, 0i64]);\n\
+             let _ = a / b;\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("division by zero")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_column_length_mismatch_traps() {
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let a: Column[i64] = Column.from_vec([1i64, 2i64, 3i64]);\n\
+             let b: Column[i64] = Column.from_vec([1i64, 2i64]);\n\
+             let _ = a + b;\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("column length mismatch")),
+        "{errors:?}",
+    );
+}
+
 // ── `ref name @ PATTERN` — explicit-ref @ bindings (design.md § @
 // Bindings): bindings borrow, scrutinee stays usable after ──────────
 

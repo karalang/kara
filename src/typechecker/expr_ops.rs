@@ -67,6 +67,25 @@ fn is_tensor_type(ty: &Type) -> bool {
     tensor_named_args(ty).is_some()
 }
 
+/// The element type `T` of a `Column[T]`, peeling one `ref` / `mut ref`.
+/// `None` for any non-Column type. Used by `infer_binary` / `infer_unary`
+/// to route element-wise Column arithmetic / comparison (phase-11 Arrow).
+fn column_elem(ty: &Type) -> Option<&Type> {
+    let core = match ty {
+        Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+        other => other,
+    };
+    match core {
+        Type::Named { name, args } if name == "Column" && args.len() == 1 => Some(&args[0]),
+        _ => None,
+    }
+}
+
+/// True iff `ty` is a `Column[T]` (peeling one borrow).
+fn is_column_type(ty: &Type) -> bool {
+    column_elem(ty).is_some()
+}
+
 /// Merge two shape dims for an element-wise tensor op. Concrete-vs-concrete
 /// must be equal (`Err` on mismatch — the static `E_SHAPE` case); a concrete
 /// literal paired with any non-literal wins (the codegen runtime-guards the
@@ -1083,6 +1102,145 @@ impl<'a> super::TypeChecker<'a> {
         false
     }
 
+    /// Element-wise three-valued-logic arithmetic / comparison on `Column[T]`
+    /// (phase-11 Arrow). `+ - * /` yield `Column[T]` (numeric element);
+    /// `== != < <= > >=` yield `Column[bool]` (any matching element). Either
+    /// form null-propagates at runtime. Col-col requires a shared element
+    /// type (length agreement is a runtime check); col-scalar / scalar-col
+    /// take a scalar of the element type (unsuffixed literals promote, Q4).
+    fn infer_column_binary(
+        &mut self,
+        op: &BinOp,
+        left_ty: &Type,
+        right_ty: &Type,
+        left: &Expr,
+        right: &Expr,
+        span: &Span,
+    ) -> Type {
+        let is_arith = matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div);
+        let is_cmp = matches!(
+            op,
+            BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq
+        );
+        if !is_arith && !is_cmp {
+            self.type_error(
+                format!(
+                    "this operator is not defined on Column[T] — only element-wise \
+                     + - * / (yielding Column[T]) and comparisons == != < <= > >= \
+                     (yielding Column[bool]), plus unary -, are supported; found \
+                     operands '{}' and '{}'",
+                    type_display(left_ty),
+                    type_display(right_ty)
+                ),
+                span.clone(),
+                TypeErrorKind::InvalidBinaryOp,
+            );
+            return Type::Error;
+        }
+        // The result element type: T for arithmetic, bool for comparison.
+        let result = |elem: Type| Type::Named {
+            name: "Column".to_string(),
+            args: vec![if is_arith { elem } else { Type::Bool }],
+        };
+        match (
+            column_elem(left_ty).cloned(),
+            column_elem(right_ty).cloned(),
+        ) {
+            (Some(le), Some(re)) => {
+                if le != re {
+                    self.type_error(
+                        format!(
+                            "column operands must share an element type; found '{}' and '{}'",
+                            type_display(&le),
+                            type_display(&re)
+                        ),
+                        right.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return Type::Error;
+                }
+                if is_arith && !is_numeric(&le) {
+                    self.type_error(
+                        format!(
+                            "element-wise column arithmetic requires a numeric element type, \
+                             found '{}'",
+                            type_display(&le)
+                        ),
+                        span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return Type::Error;
+                }
+                result(le)
+            }
+            (Some(le), None) => {
+                if !self.check_column_scalar(&le, right_ty, right, is_arith, span) {
+                    return Type::Error;
+                }
+                result(le)
+            }
+            (None, Some(re)) => {
+                if !self.check_column_scalar(&re, left_ty, left, is_arith, span) {
+                    return Type::Error;
+                }
+                result(re)
+            }
+            (None, None) => unreachable!("infer_column_binary: neither operand is a column"),
+        }
+    }
+
+    /// Validate the scalar operand of a `Column[T] ⊕ scalar` op. For
+    /// arithmetic the element must be numeric; for comparison any matching
+    /// element is fine. An unsuffixed numeric literal promotes to `T` (Q4,
+    /// re-recording the literal's span); otherwise the scalar must be `T`.
+    fn check_column_scalar(
+        &mut self,
+        elem: &Type,
+        scalar_ty: &Type,
+        scalar: &Expr,
+        require_numeric: bool,
+        span: &Span,
+    ) -> bool {
+        if require_numeric && !is_numeric(elem) {
+            self.type_error(
+                format!(
+                    "element-wise column arithmetic requires a numeric element type, found '{}'",
+                    type_display(elem)
+                ),
+                span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+            return false;
+        }
+        let is_unsuffixed = matches!(
+            &scalar.kind,
+            ExprKind::Integer(_, None) | ExprKind::Float(_, None)
+        );
+        if is_unsuffixed {
+            // A float literal cannot promote to an integer element type.
+            let can_promote = !(matches!(&scalar.kind, ExprKind::Float(_, None))
+                && matches!(elem, Type::Int(_) | Type::UInt(_)));
+            if can_promote && is_numeric(elem) {
+                self.record_expr_type(&scalar.span, elem);
+                return true;
+            }
+        }
+        if scalar_ty == elem || types_compatible(scalar_ty, elem) {
+            return true;
+        }
+        self.type_error(
+            format!(
+                "scalar operand of an element-wise column op must match the element \
+                 type '{}', found '{}'",
+                type_display(elem),
+                type_display(scalar_ty)
+            ),
+            scalar.span.clone(),
+            TypeErrorKind::TypeMismatch,
+        );
+        false
+    }
+
     /// True iff `ty` is a generic type parameter carrying a `Numeric` bound in
     /// the enclosing scope. Lets the operator checks treat `a + b` / `-a` on a
     /// `T: Numeric` parameter as valid numeric arithmetic — the bound
@@ -1127,6 +1285,18 @@ impl<'a> super::TypeChecker<'a> {
         // and broadcasting are separate slices (phase-11 line 47).
         if is_tensor_type(&left_ty) || is_tensor_type(&right_ty) {
             return self.infer_tensor_binary(op, &left_ty, &right_ty, left, right, span);
+        }
+
+        // Element-wise three-valued-logic arithmetic / comparison on
+        // `Column[T]` (phase-11 Arrow, design.md "null + x = null", "null ==
+        // null = null"). `+ - * /` yield `Column[T]`; `== != < <= > >=` yield
+        // `Column[bool]`; either form null-propagates (a null slot on either
+        // side → null in the result, never `false`). Handled before literal
+        // promotion so the Column path owns scalar-literal promotion to the
+        // element type. Col-col length agreement is a runtime check (lengths
+        // aren't statically known).
+        if is_column_type(&left_ty) || is_column_type(&right_ty) {
+            return self.infer_column_binary(op, &left_ty, &right_ty, left, right, span);
         }
 
         // Element-wise SIMD arithmetic on `Vector[T, N]` (design.md § Portable
@@ -1452,6 +1622,27 @@ impl<'a> super::TypeChecker<'a> {
                     return Type::Named {
                         name: "Tensor".to_string(),
                         args: vec![elem, Type::Shape(dims)],
+                    };
+                }
+                // Element-wise negation of a `Column[T]` — fresh Column[T],
+                // nulls preserved. Numeric element required.
+                if let Some(elem) = column_elem(&ty) {
+                    let elem = elem.clone();
+                    if !is_numeric(&elem) {
+                        self.type_error(
+                            format!(
+                                "unary '-' on a column requires a numeric element type, \
+                                 found '{}'",
+                                type_display(&elem)
+                            ),
+                            span.clone(),
+                            TypeErrorKind::InvalidUnaryOp,
+                        );
+                        return Type::Error;
+                    }
+                    return Type::Named {
+                        name: "Column".to_string(),
+                        args: vec![elem],
                     };
                 }
                 if !is_numeric(&ty)

@@ -44,6 +44,27 @@ impl<'a> super::Interpreter<'a> {
                     data: Arc::new(RwLock::new(out)),
                 }
             }
+            // Element-wise column negation — negate each valid slot; null
+            // slots stay null. Fresh value-semantics column (operand read).
+            (UnaryOp::Neg, Value::Column { data, valid }) => {
+                let elems = data.read().unwrap().clone();
+                let valids = valid.read().unwrap().clone();
+                let mut out = Vec::with_capacity(elems.len());
+                for (ok, x) in valids.iter().zip(elems) {
+                    if *ok {
+                        out.push(self.eval_unary(&UnaryOp::Neg, x, span));
+                        if self.pending_cf.is_some() {
+                            return Value::Unit;
+                        }
+                    } else {
+                        out.push(Value::Unit);
+                    }
+                }
+                Value::Column {
+                    data: Arc::new(RwLock::new(out)),
+                    valid: Arc::new(RwLock::new(valids)),
+                }
+            }
             (UnaryOp::Not, Value::Bool(b)) => Value::Bool(!b),
             (UnaryOp::BitNot, Value::Int(i)) => Value::Int(!i),
             // Integer-lane `Vector[T, N]` complement: `~v` folds `~` over each
@@ -161,6 +182,32 @@ impl<'a> super::Interpreter<'a> {
             }
             (_, scalar @ (Value::Int(_) | Value::Float(_)), Value::Tensor { dims, data }) => {
                 self.eval_tensor_scalar_binop(op, &dims, &data, scalar, true, span)
+            }
+
+            // Element-wise three-valued-logic ops on `Column[T]` (phase-11
+            // Arrow). Arithmetic `+ - * /` and comparison `== != < <= > >=`
+            // share one mechanism: result validity = AND of the input
+            // validities, and each valid slot's value is the recursive scalar
+            // `eval_binary` (inheriting overflow / div-by-zero traps). A null
+            // slot on either side → a null result slot (never `false` — the
+            // 3VL essence). Both operands are read, not moved. Col-col first;
+            // then col-scalar / scalar-col broadcast the scalar.
+            (
+                _,
+                Value::Column {
+                    data: ad,
+                    valid: av,
+                },
+                Value::Column {
+                    data: bd,
+                    valid: bv,
+                },
+            ) => self.eval_column_column_binop(op, &ad, &av, &bd, &bv, span),
+            (_, Value::Column { data, valid }, scalar) => {
+                self.eval_column_scalar_binop(op, &data, &valid, scalar, false, span)
+            }
+            (_, scalar, Value::Column { data, valid }) => {
+                self.eval_column_scalar_binop(op, &data, &valid, scalar, true, span)
             }
 
             // Arithmetic (Int). Computed at i64; when the typechecker types
@@ -416,6 +463,100 @@ impl<'a> super::Interpreter<'a> {
         Value::Tensor {
             dims: dims.clone(),
             data: Arc::new(RwLock::new(out)),
+        }
+    }
+
+    /// Element-wise `Column ⊕ Column` with SQL null propagation (phase-11
+    /// Arrow). Lengths must match (re-checked at runtime — `run_program`
+    /// bypasses the typechecker). Each output slot is valid iff *both* inputs
+    /// are valid; a valid slot recurses through the scalar `eval_binary`
+    /// (inheriting overflow / div-by-zero traps), a null slot holds a
+    /// never-read placeholder. Works for arithmetic (→ values) and
+    /// comparison (→ bools) identically — the op decides the per-element type.
+    fn eval_column_column_binop(
+        &mut self,
+        op: &BinOp,
+        ad: &Arc<RwLock<Vec<Value>>>,
+        av: &Arc<RwLock<Vec<bool>>>,
+        bd: &Arc<RwLock<Vec<Value>>>,
+        bv: &Arc<RwLock<Vec<bool>>>,
+        span: &Span,
+    ) -> Value {
+        let a = ad.read().unwrap().clone();
+        let b = bd.read().unwrap().clone();
+        let avalid = av.read().unwrap().clone();
+        let bvalid = bv.read().unwrap().clone();
+        if avalid.len() != bvalid.len() {
+            return self.record_runtime_error(
+                format!(
+                    "column length mismatch in element-wise operator: {} vs {} \
+                     (element-wise column ops require equal lengths)",
+                    avalid.len(),
+                    bvalid.len()
+                ),
+                span,
+            );
+        }
+        let mut out_data = Vec::with_capacity(a.len());
+        let mut out_valid = Vec::with_capacity(a.len());
+        for (((x, y), &ok_a), &ok_b) in a.into_iter().zip(b).zip(avalid.iter()).zip(bvalid.iter()) {
+            if ok_a && ok_b {
+                out_data.push(self.eval_binary(op, x, y, span));
+                if self.pending_cf.is_some() {
+                    return Value::Unit;
+                }
+                out_valid.push(true);
+            } else {
+                out_data.push(Value::Unit);
+                out_valid.push(false);
+            }
+        }
+        Value::Column {
+            data: Arc::new(RwLock::new(out_data)),
+            valid: Arc::new(RwLock::new(out_valid)),
+        }
+    }
+
+    /// Element-wise `Column ⊕ scalar` (or `scalar ⊕ Column` when
+    /// `scalar_on_left`) with null propagation. Valid slots compute against
+    /// the broadcast scalar; null slots stay null. An int scalar is coerced
+    /// to float when the slot is float (the Q4 literal-promotion case, kept
+    /// in step with codegen's float-literal rewrite — mirrors the Tensor
+    /// scalar path).
+    fn eval_column_scalar_binop(
+        &mut self,
+        op: &BinOp,
+        data: &Arc<RwLock<Vec<Value>>>,
+        valid: &Arc<RwLock<Vec<bool>>>,
+        scalar: Value,
+        scalar_on_left: bool,
+        span: &Span,
+    ) -> Value {
+        let elems = data.read().unwrap().clone();
+        let valids = valid.read().unwrap().clone();
+        let mut out_data = Vec::with_capacity(elems.len());
+        for (&ok, x) in valids.iter().zip(elems) {
+            if !ok {
+                out_data.push(Value::Unit);
+                continue;
+            }
+            let s = match (&x, &scalar) {
+                (Value::Float(_), Value::Int(i)) => Value::Float(*i as f64),
+                _ => scalar.clone(),
+            };
+            let v = if scalar_on_left {
+                self.eval_binary(op, s, x, span)
+            } else {
+                self.eval_binary(op, x, s, span)
+            };
+            if self.pending_cf.is_some() {
+                return Value::Unit;
+            }
+            out_data.push(v);
+        }
+        Value::Column {
+            data: Arc::new(RwLock::new(out_data)),
+            valid: Arc::new(RwLock::new(valids)),
         }
     }
 
