@@ -21881,6 +21881,89 @@ fn test_module_binding_immutable_read_at_use_site_does_not_fire_mutability_check
     );
 }
 
+// ── OnceCell[T] single-task structural rules ───────────────────────
+//
+// `OnceCell[T]` is single-task; `OnceLock[T]` is its cross-task-safe
+// sibling with the identical method surface. Three structural rules
+// reject `OnceCell` where it would become visible to more than one task:
+// (a) module scope, (b) `par struct`/`par enum` fields, (c) crossing a
+// `par {}` / spawn / channel boundary (the last reuses the pre-existing
+// cross-task escape pass). Each rejection points at the `OnceLock` swap.
+
+#[test]
+fn test_oncecell_at_module_scope_rejected() {
+    let errs = typecheck_errors("let CFG: OnceCell[i64] = OnceCell.new();");
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("E_ONCE_CELL_AT_MODULE_SCOPE")
+                && e.message.contains("OnceLock")),
+        "expected E_ONCE_CELL_AT_MODULE_SCOPE naming the OnceLock swap, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_oncecell_nested_at_module_scope_rejected() {
+    // The rule walks the whole declared type tree — a nested `OnceCell`
+    // is caught too (here under a `Map` value position).
+    let errs = typecheck_errors("let CFG: Map[String, OnceCell[i64]] = Map.new();");
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("E_ONCE_CELL_AT_MODULE_SCOPE")),
+        "expected E_ONCE_CELL_AT_MODULE_SCOPE for the nested occurrence, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_oncelock_at_module_scope_ok() {
+    // The cross-task-safe sibling IS permitted at module scope (it is a
+    // recognized const-init form and crosses task boundaries safely).
+    typecheck_ok("let CFG: OnceLock[i64] = OnceLock.new();");
+}
+
+#[test]
+fn test_oncecell_par_struct_field_rejected() {
+    let errs = typecheck_errors("par struct Service { cell: OnceCell[i64] }");
+    assert!(
+        errs.iter().any(
+            |e| e.message.contains("E_ONCE_CELL_IN_PAR_TYPE") && e.message.contains("OnceLock")
+        ),
+        "expected E_ONCE_CELL_IN_PAR_TYPE naming the OnceLock swap, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_oncelock_par_struct_field_ok() {
+    // `OnceLock[T]` as an immutable `par struct` field is fine — it is
+    // cross-task safe and immutable fields are freely readable across
+    // tasks.
+    typecheck_ok("par struct Service { cell: OnceLock[i64] }\nfn main() {}");
+}
+
+#[test]
+fn test_oncecell_crossing_par_boundary_rejected() {
+    // (c) — the pre-existing cross-task escape pass already rejects an
+    // owned `OnceCell` captured into a `par {}` branch, now that the type
+    // exists. Confirms the third structural rule is wired.
+    let errs = typecheck_errors(
+        "fn main() {
+             let cell: OnceCell[i64] = OnceCell.new();
+             par {
+                 let _ = cell.set(1);
+             }
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::CrossTaskUnsafeCapture)
+                && e.message.contains("OnceLock")),
+        "expected a cross-task-unsafe rejection naming the OnceLock swap, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
 // ── Undeclared `Type.method(...)` rejection ─────────────────────
 //
 // 2-segment `Type.method(...)` paths used to fall through silently

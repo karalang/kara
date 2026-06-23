@@ -1507,6 +1507,32 @@ impl<'a> super::TypeChecker<'a> {
     /// caller (it only invokes this for `is_par` definitions).
     fn check_par_field_constraints(&mut self, kind: &str, type_name: &str, fields: &[StructField]) {
         for f in fields {
+            // `OnceCell[T]` is single-task; a `par struct`/`par enum` is
+            // visible to every task, so a field whose type mentions
+            // `OnceCell` anywhere in its tree breaks the structural
+            // safety guarantee. Reject it (`OnceLock[T]` is the
+            // cross-task-safe replacement). Checked ahead of the
+            // `mut`-must-be-concurrent rule so an immutable `OnceCell`
+            // field is caught too (it would otherwise pass the `!f.is_mut`
+            // skip). `shared struct` fields accept `OnceCell` and never
+            // reach here — the caller only invokes this for `is_par`.
+            if Self::type_expr_mentions_type(&f.ty, "OnceCell") {
+                self.type_error(
+                    format!(
+                        "error[E_ONCE_CELL_IN_PAR_TYPE]: field `{field}` of \
+                         `par {kind} {type_name}` has type `{ty}`, but `OnceCell[T]` \
+                         is single-task; fields of a `par {kind}` are visible to \
+                         every task and must use the cross-task-safe `OnceLock[T]` \
+                         instead. Replace `OnceCell` with `OnceLock` in the field \
+                         type",
+                        field = f.name,
+                        ty = crate::formatter::render_type_expr(&f.ty),
+                    ),
+                    f.ty.span.clone(),
+                    TypeErrorKind::ParFieldNotConcurrent,
+                );
+                continue;
+            }
             if !f.is_mut || Self::is_concurrent_field_type(&f.ty) {
                 continue;
             }
@@ -1547,6 +1573,61 @@ impl<'a> super::TypeChecker<'a> {
                     Some("Atomic") | Some("Mutex")
                 )
         )
+    }
+
+    /// True when `target` appears as the final path segment of any type
+    /// node anywhere in `ty`'s tree — `OnceCell[i64]`, `Vec[OnceCell[i64]]`,
+    /// `(i64, OnceCell[T])`, `ref OnceCell[T]`, etc. Used by the
+    /// single-task structural rules (`OnceCell` at module scope / in a
+    /// `par`-type field) to reject a disallowed type wherever it is nested.
+    /// Operates on the surface `TypeExpr` (pre-lowering), matching the
+    /// last-segment convention of `is_concurrent_field_type`.
+    fn type_expr_mentions_type(ty: &TypeExpr, target: &str) -> bool {
+        match &ty.kind {
+            TypeKind::Path(p) => {
+                if p.segments.last().map(String::as_str) == Some(target) {
+                    return true;
+                }
+                p.generic_args
+                    .as_ref()
+                    .is_some_and(|ga| ga.iter().any(|a| Self::generic_arg_mentions(a, target)))
+            }
+            TypeKind::Tuple(elems) => elems
+                .iter()
+                .any(|e| Self::type_expr_mentions_type(e, target)),
+            TypeKind::Array { element, .. } => Self::type_expr_mentions_type(element, target),
+            TypeKind::Pointer { inner, .. }
+            | TypeKind::Ref(inner)
+            | TypeKind::MutRef(inner)
+            | TypeKind::MutSlice(inner)
+            | TypeKind::Weak(inner) => Self::type_expr_mentions_type(inner, target),
+            TypeKind::FnType {
+                params,
+                return_type,
+                ..
+            } => {
+                params
+                    .iter()
+                    .any(|p| Self::type_expr_mentions_type(p, target))
+                    || return_type
+                        .as_ref()
+                        .is_some_and(|rt| Self::type_expr_mentions_type(rt, target))
+            }
+            TypeKind::ImplTrait { args, .. } | TypeKind::Dyn { args, .. } => {
+                args.iter().any(|a| Self::generic_arg_mentions(a, target))
+            }
+            TypeKind::Unit | TypeKind::Error => false,
+        }
+    }
+
+    /// Recurse into a `GenericArg`'s type payload for
+    /// [`Self::type_expr_mentions_type`]. Const / shape args carry no type
+    /// tree to inspect.
+    fn generic_arg_mentions(arg: &GenericArg, target: &str) -> bool {
+        match arg {
+            GenericArg::Type(t) => Self::type_expr_mentions_type(t, target),
+            GenericArg::Const(_) | GenericArg::Shape(_) => false,
+        }
     }
 
     /// Type-check a function's contract clauses (design.md § Contracts).
@@ -1974,6 +2055,30 @@ impl<'a> super::TypeChecker<'a> {
         self.check_module_binding_init(&b.value, &b.name);
 
         if let Some(ref ty_expr) = b.ty {
+            // `OnceCell[T]` is single-task; a module-level binding is
+            // visible to every task, so it must be the cross-task-safe
+            // `OnceLock[T]` instead. Checked on the surface type tree so a
+            // nested occurrence (`Map[String, OnceCell[i64]]`) is caught
+            // too. Reuses the cross-task-unsafe diagnostic family — this is
+            // the same single-task-leaks-across-tasks violation the par /
+            // spawn / channel escape check reports, just at declaration
+            // scope.
+            if Self::type_expr_mentions_type(ty_expr, "OnceCell") {
+                self.type_error(
+                    format!(
+                        "error[E_ONCE_CELL_AT_MODULE_SCOPE]: module-level binding '{}' \
+                         is declared with type '{}', but `OnceCell[T]` is single-task; \
+                         module-level bindings are visible to every task and must use \
+                         the cross-task-safe `OnceLock[T]` instead. Replace `OnceCell` \
+                         with `OnceLock` in the binding's type",
+                        b.name,
+                        crate::formatter::render_type_expr(ty_expr),
+                    ),
+                    ty_expr.span.clone(),
+                    TypeErrorKind::CrossTaskUnsafeCapture,
+                );
+                return;
+            }
             let declared = self.lower_type_expr(ty_expr, &[]);
             if matches!(declared, Type::Str) {
                 self.type_error(
@@ -2014,6 +2119,25 @@ impl<'a> super::TypeChecker<'a> {
             // walker above has already verified the value's shape, so any
             // type the inferer returns is rooted in a permitted form.
             let inferred = self.infer_expr(&b.value);
+            // Same single-task rule as the annotated branch, for the
+            // direct `let CFG = OnceCell.new()` form (a nested unannotated
+            // occurrence isn't constructible as a const-init initializer).
+            if matches!(&inferred, Type::Named { name, .. } if name == "OnceCell") {
+                self.type_error(
+                    format!(
+                        "error[E_ONCE_CELL_AT_MODULE_SCOPE]: module-level binding '{}' \
+                         was inferred as `OnceCell[T]`, which is single-task; \
+                         module-level bindings are visible to every task and must use \
+                         the cross-task-safe `OnceLock[T]` instead — annotate the \
+                         binding as `: OnceLock[...]` and construct it with \
+                         `OnceLock.new()`",
+                        b.name,
+                    ),
+                    b.value.span.clone(),
+                    TypeErrorKind::CrossTaskUnsafeCapture,
+                );
+                return;
+            }
             // §1297: a heap-allocated `String` cannot live at module
             // scope. The §1284 sibling rule (string literals default to
             // `StringSlice` at module scope) is not yet automatic —
