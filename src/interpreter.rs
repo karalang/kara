@@ -27,6 +27,7 @@ mod method_call_http;
 mod method_call_interner;
 mod method_call_iter;
 mod method_call_map;
+mod method_call_once;
 mod method_call_optres;
 mod method_call_pool;
 mod method_call_process;
@@ -271,6 +272,17 @@ pub struct Interpreter<'a> {
     /// `Interner.new` (no table entry) is distinguishable from a real
     /// interner.
     pub(crate) interner_handle_counter: i64,
+    /// `OnceLock[T]` / `OnceCell[T]` intrinsic side-table — keyed by the
+    /// cell's `handle_id`, holds the write-once slot (`None` = empty,
+    /// `Some(v)` = filled). Both cell types share this table; the
+    /// cross-task vs. single-task split is a typecheck-time structural
+    /// guarantee, not a runtime one. See
+    /// `src/interpreter/method_call_once.rs`.
+    pub(crate) once_table: HashMap<i64, Option<Value>>,
+    /// Monotonic counter for `OnceLock`/`OnceCell` `handle_id` minting.
+    /// Starts at 1 so a hand-rolled `handle_id: 0` literal that bypassed
+    /// `*.new` (no table entry) is distinguishable from a real cell.
+    pub(crate) once_handle_counter: i64,
     /// `Semaphore` backpressure primitive — permit counter keyed by
     /// `Semaphore.handle_id`. `Semaphore.new` populates an entry;
     /// `acquire` / `release` adjust `available`. See
@@ -552,6 +564,8 @@ impl<'a> Interpreter<'a> {
             arena_handle_counter: 0,
             interner_table: HashMap::new(),
             interner_handle_counter: 0,
+            once_table: HashMap::new(),
+            once_handle_counter: 0,
             semaphore_table: HashMap::new(),
             semaphore_handle_counter: 0,
             rate_limiter_table: HashMap::new(),

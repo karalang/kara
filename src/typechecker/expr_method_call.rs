@@ -2911,7 +2911,7 @@ impl<'a> super::TypeChecker<'a> {
         let candidates = self
             .env
             .find_methods_with_args(&type_name, &type_args, method);
-        let method_sig: Option<FunctionSig> = if candidates.len() > 1 {
+        let method_pick: Option<(ImplInfo, FunctionSig)> = if candidates.len() > 1 {
             // Render each candidate as `Trait.method(receiver)` (or
             // `Type.method(receiver)` for the rare inherent-vs-inherent
             // case). The signature display includes the receiver-then-args
@@ -2966,20 +2966,52 @@ impl<'a> super::TypeChecker<'a> {
             }
             return Type::Error;
         } else {
-            candidates.into_iter().next().map(|(_, sig)| sig.clone())
+            candidates
+                .into_iter()
+                .next()
+                .map(|(imp, sig)| (imp.clone(), sig.clone()))
         };
 
-        match method_sig {
-            Some(sig) => {
+        match method_pick {
+            Some((imp, sig)) => {
                 // Validate labels against method parameter names
                 self.validate_labels(args, &sig.param_names, span);
+                // Pre-bind the impl's generic params to the receiver's
+                // concrete type args (mirroring the concrete-type UFCS path
+                // above) BEFORE solving the call args. Without this, a method
+                // whose only `T`-position is the return type or a
+                // closure-return param — e.g. `OnceLock[T].get_or_init(init:
+                // Fn() -> T) -> ref T` — leaves `T` unsolved (nothing in the
+                // non-closure args pins it), so the receiver's concrete
+                // `[i64]` never reaches the signature and inference fails with
+                // "cannot infer type parameter 'T'". Binding here makes the
+                // value-receiver path consistent with UFCS dispatch; for a
+                // non-generic receiver (empty `type_args` / no impl generics)
+                // `recv_subs` is empty and behavior is unchanged.
+                let recv_subs: HashMap<String, SubstValue> = imp
+                    .generic_params
+                    .as_ref()
+                    .map(|gp| {
+                        gp.params
+                            .iter()
+                            .zip(type_args.iter())
+                            .map(|(p, t)| (p.name.clone(), SubstValue::Type(t.clone())))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let params: Vec<Type> = sig
+                    .params
+                    .iter()
+                    .map(|p| substitute_type_params(p, &recv_subs))
+                    .collect();
+                let return_type = substitute_type_params(&sig.return_type, &recv_subs);
                 // Check argument count (excluding self)
-                if args.len() != sig.params.len() {
+                if args.len() != params.len() {
                     self.type_error(
                         format!(
                             "method '{}' expects {} argument(s), found {}",
                             method,
-                            sig.params.len(),
+                            params.len(),
                             args.len()
                         ),
                         span.clone(),
@@ -2988,17 +3020,17 @@ impl<'a> super::TypeChecker<'a> {
                     for arg in args {
                         self.infer_expr(&arg.value);
                     }
-                    return sig.return_type.clone();
+                    return return_type;
                 }
-                // Reuse the round-10.1 closure-pushdown helper so generic
-                // methods solve `T` from non-closure args before checking
-                // closure args. `apply_call_site_marker` is `false`: per
-                // design.md, the call-site `mut` marker rule applies only to
-                // free-function calls, never to method calls.
+                // Reuse the round-10.1 closure-pushdown helper so any
+                // remaining method-level generics solve from non-closure args
+                // before checking closure args. `apply_call_site_marker` is
+                // `false`: per design.md, the call-site `mut` marker rule
+                // applies only to free-function calls, never to method calls.
                 self.check_call_args_with_substitution(
                     args,
-                    &sig.params,
-                    &sig.return_type,
+                    &params,
+                    &return_type,
                     span,
                     /* apply_call_site_marker = */ false,
                 )

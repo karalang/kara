@@ -727,6 +727,16 @@ impl<'a> super::Interpreter<'a> {
                         return v;
                     }
                 }
+                "OnceLock.new" => {
+                    if let Some(v) = self.eval_once_new("OnceLock") {
+                        return v;
+                    }
+                }
+                "OnceCell.new" => {
+                    if let Some(v) = self.eval_once_new("OnceCell") {
+                        return v;
+                    }
+                }
                 // Phase-11 Tensor constructors (interpreter MVP) — see
                 // runtime/stdlib/tensor.kara for the fill-type note.
                 "Tensor.zeros" | "Tensor.ones" | "Tensor.full" => {
@@ -1651,7 +1661,7 @@ impl<'a> super::Interpreter<'a> {
     /// `with_provider` to run the body closure; factored out so future
     /// fixtures (`providers { }`, multi-attribute test wrapping) can reuse the
     /// invocation path without duplicating frame-management boilerplate.
-    fn invoke_zero_arg_closure(&mut self, callee_val: Value, span: &Span) -> Value {
+    pub(super) fn invoke_zero_arg_closure(&mut self, callee_val: Value, span: &Span) -> Value {
         let callee_variant = callee_val.variant_name();
         match callee_val {
             Value::Function {

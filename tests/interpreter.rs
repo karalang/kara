@@ -9503,6 +9503,139 @@ fn test_interner_symbol_is_copy_pass_by_value_then_reuse() {
     assert_eq!(output, "7\n");
 }
 
+// ── OnceLock[T] / OnceCell[T] write-once cells ─────────────────────
+
+#[test]
+fn test_oncelock_set_get_is_set_roundtrip() {
+    // The basic write-once lifecycle: empty cell reports `is_set() ==
+    // false` and `get() == None`; after a successful `set`, `is_set() ==
+    // true` and `get() == Some(v)`.
+    let output = run(r#"fn main() {
+             let cell: OnceLock[i64] = OnceLock.new();
+             println(cell.is_set());
+             match cell.get() {
+                 Some(v) => println(v),
+                 None => println(-1),
+             }
+             match cell.set(42) {
+                 Ok(_) => println(1),
+                 Err(_) => println(0),
+             }
+             println(cell.is_set());
+             match cell.get() {
+                 Some(v) => println(v),
+                 None => println(-1),
+             }
+         }"#);
+    assert_eq!(output, "false\n-1\n1\ntrue\n42\n");
+}
+
+#[test]
+fn test_oncelock_double_set_returns_already_set_error() {
+    // `set` on a filled cell fails with `AlreadySetError` carrying the
+    // *rejected* value, and leaves the stored value untouched.
+    let output = run(r#"fn main() {
+             let cell: OnceLock[i64] = OnceLock.new();
+             let _ = cell.set(42);
+             match cell.set(99) {
+                 Ok(_) => println(-1),
+                 Err(e) => println(e.rejected),
+             }
+             match cell.get() {
+                 Some(v) => println(v),
+                 None => println(-2),
+             }
+         }"#);
+    // 99 = the rejected value handed back; 42 = the cell is unchanged.
+    assert_eq!(output, "99\n42\n");
+}
+
+#[test]
+fn test_oncelock_get_or_init_runs_closure_once() {
+    // `get_or_init` fills the cell on first access and returns the cached
+    // value on every later call WITHOUT re-running the init closure — the
+    // second call returns the first value (7), not the second closure's
+    // value (999).
+    let output = run(r#"fn main() {
+             let cell: OnceLock[i64] = OnceLock.new();
+             let a = cell.get_or_init(|| 7);
+             println(a);
+             let b = cell.get_or_init(|| 999);
+             println(b);
+             println(cell.is_set());
+         }"#);
+    assert_eq!(output, "7\n7\ntrue\n");
+}
+
+#[test]
+fn test_oncelock_get_or_init_skipped_when_already_set() {
+    // A cell filled by `set` is not re-initialized by a later
+    // `get_or_init` — the init closure never runs and the `set` value
+    // wins.
+    let output = run(r#"fn main() {
+             let cell: OnceLock[String] = OnceLock.new();
+             let _ = cell.set("hello");
+             let s = cell.get_or_init(|| "world");
+             println(s);
+         }"#);
+    assert_eq!(output, "hello\n");
+}
+
+#[test]
+fn test_oncecell_set_get_parallel_surface() {
+    // `OnceCell[T]` carries the identical method surface to `OnceLock[T]`
+    // (the difference is single-task vs. cross-task safety, enforced at
+    // typecheck time — not a runtime difference).
+    let output = run(r#"fn main() {
+             let cell: OnceCell[i64] = OnceCell.new();
+             println(cell.is_set());
+             match cell.set(5) {
+                 Ok(_) => println(1),
+                 Err(_) => println(0),
+             }
+             println(cell.is_set());
+             match cell.get() {
+                 Some(v) => println(v),
+                 None => println(-1),
+             }
+         }"#);
+    assert_eq!(output, "false\n1\ntrue\n5\n");
+}
+
+#[test]
+fn test_oncecell_get_or_init_struct_payload() {
+    // The canonical lazy-init use case: a struct built on first access
+    // and read back by field. `get_or_init` returns `ref T`; field access
+    // auto-derefs, so `c.port` works without an explicit `*`. `T` is
+    // inferred from the receiver `OnceCell[Cfg]` (the value-receiver
+    // generic dispatch binds impl generics from the receiver's type args).
+    let output = run(r#"struct Cfg { port: i64, name: String }
+         fn main() {
+             let cell: OnceCell[Cfg] = OnceCell.new();
+             let c = cell.get_or_init(|| Cfg { port: 8080, name: "svc" });
+             println(c.port);
+             println(c.name);
+             let c2 = cell.get_or_init(|| Cfg { port: 1, name: "other" });
+             println(c2.port);
+         }"#);
+    assert_eq!(output, "8080\nsvc\n8080\n");
+}
+
+#[test]
+fn test_oncelock_string_payload_roundtrips() {
+    // Heap-payload element type: a `String` round-trips through the cell
+    // (the slot is just a `Value`, so T erases cleanly).
+    let output = run(r#"fn main() {
+             let cell: OnceLock[String] = OnceLock.new();
+             let _ = cell.set("greetings-from-the-cell");
+             match cell.get() {
+                 Some(v) => println(v),
+                 None => println("empty"),
+             }
+         }"#);
+    assert_eq!(output, "greetings-from-the-cell\n");
+}
+
 #[test]
 fn test_tracing_user_can_implement_exporter_trait() {
     // The whole point of the `Exporter` trait shape is that user code

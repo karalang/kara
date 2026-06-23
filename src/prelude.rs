@@ -266,6 +266,13 @@ pub const PRELUDE_TYPES: &[&str] = &[
     // `runtime/stdlib/interner.kara`.
     "Symbol",
     "Interner",
+    // `OnceLock[T]` / `OnceCell[T]` write-once lazy-init cells (phase-8
+    // floor). `AlreadySetError[T]` is the `set`-on-filled error type.
+    // `OnceLock` is cross-task safe; `OnceCell` is single-task (three
+    // structural rules enforce it). See `runtime/stdlib/once.kara`.
+    "OnceLock",
+    "OnceCell",
+    "AlreadySetError",
     // `Tensor[T, Shape]` shape-typed N-D container (phase-11 numerical
     // stdlib, interpreter MVP). See `runtime/stdlib/tensor.kara`.
     "Tensor",
@@ -787,6 +794,11 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
         "interner.kara",
         include_str!("../runtime/stdlib/interner.kara"),
     ),
+    // `OnceLock[T]` / `OnceCell[T]` write-once lazy-init cells (phase-8
+    // floor). Surface + interpreter intrinsic (`set` / `get` /
+    // `get_or_init` / `is_set`); codegen lowering deferred
+    // (interpreter-only, like `Pool[T]` / `Arena[T]`).
+    ("once.kara", include_str!("../runtime/stdlib/once.kara")),
     // `Semaphore` application-layer backpressure primitive (phase-8 P1).
     // Surface + collapsed single-threaded intrinsic (immediate-serve-or-
     // timeout); the parking-with-timeout backend lands with the event loop.

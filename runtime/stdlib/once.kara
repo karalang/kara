@@ -1,0 +1,151 @@
+// runtime/stdlib/once.kara
+//
+// `OnceLock[T]` + `OnceCell[T]` — write-once lazy-init cells. Phase 8
+// floor. Spec at `design.md § Module-Level Bindings > LazyLock[T] /
+// OnceLock[T] / OnceCell[T]` (v60 item 45) and the
+// `phase-8-stdlib-floor.md § 'OnceLock[T] and OnceCell[T] lazy-init
+// primitives'` entry.
+//
+// Both cells start empty and can be filled exactly once: `set` records
+// a value on the first call and rejects every later call; `get` reads
+// the value back; `get_or_init` fills on first access and then returns
+// the cached value (the init closure runs at most once); `is_set`
+// reports whether the cell has been filled. The two types carry the
+// *same* method surface — a swap between them is mechanical — and
+// differ only in task-safety:
+//
+//   * `OnceLock[T]` is cross-task safe (the `Arc<Mutex<…>>` analogue).
+//     It is permitted at module scope, as a `par struct`/`par enum`
+//     field, and may cross a `par {}` / `spawn` / channel boundary.
+//   * `OnceCell[T]` is single-task only (the `Rc<RefCell<…>>`
+//     analogue). It is rejected at module scope
+//     (`E_ONCE_CELL_AT_MODULE_SCOPE`), as a `par`-type field
+//     (`E_ONCE_CELL_IN_PAR_TYPE`), and when it would cross a task
+//     boundary (`E_ONCE_CELL_CROSSES_TASK_BOUNDARY`). Those three rules
+//     are structural checks in the typechecker — there is no `Sync`
+//     auto-trait. A `shared struct` field accepts `OnceCell[T]`
+//     (`shared struct` is itself single-task).
+//
+// **Dispatch.** The state-touching methods (`set` / `get` /
+// `get_or_init` / `is_set`) are `#[compiler_builtin]`: the associated
+// `OnceLock.new()` / `OnceCell.new()` fire through the matching
+// path-string arms in `eval_call.rs`, and the instance methods route
+// through the interpreter's `try_eval_once_method` arm. The cell's
+// slot (`Option<Value>`) lives Rust-side in `once_table: HashMap<i64,
+// Option<Value>>` keyed by the cell's `handle_id`; the Kāra value
+// carries only the handle. Generic `T` erases at runtime — a filled
+// slot is just a `Value`. The placeholder bodies below are never
+// evaluated (the interpreter intercepts before the body runs) and
+// never reach codegen (`std.OnceLock` / `std.OnceCell` are
+// interpreter-only, like `std.Pool` / `std.Arena`), and baked-stdlib
+// impl bodies are neither resolved nor type-checked — only the
+// signatures are the contract.
+//
+// **No intrinsic substrate effect.** An empty cell is a compile-time
+// constant (`OnceLock.new()` / `OnceCell.new()` are recognized
+// constant-init forms — see `items.rs::module_binding_call_is_special_form`),
+// so construction allocates nothing observable. `set` parks an
+// already-built value into the cell (interior mutation, not a fresh
+// allocation), and `get_or_init`'s init closure carries its own
+// effects, which propagate to the caller through the ordinary
+// closure-argument effect walk. None of the methods seed a substrate
+// verb — unlike `Arena.new` / `Interner.intern`, which do allocate.
+
+// Returned by `set` when the cell was already filled — carries the
+// rejected value back to the caller so nothing is silently dropped.
+// `rejected` holds the value the failed `set` tried to install.
+struct AlreadySetError[=T] {
+    rejected: T,
+}
+
+// Cross-task-safe write-once cell. `handle_id` keys into the
+// interpreter's `once_table`; `0` is reserved for a hand-rolled
+// `OnceLock { handle_id: 0 }` literal that bypassed `OnceLock.new` —
+// its methods short-circuit (empty cell) rather than corrupt another
+// cell's slot.
+struct OnceLock[=T] {
+    handle_id: i64,
+}
+
+// Single-task write-once cell. Same representation and method surface
+// as `OnceLock[T]`; the difference is the three structural rules the
+// typechecker enforces on its use sites (see the module header).
+struct OnceCell[=T] {
+    handle_id: i64,
+}
+
+impl[T] OnceLock[T] {
+    // Create a fresh empty cell. Dispatched through `eval_call.rs`'s
+    // `"OnceLock.new"` path-string arm, which allocates an empty slot
+    // in `once_table` and returns an `OnceLock { handle_id }` carrying
+    // the fresh handle. Recognized as a constant-init form, so it is
+    // permitted as a module-level binding's initializer.
+    #[compiler_builtin]
+    fn new() -> OnceLock[T] {
+        OnceLock { handle_id: 0 }
+    }
+
+    // Install `value` if the cell is empty and return `Ok(Unit)`; if
+    // the cell was already filled, return `Err(AlreadySetError {
+    // rejected: value })` handing the rejected value back. Body is a
+    // never-evaluated placeholder (a self-call so it stays type-correct
+    // as `Result[Unit, AlreadySetError[T]]`).
+    #[compiler_builtin]
+    fn set(ref self, value: T) -> Result[Unit, AlreadySetError[T]] {
+        self.set(value)
+    }
+
+    // Read the cell's value: `Some(v)` once filled, `None` before.
+    #[compiler_builtin]
+    fn get(ref self) -> Option[ref T] {
+        self.get()
+    }
+
+    // Return the filled value, running `init` to fill the cell first if
+    // it is empty. `init` runs at most once across all calls — a second
+    // `get_or_init` after the cell is filled returns the cached value
+    // without invoking the closure.
+    #[compiler_builtin]
+    fn get_or_init(ref self, init: Fn() -> T) -> ref T {
+        self.get_or_init(init)
+    }
+
+    // Whether the cell has been filled.
+    #[compiler_builtin]
+    fn is_set(ref self) -> bool {
+        false
+    }
+}
+
+impl[T] OnceCell[T] {
+    // Create a fresh empty single-task cell. Dispatched through
+    // `eval_call.rs`'s `"OnceCell.new"` path-string arm. Recognized as
+    // a constant-init form — but note that a *module-level* binding of
+    // `OnceCell[T]` is rejected (`E_ONCE_CELL_AT_MODULE_SCOPE`): the
+    // const-init recognition admits the ctor shape, the single-task
+    // structural check rejects the placement.
+    #[compiler_builtin]
+    fn new() -> OnceCell[T] {
+        OnceCell { handle_id: 0 }
+    }
+
+    #[compiler_builtin]
+    fn set(ref self, value: T) -> Result[Unit, AlreadySetError[T]] {
+        self.set(value)
+    }
+
+    #[compiler_builtin]
+    fn get(ref self) -> Option[ref T] {
+        self.get()
+    }
+
+    #[compiler_builtin]
+    fn get_or_init(ref self, init: Fn() -> T) -> ref T {
+        self.get_or_init(init)
+    }
+
+    #[compiler_builtin]
+    fn is_set(ref self) -> bool {
+        false
+    }
+}
