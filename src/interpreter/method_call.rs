@@ -1018,6 +1018,23 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // IEEE-754 bit reinterpretation (protobuf `float`/`double` codecs;
+        // typed in expr_method_call.rs). `to_bits` → the f64 bit pattern as a
+        // `u64`; `to_bits32` rounds to f32 then takes its `u32` pattern. The
+        // inverse `bits_as_f64` / `bits_as_f32` read an integer's low bits back
+        // as a float. Unsigned values are stored two's-complement in `Int`.
+        if args.is_empty() {
+            match (&obj, method) {
+                (Value::Float(f), "to_bits") => return Value::Int(f.to_bits() as i64),
+                (Value::Float(f), "to_bits32") => return Value::Int((*f as f32).to_bits() as i64),
+                (Value::Int(b), "bits_as_f64") => return Value::Float(f64::from_bits(*b as u64)),
+                (Value::Int(b), "bits_as_f32") => {
+                    return Value::Float(f32::from_bits(*b as u32) as f64)
+                }
+                _ => {}
+            }
+        }
+
         // Wrapping integer arithmetic (typed in expr_method_call.rs): the
         // non-trapping sibling of `+`/`-`/`*` — two's-complement wraparound,
         // never `record_integer_overflow`. The typechecker restricts the

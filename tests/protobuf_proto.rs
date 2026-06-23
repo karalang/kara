@@ -280,6 +280,23 @@ fn main() {
 }
 
 #[test]
+fn proto_float_double_roundtrip() {
+    // `.proto` `double` → `f64` (fixed64), `float` → `f32` (fixed32).
+    let src = r#"
+#[proto_schema]
+const SCHEMA: String = "message Sample { double precise = 1; float approx = 2; }";
+
+fn main() {
+    let s = Sample { precise: 1.25, approx: 0.5 };
+    let back = Sample.decode(s.encode());
+    println(back.precise == 1.25);
+    println(back.approx == 0.5);
+}
+"#;
+    assert_eq!(run(src), vec!["true\n", "true\n"]);
+}
+
+#[test]
 fn proto_map_field_roundtrip() {
     // `map<K, V> name = N;` maps to a `Map[K, V]` field — scalar and nested-
     // message values round-trip end to end.
@@ -386,17 +403,18 @@ fn main() {}
 
 #[test]
 fn proto_unsupported_type_errors() {
-    // `float` is not in the v1 scalar set; the pure-Kāra parser reports it.
+    // `sint32` is not in the v1 scalar set (zigzag types are unsupported); the
+    // pure-Kāra parser reports it.
     let src = r#"
 #[proto_schema]
-const SCHEMA: String = "message M { float x = 1; }";
+const SCHEMA: String = "message M { sint32 x = 1; }";
 fn main() {}
 "#;
     let diags = schema_diags(src);
     assert!(
         diags.iter().any(|d| d.contains("E_COMPTIME_ERROR")
             && d.contains("unsupported field type")
-            && d.contains("float")),
+            && d.contains("sint32")),
         "expected an unsupported-type diagnostic; got: {diags:?}"
     );
 }

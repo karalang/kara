@@ -27,7 +27,8 @@
 //!   `fn encode(ref self) -> Vec[u8]`, `fn decode(bytes: Vec[u8]) -> Self`, and
 //!   `fn merge(mut ref self, bytes: Vec[u8])`. Field numbers are 1-based
 //!   declaration order. Supported field types (v1): `i32` / `i64` / `u32` /
-//!   `u64` / `bool` (varint), `String` / `Vec[u8]` (length-delimited),
+//!   `u64` / `bool` (varint), `f64` / `f32` (`double` / `float`, fixed-width),
+//!   `String` / `Vec[u8]` (length-delimited),
 //!   nested messages — a field whose struct type itself derives `Message`,
 //!   encoded as a length-delimited sub-message — and `repeated` fields
 //!   (`Vec[T]`): packed for scalar numerics, one length-delimited field per
@@ -330,6 +331,10 @@ comptime fn proto_default(tn: String) -> String {
         "0i64"
     } else if tn == "i32" {
         "0i32"
+    } else if tn == "f64" {
+        "0.0f64"
+    } else if tn == "f32" {
+        "0.0f32"
     } else {
         "0u32"
     }
@@ -350,6 +355,10 @@ comptime fn proto_read_expr(tn: String) -> String {
         "reader.read_varint() as i64"
     } else if tn == "i32" {
         "reader.read_varint() as i32"
+    } else if tn == "f64" {
+        "reader.read_fixed64().bits_as_f64()"
+    } else if tn == "f32" {
+        "reader.read_fixed32().bits_as_f32()"
     } else {
         "reader.read_varint() as u32"
     }
@@ -383,6 +392,14 @@ comptime fn proto_encode_field(idx: i64, fname: String, tn: String) -> String {
         // varint, so a dedicated i64 encoder (negatives → 10 bytes).
         "out.extend_from_slice(ProtoBuf.encode_tag(" + tag
             + ", 0)); out.extend_from_slice(ProtoBuf.encode_varint_i64(self." + fname + "));"
+    } else if tn == "f64" {
+        // double: 8 little-endian bytes of the IEEE-754 bit pattern (wire 1).
+        "out.extend_from_slice(ProtoBuf.encode_tag(" + tag
+            + ", 1)); out.extend_from_slice(ProtoBuf.encode_fixed64(self." + fname + ".to_bits()));"
+    } else if tn == "f32" {
+        // float: 4 little-endian bytes of the f32 bit pattern (wire 5).
+        "out.extend_from_slice(ProtoBuf.encode_tag(" + tag
+            + ", 5)); out.extend_from_slice(ProtoBuf.encode_fixed32(self." + fname + ".to_bits32()));"
     } else {
         // i32: widen to i64 first so a negative sign-extends to 64 bits, then
         // encode as int64 (proto3 encodes negative int32 in the 64-bit form).
@@ -595,6 +612,8 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
         let repeated = tn.starts_with("Vec<") and tn != "Vec<u8>";
         // A `Map[K, V]` field is a proto3 map (repeated key/value entries).
         let is_map = tn.starts_with("Map<");
+        // `f64` / `f32` are proto3 `double` / `float` — fixed-width fields.
+        let is_float = tn == "f64" or tn == "f32";
         // A struct-typed field is a nested message — encoded as a length-
         // delimited sub-message via its own derived `encode`/`decode`. It must
         // itself derive `Message`; a plain struct has no codec to delegate to.
@@ -608,10 +627,11 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
                     + "`, which does not derive(Message)",
             );
         }
-        if not proto_supported(tn) and not nested and not repeated and not is_enum and not is_map {
+        if not proto_supported(tn) and not nested and not repeated and not is_enum and not is_map
+            and not is_float {
             compiler.error(
                 "derive(Message): field `" + fname + "` has unsupported type `" + tn
-                    + "` (proto3 v1 supports i32/i64/u32/u64/bool/String/Vec[u8], nested messages, enums, repeated `Vec[T]`, and `Map[K,V]`)",
+                    + "` (proto3 v1 supports i32/i64/u32/u64/bool/f32/f64/String/Vec[u8], nested messages, enums, repeated `Vec[T]`, and `Map[K,V]`)",
             );
         }
         let tag = f"{idx}";
@@ -785,8 +805,8 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
 // numbers must be contiguous `1..N` (declaration-order tagging — per-field
 // number overrides need reflection support that doesn't exist yet). `syntax` /
 // `package` / `option` / `import` statements are skipped; `oneof` and `sint*` /
-// `fixed*` / floating types are not yet supported (nor `repeated` enums, nor
-// enum map values). `map<K, V> name = N;` maps to a `Map[K, V]` field. Enum
+// `fixed*` types are not yet supported (nor `repeated` enums, nor enum/float map
+// values, nor `repeated` floats). `double` / `float` map to `f64` / `f32`. `map<K, V> name = N;` maps to a `Map[K, V]` field. Enum
 // declarations map to Kāra `enum`s (UPPER_SNAKE → PascalCase), with contiguous
 // `0..N` values matching declaration order.
 
@@ -975,6 +995,10 @@ comptime fn proto_map_type(t: String) -> String {
         "u64"
     } else if t == "bool" {
         "bool"
+    } else if t == "double" {
+        "f64"
+    } else if t == "float" {
+        "f32"
     } else {
         ""
     }

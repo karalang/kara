@@ -545,6 +545,60 @@ fn main() {
     );
 }
 
+// ── float / double ──────────────────────────────────────────────
+
+#[test]
+fn derive_float_double_roundtrip() {
+    // `f64` (double, fixed64) and `f32` (float, fixed32) round-trip exactly,
+    // including negatives; absent fields default to 0.0.
+    let src = r#"
+#[derive(Message)]
+struct Meas { d: f64, f: f32, label: String }
+
+fn main() {
+    let m = Meas { d: 3.141592653589793, f: 2.5, label: "x" };
+    let back = Meas.decode(m.encode());
+    println(back.d == 3.141592653589793);
+    println(back.f == 2.5);
+    println(back.label);
+    let n = Meas { d: -1.5, f: -0.25, label: "" };
+    let bn = Meas.decode(n.encode());
+    println(bn.d == -1.5);
+    println(bn.f == -0.25);
+    println(Meas.decode(Vec.new()).d == 0.0);
+}
+"#;
+    assert_eq!(
+        run(src),
+        vec!["true\n", "true\n", "x\n", "true\n", "true\n", "true\n"]
+    );
+}
+
+#[test]
+fn derive_double_is_fixed64_float_is_fixed32() {
+    // double occupies a wire-type-1 (fixed64) field, float a wire-type-5
+    // (fixed32) field.
+    let src = r#"
+#[derive(Message)]
+struct M { d: f64, f: f32 }
+
+fn main() {
+    let m = M { d: 1.25, f: 0.5 };
+    let mut r = ProtoReader.new(m.encode());
+    let (f1, w1) = r.read_tag();
+    let _ = r.read_fixed64();
+    let (f2, w2) = r.read_tag();
+    let _ = r.read_fixed32();
+    println(f1);
+    println(w1);
+    println(f2);
+    println(w2);
+    println(r.at_end());
+}
+"#;
+    assert_eq!(run(src), vec!["1\n", "1\n", "2\n", "5\n", "true\n"]);
+}
+
 // ── maps ────────────────────────────────────────────────────────
 
 #[test]
@@ -773,12 +827,12 @@ fn main() {
 
 #[test]
 fn derive_unsupported_field_type_errors() {
-    // A field whose type isn't a supported proto3 scalar (here a float, which
-    // v1 doesn't encode) and isn't a nested message raises a `compiler.error`
+    // A field whose type isn't a supported proto3 scalar (here `u8`, which has
+    // no proto3 wire type) and isn't a nested message raises a `compiler.error`
     // from `derive_message`.
     let src = r#"
 #[derive(Message)]
-struct Outer { id: i64, weight: f64 }
+struct Outer { id: i64, flag: u8 }
 
 fn main() {}
 "#;
@@ -786,7 +840,7 @@ fn main() {}
     assert!(
         diags.iter().any(|d| d.contains("E_COMPTIME_ERROR")
             && d.contains("unsupported type")
-            && d.contains("weight")),
+            && d.contains("flag")),
         "expected an unsupported-field diagnostic; got: {diags:?}"
     );
 }

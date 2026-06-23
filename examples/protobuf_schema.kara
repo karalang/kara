@@ -16,6 +16,7 @@ const SCHEMA: String = "
         string name = 1;
         int64 age = 2;
         bool active = 3;
+        double score = 4;
     }
 
     message Address {
@@ -49,12 +50,12 @@ const SCHEMA: String = "
 fn main() {
     // `Person` / `Team` / `Address` exist as ordinary types: the schema expanded
     // before name resolution, so they resolve like hand-written structs.
-    let p = Person { name: "Ada", age: 36, active: true };
+    let p = Person { name: "Ada", age: 36, active: true, score: 99.5 };
     let wire = p.encode();
     println(f"encoded Person in {wire.len()} bytes");
 
     let back = Person.decode(wire);
-    println(f"name={back.name} age={back.age} active={back.active}");
+    println(f"name={back.name} age={back.age} active={back.active} score={back.score}");
 
     let mut kudos: Map[String, i64] = Map.new();
     kudos.insert("Ada", 3);

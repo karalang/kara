@@ -19,8 +19,8 @@ use super::env::{FunctionSig, ImplInfo};
 use super::inference::{resolve_type_var_top, substitute_type_params, unify_types};
 use super::types::{
     clone_self_type_for, iterator_item_type_for, method_callee_type_name,
-    receiver_for_method_lookup, type_display, ConstArg, IntSize, SubstValue, Type, UIntSize,
-    VariantTypeInfo,
+    receiver_for_method_lookup, type_display, ConstArg, FloatSize, IntSize, SubstValue, Type,
+    UIntSize, VariantTypeInfo,
 };
 use super::TypeErrorKind;
 
@@ -2339,6 +2339,28 @@ impl<'a> super::TypeChecker<'a> {
         // interpreter `method_call.rs`, codegen `method_call.rs`.
         if method == "sqrt" && args.is_empty() && matches!(&receiver_for_lookup, Type::Float(_)) {
             return receiver_for_lookup.clone();
+        }
+        // IEEE-754 bit reinterpretation (used by protobuf `float`/`double`
+        // fixed-width codecs). `to_bits` → `u64` (f64 pattern), `to_bits32` →
+        // `u32` (the value rounded to f32, then its 32-bit pattern). The width
+        // is in the method name so no receiver-width recovery is needed.
+        if args.is_empty() && matches!(&receiver_for_lookup, Type::Float(_)) {
+            if method == "to_bits" {
+                return Type::UInt(UIntSize::U64);
+            }
+            if method == "to_bits32" {
+                return Type::UInt(UIntSize::U32);
+            }
+        }
+        // The inverse: reinterpret an integer's low bits as a float.
+        // `bits_as_f64` (from a `u64`) / `bits_as_f32` (from a `u32`).
+        if args.is_empty() && matches!(&receiver_for_lookup, Type::Int(_) | Type::UInt(_)) {
+            if method == "bits_as_f64" {
+                return Type::Float(FloatSize::F64);
+            }
+            if method == "bits_as_f32" {
+                return Type::Float(FloatSize::F32);
+            }
         }
         // Float→int conversion families (phase-8 § "Saturating float→int",
         // slice 2): `f.{saturating,wrapping,checked,trunc}_to_<intN>()` on

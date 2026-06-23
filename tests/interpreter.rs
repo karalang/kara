@@ -221,6 +221,25 @@ fn test_sqrt_float() {
 }
 
 #[test]
+fn test_float_bit_reinterpret_roundtrip() {
+    // IEEE-754 bit reinterpretation: `to_bits`/`to_bits32` and the inverse
+    // `bits_as_f64`/`bits_as_f32` round-trip a float through its integer bits.
+    assert_eq!(
+        run("fn main() { let d: f64 = 3.5; println(d.to_bits().bits_as_f64() == d); }"),
+        "true\n"
+    );
+    assert_eq!(
+        run("fn main() { let f: f32 = 2.25; println(f.to_bits32().bits_as_f32() == f); }"),
+        "true\n"
+    );
+    // 1.0f64 has the bit pattern 0x3FF0000000000000.
+    assert_eq!(
+        run("fn main() { println((1.0f64).to_bits()); }"),
+        "4607182418800017408\n"
+    );
+}
+
+#[test]
 fn test_abs_int_min_traps() {
     // `iN::MIN.abs()` has no representable result and traps as integer
     // overflow, matching the checked-neg arm — not a panic/ICE.
