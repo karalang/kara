@@ -139,6 +139,31 @@ impl<'a> super::Interpreter<'a> {
                         }
                     }
                 }
+                // Value-binding-rooted field path — `F.value`, `CFG.max`,
+                // `OUTER.inner.field`. The parser greedily consumes an
+                // uppercase-led dotted chain into a `Path`, so field reads on a
+                // value binding (uppercase local or module-level `let`) land
+                // here rather than in the `FieldAccess` arm. Sibling of the
+                // typechecker `resolve_path_type` walk and the codegen
+                // `compile_path_expr` module-binding arm. Walk each trailing
+                // segment as a struct field via the shared `read_field` helper,
+                // starting from the binding's value. Guarded to struct-rooted
+                // bindings so enum-variant / type-param paths still fall through
+                // to the last-segment lookup below.
+                if segments.len() >= 2 {
+                    if let Some(root) = self.env.get(&segments[0]) {
+                        if matches!(root, Value::Struct { .. } | Value::SharedStruct(_)) {
+                            let mut current = root;
+                            for member in &segments[1..] {
+                                current = self.read_field(current, member, &expr.span);
+                                if self.pending_cf.is_some() {
+                                    return current;
+                                }
+                            }
+                            return current;
+                        }
+                    }
+                }
                 // Try just the last segment (enum variant, etc.)
                 let last = segments.last().cloned().unwrap_or_default();
                 if let Some(v) = self.env.get(&last) {

@@ -369,6 +369,83 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn resolve_path_type(&mut self, segments: &[String], span: &Span) -> Type {
+        // Value-binding-rooted field path — `F.value`, `CFG.max`,
+        // `OUTER.inner.field`, where the leading segment is a value binding
+        // (uppercase local or module-level `let`), not a type. The parser
+        // consumes an uppercase-led dotted chain greedily into a single
+        // multi-segment `Path` (`src/parser/exprs.rs` — the `while
+        // self.eat(&Token::Dot)` loop), so `let F: Foo = Foo { value: 5 };
+        // let x: i64 = F.value;` arrives here as `Path([F, value])` rather
+        // than a `FieldAccess`, and `OUTER.inner.field` as a 3-segment
+        // `Path`. Sibling of the uppercase-receiver method-dispatch arm in
+        // `infer_call`: that arm covers `Call(Path)` shapes
+        // (`REGISTRY.insert(k, v)`), this one covers bare-Path field reads.
+        // Without it the trailing segments are dropped at the
+        // `resolve_identifier_type(first)` fallthrough below and the path
+        // resolves to the *binding's* type instead of the *field's* type, so
+        // an annotated binding fails with `expected 'i64', found 'Foo'`.
+        // Codegen's `compile_path_expr` already lowers `Path([BINDING,
+        // field])` correctly against `module_bindings`, so the fix is
+        // typechecker-only. The predicate is the same one the method-dispatch
+        // arm reuses; it excludes known type names, so the enum-variant /
+        // associated-fn dispatch in the `len() == 2` block below is untouched.
+        // Surfaced by slice-10 `test_e2e_modbind_struct_literal`.
+        if segments.len() >= 2 && self.path_first_segment_is_value_binding(&segments[0]) {
+            let mut current = self.resolve_identifier_type(&segments[0], span);
+            let mut walked_all = true;
+            for member in &segments[1..] {
+                let Type::Named {
+                    name: struct_name, ..
+                } = &current
+                else {
+                    // Non-struct intermediate (tuple, primitive, …) — bail to
+                    // the existing identifier-resolution path unchanged.
+                    walked_all = false;
+                    break;
+                };
+                let Some(struct_info) = self.env.structs.get(struct_name).cloned() else {
+                    walked_all = false;
+                    break;
+                };
+                let field = struct_info
+                    .fields
+                    .iter()
+                    .find(|(fname, _, _)| fname == member);
+                match field {
+                    Some((_, ftype, is_pub)) => {
+                        if !is_pub {
+                            self.check_cross_module_field_access(struct_name, member, span);
+                        }
+                        current = ftype.clone();
+                    }
+                    None => {
+                        // Known struct, unknown field — same diagnostic ordinary
+                        // field access uses, keyed off the receiver's type (not a
+                        // "type 'Foo' is not callable" misdirection).
+                        let available: Vec<&str> = struct_info
+                            .fields
+                            .iter()
+                            .map(|(n, _, _)| n.as_str())
+                            .collect();
+                        self.type_error(
+                            format!(
+                                "no field '{}' on struct '{}', available fields: {}",
+                                member,
+                                struct_name,
+                                available.join(", ")
+                            ),
+                            span.clone(),
+                            TypeErrorKind::UndefinedField,
+                        );
+                        return Type::Error;
+                    }
+                }
+            }
+            if walked_all {
+                return current;
+            }
+        }
+
         if segments.len() == 2 {
             let type_name = &segments[0];
             let member = &segments[1];

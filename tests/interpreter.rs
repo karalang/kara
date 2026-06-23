@@ -1687,6 +1687,38 @@ fn test_struct_construction_and_field_access() {
 }
 
 #[test]
+fn test_uppercase_local_binding_field_read() {
+    // `F.value` on an uppercase local binding — the parser consumes the
+    // uppercase-led dotted chain greedily into a `Path`, so the read lands
+    // in the interpreter's `ExprKind::Path` arm (the value-binding walk),
+    // not the `FieldAccess` arm. phase-8-stdlib-floor.md "Uppercase-receiver
+    // field access" entry.
+    assert_eq!(
+        run("struct Foo { value: i64 }\n\
+             fn main() {\n\
+                 let F = Foo { value: 5 };\n\
+                 let x: i64 = F.value;\n\
+                 println(x);\n\
+             }"),
+        "5\n"
+    );
+}
+
+#[test]
+fn test_uppercase_local_binding_nested_field_read() {
+    // `OUTER.inner.field` — a 3-segment `Path` walked field-by-field.
+    assert_eq!(
+        run("struct Inner { field: i64 }\n\
+             struct Outer { inner: Inner }\n\
+             fn main() {\n\
+                 let OUTER = Outer { inner: Inner { field: 9 } };\n\
+                 println(OUTER.inner.field);\n\
+             }"),
+        "9\n"
+    );
+}
+
+#[test]
 fn test_struct_method() {
     assert_eq!(
         run("struct Counter { value: i64 }\n\

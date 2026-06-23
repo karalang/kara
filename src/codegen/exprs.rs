@@ -983,7 +983,7 @@ impl<'ctx> super::Codegen<'ctx> {
             } => self.compile_method_call(object, method, args, &expr.span),
             ExprKind::Index { object, index } => self.compile_index(object, index),
             ExprKind::Question(inner) => self.compile_question(inner, &expr.span),
-            ExprKind::Path { segments, .. } => self.compile_path_expr(segments),
+            ExprKind::Path { segments, .. } => self.compile_path_expr(segments, &expr.span),
             ExprKind::LabeledBlock { label, body, .. } => self.compile_labeled_block(label, body),
             ExprKind::OffsetOf { ty, field_path } => self.compile_offset_of(ty, field_path),
             ExprKind::Lock { mutex, alias, body } => {
@@ -1084,6 +1084,7 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn compile_path_expr(
         &mut self,
         segments: &[String],
+        span: &crate::token::Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         // `ExitCode.SUCCESS` / `ExitCode.FAILURE` (Phase-8 entry-point
         // contract Slice B). Parsed as a 2-segment `Path` (leading
@@ -1097,30 +1098,40 @@ impl<'ctx> super::Codegen<'ctx> {
                 return Ok(self.context.i32_type().const_int(code as u64, false).into());
             }
         }
-        // Module-binding field access (slice 10) — `let CFG: Foo = Foo {…};`
-        // followed by `CFG.field` parses as `Path(["CFG", "field"])`
-        // because the leading segment is Const-class. Load the binding
-        // through `try_load_module_binding`, then extract the named
-        // field via `var_type_names` + `struct_field_names`. Falls
-        // through to the enum unit-variant arm below when the leading
-        // segment is not a registered module binding.
-        if segments.len() == 2 && self.module_bindings.contains_key(&segments[0]) {
-            let binding_name = &segments[0];
-            let field = &segments[1];
-            if let Some(BasicValueEnum::StructValue(sv)) =
-                self.try_load_module_binding(binding_name)
-            {
-                let type_name = self.var_type_names.get(binding_name).cloned();
-                let field_idx = type_name.as_deref().and_then(|tn| {
-                    self.struct_field_names
-                        .get(tn)
-                        .and_then(|names| names.iter().position(|n| n == field))
-                        .map(|i| i as u32)
-                });
-                if let Some(idx) = field_idx {
-                    return Ok(self.builder.build_extract_value(sv, idx, field).unwrap());
-                }
+        // Value-binding-rooted field path — `F.value` (local), `CFG.max`
+        // (module binding), `OUTER.inner.field` (nested). The parser greedily
+        // consumes an uppercase-led dotted chain into a single `Path`
+        // (`src/parser/exprs.rs` — the `while self.eat(&Token::Dot)` loop), so
+        // field reads on a value binding land here rather than in the
+        // `FieldAccess` arm. Sibling of the typechecker `resolve_path_type`
+        // walk and the interpreter Path intercept. Generalizes the slice-10
+        // module-binding-only, 2-segment arm to local-variable roots and
+        // nested paths by synthesizing the equivalent `Identifier`-rooted
+        // nested `FieldAccess` chain and reusing `compile_expr` — which
+        // already loads either root (the Identifier arm checks `variables`
+        // then `module_bindings`) and extracts each field through the full
+        // field-access machinery (struct / shared-struct / type recovery).
+        // Without it, local and nested paths fell through to the `i64 0`
+        // placeholder below and silently read 0. Guarded to value-binding
+        // roots so enum-variant / unit-variant paths fall through unchanged.
+        if segments.len() >= 2
+            && (self.variables.contains_key(&segments[0])
+                || self.module_bindings.contains_key(&segments[0]))
+        {
+            let mut obj = Expr {
+                span: span.clone(),
+                kind: ExprKind::Identifier(segments[0].clone()),
+            };
+            for member in &segments[1..] {
+                obj = Expr {
+                    span: span.clone(),
+                    kind: ExprKind::FieldAccess {
+                        object: Box::new(obj),
+                        field: member.clone(),
+                    },
+                };
             }
+            return self.compile_expr(&obj);
         }
         if segments.len() == 2 {
             let type_name = &segments[0];

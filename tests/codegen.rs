@@ -38359,6 +38359,49 @@ fn main() {
         assert_eq!(output, "7\n100\n");
     }
 
+    #[test]
+    fn test_e2e_modbind_struct_field_read_annotated() {
+        // Uppercase-receiver field access — `CFG.max` / nested
+        // `OUTER.inner.field` on a value binding. The parser consumes the
+        // uppercase-led dotted chain greedily into a `Path`, so the read
+        // lands in `resolve_path_type`, which now walks the binding's struct
+        // fields. Codegen's `compile_path_expr` always lowered this shape
+        // correctly, but `karac build` exited on a typecheck error
+        // (`expected 'i64', found 'Config'`) before the typechecker walk
+        // landed. Assert the typecheck gate is CLEAN — the slice-10
+        // `run_program` harness ignores typecheck errors, so the runtime
+        // output alone would pass vacuously. phase-8-stdlib-floor.md
+        // "Uppercase-receiver field access" entry.
+        let src = "struct Inner { field: i64 }\n\
+                   struct Config { max: i64, count: i64 }\n\
+                   struct Outer { inner: Inner }\n\
+                   let CFG: Config = Config { max: 64, count: 7 };\n\
+                   fn main() {\n\
+                       let m: i64 = CFG.max;\n\
+                       let c: i64 = CFG.count;\n\
+                       let OUTER: Outer = Outer { inner: Inner { field: 9 } };\n\
+                       let n: i64 = OUTER.inner.field;\n\
+                       println(f\"{m} {c} {n}\");\n\
+                   }";
+        // The real CLI gate: typecheck must produce no errors.
+        let parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        assert!(
+            typed.errors.is_empty(),
+            "uppercase-receiver field read must typecheck clean, got: {:?}",
+            typed.errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+        );
+        // And the binary produces the right values.
+        let output = run_program(src).expect("compile + run failed");
+        assert_eq!(output, "64 7 9\n");
+    }
+
     // ── Type-changing shadows (phase-5-diagnostics "codegen
     //    type-changing-shadow"). A `let` that re-binds an in-scope name with
     //    a different type/class used to be rejected by a `bind_pattern` guard

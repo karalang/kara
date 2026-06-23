@@ -21298,6 +21298,65 @@ fn test_module_binding_enum_variant_with_const_arg_ok() {
     );
 }
 
+// ── Uppercase-receiver field access (resolve_path_type walk) ─────
+// `F.value` / `CFG.max` / `OUTER.inner.field` — the parser consumes an
+// uppercase-led dotted chain greedily into a `Path`, so field reads on a
+// value binding land in `resolve_path_type`, not `infer_field_access`.
+// Sibling of the shipped uppercase-receiver method-dispatch entry.
+// phase-8-stdlib-floor.md "Uppercase-receiver field access" entry.
+
+#[test]
+fn test_uppercase_module_binding_field_read_ok() {
+    typecheck_ok(
+        "struct Config { max: i64, count: i64 }
+         let CFG: Config = Config { max: 64, count: 7 };
+         fn read_max() -> i64 { CFG.max }
+         fn read_count() -> i64 { CFG.count }",
+    );
+}
+
+#[test]
+fn test_uppercase_local_binding_field_read_annotated_ok() {
+    typecheck_ok(
+        "struct Foo { value: i64 }
+         fn run() -> i64 {
+             let F: Foo = Foo { value: 5 };
+             let x: i64 = F.value;
+             x
+         }",
+    );
+}
+
+#[test]
+fn test_uppercase_binding_nested_field_read_ok() {
+    typecheck_ok(
+        "struct Inner { field: i64 }
+         struct Outer { inner: Inner }
+         fn run() -> i64 {
+             let OUTER: Outer = Outer { inner: Inner { field: 9 } };
+             let n: i64 = OUTER.inner.field;
+             n
+         }",
+    );
+}
+
+#[test]
+fn test_uppercase_binding_unknown_field_rejected() {
+    let errs = typecheck_errors(
+        "struct Config { max: i64 }
+         let CFG: Config = Config { max: 64 };
+         fn read() -> i64 { CFG.nonexistent }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::UndefinedField)
+                && e.message
+                    .contains("no field 'nonexistent' on struct 'Config'")),
+        "expected UndefinedField on the value's struct type, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
 // ── Negative: forbidden initializer shapes ──────────────────────
 
 #[test]
