@@ -26078,6 +26078,85 @@ fn test_tensor_broadcast_error_cases() {
     }
 }
 
+// ── Column[T] nullable column — interpreter MVP typing (phase-11 Q5) ──
+
+#[test]
+fn test_column_constructors_methods_and_index_typecheck() {
+    // The full slice-1 surface type-checks: constructors (annotation-driven
+    // element type), push/push_null, the i64/bool accessors, and `c[i]`
+    // inferred as Option[T] (bound to an explicit Option[i64], matched).
+    typecheck_ok(
+        "fn main() {\n\
+             let mut c: Column[i64] = Column.new();\n\
+             c.push(10i64);\n\
+             c.push_null();\n\
+             let n: i64 = c.len();\n\
+             let z: i64 = c.null_count();\n\
+             let v: i64 = c.valid_count();\n\
+             let b: bool = c.is_null(0);\n\
+             let opt: Option[i64] = c[0];\n\
+             let d: Column[i64] = Column.with_capacity(8);\n\
+             let e: Column[i64] = Column.from_vec([1i64, 2i64]);\n\
+             let _ = (n, z, v, b, opt, d, e);\n\
+         }",
+    );
+}
+
+#[test]
+fn test_column_index_is_option_not_bare_element() {
+    // `c[i]` is Option[T], not T — binding it to a bare `i64` is a mismatch.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let c: Column[i64] = Column.from_vec([1i64]);\n\
+             let x: i64 = c[0];\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("expected 'i64'") && e.message.contains("Option")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_column_non_integer_index_rejected() {
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let c: Column[i64] = Column.from_vec([1i64]);\n\
+             let _ = c[\"x\"];\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("column index must be an integer")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_column_push_arity_checked() {
+    // `push` is typed against the baked signature: arity is enforced
+    // (`push()` with no value is rejected). NOTE: the *element type* of the
+    // argument is not yet statically bound to the receiver's `T` — that is
+    // a general property of builtin generic impl methods (not Column), and
+    // the dynamically-typed interpreter doesn't gate on it; the codegen
+    // slice (statically typed) will enforce element types.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let mut c: Column[i64] = Column.new();\n\
+             c.push();\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("'push' expects 1 argument")),
+        "{errors:?}",
+    );
+}
+
 // ── Effect-resource dispatch types untyped `let` bindings ─────────
 //
 // bugs.md "Untyped `let` from an effect-resource method call doesn't

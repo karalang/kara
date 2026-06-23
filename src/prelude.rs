@@ -269,6 +269,9 @@ pub const PRELUDE_TYPES: &[&str] = &[
     // `Tensor[T, Shape]` shape-typed N-D container (phase-11 numerical
     // stdlib, interpreter MVP). See `runtime/stdlib/tensor.kara`.
     "Tensor",
+    // `Column[T]` nullable 1-D Arrow column (phase-11 data-science
+    // stdlib, interpreter MVP). See `runtime/stdlib/column.kara`.
+    "Column",
     // `Semaphore` application-layer backpressure primitive (phase-8 P1).
     // See `runtime/stdlib/semaphore.kara`.
     "Semaphore",
@@ -840,6 +843,10 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     // stdlib). Interpreter MVP: zeros/ones/full + shape/rank + tuple
     // indexing; see `runtime/stdlib/tensor.kara`.
     ("tensor.kara", include_str!("../runtime/stdlib/tensor.kara")),
+    // `Column[T]` nullable 1-D Arrow column — constructors, push/push_null,
+    // null accessors, `c[i] -> Option[T]` indexing; see
+    // `runtime/stdlib/column.kara`.
+    ("column.kara", include_str!("../runtime/stdlib/column.kara")),
     // `std.time` — native async `sleep_ms` (the leaf `suspends` timer
     // primitive; auto-par divergence slice A2a-2.2). See
     // `runtime/stdlib/time.kara`.

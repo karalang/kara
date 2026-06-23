@@ -16910,6 +16910,89 @@ fn test_tensor_broadcast_incompatible_traps() {
     );
 }
 
+// ── Column[T] nullable column — interpreter MVP (phase-11 Arrow Q5) ──
+
+#[test]
+fn test_column_new_push_and_null_accessors() {
+    // new() + push/push_null, then the validity accessors. push_null keeps
+    // len growing (Arrow data/validity stay the same length).
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut c: Column[i64] = Column.new();\n\
+             c.push(10i64);\n\
+             c.push_null();\n\
+             c.push(30i64);\n\
+             println(c.len());\n\
+             println(c.null_count());\n\
+             println(c.valid_count());\n\
+             println(c.is_null(0));\n\
+             println(c.is_null(1));\n\
+         }",
+    );
+    assert_eq!(out, "3\n1\n2\nfalse\ntrue\n");
+}
+
+#[test]
+fn test_column_index_returns_option() {
+    // `c[i] -> Option[T]`: Some for a valid slot, None for a null.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut c: Column[i64] = Column.new();\n\
+             c.push(10i64);\n\
+             c.push_null();\n\
+             match c[0] { Some(v) => { println(v); } None => { println(-1i64); } }\n\
+             match c[1] { Some(v) => { println(v); } None => { println(-1i64); } }\n\
+         }",
+    );
+    assert_eq!(out, "10\n-1\n");
+}
+
+#[test]
+fn test_column_from_vec_all_valid() {
+    // from_vec — every slot valid (no nulls).
+    let out = run_no_errors(
+        "fn main() {\n\
+             let c: Column[i64] = Column.from_vec([1i64, 2i64, 3i64]);\n\
+             println(c.len());\n\
+             println(c.null_count());\n\
+             match c[2] { Some(v) => { println(v); } None => { println(-1i64); } }\n\
+         }",
+    );
+    assert_eq!(out, "3\n0\n3\n");
+}
+
+#[test]
+fn test_column_string_element_and_null() {
+    // Works for a heap element type (String); the null slot reads None.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut c: Column[String] = Column.new();\n\
+             c.push(\"hi\");\n\
+             c.push_null();\n\
+             match c[0] { Some(v) => { println(v); } None => { println(\"<none>\"); } }\n\
+             match c[1] { Some(v) => { println(v); } None => { println(\"<none>\"); } }\n\
+         }",
+    );
+    assert_eq!(out, "hi\n<none>\n");
+}
+
+#[test]
+fn test_column_index_out_of_bounds_traps() {
+    // Out-of-range index is a runtime error, NOT None.
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let c: Column[i64] = Column.from_vec([1i64, 2i64]);\n\
+             let _ = c[5];\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("column index 5 out of bounds")),
+        "{errors:?}",
+    );
+}
+
 // ── `ref name @ PATTERN` — explicit-ref @ bindings (design.md § @
 // Bindings): bindings borrow, scrutinee stays usable after ──────────
 

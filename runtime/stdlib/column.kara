@@ -1,0 +1,96 @@
+// runtime/stdlib/column.kara
+//
+// `Column[T]` — nullable 1-D column with Apache Arrow layout (Phase 11
+// data-science stdlib; design.md § Memory Layout Commitments, Q5).
+// Interpreter MVP surface so far: constructors (`new` / `with_capacity`
+// / `from_vec`), append (`push` / `push_null`), the null/validity
+// accessors (`len` / `null_count` / `valid_count` / `is_null`), and
+// positional indexing `c[i] -> Option[T]` (Some for a valid slot, None
+// for a null). The SQL-null three-valued arithmetic, the nullable
+// iterators (`iter` / `iter_valid`), `from_iter_nullable`, `fillna`,
+// `dropna`, and the Arrow-buffer codegen lowering are follow-on
+// sub-slices — tracker at `phase-11-stdlib-longtail.md § Data types —
+// Arrow commitment`.
+//
+// **Dispatch.** Constructors fire through `eval_call.rs`'s
+// `"Column.new"` / `"Column.with_capacity"` / `"Column.from_vec"`
+// path-string arms; the `push` / `push_null` / `len` / `null_count`
+// / `valid_count` / `is_null` instance methods through
+// `try_eval_column_method` (`src/interpreter/method_call_column.rs`),
+// which intercepts before these `#[compiler_builtin]` bodies (their
+// bodies are surface-only stubs). Positional indexing is intercepted at
+// the interpreter's index sites and typed at the typechecker's index
+// site (returning `Option[T]`), since the `[]` operator has no method
+// signature to dispatch through.
+//
+// **Representation.** The interpreter holds a `Value::Column` with a
+// `data` element buffer plus a parallel `valid` validity bitmap (one
+// bool per slot — `false` is a SQL null). The two stay the same length
+// (the Arrow invariant): `push_null` appends a never-read placeholder to
+// `data`. The struct body below is an opaque surface-only declaration
+// (the handle field is never read), mirroring `Tensor` / `Pool[T]`.
+//
+// **Element-type note.** The tree-walk interpreter is dynamically typed,
+// so `Column.new()` / `with_capacity()` carry no element values until a
+// `push` / `from_vec` supplies them — `T` is recovered from the binding
+// annotation / call-site inference exactly as for `Vec.new()`. `is_null`
+// / `len` / `null_count` / `valid_count` are element-type agnostic.
+
+struct Column[=T] {
+    // Opaque — interpreter intercepts all construction and access.
+    handle_id: i64,
+}
+
+impl[T] Column[T] {
+    // Fresh empty column. The element type `T` comes from the binding
+    // annotation / call-site inference: `let c: Column[i64] = Column.new();`.
+    #[compiler_builtin]
+    fn new() -> Column[T] {
+        Column { handle_id: 0 }
+    }
+
+    // Fresh empty column with a capacity hint (advisory — the
+    // interpreter MVP ignores it; the codegen Arrow buffer will honor it).
+    #[compiler_builtin]
+    fn with_capacity(cap: i64) -> Column[T] {
+        Column { handle_id: 0 }
+    }
+
+    // Column from a `Vec[T]`, every slot valid (no nulls).
+    #[compiler_builtin]
+    fn from_vec(values: Vec[T]) -> Column[T] {
+        Column { handle_id: 0 }
+    }
+
+    // Append a valid value.
+    #[compiler_builtin]
+    fn push(mut ref self, value: T) {}
+
+    // Append a SQL null (a non-valid slot).
+    #[compiler_builtin]
+    fn push_null(mut ref self) {}
+
+    // Number of slots (valid + null).
+    #[compiler_builtin]
+    fn len(ref self) -> i64 {
+        0
+    }
+
+    // Number of null (non-valid) slots.
+    #[compiler_builtin]
+    fn null_count(ref self) -> i64 {
+        0
+    }
+
+    // Number of valid (non-null) slots — `len() - null_count()`.
+    #[compiler_builtin]
+    fn valid_count(ref self) -> i64 {
+        0
+    }
+
+    // Whether slot `i` is a SQL null. Out-of-range `i` is a runtime error.
+    #[compiler_builtin]
+    fn is_null(ref self, i: i64) -> bool {
+        false
+    }
+}

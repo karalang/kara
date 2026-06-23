@@ -518,6 +518,45 @@ impl<'a> super::Interpreter<'a> {
                         Err(msg) => self.record_runtime_error(msg, &expr.span),
                     };
                 }
+                // Phase-11 Column positional indexing — `c[i] -> Option[T]`:
+                // `Some(v)` for a valid slot, `None` for a SQL null;
+                // out-of-range `i` is a runtime error (not `None`).
+                if let Value::Column { data, valid } = &obj {
+                    let Value::Int(i) = &idx else {
+                        return self.record_runtime_error(
+                            format!(
+                                "column index must be an integer, got {}",
+                                idx.variant_name()
+                            ),
+                            &expr.span,
+                        );
+                    };
+                    let valid_guard = valid.read().unwrap();
+                    if *i < 0 || (*i as usize) >= valid_guard.len() {
+                        return self.record_runtime_error(
+                            format!(
+                                "column index {} out of bounds (len {})",
+                                i,
+                                valid_guard.len()
+                            ),
+                            &expr.span,
+                        );
+                    }
+                    let i = *i as usize;
+                    return if valid_guard[i] {
+                        Value::EnumVariant {
+                            enum_name: "Option".to_string(),
+                            variant: "Some".to_string(),
+                            data: EnumData::Tuple(vec![data.read().unwrap()[i].clone()]),
+                        }
+                    } else {
+                        Value::EnumVariant {
+                            enum_name: "Option".to_string(),
+                            variant: "None".to_string(),
+                            data: EnumData::Unit,
+                        }
+                    };
+                }
                 match (&obj, &idx) {
                     (Value::Array(rc), Value::Int(i)) => {
                         let i = *i as usize;

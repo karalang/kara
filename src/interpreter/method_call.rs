@@ -874,6 +874,9 @@ impl<'a> super::Interpreter<'a> {
         if let Some(v) = self.try_eval_tensor_method(method, &obj, args, span) {
             return v;
         }
+        if let Some(v) = self.try_eval_column_method(method, &obj, args, span) {
+            return v;
+        }
         if let Some(v) = self.try_eval_pool_method(method, &obj, args, span) {
             return v;
         }

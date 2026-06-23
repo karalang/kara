@@ -143,6 +143,22 @@ pub enum Value {
         dims: Arc<Vec<i64>>,
         data: Arc<RwLock<Vec<Value>>>,
     },
+    /// `Column[T]` — nullable 1-D column (phase-11 data-science stdlib,
+    /// Arrow commitment; interpreter MVP). `data` holds one `Value` per
+    /// slot in append order; `valid` is the parallel validity bitmap
+    /// (one `bool` per slot — `false` = SQL null). The two Vecs are kept
+    /// the same length (the Arrow invariant): `push_null` appends a
+    /// `Value::Unit` placeholder to `data` (never observed — `is_null` /
+    /// indexing gate on `valid`). Both ride the same universal
+    /// `Arc<RwLock<...>>` shared-cell shape as `Value::Array` / `Tensor`
+    /// so par-block capture stays sound. The codegen slice will lower
+    /// this to the real Arrow `{ data, null_bitmap, len, capacity }`
+    /// buffer layout (design.md § Memory Layout Commitments); the
+    /// interpreter only needs the logical semantics.
+    Column {
+        data: Arc<RwLock<Vec<Value>>>,
+        valid: Arc<RwLock<Vec<bool>>>,
+    },
     Map(Vec<(Value, Value)>),
     Struct {
         name: String,
@@ -768,6 +784,11 @@ impl std::fmt::Display for Value {
                 let rendered: Vec<String> = dims.iter().map(|d| d.to_string()).collect();
                 write!(f, "Tensor[{}]", rendered.join(", "))
             }
+            // Summary form (like Tensor) — element dump would flood output;
+            // `c[i]` / `iter` read individual slots.
+            Value::Column { valid, .. } => {
+                write!(f, "Column[len={}]", valid.read().unwrap().len())
+            }
             Value::Tuple(vals) => {
                 write!(f, "(")?;
                 for (i, v) in vals.iter().enumerate() {
@@ -1099,6 +1120,7 @@ impl Value {
             Value::AstExpr(_) => "AstExpr",
             Value::AstItem(_) => "AstItem",
             Value::Tensor { .. } => "Tensor",
+            Value::Column { .. } => "Column",
             Value::Tuple(_) => "Tuple",
             Value::Array(_) => "Array",
             Value::Vector(_) => "Vector",

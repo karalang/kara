@@ -2116,6 +2116,41 @@ impl<'a> super::TypeChecker<'a> {
                         }
                     }
                 }
+                // Phase 11: Column positional indexing — `c[i] -> Option[T]`
+                // (Some for a valid slot, None for a SQL null). The index
+                // is a single integer; the null-vs-valid distinction is a
+                // runtime property, so the static result is always
+                // `Option[T]`.
+                {
+                    let column_elem = match &obj_ty {
+                        Type::Named { name, args } if name == "Column" && args.len() == 1 => {
+                            Some(args[0].clone())
+                        }
+                        Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                            Type::Named { name, args } if name == "Column" && args.len() == 1 => {
+                                Some(args[0].clone())
+                            }
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    if let Some(elem_ty) = column_elem {
+                        if !is_integer(&idx_ty) && idx_ty != Type::Error {
+                            self.type_error(
+                                format!(
+                                    "column index must be an integer, found '{}'",
+                                    type_display(&idx_ty)
+                                ),
+                                index.span.clone(),
+                                TypeErrorKind::TypeMismatch,
+                            );
+                        }
+                        return Type::Named {
+                            name: "Option".to_string(),
+                            args: vec![elem_ty],
+                        };
+                    }
+                }
                 let is_range_idx = matches!(&idx_ty, Type::Named { name, .. }
                     if matches!(name.as_str(), "Range" | "RangeInclusive" | "RangeFrom"
                         | "RangeTo" | "RangeToInclusive" | "RangeFull"));
