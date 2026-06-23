@@ -5802,14 +5802,22 @@ fn cmd_build(
         }
         // For embedded component bindings, wasm-ld's output is an
         // intermediate — link the C-ABI core module to a scratch path,
-        // then lift it into the single component at `exe_path` below.
-        let link_out = if wasm_tools.is_some() {
-            std::env::temp_dir()
-                .join(format!("karac_{}_{exe_name}.core.wasm", std::process::id()))
-                .to_string_lossy()
-                .into_owned()
+        // then lift it into the single component at `exe_path` below. The
+        // scratch basename is source-derived (not pid-bearing) so the
+        // module name wasm-ld embeds — and the component carries — is
+        // reproducible across rebuilds (B-2026-06-22-3); the enclosing
+        // dir carries the per-process uniqueness.
+        let (link_scratch_dir, link_out) = if wasm_tools.is_some() {
+            match crate::componentize::link_core_scratch(exe_name) {
+                Ok((dir, core)) => (Some(dir), core.to_string_lossy().into_owned()),
+                Err(e) => {
+                    eprintln!("error: link failed: {e}");
+                    let _ = std::fs::remove_file(&obj_path);
+                    process::exit(1);
+                }
+            }
         } else {
-            exe_path.clone()
+            (None, exe_path.clone())
         };
         let wasm_export_names =
             crate::wasm_exports::link_export_names(&crate::wasm_exports::collect_wasm_exports(
@@ -5842,7 +5850,9 @@ fn cmd_build(
                         exe_name,
                         std::path::Path::new(&exe_path),
                     );
-                    let _ = std::fs::remove_file(&link_out);
+                    if let Some(dir) = &link_scratch_dir {
+                        let _ = std::fs::remove_dir_all(dir);
+                    }
                     if let Err(e) = result {
                         eprintln!("error: componentize failed: {e}");
                         process::exit(1);
@@ -7133,15 +7143,23 @@ fn run_multi_file_codegen(
     }
     // For embedded component bindings, wasm-ld's output is an
     // intermediate — link the C-ABI core module to a scratch path, then
-    // lift it into the single component at `dist/wasm/<pkg>.wasm`.
-    let link_out = if wasm_tools.is_some() {
-        std::env::temp_dir().join(format!(
-            "karac_proj_{}_{}.core.wasm",
-            std::process::id(),
-            mf.name.replace(['/', '\\'], "_"),
-        ))
+    // lift it into the single component at `dist/wasm/<pkg>.wasm`. The
+    // scratch basename is package-derived (not pid-bearing) so the module
+    // name wasm-ld embeds — and the component carries — is reproducible
+    // across rebuilds (B-2026-06-22-3); the dir carries the uniqueness.
+    let (link_scratch_dir, link_out) = if wasm_tools.is_some() {
+        match crate::componentize::link_core_scratch(&mf.name) {
+            Ok((dir, core)) => (Some(dir), core),
+            Err(e) => {
+                let _ = std::fs::remove_file(&obj_path);
+                return BuildCodegenStatus::Failed {
+                    phase: "link".to_string(),
+                    message: e,
+                };
+            }
+        }
     } else {
-        exe_path.clone()
+        (None, exe_path.clone())
     };
     let wasm_export_names =
         crate::wasm_exports::link_export_names(&crate::wasm_exports::collect_wasm_exports(
@@ -7178,7 +7196,9 @@ fn run_multi_file_codegen(
             &mf.name,
             &exe_path,
         );
-        let _ = std::fs::remove_file(&link_out);
+        if let Some(dir) = &link_scratch_dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
         if let Err(e) = result {
             return BuildCodegenStatus::Failed {
                 phase: "componentize".to_string(),

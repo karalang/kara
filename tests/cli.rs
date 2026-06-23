@@ -12576,6 +12576,81 @@ fn main() {}
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// `--bindings component` (the wasm_wasi default) must be byte-for-byte
+/// reproducible: two builds of identical source from two distinct
+/// processes produce identical component bytes. Regression for
+/// B-2026-06-22-3 — the intermediate C-ABI core module was linked to a
+/// `karac_<pid>_<stem>.core.wasm` scratch file, and wasm-ld baked that
+/// pid-bearing basename into the module-name subsection of the `name`
+/// custom section, which `component new` carried verbatim into the final
+/// component. Three builds of the same source then differed in exactly
+/// those pid digits — same length, different bytes. (`--bindings none`
+/// was always deterministic: it links straight to the stable `<stem>.wasm`
+/// output, no pid in the basename.) The fix links the core module under a
+/// source-derived basename inside a process-unique *directory*, so this
+/// test pins reproducibility for the component path too. The exported
+/// `add_two` also drives the WIT embed step, so both componentization
+/// legs (`component embed` + `component new`) are covered.
+#[test]
+fn wasm_wasi_component_is_byte_reproducible() {
+    let tmp = wasm_test_dir("component-determinism");
+    let path = tmp.join("repro.kara");
+    std::fs::write(
+        &path,
+        r#"
+#[target(wasm_wasi)]
+pub fn add_two(a: i32, b: i32) -> i32 {
+    return a + b;
+}
+
+fn main() {
+    println(add_two(2, 3));
+}
+"#,
+    )
+    .unwrap();
+
+    // Each call is a fresh `karac` process (distinct pid) — the exact
+    // condition the old pid-in-basename leak made non-reproducible.
+    let build_once = || -> Option<Vec<u8>> {
+        let out = karac_bin()
+            .args(["build", path.to_str().unwrap(), "--target=wasm_wasi"])
+            .current_dir(&tmp)
+            .env_remove("KARAC_RUNTIME")
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if let Some(reason) = wasm_build_skip_reason(&stderr) {
+            eprintln!("skip: wasm_wasi_component_is_byte_reproducible — {reason}");
+            return None;
+        }
+        assert!(out.status.success(), "component build failed: {stderr}");
+        let component = tmp.join("repro.wasm");
+        assert_eq!(
+            wasm_artifact_kind(&component),
+            "component",
+            "the wasm_wasi default must emit a Component Model component",
+        );
+        Some(std::fs::read(&component).expect("component must be readable"))
+    };
+
+    let Some(first) = build_once() else {
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    };
+    let second = build_once().expect("second build must not suddenly skip");
+    // Length parity alone would have passed even with the pid leak — the
+    // assertion that bites is byte equality.
+    assert_eq!(first.len(), second.len(), "component length must be stable");
+    assert_eq!(
+        first, second,
+        "two builds of identical source must produce byte-identical \
+         components (B-2026-06-22-3: the process id must not leak into the \
+         embedded core-module name)",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// phase-10 "WASM entry-point discovery" (sub-slice D): a component
 /// export returning a flat record (`fn make_point(x, y) -> Point`) lifts
 /// into the WIT world as a `record` + `func(...) -> <record>`, via a

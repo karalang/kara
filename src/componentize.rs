@@ -128,6 +128,34 @@ fn scratch_dir() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+/// Scratch path for the linked C-ABI **core module** the `--bindings
+/// component` path lifts into a component — with a *deterministic*
+/// basename derived from `stem`, NOT from the process id.
+///
+/// wasm-ld bakes the output file's basename into the module-name
+/// subsection of the wasm `name` custom section, and `component embed` /
+/// `component new` carry that name verbatim into the final component. The
+/// old `karac_<pid>_<stem>.core.wasm` basename therefore leaked the
+/// process id into the shipped component, making three builds of
+/// identical source differ in exactly those pid digits — same length,
+/// different bytes (B-2026-06-22-3). (`--bindings none` was immune: it
+/// links straight to the stable `<stem>.wasm` output path.) Moving the
+/// per-process uniqueness into the enclosing *directory* (pid + counter,
+/// via [`scratch_dir`]) while the file keeps a source-derived basename
+/// keeps parallel builds collision-free on disk yet makes the embedded
+/// module name — and thus the whole component — byte-identical run to
+/// run. Path separators in `stem` fold to `_` so the basename stays a
+/// single path component.
+///
+/// Returns `(scratch_dir, core_module_path)`; the caller links to the
+/// core-module path, componentizes, then removes the directory.
+pub fn link_core_scratch(stem: &str) -> Result<(PathBuf, PathBuf), String> {
+    let dir = scratch_dir()?;
+    let sanitized = stem.replace(['/', '\\'], "_");
+    let core = dir.join(format!("{sanitized}.core.wasm"));
+    Ok((dir, core))
+}
+
 /// The vendored preview1 **command** adapter, materialized to a file
 /// (`wasm-tools` takes a path, not bytes). `KARAC_WASI_ADAPTER`
 /// substitutes an on-disk adapter verbatim — the escape hatch for a
