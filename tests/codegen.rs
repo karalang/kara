@@ -225,6 +225,115 @@ mod codegen_tests {
         );
     }
 
+    // ── B-2026-06-22-2: comprehensive store-escape guard ──
+    // A capturing closure STORED into a place that then escapes the frame —
+    // a collection (`v.push(clo)` / `v.insert(.., clo)`), an index slot
+    // (`v[i] = clo`), or a struct field (`h.f = clo`) — was a silent
+    // miscompile (built, ran garbage). The guard now marks the rooted local
+    // so the existing return-position check fires.
+
+    #[test]
+    fn escaping_capturing_closure_container_push_is_rejected() {
+        // Annotated collection local.
+        let ann = ir_result(
+            "fn make(k: i64) -> Vec[Fn(i64) -> i64] { let v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(|x: i64| x + k); return v; }\n",
+        )
+        .expect_err("a capturing closure pushed into a returned Vec must be rejected");
+        assert!(ann.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {ann}");
+        // Un-annotated `Vec.new()` constructor — the collection is recognized
+        // from the `Vec.new()` RHS.
+        let noann = ir_result(
+            "fn make(k: i64) -> Vec[Fn(i64) -> i64] { let v = Vec.new(); v.push(|x: i64| x + k); return v; }\n",
+        )
+        .expect_err("un-annotated Vec.new() then push of a capturing closure must be rejected");
+        assert!(noann.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {noann}");
+    }
+
+    #[test]
+    fn escaping_capturing_closure_container_insert_is_rejected() {
+        let err = ir_result(
+            "fn make(k: i64) -> Vec[Fn(i64) -> i64] { let v: Vec[Fn(i64) -> i64] = Vec.new(); v.insert(0i64, |x: i64| x + k); return v; }\n",
+        )
+        .expect_err("a capturing closure inserted into a returned Vec must be rejected");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
+    #[test]
+    fn escaping_capturing_closure_index_store_is_rejected() {
+        let err = ir_result(
+            "fn make(k: i64) -> Vec[Fn(i64) -> i64] { let v: Vec[Fn(i64) -> i64] = [|x: i64| x * 2i64]; v[0] = |x: i64| x + k; return v; }\n",
+        )
+        .expect_err("a capturing closure index-stored into a returned Vec must be rejected");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
+    #[test]
+    fn escaping_capturing_closure_field_store_is_rejected() {
+        // Returning the whole struct after a capturing field-store.
+        let whole = ir_result(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> H { let h = H { f: |x: i64| x * 2i64 }; h.f = |x: i64| x + k; return h; }\n",
+        )
+        .expect_err("field-storing a capturing closure then returning the struct must be rejected");
+        assert!(whole.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {whole}");
+        // Returning just the field-stored projection.
+        let proj = ir_result(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { let h = H { f: |x: i64| x * 2i64 }; h.f = |x: i64| x + k; return h.f; }\n",
+        )
+        .expect_err("projecting a field-stored capturing closure must be rejected");
+        assert!(proj.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {proj}");
+    }
+
+    /// Adversarial for the store-escape guard's PRECISION — it must reject only
+    /// when a CAPTURING closure is stored AND the place ESCAPES.
+    #[test]
+    fn store_escape_guard_does_not_over_reject() {
+        // (a) NON-capturing closure pushed then returned — sound (null env).
+        assert_eq!(
+            run_program(
+                "fn make() -> Vec[Fn(i64) -> i64] { let v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(|x| x * 2i64); return v; }\n\
+                 fn main() { let fs = make(); println(f\"{(fs[0])(21i64)}\"); }\n"
+            )
+            .as_deref(),
+            Some("42\n"),
+            "pushing a NON-capturing closure into a returned Vec must compile and run"
+        );
+        // (b) CAPTURING closure pushed, but the Vec is used SAME-FRAME and not
+        // returned — the env is still live at the call, so it is sound.
+        assert_eq!(
+            run_program(
+                "fn run(k: i64) -> i64 { let v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(|x: i64| x + k); return (v[0])(5i64); }\n\
+                 fn main() { println(f\"{run(21i64)}\"); }\n"
+            )
+            .as_deref(),
+            Some("26\n"),
+            "a capturing closure pushed then called same-frame (Vec not returned) must run"
+        );
+        // (c) A plain (non-closure) element pushed into a returned Vec — the
+        // marking must not fire on non-closure pushes.
+        assert_eq!(
+            run_program(
+                "fn make(k: i64) -> Vec[i64] { let v: Vec[i64] = Vec.new(); v.push(k); return v; }\n\
+                 fn main() { let v = make(21i64); println(f\"{v[0]}\"); }\n"
+            )
+            .as_deref(),
+            Some("21\n"),
+            "pushing a non-closure element into a returned Vec must compile and run"
+        );
+        // (d) Pass-down of a capturing closure to a free function is untouched
+        // (the guard targets stores, never call-arg passing).
+        assert_eq!(
+            run_program(
+                "fn apply(f: Fn(i64) -> i64, x: i64) -> i64 { f(x) }\n\
+                 fn main() { let base = 10i64; println(f\"{apply(|x| x + base, 5i64)}\"); }\n"
+            )
+            .as_deref(),
+            Some("15\n"),
+            "passing a capturing closure down to a function must still compile and run"
+        );
+    }
+
     /// Codegen result (Ok IR / Err diagnostic) without the `ir_for` panic.
     fn ir_result(src: &str) -> Result<String, String> {
         let mut parsed = karac::parse(src);

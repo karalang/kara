@@ -107,10 +107,24 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (`let h = H { f: |x| x+k }; return h.f`): the parallel `capturing_fields`
     /// builder records which fields of a local struct binding hold a capturing
     /// closure, so the `FieldAccess` arm rejects exactly those projections while
-    /// leaving a sound `return h.other_field` to compile. (One narrower residual
-    /// still tracked under the epic, needing the container-mutation tracking of
-    /// the escape-analysis slice: a closure pushed into a container that then
-    /// escapes — `let v = Vec.new(); v.push(|x| x+k); v`.)
+    /// leaving a sound `return h.other_field` to compile.
+    ///
+    /// The STORE-escape forms are covered too — a capturing closure moved into a
+    /// place that then escapes: a collection (`v.push(clo)` / `v.insert(.., clo)`
+    /// on a stdlib-collection local), an index slot (`v[i] = clo`), or a struct
+    /// field (`h.f = clo`). The source-ordered builder marks the rooted local
+    /// (and, for a field-store, the field) so the existing return-position check
+    /// fires on `return v` / `return h` / `return h.f`. Soundness is preserved:
+    /// the container-store marking is gated on a *known* collection (so a
+    /// like-named `push` on a user type, which might invoke rather than store, is
+    /// never marked), the marking only triggers rejection at a return (a stored
+    /// closure whose container is used same-frame and dropped is untouched), and
+    /// call-arg passing (`apply(clo, x)`) is never touched (pass-down stays
+    /// supported). Residuals deferred to the escape-analysis / heap-env slices:
+    /// a store into a collection bound by a non-recognized initializer (e.g.
+    /// `let v = make_vec()`), a store nested inside a branch/loop, a deeper
+    /// projection (`a.b.f`), and assignment to a global / `mut ref` param that
+    /// escapes without a `return`.
     pub(super) fn reject_escaping_capturing_closure(&self, func: &Function) -> Result<(), String> {
         // Names whose capture would dangle on escape: the function's params +
         // its top-level `let` bindings (the scope visible at a return).
@@ -145,51 +159,139 @@ impl<'ctx> super::Codegen<'ctx> {
         // caught here.
         let mut capturing_vars: HashSet<String> = HashSet::new();
         // Per-binding field map: a local struct binding name → the set of its
-        // field names whose struct-literal initializer was a capturing closure.
-        // Lets a later `return h.f` be rejected precisely — only the capturing
-        // field projects a dangling stack env; `return h.other_field` stays
-        // sound. Built in the SAME source-order pass so a field initialized from
-        // an earlier-bound capturing local (`H { f: g }`) resolves.
+        // field names that hold a capturing closure — populated by a
+        // struct-literal initializer (`let h = H { f: |x| x+k }`) OR a later
+        // field-store (`h.f = |x| x+k`). Lets a `return h.f` be rejected
+        // precisely — only the capturing field projects a dangling stack env;
+        // `return h.other_field` stays sound. Built in the SAME source-order
+        // pass so a field initialized from an earlier-bound capturing local
+        // (`H { f: g }`) resolves.
         let mut capturing_fields: HashMap<String, HashSet<String>> = HashMap::new();
+        // Local bindings whose declared / inferred type is a stdlib collection
+        // (Vec / Map / Set / VecDeque / …). ONLY these receive the container-
+        // store marking below: `v.push(clo)` / `v.insert(.., clo)` / `v[i] = clo`
+        // move the element INTO the receiver, so it then carries a dangling
+        // stack env on escape. Gating on a *known* collection keeps the guard
+        // one-sided — a same-named `push` on a USER type (which might invoke
+        // rather than store) never marks.
+        let mut collection_locals: HashSet<String> = HashSet::new();
         for stmt in &func.body.stmts {
-            let (pattern, value) = match &stmt.kind {
-                StmtKind::Let { pattern, value, .. } | StmtKind::LetElse { pattern, value, .. } => {
-                    (pattern, value)
+            match &stmt.kind {
+                StmtKind::Let {
+                    pattern, ty, value, ..
                 }
-                _ => continue,
-            };
-            if self.tail_escapes_capturing_closure(
-                value,
-                &outer,
-                &capturing_vars,
-                &capturing_fields,
-            ) {
-                for n in pattern.binding_names() {
-                    capturing_vars.insert(n);
-                }
-            }
-            // Record per-field capture for a direct struct-literal initializer
-            // bound to a single name (`let h = H { f: |x| x+k, g: 1 }`): mark
-            // only the closure-bearing fields. Other initializer shapes (a block
-            // tail, a call returning a struct, a multi-name pattern) are left
-            // untracked — a sound under-approximation that defers, never
-            // falsely rejects.
-            if let ExprKind::StructLiteral { fields, .. } = &value.kind {
-                if let [binding] = pattern.binding_names().as_slice() {
-                    for fi in fields {
-                        if self.tail_escapes_capturing_closure(
-                            &fi.value,
-                            &outer,
-                            &capturing_vars,
-                            &capturing_fields,
-                        ) {
-                            capturing_fields
-                                .entry(binding.clone())
-                                .or_default()
-                                .insert(fi.name.clone());
+                | StmtKind::LetElse {
+                    pattern, ty, value, ..
+                } => {
+                    // (a) initializer resolves to a capturing closure → the
+                    // binding holds one (direct / aggregate literal / id chain).
+                    if self.tail_escapes_capturing_closure(
+                        value,
+                        &outer,
+                        &capturing_vars,
+                        &capturing_fields,
+                    ) {
+                        for n in pattern.binding_names() {
+                            capturing_vars.insert(n);
+                        }
+                    }
+                    // (b) per-field capture for a direct struct-literal
+                    // initializer bound to a single name (`let h = H { f: |x|
+                    // x+k, g: 1 }`): mark only the closure-bearing fields. Other
+                    // initializer shapes (a block tail, a call returning a
+                    // struct, a multi-name pattern) are left untracked — a sound
+                    // under-approximation that defers, never falsely rejects.
+                    if let ExprKind::StructLiteral { fields, .. } = &value.kind {
+                        if let [binding] = pattern.binding_names().as_slice() {
+                            for fi in fields {
+                                if self.tail_escapes_capturing_closure(
+                                    &fi.value,
+                                    &outer,
+                                    &capturing_vars,
+                                    &capturing_fields,
+                                ) {
+                                    capturing_fields
+                                        .entry(binding.clone())
+                                        .or_default()
+                                        .insert(fi.name.clone());
+                                }
+                            }
+                        }
+                    }
+                    // (c) remember single-name collection-typed bindings for the
+                    // container-store marking in (d) / (e).
+                    if Self::let_binds_collection(ty.as_ref(), value) {
+                        if let [binding] = pattern.binding_names().as_slice() {
+                            collection_locals.insert(binding.clone());
                         }
                     }
                 }
+                // (d) `v.push(|x| x+k)` / `v.insert(.., clo)` — a capturing
+                // closure STORED into a collection local makes that local carry
+                // a dangling stack env; mark it so a later `return v` (the
+                // Identifier arm) is rejected.
+                StmtKind::Expr(e) => {
+                    if let ExprKind::MethodCall {
+                        object,
+                        method,
+                        args,
+                        ..
+                    } = &e.kind
+                    {
+                        if Self::is_element_storing_method(method) {
+                            if let ExprKind::Identifier(recv) = &object.kind {
+                                if collection_locals.contains(recv)
+                                    && args.iter().any(|a| {
+                                        self.tail_escapes_capturing_closure(
+                                            &a.value,
+                                            &outer,
+                                            &capturing_vars,
+                                            &capturing_fields,
+                                        )
+                                    })
+                                {
+                                    capturing_vars.insert(recv.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                // (e) `v[i] = clo` (index-store into a collection local) and
+                // `h.f = clo` (field-store into a struct local): a capturing
+                // closure stored into the place makes the rooted local carry it.
+                // Index-store is gated on a known collection (no index-set
+                // overload surprises); field-store is unconditional (a struct
+                // field-set always stores). Both also record the projected
+                // field so `return h.f` / `return v` are caught.
+                StmtKind::Assign { target, value }
+                    if self.tail_escapes_capturing_closure(
+                        value,
+                        &outer,
+                        &capturing_vars,
+                        &capturing_fields,
+                    ) =>
+                {
+                    match &target.kind {
+                        ExprKind::Index { object, .. } => {
+                            if let ExprKind::Identifier(recv) = &object.kind {
+                                if collection_locals.contains(recv) {
+                                    capturing_vars.insert(recv.clone());
+                                }
+                            }
+                        }
+                        ExprKind::FieldAccess { object, field } => {
+                            if let ExprKind::Identifier(base) = &object.kind {
+                                capturing_vars.insert(base.clone());
+                                capturing_fields
+                                    .entry(base.clone())
+                                    .or_default()
+                                    .insert(field.clone());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
             }
         }
         // Every return point: the body tail + every explicit `return e` not
@@ -213,6 +315,74 @@ impl<'ctx> super::Codegen<'ctx> {
             );
         }
         Ok(())
+    }
+
+    /// Stdlib collection type heads whose element-store methods (`push` /
+    /// `insert` / `push_back` / `push_front`) move the argument INTO the
+    /// receiver — so a capturing closure stored there outlives its stack env if
+    /// the receiver escapes. Gating the container-store marking on a *known*
+    /// collection is what keeps that marking one-sided (a like-named method on a
+    /// user type, which might invoke rather than store, is never marked).
+    fn is_collection_type_head(name: &str) -> bool {
+        matches!(
+            name,
+            "Vec"
+                | "VecDeque"
+                | "Deque"
+                | "Map"
+                | "HashMap"
+                | "BTreeMap"
+                | "Set"
+                | "HashSet"
+                | "BTreeSet"
+        )
+    }
+
+    /// Collection methods that STORE their element argument into the receiver,
+    /// as opposed to `sort_by` / `map` / `retain` / `each`, which invoke a
+    /// closure argument synchronously within the call and do not retain it (so
+    /// passing a capturing closure to those is sound and must NOT mark).
+    fn is_element_storing_method(name: &str) -> bool {
+        matches!(name, "push" | "insert" | "push_back" | "push_front")
+    }
+
+    /// `true` when a `let` binds a stdlib-collection local — by type annotation
+    /// (`let v: Vec[..] = …`), by a collection literal RHS (`[..]`, `Vec[..]`, a
+    /// map / repeat literal), or by a collection constructor RHS (`Vec.new()` /
+    /// `Map.with_capacity(..)`). Only such bindings are eligible for the
+    /// container-store marking; every other shape under-approximates (sound: a
+    /// missed collection leaves a residual, it never falsely rejects).
+    fn let_binds_collection(ty: Option<&TypeExpr>, value: &Expr) -> bool {
+        if let Some(TypeKind::Path(p)) = ty.map(|t| &t.kind) {
+            if p.segments
+                .last()
+                .is_some_and(|h| Self::is_collection_type_head(h))
+            {
+                return true;
+            }
+        }
+        match &value.kind {
+            ExprKind::ArrayLiteral(_)
+            | ExprKind::MapLiteral(_)
+            | ExprKind::RepeatLiteral { .. } => true,
+            ExprKind::PrefixCollectionLiteral { type_name, .. } => {
+                Self::is_collection_type_head(type_name)
+            }
+            // `Vec.new()` / `Map.with_capacity(..)` — a 2-segment associated
+            // call `Collection.method(..)`, which lowers to a `Call` whose
+            // callee is a `Path` (`["Vec", "new"]`); the head segment is the
+            // collection type. (A `MethodCall` on a bare collection identifier
+            // is matched too, in case a form ever reaches here un-pathed.)
+            ExprKind::Call { callee, .. } => matches!(
+                &callee.kind,
+                ExprKind::Path { segments, .. }
+                    if segments.first().is_some_and(|h| Self::is_collection_type_head(h))
+            ),
+            ExprKind::MethodCall { object, .. } => {
+                matches!(&object.kind, ExprKind::Identifier(h) if Self::is_collection_type_head(h))
+            }
+            _ => false,
+        }
     }
 
     /// `true` when closure-literal `|params| body` captures at least one name in
