@@ -10,6 +10,7 @@ Bench infrastructure for compiler-quality gates and microbenchmarks. Each subdir
 | [`hash_quality/`](hash_quality/) | Hash function collision rate + distribution quality | Manual reproduction |
 | [`hot_swap_cost/`](hot_swap_cost/) | `--enable-hot-swap` AOT cost on tight vs moderate function bodies | Manual reproduction |
 | [`indirection_cost/`](indirection_cost/) | Type-erasure tax on collection operations (Rust microbench) | Manual reproduction |
+| [`wasm_size/`](wasm_size/) | WASM module size (`hello` + Iris filter core) — Kāra vs Rust vs TinyGo, core module + component, stripped + brotli'd | Credibility receipt — checked-in size table, no gate (add `baseline.json` if size becomes a launch claim) |
 
 ## Bench-setup protocol
 

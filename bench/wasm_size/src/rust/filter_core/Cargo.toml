@@ -1,0 +1,21 @@
+# wasm_size bench — Rust "filter_core" crate (the Iris kernel port). Standalone
+# (empty [workspace] detaches it from karac) with the size-conscious release
+# profile a developer shipping to wasm uses.
+[package]
+name = "filter_core"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "filter_core"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[workspace]

@@ -1,0 +1,6 @@
+// wasm_size bench — minimal stdout "hello" in Kāra.
+// Built with `karac build --target=wasm_wasi`; the headline number is the
+// stripped + brotli'd module beside the same program in Rust and TinyGo.
+fn main() {
+    println("hello, world");
+}
