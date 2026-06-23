@@ -582,6 +582,17 @@ pub(crate) enum CleanupAction<'ctx> {
         /// Alloca that holds the opaque `*mut KaracFile` pointer.
         file_alloca: PointerValue<'ctx>,
     },
+    /// Heap-closure-env epic Slice 1 (B-2026-06-22-2): a binding holding a
+    /// heap-env closure value. At scope exit, load the fat pointer, extract its
+    /// env slot (the RC box `{ i64 refcount, env }`), decrement the refcount,
+    /// and `free` the box when it hits 0. A null env (non-capturing closure or
+    /// a moved-out sentinel) is skipped.
+    FreeClosureEnv {
+        /// Alloca holding the `{ fn_ptr, env_ptr }` closure fat pointer. The env
+        /// slot points at the RC box whose field 0 is the i64 refcount (a
+        /// uniform `{ i64 }` GEP reaches it regardless of the captured payload).
+        fat_alloca: PointerValue<'ctx>,
+    },
     /// Phase 6 "Channel AOT codegen lowering": scope-exit drop for a
     /// channel-end (`Sender`/`Receiver`) binding. The alloca holds the opaque
     /// `*mut KaracChannel` pointer both ends share. The drain emits

@@ -334,6 +334,76 @@ mod codegen_tests {
         );
     }
 
+    /// Heap-closure-env epic Slice 1 (B-2026-06-22-2): a function can now
+    /// RETURN a capturing closure with POD captures — its environment is
+    /// reference-counted on the heap, and the caller's binding frees it. The
+    /// demonstrated repro that was a silent miscompile (printed -1) before
+    /// Slice 0's guard, and a hard error under Slice 0, now runs and prints 42.
+    #[test]
+    fn heap_env_returned_capturing_closure_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let f = make(21i64); println(f\"{f(21i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// A heap-env closure binding may be CALLED more than once; its RC env is
+    /// freed once at scope exit.
+    #[test]
+    fn heap_env_binding_called_multiple_times_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let f = make(20i64); let a = f(1i64); let b = f(2i64); println(f\"{a + b}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("43\n"));
+    }
+
+    /// Slice 1 misuse guard: every NOT-yet-supported use of a heap-env closure
+    /// binding (or an unbound `make(..)`) is an honest error, never a UAF /
+    /// double-free / leak. Each would otherwise corrupt or leak the single-owner
+    /// RC environment.
+    #[test]
+    fn heap_env_misuse_is_rejected() {
+        let cases: &[(&str, &str)] = &[
+            (
+                "copy to another binding",
+                "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+                 fn main() { let f = make(21i64); let g = f; println(f\"{g(21i64)}\"); }\n",
+            ),
+            (
+                "unbound make() leaks",
+                "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+                 fn main() { make(21i64); println(f\"x\"); }\n",
+            ),
+            (
+                "passed as a call argument",
+                "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+                 fn use2(g: Fn(i64) -> i64) -> i64 { g(5i64) }\n\
+                 fn main() { let f = make(21i64); println(f\"{use2(f)}\"); }\n",
+            ),
+            (
+                "stored into a struct literal",
+                "struct H { f: Fn(i64) -> i64 }\n\
+                 fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+                 fn main() { let f = make(21i64); let h = H { f: f }; println(f\"{(h.f)(21i64)}\"); }\n",
+            ),
+            (
+                "directly returned unbound make()",
+                "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+                 fn relay(k: i64) -> Fn(i64) -> i64 { return make(k); }\n",
+            ),
+        ];
+        for (label, src) in cases {
+            let err =
+                ir_result(src).expect_err(&format!("heap-env misuse must be rejected: {label}"));
+            assert!(
+                err.contains("E_ESCAPING_CLOSURE_NOT_YET"),
+                "{label}: wrong diagnostic: {err}"
+            );
+        }
+    }
+
     /// Codegen result (Ok IR / Err diagnostic) without the `ir_for` panic.
     fn ir_result(src: &str) -> Result<String, String> {
         let mut parsed = karac::parse(src);
@@ -344,17 +414,21 @@ mod codegen_tests {
         compile_to_ir(&parsed.program, None, None)
     }
 
-    // ── Heap-closure-env epic Slice 0 (B-2026-06-22-2) ──
-    // A capturing closure that ESCAPES via return is rejected with an honest
-    // diagnostic (its stack env would dangle); sound closure uses keep working.
+    // ── Heap-closure-env epic Slice 1 (B-2026-06-22-2) ──
+    // A function may RETURN a capturing closure with POD captures (heap RC env,
+    // see heap_env_returned_capturing_closure_runs); the caller may then CALL
+    // the binding. Re-escaping that binding stays rejected by the misuse guard.
 
+    /// The supported shape is `let f = make(); f(x)`; RE-returning the bound
+    /// heap-env closure (`let f = make(k); return f`) would let its RC env
+    /// outlive its single owner, so the Slice 1 misuse guard rejects it.
     #[test]
-    fn escaping_capturing_closure_returned_is_rejected() {
+    fn heap_env_binding_returned_again_is_rejected() {
         let err = ir_result(
             "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
-             fn main() { let f = make(10i64); println(f\"{f(5i64)}\"); }\n",
+             fn relay(k: i64) -> Fn(i64) -> i64 { let f = make(k); return f; }\n",
         )
-        .expect_err("a returned capturing closure must be rejected, not silently miscompiled");
+        .expect_err("re-returning a heap-env closure binding must be rejected");
         assert!(
             err.contains("E_ESCAPING_CLOSURE_NOT_YET"),
             "wrong diagnostic: {err}"

@@ -1264,6 +1264,24 @@ impl<'ctx> super::Codegen<'ctx> {
                             },
                         );
                         self.closure_fn_types.insert(var_name.clone(), fn_type);
+                        // Slice 1 (B-2026-06-22-2): if the RHS is a call to a
+                        // function that returns a heap-env closure, this binding
+                        // now OWNS that reference-counted env. Register the
+                        // scope-exit RC-drop and mark it so a not-yet-supported
+                        // escape (return / copy / store of the binding) is
+                        // rejected rather than freed twice / leaked.
+                        let rhs_is_heap_env_call = matches!(&value.kind,
+                            ExprKind::Call { callee, .. }
+                                if matches!(&callee.kind, ExprKind::Identifier(n)
+                                    if self.fns_returning_heap_env.contains(n)));
+                        if rhs_is_heap_env_call {
+                            if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                                frame.push(super::state::CleanupAction::FreeClosureEnv {
+                                    fat_alloca: alloca,
+                                });
+                            }
+                            self.heap_env_closure_vars.insert(var_name.clone());
+                        }
                         return Ok(());
                     }
                     // `let r = m.entry(k).or_insert(d)` — bind `r` to the slot

@@ -309,6 +309,46 @@ mod memory_sanitizer_tests {
         );
     }
 
+    // ── Heap-closure-env epic Slice 1 (B-2026-06-22-2) ───────────
+    // A returned capturing closure gets a reference-counted HEAP environment
+    // (`emit_rc_alloc { i64 refcount, env }`); the owning `let f = make(..)`
+    // binding frees it via `FreeClosureEnv` at scope exit. This asserts the RC
+    // env is freed exactly once — no leak (LSan) and no use-after-free /
+    // double-free (ASAN) — for the supported call shape, including a binding
+    // called multiple times.
+
+    #[test]
+    fn asan_heap_env_closure_freed_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn main() {
+    let f = make(21i64);
+    println(f"{f(21i64)}");
+}
+"#,
+            &["42"],
+            "asan_heap_env_closure_freed_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_heap_env_closure_multi_call_freed_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn main() {
+    let f = make(20i64);
+    let a = f(1i64);
+    let b = f(2i64);
+    println(f"{a + b}");
+}
+"#,
+            &["43"],
+            "asan_heap_env_closure_multi_call_freed_no_leak",
+        );
+    }
+
     // ── Baseline: no heap allocations ─────────────────────────────
     // Sanity-checks the harness itself — should trivially pass on any host
     // with a working `cc + ASAN`. If this fails, the infrastructure is

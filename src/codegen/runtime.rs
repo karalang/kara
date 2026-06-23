@@ -4509,6 +4509,65 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_call(close_fn, &[handle.into()], "")
                     .unwrap();
             }
+            CleanupAction::FreeClosureEnv { fat_alloca } => {
+                // Slice 1 (B-2026-06-22-2): RC-drop a heap-env closure binding.
+                // Load the fat pointer, extract the env box (field 1); skip a
+                // null env; else decrement the refcount and `free` the box at 0.
+                let fat_ty = self.closure_value_type();
+                let fat = self
+                    .builder
+                    .build_load(fat_ty, *fat_alloca, "cleanup.clo.fat")
+                    .unwrap()
+                    .into_struct_value();
+                let env_box = self
+                    .builder
+                    .build_extract_value(fat, 1, "cleanup.clo.env")
+                    .unwrap()
+                    .into_pointer_value();
+                let null = ptr_ty.const_null();
+                let live = self
+                    .builder
+                    .build_int_compare(IntPredicate::NE, env_box, null, "cleanup.clo.live")
+                    .unwrap();
+                let dec_bb = self.context.append_basic_block(fn_val, "cleanup.clo.dec");
+                let free_bb = self.context.append_basic_block(fn_val, "cleanup.clo.free");
+                let join_bb = self.context.append_basic_block(fn_val, "cleanup.clo.join");
+                self.builder
+                    .build_conditional_branch(live, dec_bb, join_bb)
+                    .unwrap();
+                self.builder.position_at_end(dec_bb);
+                let i64_t = self.context.i64_type();
+                // The refcount is field 0 of the RC box; a `{ i64 }` GEP reaches
+                // it regardless of the captured payload that follows.
+                let rc_box_ty = self.context.struct_type(&[i64_t.into()], false);
+                let rc_ptr = self
+                    .builder
+                    .build_struct_gep(rc_box_ty, env_box, 0, "cleanup.clo.rc")
+                    .unwrap();
+                let rc = self
+                    .builder
+                    .build_load(i64_t, rc_ptr, "cleanup.clo.rcval")
+                    .unwrap()
+                    .into_int_value();
+                let dec = self
+                    .builder
+                    .build_int_sub(rc, i64_t.const_int(1, false), "cleanup.clo.dec1")
+                    .unwrap();
+                self.builder.build_store(rc_ptr, dec).unwrap();
+                let is_zero = self
+                    .builder
+                    .build_int_compare(IntPredicate::EQ, dec, i64_t.const_zero(), "cleanup.clo.z")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(is_zero, free_bb, join_bb)
+                    .unwrap();
+                self.builder.position_at_end(free_bb);
+                self.builder
+                    .build_call(self.free_fn, &[env_box.into()], "")
+                    .unwrap();
+                self.builder.build_unconditional_branch(join_bb).unwrap();
+                self.builder.position_at_end(join_bb);
+            }
             // Phase 6 "Channel AOT codegen lowering" — refcount-drop a
             // channel end at scope exit. Load the shared `*mut KaracChannel`
             // and hand it to `karac_runtime_channel_drop`, which decrements

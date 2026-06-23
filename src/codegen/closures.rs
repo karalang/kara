@@ -298,7 +298,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // inside a nested closure.
         let mut return_values: Vec<&Expr> = Vec::new();
         if let Some(tail) = func.body.final_expr.as_deref() {
-            return_values.push(tail);
+            // Slice 1 (B-2026-06-22-2): a capturing-closure literal that IS the
+            // function's direct tail now gets a reference-counted HEAP env and
+            // is RETURNABLE — so don't reject it (compile_closure builds it,
+            // the caller's binding frees it). Every OTHER escape shape (a
+            // closure bound to a local then returned, an aggregate-literal
+            // return, an explicit mid-body `return`, …) still needs later
+            // slices and stays rejected.
+            let supported = matches!(&tail.kind, ExprKind::Closure { params, body, .. }
+                if self.closure_literal_captures(params, body, &outer));
+            if !supported {
+                return_values.push(tail);
+            }
         }
         self.collect_outer_return_values(&func.body, &mut return_values);
         if return_values.iter().any(|e| {
@@ -315,6 +326,285 @@ impl<'ctx> super::Codegen<'ctx> {
             );
         }
         Ok(())
+    }
+
+    /// `true` when `e` is a call to a free function that RETURNS a heap-env
+    /// closure (`make(..)` with `make` ∈ `fns_returning_heap_env`). Such a call
+    /// mints a reference-counted heap environment that an owner must free; only
+    /// a `let f = <call>` binding is wired to free it (a `FreeClosureEnv`
+    /// cleanup), so any other occurrence of the call leaks or escapes the env.
+    fn is_heap_env_producing_call(&self, e: &Expr) -> bool {
+        let ExprKind::Call { callee, .. } = &e.kind else {
+            return false;
+        };
+        match &callee.kind {
+            ExprKind::Identifier(n) => self.fns_returning_heap_env.contains(n),
+            ExprKind::Path { segments, .. } => {
+                segments.len() == 1 && self.fns_returning_heap_env.contains(&segments[0])
+            }
+            _ => false,
+        }
+    }
+
+    /// Heap-closure-env epic Slice 1 (B-2026-06-22-2) — the misuse guard that
+    /// makes the heap-env feature SOUND. The only supported use of a heap-env
+    /// closure binding (`let f = make(..)`) is to CALL it in the same function
+    /// (`f(x)`), possibly many times; its RC env is freed at `f`'s scope exit.
+    /// Every other use would let the env outlive — or be double-freed by — its
+    /// single owner: returning it (`return f`), copying it (`let g = f`),
+    /// storing it (into a struct / collection / index / field), passing it as a
+    /// call argument, or capturing it in a nested closure. An UNBOUND
+    /// `make(..)` (a non-`let`-RHS occurrence of a heap-env-producing call —
+    /// `make(..);`, `make(..)(x)`, `return make(..)`, `[make(..)]`, …) leaks the
+    /// env. All of those are not-yet-supported and are rejected here with an
+    /// honest `E_ESCAPING_CLOSURE_NOT_YET` rather than miscompiled.
+    ///
+    /// Inert unless some function returns a heap-env closure. Otherwise: pass 1
+    /// collects the top-level heap-env bindings (single-name `let`s with a
+    /// heap-env-producing-call RHS); pass 2 walks every statement/expression
+    /// position — EXCLUDING those sanctioned RHS calls — flagging (a) any
+    /// non-sanctioned heap-env-producing call and (b) any bare reference to a
+    /// binding that is not the callee of a direct call. The walk
+    /// ([`expr_has_heap_env_misuse`]) is exhaustive over `ExprKind` (no silent
+    /// wildcard) so no escaping occurrence is missed.
+    pub(super) fn reject_heap_env_misuse(&self, func: &Function) -> Result<(), String> {
+        if self.fns_returning_heap_env.is_empty() {
+            return Ok(());
+        }
+        // Pass 1 — sanctioned top-level heap-env bindings.
+        let mut binds: HashSet<String> = HashSet::new();
+        for stmt in &func.body.stmts {
+            if let StmtKind::Let { pattern, value, .. } = &stmt.kind {
+                if self.is_heap_env_producing_call(value) {
+                    if let [b] = pattern.binding_names().as_slice() {
+                        binds.insert(b.clone());
+                    }
+                    // A heap-env call bound to a non-single pattern is not a
+                    // sanctioned binding; pass 2 rejects the call (RULE A).
+                }
+            }
+        }
+        // Pass 2 — walk for misuse, skipping the sanctioned `let f = <call>` RHS.
+        let mut bad = false;
+        for stmt in &func.body.stmts {
+            bad |= match &stmt.kind {
+                StmtKind::Let { pattern, value, .. } => {
+                    let sanctioned = self.is_heap_env_producing_call(value)
+                        && matches!(pattern.binding_names().as_slice(), [_]);
+                    !sanctioned && self.expr_has_heap_env_misuse(value, &binds)
+                }
+                StmtKind::LetElse {
+                    value, else_block, ..
+                } => {
+                    self.expr_has_heap_env_misuse(value, &binds)
+                        || self.block_has_heap_env_misuse(else_block, &binds)
+                }
+                StmtKind::LetUninit { .. } => false,
+                StmtKind::Expr(e) => self.expr_has_heap_env_misuse(e, &binds),
+                StmtKind::Assign { target, value }
+                | StmtKind::CompoundAssign { target, value, .. } => {
+                    self.expr_has_heap_env_misuse(target, &binds)
+                        || self.expr_has_heap_env_misuse(value, &binds)
+                }
+                StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                    self.block_has_heap_env_misuse(body, &binds)
+                }
+                // Desugared away before codegen; under-approximate if it survives.
+                StmtKind::MultiAssign { values, .. } => values
+                    .iter()
+                    .any(|v| self.expr_has_heap_env_misuse(v, &binds)),
+            };
+            if bad {
+                break;
+            }
+        }
+        if !bad {
+            if let Some(tail) = &func.body.final_expr {
+                bad = self.expr_has_heap_env_misuse(tail, &binds);
+            }
+        }
+        if bad {
+            return Err(
+                "error[E_ESCAPING_CLOSURE_NOT_YET]: a returned capturing closure can currently \
+                 only be CALLED in the function that binds it (`let f = make(..); f(x)`). \
+                 Returning it again (`return f`), copying it (`let g = f`), storing it, passing \
+                 it as a call argument, capturing it in a nested closure, or leaving a `make(..)` \
+                 result unbound is not yet supported — the reference-counted closure environment \
+                 would outlive or be double-freed by its single owner (heap-closure-environment \
+                 epic B-2026-06-22-2). Workaround: call the closure where it is bound, or pass it \
+                 down by a `Fn(..)` parameter."
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Statement-level companion to [`expr_has_heap_env_misuse`] for a nested
+    /// block (an `if`/`for`/`while` body, a `defer`, …). Exhaustive over
+    /// `StmtKind`. NOTE: a nested `let g = make(..)` is NOT a sanctioned binding
+    /// (only top-level lets are tracked), so its RHS is walked and rejected as a
+    /// non-sanctioned heap-env call — nested heap-env bindings are a deferred,
+    /// over-rejected shape, never a silent miss.
+    fn block_has_heap_env_misuse(&self, b: &Block, binds: &HashSet<String>) -> bool {
+        for stmt in &b.stmts {
+            let bad = match &stmt.kind {
+                StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
+                    self.expr_has_heap_env_misuse(value, binds)
+                }
+                StmtKind::LetUninit { .. } => false,
+                StmtKind::Expr(e) => self.expr_has_heap_env_misuse(e, binds),
+                StmtKind::Assign { target, value }
+                | StmtKind::CompoundAssign { target, value, .. } => {
+                    self.expr_has_heap_env_misuse(target, binds)
+                        || self.expr_has_heap_env_misuse(value, binds)
+                }
+                StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                    self.block_has_heap_env_misuse(body, binds)
+                }
+                StmtKind::MultiAssign { values, .. } => values
+                    .iter()
+                    .any(|v| self.expr_has_heap_env_misuse(v, binds)),
+            };
+            if bad {
+                return true;
+            }
+        }
+        b.final_expr
+            .as_deref()
+            .is_some_and(|t| self.expr_has_heap_env_misuse(t, binds))
+    }
+
+    /// Exhaustive (no silent `_ => false` for any sub-expression-bearing
+    /// variant) walk for a heap-env-binding misuse or a non-sanctioned heap-env
+    /// call inside `e`. Allows exactly `f(args)` for a binding `f` (recursing
+    /// the args, not the callee); a bare reference to a binding anywhere else is
+    /// a misuse, and a heap-env-producing call in any non-sanctioned position is
+    /// a leak. Leaves (literals, paths, `self`, …) hold no sub-expression and
+    /// return `false`.
+    fn expr_has_heap_env_misuse(&self, e: &Expr, binds: &HashSet<String>) -> bool {
+        let mis = |x: &Expr| self.expr_has_heap_env_misuse(x, binds);
+        let any = |xs: &[Expr]| xs.iter().any(mis);
+        let any_args = |xs: &[CallArg]| xs.iter().any(|a| mis(&a.value));
+        match &e.kind {
+            // A bare reference to a heap-env binding (NOT in callee position —
+            // that is handled in `Call`) escapes / aliases the single owner.
+            ExprKind::Identifier(n) => binds.contains(n),
+            ExprKind::Call { callee, args } => {
+                // The one supported use: `f(args)` for a binding `f`. The callee
+                // occurrence is sanctioned; the args may still misuse a binding.
+                if let ExprKind::Identifier(n) = &callee.kind {
+                    if binds.contains(n) {
+                        return any_args(args);
+                    }
+                }
+                // RULE A: a non-sanctioned heap-env-producing call leaks (the
+                // sanctioned `let`-RHS calls never reach this walk).
+                self.is_heap_env_producing_call(e) || mis(callee) || any_args(args)
+            }
+            ExprKind::MethodCall { object, args, .. } => mis(object) || any_args(args),
+            ExprKind::Binary { left, right, .. }
+            | ExprKind::Pipe { left, right }
+            | ExprKind::NilCoalesce { left, right } => mis(left) || mis(right),
+            ExprKind::Unary { operand, .. } | ExprKind::Question(operand) => mis(operand),
+            ExprKind::Cast { expr, .. } => mis(expr),
+            ExprKind::OptionalChain { object, args, .. } => {
+                mis(object) || args.as_deref().is_some_and(any_args)
+            }
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                mis(object)
+            }
+            ExprKind::Index { object, index } => mis(object) || mis(index),
+            ExprKind::Tuple(es) | ExprKind::ArrayLiteral(es) => any(es),
+            ExprKind::PrefixCollectionLiteral { items, .. } => any(items),
+            ExprKind::RepeatLiteral { value, count, .. } => mis(value) || mis(count),
+            ExprKind::MapLiteral(pairs) => pairs.iter().any(|(k, v)| mis(k) || mis(v)),
+            ExprKind::StructLiteral { fields, spread, .. } => {
+                fields.iter().any(|f| mis(&f.value)) || spread.as_deref().is_some_and(mis)
+            }
+            ExprKind::Range { start, end, .. } => {
+                start.as_deref().is_some_and(mis) || end.as_deref().is_some_and(mis)
+            }
+            ExprKind::InterpolatedStringLit(parts) => parts
+                .iter()
+                .any(|p| matches!(p, ParsedInterpolationPart::Expr(inner) if mis(inner))),
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                mis(condition)
+                    || self.block_has_heap_env_misuse(then_block, binds)
+                    || else_branch.as_deref().is_some_and(mis)
+            }
+            ExprKind::IfLet {
+                value,
+                then_block,
+                else_branch,
+                ..
+            } => {
+                mis(value)
+                    || self.block_has_heap_env_misuse(then_block, binds)
+                    || else_branch.as_deref().is_some_and(mis)
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                mis(scrutinee) || arms.iter().any(|a| mis(&a.body))
+            }
+            ExprKind::While {
+                condition, body, ..
+            } => mis(condition) || self.block_has_heap_env_misuse(body, binds),
+            ExprKind::WhileLet { value, body, .. } => {
+                mis(value) || self.block_has_heap_env_misuse(body, binds)
+            }
+            ExprKind::For { iterable, body, .. } => {
+                mis(iterable) || self.block_has_heap_env_misuse(body, binds)
+            }
+            ExprKind::Loop { body, .. } => self.block_has_heap_env_misuse(body, binds),
+            ExprKind::Block(b)
+            | ExprKind::Comptime(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Par(b) => self.block_has_heap_env_misuse(b, binds),
+            ExprKind::LabeledBlock { body, .. } => self.block_has_heap_env_misuse(body, binds),
+            ExprKind::Lock { mutex, body, .. } => {
+                mis(mutex) || self.block_has_heap_env_misuse(body, binds)
+            }
+            ExprKind::Providers { body, .. } => self.block_has_heap_env_misuse(body, binds),
+            ExprKind::Return(inner) | ExprKind::Break { value: inner, .. } => {
+                inner.as_deref().is_some_and(mis)
+            }
+            // A nested closure capturing a heap-env binding `f` lets `f`'s env
+            // escape into the (possibly escaping) closure env — not supported.
+            // A param that shadows a binding name drops it from the live set.
+            ExprKind::Closure { params, body, .. } => {
+                let shadowed: HashSet<String> = params
+                    .iter()
+                    .flat_map(|p| p.pattern.binding_names())
+                    .collect();
+                if shadowed.is_empty() {
+                    mis(body)
+                } else {
+                    let live: HashSet<String> = binds.difference(&shadowed).cloned().collect();
+                    self.expr_has_heap_env_misuse(body, &live)
+                }
+            }
+            // Leaves — no sub-expression can reference a binding.
+            ExprKind::Integer(..)
+            | ExprKind::Float(..)
+            | ExprKind::CharLit(..)
+            | ExprKind::ByteLit(..)
+            | ExprKind::StringLit(..)
+            | ExprKind::MultiStringLit(..)
+            | ExprKind::CStringLit { .. }
+            | ExprKind::Bool(..)
+            | ExprKind::Path { .. }
+            | ExprKind::SelfValue
+            | ExprKind::SelfType
+            | ExprKind::Continue { .. }
+            | ExprKind::PipePlaceholder
+            | ExprKind::OffsetOf { .. }
+            | ExprKind::Error => false,
+        }
     }
 
     /// Stdlib collection type heads whose element-store methods (`push` /
@@ -383,6 +673,58 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => false,
         }
+    }
+
+    /// The set of names a closure in `func`'s body could capture from the
+    /// enclosing frame: `func`'s params + its top-level `let` bindings.
+    fn outer_capturable_names(func: &Function) -> HashSet<String> {
+        let mut outer: HashSet<String> = func
+            .params
+            .iter()
+            .flat_map(|p| p.pattern.binding_names())
+            .collect();
+        for stmt in &func.body.stmts {
+            match &stmt.kind {
+                StmtKind::Let { pattern, .. } | StmtKind::LetElse { pattern, .. } => {
+                    outer.extend(pattern.binding_names());
+                }
+                StmtKind::LetUninit { name, .. } => {
+                    outer.insert(name.clone());
+                }
+                _ => {}
+            }
+        }
+        outer
+    }
+
+    /// Slice 1 (B-2026-06-22-2): if `func`'s direct tail is a *capturing*
+    /// closure literal, return its span — the closure escapes via the return,
+    /// so it gets a reference-counted HEAP environment. `None` otherwise (a
+    /// non-capturing tail closure needs no heap env; other escape shapes are
+    /// still guarded). This is the one return shape Slice 1 supports.
+    pub(super) fn func_tail_heap_closure_span(&self, func: &Function) -> Option<(usize, usize)> {
+        let tail = func.body.final_expr.as_deref()?;
+        if let ExprKind::Closure { params, body, .. } = &tail.kind {
+            if self.closure_literal_captures(params, body, &Self::outer_capturable_names(func)) {
+                return Some((tail.span.offset, tail.span.length));
+            }
+        }
+        None
+    }
+
+    /// Populate `fns_returning_heap_env` (functions whose return value is a
+    /// heap-env closure) from `self.fn_asts`, before any body compiles. A
+    /// `let f = <call to such a fn>` therefore owns a heap env and is given a
+    /// `FreeClosureEnv` cleanup.
+    pub(super) fn compute_fns_returning_heap_env(&mut self) {
+        let funcs: Vec<Function> = self.fn_asts.values().cloned().collect();
+        let mut set = std::collections::HashSet::new();
+        for func in &funcs {
+            if self.func_tail_heap_closure_span(func).is_some() {
+                set.insert(func.name.clone());
+            }
+        }
+        self.fns_returning_heap_env = set;
     }
 
     /// `true` when closure-literal `|params| body` captures at least one name in
@@ -929,6 +1271,38 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let env_struct_ty = self.context.struct_type(&env_field_types, false);
 
+        // Slice 1 (B-2026-06-22-2): does this closure escape its defining
+        // function via the return? If so its environment must outlive the
+        // frame, so it is allocated as a reference-counted HEAP box
+        // `{ i64 refcount, <env_struct> }` instead of a stack alloca. The
+        // closure body GEPs past the refcount to reach the payload; the
+        // owning caller binding frees it (refcount dec) at scope exit.
+        let is_heap_env = self
+            .current_fn_heap_closure_spans
+            .contains(&(closure_span.offset, closure_span.length));
+        if is_heap_env {
+            // Slice 1 supports POD captures only. A heap (String / Vec / shared)
+            // capture would need its own drop when the env is freed (Slice 2);
+            // until then, reject rather than leak it.
+            let pod = env_field_types
+                .iter()
+                .all(|t| matches!(t, BasicTypeEnum::IntType(_) | BasicTypeEnum::FloatType(_)));
+            if !pod {
+                return Err(
+                    "error[E_ESCAPING_CLOSURE_HEAP_CAPTURE_NOT_YET]: returning a closure \
+                     that captures a heap value (String / Vec / shared) is not yet supported — \
+                     only POD (integer / float / bool) captures can be returned today \
+                     (heap-closure-environment epic B-2026-06-22-2, Slice 2). Workaround: pass \
+                     the closure down by a `Fn(..)` parameter instead of returning it."
+                        .to_string(),
+                );
+            }
+        }
+        let env_box_ty = self.context.struct_type(
+            &[self.context.i64_type().into(), env_struct_ty.into()],
+            false,
+        );
+
         // 3. Determine param types. Source annotation wins, otherwise consult
         //    `pending_closure_param_hints` (caller pushdown — e.g. `Vec.sort_by`
         //    handing the element type to a `|a, b|` comparator), otherwise
@@ -1029,7 +1403,16 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(entry);
 
         // 7a. Load captured vars from the env struct (param 0 = env ptr).
-        let env_ptr = closure_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let mut env_ptr = closure_fn.get_nth_param(0).unwrap().into_pointer_value();
+        // Slice 1: a heap-env closure receives the RC box `{ refcount, env }` as
+        // its env pointer; GEP past the refcount (field 1) to the env payload so
+        // the unpack below is identical to the stack-env case.
+        if is_heap_env {
+            env_ptr = self
+                .builder
+                .build_struct_gep(env_box_ty, env_ptr, 1, "__env_payload")
+                .unwrap();
+        }
         // Load the env struct value through the env pointer.
         let env_val = self
             .builder
@@ -1223,8 +1606,23 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         // 9. In the outer context, allocate and populate the env struct.
+        //    Non-escaping closure → cheap stack alloca (freed with the frame).
+        //    Escaping (heap) closure → reference-counted heap box
+        //    `{ refcount=1, env_struct }`; the env captures are stored into the
+        //    box payload, the fat pointer carries the BOX pointer, and the
+        //    owning caller binding frees it via `FreeClosureEnv` (Slice 1).
         let outer_fn = self.current_fn.unwrap();
-        let env_alloca = self.create_entry_alloca(outer_fn, "__closure_env", env_struct_ty.into());
+        let (env_alloca, fat_env_ptr) = if is_heap_env {
+            let box_ptr = self.emit_rc_alloc(env_box_ty);
+            let payload = self
+                .builder
+                .build_struct_gep(env_box_ty, box_ptr, 1, "__env_box_payload")
+                .unwrap();
+            (payload, box_ptr)
+        } else {
+            let a = self.create_entry_alloca(outer_fn, "__closure_env", env_struct_ty.into());
+            (a, a)
+        };
         if let Some(layout) = path_layout.as_ref() {
             // Per-path capture: for each env slot, walk the source root's
             // GEP chain and store the leaf value into the slot.
@@ -1285,7 +1683,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_struct_value();
         fat = self
             .builder
-            .build_insert_value(fat, env_alloca, 1, "closure_env")
+            .build_insert_value(fat, fat_env_ptr, 1, "closure_env")
             .unwrap()
             .into_struct_value();
 

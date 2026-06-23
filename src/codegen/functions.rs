@@ -488,6 +488,21 @@ impl<'ctx> super::Codegen<'ctx> {
         // silent miscompile. Honest compile error until heap envs land. Pure
         // pre-check; no IR emitted yet.
         self.reject_escaping_capturing_closure(func)?;
+        // Slice 1: a capturing-closure literal that is this function's direct
+        // tail escapes via the return → it gets a reference-counted HEAP env
+        // (so its captures outlive the frame). Record its span for
+        // `compile_closure`, and reset the per-function heap-env-binding set.
+        self.current_fn_heap_closure_spans.clear();
+        if let Some(span) = self.func_tail_heap_closure_span(func) {
+            self.current_fn_heap_closure_spans.insert(span);
+        }
+        self.heap_env_closure_vars.clear();
+        // Slice 1 misuse guard (B-2026-06-22-2): a heap-env closure binding may
+        // only be CALLED in its owning function. Reject returning / copying /
+        // storing / passing it, or an unbound `make(..)`, with an honest error
+        // — otherwise the RC env would be double-freed, leaked, or used after
+        // free. Runs after `fns_returning_heap_env` is populated (in `compile`).
+        self.reject_heap_env_misuse(func)?;
         // Slice c-repl.B.4: `func.name == "main"` may have been
         // registered under a different LLVM symbol via
         // `main_symbol_override` (e.g. `cell_main_<id>` for REPL

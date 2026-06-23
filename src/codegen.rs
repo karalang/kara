@@ -1415,6 +1415,23 @@ pub(super) struct Codegen<'ctx> {
     /// Maps local variable names that hold closure fat-pointers to their LLVM function type.
     /// Required for indirect calls: `build_indirect_call` needs the callee's function type.
     pub(crate) closure_fn_types: HashMap<String, FunctionType<'ctx>>,
+    /// Heap-closure-env epic Slice 1 (B-2026-06-22-2). Spans (offset,length) of
+    /// closure literals in the CURRENTLY-compiled function that ESCAPE via its
+    /// return — these get a reference-counted HEAP environment (so the captured
+    /// locals outlive the frame) instead of the default stack env. Recomputed
+    /// per function (`compile_function`) from the same return-position analysis
+    /// as the Slice 0 guard.
+    pub(crate) current_fn_heap_closure_spans: std::collections::HashSet<(usize, usize)>,
+    /// Names of functions whose return value is a heap-env closure (their direct
+    /// tail / `return` is an escaping capturing closure literal). A
+    /// `let f = <call to such a fn>` binding therefore owns a heap env and gets
+    /// a `FreeClosureEnv` cleanup. Computed once before function bodies compile.
+    pub(crate) fns_returning_heap_env: std::collections::HashSet<String>,
+    /// Local bindings in the current function that own a heap-env closure (a
+    /// `FreeClosureEnv` was registered). Used to reject not-yet-supported
+    /// escapes of such a binding (return / copy / store / pass — Slice 1 is
+    /// call-only) and reset per function.
+    pub(crate) heap_env_closure_vars: std::collections::HashSet<String>,
     /// Staging slot — set by `compile_closure` so the surrounding `let` binding can record
     /// the function type under the newly bound name.
     pub(crate) pending_closure_fn_type: Option<FunctionType<'ctx>>,
@@ -5059,6 +5076,9 @@ impl<'ctx> Codegen<'ctx> {
             closure_counter: 0,
             indexed_elem_counter: 0,
             closure_fn_types: HashMap::new(),
+            current_fn_heap_closure_spans: std::collections::HashSet::new(),
+            fns_returning_heap_env: std::collections::HashSet::new(),
+            heap_env_closure_vars: std::collections::HashSet::new(),
             pending_closure_fn_type: None,
             pending_closure_param_hints: None,
             pending_map_insert_old_dec: false,
@@ -6334,6 +6354,11 @@ impl<'ctx> Codegen<'ctx> {
         // leaving it body-less lets the JIT linker resolve the symbol
         // against an earlier-installed module in the same JITDylib. Used
         // by the REPL JIT path so cell N+1 doesn't re-emit cell N's items.
+        // Heap-closure-env epic Slice 1 (B-2026-06-22-2): identify functions
+        // that return a heap-env closure, so a `let f = <call to such a fn>`
+        // binding is given a `FreeClosureEnv` cleanup. `fn_asts` is fully
+        // populated by now.
+        self.compute_fns_returning_heap_env();
         for item in &program.items {
             if let Item::Function(f) = item {
                 if f.generic_params.is_none() {
