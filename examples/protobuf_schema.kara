@@ -44,11 +44,13 @@ const SCHEMA: String = "
         Tier tier = 6;
         // `map<K, V>` → a `Map[K, V]` field (repeated key/value entries).
         map<string, int64> kudos = 7;
+        // `repeated double` → `Vec[f64]`, packed as concatenated fixed64s.
+        repeated double ratings = 8;
         // A `oneof` → a `TeamContact` enum with a `NotSet` default and one
         // payload variant per case.
         oneof contact {
-            string email = 8;
-            int64 phone = 9;
+            string email = 9;
+            int64 phone = 10;
         }
     }
 ";
@@ -74,11 +76,12 @@ fn main() {
         seats: [11, 12, 13, 14],
         tier: Tier.TierPro,
         kudos: kudos,
+        ratings: [4.5, 5.0, 3.5],
         contact: TeamContact.Email("team@compilers.dev"),
     };
     let rt = Team.decode(t.encode());
     println(f"team={rt.title} size={rt.size} city={rt.office.city} zip={rt.office.zip}");
-    println(f"members={rt.members} seats={rt.seats}");
+    println(f"members={rt.members} seats={rt.seats} ratings={rt.ratings}");
     println(match rt.tier { Tier.TierFree => "free", Tier.TierPro => "pro", Tier.TierEnterprise => "ent" });
     let grace = match rt.kudos.get("Grace") { Option.Some(x) => x, Option.None => 0 };
     println(f"kudos.Grace={grace} kudos.size={rt.kudos.len()}");

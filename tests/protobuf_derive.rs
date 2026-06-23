@@ -599,6 +599,111 @@ fn main() {
     assert_eq!(run(src), vec!["1\n", "1\n", "2\n", "5\n", "true\n"]);
 }
 
+// ── float / double in composite positions (repeated / map / oneof) ──
+
+#[test]
+fn derive_repeated_float_roundtrip() {
+    // Repeated `double` / `float` round-trip (packed), including negatives.
+    let src = r#"
+#[derive(Message)]
+struct Bag { ds: Vec[f64], fs: Vec[f32] }
+
+fn main() {
+    let b = Bag { ds: [1.5, -2.25, 0.0], fs: [0.5, -0.25] };
+    let back = Bag.decode(b.encode());
+    println(back.ds.len());
+    println(back.ds[0] == 1.5);
+    println(back.ds[1] == -2.25);
+    println(back.fs.len());
+    println(back.fs[1] == -0.25);
+}
+"#;
+    assert_eq!(run(src), vec!["3\n", "true\n", "true\n", "2\n", "true\n"]);
+}
+
+#[test]
+fn derive_repeated_float_is_packed_single_field() {
+    // Repeated doubles pack into ONE length-delimited (wire 2) field: 3 elements
+    // × 8 bytes = 24 payload bytes.
+    let src = r#"
+#[derive(Message)]
+struct Bag { ds: Vec[f64] }
+
+fn main() {
+    let mut r = ProtoReader.new(Bag { ds: [1.0, 2.0, 3.0] }.encode());
+    let (f, w) = r.read_tag();
+    let blob = r.read_len_delim();
+    println(f);
+    println(w);
+    println(blob.len());
+    println(r.at_end());
+}
+"#;
+    assert_eq!(run(src), vec!["1\n", "2\n", "24\n", "true\n"]);
+}
+
+#[test]
+fn derive_repeated_float_decodes_unpacked_form() {
+    // proto3 readers must accept the non-packed wire form: one wire-1 field per
+    // double. Hand-build two unpacked entries for field 1.
+    let src = r#"
+#[derive(Message)]
+struct Bag { ds: Vec[f64] }
+
+fn main() {
+    let mut buf = Vec.new();
+    buf.extend_from_slice(ProtoBuf.encode_tag(1, 1));
+    buf.extend_from_slice(ProtoBuf.encode_fixed64((1.5f64).to_bits()));
+    buf.extend_from_slice(ProtoBuf.encode_tag(1, 1));
+    buf.extend_from_slice(ProtoBuf.encode_fixed64((2.5f64).to_bits()));
+    let back = Bag.decode(buf);
+    println(back.ds.len());
+    println(back.ds[0] == 1.5);
+    println(back.ds[1] == 2.5);
+}
+"#;
+    assert_eq!(run(src), vec!["2\n", "true\n", "true\n"]);
+}
+
+#[test]
+fn derive_map_float_value_roundtrip() {
+    // A `Map[K, f64]` value rides the fixed64 path through the entry message.
+    let src = r#"
+#[derive(Message)]
+struct Doc { scores: Map[String, f64] }
+
+fn main() {
+    let mut scores: Map[String, f64] = Map.new();
+    scores.insert("a", 1.5);
+    scores.insert("b", -2.25);
+    let back = Doc.decode(Doc { scores: scores }.encode());
+    println(back.scores.len());
+    println(match back.scores.get("a") { Option.Some(x) => x == 1.5, Option.None => false });
+    println(match back.scores.get("b") { Option.Some(x) => x == -2.25, Option.None => false });
+}
+"#;
+    assert_eq!(run(src), vec!["2\n", "true\n", "true\n"]);
+}
+
+#[test]
+fn derive_oneof_float_payload_roundtrip() {
+    // A oneof case may carry an `f64` / `f32` payload (fixed64 / fixed32 wire).
+    let src = r#"
+enum Num { NotSet, D(f64), F(f32) }
+
+#[derive(Message)]
+struct Event { body: Num }
+
+fn main() {
+    let b1 = Event.decode(Event { body: Num.D(3.5) }.encode());
+    println(match b1.body { Num.D(x) => x == 3.5, _ => false });
+    let b2 = Event.decode(Event { body: Num.F(-1.25) }.encode());
+    println(match b2.body { Num.F(x) => x == -1.25, _ => false });
+}
+"#;
+    assert_eq!(run(src), vec!["true\n", "true\n"]);
+}
+
 // ── wire-type overrides (sint / fixed / sfixed) ─────────────────
 
 #[test]

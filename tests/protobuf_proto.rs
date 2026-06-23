@@ -297,6 +297,41 @@ fn main() {
 }
 
 #[test]
+fn proto_float_in_repeated_map_and_oneof_roundtrip() {
+    // `double` / `float` ride the repeated (packed), map-value, and oneof-payload
+    // paths through the schema lowering, same as a plain scalar field.
+    let src = r#"
+#[proto_schema]
+const SCHEMA: String = "
+    message Telemetry {
+        repeated double samples = 1;
+        map<string, float> gauges = 2;
+        oneof reading {
+            double exact = 3;
+            float rough = 4;
+        }
+    }
+";
+
+fn main() {
+    let mut gauges: Map[String, f32] = Map.new();
+    gauges.insert("temp", 21.5);
+    let t = Telemetry { samples: [1.5, -2.25], gauges: gauges, reading: TelemetryReading.Exact(9.5) };
+    let back = Telemetry.decode(t.encode());
+    println(back.samples.len());
+    println(back.samples[1] == -2.25);
+    println(match back.gauges.get("temp") { Option.Some(x) => x == 21.5, Option.None => false });
+    println(match back.reading {
+        TelemetryReading.Exact(x) => x == 9.5,
+        TelemetryReading.Rough(x) => x == 0.0,
+        TelemetryReading.NotSet => false,
+    });
+}
+"#;
+    assert_eq!(run(src), vec!["2\n", "true\n", "true\n", "true\n"]);
+}
+
+#[test]
 fn proto_oneof_roundtrip() {
     // A `.proto` `oneof` becomes a Kāra enum `<Msg><Name>` with a `NotSet`
     // default + one payload variant per case; the field round-trips.

@@ -317,6 +317,14 @@ comptime fn proto_supported(tn: String) -> bool {
         or tn == "i32" or tn == "u32"
 }
 
+// True when `tn` is a proto3 floating-point scalar (`double` / `float`). Kept
+// distinct from [`proto_supported`] because floats are fixed-width (not varint)
+// and so take a separate encode/decode path; the two together are the full set
+// of scalar value types usable in `repeated` / `map` value / `oneof` positions.
+comptime fn proto_is_float(tn: String) -> bool {
+    tn == "f64" or tn == "f32"
+}
+
 // The zero value a decoded field starts from before any wire bytes overwrite
 // it (proto3 fields default to zero). Carries an explicit suffix so the
 // generated `let mut` binding infers the field's exact width.
@@ -483,6 +491,21 @@ comptime fn proto_encode_repeated(idx: i64, fname: String, etn: String, is_msg: 
         hdr + "out.extend_from_slice(ProtoBuf.encode_tag(" + tag
             + ", 2)); out.extend_from_slice(ProtoBuf.encode_varint(" + elem
             + ".len() as u64)); out.extend_from_slice(" + elem + ");" + step
+    } else if etn == "f64" {
+        // Packed doubles: each element's 8-byte fixed64 bit pattern concatenated
+        // into one length-delimited field (proto3 packs repeated double/float).
+        "if not self." + fname + ".is_empty() { let mut p" + tag + " = Vec.new(); " + hdr
+            + "p" + tag + ".extend_from_slice(ProtoBuf.encode_fixed64(" + elem + ".to_bits()));" + step
+            + " out.extend_from_slice(ProtoBuf.encode_tag(" + tag
+            + ", 2)); out.extend_from_slice(ProtoBuf.encode_varint(p" + tag
+            + ".len() as u64)); out.extend_from_slice(p" + tag + "); }"
+    } else if etn == "f32" {
+        // Packed floats: each element's 4-byte fixed32 bit pattern.
+        "if not self." + fname + ".is_empty() { let mut p" + tag + " = Vec.new(); " + hdr
+            + "p" + tag + ".extend_from_slice(ProtoBuf.encode_fixed32(" + elem + ".to_bits32()));" + step
+            + " out.extend_from_slice(ProtoBuf.encode_tag(" + tag
+            + ", 2)); out.extend_from_slice(ProtoBuf.encode_varint(p" + tag
+            + ".len() as u64)); out.extend_from_slice(p" + tag + "); }"
     } else {
         "if not self." + fname + ".is_empty() { let mut p" + tag + " = Vec.new(); " + hdr
             + "p" + tag + ".extend_from_slice(" + proto_encode_elem_varint(elem, etn) + ");" + step
@@ -503,6 +526,16 @@ comptime fn proto_decode_repeated(target: String, etn: String, is_msg: bool) -> 
         target + ".push(reader.read_string());"
     } else if etn == "Vec<u8>" {
         target + ".push(reader.read_len_delim());"
+    } else if etn == "f64" {
+        // Accept the packed form (wire 2, a blob of fixed64s) or a lone unpacked
+        // double (wire 1) — proto3 readers must handle both.
+        "if wire == 2 { let mut sub = ProtoReader.new(reader.read_len_delim()); while not sub.at_end() { "
+            + target + ".push(sub.read_fixed64().bits_as_f64()); } } else { " + target
+            + ".push(reader.read_fixed64().bits_as_f64()); }"
+    } else if etn == "f32" {
+        "if wire == 2 { let mut sub = ProtoReader.new(reader.read_len_delim()); while not sub.at_end() { "
+            + target + ".push(sub.read_fixed32().bits_as_f32()); } } else { " + target
+            + ".push(reader.read_fixed32().bits_as_f32()); }"
     } else {
         "if wire == 2 { let mut sub = ProtoReader.new(reader.read_len_delim()); while not sub.at_end() { "
             + target + ".push(" + proto_read_elem("sub", etn) + "); } } else { " + target + ".push("
@@ -542,6 +575,12 @@ comptime fn proto_encode_scalar_one(buf: String, fnum: i64, expr: String, tn: St
     } else if tn == "i64" {
         buf + ".extend_from_slice(ProtoBuf.encode_tag(" + tag + ", 0)); " + buf
             + ".extend_from_slice(ProtoBuf.encode_varint_i64(" + expr + "));"
+    } else if tn == "f64" {
+        buf + ".extend_from_slice(ProtoBuf.encode_tag(" + tag + ", 1)); " + buf
+            + ".extend_from_slice(ProtoBuf.encode_fixed64(" + expr + ".to_bits()));"
+    } else if tn == "f32" {
+        buf + ".extend_from_slice(ProtoBuf.encode_tag(" + tag + ", 5)); " + buf
+            + ".extend_from_slice(ProtoBuf.encode_fixed32(" + expr + ".to_bits32()));"
     } else {
         buf + ".extend_from_slice(ProtoBuf.encode_tag(" + tag + ", 0)); " + buf
             + ".extend_from_slice(ProtoBuf.encode_varint_i64(" + expr + " as i64));"
@@ -563,6 +602,10 @@ comptime fn proto_read_scalar_one(rn: String, tn: String) -> String {
         rn + ".read_varint() as u32"
     } else if tn == "i64" {
         rn + ".read_varint() as i64"
+    } else if tn == "f64" {
+        rn + ".read_fixed64().bits_as_f64()"
+    } else if tn == "f32" {
+        rn + ".read_fixed32().bits_as_f32()"
     } else {
         rn + ".read_varint() as i32"
     }
@@ -750,7 +793,7 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
                         + "`, which does not derive(Message)",
                 );
             }
-            if not vmsg and not proto_supported(vtn) {
+            if not vmsg and not proto_supported(vtn) and not proto_is_float(vtn) {
                 compiler.error(
                     "derive(Message): map field `" + fname + "` has unsupported value type `" + vtn
                         + "`",
@@ -791,7 +834,7 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
                         + "`, which does not derive(Message)",
                 );
             }
-            if not is_msg and not proto_supported(etn) {
+            if not is_msg and not proto_supported(etn) and not proto_is_float(etn) {
                 compiler.error(
                     "derive(Message): repeated field `" + fname + "` has unsupported element type `"
                         + etn + "`",
@@ -821,11 +864,11 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
                 if pt == "" {
                     m = m + en + "." + vn + " => {}, ";
                 } else {
-                    if not proto_supported(pt) {
+                    if not proto_supported(pt) and not proto_is_float(pt) {
                         compiler.error(
                             "derive(Message): oneof case `" + vn + "` of `" + fname
                                 + "` has unsupported payload type `" + pt
-                                + "` (v1 oneof payloads: i32/i64/u32/u64/bool/String/Vec[u8])",
+                                + "` (v1 oneof payloads: i32/i64/u32/u64/bool/f32/f64/String/Vec[u8])",
                         );
                     }
                     let tagn = f"{fnum}";
@@ -971,7 +1014,7 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
 // numbers must be contiguous `1..N` (declaration-order tagging — per-field
 // number overrides need reflection support that doesn't exist yet). `syntax` /
 // `package` / `option` / `import` statements are skipped; not yet supported:
-// `repeated` enums/floats, enum/float map values, message oneof payloads.
+// `repeated` enums, enum map values, message/enum oneof payloads.
 // `double`/`float` → `f64`/`f32`; `sint*`/`fixed*`/`sfixed*` lower to a base int
 // type plus a `#[karac::proto(<wire>)]` attribute; `oneof NAME {...}` becomes a
 // `<Msg><Name>` enum with a `NotSet` default + one payload variant per case. `map<K, V> name = N;` maps to a `Map[K, V]` field. Enum
