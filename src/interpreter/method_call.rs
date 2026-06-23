@@ -1018,6 +1018,47 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // Built-in scalar transcendental + rounding math on float primitives
+        // (typed in expr_method_call.rs; surface in `crate::float_math`):
+        // unary `sin`/`cos`/`tan`/`exp`/`ln`/`log2`/`floor`/`ceil`/`round`
+        // (`x.m() -> Self`) and binary `pow`/`atan2` (`x.m(y) -> Self`). Each
+        // delegates to the matching `f64::*`; codegen lowers to the equivalent
+        // LLVM intrinsic (`atan2` to a libm call). Float-only — the typechecker
+        // guarantees a `Value::Float` receiver, so integer obj falls through.
+        if let Some(kind) = crate::float_math::classify(method) {
+            if let Value::Float(x) = &obj {
+                let x = *x;
+                match kind {
+                    crate::float_math::FloatMathKind::Unary if args.is_empty() => {
+                        let r = match method {
+                            "sin" => x.sin(),
+                            "cos" => x.cos(),
+                            "tan" => x.tan(),
+                            "exp" => x.exp(),
+                            "ln" => x.ln(),
+                            "log2" => x.log2(),
+                            "floor" => x.floor(),
+                            "ceil" => x.ceil(),
+                            "round" => x.round(),
+                            _ => unreachable!("float_math unary classify/match drift"),
+                        };
+                        return Value::Float(r);
+                    }
+                    crate::float_math::FloatMathKind::Binary if args.len() == 1 => {
+                        if let Value::Float(y) = self.eval_expr_inner(&args[0].value) {
+                            let r = match method {
+                                "pow" => x.powf(y),
+                                "atan2" => x.atan2(y),
+                                _ => unreachable!("float_math binary classify/match drift"),
+                            };
+                            return Value::Float(r);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         // IEEE-754 bit reinterpretation (protobuf `float`/`double` codecs;
         // typed in expr_method_call.rs). `to_bits` → the f64 bit pattern as a
         // `u64`; `to_bits32` rounds to f32 then takes its `u32` pattern. The

@@ -221,6 +221,39 @@ fn test_sqrt_float() {
 }
 
 #[test]
+fn test_float_math_transcendental_and_rounding() {
+    // Scalar transcendental + rounding math (`crate::float_math`): unary
+    // `sin`/`cos`/`tan`/`exp`/`ln`/`log2`/`floor`/`ceil`/`round` and binary
+    // `pow`/`atan2`, delegating to Rust's `f64::*`. Exact-result inputs so the
+    // assertion is platform-independent (codegen's libm twin must match).
+    assert_eq!(run("fn main() { println((0.0f64).sin()); }"), "0\n");
+    assert_eq!(run("fn main() { println((0.0f64).cos()); }"), "1\n");
+    assert_eq!(run("fn main() { println((0.0f64).tan()); }"), "0\n");
+    assert_eq!(run("fn main() { println((0.0f64).exp()); }"), "1\n");
+    assert_eq!(run("fn main() { println((1.0f64).ln()); }"), "0\n");
+    assert_eq!(run("fn main() { println((1024.0f64).log2()); }"), "10\n");
+    assert_eq!(
+        run("fn main() { println((2.0f64).pow(10.0f64)); }"),
+        "1024\n"
+    );
+    assert_eq!(run("fn main() { println((0.0f64).atan2(1.0f64)); }"), "0\n");
+    assert_eq!(run("fn main() { println((2.7f64).floor()); }"), "2\n");
+    assert_eq!(run("fn main() { println((2.2f64).ceil()); }"), "3\n");
+    // `round` is half-away-from-zero (Rust `f64::round` / `llvm.round`).
+    assert_eq!(run("fn main() { println((2.5f64).round()); }"), "3\n");
+    assert_eq!(run("fn main() { println((-2.5f64).round()); }"), "-3\n");
+    // Irrational checks — the interpreter is the f64 reference oracle.
+    assert_eq!(
+        run("fn main() { println((1.0f64).sin()); }"),
+        "0.8414709848078965\n"
+    );
+    assert_eq!(
+        run("fn main() { println((2.0f64).ln()); }"),
+        "0.6931471805599453\n"
+    );
+}
+
+#[test]
 fn test_float_bit_reinterpret_roundtrip() {
     // IEEE-754 bit reinterpretation: `to_bits`/`to_bits32` and the inverse
     // `bits_as_f64`/`bits_as_f32` round-trip a float through its integer bits.

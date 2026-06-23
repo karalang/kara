@@ -1511,6 +1511,94 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // Built-in scalar transcendental + rounding math on float primitives
+        // (typed in expr_method_call.rs; surface in `crate::float_math`): unary
+        // `sin`/`cos`/`tan`/`exp`/`ln`/`log2`/`floor`/`ceil`/`round` and binary
+        // `pow`/`atan2`. Most lower to their overloaded LLVM intrinsic, which
+        // becomes a libm call on most targets — and on wasm too, where the math
+        // symbols live in wasi-libc's `libc.a` (already linked by the wasm-ld
+        // path), so no archive/`--export` work is needed. `tan` and `atan2` are
+        // the exceptions: `llvm.tan` / `llvm.atan2` are LLVM-19+, absent on the
+        // 18.1 pin, so they lower to a direct width-correct libm call
+        // (`tan`/`tanf`, `atan2`/`atan2f`). Float-only; a non-float receiver
+        // (e.g. a user type with its own `round` method) falls through to
+        // normal dispatch.
+        if let Some(kind) = crate::float_math::classify(method) {
+            let v = self.compile_expr(object)?;
+            if let BasicValueEnum::FloatValue(fv) = v {
+                let fty = fv.get_type();
+                let is_f32 = fty == self.context.f32_type();
+                // `tan` / `atan2` have no LLVM-18 intrinsic — call libm directly,
+                // picking the width-correct symbol (`f`-suffixed for f32).
+                let libm_sym = match (method, is_f32) {
+                    ("tan", false) => Some("tan"),
+                    ("tan", true) => Some("tanf"),
+                    ("atan2", false) => Some("atan2"),
+                    ("atan2", true) => Some("atan2f"),
+                    _ => None,
+                };
+                if let Some(sym) = libm_sym {
+                    let mut call_args = vec![fv.into()];
+                    let mut params = vec![fty.into()];
+                    if matches!(kind, crate::float_math::FloatMathKind::Binary) {
+                        let BasicValueEnum::FloatValue(yv) = self.compile_expr(&args[0].value)?
+                        else {
+                            panic!(
+                                "{method} argument must be a float value (typechecker invariant)"
+                            );
+                        };
+                        call_args.push(yv.into());
+                        params.push(fty.into());
+                    }
+                    let fn_val = match self.module.get_function(sym) {
+                        Some(f) => f,
+                        None => {
+                            let fn_ty = fty.fn_type(&params, false);
+                            self.module.add_function(sym, fn_ty, None)
+                        }
+                    };
+                    let r = self
+                        .builder
+                        .build_call(fn_val, &call_args, "flibm")
+                        .unwrap()
+                        .try_as_basic_value()
+                        .unwrap_basic();
+                    return Ok(r);
+                }
+                let intrinsic_name = match method {
+                    "sin" => "llvm.sin",
+                    "cos" => "llvm.cos",
+                    "exp" => "llvm.exp",
+                    "ln" => "llvm.log",
+                    "log2" => "llvm.log2",
+                    "floor" => "llvm.floor",
+                    "ceil" => "llvm.ceil",
+                    "round" => "llvm.round",
+                    "pow" => "llvm.pow",
+                    _ => unreachable!("float_math codegen classify/match drift"),
+                };
+                let intrinsic = inkwell::intrinsics::Intrinsic::find(intrinsic_name)
+                    .unwrap_or_else(|| panic!("{intrinsic_name} intrinsic must exist"));
+                let decl = intrinsic
+                    .get_declaration(&self.module, &[fty.into()])
+                    .unwrap_or_else(|| panic!("{intrinsic_name} declaration for float type"));
+                let r = match kind {
+                    crate::float_math::FloatMathKind::Binary => {
+                        let av = self.compile_expr(&args[0].value)?;
+                        self.builder
+                            .build_call(decl, &[fv.into(), av.into()], "fmath")
+                    }
+                    crate::float_math::FloatMathKind::Unary => {
+                        self.builder.build_call(decl, &[fv.into()], "fmath")
+                    }
+                }
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic();
+                return Ok(r);
+            }
+        }
+
         // Wrapping integer arithmetic (typed in expr_method_call.rs):
         // `wrapping_add` / `wrapping_sub` / `wrapping_mul`, the non-trapping
         // sibling of the checked `+`/`-`/`*` path. Lowers to a bare

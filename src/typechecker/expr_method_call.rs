@@ -2335,10 +2335,71 @@ impl<'a> super::TypeChecker<'a> {
         // codegen (a single `f64.sqrt` instruction on wasm — no libm) and
         // `f64::sqrt` in the interpreter. The first piece of a numeric math
         // surface, driven by Plume's flow field needing vector normalization
-        // (`docs/dogfooding.md`); sin/cos/atan2 remain a tracked gap. Backends:
-        // interpreter `method_call.rs`, codegen `method_call.rs`.
+        // (`docs/dogfooding.md`). The rest of that surface (sin/cos/tan/exp/ln/
+        // log2/pow/atan2/floor/ceil/round) lives in the `crate::float_math`
+        // block just below. Backends: interpreter `method_call.rs`, codegen
+        // `method_call.rs`.
         if method == "sqrt" && args.is_empty() && matches!(&receiver_for_lookup, Type::Float(_)) {
             return receiver_for_lookup.clone();
+        }
+        // Built-in scalar transcendental + rounding math on float primitives —
+        // `x.sin()` / `x.cos()` / `x.tan()` / `x.exp()` / `x.ln()` / `x.log2()`
+        // / `x.floor()` / `x.ceil()` / `x.round()` (unary, `-> Self`) and
+        // `x.pow(y)` / `x.atan2(y)` (binary, one argument of the same float
+        // type, `-> Self`). The value-receiver shape, mirroring `sqrt`/`abs`;
+        // the surface is the single `crate::float_math` table the interpreter
+        // and codegen share. Float-only — integer receivers fall through to
+        // `NoMethodFound`. Backends: interpreter `method_call.rs` (Rust
+        // `f64::*`), codegen `method_call.rs` (LLVM intrinsics; `atan2` via a
+        // direct libm call). Driven by the Plume flow-field dogfood.
+        if matches!(&receiver_for_lookup, Type::Float(_)) {
+            if let Some(kind) = crate::float_math::classify(method) {
+                match kind {
+                    crate::float_math::FloatMathKind::Unary => {
+                        if !args.is_empty() {
+                            self.type_error(
+                                format!("{method} expects 0 arguments, got {}", args.len()),
+                                span.clone(),
+                                TypeErrorKind::WrongNumberOfArgs,
+                            );
+                            return Type::Error;
+                        }
+                        return receiver_for_lookup.clone();
+                    }
+                    crate::float_math::FloatMathKind::Binary => {
+                        if args.len() != 1 {
+                            self.type_error(
+                                format!("{method} expects 1 argument, got {}", args.len()),
+                                span.clone(),
+                                TypeErrorKind::WrongNumberOfArgs,
+                            );
+                            return Type::Error;
+                        }
+                        // The argument is the same float type as the receiver. A
+                        // suffix-free float literal promotes to it (Q4 rule, like
+                        // `wrapping_*`); otherwise it must match exactly.
+                        let arg = &args[0].value;
+                        let arg_ty = self.infer_expr(arg);
+                        if matches!(&arg.kind, ExprKind::Float(_, None)) {
+                            self.record_expr_type(&arg.span, &receiver_for_lookup);
+                            return receiver_for_lookup.clone();
+                        }
+                        if arg_ty != Type::Error && arg_ty != receiver_for_lookup {
+                            self.type_error(
+                                format!(
+                                    "{method} expects an argument of type `{}`, got `{}`",
+                                    type_display(&receiver_for_lookup),
+                                    type_display(&arg_ty)
+                                ),
+                                arg.span.clone(),
+                                TypeErrorKind::TypeMismatch,
+                            );
+                            return Type::Error;
+                        }
+                        return receiver_for_lookup.clone();
+                    }
+                }
+            }
         }
         // IEEE-754 bit reinterpretation (used by protobuf `float`/`double`
         // fixed-width codecs). `to_bits` → `u64` (f64 pattern), `to_bits32` →

@@ -11928,6 +11928,83 @@ fn test_abs_on_unsigned_rejected() {
 }
 
 #[test]
+fn test_float_math_methods_typecheck() {
+    // The scalar transcendental + rounding surface (`crate::float_math`) is a
+    // value-receiver method family typed `-> Self`, on both float widths. The
+    // binary forms (`pow`/`atan2`) take one argument of the same float type.
+    typecheck_ok(
+        "fn main() {
+             let a: f64 = (1.0f64).sin();
+             let b: f64 = (1.0f64).cos();
+             let c: f64 = (1.0f64).tan();
+             let d: f64 = (1.0f64).exp();
+             let e: f64 = (1.0f64).ln();
+             let g: f64 = (8.0f64).log2();
+             let h: f64 = (2.7f64).floor();
+             let i: f64 = (2.7f64).ceil();
+             let j: f64 = (2.5f64).round();
+             let k: f64 = (2.0f64).pow(10.0f64);
+             let l: f64 = (1.0f64).atan2(1.0f64);
+             let m: f32 = (1.0f32).cos();
+             let n: f32 = (2.0f32).pow(3.0f32);
+             let _ = (a, b, c, d, e, g, h, i, j, k, l, m, n);
+         }",
+    );
+}
+
+#[test]
+fn test_float_math_binary_arg_must_match_receiver_type() {
+    // `pow`/`atan2` take an argument of the receiver's float type. An integer
+    // literal argument does NOT promote (only suffix-free *float* literals do),
+    // so `pow(2)` is a type mismatch — pointing at the strict same-type rule.
+    let errors = typecheck_errors("fn main() { let _ = (2.0f64).pow(2); }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("pow expects an argument of type")),
+        "expected pow integer-arg mismatch, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    // A suffix-free float literal argument promotes to the receiver type.
+    typecheck_ok("fn main() { let _: f64 = (2.0f64).pow(2.0); }");
+}
+
+#[test]
+fn test_float_math_arity_errors() {
+    // A unary form rejects an argument; a binary form requires exactly one.
+    let unary = typecheck_errors("fn main() { let _ = (1.0f64).sin(1.0f64); }");
+    assert!(
+        unary
+            .iter()
+            .any(|e| e.message.contains("sin expects 0 arguments")),
+        "expected sin arity error, got: {:?}",
+        unary.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    let binary = typecheck_errors("fn main() { let _ = (1.0f64).atan2(); }");
+    assert!(
+        binary
+            .iter()
+            .any(|e| e.message.contains("atan2 expects 1 argument")),
+        "expected atan2 arity error, got: {:?}",
+        binary.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_float_math_on_integer_rejected() {
+    // Float-only: an integer receiver has no `sin` and falls through to the
+    // numeric `NoMethodFound` tightening (matching Rust — no `i64::sin`).
+    let errors = typecheck_errors("fn main() { let x = 5i64; let _ = x.sin(); }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("no method 'sin'") && e.message.contains("i64")),
+        "expected sin-on-i64 to be rejected, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn test_to_string_and_clone_on_primitives_typecheck() {
     // `to_string -> String` and `clone -> Self` are built-in value-receiver
     // methods on the scalar numeric + bool + char primitives. They must

@@ -1400,6 +1400,52 @@ fn main() {
         }
     }
 
+    /// Scalar transcendental + rounding math (`crate::float_math`): unary
+    /// `sin`/`cos`/`tan`/`exp`/`ln`/`log2`/`floor`/`ceil`/`round` and binary
+    /// `pow`/`atan2`. Most lower to an LLVM intrinsic; `tan`/`atan2` to a libm
+    /// call (`llvm.tan`/`llvm.atan2` are LLVM-19+). Exact-result inputs so the
+    /// assertion is platform-independent and matches the interpreter twin
+    /// (`tests/interpreter.rs::test_float_math_transcendental_and_rounding`).
+    #[test]
+    fn e2e_float_math_transcendental() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 println(f\"{(0.0f64).sin()}\");\n\
+                 println(f\"{(0.0f64).cos()}\");\n\
+                 println(f\"{(0.0f64).tan()}\");\n\
+                 println(f\"{(0.0f64).exp()}\");\n\
+                 println(f\"{(1.0f64).ln()}\");\n\
+                 println(f\"{(1024.0f64).log2()}\");\n\
+                 println(f\"{(2.0f64).pow(10.0f64)}\");\n\
+                 println(f\"{(0.0f64).atan2(1.0f64)}\");\n\
+                 println(f\"{(2.7f64).floor()}\");\n\
+                 println(f\"{(2.2f64).ceil()}\");\n\
+                 println(f\"{(2.5f64).round()}\");\n\
+                 println(f\"{(-2.5f64).round()}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "0\n1\n0\n1\n0\n10\n1024\n0\n2\n3\n3\n-3\n");
+        }
+    }
+
+    /// `f32` receivers lower through the same path — the LLVM intrinsics are
+    /// width-overloaded and the libm fallbacks pick the `f`-suffixed symbol
+    /// (`tanf`/`atan2f`). Exact-result inputs.
+    #[test]
+    fn e2e_float_math_f32() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let a: f32 = (0.0f32).cos();\n\
+                 let b: f32 = (0.0f32).tan();\n\
+                 let c: f32 = (2.0f32).pow(3.0f32);\n\
+                 let d: f32 = (0.0f32).atan2(1.0f32);\n\
+                 println(f\"{a}\"); println(f\"{b}\"); println(f\"{c}\"); println(f\"{d}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "1\n0\n8\n0\n");
+        }
+    }
+
     /// Integer `.pow(exp)` codegen: repeated-multiply loop, `u32` exponent,
     /// `pow(0) == 1`, width-correct on narrow receivers. Mirrors the interpreter
     /// (`tests/interpreter.rs::test_int_pow_values_and_zero_exponent`).

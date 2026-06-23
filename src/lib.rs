@@ -40,6 +40,7 @@ pub mod effectchecker;
 pub mod exhaustive;
 pub mod fallible_alloc;
 pub mod ffi_lint;
+pub mod float_math;
 pub mod fork_threshold_queries;
 pub mod formatter;
 #[cfg(not(target_arch = "wasm32"))]
