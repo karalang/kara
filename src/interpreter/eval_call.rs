@@ -752,7 +752,10 @@ impl<'a> super::Interpreter<'a> {
                 }
                 // Phase-11 Column constructors (interpreter MVP) — see
                 // runtime/stdlib/column.kara.
-                "Column.new" | "Column.with_capacity" | "Column.from_vec" => {
+                "Column.new"
+                | "Column.with_capacity"
+                | "Column.from_vec"
+                | "Column.from_iter_nullable" => {
                     if let Some(v) = self.eval_column_new(&path_str, args, span) {
                         return v;
                     }

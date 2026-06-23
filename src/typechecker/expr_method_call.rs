@@ -1540,6 +1540,61 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // Column[T] result-typed methods (phase-11 Arrow): `iter` ->
+        // `Vec[Option[T]]`, `iter_valid` -> `Vec[T]`, `fillna(value)` /
+        // `dropna` -> `Column[T]`. Their result type mentions the impl
+        // type-param `T`, which baked-signature dispatch doesn't bind from
+        // the receiver, so it's computed here (binding `T` from the
+        // receiver's element type) — and `iter` must intercept *before* the
+        // generic `iter()` iterator-source handler just below would claim
+        // it. `len`/`null_count`/`valid_count`/`is_null`/`push`/`push_null`
+        // keep flowing through normal baked dispatch (their result types are
+        // concrete).
+        if matches!(method, "iter" | "iter_valid" | "fillna" | "dropna") {
+            let column_elem = match &obj_ty {
+                Type::Named { name, args } if name == "Column" && args.len() == 1 => {
+                    Some(args[0].clone())
+                }
+                Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                    Type::Named { name, args } if name == "Column" && args.len() == 1 => {
+                        Some(args[0].clone())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(elem) = column_elem {
+                let want = if method == "fillna" { 1 } else { 0 };
+                if args.len() != want {
+                    self.type_error(
+                        format!("{method} expects {want} argument(s), got {}", args.len()),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    return Type::Error;
+                }
+                for arg in args {
+                    self.infer_expr(&arg.value);
+                }
+                let vec_of = |inner: Type| Type::Named {
+                    name: "Vec".to_string(),
+                    args: vec![inner],
+                };
+                return match method {
+                    "iter" => vec_of(Type::Named {
+                        name: "Option".to_string(),
+                        args: vec![elem],
+                    }),
+                    "iter_valid" => vec_of(elem),
+                    // fillna / dropna
+                    _ => Type::Named {
+                        name: "Column".to_string(),
+                        args: vec![elem],
+                    },
+                };
+            }
+        }
+
         // Iterator-source methods: `iter()` / `into_iter()` on any iterable
         // collection produce an `Iterator[Item = T]` value. Handled here in
         // one place so per-collection method handlers don't have to repeat

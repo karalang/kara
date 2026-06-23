@@ -26240,6 +26240,68 @@ fn test_column_push_arity_checked() {
     );
 }
 
+#[test]
+fn test_column_iter_and_transform_result_types_infer() {
+    // The slice-2 result types bind `T` from the receiver (no annotation
+    // needed): iter -> Vec[Option[T]], iter_valid -> Vec[T], fillna/dropna
+    // -> Column[T]. Probe each by feeding the result into a typed context.
+    typecheck_ok(
+        "fn main() {\n\
+             let mut c: Column[i64] = Column.new();\n\
+             c.push(1i64);\n\
+             let f = c.fillna(0i64);\n\
+             let d = c.dropna();\n\
+             let opts: Vec[Option[i64]] = c.iter();\n\
+             let vals: Vec[i64] = c.iter_valid();\n\
+             let nf: i64 = f.null_count();\n\
+             let nd: i64 = d.null_count();\n\
+             let e: Column[i64] = Column.from_iter_nullable([Some(1i64), None]);\n\
+             let _ = (opts, vals, nf, nd, e);\n\
+         }",
+    );
+}
+
+#[test]
+fn test_column_iter_valid_element_type_is_t_not_option() {
+    // `iter_valid()` is Vec[T] (unwrapped), not Vec[Option[T]] — binding to
+    // Vec[Option[i64]] is a mismatch.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let c: Column[i64] = Column.from_vec([1i64]);\n\
+             let bad: Vec[Option[i64]] = c.iter_valid();\n\
+         }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "expected iter_valid Vec[T]-vs-Vec[Option[T]] mismatch, got none",
+    );
+}
+
+#[test]
+fn test_column_transform_arity_checked() {
+    // fillna takes exactly 1 arg; dropna/iter/iter_valid take 0.
+    let f = typecheck_errors(
+        "fn main() {\n\
+             let c: Column[i64] = Column.from_vec([1i64]);\n\
+             let _ = c.fillna();\n\
+         }",
+    );
+    assert!(
+        f.iter().any(|e| e.message.contains("fillna expects 1")),
+        "{f:?}",
+    );
+    let d = typecheck_errors(
+        "fn main() {\n\
+             let c: Column[i64] = Column.from_vec([1i64]);\n\
+             let _ = c.dropna(5i64);\n\
+         }",
+    );
+    assert!(
+        d.iter().any(|e| e.message.contains("dropna expects 0")),
+        "{d:?}",
+    );
+}
+
 // ── Effect-resource dispatch types untyped `let` bindings ─────────
 //
 // bugs.md "Untyped `let` from an effect-resource method call doesn't

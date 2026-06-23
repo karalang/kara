@@ -859,6 +859,14 @@ impl<'a> super::Interpreter<'a> {
         // Category dispatchers — each returns `Some(Value)` if `method`
         // matches one of its handled names and the receiver shape is
         // compatible; otherwise `None` and we fall through to the next.
+        // Column dispatch precedes the iterator machinery: `iter` /
+        // `iter_valid` are Column method names that would otherwise be
+        // claimed by `try_eval_iterator_method` (which `unreachable!`s on a
+        // non-iterable `Value::Column` receiver). A non-Column receiver
+        // returns `None` here and falls through unchanged.
+        if let Some(v) = self.try_eval_column_method(method, &obj, args, span) {
+            return v;
+        }
         if let Some(v) = self.try_eval_iterator_method(method, object, &obj, args, span) {
             return v;
         }
@@ -872,9 +880,6 @@ impl<'a> super::Interpreter<'a> {
             return v;
         }
         if let Some(v) = self.try_eval_tensor_method(method, &obj, args, span) {
-            return v;
-        }
-        if let Some(v) = self.try_eval_column_method(method, &obj, args, span) {
             return v;
         }
         if let Some(v) = self.try_eval_pool_method(method, &obj, args, span) {

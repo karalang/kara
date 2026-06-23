@@ -1,12 +1,17 @@
 //! `Column[T]` interpreter MVP (phase-11 data-science stdlib, Arrow
-//! commitment Q5). Constructors (`new` / `with_capacity` / `from_vec`)
-//! dispatched from `eval_call.rs`, and the instance methods (`push` /
-//! `push_null` / `len` / `null_count` / `valid_count` / `is_null`)
-//! intercepted before the surface-only `#[compiler_builtin]` bodies in
-//! `runtime/stdlib/column.kara`. Positional indexing `c[i] -> Option[T]`
-//! is intercepted at the index sites (`eval_expr.rs` get, typechecker
-//! `exprs.rs` typing) — the `[]` operator has no method to dispatch
-//! through.
+//! commitment Q5). Constructors (`new` / `with_capacity` / `from_vec` /
+//! `from_iter_nullable`) dispatched from `eval_call.rs`, and the instance
+//! methods (`push` / `push_null` / `len` / `null_count` / `valid_count` /
+//! `is_null` / `iter` / `iter_valid` / `fillna` / `dropna`) intercepted
+//! before the surface-only `#[compiler_builtin]` bodies in
+//! `runtime/stdlib/column.kara`. `iter` / `iter_valid` / `fillna` /
+//! `dropna` are also typed by an intercept in
+//! `src/typechecker/expr_method_call.rs` (binding `T` from the receiver),
+//! and `iter` must dispatch here *before* the iterator machinery (which
+//! `unreachable!`s on a `Value::Column`). Positional indexing `c[i] ->
+//! Option[T]` is intercepted at the index sites (`eval_expr.rs` get,
+//! typechecker `exprs.rs` typing) — the `[]` operator has no method to
+//! dispatch through.
 //!
 //! A `Value::Column` carries a `data` element buffer plus a parallel
 //! `valid` validity bitmap (one `bool` per slot; `false` = SQL null),
@@ -19,8 +24,26 @@
 use std::sync::{Arc, RwLock};
 
 use crate::ast::CallArg;
-use crate::interpreter::value::Value;
+use crate::interpreter::value::{EnumData, Value};
 use crate::token::Span;
+
+/// Build an `Option[T]` value — `Some(v)` / `None`, the interpreter's
+/// `Value::EnumVariant` Option representation.
+fn some_value(v: Value) -> Value {
+    Value::EnumVariant {
+        enum_name: "Option".to_string(),
+        variant: "Some".to_string(),
+        data: EnumData::Tuple(vec![v]),
+    }
+}
+
+fn none_value() -> Value {
+    Value::EnumVariant {
+        enum_name: "Option".to_string(),
+        variant: "None".to_string(),
+        data: EnumData::Unit,
+    }
+}
 
 impl<'a> super::Interpreter<'a> {
     /// Column constructors dispatched from `eval_call.rs`. Returns `None`
@@ -47,6 +70,41 @@ impl<'a> super::Interpreter<'a> {
                 };
                 let data: Vec<Value> = rc.read().unwrap().clone();
                 let valid = vec![true; data.len()];
+                Some(Value::Column {
+                    data: Arc::new(RwLock::new(data)),
+                    valid: Arc::new(RwLock::new(valid)),
+                })
+            }
+            // `from_iter_nullable(values)` — the argument is a
+            // `Vec[Option[T]]` (a `Value::Array` of Option enum values):
+            // `Some(v)` becomes a valid slot, `None` a null slot.
+            "Column.from_iter_nullable" => {
+                let arg = args.first()?;
+                let Value::Array(rc) = self.eval_expr_inner(&arg.value) else {
+                    return None;
+                };
+                let src = rc.read().unwrap();
+                let mut data = Vec::with_capacity(src.len());
+                let mut valid = Vec::with_capacity(src.len());
+                for opt in src.iter() {
+                    match opt {
+                        Value::EnumVariant {
+                            variant, data: ed, ..
+                        } if variant == "Some" => {
+                            let inner = match ed {
+                                EnumData::Tuple(vs) if vs.len() == 1 => vs[0].clone(),
+                                _ => Value::Unit,
+                            };
+                            data.push(inner);
+                            valid.push(true);
+                        }
+                        // `None` (or any non-Some value) → a null slot.
+                        _ => {
+                            data.push(Value::Unit);
+                            valid.push(false);
+                        }
+                    }
+                }
                 Some(Value::Column {
                     data: Arc::new(RwLock::new(data)),
                     valid: Arc::new(RwLock::new(valid)),
@@ -112,6 +170,70 @@ impl<'a> super::Interpreter<'a> {
                     ));
                 }
                 Some(Value::Bool(!guard[i as usize]))
+            }
+            // Every slot as an Option[T], in order — a fresh Vec (copies).
+            "iter" => {
+                let data_guard = data.read().unwrap();
+                let valid_guard = valid.read().unwrap();
+                let out: Vec<Value> = valid_guard
+                    .iter()
+                    .zip(data_guard.iter())
+                    .map(|(&ok, v)| {
+                        if ok {
+                            some_value(v.clone())
+                        } else {
+                            none_value()
+                        }
+                    })
+                    .collect();
+                Some(Value::Array(Arc::new(RwLock::new(out))))
+            }
+            // The valid slots only, unwrapped, in order — a fresh Vec.
+            "iter_valid" => {
+                let data_guard = data.read().unwrap();
+                let valid_guard = valid.read().unwrap();
+                let out: Vec<Value> = valid_guard
+                    .iter()
+                    .zip(data_guard.iter())
+                    .filter(|(&ok, _)| ok)
+                    .map(|(_, v)| v.clone())
+                    .collect();
+                Some(Value::Array(Arc::new(RwLock::new(out))))
+            }
+            // Replace every null slot with `value` → a fresh all-valid
+            // column (the receiver is unchanged).
+            "fillna" => {
+                let arg = args.first()?;
+                let fill = self.eval_expr_inner(&arg.value);
+                let data_guard = data.read().unwrap();
+                let valid_guard = valid.read().unwrap();
+                let out: Vec<Value> = valid_guard
+                    .iter()
+                    .zip(data_guard.iter())
+                    .map(|(&ok, v)| if ok { v.clone() } else { fill.clone() })
+                    .collect();
+                let n = out.len();
+                Some(Value::Column {
+                    data: Arc::new(RwLock::new(out)),
+                    valid: Arc::new(RwLock::new(vec![true; n])),
+                })
+            }
+            // Drop null slots → a fresh all-valid column of the valid
+            // values in order (the receiver is unchanged).
+            "dropna" => {
+                let data_guard = data.read().unwrap();
+                let valid_guard = valid.read().unwrap();
+                let out: Vec<Value> = valid_guard
+                    .iter()
+                    .zip(data_guard.iter())
+                    .filter(|(&ok, _)| ok)
+                    .map(|(_, v)| v.clone())
+                    .collect();
+                let n = out.len();
+                Some(Value::Column {
+                    data: Arc::new(RwLock::new(out)),
+                    valid: Arc::new(RwLock::new(vec![true; n])),
+                })
             }
             _ => None,
         }

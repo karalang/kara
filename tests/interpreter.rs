@@ -17126,6 +17126,85 @@ fn test_column_index_out_of_bounds_traps() {
     );
 }
 
+// ── Column[T] slice 2 — iterators + null-handling transforms ──
+
+#[test]
+fn test_column_iter_yields_option_per_slot() {
+    // `iter()` -> Vec[Option[T]]: Some for valid, None for null, in order.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut c: Column[i64] = Column.new();\n\
+             c.push(10i64); c.push_null(); c.push(30i64);\n\
+             for x in c.iter() {\n\
+                 match x { Some(v) => { println(v); } None => { println(-1i64); } }\n\
+             }\n\
+         }",
+    );
+    assert_eq!(out, "10\n-1\n30\n");
+}
+
+#[test]
+fn test_column_iter_valid_skips_nulls() {
+    // `iter_valid()` -> Vec[T]: the valid slots only, unwrapped.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut c: Column[i64] = Column.new();\n\
+             c.push(10i64); c.push_null(); c.push(30i64);\n\
+             for v in c.iter_valid() { println(v); }\n\
+         }",
+    );
+    assert_eq!(out, "10\n30\n");
+}
+
+#[test]
+fn test_column_fillna_replaces_nulls() {
+    // `fillna(v)` -> all-valid Column[T] (receiver unchanged).
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut c: Column[i64] = Column.new();\n\
+             c.push(10i64); c.push_null(); c.push(30i64);\n\
+             let f = c.fillna(99i64);\n\
+             println(f.null_count());\n\
+             for v in f.iter_valid() { println(v); }\n\
+             println(c.null_count());\n\
+         }",
+    );
+    // f has no nulls (10,99,30); c is unchanged (still 1 null).
+    assert_eq!(out, "0\n10\n99\n30\n1\n");
+}
+
+#[test]
+fn test_column_dropna_removes_nulls() {
+    // `dropna()` -> all-valid Column[T] of the valid values (receiver kept).
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut c: Column[i64] = Column.new();\n\
+             c.push(10i64); c.push_null(); c.push(30i64);\n\
+             let d = c.dropna();\n\
+             println(d.len());\n\
+             println(d.null_count());\n\
+             for v in d.iter_valid() { println(v); }\n\
+         }",
+    );
+    assert_eq!(out, "2\n0\n10\n30\n");
+}
+
+#[test]
+fn test_column_from_iter_nullable() {
+    // `from_iter_nullable(Vec[Option[T]])` — Some -> valid, None -> null.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let e: Column[i64] = Column.from_iter_nullable([Some(1i64), None, Some(3i64)]);\n\
+             println(e.len());\n\
+             println(e.null_count());\n\
+             println(e.is_null(1));\n\
+             match e[0] { Some(v) => { println(v); } None => { println(-1i64); } }\n\
+             match e[1] { Some(v) => { println(v); } None => { println(-1i64); } }\n\
+         }",
+    );
+    assert_eq!(out, "3\n1\ntrue\n1\n-1\n");
+}
+
 // ── `ref name @ PATTERN` — explicit-ref @ bindings (design.md § @
 // Bindings): bindings borrow, scrutinee stays usable after ──────────
 

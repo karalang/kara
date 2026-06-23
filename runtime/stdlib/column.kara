@@ -3,19 +3,21 @@
 // `Column[T]` — nullable 1-D column with Apache Arrow layout (Phase 11
 // data-science stdlib; design.md § Memory Layout Commitments, Q5).
 // Interpreter MVP surface so far: constructors (`new` / `with_capacity`
-// / `from_vec`), append (`push` / `push_null`), the null/validity
-// accessors (`len` / `null_count` / `valid_count` / `is_null`), and
-// positional indexing `c[i] -> Option[T]` (Some for a valid slot, None
-// for a null). The SQL-null three-valued arithmetic, the nullable
-// iterators (`iter` / `iter_valid`), `from_iter_nullable`, `fillna`,
-// `dropna`, and the Arrow-buffer codegen lowering are follow-on
-// sub-slices — tracker at `phase-11-stdlib-longtail.md § Data types —
-// Arrow commitment`.
+// / `from_vec` / `from_iter_nullable`), append (`push` / `push_null`),
+// the null/validity accessors (`len` / `null_count` / `valid_count` /
+// `is_null`), positional indexing `c[i] -> Option[T]` (Some for a valid
+// slot, None for a null), the nullable iterators (`iter` ->
+// `Vec[Option[T]]`, `iter_valid` -> `Vec[T]`), and the null-handling
+// transforms (`fillna` / `dropna`). The SQL-null three-valued
+// arithmetic, `fillna`'s `treat_nan_as_null` flag, and the Arrow-buffer
+// codegen lowering are follow-on sub-slices — tracker at
+// `phase-11-stdlib-longtail.md § Data types — Arrow commitment`.
 //
 // **Dispatch.** Constructors fire through `eval_call.rs`'s
-// `"Column.new"` / `"Column.with_capacity"` / `"Column.from_vec"`
-// path-string arms; the `push` / `push_null` / `len` / `null_count`
-// / `valid_count` / `is_null` instance methods through
+// `"Column.new"` / `"Column.with_capacity"` / `"Column.from_vec"` /
+// `"Column.from_iter_nullable"` path-string arms; the `push` /
+// `push_null` / `len` / `null_count` / `valid_count` / `is_null` /
+// `iter` / `iter_valid` / `fillna` / `dropna` instance methods through
 // `try_eval_column_method` (`src/interpreter/method_call_column.rs`),
 // which intercepts before these `#[compiler_builtin]` bodies (their
 // bodies are surface-only stubs). Positional indexing is intercepted at
@@ -62,6 +64,13 @@ impl[T] Column[T] {
         Column { handle_id: 0 }
     }
 
+    // Column from a `Vec[Option[T]]` — `Some(v)` becomes a valid slot,
+    // `None` becomes a SQL null.
+    #[compiler_builtin]
+    fn from_iter_nullable(values: Vec[Option[T]]) -> Column[T] {
+        Column { handle_id: 0 }
+    }
+
     // Append a valid value.
     #[compiler_builtin]
     fn push(mut ref self, value: T) {}
@@ -92,5 +101,34 @@ impl[T] Column[T] {
     #[compiler_builtin]
     fn is_null(ref self, i: i64) -> bool {
         false
+    }
+
+    // Every slot as an `Option[T]` (Some for a valid slot, None for a
+    // null), in order — a Vec of copies, directly `for`-iterable. (Eager
+    // copy; a lazy view type is v1.5+, mirroring `Tensor.iter_axis`.)
+    #[compiler_builtin]
+    fn iter(ref self) -> Vec[Option[T]] {
+        Vec.new()
+    }
+
+    // The valid slots only, unwrapped, in order — nulls skipped.
+    #[compiler_builtin]
+    fn iter_valid(ref self) -> Vec[T] {
+        Vec.new()
+    }
+
+    // Replace every null slot with `value`, yielding an all-valid column
+    // (a copy; the receiver is unchanged). The `treat_nan_as_null` flag
+    // from the design surface is deferred to the float-arithmetic slice.
+    #[compiler_builtin]
+    fn fillna(ref self, value: T) -> Column[T] {
+        Column { handle_id: 0 }
+    }
+
+    // Drop the null slots, yielding an all-valid column of the valid
+    // values in order (a copy; the receiver is unchanged).
+    #[compiler_builtin]
+    fn dropna(ref self) -> Column[T] {
+        Column { handle_id: 0 }
     }
 }
