@@ -228,6 +228,66 @@ mod codegen_tests {
         assert_eq!(passed.as_deref(), Some("15\n"));
     }
 
+    // ── Closure-value call through a non-identifier callee (B-2026-06-22-4) ──
+    // A closure stored in a struct field / Vec element / tuple slot and invoked
+    // through a parenthesized place-expression callee — `(h.f)(x)`, `v[i](x)`,
+    // `(t.0)(x)` — must lower to the env-first fat-pointer indirect call, not
+    // the old const-0 stub. These tests actually RUN the program (the only
+    // `(x.f)(..)` snippets that existed before were `expect_err` escape-
+    // rejection tests that never executed), asserting the codegen output equals
+    // the known-correct interpreter (`karac run`) result.
+
+    /// The canonical repro: a non-capturing closure stored in a struct field,
+    /// called same-frame through `(h.f)(arg)`. Built+ran printing `0` before
+    /// the fix; the interpreter always printed `42`.
+    #[test]
+    fn struct_field_closure_call_runs() {
+        let out = run_program(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn main() { let h = H { f: |x| x * 2i64 }; println(f\"{(h.f)(21i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// Same struct-field call but the stored closure CAPTURES a local — the
+    /// fat pointer's env slot is non-null, so this also proves the env pointer
+    /// is threaded through the indirect call (used same-frame, so the env
+    /// alloca is still live — the B-2026-06-22-2 escape guard only fires on
+    /// return-position escapes).
+    #[test]
+    fn struct_field_capturing_closure_call_runs() {
+        let out = run_program(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn main() { let m = 3i64; let h = H { f: |x| x * m }; println(f\"{(h.f)(14i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// A `Vec[Fn(i64) -> i64]` element invoked through an index callee
+    /// `v[i](arg)`.
+    #[test]
+    fn vec_indexed_closure_call_runs() {
+        let out = run_program(
+            "fn main() {\n\
+             let mut v: Vec[Fn(i64) -> i64] = Vec.new();\n\
+             v.push(|x| x + 1i64);\n\
+             v.push(|x| x * 10i64);\n\
+             println(f\"{v[1](4i64)}\");\n\
+             }\n",
+        );
+        assert_eq!(out.as_deref(), Some("40\n"));
+    }
+
+    /// A closure in a tuple slot invoked through a tuple-index callee
+    /// `(t.0)(arg)`.
+    #[test]
+    fn tuple_index_closure_call_runs() {
+        let out = run_program(
+            "fn main() { let t = (|x| x + 1i64, 7i64); println(f\"{(t.0)(41i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
     fn ir_for(src: &str) -> String {
         let mut parsed = karac::parse(src);
         assert!(

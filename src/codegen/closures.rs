@@ -1099,6 +1099,79 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Execute an indirect call through a closure fat-pointer VALUE produced by
+    /// an arbitrary callee EXPRESSION rather than a named binding — a struct
+    /// field `(h.f)(x)`, a Vec/array index `v[i](x)`, a tuple index `t.0(x)`, a
+    /// parenthesized closure literal `(|x| x)(a)`, or a call result. The named-
+    /// identifier closure case stays on the faster `closure_fn_types` /
+    /// `load_variable` path in `compile_closure_call`; this generalization
+    /// covers every other place expression that evaluates to a
+    /// `{fn_ptr, env_ptr}` fat pointer (B-2026-06-22-4 — previously these fell
+    /// through to a const-0 stub, a silent wrong-output miscompile under
+    /// `karac build` while `karac run` was correct).
+    ///
+    /// The env-first ABI `FunctionType` is recovered from the callee
+    /// expression's recorded `Fn(..)` type in `fn_value_typed_exprs` (the same
+    /// lowering-pass span table `let_binding_fn_value_type` uses for an
+    /// un-annotated `let g = h.f;`). Returns `Ok(None)` when the callee is not a
+    /// function-typed expression, so the caller falls through to its existing
+    /// unknown-callee const-0 fallback unchanged.
+    pub(super) fn compile_closure_value_call(
+        &mut self,
+        callee: &Expr,
+        args: &[CallArg],
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        // Recover the callee's `Fn(..)` signature from the inferred-type span
+        // table; bail out (the caller keeps its const-0 fallback) when the
+        // callee isn't a function value.
+        let fn_type = match self
+            .fn_value_typed_exprs
+            .get(&(callee.span.offset, callee.span.length))
+            .map(|t| &t.kind)
+        {
+            Some(TypeKind::FnType {
+                params,
+                return_type,
+                ..
+            }) => self.closure_abi_fn_type(params, return_type.as_deref()),
+            _ => return Ok(None),
+        };
+
+        // Evaluate the callee to its fat pointer { fn_ptr, env_ptr }.
+        let fat_val = self.compile_expr(callee)?;
+        let fat_sv = fat_val.into_struct_value();
+        let fn_ptr = self
+            .builder
+            .build_extract_value(fat_sv, 0, "closure_fn")
+            .unwrap()
+            .into_pointer_value();
+        let env_ptr = self
+            .builder
+            .build_extract_value(fat_sv, 1, "closure_env")
+            .unwrap()
+            .into_pointer_value();
+
+        // Build call args: env_ptr first, then user-supplied args.
+        let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> =
+            vec![BasicMetadataValueEnum::from(env_ptr)];
+        for arg in args {
+            let val = self.compile_expr(&arg.value)?;
+            call_args.push(BasicMetadataValueEnum::from(val));
+        }
+
+        let call = self
+            .builder
+            .build_indirect_call(fn_type, fn_ptr, &call_args, "closure_call")
+            .unwrap();
+
+        let basic_val = call.try_as_basic_value();
+        if basic_val.is_instruction() {
+            Ok(Some(self.context.i64_type().const_int(0, false).into()))
+        } else {
+            Ok(Some(basic_val.unwrap_basic()))
+        }
+    }
+
     /// Lightweight return-type inference for closure bodies.
     /// Walks the expression shallowly to determine the LLVM type without building IR.
     pub(super) fn infer_closure_return_type(

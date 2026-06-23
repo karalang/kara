@@ -152,6 +152,17 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             }
         })
         .collect();
+    // Fold in the closure-VALUE call-callee `Fn` types the typechecker stashed
+    // in a dedicated map. For a `(h.f)(x)` / `v[i](x)` / `(t.0)(x)` callee the
+    // parser-shared span means `expr_types` holds the call's *result* type at
+    // the callee key (so the loop above misses it); these entries carry the
+    // un-overwritten callee signature so codegen can lower the env-first
+    // indirect call (B-2026-06-22-4).
+    for (k, fn_ty_expr) in &tc.fn_value_callee_types {
+        program
+            .fn_value_typed_exprs
+            .insert((k.0, k.1), fn_ty_expr.clone());
+    }
     // Sibling to `string_typed_exprs`: for every `Tensor[T, Shape]`-typed
     // expression whose rank is statically known (concrete `Type::Shape`,
     // no `...` splice), record the element type (as a TypeExpr, lowered

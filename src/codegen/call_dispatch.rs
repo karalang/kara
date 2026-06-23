@@ -379,7 +379,22 @@ impl<'ctx> super::Codegen<'ctx> {
                     segments,
                     generic_args: Some(ga),
                 } if segments.len() == 1 => (segments[0].clone(), Some(ga.clone())),
-                _ => return Ok(self.context.i64_type().const_int(0, false).into()),
+                // A closure VALUE produced by a non-identifier callee — a struct
+                // field `(h.f)(x)`, a Vec/array index `v[i](x)`, a tuple index
+                // `t.0(x)`, a parenthesized closure expr, or any call result —
+                // dispatches through the env-first fat-pointer indirect call
+                // (B-2026-06-22-4). The named-identifier closure case is handled
+                // below via `closure_fn_types`; this arm covers every other
+                // place expression that evaluates to a `{fn_ptr, env_ptr}` value.
+                // Falls through to the const-0 placeholder only when the callee
+                // isn't a function-typed expression (no `fn_value_typed_exprs`
+                // entry) — the same unknown-callee fallback as before.
+                _ => {
+                    if let Some(v) = self.compile_closure_value_call(callee, args)? {
+                        return Ok(v);
+                    }
+                    return Ok(self.context.i64_type().const_int(0, false).into());
+                }
             };
 
         // `Vector[T, N](lane0, …)` SIMD construction (design.md § Portable

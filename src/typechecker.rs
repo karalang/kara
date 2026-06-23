@@ -926,6 +926,19 @@ pub struct TypeCheckResult {
     /// `expr_types` for this purpose — a separate map avoids the
     /// return-type-overwrites-receiver-type race).
     pub method_callee_types: HashMap<SpanKey, String>,
+    /// Call-expression span → the callee's `Fn(..)` `TypeExpr`, for every
+    /// `Call` whose callee is a closure VALUE produced by a non-identifier
+    /// place expression (a struct field `(h.f)(x)`, a Vec/array index
+    /// `v[i](x)`, a tuple index `(t.0)(x)`, …). The parser sets a postfix
+    /// expression's span to its root atom's span, so the `Call` node, its
+    /// callee, and the root identifier all share one `SpanKey` — and the
+    /// call's *result* type overwrites the callee's `Fn` type in `expr_types`
+    /// (a `(h.f)(21)` callee ends up recorded as the result `i64`, not `Fn`).
+    /// A dedicated map (same rationale as `method_callee_types`) preserves the
+    /// callee signature so codegen can recover the env-first indirect-call ABI
+    /// type for the fat-pointer call (B-2026-06-22-4). Lowering folds this into
+    /// `Program.fn_value_typed_exprs`.
+    pub fn_value_callee_types: HashMap<SpanKey, TypeExpr>,
     /// `impl Trait` slice 4 — per-existential capture set, keyed by the
     /// `SpanKey` of the `TypeKind::ImplTrait` AST node (same key shape
     /// used by [`Type::Existential::origin`]). For each return-position
@@ -1193,6 +1206,10 @@ pub struct TypeChecker<'a> {
     /// MethodCall span → `Type.method` canonical callee key. See the
     /// matching field on `TypeCheckResult` for the full rationale.
     pub(super) method_callee_types: HashMap<SpanKey, String>,
+    /// Call span → callee `Fn(..)` `TypeExpr` for a closure-VALUE call through
+    /// a non-identifier callee. See the public copy on `TypeCheckResult` for
+    /// the full rationale.
+    pub(super) fn_value_callee_types: HashMap<SpanKey, TypeExpr>,
     /// Per-existential capture sets, keyed by the SpanKey of the
     /// `TypeKind::ImplTrait` AST node. See the public copy on
     /// `TypeCheckResult` for the full rationale.
@@ -1410,6 +1427,7 @@ impl<'a> TypeChecker<'a> {
             try_into_conversions: HashMap::new(),
             display_snake_case_enums: HashSet::new(),
             method_callee_types: HashMap::new(),
+            fn_value_callee_types: HashMap::new(),
             impl_trait_captures: HashMap::new(),
             method_unwrap_inner_types: HashMap::new(),
             channel_elem_types: HashMap::new(),
@@ -1582,6 +1600,7 @@ impl<'a> TypeChecker<'a> {
             try_into_conversions: self.try_into_conversions,
             display_snake_case_enums: self.display_snake_case_enums,
             method_callee_types: self.method_callee_types,
+            fn_value_callee_types: self.fn_value_callee_types,
             impl_trait_captures: self.impl_trait_captures,
             method_unwrap_inner_types: self.method_unwrap_inner_types,
             channel_elem_types: self.channel_elem_types,

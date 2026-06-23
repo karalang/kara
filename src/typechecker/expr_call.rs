@@ -1152,6 +1152,29 @@ impl<'a> super::TypeChecker<'a> {
 
         let callee_ty = self.infer_expr(callee);
 
+        // Closure-VALUE call through a non-identifier callee — a struct field
+        // `(h.f)(x)`, a Vec/array index `v[i](x)`, a tuple index `(t.0)(x)`,
+        // etc. The parser gives the callee, the `Call`, and the root atom one
+        // shared span, and `infer_expr(callee)` above recorded the callee's
+        // `Fn` type at that span in `expr_types` — but the call's *result* type
+        // is about to overwrite it there. Stash the callee signature in a
+        // dedicated map (codegen recovers the env-first indirect-call ABI from
+        // it, B-2026-06-22-4). Identifier / `Path` callees are excluded: a
+        // named closure binding is dispatched via `closure_fn_types` and a free
+        // fn / assoc fn is a direct call — neither needs this.
+        if matches!(
+            &callee_ty,
+            Type::Function { .. } | Type::OnceFunction { .. }
+        ) && !matches!(
+            &callee.kind,
+            ExprKind::Identifier(_) | ExprKind::Path { .. }
+        ) {
+            self.fn_value_callee_types.insert(
+                SpanKey::from_span(&callee.span),
+                Self::type_to_type_expr(&callee_ty),
+            );
+        }
+
         match &callee_ty {
             Type::Function {
                 params,
