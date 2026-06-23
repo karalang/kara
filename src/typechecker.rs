@@ -66,6 +66,36 @@ use types::{
 
 // ── Attribute Helpers ───────────────────────────────────────────
 
+/// Render one attribute to a flat string for comptime `Field.attrs` reflection:
+/// the `::`-joined path, plus any identifier/call-callee args in parentheses.
+/// `#[karac::proto(sint64)]` → `"karac::proto(sint64)"`; `#[foo]` → `"foo"`.
+pub(super) fn render_attribute(attr: &Attribute) -> String {
+    let path = attr.path.join("::");
+    let mut arg_names: Vec<String> = Vec::new();
+    for arg in &attr.args {
+        match &arg.value {
+            Some(Expr {
+                kind: ExprKind::Identifier(name),
+                ..
+            }) => arg_names.push(name.clone()),
+            Some(Expr {
+                kind: ExprKind::Call { callee, .. },
+                ..
+            }) => {
+                if let ExprKind::Identifier(name) = &callee.kind {
+                    arg_names.push(name.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    if arg_names.is_empty() {
+        path
+    } else {
+        format!("{path}({})", arg_names.join(","))
+    }
+}
+
 /// Extract trait names from `#[derive(Eq, Hash, ...)]` attributes.
 /// Also handles call-form args like `Display(snake_case)` — the trait name
 /// (`"Display"`) is inserted regardless of arguments.

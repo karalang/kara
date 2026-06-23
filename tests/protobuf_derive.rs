@@ -599,6 +599,74 @@ fn main() {
     assert_eq!(run(src), vec!["1\n", "1\n", "2\n", "5\n", "true\n"]);
 }
 
+// ── wire-type overrides (sint / fixed / sfixed) ─────────────────
+
+#[test]
+fn derive_wire_overrides_roundtrip() {
+    // `#[karac::proto(...)]` selects ZigZag (`sint*`) or fixed-width
+    // (`fixed*`/`sfixed*`) encodings that the Kāra int type can't express.
+    let src = r#"
+#[derive(Message)]
+struct M {
+    #[karac::proto(sint64)] a: i64,
+    #[karac::proto(sint32)] b: i32,
+    #[karac::proto(fixed64)] c: u64,
+    #[karac::proto(sfixed32)] d: i32,
+    plain: i64,
+}
+
+fn main() {
+    let m = M { a: -5, b: -100000, c: 18000000000u64, d: -7, plain: -5 };
+    let back = M.decode(m.encode());
+    println(back.a);
+    println(back.b);
+    println(back.c);
+    println(back.d);
+    println(back.plain);
+}
+"#;
+    assert_eq!(
+        run(src),
+        vec!["-5\n", "-100000\n", "18000000000\n", "-7\n", "-5\n"]
+    );
+}
+
+#[test]
+fn derive_sint_shrinks_small_negatives() {
+    // ZigZag encodes a small negative in 1 payload byte, vs 10 for plain int64.
+    let src = r#"
+#[derive(Message)]
+struct Plain { v: i64 }
+
+#[derive(Message)]
+struct Zig { #[karac::proto(sint64)] v: i64 }
+
+fn main() {
+    println(Plain { v: -5 }.encode().len());
+    println(Zig { v: -5 }.encode().len());
+}
+"#;
+    // Plain int64 -5 → tag(1) + 10-byte varint = 11; sint64 -5 → tag(1) + 1 = 2.
+    assert_eq!(run(src), vec!["11\n", "2\n"]);
+}
+
+#[test]
+fn derive_unknown_wire_override_errors() {
+    let src = r#"
+#[derive(Message)]
+struct M { #[karac::proto(varint7)] x: i64 }
+
+fn main() {}
+"#;
+    let diags = comptime_diags(src);
+    assert!(
+        diags.iter().any(|d| d.contains("E_COMPTIME_ERROR")
+            && d.contains("unknown wire override")
+            && d.contains("varint7")),
+        "expected an unknown-wire-override diagnostic; got: {diags:?}"
+    );
+}
+
 // ── maps ────────────────────────────────────────────────────────
 
 #[test]

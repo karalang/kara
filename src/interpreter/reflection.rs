@@ -172,24 +172,35 @@ impl Interpreter<'_> {
     }
 
     /// Build the `Vec[Field]` for a struct or union — one `Field { name, ty,
-    /// is_pub }` record per declared field. Empty for an enum (its payloads
-    /// live on `variants()`), matching `T.fields()`'s per-struct semantics.
+    /// is_pub, attrs }` record per declared field. Empty for an enum (its
+    /// payloads live on `variants()`), matching `T.fields()`'s per-struct
+    /// semantics. `attrs` is the field's rendered attributes (union fields
+    /// carry none in v1).
     fn reflect_fields(&self, type_name: &str) -> Vec<Value> {
         let tc = self.typecheck_result;
-        let raw: &[(String, crate::typechecker::Type, bool)] =
-            if let Some(s) = tc.struct_info.get(type_name) {
-                &s.fields
-            } else if let Some(u) = tc.union_info.get(type_name) {
-                &u.fields
-            } else {
-                return Vec::new();
-            };
+        let empty_attrs = HashMap::new();
+        let raw: &[(String, crate::typechecker::Type, bool)];
+        let field_attrs: &HashMap<String, Vec<String>>;
+        if let Some(s) = tc.struct_info.get(type_name) {
+            raw = &s.fields;
+            field_attrs = &s.field_attrs;
+        } else if let Some(u) = tc.union_info.get(type_name) {
+            raw = &u.fields;
+            field_attrs = &empty_attrs;
+        } else {
+            return Vec::new();
+        }
         raw.iter()
             .map(|(fname, fty, is_pub)| {
                 let mut fields: HashMap<String, Value> = HashMap::new();
                 fields.insert("name".to_string(), Value::String(fname.clone()));
                 fields.insert("ty".to_string(), Value::TypeVal(type_display(fty)));
                 fields.insert("is_pub".to_string(), Value::Bool(*is_pub));
+                let attrs = field_attrs
+                    .get(fname)
+                    .map(|a| a.iter().map(|s| Value::String(s.clone())).collect())
+                    .unwrap_or_default();
+                fields.insert("attrs".to_string(), Value::array_of(attrs));
                 Value::Struct {
                     name: "Field".to_string(),
                     fields,

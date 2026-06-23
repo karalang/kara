@@ -24,6 +24,12 @@ use super::types::{
 pub struct StructInfo {
     pub generic_params: Vec<String>,
     pub fields: Vec<(String, Type, bool)>, // (name, type, is_pub)
+    /// Field name → its rendered attributes (e.g. `"karac::proto(sint64)"`),
+    /// exposed to comptime code via `Field.attrs`. Empty for any field without
+    /// attributes and for every intrinsic/baked struct. Used by `#[derive]`s
+    /// that read per-field hints — e.g. protobuf's `sint*`/`fixed*` wire-type
+    /// overrides, which are indistinguishable from `int*` at the Kāra type.
+    pub field_attrs: std::collections::HashMap<String, Vec<String>>,
     pub derived_traits: HashSet<String>,
     pub no_rc: bool,
     pub is_shared: bool,

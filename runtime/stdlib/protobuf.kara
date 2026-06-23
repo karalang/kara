@@ -595,6 +595,74 @@ comptime fn proto_map_decode(
     }
 }
 
+// ── wire-type overrides (slice 9) ────────────────────────────────
+//
+// `sint32` / `sint64` (ZigZag varint) and `fixed*` / `sfixed*` (fixed-width)
+// are wire-format variants of `int*` / `uint*` that are the SAME Kāra type, so
+// they can't be told apart by `Field.ty`. A `#[karac::proto(<wire>)]` attribute
+// on the field carries the override; the derive reads it via `Field.attrs`.
+
+// Extract the `<wire>` from a field's `#[karac::proto(<wire>)]` attribute, or
+// "" if the field has none. `attrs` entries render as `"karac::proto(sint64)"`.
+comptime fn proto_wire_override(attrs: Vec[String]) -> String {
+    let mut found = "";
+    let mut i = 0;
+    while i < attrs.len() {
+        let a = attrs[i];
+        if a.starts_with("karac::proto(") and a.substring(a.len() - 1, a.len()) == ")" {
+            found = a.substring(13, a.len() - 1);
+        }
+        i = i + 1;
+    }
+    found
+}
+
+// Encode statement for a wire-override field (`self.fname`, number `idx`):
+// ZigZag varint for `sint*`, little-endian fixed64/fixed32 for `*fixed*`.
+comptime fn proto_encode_override(idx: i64, fname: String, wire: String) -> String {
+    let tag = f"{idx}";
+    if wire == "sint64" or wire == "sint32" {
+        "out.extend_from_slice(ProtoBuf.encode_tag(" + tag
+            + ", 0)); out.extend_from_slice(ProtoBuf.encode_varint(ProtoBuf.zigzag_encode(self."
+            + fname + " as i64)));"
+    } else if wire == "fixed64" {
+        "out.extend_from_slice(ProtoBuf.encode_tag(" + tag
+            + ", 1)); out.extend_from_slice(ProtoBuf.encode_fixed64(self." + fname + "));"
+    } else if wire == "sfixed64" {
+        "out.extend_from_slice(ProtoBuf.encode_tag(" + tag
+            + ", 1)); out.extend_from_slice(ProtoBuf.encode_fixed64(self." + fname + " as u64));"
+    } else if wire == "fixed32" {
+        "out.extend_from_slice(ProtoBuf.encode_tag(" + tag
+            + ", 5)); out.extend_from_slice(ProtoBuf.encode_fixed32(self." + fname + "));"
+    } else {
+        "out.extend_from_slice(ProtoBuf.encode_tag(" + tag
+            + ", 5)); out.extend_from_slice(ProtoBuf.encode_fixed32(self." + fname + " as u32));"
+    }
+}
+
+// The expression reading a wire-override value back, cast to the field's type.
+comptime fn proto_read_override(wire: String) -> String {
+    if wire == "sint64" {
+        "ProtoBuf.zigzag_decode(reader.read_varint())"
+    } else if wire == "sint32" {
+        "(ProtoBuf.zigzag_decode(reader.read_varint()) as i32)"
+    } else if wire == "fixed64" {
+        "reader.read_fixed64()"
+    } else if wire == "sfixed64" {
+        "(reader.read_fixed64() as i64)"
+    } else if wire == "fixed32" {
+        "reader.read_fixed32()"
+    } else {
+        "(reader.read_fixed32() as i32)"
+    }
+}
+
+// True for the six recognized wire-format override names.
+comptime fn proto_wire_is_known(wire: String) -> bool {
+    wire == "sint32" or wire == "sint64" or wire == "fixed32" or wire == "fixed64"
+        or wire == "sfixed32" or wire == "sfixed64"
+}
+
 // Emit `impl T { encode / decode / merge }` for a `#[derive(Message)]` struct.
 comptime fn derive_message(comptime T: Type) -> Vec[Item] {
     let n = T.name();
@@ -738,21 +806,39 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
             dec_body = "let ev = reader.read_varint(); " + fname + " = " + chain + ";";
             mrg_body = "let ev = reader.read_varint(); self." + fname + " = " + chain + ";";
         } else {
-            // Nested: read a length-delimited blob and decode it; default is the
-            // decode of empty bytes (every field at its proto3 zero value).
-            let read = if nested {
-                tn + ".decode(reader.read_len_delim())"
+            // A `#[karac::proto(<wire>)]` attribute on an integer field selects
+            // a ZigZag / fixed-width encoding (sint*/fixed*/sfixed*) that the
+            // Kāra type alone can't express.
+            let wire = proto_wire_override(f.attrs);
+            if not nested and wire != "" {
+                if not proto_wire_is_known(wire) {
+                    compiler.error(
+                        "derive(Message): field `" + fname + "` has unknown wire override `"
+                            + wire + "` (expected sint32/sint64/fixed32/fixed64/sfixed32/sfixed64)",
+                    );
+                }
+                let read = proto_read_override(wire);
+                dflt = proto_default(tn);
+                efield = proto_encode_override(idx, fname, wire);
+                dec_body = fname + " = " + read + ";";
+                mrg_body = "self." + fname + " = " + read + ";";
             } else {
-                proto_read_expr(tn)
-            };
-            dflt = if nested { tn + ".decode(Vec.new())" } else { proto_default(tn) };
-            efield = if nested {
-                proto_encode_nested(idx, fname)
-            } else {
-                proto_encode_field(idx, fname, tn)
-            };
-            dec_body = fname + " = " + read + ";";
-            mrg_body = "self." + fname + " = " + read + ";";
+                // Nested: read a length-delimited blob and decode it; default is
+                // the decode of empty bytes (every field at its proto3 zero).
+                let read = if nested {
+                    tn + ".decode(reader.read_len_delim())"
+                } else {
+                    proto_read_expr(tn)
+                };
+                dflt = if nested { tn + ".decode(Vec.new())" } else { proto_default(tn) };
+                efield = if nested {
+                    proto_encode_nested(idx, fname)
+                } else {
+                    proto_encode_field(idx, fname, tn)
+                };
+                dec_body = fname + " = " + read + ";";
+                mrg_body = "self." + fname + " = " + read + ";";
+            }
         }
         enc = enc + efield + " ";
         decls = decls + "let mut " + fname + " = " + dflt + "; ";
@@ -804,9 +890,10 @@ comptime fn derive_message(comptime T: Type) -> Vec[Item] {
 // message — and `repeated TYPE name = N;` fields, mapped to `Vec[TYPE]`. Field
 // numbers must be contiguous `1..N` (declaration-order tagging — per-field
 // number overrides need reflection support that doesn't exist yet). `syntax` /
-// `package` / `option` / `import` statements are skipped; `oneof` and `sint*` /
-// `fixed*` types are not yet supported (nor `repeated` enums, nor enum/float map
-// values, nor `repeated` floats). `double` / `float` map to `f64` / `f32`. `map<K, V> name = N;` maps to a `Map[K, V]` field. Enum
+// `package` / `option` / `import` statements are skipped; `oneof` is not yet
+// supported (nor `repeated` enums/floats, nor enum/float map values). `double` /
+// `float` map to `f64` / `f32`; `sint*` / `fixed*` / `sfixed*` lower to their
+// base int type plus a `#[karac::proto(<wire>)]` attribute the derive reads. `map<K, V> name = N;` maps to a `Map[K, V]` field. Enum
 // declarations map to Kāra `enum`s (UPPER_SNAKE → PascalCase), with contiguous
 // `0..N` values matching declaration order.
 
@@ -1004,6 +1091,32 @@ comptime fn proto_map_type(t: String) -> String {
     }
 }
 
+// The wire-override name for a proto type that has a non-default encoding but
+// the same Kāra base type as a plain `int*`/`uint*`, or "" for an ordinary
+// type. Emitted as a `#[karac::proto(<wire>)]` attribute on the field.
+comptime fn proto_wire_for(t: String) -> String {
+    if t == "sint32" or t == "sint64" or t == "fixed32" or t == "fixed64" or t == "sfixed32"
+        or t == "sfixed64" {
+        t
+    } else {
+        ""
+    }
+}
+
+// The Kāra base type a wire-override proto type lowers to (sint*/sfixed* are
+// signed, fixed* unsigned).
+comptime fn proto_wire_base(t: String) -> String {
+    if t == "sint32" or t == "sfixed32" {
+        "i32"
+    } else if t == "sint64" or t == "sfixed64" {
+        "i64"
+    } else if t == "fixed32" {
+        "u32"
+    } else {
+        "u64"
+    }
+}
+
 // Order the collected fields by proto field number into a `name: Type, ...`
 // struct body, validating that the numbers form a contiguous `1..N` (so the
 // slice-2 derive's declaration-order tagging matches the schema's numbers).
@@ -1097,17 +1210,31 @@ comptime fn proto_parse_schema(src: String) -> Vec[Item] {
                             let ptype = toks[base];
                             let fname = toks[base + 1];
                             let numtok = toks[base + 3];
-                            let inner = proto_resolve_type(ptype, msgs);
-                            if inner == "" {
-                                compiler.error(
-                                    "proto message '" + name + "': unsupported field type '" + ptype
-                                        + "' (v1 supports string/bytes/int32/int64/uint32/uint64/bool and nested message types)",
+                            // A wire-override scalar (`sint*` / `fixed*` /
+                            // `sfixed*`) lowers to its base int type plus a
+                            // `#[karac::proto(<wire>)]` attribute. Only on plain
+                            // (non-`repeated`) fields in v1.
+                            let wover = if rep { "" } else { proto_wire_for(ptype) };
+                            if wover != "" {
+                                fnums.push(proto_atoi(numtok));
+                                fdecls.push(
+                                    "#[karac::proto(" + wover + ")] " + fname + ": "
+                                        + proto_wire_base(ptype),
                                 );
-                                bad = true;
+                            } else {
+                                let inner = proto_resolve_type(ptype, msgs);
+                                if inner == "" {
+                                    compiler.error(
+                                        "proto message '" + name + "': unsupported field type '"
+                                            + ptype
+                                            + "' (v1 supports string/bytes/int32/int64/uint32/uint64/bool, sint*/fixed*/sfixed*, float/double, and nested message types)",
+                                    );
+                                    bad = true;
+                                }
+                                let ktype = if rep { "Vec[" + inner + "]" } else { inner };
+                                fnums.push(proto_atoi(numtok));
+                                fdecls.push(fname + ": " + ktype);
                             }
-                            let ktype = if rep { "Vec[" + inner + "]" } else { inner };
-                            fnums.push(proto_atoi(numtok));
-                            fdecls.push(fname + ": " + ktype);
                             i = if rep { i + 6 } else { i + 5 };
                         }
                     }

@@ -458,9 +458,24 @@ impl<'a> super::TypeChecker<'a> {
             .iter()
             .map(|f| (f.name.clone(), self.lower_type_expr(&f.ty, &gp), f.is_pub))
             .collect();
+        let field_attrs: std::collections::HashMap<String, Vec<String>> = sdef
+            .fields
+            .iter()
+            .filter(|f| !f.attributes.is_empty())
+            .map(|f| {
+                (
+                    f.name.clone(),
+                    f.attributes
+                        .iter()
+                        .map(crate::typechecker::render_attribute)
+                        .collect(),
+                )
+            })
+            .collect();
         Some(StructInfo {
             generic_params: gp,
             fields,
+            field_attrs,
             derived_traits: extract_derived_traits(&sdef.attributes),
             no_rc: sdef.no_rc,
             is_shared: sdef.is_shared,

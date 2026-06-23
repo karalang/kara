@@ -297,6 +297,33 @@ fn main() {
 }
 
 #[test]
+fn proto_wire_override_types_roundtrip() {
+    // `sint*` / `fixed*` / `sfixed*` lower to base int types plus a
+    // `#[karac::proto(...)]` attribute and round-trip with the right encoding.
+    let src = r#"
+#[proto_schema]
+const SCHEMA: String = "
+    message Packet {
+        sint64 delta = 1;
+        sint32 small = 2;
+        fixed64 id = 3;
+        sfixed32 temp = 4;
+    }
+";
+
+fn main() {
+    let p = Packet { delta: -1000, small: -3, id: 4294967296u64, temp: -42 };
+    let back = Packet.decode(p.encode());
+    println(back.delta);
+    println(back.small);
+    println(back.id);
+    println(back.temp);
+}
+"#;
+    assert_eq!(run(src), vec!["-1000\n", "-3\n", "4294967296\n", "-42\n"]);
+}
+
+#[test]
 fn proto_map_field_roundtrip() {
     // `map<K, V> name = N;` maps to a `Map[K, V]` field — scalar and nested-
     // message values round-trip end to end.
@@ -403,18 +430,18 @@ fn main() {}
 
 #[test]
 fn proto_unsupported_type_errors() {
-    // `sint32` is not in the v1 scalar set (zigzag types are unsupported); the
-    // pure-Kāra parser reports it.
+    // `decimal` is not a proto3 type (and not a declared message); the pure-Kāra
+    // parser reports it as unsupported.
     let src = r#"
 #[proto_schema]
-const SCHEMA: String = "message M { sint32 x = 1; }";
+const SCHEMA: String = "message M { decimal x = 1; }";
 fn main() {}
 "#;
     let diags = schema_diags(src);
     assert!(
         diags.iter().any(|d| d.contains("E_COMPTIME_ERROR")
             && d.contains("unsupported field type")
-            && d.contains("sint32")),
+            && d.contains("decimal")),
         "expected an unsupported-type diagnostic; got: {diags:?}"
     );
 }

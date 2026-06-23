@@ -209,6 +209,35 @@ fn main() {
     );
 }
 
+// ── Field.attrs ─────────────────────────────────────────────────
+
+#[test]
+fn field_attrs_reflects_rendered_attributes() {
+    // A field's attributes are exposed as `Field.attrs` (rendered strings);
+    // a field without attributes has an empty list.
+    let src = "
+struct S {
+    #[karac::proto(sint64)] x: i64,
+    y: i64,
+}
+fn main() {
+    let r = comptime {
+        let mut s = \"\";
+        for f in S.fields() {
+            s = s + f.name + \":\" + f\"{f.attrs.len()}\";
+            for a in f.attrs { s = s + \"=\" + a; }
+            s = s + \";\";
+        }
+        s
+    };
+    println(r);
+}";
+    assert_eq!(
+        karac::run_program(src),
+        vec!["x:1=karac::proto(sint64);y:0;\n"]
+    );
+}
+
 // ── comptime fn with `comptime T: Type` parameter ───────────────
 
 #[test]

@@ -71,6 +71,7 @@ impl<'a> super::TypeChecker<'a> {
                         StructInfo {
                             generic_params: gp,
                             fields: Vec::new(),
+                            field_attrs: std::collections::HashMap::new(),
                             derived_traits,
                             no_rc: s.no_rc,
                             is_shared: s.is_shared,
@@ -652,6 +653,7 @@ impl<'a> super::TypeChecker<'a> {
                 .or_insert_with(|| StructInfo {
                     generic_params: vec!["T".to_string()],
                     fields: vec![],
+                    field_attrs: std::collections::HashMap::new(),
                     derived_traits: HashSet::new(),
                     no_rc: false,
                     is_shared: false,
@@ -691,7 +693,16 @@ impl<'a> super::TypeChecker<'a> {
                     ("name".to_string(), Type::Str, true),
                     ("ty".to_string(), type_pseudo(), true),
                     ("is_pub".to_string(), Type::Bool, true),
+                    (
+                        "attrs".to_string(),
+                        Type::Named {
+                            name: "Vec".to_string(),
+                            args: vec![Type::Str],
+                        },
+                        true,
+                    ),
                 ],
+                field_attrs: std::collections::HashMap::new(),
                 derived_traits: HashSet::new(),
                 no_rc: false,
                 is_shared: false,
@@ -709,6 +720,7 @@ impl<'a> super::TypeChecker<'a> {
                     ("name".to_string(), Type::Str, true),
                     ("field_count".to_string(), Type::Int(IntSize::I64), true),
                 ],
+                field_attrs: std::collections::HashMap::new(),
                 derived_traits: HashSet::new(),
                 no_rc: false,
                 is_shared: false,
@@ -795,6 +807,7 @@ impl<'a> super::TypeChecker<'a> {
                 .or_insert_with(|| StructInfo {
                     generic_params: vec!["T".to_string()],
                     fields: vec![],
+                    field_attrs: std::collections::HashMap::new(),
                     derived_traits: HashSet::new(),
                     no_rc: false,
                     is_shared: false,
@@ -1501,6 +1514,17 @@ impl<'a> super::TypeChecker<'a> {
             .iter()
             .map(|f| (f.name.clone(), self.lower_type_expr(&f.ty, &gp), f.is_pub))
             .collect();
+        let field_attrs: std::collections::HashMap<String, Vec<String>> = s
+            .fields
+            .iter()
+            .filter(|f| !f.attributes.is_empty())
+            .map(|f| {
+                (
+                    f.name.clone(),
+                    f.attributes.iter().map(super::render_attribute).collect(),
+                )
+            })
+            .collect();
         let derived_traits = extract_derived_traits(&s.attributes);
         let must_use_message = extract_must_use_message(&s.attributes);
         self.env.structs.insert(
@@ -1508,6 +1532,7 @@ impl<'a> super::TypeChecker<'a> {
             StructInfo {
                 generic_params: gp,
                 fields,
+                field_attrs,
                 derived_traits,
                 no_rc: s.no_rc,
                 is_shared: s.is_shared,
