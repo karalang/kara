@@ -89,11 +89,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **156 surfaced · 0 open · 154 fixed** (2026-05-20 → 2026-06-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **157 surfaced · 1 open · 154 fixed** (2026-05-20 → 2026-06-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-06-22-2 | 2026-06-22 | codegen | high | An ESCAPING capturing closure silently miscompiles (dangling stack environment) — soundness hole surfaced finishing first-class fn values (B-2026-06-20-1..B-2026-06-21-3). A closure that captures a local and then outlives its defining frame — returned (`fn make(k: i64) -> Fn(i64)->i64 { |x| x + k }`), or stored in a struct field / Vec / global that escapes — reads its captures from freed stack memory after the frame returns. Repro: `fn make(k){ |x| x + k }; let f = make(10); println(f(5))` typechecks with 0 errors and `karac build` prints -1 (garbage) instead of 15; it is a WRONG-OUTPUT miscompile, not a verifier error or a diagnostic. Root cause: compile_closure (src/codegen/closures.rs) builds the env as a stack alloca in the OUTER fn frame (`create_entry_alloca(outer_fn, "__closure_env", ..)`) and the fat pointer's env slot points at it; there is NO heap allocation, NO escape analysis, and NO closure-env drop machinery anywhere today (a non-escaping closure is fine because the frame is still live when it's called, which is why all existing closure tests — same-frame `let f = |x| x+base; f(5)` — pass). Non-capturing escaping closures are safe (null env). The interpreter (`karac run`) is unaffected (tree-walk closures own their captured environment). FIX = the heap-closure-environment epic (tracked in phase-7-codegen.md as a sequenced plan): heap-allocate an escaping closure's env, drop POD then heap (String/Vec) captures at the owning value's scope exit, handle a closure value copied to multiple owners (RC env or strict move + move-out suppression), and add escape analysis so non-escaping closures keep the cheap stack env. Interim-safety option (if a slice can't land): reject a not-yet-supported escaping capturing closure with a clear `not yet supported` diagnostic so no silent miscompile remains. Until fixed, the workaround is to not return / store a capturing closure (pass it down by `Fn(..)` parameter instead, which keeps the defining frame live — already supported). | phase-7-codegen.md |
 
 ### Fixed (154)
 
