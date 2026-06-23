@@ -9414,6 +9414,95 @@ fn test_arena_rewind_with_foreign_checkpoint_is_ignored() {
     assert_eq!(output, "2\n");
 }
 
+// ── Symbol + Interner — dedup string-handle primitive ──────────────
+
+#[test]
+fn test_interner_new_returns_handle() {
+    // v1 surface check: `Interner.new()` mints a fresh side-table handle.
+    // A non-zero handle_id tells us the `"Interner.new"` path arm fired.
+    let output = run(r#"fn main() {
+             let tab: Interner = Interner.new();
+             println(tab.handle_id > 0);
+         }"#);
+    assert_eq!(output, "true\n");
+}
+
+#[test]
+fn test_interner_dedups_equal_strings() {
+    // Interning equal strings returns the SAME handle (the whole point);
+    // `Symbol` equality is integer comparison.
+    let output = run(r#"fn main() {
+             let mut tab: Interner = Interner.new();
+             let a = tab.intern("hello");
+             let b = tab.intern("hello");
+             println(a == b);
+             println(tab.len());
+         }"#);
+    assert_eq!(output, "true\n1\n");
+}
+
+#[test]
+fn test_interner_distinct_strings_distinct_symbols() {
+    // Distinct strings get distinct handles; `len` counts distinct keys.
+    let output = run(r#"fn main() {
+             let mut tab: Interner = Interner.new();
+             let a = tab.intern("foo");
+             let b = tab.intern("bar");
+             let c = tab.intern("foo");
+             println(a == b);
+             println(a == c);
+             println(tab.len());
+         }"#);
+    assert_eq!(output, "false\ntrue\n2\n");
+}
+
+#[test]
+fn test_interner_resolve_roundtrip() {
+    // `resolve` hands back the interned string for a handle. `resolve`
+    // returns `ref String`, which Displays through `println` directly.
+    let output = run(r#"fn main() {
+             let mut tab: Interner = Interner.new();
+             let a = tab.intern("alpha");
+             let b = tab.intern("beta");
+             println(tab.resolve(a));
+             println(tab.resolve(b));
+         }"#);
+    assert_eq!(output, "alpha\nbeta\n");
+}
+
+#[test]
+fn test_interner_symbol_as_map_key() {
+    // The headline use case: `Symbol` is a cheap integer-keyed map key.
+    // A handle re-interned from an equal string hits the same entry.
+    let output = run(r#"fn main() {
+             let mut tab: Interner = Interner.new();
+             let a = tab.intern("k");
+             let b = tab.intern("k");
+             let mut counts: Map[Symbol, i64] = Map.new();
+             counts.insert(a, 42);
+             println(counts.get(b).unwrap_or(0));
+         }"#);
+    assert_eq!(output, "42\n");
+}
+
+#[test]
+fn test_interner_symbol_is_copy_pass_by_value_then_reuse() {
+    // Regression for the baked-distinct-type Copy registration: `Symbol`
+    // derives `Copy`, so passing one by value to `resolve` does NOT move
+    // it — the same handle stays usable afterward. Before the
+    // `register_baked_stdlib` fix this failed ownership-check with
+    // "value moved here, used again".
+    let output = run(r#"fn main() {
+             let mut tab: Interner = Interner.new();
+             let a = tab.intern("x");
+             let _s = tab.resolve(a);
+             let mut m: Map[Symbol, i64] = Map.new();
+             m.insert(a, 7);
+             println(m.get(a).unwrap_or(0));
+         }"#);
+    assert_eq!(output, "7\n");
+}
+
 #[test]
 fn test_tracing_user_can_implement_exporter_trait() {
     // The whole point of the `Exporter` trait shape is that user code

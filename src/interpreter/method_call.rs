@@ -880,6 +880,9 @@ impl<'a> super::Interpreter<'a> {
         if let Some(v) = self.try_eval_arena_method(method, &obj, args, span) {
             return v;
         }
+        if let Some(v) = self.try_eval_interner_method(method, &obj, args, span) {
+            return v;
+        }
         // Backpressure guards borrow the receiver (`&obj`) instead of
         // cloning it: each only reads the `{name, handle_id}` struct via
         // `*_handle(&obj)`, so a speculative clone here was pure waste —

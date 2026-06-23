@@ -158,6 +158,29 @@ fn test_arena_push_infers_allocates_heap() {
 }
 
 #[test]
+fn test_interner_intern_infers_allocates_heap() {
+    // `Interner.new` / `Interner.intern` are seeded `allocates(Heap)`
+    // (conservative — a dedup hit is pure, but the checker can't tell a
+    // hit from a fresh mint statically). A private fn that interns infers
+    // the substrate alloc effect.
+    let result = effectcheck_ok(
+        "fn build() {\n\
+         let t: Interner = Interner.new();\n\
+         let _s = t.intern(\"k\");\n\
+         }",
+    );
+    let inferred = result.inferred_effects.get("build").unwrap();
+    assert!(
+        inferred
+            .effects
+            .iter()
+            .any(|e| e.effect.verb == EffectVerbKind::Allocates),
+        "Interner.intern/new should infer allocates(Heap), got: {:?}",
+        inferred.effects
+    );
+}
+
+#[test]
 fn test_function_with_declared_effects() {
     effectcheck_ok(
         "effect resource UserDB;\n\

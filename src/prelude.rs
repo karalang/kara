@@ -260,6 +260,12 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "Arena",
     "ArenaRef",
     "ArenaCheckpoint",
+    // `Symbol` + `Interner` deduplicating string-handle primitive (v70
+    // arena/handle stdlib graduation). `Symbol` is a transparent `i64`
+    // handle (`distinct type`); `Interner` is the dedup store. See
+    // `runtime/stdlib/interner.kara`.
+    "Symbol",
+    "Interner",
     // `Tensor[T, Shape]` shape-typed N-D container (phase-11 numerical
     // stdlib, interpreter MVP). See `runtime/stdlib/tensor.kara`.
     "Tensor",
@@ -770,6 +776,14 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     // (`push` / `get` / `high_water_mark` / `rewind_to` / `len`);
     // codegen lowering deferred (interpreter-only, like `Pool[T]`).
     ("arena.kara", include_str!("../runtime/stdlib/arena.kara")),
+    // `Symbol` + `Interner` deduplicating string-handle primitive (v70
+    // arena/handle stdlib graduation). Surface + interpreter intrinsic
+    // (`intern` / `resolve` / `len`); codegen lowering deferred
+    // (interpreter-only, like `Pool[T]` / `Arena[T]`).
+    (
+        "interner.kara",
+        include_str!("../runtime/stdlib/interner.kara"),
+    ),
     // `Semaphore` application-layer backpressure primitive (phase-8 P1).
     // Surface + collapsed single-threaded intrinsic (immediate-serve-or-
     // timeout); the parking-with-timeout backend lands with the event loop.

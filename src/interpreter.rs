@@ -23,6 +23,7 @@ mod method_call_bufwriter;
 mod method_call_channel;
 mod method_call_file;
 mod method_call_http;
+mod method_call_interner;
 mod method_call_iter;
 mod method_call_map;
 mod method_call_optres;
@@ -256,6 +257,19 @@ pub struct Interpreter<'a> {
     /// `Arena.new` (no table entry) is distinguishable from a real
     /// arena.
     pub(crate) arena_handle_counter: i64,
+    /// `Interner` intrinsic side-table — keyed by `Interner.handle_id`,
+    /// holds the per-interner `(Vec<String>, HashMap<String, i64>)`: the
+    /// `Vec` is the symbol-id → string lookup, the `HashMap` is the dedup
+    /// index. `Interner.new` allocates a fresh pair and returns a handle;
+    /// `intern` appends-or-dedups, `resolve` reads by id. See
+    /// `src/interpreter/method_call_interner.rs`.
+    #[allow(clippy::type_complexity)]
+    pub(crate) interner_table: HashMap<i64, (Vec<String>, HashMap<String, i64>)>,
+    /// Monotonic counter for `Interner.handle_id` minting. Starts at 1
+    /// so a hand-rolled `Interner { handle_id: 0 }` literal that bypassed
+    /// `Interner.new` (no table entry) is distinguishable from a real
+    /// interner.
+    pub(crate) interner_handle_counter: i64,
     /// `Semaphore` backpressure primitive — permit counter keyed by
     /// `Semaphore.handle_id`. `Semaphore.new` populates an entry;
     /// `acquire` / `release` adjust `available`. See
@@ -535,6 +549,8 @@ impl<'a> Interpreter<'a> {
             pool_handle_counter: 0,
             arena_table: HashMap::new(),
             arena_handle_counter: 0,
+            interner_table: HashMap::new(),
+            interner_handle_counter: 0,
             semaphore_table: HashMap::new(),
             semaphore_handle_counter: 0,
             rate_limiter_table: HashMap::new(),

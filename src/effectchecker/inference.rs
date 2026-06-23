@@ -819,6 +819,11 @@ impl<'a> super::EffectChecker<'a> {
                     // verb either way (an `Arena.push` call surfaces both
                     // keys; the effect set is identical).
                     ("push", "Arena.push"),
+                    // `Interner.intern` — `intern` is a distinctive method
+                    // name (no other stdlib type carries it), so the
+                    // name-keyed seed routes cleanly to the allocates(Heap)
+                    // key.
+                    ("intern", "Interner.intern"),
                     ("extend_from_slice", "Vec.extend_from_slice"),
                     // `VecDeque[T]` mutating method surface — paired with
                     // the matching `inferred_effects` seeds in

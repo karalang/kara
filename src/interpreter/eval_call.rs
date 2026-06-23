@@ -722,6 +722,11 @@ impl<'a> super::Interpreter<'a> {
                         return v;
                     }
                 }
+                "Interner.new" => {
+                    if let Some(v) = self.eval_interner_new(args) {
+                        return v;
+                    }
+                }
                 // Phase-11 Tensor constructors (interpreter MVP) — see
                 // runtime/stdlib/tensor.kara for the fill-type note.
                 "Tensor.zeros" | "Tensor.ones" | "Tensor.full" => {

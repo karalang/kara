@@ -678,6 +678,14 @@ impl<'a> EffectChecker<'a> {
             // `Vec.new` / `Vec.push` seeds above.
             "Arena.new",
             "Arena.push",
+            // `Interner` dedup string-handle primitive (v70 graduation):
+            // `new` allocates the (Vec, HashMap) pair; `intern` allocates
+            // on a fresh mint (and grows the dedup index). Conservatively
+            // seeded `allocates(Heap)` — the checker can't tell a dedup
+            // hit (pure) from a fresh mint statically; over-approximation
+            // is acceptable, false negatives are not.
+            "Interner.new",
+            "Interner.intern",
             "Channel.new",
             "Sender.send",
             "Iterator.chunk_by",

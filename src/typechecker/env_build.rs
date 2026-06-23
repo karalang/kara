@@ -555,6 +555,16 @@ impl<'a> super::TypeChecker<'a> {
                 Item::EnumDef(e) => self.env_add_enum(e),
                 Item::TraitDef(t) => self.env_add_trait(t),
                 Item::ImplBlock(i) => self.env_add_impl(i),
+                // Baked `distinct type`s (e.g. `Symbol`, `ExitCode`) register
+                // their derived-trait set + base type the same way user
+                // distinct types do, so downstream phases see e.g. `Symbol`'s
+                // `#[derive(Copy, Eq, Hash)]`. Without this, ownership's
+                // `is_copy_type` (`tc.distinct_type_traits`) never sees a
+                // baked Copy derive and a `Symbol` passed by value moves
+                // instead of copies. (`ExitCode` carries no derives, so its
+                // entry is an empty set — harmless; its `SUCCESS`/`FAILURE`
+                // intercepts and `coerce_to_distinct_base` path are unchanged.)
+                Item::DistinctType(d) => self.env_add_distinct_type(d),
                 Item::UnionDef(_)
                 | Item::TraitAlias(_)
                 | Item::MarkerTrait(_)
@@ -562,7 +572,6 @@ impl<'a> super::TypeChecker<'a> {
                 | Item::TypeAlias(_)
                 | Item::ExternFunction(_)
                 | Item::ExternBlock(_)
-                | Item::DistinctType(_)
                 | Item::EffectResource(_)
                 | Item::EffectGroup(_)
                 | Item::EffectVerbDecl(_)

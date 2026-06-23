@@ -1,0 +1,92 @@
+// runtime/stdlib/interner.kara
+//
+// `Symbol` + `Interner` — deduplicating string-handle primitive.
+// Phase 8 floor (v70 arena/handle stdlib graduation, 2026-06-01).
+// Spec at `phase-8-stdlib-floor.md § v70 graduation P1 additions >
+// Symbol + Interner`.
+//
+// An interner stores each distinct string once and hands back a
+// compact integer `Symbol` handle for it; re-interning an equal
+// string returns the *same* handle. Equality and hashing on `Symbol`
+// are integer ops (no string compare), so symbol-keyed maps/sets and
+// equality checks are cheap. `Interner` is `Arena[T]`-adjacent
+// (durable lifetime, no per-item release) but adds a dedup index on
+// top. Use cases: HTTP-header canonicalization, JSON/log key dedup,
+// regex character classes, every compiler's identifier handling.
+//
+// **`Symbol` is a transparent `i64` handle.** `distinct type Symbol =
+// i64` lowers to a bare `i64` (the interpreter represents it as the
+// underlying integer), so a `Symbol` costs nothing over a raw handle
+// while staying a distinct type you can't accidentally mix with other
+// integers. It derives `Eq` / `Hash` / `Copy` / `Clone` (cheap
+// integer eq/hash for map keys + equality) and `Display`. **Display
+// renders the integer id, NOT the string** — a `Symbol` can't reach
+// its `Interner`, so to print the text you thread the interner
+// through (`interner.resolve(sym)`), exactly like Rust's
+// `Symbol`/`Ident`. (Carrying the interner handle inside `Symbol` so
+// `Display` could call back is the resolved post-v1 alternative; it
+// conflicts with the bare-`i64` lowering, so v1 ships the integer
+// handle.)
+//
+// **Dispatch.** `Interner.new` fires through the `"Interner.new"`
+// path-string arm in `eval_call.rs`; `intern` / `resolve` / `len`
+// route through the interpreter's `try_eval_interner_method` arm.
+// Interner state lives Rust-side in `interner_table: HashMap<i64,
+// (Vec<String>, HashMap<String, i64>)>` keyed by `Interner.handle_id`
+// — the `Vec` is the id→string lookup, the `HashMap` is the dedup
+// index. The Kāra `Interner` value carries only the handle. The
+// baked placeholder bodies below are never evaluated (the interpreter
+// intercepts before the body runs) and never reach codegen
+// (interpreter-only, like `Pool[T]` / `Arena[T]`); baked-stdlib impl
+// bodies are neither resolved nor type-checked — only the signatures
+// are the contract.
+
+#[derive(Eq, Hash, Copy, Clone, Display)]
+distinct type Symbol = i64;
+
+// Opaque interner handle. `handle_id` keys into the interpreter's
+// `interner_table` side-table; `0` is reserved for a hand-rolled
+// `Interner { handle_id: 0 }` literal that bypassed `Interner.new`
+// (no table entry) — its methods short-circuit rather than corrupt
+// another interner's bookkeeping.
+struct Interner {
+    handle_id: i64,
+}
+
+impl Interner {
+    // Create a fresh empty interner. Dispatched through `eval_call.rs`'s
+    // `"Interner.new"` path-string arm, which allocates the (Vec,
+    // HashMap) pair in `interner_table` and returns an `Interner {
+    // handle_id }` carrying the fresh handle.
+    #[compiler_builtin]
+    fn new() -> Interner {
+        Interner { handle_id: 0 }
+    }
+
+    // Intern a string and return its handle. If `s` was previously
+    // interned, returns the existing `Symbol` (no new storage);
+    // otherwise stores `s` and mints a fresh handle. `allocates(Heap)`
+    // on a fresh mint; pure on a hit (conservatively seeded as
+    // allocating — the checker can't tell a hit from a miss statically).
+    #[compiler_builtin]
+    fn intern(ref self, s: ref String) -> Symbol {
+        Symbol(0)
+    }
+
+    // Resolve a handle back to its interned string. The interpreter
+    // hands back the stored string at the symbol's id; this body is a
+    // never-evaluated placeholder (a self-call so it stays type-correct
+    // as `ref String`). A handle minted by a different interner, or one
+    // out of range, degrades to the empty string.
+    #[compiler_builtin]
+    fn resolve(ref self, sym: Symbol) -> ref String {
+        self.resolve(sym)
+    }
+
+    // Number of distinct strings interned so far (= the next handle to
+    // be minted).
+    #[compiler_builtin]
+    fn len(ref self) -> i64 {
+        0
+    }
+}
