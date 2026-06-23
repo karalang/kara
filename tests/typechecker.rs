@@ -21496,6 +21496,40 @@ fn test_module_binding_vec_new_with_args_rejected() {
 }
 
 #[test]
+fn test_module_binding_map_set_new_init_accepted() {
+    // `Map.new()` / `Set.new()` are permitted constant-init special forms
+    // at module scope. Unlike `Vec.new()`, the empty value is NOT a
+    // zero-shaped aggregate (`karac_map_new` installs hash seeds + a
+    // vtable), so codegen emits a placeholder `null` global and fills it
+    // from a `__karac_static_init` prologue — but the const-init walker
+    // only needs to admit the shape here. The declared K/V (resp. element)
+    // annotation pins the type vars `Map.new()` infers as fresh.
+    typecheck_ok("let mut REGISTRY: Map[String, i64] = Map.new();");
+    typecheck_ok("let mut SEEN: Set[i64] = Set.new();");
+    // Immutable form also accepted (slice 5's mutability check is
+    // orthogonal to the init shape — though insert needs `let mut`).
+    typecheck_ok("let CACHE: Map[i64, i64] = Map.new();");
+}
+
+#[test]
+fn test_module_binding_map_set_new_with_args_rejected() {
+    // `Map.new(...)` / `Set.new(...)` with any argument is not a
+    // recognized constant-init form (zero-arg only).
+    for src in [
+        "let mut REGISTRY: Map[i64, i64] = Map.new(1);",
+        "let mut SEEN: Set[i64] = Set.new(1);",
+    ] {
+        let errs = typecheck_errors(src);
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e.kind, TypeErrorKind::ModuleBindingEffectfulInit)),
+            "expected ModuleBindingEffectfulInit for `{src}`, got: {:?}",
+            errs.iter().map(|e| &e.message).collect::<Vec<_>>(),
+        );
+    }
+}
+
+#[test]
 fn test_uppercase_local_method_dispatch() {
     // Uppercase locals route through the parser's eager Path-consumption
     // at `src/parser/exprs.rs` 1298–1326 (the comment says "Type/Const-class

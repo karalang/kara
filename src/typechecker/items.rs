@@ -2473,6 +2473,18 @@ impl<'a> super::TypeChecker<'a> {
             // empty Vec, so no heap allocation is needed and the value is
             // a true compile-time constant.
             "Vec" | "VecDeque" => args.is_empty(),
+            // `Map.new()` / `Set.new()` are NOT a zero-shaped aggregate
+            // (unlike Vec): `runtime/src/map.rs::karac_map_new` installs
+            // per-instance hash seeds + a vtable before any op can run.
+            // The const-init walker therefore admits them only as a
+            // structural permission; codegen emits a placeholder `null`
+            // `ptr` global and fills it from a `__karac_static_init`
+            // prologue (`karac_map_new(...)`) that runs before `main`'s
+            // body — see `declare_module_bindings` /
+            // `finalize_module_binding_static_init` in
+            // `src/codegen/module_bindings.rs`. `Set[T]` reuses the same
+            // runtime via `karac_map_new` with `val_size = 0`.
+            "Map" | "Set" => args.is_empty(),
             // Atomic.new / Mutex.new take a single argument that must
             // itself be a permitted constant-init form.
             "Atomic" | "Mutex" => {
@@ -2497,7 +2509,7 @@ impl<'a> super::TypeChecker<'a> {
                  permitted forms, tuple and fixed-size 'Array' literals, and the \
                  recognized special forms 'LazyLock.new(|| ...)', 'OnceLock.new()', \
                  'OnceCell.new()', 'Atomic.new(LITERAL)', 'Mutex.new(LITERAL)', \
-                 'Vec.new()', 'VecDeque.new()'",
+                 'Vec.new()', 'VecDeque.new()', 'Map.new()', 'Set.new()'",
                 binding_name, what,
             ),
             e.span.clone(),
