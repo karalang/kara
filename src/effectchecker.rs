@@ -671,6 +671,13 @@ impl<'a> EffectChecker<'a> {
             "Set.union",
             "Set.intersection",
             "Set.difference",
+            // `Arena[T]` bulk-allocation primitive (v70 graduation):
+            // `new` allocates the backing vec, `push` bump-allocates an
+            // element (and can realloc the vec), so both carry the
+            // `allocates(Heap)` substrate effect — matching the
+            // `Vec.new` / `Vec.push` seeds above.
+            "Arena.new",
+            "Arena.push",
             "Channel.new",
             "Sender.send",
             "Iterator.chunk_by",

@@ -16,6 +16,7 @@ mod exec;
 mod helpers;
 mod iter_eval;
 mod method_call;
+mod method_call_arena;
 mod method_call_bounded_channel;
 mod method_call_bufreader;
 mod method_call_bufwriter;
@@ -242,6 +243,19 @@ pub struct Interpreter<'a> {
     /// hand-rolled struct literal that bypassed `Pool.new`) can be
     /// distinguished from a legitimate pool.
     pub(crate) pool_handle_counter: i64,
+    /// `Arena[T]` intrinsic side-table — keyed by `Arena.handle_id`,
+    /// holds the per-arena backing vec of bump-allocated values.
+    /// `Arena.new` allocates a fresh empty vec and returns a handle;
+    /// `push` appends, `get` reads by `ArenaRef.index`,
+    /// `high_water_mark` / `rewind_to` snapshot + truncate. Generic T
+    /// erases at runtime — a slot is just a `Value`. See
+    /// `src/interpreter/method_call_arena.rs`.
+    pub(crate) arena_table: HashMap<i64, Vec<Value>>,
+    /// Monotonic counter for `Arena.handle_id` minting. Starts at 1
+    /// so a hand-rolled `Arena { handle_id: 0 }` literal that bypassed
+    /// `Arena.new` (no table entry) is distinguishable from a real
+    /// arena.
+    pub(crate) arena_handle_counter: i64,
     /// `Semaphore` backpressure primitive — permit counter keyed by
     /// `Semaphore.handle_id`. `Semaphore.new` populates an entry;
     /// `acquire` / `release` adjust `available`. See
@@ -519,6 +533,8 @@ impl<'a> Interpreter<'a> {
             child_stdin_table: HashMap::new(),
             pool_table: HashMap::new(),
             pool_handle_counter: 0,
+            arena_table: HashMap::new(),
+            arena_handle_counter: 0,
             semaphore_table: HashMap::new(),
             semaphore_handle_counter: 0,
             rate_limiter_table: HashMap::new(),

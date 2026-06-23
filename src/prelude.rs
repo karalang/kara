@@ -254,6 +254,12 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "Pool",
     "PooledConnection",
     "PoolError",
+    // `Arena[T]` bulk-allocation primitive (v70 arena/handle stdlib
+    // graduation). `Arena[T]` / `ArenaRef[T]` / `ArenaCheckpoint` are
+    // the user-facing surface. See `runtime/stdlib/arena.kara`.
+    "Arena",
+    "ArenaRef",
+    "ArenaCheckpoint",
     // `Tensor[T, Shape]` shape-typed N-D container (phase-11 numerical
     // stdlib, interpreter MVP). See `runtime/stdlib/tensor.kara`.
     "Tensor",
@@ -759,6 +765,11 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     // Surface only — acquire returns placeholder Err pending the
     // follow-up bounded-waiters intrinsic.
     ("pool.kara", include_str!("../runtime/stdlib/pool.kara")),
+    // `Arena[T]` bulk-allocation primitive (v70 arena/handle stdlib
+    // graduation). Surface + single-lifetime interpreter intrinsic
+    // (`push` / `get` / `high_water_mark` / `rewind_to` / `len`);
+    // codegen lowering deferred (interpreter-only, like `Pool[T]`).
+    ("arena.kara", include_str!("../runtime/stdlib/arena.kara")),
     // `Semaphore` application-layer backpressure primitive (phase-8 P1).
     // Surface + collapsed single-threaded intrinsic (immediate-serve-or-
     // timeout); the parking-with-timeout backend lands with the event loop.

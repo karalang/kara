@@ -1,0 +1,116 @@
+// runtime/stdlib/arena.kara
+//
+// `Arena[T]` + `ArenaRef[T]` — bulk-allocation primitive. Phase 8
+// floor (v70 arena/handle stdlib graduation, 2026-06-01). Spec at
+// `phase-8-stdlib-floor.md § v70 graduation P1 additions > Arena[T]`.
+//
+// A single-lifetime bump allocator: `push` appends a value and hands
+// back an `ArenaRef[T]` handle; `get` resolves a handle back to the
+// stored value; every item lives until the whole `Arena[T]` drops.
+// No per-item release and no generation counter — that is the
+// deliberate distinction from `Pool[T]` (which supports per-item
+// release + stale-handle detection). Use cases: parse trees per
+// compilation, AST nodes, frame-scoped game data, regex NFA states
+// during construction.
+//
+// **Dispatch.** The state-touching methods (`new` / `push` / `get` /
+// `high_water_mark` / `rewind_to` / `len`) are `#[compiler_builtin]`
+// — the associated `Arena.new()` fires through the `"Arena.new"`
+// path-string arm in `eval_call.rs`, and the instance methods route
+// through the interpreter's `try_eval_arena_method` arm. Arena state
+// (the backing `Vec<Value>`) lives Rust-side in `arena_table:
+// HashMap<i64, Vec<Value>>` keyed by `Arena.handle_id`; the Kāra
+// `Arena` value carries only the handle. Generic `T` erases at
+// runtime — a slot is just a `Value`. The placeholder bodies below
+// are never evaluated (the interpreter intercepts before the body
+// runs) and never reach codegen (`std.Arena` is interpreter-only,
+// like `std.Pool`), and baked-stdlib impl bodies are neither
+// resolved nor type-checked — only the signatures are the contract.
+//
+// **Snapshot / restore.** `high_water_mark()` records the current
+// length as an `ArenaCheckpoint`; `rewind_to(cp)` truncates the
+// backing vec back to that length — used for typechecker symbol-table
+// backtracking, mid-parse error recovery, transactional middleware
+// rollback. Per spec, `ArenaRef`s created past a checkpoint become
+// dangling after a `rewind_to` (the v1 interpreter clamps the rewind
+// to the live length and a `get` on a rewound-away handle returns
+// `Unit` rather than reading out of bounds — a debug-mode panic on
+// stale access is the sound subsequent slice).
+
+// Opaque arena handle. `handle_id` keys into the interpreter's
+// `arena_table` side-table; `0` is reserved for a hand-rolled
+// `Arena { handle_id: 0 }` literal that bypassed `Arena.new` — its
+// methods short-circuit (empty backing vec) rather than corrupt
+// another arena's bookkeeping.
+struct Arena[=T] {
+    handle_id: i64,
+}
+
+// Handle to a single bump-allocated item. Carries the source arena's
+// `handle_id` (so `get` routes back to the right arena) plus the
+// item's `index` into the backing vec. Cheap to copy; no liveness
+// tracking — every handle stays valid until the arena drops (or a
+// `rewind_to` truncates past it).
+struct ArenaRef[=T] {
+    arena_handle_id: i64,
+    index: i64,
+}
+
+// A recorded high-water mark for snapshot / restore. `mark` is the
+// arena's length at the moment `high_water_mark()` was called;
+// `rewind_to(cp)` truncates the backing vec back to `mark`. Carries
+// the source arena's `handle_id` so a checkpoint minted by one arena
+// can't rewind a different one.
+struct ArenaCheckpoint {
+    arena_handle_id: i64,
+    mark: i64,
+}
+
+impl[T] Arena[T] {
+    // Create a fresh empty arena. Dispatched through `eval_call.rs`'s
+    // `"Arena.new"` path-string arm, which allocates a backing vec in
+    // `arena_table` and returns an `Arena { handle_id }` carrying the
+    // fresh handle.
+    #[compiler_builtin]
+    fn new() -> Arena[T] {
+        Arena { handle_id: 0 }
+    }
+
+    // Bump-allocate `value` into the arena and return a handle to it.
+    // The handle's `index` is the value's position in the backing vec.
+    #[compiler_builtin]
+    fn push(ref self, value: T) -> ArenaRef[T] {
+        ArenaRef { arena_handle_id: self.handle_id, index: 0 }
+    }
+
+    // Resolve a handle back to its stored value. No liveness check —
+    // every handle is valid until the arena drops. The interpreter
+    // hands back the value at `r.index`; this body is a never-evaluated
+    // placeholder (a self-call so it stays type-correct as `ref T`).
+    #[compiler_builtin]
+    fn get(ref self, r: ArenaRef[T]) -> ref T {
+        self.get(r)
+    }
+
+    // Record the arena's current length as a checkpoint for a later
+    // `rewind_to`.
+    #[compiler_builtin]
+    fn high_water_mark(ref self) -> ArenaCheckpoint {
+        ArenaCheckpoint { arena_handle_id: self.handle_id, mark: 0 }
+    }
+
+    // Truncate the arena back to a previously-recorded checkpoint,
+    // dropping every item pushed since. `ArenaRef`s created past the
+    // checkpoint dangle afterwards (no v1 liveness check). A checkpoint
+    // minted by a different arena is ignored.
+    #[compiler_builtin]
+    fn rewind_to(ref self, cp: ArenaCheckpoint) -> Unit {
+        Unit
+    }
+
+    // Number of items currently live in the arena.
+    #[compiler_builtin]
+    fn len(ref self) -> i64 {
+        0
+    }
+}

@@ -9286,6 +9286,134 @@ fn test_pool_error_variants_match_in_pattern() {
     assert_eq!(output, "timeout\nclosed\ncreate_failed\n");
 }
 
+// ── Arena[T] — bulk-allocation primitive surface ───────────────────
+
+#[test]
+fn test_arena_new_returns_handle() {
+    // v1 surface check: `Arena.new()` mints a fresh side-table handle.
+    // A non-zero handle_id tells us the `"Arena.new"` path arm actually
+    // fired (vs falling through to the placeholder body that leaves
+    // handle_id 0).
+    let output = run(r#"fn main() {
+             let a: Arena[i64] = Arena.new();
+             println(a.handle_id > 0);
+         }"#);
+    assert_eq!(output, "true\n");
+}
+
+#[test]
+fn test_arena_push_get_roundtrip() {
+    // Bump-allocate three values; each returned `ArenaRef` resolves back
+    // to its stored value via `get`. `get` returns `ref T`, which
+    // Displays through `println` directly.
+    let output = run(r#"fn main() {
+             let a: Arena[i64] = Arena.new();
+             let r0 = a.push(10);
+             let r1 = a.push(20);
+             let r2 = a.push(30);
+             println(a.get(r0));
+             println(a.get(r1));
+             println(a.get(r2));
+         }"#);
+    assert_eq!(output, "10\n20\n30\n");
+}
+
+#[test]
+fn test_arena_len_tracks_pushes() {
+    // `len()` reports the number of live items, growing with each push.
+    let output = run(r#"fn main() {
+             let a: Arena[i64] = Arena.new();
+             println(a.len());
+             let _r0 = a.push(1);
+             let _r1 = a.push(2);
+             println(a.len());
+         }"#);
+    assert_eq!(output, "0\n2\n");
+}
+
+#[test]
+fn test_arena_get_struct_field_access() {
+    // The primary arena use case — structs (AST nodes / ECS rows) bump-
+    // allocated and read back by field. `get` returns `ref Node`; field
+    // access auto-derefs, so `n.val` works without an explicit `*`.
+    let output = run(r#"struct Node { val: i64, next: i64 }
+         fn main() {
+             let a: Arena[Node] = Arena.new();
+             let r = a.push(Node { val: 7, next: 99 });
+             let n = a.get(r);
+             println(n.val);
+             println(n.next);
+         }"#);
+    assert_eq!(output, "7\n99\n");
+}
+
+#[test]
+fn test_arena_string_elements() {
+    // Heap-payload element type: String values round-trip through the
+    // arena (the backing slot is just a `Value`, so T erases cleanly).
+    let output = run(r#"fn main() {
+             let a: Arena[String] = Arena.new();
+             let r0 = a.push("hello");
+             let r1 = a.push("world");
+             println(a.get(r0));
+             println(a.get(r1));
+         }"#);
+    assert_eq!(output, "hello\nworld\n");
+}
+
+#[test]
+fn test_arena_high_water_mark_and_rewind() {
+    // Snapshot/restore: record a checkpoint, push past it, then
+    // `rewind_to` truncates the backing vec back to the checkpoint
+    // length. `len()` reflects the truncation.
+    let output = run(r#"fn main() {
+             let a: Arena[i64] = Arena.new();
+             let _r0 = a.push(1);
+             let _r1 = a.push(2);
+             let cp = a.high_water_mark();
+             let _r2 = a.push(3);
+             let _r3 = a.push(4);
+             println(a.len());
+             a.rewind_to(cp);
+             println(a.len());
+         }"#);
+    assert_eq!(output, "4\n2\n");
+}
+
+#[test]
+fn test_arena_rewind_keeps_pre_checkpoint_items() {
+    // A handle minted before the checkpoint stays valid after a rewind —
+    // only items pushed *past* the mark are dropped.
+    let output = run(r#"fn main() {
+             let a: Arena[i64] = Arena.new();
+             let r0 = a.push(100);
+             let cp = a.high_water_mark();
+             let _r1 = a.push(200);
+             a.rewind_to(cp);
+             println(a.get(r0));
+             println(a.len());
+         }"#);
+    assert_eq!(output, "100\n1\n");
+}
+
+#[test]
+fn test_arena_rewind_with_foreign_checkpoint_is_ignored() {
+    // A checkpoint minted by a *different* arena must not truncate this
+    // one — the handle-id guard rejects the cross-arena rewind, so the
+    // length is unchanged.
+    let output = run(r#"fn main() {
+             let a: Arena[i64] = Arena.new();
+             let b: Arena[i64] = Arena.new();
+             let _ra = a.push(1);
+             let _rb0 = b.push(10);
+             let _rb1 = b.push(20);
+             let foreign = a.high_water_mark();
+             b.rewind_to(foreign);
+             println(b.len());
+         }"#);
+    assert_eq!(output, "2\n");
+}
+
 #[test]
 fn test_tracing_user_can_implement_exporter_trait() {
     // The whole point of the `Exporter` trait shape is that user code

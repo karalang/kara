@@ -135,6 +135,29 @@ fn test_pure_function() {
 }
 
 #[test]
+fn test_arena_push_infers_allocates_heap() {
+    // `Arena.new` / `Arena.push` are seeded `allocates(Heap)` (peer to
+    // the `Vec.new` / `Vec.push` seeds), so a private fn that bump-
+    // allocates into an arena infers the substrate alloc effect — the
+    // verb the auto-parallelizer's receiver-mutation lookup keys on.
+    let result = effectcheck_ok(
+        "fn build() {\n\
+         let a: Arena[i64] = Arena.new();\n\
+         let _r = a.push(7);\n\
+         }",
+    );
+    let inferred = result.inferred_effects.get("build").unwrap();
+    assert!(
+        inferred
+            .effects
+            .iter()
+            .any(|e| e.effect.verb == EffectVerbKind::Allocates),
+        "Arena.push/new should infer allocates(Heap), got: {:?}",
+        inferred.effects
+    );
+}
+
+#[test]
 fn test_function_with_declared_effects() {
     effectcheck_ok(
         "effect resource UserDB;\n\

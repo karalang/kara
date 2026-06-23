@@ -813,6 +813,12 @@ impl<'a> super::EffectChecker<'a> {
                 // Conservative over-approximation is acceptable; false negatives are not.
                 const STDLIB_METHOD_MAP: &[(&str, &str)] = &[
                     ("push", "Vec.push"),
+                    // `Arena.push` shares the `push` method name with
+                    // `Vec.push`; both seed `allocates(Heap)`, so the
+                    // name-keyed over-approximation unions to the same
+                    // verb either way (an `Arena.push` call surfaces both
+                    // keys; the effect set is identical).
+                    ("push", "Arena.push"),
                     ("extend_from_slice", "Vec.extend_from_slice"),
                     // `VecDeque[T]` mutating method surface — paired with
                     // the matching `inferred_effects` seeds in
