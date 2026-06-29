@@ -28167,3 +28167,109 @@ fn gpu_fe2_accepts_generic_param_without_bound_at_this_slice() {
     // (no GpuNotSafe error) even though `T` could be instantiated unsafely.
     typecheck_ok("#[gpu]\nfn k[T](x: T) -> T { x }\nfn main() { println(1) }");
 }
+
+// ── #[gpu] call-graph validation: recursion rejection (E0801), FE-3 ──
+// GPU kernels run with no call stack, so recursion is forbidden anywhere
+// in the transitive call graph rooted at a #[gpu] function. The check is
+// precise (direct-call keys + method_callee_types) so it never
+// false-rejects valid code. Diagnostics name the cycle chain. See
+// design.md § GPU Subset Constraints.
+
+fn gpu_recursion_errors(source: &str) -> Vec<TypeError> {
+    typecheck_errors(source)
+        .into_iter()
+        .filter(|e| e.kind == TypeErrorKind::GpuNotSafe && e.message.contains("recursion"))
+        .collect()
+}
+
+#[test]
+fn gpu_fe3_rejects_direct_self_recursion() {
+    let errs = gpu_recursion_errors(
+        "#[gpu]\n\
+         fn fib(n: i64) -> i64 { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }\n\
+         fn main() { println(1) }",
+    );
+    assert_eq!(errs.len(), 1, "got: {:?}", errs);
+    assert!(
+        errs[0].message.contains("fib → fib"),
+        "expected cycle chain; got: {}",
+        errs[0].message
+    );
+}
+
+#[test]
+fn gpu_fe3_rejects_mutual_recursion() {
+    let errs = gpu_recursion_errors(
+        "#[gpu]\n\
+         fn a(n: i64) -> i64 { b(n) }\n\
+         fn b(n: i64) -> i64 { a(n) }\n\
+         fn main() { println(1) }",
+    );
+    assert!(
+        errs.iter().any(|e| e.message.contains("a → b → a")),
+        "got: {:?}",
+        errs
+    );
+}
+
+#[test]
+fn gpu_fe3_rejects_indirect_recursion_with_root_outside_cycle() {
+    // The #[gpu] root is not itself in the cycle, but it reaches one.
+    let errs = gpu_recursion_errors(
+        "#[gpu]\n\
+         fn root(n: i64) -> i64 { p(n) }\n\
+         fn p(n: i64) -> i64 { q(n) }\n\
+         fn q(n: i64) -> i64 { p(n) }\n\
+         fn main() { println(1) }",
+    );
+    assert!(
+        errs.iter().any(|e| e.message.contains("root → p → q → p")),
+        "got: {:?}",
+        errs
+    );
+}
+
+#[test]
+fn gpu_fe3_rejects_method_self_recursion() {
+    // Exercises the precise method_callee_types edge (not a direct call).
+    let errs = gpu_recursion_errors(
+        "struct Counter { n: i64 }\n\
+         impl Counter {\n\
+             #[gpu]\n\
+             fn go(ref self, x: i64) -> i64 { if x <= 0 { 0 } else { self.go(x - 1) } }\n\
+         }\n\
+         fn main() { println(1) }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("Counter.go → Counter.go")),
+        "got: {:?}",
+        errs
+    );
+}
+
+#[test]
+fn gpu_fe3_accepts_iterative_gpu_fn_calling_nonrecursive_helper() {
+    // No false positive: a #[gpu] fn may call a non-recursive #[gpu] helper.
+    typecheck_ok(
+        "#[gpu]\n\
+         fn sq(x: i64) -> i64 { x * x }\n\
+         #[gpu]\n\
+         fn k(n: i64) -> i64 {\n\
+             let mut s: i64 = 0;\n\
+             let mut i: i64 = 0;\n\
+             while i < n { s = s + sq(i); i = i + 1; }\n\
+             s\n\
+         }\n\
+         fn main() { println(1) }",
+    );
+}
+
+#[test]
+fn gpu_fe3_recursion_in_non_gpu_fn_is_allowed() {
+    // The gate is rooted only at #[gpu] functions — ordinary recursion is fine.
+    typecheck_ok(
+        "fn fib(n: i64) -> i64 { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }\n\
+         fn main() { println(fib(10)) }",
+    );
+}

@@ -32,6 +32,7 @@ mod expr_method_tensor;
 mod expr_ops;
 mod exprs;
 mod fields;
+mod gpu_call_graph;
 mod gpu_safe;
 mod inference;
 mod items;
@@ -1563,6 +1564,11 @@ impl<'a> TypeChecker<'a> {
         // Runs after `check_items` so `expr_types` (the receiver-type source)
         // is fully populated; a no-op in the default mode.
         self.check_panicking_alloc_rejections();
+        // FE-3 — `#[gpu]` call-graph validation (recursion rejection). Runs
+        // after `check_items` so `method_callee_types` (the precise method
+        // resolution the call graph joins on) is fully populated. See
+        // `gpu_call_graph.rs` and design.md § GPU Subset Constraints.
+        self.check_gpu_call_graph();
         // Lint-level slice 5 — end-of-typecheck sweep. Walks every
         // item's `lint_overrides` and emits `unfulfilled_lint_expectation`
         // for any `Expect` override that wasn't fulfilled during
