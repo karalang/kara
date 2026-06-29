@@ -41,6 +41,9 @@ mod emutls;
 pub mod event_loop;
 mod fatal;
 mod file;
+// GPU compute spine — phase-10 GPU codegen spike slice-0a. Opt-in only.
+#[cfg(feature = "gpu")]
+mod gpu;
 mod map;
 mod mutex;
 #[cfg(feature = "net")]

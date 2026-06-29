@@ -1,6 +1,6 @@
 # Spike: GPU WGSL codegen — slice-0 (smallest end-to-end dispatch)
 
-**Status:** ⬜ OPEN — **scoping/sketch only, not an approved plan.** This spike defines the smallest provable increment of the GPU compute backend (one `#[gpu]` kernel → generated WGSL → wgpu dispatch → result read back) so the tracker's "weeks not days" estimate has a concrete first step to judge against. It also documents a **standing strategic tension**: [roadmap.md § Phase 10 > GPU compute shaders](../roadmap.md) (2026-06-10 resequence note) puts GPU codegen in the *"built once, directly in Kāra"* bucket — i.e. **don't build it in the Rust `karac`, build it in the self-hosted compiler**. This spike scopes the *Rust-now* alternative and the trade-off, so the decision can be made with a real first increment in view rather than in the abstract. **No code has been written.** Building slice-0a means adding `wgpu` to the runtime crate and reversing that roadmap decision — gate on an explicit go.
+**Status:** 🟡 PARTIAL — **slice-0a PROVEN on Metal (2026-06-29); 0b/0c gated.** The runtime wgpu spine works end-to-end: a hand-written WGSL `x * 2.0` compute shader doubles a 256-element `f32` buffer through `karac-runtime` on this Mac's Metal backend (`runtime/src/gpu.rs`, `cargo test -p karac-runtime --features gpu` — green, *not* the no-adapter skip). The genuine unknowns (async device init, buffer map/readback, the `wgpu 29.0.3` dependency) are de-risked. **Isolation held:** `wgpu` is behind an opt-in `gpu` feature, *not* in `default` — the production/lean/wasm archives are untouched (verified: a default `cargo build -p karac-runtime` pulls no `wgpu`/`naga`). Remaining: **0b** (WGSL *codegen* from the `#[gpu]` AST) and **0c** (wire `gpu.dispatch`). The original scoping sketch is preserved below. The **standing strategic tension** still applies — [roadmap.md § Phase 10 > GPU compute shaders](../roadmap.md) (2026-06-10 resequence) puts GPU codegen in the *"built once, directly in Kāra"* bucket; slice-0a proceeded under an explicit go to validate the spine, and 0b/0c remain gated on the same explicit go.
 
 ## Question
 
@@ -81,11 +81,23 @@ karac_runtime_gpu_dispatch_f32(wgsl_ptr, wgsl_len, in_ptr, n_elems) -> out_ptr
 
 | Slice | Proves | De-risks | Rough size |
 |---|---|---|---|
-| **0a** — runtime spine with *hand-written* WGSL | wgpu plumbing works: Metal on the dev Mac doubles a buffer end-to-end | the genuine unknowns — async device init, buffer mapping, the `wgpu` dependency + archive rebuild | a few days |
+| **0a** ✅ **DONE (2026-06-29)** — runtime spine with *hand-written* WGSL | wgpu plumbing works: Metal on the dev Mac doubles a buffer end-to-end | the genuine unknowns — async device init, buffer mapping, the `wgpu` dependency + archive rebuild | *took ~½ day* |
 | **0b** — WGSL codegen for the `double` shape | AST→WGSL for the trivial subset, replacing the hand-written shader | the codegen surface (the *easy* part) | 1–2 days |
 | **0c** — wire `gpu.dispatch` (SL-2) to invoke it | end-to-end from Kāra source; honest `gpu.dispatch` typing | the call-site intrinsic typing (also lands SL-2 for real) | 1–2 days |
 
 **Do 0a first.** It front-loads the real risk (wgpu) before any codegen investment. If 0a runs on Metal, the full-backend estimate (control flow, structs, `Array[T,N]`, layout-group buffer coalescing, reductions, the real per-buffer effect inference) is grounded. If 0a fights, that is learned cheaply, before building the emitter.
+
+## Slice-0a findings (2026-06-29)
+
+The spine ran on the first real attempt — the risk was lower than feared. Concrete notes for 0b/0c:
+
+- **Dependency isolation works cleanly.** `wgpu = { optional = true }` + `pollster` behind a new `gpu` feature (*not* in `default`). A default `cargo build -p karac-runtime` pulls neither — the lean/full/wasm archive floors are untouched. The [4-archive rebuild dance](../../CLAUDE.md) is a *non-issue until 0c* (when a `karac_runtime_gpu_*` C symbol actually ships into an archive); 0a lives purely behind the test-only feature.
+- **`wgpu 29.0.3` API specifics** (it churns between majors — pin/verify on bump): `Instance::new(InstanceDescriptor::new_without_display_handle())` (by value, no `Default`); `request_adapter`/`request_device` return `Result` (→ `.ok()?`); `ComputePipelineDescriptor` needs `entry_point: Some("main")` + `compilation_options`/`cache`; `device.poll(wgpu::PollType::wait_indefinitely())` (the `Wait` variant is now a struct variant).
+- **Async** handled with `pollster::block_on` — no tokio-runtime-handle juggling needed for the GPU path. Revisit if 0c must share the program's tokio reactor.
+- **Readback** = staging buffer (`MAP_READ | COPY_DST`) + `map_async` + `poll(Wait)` + an `mpsc` channel to await the callback. Works; the per-dispatch device init is the obvious next perf lever (cache the device — deferred, noted in Open questions).
+- **Verified on Metal** (`runtime/src/gpu.rs` test, green and *not* the no-adapter skip). The `None`-on-no-adapter path means CI without a GPU skips gracefully rather than failing.
+
+**0b is now unblocked** with the spine proven: generate the boilerplate WGSL + lower the `double` body (`x * 2.0`, `x` ↦ `input[i]`) from the `#[gpu]` AST in a plain-string `src/gpu_wgsl.rs`, and feed it to `dispatch_f32_map` instead of the hand-written constant.
 
 ## Mapping to the tracker
 

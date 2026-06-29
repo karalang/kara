@@ -116,6 +116,14 @@ wasm-threads = []
 # the test harness builds the runtime with `--features test-helpers`.
 test-helpers = ["net"]
 
+# GPU compute backend — phase-10 GPU codegen, spike slice-0a
+# (`docs/spikes/gpu-wgsl-slice0.md`). Opt-in ONLY: never in `default`, never
+# in any production / wasm archive yet. Pulls `wgpu` (WGSL → native GPU API:
+# Metal on macOS, Vulkan/DX12 elsewhere) + `pollster` (block_on for wgpu's
+# async device init). Gating it here keeps the compute/auto-par binary floor
+# and the wasm archives untouched while the runtime GPU spine is proven.
+gpu = ["dep:wgpu", "dep:pollster"]
+
 [dependencies]
 # Slice F (`std.json`): backing impl for `karac_runtime_json_parse` /
 # `karac_runtime_json_stringify`. Locked design choice (iii) — use
@@ -229,6 +237,8 @@ ureq = { version = "2", default-features = false, features = ["tls"], optional =
 # without a system CA bundle. Version pinned to match ureq 2.12.1's
 # transitive choice — see Cargo.lock.
 webpki-roots = { version = "0.26", optional = true }
+wgpu = { version = "29.0.3", optional = true }
+pollster = { version = "0.4.0", optional = true }
 
 [dev-dependencies]
 # Hermetic test-cert generation for `src/tls.rs`'s unit tests. Slice 4
