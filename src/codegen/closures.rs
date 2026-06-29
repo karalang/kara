@@ -333,7 +333,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// mints a reference-counted heap environment that an owner must free; only
     /// a `let f = <call>` binding is wired to free it (a `FreeClosureEnv`
     /// cleanup), so any other occurrence of the call leaks or escapes the env.
-    fn is_heap_env_producing_call(&self, e: &Expr) -> bool {
+    pub(super) fn is_heap_env_producing_call(&self, e: &Expr) -> bool {
         self.is_heap_env_producing_call_in(e, &self.fns_returning_heap_env)
     }
 
@@ -350,6 +350,24 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Path { segments, .. } => segments.len() == 1 && set.contains(&segments[0]),
             _ => false,
         }
+    }
+
+    /// If `e` is a struct literal with one or more fields whose value is a FRESH
+    /// heap-env-producing call (`H { f: make(..) }`), return those field names —
+    /// the struct local being bound OWNS each such RC env box (codegen registers
+    /// an instance-specific `FreeClosureEnv` on the field). Empty otherwise. A
+    /// heap-env BINDING field (`H { f: f }`) is NOT collected here: it would need
+    /// inc-on-store co-ownership and stays rejected this slice (store-in-struct
+    /// supports the fresh-call source only for now).
+    fn struct_literal_heap_env_call_fields(&self, e: &Expr) -> Vec<String> {
+        let ExprKind::StructLiteral { fields, .. } = &e.kind else {
+            return Vec::new();
+        };
+        fields
+            .iter()
+            .filter(|f| self.is_heap_env_producing_call(&f.value))
+            .map(|f| f.name.clone())
+            .collect()
     }
 
     /// Heap-closure-env epic (B-2026-06-22-2) — the misuse guard that keeps the
@@ -380,14 +398,17 @@ impl<'ctx> super::Codegen<'ctx> {
     /// binding that is not the callee of a direct call and is not a sanctioned
     /// copy RHS. The walk ([`expr_has_heap_env_misuse`]) is exhaustive over
     /// `ExprKind` (no silent wildcard) so no escaping occurrence is missed.
-    pub(super) fn reject_heap_env_misuse(&self, func: &Function) -> Result<(), String> {
+    pub(super) fn reject_heap_env_misuse(&mut self, func: &Function) -> Result<(), String> {
         if self.fns_returning_heap_env.is_empty() {
             return Ok(());
         }
         // Pass 1 — sanctioned top-level heap-env bindings. Forward scan so a
         // copy `let g = f` is collected once `f` is already a binding (makes
-        // `let g = f; let h = g` transitively all bindings).
+        // `let g = f; let h = g` transitively all bindings). The same scan
+        // collects struct-literal AGGREGATE OWNERS: `let h = H { f: make(..) }`
+        // → `h` owns the env in field `f` (store-in-struct slice).
         let mut binds: HashSet<String> = HashSet::new();
+        let mut owners: HashMap<String, HashSet<String>> = HashMap::new();
         for stmt in &func.body.stmts {
             if let StmtKind::Let { pattern, value, .. } = &stmt.kind {
                 let is_source = self.is_heap_env_producing_call(value)
@@ -400,9 +421,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     // sanctioned binding; pass 2 rejects the call (RULE A). A
                     // copy into a non-single pattern can't happen (a `Fn` value
                     // isn't destructurable), but the guard is order-independent.
+                } else {
+                    let fields = self.struct_literal_heap_env_call_fields(value);
+                    if !fields.is_empty() {
+                        if let [b] = pattern.binding_names().as_slice() {
+                            owners.insert(b.clone(), fields.into_iter().collect());
+                        }
+                    }
                 }
             }
         }
+        // Stash for the exhaustive walk (read via `&self` from the arms below).
+        self.heap_env_aggregate_owners = owners;
         // Pass 2 — walk for misuse, skipping the sanctioned `let f = <call>` RHS.
         let mut bad = false;
         for stmt in &func.body.stmts {
@@ -411,12 +441,33 @@ impl<'ctx> super::Codegen<'ctx> {
                     // A single-name `let` whose RHS is a heap-env-producing call
                     // OR a bare copy of a binding is sanctioned — its RHS
                     // occurrence is the supported shape, so it is not walked.
-                    let single = matches!(pattern.binding_names().as_slice(), [_]);
+                    let names = pattern.binding_names();
+                    let single = matches!(names.as_slice(), [_]);
                     let sanctioned = single
                         && (self.is_heap_env_producing_call(value)
                             || matches!(&value.kind,
                                 ExprKind::Identifier(n) if binds.contains(n)));
-                    !sanctioned && self.expr_has_heap_env_misuse(value, &binds)
+                    let is_owner = single && self.heap_env_aggregate_owners.contains_key(&names[0]);
+                    if sanctioned {
+                        false
+                    } else if is_owner {
+                        // Aggregate construction `let h = H { f: make(..), .. }`:
+                        // each heap-env-call field is the sanctioned store; walk
+                        // only the OTHER fields (and any spread) for misuse.
+                        if let ExprKind::StructLiteral { fields, spread, .. } = &value.kind {
+                            fields
+                                .iter()
+                                .filter(|f| !self.is_heap_env_producing_call(&f.value))
+                                .any(|f| self.expr_has_heap_env_misuse(&f.value, &binds))
+                                || spread
+                                    .as_deref()
+                                    .is_some_and(|s| self.expr_has_heap_env_misuse(s, &binds))
+                        } else {
+                            false
+                        }
+                    } else {
+                        self.expr_has_heap_env_misuse(value, &binds)
+                    }
                 }
                 StmtKind::LetElse {
                     value, else_block, ..
@@ -532,14 +583,29 @@ impl<'ctx> super::Codegen<'ctx> {
         let any_args = |xs: &[CallArg]| xs.iter().any(|a| mis(&a.value));
         match &e.kind {
             // A bare reference to a heap-env binding (NOT in callee position —
-            // that is handled in `Call`) escapes / aliases the single owner.
-            ExprKind::Identifier(n) => binds.contains(n),
+            // that is handled in `Call`) escapes / aliases the single owner. A
+            // bare reference to an aggregate OWNER `h` likewise escapes the
+            // struct (and its embedded env) — only `(h.f)(x)` / `h.non_closure`
+            // are allowed, handled in `Call` / `FieldAccess`.
+            ExprKind::Identifier(n) => {
+                binds.contains(n) || self.heap_env_aggregate_owners.contains_key(n)
+            }
             ExprKind::Call { callee, args } => {
                 // The one supported use: `f(args)` for a binding `f`. The callee
                 // occurrence is sanctioned; the args may still misuse a binding.
                 if let ExprKind::Identifier(n) = &callee.kind {
                     if binds.contains(n) {
                         return any_args(args);
+                    }
+                }
+                // Sanctioned field-call on an aggregate owner: `(h.f)(args)`. The
+                // `h.f` callee occurrence is allowed (it invokes, doesn't move the
+                // env); only the args can still misuse.
+                if let ExprKind::FieldAccess { object, .. } = &callee.kind {
+                    if let ExprKind::Identifier(n) = &object.kind {
+                        if self.heap_env_aggregate_owners.contains_key(n) {
+                            return any_args(args);
+                        }
                     }
                 }
                 // RULE A: a non-sanctioned heap-env-producing call leaks (the
@@ -555,9 +621,20 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::OptionalChain { object, args, .. } => {
                 mis(object) || args.as_deref().is_some_and(any_args)
             }
-            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            ExprKind::FieldAccess { object, field } => {
+                // A non-call projection of an aggregate owner's CLOSURE field
+                // escapes the env (`return h.f`, `let g = h.f`, `[h.f]`, …) →
+                // misuse; a non-closure field read (`h.count`) is fine; otherwise
+                // recurse into the object. A call form `(h.f)(x)` is sanctioned in
+                // the `Call` arm before reaching here.
+                if let ExprKind::Identifier(n) = &object.kind {
+                    if let Some(closure_fields) = self.heap_env_aggregate_owners.get(n) {
+                        return closure_fields.contains(field);
+                    }
+                }
                 mis(object)
             }
+            ExprKind::TupleIndex { object, .. } => mis(object),
             ExprKind::Index { object, index } => mis(object) || mis(index),
             ExprKind::Tuple(es) | ExprKind::ArrayLiteral(es) => any(es),
             ExprKind::PrefixCollectionLiteral { items, .. } => any(items),

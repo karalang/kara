@@ -2314,6 +2314,51 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
     }
 
+    /// Store-in-struct slice (B-2026-06-22-2): for `let h = H { f: make(..), .. }`,
+    /// register an instance-specific `FreeClosureEnv` on each struct field whose
+    /// initializer is a FRESH heap-env closure (a call to a fn in
+    /// `fns_returning_heap_env`). The struct's `Fn` field is an inline fat pointer
+    /// `{ fn_ptr, env_ptr }`, so a GEP to it is exactly the `fat_alloca` the
+    /// cleanup expects; a fresh `make(..)` leaves the field at refcount 1, so its
+    /// `FreeClosureEnv` frees the box once at `h`'s scope exit. This is
+    /// INSTANCE-specific — NOT the type-driven `__karac_drop_struct_<S>` — because
+    /// the same struct type may elsewhere hold a same-frame STACK-env closure
+    /// (`H { f: |x| x + base }`), whose env must never be RC-freed. The misuse
+    /// guard rejects any escape of `h`, so the field env never outlives `h`.
+    pub(super) fn register_struct_literal_heap_env_field_drops(
+        &mut self,
+        value: &Expr,
+        struct_name: &str,
+        struct_alloca: PointerValue<'ctx>,
+    ) {
+        let ExprKind::StructLiteral { fields, .. } = &value.kind else {
+            return;
+        };
+        let Some(field_names) = self.struct_field_names.get(struct_name).cloned() else {
+            return;
+        };
+        let Some(st) = self.struct_types.get(struct_name).copied() else {
+            return;
+        };
+        for f in fields {
+            if !self.is_heap_env_producing_call(&f.value) {
+                continue;
+            }
+            let Some(idx) = field_names.iter().position(|n| n == &f.name) else {
+                continue;
+            };
+            let field_gep = self
+                .builder
+                .build_struct_gep(st, struct_alloca, idx as u32, "clo.field.envslot")
+                .unwrap();
+            if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                frame.push(super::state::CleanupAction::FreeClosureEnv {
+                    fat_alloca: field_gep,
+                });
+            }
+        }
+    }
+
     pub(super) fn suppress_source_vec_cleanup_for_arg(&self, arg_expr: &Expr) {
         self.suppress_source_vec_cleanup_for_arg_ex(arg_expr, true);
     }

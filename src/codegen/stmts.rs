@@ -3293,6 +3293,18 @@ impl<'ctx> super::Codegen<'ctx> {
                             } else if self.struct_types.contains_key(&struct_name) {
                                 self.track_struct_var(&struct_name, alloca);
                             }
+                            // Store-in-struct slice (B-2026-06-22-2): a fresh
+                            // heap-env closure stored in a struct field
+                            // (`H { f: make(..) }`) is RC-dropped per-instance via
+                            // a `FreeClosureEnv` on that field — separate from the
+                            // type-driven struct drop, which leaves `Fn` fields
+                            // alone (a same-frame stack-env closure must not be
+                            // RC-freed).
+                            self.register_struct_literal_heap_env_field_drops(
+                                value,
+                                &struct_name,
+                                alloca,
+                            );
                         }
                     }
                 }

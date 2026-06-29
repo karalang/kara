@@ -403,6 +403,32 @@ fn main() {
         );
     }
 
+    /// Store-in-struct slice (B-2026-06-22-2): a fresh heap-env closure stored in
+    /// a struct literal field (`let h = H { f: make(k) }`) is RC-dropped
+    /// per-instance via a `FreeClosureEnv` on that field at the struct local's
+    /// scope exit — freed EXACTLY once. Covers a closure-only struct and a struct
+    /// with a sibling data field. Asserts no leak (LSan) and no use-after-free /
+    /// double-free (ASAN). Without the instance field drop the env would leak;
+    /// with a (wrong) type-driven drop a sibling stack-env closure would crash —
+    /// neither happens here.
+    #[test]
+    fn asan_heap_env_stored_in_struct_field_freed_no_leak() {
+        assert_clean_asan_run(
+            r#"
+struct H { f: Fn(i64) -> i64 }
+struct G { f: Fn(i64) -> i64, n: i64 }
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn main() {
+    let h = H { f: make(21i64) };
+    let g = G { f: make(20i64), n: 2i64 };
+    println(f"{(h.f)(21i64) + (g.f)(20i64) + g.n}");
+}
+"#,
+            &["84"],
+            "asan_heap_env_stored_in_struct_field_freed_no_leak",
+        );
+    }
+
     // ── Baseline: no heap allocations ─────────────────────────────
     // Sanity-checks the harness itself — should trivially pass on any host
     // with a working `cc + ASAN`. If this fails, the infrastructure is

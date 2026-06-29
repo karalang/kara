@@ -1432,6 +1432,15 @@ pub(super) struct Codegen<'ctx> {
     /// escapes of such a binding (return / copy / store / pass — Slice 1 is
     /// call-only) and reset per function.
     pub(crate) heap_env_closure_vars: std::collections::HashSet<String>,
+    /// Per-function map (set at the top of `reject_heap_env_misuse`, read by its
+    /// exhaustive walk): a struct local `h` constructed as `let h = H { f:
+    /// make(..) }` → the set of its fields that hold a heap-env closure. Such an
+    /// `h` OWNS those env boxes (codegen registers an instance-specific
+    /// `FreeClosureEnv` on each field GEP), so the guard sanctions a field-call
+    /// `(h.f)(x)` and a non-closure field read while rejecting any escape of `h`
+    /// or a non-call projection of a closure field (store-in-struct slice).
+    pub(crate) heap_env_aggregate_owners:
+        std::collections::HashMap<String, std::collections::HashSet<String>>,
     /// Staging slot — set by `compile_closure` so the surrounding `let` binding can record
     /// the function type under the newly bound name.
     pub(crate) pending_closure_fn_type: Option<FunctionType<'ctx>>,
@@ -5079,6 +5088,7 @@ impl<'ctx> Codegen<'ctx> {
             current_fn_heap_closure_spans: std::collections::HashSet::new(),
             fns_returning_heap_env: std::collections::HashSet::new(),
             heap_env_closure_vars: std::collections::HashSet::new(),
+            heap_env_aggregate_owners: std::collections::HashMap::new(),
             pending_closure_fn_type: None,
             pending_closure_param_hints: None,
             pending_map_insert_old_dec: false,

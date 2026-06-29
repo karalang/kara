@@ -513,6 +513,92 @@ mod codegen_tests {
         );
     }
 
+    // ── Store-in-struct slice (B-2026-06-22-2) ──
+    // A FRESH heap-env closure may be STORED into a struct literal field
+    // (`let h = H { f: make(k) }`); the field is RC-dropped per-instance at the
+    // struct local's scope exit. The struct may be field-called and have its
+    // non-closure fields read, but must NOT escape (return / copy-out / store /
+    // pass), and a BINDING source (`H { f: f }`) stays rejected (needs inc-on-store).
+
+    /// `let h = H { f: make(k) }; (h.f)(x)` — a fresh heap-env closure stored in a
+    /// struct field, called through the field, freed exactly once at scope exit.
+    #[test]
+    fn heap_env_stored_in_struct_field_runs() {
+        let out = run_program(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let h = H { f: make(21i64) }; println(f\"{(h.f)(21i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// The struct may carry non-closure fields alongside the heap-env field; a
+    /// read of a non-closure field (`h.n`) is allowed by the guard.
+    #[test]
+    fn heap_env_stored_in_struct_with_data_field_runs() {
+        let out = run_program(
+            "struct H { f: Fn(i64) -> i64, n: i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let h = H { f: make(20i64), n: 2i64 }; println(f\"{(h.f)(20i64) + h.n}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// Returning the struct that owns the heap-env field is an ESCAPE — its
+    /// per-instance field drop would free the env the caller still holds (UAF),
+    /// so it stays rejected (the aggregate-return feature is a later slice).
+    #[test]
+    fn heap_env_struct_returned_is_rejected() {
+        let err = ir_result(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn build(k: i64) -> H { let h = H { f: make(k) }; return h; }\n",
+        )
+        .expect_err("returning a struct that owns a heap-env field must be rejected");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
+    /// Projecting the closure field OUT of the struct as a value
+    /// (`let g = h.f`) aliases the env out of the owner — rejected (only a
+    /// field-CALL `(h.f)(x)` is sanctioned).
+    #[test]
+    fn heap_env_struct_field_projection_is_rejected() {
+        let err = ir_result(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let h = H { f: make(21i64) }; let g = h.f; println(f\"{g(21i64)}\"); }\n",
+        )
+        .expect_err("projecting a heap-env struct field out must be rejected");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
+    /// A BINDING source into a struct field (`H { f: f }`) stays rejected: both
+    /// the binding and the struct field would own the env without an inc-on-store
+    /// (a later sub-slice).
+    #[test]
+    fn heap_env_binding_stored_in_struct_field_is_rejected() {
+        let err = ir_result(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let f = make(21i64); let h = H { f: f }; println(f\"{(h.f)(21i64)}\"); }\n",
+        )
+        .expect_err("storing a heap-env binding into a struct field must be rejected");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
+    /// Passing the owning struct as a call argument is an escape — rejected.
+    #[test]
+    fn heap_env_struct_passed_as_arg_is_rejected() {
+        let err = ir_result(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn use_h(h: H) -> i64 { (h.f)(5i64) }\n\
+             fn main() { let h = H { f: make(21i64) }; println(f\"{use_h(h)}\"); }\n",
+        )
+        .expect_err("passing a heap-env-owning struct as an arg must be rejected");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
     #[test]
     fn escaping_capturing_closure_via_let_is_rejected() {
         let err = ir_result(
