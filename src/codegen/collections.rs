@@ -1222,6 +1222,18 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // Column variable indexing: `c[i] -> Option[T]` (phase-11
+        // data-science stdlib). Column bindings are single-pointer slots
+        // to the `{data, null_bitmap, len, cap}` control block; a valid
+        // slot yields `Some`, a SQL null yields `None`. See
+        // `src/codegen/column.rs`.
+        if let ExprKind::Identifier(name) = &object.kind {
+            if let Some(info) = self.column_var_infos.get(name.as_str()).copied() {
+                let control = self.column_ptr_for_var(name)?;
+                return self.compile_column_index(control, &info, index);
+            }
+        }
+
         // Slice variable indexing: before the fast-path alloca lookup, check
         // whether the object is a slice variable. Slices use a 2-field
         // `{ptr, len}` representation and dispatch to a dedicated path.

@@ -96,6 +96,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     // tensor-typed slot would mis-size.
                     return self.context.ptr_type(AddressSpace::default()).into();
                 }
+                if name == "Column" {
+                    // `Column[T]` is a single pointer to one malloc'd
+                    // control block `{ ptr data, ptr null_bitmap, i64
+                    // len, i64 capacity }` — see `src/codegen/column.rs`.
+                    // Like Tensor, the baked `struct Column[=T] {
+                    // handle_id: i64 }` shape would otherwise mis-size.
+                    return self.context.ptr_type(AddressSpace::default()).into();
+                }
                 if name == "Atomic" {
                     // `Atomic[T]` is a transparent wrapper over `T` —
                     // baked as `struct Atomic[T] { }` in
@@ -1024,6 +1032,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // method path without needing a per-var registration.
         if let Some(info) = self.tensor_var_info_from_type_expr(te) {
             self.tensor_var_infos.insert(var_name.to_string(), info);
+            return;
+        }
+        // Column[T] — register the element LLVM type so indexing
+        // (`c[i] -> Option[T]`), method dispatch, and the cleanup tracker
+        // recognise the binding (`src/codegen/column.rs`).
+        if let Some(info) = self.column_var_info_from_type_expr(te) {
+            self.column_var_infos.insert(var_name.to_string(), info);
             return;
         }
         if let Some(elem_ty) = self.extract_vec_elem_type(te) {

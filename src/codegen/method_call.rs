@@ -424,6 +424,18 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(v);
         }
 
+        // Column instance methods (`push` / `push_null` / `len` /
+        // `null_count` / `valid_count` / `is_null`, phase-11 data-science
+        // stdlib — `src/codegen/column.rs`). Identifier receiver only
+        // (gated on `column_var_infos`, span-collision-immune); returns
+        // `None` when the receiver isn't a column or the method isn't one
+        // of ours. The Vec-returning transforms (`iter` / `iter_valid` /
+        // `fillna` / `dropna`) are a follow-on slice and stay on
+        // `karac run`.
+        if let Some(v) = self.try_compile_column_method(object, method, args, call_span)? {
+            return Ok(v);
+        }
+
         // Tensor reductions — `sum`/`mean`/`prod`/`min`/`max` (→ scalar) and
         // `sum_axis`/`mean_axis` (→ rank-1-lower tensor), phase-11 line 47
         // Slice B. Handled here so identifier / chained / value receivers

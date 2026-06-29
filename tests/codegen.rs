@@ -47605,6 +47605,117 @@ fn main() {
         }
     }
 
+    // ── Column[T] codegen — Arrow-buffer layout (phase-11 Q5) ────────
+    // `Column[T]` lowers to a single pointer to a malloc'd control block
+    // `{ data, null_bitmap, len, capacity }` (design.md § Column): a
+    // contiguous values buffer + a bit-packed validity bitmap (1 bit/elem,
+    // 1 = valid, 0 = SQL null). Core slice: constructors (new /
+    // with_capacity / from_vec), push / push_null, the null accessors
+    // (len / null_count / valid_count / is_null), and `c[i] -> Option[T]`
+    // indexing. AOT output is verified byte-identical to `karac run`.
+
+    #[test]
+    fn test_e2e_column_constructors_push_accessors() {
+        // new() + push/push_null, then every null accessor and Option
+        // indexing (Some for a valid slot, None for a null).
+        let out = run_program(
+            "fn main() {\n\
+                 let mut c: Column[i64] = Column.new();\n\
+                 c.push(10);\n\
+                 c.push(20);\n\
+                 c.push_null();\n\
+                 c.push(40);\n\
+                 println(c.len());\n\
+                 println(c.null_count());\n\
+                 println(c.valid_count());\n\
+                 println(c.is_null(2));\n\
+                 println(c.is_null(0));\n\
+                 match c[1] { Some(v) => println(v), None => println(-1) }\n\
+                 match c[2] { Some(v) => println(v), None => println(-1) }\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "4\n1\n3\ntrue\nfalse\n20\n-1\n",
+                "Column accessors + Option indexing must match the interpreter"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_column_from_vec_and_with_capacity() {
+        // from_vec (all-valid, deep-copies the buffer) + with_capacity
+        // (capacity hint honored; len starts 0). f64 + bool element types.
+        let out = run_program(
+            "fn main() {\n\
+                 let d: Column[i64] = Column.from_vec([1, 2, 3]);\n\
+                 println(d.len());\n\
+                 println(d.null_count());\n\
+                 match d[0] { Some(x) => println(x), None => println(-9) }\n\
+                 let mut f: Column[f64] = Column.with_capacity(2);\n\
+                 f.push(1.5);\n\
+                 f.push_null();\n\
+                 f.push(2.5);\n\
+                 println(f.null_count());\n\
+                 match f[2] { Some(x) => println(x), None => println(0.0) }\n\
+                 let mut b: Column[bool] = Column.new();\n\
+                 b.push(true);\n\
+                 b.push(false);\n\
+                 match b[1] { Some(x) => println(x), None => println(true) }\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "3\n0\n1\n1\n2.5\nfalse\n",
+                "Column.from_vec / with_capacity across i64/f64/bool must match the interpreter"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_column_fn_boundary_and_move() {
+        // By-value fn-boundary move (owned arg) + `let k = h;` move
+        // (source slot nulled). Both consumers own the control block; the
+        // ASAN lifecycle test pins no double-free.
+        let out = run_program(
+            "fn take(c: Column[f64]) -> i64 { c.len() }\n\
+             fn main() {\n\
+                 let g: Column[f64] = Column.from_vec([3.0, 4.0, 5.0]);\n\
+                 println(take(g));\n\
+                 let h: Column[i64] = Column.from_vec([7, 8]);\n\
+                 let k = h;\n\
+                 println(k.len());\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "3\n2\n",
+                "Column fn-boundary + let-rebind moves must match"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_column_index_oob_panics() {
+        // Out-of-range index traps (matches the interpreter's runtime OOB
+        // trap); an in-bounds-but-null slot is `None`, not a trap.
+        let captured = run_program_capturing(
+            "fn main() {\n\
+                 let c: Column[i64] = Column.from_vec([1, 2]);\n\
+                 let i = 9;\n\
+                 match c[i] { Some(v) => println(v), None => println(-1) }\n\
+             }\n",
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("Column index out of bounds"),
+                "expected the runtime index bounds trap, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+        }
+    }
+
     // ── Shape-generic function body — tensor-param indexing ──────────
     // A `fn f[N](a: Tensor[T, [N, N]], ...)` body that indexes its tensor
     // params (`a[i, j]`) lowers in codegen: `compile_mono_function`

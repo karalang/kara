@@ -1515,6 +1515,14 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.tensor_var_infos.insert(var_name.clone(), info);
                             detected = true;
                         }
+                        // `let c: Column[T] = ...` — register the binding's
+                        // element type (`src/codegen/column.rs`); the
+                        // pending-info threading below makes it visible to
+                        // the `Column.new/with_capacity/from_vec` arms.
+                        if let Some(info) = self.column_var_info_from_type_expr(te) {
+                            self.column_var_infos.insert(var_name.clone(), info);
+                            detected = true;
+                        }
                         if let Some(elem_ty) = self.extract_vec_elem_type(te) {
                             self.vec_elem_types.insert(var_name.clone(), elem_ty);
                             if let Some(inner) = vec_inner_type_expr(te) {
@@ -1951,6 +1959,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `tensor_var_infos[var_name]` was populated above from
                 // the annotation. Cleared after compile.
                 let saved_pending_let_tensor = self.pending_let_tensor_info.take();
+                // Sibling threading for `Column.new/with_capacity/from_vec`
+                // — `new`/`with_capacity` carry no element value in their
+                // args; `column_var_infos[var_name]` was populated above
+                // from the annotation. Cleared after compile.
+                let saved_pending_let_column = self.pending_let_column_info.take();
                 if let PatternKind::Binding(var_name) = &pattern.kind {
                     if let Some(&elem_ty) = self.vec_elem_types.get(var_name.as_str()) {
                         self.pending_let_elem_type = Some(elem_ty);
@@ -1979,6 +1992,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                     if let Some(info) = self.tensor_var_infos.get(var_name.as_str()) {
                         self.pending_let_tensor_info = Some(info.clone());
+                    }
+                    if let Some(info) = self.column_var_infos.get(var_name.as_str()) {
+                        self.pending_let_column_info = Some(*info);
                     }
                 }
                 // Type-changing shadow dance (step 2 of 3 — old tags for the
@@ -2010,6 +2026,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.pending_let_elem_type = saved_pending_let_elem;
                 self.pending_let_elem_type_expr = saved_pending_let_elem_te;
                 self.pending_let_tensor_info = saved_pending_let_tensor;
+                self.pending_let_column_info = saved_pending_let_column;
                 // `let w = v[i]` over a heap-element `Vec` — deep-clone the shallow
                 // element so the binding owns a distinct buffer; without it both
                 // the binding's drop and `v`'s element-drop free the same buffer
@@ -2770,6 +2787,32 @@ impl<'ctx> super::Codegen<'ctx> {
                             if matches!(slot.ty, BasicTypeEnum::PointerType(_)) {
                                 let slot_ptr = slot.ptr;
                                 self.track_tensor_var(slot_ptr);
+                            }
+                        }
+                        self.suppress_source_vec_cleanup_for_arg(value);
+                    }
+                }
+                // Track Column bindings for scope cleanup (phase-11
+                // data-science stdlib). Unannotated bindings (a
+                // column-returning call) register here from the lowering
+                // side-table at the RHS span; annotated ones above. The
+                // move-suppression call handles `let b = a;` (source slot
+                // nulled — see `FreeColumn`'s null guard). A `ref Column`
+                // RHS is a borrow and must NOT get a `FreeColumn`.
+                if let PatternKind::Binding(var_name) = &pattern.kind {
+                    let key = (value.span.offset, value.span.length);
+                    let rhs_is_borrow = self.ref_return_inner_types.contains_key(&key);
+                    if !self.column_var_infos.contains_key(var_name.as_str()) {
+                        if let Some(ci) = self.column_typed_exprs.get(&key).cloned() {
+                            let info = self.column_var_info_from_table(&ci);
+                            self.column_var_infos.insert(var_name.clone(), info);
+                        }
+                    }
+                    if self.column_var_infos.contains_key(var_name.as_str()) && !rhs_is_borrow {
+                        if let Some(slot) = self.variables.get(var_name.as_str()) {
+                            if matches!(slot.ty, BasicTypeEnum::PointerType(_)) {
+                                let slot_ptr = slot.ptr;
+                                self.track_column_var(slot_ptr);
                             }
                         }
                         self.suppress_source_vec_cleanup_for_arg(value);

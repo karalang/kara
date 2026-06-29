@@ -3782,6 +3782,65 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.build_unconditional_branch(skip_bb).unwrap();
                 self.builder.position_at_end(skip_bb);
             }
+            CleanupAction::FreeColumn { column_alloca } => {
+                // Column binding: the slot holds one pointer to the
+                // `{ data, null_bitmap, len, capacity }` control block
+                // (`src/codegen/column.rs`). Null = moved-out (the
+                // move-suppression sentinel); skip the frees. Otherwise
+                // free the two separate Arrow buffers (`data`,
+                // `null_bitmap`) and then the control block — three
+                // `free`s.
+                let ctrl = self
+                    .builder
+                    .build_load(ptr_ty, *column_alloca, "cleanup.col")
+                    .unwrap()
+                    .into_pointer_value();
+                let null = ptr_ty.const_null();
+                let live = self
+                    .builder
+                    .build_int_compare(IntPredicate::NE, ctrl, null, "cleanup.col.live")
+                    .unwrap();
+                let free_bb = self.context.append_basic_block(fn_val, "cleanup.col.free");
+                let skip_bb = self.context.append_basic_block(fn_val, "cleanup.col.skip");
+                self.builder
+                    .build_conditional_branch(live, free_bb, skip_bb)
+                    .unwrap();
+                self.builder.position_at_end(free_bb);
+                let st = self.column_control_struct_type();
+                let data = self
+                    .builder
+                    .build_load(
+                        ptr_ty,
+                        self.builder
+                            .build_struct_gep(st, ctrl, 0, "cleanup.col.data.p")
+                            .unwrap(),
+                        "cleanup.col.data",
+                    )
+                    .unwrap()
+                    .into_pointer_value();
+                let bitmap = self
+                    .builder
+                    .build_load(
+                        ptr_ty,
+                        self.builder
+                            .build_struct_gep(st, ctrl, 1, "cleanup.col.bm.p")
+                            .unwrap(),
+                        "cleanup.col.bm",
+                    )
+                    .unwrap()
+                    .into_pointer_value();
+                self.builder
+                    .build_call(self.free_fn, &[data.into()], "")
+                    .unwrap();
+                self.builder
+                    .build_call(self.free_fn, &[bitmap.into()], "")
+                    .unwrap();
+                self.builder
+                    .build_call(self.free_fn, &[ctrl.into()], "")
+                    .unwrap();
+                self.builder.build_unconditional_branch(skip_bb).unwrap();
+                self.builder.position_at_end(skip_bb);
+            }
             CleanupAction::FreeVecBuffer {
                 vec_alloca,
                 elem_ty,

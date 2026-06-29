@@ -10504,6 +10504,81 @@ fn main() {
         );
     }
 
+    /// Column heap lifecycle (phase-11 data-science stdlib, Arrow codegen
+    /// core slice): each `Column[T]` is a control block + a separate data
+    /// buffer + a separate validity bitmap, all freed once at scope exit
+    /// via `FreeColumn`'s null-guard (three `free`s). Exercises every
+    /// ownership-transfer shape — construction (new / with_capacity /
+    /// from_vec, the last with a temporary-Vec eager free), push growth
+    /// (realloc of both buffers), `let b = a;` move (source slot nulled —
+    /// double-free would trip ASAN), and fn-boundary moves (owned arg +
+    /// tail return). Leak detection on Linux (detect_leaks=1) additionally
+    /// catches a missing free of the data buffer / bitmap / control block.
+    #[test]
+    fn asan_column_lifecycle_clean() {
+        let label = "column_lifecycle";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+fn make() -> Column[i64] {
+    let mut c: Column[i64] = Column.new();
+    c.push(7);
+    c.push_null();
+    c.push(9);
+    c
+}
+
+fn take(c: Column[f64]) -> i64 {
+    c.null_count()
+}
+
+fn main() {
+    // new() + push growth (forces realloc of data + bitmap from cap 0).
+    let mut a: Column[i64] = Column.new();
+    a.push(1);
+    a.push(2);
+    a.push_null();
+    a.push(4);
+    a.push(5);
+    println(a.len());
+    println(a.null_count());
+    // with_capacity (no growth) + indexing.
+    let mut w: Column[i64] = Column.with_capacity(8);
+    w.push(11);
+    match w[0] { Some(v) => println(v), None => println(-1) }
+    // from_vec with a temporary Vec arg (eager-free of the source buffer).
+    let v: Column[f64] = Column.from_vec([1.0, 2.0, 3.0]);
+    println(take(v));
+    // let-rebind move (source slot nulled — no double-free).
+    let h: Column[i64] = Column.from_vec([8, 9]);
+    let k = h;
+    println(k.len());
+    // fn-return move (tail return owns the control block).
+    let m = make();
+    println(m.null_count());
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             check FreeColumn double-free/leak on the move-suppression paths",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["5", "1", "11", "0", "2", "1"],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     /// Tensor element-wise arithmetic heap lifecycle (phase-11 line 47):
     /// every `+ - * /` / unary `-` mallocs a fresh result; operands are
     /// borrowed (keep their own `FreeTensor`); a fresh-temp intermediate in

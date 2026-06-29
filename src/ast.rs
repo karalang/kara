@@ -400,6 +400,27 @@ pub struct TensorTypeInfo {
 /// tensor value's runtime header instead.
 pub type TensorTypedExprsTable = std::collections::HashMap<(usize, usize), TensorTypeInfo>;
 
+/// Plain-data element type of a `Column[T]`-typed expression (phase-11
+/// data-science stdlib, Arrow commitment Q5). The codegen-containment
+/// invariant (CLAUDE.md § Architecture) forbids LLVM types in
+/// upstream-phase outputs, so this carries the element `TypeExpr` only;
+/// codegen lowers it to an LLVM type at consumption sites. `Column` is
+/// always 1-D with a runtime length, so there is no shape/dims payload
+/// (unlike [`TensorTypeInfo`]).
+#[derive(Debug, Clone)]
+pub struct ColumnTypeInfo {
+    pub elem: TypeExpr,
+}
+
+/// Side-table populated by the lowering pass from the typechecker's
+/// `expr_types` map: for every expression whose Kāra type is
+/// `Column[T]`, maps `(span.offset, span.length)` to its
+/// [`ColumnTypeInfo`]. Codegen consumes this to learn a column
+/// expression's element type at construction sites and at let-binding
+/// registration for unannotated column bindings (column-returning
+/// calls / transforms).
+pub type ColumnTypedExprsTable = std::collections::HashMap<(usize, usize), ColumnTypeInfo>;
+
 /// Side-table populated by the lowering pass from the typechecker's
 /// `expr_types` map: the set of `(span.offset, span.length)` keys for every
 /// expression whose Kāra type is a `Vector[T, N]` with an **unsigned-integer**
@@ -547,6 +568,13 @@ pub struct Program {
     /// every `Tensor[T, Shape]`-typed expression with statically-known
     /// rank, its element type + static dims. See [`TensorTypedExprsTable`].
     pub tensor_typed_exprs: TensorTypedExprsTable,
+    /// Set by the lowering pass from `TypeCheckResult.expr_types`: for
+    /// every `Column[T]`-typed expression, its element type. Codegen
+    /// consumes this to learn a column expression's element type at
+    /// construction sites and let-binding registration for unannotated
+    /// bindings (e.g. a column-returning call). See
+    /// [`ColumnTypedExprsTable`].
+    pub column_typed_exprs: ColumnTypedExprsTable,
     /// Set by the lowering pass from `TypeCheckResult.expr_types`: spans of
     /// every expression whose Kāra type is a `Vector[T, N]` with an
     /// unsigned-integer element. Lets the SIMD codegen pick the unsigned

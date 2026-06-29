@@ -49,7 +49,7 @@ use super::state::TensorVarInfo;
 
 /// True iff `te` names an unsigned integer primitive — drives the
 /// `is_unsigned` flag for per-element div/rem in the element-wise loop.
-fn type_expr_is_unsigned_int(te: &TypeExpr) -> bool {
+pub(super) fn type_expr_is_unsigned_int(te: &TypeExpr) -> bool {
     let TypeKind::Path(p) = &te.kind else {
         return false;
     };

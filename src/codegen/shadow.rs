@@ -37,7 +37,7 @@ use inkwell::types::{BasicTypeEnum, FunctionType, StructType};
 
 use crate::ast::TypeExpr;
 
-use super::state::TensorVarInfo;
+use super::state::{ColumnVarInfo, TensorVarInfo};
 
 /// A complete snapshot of every per-variable sidecar-metadata entry for one
 /// binding name. Produced by [`Codegen::take_var_metadata`] (which removes
@@ -59,6 +59,7 @@ pub(super) struct VarMetadataSnapshot<'ctx> {
     ref_params: Option<BasicTypeEnum<'ctx>>,
     var_option_shared_heap: Option<StructType<'ctx>>,
     tensor_var_infos: Option<TensorVarInfo<'ctx>>,
+    column_var_infos: Option<ColumnVarInfo<'ctx>>,
     enum_inst_var_types: Option<TypeExpr>,
     map_key_types: Option<BasicTypeEnum<'ctx>>,
     map_val_types: Option<BasicTypeEnum<'ctx>>,
@@ -93,6 +94,7 @@ impl<'ctx> super::Codegen<'ctx> {
             ref_params: self.ref_params.remove(name),
             var_option_shared_heap: self.var_option_shared_heap.remove(name),
             tensor_var_infos: self.tensor_var_infos.remove(name),
+            column_var_infos: self.column_var_infos.remove(name),
             enum_inst_var_types: self.enum_inst_var_types.remove(name),
             map_key_types: self.map_key_types.remove(name),
             map_val_types: self.map_val_types.remove(name),
@@ -147,6 +149,9 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         if let Some(v) = snap.tensor_var_infos {
             self.tensor_var_infos.insert(key.clone(), v);
+        }
+        if let Some(v) = snap.column_var_infos {
+            self.column_var_infos.insert(key.clone(), v);
         }
         if let Some(v) = snap.enum_inst_var_types {
             self.enum_inst_var_types.insert(key.clone(), v);

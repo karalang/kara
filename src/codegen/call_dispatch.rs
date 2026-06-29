@@ -2831,6 +2831,14 @@ impl<'ctx> super::Codegen<'ctx> {
             let _ = self.builder.build_store(slot.ptr, ptr_ty.const_null());
             return;
         }
+        // Column binding: null the source slot so its `FreeColumn`
+        // cleanup's null-guard skips — the consumer (tail return, by-
+        // value call arg, `let b = a;`) now owns the control block + its
+        // two buffers. The Column analog of the Tensor arm above.
+        if self.column_var_infos.contains_key(var_name) {
+            let _ = self.builder.build_store(slot.ptr, ptr_ty.const_null());
+            return;
+        }
         // Shared-struct / shared-enum binding (RC-tier): the binding
         // holds a `ptr` whose pointee is the heap object with the i64
         // refcount header. The let-site `track_rc_var` queued a scope-

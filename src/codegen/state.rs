@@ -45,6 +45,27 @@ pub(crate) struct TensorVarInfo<'ctx> {
     pub(crate) dims: Vec<Option<i64>>,
 }
 
+/// Codegen-side view of a `Column[T]` binding (phase-11 data-science
+/// stdlib, Arrow commitment Q5). The runtime value is a single pointer
+/// to one malloc'd control block laid out
+/// `{ ptr data, ptr null_bitmap, i64 len, i64 capacity }` (field order
+/// per design.md § Column) — `data` is a contiguous buffer of
+/// `capacity` elements, `null_bitmap` a bit-packed validity buffer of
+/// `ceil(capacity/8)` bytes (bit `i`: 1 = valid, 0 = SQL null). See
+/// `src/codegen/column.rs` for the layout helpers. `elem` is the
+/// element's LLVM type; `elem_unsigned` mirrors `TensorVarInfo` (set
+/// from the element `TypeExpr`) for the future 3VL-arithmetic slice's
+/// signed/unsigned compare choice.
+#[derive(Clone, Copy)]
+pub(crate) struct ColumnVarInfo<'ctx> {
+    pub(crate) elem: BasicTypeEnum<'ctx>,
+    /// Reserved for the follow-on 3VL-arithmetic slice's signed/unsigned
+    /// compare choice (mirrors `TensorVarInfo.elem_unsigned`); not read
+    /// by the core slice's accessors / indexing.
+    #[allow(dead_code)]
+    pub(crate) elem_unsigned: bool,
+}
+
 /// Resolved view of a slice-pattern scrutinee (`Array[T, N]`, `Vec[T]`,
 /// or `Slice[T]`) — `data_ptr` is normalized to a `T*` element pointer
 /// and `len` is the runtime element count as i64. `mutable` mirrors the
@@ -473,6 +494,19 @@ pub(crate) enum CleanupAction<'ctx> {
     FreeTensor {
         /// Alloca pointer of the tensor binding's `ptr` slot.
         tensor_alloca: PointerValue<'ctx>,
+    },
+    /// Free an owned `Column[T]`'s heap allocations at scope exit. The
+    /// binding's slot holds one pointer to the control block
+    /// `{ ptr data, ptr null_bitmap, i64 len, i64 capacity }`
+    /// (`src/codegen/column.rs`); the drain loads it and, when non-null,
+    /// frees the two buffers (`data`, `null_bitmap`) and then the control
+    /// block itself (three `free`s). Move-out sites (tail return,
+    /// by-value call arg, `let b = a;`) suppress by storing null into the
+    /// slot — the null check is the Column analog of `FreeTensor`'s
+    /// null-guard / `FreeVecBuffer`'s `cap > 0` guard.
+    FreeColumn {
+        /// Alloca pointer of the column binding's `ptr` slot.
+        column_alloca: PointerValue<'ctx>,
     },
     /// Free the per-group heap buffers of a SoA-laid-out `Vec[T]` at scope
     /// exit. SoA storage is multi-allocation — one buffer per hot group

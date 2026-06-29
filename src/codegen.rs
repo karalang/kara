@@ -32,6 +32,7 @@ mod channel;
 mod clone_drop;
 mod closures;
 mod collections;
+mod column;
 mod control_flow;
 mod control_flow_bce;
 mod control_flow_for;
@@ -2039,6 +2040,24 @@ pub(super) struct Codegen<'ctx> {
     /// `Vec.with_capacity` uses). `Tensor.from` never needs it (dims and
     /// element type both come from the literal).
     pub(crate) pending_let_tensor_info: Option<state::TensorVarInfo<'ctx>>,
+    /// Per-expression Column element type, keyed by `(span.offset,
+    /// span.length)`. Populated from `Program.column_typed_exprs`
+    /// (lowering pass). Consumed at unannotated column let-bindings
+    /// (column-returning calls) so the binding registers its element
+    /// type. See `src/codegen/column.rs` for the value layout.
+    pub(crate) column_typed_exprs: HashMap<(usize, usize), crate::ast::ColumnTypeInfo>,
+    /// Per-binding Column registration: element LLVM type (+ unsigned
+    /// flag). Populated by `register_var_from_type_expr`'s Column arm
+    /// (annotations, params) and the let-path side-table fallback for
+    /// unannotated bindings. Consulted by `compile_index` (`c[i] ->
+    /// Option[T]`) and method dispatch (`push` / `len` / …).
+    pub(crate) column_var_infos: HashMap<String, state::ColumnVarInfo<'ctx>>,
+    /// Expected-type threading for `Column.new` / `with_capacity` /
+    /// `from_vec` / `from_iter_nullable` — `new`/`with_capacity` carry no
+    /// element value in their args, so the let-binding path stashes the
+    /// destination binding's registered `ColumnVarInfo` here before
+    /// compiling the RHS (the `pending_let_tensor_info` mechanism).
+    pub(crate) pending_let_column_info: Option<state::ColumnVarInfo<'ctx>>,
     /// Set of `(span.offset, span.length)` keys for every expression whose
     /// Kāra type is a `Vector[T, N]` with an unsigned-integer element.
     /// Populated from `Program.unsigned_vector_exprs`. The LLVM `<N x iX>`
@@ -5159,6 +5178,9 @@ impl<'ctx> Codegen<'ctx> {
             tensor_typed_exprs: HashMap::new(),
             tensor_var_infos: HashMap::new(),
             pending_let_tensor_info: None,
+            column_typed_exprs: HashMap::new(),
+            column_var_infos: HashMap::new(),
+            pending_let_column_info: None,
             unsigned_vector_exprs: HashSet::new(),
             expr_struct_type_names: HashMap::new(),
             user_ord_typed_exprs: HashMap::new(),
@@ -6044,6 +6066,9 @@ impl<'ctx> Codegen<'ctx> {
         // construction / let-registration / indexing dispatch (see
         // `src/codegen/tensor.rs`).
         self.tensor_typed_exprs = program.tensor_typed_exprs.clone();
+        // Sibling: per-span Column element-type info for construction /
+        // let-registration / indexing dispatch (see `src/codegen/column.rs`).
+        self.column_typed_exprs = program.column_typed_exprs.clone();
         // Sibling: spans of unsigned-element vector expressions, so the SIMD
         // `reduce_min/max` codegen picks `ult`/`ugt` over the signed default.
         self.unsigned_vector_exprs = program.unsigned_vector_exprs.clone();

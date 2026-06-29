@@ -8,9 +8,18 @@
 // `is_null`), positional indexing `c[i] -> Option[T]` (Some for a valid
 // slot, None for a null), the nullable iterators (`iter` ->
 // `Vec[Option[T]]`, `iter_valid` -> `Vec[T]`), and the null-handling
-// transforms (`fillna` / `dropna`). The SQL-null three-valued
-// arithmetic, `fillna`'s `treat_nan_as_null` flag, and the Arrow-buffer
-// codegen lowering are follow-on sub-slices — tracker at
+// transforms (`fillna` / `dropna`).
+//
+// **Codegen (Arrow-buffer lowering).** The native LLVM lowering
+// (`src/codegen/column.rs`) ships the real bit-packed Apache Arrow
+// layout — a control block `{ data, null_bitmap, len, capacity }` with a
+// separate values buffer and a 1-bit-per-element validity bitmap — for
+// the *core* surface: `new` / `with_capacity` / `from_vec`, `push` /
+// `push_null`, `len` / `null_count` / `valid_count` / `is_null`, and
+// `c[i] -> Option[T]` indexing. The Vec-returning methods (`iter` /
+// `iter_valid` / `fillna` / `dropna`), `from_iter_nullable`, the SQL-null
+// three-valued arithmetic, and `fillna`'s `treat_nan_as_null` flag stay
+// interpreter-only (`karac run`) as follow-on sub-slices — tracker at
 // `phase-11-stdlib-longtail.md § Data types — Arrow commitment`.
 //
 // **Dispatch.** Constructors fire through `eval_call.rs`'s

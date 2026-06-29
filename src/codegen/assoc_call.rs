@@ -361,6 +361,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => {}
             }
         }
+        // Phase 11 data-science stdlib — Column constructors. `new` /
+        // `with_capacity` carry no element value in their args, so they
+        // thread the destination binding's element type via
+        // `pending_let_column_info` (the `Tensor.zeros` mechanism);
+        // `from_vec` deep-copies the Vec argument. `from_iter_nullable`
+        // is a follow-on slice (interpreter-only for now). See
+        // `src/codegen/column.rs`.
+        if type_name == "Column" {
+            match method {
+                "new" | "with_capacity" | "from_vec" => {
+                    return self.compile_column_new(method, args)
+                }
+                _ => {}
+            }
+        }
         // Phase 6 line 218 slice 5: `TaskGroup.new()` — allocate a
         // runtime-side group via `karac_runtime_taskgroup_new()` and
         // wrap the returned pointer (cast to i64) as `TaskGroup { id: <i64> }`.

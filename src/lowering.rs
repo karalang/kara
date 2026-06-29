@@ -211,6 +211,33 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             }
         })
         .collect();
+    // Column[T] (phase-11 data-science stdlib, Arrow commitment Q5):
+    // map every `Column[T]`-typed expression's span to its element
+    // `TypeExpr`. `Column` is always 1-D with a runtime length, so there
+    // is no shape payload — unlike the tensor table above. A borrow of a
+    // column (`ref Column` / `mut ref Column`) is the same single control
+    // pointer as the owned value, so unwrap the borrow so its span lands
+    // here too (the drop decision — a borrow is never freed — is taken
+    // separately at the binding site).
+    program.column_typed_exprs = tc
+        .expr_types
+        .iter()
+        .filter_map(|(k, ty)| {
+            let core = match ty {
+                Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+                other => other,
+            };
+            match core {
+                Type::Named { name, args } if name == "Column" && args.len() == 1 => Some((
+                    (k.0, k.1),
+                    crate::ast::ColumnTypeInfo {
+                        elem: TypeChecker::type_to_type_expr(&args[0]),
+                    },
+                )),
+                _ => None,
+            }
+        })
+        .collect();
     // Sibling to `string_typed_exprs`: spans of every `Vector[T, N]`-typed
     // expression whose element is an unsigned integer. The LLVM `<N x iX>`
     // lane type is signless, so codegen consults this set to pick the
