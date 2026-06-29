@@ -186,6 +186,56 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: bash scripts/oracle-sync-guard.sh
 
+  # The `--features llvm` clippy surface — the ENTIRE codegen backend
+  # (`src/codegen.rs` + every `src/codegen/*.rs`, the largest and most
+  # actively-developed part of the compiler) is gated behind
+  # `#[cfg(feature = "llvm")]`, so the native `lint` job's
+  # `cargo clippy --all -- -D warnings` (no `--features llvm`) never compiles —
+  # let alone lints — a single line of it. That hole let a `doc_lazy_continuation`
+  # lint sit undetected in `src/codegen/column.rs` (a wrapped `//!` doc line
+  # whose continuation read as a markdown bullet) until a local
+  # `cargo clippy --all --all-targets --features llvm` run caught it. This job
+  # closes the gap with the SAME LLVM-18.1 install as `codegen-e2e` below
+  # (inkwell → llvm-sys needs `llvm-config-18` + libLLVM-18.so), plus the
+  # `clippy` component the bare `codegen-e2e` job omits. `--all-targets` keeps
+  # the `#[cfg(feature = "llvm")]` test targets (`tests/codegen.rs`,
+  # `tests/par_codegen.rs`, `tests/memory_sanitizer.rs`) under the gate too —
+  # see CLAUDE.md § "Use `--all-targets`, not `--tests`". No runtime staticlib
+  # archives are needed here: clippy type-checks but never links or runs a
+  # binary, so the lean→full archive dance the E2E jobs do is unnecessary.
+  # This is the codegen sibling of the per-target `wasm` and `windows-lint`
+  # clippy jobs — each gates a cfg surface the ubuntu-native `lint` can't see.
+  codegen-lint:
+    name: Codegen clippy (LLVM 18)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Mirror codegen-e2e's LLVM-18.1 setup. clippy is a check build (no final
+      # link), so libLLVM-18.so isn't strictly loaded, but llvm-sys's build
+      # script invokes `llvm-config-18`; install `llvm-18-dev` and export the
+      # prefix it queries. LD_LIBRARY_PATH is kept for parity with the E2E jobs.
+      - name: Install LLVM 18
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-18 llvm-18-dev
+          echo "LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$(llvm-config-18 --libdir)" >> "$GITHUB_ENV"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: llvm-clippy
+
+      - name: Clippy (--features llvm codegen backend)
+        run: cargo clippy --all --all-targets --features llvm -- -D warnings
+
   codegen-e2e:
     name: Codegen E2E (LLVM 18)
     runs-on: ubuntu-latest
