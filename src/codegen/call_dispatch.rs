@@ -2269,6 +2269,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `FreeClosureEnv` doesn't dec the box the caller now owns
                 // (sibling of the channel / Map / SoA tail suppressions above).
                 self.neutralize_moved_closure_env_slot(name);
+                // Aggregate-escape move-out (B-2026-06-22-2): a bare aggregate-
+                // owner tail hands its struct (carrying the env boxes) to the
+                // caller — null the owned fields' env slots so their scope-exit
+                // `FreeClosureEnv` no-ops; the caller's binding frees them.
+                self.neutralize_moved_aggregate_env_slots(name);
             }
             // (Option[shared T] tail FIELD returns — `fn f() ->
             // Option[T] { x.next }` — are compensated during body
@@ -2337,6 +2342,7 @@ impl<'ctx> super::Codegen<'ctx> {
         value: &Expr,
         struct_name: &str,
         struct_alloca: PointerValue<'ctx>,
+        var_name: &str,
     ) {
         let ExprKind::StructLiteral { fields, .. } = &value.kind else {
             return;
@@ -2378,6 +2384,112 @@ impl<'ctx> super::Codegen<'ctx> {
                     fat_alloca: field_gep,
                 });
             }
+            // Record the owned field so `neutralize_moved_aggregate_env_slots` can
+            // null this env slot if `var_name` is later moved out via a return
+            // (aggregate-escape slice).
+            self.heap_env_owner_fields
+                .entry(var_name.to_string())
+                .or_default()
+                .push((struct_name.to_string(), idx as u32));
+        }
+    }
+
+    /// Aggregate-escape slice (B-2026-06-22-2): for `let r = build(k)` where
+    /// `build` ∈ `fns_returning_heap_env_aggregate`, register an instance
+    /// `FreeClosureEnv` on each of `r`'s owned heap-env fields. `build` MOVED the
+    /// env boxes out at the same refcount (its tail/`return` neutralized the
+    /// owner's field env slots), so `r`'s field drop is the new sole RC-owner — NO
+    /// inc, freed exactly once at `r`'s scope exit. Also records the owned fields so
+    /// `r` may itself be re-returned (relay-of-aggregate). The returned struct's
+    /// `Fn` field is an inline fat pointer, so the field GEP is the `fat_alloca` the
+    /// cleanup expects. Like the struct-literal registrar, this is INSTANCE-specific
+    /// — the type-driven struct drop never RC-frees a `Fn` field.
+    pub(super) fn register_aggregate_call_heap_env_field_drops(
+        &mut self,
+        value: &Expr,
+        struct_name: &str,
+        struct_alloca: PointerValue<'ctx>,
+        var_name: &str,
+    ) {
+        let ExprKind::Call { callee, .. } = &value.kind else {
+            return;
+        };
+        let callee_name = match &callee.kind {
+            ExprKind::Identifier(n) => n.clone(),
+            ExprKind::Path { segments, .. } if segments.len() == 1 => segments[0].clone(),
+            _ => return,
+        };
+        let Some(owned_fields) = self
+            .fns_returning_heap_env_aggregate
+            .get(&callee_name)
+            .cloned()
+        else {
+            return;
+        };
+        let Some(field_names) = self.struct_field_names.get(struct_name).cloned() else {
+            return;
+        };
+        let Some(st) = self.struct_types.get(struct_name).copied() else {
+            return;
+        };
+        // Iterate the struct's DECLARED field order (not `owned_fields`, a HashSet
+        // with randomized iteration) so the emitted cleanup order is deterministic
+        // across rebuilds — HashSet-order-dependent codegen is a known footgun.
+        for (idx, fname) in field_names.iter().enumerate() {
+            if !owned_fields.contains(fname) {
+                continue;
+            }
+            let field_gep = self
+                .builder
+                .build_struct_gep(st, struct_alloca, idx as u32, "clo.aggret.envslot")
+                .unwrap();
+            if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                frame.push(super::state::CleanupAction::FreeClosureEnv {
+                    fat_alloca: field_gep,
+                });
+            }
+            self.heap_env_owner_fields
+                .entry(var_name.to_string())
+                .or_default()
+                .push((struct_name.to_string(), idx as u32));
+        }
+    }
+
+    /// Aggregate-escape move-out (B-2026-06-22-2): when an aggregate owner `name`
+    /// is RETURNED (a bare-identifier tail or a top-level `return h;`), its struct
+    /// VALUE is handed to the caller carrying the env boxes — so this function must
+    /// NOT RC-drop them at scope exit. For each owned field, null the inline fat
+    /// pointer's env-pointer slot in `name`'s alloca at runtime, so the field's
+    /// scope-exit `FreeClosureEnv` (which skips a null env) no-ops. The already-
+    /// materialized return value keeps the env, and the caller's `let r = build(..)`
+    /// binding frees it (the caller registers the field drops via
+    /// `register_aggregate_call_heap_env_field_drops`). Runtime null — not
+    /// compile-time queue removal — mirrors `neutralize_moved_closure_env_slot`.
+    /// No-op for a name that owns no heap-env fields.
+    pub(super) fn neutralize_moved_aggregate_env_slots(&mut self, name: &str) {
+        let Some(fields) = self.heap_env_owner_fields.get(name).cloned() else {
+            return;
+        };
+        let Some(slot_ptr) = self.variables.get(name).map(|s| s.ptr) else {
+            return;
+        };
+        let fat_ty = self.closure_value_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        for (struct_name, idx) in fields {
+            let Some(st) = self.struct_types.get(&struct_name).copied() else {
+                continue;
+            };
+            let field_gep = self
+                .builder
+                .build_struct_gep(st, slot_ptr, idx, "clo.agg.field")
+                .unwrap();
+            let env_gep = self
+                .builder
+                .build_struct_gep(fat_ty, field_gep, 1, "clo.agg.envslot")
+                .unwrap();
+            self.builder
+                .build_store(env_gep, ptr_ty.const_null())
+                .unwrap();
         }
     }
 

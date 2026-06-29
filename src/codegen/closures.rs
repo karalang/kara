@@ -410,37 +410,14 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.fns_returning_heap_env.is_empty() {
             return Ok(());
         }
-        // Pass 1 — sanctioned top-level heap-env bindings. Forward scan so a
-        // copy `let g = f` is collected once `f` is already a binding (makes
-        // `let g = f; let h = g` transitively all bindings). The same scan
-        // collects struct-literal AGGREGATE OWNERS: `let h = H { f: <src> }`
-        // → `h` owns the env in field `f`, where `<src>` is a FRESH call
-        // (`make(..)`) or a heap-env BINDING (`f`, collected once `f` is a
-        // binding — co-owned via inc-on-store) (store-in-struct slice).
-        let mut binds: HashSet<String> = HashSet::new();
-        let mut owners: HashMap<String, HashSet<String>> = HashMap::new();
-        for stmt in &func.body.stmts {
-            if let StmtKind::Let { pattern, value, .. } = &stmt.kind {
-                let is_source = self.is_heap_env_producing_call(value)
-                    || matches!(&value.kind, ExprKind::Identifier(n) if binds.contains(n));
-                if is_source {
-                    if let [b] = pattern.binding_names().as_slice() {
-                        binds.insert(b.clone());
-                    }
-                    // A heap-env source bound to a non-single pattern is not a
-                    // sanctioned binding; pass 2 rejects the call (RULE A). A
-                    // copy into a non-single pattern can't happen (a `Fn` value
-                    // isn't destructurable), but the guard is order-independent.
-                } else {
-                    let fields = self.struct_literal_heap_env_store_fields(value, &binds);
-                    if !fields.is_empty() {
-                        if let [b] = pattern.binding_names().as_slice() {
-                            owners.insert(b.clone(), fields.into_iter().collect());
-                        }
-                    }
-                }
-            }
-        }
+        // Pass 1 — sanctioned top-level heap-env bindings and aggregate owners
+        // (factored into `collect_heap_env_binds_and_owners`, shared with the
+        // aggregate-return detection fixpoint). `binds`: heap-env closure bindings
+        // (call sources + transitive copies). `owners`: struct locals owning one
+        // or more heap-env fields (struct-literal stores OR an aggregate-returning
+        // call result).
+        let (binds, owners) =
+            self.collect_heap_env_binds_and_owners(func, &self.fns_returning_heap_env_aggregate);
         // Stash for the exhaustive walk (read via `&self` from the arms below).
         self.heap_env_aggregate_owners = owners;
         // Pass 2 — walk for misuse, skipping the sanctioned `let f = <call>` RHS.
@@ -461,26 +438,35 @@ impl<'ctx> super::Codegen<'ctx> {
                     if sanctioned {
                         false
                     } else if is_owner {
-                        // Aggregate construction `let h = H { f: <src>, .. }`: each
-                        // sanctioned heap-env store field (a FRESH call or a heap-env
-                        // BINDING source) is allowed; walk only the OTHER fields (and
-                        // any spread) for misuse. The binding-field skip mirrors the
-                        // store-field collection above — without it, `H { f: f }`'s
-                        // bare `f` would be (wrongly) flagged as an escaping binding.
-                        if let ExprKind::StructLiteral { fields, spread, .. } = &value.kind {
-                            fields
+                        // An aggregate owner is bound two ways:
+                        //   * construction `let h = H { f: <src>, .. }`: each
+                        //     sanctioned heap-env store field (a FRESH call or a
+                        //     heap-env BINDING source) is allowed; walk only the
+                        //     OTHER fields (and any spread). The binding-field skip
+                        //     mirrors the store-field collection — without it,
+                        //     `H { f: f }`'s bare `f` would be (wrongly) flagged.
+                        //   * an aggregate-returning CALL `let r = build(k)`
+                        //     (aggregate-escape slice): the call result is the
+                        //     sanctioned owner source, but the args may still misuse
+                        //     a binding/owner, so walk them.
+                        match &value.kind {
+                            ExprKind::StructLiteral { fields, spread, .. } => {
+                                fields
+                                    .iter()
+                                    .filter(|f| {
+                                        !self.is_heap_env_producing_call(&f.value)
+                                            && !matches!(&f.value.kind,
+                                                ExprKind::Identifier(n) if binds.contains(n))
+                                    })
+                                    .any(|f| self.expr_has_heap_env_misuse(&f.value, &binds))
+                                    || spread
+                                        .as_deref()
+                                        .is_some_and(|s| self.expr_has_heap_env_misuse(s, &binds))
+                            }
+                            ExprKind::Call { args, .. } => args
                                 .iter()
-                                .filter(|f| {
-                                    !self.is_heap_env_producing_call(&f.value)
-                                        && !matches!(&f.value.kind,
-                                            ExprKind::Identifier(n) if binds.contains(n))
-                                })
-                                .any(|f| self.expr_has_heap_env_misuse(&f.value, &binds))
-                                || spread
-                                    .as_deref()
-                                    .is_some_and(|s| self.expr_has_heap_env_misuse(s, &binds))
-                        } else {
-                            false
+                                .any(|a| self.expr_has_heap_env_misuse(&a.value, &binds)),
+                            _ => false,
                         }
                     } else {
                         self.expr_has_heap_env_misuse(value, &binds)
@@ -495,11 +481,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 StmtKind::LetUninit { .. } => false,
                 StmtKind::Expr(e) => {
                     // A top-level `return <bare binding>;` is the sanctioned
-                    // return-of-a-heap-env-binding shape (move-out codegen
-                    // neutralizes the source) — not a misuse. Any other expr
-                    // statement is walked as usual.
+                    // return-of-a-heap-env-binding shape, and `return <bare owner>;`
+                    // the sanctioned aggregate-escape shape (move-out codegen
+                    // neutralizes the source / the owner's field env slots) — not a
+                    // misuse. Any other expr statement is walked as usual.
                     if let ExprKind::Return(Some(inner)) = &e.kind {
-                        if matches!(&inner.kind, ExprKind::Identifier(n) if binds.contains(n)) {
+                        if matches!(&inner.kind, ExprKind::Identifier(n)
+                            if binds.contains(n) || self.heap_env_aggregate_owners.contains_key(n))
+                        {
                             false
                         } else {
                             self.expr_has_heap_env_misuse(e, &binds)
@@ -528,9 +517,12 @@ impl<'ctx> super::Codegen<'ctx> {
         if !bad {
             if let Some(tail) = &func.body.final_expr {
                 // A bare heap-env-binding TAIL is the sanctioned
-                // return-of-a-binding shape (move-out codegen neutralizes the
-                // source); anything else in tail position is walked as usual.
-                let returnable = matches!(&tail.kind, ExprKind::Identifier(n) if binds.contains(n));
+                // return-of-a-binding shape, and a bare AGGREGATE-OWNER tail the
+                // sanctioned aggregate-escape shape (move-out codegen neutralizes
+                // the source / the owner's field env slots); anything else in tail
+                // position is walked as usual.
+                let returnable = matches!(&tail.kind, ExprKind::Identifier(n)
+                    if binds.contains(n) || self.heap_env_aggregate_owners.contains_key(n));
                 bad = !returnable && self.expr_has_heap_env_misuse(tail, &binds);
             }
         }
@@ -923,6 +915,126 @@ impl<'ctx> super::Codegen<'ctx> {
                 matches!(&e.kind, ExprKind::Return(Some(inner)) if is_bound(inner))
             }
             _ => false,
+        })
+    }
+
+    /// If `e` is a call to a function that returns a heap-env-OWNING aggregate
+    /// (`build(..)` with `build` ∈ `agg_map`), return that function's owned-field
+    /// set — the binding `let r = build(..)` then OWNS those env boxes (the caller
+    /// registers an instance `FreeClosureEnv` on each named field; the callee moved
+    /// them out at the same refcount). `None` otherwise. `agg_map` is passed
+    /// explicitly so the detection fixpoint can query the in-progress map.
+    fn aggregate_call_owner_fields(
+        &self,
+        e: &Expr,
+        agg_map: &HashMap<String, HashSet<String>>,
+    ) -> Option<HashSet<String>> {
+        let ExprKind::Call { callee, .. } = &e.kind else {
+            return None;
+        };
+        let name = match &callee.kind {
+            ExprKind::Identifier(n) => n,
+            ExprKind::Path { segments, .. } if segments.len() == 1 => &segments[0],
+            _ => return None,
+        };
+        agg_map.get(name).cloned()
+    }
+
+    /// Collect, for `func`, the top-level heap-env closure BINDINGS and the
+    /// aggregate OWNERS (struct locals owning one or more heap-env fields). Forward
+    /// scan so a copy `let g = f` is collected once `f` is a binding (transitive
+    /// `let g = f; let h = g`). An owner is bound from a struct literal with a
+    /// sanctioned heap-env store field (`let h = H { f: <fresh-call|binding> }`) OR
+    /// from a call to an aggregate-returning function (`let r = build(k)`, using
+    /// `agg_map`). Shared by the misuse guard (pass 1) and the aggregate-return
+    /// detection fixpoint — keeping owner reasoning in exactly one place.
+    fn collect_heap_env_binds_and_owners(
+        &self,
+        func: &Function,
+        agg_map: &HashMap<String, HashSet<String>>,
+    ) -> (HashSet<String>, HashMap<String, HashSet<String>>) {
+        let mut binds: HashSet<String> = HashSet::new();
+        let mut owners: HashMap<String, HashSet<String>> = HashMap::new();
+        for stmt in &func.body.stmts {
+            if let StmtKind::Let { pattern, value, .. } = &stmt.kind {
+                let is_source = self.is_heap_env_producing_call(value)
+                    || matches!(&value.kind, ExprKind::Identifier(n) if binds.contains(n));
+                if is_source {
+                    if let [b] = pattern.binding_names().as_slice() {
+                        binds.insert(b.clone());
+                    }
+                } else if let Some(fields) = self.aggregate_call_owner_fields(value, agg_map) {
+                    if let [b] = pattern.binding_names().as_slice() {
+                        owners.insert(b.clone(), fields);
+                    }
+                } else {
+                    let fields = self.struct_literal_heap_env_store_fields(value, &binds);
+                    if !fields.is_empty() {
+                        if let [b] = pattern.binding_names().as_slice() {
+                            owners.insert(b.clone(), fields.into_iter().collect());
+                        }
+                    }
+                }
+            }
+        }
+        (binds, owners)
+    }
+
+    /// Populate `fns_returning_heap_env_aggregate` (functions that RETURN a struct
+    /// local owning one or more heap-env closure fields, as a bare tail / top-level
+    /// `return h`). Maps fn name → the returned struct's owned-field names. Runs
+    /// after `compute_fns_returning_heap_env` (an owner can be built from a fresh
+    /// heap-env call). A FIXPOINT so a relay-of-aggregate (`let r = build(k); r`)
+    /// is recognized once its inner builder is.
+    pub(super) fn compute_fns_returning_heap_env_aggregate(&mut self) {
+        let funcs: Vec<Function> = self.fn_asts.values().cloned().collect();
+        let mut map: HashMap<String, HashSet<String>> = HashMap::new();
+        loop {
+            let mut changed = false;
+            for func in &funcs {
+                if map.contains_key(&func.name) {
+                    continue;
+                }
+                if let Some(fields) = self.func_returns_heap_env_aggregate(func, &map) {
+                    map.insert(func.name.clone(), fields);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        self.fns_returning_heap_env_aggregate = map;
+    }
+
+    /// The owned-field set if `func` returns — as a bare-identifier TAIL or a
+    /// top-level `return <bare identifier>;` — a local that is an aggregate owner
+    /// (per `collect_heap_env_binds_and_owners` against `map`). `None` otherwise.
+    /// Branch-buried returns are intentionally NOT detected — the sound
+    /// under-approximation that keeps detection in lockstep with the misuse guard
+    /// and the move-out codegen (both only handle these top-level shapes).
+    fn func_returns_heap_env_aggregate(
+        &self,
+        func: &Function,
+        map: &HashMap<String, HashSet<String>>,
+    ) -> Option<HashSet<String>> {
+        let (_binds, owners) = self.collect_heap_env_binds_and_owners(func, map);
+        if owners.is_empty() {
+            return None;
+        }
+        let returned = |e: &Expr| match &e.kind {
+            ExprKind::Identifier(n) => owners.get(n).cloned(),
+            _ => None,
+        };
+        if let Some(fields) = func.body.final_expr.as_deref().and_then(&returned) {
+            return Some(fields);
+        }
+        func.body.stmts.iter().find_map(|s| match &s.kind {
+            StmtKind::Expr(e) => match &e.kind {
+                ExprKind::Return(Some(inner)) => returned(inner),
+                _ => None,
+            },
+            _ => None,
         })
     }
 

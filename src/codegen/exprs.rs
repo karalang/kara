@@ -696,6 +696,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         // caller now owns (runtime-null, branch-safe; sibling of
                         // the channel/SoA early-return suppressions here).
                         self.neutralize_moved_closure_env_slot(name);
+                        // Aggregate-escape move-out (B-2026-06-22-2): an explicit
+                        // `return h;` of an aggregate owner hands its struct (with
+                        // the env boxes) to the caller — null the owned fields' env
+                        // slots so their `FreeClosureEnv` no-ops below.
+                        self.neutralize_moved_aggregate_env_slots(name);
                         // Channel-end `return rx;`: the moved-out `Sender`/
                         // `Receiver` is now the caller's; suppress the
                         // binding's scope-exit `DropChannelEnd` so its

@@ -467,6 +467,42 @@ fn main() {
         );
     }
 
+    /// Aggregate-escape slice (B-2026-06-22-2): a function may RETURN a struct that
+    /// OWNS a heap-env closure field. The env box MOVES OUT inside the struct — the
+    /// callee neutralizes the owner's field env slot on the returning path (so its
+    /// `FreeClosureEnv` no-ops), and the caller's `let r = build(..)` binding
+    /// registers an instance `FreeClosureEnv` on each owned field and frees it once.
+    /// Covers an explicit return, a bare-tail return, a sibling data field, a
+    /// binding-source field (store inc → rc 2, then move-out decs to 1 at callee
+    /// scope exit), and a relay-of-aggregate (fixpoint). Each env freed EXACTLY
+    /// once across the move boundary — without the move-out the callee would free
+    /// the box the caller holds (UAF); without the caller field drop it would leak.
+    #[test]
+    fn asan_heap_env_aggregate_returned_freed_no_leak() {
+        assert_clean_asan_run(
+            r#"
+struct H { f: Fn(i64) -> i64 }
+struct G { f: Fn(i64) -> i64, n: i64 }
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn build(k: i64) -> H { let h = H { f: make(k) }; return h; }
+fn build_tail(k: i64) -> H { let h = H { f: make(k) }; h }
+fn build_data(k: i64) -> G { let g = G { f: make(k), n: 3i64 }; g }
+fn build_binding(k: i64) -> H { let f = make(k); let h = H { f: f }; return h; }
+fn relay(k: i64) -> H { let r = build(k); return r; }
+fn main() {
+    let a = build(10i64);
+    let b = build_tail(20i64);
+    let c = build_data(30i64);
+    let d = build_binding(40i64);
+    let e = relay(5i64);
+    println(f"{(a.f)(1i64) + (b.f)(2i64) + (c.f)(3i64) + c.n + (d.f)(4i64) + (e.f)(6i64)}");
+}
+"#,
+            &["124"],
+            "asan_heap_env_aggregate_returned_freed_no_leak",
+        );
+    }
+
     // ── Baseline: no heap allocations ─────────────────────────────
     // Sanity-checks the harness itself — should trivially pass on any host
     // with a working `cc + ASAN`. If this fails, the infrastructure is

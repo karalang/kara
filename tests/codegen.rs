@@ -539,18 +539,66 @@ mod codegen_tests {
         assert_eq!(out.as_deref(), Some("42\n"));
     }
 
-    /// Returning the struct that owns the heap-env field is an ESCAPE — its
-    /// per-instance field drop would free the env the caller still holds (UAF),
-    /// so it stays rejected (the aggregate-return feature is a later slice).
+    /// Aggregate-escape slice (B-2026-06-22-2): a function may RETURN a struct
+    /// that OWNS a heap-env closure field (`fn build(k) -> H { let h = H { f:
+    /// make(k) }; return h }`). The env box MOVES OUT to the caller — `build`
+    /// neutralizes `h`'s field env slot on the returning path, so its scope-exit
+    /// `FreeClosureEnv` no-ops; `build` is registered as aggregate-returning so the
+    /// caller's `let r = build(..)` binding frees the field env. Freed exactly once.
+    /// Was rejected by the store-in-struct slice; now supported (explicit return).
     #[test]
-    fn heap_env_struct_returned_is_rejected() {
-        let err = ir_result(
+    fn heap_env_struct_returned_runs() {
+        let out = run_program(
             "struct H { f: Fn(i64) -> i64 }\n\
              fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
-             fn build(k: i64) -> H { let h = H { f: make(k) }; return h; }\n",
-        )
-        .expect_err("returning a struct that owns a heap-env field must be rejected");
-        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+             fn build(k: i64) -> H { let h = H { f: make(k) }; return h; }\n\
+             fn main() { let r = build(20i64); println(f\"{(r.f)(22i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// The bare-identifier TAIL form of aggregate escape
+    /// (`{ let h = H { f: make(k) }; h }`) goes through the tail-return move-out
+    /// hub rather than the explicit-return arm — both neutralize the owner's field
+    /// env slots. Runs and frees once.
+    #[test]
+    fn heap_env_struct_returned_tail_runs() {
+        let out = run_program(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn build(k: i64) -> H { let h = H { f: make(k) }; h }\n\
+             fn main() { let r = build(20i64); println(f\"{(r.f)(22i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// The returned owner may carry a sibling non-closure field, read through the
+    /// caller's binding (`r.n`) alongside the field call (`(r.f)(x)`).
+    #[test]
+    fn heap_env_struct_returned_with_data_field_runs() {
+        let out = run_program(
+            "struct H { f: Fn(i64) -> i64, n: i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn build(k: i64) -> H { let h = H { f: make(k), n: 2i64 }; h }\n\
+             fn main() { let r = build(20i64); println(f\"{(r.f)(20i64) + r.n}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// Relay-of-aggregate: the aggregate-returning set is a FIXPOINT, so a function
+    /// returning the result of another aggregate-returning function is itself
+    /// recognized. The one env box flows through both relays inside the struct to
+    /// the final caller, freed exactly once.
+    #[test]
+    fn heap_env_aggregate_relay_runs() {
+        let out = run_program(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn build(k: i64) -> H { let h = H { f: make(k) }; h }\n\
+             fn relay(k: i64) -> H { let r = build(k); return r; }\n\
+             fn main() { let r = relay(20i64); println(f\"{(r.f)(22i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
     }
 
     /// Projecting the closure field OUT of the struct as a value
@@ -614,21 +662,23 @@ mod codegen_tests {
         assert_eq!(out.as_deref(), Some("42\n"));
     }
 
-    /// The owner struct still can't ESCAPE even when its field came from a BINDING
-    /// source — returning `h` (`H { f: f }`) is rejected exactly as the fresh-call
-    /// owner is (the field drop would free the env the caller still holds).
+    /// Aggregate escape composes with a BINDING-source field: `build` co-owns the
+    /// env (store inc → rc 2), then moves the owner out (`return h` neutralizes the
+    /// field env slot). At `build`'s scope exit the source binding decs rc 2→1; the
+    /// caller's `r` field drop frees the last ref. Was rejected; now supported.
     #[test]
-    fn heap_env_binding_owner_struct_returned_is_rejected() {
-        let err = ir_result(
+    fn heap_env_binding_owner_struct_returned_runs() {
+        let out = run_program(
             "struct H { f: Fn(i64) -> i64 }\n\
              fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
-             fn build(k: i64) -> H { let f = make(k); let h = H { f: f }; return h; }\n",
-        )
-        .expect_err("returning a binding-sourced heap-env-owning struct must be rejected");
-        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+             fn build(k: i64) -> H { let f = make(k); let h = H { f: f }; return h; }\n\
+             fn main() { let r = build(20i64); println(f\"{(r.f)(22i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
     }
 
-    /// Passing the owning struct as a call argument is an escape — rejected.
+    /// Passing the owning struct as a call argument is an escape — still rejected
+    /// (the aggregate may only be CALLED-through, read, or RETURNED).
     #[test]
     fn heap_env_struct_passed_as_arg_is_rejected() {
         let err = ir_result(
@@ -638,6 +688,24 @@ mod codegen_tests {
              fn main() { let h = H { f: make(21i64) }; println(f\"{use_h(h)}\"); }\n",
         )
         .expect_err("passing a heap-env-owning struct as an arg must be rejected");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
+    /// Even when the call result is a sanctioned aggregate owner, a heap-env
+    /// BINDING passed as one of the call's ARGS is still a misuse — the
+    /// aggregate-owner Call branch walks the args (closing the arg-escape hole).
+    #[test]
+    fn heap_env_binding_passed_to_aggregate_builder_is_rejected() {
+        let err = ir_result(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn build2(g: Fn(i64) -> i64) -> H { let local = make(5i64); let h = H { f: local }; \
+              let _u = g(0i64); h }\n\
+             fn main() { let f = make(3i64); let r = build2(f); println(f\"{(r.f)(1i64)}\"); }\n",
+        )
+        .expect_err(
+            "passing a heap-env binding as an arg to an aggregate builder must be rejected",
+        );
         assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
     }
 

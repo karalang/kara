@@ -3347,6 +3347,18 @@ impl<'ctx> super::Codegen<'ctx> {
                                 value,
                                 &struct_name,
                                 alloca,
+                                var_name,
+                            );
+                            // Aggregate-escape slice (B-2026-06-22-2): `let r =
+                            // build(k)` where `build` returns a heap-env-owning
+                            // struct — register an instance `FreeClosureEnv` on each
+                            // owned field of `r` (the callee moved the env boxes out
+                            // at the same refcount; `r` is now their sole RC-owner).
+                            self.register_aggregate_call_heap_env_field_drops(
+                                value,
+                                &struct_name,
+                                alloca,
+                                var_name,
                             );
                         }
                     }

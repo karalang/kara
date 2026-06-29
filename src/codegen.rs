@@ -1442,6 +1442,24 @@ pub(super) struct Codegen<'ctx> {
     /// or a non-call projection of a closure field (store-in-struct slice).
     pub(crate) heap_env_aggregate_owners:
         std::collections::HashMap<String, std::collections::HashSet<String>>,
+    /// Names of functions whose return value is a heap-env-OWNING aggregate — a
+    /// struct local that owns one or more heap-env closure fields, returned as a
+    /// bare tail / `return h` (aggregate-escape slice). Maps fn name → the set of
+    /// the returned struct's field names that own a heap env. A
+    /// `let r = <call to such a fn>` binding therefore owns those env boxes (the
+    /// caller registers an instance `FreeClosureEnv` on each named field; the
+    /// callee moved them out at the same refcount). A FIXPOINT (relay-of-aggregate)
+    /// computed once before bodies compile, after `fns_returning_heap_env`.
+    pub(crate) fns_returning_heap_env_aggregate:
+        std::collections::HashMap<String, std::collections::HashSet<String>>,
+    /// Per-function map (reset each function): an aggregate-owner local `h` → the
+    /// `(struct type name, field index)` of each heap-env field it owns. Recorded
+    /// when the field's `FreeClosureEnv` is registered (struct-literal store OR an
+    /// aggregate-returning call result). Used by `neutralize_moved_aggregate_env_slots`
+    /// to runtime-null those field env slots when `h` is moved out via a return, so
+    /// the callee's field drop no-ops and the box flows to the caller at the same
+    /// refcount (the aggregate analog of `neutralize_moved_closure_env_slot`).
+    pub(crate) heap_env_owner_fields: std::collections::HashMap<String, Vec<(String, u32)>>,
     /// Staging slot — set by `compile_closure` so the surrounding `let` binding can record
     /// the function type under the newly bound name.
     pub(crate) pending_closure_fn_type: Option<FunctionType<'ctx>>,
@@ -5108,6 +5126,8 @@ impl<'ctx> Codegen<'ctx> {
             fns_returning_heap_env: std::collections::HashSet::new(),
             heap_env_closure_vars: std::collections::HashSet::new(),
             heap_env_aggregate_owners: std::collections::HashMap::new(),
+            fns_returning_heap_env_aggregate: std::collections::HashMap::new(),
+            heap_env_owner_fields: std::collections::HashMap::new(),
             pending_closure_fn_type: None,
             pending_closure_param_hints: None,
             pending_map_insert_old_dec: false,
@@ -6394,6 +6414,12 @@ impl<'ctx> Codegen<'ctx> {
         // binding is given a `FreeClosureEnv` cleanup. `fn_asts` is fully
         // populated by now.
         self.compute_fns_returning_heap_env();
+        // Aggregate-escape slice (B-2026-06-22-2): identify functions that return
+        // a struct OWNING a heap-env closure field, so a `let r = <call to such a
+        // fn>` binding registers an instance `FreeClosureEnv` on each owned field.
+        // Runs AFTER `compute_fns_returning_heap_env` (an owner can be built from a
+        // fresh heap-env call) and is itself a fixpoint (relay-of-aggregate).
+        self.compute_fns_returning_heap_env_aggregate();
         for item in &program.items {
             if let Item::Function(f) = item {
                 if f.generic_params.is_none() {
