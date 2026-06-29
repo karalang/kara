@@ -2803,6 +2803,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::resolver::ResolveErrorKind::ContinueOnBlockLabel => "E0238",
                 crate::resolver::ResolveErrorKind::NonExhaustiveInvalidTarget => "E0239",
                 crate::resolver::ResolveErrorKind::TrackCallerInvalidTarget => "E0240",
+                crate::resolver::ResolveErrorKind::GpuInvalidTarget => "E0800",
                 crate::resolver::ResolveErrorKind::CodegenHintInvalidTarget => {
                     "E_CODEGEN_HINT_INVALID_POSITION"
                 }
@@ -7541,6 +7542,7 @@ fn resolve_error_code(kind: &ResolveErrorKind) -> &'static str {
         ResolveErrorKind::ContinueOnBlockLabel => "E0238",
         ResolveErrorKind::NonExhaustiveInvalidTarget => "E0239",
         ResolveErrorKind::TrackCallerInvalidTarget => "E0240",
+        ResolveErrorKind::GpuInvalidTarget => "E0800",
         ResolveErrorKind::CodegenHintInvalidTarget => "E_CODEGEN_HINT_INVALID_POSITION",
         ResolveErrorKind::CodegenHintOnExternDecl => "E_CODEGEN_HINT_ON_EXTERN_DECL",
         ResolveErrorKind::DeprecatedOnImpl => "E0241",
@@ -10002,6 +10004,7 @@ fn lower_test_case_to_function(tc: &crate::ast::TestCase, mangled_name: String) 
         deprecation: None,
         unstable: None,
         is_track_caller: false,
+        is_gpu: false,
         inline_hint: None,
         is_cold: false,
         lint_overrides: Vec::new(),

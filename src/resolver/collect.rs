@@ -650,6 +650,42 @@ impl<'a> super::Resolver<'a> {
         }
     }
 
+    /// Reject `#[gpu]` placed on an item kind that is not a `fn`
+    /// declaration. Per design.md § GPU Subset Constraints, `#[gpu]` is
+    /// the constraint marker that asserts a function uses only
+    /// GPU-compatible features and makes it GPU-callable — it only
+    /// applies to functions (free `fn`, inherent / trait-impl method,
+    /// trait method declaration). Mirrors [`Self::reject_track_caller_attr`]:
+    /// called once per non-fn item kind (struct, enum, union, trait
+    /// decl, trait alias, marker trait, impl block, module const, type
+    /// alias) and on their fields / variants. Function and impl-method
+    /// callers skip this helper — the attribute is legal at those sites.
+    ///
+    /// `target_kind` is the human-readable role name surfaced in the
+    /// diagnostic message.
+    fn reject_gpu_attr(&mut self, attrs: &[Attribute], target_kind: &str) {
+        for attr in attrs {
+            if attr.is_bare("gpu") {
+                self.errors.push(ResolveError {
+                    message: format!(
+                        "error[E_GPU_INVALID_TARGET]: \
+                         `#[gpu]` is not valid on {target_kind}; the \
+                         attribute is the GPU-subset constraint marker and \
+                         only applies to `fn` declarations — it asserts the \
+                         function uses only GPU-compatible features and \
+                         makes it callable from `gpu.dispatch`. See \
+                         design.md § GPU Subset Constraints.",
+                    ),
+                    span: attr.span.clone(),
+                    kind: ResolveErrorKind::GpuInvalidTarget,
+                    suggestion: None,
+                    replacement: None,
+                    stub_hint: None,
+                });
+            }
+        }
+    }
+
     /// Reject the codegen-hint attributes (`#[inline]`,
     /// `#[inline(always)]`, `#[inline(never)]`, `#[cold]`) on a position
     /// where they are not valid. Mirrors [`Self::reject_track_caller_attr`]:
@@ -865,6 +901,7 @@ impl<'a> super::Resolver<'a> {
             self.reject_non_exhaustive_attr(&s.attributes, "private struct");
         }
         self.reject_track_caller_attr(&s.attributes, "struct");
+        self.reject_gpu_attr(&s.attributes, "struct");
         self.reject_codegen_hint_attrs(&s.attributes, "struct");
         self.reject_profile_attr(&s.attributes, "struct");
         // Field-level `#[non_exhaustive]` is post-v1 (Rust accepts it
@@ -875,6 +912,7 @@ impl<'a> super::Resolver<'a> {
         for field in &s.fields {
             self.reject_non_exhaustive_attr(&field.attributes, "struct field");
             self.reject_track_caller_attr(&field.attributes, "struct field");
+            self.reject_gpu_attr(&field.attributes, "struct field");
             self.reject_codegen_hint_attrs(&field.attributes, "struct field");
             self.reject_profile_attr(&field.attributes, "struct field");
             self.reject_deprecated_on_field(&field.attributes);
@@ -937,11 +975,13 @@ impl<'a> super::Resolver<'a> {
             }
         }
         self.reject_track_caller_attr(&u.attributes, "union");
+        self.reject_gpu_attr(&u.attributes, "union");
         self.reject_codegen_hint_attrs(&u.attributes, "union");
         self.reject_profile_attr(&u.attributes, "union");
         for field in &u.fields {
             self.reject_non_exhaustive_attr(&field.attributes, "union field");
             self.reject_track_caller_attr(&field.attributes, "union field");
+            self.reject_gpu_attr(&field.attributes, "union field");
             self.reject_codegen_hint_attrs(&field.attributes, "union field");
             self.reject_profile_attr(&field.attributes, "union field");
             self.reject_deprecated_on_field(&field.attributes);
@@ -967,6 +1007,7 @@ impl<'a> super::Resolver<'a> {
             self.reject_non_exhaustive_attr(&e.attributes, "private enum");
         }
         self.reject_track_caller_attr(&e.attributes, "enum");
+        self.reject_gpu_attr(&e.attributes, "enum");
         self.reject_codegen_hint_attrs(&e.attributes, "enum");
         self.reject_profile_attr(&e.attributes, "enum");
         // Variant-level attribute placement validation —
@@ -976,6 +1017,7 @@ impl<'a> super::Resolver<'a> {
         // and so is not rejected here.
         for variant in &e.variants {
             self.reject_track_caller_attr(&variant.attributes, "enum variant");
+            self.reject_gpu_attr(&variant.attributes, "enum variant");
             self.reject_codegen_hint_attrs(&variant.attributes, "enum variant");
             self.reject_profile_attr(&variant.attributes, "enum variant");
             self.reject_non_exhaustive_attr(&variant.attributes, "enum variant");
@@ -1030,6 +1072,7 @@ impl<'a> super::Resolver<'a> {
         self.check_compiler_builtin_attr(&t.attributes, t.stdlib_origin);
         self.reject_non_exhaustive_attr(&t.attributes, "trait");
         self.reject_track_caller_attr(&t.attributes, "trait");
+        self.reject_gpu_attr(&t.attributes, "trait");
         self.reject_codegen_hint_attrs(&t.attributes, "trait");
         self.reject_profile_attr(&t.attributes, "trait");
         // Trait-method-level attribute placement validation —
@@ -1085,6 +1128,7 @@ impl<'a> super::Resolver<'a> {
     fn collect_trait_alias(&mut self, t: &TraitAliasDef) {
         self.reject_non_exhaustive_attr(&t.attributes, "trait alias");
         self.reject_track_caller_attr(&t.attributes, "trait alias");
+        self.reject_gpu_attr(&t.attributes, "trait alias");
         self.reject_codegen_hint_attrs(&t.attributes, "trait alias");
         self.reject_profile_attr(&t.attributes, "trait alias");
         match self.table.define(
@@ -1104,6 +1148,7 @@ impl<'a> super::Resolver<'a> {
     fn collect_marker_trait(&mut self, t: &MarkerTraitDef) {
         self.reject_non_exhaustive_attr(&t.attributes, "marker trait");
         self.reject_track_caller_attr(&t.attributes, "marker trait");
+        self.reject_gpu_attr(&t.attributes, "marker trait");
         self.reject_codegen_hint_attrs(&t.attributes, "marker trait");
         self.reject_profile_attr(&t.attributes, "marker trait");
         // Marker traits register in the trait namespace alongside ordinary
@@ -1142,6 +1187,7 @@ impl<'a> super::Resolver<'a> {
         self.check_compiler_builtin_attr(&imp.attributes, false);
         self.reject_non_exhaustive_attr(&imp.attributes, "impl block");
         self.reject_track_caller_attr(&imp.attributes, "impl block");
+        self.reject_gpu_attr(&imp.attributes, "impl block");
         self.reject_codegen_hint_attrs(&imp.attributes, "impl block");
         self.reject_profile_attr(&imp.attributes, "impl block");
         self.reject_deprecated_on_impl(&imp.attributes);
@@ -1234,6 +1280,7 @@ impl<'a> super::Resolver<'a> {
         // share the same "target kind" message shape.
         self.reject_non_exhaustive_attr(&c.attributes, "module const");
         self.reject_track_caller_attr(&c.attributes, "module const");
+        self.reject_gpu_attr(&c.attributes, "module const");
         self.reject_codegen_hint_attrs(&c.attributes, "module const");
         self.reject_profile_attr(&c.attributes, "module const");
         match self.table.define(
@@ -1322,6 +1369,7 @@ impl<'a> super::Resolver<'a> {
         // (non_exhaustive invalid).
         self.reject_non_exhaustive_attr(&t.attributes, "type alias");
         self.reject_track_caller_attr(&t.attributes, "type alias");
+        self.reject_gpu_attr(&t.attributes, "type alias");
         self.reject_codegen_hint_attrs(&t.attributes, "type alias");
         self.reject_profile_attr(&t.attributes, "type alias");
         match self.table.define(

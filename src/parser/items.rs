@@ -371,6 +371,7 @@ impl super::Parser {
         // split, so downstream tools that re-parse without a resolver
         // still see the captured attribute.
         let is_track_caller = self.scan_track_caller_attr(&attributes);
+        let is_gpu = self.scan_gpu_attr(&attributes);
         let (inline_hint, is_cold) = self.scan_codegen_hint_attrs(&attributes);
         let deprecation = self.scan_deprecated_attr(&attributes);
         let unstable = self.scan_unstable_attr(&attributes);
@@ -399,6 +400,7 @@ impl super::Parser {
             deprecation,
             unstable,
             is_track_caller,
+            is_gpu,
             inline_hint,
             is_cold,
             lint_overrides,
@@ -516,6 +518,42 @@ impl super::Parser {
                               the attribute redirects the panic-site \
                               location and has no configurable shape; \
                               remove the arguments"
+                        .to_string(),
+                    span: attr.span.clone(),
+                });
+            }
+        }
+        present
+    }
+
+    /// Scan `attributes` for `#[gpu]`. Sets the flag when the attribute
+    /// is present (idempotent across duplicate occurrences). `#[gpu]` is
+    /// the GPU-subset *constraint* marker (design.md § GPU Subset
+    /// Constraints): it asserts the function uses only GPU-compatible
+    /// features and is GPU-callable — it does not route work to the GPU.
+    /// The attribute is **bare**; any args or string value
+    /// (`#[gpu(...)]`, `#[gpu = "..."]`) is a focused
+    /// `E_GPU_ARGS_NOT_PERMITTED` parse diagnostic anchored at the
+    /// attribute span. Placement validation (must be on a `fn`; rejected
+    /// on structs / enums / traits / impl blocks / etc.) lives in the
+    /// resolver — mirrors the `#[track_caller]` parser/resolver split so
+    /// downstream tools that re-parse without a resolver still see the
+    /// captured marker. FE-1 captures the flag only; the enforcement
+    /// that consumes it lands in FE-2…FE-4.
+    pub(crate) fn scan_gpu_attr(&mut self, attributes: &[Attribute]) -> bool {
+        let mut present = false;
+        for attr in attributes {
+            if !attr.is_bare("gpu") {
+                continue;
+            }
+            present = true;
+            if !attr.args.is_empty() || attr.string_value.is_some() {
+                self.errors.push(super::ParseError {
+                    message: "error[E_GPU_ARGS_NOT_PERMITTED]: \
+                              `#[gpu]` takes no arguments — it is a bare \
+                              constraint marker asserting the function uses \
+                              only the GPU-compatible subset; remove the \
+                              arguments"
                         .to_string(),
                     span: attr.span.clone(),
                 });

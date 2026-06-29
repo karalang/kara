@@ -2660,6 +2660,120 @@ fn track_caller_slice1_rejection_uses_dedicated_error_kind() {
     );
 }
 
+// ── #[gpu] placement validation (E0800), FE-1 ────────────────────
+// `#[gpu]` is the GPU-subset constraint marker and is valid only on
+// `fn` declarations (free fn, inherent / trait-impl method, trait
+// method declaration). The resolver rejects every other top-level /
+// impl-block target — struct, enum, union, trait, marker trait, trait
+// alias, impl block, struct field, module const, type alias. Per
+// design.md § GPU Subset Constraints. Mirrors the `#[track_caller]`
+// placement suite above.
+
+fn assert_gpu_rejected_kind(source: &str, expected_target_kind: &str) {
+    let errs = resolve_errors(source);
+    let matched: Vec<_> = errs
+        .iter()
+        .filter(|e| {
+            e.kind == ResolveErrorKind::GpuInvalidTarget && e.message.contains(expected_target_kind)
+        })
+        .collect();
+    assert!(
+        !matched.is_empty(),
+        "expected GpuInvalidTarget mentioning {:?}, got: {:?}",
+        expected_target_kind,
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn gpu_fe1_accepted_on_function() {
+    // Positive pin — no placement diagnostic on the legal site.
+    let parsed = parse("#[gpu]\nfn dot() -> i64 { 0 }");
+    assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+    let errs = resolve(&parsed.program).errors;
+    assert!(
+        errs.iter()
+            .all(|e| e.kind != ResolveErrorKind::GpuInvalidTarget),
+        "fn should accept #[gpu] without placement diagnostic; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn gpu_fe1_accepted_on_impl_method() {
+    let parsed = parse(
+        "pub struct Foo { x: i64, }\n\
+         impl Foo { #[gpu] fn double(ref self) -> i64 { self.x } }",
+    );
+    assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+    let errs = resolve(&parsed.program).errors;
+    assert!(
+        errs.iter()
+            .all(|e| e.kind != ResolveErrorKind::GpuInvalidTarget),
+        "impl method should accept #[gpu]; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn gpu_fe1_rejected_on_struct() {
+    assert_gpu_rejected_kind("#[gpu]\nstruct Foo { x: i64, }", "struct");
+}
+
+#[test]
+fn gpu_fe1_rejected_on_enum() {
+    assert_gpu_rejected_kind("#[gpu]\nenum Color { Red, Green, }", "enum");
+}
+
+#[test]
+fn gpu_fe1_rejected_on_trait() {
+    assert_gpu_rejected_kind(
+        "#[gpu]\ntrait Show { fn show(ref self) -> String; }",
+        "trait",
+    );
+}
+
+#[test]
+fn gpu_fe1_rejected_on_marker_trait() {
+    assert_gpu_rejected_kind("#[gpu]\nmarker trait Send;", "marker trait");
+}
+
+#[test]
+fn gpu_fe1_rejected_on_trait_alias() {
+    assert_gpu_rejected_kind("#[gpu]\ntrait Eq2 = Eq;", "trait alias");
+}
+
+#[test]
+fn gpu_fe1_rejected_on_impl_block() {
+    assert_gpu_rejected_kind(
+        "pub struct Foo { x: i64, }\n#[gpu]\nimpl Foo { fn x(ref self) -> i64 { 0 } }",
+        "impl block",
+    );
+}
+
+#[test]
+fn gpu_fe1_rejected_on_struct_field() {
+    assert_gpu_rejected_kind("pub struct Foo { #[gpu] x: i64, }", "struct field");
+}
+
+#[test]
+fn gpu_fe1_rejected_on_type_alias() {
+    assert_gpu_rejected_kind("#[gpu]\ntype Id = i64;", "type alias");
+}
+
+#[test]
+fn gpu_fe1_rejection_uses_dedicated_error_kind_and_code() {
+    let errs = resolve_errors("#[gpu]\nstruct Foo { x: i64, }");
+    assert!(
+        errs.iter().any(|e| {
+            e.kind == ResolveErrorKind::GpuInvalidTarget
+                && e.message.contains("E_GPU_INVALID_TARGET")
+        }),
+        "expected GpuInvalidTarget with symbolic code; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
 // ── #[profile(...)] slices 1+2 — resolver validation + placement ──
 
 #[test]

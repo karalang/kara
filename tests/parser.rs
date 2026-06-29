@@ -2567,6 +2567,125 @@ fn track_caller_slice1_trait_method_rejects_string_value() {
     );
 }
 
+// ── #[gpu] FE-1 (GPU-subset constraint marker) ───────────────────
+//
+// `#[gpu]` is a bare attribute on `fn` items captured as
+// `is_gpu: bool` on `Function` / `TraitMethod`. It asserts the
+// function uses only the GPU-compatible subset and is GPU-callable; it
+// does NOT route work to the GPU (dispatch is the explicit
+// `gpu.dispatch(...)` call). The attribute MUST take no arguments;
+// malformed forms produce `E_GPU_ARGS_NOT_PERMITTED`. Placement
+// validation (must be on `fn`; rejected on struct / enum / trait /
+// impl / etc.) lives in the resolver — covered by tests/resolver.rs.
+// Per design.md § GPU Subset Constraints.
+
+#[test]
+fn gpu_fe1_sets_flag_on_function() {
+    let prog = parse_ok("#[gpu]\nfn dot() -> i64 { 0 }");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("Expected Function");
+    };
+    assert!(f.is_gpu);
+    assert_eq!(f.attributes.len(), 1);
+    assert_eq!(f.attributes[0].path[0], "gpu");
+    assert!(f.attributes[0].args.is_empty());
+    assert!(f.attributes[0].string_value.is_none());
+}
+
+#[test]
+fn gpu_fe1_function_without_attribute_has_flag_false() {
+    let prog = parse_ok("fn dot() -> i64 { 0 }");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("Expected Function");
+    };
+    assert!(!f.is_gpu);
+}
+
+#[test]
+fn gpu_fe1_coexists_with_other_attributes() {
+    let prog = parse_ok("#[gpu]\n#[inline]\nfn dot() -> i64 { 0 }");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("Expected Function");
+    };
+    assert!(f.is_gpu);
+    assert_eq!(f.attributes.len(), 2);
+}
+
+#[test]
+fn gpu_fe1_rejects_paren_args() {
+    let (_prog, errors) = parse_with_errors("#[gpu(cuda)]\nfn dot() -> i64 { 0 }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_GPU_ARGS_NOT_PERMITTED")),
+        "Expected E_GPU_ARGS_NOT_PERMITTED diagnostic; got: {errors:?}"
+    );
+}
+
+#[test]
+fn gpu_fe1_rejects_string_value() {
+    let (_prog, errors) = parse_with_errors("#[gpu = \"oops\"]\nfn dot() -> i64 { 0 }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_GPU_ARGS_NOT_PERMITTED")),
+        "Expected E_GPU_ARGS_NOT_PERMITTED diagnostic; got: {errors:?}"
+    );
+}
+
+#[test]
+fn gpu_fe1_duplicate_attribute_is_idempotent() {
+    let prog = parse_ok("#[gpu]\n#[gpu]\nfn f() { }");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("Expected Function");
+    };
+    assert!(f.is_gpu);
+    assert_eq!(f.attributes.len(), 2);
+}
+
+#[test]
+fn gpu_fe1_set_on_non_fn_item_parser_does_not_reject() {
+    // Parser captures attributes uniformly; the resolver rejects
+    // placement on non-fn items. The struct still parses cleanly.
+    let prog = parse_ok("#[gpu]\npub struct Config { x: i64, }");
+    let Item::StructDef(s) = &prog.items[0] else {
+        panic!("Expected StructDef");
+    };
+    assert_eq!(s.attributes.len(), 1);
+    assert_eq!(s.attributes[0].path[0], "gpu");
+}
+
+#[test]
+fn gpu_fe1_sets_flag_on_trait_method() {
+    let prog = parse_ok(
+        "pub trait T {\n\
+         #[gpu]\n\
+         fn m(ref self) -> i64;\n\
+         }",
+    );
+    let Item::TraitDef(t) = &prog.items[0] else {
+        panic!("Expected TraitDef");
+    };
+    let methods = trait_methods(t);
+    assert!(methods[0].is_gpu);
+}
+
+#[test]
+fn gpu_fe1_trait_method_rejects_paren_args() {
+    let (_prog, errors) = parse_with_errors(
+        "pub trait T {\n\
+         #[gpu(extra)]\n\
+         fn m(ref self) -> i64;\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_GPU_ARGS_NOT_PERMITTED")),
+        "Expected E_GPU_ARGS_NOT_PERMITTED on trait method; got: {errors:?}",
+    );
+}
+
 #[test]
 fn track_caller_slice1_trait_method_per_method_independent() {
     // Mixed presence within a single trait — one method carries the

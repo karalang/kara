@@ -341,6 +341,7 @@ fn make_default_impl(type_name: &str, body: Expr, span: Span) -> Item {
         deprecation: None,
         unstable: None,
         is_track_caller: false,
+        is_gpu: false,
         inline_hint: None,
         is_cold: false,
         lint_overrides: Vec::new(),

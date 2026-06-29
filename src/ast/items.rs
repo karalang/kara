@@ -253,6 +253,21 @@ pub struct Function {
     /// other inline/cold combination is legal. Propagates from a trait
     /// method declaration to non-overriding impls like `inline_hint`.
     pub is_cold: bool,
+    /// `#[gpu]` declared on this function — the GPU-subset *constraint*
+    /// marker (design.md § GPU Subset Constraints). It asserts "this
+    /// function uses only the GPU-compatible subset" and makes the
+    /// function GPU-callable; it does NOT route the function to the GPU
+    /// (dispatch is always the explicit `gpu.dispatch(...)` call). This
+    /// slice (FE-1) captures the surface marker only — the parser
+    /// rejects arguments (`#[gpu]` is bare, `E_GPU_ARGS_NOT_PERMITTED`)
+    /// and the resolver rejects placement on non-`fn` items
+    /// (`E_GPU_INVALID_TARGET` / `E0800`). The enforcement that consumes
+    /// it — the `GpuSafe` structural type-check (FE-2, `E0801`),
+    /// `#[gpu]` call-graph validation (FE-3), and effect enforcement
+    /// (FE-4) — lands in later slices. See
+    /// `docs/implementation_checklist/phase-10-targets.md` § "GPU
+    /// compute shaders — slice breakdown".
+    pub is_gpu: bool,
     /// Lint-level overrides declared at this function via
     /// `#[allow(NAME)]` / `#[warn(NAME)]` / `#[deny(NAME)]` /
     /// `#[expect(NAME)]`. Each attribute produces one entry per
@@ -737,6 +752,13 @@ pub struct TraitMethod {
     /// `#[cold]` on this trait method declaration — see
     /// [`Function::is_cold`]. Propagates to non-overriding impls.
     pub is_cold: bool,
+    /// `#[gpu]` on this trait method declaration — see
+    /// [`Function::is_gpu`]. Captured here so a `#[gpu]`-annotated trait
+    /// method declares GPU-callable intent; FE-1 captures the surface
+    /// marker only (parser rejects args; resolver rejects non-`fn`
+    /// placement). Propagation to impl methods rides with the FE-3
+    /// call-graph slice, paralleling `is_track_caller`.
+    pub is_gpu: bool,
 }
 
 /// The inlining axis of the codegen-hint attributes (design.md §

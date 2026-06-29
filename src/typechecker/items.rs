@@ -331,6 +331,7 @@ impl<'a> super::TypeChecker<'a> {
                         deprecation: None,
                         unstable: None,
                         is_track_caller: false,
+                        is_gpu: false,
                         inline_hint: None,
                         is_cold: false,
                         lint_overrides: Vec::new(),

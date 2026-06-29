@@ -702,6 +702,16 @@ pub enum ResolveErrorKind {
     /// design.md § Error Handling > "Stdlib panic-emitters report the
     /// caller's source location". `E0240`.
     TrackCallerInvalidTarget,
+    /// `#[gpu]` placed on an item that is not a `fn` declaration. The
+    /// attribute is the GPU-subset *constraint* marker — it asserts a
+    /// function uses only GPU-compatible features and makes it
+    /// GPU-callable, so it only makes sense on functions (free `fn`,
+    /// inherent / trait-impl method, trait method declaration). Placing
+    /// it on a struct / enum / union / trait / impl block / const / type
+    /// alias, or a field / variant, is rejected with
+    /// `E_GPU_INVALID_TARGET`. See design.md § GPU Subset Constraints.
+    /// `E0800`.
+    GpuInvalidTarget,
     /// A codegen-hint attribute (`#[inline]`, `#[inline(always)]`,
     /// `#[inline(never)]`, `#[cold]`) placed on an item that is not an
     /// inlinable function body — a struct/enum/union/trait/impl-block/

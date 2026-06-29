@@ -458,6 +458,7 @@ impl super::Parser {
         // for malformed args; the deprecated helper emits the four
         // `E_DEPRECATED_*` diagnostics for malformed forms.
         let is_track_caller = self.scan_track_caller_attr(&attributes);
+        let is_gpu = self.scan_gpu_attr(&attributes);
         let (inline_hint, is_cold) = self.scan_codegen_hint_attrs(&attributes);
         let deprecation = self.scan_deprecated_attr(&attributes);
         let unstable = self.scan_unstable_attr(&attributes);
@@ -481,6 +482,7 @@ impl super::Parser {
             deprecation,
             unstable,
             is_track_caller,
+            is_gpu,
             inline_hint,
             is_cold,
         })

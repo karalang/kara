@@ -106,6 +106,7 @@ fn make_function(name: &str, stdlib_origin: bool, is_pub: bool) -> Function {
         deprecation: None,
         unstable: None,
         is_track_caller: false,
+        is_gpu: false,
         inline_hint: None,
         is_cold: false,
         lint_overrides: Vec::new(),
