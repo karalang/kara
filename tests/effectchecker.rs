@@ -8553,3 +8553,77 @@ fn gpu_fe4_non_gpu_alloc_is_allowed() {
     );
     assert!(errs.is_empty(), "unexpected GpuEffectViolation: {:?}", errs);
 }
+
+// ── FE-4b — explicit-panic rejection (E0802) ─────────────────────
+// Only *explicit* panic emitters (panic/todo/unreachable/abort, unwrap/expect,
+// assert*, process.exit) are forbidden in a #[gpu] call graph. Implicit
+// bounds-check / divide-by-zero panics are GPU-acceptable and stay permitted.
+
+#[test]
+fn gpu_fe4b_rejects_explicit_todo_panic() {
+    let errs = gpu_effect_errors(
+        "#[gpu]\n\
+         fn k(n: i64) -> i64 { todo() }\n\
+         fn main() { println(1) }",
+    );
+    assert!(
+        errs.iter().any(|e| e.message.contains("explicit panic")
+            && e.message.contains("todo()")
+            && e.message.contains("call chain k")),
+        "got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn gpu_fe4b_rejects_transitive_explicit_panic_with_chain() {
+    let errs = gpu_effect_errors(
+        "fn helper() -> i64 { unreachable() }\n\
+         #[gpu]\n\
+         fn k(n: i64) -> i64 { helper() }\n\
+         fn main() { println(1) }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("explicit panic") && e.message.contains("k → helper")),
+        "expected explicit-panic chain k → helper; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn gpu_fe4b_rejects_unwrap() {
+    let errs = gpu_effect_errors(
+        "#[gpu]\n\
+         fn k(o: Option[i64]) -> i64 { o.unwrap() }\n\
+         fn main() { println(1) }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("explicit panic") && e.message.contains("unwrap()")),
+        "got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn gpu_fe4b_allows_implicit_divide_panic() {
+    // `a / b` carries only the implicit divide-by-zero panic (a GPU traps),
+    // which FE-4b does not forbid.
+    let errs = gpu_effect_errors(
+        "#[gpu]\n\
+         fn k(a: i64, b: i64) -> i64 { a / b }\n\
+         fn main() { println(1) }",
+    );
+    assert!(errs.is_empty(), "unexpected GpuEffectViolation: {:?}", errs);
+}
+
+#[test]
+fn gpu_fe4b_explicit_panic_in_non_gpu_is_allowed() {
+    // The gate is rooted only at #[gpu] functions.
+    let errs = gpu_effect_errors(
+        "fn k() -> i64 { todo() }\n\
+         fn main() { println(1) }",
+    );
+    assert!(errs.is_empty(), "unexpected GpuEffectViolation: {:?}", errs);
+}

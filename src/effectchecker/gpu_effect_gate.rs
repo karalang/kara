@@ -11,12 +11,15 @@
 //! - **`reads` / `writes`** on a *host* resource other than `GpuBuffer` — the
 //!   only host resource a GPU kernel may touch is an explicit GPU buffer.
 //!
-//! **`panics` is deferred to FE-4b** — see [`gpu_forbidden_reason`]: implicit
-//! bounds-check / divide-by-zero panics are pervasive in pure arithmetic and
-//! GPU-acceptable (trap/clamp, not unwind), so forbidding the `panics` effect
-//! wholesale would reject every real kernel. Catching only the *explicit*
-//! emitters (`panic()`/`todo()`/`unreachable()`) needs a panic-origin
-//! refinement the effect set does not carry today.
+//! **`panics` is refined by FE-4b** — see [`explicit_panic_emitter_label`].
+//! Only *explicit* emitters (`panic()`/`todo()`/`unreachable()`/`abort()`,
+//! `unwrap`/`expect`, `assert*`, `process.exit`) are forbidden. Implicit
+//! bounds-check (`__builtin_index`) and divide-by-zero (`__builtin_div_rem`)
+//! panics are pervasive in pure arithmetic and GPU-acceptable (trap/clamp, not
+//! unwind), so they stay permitted — forbidding the `panics` effect wholesale
+//! would reject every real kernel. The distinction is keyed on the `panics`
+//! effect's `Callee` origin (the emitter's name), since the effect verb alone
+//! conflates the two.
 //!
 //! This reuses the effect checker's existing call-graph + direct-use
 //! machinery (the same shape as `target_gate.rs`, which gates host resources
@@ -61,6 +64,30 @@ impl<'a> super::EffectChecker<'a> {
         let mut direct: HashMap<String, Vec<(String, Span)>> = HashMap::new();
         for (fn_name, set) in &self.inferred_effects {
             for te in &set.effects {
+                // FE-4b: a `panics` effect is forbidden only when it
+                // originates from an *explicit* emitter. Implicit bounds-check
+                // (`__builtin_index`) / divide-by-zero (`__builtin_div_rem`)
+                // panics stay permitted (a GPU traps/clamps, it does not
+                // unwind). An explicit emitter is always a body-less callee, so
+                // it is charged here at the call site; a transitive caller sees
+                // it via the in-graph `helper`-keyed edge and the DFS walks
+                // down to the function that directly performs it.
+                if matches!(te.effect.verb, EffectVerbKind::Panics) {
+                    if let EffectOrigin::Callee {
+                        fn_name: callee,
+                        span,
+                    } = &te.origin
+                    {
+                        if let Some(label) = explicit_panic_emitter_label(callee) {
+                            direct
+                                .entry(fn_name.clone())
+                                .or_default()
+                                .push((format!("an explicit panic (`{label}`)"), span.clone()));
+                        }
+                    }
+                    continue;
+                }
+
                 let Some(reason) = gpu_forbidden_reason(&te.effect) else {
                     continue;
                 };
@@ -118,9 +145,9 @@ fn gpu_gate_dfs(
             errors.push(EffectError {
                 message: format!(
                     "a `#[gpu]` function must not perform {reason}; it is reached on the call \
-                     chain {chain}. The GPU subset is allocation-free and has no host I/O or \
-                     channels — restructure to keep it off the `#[gpu]` call graph. See \
-                     design.md § GPU Subset Constraints.",
+                     chain {chain}. The GPU subset forbids heap allocation, host I/O, channels, \
+                     and explicit panics — restructure to keep it off the `#[gpu]` call graph. \
+                     See design.md § GPU Subset Constraints.",
                 ),
                 span: span.clone(),
                 kind: EffectErrorKind::GpuEffectViolation,
@@ -145,14 +172,10 @@ fn gpu_gate_dfs(
 /// Classify an effect as GPU-forbidden, returning a human reason (already
 /// back-tick-wrapped where it names the effect) or `None` if allowed.
 ///
-/// **`panics` is intentionally NOT forbidden here (tracked as FE-4b).** Pure
-/// arithmetic infers `panics` from implicit bounds-check (`__builtin_index`)
-/// and divide-by-zero (`__builtin_div_rem`) traps, which a GPU handles by
-/// trapping/clamping rather than unwinding — so they are GPU-acceptable. The
-/// design's target is *explicit* emitters (`panic()`/`todo()`/`unreachable()`);
-/// the effect set conflates the two, so distinguishing them needs a
-/// panic-origin refinement. Forbidding `panics` wholesale would reject every
-/// real kernel (the canonical `dot` indexes arrays), so it is deferred.
+/// **`panics` is handled separately, not here** — its forbidden-ness depends on
+/// the *origin* (the emitter's name), which this effect-only predicate cannot
+/// see. See [`explicit_panic_emitter_label`] and the FE-4b branch in
+/// [`super::EffectChecker::check_gpu_effect_gate`].
 fn gpu_forbidden_reason(effect: &Effect) -> Option<String> {
     match &effect.verb {
         EffectVerbKind::Allocates if effect.resource == "Heap" => {
@@ -177,6 +200,31 @@ fn gpu_forbidden_reason(effect: &Effect) -> Option<String> {
             };
             Some(format!("`{verb}({})` (host I/O)", effect.resource))
         }
+        _ => None,
+    }
+}
+
+/// FE-4b — explicit panic emitters whose `panics` effect a `#[gpu]` function
+/// may not carry, mapped to a human label. Returns `None` for *implicit* panic
+/// sources — array-index bounds check (`__builtin_index`), divide-by-zero
+/// (`__builtin_div_rem`), and refinement / float-trunc cast asserts — which a
+/// GPU handles by trapping/clamping rather than unwinding, so they stay
+/// permitted (the canonical arithmetic kernel indexes and divides and must
+/// remain clean). This is the deny side: only the names listed here are
+/// forbidden, so any unrecognized panic source is permitted rather than risking
+/// a false reject.
+fn explicit_panic_emitter_label(callee: &str) -> Option<&'static str> {
+    match callee {
+        "panic" => Some("panic()"),
+        "todo" => Some("todo()"),
+        "unreachable" => Some("unreachable()"),
+        "abort" => Some("abort()"),
+        "assert" => Some("assert(...)"),
+        "assert_eq" => Some("assert_eq(...)"),
+        "assert_ne" => Some("assert_ne(...)"),
+        "__builtin_unwrap" => Some("unwrap()"),
+        "__builtin_expect" => Some("expect()"),
+        "process.exit" => Some("process.exit()"),
         _ => None,
     }
 }
