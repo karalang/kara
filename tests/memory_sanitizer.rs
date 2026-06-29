@@ -10617,6 +10617,59 @@ fn main() {
         );
     }
 
+    /// Column transform heap lifecycle (phase-11 follow-on slice): the
+    /// Column-returning transforms `fillna` / `dropna` and the
+    /// `from_iter_nullable` constructor each malloc a *fresh* control
+    /// block + data buffer + bitmap; the receiver is borrowed (keeps its
+    /// own `FreeColumn`), and the fresh result is freed once via the
+    /// let-binding's `FreeColumn`. A missing free leaks (Linux
+    /// detect_leaks); a wrong free double-frees (caught everywhere).
+    /// Receiver reuse after the transforms pins it wasn't consumed.
+    #[test]
+    fn asan_column_transforms_lifecycle_clean() {
+        let label = "column_transforms_lifecycle";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+fn main() {
+    let mut c: Column[i64] = Column.new();
+    c.push(10);
+    c.push_null();
+    c.push(30);
+    c.push_null();
+    let f = c.fillna(99);
+    println(f.len());
+    let d = c.dropna();
+    println(d.len());
+    // receiver still usable (borrowed, not consumed).
+    println(c.null_count());
+    let opts: Vec[Option[i64]] = [Some(1), None, Some(3)];
+    let e: Column[i64] = Column.from_iter_nullable(opts);
+    println(e.null_count());
+    match e[2] { Some(v) => println(v), None => println(-1) }
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             check FreeColumn on fresh transform results / receiver-borrow",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["4", "2", "2", "1", "3"],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     /// Tensor element-wise arithmetic heap lifecycle (phase-11 line 47):
     /// every `+ - * /` / unary `-` mallocs a fresh result; operands are
     /// borrowed (keep their own `FreeTensor`); a fresh-temp intermediate in

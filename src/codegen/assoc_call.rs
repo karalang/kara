@@ -365,12 +365,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // `with_capacity` carry no element value in their args, so they
         // thread the destination binding's element type via
         // `pending_let_column_info` (the `Tensor.zeros` mechanism);
-        // `from_vec` deep-copies the Vec argument. `from_iter_nullable`
-        // is a follow-on slice (interpreter-only for now). See
+        // `from_vec` deep-copies the Vec argument; `from_iter_nullable`
+        // scatters a `Vec[Option[T]]` into values + validity bitmap. See
         // `src/codegen/column.rs`.
         if type_name == "Column" {
             match method {
-                "new" | "with_capacity" | "from_vec" => {
+                "new" | "with_capacity" | "from_vec" | "from_iter_nullable" => {
                     return self.compile_column_new(method, args)
                 }
                 _ => {}

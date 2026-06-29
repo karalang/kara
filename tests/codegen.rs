@@ -47758,6 +47758,62 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_column_fillna_dropna() {
+        // fillna replaces null slots with the value (fresh all-valid
+        // column, receiver unchanged); dropna drops them. Both return a
+        // fresh owned Column tracked by `FreeColumn`.
+        let out = run_program(
+            "fn main() {\n\
+                 let mut c: Column[i64] = Column.new();\n\
+                 c.push(10);\n\
+                 c.push_null();\n\
+                 c.push(30);\n\
+                 c.push_null();\n\
+                 let f = c.fillna(99);\n\
+                 println(f.len());\n\
+                 println(f.null_count());\n\
+                 match f[1] { Some(v) => println(v), None => println(-1) }\n\
+                 match f[2] { Some(v) => println(v), None => println(-1) }\n\
+                 let d = c.dropna();\n\
+                 println(d.len());\n\
+                 println(d.null_count());\n\
+                 match d[0] { Some(v) => println(v), None => println(-1) }\n\
+                 match d[1] { Some(v) => println(v), None => println(-1) }\n\
+                 println(c.null_count());\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "4\n0\n99\n30\n2\n0\n10\n30\n2\n",
+                "Column.fillna / dropna must match the interpreter (receiver unchanged)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_column_from_iter_nullable() {
+        // Vec[Option[T]] -> Column[T]: Some -> valid slot, None -> SQL null.
+        let out = run_program(
+            "fn main() {\n\
+                 let opts: Vec[Option[i64]] = [Some(1), None, Some(3)];\n\
+                 let e: Column[i64] = Column.from_iter_nullable(opts);\n\
+                 println(e.len());\n\
+                 println(e.null_count());\n\
+                 println(e.is_null(1));\n\
+                 match e[0] { Some(v) => println(v), None => println(-1) }\n\
+                 match e[1] { Some(v) => println(v), None => println(-1) }\n\
+                 match e[2] { Some(v) => println(v), None => println(-1) }\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "3\n1\ntrue\n1\n-1\n3\n",
+                "Column.from_iter_nullable must scatter Some/None into values + bitmap"
+            );
+        }
+    }
+
     // ── Shape-generic function body — tensor-param indexing ──────────
     // A `fn f[N](a: Tensor[T, [N, N]], ...)` body that indexes its tensor
     // params (`a[i, j]`) lowers in codegen: `compile_mono_function`

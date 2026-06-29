@@ -29,14 +29,15 @@
 //! move-suppression sentinel) is skipped — the Column analog of
 //! `FreeTensor` / `FreeVecBuffer`.
 //!
-//! **Scope (this slice).** Constructors `new` / `with_capacity` /
-//! `from_vec`; mutators `push` / `push_null`; accessors `len` /
+//! **Scope.** Constructors `new` / `with_capacity` / `from_vec` /
+//! `from_iter_nullable`; mutators `push` / `push_null`; accessors `len` /
 //! `null_count` / `valid_count` / `is_null`; positional indexing
-//! `c[i] -> Option[T]`. Element types are the numeric primitives + `bool`
-//! (POD, ≤ one word), matching the Tensor codegen surface. The
-//! Vec-returning methods (`iter` / `iter_valid` / `fillna` / `dropna`),
-//! `from_iter_nullable`, and the SQL three-valued-logic arithmetic are
-//! follow-on slices (they stay on `karac run` until then).
+//! `c[i] -> Option[T]`; and the Column-returning transforms `fillna` /
+//! `dropna`. Element types are the numeric primitives + `bool` (POD,
+//! ≤ one word), matching the Tensor codegen surface. The Vec-returning
+//! methods (`iter` -> `Vec[Option[T]]`, `iter_valid` -> `Vec[T]`), the
+//! SQL three-valued-logic arithmetic, and `fillna`'s `treat_nan_as_null`
+//! flag are follow-on slices (they stay on `karac run` until then).
 
 use inkwell::types::{BasicTypeEnum, StructType};
 use inkwell::values::{BasicValueEnum, IntValue, PointerValue};
@@ -76,6 +77,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 other
             )),
         }
+    }
+
+    /// `ceil(n / 8)` — the byte count of an `n`-element validity bitmap.
+    fn column_bitmap_bytes(&self, n: IntValue<'ctx>) -> IntValue<'ctx> {
+        let i64_t = self.context.i64_type();
+        self.builder
+            .build_right_shift(
+                self.builder
+                    .build_int_add(n, i64_t.const_int(7, false), "col.bm.add7")
+                    .unwrap(),
+                i64_t.const_int(3, false),
+                false,
+                "col.bm.bytes",
+            )
+            .unwrap()
     }
 
     /// Extract a `ColumnVarInfo` from an annotation TypeExpr
@@ -210,6 +226,55 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_store(byte_ptr, new_byte).unwrap();
     }
 
+    /// Write validity bit `idx` of `bitmap` to a *runtime* `i1` `valid`
+    /// (the `from_iter_nullable` per-slot `Some`/`None` case, where
+    /// validity isn't a compile-time constant). `byte = valid ? (byte |
+    /// mask) : (byte & ~mask)`.
+    fn column_write_bit_runtime(
+        &self,
+        bitmap: PointerValue<'ctx>,
+        idx: IntValue<'ctx>,
+        valid: IntValue<'ctx>,
+    ) {
+        let i8_t = self.context.i8_type();
+        let i64_t = self.context.i64_type();
+        let byte_idx = self
+            .builder
+            .build_right_shift(idx, i64_t.const_int(3, false), false, "col.rbyteidx")
+            .unwrap();
+        let bit_in = self
+            .builder
+            .build_and(idx, i64_t.const_int(7, false), "col.rbitidx")
+            .unwrap();
+        let bit_in8 = self
+            .builder
+            .build_int_truncate(bit_in, i8_t, "col.rbitidx8")
+            .unwrap();
+        let mask = self
+            .builder
+            .build_left_shift(i8_t.const_int(1, false), bit_in8, "col.rmask")
+            .unwrap();
+        let byte_ptr = unsafe {
+            self.builder
+                .build_gep(i8_t, bitmap, &[byte_idx], "col.rbytep")
+                .unwrap()
+        };
+        let byte = self
+            .builder
+            .build_load(i8_t, byte_ptr, "col.rbyte")
+            .unwrap()
+            .into_int_value();
+        let set = self.builder.build_or(byte, mask, "col.rset").unwrap();
+        let notmask = self.builder.build_not(mask, "col.rnotmask").unwrap();
+        let clr = self.builder.build_and(byte, notmask, "col.rclr").unwrap();
+        let new_byte = self
+            .builder
+            .build_select(valid, set, clr, "col.rbyte.new")
+            .unwrap()
+            .into_int_value();
+        self.builder.build_store(byte_ptr, new_byte).unwrap();
+    }
+
     /// Load validity bit `idx` of `bitmap` as an `i1` (`true` = valid).
     fn column_load_valid_bit(
         &self,
@@ -283,6 +348,42 @@ impl<'ctx> super::Codegen<'ctx> {
             other => self
                 .coerce_to_i64(other)
                 .unwrap_or_else(|_| i64_t.const_zero()),
+        }
+    }
+
+    /// Decode an enum-payload word `w` (the `Option[T].Some` payload) back
+    /// to an `elem`-typed value — the inverse of `column_value_to_word`,
+    /// used by `from_iter_nullable` reading a `Vec[Option[T]]`.
+    fn column_word_to_value(
+        &self,
+        w: IntValue<'ctx>,
+        elem: BasicTypeEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        match elem {
+            BasicTypeEnum::IntType(it) => {
+                let width = it.get_bit_width();
+                if width == 64 {
+                    w.into()
+                } else {
+                    self.builder
+                        .build_int_truncate(w, it, "col.w2v.trunc")
+                        .unwrap()
+                        .into()
+                }
+            }
+            BasicTypeEnum::FloatType(ft) => {
+                if ft == self.context.f64_type() {
+                    self.builder.build_bit_cast(w, ft, "col.w2v.f64").unwrap()
+                } else {
+                    let i32_t = self.context.i32_type();
+                    let lo = self
+                        .builder
+                        .build_int_truncate(w, i32_t, "col.w2v.lo")
+                        .unwrap();
+                    self.builder.build_bit_cast(lo, ft, "col.w2v.f32").unwrap()
+                }
+            }
+            other => other.const_zero(),
         }
     }
 
@@ -391,6 +492,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 Ok(self.column_alloc(info.elem, cap, zero)?.into())
             }
             "from_vec" => self.compile_column_from_vec(info.elem, args),
+            "from_iter_nullable" => self.compile_column_from_iter_nullable(info.elem, args),
             other => Err(format!("unknown Column constructor '{}'", other)),
         }
     }
@@ -508,6 +610,149 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(control.into())
     }
 
+    /// `Column.from_iter_nullable(values: Vec[Option[T]]) -> Column[T]` —
+    /// `Some(v)` becomes a valid slot, `None` a SQL null. Reads each
+    /// `Option[T]` out of the source Vec buffer (the canonical 4-word
+    /// enum struct), decodes the `Some` payload word back to `T`, and
+    /// scatters value + runtime validity bit into a fresh column.
+    fn compile_column_from_iter_nullable(
+        &mut self,
+        elem: BasicTypeEnum<'ctx>,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "Column.from_iter_nullable outside function".to_string())?;
+        let arg_expr = args
+            .first()
+            .map(|a| &a.value)
+            .ok_or_else(|| "Column.from_iter_nullable: missing values argument".to_string())?;
+        let arg_val = self.compile_expr(arg_expr)?;
+        let vec_val = arg_val.into_struct_value();
+        let src_ptr = self
+            .builder
+            .build_extract_value(vec_val, 0, "col.fin.src")
+            .unwrap()
+            .into_pointer_value();
+        let vlen = self
+            .builder
+            .build_extract_value(vec_val, 1, "col.fin.len")
+            .unwrap()
+            .into_int_value();
+
+        let control = self.column_alloc(elem, vlen, vlen)?;
+        let data = self
+            .column_load_field(control, 0, "col.fin.data")
+            .into_pointer_value();
+        let bitmap = self
+            .column_load_field(control, 1, "col.fin.bm")
+            .into_pointer_value();
+
+        let option_ty = self
+            .enum_layouts
+            .get("Option")
+            .map(|l| l.llvm_type)
+            .ok_or_else(|| "Column.from_iter_nullable: Option enum layout missing".to_string())?;
+        let some_tag = self
+            .enum_layouts
+            .get("Option")
+            .and_then(|l| l.tags.get("Some").copied())
+            .unwrap_or(1);
+
+        // for i in 0..vlen { let o = src[i]; data[i] = decode(o.w0);
+        //                    bit[i] = (o.tag == Some) }
+        let idx_slot = self.builder.build_alloca(i64_t, "col.fin.i").unwrap();
+        self.builder
+            .build_store(idx_slot, i64_t.const_zero())
+            .unwrap();
+        let head = self.context.append_basic_block(fn_val, "col.fin.head");
+        let body = self.context.append_basic_block(fn_val, "col.fin.body");
+        let exit = self.context.append_basic_block(fn_val, "col.fin.exit");
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(head);
+        let i = self
+            .builder
+            .build_load(i64_t, idx_slot, "col.fin.iv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, vlen, "col.fin.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, body, exit)
+            .unwrap();
+        self.builder.position_at_end(body);
+        let opt_ptr = unsafe {
+            self.builder
+                .build_gep(option_ty, src_ptr, &[i], "col.fin.optp")
+                .unwrap()
+        };
+        let tag_ptr = self
+            .builder
+            .build_struct_gep(option_ty, opt_ptr, 0, "col.fin.tagp")
+            .unwrap();
+        let tag = self
+            .builder
+            .build_load(i64_t, tag_ptr, "col.fin.tag")
+            .unwrap()
+            .into_int_value();
+        let is_some = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                tag,
+                i64_t.const_int(some_tag, false),
+                "col.fin.some",
+            )
+            .unwrap();
+        let w0_ptr = self
+            .builder
+            .build_struct_gep(option_ty, opt_ptr, 1, "col.fin.w0p")
+            .unwrap();
+        let w0 = self
+            .builder
+            .build_load(i64_t, w0_ptr, "col.fin.w0")
+            .unwrap()
+            .into_int_value();
+        let val = self.column_word_to_value(w0, elem);
+        // A null slot stores the zero placeholder (the payload word is 0
+        // for `None`, so the decode already yields zero — but select keeps
+        // it explicit and matches `push_null`).
+        let zero = self.column_zero_elem(elem);
+        let stored = self
+            .builder
+            .build_select(is_some, val, zero, "col.fin.sel")
+            .unwrap();
+        let dslot = unsafe {
+            self.builder
+                .build_gep(elem, data, &[i], "col.fin.dslot")
+                .unwrap()
+        };
+        self.builder.build_store(dslot, stored).unwrap();
+        self.column_write_bit_runtime(bitmap, i, is_some);
+        let next = self
+            .builder
+            .build_int_add(i, i64_t.const_int(1, false), "col.fin.next")
+            .unwrap();
+        self.builder.build_store(idx_slot, next).unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(exit);
+
+        // Free a temporary source Vec's buffer (POD Option elements — no
+        // per-element heap to walk).
+        if !matches!(arg_expr.kind, ExprKind::Identifier(_)) {
+            let cap = self
+                .builder
+                .build_extract_value(vec_val, 2, "col.fin.cap")
+                .unwrap()
+                .into_int_value();
+            self.emit_free_if_cap_positive(src_ptr, cap);
+        }
+        Ok(control.into())
+    }
+
     // ── Instance methods ────────────────────────────────────────
 
     /// Column instance methods on an identifier receiver (`push` /
@@ -532,7 +777,14 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         if !matches!(
             method,
-            "push" | "push_null" | "len" | "null_count" | "valid_count" | "is_null"
+            "push"
+                | "push_null"
+                | "len"
+                | "null_count"
+                | "valid_count"
+                | "is_null"
+                | "fillna"
+                | "dropna"
         ) {
             return Ok(None);
         }
@@ -577,8 +829,216 @@ impl<'ctx> super::Codegen<'ctx> {
                 let is_null = self.builder.build_not(valid, "col.isnull").unwrap();
                 Ok(Some(is_null.into()))
             }
+            "fillna" => {
+                let arg = args
+                    .first()
+                    .ok_or_else(|| "Column.fillna requires a value argument".to_string())?;
+                let fill = self.compile_expr(&arg.value)?;
+                let fill = self.coerce_scalar_to_type(fill, info.elem);
+                Ok(Some(self.compile_column_fillna(control, info.elem, fill)?))
+            }
+            "dropna" => Ok(Some(self.compile_column_dropna(control, info.elem)?)),
             _ => unreachable!(),
         }
+    }
+
+    /// `fillna(value) -> Column[T]` — a fresh all-valid column the same
+    /// length as the receiver: valid slots copied as-is, null slots
+    /// replaced with `value`. The receiver is borrowed (unchanged); the
+    /// result owns independent allocations. (`treat_nan_as_null` is a
+    /// follow-on slice.)
+    fn compile_column_fillna(
+        &mut self,
+        src: PointerValue<'ctx>,
+        elem: BasicTypeEnum<'ctx>,
+        fill: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let i8_t = self.context.i8_type();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "Column.fillna outside function".to_string())?;
+        let len = self
+            .column_load_field(src, 2, "col.fill.len")
+            .into_int_value();
+        let src_data = self
+            .column_load_field(src, 0, "col.fill.sdata")
+            .into_pointer_value();
+        let src_bm = self
+            .column_load_field(src, 1, "col.fill.sbm")
+            .into_pointer_value();
+
+        let dst = self.column_alloc(elem, len, len)?;
+        let dst_data = self
+            .column_load_field(dst, 0, "col.fill.ddata")
+            .into_pointer_value();
+        let dst_bm = self
+            .column_load_field(dst, 1, "col.fill.dbm")
+            .into_pointer_value();
+        // All-valid result bitmap.
+        let bm_bytes = self.column_bitmap_bytes(len);
+        self.builder
+            .build_memset(dst_bm, 1, i8_t.const_int(0xFF, false), bm_bytes)
+            .map_err(|e| format!("Column.fillna bitmap memset failed: {:?}", e))?;
+
+        // for i in 0..len { dst[i] = valid(i) ? src[i] : fill }
+        let idx_slot = self.builder.build_alloca(i64_t, "col.fill.i").unwrap();
+        self.builder
+            .build_store(idx_slot, i64_t.const_zero())
+            .unwrap();
+        let head = self.context.append_basic_block(fn_val, "col.fill.head");
+        let body = self.context.append_basic_block(fn_val, "col.fill.body");
+        let exit = self.context.append_basic_block(fn_val, "col.fill.exit");
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(head);
+        let i = self
+            .builder
+            .build_load(i64_t, idx_slot, "col.fill.iv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, len, "col.fill.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, body, exit)
+            .unwrap();
+        self.builder.position_at_end(body);
+        let valid = self.column_load_valid_bit(src_bm, i);
+        let src_slot = unsafe {
+            self.builder
+                .build_gep(elem, src_data, &[i], "col.fill.sslot")
+                .unwrap()
+        };
+        let loaded = self
+            .builder
+            .build_load(elem, src_slot, "col.fill.sval")
+            .unwrap();
+        let chosen = self
+            .builder
+            .build_select(valid, loaded, fill, "col.fill.sel")
+            .unwrap();
+        let dst_slot = unsafe {
+            self.builder
+                .build_gep(elem, dst_data, &[i], "col.fill.dslot")
+                .unwrap()
+        };
+        self.builder.build_store(dst_slot, chosen).unwrap();
+        let next = self
+            .builder
+            .build_int_add(i, i64_t.const_int(1, false), "col.fill.next")
+            .unwrap();
+        self.builder.build_store(idx_slot, next).unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(exit);
+        Ok(dst.into())
+    }
+
+    /// `dropna() -> Column[T]` — a fresh all-valid column of the
+    /// receiver's valid values in order (nulls dropped). The receiver is
+    /// borrowed; the result owns independent allocations.
+    fn compile_column_dropna(
+        &mut self,
+        src: PointerValue<'ctx>,
+        elem: BasicTypeEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let i8_t = self.context.i8_type();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "Column.dropna outside function".to_string())?;
+        let len = self
+            .column_load_field(src, 2, "col.drop.len")
+            .into_int_value();
+        let src_data = self
+            .column_load_field(src, 0, "col.drop.sdata")
+            .into_pointer_value();
+        let src_bm = self
+            .column_load_field(src, 1, "col.drop.sbm")
+            .into_pointer_value();
+        // valid_count → result capacity/len.
+        let vc = self.compile_column_count(src, true)?.into_int_value();
+        let dst = self.column_alloc(elem, vc, vc)?;
+        let dst_data = self
+            .column_load_field(dst, 0, "col.drop.ddata")
+            .into_pointer_value();
+        let dst_bm = self
+            .column_load_field(dst, 1, "col.drop.dbm")
+            .into_pointer_value();
+        let bm_bytes = self.column_bitmap_bytes(vc);
+        self.builder
+            .build_memset(dst_bm, 1, i8_t.const_int(0xFF, false), bm_bytes)
+            .map_err(|e| format!("Column.dropna bitmap memset failed: {:?}", e))?;
+
+        // for i in 0..len { if valid(i) { dst[j++] = src[i] } }
+        let idx_slot = self.builder.build_alloca(i64_t, "col.drop.i").unwrap();
+        let j_slot = self.builder.build_alloca(i64_t, "col.drop.j").unwrap();
+        self.builder
+            .build_store(idx_slot, i64_t.const_zero())
+            .unwrap();
+        self.builder
+            .build_store(j_slot, i64_t.const_zero())
+            .unwrap();
+        let head = self.context.append_basic_block(fn_val, "col.drop.head");
+        let body = self.context.append_basic_block(fn_val, "col.drop.body");
+        let keep = self.context.append_basic_block(fn_val, "col.drop.keep");
+        let cont = self.context.append_basic_block(fn_val, "col.drop.cont");
+        let exit = self.context.append_basic_block(fn_val, "col.drop.exit");
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(head);
+        let i = self
+            .builder
+            .build_load(i64_t, idx_slot, "col.drop.iv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, len, "col.drop.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, body, exit)
+            .unwrap();
+        self.builder.position_at_end(body);
+        let valid = self.column_load_valid_bit(src_bm, i);
+        self.builder
+            .build_conditional_branch(valid, keep, cont)
+            .unwrap();
+        self.builder.position_at_end(keep);
+        let j = self
+            .builder
+            .build_load(i64_t, j_slot, "col.drop.jv")
+            .unwrap()
+            .into_int_value();
+        let src_slot = unsafe {
+            self.builder
+                .build_gep(elem, src_data, &[i], "col.drop.sslot")
+                .unwrap()
+        };
+        let loaded = self
+            .builder
+            .build_load(elem, src_slot, "col.drop.sval")
+            .unwrap();
+        let dst_slot = unsafe {
+            self.builder
+                .build_gep(elem, dst_data, &[j], "col.drop.dslot")
+                .unwrap()
+        };
+        self.builder.build_store(dst_slot, loaded).unwrap();
+        let j2 = self
+            .builder
+            .build_int_add(j, i64_t.const_int(1, false), "col.drop.j2")
+            .unwrap();
+        self.builder.build_store(j_slot, j2).unwrap();
+        self.builder.build_unconditional_branch(cont).unwrap();
+        self.builder.position_at_end(cont);
+        let next = self
+            .builder
+            .build_int_add(i, i64_t.const_int(1, false), "col.drop.next")
+            .unwrap();
+        self.builder.build_store(idx_slot, next).unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(exit);
+        Ok(dst.into())
     }
 
     /// `push(value)` (valid slot) / `push_null()` (null slot). Grows the
