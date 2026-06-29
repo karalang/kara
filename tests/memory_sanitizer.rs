@@ -349,6 +349,30 @@ fn main() {
         );
     }
 
+    /// Shared-ownership inc-on-copy (B-2026-06-22-2): copying a heap-env closure
+    /// binding (`let g = f`, plus a copy-of-a-copy `let h = g`) shares ONE RC env
+    /// box across all owners — the copy increments the refcount and each owner's
+    /// `FreeClosureEnv` decrements, so the box is freed EXACTLY once. Asserts no
+    /// leak (LSan) and no use-after-free / double-free (ASAN). Without the
+    /// inc-on-copy the box would be under-counted and freed early (UAF) by the
+    /// first owner's scope exit while later owners still alias it.
+    #[test]
+    fn asan_heap_env_closure_copy_freed_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn main() {
+    let f = make(10i64);
+    let g = f;
+    let h = g;
+    println(f"{f(1i64) + g(2i64) + h(3i64)}");
+}
+"#,
+            &["36"],
+            "asan_heap_env_closure_copy_freed_no_leak",
+        );
+    }
+
     // ── Baseline: no heap allocations ─────────────────────────────
     // Sanity-checks the harness itself — should trivially pass on any host
     // with a working `cc + ASAN`. If this fails, the infrastructure is

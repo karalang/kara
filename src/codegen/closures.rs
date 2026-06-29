@@ -346,41 +346,51 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    /// Heap-closure-env epic Slice 1 (B-2026-06-22-2) — the misuse guard that
-    /// makes the heap-env feature SOUND. The only supported use of a heap-env
-    /// closure binding (`let f = make(..)`) is to CALL it in the same function
-    /// (`f(x)`), possibly many times; its RC env is freed at `f`'s scope exit.
-    /// Every other use would let the env outlive — or be double-freed by — its
-    /// single owner: returning it (`return f`), copying it (`let g = f`),
-    /// storing it (into a struct / collection / index / field), passing it as a
-    /// call argument, or capturing it in a nested closure. An UNBOUND
-    /// `make(..)` (a non-`let`-RHS occurrence of a heap-env-producing call —
-    /// `make(..);`, `make(..)(x)`, `return make(..)`, `[make(..)]`, …) leaks the
-    /// env. All of those are not-yet-supported and are rejected here with an
-    /// honest `E_ESCAPING_CLOSURE_NOT_YET` rather than miscompiled.
+    /// Heap-closure-env epic (B-2026-06-22-2) — the misuse guard that keeps the
+    /// heap-env feature SOUND. A heap-env closure binding (`let f = make(..)`)
+    /// may now be CALLED in the function that binds it (`f(x)`, possibly many
+    /// times) AND COPIED to another binding (`let g = f`): a copy increments the
+    /// shared RC env's refcount and both owners free it via `FreeClosureEnv` at
+    /// scope exit, so it is reclaimed exactly once (shared-ownership inc-on-copy
+    /// RC slice). Every OTHER use would let the env outlive — or be double-freed
+    /// by — its owner set: returning it (`return f`), storing it (into a struct
+    /// / collection / index / field), passing it as a call argument, or
+    /// capturing it in a nested closure. An UNBOUND `make(..)` (a non-`let`-RHS
+    /// occurrence of a heap-env-producing call — `make(..);`, `make(..)(x)`,
+    /// `return make(..)`, `[make(..)]`, …) leaks the env. All of those are
+    /// not-yet-supported and are rejected here with an honest
+    /// `E_ESCAPING_CLOSURE_NOT_YET` rather than miscompiled.
     ///
     /// Inert unless some function returns a heap-env closure. Otherwise: pass 1
-    /// collects the top-level heap-env bindings (single-name `let`s with a
-    /// heap-env-producing-call RHS); pass 2 walks every statement/expression
-    /// position — EXCLUDING those sanctioned RHS calls — flagging (a) any
+    /// collects the top-level heap-env bindings — single-name `let`s whose RHS
+    /// is a heap-env-producing call OR a bare copy of an already-collected
+    /// binding (a forward scan makes the copy collection transitive, e.g. `let g
+    /// = f; let h = g`); pass 2 walks every statement/expression position —
+    /// EXCLUDING those sanctioned RHS calls and copies — flagging (a) any
     /// non-sanctioned heap-env-producing call and (b) any bare reference to a
-    /// binding that is not the callee of a direct call. The walk
-    /// ([`expr_has_heap_env_misuse`]) is exhaustive over `ExprKind` (no silent
-    /// wildcard) so no escaping occurrence is missed.
+    /// binding that is not the callee of a direct call and is not a sanctioned
+    /// copy RHS. The walk ([`expr_has_heap_env_misuse`]) is exhaustive over
+    /// `ExprKind` (no silent wildcard) so no escaping occurrence is missed.
     pub(super) fn reject_heap_env_misuse(&self, func: &Function) -> Result<(), String> {
         if self.fns_returning_heap_env.is_empty() {
             return Ok(());
         }
-        // Pass 1 — sanctioned top-level heap-env bindings.
+        // Pass 1 — sanctioned top-level heap-env bindings. Forward scan so a
+        // copy `let g = f` is collected once `f` is already a binding (makes
+        // `let g = f; let h = g` transitively all bindings).
         let mut binds: HashSet<String> = HashSet::new();
         for stmt in &func.body.stmts {
             if let StmtKind::Let { pattern, value, .. } = &stmt.kind {
-                if self.is_heap_env_producing_call(value) {
+                let is_source = self.is_heap_env_producing_call(value)
+                    || matches!(&value.kind, ExprKind::Identifier(n) if binds.contains(n));
+                if is_source {
                     if let [b] = pattern.binding_names().as_slice() {
                         binds.insert(b.clone());
                     }
-                    // A heap-env call bound to a non-single pattern is not a
-                    // sanctioned binding; pass 2 rejects the call (RULE A).
+                    // A heap-env source bound to a non-single pattern is not a
+                    // sanctioned binding; pass 2 rejects the call (RULE A). A
+                    // copy into a non-single pattern can't happen (a `Fn` value
+                    // isn't destructurable), but the guard is order-independent.
                 }
             }
         }
@@ -389,8 +399,14 @@ impl<'ctx> super::Codegen<'ctx> {
         for stmt in &func.body.stmts {
             bad |= match &stmt.kind {
                 StmtKind::Let { pattern, value, .. } => {
-                    let sanctioned = self.is_heap_env_producing_call(value)
-                        && matches!(pattern.binding_names().as_slice(), [_]);
+                    // A single-name `let` whose RHS is a heap-env-producing call
+                    // OR a bare copy of a binding is sanctioned — its RHS
+                    // occurrence is the supported shape, so it is not walked.
+                    let single = matches!(pattern.binding_names().as_slice(), [_]);
+                    let sanctioned = single
+                        && (self.is_heap_env_producing_call(value)
+                            || matches!(&value.kind,
+                                ExprKind::Identifier(n) if binds.contains(n)));
                     !sanctioned && self.expr_has_heap_env_misuse(value, &binds)
                 }
                 StmtKind::LetElse {
@@ -426,13 +442,13 @@ impl<'ctx> super::Codegen<'ctx> {
         if bad {
             return Err(
                 "error[E_ESCAPING_CLOSURE_NOT_YET]: a returned capturing closure can currently \
-                 only be CALLED in the function that binds it (`let f = make(..); f(x)`). \
-                 Returning it again (`return f`), copying it (`let g = f`), storing it, passing \
-                 it as a call argument, capturing it in a nested closure, or leaving a `make(..)` \
-                 result unbound is not yet supported — the reference-counted closure environment \
-                 would outlive or be double-freed by its single owner (heap-closure-environment \
-                 epic B-2026-06-22-2). Workaround: call the closure where it is bound, or pass it \
-                 down by a `Fn(..)` parameter."
+                 only be CALLED in the function that binds it (`let f = make(..); f(x)`) or \
+                 COPIED to another binding (`let g = f`). Returning it again (`return f`), \
+                 storing it, passing it as a call argument, capturing it in a nested closure, or \
+                 leaving a `make(..)` result unbound is not yet supported — the reference-counted \
+                 closure environment would outlive or be double-freed by its owner set \
+                 (heap-closure-environment epic B-2026-06-22-2). Workaround: call or copy the \
+                 closure where it is bound, or pass it down by a `Fn(..)` parameter."
                     .to_string(),
             );
         }

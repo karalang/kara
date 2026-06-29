@@ -1233,6 +1233,50 @@ impl<'ctx> super::Codegen<'ctx> {
                 // B-2026-06-07-5. Sits ahead of the value-oriented Vec/String
                 // tracking below, which would mis-handle the raw pointer.
                 if let PatternKind::Binding(var_name) = &pattern.kind {
+                    // Shared-ownership inc-on-copy (B-2026-06-22-2): `let g = f`
+                    // where `f` is a heap-env closure binding. Both owners share
+                    // the SAME RC env box, so copy the fat pointer, INCREMENT the
+                    // env refcount, and register `g`'s own `FreeClosureEnv`
+                    // cleanup — each owner RC-drops at scope exit, so the box is
+                    // freed exactly once. Marking `g` in `heap_env_closure_vars`
+                    // makes copies-of-copies (`let h = g`) work and keeps the
+                    // misuse guard's owner-set reasoning consistent. Sits ahead
+                    // of the generic fn-value path below, which would copy the
+                    // pointer WITHOUT the inc (leaving the box under-counted →
+                    // premature free / use-after-free).
+                    if let ExprKind::Identifier(src) = &value.kind {
+                        if self.heap_env_closure_vars.contains(src) {
+                            let (src_ptr, src_ty) = {
+                                let s = &self.variables[src];
+                                (s.ptr, s.ty)
+                            };
+                            let fat = self
+                                .builder
+                                .build_load(src_ty, src_ptr, "clo.copy.fat")
+                                .unwrap();
+                            self.emit_heap_closure_env_inc(fat);
+                            let fn_val = self.current_fn.expect("let inside a function");
+                            let alloca = self.create_entry_alloca(fn_val, var_name, src_ty);
+                            self.builder.build_store(alloca, fat).unwrap();
+                            self.variables.insert(
+                                var_name.clone(),
+                                VarSlot {
+                                    ptr: alloca,
+                                    ty: src_ty,
+                                },
+                            );
+                            if let Some(ft) = self.closure_fn_types.get(src).copied() {
+                                self.closure_fn_types.insert(var_name.clone(), ft);
+                            }
+                            if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                                frame.push(super::state::CleanupAction::FreeClosureEnv {
+                                    fat_alloca: alloca,
+                                });
+                            }
+                            self.heap_env_closure_vars.insert(var_name.clone());
+                            return Ok(());
+                        }
+                    }
                     // First-class fn-value binding (B-2026-06-20-1 / -06-21-1 /
                     // -06-21-2). When this `let` binds a fn value — an explicit
                     // `Fn(...)` annotation, a bare free-fn name, or a call whose

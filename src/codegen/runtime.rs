@@ -190,6 +190,57 @@ impl<'ctx> super::Codegen<'ctx> {
         ptr
     }
 
+    /// Shared-ownership inc-on-copy (B-2026-06-22-2): when a heap-env closure
+    /// binding is COPIED (`let g = f`), the new owner shares the SAME RC env box
+    /// `{ i64 refcount, env }`, so its refcount must be incremented — both
+    /// owners then RC-drop it via `FreeClosureEnv` at scope exit and the box is
+    /// reclaimed exactly once. `fat` is the `{ fn_ptr, env_ptr }` closure value
+    /// being copied; field 1 is the env box (whose field 0 is the refcount). A
+    /// null env (a non-capturing closure) is skipped. Mirrors the `FreeClosureEnv`
+    /// cleanup's box/refcount access shape, inverted to `+1` with no free.
+    pub(super) fn emit_heap_closure_env_inc(&self, fat: BasicValueEnum<'ctx>) {
+        let fn_val = self
+            .current_fn
+            .expect("heap-closure env inc emitted inside a function");
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let env_box = self
+            .builder
+            .build_extract_value(fat.into_struct_value(), 1, "clo.inc.env")
+            .unwrap()
+            .into_pointer_value();
+        let null = ptr_ty.const_null();
+        let live = self
+            .builder
+            .build_int_compare(IntPredicate::NE, env_box, null, "clo.inc.live")
+            .unwrap();
+        let inc_bb = self.context.append_basic_block(fn_val, "clo.inc.do");
+        let join_bb = self.context.append_basic_block(fn_val, "clo.inc.join");
+        self.builder
+            .build_conditional_branch(live, inc_bb, join_bb)
+            .unwrap();
+        self.builder.position_at_end(inc_bb);
+        let i64_t = self.context.i64_type();
+        // The refcount is field 0 of the RC box; a `{ i64 }` GEP reaches it
+        // regardless of the captured payload that follows.
+        let rc_box_ty = self.context.struct_type(&[i64_t.into()], false);
+        let rc_ptr = self
+            .builder
+            .build_struct_gep(rc_box_ty, env_box, 0, "clo.inc.rc")
+            .unwrap();
+        let rc = self
+            .builder
+            .build_load(i64_t, rc_ptr, "clo.inc.rcval")
+            .unwrap()
+            .into_int_value();
+        let inc = self
+            .builder
+            .build_int_add(rc, i64_t.const_int(1, false), "clo.inc.rc1")
+            .unwrap();
+        self.builder.build_store(rc_ptr, inc).unwrap();
+        self.builder.build_unconditional_branch(join_bb).unwrap();
+        self.builder.position_at_end(join_bb);
+    }
+
     /// Phase D: allocate a headerless cluster member — `malloc` of the
     /// twin struct's size, no rc word, no rc=1 store. Callers must hold
     /// a `shared_gep_layout` result with base 0 for the same type; the

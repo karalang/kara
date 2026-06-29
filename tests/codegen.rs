@@ -359,6 +359,32 @@ mod codegen_tests {
         assert_eq!(out.as_deref(), Some("43\n"));
     }
 
+    /// Shared-ownership inc-on-copy (B-2026-06-22-2): a heap-env closure binding
+    /// may be COPIED to another binding (`let g = f`). The copy increments the
+    /// shared RC env's refcount; BOTH bindings stay callable and the env is
+    /// freed exactly once at scope exit. Was rejected by the Slice 1 misuse
+    /// guard; now supported.
+    #[test]
+    fn heap_env_binding_copied_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let f = make(20i64); let g = f; let a = f(1i64); let b = g(2i64); println(f\"{a + b}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("43\n"));
+    }
+
+    /// A copy-of-a-copy chain (`let g = f; let h = g`) is transitively all
+    /// heap-env bindings — each copy increments the one shared RC env, so three
+    /// owners free it exactly once.
+    #[test]
+    fn heap_env_binding_copy_chain_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let f = make(10i64); let g = f; let h = g; println(f\"{f(1i64) + g(2i64) + h(3i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("36\n"));
+    }
+
     /// Slice 1 misuse guard: every NOT-yet-supported use of a heap-env closure
     /// binding (or an unbound `make(..)`) is an honest error, never a UAF /
     /// double-free / leak. Each would otherwise corrupt or leak the single-owner
@@ -366,11 +392,6 @@ mod codegen_tests {
     #[test]
     fn heap_env_misuse_is_rejected() {
         let cases: &[(&str, &str)] = &[
-            (
-                "copy to another binding",
-                "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
-                 fn main() { let f = make(21i64); let g = f; println(f\"{g(21i64)}\"); }\n",
-            ),
             (
                 "unbound make() leaks",
                 "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
