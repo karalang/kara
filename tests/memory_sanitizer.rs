@@ -10731,6 +10731,55 @@ fn main() {
         );
     }
 
+    /// Column `fillna(value, treat_nan_as_null)` float-NaN normalization heap
+    /// lifecycle (phase-11 follow-on): each `fillna` mallocs a fresh control
+    /// block + data buffer + all-ones bitmap, freed once via the let-binding's
+    /// `FreeColumn`; the float receiver is borrowed and reused after both
+    /// transforms. The NaN-normalizing arm doesn't change the allocation
+    /// shape, so this pins the float fill loop frees cleanly too.
+    #[test]
+    fn asan_column_fillna_nan_lifecycle_clean() {
+        let label = "column_fillna_nan_lifecycle";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+fn main() {
+    let z: f64 = 0.0;
+    let nan: f64 = z / z;
+    let mut c: Column[f64] = Column.new();
+    c.push(1.5);
+    c.push_null();
+    c.push(nan);
+    c.push(4.0);
+    let a = c.fillna(0.0);
+    println(a.null_count());
+    let b = c.fillna(0.0, treat_nan_as_null: true);
+    println(b.null_count());
+    // receiver still usable (borrowed, not consumed).
+    println(c.null_count());
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             check FreeColumn on the fresh fillna results / receiver-borrow",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["0", "0", "1"],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     /// Column Vec-returning iterators heap lifecycle (phase-11 follow-on):
     /// `iter() -> Vec[Option[T]]` and `iter_valid() -> Vec[T]` each malloc
     /// a fresh Vec buffer (POD elements — no per-element drop), freed once

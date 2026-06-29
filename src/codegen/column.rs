@@ -43,7 +43,7 @@
 
 use inkwell::types::{BasicTypeEnum, StructType};
 use inkwell::values::{BasicValueEnum, IntValue, PointerValue};
-use inkwell::{AddressSpace, IntPredicate};
+use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 
 use super::state::ColumnVarInfo;
 use super::tensor::type_expr_is_unsigned_int;
@@ -835,12 +835,29 @@ impl<'ctx> super::Codegen<'ctx> {
                 Ok(Some(is_null.into()))
             }
             "fillna" => {
-                let arg = args
-                    .first()
+                // `value` is the leading positional arg; `treat_nan_as_null`
+                // is the labeled / second positional arg (default `false`).
+                let value_arg = args
+                    .iter()
+                    .find(|a| a.label.as_deref() == Some("value"))
+                    .or_else(|| args.iter().find(|a| a.label.is_none()))
                     .ok_or_else(|| "Column.fillna requires a value argument".to_string())?;
-                let fill = self.compile_expr(&arg.value)?;
+                let fill = self.compile_expr(&value_arg.value)?;
                 let fill = self.coerce_scalar_to_type(fill, info.elem);
-                Ok(Some(self.compile_column_fillna(control, info.elem, fill)?))
+                let treat_nan = match args
+                    .iter()
+                    .find(|a| a.label.as_deref() == Some("treat_nan_as_null"))
+                    .or_else(|| args.iter().filter(|a| a.label.is_none()).nth(1))
+                {
+                    Some(flag) => {
+                        let v = self.compile_expr(&flag.value)?;
+                        v.into_int_value()
+                    }
+                    None => self.context.bool_type().const_zero(),
+                };
+                Ok(Some(self.compile_column_fillna(
+                    control, info.elem, fill, treat_nan,
+                )?))
             }
             "dropna" => Ok(Some(self.compile_column_dropna(control, info.elem)?)),
             "iter" => Ok(Some(self.compile_column_iter(control, info.elem)?)),
@@ -1083,16 +1100,19 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(self.build_vec_value(buf, vc, vc))
     }
 
-    /// `fillna(value) -> Column[T]` — a fresh all-valid column the same
-    /// length as the receiver: valid slots copied as-is, null slots
-    /// replaced with `value`. The receiver is borrowed (unchanged); the
-    /// result owns independent allocations. (`treat_nan_as_null` is a
-    /// follow-on slice.)
+    /// `fillna(value, treat_nan_as_null = false) -> Column[T]` — a fresh
+    /// all-valid column the same length as the receiver: valid slots copied
+    /// as-is, null slots replaced with `value`. When `treat_nan` (an i1) is
+    /// set and the element is a float, a bitmap-valid NaN slot is also
+    /// replaced — the opt-in NaN→null normalization (design.md § Data
+    /// types); the flag is inert for non-float elements. The receiver is
+    /// borrowed (unchanged); the result owns independent allocations.
     fn compile_column_fillna(
         &mut self,
         src: PointerValue<'ctx>,
         elem: BasicTypeEnum<'ctx>,
         fill: BasicValueEnum<'ctx>,
+        treat_nan: IntValue<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let i64_t = self.context.i64_type();
         let i8_t = self.context.i8_type();
@@ -1155,9 +1175,33 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_load(elem, src_slot, "col.fill.sval")
             .unwrap();
+        // keep = valid AND NOT(treat_nan AND isnan(loaded)). The NaN arm is
+        // only meaningful for float elements; for any other element type the
+        // flag is inert and `keep` collapses to the bitmap-valid bit.
+        let keep = if let BasicTypeEnum::FloatType(_) = elem {
+            let fv = loaded.into_float_value();
+            // `fcmp uno x, x` is true iff x is NaN (unordered self-compare).
+            let is_nan = self
+                .builder
+                .build_float_compare(FloatPredicate::UNO, fv, fv, "col.fill.isnan")
+                .unwrap();
+            let drop_nan = self
+                .builder
+                .build_and(treat_nan, is_nan, "col.fill.dropnan")
+                .unwrap();
+            let not_drop = self
+                .builder
+                .build_not(drop_nan, "col.fill.keepnan")
+                .unwrap();
+            self.builder
+                .build_and(valid, not_drop, "col.fill.keep")
+                .unwrap()
+        } else {
+            valid
+        };
         let chosen = self
             .builder
-            .build_select(valid, loaded, fill, "col.fill.sel")
+            .build_select(keep, loaded, fill, "col.fill.sel")
             .unwrap();
         let dst_slot = unsafe {
             self.builder

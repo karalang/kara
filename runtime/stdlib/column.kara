@@ -20,8 +20,8 @@
 // Column-returning transforms `fillna` / `dropna`, the Vec-returning
 // iterators (`iter` -> `Vec[Option[T]]`, `iter_valid` -> `Vec[T]`), and
 // the SQL-null three-valued element-wise operators (`+ - * /` /
-// comparisons / unary `-`, with null propagation). Only `fillna`'s
-// `treat_nan_as_null` float flag remains interpreter-only (`karac run`) —
+// comparisons / unary `-`, with null propagation). `fillna`'s
+// `treat_nan_as_null` float flag is lowered on both surfaces too —
 // tracker at `phase-11-stdlib-longtail.md § Data types — Arrow commitment`.
 //
 // **Dispatch.** Constructors fire through `eval_call.rs`'s
@@ -129,10 +129,12 @@ impl[T] Column[T] {
     }
 
     // Replace every null slot with `value`, yielding an all-valid column
-    // (a copy; the receiver is unchanged). The `treat_nan_as_null` flag
-    // from the design surface is deferred to the float-arithmetic slice.
+    // (a copy; the receiver is unchanged). With `treat_nan_as_null = true`
+    // a float column's NaN slots (which are bitmap-valid, not null) are
+    // also replaced — the opt-in NaN→null normalization (design.md § Data
+    // types). The flag is a no-op for non-float element types.
     #[compiler_builtin]
-    fn fillna(ref self, value: T) -> Column[T] {
+    fn fillna(ref self, value: T, treat_nan_as_null: bool = false) -> Column[T] {
         Column { handle_id: 0 }
     }
 

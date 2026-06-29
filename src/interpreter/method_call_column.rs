@@ -201,16 +201,38 @@ impl<'a> super::Interpreter<'a> {
                 Some(Value::Array(Arc::new(RwLock::new(out))))
             }
             // Replace every null slot with `value` → a fresh all-valid
-            // column (the receiver is unchanged).
+            // column (the receiver is unchanged). `treat_nan_as_null = true`
+            // additionally normalizes a float column's NaN slots (which are
+            // bitmap-valid, not null) into fills — the opt-in NaN→null
+            // surface (design.md § Data types); a no-op for non-float
+            // elements. `value` is the leading positional arg; the flag is
+            // the labeled / second positional arg (default `false`).
             "fillna" => {
-                let arg = args.first()?;
-                let fill = self.eval_expr_inner(&arg.value);
+                let value_arg = args
+                    .iter()
+                    .find(|a| a.label.as_deref() == Some("value"))
+                    .or_else(|| args.iter().find(|a| a.label.is_none()))?;
+                let fill = self.eval_expr_inner(&value_arg.value);
+                let treat_nan = args
+                    .iter()
+                    .find(|a| a.label.as_deref() == Some("treat_nan_as_null"))
+                    .or_else(|| args.iter().filter(|a| a.label.is_none()).nth(1))
+                    .map(|a| matches!(self.eval_expr_inner(&a.value), Value::Bool(true)))
+                    .unwrap_or(false);
                 let data_guard = data.read().unwrap();
                 let valid_guard = valid.read().unwrap();
                 let out: Vec<Value> = valid_guard
                     .iter()
                     .zip(data_guard.iter())
-                    .map(|(&ok, v)| if ok { v.clone() } else { fill.clone() })
+                    .map(|(&ok, v)| {
+                        let nullish =
+                            !ok || (treat_nan && matches!(v, Value::Float(f) if f.is_nan()));
+                        if nullish {
+                            fill.clone()
+                        } else {
+                            v.clone()
+                        }
+                    })
                     .collect();
                 let n = out.len();
                 Some(Value::Column {

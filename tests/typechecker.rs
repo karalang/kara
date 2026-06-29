@@ -26313,7 +26313,8 @@ fn test_column_iter_valid_element_type_is_t_not_option() {
 
 #[test]
 fn test_column_transform_arity_checked() {
-    // fillna takes exactly 1 arg; dropna/iter/iter_valid take 0.
+    // fillna takes 1 or 2 args (`value` + optional `treat_nan_as_null`);
+    // dropna/iter/iter_valid take 0.
     let f = typecheck_errors(
         "fn main() {\n\
              let c: Column[i64] = Column.from_vec([1i64]);\n\
@@ -26324,6 +26325,18 @@ fn test_column_transform_arity_checked() {
         f.iter().any(|e| e.message.contains("fillna expects 1")),
         "{f:?}",
     );
+    // Three args is too many.
+    let f3 = typecheck_errors(
+        "fn main() {\n\
+             let c: Column[i64] = Column.from_vec([1i64]);\n\
+             let _ = c.fillna(0i64, true, false);\n\
+         }",
+    );
+    assert!(
+        f3.iter()
+            .any(|e| e.message.contains("fillna expects 1 or 2")),
+        "{f3:?}",
+    );
     let d = typecheck_errors(
         "fn main() {\n\
              let c: Column[i64] = Column.from_vec([1i64]);\n\
@@ -26333,6 +26346,31 @@ fn test_column_transform_arity_checked() {
     assert!(
         d.iter().any(|e| e.message.contains("dropna expects 0")),
         "{d:?}",
+    );
+}
+
+#[test]
+fn test_column_fillna_treat_nan_as_null_arg() {
+    // The optional `treat_nan_as_null` flag (labeled or positional) is a
+    // bool; both call forms typecheck and the result stays `Column[T]`.
+    typecheck_ok(
+        "fn main() {\n\
+             let c: Column[f64] = Column.from_vec([1.0]);\n\
+             let a: Column[f64] = c.fillna(0.0, treat_nan_as_null: true);\n\
+             let b: Column[f64] = c.fillna(0.0, true);\n\
+             let _ = (a, b);\n\
+         }",
+    );
+    // A non-bool flag is rejected.
+    let bad = typecheck_errors(
+        "fn main() {\n\
+             let c: Column[f64] = Column.from_vec([1.0]);\n\
+             let _ = c.fillna(0.0, treat_nan_as_null: 5i64);\n\
+         }",
+    );
+    assert!(
+        !bad.is_empty(),
+        "non-bool treat_nan_as_null must be rejected"
     );
 }
 

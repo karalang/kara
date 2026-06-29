@@ -1564,10 +1564,21 @@ impl<'a> super::TypeChecker<'a> {
                 _ => None,
             };
             if let Some(elem) = column_elem {
-                let want = if method == "fillna" { 1 } else { 0 };
-                if args.len() != want {
+                // `fillna` takes the fill `value` plus an optional
+                // `treat_nan_as_null: bool` (1 or 2 args, the flag default
+                // `false`); the rest take none.
+                if method == "fillna" {
+                    if args.is_empty() || args.len() > 2 {
+                        self.type_error(
+                            format!("fillna expects 1 or 2 argument(s), got {}", args.len()),
+                            span.clone(),
+                            TypeErrorKind::WrongNumberOfArgs,
+                        );
+                        return Type::Error;
+                    }
+                } else if !args.is_empty() {
                     self.type_error(
-                        format!("{method} expects {want} argument(s), got {}", args.len()),
+                        format!("{method} expects 0 argument(s), got {}", args.len()),
                         span.clone(),
                         TypeErrorKind::WrongNumberOfArgs,
                     );
@@ -1575,6 +1586,20 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 for arg in args {
                     self.infer_expr(&arg.value);
+                }
+                // The `treat_nan_as_null` flag (labeled, or the 2nd
+                // positional arg) must be a bool — the only statically
+                // checkable arg, since the fill `value`'s type `T` isn't
+                // bound from the receiver for baked generic methods.
+                if method == "fillna" {
+                    if let Some(flag) = args
+                        .iter()
+                        .find(|a| a.label.as_deref() == Some("treat_nan_as_null"))
+                        .or_else(|| args.iter().filter(|a| a.label.is_none()).nth(1))
+                    {
+                        let flag_ty = self.infer_expr(&flag.value);
+                        self.check_assignable(&Type::Bool, &flag_ty, flag.value.span.clone());
+                    }
                 }
                 let vec_of = |inner: Type| Type::Named {
                     name: "Vec".to_string(),

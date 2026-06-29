@@ -47926,6 +47926,39 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_column_fillna_treat_nan_as_null() {
+        // `treat_nan_as_null` normalizes a float column's bitmap-valid NaN
+        // slots into fills (design.md § Data types). Column [1.5, null, NaN,
+        // 4.0]: bare fillna fills only the null slot (NaN kept); the labeled
+        // and positional flag forms additionally fill the NaN slot. Receiver
+        // unchanged. Byte-identical to `karac run`.
+        let out = run_program(
+            "fn main() {\n\
+                 let z: f64 = 0.0;\n\
+                 let nan: f64 = z / z;\n\
+                 let mut c: Column[f64] = Column.new();\n\
+                 c.push(1.5); c.push_null(); c.push(nan); c.push(4.0);\n\
+                 let a = c.fillna(0.0);\n\
+                 println(a.null_count());\n\
+                 match a[1] { Some(v) => println(v), None => println(-1.0) }\n\
+                 match a[2] { Some(v) => println(v), None => println(-1.0) }\n\
+                 let b = c.fillna(0.0, treat_nan_as_null: true);\n\
+                 match b[1] { Some(v) => println(v), None => println(-1.0) }\n\
+                 match b[2] { Some(v) => println(v), None => println(-1.0) }\n\
+                 let d = c.fillna(7.0, true);\n\
+                 match d[2] { Some(v) => println(v), None => println(-1.0) }\n\
+                 println(c.null_count());\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "0\n0\nNaN\n0\n0\n7\n1\n",
+                "Column.fillna treat_nan_as_null must normalize NaN only when set"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_column_from_iter_nullable() {
         // Vec[Option[T]] -> Column[T]: Some -> valid slot, None -> SQL null.
         let out = run_program(
