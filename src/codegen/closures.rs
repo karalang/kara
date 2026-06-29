@@ -352,20 +352,28 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    /// If `e` is a struct literal with one or more fields whose value is a FRESH
-    /// heap-env-producing call (`H { f: make(..) }`), return those field names —
-    /// the struct local being bound OWNS each such RC env box (codegen registers
-    /// an instance-specific `FreeClosureEnv` on the field). Empty otherwise. A
-    /// heap-env BINDING field (`H { f: f }`) is NOT collected here: it would need
-    /// inc-on-store co-ownership and stays rejected this slice (store-in-struct
-    /// supports the fresh-call source only for now).
-    fn struct_literal_heap_env_call_fields(&self, e: &Expr) -> Vec<String> {
+    /// If `e` is a struct literal with one or more fields whose value is a
+    /// sanctioned heap-env closure STORE, return those field names — the struct
+    /// local being bound OWNS each such RC env box (codegen registers an
+    /// instance-specific `FreeClosureEnv` on the field). Two store shapes are
+    /// collected: a FRESH heap-env-producing call (`H { f: make(..) }`, the field
+    /// is the sole owner at refcount 1) and a heap-env BINDING source
+    /// (`H { f: f }`, `f` in `binds` — the field co-owns the box with the source
+    /// binding via inc-on-store). Empty otherwise.
+    fn struct_literal_heap_env_store_fields(
+        &self,
+        e: &Expr,
+        binds: &HashSet<String>,
+    ) -> Vec<String> {
         let ExprKind::StructLiteral { fields, .. } = &e.kind else {
             return Vec::new();
         };
         fields
             .iter()
-            .filter(|f| self.is_heap_env_producing_call(&f.value))
+            .filter(|f| {
+                self.is_heap_env_producing_call(&f.value)
+                    || matches!(&f.value.kind, ExprKind::Identifier(n) if binds.contains(n))
+            })
             .map(|f| f.name.clone())
             .collect()
     }
@@ -405,8 +413,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // Pass 1 — sanctioned top-level heap-env bindings. Forward scan so a
         // copy `let g = f` is collected once `f` is already a binding (makes
         // `let g = f; let h = g` transitively all bindings). The same scan
-        // collects struct-literal AGGREGATE OWNERS: `let h = H { f: make(..) }`
-        // → `h` owns the env in field `f` (store-in-struct slice).
+        // collects struct-literal AGGREGATE OWNERS: `let h = H { f: <src> }`
+        // → `h` owns the env in field `f`, where `<src>` is a FRESH call
+        // (`make(..)`) or a heap-env BINDING (`f`, collected once `f` is a
+        // binding — co-owned via inc-on-store) (store-in-struct slice).
         let mut binds: HashSet<String> = HashSet::new();
         let mut owners: HashMap<String, HashSet<String>> = HashMap::new();
         for stmt in &func.body.stmts {
@@ -422,7 +432,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // copy into a non-single pattern can't happen (a `Fn` value
                     // isn't destructurable), but the guard is order-independent.
                 } else {
-                    let fields = self.struct_literal_heap_env_call_fields(value);
+                    let fields = self.struct_literal_heap_env_store_fields(value, &binds);
                     if !fields.is_empty() {
                         if let [b] = pattern.binding_names().as_slice() {
                             owners.insert(b.clone(), fields.into_iter().collect());
@@ -451,13 +461,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     if sanctioned {
                         false
                     } else if is_owner {
-                        // Aggregate construction `let h = H { f: make(..), .. }`:
-                        // each heap-env-call field is the sanctioned store; walk
-                        // only the OTHER fields (and any spread) for misuse.
+                        // Aggregate construction `let h = H { f: <src>, .. }`: each
+                        // sanctioned heap-env store field (a FRESH call or a heap-env
+                        // BINDING source) is allowed; walk only the OTHER fields (and
+                        // any spread) for misuse. The binding-field skip mirrors the
+                        // store-field collection above — without it, `H { f: f }`'s
+                        // bare `f` would be (wrongly) flagged as an escaping binding.
                         if let ExprKind::StructLiteral { fields, spread, .. } = &value.kind {
                             fields
                                 .iter()
-                                .filter(|f| !self.is_heap_env_producing_call(&f.value))
+                                .filter(|f| {
+                                    !self.is_heap_env_producing_call(&f.value)
+                                        && !matches!(&f.value.kind,
+                                            ExprKind::Identifier(n) if binds.contains(n))
+                                })
                                 .any(|f| self.expr_has_heap_env_misuse(&f.value, &binds))
                                 || spread
                                     .as_deref()

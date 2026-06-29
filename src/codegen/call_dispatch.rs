@@ -2314,17 +2314,24 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
     }
 
-    /// Store-in-struct slice (B-2026-06-22-2): for `let h = H { f: make(..), .. }`,
+    /// Store-in-struct slice (B-2026-06-22-2): for `let h = H { f: <src>, .. }`,
     /// register an instance-specific `FreeClosureEnv` on each struct field whose
-    /// initializer is a FRESH heap-env closure (a call to a fn in
-    /// `fns_returning_heap_env`). The struct's `Fn` field is an inline fat pointer
-    /// `{ fn_ptr, env_ptr }`, so a GEP to it is exactly the `fat_alloca` the
-    /// cleanup expects; a fresh `make(..)` leaves the field at refcount 1, so its
-    /// `FreeClosureEnv` frees the box once at `h`'s scope exit. This is
-    /// INSTANCE-specific — NOT the type-driven `__karac_drop_struct_<S>` — because
-    /// the same struct type may elsewhere hold a same-frame STACK-env closure
-    /// (`H { f: |x| x + base }`), whose env must never be RC-freed. The misuse
-    /// guard rejects any escape of `h`, so the field env never outlives `h`.
+    /// initializer is a sanctioned heap-env closure STORE, and — for a binding
+    /// source — bump the shared RC env's refcount. A FRESH call store
+    /// (`H { f: make(..) }`, a call to a fn in `fns_returning_heap_env`) leaves the
+    /// field as the SOLE owner at refcount 1, so it takes NO inc; its
+    /// `FreeClosureEnv` frees the box once at `h`'s scope exit. A BINDING source
+    /// store (`H { f: f }`, `f` a heap-env closure local in `heap_env_closure_vars`)
+    /// COPIES the source's fat pointer, so the source binding AND this field own the
+    /// SAME RC env box; the refcount is INCREMENTED so each RC-drops exactly once
+    /// (binding-source sub-slice — the source stays usable, closures being
+    /// copy-semantics). The struct's `Fn` field is an inline fat pointer
+    /// `{ fn_ptr, env_ptr }`, so a GEP to it is exactly the `fat_alloca` the cleanup
+    /// expects (and the value to inc). This is INSTANCE-specific — NOT the
+    /// type-driven `__karac_drop_struct_<S>` — because the same struct type may
+    /// elsewhere hold a same-frame STACK-env closure (`H { f: |x| x + base }`),
+    /// whose env must never be RC-freed. The misuse guard rejects any escape of
+    /// `h`, so the field env never outlives `h`.
     pub(super) fn register_struct_literal_heap_env_field_drops(
         &mut self,
         value: &Expr,
@@ -2341,7 +2348,12 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         };
         for f in fields {
-            if !self.is_heap_env_producing_call(&f.value) {
+            let is_fresh = self.is_heap_env_producing_call(&f.value);
+            let is_binding = matches!(
+                &f.value.kind,
+                ExprKind::Identifier(src) if self.heap_env_closure_vars.contains(src)
+            );
+            if !is_fresh && !is_binding {
                 continue;
             }
             let Some(idx) = field_names.iter().position(|n| n == &f.name) else {
@@ -2351,6 +2363,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 .builder
                 .build_struct_gep(st, struct_alloca, idx as u32, "clo.field.envslot")
                 .unwrap();
+            // Binding source: co-own the box with the source binding — load the
+            // field's fat pointer and bump the env refcount (mirrors the
+            // `let g = f` inc-on-copy). A fresh-call field is already rc 1.
+            if is_binding {
+                let fat = self
+                    .builder
+                    .build_load(self.closure_value_type(), field_gep, "clo.field.fat")
+                    .unwrap();
+                self.emit_heap_closure_env_inc(fat);
+            }
             if let Some(frame) = self.scope_cleanup_actions.last_mut() {
                 frame.push(super::state::CleanupAction::FreeClosureEnv {
                     fat_alloca: field_gep,

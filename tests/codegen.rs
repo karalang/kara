@@ -404,12 +404,6 @@ mod codegen_tests {
                  fn main() { let f = make(21i64); println(f\"{use2(f)}\"); }\n",
             ),
             (
-                "stored into a struct literal",
-                "struct H { f: Fn(i64) -> i64 }\n\
-                 fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
-                 fn main() { let f = make(21i64); let h = H { f: f }; println(f\"{(h.f)(21i64)}\"); }\n",
-            ),
-            (
                 "directly returned unbound make()",
                 "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
                  fn relay(k: i64) -> Fn(i64) -> i64 { return make(k); }\n",
@@ -518,7 +512,8 @@ mod codegen_tests {
     // (`let h = H { f: make(k) }`); the field is RC-dropped per-instance at the
     // struct local's scope exit. The struct may be field-called and have its
     // non-closure fields read, but must NOT escape (return / copy-out / store /
-    // pass), and a BINDING source (`H { f: f }`) stays rejected (needs inc-on-store).
+    // pass). A BINDING source (`H { f: f }`) is now supported too: the store inc's
+    // the shared RC env so the source binding and the field co-own it.
 
     /// `let h = H { f: make(k) }; (h.f)(x)` — a fresh heap-env closure stored in a
     /// struct field, called through the field, freed exactly once at scope exit.
@@ -572,17 +567,64 @@ mod codegen_tests {
         assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
     }
 
-    /// A BINDING source into a struct field (`H { f: f }`) stays rejected: both
-    /// the binding and the struct field would own the env without an inc-on-store
-    /// (a later sub-slice).
+    /// Binding-source slice (B-2026-06-22-2): a heap-env BINDING may now be
+    /// STORED into a struct field (`let h = H { f: f }`). Closures are
+    /// copy-semantics, so the source binding `f` stays usable AND the struct field
+    /// co-owns the env: codegen bumps the shared RC env's refcount at the store, so
+    /// both `f`'s scope-exit drop and `h`'s field drop fire and the box is freed
+    /// exactly once. Was rejected by the store-in-struct slice; now supported.
     #[test]
-    fn heap_env_binding_stored_in_struct_field_is_rejected() {
+    fn heap_env_binding_stored_in_struct_field_runs() {
+        let out = run_program(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let f = make(20i64); let h = H { f: f }; \
+              let a = f(1i64); let b = (h.f)(1i64); println(f\"{a + b}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// Binding source alongside a non-closure field, and through a COPY of the
+    /// binding (`let g = f; H { f: g }`): the copy and the store each inc the one
+    /// shared env, so the three owners (`f`, `g`, the field) free it exactly once.
+    #[test]
+    fn heap_env_binding_copy_stored_in_struct_with_data_field_runs() {
+        let out = run_program(
+            "struct H { f: Fn(i64) -> i64, n: i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let f = make(18i64); let g = f; let h = H { f: g, n: 2i64 }; \
+              println(f\"{f(0i64) + (h.f)(4i64) + h.n}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// Composite soundness: store a binding into a struct field, THEN move the
+    /// source binding out via a tail return. The store inc's to rc 2; the tail
+    /// move-out neutralizes the source's drop and hands the box to the caller; the
+    /// owner struct's field drop decs to 1 at relay's scope exit, and the caller's
+    /// binding frees the last ref — freed exactly once across the move boundary.
+    #[test]
+    fn heap_env_binding_stored_then_source_returned_runs() {
+        let out = run_program(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn relay(k: i64) -> Fn(i64) -> i64 { let f = make(k); let h = H { f: f }; f }\n\
+             fn main() { let r = relay(20i64); println(f\"{r(22i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// The owner struct still can't ESCAPE even when its field came from a BINDING
+    /// source — returning `h` (`H { f: f }`) is rejected exactly as the fresh-call
+    /// owner is (the field drop would free the env the caller still holds).
+    #[test]
+    fn heap_env_binding_owner_struct_returned_is_rejected() {
         let err = ir_result(
             "struct H { f: Fn(i64) -> i64 }\n\
              fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
-             fn main() { let f = make(21i64); let h = H { f: f }; println(f\"{(h.f)(21i64)}\"); }\n",
+             fn build(k: i64) -> H { let f = make(k); let h = H { f: f }; return h; }\n",
         )
-        .expect_err("storing a heap-env binding into a struct field must be rejected");
+        .expect_err("returning a binding-sourced heap-env-owning struct must be rejected");
         assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
     }
 

@@ -429,6 +429,44 @@ fn main() {
         );
     }
 
+    /// Binding-source slice (B-2026-06-22-2): a heap-env BINDING stored into a
+    /// struct field (`let h = H { f: f }`) is co-owned — the store bumps the shared
+    /// RC env's refcount, so both the source binding's scope-exit drop AND the
+    /// field's instance drop fire and the box is freed EXACTLY once. Covers
+    /// co-ownership with the source still used after the store, a store through a
+    /// COPY of the binding (`let g = f; H { f: g }`), and the composite where the
+    /// source is MOVED OUT (tail return) after being stored — the field drop decs,
+    /// the caller frees the last ref. Without the store inc the box would be
+    /// double-freed (ASAN); without the field drop it would leak (LSan).
+    #[test]
+    fn asan_heap_env_binding_stored_in_struct_field_freed_no_leak() {
+        assert_clean_asan_run(
+            r#"
+struct H { f: Fn(i64) -> i64 }
+struct G { f: Fn(i64) -> i64, n: i64 }
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn relay(k: i64) -> Fn(i64) -> i64 { let f = make(k); let h = H { f: f }; f }
+fn main() {
+    let f = make(10i64);
+    let h = H { f: f };
+    let a = f(1i64);
+    let b = (h.f)(2i64);
+    let g = make(5i64);
+    let g2 = g;
+    let gg = G { f: g2, n: 3i64 };
+    let c = g(4i64);
+    let d = (gg.f)(6i64);
+    let e = gg.n;
+    let r = relay(30i64);
+    let k = r(7i64);
+    println(f"{a + b + c + d + e + k}");
+}
+"#,
+            &["83"],
+            "asan_heap_env_binding_stored_in_struct_field_freed_no_leak",
+        );
+    }
+
     // ── Baseline: no heap allocations ─────────────────────────────
     // Sanity-checks the harness itself — should trivially pass on any host
     // with a working `cc + ASAN`. If this fails, the infrastructure is
