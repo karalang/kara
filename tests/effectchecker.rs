@@ -8484,3 +8484,72 @@ fn test_missing_effect_fixit_omits_substrate_allocates() {
         "substrate allocates(Heap) must not appear in the diagnostic: {msg}"
     );
 }
+
+// ── FE-4 — GPU effect enforcement (E0802) ────────────────────────
+// A function reachable from a #[gpu] root must not perform a GPU-forbidden
+// effect: allocates(Heap), sends/receives, or host-I/O reads/writes on a
+// host resource other than GpuBuffer. (`panics` is deferred to FE-4b —
+// implicit bounds/divide-by-zero panics are GPU-acceptable.) See
+// design.md § GPU Subset Constraints.
+
+fn gpu_effect_errors(source: &str) -> Vec<EffectError> {
+    effectcheck_all(source)
+        .errors
+        .into_iter()
+        .filter(|e| e.kind == EffectErrorKind::GpuEffectViolation)
+        .collect()
+}
+
+#[test]
+fn gpu_fe4_rejects_heap_alloc_in_gpu_fn() {
+    let errs = gpu_effect_errors(
+        "#[gpu]\n\
+         fn k(n: i64) -> i64 { let v: Vec[i64] = Vec.new(); n }\n\
+         fn main() { println(1) }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("allocates(Heap)") && e.message.contains("call chain k")),
+        "got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn gpu_fe4_rejects_transitive_heap_alloc_with_chain() {
+    let errs = gpu_effect_errors(
+        "fn make() -> Vec[i64] { Vec.new() }\n\
+         #[gpu]\n\
+         fn k(n: i64) -> i64 { let v: Vec[i64] = make(); n }\n\
+         fn main() { println(1) }",
+    );
+    assert!(
+        errs.iter().any(|e| e.message.contains("k → make")),
+        "expected chain k → make; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn gpu_fe4_accepts_pure_arithmetic_kernel() {
+    // The canonical dot kernel indexes arrays (implicit bounds-check panics)
+    // and divides — none of which FE-4 forbids. No GpuEffectViolation.
+    let errs = gpu_effect_errors(
+        "#[gpu]\n\
+         fn dot(a: ref Array[f64, 3], b: ref Array[f64, 3]) -> f64 {\n\
+             a[0] * b[0] + a[1] * b[1] + a[2] * b[2]\n\
+         }\n\
+         fn main() { println(1) }",
+    );
+    assert!(errs.is_empty(), "unexpected GpuEffectViolation: {:?}", errs);
+}
+
+#[test]
+fn gpu_fe4_non_gpu_alloc_is_allowed() {
+    // The gate is rooted only at #[gpu] functions.
+    let errs = gpu_effect_errors(
+        "fn k(n: i64) -> i64 { let v: Vec[i64] = Vec.new(); n }\n\
+         fn main() { println(1) }",
+    );
+    assert!(errs.is_empty(), "unexpected GpuEffectViolation: {:?}", errs);
+}

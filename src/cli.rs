@@ -3092,6 +3092,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::effectchecker::EffectErrorKind::ExternCUnwindRequiresPanics => {
                     ("E0413", "error")
                 }
+                crate::effectchecker::EffectErrorKind::GpuEffectViolation => ("E0802", "error"),
             };
             let subtype_json = err.subtype_trace.as_ref().map(|t| {
                 let slot = json_string_list(&t.slot_effects);

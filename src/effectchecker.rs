@@ -14,6 +14,7 @@ use std::collections::{HashMap, HashSet};
 
 mod bounds;
 mod extern_ffi;
+mod gpu_effect_gate;
 mod inference;
 mod modbind_synth;
 mod profile_compat;
@@ -265,6 +266,15 @@ pub enum EffectErrorKind {
     /// design.md § Panic Semantics at the FFI Boundary, case 2
     /// (`E_EXTERN_C_UNWIND_REQUIRES_PANICS`).
     ExternCUnwindRequiresPanics,
+    /// FE-4 — a function reachable from a `#[gpu]` root performs an effect
+    /// forbidden in the GPU subset: `panics` (incl. `todo()`/`unreachable()`),
+    /// `allocates(Heap)`, channel `sends`/`receives`, or an I/O
+    /// `reads`/`writes` on a host resource other than `GpuBuffer`. The GPU
+    /// execution model has no host heap, no unwinding, and no host-resource
+    /// access beyond explicit GPU buffers. See `effectchecker/gpu_effect_gate.rs`
+    /// and design.md § GPU Subset Constraints > Call graph validation.
+    /// `E0802`.
+    GpuEffectViolation,
 }
 
 impl std::fmt::Display for EffectError {
@@ -974,6 +984,9 @@ impl<'a> EffectChecker<'a> {
         // Phase-10: effect-driven target gating — reachable-from-entry
         // host-resource availability for the current target.
         self.check_target_gate();
+        // FE-4: GPU effect enforcement — reject panics / allocates(Heap) /
+        // sends / receives / host-I/O reachable from any `#[gpu]` root.
+        self.check_gpu_effect_gate();
 
         // Phase C: Detect mutual recursion groups and build resolution traces
         let mutual_recursion_groups = self.detect_mutual_recursion_groups();
