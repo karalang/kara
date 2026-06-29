@@ -775,6 +775,105 @@ mod codegen_tests {
         assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
     }
 
+    // ── Array-store slice (B-2026-06-22-2) ──
+    // A heap-env closure may be STORED in a FIXED-SIZE array element
+    // (`let a: Array[Fn,N] = [make(k), ..]` or a binding `[f, ..]`), then
+    // array-index-CALLED (`(a[i])(x)`, constant OR dynamic index). The element env
+    // is RC-dropped per-INSTANCE via a `FreeClosureEnv` on the element GEP. Arrays
+    // are homogeneous, so an array-of-closures has no non-closure sibling read. The
+    // owning array must NOT escape. A bare `[..]` lowers to a Vec (deferred slice),
+    // so only the explicitly-typed `Array[T, N]` form is sanctioned here.
+
+    /// A FRESH heap-env closure stored in a one-element array, called through the
+    /// element — freed once at scope exit.
+    #[test]
+    fn heap_env_stored_in_array_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let a: Array[Fn(i64) -> i64, 1] = [make(20i64)]; \
+              println(f\"{(a[0])(22i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// Two FRESH heap-env closures in one array, each called through its element —
+    /// both envs freed exactly once.
+    #[test]
+    fn heap_env_two_closures_in_array_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let a: Array[Fn(i64) -> i64, 2] = [make(10i64), make(20i64)]; \
+              println(f\"{(a[0])(1i64) + (a[1])(11i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// A heap-env BINDING stored in an array element co-owns the env (store inc →
+    /// rc 2): the source binding stays usable AND the array element drops it, so the
+    /// box is freed exactly once.
+    #[test]
+    fn heap_env_binding_stored_in_array_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let f = make(20i64); let a: Array[Fn(i64) -> i64, 1] = [f]; \
+              let x = f(1i64); let y = (a[0])(0i64); println(f\"{x + y + 1i64}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// An array element may be called through a DYNAMIC index `(a[i])(x)` — invoking
+    /// through the element doesn't move the env, so it is sanctioned like the
+    /// constant-index call.
+    #[test]
+    fn heap_env_array_dynamic_index_call_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let a: Array[Fn(i64) -> i64, 2] = [make(10i64), make(20i64)]; \
+              let i = 1i64; println(f\"{(a[i])(22i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// Returning the array that owns the heap-env element is an ESCAPE — rejected
+    /// (array escape is a later slice; only call-through is sanctioned).
+    #[test]
+    fn heap_env_array_returned_is_rejected() {
+        let err = ir_result(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn build(k: i64) -> Array[Fn(i64) -> i64, 1] { \
+              let a: Array[Fn(i64) -> i64, 1] = [make(k)]; return a; }\n",
+        )
+        .expect_err("returning an array that owns a heap-env element must be rejected");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
+    /// Projecting the closure element OUT of the array (`let g = a[0]`) aliases the
+    /// env out of the owner — rejected (only an array-index CALL `(a[0])(x)` is ok).
+    #[test]
+    fn heap_env_array_elem_projection_is_rejected() {
+        let err = ir_result(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let a: Array[Fn(i64) -> i64, 1] = [make(21i64)]; \
+              let g = a[0]; println(f\"{g(21i64)}\"); }\n",
+        )
+        .expect_err("projecting a heap-env array element out must be rejected");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
+    /// A DYNAMIC-index projection (`let g = a[i]`) can't be proven to land on a
+    /// non-closure element, so it is conservatively rejected (the homogeneous
+    /// array is all closures anyway).
+    #[test]
+    fn heap_env_array_dynamic_index_projection_is_rejected() {
+        let err = ir_result(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let a: Array[Fn(i64) -> i64, 2] = [make(21i64), make(22i64)]; \
+              let i = 1i64; let g = a[i]; println(f\"{g(20i64)}\"); }\n",
+        )
+        .expect_err("a dynamic-index projection of a heap-env array element must be rejected");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
     #[test]
     fn escaping_capturing_closure_via_let_is_rejected() {
         let err = ir_result(

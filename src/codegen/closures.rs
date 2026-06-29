@@ -448,6 +448,35 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         self.heap_env_tuple_owners = tuple_owners;
+        // Array owners (array-store slice): `let a: Array[Fn,N] = [make(..), ..]` /
+        // `[f, ..]` — collect the element INDICES that hold a heap-env closure (a
+        // FRESH call or a heap-env BINDING source). `a` then owns those env boxes;
+        // codegen registers an instance `FreeClosureEnv` on each element. Only an
+        // `ExprKind::ArrayLiteral` RHS qualifies: a bare `[..]` lowers to a Vec
+        // `PrefixCollectionLiteral` (dynamic-length — the deferred Vec slice), which
+        // this match deliberately does not see, so the Vec form stays rejected.
+        let mut array_owners: HashMap<String, HashSet<usize>> = HashMap::new();
+        for stmt in &func.body.stmts {
+            if let StmtKind::Let { pattern, value, .. } = &stmt.kind {
+                if let ExprKind::ArrayLiteral(elems) = &value.kind {
+                    let idxs: HashSet<usize> = elems
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, e)| {
+                            self.is_heap_env_producing_call(e)
+                                || matches!(&e.kind, ExprKind::Identifier(n) if binds.contains(n))
+                        })
+                        .map(|(i, _)| i)
+                        .collect();
+                    if !idxs.is_empty() {
+                        if let [b] = pattern.binding_names().as_slice() {
+                            array_owners.insert(b.clone(), idxs);
+                        }
+                    }
+                }
+            }
+        }
+        self.heap_env_array_owners = array_owners;
         // Pass 2 — walk for misuse, skipping the sanctioned `let f = <call>` RHS.
         let mut bad = false;
         for stmt in &func.body.stmts {
@@ -465,8 +494,27 @@ impl<'ctx> super::Codegen<'ctx> {
                     let is_owner = single && self.heap_env_aggregate_owners.contains_key(&names[0]);
                     let is_tuple_owner =
                         single && self.heap_env_tuple_owners.contains_key(&names[0]);
+                    let is_array_owner =
+                        single && self.heap_env_array_owners.contains_key(&names[0]);
                     if sanctioned {
                         false
+                    } else if is_array_owner {
+                        // Array construction `let a: Array[Fn,N] = [<src>, ..]`: each
+                        // sanctioned heap-env store element (a FRESH call or a heap-env
+                        // BINDING source) is allowed; walk only the OTHER elements.
+                        // Mirrors the tuple-owner construction walk, by element index.
+                        if let ExprKind::ArrayLiteral(elems) = &value.kind {
+                            elems
+                                .iter()
+                                .filter(|e| {
+                                    !self.is_heap_env_producing_call(e)
+                                        && !matches!(&e.kind,
+                                            ExprKind::Identifier(n) if binds.contains(n))
+                                })
+                                .any(|e| self.expr_has_heap_env_misuse(e, &binds))
+                        } else {
+                            false
+                        }
                     } else if is_tuple_owner {
                         // Tuple construction `let t = (<src>, ..)`: each sanctioned
                         // heap-env store element (a FRESH call or a heap-env BINDING
@@ -647,6 +695,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 binds.contains(n)
                     || self.heap_env_aggregate_owners.contains_key(n)
                     || self.heap_env_tuple_owners.contains_key(n)
+                    || self.heap_env_array_owners.contains_key(n)
             }
             ExprKind::Call { callee, args } => {
                 // The one supported use: `f(args)` for a binding `f`. The callee
@@ -672,6 +721,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let ExprKind::TupleIndex { object, .. } = &callee.kind {
                     if let ExprKind::Identifier(n) = &object.kind {
                         if self.heap_env_tuple_owners.contains_key(n) {
+                            return any_args(args);
+                        }
+                    }
+                }
+                // Sanctioned array-index call on an array owner: `(a[i])(args)`. As
+                // with the tuple-index call, invoking through the element doesn't
+                // move the env; only the args can still misuse. The index `i` may be
+                // any expression — it is walked via `any_args` only if it appears in
+                // the args; the callee index occurrence itself is allowed.
+                if let ExprKind::Index { object, .. } = &callee.kind {
+                    if let ExprKind::Identifier(n) = &object.kind {
+                        if self.heap_env_array_owners.contains_key(n) {
                             return any_args(args);
                         }
                     }
@@ -714,7 +775,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 mis(object)
             }
-            ExprKind::Index { object, index } => mis(object) || mis(index),
+            ExprKind::Index { object, index } => {
+                // A non-call projection of an array owner's CLOSURE element
+                // (`let g = a[0]`, `return a[0]`, …) escapes the env → misuse; a
+                // call form `(a[i])(x)` is sanctioned in the `Call` arm before here.
+                // A constant index picks a specific element (reject iff that element
+                // is a heap-env closure); a dynamic index can't be proven to land on
+                // a non-closure element, so it is conservatively rejected. The index
+                // sub-expression is still walked for its own misuse.
+                if let ExprKind::Identifier(n) = &object.kind {
+                    if let Some(elem_idxs) = self.heap_env_array_owners.get(n) {
+                        let elem_escapes = match &index.kind {
+                            ExprKind::Integer(c, _) => elem_idxs.contains(&(*c as usize)),
+                            _ => true,
+                        };
+                        return elem_escapes || mis(index);
+                    }
+                }
+                mis(object) || mis(index)
+            }
             ExprKind::Tuple(es) | ExprKind::ArrayLiteral(es) => any(es),
             ExprKind::PrefixCollectionLiteral { items, .. } => any(items),
             ExprKind::RepeatLiteral { value, count, .. } => mis(value) || mis(count),

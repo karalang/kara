@@ -1469,6 +1469,19 @@ pub(super) struct Codegen<'ctx> {
     /// element (tuple-store slice). The tuple analog of `heap_env_aggregate_owners`.
     pub(crate) heap_env_tuple_owners:
         std::collections::HashMap<String, std::collections::HashSet<usize>>,
+    /// Per-function map (set in `reject_heap_env_misuse`, read by its walk): a
+    /// fixed-size ARRAY local `a` constructed as `let a: Array[Fn,N] = [make(..), ..]`
+    /// / `[f, ..]` → the set of its element INDICES that hold a heap-env closure.
+    /// Such an `a` OWNS those env boxes (codegen registers an instance
+    /// `FreeClosureEnv` on each element GEP), so the guard sanctions an array-index
+    /// call `(a[i])(x)` while rejecting any escape of `a` or a non-call projection
+    /// of a closure element (array-store slice). The array analog of
+    /// `heap_env_tuple_owners`; an array is homogeneous, so an array-of-closures
+    /// has no non-closure sibling elements to read (unlike a tuple). Only an
+    /// `ExprKind::ArrayLiteral` RHS qualifies — a bare `[..]` lowers to a Vec
+    /// `PrefixCollectionLiteral`, whose element store stays rejected (Vec slice).
+    pub(crate) heap_env_array_owners:
+        std::collections::HashMap<String, std::collections::HashSet<usize>>,
     /// Staging slot — set by `compile_closure` so the surrounding `let` binding can record
     /// the function type under the newly bound name.
     pub(crate) pending_closure_fn_type: Option<FunctionType<'ctx>>,
@@ -5138,6 +5151,7 @@ impl<'ctx> Codegen<'ctx> {
             fns_returning_heap_env_aggregate: std::collections::HashMap::new(),
             heap_env_owner_fields: std::collections::HashMap::new(),
             heap_env_tuple_owners: std::collections::HashMap::new(),
+            heap_env_array_owners: std::collections::HashMap::new(),
             pending_closure_fn_type: None,
             pending_closure_param_hints: None,
             pending_map_insert_old_dec: false,

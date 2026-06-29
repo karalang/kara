@@ -528,6 +528,31 @@ fn main() {
         );
     }
 
+    /// Array-store slice (B-2026-06-22-2): a heap-env closure stored in a
+    /// fixed-size array element is RC-dropped per-instance via a `FreeClosureEnv`
+    /// on that element GEP. Covers a FRESH single-element array, a multi-element
+    /// array (two closures, each called through), and a BINDING source (store inc →
+    /// rc 2, source still used, both drop → one free). Each env freed EXACTLY once
+    /// at scope exit — without the element drop they leak (LSan); with the binding
+    /// store missing the inc it double-frees (ASAN).
+    #[test]
+    fn asan_heap_env_stored_in_array_freed_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn main() {
+    let a: Array[Fn(i64) -> i64, 1] = [make(10i64)];
+    let b: Array[Fn(i64) -> i64, 2] = [make(5i64), make(7i64)];
+    let f = make(20i64);
+    let c: Array[Fn(i64) -> i64, 1] = [f];
+    println(f"{(a[0])(1i64) + (b[0])(1i64) + (b[1])(2i64) + f(0i64) + (c[0])(1i64)}");
+}
+"#,
+            &["67"],
+            "asan_heap_env_stored_in_array_freed_no_leak",
+        );
+    }
+
     // ── Baseline: no heap allocations ─────────────────────────────
     // Sanity-checks the harness itself — should trivially pass on any host
     // with a working `cc + ASAN`. If this fails, the infrastructure is

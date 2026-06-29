@@ -3136,6 +3136,19 @@ impl<'ctx> super::Codegen<'ctx> {
                                         }
                                     }
                                 }
+                            } else if let BasicTypeEnum::ArrayType(arr_ty) = slot.ty {
+                                // Array-store slice (B-2026-06-22-2): a heap-env
+                                // closure stored in a fixed-size array element
+                                // (`let a: Array[Fn,N] = [make(k), ..]` / `[f, ..]`)
+                                // is RC-dropped per-instance via a `FreeClosureEnv` on
+                                // that element GEP. There is no type-driven drop for a
+                                // `Fn`-element array (a `{ptr,ptr}` element reads as
+                                // POD), so without this the env would leak. A no-op
+                                // unless `value` is an array literal with a heap-env
+                                // element. The array twin of the tuple branch above.
+                                self.register_array_literal_heap_env_elem_drops(
+                                    value, slot.ptr, arr_ty,
+                                );
                             }
                         }
                     }

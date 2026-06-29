@@ -2505,6 +2505,64 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Array-store slice (B-2026-06-22-2): for `let a: Array[Fn,N] = [<src>, ..]`,
+    /// register an instance `FreeClosureEnv` on each fixed-size-array element whose
+    /// initializer is a sanctioned heap-env closure STORE. A FRESH call
+    /// (`[make(k), ..]`) leaves the element at refcount 1 (no inc); a heap-env
+    /// BINDING source (`[f, ..]`, `f` in `heap_env_closure_vars`) COPIES the
+    /// source's fat pointer, so the element co-owns the box — bump the refcount
+    /// (mirrors the tuple binding-source store). An array is a by-value LLVM
+    /// aggregate `[N x { fn_ptr, env_ptr }]`, so a `Fn` element GEP'd at `[0, idx]`
+    /// yields exactly the inline fat pointer the cleanup expects as `fat_alloca`.
+    /// INSTANCE-specific — there is no type-driven array drop for a `Fn`-element
+    /// array (a `{ptr,ptr}` element looks like POD), so without this the env would
+    /// leak; the misuse guard rejects any escape of `a`, so the element env never
+    /// outlives `a` (array escape is a later slice). The tuple-store registrar's
+    /// array twin; only the element GEP form differs (array `build_gep` `[0, idx]`
+    /// vs tuple `build_struct_gep`).
+    pub(super) fn register_array_literal_heap_env_elem_drops(
+        &mut self,
+        value: &Expr,
+        arr_alloca: PointerValue<'ctx>,
+        arr_ty: inkwell::types::ArrayType<'ctx>,
+    ) {
+        let ExprKind::ArrayLiteral(elems) = &value.kind else {
+            return;
+        };
+        let i64_t = self.context.i64_type();
+        let zero = i64_t.const_int(0, false);
+        for (idx, elem) in elems.iter().enumerate() {
+            let is_fresh = self.is_heap_env_producing_call(elem);
+            let is_binding = matches!(
+                &elem.kind,
+                ExprKind::Identifier(src) if self.heap_env_closure_vars.contains(src)
+            );
+            if !is_fresh && !is_binding {
+                continue;
+            }
+            let elem_idx = i64_t.const_int(idx as u64, false);
+            let elem_gep = unsafe {
+                self.builder
+                    .build_gep(arr_ty, arr_alloca, &[zero, elem_idx], "clo.arr.envslot")
+                    .unwrap()
+            };
+            // Binding source co-owns the box with the source binding — bump the env
+            // refcount (a fresh-call element is already rc 1).
+            if is_binding {
+                let fat = self
+                    .builder
+                    .build_load(self.closure_value_type(), elem_gep, "clo.arr.fat")
+                    .unwrap();
+                self.emit_heap_closure_env_inc(fat);
+            }
+            if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                frame.push(super::state::CleanupAction::FreeClosureEnv {
+                    fat_alloca: elem_gep,
+                });
+            }
+        }
+    }
+
     /// Aggregate-escape move-out (B-2026-06-22-2): when an aggregate owner `name`
     /// is RETURNED (a bare-identifier tail or a top-level `return h;`), its struct
     /// VALUE is handed to the caller carrying the env boxes — so this function must
