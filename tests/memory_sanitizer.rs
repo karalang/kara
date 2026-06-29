@@ -373,6 +373,36 @@ fn main() {
         );
     }
 
+    /// Return-again move-out (B-2026-06-22-2): a relay RE-RETURNS a bound
+    /// heap-env closure (explicit `return f`, bare-identifier tail, relay-of-a-
+    /// relay, and copy-then-return). The RC env box MOVES OUT of each relay to
+    /// its caller — the source binding's `FreeClosureEnv` is neutralized on the
+    /// returning path, so the box is freed EXACTLY once at the final owner's
+    /// scope exit. Asserts no leak (LSan) and no use-after-free / double-free
+    /// (ASAN). Without the move-out, the relay's scope exit would free the box
+    /// the caller still holds (UAF), or double-free across copy-then-return.
+    #[test]
+    fn asan_heap_env_closure_returned_again_freed_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn relay(k: i64) -> Fn(i64) -> i64 { let f = make(k); return f; }
+fn relay_tail(k: i64) -> Fn(i64) -> i64 { let f = make(k); f }
+fn relay2(k: i64) -> Fn(i64) -> i64 { let g = relay_tail(k); g }
+fn relay_copy(k: i64) -> Fn(i64) -> i64 { let f = make(k); let g = f; g }
+fn main() {
+    let a = relay(10i64);
+    let b = relay_tail(20i64);
+    let c = relay2(30i64);
+    let d = relay_copy(40i64);
+    println(f"{a(1i64) + b(2i64) + c(3i64) + d(4i64)}");
+}
+"#,
+            &["110"],
+            "asan_heap_env_closure_returned_again_freed_no_leak",
+        );
+    }
+
     // ── Baseline: no heap allocations ─────────────────────────────
     // Sanity-checks the harness itself — should trivially pass on any host
     // with a working `cc + ASAN`. If this fails, the infrastructure is

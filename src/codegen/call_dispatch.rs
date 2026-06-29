@@ -2263,6 +2263,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 if matches!(self.return_layout, LayoutId::Soa(_)) {
                     self.suppress_soa_cleanup_for_tail_identifier(name);
                 }
+                // Return-again move-out (B-2026-06-22-2): a bare
+                // heap-env-closure-binding tail hands its RC env box to the
+                // caller — neutralize the source so its scope-exit
+                // `FreeClosureEnv` doesn't dec the box the caller now owns
+                // (sibling of the channel / Map / SoA tail suppressions above).
+                self.neutralize_moved_closure_env_slot(name);
             }
             // (Option[shared T] tail FIELD returns — `fn f() ->
             // Option[T] { x.next }` — are compensated during body
@@ -2277,6 +2283,35 @@ impl<'ctx> super::Codegen<'ctx> {
             // ref-root addressing wrote through the un-deref'd param
             // slot into the caller's stack frame.)
         }
+    }
+
+    /// Return-again move-out (B-2026-06-22-2): when a heap-env closure binding
+    /// is RETURNED (a bare-identifier tail or a top-level `return f;`), the RC
+    /// env box flows to the caller — so the source binding must NOT RC-drop it at
+    /// this function's scope exit. Null the source fat pointer's env-pointer slot
+    /// (the second field) at runtime so its scope-exit `FreeClosureEnv` (which
+    /// skips a null env) no-ops; the already-loaded return value keeps the env, and the
+    /// caller's binding frees it (the function is in `fns_returning_heap_env`, so
+    /// the caller's `let r = relay(..)` is given a `FreeClosureEnv`). Runtime
+    /// null — not compile-time queue removal — so a branch that returns the
+    /// binding neutralizes only on its own path while a fall-through path that
+    /// does NOT return it still frees it. No-op for a non-heap-env name.
+    pub(super) fn neutralize_moved_closure_env_slot(&mut self, name: &str) {
+        if !self.heap_env_closure_vars.contains(name) {
+            return;
+        }
+        let Some(slot_ptr) = self.variables.get(name).map(|s| s.ptr) else {
+            return;
+        };
+        let fat_ty = self.closure_value_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let env_gep = self
+            .builder
+            .build_struct_gep(fat_ty, slot_ptr, 1, "clo.move.envslot")
+            .unwrap();
+        self.builder
+            .build_store(env_gep, ptr_ty.const_null())
+            .unwrap();
     }
 
     pub(super) fn suppress_source_vec_cleanup_for_arg(&self, arg_expr: &Expr) {

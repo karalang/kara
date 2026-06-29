@@ -334,14 +334,20 @@ impl<'ctx> super::Codegen<'ctx> {
     /// a `let f = <call>` binding is wired to free it (a `FreeClosureEnv`
     /// cleanup), so any other occurrence of the call leaks or escapes the env.
     fn is_heap_env_producing_call(&self, e: &Expr) -> bool {
+        self.is_heap_env_producing_call_in(e, &self.fns_returning_heap_env)
+    }
+
+    /// As [`Self::is_heap_env_producing_call`] but against an EXPLICIT set —
+    /// used inside `compute_fns_returning_heap_env`'s fixpoint, where
+    /// `self.fns_returning_heap_env` is not yet populated (the set is being
+    /// built up iteration by iteration).
+    fn is_heap_env_producing_call_in(&self, e: &Expr, set: &HashSet<String>) -> bool {
         let ExprKind::Call { callee, .. } = &e.kind else {
             return false;
         };
         match &callee.kind {
-            ExprKind::Identifier(n) => self.fns_returning_heap_env.contains(n),
-            ExprKind::Path { segments, .. } => {
-                segments.len() == 1 && self.fns_returning_heap_env.contains(&segments[0])
-            }
+            ExprKind::Identifier(n) => set.contains(n),
+            ExprKind::Path { segments, .. } => segments.len() == 1 && set.contains(&segments[0]),
             _ => false,
         }
     }
@@ -349,16 +355,19 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Heap-closure-env epic (B-2026-06-22-2) — the misuse guard that keeps the
     /// heap-env feature SOUND. A heap-env closure binding (`let f = make(..)`)
     /// may now be CALLED in the function that binds it (`f(x)`, possibly many
-    /// times) AND COPIED to another binding (`let g = f`): a copy increments the
+    /// times), COPIED to another binding (`let g = f`; a copy increments the
     /// shared RC env's refcount and both owners free it via `FreeClosureEnv` at
-    /// scope exit, so it is reclaimed exactly once (shared-ownership inc-on-copy
-    /// RC slice). Every OTHER use would let the env outlive — or be double-freed
-    /// by — its owner set: returning it (`return f`), storing it (into a struct
-    /// / collection / index / field), passing it as a call argument, or
-    /// capturing it in a nested closure. An UNBOUND `make(..)` (a non-`let`-RHS
-    /// occurrence of a heap-env-producing call — `make(..);`, `make(..)(x)`,
-    /// `return make(..)`, `[make(..)]`, …) leaks the env. All of those are
-    /// not-yet-supported and are rejected here with an honest
+    /// scope exit — inc-on-copy RC slice), and RETURNED as a bare-identifier tail
+    /// or a top-level `return f;` (move-out: codegen neutralizes the source's
+    /// `FreeClosureEnv` so the box flows to the caller at the same refcount, and
+    /// the function is registered in `fns_returning_heap_env` so the caller's
+    /// binding frees it — return-again slice). Every OTHER use would let the env
+    /// outlive — or be double-freed by — its owner set: storing it (into a struct
+    /// / collection / index / field), passing it as a call argument, capturing it
+    /// in a nested closure, or a BRANCH-BURIED return. An UNBOUND `make(..)` (a
+    /// non-`let`-RHS occurrence of a heap-env-producing call — `make(..);`,
+    /// `make(..)(x)`, `return make(..)`, `[make(..)]`, …) leaks the env. All of
+    /// those are not-yet-supported and are rejected here with an honest
     /// `E_ESCAPING_CLOSURE_NOT_YET` rather than miscompiled.
     ///
     /// Inert unless some function returns a heap-env closure. Otherwise: pass 1
@@ -416,7 +425,21 @@ impl<'ctx> super::Codegen<'ctx> {
                         || self.block_has_heap_env_misuse(else_block, &binds)
                 }
                 StmtKind::LetUninit { .. } => false,
-                StmtKind::Expr(e) => self.expr_has_heap_env_misuse(e, &binds),
+                StmtKind::Expr(e) => {
+                    // A top-level `return <bare binding>;` is the sanctioned
+                    // return-of-a-heap-env-binding shape (move-out codegen
+                    // neutralizes the source) — not a misuse. Any other expr
+                    // statement is walked as usual.
+                    if let ExprKind::Return(Some(inner)) = &e.kind {
+                        if matches!(&inner.kind, ExprKind::Identifier(n) if binds.contains(n)) {
+                            false
+                        } else {
+                            self.expr_has_heap_env_misuse(e, &binds)
+                        }
+                    } else {
+                        self.expr_has_heap_env_misuse(e, &binds)
+                    }
+                }
                 StmtKind::Assign { target, value }
                 | StmtKind::CompoundAssign { target, value, .. } => {
                     self.expr_has_heap_env_misuse(target, &binds)
@@ -436,19 +459,25 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         if !bad {
             if let Some(tail) = &func.body.final_expr {
-                bad = self.expr_has_heap_env_misuse(tail, &binds);
+                // A bare heap-env-binding TAIL is the sanctioned
+                // return-of-a-binding shape (move-out codegen neutralizes the
+                // source); anything else in tail position is walked as usual.
+                let returnable = matches!(&tail.kind, ExprKind::Identifier(n) if binds.contains(n));
+                bad = !returnable && self.expr_has_heap_env_misuse(tail, &binds);
             }
         }
         if bad {
             return Err(
                 "error[E_ESCAPING_CLOSURE_NOT_YET]: a returned capturing closure can currently \
-                 only be CALLED in the function that binds it (`let f = make(..); f(x)`) or \
-                 COPIED to another binding (`let g = f`). Returning it again (`return f`), \
-                 storing it, passing it as a call argument, capturing it in a nested closure, or \
-                 leaving a `make(..)` result unbound is not yet supported — the reference-counted \
-                 closure environment would outlive or be double-freed by its owner set \
-                 (heap-closure-environment epic B-2026-06-22-2). Workaround: call or copy the \
-                 closure where it is bound, or pass it down by a `Fn(..)` parameter."
+                 be CALLED in the function that binds it (`let f = make(..); f(x)`), COPIED to \
+                 another binding (`let g = f`), or RETURNED as a bare tail / top-level `return f`. \
+                 Storing it (struct / collection / index / field), passing it as a call argument, \
+                 capturing it in a nested closure, returning it from inside a branch, or leaving a \
+                 `make(..)` result unbound is not yet supported — the reference-counted closure \
+                 environment would outlive or be double-freed by its owner set \
+                 (heap-closure-environment epic B-2026-06-22-2). Workaround: call, copy, or \
+                 directly return the closure where it is bound, or pass it down by a `Fn(..)` \
+                 parameter."
                     .to_string(),
             );
         }
@@ -735,12 +764,72 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn compute_fns_returning_heap_env(&mut self) {
         let funcs: Vec<Function> = self.fn_asts.values().cloned().collect();
         let mut set = std::collections::HashSet::new();
+        // Seed: a direct capturing-closure-literal tail mints a heap env here.
         for func in &funcs {
             if self.func_tail_heap_closure_span(func).is_some() {
                 set.insert(func.name.clone());
             }
         }
+        // Fixpoint (return-again slice): a function that RETURNS a heap-env
+        // BINDING — a local bound from a call to a fn already in the set
+        // (transitively through copies `let g = f`), returned as a
+        // bare-identifier tail or a top-level `return <binding>` — also yields a
+        // heap env to ITS caller; codegen moves the env box out (neutralizes the
+        // source's `FreeClosureEnv`), so the same box flows on at the same
+        // refcount. Repeat until stable so a relay-of-a-relay is recognized once
+        // its inner relay is.
+        loop {
+            let mut changed = false;
+            for func in &funcs {
+                if set.contains(&func.name) {
+                    continue;
+                }
+                if self.func_returns_heap_env_binding(func, &set) {
+                    set.insert(func.name.clone());
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
         self.fns_returning_heap_env = set;
+    }
+
+    /// `true` when `func` returns — as a bare-identifier TAIL or a top-level
+    /// `return <bare identifier>;` — a local that is a heap-env binding (bound
+    /// from a call to a fn in `set`, transitively through copies). Branch-buried
+    /// returns are intentionally NOT detected: a sound under-approximation that
+    /// keeps detection in lockstep with the misuse guard (which only sanctions
+    /// these same two top-level return shapes) and the move-out codegen (which
+    /// neutralizes the source on the executed path) — never a silent miscompile.
+    fn func_returns_heap_env_binding(&self, func: &Function, set: &HashSet<String>) -> bool {
+        // Heap-env bindings local to `func` (forward scan; transitive copies).
+        let mut binds: HashSet<String> = HashSet::new();
+        for stmt in &func.body.stmts {
+            if let StmtKind::Let { pattern, value, .. } = &stmt.kind {
+                let is_src = self.is_heap_env_producing_call_in(value, set)
+                    || matches!(&value.kind, ExprKind::Identifier(n) if binds.contains(n));
+                if is_src {
+                    if let [b] = pattern.binding_names().as_slice() {
+                        binds.insert(b.clone());
+                    }
+                }
+            }
+        }
+        if binds.is_empty() {
+            return false;
+        }
+        let is_bound = |e: &Expr| matches!(&e.kind, ExprKind::Identifier(n) if binds.contains(n));
+        if func.body.final_expr.as_deref().is_some_and(&is_bound) {
+            return true;
+        }
+        func.body.stmts.iter().any(|s| match &s.kind {
+            StmtKind::Expr(e) => {
+                matches!(&e.kind, ExprKind::Return(Some(inner)) if is_bound(inner))
+            }
+            _ => false,
+        })
     }
 
     /// `true` when closure-literal `|params| body` captures at least one name in

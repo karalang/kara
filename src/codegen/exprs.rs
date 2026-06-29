@@ -689,6 +689,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let ExprKind::Identifier(name) = &e.kind {
                         self.suppress_user_drop_for_var(name);
                         self.suppress_map_cleanup_for_tail_identifier(name);
+                        // Return-again move-out (B-2026-06-22-2): an explicit
+                        // `return f;` of a heap-env closure binding hands its RC
+                        // env box to the caller — neutralize the source so the
+                        // `emit_scope_cleanup()` below doesn't dec the box the
+                        // caller now owns (runtime-null, branch-safe; sibling of
+                        // the channel/SoA early-return suppressions here).
+                        self.neutralize_moved_closure_env_slot(name);
                         // Channel-end `return rx;`: the moved-out `Sender`/
                         // `Receiver` is now the caller's; suppress the
                         // binding's scope-exit `DropChannelEnd` so its

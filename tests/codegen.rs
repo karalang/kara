@@ -440,16 +440,73 @@ mod codegen_tests {
     // see heap_env_returned_capturing_closure_runs); the caller may then CALL
     // the binding. Re-escaping that binding stays rejected by the misuse guard.
 
-    /// The supported shape is `let f = make(); f(x)`; RE-returning the bound
-    /// heap-env closure (`let f = make(k); return f`) would let its RC env
-    /// outlive its single owner, so the Slice 1 misuse guard rejects it.
+    /// Return-again (B-2026-06-22-2): a relay may RE-RETURN a bound heap-env
+    /// closure via an explicit top-level `return f;`. The env box moves out to
+    /// the caller (the source's `FreeClosureEnv` is neutralized; `relay` is
+    /// registered as heap-env-returning so the caller's binding frees it), freed
+    /// exactly once. Was rejected by the Slice 1 misuse guard; now supported.
     #[test]
-    fn heap_env_binding_returned_again_is_rejected() {
+    fn heap_env_binding_returned_again_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn relay(k: i64) -> Fn(i64) -> i64 { let f = make(k); return f; }\n\
+             fn main() { let r = relay(21i64); println(f\"{r(21i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// The bare-identifier TAIL form of return-again (`{ let f = make(k); f }`)
+    /// goes through the tail-return move-out hub rather than the explicit-return
+    /// arm — both neutralize the source. Runs and frees once.
+    #[test]
+    fn heap_env_binding_returned_again_tail_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn relay(k: i64) -> Fn(i64) -> i64 { let f = make(k); f }\n\
+             fn main() { let r = relay(20i64); println(f\"{r(22i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// Relay-of-a-relay: the heap-env-returning set is a FIXPOINT, so a function
+    /// returning the result of another heap-env-returning function is itself
+    /// recognized. The one env box flows through both relays to the caller.
+    #[test]
+    fn heap_env_binding_relay_of_relay_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn relay1(k: i64) -> Fn(i64) -> i64 { let f = make(k); f }\n\
+             fn relay2(k: i64) -> Fn(i64) -> i64 { let g = relay1(k); g }\n\
+             fn main() { let r = relay2(20i64); println(f\"{r(22i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// Copy-then-return in one function (`let f = make(k); let g = f; g`): the
+    /// copy increments the shared box (rc 2); returning `g` moves it out (g's
+    /// drop neutralized), `f`'s scope-exit drop decs to 1, the caller frees the
+    /// last ref — freed exactly once.
+    #[test]
+    fn heap_env_binding_copy_then_return_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn relay(k: i64) -> Fn(i64) -> i64 { let f = make(k); let g = f; g }\n\
+             fn main() { let r = relay(20i64); println(f\"{r(22i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// A BRANCH-BURIED return of a heap-env binding stays rejected — the
+    /// move-out neutralization is only wired for a top-level tail / `return`, so
+    /// detection and the misuse guard agree on the under-approximation (sound:
+    /// an honest error, never a miscompile).
+    #[test]
+    fn heap_env_binding_branch_buried_return_is_rejected() {
         let err = ir_result(
             "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
-             fn relay(k: i64) -> Fn(i64) -> i64 { let f = make(k); return f; }\n",
+             fn relay(c: bool, k: i64) -> Fn(i64) -> i64 { let f = make(k); if c { return f; } else { return f; } }\n",
         )
-        .expect_err("re-returning a heap-env closure binding must be rejected");
+        .expect_err("branch-buried return of a heap-env binding must be rejected");
         assert!(
             err.contains("E_ESCAPING_CLOSURE_NOT_YET"),
             "wrong diagnostic: {err}"
