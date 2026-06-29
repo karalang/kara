@@ -874,7 +874,7 @@ Resolution archive: [`brainstorming/archive/v69_go_parity_gaps.md § Gap 4`](../
     ```
     No silent CPU fallback. The `KARAC_GPU_BACKEND=cpu` escape hatch is for debugging only and is explicitly labelled as such.
 
-  **Implementation tasks:**
+  **Implementation tasks:** — *granular slice breakdown with readiness/sequencing (front-end-now vs codegen-blocked-on-self-hosting) lives in [`implementation_checklist/phase-10-targets.md`](implementation_checklist/phase-10-targets.md) "GPU compute shaders — slice breakdown"; the coarse boxes below mirror it.*
   - [ ] WGSL codegen: lower `#[gpu]` function bodies to WGSL compute shaders
   - [ ] wgpu integration: device initialization, buffer management, shader compilation, dispatch
   - [ ] `gpu.dispatch` runtime call: pack arguments into GPU buffers, submit compute pass, read results back
