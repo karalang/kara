@@ -1402,6 +1402,15 @@ impl<'a> super::TypeChecker<'a> {
             .unwrap_or(Type::Unit);
         self.current_return_type = Some(return_type.clone());
 
+        // FE-2 — `GpuSafe` structural check. A `#[gpu]` function may use
+        // only the GPU-compatible type subset; reject heap / RC types (and
+        // aggregates containing them) in its parameter and return types.
+        // Local-binding types are checked from the body walk below. See
+        // `gpu_safe.rs` and design.md § GPU Subset Constraints.
+        if f.is_gpu {
+            self.check_gpu_safe_signature(f, &gp);
+        }
+
         // Phase-8 entry-point contract Slice C: the top-level `fn main`
         // must return exactly `()` / `Unit`, `Result[(), E: Display]`, or
         // `ExitCode` (design.md § Entry Point). Gated on a free function

@@ -2999,6 +2999,8 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::typechecker::TypeErrorKind::MainReturnType => "E0266",
                 // Slice C — `main() -> Result[(), E]` where `E` lacks `Display`.
                 crate::typechecker::TypeErrorKind::MainErrNotDisplay => "E0267",
+                // FE-2 — a `#[gpu]` function uses a non-GPU-safe type.
+                crate::typechecker::TypeErrorKind::GpuNotSafe => "E0801",
             };
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),
@@ -7734,6 +7736,7 @@ fn type_error_code(kind: &crate::typechecker::TypeErrorKind) -> &'static str {
         K::ConditionNotBool => "E0211",
         K::BranchTypeMismatch => "E0212",
         K::ReturnTypeMismatch => "E0213",
+        K::GpuNotSafe => "E0801",
         _ => "E0200",
     }
 }

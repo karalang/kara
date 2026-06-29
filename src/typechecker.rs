@@ -32,6 +32,7 @@ mod expr_method_tensor;
 mod expr_ops;
 mod exprs;
 mod fields;
+mod gpu_safe;
 mod inference;
 mod items;
 mod lowering;
@@ -689,6 +690,16 @@ pub enum TypeErrorKind {
     /// exit path, so the bound is checked at the entry-point boundary with
     /// an `impl Display for E` fix-it. `E_MAIN_ERR_NOT_DISPLAY` (Slice C).
     MainErrNotDisplay,
+    /// A `#[gpu]`-annotated function uses a type that is not GPU-compatible
+    /// — a heap-allocated type (`String`, `Vec[T]`, `Map`/`Set`, …), an
+    /// RC/`shared` reference type (`shared struct`, `Rc[T]`, `Arc[T]`,
+    /// `Weak[T]`), or an aggregate transitively containing one (e.g. a
+    /// struct with a `String` field, `Option[String]`). The GPU subset is
+    /// allocation-free and reference-free; the structural `GpuSafe` walk
+    /// (FE-2) rejects these in the function's parameter / return / local
+    /// types before codegen. See design.md § GPU Subset Constraints >
+    /// `GpuSafe` trait. `E0801`.
+    GpuNotSafe,
 }
 
 impl TypeErrorKind {
@@ -803,7 +814,8 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::DeriveCloneAllocates
         | TypeErrorKind::MainReturnType
         | TypeErrorKind::MainErrNotDisplay
-        | TypeErrorKind::CrossTaskUnsafeCapture => None,
+        | TypeErrorKind::CrossTaskUnsafeCapture
+        | TypeErrorKind::GpuNotSafe => None,
     }
 }
 

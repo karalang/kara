@@ -28011,3 +28011,159 @@ fn compare_borrow_against_unrelated_type_still_rejected() {
         errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
+
+// ── #[gpu] GpuSafe structural type-check (E0801), FE-2 ────────────
+// A `#[gpu]` function may use only the GPU-compatible type subset in its
+// parameter and return types: primitives, fixed-size `Array[T, N]`,
+// tuples, `Option`/`Result` over safe inners, and structs/enums whose
+// fields are all GPU-safe. Heap types (`String`, `Vec`, `Map`, `Set`) and
+// RC/`shared` types (`shared struct`, `Rc`, `Arc`, `Weak`) — and any
+// aggregate transitively containing one — are rejected with E0801. See
+// design.md § GPU Subset Constraints.
+
+fn gpu_safe_errors(source: &str) -> Vec<TypeError> {
+    typecheck_errors(source)
+        .into_iter()
+        .filter(|e| e.kind == TypeErrorKind::GpuNotSafe)
+        .collect()
+}
+
+#[test]
+fn gpu_fe2_accepts_primitives_array_and_ref_array() {
+    typecheck_ok(
+        "#[gpu]\n\
+         fn dot(a: ref Array[f64, 3], b: ref Array[f64, 3]) -> f64 {\n\
+             a[0] * b[0] + a[1] * b[1] + a[2] * b[2]\n\
+         }\n\
+         fn main() { println(1) }",
+    );
+}
+
+#[test]
+fn gpu_fe2_accepts_option_of_primitive() {
+    typecheck_ok("#[gpu]\nfn k(x: Option[i64]) -> i64 { 0 }\nfn main() { println(1) }");
+}
+
+#[test]
+fn gpu_fe2_accepts_tuple_and_struct_of_primitives() {
+    typecheck_ok(
+        "struct Vec3 { x: f64, y: f64, z: f64 }\n\
+         #[gpu]\n\
+         fn k(p: Vec3, t: (i64, bool)) -> f64 { p.x }\n\
+         fn main() { println(1) }",
+    );
+}
+
+#[test]
+fn gpu_fe2_non_gpu_fn_with_string_is_fine() {
+    // The check is gated on `#[gpu]` — an ordinary fn may use heap types.
+    typecheck_ok("fn k(s: String) -> i64 { 0 }\nfn main() { println(1) }");
+}
+
+#[test]
+fn gpu_fe2_rejects_string_param() {
+    let errs = gpu_safe_errors("#[gpu]\nfn k(s: String) -> i64 { 0 }\nfn main() { println(1) }");
+    assert_eq!(errs.len(), 1, "got: {:?}", errs);
+    assert!(errs[0].message.contains("`String` is not GPU-compatible"));
+    assert!(errs[0].message.contains("parameter"));
+}
+
+#[test]
+fn gpu_fe2_rejects_vec_return() {
+    let errs =
+        gpu_safe_errors("#[gpu]\nfn k(x: i64) -> Vec[i64] { todo() }\nfn main() { println(1) }");
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("`Vec` is not GPU-compatible")
+                && e.message.contains("return type")),
+        "got: {:?}",
+        errs
+    );
+}
+
+#[test]
+fn gpu_fe2_rejects_map_and_set_params() {
+    assert!(!gpu_safe_errors(
+        "#[gpu]\nfn k(m: Map[i64, i64]) -> i64 { 0 }\nfn main() { println(1) }"
+    )
+    .is_empty());
+    assert!(
+        !gpu_safe_errors("#[gpu]\nfn k(s: Set[i64]) -> i64 { 0 }\nfn main() { println(1) }")
+            .is_empty()
+    );
+}
+
+#[test]
+fn gpu_fe2_rejects_struct_with_heap_field_and_reports_field_path() {
+    let errs = gpu_safe_errors(
+        "struct Particle { pos: f64, name: String }\n\
+         #[gpu]\n\
+         fn step(p: Particle) -> f64 { p.pos }\n\
+         fn main() { println(1) }",
+    );
+    assert_eq!(errs.len(), 1, "got: {:?}", errs);
+    assert!(
+        errs[0].message.contains("`String` is not GPU-compatible")
+            && errs[0].message.contains("Particle.name"),
+        "expected a field-path mention; got: {}",
+        errs[0].message
+    );
+}
+
+#[test]
+fn gpu_fe2_rejects_option_of_string() {
+    let errs =
+        gpu_safe_errors("#[gpu]\nfn k(x: Option[String]) -> i64 { 0 }\nfn main() { println(1) }");
+    assert_eq!(errs.len(), 1, "got: {:?}", errs);
+    assert!(errs[0].message.contains("`String` is not GPU-compatible"));
+}
+
+#[test]
+fn gpu_fe2_rejects_shared_struct() {
+    let errs = gpu_safe_errors(
+        "shared struct Node { v: i64 }\n\
+         #[gpu]\n\
+         fn k(n: Node) -> i64 { n.v }\n\
+         fn main() { println(1) }",
+    );
+    assert_eq!(errs.len(), 1, "got: {:?}", errs);
+    assert!(errs[0].message.contains("shared Node"));
+    assert!(errs[0].message.contains("reference-counted"));
+}
+
+#[test]
+fn gpu_fe2_rejects_tuple_containing_vec() {
+    let errs =
+        gpu_safe_errors("#[gpu]\nfn k(p: (i64, Vec[i64])) -> i64 { 0 }\nfn main() { println(1) }");
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("`Vec` is not GPU-compatible")),
+        "got: {:?}",
+        errs
+    );
+}
+
+#[test]
+fn gpu_fe2_rejects_enum_with_heap_variant_payload() {
+    let errs = gpu_safe_errors(
+        "enum Token { Num(i64), Name(String) }\n\
+         #[gpu]\n\
+         fn k(t: Token) -> i64 { 0 }\n\
+         fn main() { println(1) }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("`String` is not GPU-compatible")
+                && e.message.contains("Token::Name")),
+        "expected variant-path mention; got: {:?}",
+        errs
+    );
+}
+
+#[test]
+fn gpu_fe2_accepts_generic_param_without_bound_at_this_slice() {
+    // A bare generic `T` is treated as GPU-safe structurally; enforcing
+    // the `T: GpuSafe` bound is FE-3's call-graph job. So this typechecks
+    // (no GpuNotSafe error) even though `T` could be instantiated unsafely.
+    typecheck_ok("#[gpu]\nfn k[T](x: T) -> T { x }\nfn main() { println(1) }");
+}
