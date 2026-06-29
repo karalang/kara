@@ -1468,6 +1468,15 @@ pub(super) struct Codegen<'ctx> {
     /// `build_gep [0, idx]` vs tuple `build_struct_gep`).
     pub(crate) fns_returning_heap_env_array:
         std::collections::HashMap<String, std::collections::HashSet<usize>>,
+    /// Names of functions whose return value is a heap-env-OWNING `Vec[Fn]` — a Vec
+    /// owner returned as a bare tail / `return v` (Vec-escape slice). A set (not a
+    /// map): a Vec is homogeneous `Vec[Fn]` of unknown length, so there are no
+    /// per-element indices to carry — every live element is a closure. A
+    /// `let r = <call to such a fn>` binding becomes a Vec owner: the callee moved
+    /// the buffer out by value (its tail-return cap-zero suppressed its own dynamic
+    /// closure drop loop), and the caller's binding adopts that drop loop. A FIXPOINT
+    /// (relay-of-Vec), computed after the tuple/array fixpoints.
+    pub(crate) fns_returning_heap_env_vec: std::collections::HashSet<String>,
     /// Per-function map (reset each function): an aggregate-owner local `h` → the
     /// `(struct type name, field index)` of each heap-env field it owns. Recorded
     /// when the field's `FreeClosureEnv` is registered (struct-literal store OR an
@@ -5182,6 +5191,7 @@ impl<'ctx> Codegen<'ctx> {
             fns_returning_heap_env_aggregate: std::collections::HashMap::new(),
             fns_returning_heap_env_tuple: std::collections::HashMap::new(),
             fns_returning_heap_env_array: std::collections::HashMap::new(),
+            fns_returning_heap_env_vec: std::collections::HashSet::new(),
             heap_env_owner_fields: std::collections::HashMap::new(),
             heap_env_tuple_owners: std::collections::HashMap::new(),
             heap_env_array_owners: std::collections::HashMap::new(),
@@ -6485,6 +6495,12 @@ impl<'ctx> Codegen<'ctx> {
         // fixpoint; runs after it (a relay can chain through a struct builder) and is
         // itself a fixpoint (relay-of-container).
         self.compute_fns_returning_heap_env_tuple_array();
+        // Vec-escape slice (B-2026-06-22-2): identify functions that return a
+        // closure-owning `Vec[Fn]`, so a `let r = <call to such a fn>` binding adopts
+        // the dynamic per-element drop loop (the callee moved the buffer out by
+        // value, its cap-zero suppressing its own loop). A fixpoint (relay-of-Vec),
+        // after the tuple/array fixpoint.
+        self.compute_fns_returning_heap_env_vec();
         for item in &program.items {
             if let Item::Function(f) = item {
                 if f.generic_params.is_none() {

@@ -428,40 +428,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let (tuple_owners, array_owners) = self.collect_tuple_array_owners(func, &binds);
         self.heap_env_tuple_owners = tuple_owners;
         self.heap_env_array_owners = array_owners;
-        // Vec owners (Vec-store slice): a `Vec[Fn]` local bound `let v: Vec[Fn] =
-        // Vec.new()` / `Vec.with_capacity(..)` that receives at least one heap-env
-        // PUSH. Two steps: (1) collect the CANDIDATE bindings — an explicit
-        // `Vec[Fn..]` annotation over a fresh empty Vec ctor (so we provably own
-        // every element, and codegen has the element type to size the drop loop);
-        // (2) promote a candidate to an OWNER the first time a `v.push(<heap-env>)`
-        // is seen anywhere in the body (incl. loops/branches, the whole point of a
-        // dynamic Vec). A candidate with NO heap-env push stays a plain Vec (its
-        // stack-env / non-capturing elements are freed with the frame, never by us).
-        let mut vec_candidates: HashSet<String> = HashSet::new();
-        for stmt in &func.body.stmts {
-            if let StmtKind::Let {
-                pattern,
-                value,
-                ty: Some(te),
-                ..
-            } = &stmt.kind
-            {
-                let is_fn_vec = super::helpers::vec_inner_type_expr(te)
-                    .is_some_and(|inner| matches!(inner.kind, TypeKind::FnType { .. }));
-                let fresh_vec =
-                    self.is_vec_new_call(value) || self.is_vec_with_capacity_call(value);
-                if is_fn_vec && fresh_vec {
-                    if let [b] = pattern.binding_names().as_slice() {
-                        vec_candidates.insert(b.clone());
-                    }
-                }
-            }
-        }
-        let mut vec_owners: HashSet<String> = HashSet::new();
-        if !vec_candidates.is_empty() {
-            self.collect_heap_env_vec_owners(&func.body, &binds, &vec_candidates, &mut vec_owners);
-        }
-        self.heap_env_vec_owners = vec_owners;
+        // Vec owners (Vec-store + Vec-escape slices): a `Vec[Fn]` local bound
+        // `let v: Vec[Fn] = Vec.new()`/`Vec.with_capacity(..)` that receives >=1
+        // heap-env push, OR a relay `let r = build(k)` where `build` returns a
+        // closure-owning Vec (Vec-escape caller-adopt). Factored into
+        // `collect_vec_owners`, shared with the Vec-return detection fixpoint.
+        self.heap_env_vec_owners = self.collect_vec_owners(func, &binds);
         // Pass 2 — walk for misuse, skipping the sanctioned `let f = <call>` RHS.
         let mut bad = false;
         for stmt in &func.body.stmts {
@@ -570,7 +542,8 @@ impl<'ctx> super::Codegen<'ctx> {
                             if binds.contains(n)
                                 || self.heap_env_aggregate_owners.contains_key(n)
                                 || self.heap_env_tuple_owners.contains_key(n)
-                                || self.heap_env_array_owners.contains_key(n))
+                                || self.heap_env_array_owners.contains_key(n)
+                                || self.heap_env_vec_owners.contains(n))
                         {
                             false
                         } else {
@@ -608,7 +581,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     if binds.contains(n)
                         || self.heap_env_aggregate_owners.contains_key(n)
                         || self.heap_env_tuple_owners.contains_key(n)
-                        || self.heap_env_array_owners.contains_key(n));
+                        || self.heap_env_array_owners.contains_key(n)
+                        || self.heap_env_vec_owners.contains(n));
                 bad = !returnable && self.expr_has_heap_env_misuse(tail, &binds);
             }
         }
@@ -1476,6 +1450,115 @@ impl<'ctx> super::Codegen<'ctx> {
                             .insert(func.name.clone(), idxs);
                         changed = true;
                     }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+    }
+
+    /// `true` when `e` is a CALL to a fn that returns a closure-owning `Vec[Fn]`
+    /// (in `fns_returning_heap_env_vec`). The Vec twin of `container_call_owner_elems`
+    /// (a Vec carries no per-element indices, so this returns a bool).
+    fn call_returns_heap_env_vec(&self, e: &Expr) -> bool {
+        let ExprKind::Call { callee, .. } = &e.kind else {
+            return false;
+        };
+        let name = match &callee.kind {
+            ExprKind::Identifier(n) => n,
+            ExprKind::Path { segments, .. } if segments.len() == 1 => &segments[0],
+            _ => return false,
+        };
+        self.fns_returning_heap_env_vec.contains(name)
+    }
+
+    /// Collect, for `func`, the `Vec[Fn]` OWNERS. An owner is (a) a fresh-ctor
+    /// `let v: Vec[Fn] = Vec.new()`/`Vec.with_capacity(..)` binding that receives at
+    /// least one heap-env push (Vec-store), OR (b) a relay `let r = build(k)` where
+    /// `build` returns a closure-owning Vec (Vec-escape caller-adopt — uses
+    /// `fns_returning_heap_env_vec`). Shared by the misuse guard (pass 1) and the
+    /// Vec-return fixpoint, keeping owner reasoning in one place. `binds` must
+    /// already be complete.
+    fn collect_vec_owners(&self, func: &Function, binds: &HashSet<String>) -> HashSet<String> {
+        let mut candidates: HashSet<String> = HashSet::new();
+        for stmt in &func.body.stmts {
+            if let StmtKind::Let {
+                pattern,
+                value,
+                ty: Some(te),
+                ..
+            } = &stmt.kind
+            {
+                let is_fn_vec = super::helpers::vec_inner_type_expr(te)
+                    .is_some_and(|inner| matches!(inner.kind, TypeKind::FnType { .. }));
+                let fresh_vec =
+                    self.is_vec_new_call(value) || self.is_vec_with_capacity_call(value);
+                if is_fn_vec && fresh_vec {
+                    if let [b] = pattern.binding_names().as_slice() {
+                        candidates.insert(b.clone());
+                    }
+                }
+            }
+        }
+        let mut owners: HashSet<String> = HashSet::new();
+        if !candidates.is_empty() {
+            self.collect_heap_env_vec_owners(&func.body, binds, &candidates, &mut owners);
+        }
+        // Vec-escape caller-adopt relay: `let r = build(k)` where `build` returns a
+        // closure-owning Vec — `r` adopts the dynamic drop loop (no push needed).
+        for stmt in &func.body.stmts {
+            if let StmtKind::Let { pattern, value, .. } = &stmt.kind {
+                if self.call_returns_heap_env_vec(value) {
+                    if let [b] = pattern.binding_names().as_slice() {
+                        owners.insert(b.clone());
+                    }
+                }
+            }
+        }
+        owners
+    }
+
+    /// `true` if `func` RETURNS a `Vec[Fn]` owner — a bare-identifier TAIL or
+    /// top-level `return v;` of a Vec owner. The Vec twin of
+    /// `func_returns_container_owner` (bool, no per-element indices).
+    fn func_returns_vec_owner(&self, func: &Function, owners: &HashSet<String>) -> bool {
+        if owners.is_empty() {
+            return false;
+        }
+        let is_owner_id =
+            |e: &Expr| matches!(&e.kind, ExprKind::Identifier(n) if owners.contains(n));
+        if func.body.final_expr.as_deref().is_some_and(is_owner_id) {
+            return true;
+        }
+        func.body.stmts.iter().any(|s| match &s.kind {
+            StmtKind::Expr(e) => {
+                matches!(&e.kind, ExprKind::Return(Some(inner)) if is_owner_id(inner))
+            }
+            _ => false,
+        })
+    }
+
+    /// Populate `fns_returning_heap_env_vec` (functions that RETURN a `Vec[Fn]`
+    /// owner, as a bare tail / `return v`). A FIXPOINT so a relay-of-Vec
+    /// (`let r = build(k); r`) is recognized once its inner builder is. Runs after
+    /// the tuple/array fixpoint (a relay can chain through any container builder).
+    pub(super) fn compute_fns_returning_heap_env_vec(&mut self) {
+        let funcs: Vec<Function> = self.fn_asts.values().cloned().collect();
+        loop {
+            let mut changed = false;
+            for func in &funcs {
+                if self.fns_returning_heap_env_vec.contains(&func.name) {
+                    continue;
+                }
+                let (binds, _) = self.collect_heap_env_binds_and_owners(
+                    func,
+                    &self.fns_returning_heap_env_aggregate,
+                );
+                let owners = self.collect_vec_owners(func, &binds);
+                if self.func_returns_vec_owner(func, &owners) {
+                    self.fns_returning_heap_env_vec.insert(func.name.clone());
+                    changed = true;
                 }
             }
             if !changed {

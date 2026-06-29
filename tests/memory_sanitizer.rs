@@ -613,6 +613,49 @@ fn main() {
         );
     }
 
+    /// Vec-escape slice (B-2026-06-22-2): a function returns a closure-owning
+    /// `Vec[Fn]`; the callee moves the BUFFER out (its tail-return cap-zero
+    /// suppresses its own dynamic drop loop) and the caller's binding adopts that
+    /// `0..len` drop loop. Covers a loop-built escape (3 element envs adopted), a
+    /// BINDING-push escape (store inc → callee source drop + caller loop drop = one
+    /// free), and a RELAY (the buffer flows callee→relay→caller, freed once at the
+    /// outermost binding). Without the caller-adopt the envs leak (LSan); if the
+    /// callee's loop weren't cap-zero suppressed it double-frees (ASAN).
+    #[test]
+    fn asan_heap_env_vec_escape_freed_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn build(n: i64) -> Vec[Fn(i64) -> i64] {
+    let mut v: Vec[Fn(i64) -> i64] = Vec.new();
+    let mut i = 0i64;
+    while i < n { v.push(make(i)); i = i + 1i64; }
+    v
+}
+fn build_bf(k: i64) -> Vec[Fn(i64) -> i64] {
+    let f = make(k);
+    let mut v: Vec[Fn(i64) -> i64] = Vec.new();
+    v.push(f);
+    v
+}
+fn relay(n: i64) -> Vec[Fn(i64) -> i64] { let q = build(n); q }
+fn main() {
+    let r = build(3i64);
+    let w = build_bf(20i64);
+    let z = relay(2i64);
+    let mut acc = 0i64;
+    let mut j = 0i64;
+    while j < r.len() { acc = acc + (r[j])(10i64); j = j + 1i64; }
+    acc = acc + (w[0])(2i64);
+    acc = acc + (z[0])(5i64) + (z[1])(6i64);
+    println(f"{acc}");
+}
+"#,
+            &["67"],
+            "asan_heap_env_vec_escape_freed_no_leak",
+        );
+    }
+
     // ── Baseline: no heap allocations ─────────────────────────────
     // Sanity-checks the harness itself — should trivially pass on any host
     // with a working `cc + ASAN`. If this fails, the infrastructure is

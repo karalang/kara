@@ -932,16 +932,79 @@ mod codegen_tests {
         assert_eq!(out.as_deref(), Some("42\n"));
     }
 
-    /// Returning the Vec that owns the heap-env elements is an ESCAPE — rejected
-    /// (Vec escape is a later slice; only push / call-through / len are sanctioned).
+    // ── Vec-escape slice (B-2026-06-22-2) ──
+    // A function may RETURN a closure-owning `Vec[Fn]` (bare tail / `return v`). The
+    // callee moves the BUFFER out by value — its tail-return cap-zero suppresses its
+    // own dynamic per-element drop loop — and the caller's `let r = build(..)`
+    // binding ADOPTS that drop loop (the Vec twin of the tuple/array escape). The
+    // owning Vec must still not be projected from / popped at the caller.
+
+    /// Returning the Vec that owns the heap-env elements — was rejected by the
+    /// Vec-store slice; now runs (explicit `return v`).
     #[test]
-    fn heap_env_vec_returned_is_rejected() {
+    fn heap_env_vec_returned_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn build(k: i64) -> Vec[Fn(i64) -> i64] { \
+              let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(make(k)); return v; }\n\
+             fn main() { let r = build(22i64); println(f\"{(r[0])(20i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// Bare-tail return of a closure-owning Vec, called through at the caller.
+    #[test]
+    fn heap_env_vec_returned_tail_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn build(k: i64) -> Vec[Fn(i64) -> i64] { \
+              let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(make(k)); v }\n\
+             fn main() { let r = build(20i64); println(f\"{(r[0])(22i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// A DYNAMIC-length escaping Vec (loop-built) — the caller's adopted drop loop
+    /// frees all `len` element envs.
+    #[test]
+    fn heap_env_vec_loop_built_escape_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn build(n: i64) -> Vec[Fn(i64) -> i64] { \
+              let mut v: Vec[Fn(i64) -> i64] = Vec.new(); let mut i = 0i64; \
+              while i < n { v.push(make(i)); i = i + 1i64; } v }\n\
+             fn main() { let r = build(4i64); let mut acc = 0i64; let mut j = 0i64; \
+              while j < r.len() { acc = acc + (r[j])(10i64); j = j + 1i64; } println(f\"{acc}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("46\n"));
+    }
+
+    /// A RELAY re-returns a Vec built by another fn (`let r = build(k); r`) — the
+    /// detection fixpoint recognizes `relay` once `build` is known; the buffer flows
+    /// caller→caller, the dynamic drop loop adopted at the outermost binding.
+    #[test]
+    fn heap_env_vec_escape_relay_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn build(k: i64) -> Vec[Fn(i64) -> i64] { \
+              let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(make(k)); v }\n\
+             fn relay(k: i64) -> Vec[Fn(i64) -> i64] { let r = build(k); r }\n\
+             fn main() { let q = relay(20i64); println(f\"{(q[0])(22i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// Projecting a closure element out of the ADOPTED Vec at the caller
+    /// (`let g = r[0]`) still escapes the env — rejected (only call-through is ok).
+    #[test]
+    fn heap_env_vec_escape_caller_projection_is_rejected() {
         let err = ir_result(
             "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
              fn build(k: i64) -> Vec[Fn(i64) -> i64] { \
-              let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(make(k)); return v; }\n",
+              let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(make(k)); v }\n\
+             fn main() { let r = build(21i64); let g = r[0]; println(f\"{g(21i64)}\"); }\n",
         )
-        .expect_err("returning a Vec that owns heap-env elements must be rejected");
+        .expect_err("projecting an element out of an adopted heap-env Vec must be rejected");
         assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
     }
 
