@@ -47814,6 +47814,37 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_column_iter_and_iter_valid() {
+        // iter() -> Vec[Option[T]] (every slot as an Option); iter_valid()
+        // -> Vec[T] (valid slots only). Exercised via for-loop iteration
+        // over both the let-bound result and a direct for-source.
+        let out = run_program(
+            "fn main() {\n\
+                 let mut c: Column[i64] = Column.new();\n\
+                 c.push(10);\n\
+                 c.push_null();\n\
+                 c.push(30);\n\
+                 let all: Vec[Option[i64]] = c.iter();\n\
+                 println(all.len());\n\
+                 let mut sum = 0;\n\
+                 for o in all { match o { Some(v) => { sum = sum + v; }, None => { sum = sum - 1; } } }\n\
+                 println(sum);\n\
+                 let valid: Vec[i64] = c.iter_valid();\n\
+                 println(valid.len());\n\
+                 let mut vs = 0;\n\
+                 for x in c.iter_valid() { vs = vs + x; }\n\
+                 println(vs);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "3\n39\n2\n40\n",
+                "Column.iter / iter_valid must match the interpreter"
+            );
+        }
+    }
+
     // ── Shape-generic function body — tensor-param indexing ──────────
     // A `fn f[N](a: Tensor[T, [N, N]], ...)` body that indexes its tensor
     // params (`a[i, j]`) lowers in codegen: `compile_mono_function`

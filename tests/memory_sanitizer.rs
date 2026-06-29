@@ -10670,6 +10670,59 @@ fn main() {
         );
     }
 
+    /// Column Vec-returning iterators heap lifecycle (phase-11 follow-on):
+    /// `iter() -> Vec[Option[T]]` and `iter_valid() -> Vec[T]` each malloc
+    /// a fresh Vec buffer (POD elements — no per-element drop), freed once
+    /// via the result binding's `FreeVecBuffer` / the for-loop's owned-temp
+    /// materialization. The source column is borrowed (keeps its own
+    /// `FreeColumn`). Both the let-bound and direct-for-source forms run;
+    /// a missing free leaks (Linux detect_leaks), a wrong free double-frees.
+    #[test]
+    fn asan_column_iter_lifecycle_clean() {
+        let label = "column_iter_lifecycle";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+fn main() {
+    let mut c: Column[i64] = Column.new();
+    c.push(10);
+    c.push_null();
+    c.push(30);
+    let all: Vec[Option[i64]] = c.iter();
+    println(all.len());
+    let mut sum = 0;
+    for o in all { match o { Some(v) => { sum = sum + v; }, None => { sum = sum - 1; } } }
+    println(sum);
+    let valid: Vec[i64] = c.iter_valid();
+    println(valid.len());
+    let mut vs = 0;
+    for x in c.iter_valid() { vs = vs + x; }
+    println(vs);
+    // source column still usable (borrowed, not consumed).
+    println(c.null_count());
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             check FreeVecBuffer on the iter results / column borrow",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["3", "39", "2", "40", "1"],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     /// Tensor element-wise arithmetic heap lifecycle (phase-11 line 47):
     /// every `+ - * /` / unary `-` mallocs a fresh result; operands are
     /// borrowed (keep their own `FreeTensor`); a fresh-temp intermediate in
