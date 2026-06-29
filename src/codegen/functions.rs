@@ -498,6 +498,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         self.heap_env_closure_vars.clear();
         self.heap_env_owner_fields.clear();
+        self.heap_env_tuple_owners.clear();
         // Slice 1 misuse guard (B-2026-06-22-2): a heap-env closure binding may
         // only be CALLED in its owning function. Reject returning / copying /
         // storing / passing it, or an unbound `make(..)`, with an honest error

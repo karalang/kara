@@ -1460,6 +1460,15 @@ pub(super) struct Codegen<'ctx> {
     /// the callee's field drop no-ops and the box flows to the caller at the same
     /// refcount (the aggregate analog of `neutralize_moved_closure_env_slot`).
     pub(crate) heap_env_owner_fields: std::collections::HashMap<String, Vec<(String, u32)>>,
+    /// Per-function map (set in `reject_heap_env_misuse`, read by its walk): a TUPLE
+    /// local `t` constructed as `let t = (make(..), ..)` / `(f, ..)` → the set of its
+    /// element INDICES that hold a heap-env closure. Such a `t` OWNS those env boxes
+    /// (codegen registers an instance `FreeClosureEnv` on each element GEP), so the
+    /// guard sanctions a tuple-index call `(t.0)(x)` and a non-closure element read
+    /// while rejecting any escape of `t` or a non-call projection of a closure
+    /// element (tuple-store slice). The tuple analog of `heap_env_aggregate_owners`.
+    pub(crate) heap_env_tuple_owners:
+        std::collections::HashMap<String, std::collections::HashSet<usize>>,
     /// Staging slot — set by `compile_closure` so the surrounding `let` binding can record
     /// the function type under the newly bound name.
     pub(crate) pending_closure_fn_type: Option<FunctionType<'ctx>>,
@@ -5128,6 +5137,7 @@ impl<'ctx> Codegen<'ctx> {
             heap_env_aggregate_owners: std::collections::HashMap::new(),
             fns_returning_heap_env_aggregate: std::collections::HashMap::new(),
             heap_env_owner_fields: std::collections::HashMap::new(),
+            heap_env_tuple_owners: std::collections::HashMap::new(),
             pending_closure_fn_type: None,
             pending_closure_param_hints: None,
             pending_map_insert_old_dec: false,

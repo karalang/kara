@@ -420,6 +420,34 @@ impl<'ctx> super::Codegen<'ctx> {
             self.collect_heap_env_binds_and_owners(func, &self.fns_returning_heap_env_aggregate);
         // Stash for the exhaustive walk (read via `&self` from the arms below).
         self.heap_env_aggregate_owners = owners;
+        // Tuple owners (tuple-store slice): `let t = (make(..), ..)` / `(f, ..)` —
+        // collect the element INDICES that hold a heap-env closure (a FRESH call or
+        // a heap-env BINDING source). `t` then owns those env boxes; codegen
+        // registers an instance `FreeClosureEnv` on each element. Forward `binds` is
+        // already complete (the helper's scan ran above), so a binding-source
+        // element is recognized regardless of source order within the function.
+        let mut tuple_owners: HashMap<String, HashSet<usize>> = HashMap::new();
+        for stmt in &func.body.stmts {
+            if let StmtKind::Let { pattern, value, .. } = &stmt.kind {
+                if let ExprKind::Tuple(elems) = &value.kind {
+                    let idxs: HashSet<usize> = elems
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, e)| {
+                            self.is_heap_env_producing_call(e)
+                                || matches!(&e.kind, ExprKind::Identifier(n) if binds.contains(n))
+                        })
+                        .map(|(i, _)| i)
+                        .collect();
+                    if !idxs.is_empty() {
+                        if let [b] = pattern.binding_names().as_slice() {
+                            tuple_owners.insert(b.clone(), idxs);
+                        }
+                    }
+                }
+            }
+        }
+        self.heap_env_tuple_owners = tuple_owners;
         // Pass 2 — walk for misuse, skipping the sanctioned `let f = <call>` RHS.
         let mut bad = false;
         for stmt in &func.body.stmts {
@@ -435,8 +463,27 @@ impl<'ctx> super::Codegen<'ctx> {
                             || matches!(&value.kind,
                                 ExprKind::Identifier(n) if binds.contains(n)));
                     let is_owner = single && self.heap_env_aggregate_owners.contains_key(&names[0]);
+                    let is_tuple_owner =
+                        single && self.heap_env_tuple_owners.contains_key(&names[0]);
                     if sanctioned {
                         false
+                    } else if is_tuple_owner {
+                        // Tuple construction `let t = (<src>, ..)`: each sanctioned
+                        // heap-env store element (a FRESH call or a heap-env BINDING
+                        // source) is allowed; walk only the OTHER elements. Mirrors
+                        // the struct-owner construction walk, by element index.
+                        if let ExprKind::Tuple(elems) = &value.kind {
+                            elems
+                                .iter()
+                                .filter(|e| {
+                                    !self.is_heap_env_producing_call(e)
+                                        && !matches!(&e.kind,
+                                            ExprKind::Identifier(n) if binds.contains(n))
+                                })
+                                .any(|e| self.expr_has_heap_env_misuse(e, &binds))
+                        } else {
+                            false
+                        }
                     } else if is_owner {
                         // An aggregate owner is bound two ways:
                         //   * construction `let h = H { f: <src>, .. }`: each
@@ -597,7 +644,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // struct (and its embedded env) — only `(h.f)(x)` / `h.non_closure`
             // are allowed, handled in `Call` / `FieldAccess`.
             ExprKind::Identifier(n) => {
-                binds.contains(n) || self.heap_env_aggregate_owners.contains_key(n)
+                binds.contains(n)
+                    || self.heap_env_aggregate_owners.contains_key(n)
+                    || self.heap_env_tuple_owners.contains_key(n)
             }
             ExprKind::Call { callee, args } => {
                 // The one supported use: `f(args)` for a binding `f`. The callee
@@ -613,6 +662,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let ExprKind::FieldAccess { object, .. } = &callee.kind {
                     if let ExprKind::Identifier(n) = &object.kind {
                         if self.heap_env_aggregate_owners.contains_key(n) {
+                            return any_args(args);
+                        }
+                    }
+                }
+                // Sanctioned tuple-index call on a tuple owner: `(t.0)(args)`. Like
+                // the struct field-call, invoking through the element doesn't move
+                // the env; only the args can still misuse.
+                if let ExprKind::TupleIndex { object, .. } = &callee.kind {
+                    if let ExprKind::Identifier(n) = &object.kind {
+                        if self.heap_env_tuple_owners.contains_key(n) {
                             return any_args(args);
                         }
                     }
@@ -643,7 +702,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 mis(object)
             }
-            ExprKind::TupleIndex { object, .. } => mis(object),
+            ExprKind::TupleIndex { object, index } => {
+                // A non-call projection of a tuple owner's CLOSURE element
+                // (`let g = t.0`, `return t.0`, …) escapes the env → misuse; a
+                // non-closure element read (`t.1`) is fine; otherwise recurse. A
+                // call form `(t.0)(x)` is sanctioned in the `Call` arm before here.
+                if let ExprKind::Identifier(n) = &object.kind {
+                    if let Some(elem_idxs) = self.heap_env_tuple_owners.get(n) {
+                        return elem_idxs.contains(&(*index as usize));
+                    }
+                }
+                mis(object)
+            }
             ExprKind::Index { object, index } => mis(object) || mis(index),
             ExprKind::Tuple(es) | ExprKind::ArrayLiteral(es) => any(es),
             ExprKind::PrefixCollectionLiteral { items, .. } => any(items),

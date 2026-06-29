@@ -503,6 +503,31 @@ fn main() {
         );
     }
 
+    /// Tuple-store slice (B-2026-06-22-2): a heap-env closure stored in a tuple
+    /// element is RC-dropped per-instance via a `FreeClosureEnv` on that element.
+    /// Covers a FRESH-call element with a sibling data element, a BINDING source
+    /// (store inc → rc 2, source still used, both drop → one free), and two
+    /// closures in one tuple. Each env freed EXACTLY once at scope exit — without
+    /// the element drop they leak (LSan); with the binding store missing the inc it
+    /// double-frees (ASAN).
+    #[test]
+    fn asan_heap_env_stored_in_tuple_freed_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn main() {
+    let t = (make(10i64), 2i64);
+    let f = make(20i64);
+    let u = (f, 3i64);
+    let v = (make(5i64), make(7i64));
+    println(f"{(t.0)(1i64) + t.1 + f(0i64) + (u.0)(1i64) + u.1 + (v.0)(1i64) + (v.1)(2i64)}");
+}
+"#,
+            &["72"],
+            "asan_heap_env_stored_in_tuple_freed_no_leak",
+        );
+    }
+
     // ── Baseline: no heap allocations ─────────────────────────────
     // Sanity-checks the harness itself — should trivially pass on any host
     // with a working `cc + ASAN`. If this fails, the infrastructure is

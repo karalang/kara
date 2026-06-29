@@ -3076,6 +3076,18 @@ impl<'ctx> super::Codegen<'ctx> {
                         if let Some(slot) = self.variables.get(var_name.as_str()).copied() {
                             if let BasicTypeEnum::StructType(agg_ty) = slot.ty {
                                 if agg_ty != self.vec_struct_type() {
+                                    // Tuple-store slice (B-2026-06-22-2): a heap-env
+                                    // closure stored in a tuple element
+                                    // (`let t = (make(k), ..)` / `(f, ..)`) is
+                                    // RC-dropped per-instance via a `FreeClosureEnv`
+                                    // on that element — separate from the type-driven
+                                    // tuple drop, which leaves `Fn` elements alone (a
+                                    // same-frame stack-env closure must not be freed).
+                                    // A no-op unless `value` is a tuple literal with a
+                                    // heap-env element.
+                                    self.register_tuple_literal_heap_env_elem_drops(
+                                        value, slot.ptr, agg_ty,
+                                    );
                                     if self.aggregate_has_heap_field(agg_ty) {
                                         // Proven LLVM-type path: a tuple whose heap
                                         // is a directly-visible Vec/String field

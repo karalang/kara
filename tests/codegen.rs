@@ -709,6 +709,72 @@ mod codegen_tests {
         assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
     }
 
+    // ── Tuple-store slice (B-2026-06-22-2) ──
+    // A heap-env closure may be STORED in a tuple element (`let t = (make(k), n)`
+    // or a binding `(f, n)`), then tuple-index-CALLED (`(t.0)(x)`) and its
+    // non-closure elements read. The element env is RC-dropped per-INSTANCE via a
+    // `FreeClosureEnv` on the tuple element GEP. The owning tuple must NOT escape.
+
+    /// A FRESH heap-env closure stored in a tuple element, called through the
+    /// element, with a sibling non-closure element read — freed once at scope exit.
+    #[test]
+    fn heap_env_stored_in_tuple_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let t = (make(20i64), 2i64); println(f\"{(t.0)(20i64) + t.1}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// A heap-env BINDING stored in a tuple element co-owns the env (store inc →
+    /// rc 2): the source binding stays usable AND the tuple element drops it, so the
+    /// box is freed exactly once.
+    #[test]
+    fn heap_env_binding_stored_in_tuple_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let f = make(20i64); let t = (f, 1i64); \
+              let a = f(1i64); let b = (t.0)(0i64); println(f\"{a + b + t.1}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// Two heap-env closures in one tuple, each called through its element — both
+    /// envs freed exactly once.
+    #[test]
+    fn heap_env_two_closures_in_tuple_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let t = (make(10i64), make(20i64)); \
+              println(f\"{(t.0)(1i64) + (t.1)(11i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// Returning the tuple that owns the heap-env element is an ESCAPE — rejected
+    /// (tuple escape is a later slice; only call-through / read are sanctioned).
+    #[test]
+    fn heap_env_tuple_returned_is_rejected() {
+        let err = ir_result(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn build(k: i64) -> (Fn(i64) -> i64, i64) { let t = (make(k), 0i64); return t; }\n",
+        )
+        .expect_err("returning a tuple that owns a heap-env element must be rejected");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
+    /// Projecting the closure element OUT of the tuple (`let g = t.0`) aliases the
+    /// env out of the owner — rejected (only a tuple-index CALL `(t.0)(x)` is ok).
+    #[test]
+    fn heap_env_tuple_elem_projection_is_rejected() {
+        let err = ir_result(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let t = (make(21i64), 0i64); let g = t.0; println(f\"{g(21i64)}\"); }\n",
+        )
+        .expect_err("projecting a heap-env tuple element out must be rejected");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
     #[test]
     fn escaping_capturing_closure_via_let_is_rejected() {
         let err = ir_result(

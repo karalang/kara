@@ -2455,6 +2455,56 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Tuple-store slice (B-2026-06-22-2): for `let t = (<src>, ..)`, register an
+    /// instance `FreeClosureEnv` on each tuple element whose initializer is a
+    /// sanctioned heap-env closure STORE. A FRESH call (`(make(k), ..)`) leaves the
+    /// element at refcount 1 (no inc); a heap-env BINDING source (`(f, ..)`, `f` in
+    /// `heap_env_closure_vars`) COPIES the source's fat pointer, so the element
+    /// co-owns the box — bump the refcount (mirrors the struct binding-source
+    /// store). A tuple is a by-value aggregate `{ e0, e1, .. }`, so a `Fn` element is
+    /// an inline `{ fn_ptr, env_ptr }` fat pointer and the element GEP is exactly the
+    /// `fat_alloca` the cleanup expects. INSTANCE-specific — the type-driven tuple
+    /// drop never RC-frees a `Fn` element. The misuse guard rejects any escape of
+    /// `t`, so the element env never outlives `t` (tuple escape is a later slice).
+    pub(super) fn register_tuple_literal_heap_env_elem_drops(
+        &mut self,
+        value: &Expr,
+        tuple_alloca: PointerValue<'ctx>,
+        agg_ty: inkwell::types::StructType<'ctx>,
+    ) {
+        let ExprKind::Tuple(elems) = &value.kind else {
+            return;
+        };
+        for (idx, elem) in elems.iter().enumerate() {
+            let is_fresh = self.is_heap_env_producing_call(elem);
+            let is_binding = matches!(
+                &elem.kind,
+                ExprKind::Identifier(src) if self.heap_env_closure_vars.contains(src)
+            );
+            if !is_fresh && !is_binding {
+                continue;
+            }
+            let elem_gep = self
+                .builder
+                .build_struct_gep(agg_ty, tuple_alloca, idx as u32, "clo.tuple.envslot")
+                .unwrap();
+            // Binding source co-owns the box with the source binding — bump the env
+            // refcount (a fresh-call element is already rc 1).
+            if is_binding {
+                let fat = self
+                    .builder
+                    .build_load(self.closure_value_type(), elem_gep, "clo.tuple.fat")
+                    .unwrap();
+                self.emit_heap_closure_env_inc(fat);
+            }
+            if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                frame.push(super::state::CleanupAction::FreeClosureEnv {
+                    fat_alloca: elem_gep,
+                });
+            }
+        }
+    }
+
     /// Aggregate-escape move-out (B-2026-06-22-2): when an aggregate owner `name`
     /// is RETURNED (a bare-identifier tail or a top-level `return h;`), its struct
     /// VALUE is handed to the caller carrying the env boxes — so this function must
