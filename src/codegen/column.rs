@@ -33,12 +33,13 @@
 //! `from_iter_nullable`; mutators `push` / `push_null`; accessors `len` /
 //! `null_count` / `valid_count` / `is_null`; positional indexing
 //! `c[i] -> Option[T]`; the Column-returning transforms `fillna` /
-//! `dropna`; and the Vec-returning iterators `iter` -> `Vec[Option[T]]`
-//! and `iter_valid` -> `Vec[T]`. Element types are the numeric primitives
-//! + `bool` (POD, ≤ one word), matching the Tensor codegen surface. The
-//! SQL three-valued-logic arithmetic and `fillna`'s `treat_nan_as_null`
-//! flag are the remaining follow-on slices (they stay on `karac run`
-//! until then).
+//! `dropna`; the Vec-returning iterators `iter` -> `Vec[Option[T]]` and
+//! `iter_valid` -> `Vec[T]`; and the SQL three-valued-logic element-wise
+//! operators (`+ - * /` -> `Column[T]`, comparisons -> `Column[bool]`,
+//! unary `-`, with null propagation). Element types are the numeric
+//! primitives and `bool` (POD, ≤ one word), matching the Tensor codegen
+//! surface. Only `fillna`'s `treat_nan_as_null` float flag remains
+//! interpreter-only (`karac run`).
 
 use inkwell::types::{BasicTypeEnum, StructType};
 use inkwell::values::{BasicValueEnum, IntValue, PointerValue};
@@ -46,7 +47,8 @@ use inkwell::{AddressSpace, IntPredicate};
 
 use super::state::ColumnVarInfo;
 use super::tensor::type_expr_is_unsigned_int;
-use crate::ast::{CallArg, Expr, ExprKind, GenericArg, TypeExpr, TypeKind};
+use crate::ast::{BinOp, CallArg, Expr, ExprKind, GenericArg, TypeExpr, TypeKind};
+use crate::token::Span;
 
 impl<'ctx> super::Codegen<'ctx> {
     // ── Layout helpers ──────────────────────────────────────────
@@ -1602,6 +1604,404 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(merge_bb);
         Ok(self.build_option_some_via_phis(&[word], some_end_bb, none_bb, "col.idx"))
+    }
+
+    // ── SQL three-valued-logic arithmetic / comparison ──────────
+
+    /// True iff `expr` is a column-typed operand (an identifier bound as a
+    /// column, or any column-typed expression in the side-table).
+    fn expr_is_column(&self, expr: &Expr) -> bool {
+        if let ExprKind::Identifier(name) = &expr.kind {
+            if self.column_var_infos.contains_key(name.as_str()) {
+                return true;
+            }
+        }
+        self.column_typed_exprs
+            .contains_key(&(expr.span.offset, expr.span.length))
+    }
+
+    /// Resolve a column operand to `(control_ptr, elem_llvm, elem_unsigned)`.
+    /// An identifier reads its slot; any other column-typed expression is
+    /// compiled to its control pointer (its element type from the
+    /// side-table).
+    fn column_operand(
+        &mut self,
+        expr: &Expr,
+    ) -> Result<(PointerValue<'ctx>, BasicTypeEnum<'ctx>, bool), String> {
+        if let ExprKind::Identifier(name) = &expr.kind {
+            if let Some(info) = self.column_var_infos.get(name.as_str()).copied() {
+                let ptr = self.column_ptr_for_var(name)?;
+                return Ok((ptr, info.elem, info.elem_unsigned));
+            }
+        }
+        let ci = self
+            .column_typed_exprs
+            .get(&(expr.span.offset, expr.span.length))
+            .cloned()
+            .ok_or_else(|| "column operand: missing element-type side-table entry".to_string())?;
+        let elem = self.llvm_type_for_type_expr(&ci.elem);
+        let unsigned = type_expr_is_unsigned_int(&ci.elem);
+        let ptr = self.compile_expr(expr)?.into_pointer_value();
+        Ok((ptr, elem, unsigned))
+    }
+
+    /// Free a column operand's three allocations when it is a fresh
+    /// temporary (a column-producing expression that is not a live
+    /// binding / place) — so chained `a + b + c` / `-a + b` don't leak the
+    /// intermediate. An identifier / field / index operand is a live owner
+    /// (its own scope cleanup frees it) and is left alone.
+    fn column_free_if_fresh_temp(&self, expr: &Expr, control: PointerValue<'ctx>) {
+        if matches!(
+            expr.kind,
+            ExprKind::Identifier(_) | ExprKind::FieldAccess { .. } | ExprKind::Index { .. }
+        ) {
+            return;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let data = self
+            .builder
+            .build_load(
+                ptr_ty,
+                self.column_field_slot(control, 0, "col.ft.data.p"),
+                "col.ft.data",
+            )
+            .unwrap()
+            .into_pointer_value();
+        let bm = self
+            .builder
+            .build_load(
+                ptr_ty,
+                self.column_field_slot(control, 1, "col.ft.bm.p"),
+                "col.ft.bm",
+            )
+            .unwrap()
+            .into_pointer_value();
+        self.builder
+            .build_call(self.free_fn, &[data.into()], "")
+            .unwrap();
+        self.builder
+            .build_call(self.free_fn, &[bm.into()], "")
+            .unwrap();
+        self.builder
+            .build_call(self.free_fn, &[control.into()], "")
+            .unwrap();
+    }
+
+    /// Element-wise `Column ⊕ Column` / `Column ⊕ scalar` (and the scalar-
+    /// on-left form) with SQL null propagation: a result slot is valid iff
+    /// **both** inputs are valid (a null on either side → null result, never
+    /// `false`). Arithmetic (`+ - * /`) yields `Column[T]`; comparison
+    /// (`== != < <= > >=`) yields `Column[bool]`. The per-element op runs
+    /// only in the valid branch (so a null slot's placeholder never trips a
+    /// div-by-zero / overflow trap — matching the interpreter, which evals
+    /// valid slots only). Operands are read; the result is a fresh owned
+    /// column; a fresh-temp operand is freed after the copy. Result element
+    /// type comes from the side-table at the op span (T / bool).
+    pub(super) fn compile_column_binop(
+        &mut self,
+        op: &BinOp,
+        left: &Expr,
+        right: &Expr,
+        span: &Span,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "column binop outside function".to_string())?;
+        let result_ci = self
+            .column_typed_exprs
+            .get(&(span.offset, span.length))
+            .cloned()
+            .ok_or_else(|| "column binop: missing result element-type side-table".to_string())?;
+        let result_elem = self.llvm_type_for_type_expr(&result_ci.elem);
+
+        let l_is_col = self.expr_is_column(left);
+        let r_is_col = self.expr_is_column(right);
+
+        // ── col-col ──────────────────────────────────────────────
+        if l_is_col && r_is_col {
+            let (lp, lelem, lunsigned) = self.column_operand(left)?;
+            let (rp, relem, _) = self.column_operand(right)?;
+            let len = self
+                .column_load_field(lp, 2, "col.bin.llen")
+                .into_int_value();
+            let rlen = self
+                .column_load_field(rp, 2, "col.bin.rlen")
+                .into_int_value();
+            let eq = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, len, rlen, "col.bin.leneq")
+                .unwrap();
+            self.emit_column_guard(eq, "column length mismatch in element-wise operator")?;
+            let ldata = self
+                .column_load_field(lp, 0, "col.bin.ldata")
+                .into_pointer_value();
+            let lbm = self
+                .column_load_field(lp, 1, "col.bin.lbm")
+                .into_pointer_value();
+            let rdata = self
+                .column_load_field(rp, 0, "col.bin.rdata")
+                .into_pointer_value();
+            let rbm = self
+                .column_load_field(rp, 1, "col.bin.rbm")
+                .into_pointer_value();
+            let dst = self.column_alloc(result_elem, len, len)?;
+            let dst_data = self
+                .column_load_field(dst, 0, "col.bin.ddata")
+                .into_pointer_value();
+            let dst_bm = self
+                .column_load_field(dst, 1, "col.bin.dbm")
+                .into_pointer_value();
+
+            let idx = self.builder.build_alloca(i64_t, "col.bin.i").unwrap();
+            self.builder.build_store(idx, i64_t.const_zero()).unwrap();
+            let head = self.context.append_basic_block(fn_val, "col.bin.head");
+            let body = self.context.append_basic_block(fn_val, "col.bin.body");
+            let comp = self.context.append_basic_block(fn_val, "col.bin.comp");
+            let skip = self.context.append_basic_block(fn_val, "col.bin.skip");
+            let cont = self.context.append_basic_block(fn_val, "col.bin.cont");
+            let exit = self.context.append_basic_block(fn_val, "col.bin.exit");
+            self.builder.build_unconditional_branch(head).unwrap();
+            self.builder.position_at_end(head);
+            let i = self
+                .builder
+                .build_load(i64_t, idx, "col.bin.iv")
+                .unwrap()
+                .into_int_value();
+            let more = self
+                .builder
+                .build_int_compare(IntPredicate::ULT, i, len, "col.bin.more")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(more, body, exit)
+                .unwrap();
+            self.builder.position_at_end(body);
+            let lv = self.column_load_valid_bit(lbm, i);
+            let rv = self.column_load_valid_bit(rbm, i);
+            let both = self.builder.build_and(lv, rv, "col.bin.both").unwrap();
+            self.column_write_bit_runtime(dst_bm, i, both);
+            self.builder
+                .build_conditional_branch(both, comp, skip)
+                .unwrap();
+            self.builder.position_at_end(comp);
+            let a = self.column_gep_load(ldata, lelem, i, "col.bin.a");
+            let b = self.column_gep_load(rdata, relem, i, "col.bin.b");
+            let r = self.compile_binop_typed(op, a, b, lunsigned)?;
+            let r = self.coerce_scalar_to_type(r, result_elem);
+            self.column_gep_store(dst_data, result_elem, i, r);
+            self.builder.build_unconditional_branch(cont).unwrap();
+            self.builder.position_at_end(skip);
+            self.column_gep_store(dst_data, result_elem, i, self.column_zero_elem(result_elem));
+            self.builder.build_unconditional_branch(cont).unwrap();
+            self.builder.position_at_end(cont);
+            let next = self
+                .builder
+                .build_int_add(i, i64_t.const_int(1, false), "col.bin.next")
+                .unwrap();
+            self.builder.build_store(idx, next).unwrap();
+            self.builder.build_unconditional_branch(head).unwrap();
+            self.builder.position_at_end(exit);
+            self.column_free_if_fresh_temp(left, lp);
+            self.column_free_if_fresh_temp(right, rp);
+            return Ok(dst.into());
+        }
+
+        // ── col-scalar / scalar-col ──────────────────────────────
+        let (col_expr, scalar_expr, scalar_on_left) = if l_is_col {
+            (left, right, false)
+        } else {
+            (right, left, true)
+        };
+        let (cp, celem, cunsigned) = self.column_operand(col_expr)?;
+        let scalar = self.compile_expr(scalar_expr)?;
+        let scalar = self.coerce_scalar_to_type(scalar, celem);
+        let len = self.column_load_field(cp, 2, "col.bs.len").into_int_value();
+        let cdata = self
+            .column_load_field(cp, 0, "col.bs.data")
+            .into_pointer_value();
+        let cbm = self
+            .column_load_field(cp, 1, "col.bs.bm")
+            .into_pointer_value();
+        let dst = self.column_alloc(result_elem, len, len)?;
+        let dst_data = self
+            .column_load_field(dst, 0, "col.bs.ddata")
+            .into_pointer_value();
+        let dst_bm = self
+            .column_load_field(dst, 1, "col.bs.dbm")
+            .into_pointer_value();
+
+        let idx = self.builder.build_alloca(i64_t, "col.bs.i").unwrap();
+        self.builder.build_store(idx, i64_t.const_zero()).unwrap();
+        let head = self.context.append_basic_block(fn_val, "col.bs.head");
+        let body = self.context.append_basic_block(fn_val, "col.bs.body");
+        let comp = self.context.append_basic_block(fn_val, "col.bs.comp");
+        let skip = self.context.append_basic_block(fn_val, "col.bs.skip");
+        let cont = self.context.append_basic_block(fn_val, "col.bs.cont");
+        let exit = self.context.append_basic_block(fn_val, "col.bs.exit");
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(head);
+        let i = self
+            .builder
+            .build_load(i64_t, idx, "col.bs.iv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, len, "col.bs.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, body, exit)
+            .unwrap();
+        self.builder.position_at_end(body);
+        let v = self.column_load_valid_bit(cbm, i);
+        self.column_write_bit_runtime(dst_bm, i, v);
+        self.builder
+            .build_conditional_branch(v, comp, skip)
+            .unwrap();
+        self.builder.position_at_end(comp);
+        let x = self.column_gep_load(cdata, celem, i, "col.bs.x");
+        let r = if scalar_on_left {
+            self.compile_binop_typed(op, scalar, x, cunsigned)?
+        } else {
+            self.compile_binop_typed(op, x, scalar, cunsigned)?
+        };
+        let r = self.coerce_scalar_to_type(r, result_elem);
+        self.column_gep_store(dst_data, result_elem, i, r);
+        self.builder.build_unconditional_branch(cont).unwrap();
+        self.builder.position_at_end(skip);
+        self.column_gep_store(dst_data, result_elem, i, self.column_zero_elem(result_elem));
+        self.builder.build_unconditional_branch(cont).unwrap();
+        self.builder.position_at_end(cont);
+        let next = self
+            .builder
+            .build_int_add(i, i64_t.const_int(1, false), "col.bs.next")
+            .unwrap();
+        self.builder.build_store(idx, next).unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(exit);
+        self.column_free_if_fresh_temp(col_expr, cp);
+        Ok(dst.into())
+    }
+
+    /// Unary `-Column[T]` — negate every valid slot, nulls stay null.
+    pub(super) fn compile_column_neg(
+        &mut self,
+        operand: &Expr,
+        span: &Span,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "column neg outside function".to_string())?;
+        let result_ci = self
+            .column_typed_exprs
+            .get(&(span.offset, span.length))
+            .cloned()
+            .ok_or_else(|| "column neg: missing result element-type side-table".to_string())?;
+        let result_elem = self.llvm_type_for_type_expr(&result_ci.elem);
+        let (cp, celem, _) = self.column_operand(operand)?;
+        let len = self
+            .column_load_field(cp, 2, "col.neg.len")
+            .into_int_value();
+        let cdata = self
+            .column_load_field(cp, 0, "col.neg.data")
+            .into_pointer_value();
+        let cbm = self
+            .column_load_field(cp, 1, "col.neg.bm")
+            .into_pointer_value();
+        let dst = self.column_alloc(result_elem, len, len)?;
+        let dst_data = self
+            .column_load_field(dst, 0, "col.neg.ddata")
+            .into_pointer_value();
+        let dst_bm = self
+            .column_load_field(dst, 1, "col.neg.dbm")
+            .into_pointer_value();
+
+        let idx = self.builder.build_alloca(i64_t, "col.neg.i").unwrap();
+        self.builder.build_store(idx, i64_t.const_zero()).unwrap();
+        let head = self.context.append_basic_block(fn_val, "col.neg.head");
+        let body = self.context.append_basic_block(fn_val, "col.neg.body");
+        let comp = self.context.append_basic_block(fn_val, "col.neg.comp");
+        let skip = self.context.append_basic_block(fn_val, "col.neg.skip");
+        let cont = self.context.append_basic_block(fn_val, "col.neg.cont");
+        let exit = self.context.append_basic_block(fn_val, "col.neg.exit");
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(head);
+        let i = self
+            .builder
+            .build_load(i64_t, idx, "col.neg.iv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, len, "col.neg.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, body, exit)
+            .unwrap();
+        self.builder.position_at_end(body);
+        let v = self.column_load_valid_bit(cbm, i);
+        self.column_write_bit_runtime(dst_bm, i, v);
+        self.builder
+            .build_conditional_branch(v, comp, skip)
+            .unwrap();
+        self.builder.position_at_end(comp);
+        let x = self.column_gep_load(cdata, celem, i, "col.neg.x");
+        let r = match x {
+            BasicValueEnum::FloatValue(fv) => self
+                .builder
+                .build_float_neg(fv, "col.neg.f")
+                .unwrap()
+                .into(),
+            BasicValueEnum::IntValue(iv) => {
+                self.builder.build_int_neg(iv, "col.neg.i2").unwrap().into()
+            }
+            other => other,
+        };
+        let r = self.coerce_scalar_to_type(r, result_elem);
+        self.column_gep_store(dst_data, result_elem, i, r);
+        self.builder.build_unconditional_branch(cont).unwrap();
+        self.builder.position_at_end(skip);
+        self.column_gep_store(dst_data, result_elem, i, self.column_zero_elem(result_elem));
+        self.builder.build_unconditional_branch(cont).unwrap();
+        self.builder.position_at_end(cont);
+        let next = self
+            .builder
+            .build_int_add(i, i64_t.const_int(1, false), "col.neg.next")
+            .unwrap();
+        self.builder.build_store(idx, next).unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(exit);
+        self.column_free_if_fresh_temp(operand, cp);
+        Ok(dst.into())
+    }
+
+    /// `data[i]` load with the element type.
+    fn column_gep_load(
+        &self,
+        data: PointerValue<'ctx>,
+        elem: BasicTypeEnum<'ctx>,
+        i: IntValue<'ctx>,
+        name: &str,
+    ) -> BasicValueEnum<'ctx> {
+        let slot = unsafe { self.builder.build_gep(elem, data, &[i], name).unwrap() };
+        self.builder.build_load(elem, slot, name).unwrap()
+    }
+
+    /// `data[i] = v` store with the element type.
+    fn column_gep_store(
+        &self,
+        data: PointerValue<'ctx>,
+        elem: BasicTypeEnum<'ctx>,
+        i: IntValue<'ctx>,
+        v: BasicValueEnum<'ctx>,
+    ) {
+        let slot = unsafe {
+            self.builder
+                .build_gep(elem, data, &[i], "col.store")
+                .unwrap()
+        };
+        self.builder.build_store(slot, v).unwrap();
     }
 
     // ── Cleanup ─────────────────────────────────────────────────

@@ -47913,6 +47913,63 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_column_3vl_arithmetic() {
+        // SQL three-valued-logic element-wise ops: a result slot is valid
+        // iff BOTH inputs are valid (null on either side -> null). col-col
+        // arithmetic + comparison (-> Column[bool]) + col-scalar broadcast
+        // + unary neg, all with null propagation. a=[10,null,30],
+        // b=[1,2,null].
+        let out = run_program(
+            "fn fst(c: Column[i64], i: i64) -> i64 { match c[i] { Some(v) => v, None => -999 } }\n\
+             fn fstb(c: Column[bool], i: i64) -> i64 { match c[i] { Some(v) => { if v { 1 } else { 0 } }, None => -9 } }\n\
+             fn main() {\n\
+                 let mut a: Column[i64] = Column.new();\n\
+                 a.push(10); a.push_null(); a.push(30);\n\
+                 let mut b: Column[i64] = Column.new();\n\
+                 b.push(1); b.push(2); b.push_null();\n\
+                 let s = a + b;\n\
+                 println(fst(s, 0)); println(fst(s, 1)); println(s.null_count());\n\
+                 let m = a * 10;\n\
+                 println(fst(m, 0)); println(fst(m, 2));\n\
+                 let eq = a == b;\n\
+                 println(fstb(eq, 0)); println(eq.null_count());\n\
+                 let ng = -a;\n\
+                 println(fst(ng, 0)); println(fst(ng, 2));\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "11\n-999\n2\n100\n300\n0\n2\n-10\n-30\n",
+                "Column 3VL arithmetic/comparison/neg must match the interpreter"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_column_3vl_div_null_skips_trap() {
+        // A null result slot's per-element op is NEVER evaluated, so a
+        // null paired with a zero divisor must not trap (matches the
+        // interpreter, which evals valid slots only).
+        let out = run_program(
+            "fn main() {\n\
+                 let mut a: Column[i64] = Column.new();\n\
+                 a.push_null(); a.push(8);\n\
+                 let mut b: Column[i64] = Column.new();\n\
+                 b.push(0); b.push(2);\n\
+                 let q = a / b;\n\
+                 match q[0] { Some(v) => { println(v); }, None => { println(-1); } }\n\
+                 match q[1] { Some(v) => { println(v); }, None => { println(-1); } }\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "-1\n4\n",
+                "null slot must skip the div-by-zero; valid slot computes"
+            );
+        }
+    }
+
     // ── Shape-generic function body — tensor-param indexing ──────────
     // A `fn f[N](a: Tensor[T, [N, N]], ...)` body that indexes its tensor
     // params (`a[i, j]`) lowers in codegen: `compile_mono_function`

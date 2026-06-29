@@ -375,6 +375,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     {
                         return self.compile_tensor_binop(op, left, right, &expr.span);
                     }
+                    // Element-wise SQL three-valued-logic op on `Column[T]`
+                    // — the Binary's *result* span is column-typed
+                    // (`Column[T]` for arithmetic, `Column[bool]` for
+                    // comparison). Route to the column lowering (operands
+                    // borrowed; fresh value-semantics result with null
+                    // propagation). Mirrors the tensor intercept above.
+                    if self
+                        .column_typed_exprs
+                        .contains_key(&(expr.span.offset, expr.span.length))
+                    {
+                        return self.compile_column_binop(op, left, right, &expr.span);
+                    }
                     let lhs = self.compile_expr(left)?;
                     let rhs = self.compile_expr(right)?;
                     // Vector binops aren't lowered to primitive method calls
@@ -538,6 +550,15 @@ impl<'ctx> super::Codegen<'ctx> {
                         .contains_key(&(expr.span.offset, expr.span.length))
                     {
                         return self.compile_tensor_neg(operand, &expr.span);
+                    }
+                    // Element-wise column negation — the result span is
+                    // column-typed; lower to a fresh negated column (nulls
+                    // stay null).
+                    if self
+                        .column_typed_exprs
+                        .contains_key(&(expr.span.offset, expr.span.length))
+                    {
+                        return self.compile_column_neg(operand, &expr.span);
                     }
                 }
                 let val = self.compile_expr(operand)?;

@@ -17,12 +17,12 @@
 // all four constructors (`new` / `with_capacity` / `from_vec` /
 // `from_iter_nullable`), `push` / `push_null`, `len` / `null_count` /
 // `valid_count` / `is_null`, `c[i] -> Option[T]` indexing, the
-// Column-returning transforms `fillna` / `dropna`, and the Vec-returning
-// iterators (`iter` -> `Vec[Option[T]]`, `iter_valid` -> `Vec[T]`). The
-// SQL-null three-valued arithmetic and `fillna`'s `treat_nan_as_null`
-// flag stay interpreter-only (`karac run`) as the remaining follow-on
-// sub-slices — tracker at
-// `phase-11-stdlib-longtail.md § Data types — Arrow commitment`.
+// Column-returning transforms `fillna` / `dropna`, the Vec-returning
+// iterators (`iter` -> `Vec[Option[T]]`, `iter_valid` -> `Vec[T]`), and
+// the SQL-null three-valued element-wise operators (`+ - * /` /
+// comparisons / unary `-`, with null propagation). Only `fillna`'s
+// `treat_nan_as_null` float flag remains interpreter-only (`karac run`) —
+// tracker at `phase-11-stdlib-longtail.md § Data types — Arrow commitment`.
 //
 // **Dispatch.** Constructors fire through `eval_call.rs`'s
 // `"Column.new"` / `"Column.with_capacity"` / `"Column.from_vec"` /

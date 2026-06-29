@@ -10759,6 +10759,61 @@ fn main() {
         );
     }
 
+    /// Column 3VL-arithmetic heap lifecycle (phase-11 follow-on): every
+    /// element-wise `+ - * /` / comparison / unary `-` mallocs a fresh
+    /// result column; operands are borrowed (keep their own `FreeColumn`),
+    /// and a fresh-temp intermediate in `a + b + c` / `-a` chains is freed
+    /// after the copy (`column_free_if_fresh_temp`) — a missing free leaks
+    /// (Linux detect_leaks), a wrong free double-frees. Operand reuse after
+    /// the ops pins that nothing was wrongly consumed.
+    #[test]
+    fn asan_column_arithmetic_lifecycle_clean() {
+        let label = "column_arithmetic_lifecycle";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+fn fst(c: Column[i64], i: i64) -> i64 { match c[i] { Some(v) => v, None => -1 } }
+fn main() {
+    let mut a: Column[i64] = Column.new();
+    a.push(10); a.push_null(); a.push(30);
+    let mut b: Column[i64] = Column.new();
+    b.push(1); b.push(2); b.push(3);
+    // chained col-col: a + b + b — the (a + b) intermediate is a fresh
+    // temp freed after the second op.
+    let s = a + b + b;
+    println(fst(s, 2));
+    // col-scalar + unary neg chain.
+    let m = -(a * 2);
+    println(fst(m, 0));
+    // comparison -> fresh Column[bool].
+    let eq = a == b;
+    println(eq.null_count());
+    // operands still usable (borrowed, not consumed).
+    println(a.null_count());
+    println(b.len());
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             check FreeColumn on fresh 3VL results / fresh-temp operand free",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["36", "-20", "1", "1", "3"],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     /// Tensor element-wise arithmetic heap lifecycle (phase-11 line 47):
     /// every `+ - * /` / unary `-` mallocs a fresh result; operands are
     /// borrowed (keep their own `FreeTensor`); a fresh-temp intermediate in
