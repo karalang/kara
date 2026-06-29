@@ -1916,6 +1916,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.suppress_map_cleanup_for_tail_identifier(&n);
                 }
 
+                // Vec-store slice (B-2026-06-22-2): pushing a heap-env closure
+                // BINDING (`v.push(f)`) into a heap-env Vec owner co-owns the env
+                // box — the source binding's scope-exit `FreeClosureEnv` AND the
+                // Vec's per-element drop loop both decrement it, so bump the
+                // refcount here. A fresh `v.push(make(k))` element is already rc 1
+                // (no inc). Mirrors the array/tuple binding-source store inc.
+                if self.heap_env_vec_owners.contains(var_name) {
+                    if let ExprKind::Identifier(src) = &args[0].value.kind {
+                        if self.heap_env_closure_vars.contains(src) {
+                            self.emit_heap_closure_env_inc(elem_val);
+                        }
+                    }
+                }
+
                 // Load current vec fields.
                 let data_ptr_ptr = self
                     .builder

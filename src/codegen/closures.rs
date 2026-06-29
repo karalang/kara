@@ -477,6 +477,40 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         self.heap_env_array_owners = array_owners;
+        // Vec owners (Vec-store slice): a `Vec[Fn]` local bound `let v: Vec[Fn] =
+        // Vec.new()` / `Vec.with_capacity(..)` that receives at least one heap-env
+        // PUSH. Two steps: (1) collect the CANDIDATE bindings — an explicit
+        // `Vec[Fn..]` annotation over a fresh empty Vec ctor (so we provably own
+        // every element, and codegen has the element type to size the drop loop);
+        // (2) promote a candidate to an OWNER the first time a `v.push(<heap-env>)`
+        // is seen anywhere in the body (incl. loops/branches, the whole point of a
+        // dynamic Vec). A candidate with NO heap-env push stays a plain Vec (its
+        // stack-env / non-capturing elements are freed with the frame, never by us).
+        let mut vec_candidates: HashSet<String> = HashSet::new();
+        for stmt in &func.body.stmts {
+            if let StmtKind::Let {
+                pattern,
+                value,
+                ty: Some(te),
+                ..
+            } = &stmt.kind
+            {
+                let is_fn_vec = super::helpers::vec_inner_type_expr(te)
+                    .is_some_and(|inner| matches!(inner.kind, TypeKind::FnType { .. }));
+                let fresh_vec =
+                    self.is_vec_new_call(value) || self.is_vec_with_capacity_call(value);
+                if is_fn_vec && fresh_vec {
+                    if let [b] = pattern.binding_names().as_slice() {
+                        vec_candidates.insert(b.clone());
+                    }
+                }
+            }
+        }
+        let mut vec_owners: HashSet<String> = HashSet::new();
+        if !vec_candidates.is_empty() {
+            self.collect_heap_env_vec_owners(&func.body, &binds, &vec_candidates, &mut vec_owners);
+        }
+        self.heap_env_vec_owners = vec_owners;
         // Pass 2 — walk for misuse, skipping the sanctioned `let f = <call>` RHS.
         let mut bad = false;
         for stmt in &func.body.stmts {
@@ -639,6 +673,117 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(())
     }
 
+    /// Vec-store slice (B-2026-06-22-2): recursively scan `block` (and nested
+    /// loop / branch / block bodies) for `v.push(<heap-env source>)` where `v` is a
+    /// `Vec[Fn]` candidate, promoting it to a heap-env Vec OWNER. A heap-env source
+    /// is a fresh heap-env-producing call (`make(k)`) or a heap-env closure binding
+    /// (`f` in `binds`). Descending into loops/branches is what makes the canonical
+    /// `for .. { v.push(make(i)) }` shape usable; a push in an exotic position the
+    /// scan misses is SOUND — `v` then isn't an owner and the guard rejects that
+    /// push via the generic heap-env-call rule (over-restrict, never miscompile).
+    fn collect_heap_env_vec_owners(
+        &self,
+        block: &Block,
+        binds: &HashSet<String>,
+        candidates: &HashSet<String>,
+        owners: &mut HashSet<String>,
+    ) {
+        for stmt in &block.stmts {
+            match &stmt.kind {
+                StmtKind::Expr(e)
+                | StmtKind::Let { value: e, .. }
+                | StmtKind::LetElse { value: e, .. } => {
+                    self.collect_vec_owner_pushes_in_expr(e, binds, candidates, owners)
+                }
+                StmtKind::Assign { value, .. } | StmtKind::CompoundAssign { value, .. } => {
+                    self.collect_vec_owner_pushes_in_expr(value, binds, candidates, owners)
+                }
+                StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                    self.collect_heap_env_vec_owners(body, binds, candidates, owners)
+                }
+                StmtKind::MultiAssign { values, .. } => {
+                    for v in values {
+                        self.collect_vec_owner_pushes_in_expr(v, binds, candidates, owners);
+                    }
+                }
+                StmtKind::LetUninit { .. } => {}
+            }
+        }
+        if let Some(t) = &block.final_expr {
+            self.collect_vec_owner_pushes_in_expr(t, binds, candidates, owners);
+        }
+    }
+
+    /// Expression companion to [`collect_heap_env_vec_owners`]: flag the push when
+    /// `e` IS one, then descend into every block-bearing sub-expression so pushes
+    /// nested in loops / branches / blocks are found.
+    fn collect_vec_owner_pushes_in_expr(
+        &self,
+        e: &Expr,
+        binds: &HashSet<String>,
+        candidates: &HashSet<String>,
+        owners: &mut HashSet<String>,
+    ) {
+        if let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &e.kind
+        {
+            if matches!(method.as_str(), "push" | "push_back") && args.len() == 1 {
+                if let ExprKind::Identifier(v) = &object.kind {
+                    if candidates.contains(v) {
+                        let a = &args[0].value;
+                        let heap_env = self.is_heap_env_producing_call(a)
+                            || matches!(&a.kind, ExprKind::Identifier(n) if binds.contains(n));
+                        if heap_env {
+                            owners.insert(v.clone());
+                        }
+                    }
+                }
+            }
+        }
+        match &e.kind {
+            ExprKind::For { body, .. }
+            | ExprKind::While { body, .. }
+            | ExprKind::WhileLet { body, .. }
+            | ExprKind::Loop { body, .. }
+            | ExprKind::LabeledBlock { body, .. }
+            | ExprKind::Lock { body, .. }
+            | ExprKind::Providers { body, .. } => {
+                self.collect_heap_env_vec_owners(body, binds, candidates, owners)
+            }
+            ExprKind::Block(b)
+            | ExprKind::Comptime(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Par(b) => self.collect_heap_env_vec_owners(b, binds, candidates, owners),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                self.collect_heap_env_vec_owners(then_block, binds, candidates, owners);
+                if let Some(eb) = else_branch {
+                    self.collect_vec_owner_pushes_in_expr(eb, binds, candidates, owners);
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    self.collect_vec_owner_pushes_in_expr(&arm.body, binds, candidates, owners);
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Statement-level companion to [`expr_has_heap_env_misuse`] for a nested
     /// block (an `if`/`for`/`while` body, a `defer`, …). Exhaustive over
     /// `StmtKind`. NOTE: a nested `let g = make(..)` is NOT a sanctioned binding
@@ -696,6 +841,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     || self.heap_env_aggregate_owners.contains_key(n)
                     || self.heap_env_tuple_owners.contains_key(n)
                     || self.heap_env_array_owners.contains_key(n)
+                    || self.heap_env_vec_owners.contains(n)
             }
             ExprKind::Call { callee, args } => {
                 // The one supported use: `f(args)` for a binding `f`. The callee
@@ -725,14 +871,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
-                // Sanctioned array-index call on an array owner: `(a[i])(args)`. As
-                // with the tuple-index call, invoking through the element doesn't
-                // move the env; only the args can still misuse. The index `i` may be
-                // any expression — it is walked via `any_args` only if it appears in
-                // the args; the callee index occurrence itself is allowed.
+                // Sanctioned index call on an array OR Vec owner: `(a[i])(args)` /
+                // `(v[i])(args)`. As with the tuple-index call, invoking through the
+                // element doesn't move the env; only the args can still misuse. The
+                // index `i` may be any expression — walked via `any_args` only if it
+                // appears in the args; the callee index occurrence itself is allowed.
                 if let ExprKind::Index { object, .. } = &callee.kind {
                     if let ExprKind::Identifier(n) = &object.kind {
-                        if self.heap_env_array_owners.contains_key(n) {
+                        if self.heap_env_array_owners.contains_key(n)
+                            || self.heap_env_vec_owners.contains(n)
+                        {
                             return any_args(args);
                         }
                     }
@@ -741,7 +889,35 @@ impl<'ctx> super::Codegen<'ctx> {
                 // sanctioned `let`-RHS calls never reach this walk).
                 self.is_heap_env_producing_call(e) || mis(callee) || any_args(args)
             }
-            ExprKind::MethodCall { object, args, .. } => mis(object) || any_args(args),
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } => {
+                // Sanctioned methods on a Vec owner `v` (Vec-store slice): a
+                // heap-env PUSH (`v.push(make(k))` / `v.push(f)`) — the supported
+                // store, whose env the Vec's dynamic drop loop will free — and the
+                // read-only `len`/`is_empty`/`capacity`. Any OTHER method on a Vec
+                // owner (`pop`, `remove`, `get`, `clear`, `clone`, iteration, or a
+                // NON-heap-env push) escapes / aliases / drops an element without
+                // env accounting, OR would mix a stack-env element into a Vec the
+                // drop loop frees unconditionally — rejected (the env would leak,
+                // double-free, or free a stack address).
+                if let ExprKind::Identifier(n) = &object.kind {
+                    if self.heap_env_vec_owners.contains(n) {
+                        let push_heap_env = matches!(method.as_str(), "push" | "push_back")
+                            && args.len() == 1
+                            && (self.is_heap_env_producing_call(&args[0].value)
+                                || matches!(&args[0].value.kind,
+                                    ExprKind::Identifier(a) if binds.contains(a)));
+                        let readonly = args.is_empty()
+                            && matches!(method.as_str(), "len" | "is_empty" | "capacity");
+                        return !(push_heap_env || readonly);
+                    }
+                }
+                mis(object) || any_args(args)
+            }
             ExprKind::Binary { left, right, .. }
             | ExprKind::Pipe { left, right }
             | ExprKind::NilCoalesce { left, right } => mis(left) || mis(right),

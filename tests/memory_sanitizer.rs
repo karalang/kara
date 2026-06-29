@@ -553,6 +553,38 @@ fn main() {
         );
     }
 
+    /// Vec-store slice (B-2026-06-22-2): heap-env closures pushed into a `Vec[Fn]`
+    /// are RC-dropped by a DYNAMIC `0..len` drop loop at the Vec's scope exit.
+    /// Covers a LOOP of fresh pushes (the dynamic-length case — three element envs
+    /// freed by the loop) and a BINDING push (push inc → rc 2, source `f` still
+    /// used, both the source's `FreeClosureEnv` and the Vec drop loop decrement →
+    /// one free). Without the drop loop the element envs leak (LSan); with the
+    /// binding push missing the inc it double-frees (ASAN). Also exercises the
+    /// auto-par bail (`let f = make(..)` no longer parallelized with `Vec.new()`).
+    #[test]
+    fn asan_heap_env_stored_in_vec_freed_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn main() {
+    let mut v: Vec[Fn(i64) -> i64] = Vec.new();
+    let mut i = 0i64;
+    while i < 3i64 { v.push(make(i)); i = i + 1i64; }
+    let f = make(20i64);
+    let mut w: Vec[Fn(i64) -> i64] = Vec.new();
+    w.push(f);
+    let mut acc = 0i64;
+    let mut j = 0i64;
+    while j < v.len() { acc = acc + (v[j])(10i64); j = j + 1i64; }
+    acc = acc + f(0i64) + (w[0])(1i64);
+    println(f"{acc}");
+}
+"#,
+            &["74"],
+            "asan_heap_env_stored_in_vec_freed_no_leak",
+        );
+    }
+
     // ── Baseline: no heap allocations ─────────────────────────────
     // Sanity-checks the harness itself — should trivially pass on any host
     // with a working `cc + ASAN`. If this fails, the infrastructure is

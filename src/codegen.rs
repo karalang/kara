@@ -1482,6 +1482,21 @@ pub(super) struct Codegen<'ctx> {
     /// `PrefixCollectionLiteral`, whose element store stays rejected (Vec slice).
     pub(crate) heap_env_array_owners:
         std::collections::HashMap<String, std::collections::HashSet<usize>>,
+    /// Per-function set (set in `reject_heap_env_misuse`, read by its walk AND by
+    /// the Vec-binding codegen): a `Vec[Fn]` local `v` bound as `let v: Vec[Fn] =
+    /// Vec.new()` / `Vec.with_capacity(..)` that receives at least one heap-env
+    /// closure PUSH (`v.push(make(k))` fresh, or `v.push(f)` for a heap-env
+    /// binding). Such a `v` OWNS the env boxes of every element it holds; codegen
+    /// registers a DYNAMIC per-element `FreeClosureEnv` drop loop (`0..len`) at its
+    /// scope exit (the dynamic-length analog of the array/tuple per-slot drops).
+    /// The guard sanctions `v.push(<heap-env>)`, `(v[i])(x)`, and read-only
+    /// `len`/`is_empty`/`capacity`, while rejecting any other use (escape,
+    /// projection, a non-heap-env push, or a moving/aliasing method) — a mixed
+    /// heap-env + stack-env Vec can't be drop-classified at runtime, so it is
+    /// rejected, never silently miscompiled. Unlike the by-value array/tuple owner
+    /// maps, this carries no per-index set: a Vec is homogeneous `Vec[Fn]`, every
+    /// live element is a closure, and the length is dynamic.
+    pub(crate) heap_env_vec_owners: std::collections::HashSet<String>,
     /// Staging slot — set by `compile_closure` so the surrounding `let` binding can record
     /// the function type under the newly bound name.
     pub(crate) pending_closure_fn_type: Option<FunctionType<'ctx>>,
@@ -5152,6 +5167,7 @@ impl<'ctx> Codegen<'ctx> {
             heap_env_owner_fields: std::collections::HashMap::new(),
             heap_env_tuple_owners: std::collections::HashMap::new(),
             heap_env_array_owners: std::collections::HashMap::new(),
+            heap_env_vec_owners: std::collections::HashSet::new(),
             pending_closure_fn_type: None,
             pending_closure_param_hints: None,
             pending_map_insert_old_dec: false,

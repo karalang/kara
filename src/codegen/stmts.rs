@@ -730,6 +730,30 @@ impl<'ctx> super::Codegen<'ctx> {
         sorted_indices.sort_unstable();
         let in_group: HashSet<usize> = sorted_indices.iter().copied().collect();
 
+        // Auto-par + heap-env closures (B-2026-06-22-2, Vec-store slice): a
+        // heap-env closure's fat pointer + reference-counted env box does NOT
+        // survive the par-group return-struct round-trip — the env pointer is
+        // mis-transferred across the `karac_par_run` join, so the joined binding
+        // reads a closure with a dangling/garbage env (e.g. a `let f = make(k)`
+        // grouped with an independent `let v = Vec.new()`). Bail any group that
+        // constructs a heap-env closure to sequential codegen. Sound — sequential
+        // is always correct, and a `make(..)`-shaped let is cheap, so the lost
+        // parallelism is negligible. Mirrors the destructure-bind / captured-
+        // mutation bail-outs below; the slot-type guard in step 3 additionally
+        // catches a closure COPY whose RHS isn't a call.
+        for &stmt_idx in &sorted_indices {
+            if stmt_idx >= body.stmts.len() {
+                continue;
+            }
+            if let StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } =
+                &body.stmts[stmt_idx].kind
+            {
+                if self.is_heap_env_producing_call(value) {
+                    return None;
+                }
+            }
+        }
+
         // Per-binding metadata: which branch defines it, and what's the
         // statement reference for type inference.
         let mut defined: HashMap<String, (usize, &Stmt)> = HashMap::new();
@@ -869,6 +893,20 @@ impl<'ctx> super::Codegen<'ctx> {
         names_with_branch.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
         for (branch_idx, name, stmt) in names_with_branch {
             if let Some(llvm_ty) = self.infer_let_binding_llvm_type(stmt) {
+                // A closure-valued return slot (a heap-env closure binding, or a
+                // COPY of one) can't round-trip the par-group join — see the
+                // group-level bail above. The construction-site `is_heap_env_producing_call`
+                // check catches a fresh `make(..)`; this catches a `let g = f`
+                // copy whose inferred type is the closure fat pointer. Bail to
+                // sequential (B-2026-06-22-2, Vec-store slice). Gated to programs
+                // that actually define an escaping closure so a closure-free
+                // program with a coincidental `{ptr, ptr}`-typed slot (e.g. a
+                // two-pointer tuple) is never de-parallelized.
+                if !self.fns_returning_heap_env.is_empty()
+                    && llvm_ty == self.closure_value_type().into()
+                {
+                    return None;
+                }
                 slots.push(ReturnSlot {
                     binding_name: name,
                     branch_index: branch_idx,
@@ -2910,7 +2948,23 @@ impl<'ctx> super::Codegen<'ctx> {
                                 let agg_elem_drop = elem_te
                                     .as_ref()
                                     .and_then(|te| self.vec_elem_agg_drop_for_type_expr(te));
-                                if is_tensor_elem {
+                                // Vec-store slice (B-2026-06-22-2): a `Vec[Fn]`
+                                // that OWNS heap-env closures (>=1 heap-env push,
+                                // flagged in `reject_heap_env_misuse`). Free each
+                                // live element's closure env via a DYNAMIC `0..len`
+                                // drop loop — reusing the `elem_agg_drop` drain with
+                                // a synthesized per-element env-drop fn. The Vec is
+                                // homogeneous `Vec[Fn]`, so `elem_ty` is the closure
+                                // fat-pointer struct (the GEP stride). Without this
+                                // the element envs leak; the guard rejects any escape
+                                // / non-heap-env push, so every live element is a
+                                // heap-env (or null-env) closure this Vec owns.
+                                let is_heap_env_vec =
+                                    self.heap_env_vec_owners.contains(var_name.as_str());
+                                if is_heap_env_vec {
+                                    let drop_fn = self.emit_vec_elem_closure_env_drop_fn();
+                                    self.track_vec_of_aggs_var(slot_ptr, elem_ty, drop_fn);
+                                } else if is_tensor_elem {
                                     self.track_vec_of_tensors_var(slot_ptr);
                                 } else if let Some(map_drop) = map_elem_drop {
                                     // `Vec[Map]` / `Vec[Set]`: elements are

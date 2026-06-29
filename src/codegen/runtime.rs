@@ -1674,6 +1674,99 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(drop_fn)
     }
 
+    /// Vec-store slice (B-2026-06-22-2): synthesize (or fetch) the per-element
+    /// drop fn for a `Vec[Fn]` that OWNS heap-env closure environments. The
+    /// `FreeVecBuffer` drain calls it once per live element with a pointer to the
+    /// element SLOT (a closure fat pointer `{ fn_ptr, env_ptr }` stored inline in
+    /// the buffer); the fn RC-drops that element's env — extract the env box
+    /// (field 1), skip a null env (a non-capturing element), else decrement the
+    /// refcount and `free` the box at zero. This is exactly the `FreeClosureEnv`
+    /// cleanup logic, hoisted into a standalone fn so the existing `elem_agg_drop`
+    /// `0..len` loop (`track_vec_of_aggs_var`) drives it over the dynamic length.
+    /// One shared fn serves every heap-env Vec (the body is element-type-agnostic);
+    /// memoized by symbol name.
+    pub(super) fn emit_vec_elem_closure_env_drop_fn(
+        &mut self,
+    ) -> inkwell::values::FunctionValue<'ctx> {
+        let fn_name = "__karac_vec_elem_closure_env_drop";
+        if let Some(f) = self.module.get_function(fn_name) {
+            return f;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let void_ty = self.context.void_type();
+        let i64_t = self.context.i64_type();
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let fn_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        let drop_fn =
+            self.module
+                .add_function(fn_name, fn_ty, Some(inkwell::module::Linkage::Internal));
+        self.current_fn = Some(drop_fn);
+        let entry = self.context.append_basic_block(drop_fn, "entry");
+        self.builder.position_at_end(entry);
+        // The element slot holds a closure fat pointer `{ fn_ptr, env_ptr }`.
+        let elem_ptr = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let fat_ty = self.closure_value_type();
+        let fat = self
+            .builder
+            .build_load(fat_ty, elem_ptr, "vecelem.clo.fat")
+            .unwrap()
+            .into_struct_value();
+        let env_box = self
+            .builder
+            .build_extract_value(fat, 1, "vecelem.clo.env")
+            .unwrap()
+            .into_pointer_value();
+        let null = ptr_ty.const_null();
+        let live = self
+            .builder
+            .build_int_compare(IntPredicate::NE, env_box, null, "vecelem.clo.live")
+            .unwrap();
+        let dec_bb = self.context.append_basic_block(drop_fn, "vecelem.clo.dec");
+        let free_bb = self.context.append_basic_block(drop_fn, "vecelem.clo.free");
+        let ret_bb = self.context.append_basic_block(drop_fn, "vecelem.clo.ret");
+        self.builder
+            .build_conditional_branch(live, dec_bb, ret_bb)
+            .unwrap();
+        self.builder.position_at_end(dec_bb);
+        // The refcount is field 0 of the RC box; a `{ i64 }` GEP reaches it
+        // regardless of the captured payload that follows.
+        let rc_box_ty = self.context.struct_type(&[i64_t.into()], false);
+        let rc_ptr = self
+            .builder
+            .build_struct_gep(rc_box_ty, env_box, 0, "vecelem.clo.rc")
+            .unwrap();
+        let rc = self
+            .builder
+            .build_load(i64_t, rc_ptr, "vecelem.clo.rcval")
+            .unwrap()
+            .into_int_value();
+        let dec = self
+            .builder
+            .build_int_sub(rc, i64_t.const_int(1, false), "vecelem.clo.dec1")
+            .unwrap();
+        self.builder.build_store(rc_ptr, dec).unwrap();
+        let is_zero = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, dec, i64_t.const_zero(), "vecelem.clo.z")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_zero, free_bb, ret_bb)
+            .unwrap();
+        self.builder.position_at_end(free_bb);
+        self.builder
+            .build_call(self.free_fn, &[env_box.into()], "")
+            .unwrap();
+        self.builder.build_unconditional_branch(ret_bb).unwrap();
+        self.builder.position_at_end(ret_bb);
+        self.builder.build_return(None).unwrap();
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        self.current_fn = saved_fn;
+        drop_fn
+    }
+
     /// Derive the four `track_map_var` classification args for a `Map[K, V]`
     /// / `Set[T]` temporary straight from its surface `TypeExpr`. Mirrors the
     /// let-binding derivation in `stmts.rs` (which reads per-binding

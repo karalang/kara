@@ -874,6 +874,101 @@ mod codegen_tests {
         assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
     }
 
+    // ── Vec-store slice (B-2026-06-22-2) ──
+    // A heap-env closure may be STORED in a `Vec[Fn]` element via `push`
+    // (`let v: Vec[Fn] = Vec.new(); v.push(make(k))` fresh, or `v.push(f)` for a
+    // heap-env binding), called back through the index (`(v[i])(x)`), and counted
+    // (`v.len()`). The element envs are RC-dropped by a DYNAMIC `0..len` drop loop
+    // at the Vec's scope exit — the dynamic-length analog of the array/tuple
+    // per-slot drops. The owning Vec must NOT escape, and a closure element can't
+    // be projected out. Only a fresh `Vec.new()`/`Vec.with_capacity` + `Vec[Fn]`
+    // annotation qualifies; a bare `[..]` lowers to a Vec but isn't the slice's
+    // entry shape.
+
+    /// A FRESH heap-env closure pushed into a `Vec[Fn]`, called through the index
+    /// — freed once at scope exit.
+    #[test]
+    fn heap_env_stored_in_vec_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(make(20i64)); \
+              println(f\"{(v[0])(22i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// A DYNAMIC count of pushes in a loop — the per-element drop loop frees all
+    /// `len` element envs (the dynamic-length case the array/tuple slices can't do).
+    #[test]
+    fn heap_env_vec_loop_push_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() {\n\
+             let mut v: Vec[Fn(i64) -> i64] = Vec.new();\n\
+             let mut i = 0i64;\n\
+             while i < 5i64 { v.push(make(i)); i = i + 1i64; }\n\
+             let mut acc = 0i64; let mut j = 0i64;\n\
+             while j < v.len() { acc = acc + (v[j])(10i64); j = j + 1i64; }\n\
+             println(f\"{acc}\");\n\
+             }\n",
+        );
+        assert_eq!(out.as_deref(), Some("60\n"));
+    }
+
+    /// A heap-env BINDING pushed into a `Vec[Fn]` co-owns the env (push inc →
+    /// rc 2): the source binding stays usable AND the Vec element drops it, so the
+    /// box is freed exactly once. (Exercises the auto-par bail too: `let f =
+    /// make(..)` grouped with `let v = Vec.new()` falls back to sequential.)
+    #[test]
+    fn heap_env_binding_stored_in_vec_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let f = make(20i64); let mut v: Vec[Fn(i64) -> i64] = Vec.new(); \
+              v.push(f); let a = f(1i64); let b = (v[0])(0i64); println(f\"{a + b + 1i64}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// Returning the Vec that owns the heap-env elements is an ESCAPE — rejected
+    /// (Vec escape is a later slice; only push / call-through / len are sanctioned).
+    #[test]
+    fn heap_env_vec_returned_is_rejected() {
+        let err = ir_result(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn build(k: i64) -> Vec[Fn(i64) -> i64] { \
+              let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(make(k)); return v; }\n",
+        )
+        .expect_err("returning a Vec that owns heap-env elements must be rejected");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
+    /// Projecting a closure element OUT of the Vec (`let g = v[0]`) aliases the env
+    /// out of the owner — rejected (only an index CALL `(v[0])(x)` is ok).
+    #[test]
+    fn heap_env_vec_elem_projection_is_rejected() {
+        let err = ir_result(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(make(21i64)); \
+              let g = v[0]; println(f\"{g(21i64)}\"); }\n",
+        )
+        .expect_err("projecting a heap-env Vec element out must be rejected");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
+    /// A moving/aliasing method on the owner Vec (`v.pop()`) would hand out an
+    /// element without env accounting — rejected (only push / index-call / len are
+    /// sanctioned).
+    #[test]
+    fn heap_env_vec_pop_is_rejected() {
+        let err = ir_result(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(make(21i64)); \
+              let g = v.pop(); println(\"x\"); }\n",
+        )
+        .expect_err("a moving method on a heap-env Vec owner must be rejected");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
     #[test]
     fn escaping_capturing_closure_via_let_is_rejected() {
         let err = ir_result(
