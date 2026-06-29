@@ -398,12 +398,6 @@ mod codegen_tests {
                  fn main() { make(21i64); println(f\"x\"); }\n",
             ),
             (
-                "passed as a call argument",
-                "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
-                 fn use2(g: Fn(i64) -> i64) -> i64 { g(5i64) }\n\
-                 fn main() { let f = make(21i64); println(f\"{use2(f)}\"); }\n",
-            ),
-            (
                 "directly returned unbound make()",
                 "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
                  fn relay(k: i64) -> Fn(i64) -> i64 { return make(k); }\n",
@@ -691,23 +685,10 @@ mod codegen_tests {
         assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
     }
 
-    /// Even when the call result is a sanctioned aggregate owner, a heap-env
-    /// BINDING passed as one of the call's ARGS is still a misuse — the
-    /// aggregate-owner Call branch walks the args (closing the arg-escape hole).
-    #[test]
-    fn heap_env_binding_passed_to_aggregate_builder_is_rejected() {
-        let err = ir_result(
-            "struct H { f: Fn(i64) -> i64 }\n\
-             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
-             fn build2(g: Fn(i64) -> i64) -> H { let local = make(5i64); let h = H { f: local }; \
-              let _u = g(0i64); h }\n\
-             fn main() { let f = make(3i64); let r = build2(f); println(f\"{(r.f)(1i64)}\"); }\n",
-        )
-        .expect_err(
-            "passing a heap-env binding as an arg to an aggregate builder must be rejected",
-        );
-        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
-    }
+    // (A heap-env BINDING passed as an arg to a borrows-only aggregate BUILDER
+    // — `build2(f)` — now RUNS; see `heap_env_binding_passed_to_borrows_only_builder_runs`
+    // in the by-value arg-pass block below. A builder that RETAINS the arg is
+    // still rejected via the same borrows-only check.)
 
     // ── Tuple-store slice (B-2026-06-22-2) ──
     // A heap-env closure may be STORED in a tuple element (`let t = (make(k), n)`
@@ -1093,6 +1074,117 @@ mod codegen_tests {
              fn main() { let q = relay(21i64); println(f\"{(q.0)(21i64)}\"); }\n",
         );
         assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    // ── By-value arg-pass slice (B-2026-06-22-2) ──
+    // A heap-env closure BINDING may be passed BY VALUE to a free function whose
+    // matching parameter is BORROWS-ONLY — one that only CALLS the closure and
+    // never returns / stores / re-binds / captures it. The callee borrows the
+    // shared RC env (no inc), the CALLER retains sole ownership and RC-drops it
+    // once at scope exit. A callee that retains the param (returns / stores it)
+    // is NOT borrows-only and the arg-pass stays rejected.
+
+    /// The canonical borrow: `apply(f, x)` where `apply(g, x) { g(x) }` only
+    /// calls `g`. `f` is still usable after the borrow. No inc / move-out — the
+    /// box is freed exactly once at `f`'s scope exit.
+    #[test]
+    fn heap_env_binding_passed_to_borrows_only_fn_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn apply(g: Fn(i64) -> i64, x: i64) -> i64 { g(x) }\n\
+             fn apply_twice(g: Fn(i64) -> i64, x: i64) -> i64 { g(g(x)) }\n\
+             fn main() { let f = make(10i64); \
+              let a = apply(f, 5i64); let b = apply_twice(f, 1i64); let c = f(100i64); \
+              println(f\"{a + b + c}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("146\n"));
+    }
+
+    /// A COPY of a heap-env binding (`let g = f`) is itself a heap-env binding and
+    /// may likewise be passed by value to a borrows-only callee.
+    #[test]
+    fn heap_env_copy_passed_to_borrows_only_fn_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn apply(g: Fn(i64) -> i64, x: i64) -> i64 { g(x) }\n\
+             fn main() { let f = make(20i64); let g = f; let a = apply(g, 10i64); \
+              println(f\"{a + f(1i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("51\n"));
+    }
+
+    /// Borrow then RETURN the same binding: `apply(f, ..)` borrows `f`, then the
+    /// fn returns `f` (move-out to caller). The borrow leaves ownership untouched,
+    /// so the move-out still transfers the single box; freed once at the caller.
+    #[test]
+    fn heap_env_binding_borrowed_then_returned_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn apply(g: Fn(i64) -> i64, x: i64) -> i64 { g(x) }\n\
+             fn outer(k: i64) -> Fn(i64) -> i64 { let f = make(k); let _a = apply(f, 1i64); f }\n\
+             fn main() { let h = outer(10i64); println(f\"{h(1i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("11\n"));
+    }
+
+    /// A borrows-only callee may call the param inside a loop / branch (the
+    /// borrow-call sanction descends into nested blocks). `g(0)+g(1)+g(2)+g(3)`
+    /// with `g = |x| x + 5` = 5+6+7+8 = 26.
+    #[test]
+    fn heap_env_binding_loop_borrowed_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn sumcalls(g: Fn(i64) -> i64, n: i64) -> i64 { \
+              let mut s = 0i64; let mut i = 0i64; \
+              while i < n { s = s + g(i); i = i + 1i64; } s }\n\
+             fn main() { let f = make(5i64); println(f\"{sumcalls(f, 4i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("26\n"));
+    }
+
+    /// A borrows-only callee that ALSO returns an aggregate owner: `build2` makes
+    /// its OWN closure for the returned struct and merely BORROW-CALLS the passed
+    /// `g`. The arg-pass is sanctioned through the aggregate-owner Call branch
+    /// (which now walks the whole call). `(r.f)(4) = 4 + 5 = 9`; `f`'s box and
+    /// `r.f`'s box are distinct and each freed once. (Was rejected pre-slice.)
+    #[test]
+    fn heap_env_binding_passed_to_borrows_only_builder_runs() {
+        let out = run_program(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn build2(g: Fn(i64) -> i64) -> H { let local = make(5i64); let h = H { f: local }; \
+              let _u = g(0i64); h }\n\
+             fn main() { let f = make(3i64); let r = build2(f); println(f\"{(r.f)(4i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("9\n"));
+    }
+
+    /// A callee that RETURNS its closure param retains the env past the call, so
+    /// it is NOT borrows-only — passing a heap-env binding to it stays rejected
+    /// (the env would outlive / be double-freed by the caller's owner).
+    #[test]
+    fn heap_env_arg_to_returning_callee_is_rejected() {
+        let err = ir_result(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn relay(g: Fn(i64) -> i64) -> Fn(i64) -> i64 { g }\n\
+             fn main() { let f = make(3i64); let r = relay(f); println(f\"{r(1i64)}\"); }\n",
+        )
+        .expect_err("passing a heap-env binding to a param-returning callee must be rejected");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
+    /// A callee that STORES its closure param into a returned collection retains
+    /// the env, so it is NOT borrows-only — the arg-pass stays rejected.
+    #[test]
+    fn heap_env_arg_to_storing_callee_is_rejected() {
+        let err = ir_result(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn keep(g: Fn(i64) -> i64) -> Vec[Fn(i64) -> i64] { \
+              let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(g); v }\n\
+             fn main() { let f = make(3i64); let r = keep(f); println(f\"{(r[0])(1i64)}\"); }\n",
+        )
+        .expect_err("passing a heap-env binding to a param-storing callee must be rejected");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
     }
 
     // (Vec escape stays rejected — covered by `heap_env_vec_returned_is_rejected`

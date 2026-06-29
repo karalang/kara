@@ -515,9 +515,14 @@ impl<'ctx> super::Codegen<'ctx> {
                                         .as_deref()
                                         .is_some_and(|s| self.expr_has_heap_env_misuse(s, &binds))
                             }
-                            ExprKind::Call { args, .. } => args
-                                .iter()
-                                .any(|a| self.expr_has_heap_env_misuse(&a.value, &binds)),
+                            // The aggregate-returning CALL itself is the sanctioned
+                            // owner source (not heap-env-PRODUCING, so it is not a
+                            // leak); walk the whole call so the by-value arg-pass
+                            // sanction in the `Call` arm applies uniformly — a
+                            // builder that BORROWS-only its closure arg accepts a
+                            // heap-env binding, one that retains it is still
+                            // rejected (the arg then re-flags).
+                            ExprKind::Call { .. } => self.expr_has_heap_env_misuse(value, &binds),
                             _ => false,
                         }
                     } else {
@@ -818,7 +823,43 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 // RULE A: a non-sanctioned heap-env-producing call leaks (the
                 // sanctioned `let`-RHS calls never reach this walk).
-                self.is_heap_env_producing_call(e) || mis(callee) || any_args(args)
+                if self.is_heap_env_producing_call(e) {
+                    return true;
+                }
+                // A callee EXPRESSION that is itself a misuse (e.g. a bare owner
+                // name shadowing a free fn, or a computed callee referencing a
+                // binding) is rejected before the arg sanction — preserving the
+                // pre-slice `mis(callee)` semantics.
+                if mis(callee) {
+                    return true;
+                }
+                // By-value arg-pass (borrow): a heap-env binding passed BY VALUE
+                // to a known free function whose matching parameter is
+                // borrows-only (the callee only CALLS it — `fn_param_is_borrows_only`)
+                // is sanctioned. The callee borrows the shared RC env and never
+                // frees it; the caller retains sole ownership and RC-drops it once
+                // at scope exit — so no inc and no move-out are needed, and the
+                // fat pointer is simply passed by value (existing fn-value arg
+                // codegen). Only PLAIN positional args map index→param soundly, so
+                // bail the whole sanction if any arg is labeled; a `mut`-marked arg
+                // (pass-by-mut-ref) is never treated as a borrow. Other args, and
+                // the callee, are still walked.
+                let all_positional = args.iter().all(|a| a.label.is_none());
+                if all_positional {
+                    if let ExprKind::Identifier(callee_name) = &callee.kind {
+                        if let Some(callee_fn) = self.fn_asts.get(callee_name) {
+                            return args.iter().enumerate().any(|(i, a)| {
+                                let borrowed = !a.mut_marker
+                                    && matches!(&a.value.kind,
+                                        ExprKind::Identifier(n) if binds.contains(n))
+                                    && self.fn_param_is_borrows_only(callee_fn, i);
+                                !borrowed && mis(&a.value)
+                            });
+                        }
+                    }
+                }
+                // `mis(callee)` was already checked above; only the args remain.
+                any_args(args)
             }
             ExprKind::MethodCall {
                 object,
@@ -992,6 +1033,192 @@ impl<'ctx> super::Codegen<'ctx> {
             | ExprKind::OffsetOf { .. }
             | ExprKind::Error => false,
         }
+    }
+
+    /// By-value arg-pass slice (B-2026-06-22-2): `true` when the `Fn`-value
+    /// parameter named `pname` ESCAPES (is used as anything other than the
+    /// callee of a direct call `pname(args)`) anywhere in `body`. A borrows-only
+    /// callee — one for which this returns `false` — merely CALLS the closure and
+    /// never returns / stores / re-binds / captures it, so a heap-env closure
+    /// passed into that parameter is a pure BORROW: the callee touches the shared
+    /// RC env but never frees it, and the CALLER retains sole ownership and
+    /// RC-drops it once at scope exit (no inc, no move-out needed at the call).
+    ///
+    /// Deliberately self-contained — it consults NO owner sets (those are the
+    /// CALLER's state), so a function's borrows-only-ness is a property of its own
+    /// body alone and does not vary by call site. The walk is the exhaustive,
+    /// single-name dual of [`Self::expr_has_heap_env_misuse`]: only a TOP-LEVEL
+    /// `pname(args)` in callee position is sanctioned; every other occurrence
+    /// escapes. The `in_closure` flag, set once the walk descends into a nested
+    /// closure body, DISABLES even that sanction — inside a (possibly escaping)
+    /// closure ANY mention of `pname` is a capture, so `|y| pname(y)` retains the
+    /// env and is correctly an escape. Any over-approximation (treating a shadow
+    /// or an exotic-but-safe use as an escape) only REJECTS a valid arg-pass —
+    /// never admits an unsound one.
+    fn fn_value_escapes_block(&self, body: &Block, pname: &str, in_closure: bool) -> bool {
+        body.stmts.iter().any(|s| match &s.kind {
+            StmtKind::Let { value, .. }
+            | StmtKind::LetElse { value, .. }
+            | StmtKind::Expr(value) => self.fn_value_escapes_expr(value, pname, in_closure),
+            StmtKind::LetUninit { .. } => false,
+            StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+                self.fn_value_escapes_expr(target, pname, in_closure)
+                    || self.fn_value_escapes_expr(value, pname, in_closure)
+            }
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                self.fn_value_escapes_block(body, pname, in_closure)
+            }
+            StmtKind::MultiAssign { values, .. } => values
+                .iter()
+                .any(|v| self.fn_value_escapes_expr(v, pname, in_closure)),
+        }) || body
+            .final_expr
+            .as_deref()
+            .is_some_and(|t| self.fn_value_escapes_expr(t, pname, in_closure))
+    }
+
+    /// Expression companion to [`Self::fn_value_escapes_block`]. Exhaustive (no
+    /// silent `_ => false` for any sub-expression-bearing variant) so a new AST
+    /// shape can never silently admit an unsound escape.
+    fn fn_value_escapes_expr(&self, e: &Expr, pname: &str, in_closure: bool) -> bool {
+        let esc = |x: &Expr| self.fn_value_escapes_expr(x, pname, in_closure);
+        let any = |xs: &[Expr]| xs.iter().any(esc);
+        let any_args = |xs: &[CallArg]| xs.iter().any(|a| esc(&a.value));
+        match &e.kind {
+            // A bare reference to the param escapes; only a top-level `pname(args)`
+            // callee position (handled in `Call`) is a non-escaping borrow-call.
+            ExprKind::Identifier(n) => n == pname,
+            ExprKind::Call { callee, args } => {
+                if !in_closure {
+                    if let ExprKind::Identifier(n) = &callee.kind {
+                        if n == pname {
+                            // `pname(args)` — the sanctioned borrow-call. The callee
+                            // occurrence does not escape; the args still might.
+                            return any_args(args);
+                        }
+                    }
+                }
+                esc(callee) || any_args(args)
+            }
+            ExprKind::MethodCall { object, args, .. } => esc(object) || any_args(args),
+            ExprKind::Binary { left, right, .. }
+            | ExprKind::Pipe { left, right }
+            | ExprKind::NilCoalesce { left, right } => esc(left) || esc(right),
+            ExprKind::Unary { operand, .. } | ExprKind::Question(operand) => esc(operand),
+            ExprKind::Cast { expr, .. } => esc(expr),
+            ExprKind::OptionalChain { object, args, .. } => {
+                esc(object) || args.as_deref().is_some_and(any_args)
+            }
+            ExprKind::FieldAccess { object, .. } => esc(object),
+            ExprKind::TupleIndex { object, .. } => esc(object),
+            ExprKind::Index { object, index } => esc(object) || esc(index),
+            ExprKind::Tuple(es) | ExprKind::ArrayLiteral(es) => any(es),
+            ExprKind::PrefixCollectionLiteral { items, .. } => any(items),
+            ExprKind::RepeatLiteral { value, count, .. } => esc(value) || esc(count),
+            ExprKind::MapLiteral(pairs) => pairs.iter().any(|(k, v)| esc(k) || esc(v)),
+            ExprKind::StructLiteral { fields, spread, .. } => {
+                fields.iter().any(|f| esc(&f.value)) || spread.as_deref().is_some_and(esc)
+            }
+            ExprKind::Range { start, end, .. } => {
+                start.as_deref().is_some_and(esc) || end.as_deref().is_some_and(esc)
+            }
+            ExprKind::InterpolatedStringLit(parts) => parts
+                .iter()
+                .any(|p| matches!(p, ParsedInterpolationPart::Expr(inner) if esc(inner))),
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                esc(condition)
+                    || self.fn_value_escapes_block(then_block, pname, in_closure)
+                    || else_branch.as_deref().is_some_and(esc)
+            }
+            ExprKind::IfLet {
+                value,
+                then_block,
+                else_branch,
+                ..
+            } => {
+                esc(value)
+                    || self.fn_value_escapes_block(then_block, pname, in_closure)
+                    || else_branch.as_deref().is_some_and(esc)
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                esc(scrutinee) || arms.iter().any(|a| esc(&a.body))
+            }
+            ExprKind::While {
+                condition, body, ..
+            } => esc(condition) || self.fn_value_escapes_block(body, pname, in_closure),
+            ExprKind::WhileLet { value, body, .. } => {
+                esc(value) || self.fn_value_escapes_block(body, pname, in_closure)
+            }
+            ExprKind::For { iterable, body, .. } => {
+                esc(iterable) || self.fn_value_escapes_block(body, pname, in_closure)
+            }
+            ExprKind::Loop { body, .. } => self.fn_value_escapes_block(body, pname, in_closure),
+            ExprKind::Block(b)
+            | ExprKind::Comptime(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Par(b) => self.fn_value_escapes_block(b, pname, in_closure),
+            ExprKind::LabeledBlock { body, .. } => {
+                self.fn_value_escapes_block(body, pname, in_closure)
+            }
+            ExprKind::Lock { mutex, body, .. } => {
+                esc(mutex) || self.fn_value_escapes_block(body, pname, in_closure)
+            }
+            ExprKind::Providers { body, .. } => {
+                self.fn_value_escapes_block(body, pname, in_closure)
+            }
+            ExprKind::Return(inner) | ExprKind::Break { value: inner, .. } => {
+                inner.as_deref().is_some_and(esc)
+            }
+            // A nested closure that mentions `pname` CAPTURES it — the env escapes
+            // into a (possibly escaping) closure env, so even `|y| pname(y)` is an
+            // escape (walked with `in_closure = true`, which disables the
+            // borrow-call sanction). A closure param that shadows `pname` rebinds
+            // the name — inner uses are the shadow, not the param.
+            ExprKind::Closure { params, body, .. } => {
+                let shadowed = params
+                    .iter()
+                    .flat_map(|p| p.pattern.binding_names())
+                    .any(|n| n == pname);
+                !shadowed && self.fn_value_escapes_expr(body, pname, true)
+            }
+            ExprKind::Integer(..)
+            | ExprKind::Float(..)
+            | ExprKind::CharLit(..)
+            | ExprKind::ByteLit(..)
+            | ExprKind::StringLit(..)
+            | ExprKind::MultiStringLit(..)
+            | ExprKind::CStringLit { .. }
+            | ExprKind::Bool(..)
+            | ExprKind::Path { .. }
+            | ExprKind::SelfValue
+            | ExprKind::SelfType
+            | ExprKind::Continue { .. }
+            | ExprKind::PipePlaceholder
+            | ExprKind::OffsetOf { .. }
+            | ExprKind::Error => false,
+        }
+    }
+
+    /// By-value arg-pass slice (B-2026-06-22-2): `true` when parameter `idx` of
+    /// `f` is a plain (non-`self`) value parameter that the body only ever CALLS
+    /// — so a heap-env closure passed into it is borrowed, not owned (see
+    /// [`Self::fn_value_escapes_block`]). A destructuring-pattern param, an
+    /// out-of-range index, or a param the body lets escape all return `false`
+    /// (conservatively NOT borrows-only → the arg-pass stays rejected).
+    fn fn_param_is_borrows_only(&self, f: &Function, idx: usize) -> bool {
+        let Some(param) = f.params.get(idx) else {
+            return false;
+        };
+        let Some(pname) = param.name() else {
+            return false;
+        };
+        !self.fn_value_escapes_block(&f.body, pname, false)
     }
 
     /// Stdlib collection type heads whose element-store methods (`push` /

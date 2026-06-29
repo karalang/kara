@@ -656,6 +656,47 @@ fn main() {
         );
     }
 
+    /// By-value arg-pass slice (B-2026-06-22-2): a heap-env closure BINDING passed
+    /// BY VALUE to a borrows-only callee (one that only CALLS it) is a pure
+    /// BORROW — the callee never frees the shared RC env, and the CALLER retains
+    /// sole ownership and RC-drops it EXACTLY once at scope exit (no inc, no
+    /// move-out). Covers the bare binding (`apply(f, ..)`), a borrow inside a
+    /// loop (`sumcalls`), a copy passed by value (`apply(g, ..)`), a borrows-only
+    /// aggregate builder (`build2` — its own returned env is a SECOND, distinct
+    /// box freed once), and continued use of `f` after the borrow. Asserts no
+    /// leak (LSan) and no use-after-free / double-free (ASAN). Without the
+    /// borrow-only treatment the callee would either free the caller's box early
+    /// (UAF) or the caller would free it twice; an erroneous inc would leak it.
+    #[test]
+    fn asan_heap_env_arg_pass_borrow_freed_no_leak() {
+        assert_clean_asan_run(
+            r#"
+struct H { f: Fn(i64) -> i64 }
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn apply(g: Fn(i64) -> i64, x: i64) -> i64 { g(x) }
+fn sumcalls(g: Fn(i64) -> i64, n: i64) -> i64 {
+    let mut s = 0i64;
+    let mut i = 0i64;
+    while i < n { s = s + g(i); i = i + 1i64; }
+    s
+}
+fn build2(g: Fn(i64) -> i64) -> H { let local = make(7i64); let h = H { f: local }; let _u = g(0i64); h }
+fn main() {
+    let f = make(10i64);
+    let g = f;
+    let a = apply(f, 5i64);
+    let b = sumcalls(g, 4i64);
+    let r = build2(f);
+    let c = (r.f)(3i64);
+    let d = f(100i64);
+    println(f"{a + b + c + d}");
+}
+"#,
+            &["181"],
+            "asan_heap_env_arg_pass_borrow_freed_no_leak",
+        );
+    }
+
     // ── Baseline: no heap allocations ─────────────────────────────
     // Sanity-checks the harness itself — should trivially pass on any host
     // with a working `cc + ASAN`. If this fails, the infrastructure is
