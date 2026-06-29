@@ -28439,3 +28439,93 @@ fn gpu_fe2b_non_gpu_fn_with_heap_local_is_fine() {
          fn main() { println(1) }",
     );
 }
+
+// ── FE-3c — host-capturing closures (E0801) ──────────────────────
+// A closure inside a #[gpu] function may not capture host (non-GpuSafe)
+// state. FE-2/FE-2b already make params + local `let`s GpuSafe, so this
+// catches the residual: a `for`/`match`/`if let` pattern binding over a
+// non-GpuSafe scrutinee, captured by a closure.
+
+#[test]
+fn gpu_fe3c_rejects_closure_capturing_match_bound_heap_value() {
+    let errs = gpu_safe_errors(
+        "fn make() -> (i64, Vec[i64]) { let v: Vec[i64] = Vec.new(); (1, v) }\n\
+         #[gpu]\n\
+         fn k() -> i64 {\n\
+             match make() { (a, v) => { let f = || v.len(); a } }\n\
+         }\n\
+         fn main() { println(1) }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("may not capture host state")
+                && e.message.contains("`v`")
+                && e.message.contains("`Vec`")),
+        "got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn gpu_fe3c_rejects_closure_capturing_for_bound_string() {
+    let errs = gpu_safe_errors(
+        "fn strings() -> Vec[String] { Vec.new() }\n\
+         #[gpu]\n\
+         fn k() -> i64 {\n\
+             for s in strings() { let f = || s.len(); }\n\
+             0\n\
+         }\n\
+         fn main() { println(1) }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("may not capture host state")
+                && e.message.contains("`String`")),
+        "got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn gpu_fe3c_accepts_closure_capturing_gpusafe_scalar() {
+    // Capturing a GpuSafe value (an `f64` param) is fine — it lowers as a
+    // kernel constant.
+    typecheck_ok(
+        "#[gpu]\n\
+         fn k(x: f64) -> f64 { let f = || x * 2.0; f() }\n\
+         fn main() { println(1) }",
+    );
+}
+
+#[test]
+fn gpu_fe3c_accepts_non_capturing_closure() {
+    typecheck_ok(
+        "#[gpu]\n\
+         fn k() -> i64 { let f = || 42; f() }\n\
+         fn main() { println(1) }",
+    );
+}
+
+#[test]
+fn gpu_fe3c_closure_in_non_gpu_fn_capturing_heap_is_fine() {
+    // The capture gate is rooted only at #[gpu] functions.
+    typecheck_ok(
+        "fn strings() -> Vec[String] { Vec.new() }\n\
+         fn k() -> i64 { for s in strings() { let f = || s.len(); } 0 }\n\
+         fn main() { println(1) }",
+    );
+}
+
+#[test]
+fn gpu_fe3c_closure_param_shadows_outer_heap_binding_no_false_reject() {
+    // The closure param `v` shadows the match-bound `v`, so the closure does
+    // NOT capture the host value — must not be flagged (shadow correctness).
+    typecheck_ok(
+        "fn make() -> (i64, Vec[i64]) { let v: Vec[i64] = Vec.new(); (1, v) }\n\
+         #[gpu]\n\
+         fn k() -> i64 {\n\
+             match make() { (a, v) => { let f = |v: i64| v + 1; f(a) } }\n\
+         }\n\
+         fn main() { println(1) }",
+    );
+}

@@ -1204,6 +1204,11 @@ pub struct TypeChecker<'a> {
     /// (out-of-scope here).
     pub(super) break_value_types: Vec<(String, Vec<Type>)>,
     pub(super) current_self_type: Option<Type>,
+    /// FE-3c — true while type-checking the body of a `#[gpu]` function, so
+    /// the closure-capture hook (`closure_type_with_capture_inference`) can
+    /// reject closures that capture host (non-`GpuSafe`) state. Saved/
+    /// restored around each function body in `check_function`.
+    pub(super) current_fn_is_gpu: bool,
     /// True when type-checking inside a defer/errdefer block.
     pub(super) in_defer: bool,
     /// `?` cross-error From conversions (span → target error type name).
@@ -1432,6 +1437,7 @@ impl<'a> TypeChecker<'a> {
             assigning_lhs: false,
             borrow_context: None,
             current_return_type: None,
+            current_fn_is_gpu: false,
             break_value_types: Vec::new(),
             current_self_type: None,
             in_defer: false,

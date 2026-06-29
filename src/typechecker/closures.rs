@@ -98,6 +98,19 @@ impl<'a> super::TypeChecker<'a> {
         param_types: Vec<Type>,
         body_ty: Type,
     ) -> Type {
+        // FE-3c — inside a `#[gpu]` function, reject a closure that captures
+        // host (non-`GpuSafe`) state. Runs here (the single closure-typing
+        // chokepoint) so both the synth and expected-type paths are covered;
+        // the capture set is computed shadow-aware from `outer_bindings`.
+        if self.current_fn_is_gpu {
+            self.check_gpu_closure_captures(
+                closure_span,
+                closure_param_names,
+                body,
+                outer_bindings,
+            );
+        }
+
         let return_type = Box::new(body_ty);
         let force_repeatable = matches!(
             capture_mode,

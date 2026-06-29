@@ -45,7 +45,7 @@ use crate::ast::{Block, Expr, ExprKind, Function, Stmt, StmtKind, TypeExpr};
 use crate::resolver::SpanKey;
 use crate::token::Span;
 use crate::typechecker::TypeErrorKind;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Why a type is not GPU-safe, plus the field/element path from the
 /// signature/binding type down to the offending leaf. `path` reads
@@ -244,6 +244,360 @@ impl<'a> super::TypeChecker<'a> {
         } else {
             ann.map(BindingTy::Annot)
         }
+    }
+
+    /// FE-3c entry point. Called from `closure_type_with_capture_inference`
+    /// for every closure typed inside a `#[gpu]` function. A closure may not
+    /// capture *host* state (design.md § GPU Subset Constraints — "Closures
+    /// that capture from host memory"); the type-based rule is that a captured
+    /// outer binding whose type is not `GpuSafe` is a host capture. Capturing
+    /// only `GpuSafe` values (or nothing) is fine — those lower as kernel
+    /// constants.
+    ///
+    /// FE-2 (params) and FE-2b (local `let`s) already make most in-scope
+    /// bindings `GpuSafe`, so this mainly catches the residual: a non-`let`
+    /// pattern binding (a `for` / `match` / `if let` variable over a
+    /// non-`GpuSafe` scrutinee) captured by a closure. Each captured outer
+    /// name is reported once, at the closure span.
+    pub(super) fn check_gpu_closure_captures(
+        &mut self,
+        closure_span: &Span,
+        closure_param_names: &[String],
+        body: &Expr,
+        outer_bindings: &HashMap<String, Type>,
+    ) {
+        let mut shadows: Vec<HashSet<String>> = vec![closure_param_names.iter().cloned().collect()];
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut found: Vec<(String, GpuUnsafe)> = Vec::new();
+        self.gpu_collect_captures(body, outer_bindings, &mut shadows, &mut seen, &mut found);
+        for (name, bad) in found {
+            self.emit_gpu_host_capture(closure_span.clone(), &name, &bad);
+        }
+    }
+
+    /// Shadow-aware free-variable walk over a closure body. Records, once per
+    /// name, each captured outer binding (present in `outer`, not shadowed by
+    /// a closure param / inner `let` / nested pattern) whose type is not
+    /// `GpuSafe`. Uniform traversal (unlike the moded once-callability walker
+    /// in `closures.rs`): every sub-expression is walked the same way; only
+    /// identifiers and shadow-introducing forms carry logic. The exhaustive
+    /// match makes the compiler enforce that no expression form is missed.
+    fn gpu_collect_captures(
+        &self,
+        expr: &Expr,
+        outer: &HashMap<String, Type>,
+        shadows: &mut Vec<HashSet<String>>,
+        seen: &mut HashSet<String>,
+        out: &mut Vec<(String, GpuUnsafe)>,
+    ) {
+        match &expr.kind {
+            ExprKind::Identifier(name) => self.note_capture(name, outer, shadows, seen, out),
+            ExprKind::SelfValue => self.note_capture("self", outer, shadows, seen, out),
+
+            // Leaves — no captured sub-expressions. (An f-string's interpolated
+            // exprs are not walked, mirroring the once-callability walker; a
+            // captured heap value there is left to FE-4's effect backstop.)
+            ExprKind::Integer(..)
+            | ExprKind::Float(..)
+            | ExprKind::Bool(..)
+            | ExprKind::CharLit(..)
+            | ExprKind::ByteLit(..)
+            | ExprKind::StringLit(..)
+            | ExprKind::MultiStringLit(..)
+            | ExprKind::InterpolatedStringLit(..)
+            | ExprKind::CStringLit { .. }
+            | ExprKind::Path { .. }
+            | ExprKind::SelfType
+            | ExprKind::PipePlaceholder
+            | ExprKind::OffsetOf { .. }
+            | ExprKind::Error
+            | ExprKind::Break { value: None, .. }
+            | ExprKind::Continue { .. }
+            | ExprKind::Return(None) => {}
+
+            ExprKind::Binary { left, right, .. }
+            | ExprKind::Pipe { left, right }
+            | ExprKind::NilCoalesce { left, right } => {
+                self.gpu_collect_captures(left, outer, shadows, seen, out);
+                self.gpu_collect_captures(right, outer, shadows, seen, out);
+            }
+            ExprKind::Unary { operand, .. } => {
+                self.gpu_collect_captures(operand, outer, shadows, seen, out)
+            }
+            ExprKind::Cast { expr: inner, .. } | ExprKind::Question(inner) => {
+                self.gpu_collect_captures(inner, outer, shadows, seen, out)
+            }
+            ExprKind::Break { value: Some(v), .. } | ExprKind::Return(Some(v)) => {
+                self.gpu_collect_captures(v, outer, shadows, seen, out)
+            }
+
+            ExprKind::Call { callee, args } => {
+                self.gpu_collect_captures(callee, outer, shadows, seen, out);
+                for arg in args {
+                    self.gpu_collect_captures(&arg.value, outer, shadows, seen, out);
+                }
+            }
+            ExprKind::MethodCall { object, args, .. } => {
+                self.gpu_collect_captures(object, outer, shadows, seen, out);
+                for arg in args {
+                    self.gpu_collect_captures(&arg.value, outer, shadows, seen, out);
+                }
+            }
+            ExprKind::OptionalChain { object, args, .. } => {
+                self.gpu_collect_captures(object, outer, shadows, seen, out);
+                if let Some(arg_list) = args {
+                    for arg in arg_list {
+                        self.gpu_collect_captures(&arg.value, outer, shadows, seen, out);
+                    }
+                }
+            }
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                self.gpu_collect_captures(object, outer, shadows, seen, out)
+            }
+            ExprKind::Index { object, index } => {
+                self.gpu_collect_captures(object, outer, shadows, seen, out);
+                self.gpu_collect_captures(index, outer, shadows, seen, out);
+            }
+            ExprKind::Range { start, end, .. } => {
+                if let Some(s) = start {
+                    self.gpu_collect_captures(s, outer, shadows, seen, out);
+                }
+                if let Some(e) = end {
+                    self.gpu_collect_captures(e, outer, shadows, seen, out);
+                }
+            }
+            ExprKind::Tuple(es) | ExprKind::ArrayLiteral(es) => {
+                for e in es {
+                    self.gpu_collect_captures(e, outer, shadows, seen, out);
+                }
+            }
+            ExprKind::PrefixCollectionLiteral { items, .. } => {
+                for e in items {
+                    self.gpu_collect_captures(e, outer, shadows, seen, out);
+                }
+            }
+            ExprKind::RepeatLiteral { value, count, .. } => {
+                self.gpu_collect_captures(value, outer, shadows, seen, out);
+                self.gpu_collect_captures(count, outer, shadows, seen, out);
+            }
+            ExprKind::MapLiteral(entries) => {
+                for (k, v) in entries {
+                    self.gpu_collect_captures(k, outer, shadows, seen, out);
+                    self.gpu_collect_captures(v, outer, shadows, seen, out);
+                }
+            }
+            ExprKind::StructLiteral { fields, spread, .. } => {
+                for f in fields {
+                    self.gpu_collect_captures(&f.value, outer, shadows, seen, out);
+                }
+                if let Some(s) = spread {
+                    self.gpu_collect_captures(s, outer, shadows, seen, out);
+                }
+            }
+
+            ExprKind::Block(block) | ExprKind::Comptime(block) => {
+                self.gpu_collect_captures_block(block, outer, shadows, seen, out)
+            }
+            ExprKind::Par(body)
+            | ExprKind::Seq(body)
+            | ExprKind::Unsafe(body)
+            | ExprKind::Try(body) => {
+                self.gpu_collect_captures_block(body, outer, shadows, seen, out)
+            }
+            ExprKind::Lock { body, .. }
+            | ExprKind::Loop { body, .. }
+            | ExprKind::LabeledBlock { body, .. } => {
+                self.gpu_collect_captures_block(body, outer, shadows, seen, out)
+            }
+            ExprKind::Providers { bindings, body } => {
+                for binding in bindings {
+                    self.gpu_collect_captures(&binding.value, outer, shadows, seen, out);
+                }
+                self.gpu_collect_captures_block(body, outer, shadows, seen, out);
+            }
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                self.gpu_collect_captures(condition, outer, shadows, seen, out);
+                self.gpu_collect_captures_block(then_block, outer, shadows, seen, out);
+                if let Some(eb) = else_branch {
+                    self.gpu_collect_captures(eb, outer, shadows, seen, out);
+                }
+            }
+            ExprKind::While {
+                condition, body, ..
+            } => {
+                self.gpu_collect_captures(condition, outer, shadows, seen, out);
+                self.gpu_collect_captures_block(body, outer, shadows, seen, out);
+            }
+            // Pattern-binding forms push the pattern's names as a shadow scope
+            // over the guarded body (the bound names are the closure's locals,
+            // not captures).
+            ExprKind::IfLet {
+                pattern,
+                value,
+                then_block,
+                else_branch,
+            } => {
+                self.gpu_collect_captures(value, outer, shadows, seen, out);
+                shadows.push(pattern.binding_names().into_iter().collect());
+                self.gpu_collect_captures_block(then_block, outer, shadows, seen, out);
+                shadows.pop();
+                if let Some(eb) = else_branch {
+                    self.gpu_collect_captures(eb, outer, shadows, seen, out);
+                }
+            }
+            ExprKind::WhileLet {
+                pattern,
+                value,
+                body,
+                ..
+            } => {
+                self.gpu_collect_captures(value, outer, shadows, seen, out);
+                shadows.push(pattern.binding_names().into_iter().collect());
+                self.gpu_collect_captures_block(body, outer, shadows, seen, out);
+                shadows.pop();
+            }
+            ExprKind::For {
+                pattern,
+                iterable,
+                body,
+                ..
+            } => {
+                self.gpu_collect_captures(iterable, outer, shadows, seen, out);
+                shadows.push(pattern.binding_names().into_iter().collect());
+                self.gpu_collect_captures_block(body, outer, shadows, seen, out);
+                shadows.pop();
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                self.gpu_collect_captures(scrutinee, outer, shadows, seen, out);
+                for arm in arms {
+                    shadows.push(arm.pattern.binding_names().into_iter().collect());
+                    if let Some(g) = &arm.guard {
+                        self.gpu_collect_captures(g, outer, shadows, seen, out);
+                    }
+                    self.gpu_collect_captures(&arm.body, outer, shadows, seen, out);
+                    shadows.pop();
+                }
+            }
+            // A nested closure's params shadow within its body; its own
+            // captures of `outer` are still this `#[gpu]` function's captures.
+            ExprKind::Closure {
+                params: nested_params,
+                body: nested_body,
+                ..
+            } => {
+                let mut nested_scope: HashSet<String> = HashSet::new();
+                for p in nested_params {
+                    for n in p.pattern.binding_names() {
+                        nested_scope.insert(n);
+                    }
+                }
+                shadows.push(nested_scope);
+                self.gpu_collect_captures(nested_body, outer, shadows, seen, out);
+                shadows.pop();
+            }
+        }
+    }
+
+    fn gpu_collect_captures_block(
+        &self,
+        block: &Block,
+        outer: &HashMap<String, Type>,
+        shadows: &mut Vec<HashSet<String>>,
+        seen: &mut HashSet<String>,
+        out: &mut Vec<(String, GpuUnsafe)>,
+    ) {
+        shadows.push(HashSet::new());
+        for stmt in &block.stmts {
+            match &stmt.kind {
+                StmtKind::Let { pattern, value, .. } => {
+                    self.gpu_collect_captures(value, outer, shadows, seen, out);
+                    if let Some(top) = shadows.last_mut() {
+                        top.extend(pattern.binding_names());
+                    }
+                }
+                StmtKind::LetUninit { name, .. } => {
+                    if let Some(top) = shadows.last_mut() {
+                        top.insert(name.clone());
+                    }
+                }
+                StmtKind::LetElse {
+                    pattern,
+                    value,
+                    else_block,
+                    ..
+                } => {
+                    self.gpu_collect_captures(value, outer, shadows, seen, out);
+                    self.gpu_collect_captures_block(else_block, outer, shadows, seen, out);
+                    if let Some(top) = shadows.last_mut() {
+                        top.extend(pattern.binding_names());
+                    }
+                }
+                StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                    self.gpu_collect_captures_block(body, outer, shadows, seen, out)
+                }
+                StmtKind::Assign { target, value } => {
+                    self.gpu_collect_captures(value, outer, shadows, seen, out);
+                    self.gpu_collect_captures(target, outer, shadows, seen, out);
+                }
+                StmtKind::CompoundAssign { target, value, .. } => {
+                    self.gpu_collect_captures(value, outer, shadows, seen, out);
+                    self.gpu_collect_captures(target, outer, shadows, seen, out);
+                }
+                StmtKind::Expr(e) => self.gpu_collect_captures(e, outer, shadows, seen, out),
+                // Desugared away before this phase.
+                StmtKind::MultiAssign { .. } => {}
+            }
+        }
+        if let Some(tail) = &block.final_expr {
+            self.gpu_collect_captures(tail, outer, shadows, seen, out);
+        }
+        shadows.pop();
+    }
+
+    /// Record `name` as a host capture iff it is an outer binding (in `outer`),
+    /// not shadowed by a closure-local, not already reported, and its type is
+    /// not `GpuSafe`.
+    fn note_capture(
+        &self,
+        name: &str,
+        outer: &HashMap<String, Type>,
+        shadows: &[HashSet<String>],
+        seen: &mut HashSet<String>,
+        out: &mut Vec<(String, GpuUnsafe)>,
+    ) {
+        if shadows.iter().any(|s| s.contains(name)) {
+            return;
+        }
+        let Some(ty) = outer.get(name) else {
+            return; // a global / free fn / not an outer binding — not a capture
+        };
+        if !seen.insert(name.to_string()) {
+            return; // report each captured name once
+        }
+        if let Some(bad) = self.gpu_unsafe_reason(ty) {
+            out.push((name.to_string(), bad));
+        }
+    }
+
+    fn emit_gpu_host_capture(&mut self, closure_span: Span, name: &str, bad: &GpuUnsafe) {
+        let where_ = if bad.path.is_empty() {
+            String::new()
+        } else {
+            format!(" (via {})", bad.path.join(" → "))
+        };
+        let message = format!(
+            "a closure in a `#[gpu]` function may not capture host state: it captures \
+             `{name}`, whose type `{leaf}`{where_} is not GPU-compatible. {note}. hint: \
+             {hint}, or pass the value as a kernel argument instead of capturing it.",
+            leaf = bad.leaf,
+            note = bad.reason.note(),
+            hint = bad.reason.hint(),
+        );
+        self.type_error(message, closure_span, TypeErrorKind::GpuNotSafe);
     }
 
     fn emit_gpu_not_safe_binding(&mut self, bad: &GpuUnsafe, span: Span) {

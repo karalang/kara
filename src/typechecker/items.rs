@@ -1463,11 +1463,17 @@ impl<'a> super::TypeChecker<'a> {
         if comptime_fn {
             self.comptime_depth += 1;
         }
+        // FE-3c — flag the body as a `#[gpu]` context so the closure-capture
+        // hook rejects host-capturing closures. Saved/restored so a non-gpu
+        // sibling item is unaffected.
+        let saved_fn_is_gpu = self.current_fn_is_gpu;
+        self.current_fn_is_gpu = f.is_gpu;
         if f.body.final_expr.is_some() {
             self.check_block_against(&f.body, &return_type);
         } else {
             self.infer_block(&f.body);
         }
+        self.current_fn_is_gpu = saved_fn_is_gpu;
         if comptime_fn {
             self.comptime_depth -= 1;
         }
