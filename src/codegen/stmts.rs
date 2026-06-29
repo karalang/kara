@@ -3142,6 +3142,14 @@ impl<'ctx> super::Codegen<'ctx> {
                                     self.register_tuple_literal_heap_env_elem_drops(
                                         value, slot.ptr, agg_ty,
                                     );
+                                    // Container-escape caller-adopt: `let r = build(k)`
+                                    // where `build` returns a closure-owning tuple —
+                                    // register a per-element `FreeClosureEnv` on `r`
+                                    // (no inc; the callee moved the boxes out). No-op
+                                    // unless `value` is such a call.
+                                    self.register_container_call_heap_env_elem_drops(
+                                        value, var_name,
+                                    );
                                     if self.aggregate_has_heap_field(agg_ty) {
                                         // Proven LLVM-type path: a tuple whose heap
                                         // is a directly-visible Vec/String field
@@ -3203,6 +3211,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                 self.register_array_literal_heap_env_elem_drops(
                                     value, slot.ptr, arr_ty,
                                 );
+                                // Container-escape caller-adopt: `let r = build(k)`
+                                // where `build` returns a closure-owning array.
+                                self.register_container_call_heap_env_elem_drops(value, var_name);
                             }
                         }
                     }

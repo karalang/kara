@@ -1452,6 +1452,22 @@ pub(super) struct Codegen<'ctx> {
     /// computed once before bodies compile, after `fns_returning_heap_env`.
     pub(crate) fns_returning_heap_env_aggregate:
         std::collections::HashMap<String, std::collections::HashSet<String>>,
+    /// Names of functions whose return value is a heap-env-OWNING TUPLE — a tuple
+    /// local owning one or more heap-env closure ELEMENTS, returned as a bare tail /
+    /// `return t` (container-escape slice). Maps fn name → the set of returned tuple
+    /// element INDICES that own a heap env. A `let r = <call to such a fn>` binding
+    /// then owns those env boxes (the caller registers a per-element `FreeClosureEnv`;
+    /// the callee moved them out at the same refcount). The tuple twin of
+    /// `fns_returning_heap_env_aggregate`; a FIXPOINT computed before bodies compile.
+    pub(crate) fns_returning_heap_env_tuple:
+        std::collections::HashMap<String, std::collections::HashSet<usize>>,
+    /// Names of functions whose return value is a heap-env-OWNING fixed-size ARRAY —
+    /// the array twin of `fns_returning_heap_env_tuple`. Maps fn name → the returned
+    /// array's heap-env element INDICES. Same caller-adopts / callee-moves-out
+    /// contract; the only codegen difference is the element GEP form (array
+    /// `build_gep [0, idx]` vs tuple `build_struct_gep`).
+    pub(crate) fns_returning_heap_env_array:
+        std::collections::HashMap<String, std::collections::HashSet<usize>>,
     /// Per-function map (reset each function): an aggregate-owner local `h` → the
     /// `(struct type name, field index)` of each heap-env field it owns. Recorded
     /// when the field's `FreeClosureEnv` is registered (struct-literal store OR an
@@ -5164,6 +5180,8 @@ impl<'ctx> Codegen<'ctx> {
             heap_env_closure_vars: std::collections::HashSet::new(),
             heap_env_aggregate_owners: std::collections::HashMap::new(),
             fns_returning_heap_env_aggregate: std::collections::HashMap::new(),
+            fns_returning_heap_env_tuple: std::collections::HashMap::new(),
+            fns_returning_heap_env_array: std::collections::HashMap::new(),
             heap_env_owner_fields: std::collections::HashMap::new(),
             heap_env_tuple_owners: std::collections::HashMap::new(),
             heap_env_array_owners: std::collections::HashMap::new(),
@@ -6460,6 +6478,13 @@ impl<'ctx> Codegen<'ctx> {
         // Runs AFTER `compute_fns_returning_heap_env` (an owner can be built from a
         // fresh heap-env call) and is itself a fixpoint (relay-of-aggregate).
         self.compute_fns_returning_heap_env_aggregate();
+        // Container-escape slice (B-2026-06-22-2): identify functions that return a
+        // TUPLE / ARRAY owning a heap-env closure element, so a `let r = <call to
+        // such a fn>` binding registers a per-element `FreeClosureEnv` (the caller
+        // adopts the moved-out env boxes). The tuple/array twin of the aggregate
+        // fixpoint; runs after it (a relay can chain through a struct builder) and is
+        // itself a fixpoint (relay-of-container).
+        self.compute_fns_returning_heap_env_tuple_array();
         for item in &program.items {
             if let Item::Function(f) = item {
                 if f.generic_params.is_none() {

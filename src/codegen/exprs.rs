@@ -722,6 +722,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         // the env boxes) to the caller — null the owned fields' env
                         // slots so their `FreeClosureEnv` no-ops below.
                         self.neutralize_moved_aggregate_env_slots(name);
+                        // Container-escape move-out (B-2026-06-22-2): the tuple/array
+                        // twin — `return t;` of a tuple/array owner hands its by-value
+                        // aggregate (with the env boxes) to the caller; null the owned
+                        // elements' env slots so their `FreeClosureEnv` no-ops.
+                        self.neutralize_moved_container_env_slots(name);
                         // Channel-end `return rx;`: the moved-out `Sender`/
                         // `Receiver` is now the caller's; suppress the
                         // binding's scope-exit `DropChannelEnd` so its

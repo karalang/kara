@@ -420,62 +420,13 @@ impl<'ctx> super::Codegen<'ctx> {
             self.collect_heap_env_binds_and_owners(func, &self.fns_returning_heap_env_aggregate);
         // Stash for the exhaustive walk (read via `&self` from the arms below).
         self.heap_env_aggregate_owners = owners;
-        // Tuple owners (tuple-store slice): `let t = (make(..), ..)` / `(f, ..)` —
-        // collect the element INDICES that hold a heap-env closure (a FRESH call or
-        // a heap-env BINDING source). `t` then owns those env boxes; codegen
-        // registers an instance `FreeClosureEnv` on each element. Forward `binds` is
-        // already complete (the helper's scan ran above), so a binding-source
-        // element is recognized regardless of source order within the function.
-        let mut tuple_owners: HashMap<String, HashSet<usize>> = HashMap::new();
-        for stmt in &func.body.stmts {
-            if let StmtKind::Let { pattern, value, .. } = &stmt.kind {
-                if let ExprKind::Tuple(elems) = &value.kind {
-                    let idxs: HashSet<usize> = elems
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, e)| {
-                            self.is_heap_env_producing_call(e)
-                                || matches!(&e.kind, ExprKind::Identifier(n) if binds.contains(n))
-                        })
-                        .map(|(i, _)| i)
-                        .collect();
-                    if !idxs.is_empty() {
-                        if let [b] = pattern.binding_names().as_slice() {
-                            tuple_owners.insert(b.clone(), idxs);
-                        }
-                    }
-                }
-            }
-        }
+        // Tuple / array owners (tuple/array-store + container-escape slices):
+        // `let t = (make(..), ..)` / `(f, ..)`, `let a: Array[Fn,N] = [..]`, OR a
+        // relay `let r = build(k)` where `build` returns a closure-owning tuple /
+        // array (container-escape). Factored into `collect_tuple_array_owners`,
+        // shared with the container-return detection fixpoint.
+        let (tuple_owners, array_owners) = self.collect_tuple_array_owners(func, &binds);
         self.heap_env_tuple_owners = tuple_owners;
-        // Array owners (array-store slice): `let a: Array[Fn,N] = [make(..), ..]` /
-        // `[f, ..]` — collect the element INDICES that hold a heap-env closure (a
-        // FRESH call or a heap-env BINDING source). `a` then owns those env boxes;
-        // codegen registers an instance `FreeClosureEnv` on each element. Only an
-        // `ExprKind::ArrayLiteral` RHS qualifies: a bare `[..]` lowers to a Vec
-        // `PrefixCollectionLiteral` (dynamic-length — the deferred Vec slice), which
-        // this match deliberately does not see, so the Vec form stays rejected.
-        let mut array_owners: HashMap<String, HashSet<usize>> = HashMap::new();
-        for stmt in &func.body.stmts {
-            if let StmtKind::Let { pattern, value, .. } = &stmt.kind {
-                if let ExprKind::ArrayLiteral(elems) = &value.kind {
-                    let idxs: HashSet<usize> = elems
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, e)| {
-                            self.is_heap_env_producing_call(e)
-                                || matches!(&e.kind, ExprKind::Identifier(n) if binds.contains(n))
-                        })
-                        .map(|(i, _)| i)
-                        .collect();
-                    if !idxs.is_empty() {
-                        if let [b] = pattern.binding_names().as_slice() {
-                            array_owners.insert(b.clone(), idxs);
-                        }
-                    }
-                }
-            }
-        }
         self.heap_env_array_owners = array_owners;
         // Vec owners (Vec-store slice): a `Vec[Fn]` local bound `let v: Vec[Fn] =
         // Vec.new()` / `Vec.with_capacity(..)` that receives at least one heap-env
@@ -616,7 +567,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     // misuse. Any other expr statement is walked as usual.
                     if let ExprKind::Return(Some(inner)) = &e.kind {
                         if matches!(&inner.kind, ExprKind::Identifier(n)
-                            if binds.contains(n) || self.heap_env_aggregate_owners.contains_key(n))
+                            if binds.contains(n)
+                                || self.heap_env_aggregate_owners.contains_key(n)
+                                || self.heap_env_tuple_owners.contains_key(n)
+                                || self.heap_env_array_owners.contains_key(n))
                         {
                             false
                         } else {
@@ -651,7 +605,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the source / the owner's field env slots); anything else in tail
                 // position is walked as usual.
                 let returnable = matches!(&tail.kind, ExprKind::Identifier(n)
-                    if binds.contains(n) || self.heap_env_aggregate_owners.contains_key(n));
+                    if binds.contains(n)
+                        || self.heap_env_aggregate_owners.contains_key(n)
+                        || self.heap_env_tuple_owners.contains_key(n)
+                        || self.heap_env_array_owners.contains_key(n));
                 bad = !returnable && self.expr_has_heap_env_misuse(tail, &binds);
             }
         }
@@ -1361,6 +1318,170 @@ impl<'ctx> super::Codegen<'ctx> {
             },
             _ => None,
         })
+    }
+
+    /// The heap-env element INDICES of `elems` — a tuple / array literal's element
+    /// list — that hold a heap-env closure: a FRESH heap-env-producing call
+    /// (`make(k)`) or a heap-env BINDING source (`f` in `binds`).
+    fn heap_env_elem_indices(&self, elems: &[Expr], binds: &HashSet<String>) -> HashSet<usize> {
+        elems
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| {
+                self.is_heap_env_producing_call(e)
+                    || matches!(&e.kind, ExprKind::Identifier(n) if binds.contains(n))
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// The returned element-index set if `e` is a CALL to a fn in `map` (a
+    /// container-returning fn). The tuple / array twin of `aggregate_call_owner_fields`.
+    fn container_call_owner_elems(
+        &self,
+        e: &Expr,
+        map: &HashMap<String, HashSet<usize>>,
+    ) -> Option<HashSet<usize>> {
+        let ExprKind::Call { callee, .. } = &e.kind else {
+            return None;
+        };
+        let name = match &callee.kind {
+            ExprKind::Identifier(n) => n,
+            ExprKind::Path { segments, .. } if segments.len() == 1 => &segments[0],
+            _ => return None,
+        };
+        map.get(name).cloned()
+    }
+
+    /// Collect, for `func`, the TUPLE and ARRAY owners → their heap-env element
+    /// indices. An owner is bound from (a) a tuple / array LITERAL with a sanctioned
+    /// heap-env store element (tuple/array-store slices) OR (b) a relay
+    /// `let r = build(k)` where `build` returns a closure-owning tuple / array
+    /// (container-escape — uses `fns_returning_heap_env_tuple` / `_array`). Shared by
+    /// the misuse guard (pass 1) and the container-return fixpoint, keeping owner
+    /// reasoning in one place (the tuple/array twin of
+    /// `collect_heap_env_binds_and_owners`). `binds` must already be complete.
+    fn collect_tuple_array_owners(
+        &self,
+        func: &Function,
+        binds: &HashSet<String>,
+    ) -> (
+        HashMap<String, HashSet<usize>>,
+        HashMap<String, HashSet<usize>>,
+    ) {
+        let mut tuple_owners: HashMap<String, HashSet<usize>> = HashMap::new();
+        let mut array_owners: HashMap<String, HashSet<usize>> = HashMap::new();
+        for stmt in &func.body.stmts {
+            let StmtKind::Let { pattern, value, .. } = &stmt.kind else {
+                continue;
+            };
+            let names = pattern.binding_names();
+            let [b] = names.as_slice() else {
+                continue;
+            };
+            let b = b.clone();
+            match &value.kind {
+                ExprKind::Tuple(elems) => {
+                    let idxs = self.heap_env_elem_indices(elems, binds);
+                    if !idxs.is_empty() {
+                        tuple_owners.insert(b, idxs);
+                    }
+                }
+                ExprKind::ArrayLiteral(elems) => {
+                    let idxs = self.heap_env_elem_indices(elems, binds);
+                    if !idxs.is_empty() {
+                        array_owners.insert(b, idxs);
+                    }
+                }
+                _ => {
+                    if let Some(idxs) =
+                        self.container_call_owner_elems(value, &self.fns_returning_heap_env_tuple)
+                    {
+                        tuple_owners.insert(b, idxs);
+                    } else if let Some(idxs) =
+                        self.container_call_owner_elems(value, &self.fns_returning_heap_env_array)
+                    {
+                        array_owners.insert(b, idxs);
+                    }
+                }
+            }
+        }
+        (tuple_owners, array_owners)
+    }
+
+    /// The owned element-index set if `func` returns — as a bare-identifier TAIL or
+    /// top-level `return <bare identifier>;` — a local in `owners`. `None` otherwise.
+    /// Branch-buried returns are intentionally NOT detected (the sound under-
+    /// approximation that keeps detection in lockstep with the guard + move-out
+    /// codegen). The tuple/array twin of `func_returns_heap_env_aggregate`.
+    fn func_returns_container_owner(
+        &self,
+        func: &Function,
+        owners: &HashMap<String, HashSet<usize>>,
+    ) -> Option<HashSet<usize>> {
+        if owners.is_empty() {
+            return None;
+        }
+        let returned = |e: &Expr| match &e.kind {
+            ExprKind::Identifier(n) => owners.get(n).cloned(),
+            _ => None,
+        };
+        if let Some(idxs) = func.body.final_expr.as_deref().and_then(&returned) {
+            return Some(idxs);
+        }
+        func.body.stmts.iter().find_map(|s| match &s.kind {
+            StmtKind::Expr(e) => match &e.kind {
+                ExprKind::Return(Some(inner)) => returned(inner),
+                _ => None,
+            },
+            _ => None,
+        })
+    }
+
+    /// Populate `fns_returning_heap_env_tuple` / `_array` (functions that RETURN a
+    /// tuple / array local owning one or more heap-env closure elements, as a bare
+    /// tail / top-level `return t`). A FIXPOINT so a relay-of-container
+    /// (`let r = build(k); r`) is recognized once its inner builder is. Runs after
+    /// `compute_fns_returning_heap_env_aggregate` (an owner's binds come from a fresh
+    /// heap-env call, and a tuple/array element can be a heap-env binding). The
+    /// tuple/array twin of `compute_fns_returning_heap_env_aggregate`.
+    pub(super) fn compute_fns_returning_heap_env_tuple_array(&mut self) {
+        let funcs: Vec<Function> = self.fn_asts.values().cloned().collect();
+        loop {
+            let mut changed = false;
+            for func in &funcs {
+                let have_tuple = self.fns_returning_heap_env_tuple.contains_key(&func.name);
+                let have_array = self.fns_returning_heap_env_array.contains_key(&func.name);
+                if have_tuple && have_array {
+                    continue;
+                }
+                // `binds` for this func (a tuple/array element may be a heap-env
+                // binding); the aggregate map seeds owner reasoning shared with the
+                // struct path.
+                let (binds, _) = self.collect_heap_env_binds_and_owners(
+                    func,
+                    &self.fns_returning_heap_env_aggregate,
+                );
+                let (tuple_owners, array_owners) = self.collect_tuple_array_owners(func, &binds);
+                if !have_tuple {
+                    if let Some(idxs) = self.func_returns_container_owner(func, &tuple_owners) {
+                        self.fns_returning_heap_env_tuple
+                            .insert(func.name.clone(), idxs);
+                        changed = true;
+                    }
+                }
+                if !have_array {
+                    if let Some(idxs) = self.func_returns_container_owner(func, &array_owners) {
+                        self.fns_returning_heap_env_array
+                            .insert(func.name.clone(), idxs);
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
     }
 
     /// `true` when closure-literal `|params| body` captures at least one name in

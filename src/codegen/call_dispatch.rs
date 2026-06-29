@@ -2274,6 +2274,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // caller — null the owned fields' env slots so their scope-exit
                 // `FreeClosureEnv` no-ops; the caller's binding frees them.
                 self.neutralize_moved_aggregate_env_slots(name);
+                // Container-escape move-out (B-2026-06-22-2): the tuple/array twin —
+                // a bare tuple/array-owner tail hands its by-value aggregate
+                // (carrying the env boxes) to the caller; null the owned elements'
+                // env slots so their scope-exit `FreeClosureEnv` no-ops.
+                self.neutralize_moved_container_env_slots(name);
             }
             // (Option[shared T] tail FIELD returns — `fn f() ->
             // Option[T] { x.next }` — are compensated during body
@@ -2598,6 +2603,137 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder
                 .build_store(env_gep, ptr_ty.const_null())
                 .unwrap();
+        }
+    }
+
+    /// Container-escape move-out (B-2026-06-22-2): when a TUPLE or ARRAY owner
+    /// `name` is RETURNED (a bare-identifier tail or a top-level `return t;`), its
+    /// by-value aggregate VALUE is handed to the caller carrying the env boxes — so
+    /// this function must NOT RC-drop them at scope exit. For each owned element,
+    /// null the inline fat pointer's env-pointer slot in `name`'s alloca at runtime,
+    /// so the element's scope-exit `FreeClosureEnv` (which skips a null env) no-ops.
+    /// The already-materialized return value keeps the env, and the caller's
+    /// `let r = build(..)` binding frees it (the caller registers the element drops
+    /// via `register_container_call_heap_env_elem_drops`). The tuple/array twin of
+    /// `neutralize_moved_aggregate_env_slots`; tuple elements GEP via the slot's
+    /// StructType, array elements via `[0, idx]`. No-op for a name owning no
+    /// tuple/array heap-env elements.
+    pub(super) fn neutralize_moved_container_env_slots(&mut self, name: &str) {
+        let Some(slot) = self.variables.get(name).copied() else {
+            return;
+        };
+        let fat_ty = self.closure_value_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let null = ptr_ty.const_null();
+        if let Some(idxs) = self.heap_env_tuple_owners.get(name).cloned() {
+            let inkwell::types::BasicTypeEnum::StructType(agg_ty) = slot.ty else {
+                return;
+            };
+            for idx in idxs {
+                let elem_gep = self
+                    .builder
+                    .build_struct_gep(agg_ty, slot.ptr, idx as u32, "clo.cont.tup.elem")
+                    .unwrap();
+                let env_gep = self
+                    .builder
+                    .build_struct_gep(fat_ty, elem_gep, 1, "clo.cont.tup.envslot")
+                    .unwrap();
+                self.builder.build_store(env_gep, null).unwrap();
+            }
+        } else if let Some(idxs) = self.heap_env_array_owners.get(name).cloned() {
+            let inkwell::types::BasicTypeEnum::ArrayType(arr_ty) = slot.ty else {
+                return;
+            };
+            let i64_t = self.context.i64_type();
+            let zero = i64_t.const_int(0, false);
+            for idx in idxs {
+                let elem_gep = unsafe {
+                    self.builder
+                        .build_gep(
+                            arr_ty,
+                            slot.ptr,
+                            &[zero, i64_t.const_int(idx as u64, false)],
+                            "clo.cont.arr.elem",
+                        )
+                        .unwrap()
+                };
+                let env_gep = self
+                    .builder
+                    .build_struct_gep(fat_ty, elem_gep, 1, "clo.cont.arr.envslot")
+                    .unwrap();
+                self.builder.build_store(env_gep, null).unwrap();
+            }
+        }
+    }
+
+    /// Container-escape caller-adopt (B-2026-06-22-2): for `let r = build(k)` where
+    /// `build` returns a closure-owning TUPLE / ARRAY (in
+    /// `fns_returning_heap_env_tuple` / `_array`), register an instance
+    /// `FreeClosureEnv` on each of `r`'s owned elements. `build` MOVED the env boxes
+    /// out at the same refcount (its return neutralized the owner's element env
+    /// slots), so `r`'s element drop is the new sole RC-owner — NO inc, freed once
+    /// at `r`'s scope exit. Iterates a SORTED index list for deterministic IR. The
+    /// tuple/array twin of `register_aggregate_call_heap_env_field_drops`; only the
+    /// element GEP form differs (array `build_gep [0, idx]` vs tuple
+    /// `build_struct_gep`). A no-op unless `value` is a call to such a fn.
+    pub(super) fn register_container_call_heap_env_elem_drops(
+        &mut self,
+        value: &Expr,
+        var_name: &str,
+    ) {
+        let ExprKind::Call { callee, .. } = &value.kind else {
+            return;
+        };
+        let callee_name = match &callee.kind {
+            ExprKind::Identifier(n) => n.clone(),
+            ExprKind::Path { segments, .. } if segments.len() == 1 => segments[0].clone(),
+            _ => return,
+        };
+        let Some(slot) = self.variables.get(var_name).copied() else {
+            return;
+        };
+        if let Some(idxs) = self.fns_returning_heap_env_tuple.get(&callee_name).cloned() {
+            let inkwell::types::BasicTypeEnum::StructType(agg_ty) = slot.ty else {
+                return;
+            };
+            let mut sorted: Vec<usize> = idxs.into_iter().collect();
+            sorted.sort_unstable();
+            for idx in sorted {
+                let elem_gep = self
+                    .builder
+                    .build_struct_gep(agg_ty, slot.ptr, idx as u32, "clo.contret.tup.envslot")
+                    .unwrap();
+                if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                    frame.push(super::state::CleanupAction::FreeClosureEnv {
+                        fat_alloca: elem_gep,
+                    });
+                }
+            }
+        } else if let Some(idxs) = self.fns_returning_heap_env_array.get(&callee_name).cloned() {
+            let inkwell::types::BasicTypeEnum::ArrayType(arr_ty) = slot.ty else {
+                return;
+            };
+            let i64_t = self.context.i64_type();
+            let zero = i64_t.const_int(0, false);
+            let mut sorted: Vec<usize> = idxs.into_iter().collect();
+            sorted.sort_unstable();
+            for idx in sorted {
+                let elem_gep = unsafe {
+                    self.builder
+                        .build_gep(
+                            arr_ty,
+                            slot.ptr,
+                            &[zero, i64_t.const_int(idx as u64, false)],
+                            "clo.contret.arr.envslot",
+                        )
+                        .unwrap()
+                };
+                if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                    frame.push(super::state::CleanupAction::FreeClosureEnv {
+                        fat_alloca: elem_gep,
+                    });
+                }
+            }
         }
     }
 

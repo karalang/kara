@@ -585,6 +585,34 @@ fn main() {
         );
     }
 
+    /// Container-escape slice (B-2026-06-22-2): a function returns a TUPLE / ARRAY
+    /// owning heap-env closure elements; the callee moves the env boxes out (its
+    /// return neutralizes the owner's element env slots) and the caller's binding
+    /// adopts a per-element `FreeClosureEnv`. Covers a fresh-element tuple escape, a
+    /// fresh-element array escape, and a BINDING-element tuple escape (store inc →
+    /// callee source drop + caller adopted drop = one free). Each env freed EXACTLY
+    /// once — without the caller-adopt it leaks (LSan); without the callee neutralize
+    /// it double-frees (ASAN).
+    #[test]
+    fn asan_heap_env_container_escape_freed_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn build_t(k: i64) -> (Fn(i64) -> i64, i64) { let t = (make(k), 1i64); t }
+fn build_a(k: i64) -> Array[Fn(i64) -> i64, 1] { let a: Array[Fn(i64) -> i64, 1] = [make(k)]; a }
+fn build_bf(k: i64) -> (Fn(i64) -> i64, i64) { let f = make(k); let t = (f, 2i64); t }
+fn main() {
+    let r = build_t(10i64);
+    let s = build_a(20i64);
+    let u = build_bf(30i64);
+    println(f"{(r.0)(1i64) + r.1 + (s[0])(2i64) + (u.0)(0i64) + u.1}");
+}
+"#,
+            &["66"],
+            "asan_heap_env_container_escape_freed_no_leak",
+        );
+    }
+
     // ── Baseline: no heap allocations ─────────────────────────────
     // Sanity-checks the harness itself — should trivially pass on any host
     // with a working `cc + ASAN`. If this fails, the infrastructure is

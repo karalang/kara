@@ -751,16 +751,18 @@ mod codegen_tests {
         assert_eq!(out.as_deref(), Some("42\n"));
     }
 
-    /// Returning the tuple that owns the heap-env element is an ESCAPE — rejected
-    /// (tuple escape is a later slice; only call-through / read are sanctioned).
+    /// Returning the tuple that owns the heap-env element is an ESCAPE — the
+    /// container-escape slice MOVES the env boxes out to the caller (the source's
+    /// element env slots are neutralized; the caller's binding adopts the drops).
+    /// Was rejected by the tuple-store slice; now runs and frees once.
     #[test]
-    fn heap_env_tuple_returned_is_rejected() {
-        let err = ir_result(
+    fn heap_env_tuple_returned_runs() {
+        let out = run_program(
             "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
-             fn build(k: i64) -> (Fn(i64) -> i64, i64) { let t = (make(k), 0i64); return t; }\n",
-        )
-        .expect_err("returning a tuple that owns a heap-env element must be rejected");
-        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+             fn build(k: i64) -> (Fn(i64) -> i64, i64) { let t = (make(k), 2i64); t }\n\
+             fn main() { let r = build(20i64); println(f\"{(r.0)(20i64) + r.1}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
     }
 
     /// Projecting the closure element OUT of the tuple (`let g = t.0`) aliases the
@@ -834,17 +836,18 @@ mod codegen_tests {
         assert_eq!(out.as_deref(), Some("42\n"));
     }
 
-    /// Returning the array that owns the heap-env element is an ESCAPE — rejected
-    /// (array escape is a later slice; only call-through is sanctioned).
+    /// Returning the array that owns the heap-env element is an ESCAPE — the
+    /// container-escape slice moves the env boxes out to the caller (the array twin
+    /// of the tuple escape). Was rejected by the array-store slice; now runs.
     #[test]
-    fn heap_env_array_returned_is_rejected() {
-        let err = ir_result(
+    fn heap_env_array_returned_runs() {
+        let out = run_program(
             "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
              fn build(k: i64) -> Array[Fn(i64) -> i64, 1] { \
-              let a: Array[Fn(i64) -> i64, 1] = [make(k)]; return a; }\n",
-        )
-        .expect_err("returning an array that owns a heap-env element must be rejected");
-        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+              let a: Array[Fn(i64) -> i64, 1] = [make(k)]; a }\n\
+             fn main() { let r = build(20i64); println(f\"{(r[0])(22i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
     }
 
     /// Projecting the closure element OUT of the array (`let g = a[0]`) aliases the
@@ -968,6 +971,70 @@ mod codegen_tests {
         .expect_err("a moving method on a heap-env Vec owner must be rejected");
         assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
     }
+
+    // ── Container-escape slice (B-2026-06-22-2) ──
+    // A function may RETURN a TUPLE or fixed-size ARRAY that owns heap-env closure
+    // elements (bare tail or top-level `return t`). The callee MOVES the env boxes
+    // out at the same refcount (its return neutralizes the owner's element env
+    // slots), and the caller's `let r = build(..)` binding ADOPTS a per-element
+    // `FreeClosureEnv` — freed exactly once at the caller. The by-value twin of the
+    // already-landed struct aggregate-escape; Vec escape stays rejected (its
+    // buffer-transfer + drop-loop relocation is a separate slice).
+
+    /// Explicit `return t;` of a tuple owner — the explicit-return move-out arm.
+    #[test]
+    fn heap_env_tuple_returned_explicit_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn build(k: i64) -> (Fn(i64) -> i64, i64) { let t = (make(k), 0i64); return t; }\n\
+             fn main() { let r = build(22i64); println(f\"{(r.0)(20i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// Two heap-env closures in an escaping tuple — both env boxes move out, each
+    /// freed once at the caller.
+    #[test]
+    fn heap_env_two_closure_tuple_escape_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn build(k: i64) -> (Fn(i64) -> i64, Fn(i64) -> i64) { \
+              let t = (make(k), make(k + 1i64)); t }\n\
+             fn main() { let r = build(10i64); println(f\"{(r.0)(1i64) + (r.1)(20i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// A heap-env BINDING element in an escaping tuple (`let f = make(k); let t =
+    /// (f, ..)`): the store inc'd (rc 2), then the callee's source `f` drop (rc 1)
+    /// and the caller's adopted element drop (rc 0) free it exactly once.
+    #[test]
+    fn heap_env_binding_element_tuple_escape_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn build(k: i64) -> (Fn(i64) -> i64, i64) { let f = make(k); let t = (f, 0i64); t }\n\
+             fn main() { let r = build(22i64); println(f\"{(r.0)(20i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// A RELAY re-returns a container built by another fn (`let r = build(k); r`) —
+    /// the detection fixpoint recognizes `relay` once `build` is known, and the env
+    /// boxes flow caller→caller, freed once at the outermost binding.
+    #[test]
+    fn heap_env_tuple_escape_relay_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn build(k: i64) -> (Fn(i64) -> i64, i64) { let t = (make(k), 0i64); t }\n\
+             fn relay(k: i64) -> (Fn(i64) -> i64, i64) { let r = build(k); r }\n\
+             fn main() { let q = relay(21i64); println(f\"{(q.0)(21i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    // (Vec escape stays rejected — covered by `heap_env_vec_returned_is_rejected`
+    // in the Vec-store block above; its buffer-transfer + drop-loop relocation is
+    // the next slice.)
 
     #[test]
     fn escaping_capturing_closure_via_let_is_rejected() {
