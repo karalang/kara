@@ -28,11 +28,14 @@ impl<'a> super::TypeChecker<'a> {
             "Default",
             "Iterator",
         ];
-        // `Numeric` is a built-in *marker* trait satisfied by the primitive
-        // numeric types (not user-derivable, not impl-able). It gates SIMD
-        // `Vector[T, N]` elements and `fn f[T: Numeric]` bounds; satisfaction
-        // is decided structurally in `type_supports_numeric`.
-        if trait_name == "Numeric" {
+        // `Numeric` and `GpuSafe` are built-in *marker* traits satisfied
+        // structurally (not user-derivable, not impl-able). `Numeric` is
+        // satisfied by the primitive numeric types and gates SIMD
+        // `Vector[T, N]` elements / `fn f[T: Numeric]` bounds
+        // (`type_supports_numeric`); `GpuSafe` is the named bound for generic
+        // `#[gpu]` functions (design.md § GpuSafe trait), satisfied by the
+        // FE-2 structural predicate (`is_gpu_safe_type`).
+        if matches!(trait_name, "Numeric" | "GpuSafe") {
             return true;
         }
         self.env.traits.contains_key(trait_name)

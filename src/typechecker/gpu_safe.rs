@@ -643,6 +643,16 @@ impl<'a> super::TypeChecker<'a> {
         self.gpu_unsafe_walk(ty, &subs, &mut visited)
     }
 
+    /// SL-1 — public boolean face of the structural predicate. `T: GpuSafe`
+    /// (the built-in marker bound declared for generic `#[gpu]` functions,
+    /// design.md § GpuSafe trait) is satisfied iff this returns `true` — the
+    /// same "all the way down" walk the FE-2 signature check uses, so the
+    /// explicit bound and the implicit `#[gpu]` constraint agree by
+    /// construction. Exposed as `bool` because `GpuUnsafe` is module-private.
+    pub(super) fn is_gpu_safe_type(&self, ty: &Type) -> bool {
+        self.gpu_unsafe_reason(ty).is_none()
+    }
+
     fn gpu_unsafe_walk(
         &self,
         ty: &Type,

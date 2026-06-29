@@ -1662,6 +1662,12 @@ impl<'a> super::TypeChecker<'a> {
             // Built-in marker trait for primitive numeric types (SIMD lane
             // elements + `fn f[T: Numeric]`). See `type_supports_numeric`.
             "Numeric" => return self.type_supports_numeric(ty),
+            // Built-in structural marker for GPU-compatible types
+            // (design.md § GpuSafe trait). Satisfied iff the FE-2 predicate
+            // finds no offending heap / RC leaf — the same "all the way down"
+            // walk the `#[gpu]` signature check uses, so the explicit
+            // `T: GpuSafe` bound and the implicit `#[gpu]` constraint agree.
+            "GpuSafe" => return self.is_gpu_safe_type(ty),
             _ => {}
         }
         // Other traits: explicit impl in the table, with supertrait closure.

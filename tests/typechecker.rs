@@ -28567,3 +28567,66 @@ fn gpu_fe3c_closure_param_shadows_outer_heap_binding_no_false_reject() {
          fn main() { println(1) }",
     );
 }
+
+// ── SL-1 — `GpuSafe` marker-trait bound ──────────────────────────
+// `GpuSafe` is a built-in structural marker trait usable as an explicit
+// bound (`fn batch[T: GpuSafe](...)`). Satisfied iff the FE-2 predicate
+// finds no heap/RC leaf — the named spelling for the #[gpu] type subset.
+
+#[test]
+fn gpu_sl1_gpusafe_bound_is_a_known_trait() {
+    // The bound parses, resolves, and validates — not an "unknown trait".
+    typecheck_ok("fn batch[T: GpuSafe](x: T) -> T { x }\nfn main() { println(1) }");
+}
+
+#[test]
+fn gpu_sl1_accepts_primitive_arg() {
+    typecheck_ok(
+        "fn batch[T: GpuSafe](x: T) -> T { x }\n\
+         fn main() { let _ = batch(1); }",
+    );
+}
+
+#[test]
+fn gpu_sl1_accepts_array_of_primitive_arg() {
+    typecheck_ok(
+        "fn batch[T: GpuSafe](x: T) -> T { x }\n\
+         fn main() { let a: Array[f64, 3] = [1.0, 2.0, 3.0]; let _ = batch(a); }",
+    );
+}
+
+#[test]
+fn gpu_sl1_rejects_string_arg() {
+    let errs = typecheck_errors(
+        "fn batch[T: GpuSafe](x: T) -> T { x }\n\
+         fn main() { let _ = batch(\"hi\".to_string()); }",
+    );
+    assert!(
+        errs.iter().any(|e| e.message.contains("GpuSafe")),
+        "expected an unsatisfied `GpuSafe` bound; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn gpu_sl1_rejects_struct_with_heap_field_arg() {
+    let errs = typecheck_errors(
+        "struct Holder { name: String }\n\
+         fn batch[T: GpuSafe](x: T) -> T { x }\n\
+         fn main() { let _ = batch(Holder { name: \"x\".to_string() }); }",
+    );
+    assert!(
+        errs.iter().any(|e| e.message.contains("GpuSafe")),
+        "expected an unsatisfied `GpuSafe` bound; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn gpu_sl1_accepts_struct_of_primitives_arg() {
+    typecheck_ok(
+        "struct Vec3 { x: f64, y: f64, z: f64 }\n\
+         fn batch[T: GpuSafe](v: T) -> T { v }\n\
+         fn main() { let _ = batch(Vec3 { x: 1.0, y: 2.0, z: 3.0 }); }",
+    );
+}
