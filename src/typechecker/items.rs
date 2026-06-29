@@ -1472,6 +1472,14 @@ impl<'a> super::TypeChecker<'a> {
             self.comptime_depth -= 1;
         }
 
+        // FE-2b — `GpuSafe` local-binding check. Now that the body is checked
+        // (so `expr_types` carries each binding's value type), reject any
+        // `let` binding in a `#[gpu]` function whose type is GPU-incompatible.
+        // Complements the FE-2 signature check above and FE-4's effect gate.
+        if f.is_gpu {
+            self.check_gpu_safe_bindings(&f.body, &gp);
+        }
+
         self.current_return_type = None;
         self.current_self_type = None;
         self.enclosing_bounds = saved_bounds;

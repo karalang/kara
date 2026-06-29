@@ -15,18 +15,23 @@
 //!   `String` field, `Option[String]`, `(i64, Vec[i64])`, etc.
 //!
 //! The check is purely structural — it mirrors the auto-derived `GpuSafe`
-//! trait (compatibility is "all the way down"). This slice runs over a
-//! `#[gpu]` function's **parameter and return types** — the signature
-//! boundary, the cleanest and highest-confidence enforcement point.
+//! trait (compatibility is "all the way down"). FE-2 runs over a `#[gpu]`
+//! function's **parameter and return types** (the signature boundary, the
+//! highest-confidence enforcement point); **FE-2b** ([`Self::check_gpu_safe_bindings`])
+//! extends the same predicate to the function's **local `let`-binding types**.
 //!
-//! *Local-binding* structural checking is a deliberate follow-up: a heap
-//! local in a `#[gpu]` body almost always originates from an allocating
-//! call (`Vec.new()`, `"…".to_string()`, a collection literal), which
-//! FE-4 rejects through the `allocates(Heap)` effect — so the signature
-//! boundary plus FE-4 already cover the overwhelming majority of cases.
-//! Closures/recursion/`dyn` (FE-3) and `panics`/IO effects (FE-4) are
-//! separate enforcement axes; this slice is only about the *types that
-//! appear in the signature*.
+//! A heap local in a `#[gpu]` body almost always originates from an
+//! allocating call (`Vec.new()`, `"…".to_string()`, a collection literal),
+//! which FE-4 also rejects through the `allocates(Heap)` effect — but FE-2b
+//! gives a precise *type-level* diagnostic at the binding and catches the
+//! rare non-allocating heap local. Each binding's type is read from the
+//! populated `expr_types` table (value-bearing `let`) or lowered from its
+//! annotation (`let x: T;`), so it runs after the body is checked. The walk
+//! descends control-flow blocks (`if`/`match`/loops/block-exprs) to reach
+//! nested bindings; a `let` buried inside a non-control-flow sub-expression
+//! (e.g. a block-expr passed as a call argument) is left to FE-4's effect
+//! backstop. Closures/recursion (FE-3) and `panics`/IO effects (FE-4) are
+//! separate enforcement axes.
 //!
 //! Generic type parameters of the `#[gpu]` function itself are treated as
 //! GPU-safe here (deferred): a generic GPU function declares `T: GpuSafe`
@@ -36,7 +41,9 @@
 //! the field types so `String` is still caught.
 
 use super::types::{Type, VariantTypeInfo};
-use crate::ast::Function;
+use crate::ast::{Block, Expr, ExprKind, Function, Stmt, StmtKind, TypeExpr};
+use crate::resolver::SpanKey;
+use crate::token::Span;
 use crate::typechecker::TypeErrorKind;
 use std::collections::HashMap;
 
@@ -86,6 +93,16 @@ impl GpuUnsafeReason {
     }
 }
 
+/// A local binding's type to check (FE-2b), captured during the immutable
+/// body walk and resolved in the mutable emit pass. A value-bearing `let`
+/// carries the already-lowered type recorded in `expr_types`; an
+/// uninitialised `let x: T;` carries its annotation, lowered with the
+/// function's generic scope at emit time.
+enum BindingTy<'b> {
+    Lowered(Type),
+    Annot(&'b TypeExpr),
+}
+
 impl<'a> super::TypeChecker<'a> {
     /// FE-2 entry point. Called from `check_function` for every `#[gpu]`
     /// function (free fn or impl method) after its parameter and return
@@ -109,6 +126,140 @@ impl<'a> super::TypeChecker<'a> {
                 self.emit_gpu_not_safe(&bad, ret.span.clone(), "return type");
             }
         }
+    }
+
+    /// FE-2b entry point. Called from `check_function` for every `#[gpu]`
+    /// function after its body has been type-checked (so `expr_types` carries
+    /// each binding's value type). Walks the body's `let` bindings — at any
+    /// control-flow nesting depth — and emits an `E0801` `GpuNotSafe`
+    /// diagnostic for any binding whose type is GPU-incompatible.
+    ///
+    /// Two-phase to satisfy the borrow checker: the walk reads `expr_types`
+    /// (`&self`) and collects `(span, type)` pairs, then the emit pass lowers
+    /// any annotation and reports (`&mut self`).
+    pub(super) fn check_gpu_safe_bindings(&mut self, body: &Block, generic_scope: &[String]) {
+        let mut bindings: Vec<(Span, BindingTy)> = Vec::new();
+        self.collect_gpu_let_bindings(body, &mut bindings);
+        for (span, bty) in bindings {
+            let ty = match bty {
+                BindingTy::Lowered(t) => t,
+                BindingTy::Annot(te) => self.lower_type_expr(te, generic_scope),
+            };
+            if let Some(bad) = self.gpu_unsafe_reason(&ty) {
+                self.emit_gpu_not_safe_binding(&bad, span);
+            }
+        }
+    }
+
+    fn collect_gpu_let_bindings<'b>(&self, block: &'b Block, out: &mut Vec<(Span, BindingTy<'b>)>) {
+        for s in &block.stmts {
+            self.collect_let_in_stmt(s, out);
+        }
+        if let Some(fe) = &block.final_expr {
+            self.collect_let_in_expr(fe, out);
+        }
+    }
+
+    fn collect_let_in_stmt<'b>(&self, s: &'b Stmt, out: &mut Vec<(Span, BindingTy<'b>)>) {
+        match &s.kind {
+            StmtKind::Let { value, ty, .. } => {
+                if let Some(bty) = self.binding_ty_for(value, ty.as_ref()) {
+                    out.push((s.span.clone(), bty));
+                }
+                self.collect_let_in_expr(value, out);
+            }
+            StmtKind::LetElse {
+                value,
+                ty,
+                else_block,
+                ..
+            } => {
+                if let Some(bty) = self.binding_ty_for(value, ty.as_ref()) {
+                    out.push((s.span.clone(), bty));
+                }
+                self.collect_let_in_expr(value, out);
+                self.collect_gpu_let_bindings(else_block, out);
+            }
+            // Uninitialised `let x: T;` — no value to consult, so the
+            // annotation is the binding type (lowered in the emit pass).
+            StmtKind::LetUninit { ty, .. } => out.push((s.span.clone(), BindingTy::Annot(ty))),
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                self.collect_gpu_let_bindings(body, out)
+            }
+            StmtKind::Assign { value, .. } | StmtKind::CompoundAssign { value, .. } => {
+                self.collect_let_in_expr(value, out)
+            }
+            StmtKind::Expr(e) => self.collect_let_in_expr(e, out),
+            // Desugared away before this phase.
+            StmtKind::MultiAssign { .. } => {}
+        }
+    }
+
+    /// Recurse into the *block-bearing* expression forms only — those are the
+    /// sole places a nested `let` statement can appear. Leaf expressions carry
+    /// no statements, so they are not walked (see the module-doc note on the
+    /// call-argument-block-expr limitation, which FE-4 backstops).
+    fn collect_let_in_expr<'b>(&self, e: &'b Expr, out: &mut Vec<(Span, BindingTy<'b>)>) {
+        match &e.kind {
+            ExprKind::Block(b) => self.collect_gpu_let_bindings(b, out),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                self.collect_gpu_let_bindings(then_block, out);
+                if let Some(eb) = else_branch {
+                    self.collect_let_in_expr(eb, out);
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    if let Some(g) = &arm.guard {
+                        self.collect_let_in_expr(g, out);
+                    }
+                    self.collect_let_in_expr(&arm.body, out);
+                }
+            }
+            ExprKind::While { body, .. }
+            | ExprKind::WhileLet { body, .. }
+            | ExprKind::For { body, .. }
+            | ExprKind::Loop { body, .. }
+            | ExprKind::LabeledBlock { body, .. } => self.collect_gpu_let_bindings(body, out),
+            _ => {}
+        }
+    }
+
+    /// A value-bearing `let`'s type comes from the checked value (`expr_types`);
+    /// if the value has no recorded type, fall back to the annotation. Returns
+    /// `None` when neither is available (treated as safe — an `Error`/unknown
+    /// binding).
+    fn binding_ty_for<'b>(&self, value: &Expr, ann: Option<&'b TypeExpr>) -> Option<BindingTy<'b>> {
+        if let Some(t) = self.expr_types.get(&SpanKey::from_span(&value.span)) {
+            Some(BindingTy::Lowered(t.clone()))
+        } else {
+            ann.map(BindingTy::Annot)
+        }
+    }
+
+    fn emit_gpu_not_safe_binding(&mut self, bad: &GpuUnsafe, span: Span) {
+        let where_ = if bad.path.is_empty() {
+            String::new()
+        } else {
+            format!(" (via {})", bad.path.join(" → "))
+        };
+        let message = format!(
+            "`{leaf}` is not GPU-compatible{where_}; it is the type of a local \
+             binding in a `#[gpu]` function. {note}. hint: {hint}",
+            leaf = bad.leaf,
+            note = bad.reason.note(),
+            hint = bad.reason.hint(),
+        );
+        self.type_error(message, span, TypeErrorKind::GpuNotSafe);
     }
 
     fn emit_gpu_not_safe(&mut self, bad: &GpuUnsafe, span: crate::token::Span, position: &str) {

@@ -28358,3 +28358,84 @@ fn gpu_fe3b_flags_generic_reachable_through_nongeneric_helper() {
         errs
     );
 }
+
+// ── FE-2b — GpuSafe local-binding check (E0801) ──────────────────
+// The FE-2 structural predicate, extended to a #[gpu] function's local
+// `let`-binding types (at any control-flow depth). Emits GpuNotSafe; the
+// message says "local binding" rather than "parameter"/"return type".
+
+#[test]
+fn gpu_fe2b_rejects_heap_local_binding() {
+    let errs = gpu_safe_errors(
+        "#[gpu]\n\
+         fn k(n: i64) -> i64 { let v: Vec[i64] = Vec.new(); n }\n\
+         fn main() { println(1) }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("`Vec` is not GPU-compatible")
+                && e.message.contains("local binding")),
+        "got: {:?}",
+        errs
+    );
+}
+
+#[test]
+fn gpu_fe2b_rejects_nested_heap_binding_in_if() {
+    // The walk descends control-flow blocks, so a binding inside an `if`
+    // branch is still checked.
+    let errs = gpu_safe_errors(
+        "#[gpu]\n\
+         fn k(n: i64) -> i64 {\n\
+             if n > 0 { let v: Vec[i64] = Vec.new(); n } else { n }\n\
+         }\n\
+         fn main() { println(1) }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("`Vec` is not GPU-compatible")),
+        "got: {:?}",
+        errs
+    );
+}
+
+#[test]
+fn gpu_fe2b_reports_struct_field_path_for_heap_local() {
+    // A struct local whose field is heap reports the field path, reusing the
+    // FE-2 predicate's path plumbing.
+    let errs = gpu_safe_errors(
+        "struct Bad { name: String }\n\
+         #[gpu]\n\
+         fn k() -> i64 { let b: Bad = Bad { name: \"x\" }; 0 }\n\
+         fn main() { println(1) }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("`String` is not GPU-compatible")
+                && e.message.contains("Bad.name")
+                && e.message.contains("local binding")),
+        "got: {:?}",
+        errs
+    );
+}
+
+#[test]
+fn gpu_fe2b_accepts_primitive_and_array_locals() {
+    // Scalar and fixed-array locals are GPU-safe — no GpuNotSafe.
+    typecheck_ok(
+        "#[gpu]\n\
+         fn k(a: ref Array[f64, 3]) -> f64 {\n\
+             let s: f64 = a[0] + a[1]; let t = s * 2.0; t\n\
+         }\n\
+         fn main() { println(1) }",
+    );
+}
+
+#[test]
+fn gpu_fe2b_non_gpu_fn_with_heap_local_is_fine() {
+    // The binding check is gated on `#[gpu]` like the signature check.
+    typecheck_ok(
+        "fn k(n: i64) -> i64 { let v: Vec[i64] = Vec.new(); n }\n\
+         fn main() { println(1) }",
+    );
+}
