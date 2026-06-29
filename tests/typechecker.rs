@@ -28273,3 +28273,88 @@ fn gpu_fe3_recursion_in_non_gpu_fn_is_allowed() {
          fn main() { println(fib(10)) }",
     );
 }
+
+// ── #[gpu] call-graph: generic-callee-without-#[gpu] (E0801), FE-3b ──
+// From any function reachable from a #[gpu] root, a call to a *generic*
+// function lacking #[gpu] is rejected (the "declared GPU-callable" rule —
+// even an all-GpuSafe instantiation needs the annotation). Non-generic
+// clean callees are auto-compatible. See design.md § GPU Subset
+// Constraints > Generics and #[gpu].
+
+fn gpu_generic_callee_errors(source: &str) -> Vec<TypeError> {
+    typecheck_errors(source)
+        .into_iter()
+        .filter(|e| {
+            e.kind == TypeErrorKind::GpuNotSafe && e.message.contains("must be annotated `#[gpu]`")
+        })
+        .collect()
+}
+
+#[test]
+fn gpu_fe3b_rejects_call_to_generic_without_gpu() {
+    let errs = gpu_generic_callee_errors(
+        "fn id[T](x: T) -> T { x }\n\
+         #[gpu]\n\
+         fn k(n: i64) -> i64 { id(n) }\n\
+         fn main() { println(1) }",
+    );
+    assert_eq!(errs.len(), 1, "got: {:?}", errs);
+    assert!(
+        errs[0].message.contains("`id`") && errs[0].message.contains("k → id"),
+        "expected chain mentioning id; got: {}",
+        errs[0].message
+    );
+}
+
+#[test]
+fn gpu_fe3b_accepts_generic_callee_that_is_gpu() {
+    // A generic callee annotated #[gpu] is GPU-callable.
+    typecheck_ok(
+        "#[gpu]\n\
+         fn id[T](x: T) -> T { x }\n\
+         #[gpu]\n\
+         fn k(n: i64) -> i64 { id(n) }\n\
+         fn main() { println(1) }",
+    );
+}
+
+#[test]
+fn gpu_fe3b_accepts_nongeneric_callee_without_gpu() {
+    // A non-generic clean callee needs no annotation (auto-compatible).
+    typecheck_ok(
+        "fn sq(x: i64) -> i64 { x * x }\n\
+         #[gpu]\n\
+         fn k(n: i64) -> i64 { sq(n) }\n\
+         fn main() { println(1) }",
+    );
+}
+
+#[test]
+fn gpu_fe3b_generic_call_outside_gpu_graph_is_allowed() {
+    // The rule is rooted only at #[gpu] functions.
+    typecheck_ok(
+        "fn id[T](x: T) -> T { x }\n\
+         fn k(n: i64) -> i64 { id(n) }\n\
+         fn main() { println(k(3)) }",
+    );
+}
+
+#[test]
+fn gpu_fe3b_flags_generic_reachable_through_nongeneric_helper() {
+    // The generic callee is buried below a non-#[gpu] helper; the whole
+    // transitive graph from the #[gpu] root is the context, so it's flagged
+    // with the full chain.
+    let errs = gpu_generic_callee_errors(
+        "fn ident[T](x: T) -> T { x }\n\
+         fn helper(n: i64) -> i64 { ident(n) }\n\
+         #[gpu]\n\
+         fn k(n: i64) -> i64 { helper(n) }\n\
+         fn main() { println(1) }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("k → helper → ident")),
+        "got: {:?}",
+        errs
+    );
+}

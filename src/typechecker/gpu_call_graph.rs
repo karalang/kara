@@ -1,10 +1,19 @@
-//! FE-3 — `#[gpu]` call-graph validation (recursion rejection).
+//! FE-3 — `#[gpu]` call-graph validation.
 //!
-//! GPU kernels run with no call stack, so **recursion is forbidden** in the
-//! transitive call graph rooted at any `#[gpu]` function (design.md § GPU
-//! Subset Constraints — "Recursion" is in the *Not Allowed* column). This
-//! pass builds a *precise* call graph and, from each `#[gpu]` root, reports
-//! the first reachable cycle with the full call chain from the root.
+//! Two checks over a *precise* call graph rooted at every `#[gpu]` function:
+//!
+//! - **FE-3a — recursion rejection.** GPU kernels run with no call stack, so
+//!   recursion is forbidden anywhere in the transitive call graph rooted at a
+//!   `#[gpu]` function (design.md § GPU Subset Constraints — "Recursion" is in
+//!   the *Not Allowed* column). Reports the first reachable cycle with the
+//!   full chain from the root.
+//! - **FE-3b — generic-callee-without-`#[gpu]`.** From any function reachable
+//!   from a `#[gpu]` root, a call to a *generic* function that lacks `#[gpu]`
+//!   is rejected — even when the instantiation is all-`GpuSafe` (design.md
+//!   § *Generics and `#[gpu]`*: the intent to be GPU-callable must be declared
+//!   at the definition site, not inferred at the call site; this is the
+//!   pre-monomorphization check). A *non-generic* clean callee needs no
+//!   annotation — it is auto-compatible and walked through.
 //!
 //! **Precision matters here because the diagnostic is a hard reject** — a
 //! false-positive cycle would wrongly reject valid GPU code. So unlike the
@@ -19,11 +28,19 @@
 //!   during inference. Unresolved / builtin / indirect callees add no edge
 //!   (a false *negative* — safe: it under-rejects, never over-rejects).
 //!
-//! Scope of this slice: **recursion only**. The sibling `#[gpu]` call-graph
-//! checks — a call to a *generic* function lacking `#[gpu]` (FE-3b) and
-//! host-capturing closures (FE-3c) — are tracked follow-ups. `dyn Trait` is
-//! already globally rejected at type lowering (`E_DYN_TRAIT_NOT_IMPLEMENTED_YET`),
-//! so no `#[gpu]`-specific dyn check is needed.
+//! Both checks reuse the same precise call graph — direct calls keyed by the
+//! callee path, method calls resolved through the typechecker's own
+//! `method_callee_types` side-table (`"Type.method"`). An unresolved / builtin
+//! / indirect callee adds no edge (a safe false *negative*: it under-rejects,
+//! never over-rejects — critical because both are hard rejects). Only
+//! *user-defined* callees (those with a body node) participate; a generic
+//! *stdlib* callee is out of scope here (most stdlib is excluded by FE-4's
+//! effect gate instead).
+//!
+//! Still a tracked follow-up: **FE-3c** host-capturing closures (needs the
+//! closure-capture analysis, not the call graph). `dyn Trait` is already
+//! globally rejected at type lowering (`E_DYN_TRAIT_NOT_IMPLEMENTED_YET`), so
+//! no `#[gpu]`-specific dyn check is needed.
 
 use std::collections::{HashMap, HashSet};
 
@@ -32,13 +49,18 @@ use crate::resolver::SpanKey;
 use crate::token::Span;
 use crate::typechecker::TypeErrorKind;
 
-/// One call-graph node reachable for the recursion analysis.
+/// One call-graph node.
 struct GpuNode {
     /// `fn`-keyword span, for anchoring the root's diagnostic.
     span: Span,
     is_gpu: bool,
-    /// Precise callee keys (free-fn names / `Type.method`).
-    callees: Vec<String>,
+    /// True iff the function declares type/const generic params (`fn f[T]`).
+    /// Effect-only polymorphism (`with E`) does not count — only the
+    /// monomorphized type params drive the FE-3b "declared GPU-callable" rule.
+    is_generic: bool,
+    /// Precise outgoing edges: `(callee key, call-site span)`. Not deduped —
+    /// FE-3b anchors its diagnostic at each individual call site.
+    callees: Vec<(String, Span)>,
 }
 
 impl<'a> super::TypeChecker<'a> {
@@ -54,18 +76,35 @@ impl<'a> super::TypeChecker<'a> {
         // 1. Collect every user function node (free fn, impl method, trait
         //    default-body method) keyed identically to `method_callee_types`
         //    (`"Type.method"`) so resolved method edges join cleanly.
-        let mut nodes: HashMap<String, (Span, bool, &Block)> = HashMap::new();
+        //    Tuple: (fn span, is_gpu, is_generic, body).
+        let mut nodes: HashMap<String, (Span, bool, bool, &Block)> = HashMap::new();
         for item in &program.items {
             match item {
                 Item::Function(f) => {
-                    nodes.insert(f.name.clone(), (f.span.clone(), f.is_gpu, &f.body));
+                    nodes.insert(
+                        f.name.clone(),
+                        (
+                            f.span.clone(),
+                            f.is_gpu,
+                            is_type_generic(&f.generic_params),
+                            &f.body,
+                        ),
+                    );
                 }
                 Item::ImplBlock(b) => {
                     let recv = render_target_base(&b.target_type);
                     for inner in &b.items {
                         if let ImplItem::Method(m) = inner {
                             let key = format!("{recv}.{}", m.name);
-                            nodes.insert(key, (m.span.clone(), m.is_gpu, &m.body));
+                            nodes.insert(
+                                key,
+                                (
+                                    m.span.clone(),
+                                    m.is_gpu,
+                                    is_type_generic(&m.generic_params),
+                                    &m.body,
+                                ),
+                            );
                         }
                     }
                 }
@@ -74,7 +113,15 @@ impl<'a> super::TypeChecker<'a> {
                         if let TraitItem::Method(m) = inner {
                             if let Some(body) = &m.body {
                                 let key = format!("{}.{}", t.name, m.name);
-                                nodes.insert(key, (m.span.clone(), m.is_gpu, body));
+                                nodes.insert(
+                                    key,
+                                    (
+                                        m.span.clone(),
+                                        m.is_gpu,
+                                        is_type_generic(&m.generic_params),
+                                        body,
+                                    ),
+                                );
                             }
                         }
                     }
@@ -88,23 +135,21 @@ impl<'a> super::TypeChecker<'a> {
         // 2. Build the precise forward graph.
         let graph: HashMap<String, GpuNode> = nodes
             .iter()
-            .map(|(key, (span, is_gpu, body))| {
-                let mut callees: Vec<String> = Vec::new();
+            .map(|(key, (span, is_gpu, is_generic, body))| {
+                let mut callees: Vec<(String, Span)> = Vec::new();
                 collect_edges_block(body, &known, method_callee, &mut callees);
-                callees.sort();
-                callees.dedup();
                 (
                     key.clone(),
                     GpuNode {
                         span: span.clone(),
                         is_gpu: *is_gpu,
+                        is_generic: *is_generic,
                         callees,
                     },
                 )
             })
             .collect();
 
-        // 3. From each `#[gpu]` root, find the first reachable cycle.
         let mut roots: Vec<&String> = graph
             .iter()
             .filter(|(_, n)| n.is_gpu)
@@ -113,12 +158,13 @@ impl<'a> super::TypeChecker<'a> {
         roots.sort(); // deterministic diagnostic order
 
         let mut violations: Vec<(Span, String)> = Vec::new();
-        for root in roots {
+
+        // 3a. FE-3a — from each `#[gpu]` root, find the first reachable cycle.
+        for root in &roots {
             let mut path: Vec<String> = Vec::new();
             let mut on_path: HashSet<String> = HashSet::new();
             let mut done: HashSet<String> = HashSet::new();
             if let Some(chain) = find_cycle(root, &graph, &mut path, &mut on_path, &mut done) {
-                let root_span = graph[root].span.clone();
                 let message = format!(
                     "recursion is not allowed in a `#[gpu]` call graph: `{}` reaches a cycle \
                      `{}`. GPU kernels run with no call stack, so a `#[gpu]` function and \
@@ -128,14 +174,79 @@ impl<'a> super::TypeChecker<'a> {
                     root,
                     chain.join(" → "),
                 );
-                violations.push((root_span, message));
+                violations.push((graph[*root].span.clone(), message));
             }
+        }
+
+        // 3b. FE-3b — walk the reachable graph; flag a call to a generic
+        //     callee that lacks `#[gpu]`. One global `visited` set so each
+        //     node's call sites are checked once; the chain is the first
+        //     root→…→caller path found.
+        let mut visited: HashSet<String> = HashSet::new();
+        let mut path: Vec<String> = Vec::new();
+        for root in &roots {
+            collect_generic_callee_violations(
+                root,
+                &graph,
+                &mut path,
+                &mut visited,
+                &mut violations,
+            );
         }
 
         for (span, message) in violations {
             self.type_error(message, span, TypeErrorKind::GpuNotSafe);
         }
     }
+}
+
+/// FE-3b traversal. Visits each node once (global `visited`), tracking the
+/// `path` from a `#[gpu]` root so a flagged call site carries its chain. For
+/// each outgoing edge to a *generic, non-`#[gpu]`* callee, records a violation
+/// anchored at the call site. Does not descend *into* a flagged generic
+/// callee (the boundary is the error); descends into every other callee so the
+/// whole `#[gpu]`-reachable graph is covered.
+fn collect_generic_callee_violations(
+    node: &str,
+    graph: &HashMap<String, GpuNode>,
+    path: &mut Vec<String>,
+    visited: &mut HashSet<String>,
+    violations: &mut Vec<(Span, String)>,
+) {
+    if !visited.insert(node.to_string()) {
+        return;
+    }
+    path.push(node.to_string());
+    if let Some(n) = graph.get(node) {
+        for (callee, span) in &n.callees {
+            let Some(cn) = graph.get(callee) else {
+                continue;
+            };
+            if cn.is_generic && !cn.is_gpu {
+                let mut chain = path.clone();
+                chain.push(callee.clone());
+                let message = format!(
+                    "`{callee}` is generic and must be annotated `#[gpu]` to be called from a \
+                     `#[gpu]` call graph (here: `{}`) — GPU-callability is declared at the \
+                     definition site, not inferred from the call, so even an all-`GpuSafe` \
+                     instantiation needs the annotation. Add `#[gpu]` to `{callee}`. See \
+                     design.md § GPU Subset Constraints > Generics and `#[gpu]`.",
+                    chain.join(" → "),
+                );
+                violations.push((span.clone(), message));
+            } else {
+                collect_generic_callee_violations(callee, graph, path, visited, violations);
+            }
+        }
+    }
+    path.pop();
+}
+
+/// True iff the generic-param list declares at least one type/const param
+/// (`fn f[T]`, `fn g[const N: i64]`) — effect-only params (`with E`) do not
+/// count toward the FE-3b "declared GPU-callable" rule.
+fn is_type_generic(gp: &Option<GenericParams>) -> bool {
+    gp.as_ref().is_some_and(|g| !g.params.is_empty())
 }
 
 /// DFS for the first cycle reachable from `node`. `path`/`on_path` track the
@@ -154,7 +265,7 @@ fn find_cycle(
     on_path.insert(node.to_string());
 
     if let Some(n) = graph.get(node) {
-        for callee in &n.callees {
+        for (callee, _span) in &n.callees {
             if on_path.contains(callee) {
                 // Back-edge → cycle. Report the path so far plus the repeat.
                 let mut chain = path.clone();
@@ -212,7 +323,7 @@ fn collect_edges_block(
     block: &Block,
     known: &HashSet<String>,
     method_callee: &HashMap<SpanKey, String>,
-    out: &mut Vec<String>,
+    out: &mut Vec<(String, Span)>,
 ) {
     for stmt in &block.stmts {
         collect_edges_stmt(stmt, known, method_callee, out);
@@ -226,7 +337,7 @@ fn collect_edges_stmt(
     stmt: &Stmt,
     known: &HashSet<String>,
     method_callee: &HashMap<SpanKey, String>,
-    out: &mut Vec<String>,
+    out: &mut Vec<(String, Span)>,
 ) {
     match &stmt.kind {
         StmtKind::MultiAssign { .. } => {}
@@ -253,13 +364,13 @@ fn collect_edges_expr(
     expr: &Expr,
     known: &HashSet<String>,
     method_callee: &HashMap<SpanKey, String>,
-    out: &mut Vec<String>,
+    out: &mut Vec<(String, Span)>,
 ) {
     match &expr.kind {
         ExprKind::Call { callee, args } => {
             if let Some(key) = callee_key(callee) {
                 if known.contains(&key) {
-                    out.push(key);
+                    out.push((key, expr.span.clone()));
                 }
             }
             collect_edges_expr(callee, known, method_callee, out);
@@ -270,7 +381,7 @@ fn collect_edges_expr(
         ExprKind::MethodCall { object, args, .. } => {
             if let Some(key) = method_callee.get(&SpanKey::from_span(&expr.span)) {
                 if known.contains(key) {
-                    out.push(key.clone());
+                    out.push((key.clone(), expr.span.clone()));
                 }
             }
             collect_edges_expr(object, known, method_callee, out);
@@ -285,7 +396,7 @@ fn collect_edges_expr(
         } => {
             if let Some(key) = method_callee.get(&SpanKey::from_span(&expr.span)) {
                 if known.contains(key) {
-                    out.push(key.clone());
+                    out.push((key.clone(), expr.span.clone()));
                 }
             }
             collect_edges_expr(object, known, method_callee, out);
