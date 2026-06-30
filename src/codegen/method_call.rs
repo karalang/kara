@@ -3469,8 +3469,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // Drop the fresh-owned receiver at the enclosing frame's exit (the
         // position ceiling). The cleanup references the slot pointer, not the
         // synth name, so it stays valid after the name is unregistered below.
+        // For a user-STRUCT element (slice 3f), thread the synthesized
+        // per-element `__karac_drop_<S>` so the `FreeVecBuffer` runs it on every
+        // live element (freeing String/Vec/shared fields) before releasing the
+        // outer buffer — the inline vec-struct recursion only reaches elements
+        // that are *themselves* Vec/String. Scalar/String/nested-Vec elements
+        // return `None` here (not in `struct_types`) and keep the plain path.
         if self.expr_yields_fresh_owned_temp(object) {
-            self.track_vec_var(slot, Some(elem_llvm));
+            if let Some(agg_drop) = self.vec_elem_agg_drop_for_type_expr(&elem_te) {
+                self.track_vec_of_aggs_var(slot, elem_llvm, agg_drop);
+            } else {
+                self.track_vec_var(slot, Some(elem_llvm));
+            }
         }
 
         // Register the synth name so the identifier-keyed `compile_vec_method`

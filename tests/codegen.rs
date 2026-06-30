@@ -19241,6 +19241,48 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_freshtemp_vec_struct_get_emits_agg_drop() {
+        // Slice 3f: `make_recs().get(i)` on a fresh-temp `Vec[Rec]` where `Rec`
+        // has a `String` field. Unlike the scalar/String/nested-Vec cases (which
+        // use the inline vec-struct recursion or a plain free), a user-struct
+        // element needs its synthesized per-element `__karac_drop_struct_Rec`
+        // threaded into the `FreeVecBuffer` — emitted as the `cleanup.adrop`
+        // loop, which calls the struct drop on every live element to free its
+        // `name` String before the outer buffer. Without it each element's String
+        // field leaks (LeakSanitizer on Linux CI). The `Some(r)` borrow
+        // (`Option[ref Rec]`) is NOT independently dropped
+        // (`scrutinee_is_borrow_call`).
+        let src = r#"
+struct Rec { name: String, n: i64 }
+
+fn make_recs() -> Vec[Rec] {
+    let mut v: Vec[Rec] = Vec.new();
+    v.push(Rec { name: "a record name field padded beyond thirty-six bytes", n: 1_i64 });
+    return v;
+}
+
+fn main() {
+    match make_recs().get(0) {
+        Some(r) => println(r.n),
+        None => println(0_i64),
+    };
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("__vrecv_tmp"),
+            "expected the fresh Vec[Rec] receiver materialized into __vrecv_tmp; got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("cleanup.adrop.body"),
+            "expected the per-element aggregate-drop loop (cleanup.adrop) running \
+             __karac_drop_struct_Rec on each element of the fresh-temp Vec[Rec]; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_ir_freshtemp_vec_string_contains_emits_per_element_drop() {
         // Slice 3b-heap follow-on: `contains` on a fresh-temp `Vec[String]`.
         // `contains` returns `bool` (no borrow escapes), but the receiver temp

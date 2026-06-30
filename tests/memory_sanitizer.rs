@@ -3241,6 +3241,83 @@ fn main() {
     }
 
     #[test]
+    fn asan_freshtemp_vec_struct_get_no_double_free() {
+        // Slice 3f: `make_recs().get(i)` on a fresh-temp `Vec[Rec]` (Rec has a
+        // String field) in a loop. `get` returns `Option[ref Rec]` borrowing an
+        // element inside the temp's buffer, which `__vrecv_tmp`'s `FreeVecBuffer`
+        // — now carrying the per-element `__karac_drop_struct_Rec` agg drop —
+        // frees at frame exit. Hazards: (1) the `Some(r)` arm binds a `ref Rec`
+        // that must NOT be independently dropped (`scrutinee_is_borrow_call`),
+        // else it double-frees the element's String field the agg drop also frees
+        // (macOS ASAN); (2) each element's String field must be freed by the agg
+        // drop before the outer buffer, else they leak (Linux LSan). ≥36-byte
+        // String fields defeat LSan short-string reachability; loop accumulates.
+        assert_clean_asan_run(
+            r#"
+struct Rec { name: String, n: i64 }
+
+fn make_recs() -> Vec[Rec] {
+    let mut v: Vec[Rec] = Vec.new();
+    v.push(Rec { name: "first record name field padded beyond thirty-six bytes", n: 10_i64 });
+    v.push(Rec { name: "second record name field padded beyond thirty-six byte", n: 20_i64 });
+    v.push(Rec { name: "third record name field padded beyond thirty-six bytess", n: 30_i64 });
+    return v;
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        match make_recs().get(i) {
+            Some(r) => println(r.n),
+            None => println(0_i64),
+        };
+        i = i + 1;
+    };
+}
+"#,
+            &["10", "20", "30"],
+            "freshtemp_vec_struct_get_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_freshtemp_vec_struct_string_field_read_no_double_free() {
+        // Slice 3f companion: read the borrowed struct's STRING field through the
+        // `Option[ref Rec]` borrow (`r.name`), not just the scalar. This exercises
+        // the borrow aliasing the very String buffer the agg drop frees — a
+        // tighter check that the borrow is read before the frame-exit free and
+        // that the field String is freed exactly once.
+        assert_clean_asan_run(
+            r#"
+struct Rec { name: String, n: i64 }
+
+fn make_recs() -> Vec[Rec] {
+    let mut v: Vec[Rec] = Vec.new();
+    v.push(Rec { name: "alpha name field padded out beyond thirty-six bytes ok", n: 1_i64 });
+    v.push(Rec { name: "beta name field padded out beyond thirty-six bytes okk", n: 2_i64 });
+    return v;
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 2 {
+        match make_recs().get(i) {
+            Some(r) => println(r.name),
+            None => println("none"),
+        };
+        i = i + 1;
+    };
+}
+"#,
+            &[
+                "alpha name field padded out beyond thirty-six bytes ok",
+                "beta name field padded out beyond thirty-six bytes okk",
+            ],
+            "freshtemp_vec_struct_string_field_read_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_freshtemp_vec_string_first_last_no_double_free() {
         // Slice 3b-heap companion: `first`/`last` on a fresh-temp `Vec[String]`
         // — the other two borrow-returning (`Option[ref String]`) read methods

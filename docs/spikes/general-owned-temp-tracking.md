@@ -383,11 +383,34 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    (`test_ir_freshtemp_vec_nested_get_emits_per_element_drop` → `__vrecv_tmp`
    **and** `cleanup.drop.inner.free`) + 1 ASAN
    (`asan_freshtemp_vec_nested_get_no_double_free` — looped, multi-element rows).
-   **Still open under 3b/3e:** deeper-heap element receivers — `Vec[Vec[String]]`
-   / `Vec[String]`-or-Map nested two levels, `Vec[T]`/user struct/enum/`Map`/`Set`
-   *with heap fields* (need element-drop threading, `elem_agg_drop`, the helper
-   doesn't carry; the String + one-level-POD-Vec cases work *because* the element
-   reuses `vec_struct_type` so the inline recursion already covers it);
+   **Slice 3f — user-STRUCT elements via `elem_agg_drop` threading. — DONE
+   2026-06-29.** `make_recs().get(i)` / `.first()` / `.last()` on a fresh-temp
+   `Vec[Rec]` where `Rec` has a `String`/`Vec`/`shared` field now compile. This
+   is the **first slice that adds mechanism rather than lifting a gate**: a struct
+   element's heap fields aren't reached by the inline vec-struct recursion (which
+   only frees elements that are *themselves* Vec/String), so the helper now
+   threads the synthesized per-element `__karac_drop_struct_<S>` — codegen's
+   existing `vec_elem_agg_drop_for_type_expr` (which also handles transitive
+   `shared` fields) → `track_vec_of_aggs_var`, emitted as the `cleanup.adrop`
+   loop. The helper tries the agg-drop first and falls back to `track_vec_var`, so
+   scalar/String/nested-POD-Vec elements (not in `struct_types`) keep their
+   existing path unchanged. The typechecker gate records a `Vec[<user struct>]`
+   element (checked via `self.env.structs`) for `get`/`first`/`last`; `get`
+   returns `Option[ref Rec]`, a borrow `scrutinee_is_borrow_call` suppresses, so
+   each element's heap fields are freed once at frame exit while the borrow reads
+   them (verified reading both the scalar `r.n` and the String `r.name` through
+   the borrow). Codegen output matched the interpreter oracle (`2`). Verified: no
+   double-free (macOS ASAN) and no leak (Linux LSan — `Compiling karac` confirmed,
+   zero reports). **Tests:** 1 IR
+   (`test_ir_freshtemp_vec_struct_get_emits_agg_drop` → `__vrecv_tmp` **and**
+   `cleanup.adrop.body`, the per-element struct-drop loop the scalar/String cases
+   never emit) + 2 ASAN (`asan_freshtemp_vec_struct_get_no_double_free`;
+   `asan_freshtemp_vec_struct_string_field_read_no_double_free` — the borrow reads
+   the very String the agg drop frees). **Still open:** ENUM elements
+   (`Vec[Enum]` — boxed/shared payloads have more edge cases, though
+   `vec_elem_agg_drop_for_type_expr` already handles them, so likely a gate-only
+   follow-on); deeper-nested `Vec[Vec[String]]` (two-level heap leaks the innermost
+   even for named bindings — an upstream recursion limit, not a temp-specific gap);
    `get_unchecked` on `Vec[String]`; `iter` on a temp (the
    iterator must keep the temp alive across the loop); and (the `vector_method_
    receivers` model — receiver `(T, N)` recorded at the collided span — remains a

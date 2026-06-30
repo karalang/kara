@@ -1417,13 +1417,30 @@ impl<'a> super::TypeChecker<'a> {
                                     | Type::Char
                             )
                 );
+                // A user-defined STRUCT element (`Vec[Rec]`, `Rec` carrying a
+                // `String`/`Vec`/`shared` field). Unlike scalar/String/nested-Vec
+                // — whose element either has no destructor or reuses the
+                // `vec_struct_type` recursion — a struct element needs its
+                // synthesized per-element `__karac_drop_<S>` threaded into the
+                // `FreeVecBuffer` (codegen's `vec_elem_agg_drop_for_type_expr` +
+                // `track_vec_of_aggs_var`). `get`/`first`/`last` return
+                // `Option[ref Rec]`, a borrow `scrutinee_is_borrow_call`
+                // suppresses, so each element's heap fields are freed once at
+                // frame exit while the borrow reads it. ENUMS are excluded here
+                // (boxed/shared payloads have more edge cases — a follow-on); so
+                // are `contains` (struct content-eq) and `get_unchecked`.
+                let is_user_struct = matches!(
+                    &resolved,
+                    Type::Named { name, args } if args.is_empty() && self.env.structs.contains_key(name)
+                );
                 let record = (is_scalar
                     && matches!(
                         method,
                         "get" | "first" | "last" | "get_unchecked" | "contains"
                     ))
                     || (is_string && matches!(method, "get" | "first" | "last" | "contains"))
-                    || (is_pod_vec && matches!(method, "get" | "first" | "last"));
+                    || (is_pod_vec && matches!(method, "get" | "first" | "last"))
+                    || (is_user_struct && matches!(method, "get" | "first" | "last"));
                 if record {
                     let te = Self::type_to_type_expr(&resolved);
                     self.temp_recv_elem_types
