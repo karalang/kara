@@ -32,6 +32,33 @@ println(apply_twice(double, 3));    // 12
 
 Closures inherit effects from the code they contain. A closure that calls `println` carries a `writes(Stdout)` effect. The effect system tracks this through higher-order functions — no surprise side effects hiding in callbacks.
 
+## Sorting
+
+The most common place you'll hand a closure to the standard library is sorting.
+`Vec` sorts **in place**, so the binding must be `mut`:
+
+```kara
+let mut v = [3, 1, 4, 1, 5, 9, 2, 6];
+v.sort();                       // natural ascending order
+```
+
+For any other order, `sort_by` takes a comparator closure `|a, b| ...` that
+returns an ordering. Produce one by comparing two elements with `.cmp()`:
+
+```kara
+v.sort_by(|a, b| a.cmp(b));     // ascending — same as v.sort()
+v.sort_by(|a, b| b.cmp(a));     // descending — flip the operands
+```
+
+`a.cmp(b)` answers "how does `a` order relative to `b`?", so putting `b` first
+reverses the direction. The same shape sorts by a derived key — compare the keys
+instead of the whole elements:
+
+```kara
+// pairs: Vec[(i64, i64)] — order by the second component, descending
+pairs.sort_by(|a, b| b.1.cmp(a.1));
+```
+
 ## Iterators
 
 Iterators let you process sequences lazily:
