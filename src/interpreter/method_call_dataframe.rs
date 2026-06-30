@@ -23,6 +23,25 @@ use crate::ast::CallArg;
 use crate::interpreter::value::Value;
 use crate::token::Span;
 
+/// A deep, independent copy of a `Value::Column` — fresh `Arc` cells with
+/// cloned contents, sharing nothing with the source. This is the
+/// **value-semantics** the codegen lowering also uses (the frame owns its
+/// columns outright; `insert` copies in, `column` copies out), so a
+/// program that mutates a column after inserting / looking it up behaves
+/// identically under `karac run` and `karac build` — no frame↔column
+/// `Arc` aliasing to diverge on. (CoW buffer-sharing is a later
+/// optimization, the documented Tensor/Column posture.) Non-Column values
+/// fall back to a plain clone (defensive; callers only pass columns).
+fn deep_copy_column(v: &Value) -> Value {
+    match v {
+        Value::Column { data, valid } => Value::Column {
+            data: Arc::new(RwLock::new(data.read().unwrap().clone())),
+            valid: Arc::new(RwLock::new(valid.read().unwrap().clone())),
+        },
+        other => other.clone(),
+    }
+}
+
 impl<'a> super::Interpreter<'a> {
     /// `DataFrame.new` constructor dispatched from `eval_call.rs`. Returns
     /// `None` for an unrecognized path (caller falls through).
@@ -93,10 +112,13 @@ impl<'a> super::Interpreter<'a> {
                         ));
                     }
                 }
+                // Copy in — the frame owns an independent column (value
+                // semantics; matches codegen).
+                let owned = deep_copy_column(&col);
                 if let Some(slot) = cols.iter_mut().find(|(n, _)| n == &name) {
-                    slot.1 = col;
+                    slot.1 = owned;
                 } else {
-                    cols.push((name, col));
+                    cols.push((name, owned));
                 }
                 Some(Value::Unit)
             }
@@ -117,7 +139,9 @@ impl<'a> super::Interpreter<'a> {
                 };
                 let cols = columns.read().unwrap();
                 match cols.iter().find(|(n, _)| n == &name) {
-                    Some((_, col)) => Some(col.clone()),
+                    // Copy out — the looked-up column is independent of the
+                    // frame (value semantics; matches codegen).
+                    Some((_, col)) => Some(deep_copy_column(col)),
                     None => Some(self.record_runtime_error(
                         format!("DataFrame.column: no column named '{name}'"),
                         span,
@@ -185,7 +209,7 @@ impl<'a> super::Interpreter<'a> {
                         ));
                     };
                     match cols.iter().find(|(n, _)| n == name) {
-                        Some((_, col)) => picked.push((name.clone(), col.clone())),
+                        Some((_, col)) => picked.push((name.clone(), deep_copy_column(col))),
                         None => {
                             return Some(self.record_runtime_error(
                                 format!("DataFrame.select: no column named '{name}'"),

@@ -17432,6 +17432,27 @@ fn test_dataframe_select_subset_and_reorder() {
 }
 
 #[test]
+fn test_dataframe_column_is_value_copy_not_view() {
+    // Value semantics: a looked-up column is independent of the frame.
+    // Mutating the copy leaves the frame's column untouched — pins the
+    // run/build contract the codegen lowering must match (copy-out).
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"a\", Column.from_vec([1i64, 2i64]));\n\
+             let mut c: Column[i64] = df.column(\"a\");\n\
+             c.push(3i64);\n\
+             println(c.len());\n\
+             println(df.height());\n\
+             let d: Column[i64] = df.column(\"a\");\n\
+             println(d.len());\n\
+         }",
+    );
+    // copy grows to 3; frame still 2 rows; a fresh lookup is still 2.
+    assert_eq!(out, "3\n2\n2\n");
+}
+
+#[test]
 fn test_dataframe_select_missing_column_traps() {
     let errors = runtime_errors(
         "fn main() {\n\
