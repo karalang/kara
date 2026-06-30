@@ -2847,10 +2847,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                     if self.column_var_infos.contains_key(var_name.as_str()) && !rhs_is_borrow {
+                        let string_elem = self
+                            .column_var_infos
+                            .get(var_name.as_str())
+                            .is_some_and(|i| self.column_elem_is_string(i.elem));
                         if let Some(slot) = self.variables.get(var_name.as_str()) {
                             if matches!(slot.ty, BasicTypeEnum::PointerType(_)) {
                                 let slot_ptr = slot.ptr;
-                                self.track_column_var(slot_ptr);
+                                self.track_column_var(slot_ptr, string_elem);
                             }
                         }
                         self.suppress_source_vec_cleanup_for_arg(value);

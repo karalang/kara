@@ -11991,6 +11991,59 @@ fn main() {
         );
     }
 
+    /// `Column[String]` heap-element lifecycle (phase-11 Column[String]
+    /// codegen slice): each String column owns its element heaps. `from_vec`
+    /// deep-clones the source Vec's strings IN (the source Vec is borrowed and
+    /// drops its own); `iter_valid` deep-clones them OUT into a fresh
+    /// `Vec[String]` (which drops its own); the `FreeColumn` drain frees every
+    /// valid slot's String (cap-guarded) before the buffers; a move
+    /// (`let d = c`) nulls the source slot so only the new owner frees. A
+    /// missing free leaks (Linux detect_leaks), a double free / use-after-free
+    /// trips ASAN everywhere. The moved column's reuse pins that the move
+    /// transferred ownership cleanly (no double free of the shared heaps).
+    #[test]
+    fn asan_column_string_lifecycle_clean() {
+        let label = "column_string_lifecycle";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+fn main() {
+    // Long payloads (>= 23 bytes) force real heap allocation (LSan misses
+    // short reachable strings) — see lsan-reachability-short-string-leaks.
+    // The source Vec is moved into from_vec (ownership), but its scope drop
+    // still frees its own element strings; from_vec deep-clones independent
+    // copies into the column, so the two never share a heap.
+    let v: Vec[String] = ["alpha_aaaaaaaaaaaaaaaaaaaaaaaa", "beta_bbbbbbbbbbbbbbbbbbbbbbbbb", "gamma_ccccccccccccccccccccccc"];
+    let c: Column[String] = Column.from_vec(v);
+    // iter_valid clones out into a fresh Vec[String] (dropped after the loop).
+    for s in c.iter_valid() { println(s.len()); }
+    // Move the column: `d` owns the heaps, `c`'s FreeColumn is suppressed.
+    let d = c;
+    println(d.valid_count());
+    for s in d.iter_valid() { println(s.len()); }
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             check from_vec clone-in / iter_valid clone-out / FreeColumn String drain / move",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["30", "30", "29", "3", "30", "30", "29"],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     /// Tensor element-wise arithmetic heap lifecycle (phase-11 line 47):
     /// every `+ - * /` / unary `-` mallocs a fresh result; operands are
     /// borrowed (keep their own `FreeTensor`); a fresh-temp intermediate in

@@ -507,6 +507,10 @@ pub(crate) enum CleanupAction<'ctx> {
     FreeColumn {
         /// Alloca pointer of the column binding's `ptr` slot.
         column_alloca: PointerValue<'ctx>,
+        /// `true` for a `Column[String]` (heap element): the drain frees
+        /// each valid slot's String heap before the data buffer. POD
+        /// columns (numeric / bool) leave this `false`.
+        string_elem: bool,
     },
     /// Free an owned `DataFrame`'s heap at scope exit. The slot holds one
     /// pointer to the control block `{ ptr entries, i64 len, i64 capacity }`

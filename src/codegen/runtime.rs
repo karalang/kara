@@ -3936,7 +3936,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.build_unconditional_branch(skip_bb).unwrap();
                 self.builder.position_at_end(skip_bb);
             }
-            CleanupAction::FreeColumn { column_alloca } => {
+            CleanupAction::FreeColumn {
+                column_alloca,
+                string_elem,
+            } => {
                 // Column binding: the slot holds one pointer to the
                 // `{ data, null_bitmap, len, capacity }` control block
                 // (`src/codegen/column.rs`). Null = moved-out (the
@@ -3983,6 +3986,89 @@ impl<'ctx> super::Codegen<'ctx> {
                     )
                     .unwrap()
                     .into_pointer_value();
+                // `Column[String]`: each valid slot owns a heap String —
+                // free it (cap-guarded via the canonical String drop fn)
+                // before the data buffer. Null slots hold a never-read
+                // placeholder (no owned heap), so only valid slots are freed.
+                if *string_elem {
+                    let len = self
+                        .builder
+                        .build_load(
+                            i64_t,
+                            self.builder
+                                .build_struct_gep(st, ctrl, 2, "cleanup.col.len.p")
+                                .unwrap(),
+                            "cleanup.col.len",
+                        )
+                        .unwrap()
+                        .into_int_value();
+                    let str_st = self.vec_struct_type();
+                    // Pre-emitted in `track_column_var` (the `&self` drain
+                    // can't emit); fetch it from the module immutably.
+                    let drop_fn = self
+                        .module
+                        .get_function("karac_drop_String")
+                        .expect("karac_drop_String pre-emitted by track_column_var");
+                    let i_slot = self.builder.build_alloca(i64_t, "cleanup.col.s.i").unwrap();
+                    self.builder
+                        .build_store(i_slot, i64_t.const_zero())
+                        .unwrap();
+                    let head = self
+                        .context
+                        .append_basic_block(fn_val, "cleanup.col.s.head");
+                    let body = self
+                        .context
+                        .append_basic_block(fn_val, "cleanup.col.s.body");
+                    let free1 = self
+                        .context
+                        .append_basic_block(fn_val, "cleanup.col.s.free");
+                    let cont = self
+                        .context
+                        .append_basic_block(fn_val, "cleanup.col.s.cont");
+                    let done = self
+                        .context
+                        .append_basic_block(fn_val, "cleanup.col.s.done");
+                    self.builder.build_unconditional_branch(head).unwrap();
+                    self.builder.position_at_end(head);
+                    let i = self
+                        .builder
+                        .build_load(i64_t, i_slot, "cleanup.col.s.iv")
+                        .unwrap()
+                        .into_int_value();
+                    let more = self
+                        .builder
+                        .build_int_compare(IntPredicate::ULT, i, len, "cleanup.col.s.more")
+                        .unwrap();
+                    self.builder
+                        .build_conditional_branch(more, body, done)
+                        .unwrap();
+                    self.builder.position_at_end(body);
+                    let valid = self.column_load_valid_bit(bitmap, i);
+                    self.builder
+                        .build_conditional_branch(valid, free1, cont)
+                        .unwrap();
+                    self.builder.position_at_end(free1);
+                    let slot = unsafe {
+                        self.builder
+                            .build_gep(str_st, data, &[i], "cleanup.col.s.slot")
+                            .unwrap()
+                    };
+                    self.builder
+                        .build_call(drop_fn, &[slot.into()], "")
+                        .unwrap();
+                    self.builder.build_unconditional_branch(cont).unwrap();
+                    self.builder.position_at_end(cont);
+                    self.builder
+                        .build_store(
+                            i_slot,
+                            self.builder
+                                .build_int_add(i, i64_t.const_int(1, false), "cleanup.col.s.next")
+                                .unwrap(),
+                        )
+                        .unwrap();
+                    self.builder.build_unconditional_branch(head).unwrap();
+                    self.builder.position_at_end(done);
+                }
                 self.builder
                     .build_call(self.free_fn, &[data.into()], "")
                     .unwrap();

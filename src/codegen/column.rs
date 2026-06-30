@@ -75,12 +75,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
             BasicTypeEnum::IntType(it) => Ok((it.get_bit_width() as u64).div_ceil(8)),
+            // `String` (the `{ ptr, i64, i64 }` value struct) — a heap
+            // element; the data buffer stores the 24-byte structs inline,
+            // and the per-element String heap is cloned/freed separately.
+            BasicTypeEnum::StructType(_) if self.column_elem_is_string(elem) => Ok(24),
             other => Err(format!(
                 "Column element type {:?} is not yet supported in codegen — \
-                 numeric primitives and bool only",
+                 numeric primitives, bool, and String only",
                 other
             )),
         }
+    }
+
+    /// Whether a Column element is `String` (a heap element). The `String`
+    /// value type is the `{ ptr, i64, i64 }` struct (shared with `Vec`);
+    /// `Column` only admits numeric / bool / String elements, so a struct
+    /// element is a String. Heap elements need per-slot clone (copy in/out)
+    /// and per-slot free (drop), unlike POD numeric / bool elements.
+    pub(super) fn column_elem_is_string(&self, elem: BasicTypeEnum<'ctx>) -> bool {
+        matches!(elem, BasicTypeEnum::StructType(st) if st == self.vec_struct_type())
     }
 
     /// `ceil(n / 8)` — the byte count of an `n`-element validity bitmap.
@@ -383,7 +396,7 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// Load validity bit `idx` of `bitmap` as an `i1` (`true` = valid).
-    fn column_load_valid_bit(
+    pub(super) fn column_load_valid_bit(
         &self,
         bitmap: PointerValue<'ctx>,
         idx: IntValue<'ctx>,
@@ -677,6 +690,83 @@ impl<'ctx> super::Codegen<'ctx> {
         let data = self
             .column_load_field(control, 0, "col.fv.data")
             .into_pointer_value();
+
+        // `Column[String]`: a `memcpy` would share each source String's heap
+        // ptr (→ double-free), so deep-clone every element into the column
+        // (the column owns independent String heaps). Only an identifier
+        // source is supported here — its own scope drop frees the originals;
+        // a fresh-temp `Vec[String]` source needs ownership-transfer plumbing
+        // (a follow-on slice), so it errors loudly rather than leak.
+        if self.column_elem_is_string(elem) {
+            if !matches!(arg_expr.kind, ExprKind::Identifier(_)) {
+                return Err(
+                    "Column.from_vec(<temporary Vec[String]>) is not yet supported by the \
+                     native backend; bind the Vec to a `let` first (a follow-on codegen slice \
+                     adds the ownership transfer)"
+                        .to_string(),
+                );
+            }
+            let str_st = self.vec_struct_type();
+            let clone_fn = self.emit_string_clone_fn();
+            let fn_val = self
+                .current_fn
+                .ok_or_else(|| "Column.from_vec outside function".to_string())?;
+            let i_slot = self.builder.build_alloca(i64_t, "col.fv.s.i").unwrap();
+            self.builder
+                .build_store(i_slot, i64_t.const_zero())
+                .unwrap();
+            let head = self.context.append_basic_block(fn_val, "col.fv.s.head");
+            let body = self.context.append_basic_block(fn_val, "col.fv.s.body");
+            let exit = self.context.append_basic_block(fn_val, "col.fv.s.exit");
+            self.builder.build_unconditional_branch(head).unwrap();
+            self.builder.position_at_end(head);
+            let i = self
+                .builder
+                .build_load(i64_t, i_slot, "col.fv.s.iv")
+                .unwrap()
+                .into_int_value();
+            let more = self
+                .builder
+                .build_int_compare(IntPredicate::ULT, i, vlen, "col.fv.s.more")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(more, body, exit)
+                .unwrap();
+            self.builder.position_at_end(body);
+            let s_slot = unsafe {
+                self.builder
+                    .build_gep(str_st, src_data, &[i], "col.fv.s.src")
+                    .unwrap()
+            };
+            let d_slot = unsafe {
+                self.builder
+                    .build_gep(str_st, data, &[i], "col.fv.s.dst")
+                    .unwrap()
+            };
+            self.builder
+                .build_call(clone_fn, &[s_slot.into(), d_slot.into()], "")
+                .unwrap();
+            self.builder
+                .build_store(
+                    i_slot,
+                    self.builder
+                        .build_int_add(i, i64_t.const_int(1, false), "col.fv.s.next")
+                        .unwrap(),
+                )
+                .unwrap();
+            self.builder.build_unconditional_branch(head).unwrap();
+            self.builder.position_at_end(exit);
+            let bitmap = self
+                .column_load_field(control, 1, "col.fv.s.bm")
+                .into_pointer_value();
+            let bm_bytes = self.column_bitmap_bytes(vlen);
+            self.builder
+                .build_memset(bitmap, 1, i8_t.const_int(0xFF, false), bm_bytes)
+                .map_err(|e| format!("Column.from_vec[String] bitmap memset failed: {:?}", e))?;
+            // Identifier source is borrowed (its own cleanup frees it).
+            return Ok(control.into());
+        }
+
         let elem_size = i64_t.const_int(self.column_elem_size(elem)?, false);
         let copy_bytes = self
             .builder
@@ -727,6 +817,14 @@ impl<'ctx> super::Codegen<'ctx> {
         elem: BasicTypeEnum<'ctx>,
         args: &[CallArg],
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        if self.column_elem_is_string(elem) {
+            return Err(
+                "Column.from_iter_nullable for String is not yet supported by the native \
+                 backend (`karac build`); it works under `karac run` and lands in a follow-on \
+                 codegen slice. Use `Column.from_vec(<Vec[String] binding>)` for now."
+                    .to_string(),
+            );
+        }
         let i64_t = self.context.i64_type();
         let fn_val = self
             .current_fn
@@ -905,6 +1003,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 | "quantile"
         ) {
             return Ok(None);
+        }
+        // `Column[String]` (heap element) supports the read / introspection
+        // surface (`len` / `null_count` / `valid_count` / `is_null` /
+        // `iter_valid`) in this slice; the heap-mutating / Option-payload
+        // methods need per-slot clone/move plumbing that lands in a follow-on
+        // — fail loudly rather than run the POD path on String structs.
+        if self.column_elem_is_string(info.elem)
+            && matches!(method, "push" | "push_null" | "iter" | "fillna" | "dropna")
+        {
+            return Err(format!(
+                "Column[String].{method} is not yet supported by the native backend \
+                 (`karac build`); it works under `karac run` and lands in a follow-on \
+                 codegen slice. Supported on String in build today: from_vec, len, \
+                 null_count, valid_count, is_null, iter_valid."
+            ));
         }
         let control = self.column_ptr_for_var(name)?;
         let i64_t = self.context.i64_type();
@@ -1280,16 +1393,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_gep(elem, data, &[i], "col.iv.sslot")
                 .unwrap()
         };
-        let loaded = self
-            .builder
-            .build_load(elem, src_slot, "col.iv.sval")
-            .unwrap();
         let dst_slot = unsafe {
             self.builder
                 .build_gep(elem, buf, &[j], "col.iv.dslot")
                 .unwrap()
         };
-        self.builder.build_store(dst_slot, loaded).unwrap();
+        if self.column_elem_is_string(elem) {
+            // Deep-clone each valid String into the result Vec, which then
+            // owns independent heaps (its own `Vec[String]` drop frees them).
+            let clone_fn = self.emit_string_clone_fn();
+            self.builder
+                .build_call(clone_fn, &[src_slot.into(), dst_slot.into()], "")
+                .unwrap();
+        } else {
+            let loaded = self
+                .builder
+                .build_load(elem, src_slot, "col.iv.sval")
+                .unwrap();
+            self.builder.build_store(dst_slot, loaded).unwrap();
+        }
         let j2 = self
             .builder
             .build_int_add(j, i64_t.const_int(1, false), "col.iv.j2")
@@ -2950,6 +3072,14 @@ impl<'ctx> super::Codegen<'ctx> {
         info: &ColumnVarInfo<'ctx>,
         index: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        if self.column_elem_is_string(info.elem) {
+            return Err(
+                "Column[String] indexing `c[i] -> Option[String]` is not yet supported by the \
+                 native backend (`karac build`); it works under `karac run` and lands in a \
+                 follow-on codegen slice. Use `iter_valid()` to read a String column for now."
+                    .to_string(),
+            );
+        }
         let fn_val = self
             .current_fn
             .ok_or_else(|| "Column index outside function".to_string())?;
@@ -3404,9 +3534,21 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Register a column binding's cleanup (scope-exit free of the data
     /// buffer, validity bitmap, and control block). Mirrors
     /// `track_tensor_var`.
-    pub(super) fn track_column_var(&mut self, column_alloca: PointerValue<'ctx>) {
+    pub(super) fn track_column_var(
+        &mut self,
+        column_alloca: PointerValue<'ctx>,
+        string_elem: bool,
+    ) {
+        // Pre-emit the canonical String drop fn so the `&self` cleanup
+        // drain can fetch it immutably from the module.
+        if string_elem {
+            self.emit_string_drop_fn();
+        }
         if let Some(frame) = self.scope_cleanup_actions.last_mut() {
-            frame.push(super::state::CleanupAction::FreeColumn { column_alloca });
+            frame.push(super::state::CleanupAction::FreeColumn {
+                column_alloca,
+                string_elem,
+            });
         }
     }
 

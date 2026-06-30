@@ -49493,6 +49493,32 @@ fn main() {
         }
     }
 
+    // ── Column[String] codegen — heap-element lifecycle (phase-11) ──
+
+    #[test]
+    fn test_e2e_column_string_from_vec_iter_valid() {
+        // Build a Column[String] from a Vec[String] binding (deep-clones each
+        // string in), read it back via iter_valid (deep-clones each out) —
+        // byte-identical to the interpreter. A subsequent move (`let d = c`)
+        // and scope drop must free every string exactly once (ASAN test below).
+        let out = run_program(
+            "fn main() {\n\
+                 let v: Vec[String] = [\"alpha\", \"beta\", \"gamma\"];\n\
+                 let c: Column[String] = Column.from_vec(v);\n\
+                 println(c.len());\n\
+                 println(c.null_count());\n\
+                 println(c.valid_count());\n\
+                 for s in c.iter_valid() { println(s); }\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "3\n0\n3\nalpha\nbeta\ngamma\n",
+                "Column[String] from_vec + iter_valid must match the interpreter"
+            );
+        }
+    }
+
     // ── DataFrame codegen (phase-11 Arrow Q6) ───────────────────────
 
     #[test]
