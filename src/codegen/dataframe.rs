@@ -782,6 +782,27 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // The `Vec[String]` of requested names.
         let cols_val = self.compile_expr(cols_arg)?;
+        // The `select` dispatch returns early from `compile_method_call`
+        // (before the generic owned-temp arg loop), so a *fresh-owned*
+        // `Vec[String]` arg has no consuming binding and would leak its
+        // buffer + element strings. The names are only *read* below (copied
+        // in via `df_copy_name`), so route the arg through the same
+        // `materialize_owned_temp` chokepoint the generic path uses: a
+        // `FreeVecBuffer` (element-type-aware via `owned_temp_drops`,
+        // `cap > 0`-guarded) drains it at scope exit. Two fresh forms:
+        //   * a Vec literal — `df.select(["b", "a"])`; lowering canonicalizes
+        //     a bare `[…]` / `Vec[…]` to `PrefixCollectionLiteral` (Vec),
+        //     which `compile_vec_prefix_literal` mallocs a real heap buffer
+        //     for (the 48-byte leak this closes);
+        //   * a fresh call result — `df.select(other.column_names())`.
+        // An identifier / field / index arg is an existing-binding alias
+        // (its own cleanup frees it), so it is NOT matched here — freeing it
+        // would double-free. Mirrors `insert`'s fresh-temp column free.
+        let cols_is_fresh_owned = self.expr_yields_fresh_owned_temp(cols_arg)
+            || matches!(&cols_arg.kind, ExprKind::PrefixCollectionLiteral { .. });
+        if cols_is_fresh_owned && self.llvm_ty_is_vec_struct(cols_val.get_type()) {
+            self.materialize_owned_temp(cols_val, (cols_arg.span.offset, cols_arg.span.length));
+        }
         let cols_struct = cols_val.into_struct_value();
         let cols_data = self
             .builder
@@ -868,9 +889,10 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(after_bb);
         // The `cols` Vec[String] is only read (names are copied in via
-        // `df_copy_name`); it is not consumed, so its own scope cleanup /
-        // the caller's owned-temp drop frees it. (Freeing it here would
-        // double-free a literal-arg temp.)
+        // `df_copy_name`); it is not consumed. An identifier arg keeps its
+        // own binding cleanup; a fresh-owned temp got a `FreeVecBuffer`
+        // registered above (`materialize_owned_temp`). Either way it is
+        // freed exactly once — never here (that would double-free).
         let _ = cols_struct;
         Ok(new_ctrl.into())
     }
