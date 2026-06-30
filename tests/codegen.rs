@@ -1517,22 +1517,84 @@ mod codegen_tests {
         assert_eq!(out.as_deref(), Some("42\n"));
     }
 
-    /// Reassigning a closure FIELD of a struct owner (`r.f = make(j)`) is a later
-    /// slice — still rejected (only binding reassignment is sanctioned here).
+    // ── Heap-env struct FIELD reassignment (B-2026-06-22-2) ──
+    // `r.f = make(j)` (fresh env, a MOVE) or `r.f = g` (binding source, the
+    // SHARED env, a COPY) where `r` is a heap-env struct owner and `f` a closure
+    // field. The binding-reassignment shape with the slot = a field GEP: codegen
+    // drops r.f's CURRENT env, incs the new env on a copy, and stores the new fat
+    // into the field slot, so each env is freed exactly once (the field's
+    // already-registered scope-exit `FreeClosureEnv` frees whatever ends up
+    // stored). Vec element reassignment is the final remaining form and stays
+    // rejected.
+
+    /// `r.f = make(j)` is a MOVE to a fresh field env: r.f's old env is dropped,
+    /// the new one freed once at scope exit. `(h.f)(5) = 5 + 20 = 25`.
     #[test]
-    fn heap_env_struct_field_reassign_is_rejected() {
-        let err = ir_result(
+    fn heap_env_struct_field_reassigned_to_fresh_runs() {
+        let out = run_program(
             "struct H { f: Fn(i64) -> i64 }\n\
              fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
              fn main() { let mut h = H { f: make(10i64) }; h.f = make(20i64); \
               println(f\"{(h.f)(5i64)}\"); }\n",
-        )
-        .expect_err("struct field reassignment is not yet supported");
-        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+        );
+        assert_eq!(out.as_deref(), Some("25\n"));
     }
 
-    /// Reassigning a `Vec[Fn]` ELEMENT (`v[i] = make(j)`) is a later slice — still
-    /// rejected.
+    /// `r.f = g` is a COPY: the field shares `g`'s env (inc'd, freed once) and `g`
+    /// stays usable. `(h.f)(5) = 105`, `g(1) = 101` → 206.
+    #[test]
+    fn heap_env_struct_field_reassigned_copy_runs() {
+        let out = run_program(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let g = make(100i64); let mut h = H { f: make(10i64) }; h.f = g; \
+              println(f\"{(h.f)(5i64) + g(1i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("206\n"));
+    }
+
+    /// A POD sibling field rides along untouched by the closure-field reassign.
+    /// `(h.f)(5) = 25`, `h.n = 7` → 32.
+    #[test]
+    fn heap_env_struct_field_reassigned_pod_sibling_runs() {
+        let out = run_program(
+            "struct H { f: Fn(i64) -> i64, n: i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let mut h = H { f: make(10i64), n: 7i64 }; h.f = make(20i64); \
+              println(f\"{(h.f)(5i64) + h.n}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("32\n"));
+    }
+
+    /// Reassigning a field in a LOOP drops the prior env each iteration, so every
+    /// intermediate env is freed once. Last is `make(30)`; `(h.f)(5) = 35`.
+    #[test]
+    fn heap_env_struct_field_reassigned_in_loop_runs() {
+        let out = run_program(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let mut h = H { f: make(0i64) }; let mut i = 1i64; \
+              while i <= 3i64 { h.f = make(i * 10i64); i = i + 1i64; } \
+              println(f\"{(h.f)(5i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("35\n"));
+    }
+
+    /// In a two-closure-field owner, reassigning ONE field leaves the sibling
+    /// closure field intact. `(h.f)(1) = 51` (reassigned), `(h.g)(2) = 22` → 73.
+    #[test]
+    fn heap_env_struct_field_reassigned_one_of_two_runs() {
+        let out = run_program(
+            "struct H { f: Fn(i64) -> i64, g: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let mut h = H { f: make(10i64), g: make(20i64) }; h.f = make(50i64); \
+              println(f\"{(h.f)(1i64) + (h.g)(2i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("73\n"));
+    }
+
+    /// Reassigning a `Vec[Fn]` ELEMENT (`v[i] = make(j)`) is the final remaining
+    /// reassignment form — still rejected.
     #[test]
     fn heap_env_vec_element_reassign_is_rejected() {
         let err = ir_result(

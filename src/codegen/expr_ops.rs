@@ -785,6 +785,80 @@ impl<'ctx> super::Codegen<'ctx> {
         Some((var_name, type_name, field_ty, storage_ptr))
     }
 
+    /// Heap-env closure FIELD reassignment (B-2026-06-22-2): `r.f = make(j)`
+    /// (fresh env, a MOVE) or `r.f = g` (binding source, the SHARED env, a COPY)
+    /// where `r` is a heap-env struct owner and `f` one of its closure fields.
+    /// The field's `Fn` slot is an inline fat pointer, so a `build_struct_gep`
+    /// to it is exactly the `fat_alloca` the field's scope-exit `FreeClosureEnv`
+    /// already uses — this is the binding-reassignment shape with the slot = field
+    /// GEP. RC setter rule (retain new → store → release old): save `r.f`'s
+    /// CURRENT fat, inc the new env on a binding copy (a fresh `make(j)` carries
+    /// its +1), store the new fat, then RC-drop the saved old env. So `r.f`'s old
+    /// env is freed once at the reassignment, the new one once at `r`'s scope exit
+    /// (via the already-registered field `FreeClosureEnv`), and on a copy the
+    /// source `g` stays a live co-owner. Returns `Ok(true)` when handled; `false`
+    /// for any non-heap-env-closure-field target (falls through to the generic
+    /// `compile_field_store`). The misuse guard rejects any escape of `r`, so the
+    /// field env never outlives `r`.
+    pub(super) fn try_compile_heap_env_field_reassign(
+        &mut self,
+        object: &Expr,
+        field: &str,
+        new_val: BasicValueEnum<'ctx>,
+        value: &Expr,
+    ) -> Result<bool, String> {
+        let ExprKind::Identifier(rname) = &object.kind else {
+            return Ok(false);
+        };
+        // `r` must be a heap-env struct owner and `field` one of its closure
+        // fields — the same predicate the misuse guard sanctions.
+        let is_closure_field = self
+            .heap_env_aggregate_owners
+            .get(rname)
+            .is_some_and(|fs| fs.contains(field));
+        if !is_closure_field {
+            return Ok(false);
+        }
+        let Some(struct_name) = self.var_type_names.get(rname).cloned() else {
+            return Ok(false);
+        };
+        let Some(st) = self.struct_types.get(&struct_name).copied() else {
+            return Ok(false);
+        };
+        let Some(idx) = self
+            .struct_field_names
+            .get(&struct_name)
+            .and_then(|ns| ns.iter().position(|n| n == field))
+        else {
+            return Ok(false);
+        };
+        let Some(slot) = self.variables.get(rname).copied() else {
+            return Ok(false);
+        };
+        let field_gep = self
+            .builder
+            .build_struct_gep(st, slot.ptr, idx as u32, "clo.field.reassign.slot")
+            .unwrap();
+        let old_fat = self
+            .builder
+            .build_load(
+                self.closure_value_type(),
+                field_gep,
+                "clo.field.reassign.old",
+            )
+            .unwrap();
+        // Binding-source copy co-owns the shared env — inc it; a fresh `make(j)`
+        // already carries its +1.
+        let rhs_is_binding_copy = matches!(&value.kind,
+            ExprKind::Identifier(n) if self.heap_env_closure_vars.contains(n));
+        if rhs_is_binding_copy {
+            self.emit_heap_closure_env_inc(new_val);
+        }
+        self.builder.build_store(field_gep, new_val).unwrap();
+        self.emit_heap_closure_env_dec(old_fat);
+        Ok(true)
+    }
+
     pub(super) fn compile_field_store(
         &mut self,
         object: &Expr,

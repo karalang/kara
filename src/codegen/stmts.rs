@@ -4165,6 +4165,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 } else if let ExprKind::FieldAccess { object, field } = &target.kind {
+                    // Heap-env closure FIELD reassignment (`r.f = make(j)` /
+                    // `r.f = g`): drop r.f's CURRENT env, inc the new env on a
+                    // binding copy, store the new fat into the field slot — the
+                    // binding-reassignment shape with the slot = field GEP. The
+                    // field's scope-exit `FreeClosureEnv` then frees whatever is
+                    // stored once. No-op (`false`) for any non-closure-field
+                    // target, which falls through to the generic field store.
+                    if self.try_compile_heap_env_field_reassign(object, field, val, value)? {
+                        return Ok(());
+                    }
                     self.compile_field_store(object, field, val, rhs_is_fresh)?;
                     // `cells[i].name = f"…"` — a heap String field store on a
                     // SoA element whose RHS is an f-string. `compile_soa_field_store`

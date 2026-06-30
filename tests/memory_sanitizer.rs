@@ -917,6 +917,80 @@ fn main() {
         );
     }
 
+    /// FIELD reassignment slice (B-2026-06-22-2): `r.f = g` where `r` is a heap-env
+    /// struct owner and `g` a heap-env binding is a COPY — the reassignment drops
+    /// `r.f`'s OLD env, incs the SHARED env `g` holds, and stores it into the field
+    /// slot, so `r.f` and `g` co-own one box freed EXACTLY once while `r.f`'s
+    /// original env is freed once at the reassignment. Both `r.f` and `g` are used
+    /// after, confirming the source stays a live co-owner. Without the drop-old the
+    /// original field env leaks; without the inc the shared box is freed twice (the
+    /// field's and `g`'s scope-exit drops). A POD sibling field rides along.
+    #[test]
+    fn asan_heap_env_struct_field_reassign_copy_no_leak() {
+        assert_clean_asan_run(
+            r#"
+struct H { f: Fn(i64) -> i64, n: i64 }
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn main() {
+    let g = make(100i64);
+    let mut h = H { f: make(10i64), n: 7i64 };
+    h.f = g;
+    println(f"{(h.f)(1i64) + g(1i64) + h.n}");
+}
+"#,
+            &["209"],
+            "asan_heap_env_struct_field_reassign_copy_no_leak",
+        );
+    }
+
+    /// `r.f = make(j)` is a MOVE to a fresh field env: the reassignment drops
+    /// `r.f`'s old env (freed once) and the field becomes the sole owner of the
+    /// fresh one (freed once at scope exit). Without the drop-old the original
+    /// field env leaks. `(h.f)(5) = 25`.
+    #[test]
+    fn asan_heap_env_struct_field_reassign_to_fresh_no_leak() {
+        assert_clean_asan_run(
+            r#"
+struct H { f: Fn(i64) -> i64 }
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn main() {
+    let mut h = H { f: make(10i64) };
+    h.f = make(20i64);
+    println(f"{(h.f)(5i64)}");
+}
+"#,
+            &["25"],
+            "asan_heap_env_struct_field_reassign_to_fresh_no_leak",
+        );
+    }
+
+    /// The strongest field-reassign leak case: reassigning a field in a LOOP. Each
+    /// of the 50 iterations drops the prior field env before storing the next, so
+    /// every intermediate env box is freed once — without the per-assignment
+    /// drop-old, 50 unreachable env boxes would leak (LSan-caught). A two-closure-
+    /// field owner: only `f` is reassigned, `g` stays the original (freed once).
+    /// Last `f` is `make(500)`; `(h.f)(5) + (h.g)(0) = 505 + 20 = 525`.
+    #[test]
+    fn asan_heap_env_struct_field_reassign_in_loop_no_leak() {
+        assert_clean_asan_run(
+            r#"
+struct H { f: Fn(i64) -> i64, g: Fn(i64) -> i64 }
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn main() {
+    let mut h = H { f: make(0i64), g: make(20i64) };
+    let mut i = 1i64;
+    while i <= 50i64 {
+        h.f = make(i * 10i64);
+        i = i + 1i64;
+    }
+    println(f"{(h.f)(5i64) + (h.g)(0i64)}");
+}
+"#,
+            &["525"],
+            "asan_heap_env_struct_field_reassign_in_loop_no_leak",
+        );
+    }
+
     /// Owner-copy slice (B-2026-06-22-2): `let s = a` where `a` is a heap-env
     /// STRUCT owner. The struct copy shallow-copies the `Fn` field so `s` aliases
     /// `a`'s SAME RC env box; the copy INCs the shared env and registers `s`'s own
