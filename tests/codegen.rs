@@ -2922,6 +2922,52 @@ fn main() {
         run_program_capturing(src).map(|c| c.stdout)
     }
 
+    /// Binding a row out of a BORROWED nested collection — `let row = m[i]`
+    /// where `m: ref Vec[Vec[i64]]` — must dispatch `row.len()` / `row[j]` as
+    /// the inner `Vec[i64]`. The integer-index inference used to peel `ref`
+    /// only on the range-index (`m[a..b]`) and Tensor/Column paths, so a scalar
+    /// index of a borrowed Vec inferred `Type::Error` for the binding and
+    /// codegen failed with "no handler for method 'len' on variable 'row'".
+    /// (Surfaced by kata #48 Rotate Image's matrix display over a `ref`-passed
+    /// `Vec[Vec[i64]]`.) The direct double-index form `m[i][j]` already worked;
+    /// this covers the let-bound-row form that the fix repaired.
+    #[test]
+    fn ref_param_nested_vec_row_binding_dispatches() {
+        let src = "fn row_sum(m: ref Vec[Vec[i64]], i: i64) -> i64 {\n\
+                   \x20   let row = m[i];\n\
+                   \x20   let mut s = 0i64;\n\
+                   \x20   let mut j = 0i64;\n\
+                   \x20   let n = row.len();\n\
+                   \x20   while j < n { s = s + row[j]; j = j + 1i64; }\n\
+                   \x20   s\n\
+                   }\n\
+                   fn main() {\n\
+                   \x20   let mut m: Vec[Vec[i64]] = Vec.new();\n\
+                   \x20   let mut a: Vec[i64] = Vec.new(); a.push(1i64); a.push(2i64); a.push(3i64);\n\
+                   \x20   let mut b: Vec[i64] = Vec.new(); b.push(4i64); b.push(5i64); b.push(6i64);\n\
+                   \x20   m.push(a); m.push(b);\n\
+                   \x20   println(f\"{row_sum(m, 0i64) + row_sum(m, 1i64)}\");\n\
+                   }\n";
+        assert_eq!(run_program(src).as_deref(), Some("21\n"));
+    }
+
+    /// The `mut ref` sibling of the above: a row bound out of a `mut ref
+    /// Vec[Vec[i64]]` must dispatch the same way (the fix peels `MutRef` too).
+    #[test]
+    fn mut_ref_param_nested_vec_row_binding_dispatches() {
+        let src = "fn first_len(m: mut ref Vec[Vec[i64]]) -> i64 {\n\
+                   \x20   let row = m[0i64];\n\
+                   \x20   row.len()\n\
+                   }\n\
+                   fn main() {\n\
+                   \x20   let mut m: Vec[Vec[i64]] = Vec.new();\n\
+                   \x20   let mut a: Vec[i64] = Vec.new(); a.push(7i64); a.push(8i64);\n\
+                   \x20   m.push(a);\n\
+                   \x20   println(f\"{first_len(mut m)}\");\n\
+                   }\n";
+        assert_eq!(run_program(src).as_deref(), Some("2\n"));
+    }
+
     // ── Borrow-elision for read-only `let r = v[i]` (B-2026-06-19-6) ──
 
     /// Count `karac_clone_Vec*` call sites inside the `@main` function body.

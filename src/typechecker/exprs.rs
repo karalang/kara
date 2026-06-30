@@ -2286,6 +2286,33 @@ impl<'a> super::TypeChecker<'a> {
                     Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
                         args[0].clone()
                     }
+                    // Peel an immutable/exclusive borrow before extracting the
+                    // element type: integer-indexing a borrowed collection
+                    // (`m[i]` where `m: ref Vec[Vec[T]]` / `mut ref Slice[T]`)
+                    // must yield the inner element, not silently fall to the
+                    // `_ => Error` arm. Without this a `let row = m[i]` binding
+                    // infers `Type::Error`, which records no surface/element
+                    // type and trips codegen's "no handler for method" on a
+                    // later `row.len()` / `row[j]`. The range-index path above
+                    // (and the Tensor/Column arms) already peel Ref/MutRef this
+                    // way; this brings scalar integer indexing in line.
+                    Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                        Type::Array { element, .. } => *element.clone(),
+                        Type::Slice { element, .. } => *element.clone(),
+                        Type::Vector { element, lanes } => {
+                            if let Some(n) = lanes.as_usize() {
+                                self.vector_method_receivers.insert(
+                                    SpanKey::from_span(&expr.span),
+                                    ((**element).clone(), n),
+                                );
+                            }
+                            *element.clone()
+                        }
+                        Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
+                            args[0].clone()
+                        }
+                        _ => Type::Error,
+                    },
                     Type::Error => Type::Error,
                     _ => Type::Error,
                 }
