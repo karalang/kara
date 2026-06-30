@@ -608,7 +608,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // identifier source keeps its own scope cleanup, which
                 // would double-free if we freed it here.
                 if !matches!(args[1].value.kind, ExprKind::Identifier(_)) {
-                    self.column_free_allocations(src_col);
+                    self.column_free_allocations(src_col, elem_size);
                 }
 
                 self.dataframe_store_entry(control, name_data, name_len, owned_col, elem_size)?;
@@ -989,7 +989,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let old_col = self
             .df_entry_load(entry, 2, "df.ins.r.oldcol")
             .into_pointer_value();
-        self.column_free_allocations(old_col);
+        // Free the OLD column with its OWN elem_size (a replacement may change
+        // the column type) — String columns free per-element heaps.
+        let old_size = self
+            .df_entry_load(entry, 3, "df.ins.r.oldsize")
+            .into_int_value();
+        self.column_free_allocations(old_col, old_size);
         self.builder
             .build_store(
                 self.df_entry_field_slot(entry, 2, "df.ins.r.col"),
@@ -1198,7 +1203,10 @@ impl<'ctx> super::Codegen<'ctx> {
         let col = self
             .df_entry_load(entry, 2, "df.drop.col")
             .into_pointer_value();
-        self.column_free_allocations(col);
+        let col_size = self
+            .df_entry_load(entry, 3, "df.drop.esize")
+            .into_int_value();
+        self.column_free_allocations(col, col_size);
         self.builder
             .build_call(self.free_fn, &[name.into()], "")
             .unwrap();

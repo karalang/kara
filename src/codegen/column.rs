@@ -219,19 +219,214 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_store(self.column_field_slot(control, 3, "col.cp.f.cap"), cap)
             .unwrap();
+
+        // `Column[String]` (a heap element, uniquely `elem_size == 24` among
+        // the admitted Column element types): the `memcpy` above shared each
+        // source String's heap ptr — re-clone every *valid* slot in place so
+        // the copy owns independent heaps (`karac_string_clone(dst, dst)`
+        // reads the shared ptr and overwrites it with a fresh clone). A
+        // runtime branch so one `deep_copy` serves POD and String columns
+        // (insert copy-in / `column` copy-out / `select`).
+        if let Some(fn_val) = self.current_fn {
+            let i64_t = self.context.i64_type();
+            let is_string = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    elem_size,
+                    i64_t.const_int(24, false),
+                    "col.cp.isstr",
+                )
+                .unwrap();
+            let str_bb = self.context.append_basic_block(fn_val, "col.cp.str");
+            let done_bb = self.context.append_basic_block(fn_val, "col.cp.done");
+            self.builder
+                .build_conditional_branch(is_string, str_bb, done_bb)
+                .unwrap();
+            self.builder.position_at_end(str_bb);
+            let str_st = self.vec_struct_type();
+            let i_slot = self.builder.build_alloca(i64_t, "col.cp.s.i").unwrap();
+            self.builder
+                .build_store(i_slot, i64_t.const_zero())
+                .unwrap();
+            let head = self.context.append_basic_block(fn_val, "col.cp.s.head");
+            let body = self.context.append_basic_block(fn_val, "col.cp.s.body");
+            let cl = self.context.append_basic_block(fn_val, "col.cp.s.clone");
+            let cont = self.context.append_basic_block(fn_val, "col.cp.s.cont");
+            self.builder.build_unconditional_branch(head).unwrap();
+            self.builder.position_at_end(head);
+            let i = self
+                .builder
+                .build_load(i64_t, i_slot, "col.cp.s.iv")
+                .unwrap()
+                .into_int_value();
+            let more = self
+                .builder
+                .build_int_compare(IntPredicate::ULT, i, len, "col.cp.s.more")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(more, body, done_bb)
+                .unwrap();
+            self.builder.position_at_end(body);
+            let valid = self.column_load_valid_bit(bitmap, i);
+            self.builder
+                .build_conditional_branch(valid, cl, cont)
+                .unwrap();
+            self.builder.position_at_end(cl);
+            let slot = unsafe {
+                self.builder
+                    .build_gep(str_st, data, &[i], "col.cp.s.slot")
+                    .unwrap()
+            };
+            self.builder
+                .build_call(self.karac_string_clone_fn, &[slot.into(), slot.into()], "")
+                .unwrap();
+            self.builder.build_unconditional_branch(cont).unwrap();
+            self.builder.position_at_end(cont);
+            self.builder
+                .build_store(
+                    i_slot,
+                    self.builder
+                        .build_int_add(i, i64_t.const_int(1, false), "col.cp.s.next")
+                        .unwrap(),
+                )
+                .unwrap();
+            self.builder.build_unconditional_branch(head).unwrap();
+            self.builder.position_at_end(done_bb);
+        }
         Ok(control)
     }
 
     /// Free a column control block's three allocations (data + bitmap +
     /// control). Unguarded — callers (the DataFrame drop loop) only pass
-    /// live, frame-owned column pointers. `pub(super)` for reuse.
-    pub(super) fn column_free_allocations(&self, ctrl: PointerValue<'ctx>) {
+    /// live, frame-owned column pointers. `pub(super)` for reuse. For a
+    /// `Column[String]` (`elem_size == 24`) each valid slot's String heap is
+    /// freed first (cap-guarded, inline — matching `karac_drop_String`).
+    pub(super) fn column_free_allocations(
+        &self,
+        ctrl: PointerValue<'ctx>,
+        elem_size: IntValue<'ctx>,
+    ) {
+        let i64_t = self.context.i64_type();
         let data = self
             .column_load_field(ctrl, 0, "col.free.data")
             .into_pointer_value();
         let bitmap = self
             .column_load_field(ctrl, 1, "col.free.bm")
             .into_pointer_value();
+
+        // `Column[String]` (`elem_size == 24`): free each valid slot's String
+        // heap before the buffers (cap-guarded inline, like `karac_drop_String`
+        // — a `cap == 0` empty/static String owns no heap). Runtime branch so
+        // the same free serves POD and String columns.
+        if let Some(fn_val) = self.current_fn {
+            let is_string = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    elem_size,
+                    i64_t.const_int(24, false),
+                    "col.free.isstr",
+                )
+                .unwrap();
+            let str_bb = self.context.append_basic_block(fn_val, "col.free.str");
+            let buf_bb = self.context.append_basic_block(fn_val, "col.free.bufs");
+            self.builder
+                .build_conditional_branch(is_string, str_bb, buf_bb)
+                .unwrap();
+            self.builder.position_at_end(str_bb);
+            let len = self
+                .column_load_field(ctrl, 2, "col.free.len")
+                .into_int_value();
+            let str_st = self.vec_struct_type();
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+            let i_slot = self.builder.build_alloca(i64_t, "col.free.s.i").unwrap();
+            self.builder
+                .build_store(i_slot, i64_t.const_zero())
+                .unwrap();
+            let head = self.context.append_basic_block(fn_val, "col.free.s.head");
+            let body = self.context.append_basic_block(fn_val, "col.free.s.body");
+            let chk = self.context.append_basic_block(fn_val, "col.free.s.chk");
+            let frees = self.context.append_basic_block(fn_val, "col.free.s.free");
+            let cont = self.context.append_basic_block(fn_val, "col.free.s.cont");
+            self.builder.build_unconditional_branch(head).unwrap();
+            self.builder.position_at_end(head);
+            let i = self
+                .builder
+                .build_load(i64_t, i_slot, "col.free.s.iv")
+                .unwrap()
+                .into_int_value();
+            let more = self
+                .builder
+                .build_int_compare(IntPredicate::ULT, i, len, "col.free.s.more")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(more, body, buf_bb)
+                .unwrap();
+            self.builder.position_at_end(body);
+            let valid = self.column_load_valid_bit(bitmap, i);
+            self.builder
+                .build_conditional_branch(valid, chk, cont)
+                .unwrap();
+            self.builder.position_at_end(chk);
+            let slot = unsafe {
+                self.builder
+                    .build_gep(str_st, data, &[i], "col.free.s.slot")
+                    .unwrap()
+            };
+            // String struct { ptr(0), len(1), cap(2) } — free ptr iff cap > 0.
+            let cap = self
+                .builder
+                .build_load(
+                    i64_t,
+                    self.builder
+                        .build_struct_gep(str_st, slot, 2, "col.free.s.capp")
+                        .unwrap(),
+                    "col.free.s.cap",
+                )
+                .unwrap()
+                .into_int_value();
+            let has_heap = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::UGT,
+                    cap,
+                    i64_t.const_zero(),
+                    "col.free.s.heap",
+                )
+                .unwrap();
+            self.builder
+                .build_conditional_branch(has_heap, frees, cont)
+                .unwrap();
+            self.builder.position_at_end(frees);
+            let sptr = self
+                .builder
+                .build_load(
+                    ptr_ty,
+                    self.builder
+                        .build_struct_gep(str_st, slot, 0, "col.free.s.ptrp")
+                        .unwrap(),
+                    "col.free.s.ptr",
+                )
+                .unwrap()
+                .into_pointer_value();
+            self.builder
+                .build_call(self.free_fn, &[sptr.into()], "")
+                .unwrap();
+            self.builder.build_unconditional_branch(cont).unwrap();
+            self.builder.position_at_end(cont);
+            self.builder
+                .build_store(
+                    i_slot,
+                    self.builder
+                        .build_int_add(i, i64_t.const_int(1, false), "col.free.s.next")
+                        .unwrap(),
+                )
+                .unwrap();
+            self.builder.build_unconditional_branch(head).unwrap();
+            self.builder.position_at_end(buf_bb);
+        }
+
         self.builder
             .build_call(self.free_fn, &[data.into()], "")
             .unwrap();

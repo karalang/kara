@@ -49765,6 +49765,34 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_dataframe_string_column() {
+        // A heterogeneous frame with a String column: insert + copy-out +
+        // select reorder + replace, all value-semantics (independent String
+        // heaps). Byte-identical to the interpreter twin.
+        let out = run_program(
+            "fn main() {\n\
+                 let mut df: DataFrame = DataFrame.new();\n\
+                 let names: Vec[String] = [\"ann\", \"bob\"];\n\
+                 df.insert(\"name\", Column.from_vec(names));\n\
+                 df.insert(\"age\", Column.from_vec([20, 30]));\n\
+                 println(df.width());\n\
+                 println(df.height());\n\
+                 let back: Column[String] = df.column(\"name\");\n\
+                 for s in back.iter_valid() { println(s); }\n\
+                 let sub: DataFrame = df.select([\"age\", \"name\"]);\n\
+                 let sn: Column[String] = sub.column(\"name\");\n\
+                 for s in sn.iter_valid() { println(s); }\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "2\n2\nann\nbob\nann\nbob\n",
+                "DataFrame with a String column must match the interpreter"
+            );
+        }
+    }
+
     // ── Shape-generic function body — tensor-param indexing ──────────
     // A `fn f[N](a: Tensor[T, [N, N]], ...)` body that indexes its tensor
     // params (`a[i, j]`) lowers in codegen: `compile_mono_function`

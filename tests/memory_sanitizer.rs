@@ -11834,6 +11834,65 @@ fn main() {
         );
     }
 
+    /// `DataFrame` holding a `Column[String]` heap lifecycle (phase-11
+    /// DataFrame-String integration). A String column inside a frame must
+    /// keep value semantics with independent String heaps: `insert`
+    /// deep-clones the column's strings IN (a fresh-temp original is fully
+    /// freed incl. its strings; an identifier source keeps its own drop),
+    /// `column(name)` deep-clones OUT, `select` deep-clones into the new
+    /// frame, `insert`-replace frees the old column's strings, and the
+    /// frame drop frees every column's per-element strings (`elem_size == 24`
+    /// runtime branch). A shared heap (memcpy without re-clone) double-frees;
+    /// a missing per-element free leaks (Linux detect_leaks). Long payloads
+    /// (>= 23 bytes) force real heap allocation.
+    #[test]
+    fn asan_dataframe_string_column_lifecycle_clean() {
+        let label = "dataframe_string_column";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+fn main() {
+    let mut df: DataFrame = DataFrame.new();
+    // insert from a fresh-temp Column[String] (from_vec of an identifier Vec).
+    let names: Vec[String] = ["alpha_padding_aaaaaaaaaaaaaaa", "beta_padding_bbbbbbbbbbbbbbbb"];
+    df.insert("name", Column.from_vec(names));
+    df.insert("age", Column.from_vec([20, 30]));
+    // copy a String column OUT (independent clone; dropped after use).
+    let back: Column[String] = df.column("name");
+    for s in back.iter_valid() { println(s.len()); }
+    // select reorders both a numeric and a String column into a fresh frame.
+    let sub: DataFrame = df.select(["age", "name"]);
+    let sn: Column[String] = sub.column("name");
+    println(sn.valid_count());
+    // replace the String column (frees the old column's strings).
+    let repl: Vec[String] = ["gamma_padding_ccccccccccccccc", "delta_padding_ddddddddddddddd"];
+    df.insert("name", Column.from_vec(repl));
+    let back2: Column[String] = df.column("name");
+    for s in back2.iter_valid() { println(s.len()); }
+    println(df.width());
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             check deep_copy String re-clone / column_free_allocations String drain / replace",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["29", "29", "2", "29", "29", "2"],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     /// Column transform heap lifecycle (phase-11 follow-on slice): the
     /// Column-returning transforms `fillna` / `dropna` and the
     /// `from_iter_nullable` constructor each malloc a *fresh* control
