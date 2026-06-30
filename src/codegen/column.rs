@@ -906,16 +906,6 @@ impl<'ctx> super::Codegen<'ctx> {
         ) {
             return Ok(None);
         }
-        // `median` / `quantile` typecheck and run under `karac run`, but the
-        // native backend defers them (they need an in-IR sort) — fail loudly
-        // here rather than fall through to a silent stub-body `0.0`.
-        if matches!(method, "median" | "quantile") {
-            return Err(format!(
-                "Column.{method} is not yet supported by the native backend \
-                 (`karac build`); it works under `karac run` and lands in a \
-                 follow-on codegen slice (needs an in-IR sort)"
-            ));
-        }
         let control = self.column_ptr_for_var(name)?;
         let i64_t = self.context.i64_type();
 
@@ -1028,6 +1018,56 @@ impl<'ctx> super::Codegen<'ctx> {
                     .first()
                     .ok_or_else(|| "Column.corr requires a Column argument".to_string())?;
                 Ok(Some(self.compile_column_corr(control, &arg.value)?))
+            }
+            // `median()` ≡ `quantile(0.5)` under linear interpolation (the
+            // mean of the two middle values for an even count, the middle
+            // for odd) — both share one sorted-buffer path.
+            "median" => {
+                let half = self.context.f64_type().const_float(0.5);
+                Ok(Some(self.compile_column_quantile_value(
+                    control,
+                    info.elem,
+                    info.elem_unsigned,
+                    half,
+                    "median",
+                )?))
+            }
+            "quantile" => {
+                let arg = args
+                    .first()
+                    .ok_or_else(|| "Column.quantile requires a q argument".to_string())?;
+                let q = self.compile_expr(&arg.value)?;
+                let q = self
+                    .coerce_scalar_to_type(q, self.context.f64_type().into())
+                    .into_float_value();
+                // q ∈ [0, 1] (runtime-checked, matching the interpreter).
+                let ge0 = self
+                    .builder
+                    .build_float_compare(
+                        FloatPredicate::OGE,
+                        q,
+                        self.context.f64_type().const_zero(),
+                        "col.q.ge0",
+                    )
+                    .unwrap();
+                let le1 = self
+                    .builder
+                    .build_float_compare(
+                        FloatPredicate::OLE,
+                        q,
+                        self.context.f64_type().const_float(1.0),
+                        "col.q.le1",
+                    )
+                    .unwrap();
+                let ok = self.builder.build_and(ge0, le1, "col.q.ok").unwrap();
+                self.emit_column_guard(ok, "Column.quantile q must be in [0, 1]")?;
+                Ok(Some(self.compile_column_quantile_value(
+                    control,
+                    info.elem,
+                    info.elem_unsigned,
+                    q,
+                    "quantile",
+                )?))
             }
             _ => unreachable!(),
         }
@@ -2547,6 +2587,356 @@ impl<'ctx> super::Codegen<'ctx> {
         // A fresh-temp `other` operand (e.g. `a.corr(b + c)`) is freed.
         self.column_free_if_fresh_temp(other, octrl);
         Ok(result)
+    }
+
+    /// Collect the valid slots into a fresh malloc'd `f64` scratch buffer
+    /// and sort it ascending (insertion sort) — the shared backbone of
+    /// `median` / `quantile`. Traps on an empty valid set (parity with the
+    /// other reductions). Returns `(buffer, count)`; the caller frees the
+    /// buffer after reading. NaN ordering follows `fcmp ogt` (a NaN key
+    /// never shifts a smaller element, so NaNs settle at the front — an
+    /// acceptable v1 posture, since the scalar comparison world treats NaN
+    /// as unordered; quantiles over NaN-bearing data are undefined anyway).
+    fn column_sorted_valid_f64(
+        &mut self,
+        control: PointerValue<'ctx>,
+        elem: BasicTypeEnum<'ctx>,
+        unsigned: bool,
+        method: &str,
+    ) -> Result<(PointerValue<'ctx>, IntValue<'ctx>), String> {
+        let i64_t = self.context.i64_type();
+        let f64_t = self.context.f64_type();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "Column sorted-buffer outside function".to_string())?;
+        let n = self.compile_column_count(control, true)?.into_int_value();
+        let ok = self
+            .builder
+            .build_int_compare(IntPredicate::UGT, n, i64_t.const_zero(), "col.srt.ok")
+            .unwrap();
+        self.emit_column_guard(
+            ok,
+            &format!("cannot compute `{method}` on a column with no valid values"),
+        )?;
+
+        // Fresh f64 scratch buffer of `n` elements.
+        let nbytes = self
+            .builder
+            .build_int_mul(n, i64_t.const_int(8, false), "col.srt.bytes")
+            .unwrap();
+        let buf = self
+            .builder
+            .build_call(self.malloc_fn, &[nbytes.into()], "col.srt.buf")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+
+        // Fill: walk [0, len), copy each valid element (as f64) into buf[j++].
+        let len = self
+            .column_load_field(control, 2, "col.srt.len")
+            .into_int_value();
+        let data = self
+            .column_load_field(control, 0, "col.srt.data")
+            .into_pointer_value();
+        let bm = self
+            .column_load_field(control, 1, "col.srt.bm")
+            .into_pointer_value();
+        let i = self.builder.build_alloca(i64_t, "col.srt.i").unwrap();
+        let j = self.builder.build_alloca(i64_t, "col.srt.j").unwrap();
+        self.builder.build_store(i, i64_t.const_zero()).unwrap();
+        self.builder.build_store(j, i64_t.const_zero()).unwrap();
+        let fh = self.context.append_basic_block(fn_val, "col.fill.head");
+        let fb = self.context.append_basic_block(fn_val, "col.fill.body");
+        let fa = self.context.append_basic_block(fn_val, "col.fill.add");
+        let fc = self.context.append_basic_block(fn_val, "col.fill.cont");
+        let fe = self.context.append_basic_block(fn_val, "col.fill.exit");
+        self.builder.build_unconditional_branch(fh).unwrap();
+        self.builder.position_at_end(fh);
+        let iv = self
+            .builder
+            .build_load(i64_t, i, "col.fill.iv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, iv, len, "col.fill.more")
+            .unwrap();
+        self.builder.build_conditional_branch(more, fb, fe).unwrap();
+        self.builder.position_at_end(fb);
+        let valid = self.column_load_valid_bit(bm, iv);
+        self.builder
+            .build_conditional_branch(valid, fa, fc)
+            .unwrap();
+        self.builder.position_at_end(fa);
+        let x = self.column_gep_load(data, elem, iv, "col.fill.x");
+        let xf = self.column_elem_to_f64(x, unsigned);
+        let jv = self
+            .builder
+            .build_load(i64_t, j, "col.fill.jv")
+            .unwrap()
+            .into_int_value();
+        let slot = unsafe {
+            self.builder
+                .build_gep(f64_t, buf, &[jv], "col.fill.slot")
+                .unwrap()
+        };
+        self.builder.build_store(slot, xf).unwrap();
+        self.builder
+            .build_store(
+                j,
+                self.builder
+                    .build_int_add(jv, i64_t.const_int(1, false), "col.fill.j2")
+                    .unwrap(),
+            )
+            .unwrap();
+        self.builder.build_unconditional_branch(fc).unwrap();
+        self.builder.position_at_end(fc);
+        self.builder
+            .build_store(
+                i,
+                self.builder
+                    .build_int_add(iv, i64_t.const_int(1, false), "col.fill.i2")
+                    .unwrap(),
+            )
+            .unwrap();
+        self.builder.build_unconditional_branch(fh).unwrap();
+        self.builder.position_at_end(fe);
+
+        // Insertion sort buf[0..n] ascending.
+        // for si in 1..n { key = buf[si]; sj = si-1;
+        //   while sj >= 0 && buf[sj] > key { buf[sj+1] = buf[sj]; sj-- }
+        //   buf[sj+1] = key }
+        let si = self.builder.build_alloca(i64_t, "col.is.si").unwrap();
+        let sj = self.builder.build_alloca(i64_t, "col.is.sj").unwrap();
+        let key = self.builder.build_alloca(f64_t, "col.is.key").unwrap();
+        self.builder
+            .build_store(si, i64_t.const_int(1, false))
+            .unwrap();
+        let oh = self.context.append_basic_block(fn_val, "col.is.ohead");
+        let ob = self.context.append_basic_block(fn_val, "col.is.obody");
+        let ih = self.context.append_basic_block(fn_val, "col.is.ihead");
+        let ick = self.context.append_basic_block(fn_val, "col.is.icheck");
+        let ish = self.context.append_basic_block(fn_val, "col.is.ishift");
+        let ipl = self.context.append_basic_block(fn_val, "col.is.iplace");
+        let oc = self.context.append_basic_block(fn_val, "col.is.ocont");
+        let oe = self.context.append_basic_block(fn_val, "col.is.oexit");
+        self.builder.build_unconditional_branch(oh).unwrap();
+        self.builder.position_at_end(oh);
+        let siv = self
+            .builder
+            .build_load(i64_t, si, "col.is.siv")
+            .unwrap()
+            .into_int_value();
+        let omore = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, siv, n, "col.is.omore")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(omore, ob, oe)
+            .unwrap();
+        self.builder.position_at_end(ob);
+        let key_slot = unsafe {
+            self.builder
+                .build_gep(f64_t, buf, &[siv], "col.is.keyslot")
+                .unwrap()
+        };
+        let key_v = self
+            .builder
+            .build_load(f64_t, key_slot, "col.is.keyv")
+            .unwrap();
+        self.builder.build_store(key, key_v).unwrap();
+        self.builder
+            .build_store(
+                sj,
+                self.builder
+                    .build_int_sub(siv, i64_t.const_int(1, false), "col.is.sj0")
+                    .unwrap(),
+            )
+            .unwrap();
+        self.builder.build_unconditional_branch(ih).unwrap();
+        self.builder.position_at_end(ih);
+        let sjv = self
+            .builder
+            .build_load(i64_t, sj, "col.is.sjv")
+            .unwrap()
+            .into_int_value();
+        // Signed `sj >= 0` (short-circuits before the buf[sj] read).
+        let ge0 = self
+            .builder
+            .build_int_compare(IntPredicate::SGE, sjv, i64_t.const_zero(), "col.is.ge0")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(ge0, ick, ipl)
+            .unwrap();
+        self.builder.position_at_end(ick);
+        let bj_slot = unsafe {
+            self.builder
+                .build_gep(f64_t, buf, &[sjv], "col.is.bjslot")
+                .unwrap()
+        };
+        let bj = self
+            .builder
+            .build_load(f64_t, bj_slot, "col.is.bj")
+            .unwrap()
+            .into_float_value();
+        let key_cur = self
+            .builder
+            .build_load(f64_t, key, "col.is.keycur")
+            .unwrap()
+            .into_float_value();
+        let gt = self
+            .builder
+            .build_float_compare(FloatPredicate::OGT, bj, key_cur, "col.is.gt")
+            .unwrap();
+        self.builder.build_conditional_branch(gt, ish, ipl).unwrap();
+        self.builder.position_at_end(ish);
+        // buf[sj+1] = buf[sj]
+        let sjp1 = self
+            .builder
+            .build_int_add(sjv, i64_t.const_int(1, false), "col.is.sjp1")
+            .unwrap();
+        let dst = unsafe {
+            self.builder
+                .build_gep(f64_t, buf, &[sjp1], "col.is.dst")
+                .unwrap()
+        };
+        self.builder.build_store(dst, bj).unwrap();
+        self.builder
+            .build_store(
+                sj,
+                self.builder
+                    .build_int_sub(sjv, i64_t.const_int(1, false), "col.is.sjdec")
+                    .unwrap(),
+            )
+            .unwrap();
+        self.builder.build_unconditional_branch(ih).unwrap();
+        self.builder.position_at_end(ipl);
+        // buf[sj+1] = key (sj is the current value in the slot)
+        let sjv2 = self
+            .builder
+            .build_load(i64_t, sj, "col.is.sjv2")
+            .unwrap()
+            .into_int_value();
+        let placep1 = self
+            .builder
+            .build_int_add(sjv2, i64_t.const_int(1, false), "col.is.placep1")
+            .unwrap();
+        let pslot = unsafe {
+            self.builder
+                .build_gep(f64_t, buf, &[placep1], "col.is.pslot")
+                .unwrap()
+        };
+        let key_final = self.builder.build_load(f64_t, key, "col.is.keyf").unwrap();
+        self.builder.build_store(pslot, key_final).unwrap();
+        self.builder.build_unconditional_branch(oc).unwrap();
+        self.builder.position_at_end(oc);
+        self.builder
+            .build_store(
+                si,
+                self.builder
+                    .build_int_add(siv, i64_t.const_int(1, false), "col.is.sinext")
+                    .unwrap(),
+            )
+            .unwrap();
+        self.builder.build_unconditional_branch(oh).unwrap();
+        self.builder.position_at_end(oe);
+        Ok((buf, n))
+    }
+
+    /// `median` / `quantile(q)` — the `q`-quantile of the valid slots via
+    /// linear interpolation (NumPy / pandas default), freeing the sorted
+    /// scratch buffer after the read. `median` passes `q = 0.5`.
+    fn compile_column_quantile_value(
+        &mut self,
+        control: PointerValue<'ctx>,
+        elem: BasicTypeEnum<'ctx>,
+        unsigned: bool,
+        q: FloatValue<'ctx>,
+        method: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let f64_t = self.context.f64_type();
+        let (buf, n) = self.column_sorted_valid_f64(control, elem, unsigned, method)?;
+
+        // pos = q * (n - 1); lo = floor(pos) (= trunc, pos ≥ 0); frac = pos - lo.
+        let nf = self
+            .builder
+            .build_unsigned_int_to_float(n, f64_t, "col.q.nf")
+            .unwrap();
+        let nm1 = self
+            .builder
+            .build_float_sub(nf, f64_t.const_float(1.0), "col.q.nm1")
+            .unwrap();
+        let pos = self.builder.build_float_mul(q, nm1, "col.q.pos").unwrap();
+        let lo = self
+            .builder
+            .build_float_to_unsigned_int(pos, i64_t, "col.q.lo")
+            .unwrap();
+        let lof = self
+            .builder
+            .build_unsigned_int_to_float(lo, f64_t, "col.q.lof")
+            .unwrap();
+        let frac = self
+            .builder
+            .build_float_sub(pos, lof, "col.q.frac")
+            .unwrap();
+        // hi = (lo + 1 < n) ? lo + 1 : lo  (no OOB at q == 1 / n == 1).
+        let lop1 = self
+            .builder
+            .build_int_add(lo, i64_t.const_int(1, false), "col.q.lop1")
+            .unwrap();
+        let hi_ok = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, lop1, n, "col.q.hiok")
+            .unwrap();
+        let hi = self
+            .builder
+            .build_select(hi_ok, lop1, lo, "col.q.hi")
+            .unwrap()
+            .into_int_value();
+        let blo = self
+            .builder
+            .build_load(
+                f64_t,
+                unsafe {
+                    self.builder
+                        .build_gep(f64_t, buf, &[lo], "col.q.bloslot")
+                        .unwrap()
+                },
+                "col.q.blo",
+            )
+            .unwrap()
+            .into_float_value();
+        let bhi = self
+            .builder
+            .build_load(
+                f64_t,
+                unsafe {
+                    self.builder
+                        .build_gep(f64_t, buf, &[hi], "col.q.bhislot")
+                        .unwrap()
+                },
+                "col.q.bhi",
+            )
+            .unwrap()
+            .into_float_value();
+        let diff = self
+            .builder
+            .build_float_sub(bhi, blo, "col.q.diff")
+            .unwrap();
+        let scaled = self
+            .builder
+            .build_float_mul(frac, diff, "col.q.scaled")
+            .unwrap();
+        let result = self
+            .builder
+            .build_float_add(blo, scaled, "col.q.result")
+            .unwrap();
+        self.builder
+            .build_call(self.free_fn, &[buf.into()], "")
+            .unwrap();
+        Ok(result.into())
     }
 
     // ── Indexing ────────────────────────────────────────────────

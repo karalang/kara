@@ -49086,6 +49086,49 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_column_median_and_quantile() {
+        // In-IR sort then linear-interpolation quantile; median == quantile(0.5).
+        // Unsorted input + a null-skipping integer median pin the sort + skip.
+        let out = run_program(
+            "fn main() {\n\
+                 let c: Column[f64] = Column.from_vec([4.0, 1.0, 3.0, 2.0]);\n\
+                 println(c.median());\n\
+                 println(c.quantile(0.0));\n\
+                 println(c.quantile(0.25));\n\
+                 println(c.quantile(0.75));\n\
+                 println(c.quantile(1.0));\n\
+                 let o: Column[i64] = Column.from_iter_nullable([Some(5), None, Some(1), Some(3)]);\n\
+                 println(o.median());\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "2.5\n1\n1.75\n3.25\n4\n3\n",
+                "median/quantile must match the interpreter (sorted, null-skipping)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_column_quantile_out_of_range_traps() {
+        // q outside [0, 1] traps (matches the interpreter).
+        let captured = run_program_capturing(
+            "fn main() {\n\
+                 let c: Column[f64] = Column.from_vec([1.0, 2.0, 3.0]);\n\
+                 println(c.quantile(1.5));\n\
+             }\n",
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("must be in [0, 1]"),
+                "expected quantile-range trap, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+        }
+    }
+
     // ── DataFrame codegen (phase-11 Arrow Q6) ───────────────────────
 
     #[test]

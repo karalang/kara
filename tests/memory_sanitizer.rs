@@ -11601,6 +11601,52 @@ fn main() {
         );
     }
 
+    /// Column `median` / `quantile` heap lifecycle (phase-11 stats codegen
+    /// slice 3): each call mallocs a fresh `f64` scratch buffer, sorts it
+    /// in place, reads the interpolated result, then frees the buffer — a
+    /// missing free leaks (Linux detect_leaks), a double-free or read past
+    /// the free trips ASAN. Several calls in a row on the same (borrowed,
+    /// untouched) column pin allocate-sort-free balance across iterations.
+    #[test]
+    fn asan_column_median_quantile_lifecycle_clean() {
+        let label = "column_median_quantile_lifecycle";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+fn main() {
+    let c: Column[f64] = Column.from_vec([4.0, 1.0, 3.0, 2.0, 5.0]);
+    // Repeated median/quantile — each mallocs + frees its own scratch buffer.
+    println(c.median());
+    println(c.quantile(0.25));
+    println(c.quantile(0.75));
+    // Null-skipping median over an integer column (separate buffer).
+    let o: Column[i64] = Column.from_iter_nullable([Some(9), None, Some(1), Some(5)]);
+    println(o.median());
+    // c still usable afterward (borrowed, not consumed).
+    println(c.len());
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             check the median/quantile sort-buffer malloc/free balance",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["3", "2", "4", "5", "5"],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     /// Tensor element-wise arithmetic heap lifecycle (phase-11 line 47):
     /// every `+ - * /` / unary `-` mallocs a fresh result; operands are
     /// borrowed (keep their own `FreeTensor`); a fresh-temp intermediate in
