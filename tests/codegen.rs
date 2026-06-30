@@ -48873,6 +48873,107 @@ fn main() {
         }
     }
 
+    // ── Column[T] codegen — statistical reductions (phase-11 stats) ──
+
+    #[test]
+    fn test_e2e_column_stats_int_reductions() {
+        // sum/min/max preserve the integer element type; mean is f64. All
+        // skip null slots (valid = [2, 4, 6]).
+        let out = run_program(
+            "fn main() {\n\
+                 let c: Column[i64] = Column.from_iter_nullable([Some(2), None, Some(4), Some(6)]);\n\
+                 println(c.sum());\n\
+                 println(c.min());\n\
+                 println(c.max());\n\
+                 println(c.mean());\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "12\n2\n6\n4\n",
+                "int reductions skip nulls; sum/min/max -> T, mean -> f64"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_column_stats_var_std_sample() {
+        // f64 column [2, 4, 6]: mean 4, sample var = 8/2 = 4, std = 2.
+        let out = run_program(
+            "fn main() {\n\
+                 let c: Column[f64] = Column.from_vec([2.0, 4.0, 6.0]);\n\
+                 println(c.mean());\n\
+                 println(c.var());\n\
+                 println(c.std());\n\
+                 println(c.min());\n\
+                 println(c.max());\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "4\n4\n2\n2\n6\n",
+                "sample var/std over valid f64 slots"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_column_corr_pairwise_valid() {
+        // Perfectly correlated -> 1; only both-valid slots contribute.
+        let out = run_program(
+            "fn main() {\n\
+                 let a: Column[f64] = Column.from_vec([1.0, 2.0, 3.0, 4.0]);\n\
+                 let b: Column[f64] = Column.from_vec([2.0, 4.0, 6.0, 8.0]);\n\
+                 println(a.corr(b));\n\
+                 let p: Column[f64] = Column.from_iter_nullable([Some(1.0), Some(2.0), None, Some(4.0)]);\n\
+                 let q: Column[f64] = Column.from_iter_nullable([Some(2.0), Some(4.0), Some(99.0), Some(8.0)]);\n\
+                 println(p.corr(q));\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "1\n1\n", "Pearson corr over pairwise-valid slots");
+        }
+    }
+
+    #[test]
+    fn test_e2e_column_stats_empty_reduce_traps() {
+        // An all-null column has no valid values -> sum traps.
+        let captured = run_program_capturing(
+            "fn main() {\n\
+                 let mut c: Column[i64] = Column.new();\n\
+                 c.push_null();\n\
+                 println(c.sum());\n\
+             }\n",
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("no valid values"),
+                "expected empty-reduce trap, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_column_var_requires_two_values_traps() {
+        // Sample variance is undefined for fewer than 2 valid values.
+        let captured = run_program_capturing(
+            "fn main() {\n\
+                 let c: Column[f64] = Column.from_vec([3.0]);\n\
+                 println(c.var());\n\
+             }\n",
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("at least 2 valid values"),
+                "expected var<2 trap, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+        }
+    }
+
     // ── DataFrame codegen (phase-11 Arrow Q6) ───────────────────────
 
     #[test]

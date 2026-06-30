@@ -11497,6 +11497,56 @@ fn main() {
         );
     }
 
+    /// Column statistical reductions heap lifecycle (phase-11 stats codegen
+    /// slice): the scalar reductions (`sum`/`mean`/`var`/`std`/`min`/`max`)
+    /// allocate no heap and only read the column's buffers, so the column
+    /// stays intact and is freed once at scope exit. `corr`'s argument may be
+    /// a *fresh-temp* column (`a.corr(a + a)`) — the temporary is freed after
+    /// the read via `column_free_if_fresh_temp` (a missing free leaks on
+    /// Linux detect_leaks; a wrong free double-frees). The receiver stays
+    /// borrowed and usable after every call.
+    #[test]
+    fn asan_column_stats_lifecycle_clean() {
+        let label = "column_stats_lifecycle";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+fn main() {
+    let a: Column[f64] = Column.from_vec([2.0, 4.0, 6.0]);
+    // Scalar reductions allocate no heap; the column is untouched.
+    println(a.sum());
+    println(a.mean());
+    println(a.var());
+    println(a.std());
+    // corr with a fresh-temp argument (a + a) — the temporary column is
+    // freed after the read; `a` is borrowed.
+    println(a.corr(a + a));
+    // a still usable after all of the above (borrowed, not consumed).
+    println(a.min());
+    println(a.max());
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             check corr's fresh-temp arg free / reductions not freeing the receiver",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["12", "4", "4", "2", "1", "2", "6"],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     /// Tensor element-wise arithmetic heap lifecycle (phase-11 line 47):
     /// every `+ - * /` / unary `-` mallocs a fresh result; operands are
     /// borrowed (keep their own `FreeTensor`); a fresh-temp intermediate in

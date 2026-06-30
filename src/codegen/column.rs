@@ -42,7 +42,7 @@
 //! interpreter-only (`karac run`).
 
 use inkwell::types::{BasicTypeEnum, StructType};
-use inkwell::values::{BasicValueEnum, IntValue, PointerValue};
+use inkwell::values::{BasicValueEnum, FloatValue, IntValue, PointerValue};
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 
 use super::state::ColumnVarInfo;
@@ -894,8 +894,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 | "dropna"
                 | "iter"
                 | "iter_valid"
+                | "sum"
+                | "mean"
+                | "min"
+                | "max"
+                | "var"
+                | "std"
+                | "corr"
+                | "median"
+                | "quantile"
         ) {
             return Ok(None);
+        }
+        // `median` / `quantile` typecheck and run under `karac run`, but the
+        // native backend defers them (they need an in-IR sort) — fail loudly
+        // here rather than fall through to a silent stub-body `0.0`.
+        if matches!(method, "median" | "quantile") {
+            return Err(format!(
+                "Column.{method} is not yet supported by the native backend \
+                 (`karac build`); it works under `karac run` and lands in a \
+                 follow-on codegen slice (needs an in-IR sort)"
+            ));
         }
         let control = self.column_ptr_for_var(name)?;
         let i64_t = self.context.i64_type();
@@ -966,6 +985,50 @@ impl<'ctx> super::Codegen<'ctx> {
             "dropna" => Ok(Some(self.compile_column_dropna(control, info.elem)?)),
             "iter" => Ok(Some(self.compile_column_iter(control, info.elem)?)),
             "iter_valid" => Ok(Some(self.compile_column_iter_valid(control, info.elem)?)),
+            // Statistical reductions over the valid slots (nulls skipped).
+            // `sum`/`min`/`max` -> T; `mean`/`var`/`std`/`corr` -> f64.
+            // (`median`/`quantile` are interpreter-only pending an in-IR
+            // sort — a follow-on slice.)
+            "sum" => Ok(Some(self.compile_column_sum(
+                control,
+                info.elem,
+                info.elem_unsigned,
+            )?)),
+            "min" => Ok(Some(self.compile_column_minmax(
+                control,
+                info.elem,
+                info.elem_unsigned,
+                true,
+            )?)),
+            "max" => Ok(Some(self.compile_column_minmax(
+                control,
+                info.elem,
+                info.elem_unsigned,
+                false,
+            )?)),
+            "mean" => Ok(Some(self.compile_column_mean(
+                control,
+                info.elem,
+                info.elem_unsigned,
+            )?)),
+            "var" => Ok(Some(self.compile_column_var(
+                control,
+                info.elem,
+                info.elem_unsigned,
+                false,
+            )?)),
+            "std" => Ok(Some(self.compile_column_var(
+                control,
+                info.elem,
+                info.elem_unsigned,
+                true,
+            )?)),
+            "corr" => {
+                let arg = args
+                    .first()
+                    .ok_or_else(|| "Column.corr requires a Column argument".to_string())?;
+                Ok(Some(self.compile_column_corr(control, &arg.value)?))
+            }
             _ => unreachable!(),
         }
     }
@@ -1690,6 +1753,800 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_load(i64_t, acc_slot, "col.cnt.result")
             .unwrap())
+    }
+
+    // ── Statistical reductions ──────────────────────────────────
+
+    /// A numeric element value widened to `f64` (for the float-result
+    /// statistics). Signed/unsigned ints convert per the column's element
+    /// signedness; `f32` extends to `f64`; `f64` is returned as-is. Bool /
+    /// non-numeric never reach here (the typechecker requires a numeric
+    /// element for every stat).
+    fn column_elem_to_f64(&self, val: BasicValueEnum<'ctx>, unsigned: bool) -> FloatValue<'ctx> {
+        let f64_t = self.context.f64_type();
+        match val {
+            BasicValueEnum::FloatValue(fv) => {
+                if fv.get_type() == f64_t {
+                    fv
+                } else {
+                    self.builder
+                        .build_float_ext(fv, f64_t, "col.f2f64")
+                        .unwrap()
+                }
+            }
+            BasicValueEnum::IntValue(iv) => {
+                if unsigned {
+                    self.builder
+                        .build_unsigned_int_to_float(iv, f64_t, "col.u2f")
+                        .unwrap()
+                } else {
+                    self.builder
+                        .build_signed_int_to_float(iv, f64_t, "col.i2f")
+                        .unwrap()
+                }
+            }
+            _ => f64_t.const_zero(),
+        }
+    }
+
+    /// `sqrt` of an `f64` via the overloaded `llvm.sqrt` intrinsic (the
+    /// `x.sqrt()` lowering, reused for `std` / `corr`).
+    fn column_sqrt_f64(&self, fv: FloatValue<'ctx>) -> FloatValue<'ctx> {
+        let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.sqrt")
+            .expect("llvm.sqrt intrinsic must exist");
+        let decl = intrinsic
+            .get_declaration(&self.module, &[fv.get_type().into()])
+            .expect("llvm.sqrt declaration for f64");
+        self.builder
+            .build_call(decl, &[fv.into()], "col.sqrt")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_float_value()
+    }
+
+    /// `sum() -> T` — fold `+` over the valid slots (inherits the scalar
+    /// overflow trap via `compile_binop_typed`); an all-null / empty column
+    /// traps (parity with the interpreter / Tensor empty-reduce).
+    fn compile_column_sum(
+        &mut self,
+        control: PointerValue<'ctx>,
+        elem: BasicTypeEnum<'ctx>,
+        unsigned: bool,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "Column.sum outside function".to_string())?;
+        let len = self
+            .column_load_field(control, 2, "col.sum.len")
+            .into_int_value();
+        let data = self
+            .column_load_field(control, 0, "col.sum.data")
+            .into_pointer_value();
+        let bitmap = self
+            .column_load_field(control, 1, "col.sum.bm")
+            .into_pointer_value();
+        let idx = self.builder.build_alloca(i64_t, "col.sum.i").unwrap();
+        let acc = self.builder.build_alloca(elem, "col.sum.acc").unwrap();
+        let cnt = self.builder.build_alloca(i64_t, "col.sum.cnt").unwrap();
+        self.builder.build_store(idx, i64_t.const_zero()).unwrap();
+        self.builder
+            .build_store(acc, self.column_zero_elem(elem))
+            .unwrap();
+        self.builder.build_store(cnt, i64_t.const_zero()).unwrap();
+
+        let head = self.context.append_basic_block(fn_val, "col.sum.head");
+        let body = self.context.append_basic_block(fn_val, "col.sum.body");
+        let add = self.context.append_basic_block(fn_val, "col.sum.add");
+        let cont = self.context.append_basic_block(fn_val, "col.sum.cont");
+        let exit = self.context.append_basic_block(fn_val, "col.sum.exit");
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(head);
+        let i = self
+            .builder
+            .build_load(i64_t, idx, "col.sum.iv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, len, "col.sum.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, body, exit)
+            .unwrap();
+        self.builder.position_at_end(body);
+        let valid = self.column_load_valid_bit(bitmap, i);
+        self.builder
+            .build_conditional_branch(valid, add, cont)
+            .unwrap();
+        self.builder.position_at_end(add);
+        let x = self.column_gep_load(data, elem, i, "col.sum.x");
+        let a = self.builder.build_load(elem, acc, "col.sum.a").unwrap();
+        let a2 = self.compile_binop_typed(&BinOp::Add, a, x, unsigned)?;
+        self.builder.build_store(acc, a2).unwrap();
+        let c = self
+            .builder
+            .build_load(i64_t, cnt, "col.sum.c")
+            .unwrap()
+            .into_int_value();
+        let c2 = self
+            .builder
+            .build_int_add(c, i64_t.const_int(1, false), "col.sum.c2")
+            .unwrap();
+        self.builder.build_store(cnt, c2).unwrap();
+        self.builder.build_unconditional_branch(cont).unwrap();
+        self.builder.position_at_end(cont);
+        let next = self
+            .builder
+            .build_int_add(i, i64_t.const_int(1, false), "col.sum.next")
+            .unwrap();
+        self.builder.build_store(idx, next).unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(exit);
+        let cnt_v = self
+            .builder
+            .build_load(i64_t, cnt, "col.sum.cntv")
+            .unwrap()
+            .into_int_value();
+        let ok = self
+            .builder
+            .build_int_compare(IntPredicate::UGT, cnt_v, i64_t.const_zero(), "col.sum.ok")
+            .unwrap();
+        self.emit_column_guard(ok, "cannot compute `sum` on a column with no valid values")?;
+        Ok(self
+            .builder
+            .build_load(elem, acc, "col.sum.result")
+            .unwrap())
+    }
+
+    /// `min() -> T` / `max() -> T` — the smallest / largest valid slot,
+    /// seeded by the first valid element so NaN neither displaces nor is
+    /// taken (the scalar `<` / `>` posture, matching the interpreter). An
+    /// all-null / empty column traps.
+    fn compile_column_minmax(
+        &mut self,
+        control: PointerValue<'ctx>,
+        elem: BasicTypeEnum<'ctx>,
+        unsigned: bool,
+        is_min: bool,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let bool_t = self.context.bool_type();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "Column.minmax outside function".to_string())?;
+        let len = self
+            .column_load_field(control, 2, "col.mm.len")
+            .into_int_value();
+        let data = self
+            .column_load_field(control, 0, "col.mm.data")
+            .into_pointer_value();
+        let bitmap = self
+            .column_load_field(control, 1, "col.mm.bm")
+            .into_pointer_value();
+        let idx = self.builder.build_alloca(i64_t, "col.mm.i").unwrap();
+        let acc = self.builder.build_alloca(elem, "col.mm.acc").unwrap();
+        let seeded = self.builder.build_alloca(bool_t, "col.mm.seeded").unwrap();
+        self.builder.build_store(idx, i64_t.const_zero()).unwrap();
+        self.builder
+            .build_store(acc, self.column_zero_elem(elem))
+            .unwrap();
+        self.builder
+            .build_store(seeded, bool_t.const_zero())
+            .unwrap();
+
+        let head = self.context.append_basic_block(fn_val, "col.mm.head");
+        let body = self.context.append_basic_block(fn_val, "col.mm.body");
+        let upd = self.context.append_basic_block(fn_val, "col.mm.upd");
+        let cont = self.context.append_basic_block(fn_val, "col.mm.cont");
+        let exit = self.context.append_basic_block(fn_val, "col.mm.exit");
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(head);
+        let i = self
+            .builder
+            .build_load(i64_t, idx, "col.mm.iv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, len, "col.mm.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, body, exit)
+            .unwrap();
+        self.builder.position_at_end(body);
+        let valid = self.column_load_valid_bit(bitmap, i);
+        self.builder
+            .build_conditional_branch(valid, upd, cont)
+            .unwrap();
+        self.builder.position_at_end(upd);
+        let x = self.column_gep_load(data, elem, i, "col.mm.x");
+        let cur = self.builder.build_load(elem, acc, "col.mm.cur").unwrap();
+        let s = self
+            .builder
+            .build_load(bool_t, seeded, "col.mm.s")
+            .unwrap()
+            .into_int_value();
+        // Strict compare `x ⋖ cur`; if not yet seeded, always take.
+        let op = if is_min { BinOp::Lt } else { BinOp::Gt };
+        let cmp = self
+            .compile_binop_typed(&op, x, cur, unsigned)?
+            .into_int_value();
+        let not_seeded = self.builder.build_not(s, "col.mm.ns").unwrap();
+        let take = self
+            .builder
+            .build_or(not_seeded, cmp, "col.mm.take")
+            .unwrap();
+        let newacc = self
+            .builder
+            .build_select(take, x, cur, "col.mm.new")
+            .unwrap();
+        self.builder.build_store(acc, newacc).unwrap();
+        self.builder
+            .build_store(seeded, bool_t.const_int(1, false))
+            .unwrap();
+        self.builder.build_unconditional_branch(cont).unwrap();
+        self.builder.position_at_end(cont);
+        let next = self
+            .builder
+            .build_int_add(i, i64_t.const_int(1, false), "col.mm.next")
+            .unwrap();
+        self.builder.build_store(idx, next).unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(exit);
+        let s = self
+            .builder
+            .build_load(bool_t, seeded, "col.mm.sf")
+            .unwrap()
+            .into_int_value();
+        let method = if is_min { "min" } else { "max" };
+        self.emit_column_guard(
+            s,
+            &format!("cannot compute `{method}` on a column with no valid values"),
+        )?;
+        Ok(self.builder.build_load(elem, acc, "col.mm.result").unwrap())
+    }
+
+    /// `mean() -> f64` — `Σ valid / count` as `f64`; empty traps. The
+    /// `(sum_f64, count)` pair is also the first pass of `var` / `std`, so
+    /// this is factored into `column_sum_f64_and_count`.
+    fn compile_column_mean(
+        &mut self,
+        control: PointerValue<'ctx>,
+        elem: BasicTypeEnum<'ctx>,
+        unsigned: bool,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let f64_t = self.context.f64_type();
+        let (sum, cnt) = self.column_sum_f64_and_count(control, elem, unsigned)?;
+        let ok = self
+            .builder
+            .build_int_compare(
+                IntPredicate::UGT,
+                cnt,
+                self.context.i64_type().const_zero(),
+                "col.mean.ok",
+            )
+            .unwrap();
+        self.emit_column_guard(ok, "cannot compute `mean` on a column with no valid values")?;
+        let cntf = self
+            .builder
+            .build_unsigned_int_to_float(cnt, f64_t, "col.mean.cntf")
+            .unwrap();
+        let mean = self.builder.build_float_div(sum, cntf, "col.mean").unwrap();
+        Ok(mean.into())
+    }
+
+    /// One pass over the valid slots accumulating `(Σ x as f64, count)`.
+    fn column_sum_f64_and_count(
+        &mut self,
+        control: PointerValue<'ctx>,
+        elem: BasicTypeEnum<'ctx>,
+        unsigned: bool,
+    ) -> Result<(FloatValue<'ctx>, IntValue<'ctx>), String> {
+        let i64_t = self.context.i64_type();
+        let f64_t = self.context.f64_type();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "Column f64-sum outside function".to_string())?;
+        let len = self
+            .column_load_field(control, 2, "col.fsum.len")
+            .into_int_value();
+        let data = self
+            .column_load_field(control, 0, "col.fsum.data")
+            .into_pointer_value();
+        let bitmap = self
+            .column_load_field(control, 1, "col.fsum.bm")
+            .into_pointer_value();
+        let idx = self.builder.build_alloca(i64_t, "col.fsum.i").unwrap();
+        let acc = self.builder.build_alloca(f64_t, "col.fsum.acc").unwrap();
+        let cnt = self.builder.build_alloca(i64_t, "col.fsum.cnt").unwrap();
+        self.builder.build_store(idx, i64_t.const_zero()).unwrap();
+        self.builder.build_store(acc, f64_t.const_zero()).unwrap();
+        self.builder.build_store(cnt, i64_t.const_zero()).unwrap();
+
+        let head = self.context.append_basic_block(fn_val, "col.fsum.head");
+        let body = self.context.append_basic_block(fn_val, "col.fsum.body");
+        let add = self.context.append_basic_block(fn_val, "col.fsum.add");
+        let cont = self.context.append_basic_block(fn_val, "col.fsum.cont");
+        let exit = self.context.append_basic_block(fn_val, "col.fsum.exit");
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(head);
+        let i = self
+            .builder
+            .build_load(i64_t, idx, "col.fsum.iv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, len, "col.fsum.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, body, exit)
+            .unwrap();
+        self.builder.position_at_end(body);
+        let valid = self.column_load_valid_bit(bitmap, i);
+        self.builder
+            .build_conditional_branch(valid, add, cont)
+            .unwrap();
+        self.builder.position_at_end(add);
+        let x = self.column_gep_load(data, elem, i, "col.fsum.x");
+        let xf = self.column_elem_to_f64(x, unsigned);
+        let a = self
+            .builder
+            .build_load(f64_t, acc, "col.fsum.a")
+            .unwrap()
+            .into_float_value();
+        let a2 = self.builder.build_float_add(a, xf, "col.fsum.a2").unwrap();
+        self.builder.build_store(acc, a2).unwrap();
+        let c = self
+            .builder
+            .build_load(i64_t, cnt, "col.fsum.c")
+            .unwrap()
+            .into_int_value();
+        let c2 = self
+            .builder
+            .build_int_add(c, i64_t.const_int(1, false), "col.fsum.c2")
+            .unwrap();
+        self.builder.build_store(cnt, c2).unwrap();
+        self.builder.build_unconditional_branch(cont).unwrap();
+        self.builder.position_at_end(cont);
+        let next = self
+            .builder
+            .build_int_add(i, i64_t.const_int(1, false), "col.fsum.next")
+            .unwrap();
+        self.builder.build_store(idx, next).unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(exit);
+        let sum = self
+            .builder
+            .build_load(f64_t, acc, "col.fsum.sum")
+            .unwrap()
+            .into_float_value();
+        let count = self
+            .builder
+            .build_load(i64_t, cnt, "col.fsum.count")
+            .unwrap()
+            .into_int_value();
+        Ok((sum, count))
+    }
+
+    /// `var() -> f64` / `std() -> f64` — the **sample** (Bessel `n-1`)
+    /// variance / standard deviation over the valid slots. Requires ≥ 2
+    /// valid values (else traps; sample variance is undefined for fewer).
+    fn compile_column_var(
+        &mut self,
+        control: PointerValue<'ctx>,
+        elem: BasicTypeEnum<'ctx>,
+        unsigned: bool,
+        is_std: bool,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let f64_t = self.context.f64_type();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "Column.var outside function".to_string())?;
+        // Pass 1 — mean.
+        let (sum, cnt) = self.column_sum_f64_and_count(control, elem, unsigned)?;
+        let two = i64_t.const_int(2, false);
+        let ok = self
+            .builder
+            .build_int_compare(IntPredicate::UGE, cnt, two, "col.var.ok")
+            .unwrap();
+        let method = if is_std { "std" } else { "var" };
+        self.emit_column_guard(
+            ok,
+            &format!("`{method}` requires at least 2 valid values (sample variance is undefined for fewer)"),
+        )?;
+        let cntf = self
+            .builder
+            .build_unsigned_int_to_float(cnt, f64_t, "col.var.cntf")
+            .unwrap();
+        let mean = self
+            .builder
+            .build_float_div(sum, cntf, "col.var.mean")
+            .unwrap();
+
+        // Pass 2 — Σ (x - mean)².
+        let len = self
+            .column_load_field(control, 2, "col.var.len")
+            .into_int_value();
+        let data = self
+            .column_load_field(control, 0, "col.var.data")
+            .into_pointer_value();
+        let bitmap = self
+            .column_load_field(control, 1, "col.var.bm")
+            .into_pointer_value();
+        let idx = self.builder.build_alloca(i64_t, "col.var.i").unwrap();
+        let ss = self.builder.build_alloca(f64_t, "col.var.ss").unwrap();
+        self.builder.build_store(idx, i64_t.const_zero()).unwrap();
+        self.builder.build_store(ss, f64_t.const_zero()).unwrap();
+        let head = self.context.append_basic_block(fn_val, "col.var.head");
+        let body = self.context.append_basic_block(fn_val, "col.var.body");
+        let add = self.context.append_basic_block(fn_val, "col.var.add");
+        let cont = self.context.append_basic_block(fn_val, "col.var.cont");
+        let exit = self.context.append_basic_block(fn_val, "col.var.exit");
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(head);
+        let i = self
+            .builder
+            .build_load(i64_t, idx, "col.var.iv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, len, "col.var.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, body, exit)
+            .unwrap();
+        self.builder.position_at_end(body);
+        let valid = self.column_load_valid_bit(bitmap, i);
+        self.builder
+            .build_conditional_branch(valid, add, cont)
+            .unwrap();
+        self.builder.position_at_end(add);
+        let x = self.column_gep_load(data, elem, i, "col.var.x");
+        let xf = self.column_elem_to_f64(x, unsigned);
+        let d = self.builder.build_float_sub(xf, mean, "col.var.d").unwrap();
+        let d2 = self.builder.build_float_mul(d, d, "col.var.d2").unwrap();
+        let s = self
+            .builder
+            .build_load(f64_t, ss, "col.var.s")
+            .unwrap()
+            .into_float_value();
+        let s2 = self.builder.build_float_add(s, d2, "col.var.s2").unwrap();
+        self.builder.build_store(ss, s2).unwrap();
+        self.builder.build_unconditional_branch(cont).unwrap();
+        self.builder.position_at_end(cont);
+        let next = self
+            .builder
+            .build_int_add(i, i64_t.const_int(1, false), "col.var.next")
+            .unwrap();
+        self.builder.build_store(idx, next).unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(exit);
+        let ss_v = self
+            .builder
+            .build_load(f64_t, ss, "col.var.ssv")
+            .unwrap()
+            .into_float_value();
+        let one = f64_t.const_float(1.0);
+        let denom = self
+            .builder
+            .build_float_sub(cntf, one, "col.var.denom")
+            .unwrap();
+        let var = self
+            .builder
+            .build_float_div(ss_v, denom, "col.var.var")
+            .unwrap();
+        if is_std {
+            Ok(self.column_sqrt_f64(var).into())
+        } else {
+            Ok(var.into())
+        }
+    }
+
+    /// `corr(other) -> f64` — Pearson correlation over the pairwise-valid
+    /// (both columns valid) slots; requires equal length (else traps) and
+    /// ≥ 2 valid pairs (else traps). A zero-variance operand yields `NaN`
+    /// (the pandas posture). Both columns are `f64` (typechecker-enforced).
+    fn compile_column_corr(
+        &mut self,
+        control: PointerValue<'ctx>,
+        other: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let f64_t = self.context.f64_type();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "Column.corr outside function".to_string())?;
+        let (octrl, _oelem, _ounsigned) = self.column_operand(other)?;
+        let elem: BasicTypeEnum = f64_t.into(); // typechecker guarantees Column[f64] both sides
+
+        let len = self
+            .column_load_field(control, 2, "col.corr.len")
+            .into_int_value();
+        let olen = self
+            .column_load_field(octrl, 2, "col.corr.olen")
+            .into_int_value();
+        let len_eq = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, len, olen, "col.corr.leneq")
+            .unwrap();
+        self.emit_column_guard(len_eq, "Column.corr length mismatch")?;
+
+        let xdata = self
+            .column_load_field(control, 0, "col.corr.xdata")
+            .into_pointer_value();
+        let xbm = self
+            .column_load_field(control, 1, "col.corr.xbm")
+            .into_pointer_value();
+        let ydata = self
+            .column_load_field(octrl, 0, "col.corr.ydata")
+            .into_pointer_value();
+        let ybm = self
+            .column_load_field(octrl, 1, "col.corr.ybm")
+            .into_pointer_value();
+
+        // Both-valid bit for slot `i` (emitted in the current block).
+        // Pass 1 — pairwise sums sx / sy and the paired count.
+        let sx = self.builder.build_alloca(f64_t, "col.corr.sx").unwrap();
+        let sy = self.builder.build_alloca(f64_t, "col.corr.sy").unwrap();
+        let cnt = self.builder.build_alloca(i64_t, "col.corr.cnt").unwrap();
+        let idx1 = self.builder.build_alloca(i64_t, "col.corr.i1").unwrap();
+        for slot in [sx, sy] {
+            self.builder.build_store(slot, f64_t.const_zero()).unwrap();
+        }
+        self.builder.build_store(cnt, i64_t.const_zero()).unwrap();
+        self.builder.build_store(idx1, i64_t.const_zero()).unwrap();
+
+        let h1 = self.context.append_basic_block(fn_val, "col.corr1.head");
+        let b1 = self.context.append_basic_block(fn_val, "col.corr1.body");
+        let a1 = self.context.append_basic_block(fn_val, "col.corr1.add");
+        let c1 = self.context.append_basic_block(fn_val, "col.corr1.cont");
+        let e1 = self.context.append_basic_block(fn_val, "col.corr1.exit");
+        self.builder.build_unconditional_branch(h1).unwrap();
+        self.builder.position_at_end(h1);
+        let i = self
+            .builder
+            .build_load(i64_t, idx1, "col.corr1.iv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, len, "col.corr1.more")
+            .unwrap();
+        self.builder.build_conditional_branch(more, b1, e1).unwrap();
+        self.builder.position_at_end(b1);
+        let vx = self.column_load_valid_bit(xbm, i);
+        let vy = self.column_load_valid_bit(ybm, i);
+        let both = self.builder.build_and(vx, vy, "col.corr1.both").unwrap();
+        self.builder.build_conditional_branch(both, a1, c1).unwrap();
+        self.builder.position_at_end(a1);
+        let x = self
+            .column_gep_load(xdata, elem, i, "col.corr1.x")
+            .into_float_value();
+        let y = self
+            .column_gep_load(ydata, elem, i, "col.corr1.y")
+            .into_float_value();
+        let sxv = self
+            .builder
+            .build_load(f64_t, sx, "col.corr1.sxv")
+            .unwrap()
+            .into_float_value();
+        self.builder
+            .build_store(
+                sx,
+                self.builder
+                    .build_float_add(sxv, x, "col.corr1.sx2")
+                    .unwrap(),
+            )
+            .unwrap();
+        let syv = self
+            .builder
+            .build_load(f64_t, sy, "col.corr1.syv")
+            .unwrap()
+            .into_float_value();
+        self.builder
+            .build_store(
+                sy,
+                self.builder
+                    .build_float_add(syv, y, "col.corr1.sy2")
+                    .unwrap(),
+            )
+            .unwrap();
+        let cv = self
+            .builder
+            .build_load(i64_t, cnt, "col.corr1.cv")
+            .unwrap()
+            .into_int_value();
+        self.builder
+            .build_store(
+                cnt,
+                self.builder
+                    .build_int_add(cv, i64_t.const_int(1, false), "col.corr1.cv2")
+                    .unwrap(),
+            )
+            .unwrap();
+        self.builder.build_unconditional_branch(c1).unwrap();
+        self.builder.position_at_end(c1);
+        self.builder
+            .build_store(
+                idx1,
+                self.builder
+                    .build_int_add(i, i64_t.const_int(1, false), "col.corr1.next")
+                    .unwrap(),
+            )
+            .unwrap();
+        self.builder.build_unconditional_branch(h1).unwrap();
+        self.builder.position_at_end(e1);
+
+        let cnt_v = self
+            .builder
+            .build_load(i64_t, cnt, "col.corr.cntv")
+            .unwrap()
+            .into_int_value();
+        let two = i64_t.const_int(2, false);
+        let ok = self
+            .builder
+            .build_int_compare(IntPredicate::UGE, cnt_v, two, "col.corr.ok")
+            .unwrap();
+        self.emit_column_guard(ok, "Column.corr requires at least 2 valid paired values")?;
+        let cntf = self
+            .builder
+            .build_unsigned_int_to_float(cnt_v, f64_t, "col.corr.cntf")
+            .unwrap();
+        let sxv = self
+            .builder
+            .build_load(f64_t, sx, "col.corr.sxf")
+            .unwrap()
+            .into_float_value();
+        let syv = self
+            .builder
+            .build_load(f64_t, sy, "col.corr.syf")
+            .unwrap()
+            .into_float_value();
+        let mx = self
+            .builder
+            .build_float_div(sxv, cntf, "col.corr.mx")
+            .unwrap();
+        let my = self
+            .builder
+            .build_float_div(syv, cntf, "col.corr.my")
+            .unwrap();
+
+        // Pass 2 — sxy / sxx / syy about the means.
+        let sxy = self.builder.build_alloca(f64_t, "col.corr.sxy").unwrap();
+        let sxx = self.builder.build_alloca(f64_t, "col.corr.sxx").unwrap();
+        let syy = self.builder.build_alloca(f64_t, "col.corr.syy").unwrap();
+        let idx2 = self.builder.build_alloca(i64_t, "col.corr.i2").unwrap();
+        for slot in [sxy, sxx, syy] {
+            self.builder.build_store(slot, f64_t.const_zero()).unwrap();
+        }
+        self.builder.build_store(idx2, i64_t.const_zero()).unwrap();
+        let h2 = self.context.append_basic_block(fn_val, "col.corr2.head");
+        let b2 = self.context.append_basic_block(fn_val, "col.corr2.body");
+        let a2 = self.context.append_basic_block(fn_val, "col.corr2.add");
+        let c2 = self.context.append_basic_block(fn_val, "col.corr2.cont");
+        let e2 = self.context.append_basic_block(fn_val, "col.corr2.exit");
+        self.builder.build_unconditional_branch(h2).unwrap();
+        self.builder.position_at_end(h2);
+        let i = self
+            .builder
+            .build_load(i64_t, idx2, "col.corr2.iv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, len, "col.corr2.more")
+            .unwrap();
+        self.builder.build_conditional_branch(more, b2, e2).unwrap();
+        self.builder.position_at_end(b2);
+        let vx = self.column_load_valid_bit(xbm, i);
+        let vy = self.column_load_valid_bit(ybm, i);
+        let both = self.builder.build_and(vx, vy, "col.corr2.both").unwrap();
+        self.builder.build_conditional_branch(both, a2, c2).unwrap();
+        self.builder.position_at_end(a2);
+        let x = self
+            .column_gep_load(xdata, elem, i, "col.corr2.x")
+            .into_float_value();
+        let y = self
+            .column_gep_load(ydata, elem, i, "col.corr2.y")
+            .into_float_value();
+        let dx = self.builder.build_float_sub(x, mx, "col.corr2.dx").unwrap();
+        let dy = self.builder.build_float_sub(y, my, "col.corr2.dy").unwrap();
+        let upd = |me: &Self, slot: PointerValue<'ctx>, inc: FloatValue<'ctx>, n: &str| {
+            let cur = me
+                .builder
+                .build_load(f64_t, slot, n)
+                .unwrap()
+                .into_float_value();
+            me.builder
+                .build_store(slot, me.builder.build_float_add(cur, inc, n).unwrap())
+                .unwrap();
+        };
+        upd(
+            self,
+            sxy,
+            self.builder
+                .build_float_mul(dx, dy, "col.corr2.dxy")
+                .unwrap(),
+            "col.corr2.sxy",
+        );
+        upd(
+            self,
+            sxx,
+            self.builder
+                .build_float_mul(dx, dx, "col.corr2.dxx")
+                .unwrap(),
+            "col.corr2.sxx",
+        );
+        upd(
+            self,
+            syy,
+            self.builder
+                .build_float_mul(dy, dy, "col.corr2.dyy")
+                .unwrap(),
+            "col.corr2.syy",
+        );
+        self.builder.build_unconditional_branch(c2).unwrap();
+        self.builder.position_at_end(c2);
+        self.builder
+            .build_store(
+                idx2,
+                self.builder
+                    .build_int_add(i, i64_t.const_int(1, false), "col.corr2.next")
+                    .unwrap(),
+            )
+            .unwrap();
+        self.builder.build_unconditional_branch(h2).unwrap();
+        self.builder.position_at_end(e2);
+
+        let sxx_v = self
+            .builder
+            .build_load(f64_t, sxx, "col.corr.sxxv")
+            .unwrap()
+            .into_float_value();
+        let syy_v = self
+            .builder
+            .build_load(f64_t, syy, "col.corr.syyv")
+            .unwrap()
+            .into_float_value();
+        let sxy_v = self
+            .builder
+            .build_load(f64_t, sxy, "col.corr.sxyv")
+            .unwrap()
+            .into_float_value();
+        let prod = self
+            .builder
+            .build_float_mul(sxx_v, syy_v, "col.corr.prod")
+            .unwrap();
+        let denom = self.column_sqrt_f64(prod);
+        let is_zero = self
+            .builder
+            .build_float_compare(
+                FloatPredicate::OEQ,
+                denom,
+                f64_t.const_zero(),
+                "col.corr.dz",
+            )
+            .unwrap();
+        let r = self
+            .builder
+            .build_float_div(sxy_v, denom, "col.corr.r")
+            .unwrap();
+        let nan = f64_t.const_float(f64::NAN);
+        let result = self
+            .builder
+            .build_select(is_zero, nan, r, "col.corr.result")
+            .unwrap();
+        // A fresh-temp `other` operand (e.g. `a.corr(b + c)`) is freed.
+        self.column_free_if_fresh_temp(other, octrl);
+        Ok(result)
     }
 
     // ── Indexing ────────────────────────────────────────────────
