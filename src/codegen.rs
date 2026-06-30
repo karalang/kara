@@ -69,6 +69,7 @@ mod refinement;
 mod runtime;
 mod shadow;
 mod state;
+mod stats;
 mod stmts;
 mod synth;
 mod synth_display;

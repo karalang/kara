@@ -49828,6 +49828,93 @@ fn main() {
         }
     }
 
+    // ── Stats.* free-function codegen (phase-11, run/build parity) ──
+
+    #[test]
+    fn test_e2e_stats_free_functions() {
+        // All eight `Stats` free functions over a `Vec[f64]`, byte-identical
+        // to the interpreter (`eval_stats_fn`). variance/stddev are the
+        // POPULATION forms (÷n) — distinct from the Column sample (÷n-1) stats.
+        let out = run_program(
+            "fn main() {\n\
+                 let v: Vec[f64] = vec![3.0, 1.0, 4.0, 1.0, 5.0, 9.0, 2.0];\n\
+                 println(Stats.sum(v));\n\
+                 println(Stats.prod(v));\n\
+                 println(Stats.mean(v));\n\
+                 println(Stats.variance(v));\n\
+                 println(Stats.stddev(v));\n\
+                 println(Stats.median(v));\n\
+                 match Stats.min(v) { Some(m) => println(m), None => println(-1.0), };\n\
+                 match Stats.max(v) { Some(m) => println(m), None => println(-1.0), };\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out,
+                "25\n1080\n3.5714285714285716\n6.816326530612246\n2.610809554642438\n3\n1\n9\n",
+                "Stats.* must match the interpreter (population var/std, sorted median)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_stats_even_median_and_fresh_temp_arg() {
+        // Even-count median averages the two middles; a fresh `vec![…]` temp
+        // argument is read then freed (the owned-temp leak guard — see the
+        // ASAN test below).
+        let out = run_program(
+            "fn main() {\n\
+                 let e: Vec[f64] = vec![10.0, 20.0, 30.0, 40.0];\n\
+                 println(Stats.median(e));\n\
+                 println(Stats.sum(vec![100.0, 200.0]));\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "25\n300\n", "even-count median + fresh-temp arg");
+        }
+    }
+
+    #[test]
+    fn test_e2e_stats_empty_slice() {
+        // Empty input: sum -> -0 (Rust's float `Sum` identity is -0.0),
+        // prod -> 1, min/max -> None. (mean/variance/stddev/median trap — below.)
+        let out = run_program(
+            "fn main() {\n\
+                 let v: Vec[f64] = vec![];\n\
+                 println(Stats.sum(v));\n\
+                 println(Stats.prod(v));\n\
+                 match Stats.min(v) { Some(m) => println(m), None => println(-1.0), };\n\
+                 match Stats.max(v) { Some(m) => println(m), None => println(-1.0), };\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "-0\n1\n-1\n-1\n",
+                "empty sum -> -0, prod -> 1, min/max -> None (interpreter parity)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_stats_mean_empty_traps() {
+        // `Stats.mean` on an empty slice traps (parity with the interpreter's
+        // empty-slice panic).
+        let captured = run_program_capturing(
+            "fn main() {\n\
+                 let v: Vec[f64] = vec![];\n\
+                 println(Stats.mean(v));\n\
+             }\n",
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("empty slice"),
+                "expected empty-slice trap, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+        }
+    }
+
     // ── Column[String] codegen — heap-element lifecycle (phase-11) ──
 
     #[test]

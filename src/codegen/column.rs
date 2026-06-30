@@ -2148,7 +2148,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// `sqrt` of an `f64` via the overloaded `llvm.sqrt` intrinsic (the
     /// `x.sqrt()` lowering, reused for `std` / `corr`).
-    fn column_sqrt_f64(&self, fv: FloatValue<'ctx>) -> FloatValue<'ctx> {
+    pub(super) fn column_sqrt_f64(&self, fv: FloatValue<'ctx>) -> FloatValue<'ctx> {
         let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.sqrt")
             .expect("llvm.sqrt intrinsic must exist");
         let decl = intrinsic
@@ -3468,7 +3468,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// In-place ascending insertion sort of an `f64` buffer of `n` elements
     /// (NaN settles to the front under `fcmp ogt`, matching the quantile
     /// posture).
-    fn column_sort_f64_inplace(&self, buf: PointerValue<'ctx>, n: IntValue<'ctx>) {
+    pub(super) fn column_sort_f64_inplace(&self, buf: PointerValue<'ctx>, n: IntValue<'ctx>) {
         let i64_t = self.context.i64_type();
         let f64_t = self.context.f64_type();
         let fn_val = self.current_fn.expect("sort in function");

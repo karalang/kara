@@ -2397,11 +2397,24 @@ impl<'ctx> super::Codegen<'ctx> {
                                 if let ExprKind::Path { segments, .. } = &callee.kind {
                                     if segments.len() == 2 {
                                         let target = &segments[0];
-                                        match self.struct_types.get(target) {
-                                            Some(target_st) if *target_st == st => {
-                                                Some(target.clone())
+                                        // `Stats.min` / `Stats.max` return
+                                        // `Option[f64]` (intercepted in
+                                        // `try_compile_stats_call`, no user-fn
+                                        // return-type entry) — record the binding
+                                        // as `Option` so a downstream `match` can
+                                        // resolve the scrutinee's enum and bind
+                                        // the payload.
+                                        if target == "Stats"
+                                            && matches!(segments[1].as_str(), "min" | "max")
+                                        {
+                                            Some("Option".to_string())
+                                        } else {
+                                            match self.struct_types.get(target) {
+                                                Some(target_st) if *target_st == st => {
+                                                    Some(target.clone())
+                                                }
+                                                _ => None,
                                             }
-                                            _ => None,
                                         }
                                     } else {
                                         None

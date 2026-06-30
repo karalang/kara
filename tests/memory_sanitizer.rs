@@ -12523,6 +12523,52 @@ fn main() {
         );
     }
 
+    /// `Stats.*` free-function codegen lifecycle (phase-11). `Stats.median`
+    /// mallocs + frees a scratch f64 buffer per call (memcpy-sort-read-free);
+    /// a fresh `vec![…]` temp argument is read and then freed via
+    /// `materialize_owned_temp` (the early-dispatch owned-temp leak guard —
+    /// `builtin-method-early-dispatch-skips-owned-temp-arg-free`). A borrowed
+    /// `Vec` argument is NOT consumed (still usable after). A missing free
+    /// leaks (Linux detect_leaks); a double free trips ASAN everywhere.
+    #[test]
+    fn asan_stats_free_functions_lifecycle_clean() {
+        let label = "stats_free_functions_lifecycle";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+fn main() {
+    let v: Vec[f64] = vec![4.0, 1.0, 3.0, 2.0, 5.0];
+    // median mallocs/frees a scratch buffer; the others read in place.
+    println(Stats.median(v));
+    println(Stats.mean(v));
+    println(Stats.stddev(v));
+    // v borrowed, not consumed — still usable.
+    println(Stats.sum(v));
+    // fresh vec![…] temp argument: read then freed (no leak).
+    println(Stats.median(vec![30.0, 10.0, 20.0, 40.0]));
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             check the median scratch malloc/free + fresh-temp arg free",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["3", "3", "1.4142135623730951", "15", "25"],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     /// `Column[String]` heap-element lifecycle (phase-11 Column[String]
     /// codegen slice): each String column owns its element heaps. `from_vec`
     /// deep-clones the source Vec's strings IN (the source Vec is borrowed and

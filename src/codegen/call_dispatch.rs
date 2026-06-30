@@ -244,6 +244,14 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(v);
         }
 
+        // `Stats.*` free-function statistics over a `Slice[f64]` / `Vec[f64]`
+        // (the AOT twin of `eval_stats_fn`). Intercepted before the generic
+        // free-function dispatch — the `#[compiler_builtin]` bodies are
+        // doc-only placeholders. Returns `None` for any non-`Stats` callee.
+        if let Some(v) = self.try_compile_stats_call(callee, args, call_span)? {
+            return Ok(v);
+        }
+
         // Const generics slice 1c: `f[8]()` parses as
         // `Call { callee: Index { object: Identifier(name), index: literal }, args }`.
         // The typechecker disambiguation routes through a synthetic
