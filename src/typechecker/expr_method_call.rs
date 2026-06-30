@@ -1324,6 +1324,51 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // General owned-temp tracking, slice 3b — element-type-aware read
+        // methods (`get`/`first`/`last`/`get_unchecked`/`contains`) on a
+        // FRESH-TEMP (non-identifier) `Vec`/`VecDeque` receiver
+        // (`make_vec().get(0)`). Codegen materializes the temp into a synthetic
+        // local and re-dispatches through `compile_vec_method`, which needs the
+        // receiver's ELEMENT type to shape the `Option[T]` payload — but it
+        // cannot recover it from `expr_types` because `MethodCall.span ==
+        // receiver.span` holds the method's *result* type (`Option[T]`), not the
+        // receiver's `Vec[T]`. Record the element `TypeExpr` here (where
+        // `obj_ty` is the receiver type), keyed by the call span — the same
+        // collision dodge `method_unwrap_inner_types` / `method_callee_types`
+        // use. SCALAR elements only: a heap element (`Vec[String]`) returns
+        // `Option[ref T]` aliasing the soon-freed temp buffer, a borrow-lifetime
+        // case left to a follow-on slice. Gated to `Call`/`MethodCall`
+        // receivers — the fresh-temp shapes codegen's `expr_yields_fresh_owned_temp`
+        // recognizes; a place-expression receiver (identifier / field / index)
+        // is owned elsewhere and routes through the named-binding dispatch.
+        if matches!(
+            method,
+            "get" | "first" | "last" | "get_unchecked" | "contains"
+        ) && matches!(
+            &object.kind,
+            ExprKind::Call { .. } | ExprKind::MethodCall { .. }
+        ) {
+            let elem = match &obj_ty {
+                Type::Named { name, args }
+                    if (name == "Vec" || name == "VecDeque") && args.len() == 1 =>
+                {
+                    Some(args[0].clone())
+                }
+                _ => None,
+            };
+            if let Some(elem) = elem {
+                let resolved = resolve_type_var_top(&elem, &self.env.substitutions);
+                if matches!(
+                    resolved,
+                    Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char
+                ) {
+                    let te = Self::type_to_type_expr(&resolved);
+                    self.temp_recv_elem_types
+                        .insert(SpanKey::from_span(span), te);
+                }
+            }
+        }
+
         // Option/Result unwrap-family side-table: record the inner `T` /
         // success-`T` so codegen's `compile_method_call` arm for
         // `unwrap`/`expect`/`is_*`/`unwrap_or` knows the LLVM shape of the

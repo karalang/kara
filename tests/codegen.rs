@@ -18472,6 +18472,74 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_freshtemp_vec_get_emits_owned_temp_free() {
+        // Slice 3b (element-type-aware read methods on fresh-temp receivers):
+        // `make_vec().get(0)` — the receiver is a fresh-owned Vec temp the
+        // `get` borrows read-only. Codegen materializes it into a
+        // `__vrecv_tmp` slot (with the scalar element type recovered from the
+        // typechecker's `temp_recv_elem_types`) and queues a `FreeVecBuffer`
+        // (`cleanup.free`) at the enclosing frame's exit. Without this the
+        // receiver buffer leaked. Archive-independent leak-closure gate (macOS
+        // ASAN has no LeakSanitizer).
+        let src = r#"
+fn make_vec() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1_i64);
+    return v;
+}
+
+fn main() {
+    match make_vec().get(0) {
+        Some(x) => println(x),
+        None => println(0_i64),
+    };
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("__vrecv_tmp"),
+            "expected the fresh Vec receiver materialized into __vrecv_tmp; got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("cleanup.free"),
+            "expected a FreeVecBuffer drain for the fresh-temp get receiver; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_freshtemp_vec_get_field_receiver_no_owned_temp() {
+        // Negative / double-free guard: a *place*-expression receiver
+        // (`h.items.get(0)`, a field access) reloads a buffer the `h` binding
+        // owns. The slice-3b typechecker gate records only `Call`/`MethodCall`
+        // receivers, so a field-access receiver is never serviced by the
+        // fresh-temp path and must NOT materialize a `__vrecv_tmp` — freeing
+        // it would double-free against `h`'s own cleanup. (`get` on the field
+        // receiver routes through the existing named-binding dispatch.)
+        let src = r#"
+struct Holder { items: Vec[i64] }
+
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1_i64);
+    let h = Holder { items: v };
+    match h.items.get(0) {
+        Some(x) => println(x),
+        None => println(0_i64),
+    };
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            !ir.contains("__vrecv_tmp"),
+            "a field-access receiver must not materialize a fresh-temp Vec slot \
+             (would double-free against the binding's cleanup); got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_ir_discarded_block_tail_temp_freed() {
         // Slice 5 (tail-expr temp drop): a fresh `Vec` produced in the tail
         // of a statement-position block (`{ make_vec() }`) is the block's

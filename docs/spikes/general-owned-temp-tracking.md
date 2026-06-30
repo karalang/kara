@@ -295,30 +295,44 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    `test_ir_method_chain_field_receiver_no_owned_temp` → the place-receiver
    negative) + 2 ASAN (`asan_method_chain_intermediate_vec_freed`,
    `asan_method_chain_field_receiver_no_double_free`).
-   **Deferred to a follow-up (slice 3b):** (a) element-type-aware Vec/String/Map
-   receiver methods on temps (`get`/`contains`/`iter`, `Map.get` etc.) — these
-   hard-error today (no non-identifier handler) and dispatch via the synth-alloca
-   redispatch the `RequestBuilder` chain uses (`compile_vec_method` on a
-   registered synth name). **Blocker found 2026-06-07 (attempted, reverted):**
-   `compile_vec_method` needs the receiver's *element* LLVM type to shape the
-   `Option[T]` payload of `get`/`first`/`last`, but it cannot be recovered for a
-   temp receiver — the parser sets `MethodCall.span == receiver.span`, so
-   `make_vec()` (receiver) and `.get(0)` (outer) collide at one `expr_types`
-   key, and `owned_temp_drops[span]` holds the *method-result* type
-   (`Option[i64]`), not the receiver's `Vec[i64]`. (LLVM-type detection gives
-   only the type-erased `{ptr,len,cap}`, no element.) **Fix path:** a dedicated
-   typechecker-recorded table mapping the method-call span → the receiver's
-   element `TypeExpr`, populated in `infer_method_call` (where the receiver type
-   is known) and forwarded through lowering — exactly the pattern
-   `method_callee_types` uses to dodge the same span-collision race. (A second
-   live instance landed 2026-06-07 with the WASM SIMD-128 slice:
-   `vector_method_receivers` — receiver `(T, N)` recorded at the collided
-   span in `infer_method_call` *and* at `Vector` lane-read Index spans, folded
-   into `unsigned_vector_exprs` in lowering.rs for SIMD reduce/print
-   signedness — copy either model.) That makes
-   3b a small cross-phase slice (typechecker + lowering + the codegen
-   redispatch), not codegen-only. Until it lands these methods on temps stay a
-   hard error (fail-loud, no silent leak);
+   **Slice 3b (a) — Vec/VecDeque scalar-element read methods on fresh temps.
+   — DONE 2026-06-29.** `make_vec().get(i)` / `.first()` / `.last()` /
+   `.get_unchecked(i)` / `.contains(x)` on a non-identifier `Vec[T]`/`VecDeque[T]`
+   receiver now compile (they hard-errored — "no handler for method 'get' on
+   non-identifier receiver"). The fix path scoped above landed exactly as
+   designed: a dedicated typechecker table `temp_recv_elem_types`
+   (`SpanKey` → element `TypeExpr`) populated in `infer_method_call` where the
+   receiver type is known, forwarded through `lowering.rs` to `Program` and onto
+   codegen state (sibling to `method_unwrap_inner_types`; same collision dodge —
+   `owned_temp_drops[span]` holds the method-result `Option[T]`, not the
+   receiver's `Vec[T]`). Codegen's `try_compile_freshtemp_vec_read_method`
+   (`method_call.rs`) materializes the receiver into a `__vrecv_tmp` slot,
+   registers the element type (`vec_elem_types` + `var_elem_type_exprs`), drop-
+   tracks the fresh temp via `track_vec_var` → `FreeVecBuffer` at the enclosing
+   frame's exit (gated on `expr_yields_fresh_owned_temp`; the read methods borrow
+   `self`, so the caller owns the temp), then re-dispatches through the
+   identifier-keyed `compile_vec_method`. **Scoped to SCALAR elements** (the
+   typechecker only records `Int`/`UInt`/`Float`/`Bool`/`Char`): a scalar element
+   has no destructor, so the `Option[ref T]` result (B-2026-06-07-5 — `get`
+   returns `Option[ref T]` even for scalars) registers no second free and the
+   single receiver-buffer `FreeVecBuffer` is the complete, double-free-free drop.
+   A **heap element** (`Vec[String]`) returns `Option[ref String]` aliasing the
+   buffer this frees, and its no-double-free relies on the borrow-binding
+   cleanup-suppression (`scrutinee_is_borrow_call`) firing for a *temp* receiver
+   — unverified, so it's the next 3b sub-slice. Native-oracle parity: codegen
+   output byte-identical to the interpreter across i64/f64/bool elements + OOB/
+   empty→None; auto-par A/B identical. **Tests:** 2 IR
+   (`test_ir_freshtemp_vec_get_emits_owned_temp_free` → `__vrecv_tmp` +
+   `cleanup.free`; `test_ir_freshtemp_vec_get_field_receiver_no_owned_temp` → the
+   place-receiver negative, proving the `Call`/`MethodCall`-only typechecker gate)
+   + 2 ASAN (`asan_freshtemp_vec_get_no_double_free` — looped fresh-temp get;
+   `asan_freshtemp_vec_first_last_contains_no_double_free`).
+   **Still open under 3b:** heap-element receivers (`Vec[String].get` borrow
+   lifetime across the freed temp); `Map`/`Set` temp receivers (`Map.get` — a
+   separate `compile_map_method` redispatch needing K+V); `iter` on a temp (the
+   iterator must keep the temp alive across the loop); and (the `vector_method_
+   receivers` model — receiver `(T, N)` recorded at the collided span — remains a
+   second copy-able precedent for any future receiver-type table);
    (b) user-`impl` methods on fresh-temp receivers (also unsupported today);
    (c) **operator-operand temps** (`make_str() + "x"`) — the lowered
    `String.add(make_str(), "x")` passes the fresh operand as an *owned* arg to

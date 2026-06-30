@@ -57,6 +57,16 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
         .iter()
         .map(|(k, v)| ((k.0, k.1), v.clone()))
         .collect();
+    // Forward the slice-3b fresh-temp `Vec`/`VecDeque` receiver element-type
+    // table so codegen can materialize a non-identifier collection receiver
+    // and re-dispatch element-type-aware read methods through
+    // `compile_vec_method`. Sibling to `method_unwrap_inner_types`; same
+    // keying (MethodCall span).
+    program.temp_recv_elem_types = tc
+        .temp_recv_elem_types
+        .iter()
+        .map(|(k, v)| ((k.0, k.1), v.clone()))
+        .collect();
     // Forward the channel-op element-type table so codegen's
     // `karac_runtime_channel_*` lowering knows the LLVM shape of `T` to size
     // the type-erased transfer + shape the recv/try_recv out slot. Sibling

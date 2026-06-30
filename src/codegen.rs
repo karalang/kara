@@ -2056,6 +2056,14 @@ pub(super) struct Codegen<'ctx> {
     /// Codegen's `unwrap` arm uses this to lower the inner type to its
     /// LLVM shape and reconstitute the payload words back to a value.
     pub(crate) method_unwrap_inner_types: HashMap<(usize, usize), TypeExpr>,
+    /// Per-fresh-temp `Vec`/`VecDeque` receiver read-method (`get`/`first`/
+    /// `last`/`get_unchecked`/`contains`) MethodCall → scalar element
+    /// `TypeExpr` side-table — populated from `Program.temp_recv_elem_types`.
+    /// Key: `(span.offset, span.length)` of the MethodCall. Codegen
+    /// materializes the non-identifier receiver into a synth local, registers
+    /// this element type, and re-dispatches through `compile_vec_method`
+    /// (general-owned-temp-tracking spike, slice 3b).
+    pub(crate) temp_recv_elem_types: HashMap<(usize, usize), TypeExpr>,
     /// Per-channel-op MethodCall → element `TypeExpr` side-table — populated
     /// from `Program.channel_elem_types`. Key: `(span.offset, span.length)`
     /// of the `Sender.send` / `Receiver.recv` / `Receiver.try_recv`
@@ -5257,6 +5265,7 @@ impl<'ctx> Codegen<'ctx> {
             method_callee_types: HashMap::new(),
             call_effect_subs: crate::ast::CallEffectSubsTable::new(),
             method_unwrap_inner_types: HashMap::new(),
+            temp_recv_elem_types: HashMap::new(),
             channel_elem_types: HashMap::new(),
             task_join_return_types: HashMap::new(),
             ref_return_inner_types: HashMap::new(),
@@ -6201,6 +6210,7 @@ impl<'ctx> Codegen<'ctx> {
         // maps to the inner `TypeExpr`. Read by the codegen `unwrap` arm
         // to know how to reconstitute the payload back to a value of T.
         self.method_unwrap_inner_types = program.method_unwrap_inner_types.clone();
+        self.temp_recv_elem_types = program.temp_recv_elem_types.clone();
         self.channel_elem_types = program.channel_elem_types.clone();
         self.task_join_return_types = program.task_join_return_types.clone();
         self.ref_return_inner_types = program.ref_return_inner_types.clone();
@@ -6841,6 +6851,7 @@ impl<'ctx> Codegen<'ctx> {
         let mut t_enum_inst_type_exprs = tp.enum_inst_type_exprs.clone();
         let mut t_call_effect_subs = tp.call_effect_subs.clone();
         let mut t_method_unwrap_inner_types = tp.method_unwrap_inner_types.clone();
+        let mut t_temp_recv_elem_types = tp.temp_recv_elem_types.clone();
         let mut t_channel_elem_types = tp.channel_elem_types.clone();
         let mut t_ref_return_inner_types = tp.ref_return_inner_types.clone();
         let mut t_pattern_binding_types = tp.pattern_binding_types.clone();
@@ -6872,6 +6883,7 @@ impl<'ctx> Codegen<'ctx> {
                     &mut self.method_unwrap_inner_types,
                     &mut t_method_unwrap_inner_types,
                 );
+                std::mem::swap(&mut self.temp_recv_elem_types, &mut t_temp_recv_elem_types);
                 std::mem::swap(&mut self.channel_elem_types, &mut t_channel_elem_types);
                 std::mem::swap(
                     &mut self.ref_return_inner_types,

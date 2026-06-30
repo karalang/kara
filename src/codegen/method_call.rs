@@ -3108,6 +3108,18 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // General owned-temp tracking, slice 3b — element-type-aware read
+        // methods (`get`/`first`/`last`/`get_unchecked`/`contains`) on a
+        // FRESH-TEMP `Vec`/`VecDeque` receiver (`make_vec().get(0)`). Needs the
+        // receiver's element type, recorded span-keyed by the typechecker in
+        // `temp_recv_elem_types` (unrecoverable from the LLVM `{ptr,len,cap}`
+        // shape, which is element-erased). Runs before the String redispatch
+        // below; no-ops (returns `Ok(None)`) when there's no recorded element
+        // type, so the String path and the diagnostic are untouched.
+        if let Some(result) = self.try_compile_freshtemp_vec_read_method(object, method, args)? {
+            return Ok(result);
+        }
+
         // Last-resort before the dispatch-fail error: a String collection
         // method (`split`, `contains`, …) on a **non-identifier** receiver
         // (`"a,b,c".split(",")`, `make_csv().split(",")`). The collection
@@ -3360,6 +3372,97 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_type_names.remove(&synth);
         self.vec_elem_types.remove(&synth);
         self.string_vars.remove(&synth);
+
+        result.map(Some)
+    }
+
+    /// General owned-temp tracking, slice 3b — element-type-aware read methods
+    /// (`get`/`first`/`last`/`get_unchecked`/`contains`) on a FRESH-TEMP
+    /// (non-identifier) `Vec`/`VecDeque` receiver: `make_vec().get(0)`,
+    /// `build_ids().contains(x)`. The typechecker records the (scalar) element
+    /// `TypeExpr` keyed by the MethodCall span in `temp_recv_elem_types` — it
+    /// can't be recovered from `expr_types` because the receiver and the
+    /// method call share one span, which holds the method's `Option[T]`
+    /// *result* type, and the LLVM `{ptr,len,cap}` shape is element-erased.
+    /// With the element type in hand: compile the receiver, materialize it into
+    /// a synthetic local, register the element type, drop-track the fresh temp
+    /// (a `FreeVecBuffer` at the enclosing frame's exit — the read methods
+    /// borrow `self`, so the caller owns the temp), then re-dispatch through
+    /// the identifier-keyed `compile_vec_method`.
+    ///
+    /// Returns `Ok(None)` when there's no recorded element type (not a
+    /// serviceable fresh-temp Vec read), so the caller falls through to the
+    /// String redispatch / diagnostic — a pure addition that can't change any
+    /// existing case.
+    ///
+    /// Scoped to SCALAR elements (the typechecker only records those): a heap
+    /// element (`Vec[String]`) returns `Option[ref T]` aliasing the buffer this
+    /// frees, a borrow-lifetime case for a follow-on slice. A scalar element
+    /// owns no nested heap, so the outer-buffer `FreeVecBuffer` is the complete
+    /// drop. The drop-track is gated on `expr_yields_fresh_owned_temp`, and the
+    /// `cap > 0` guard inside `FreeVecBuffer` is a second backstop, so a
+    /// (hypothetical) borrow-returning receiver is never double-freed.
+    fn try_compile_freshtemp_vec_read_method(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        // Identifier / self receivers route through the named-binding dispatch.
+        if matches!(&object.kind, ExprKind::Identifier(_) | ExprKind::SelfValue) {
+            return Ok(None);
+        }
+        let span_key = (object.span.offset, object.span.length);
+        let Some(elem_te) = self.temp_recv_elem_types.get(&span_key).cloned() else {
+            return Ok(None);
+        };
+        let cur_fn = self
+            .current_fn
+            .ok_or_else(|| "fresh-temp Vec read method outside fn".to_string())?;
+
+        let recv_val = self.compile_expr(object)?;
+        // The receiver must be the `{ptr, len, cap}` Vec struct; bail otherwise
+        // (the typechecker gate should guarantee it, but stay shape-defensive).
+        let BasicValueEnum::StructValue(sv) = recv_val else {
+            return Ok(None);
+        };
+        if sv.get_type() != self.vec_struct_type() {
+            return Ok(None);
+        }
+
+        let elem_llvm = self.llvm_type_for_type_expr(&elem_te);
+        let slot = self.create_entry_alloca(cur_fn, "__vrecv_tmp", recv_val.get_type());
+        self.builder.build_store(slot, recv_val).unwrap();
+
+        // Drop the fresh-owned receiver at the enclosing frame's exit (the
+        // position ceiling). The cleanup references the slot pointer, not the
+        // synth name, so it stays valid after the name is unregistered below.
+        if self.expr_yields_fresh_owned_temp(object) {
+            self.track_vec_var(slot, Some(elem_llvm));
+        }
+
+        // Register the synth name so the identifier-keyed `compile_vec_method`
+        // resolves the element type and the slot. Unique per call site.
+        let synth = format!("__vrecv_tmp_{}", self.indexed_elem_counter);
+        self.indexed_elem_counter += 1;
+        self.variables.insert(
+            synth.clone(),
+            super::VarSlot {
+                ptr: slot,
+                ty: recv_val.get_type(),
+            },
+        );
+        self.vec_elem_types.insert(synth.clone(), elem_llvm);
+        self.var_elem_type_exprs.insert(synth.clone(), elem_te);
+        self.var_type_names.insert(synth.clone(), "Vec".to_string());
+
+        let result = self.compile_vec_method(&synth, slot, method, args);
+
+        // Drop the dispatch-only registrations.
+        self.variables.remove(&synth);
+        self.vec_elem_types.remove(&synth);
+        self.var_elem_type_exprs.remove(&synth);
+        self.var_type_names.remove(&synth);
 
         result.map(Some)
     }

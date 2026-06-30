@@ -256,6 +256,14 @@ pub type MethodCalleeTypesTable = std::collections::HashMap<(usize, usize), Stri
 pub type MethodUnwrapInnerTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
 
 /// Side-table populated by the lowering pass from the typechecker's
+/// `temp_recv_elem_types` map. Maps each fresh-temp `Vec`/`VecDeque` receiver
+/// read-method (`get`/`first`/`last`/`get_unchecked`/`contains`) `MethodCall`
+/// span to the receiver's scalar element `TypeExpr`. Codegen consults it to
+/// materialize the temp + register the element type before re-dispatching
+/// through `compile_vec_method` (general-owned-temp-tracking spike, slice 3b).
+pub type TempRecvElemTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
+
+/// Side-table populated by the lowering pass from the typechecker's
 /// `channel_elem_types` map. Maps each `Sender.send` / `Receiver.recv` /
 /// `Receiver.try_recv` `MethodCall` expression's span to the channel
 /// element `T` `TypeExpr`. Codegen consults it in the channel-op arm of
@@ -535,6 +543,10 @@ pub struct Program {
     /// Set by the lowering pass from
     /// `TypeCheckResult.method_unwrap_inner_types`; empty otherwise.
     pub method_unwrap_inner_types: MethodUnwrapInnerTypesTable,
+    /// Set by the lowering pass from `TypeCheckResult.temp_recv_elem_types`;
+    /// empty otherwise. Fresh-temp `Vec`/`VecDeque` receiver scalar element
+    /// types for codegen's slice-3b read-method redispatch.
+    pub temp_recv_elem_types: TempRecvElemTypesTable,
     /// Set by the lowering pass from `TypeCheckResult.channel_elem_types`;
     /// empty otherwise. Channel-op element types for codegen's
     /// `karac_runtime_channel_*` lowering.

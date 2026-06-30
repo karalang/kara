@@ -2478,6 +2478,78 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_freshtemp_vec_get_no_double_free() {
+        // General owned-temp tracking, slice 3b: `make_vec().get(i)` on a
+        // FRESH-TEMP receiver in a loop. Each iteration builds a fresh Vec
+        // temp whose heap buffer the `get` borrows read-only; codegen
+        // materializes it into a `__vrecv_tmp` slot and frees the buffer once
+        // per iteration. A regression that skipped the free leaks (caught by
+        // LeakSanitizer on Linux CI); one that freed it twice (or freed a
+        // buffer the scalar `Option[ref i64]` result still read) double-frees /
+        // UAFs (caught here on macOS too). The loop forces alloca reuse so a
+        // per-iteration leak accumulates.
+        assert_clean_asan_run(
+            r#"
+fn ids() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(100_i64);
+    v.push(200_i64);
+    v.push(300_i64);
+    return v;
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        match ids().get(i) {
+            Some(x) => println(x),
+            None => println(0_i64),
+        };
+        i = i + 1;
+    };
+}
+"#,
+            &["100", "200", "300"],
+            "freshtemp_vec_get_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_freshtemp_vec_first_last_contains_no_double_free() {
+        // Slice 3b: the remaining element-type-aware read methods on fresh-temp
+        // receivers — `first`/`last` (return `Option[ref i64]`) and `contains`
+        // (returns `bool`). Each receiver Vec temp's buffer must be freed
+        // exactly once after the borrow is read. The `make_vec` body forces a
+        // real heap buffer (three `push`es past the inline cap).
+        assert_clean_asan_run(
+            r#"
+fn nums() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(7_i64);
+    v.push(8_i64);
+    v.push(9_i64);
+    return v;
+}
+
+fn main() {
+    match nums().first() {
+        Some(x) => println(x),
+        None => println(0_i64),
+    };
+    match nums().last() {
+        Some(x) => println(x),
+        None => println(0_i64),
+    };
+    println(nums().contains(8_i64));
+    println(nums().contains(42_i64));
+}
+"#,
+            &["7", "9", "true", "false"],
+            "freshtemp_vec_first_last_contains_no_double_free",
+        );
+    }
+
     // ── B-2026-06-10-6: inline-heap `Option[T]` payload drop ──────
     //
     // An `Option[String]` / `Option[Vec[_]]` dropped WITHOUT being
