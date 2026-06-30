@@ -751,6 +751,105 @@ fn main() {
         );
     }
 
+    /// Container owner arg-pass slice (B-2026-06-22-2): a heap-env TUPLE owner with
+    /// TWO closure elements passed BY VALUE to a borrows-only callee. The callee
+    /// receives a shallow copy of the tuple aliasing the SAME RC env boxes, calls
+    /// both elements, and frees neither (a param gets no per-element
+    /// `FreeClosureEnv`); the caller retains sole ownership and RC-drops each env
+    /// EXACTLY once at scope exit (no inc, no move-out). The owner stays usable
+    /// after the call. `(t.0)(1)+(t.1)(2)=33` in the callee, then `(a.0)(1)+(a.1)(1)
+    /// =32` after → `65`. Without the borrow treatment the callee would free the
+    /// caller's boxes early (UAF) or both would free them (double-free); a stray inc
+    /// would leak them.
+    #[test]
+    fn asan_heap_env_tuple_owner_arg_pass_borrow_freed_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn use_t(t: (Fn(i64) -> i64, Fn(i64) -> i64)) -> i64 { (t.0)(1i64) + (t.1)(2i64) }
+fn main() {
+    let a = (make(10i64), make(20i64));
+    let r = use_t(a);
+    println(f"{r + (a.0)(1i64) + (a.1)(1i64)}");
+}
+"#,
+            &["65"],
+            "asan_heap_env_tuple_owner_arg_pass_borrow_freed_no_leak",
+        );
+    }
+
+    /// The ARRAY twin: a two-element `Array[Fn,2]` owner borrowed (both elements
+    /// called via the `[0, idx]` GEP), reused after the call. Each shared env freed
+    /// exactly once. `33` in the callee, `32` after → `65`.
+    #[test]
+    fn asan_heap_env_array_owner_arg_pass_borrow_freed_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn use_a(a: Array[Fn(i64) -> i64, 2]) -> i64 { (a[0])(1i64) + (a[1])(2i64) }
+fn main() {
+    let a: Array[Fn(i64) -> i64, 2] = [make(10i64), make(20i64)];
+    let r = use_a(a);
+    println(f"{r + (a[0])(1i64) + (a[1])(1i64)}");
+}
+"#,
+            &["65"],
+            "asan_heap_env_array_owner_arg_pass_borrow_freed_no_leak",
+        );
+    }
+
+    /// The `Vec[Fn]` owner arg-pass — the CRITICAL case. By-value arg-pass passes
+    /// the Vec header by value WITHOUT zeroing the caller's cap (unlike `let w = v`,
+    /// a move), so it is a BORROW: the callee reads through the shared buffer and
+    /// frees nothing; the caller's dynamic per-element drop loop frees every element
+    /// env (and the buffer) EXACTLY once. Multi-element to exercise that loop, and
+    /// the owner is reused after the call (`(v[0])/(v[1])` still valid — the cap was
+    /// not zeroed). `33` in the callee, `32` after → `65`. Were arg-pass a move, the
+    /// callee would adopt and free the buffer while the caller's loop freed it too
+    /// (double-free), or the element envs would leak.
+    #[test]
+    fn asan_heap_env_vec_owner_arg_pass_borrow_freed_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn use_v(v: Vec[Fn(i64) -> i64]) -> i64 { (v[0])(1i64) + (v[1])(2i64) }
+fn main() {
+    let mut v: Vec[Fn(i64) -> i64] = Vec.new();
+    v.push(make(10i64));
+    v.push(make(20i64));
+    let r = use_v(v);
+    println(f"{r + (v[0])(1i64) + (v[1])(1i64)}");
+}
+"#,
+            &["65"],
+            "asan_heap_env_vec_owner_arg_pass_borrow_freed_no_leak",
+        );
+    }
+
+    /// A TUPLE owner with a sibling HEAP String element passed by value to a
+    /// borrows-only callee. The `Fn` env is borrowed (caller frees once) and the
+    /// String element rides along by the normal owned arg-pass copy — the caller's
+    /// owner stays valid and readable after the call (`a.1`), each heap allocation
+    /// freed exactly once. Guards against a String double-free or a leak alongside
+    /// the borrowed closure env. `r=(t.0)(1)=11`, `r+(a.0)(2)=23`, then `a.1`.
+    #[test]
+    fn asan_heap_env_tuple_owner_arg_pass_string_sibling_freed_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn use_t(t: (Fn(i64) -> i64, String)) -> i64 { (t.0)(1i64) }
+fn main() {
+    let a = (make(10i64), "an independently long heap string payload here");
+    let r = use_t(a);
+    println(f"{r + (a.0)(2i64)}");
+    println(a.1);
+}
+"#,
+            &["23", "an independently long heap string payload here"],
+            "asan_heap_env_tuple_owner_arg_pass_string_sibling_freed_no_leak",
+        );
+    }
+
     /// Owner-copy slice (B-2026-06-22-2): `let s = a` where `a` is a heap-env
     /// STRUCT owner. The struct copy shallow-copies the `Fn` field so `s` aliases
     /// `a`'s SAME RC env box; the copy INCs the shared env and registers `s`'s own

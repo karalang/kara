@@ -871,18 +871,25 @@ impl<'ctx> super::Codegen<'ctx> {
                         if let Some(callee_fn) = self.fn_asts.get(callee_name) {
                             return args.iter().enumerate().any(|(i, a)| {
                                 // The arg is borrowed when it is a heap-env BINDING
-                                // (`let f = make()`) or a heap-env STRUCT OWNER
-                                // (`let h = H { f: make() }`) passed by value to a
-                                // borrows-only param — the callee only CALLS it
-                                // (`f(x)` / `(h.f)(x)`), so the caller retains sole
-                                // ownership and RC-drops the env once (no inc, no
-                                // move-out). Tuple / array / Vec owner args are a
-                                // later slice — they re-flag and stay rejected.
+                                // (`let f = make()`) or a heap-env CONTAINER OWNER —
+                                // a struct (`let h = H { f: make() }`), tuple / array
+                                // (`let t = (make(), 0)`), or `Vec[Fn]`
+                                // (`let v = [make()]vec`) — passed by value to a
+                                // borrows-only param. The callee only CALLS the
+                                // closure(s) (`f(x)` / `(h.f)(x)` / `(t.0)(x)` /
+                                // `(v[i])(x)`), so it borrows the shared RC env(s) and
+                                // never frees them; the caller retains sole ownership
+                                // and RC-drops each env once at scope exit (no inc, no
+                                // move-out — a call arg is not a return move-out, so
+                                // the owner's env slot is never neutralized).
                                 let borrowed = !a.mut_marker
                                     && matches!(&a.value.kind,
                                         ExprKind::Identifier(n)
                                             if binds.contains(n)
-                                                || self.heap_env_aggregate_owners.contains_key(n))
+                                                || self.heap_env_aggregate_owners.contains_key(n)
+                                                || self.heap_env_tuple_owners.contains_key(n)
+                                                || self.heap_env_array_owners.contains_key(n)
+                                                || self.heap_env_vec_owners.contains(n))
                                     && self.fn_param_is_borrows_only(callee_fn, i);
                                 !borrowed && mis(&a.value)
                             });
@@ -1140,6 +1147,28 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let ExprKind::FieldAccess { object, .. } = &callee.kind {
                         if matches!(&object.kind, ExprKind::Identifier(n) if n == pname) {
                             return any_args(args);
+                        }
+                    }
+                    // Owner tuple-index call `(pname.N)(args)`: invokes a closure
+                    // ELEMENT of a tuple param without moving the env out — the param
+                    // is BORROWED, exactly like the struct field-call. Only the CALL
+                    // form; `pname.N` in value position stays an escape via the
+                    // `TupleIndex` arm. `index` is a literal (no sub-expression to
+                    // walk). Disabled inside a nested closure (`in_closure`).
+                    if let ExprKind::TupleIndex { object, .. } = &callee.kind {
+                        if matches!(&object.kind, ExprKind::Identifier(n) if n == pname) {
+                            return any_args(args);
+                        }
+                    }
+                    // Owner index call `(pname[i])(args)`: invokes a closure ELEMENT
+                    // of an array / `Vec[Fn]` param without moving the env out — the
+                    // param is BORROWED. Only the CALL form; `pname[i]` in value
+                    // position stays an escape via the `Index` arm. The index
+                    // sub-expression is still walked (it could itself reference
+                    // `pname`); the callee element occurrence is the borrow-call.
+                    if let ExprKind::Index { object, index } = &callee.kind {
+                        if matches!(&object.kind, ExprKind::Identifier(n) if n == pname) {
+                            return esc(index) || any_args(args);
                         }
                     }
                 }

@@ -1286,16 +1286,159 @@ mod codegen_tests {
         assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
     }
 
-    /// A TUPLE owner passed by value is a later slice — still rejected (only the
-    /// STRUCT owner arg-pass is sanctioned here).
+    // ── Container owner by-value arg-pass (B-2026-06-22-2) ──
+    // Extends the struct owner arg-pass borrow to TUPLE / array / `Vec[Fn]`
+    // owners. A container owner passed BY VALUE to a borrows-only callee — one
+    // that only CALLS its closure element(s) via `(t.0)(x)` / `(a[i])(x)` /
+    // `(v[i])(x)` and never returns / projects / stores / re-binds it — is a pure
+    // BORROW: the callee receives a shallow copy of the container header pointing
+    // at the SAME RC env box(es), reads through it, and never frees it (a param
+    // is not a let-bound owner, so it gets no FreeClosureEnv / Vec drop loop); the
+    // caller retains sole ownership and RC-drops each env once at scope exit (no
+    // inc, no move-out — a call arg is not a return move-out, so the owner's env
+    // slot is never neutralized). The owner stays a live, usable owner after the
+    // call. Guard-only (zero codegen emission). Crucially this holds for `Vec[Fn]`
+    // too — by-value arg-pass passes the Vec header by value and does NOT zero the
+    // caller's cap (unlike `let w = v`, which is a move), so it is a borrow, not a
+    // move. Field / element REASSIGNMENT is the remaining piece and stays rejected.
+
+    /// The canonical TUPLE owner borrow: `use_t(t) { (t.0)(5) }` only calls the
+    /// element. `(t.0)(5) = 5 + 10 = 15`; the env box is freed once at `a`'s exit.
     #[test]
-    fn heap_env_tuple_owner_arg_is_rejected() {
-        let err = ir_result(
+    fn heap_env_tuple_owner_passed_by_value_runs() {
+        let out = run_program(
             "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
              fn use_t(t: (Fn(i64) -> i64, i64)) -> i64 { (t.0)(5i64) }\n\
              fn main() { let a = (make(10i64), 0i64); println(f\"{use_t(a)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("15\n"));
+    }
+
+    /// The TUPLE owner stays usable AFTER the borrow call: `use_t(a)` then
+    /// `(a.0)(1)`. `15 + 11 = 26`; the shared env is freed once.
+    #[test]
+    fn heap_env_tuple_owner_arg_then_reused_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn use_t(t: (Fn(i64) -> i64, i64)) -> i64 { (t.0)(5i64) }\n\
+             fn main() { let a = (make(10i64), 0i64); let r = use_t(a); \
+              println(f\"{r + (a.0)(1i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("26\n"));
+    }
+
+    /// The ARRAY owner borrow: `use_a(a) { (a[0])(5) }`. `(a[0])(5) = 15`.
+    #[test]
+    fn heap_env_array_owner_passed_by_value_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn use_a(a: Array[Fn(i64) -> i64, 1]) -> i64 { (a[0])(5i64) }\n\
+             fn main() { let a: Array[Fn(i64) -> i64, 1] = [make(10i64)]; \
+              println(f\"{use_a(a)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("15\n"));
+    }
+
+    /// A two-element `Fn` ARRAY borrowed — the callee calls both elements; each
+    /// shared env is freed once at the caller's scope exit. The owner is reused
+    /// after the call. `(a[0])(1)+(a[1])(1) = 11+21 = 32` in the callee, then
+    /// `(a[0])(0)=10` after → `32 + 10 = 42`.
+    #[test]
+    fn heap_env_array_owner_arg_multi_then_reused_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn use_a(a: Array[Fn(i64) -> i64, 2]) -> i64 { (a[0])(1i64) + (a[1])(1i64) }\n\
+             fn main() { let a: Array[Fn(i64) -> i64, 2] = [make(10i64), make(20i64)]; \
+              let r = use_a(a); println(f\"{r + (a[0])(0i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// The `Vec[Fn]` owner borrow — the critical case: by-value arg-pass passes the
+    /// Vec header by value WITHOUT zeroing the caller's cap (unlike `let w = v`,
+    /// a move), so it is a borrow. The callee reads `(v[0])(5)=15` and frees
+    /// nothing; the caller's drop loop frees the one element env once.
+    #[test]
+    fn heap_env_vec_owner_passed_by_value_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn use_v(v: Vec[Fn(i64) -> i64]) -> i64 { (v[0])(5i64) }\n\
+             fn main() { let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(make(10i64)); \
+              println(f\"{use_v(v)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("15\n"));
+    }
+
+    /// The `Vec[Fn]` owner stays usable AFTER the borrow call (a borrow does not
+    /// move it / zero its cap): `use_v(v)` then `(v[0])(1)`. Multi-element to
+    /// exercise the caller's dynamic drop loop. `(v[0])(1)+(v[1])(1) = 11+21 = 32`
+    /// in the callee, `(v[0])(0)=10` after → `42`.
+    #[test]
+    fn heap_env_vec_owner_arg_multi_then_reused_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn use_v(v: Vec[Fn(i64) -> i64]) -> i64 { (v[0])(1i64) + (v[1])(1i64) }\n\
+             fn main() { let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(make(10i64)); \
+              v.push(make(20i64)); let r = use_v(v); println(f\"{r + (v[0])(0i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// A TUPLE owner with a sibling HEAP String element rides along; the
+    /// borrows-only callee ignores it and only calls the closure. The owned
+    /// String element is passed by value (its buffer shared for the call); freed
+    /// once. `(t.0)(5) = 15`.
+    #[test]
+    fn heap_env_tuple_owner_arg_string_sibling_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn use_t(t: (Fn(i64) -> i64, String)) -> i64 { (t.0)(5i64) }\n\
+             fn main() { let a = (make(10i64), \"a long enough heap string payload\"); \
+              println(f\"{use_t(a)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("15\n"));
+    }
+
+    /// A callee that RETURNS the tuple owner (`keep(t) -> (..) { t }`) retains the
+    /// env past the call, so it is NOT borrows-only — the arg-pass stays rejected.
+    #[test]
+    fn heap_env_tuple_owner_arg_to_returning_callee_is_rejected() {
+        let err = ir_result(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn keep(t: (Fn(i64) -> i64, i64)) -> (Fn(i64) -> i64, i64) { t }\n\
+             fn main() { let a = (make(10i64), 0i64); let b = keep(a); \
+              println(f\"{(b.0)(5i64)}\"); }\n",
         )
-        .expect_err("tuple owner arg-pass is not yet supported");
+        .expect_err("passing a tuple owner to a param-returning callee must be rejected");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
+    /// A callee that PROJECTS the closure element out (`steal(t) -> Fn { t.0 }`)
+    /// escapes the env, so it is NOT borrows-only — rejected (only the CALL form
+    /// `(t.0)(x)` is a borrow; `t.0` in value position escapes).
+    #[test]
+    fn heap_env_tuple_owner_arg_to_projecting_callee_is_rejected() {
+        let err = ir_result(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn steal(t: (Fn(i64) -> i64, i64)) -> Fn(i64) -> i64 { t.0 }\n\
+             fn main() { let a = (make(10i64), 0i64); let g = steal(a); \
+              println(f\"{g(5i64)}\"); }\n",
+        )
+        .expect_err("passing a tuple owner to an element-projecting callee must be rejected");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
+    /// The `Vec[Fn]` twin of the projecting-callee rejection: `steal(v) -> Fn
+    /// { v[0] }` moves the element env out of the borrowed Vec — not borrows-only.
+    #[test]
+    fn heap_env_vec_owner_arg_to_projecting_callee_is_rejected() {
+        let err = ir_result(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn steal(v: Vec[Fn(i64) -> i64]) -> Fn(i64) -> i64 { v[0] }\n\
+             fn main() { let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(make(10i64)); \
+              let g = steal(v); println(f\"{g(5i64)}\"); }\n",
+        )
+        .expect_err("passing a Vec owner to an element-projecting callee must be rejected");
         assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
     }
 
