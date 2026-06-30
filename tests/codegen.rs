@@ -18640,6 +18640,46 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_freshtemp_vec_string_get_emits_per_element_drop() {
+        // Slice 3b-heap: `make_strvec().get(0)` on a fresh-temp `Vec[String]`.
+        // The receiver still materializes into `__vrecv_tmp` (the typechecker
+        // now records String elements for `get`/`first`/`last`), but unlike the
+        // scalar case its `FreeVecBuffer` must take the vec-struct recursion —
+        // each element is itself a `{ptr,len,cap}` String, so its buffer is
+        // freed in the per-element `cleanup.drop.inner.free` loop *before* the
+        // outer `cleanup.free`. Without per-element drop the three element
+        // String buffers leak (LeakSanitizer on Linux CI). The `Some(s)`
+        // borrow is NOT independently dropped (`scrutinee_is_borrow_call`), so
+        // each buffer is freed exactly once.
+        let src = r#"
+fn names() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("a heap string element padded beyond thirty-six bytes ok");
+    return v;
+}
+
+fn main() {
+    match names().get(0) {
+        Some(s) => println(s),
+        None => println("none"),
+    };
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("__vrecv_tmp"),
+            "expected the fresh Vec[String] receiver materialized into __vrecv_tmp; got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("cleanup.drop.inner.free"),
+            "expected the vec-struct per-element drop loop (cleanup.drop.inner.free) \
+             freeing each element String buffer of the fresh-temp receiver; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_ir_discarded_block_tail_temp_freed() {
         // Slice 5 (tail-expr temp drop): a fresh `Vec` produced in the tail
         // of a statement-position block (`{ make_vec() }`) is the block's

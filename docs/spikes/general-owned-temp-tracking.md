@@ -327,8 +327,38 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    place-receiver negative, proving the `Call`/`MethodCall`-only typechecker gate)
    + 2 ASAN (`asan_freshtemp_vec_get_no_double_free` — looped fresh-temp get;
    `asan_freshtemp_vec_first_last_contains_no_double_free`).
-   **Still open under 3b:** heap-element receivers (`Vec[String].get` borrow
-   lifetime across the freed temp); `Map`/`Set` temp receivers (`Map.get` — a
+   **Slice 3b-heap — `Vec[String]` borrow-returning read methods on fresh temps.
+   — DONE 2026-06-29.** `make_strvec().get(i)` / `.first()` / `.last()` on a
+   fresh-temp `Vec[String]` receiver now compile (they hard-errored — the 3b-a
+   gate recorded scalar elements only). The "unverified" borrow-suppression
+   concern flagged above **resolved favorably with no codegen-helper change**:
+   `scrutinee_is_borrow_call` keys off the *method* (`get`/`first`/`last`), not
+   the receiver shape, so the `Some(s)` arm binding's `ref String` is already
+   suppressed from independent drop for a temp receiver exactly as for a named
+   one. The fix is therefore typechecker-only: the `temp_recv_elem_types` gate
+   also records the element type when it is an owned `String` (which resolves to
+   `Type::Str` here — *not* `Type::Named { "String" }`) for `get`/`first`/`last`.
+   The recorded `str` `TypeExpr` lowers to `vec_struct_type`, so the existing
+   `FreeVecBuffer` **vec-struct recursion** (`llvm_ty_is_vec_struct`) per-element
+   frees each element String buffer (`cleanup.drop.inner.free`) before the outer
+   buffer — the same drop the named-binding `Vec[String].get` path already emits,
+   reached verbatim through `compile_vec_method`. So each per-element buffer is
+   freed exactly once at frame exit while the borrow reads it: no double-free
+   (macOS ASAN) and no leak (Linux LSan, run locally via `scripts/lsan-local.sh`
+   — `Compiling karac` confirmed, 2/2, zero LeakSanitizer reports). `contains`
+   (owned-String arg + element equality) and `get_unchecked` (bare `ref String`
+   via a let-binding suppression path, not the match path) stay scalar-only —
+   their suppression shapes differ, so they are distinct follow-ons. **Tests:** 1
+   IR (`test_ir_freshtemp_vec_string_get_emits_per_element_drop` → `__vrecv_tmp`
+   **and** `cleanup.drop.inner.free`, the per-element String free the scalar case
+   never emits) + 2 ASAN (`asan_freshtemp_vec_string_get_no_double_free` — looped
+   get, ≥36-byte elements so an LSan-reachable-short-string false-pass can't mask
+   a regression; `asan_freshtemp_vec_string_first_last_no_double_free`).
+   **Still open under 3b:** other heap-element receivers — `Vec[T]`/user
+   struct/enum/`Map`/`Set` elements (need element-drop threading, `elem_agg_drop`,
+   the helper doesn't carry; the String case works *because* `String` reuses
+   `vec_struct_type` so the inline recursion already covers it); `contains` /
+   `get_unchecked` on `Vec[String]`; `Map`/`Set` temp receivers (`Map.get` — a
    separate `compile_map_method` redispatch needing K+V); `iter` on a temp (the
    iterator must keep the temp alive across the loop); and (the `vector_method_
    receivers` model — receiver `(T, N)` recorded at the collided span — remains a

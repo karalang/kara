@@ -1335,16 +1335,27 @@ impl<'a> super::TypeChecker<'a> {
         // receiver's `Vec[T]`. Record the element `TypeExpr` here (where
         // `obj_ty` is the receiver type), keyed by the call span — the same
         // collision dodge `method_unwrap_inner_types` / `method_callee_types`
-        // use. SCALAR elements only: a heap element (`Vec[String]`) returns
-        // `Option[ref T]` aliasing the soon-freed temp buffer, a borrow-lifetime
-        // case left to a follow-on slice. Gated to `Call`/`MethodCall`
-        // receivers — the fresh-temp shapes codegen's `expr_yields_fresh_owned_temp`
-        // recognizes; a place-expression receiver (identifier / field / index)
-        // is owned elsewhere and routes through the named-binding dispatch.
+        // use. Gated to `Call`/`MethodCall` receivers — the fresh-temp shapes
+        // codegen's `expr_yields_fresh_owned_temp` recognizes; a place-expression
+        // receiver (identifier / field / index) is owned elsewhere and routes
+        // through the named-binding dispatch.
+        //
+        // Element scope: SCALAR elements service all five read methods — a
+        // scalar element owns no nested heap, so the single outer
+        // `FreeVecBuffer` is the complete, double-free-free drop. STRING
+        // elements (slice 3b-heap) service only the borrow-returning
+        // `get`/`first`/`last`: their `Option[ref String]` payload aliases an
+        // element inside the soon-freed temp buffer, but `scrutinee_is_borrow_call`
+        // (receiver-shape-agnostic — it keys off the *method*, not the object)
+        // already suppresses the `Some(s)` arm binding's independent drop, and
+        // the `FreeVecBuffer` vec-struct recursion frees each per-element String
+        // buffer, so the borrow is the sole reader of storage freed exactly once
+        // at frame exit. `contains` (owned-String arg + element equality) and
+        // `get_unchecked` (bare `ref String`, a let-binding suppression path,
+        // not the match path) stay scalar-only — distinct follow-ons. Other heap
+        // elements (`Vec[T]`, user struct/enum, Map/Set) need element-drop
+        // threading (`elem_agg_drop`) the helper doesn't carry — also follow-ons.
         if matches!(
-            method,
-            "get" | "first" | "last" | "get_unchecked" | "contains"
-        ) && matches!(
             &object.kind,
             ExprKind::Call { .. } | ExprKind::MethodCall { .. }
         ) {
@@ -1358,10 +1369,28 @@ impl<'a> super::TypeChecker<'a> {
             };
             if let Some(elem) = elem {
                 let resolved = resolve_type_var_top(&elem, &self.env.substitutions);
-                if matches!(
+                let is_scalar = matches!(
                     resolved,
                     Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char
-                ) {
+                );
+                // An owned `String` element resolves to `Type::Str` here (the
+                // checker's owned-string representation); a `Type::Named` form
+                // is accepted too for robustness. Both `type_to_type_expr` to a
+                // `str`/`String` `TypeExpr` that `llvm_type_for_type_expr`
+                // lowers to `vec_struct_type`, so the `FreeVecBuffer` vec-struct
+                // recursion per-element frees each element's buffer.
+                let is_string = matches!(&resolved, Type::Str)
+                    || matches!(
+                        &resolved,
+                        Type::Named { name, args } if name == "String" && args.is_empty()
+                    );
+                let record = (is_scalar
+                    && matches!(
+                        method,
+                        "get" | "first" | "last" | "get_unchecked" | "contains"
+                    ))
+                    || (is_string && matches!(method, "get" | "first" | "last"));
+                if record {
                     let te = Self::type_to_type_expr(&resolved);
                     self.temp_recv_elem_types
                         .insert(SpanKey::from_span(span), te);

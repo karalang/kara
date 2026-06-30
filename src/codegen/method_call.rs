@@ -3402,13 +3402,22 @@ impl<'ctx> super::Codegen<'ctx> {
     /// String redispatch / diagnostic — a pure addition that can't change any
     /// existing case.
     ///
-    /// Scoped to SCALAR elements (the typechecker only records those): a heap
-    /// element (`Vec[String]`) returns `Option[ref T]` aliasing the buffer this
-    /// frees, a borrow-lifetime case for a follow-on slice. A scalar element
-    /// owns no nested heap, so the outer-buffer `FreeVecBuffer` is the complete
-    /// drop. The drop-track is gated on `expr_yields_fresh_owned_temp`, and the
-    /// `cap > 0` guard inside `FreeVecBuffer` is a second backstop, so a
-    /// (hypothetical) borrow-returning receiver is never double-freed.
+    /// Element-type-generic: the typechecker records SCALAR elements for all
+    /// five read methods, and STRING elements for the borrow-returning
+    /// `get`/`first`/`last` (slice 3b-heap). For a String element the recorded
+    /// `TypeExpr` lowers to `vec_struct_type`, so `track_vec_var`'s
+    /// `FreeVecBuffer` takes the vec-struct recursion and per-element frees each
+    /// `String` buffer before the outer buffer — and the `Option[ref String]`
+    /// the method returns is suppressed from independent drop at the match arm
+    /// by `scrutinee_is_borrow_call` (which keys off the method, not the
+    /// receiver shape), so the per-element storage is freed exactly once at
+    /// frame exit while the borrow reads it. A scalar element owns no nested
+    /// heap, so the outer-buffer `FreeVecBuffer` is its complete drop. The
+    /// drop-track is gated on `expr_yields_fresh_owned_temp`, and the `cap > 0`
+    /// guard inside `FreeVecBuffer` is a second backstop, so a (hypothetical)
+    /// borrow-returning receiver is never double-freed. Other heap elements
+    /// (`Vec[T]`, user struct/enum, Map/Set) are not recorded — they need
+    /// element-drop threading (`elem_agg_drop`) this helper doesn't carry.
     fn try_compile_freshtemp_vec_read_method(
         &mut self,
         object: &Expr,

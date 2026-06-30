@@ -2630,6 +2630,93 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_freshtemp_vec_string_get_no_double_free() {
+        // Slice 3b-heap: `make_strvec().get(i)` on a FRESH-TEMP `Vec[String]`
+        // receiver in a loop. `get` returns `Option[ref String]` — the payload
+        // borrows an element *inside* the temp's buffer, which the
+        // `__vrecv_tmp` `FreeVecBuffer` frees at the enclosing frame's exit.
+        // Two distinct hazards this gates:
+        //   (1) DOUBLE-FREE — the `Some(s)` arm binds `s: ref String`; if it
+        //       were dropped independently it would free the same buffer the
+        //       per-element `FreeVecBuffer` recursion frees. The match path's
+        //       `scrutinee_is_borrow_call` suppression must hold for a temp
+        //       receiver (it keys off the method, not the object). Caught here
+        //       on macOS.
+        //   (2) LEAK — the receiver's three per-element String buffers must be
+        //       freed by the vec-struct recursion before the outer buffer; a
+        //       regression that frees only the outer buffer leaks all three.
+        //       Caught by LeakSanitizer on Linux CI. The strings are ≥36 bytes
+        //       so LSan cannot dismiss them as reachable short-strings, and the
+        //       loop forces per-iteration accumulation.
+        assert_clean_asan_run(
+            r#"
+fn names() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("alpha element string padded well past thirty-six bytes");
+    v.push("beta element string also padded past thirty-six bytes!!");
+    v.push("gamma element string likewise padded beyond thirty-six b");
+    return v;
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        match names().get(i) {
+            Some(s) => println(s),
+            None => println("none"),
+        };
+        i = i + 1;
+    };
+}
+"#,
+            &[
+                "alpha element string padded well past thirty-six bytes",
+                "beta element string also padded past thirty-six bytes!!",
+                "gamma element string likewise padded beyond thirty-six b",
+            ],
+            "freshtemp_vec_string_get_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_freshtemp_vec_string_first_last_no_double_free() {
+        // Slice 3b-heap companion: `first`/`last` on a fresh-temp `Vec[String]`
+        // — the other two borrow-returning (`Option[ref String]`) read methods
+        // routed through `scrutinee_is_borrow_call`. Same single-free / borrow-
+        // not-dropped obligation as `get`; verifies the method set, not just
+        // `get`. `contains`/`get_unchecked` stay scalar-only (owned-arg eq /
+        // bare-ref let-binding suppression — separate follow-ons), so they are
+        // intentionally absent here.
+        assert_clean_asan_run(
+            r#"
+fn names() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("first padded element string beyond thirty-six bytes ok");
+    v.push("middle padded element string beyond thirty-six bytes k");
+    v.push("last padded element string beyond thirty-six bytes okk");
+    return v;
+}
+
+fn main() {
+    match names().first() {
+        Some(s) => println(s),
+        None => println("none"),
+    };
+    match names().last() {
+        Some(s) => println(s),
+        None => println("none"),
+    };
+}
+"#,
+            &[
+                "first padded element string beyond thirty-six bytes ok",
+                "last padded element string beyond thirty-six bytes okk",
+            ],
+            "freshtemp_vec_string_first_last_no_double_free",
+        );
+    }
+
     // ── B-2026-06-10-6: inline-heap `Option[T]` payload drop ──────
     //
     // An `Option[String]` / `Option[Vec[_]]` dropped WITHOUT being
