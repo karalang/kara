@@ -10950,6 +10950,61 @@ fn main() {
         );
     }
 
+    /// DataFrame heap lifecycle (phase-11 Arrow Q6 codegen): `insert`
+    /// copies the argument column *in* (freeing a fresh-temp original) and
+    /// grows the entries buffer from cap 0; a same-name `insert` replaces
+    /// (frees the old column); `column` copies *out* a fresh independent
+    /// column (its own `FreeColumn`); the frame is moved (`let df2 = df`,
+    /// source slot nulled — the `FreeDataFrame` drop runs once); and the
+    /// `FreeDataFrame` drop loop frees every column (data + bitmap +
+    /// control) + name buffer, then the entries buffer + control. A
+    /// missing free leaks (Linux detect_leaks); a double free is caught
+    /// everywhere.
+    #[test]
+    fn asan_dataframe_lifecycle_clean() {
+        let label = "dataframe_lifecycle";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+fn main() {
+    let mut df: DataFrame = DataFrame.new();
+    df.insert("age", Column.from_vec([30, 25, 40]));
+    df.insert("score", Column.from_vec([1.5, 2.5, 3.5]));
+    // Replace an existing column (frees the old column's allocations).
+    df.insert("age", Column.from_vec([31, 26, 41]));
+    println(df.width());
+    println(df.height());
+    // Copy-out: a fresh independent column, mutated, then dropped.
+    let mut a: Column[i64] = df.column("age");
+    a.push(99);
+    println(a.len());
+    println(df.height());
+    // Move the frame (source slot nulled — drop runs exactly once).
+    let df2: DataFrame = df;
+    println(df2.width());
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             check FreeDataFrame drop loop + insert copy-in / replace frees",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["2", "3", "4", "3", "2"],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     /// Column transform heap lifecycle (phase-11 follow-on slice): the
     /// Column-returning transforms `fillna` / `dropna` and the
     /// `from_iter_nullable` constructor each malloc a *fresh* control

@@ -3266,6 +3266,14 @@ impl<'ctx> super::Codegen<'ctx> {
             let _ = self.builder.build_store(slot.ptr, ptr_ty.const_null());
             return;
         }
+        // DataFrame binding: null the source slot so its `FreeDataFrame`
+        // cleanup's null-guard skips — the consumer (`let b = a;`, by-value
+        // arg, tail return) now owns the control block + every column /
+        // name it holds. The DataFrame analog of the Column arm above.
+        if self.dataframe_var_infos.contains(var_name) {
+            let _ = self.builder.build_store(slot.ptr, ptr_ty.const_null());
+            return;
+        }
         // Shared-struct / shared-enum binding (RC-tier): the binding
         // holds a `ptr` whose pointee is the heap object with the i64
         // refcount header. The let-site `track_rc_var` queued a scope-

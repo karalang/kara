@@ -2856,6 +2856,20 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.suppress_source_vec_cleanup_for_arg(value);
                     }
                 }
+                // Track DataFrame bindings for scope cleanup (FreeDataFrame).
+                // A `let b = a;` move suppresses the source's free (its slot
+                // is nulled — see FreeDataFrame's null guard).
+                if let PatternKind::Binding(var_name) = &pattern.kind {
+                    if self.dataframe_var_infos.contains(var_name.as_str()) {
+                        if let Some(slot) = self.variables.get(var_name.as_str()) {
+                            if matches!(slot.ty, BasicTypeEnum::PointerType(_)) {
+                                let slot_ptr = slot.ptr;
+                                self.track_dataframe_var(slot_ptr);
+                            }
+                        }
+                        self.suppress_source_vec_cleanup_for_arg(value);
+                    }
+                }
                 // Track Vec variables for scope cleanup.
                 if let PatternKind::Binding(var_name) = &pattern.kind {
                     if let Some(&elem_ty) = self.vec_elem_types.get(var_name.as_str()) {

@@ -376,6 +376,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => {}
             }
         }
+        // `DataFrame.new()` — a fresh empty table. See
+        // `src/codegen/dataframe.rs`.
+        if type_name == "DataFrame" && method == "new" {
+            return self.compile_dataframe_new();
+        }
         // Phase 6 line 218 slice 5: `TaskGroup.new()` — allocate a
         // runtime-side group via `karac_runtime_taskgroup_new()` and
         // wrap the returned pointer (cast to i64) as `TaskGroup { id: <i64> }`.

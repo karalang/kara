@@ -39,6 +39,7 @@ mod control_flow_for;
 mod control_flow_match;
 mod control_flow_slice;
 mod coro;
+mod dataframe;
 mod debug_info;
 mod declarations;
 mod driver;
@@ -2146,6 +2147,11 @@ pub(super) struct Codegen<'ctx> {
     /// destination binding's registered `ColumnVarInfo` here before
     /// compiling the RHS (the `pending_let_tensor_info` mechanism).
     pub(crate) pending_let_column_info: Option<state::ColumnVarInfo<'ctx>>,
+    /// Set of binding names known to be `DataFrame`s (non-generic, so no
+    /// per-binding type info — just membership). Populated by
+    /// `register_var_from_type_expr`'s DataFrame arm; gates
+    /// `try_compile_dataframe_method` and the `FreeDataFrame` tracker.
+    pub(crate) dataframe_var_infos: std::collections::HashSet<String>,
     /// Set of `(span.offset, span.length)` keys for every expression whose
     /// Kāra type is a `Vector[T, N]` with an unsigned-integer element.
     /// Populated from `Program.unsigned_vector_exprs`. The LLVM `<N x iX>`
@@ -5278,6 +5284,7 @@ impl<'ctx> Codegen<'ctx> {
             column_typed_exprs: HashMap::new(),
             column_var_infos: HashMap::new(),
             pending_let_column_info: None,
+            dataframe_var_infos: std::collections::HashSet::new(),
             unsigned_vector_exprs: HashSet::new(),
             expr_struct_type_names: HashMap::new(),
             user_ord_typed_exprs: HashMap::new(),

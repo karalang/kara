@@ -508,6 +508,16 @@ pub(crate) enum CleanupAction<'ctx> {
         /// Alloca pointer of the column binding's `ptr` slot.
         column_alloca: PointerValue<'ctx>,
     },
+    /// Free an owned `DataFrame`'s heap at scope exit. The slot holds one
+    /// pointer to the control block `{ ptr entries, i64 len, i64 capacity }`
+    /// (`src/codegen/dataframe.rs`); the drain loops the entries freeing
+    /// each column (data + bitmap + control) and name buffer, then the
+    /// entries buffer and the control block. Null = moved-out (skip),
+    /// like `FreeColumn`.
+    FreeDataFrame {
+        /// Alloca pointer of the DataFrame binding's `ptr` slot.
+        df_alloca: PointerValue<'ctx>,
+    },
     /// Free the per-group heap buffers of a SoA-laid-out `Vec[T]` at scope
     /// exit. SoA storage is multi-allocation — one buffer per hot group
     /// plus an optional cold-group buffer — and the outer struct's field

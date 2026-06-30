@@ -3934,6 +3934,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.build_unconditional_branch(skip_bb).unwrap();
                 self.builder.position_at_end(skip_bb);
             }
+            CleanupAction::FreeDataFrame { df_alloca } => {
+                self.emit_dataframe_free(fn_val, *df_alloca);
+            }
             CleanupAction::FreeVecBuffer {
                 vec_alloca,
                 elem_ty,

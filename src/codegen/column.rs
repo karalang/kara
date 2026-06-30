@@ -63,8 +63,9 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// Element size in bytes for the supported (POD) element types —
-    /// mirrors `tensor_elem_size`.
-    fn column_elem_size(&self, elem: BasicTypeEnum<'ctx>) -> Result<u64, String> {
+    /// mirrors `tensor_elem_size`. `pub(super)` so the DataFrame lowering
+    /// can size a stored column's data buffer for copy-in / copy-out.
+    pub(super) fn column_elem_size(&self, elem: BasicTypeEnum<'ctx>) -> Result<u64, String> {
         match elem {
             BasicTypeEnum::FloatType(ft) => {
                 if ft == self.context.f64_type() {
@@ -130,6 +131,109 @@ impl<'ctx> super::Codegen<'ctx> {
             elem: self.llvm_type_for_type_expr(&ci.elem),
             elem_unsigned: type_expr_is_unsigned_int(&ci.elem),
         }
+    }
+
+    /// Deep-copy a column control block into a fresh, fully independent
+    /// column (new control + data + bitmap, byte-wise `memcpy`). The
+    /// erased control block doesn't carry its element size, so the caller
+    /// — which knows it, from a static `Column[T]` type at copy-in or the
+    /// `elem_size` it stored at copy-out — passes `elem_size` (bytes per
+    /// element). The fresh column owns its allocations; the source is
+    /// untouched. This is the primitive behind DataFrame value semantics
+    /// (`insert` copies in, `column` copies out), so the frame owns its
+    /// columns outright and `karac run` / `karac build` agree.
+    pub(super) fn column_deep_copy(
+        &self,
+        src: PointerValue<'ctx>,
+        elem_size: IntValue<'ctx>,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let src_data = self
+            .column_load_field(src, 0, "col.cp.src.data")
+            .into_pointer_value();
+        let src_bm = self
+            .column_load_field(src, 1, "col.cp.src.bm")
+            .into_pointer_value();
+        let len = self
+            .column_load_field(src, 2, "col.cp.len")
+            .into_int_value();
+        let cap = self
+            .column_load_field(src, 3, "col.cp.cap")
+            .into_int_value();
+        let data_bytes = self
+            .builder
+            .build_int_mul(cap, elem_size, "col.cp.dbytes")
+            .unwrap();
+        let bm_bytes = self.column_bitmap_bytes(cap);
+
+        let ctrl_bytes = self.column_control_struct_type().size_of().unwrap();
+        let control = self
+            .builder
+            .build_call(self.malloc_fn, &[ctrl_bytes.into()], "col.cp.ctrl")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let data = self
+            .builder
+            .build_call(self.malloc_fn, &[data_bytes.into()], "col.cp.data")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        self.builder
+            .build_memcpy(data, 8, src_data, 8, data_bytes)
+            .map_err(|e| format!("column_deep_copy data memcpy failed: {e:?}"))?;
+        let bitmap = self
+            .builder
+            .build_call(self.malloc_fn, &[bm_bytes.into()], "col.cp.bm")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        self.builder
+            .build_memcpy(bitmap, 1, src_bm, 1, bm_bytes)
+            .map_err(|e| format!("column_deep_copy bitmap memcpy failed: {e:?}"))?;
+
+        self.builder
+            .build_store(self.column_field_slot(control, 0, "col.cp.f.data"), data)
+            .unwrap();
+        self.builder
+            .build_store(self.column_field_slot(control, 1, "col.cp.f.bm"), bitmap)
+            .unwrap();
+        self.builder
+            .build_store(self.column_field_slot(control, 2, "col.cp.f.len"), len)
+            .unwrap();
+        self.builder
+            .build_store(self.column_field_slot(control, 3, "col.cp.f.cap"), cap)
+            .unwrap();
+        Ok(control)
+    }
+
+    /// Free a column control block's three allocations (data + bitmap +
+    /// control). Unguarded — callers (the DataFrame drop loop) only pass
+    /// live, frame-owned column pointers. `pub(super)` for reuse.
+    pub(super) fn column_free_allocations(&self, ctrl: PointerValue<'ctx>) {
+        let data = self
+            .column_load_field(ctrl, 0, "col.free.data")
+            .into_pointer_value();
+        let bitmap = self
+            .column_load_field(ctrl, 1, "col.free.bm")
+            .into_pointer_value();
+        self.builder
+            .build_call(self.free_fn, &[data.into()], "")
+            .unwrap();
+        self.builder
+            .build_call(self.free_fn, &[bitmap.into()], "")
+            .unwrap();
+        self.builder
+            .build_call(self.free_fn, &[ctrl.into()], "")
+            .unwrap();
+    }
+
+    /// Load a column control block's `len` field (index 2). `pub(super)`
+    /// for the DataFrame `height` accessor.
+    pub(super) fn column_len_field(&self, ctrl: PointerValue<'ctx>) -> IntValue<'ctx> {
+        self.column_load_field(ctrl, 2, "col.lenf").into_int_value()
     }
 
     /// Load the control pointer from a column binding's slot.
@@ -2060,8 +2164,13 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// Branch-to-panic guard for column runtime checks (the Column twin
-    /// of `emit_tensor_guard`).
-    fn emit_column_guard(&mut self, ok: IntValue<'ctx>, message: &str) -> Result<(), String> {
+    /// of `emit_tensor_guard`). `pub(super)` so the DataFrame lowering can
+    /// reuse it for the missing-column trap.
+    pub(super) fn emit_column_guard(
+        &mut self,
+        ok: IntValue<'ctx>,
+        message: &str,
+    ) -> Result<(), String> {
         let fn_val = self
             .current_fn
             .ok_or_else(|| "column guard outside function".to_string())?;

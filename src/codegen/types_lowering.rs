@@ -104,6 +104,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     // handle_id: i64 }` shape would otherwise mis-size.
                     return self.context.ptr_type(AddressSpace::default()).into();
                 }
+                if name == "DataFrame" {
+                    // `DataFrame` is a single pointer to one malloc'd
+                    // control block `{ ptr entries, i64 len, i64 capacity }`
+                    // — see `src/codegen/dataframe.rs`. The baked
+                    // `struct DataFrame { handle_id: i64 }` shape would
+                    // otherwise mis-size.
+                    return self.context.ptr_type(AddressSpace::default()).into();
+                }
                 if name == "Atomic" {
                     // `Atomic[T]` is a transparent wrapper over `T` —
                     // baked as `struct Atomic[T] { }` in
@@ -878,6 +886,14 @@ impl<'ctx> super::Codegen<'ctx> {
     /// binding dispatches as its base everywhere downstream.
     pub(super) fn record_var_type_name(&mut self, var: String, ty_name: String) {
         let normalized = self.refinement_base_name(&ty_name);
+        // DataFrame is non-generic, so its bindings don't flow through a
+        // typed-exprs side-table the way Column/Tensor do — record
+        // membership here (every path that names a binding goes through
+        // this fn) so method dispatch + the `FreeDataFrame` tracker
+        // recognise it (`src/codegen/dataframe.rs`).
+        if normalized == "DataFrame" {
+            self.dataframe_var_infos.insert(var.clone());
+        }
         self.var_type_names.insert(var, normalized);
     }
 
@@ -1040,6 +1056,15 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(info) = self.column_var_info_from_type_expr(te) {
             self.column_var_infos.insert(var_name.to_string(), info);
             return;
+        }
+        // DataFrame — non-generic, so just record membership so method
+        // dispatch + the `FreeDataFrame` cleanup tracker recognise the
+        // binding (`src/codegen/dataframe.rs`).
+        if let crate::ast::TypeKind::Path(p) = &te.kind {
+            if p.segments.last().map(|s| s.as_str()) == Some("DataFrame") {
+                self.dataframe_var_infos.insert(var_name.to_string());
+                return;
+            }
         }
         if let Some(elem_ty) = self.extract_vec_elem_type(te) {
             self.vec_elem_types.insert(var_name.to_string(), elem_ty);

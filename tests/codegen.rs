@@ -48658,6 +48658,84 @@ fn main() {
         }
     }
 
+    // ── DataFrame codegen (phase-11 Arrow Q6) ───────────────────────
+
+    #[test]
+    fn test_e2e_dataframe_build_lookup_accessors() {
+        // Heterogeneous build (i64 + f64 columns), width/height/has_column,
+        // and column(name) copy-out round-trips values. AOT output must be
+        // byte-identical to the interpreter twin.
+        let out = run_program(
+            "fn main() {\n\
+                 let mut df: DataFrame = DataFrame.new();\n\
+                 df.insert(\"age\", Column.from_vec([30, 25, 40]));\n\
+                 df.insert(\"score\", Column.from_vec([1.5, 2.5, 3.5]));\n\
+                 println(df.width());\n\
+                 println(df.height());\n\
+                 println(df.has_column(\"age\"));\n\
+                 println(df.has_column(\"nope\"));\n\
+                 let ages: Column[i64] = df.column(\"age\");\n\
+                 match ages[2] { Some(v) => println(v), None => println(-1) }\n\
+                 let scores: Column[f64] = df.column(\"score\");\n\
+                 match scores[0] { Some(v) => println(v), None => println(0.0) }\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "2\n3\ntrue\nfalse\n40\n1.5\n",
+                "DataFrame build / lookup / accessors must match the interpreter"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_dataframe_column_is_value_copy() {
+        // Value semantics: a looked-up column is independent of the frame
+        // (copy-out). Mutating the copy leaves the frame untouched — the
+        // run/build parity contract pinned by the interpreter twin.
+        let out = run_program(
+            "fn main() {\n\
+                 let mut df: DataFrame = DataFrame.new();\n\
+                 df.insert(\"a\", Column.from_vec([1, 2]));\n\
+                 let mut c: Column[i64] = df.column(\"a\");\n\
+                 c.push(3);\n\
+                 println(c.len());\n\
+                 println(df.height());\n\
+                 let d: Column[i64] = df.column(\"a\");\n\
+                 println(d.len());\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "3\n2\n2\n",
+                "column() must be a value copy, not a view"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_dataframe_insert_replace() {
+        // Re-inserting an existing name replaces the column (frees the old);
+        // width unchanged, the new values win.
+        let out = run_program(
+            "fn main() {\n\
+                 let mut df: DataFrame = DataFrame.new();\n\
+                 df.insert(\"a\", Column.from_vec([1, 2]));\n\
+                 df.insert(\"a\", Column.from_vec([9, 8]));\n\
+                 println(df.width());\n\
+                 println(df.height());\n\
+                 let a: Column[i64] = df.column(\"a\");\n\
+                 match a[0] { Some(v) => println(v), None => println(-1) }\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "1\n2\n9\n",
+                "insert replace must overwrite + free the old column"
+            );
+        }
+    }
+
     // ── Shape-generic function body — tensor-param indexing ──────────
     // A `fn f[N](a: Tensor[T, [N, N]], ...)` body that indexes its tensor
     // params (`a[i, j]`) lowers in codegen: `compile_mono_function`

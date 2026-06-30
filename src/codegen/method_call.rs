@@ -435,6 +435,13 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(v) = self.try_compile_column_method(object, method, args, call_span)? {
             return Ok(v);
         }
+        // DataFrame methods (`insert` / `column` / `has_column` / `width`
+        // / `height`) — gated on `dataframe_var_infos` (identifier
+        // receiver). `None` for a non-DataFrame receiver. See
+        // `src/codegen/dataframe.rs`.
+        if let Some(v) = self.try_compile_dataframe_method(object, method, args, call_span)? {
+            return Ok(v);
+        }
 
         // Tensor reductions — `sum`/`mean`/`prod`/`min`/`max` (→ scalar) and
         // `sum_axis`/`mean_axis` (→ rank-1-lower tensor), phase-11 line 47
