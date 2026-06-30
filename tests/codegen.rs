@@ -19283,6 +19283,52 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_freshtemp_vec_enum_get_emits_agg_drop() {
+        // Slice 3g: `make_toks().get(i)` on a fresh-temp `Vec[Tok]` where `Tok`
+        // is a user enum with a heap-bearing variant (`Word { s: String }`).
+        // The enum element rides the SAME agg-drop machinery as the struct case
+        // (slice 3f): `vec_elem_agg_drop_for_type_expr` routes a non-shared enum
+        // to `emit_enum_drop_switch`, which synthesizes `__karac_drop_Tok`,
+        // threaded into the `FreeVecBuffer` as the `cleanup.adrop` loop so every
+        // live element's variant payload String is freed before the outer
+        // buffer. Without it each `Word` element's String leaks (Linux LSan).
+        // The `Some(t)` borrow (`Option[ref Tok]`) is NOT independently dropped
+        // (`scrutinee_is_borrow_call`). No new codegen mechanism over 3f — this
+        // is a typechecker gate lift.
+        let src = r#"
+enum Tok { Word { s: String }, Num { n: i64 } }
+
+fn make_toks() -> Vec[Tok] {
+    let mut v: Vec[Tok] = Vec.new();
+    v.push(Tok.Word { s: "a token payload string padded beyond thirty-six bytes" });
+    return v;
+}
+
+fn main() {
+    match make_toks().get(0) {
+        Some(t) => match t {
+            Word { s } => println(s.len()),
+            Num { n } => println(n),
+        },
+        None => println(0_i64),
+    };
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("__vrecv_tmp"),
+            "expected the fresh Vec[Tok] receiver materialized into __vrecv_tmp; got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("cleanup.adrop.body") && ir.contains("__karac_drop_Tok"),
+            "expected the per-element aggregate-drop loop (cleanup.adrop) running \
+             __karac_drop_Tok on each element of the fresh-temp Vec[Tok]; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_ir_freshtemp_vec_string_contains_emits_per_element_drop() {
         // Slice 3b-heap follow-on: `contains` on a fresh-temp `Vec[String]`.
         // `contains` returns `bool` (no borrow escapes), but the receiver temp

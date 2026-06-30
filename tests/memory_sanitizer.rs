@@ -3318,6 +3318,53 @@ fn main() {
     }
 
     #[test]
+    fn asan_freshtemp_vec_enum_get_no_double_free() {
+        // Slice 3g: `make_toks().get(i)` on a fresh-temp `Vec[Tok]` where `Tok`
+        // is a user enum with a heap-bearing variant (`Word { s: String }`), in
+        // a loop. `get` returns `Option[ref Tok]` borrowing an element inside
+        // the temp's buffer, which `__vrecv_tmp`'s `FreeVecBuffer` — now carrying
+        // the per-element `__karac_drop_Tok` agg drop (slice 3f machinery, enum
+        // routed via `emit_enum_drop_switch`) — frees at frame exit. Hazards:
+        // (1) the `Some(t)` arm binds a `ref Tok` that must NOT be independently
+        // dropped (`scrutinee_is_borrow_call`), else it double-frees the `Word`
+        // variant's String the agg drop also frees (macOS ASAN); (2) each
+        // element's payload String must be freed by the agg drop before the
+        // outer buffer, else it leaks (Linux LSan). The borrow is further matched
+        // on its variant and the payload String is read through it (`s.len()`),
+        // aliasing the very buffer the agg drop frees. ≥36-byte payloads defeat
+        // LSan short-string reachability; loop accumulates.
+        assert_clean_asan_run(
+            r#"
+enum Tok { Word { s: String }, Num { n: i64 } }
+
+fn make_toks() -> Vec[Tok] {
+    let mut v: Vec[Tok] = Vec.new();
+    v.push(Tok.Word { s: "first token payload string padded beyond thirty-six b" });
+    v.push(Tok.Num { n: 20_i64 });
+    v.push(Tok.Word { s: "third token payload string padded beyond thirty-six b" });
+    return v;
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        match make_toks().get(i) {
+            Some(t) => match t {
+                Word { s } => println(s.len()),
+                Num { n } => println(n),
+            },
+            None => println(0_i64),
+        };
+        i = i + 1;
+    };
+}
+"#,
+            &["53", "20", "53"],
+            "freshtemp_vec_enum_get_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_freshtemp_vec_string_first_last_no_double_free() {
         // Slice 3b-heap companion: `first`/`last` on a fresh-temp `Vec[String]`
         // — the other two borrow-returning (`Option[ref String]`) read methods

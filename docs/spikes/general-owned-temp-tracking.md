@@ -406,10 +406,29 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    `cleanup.adrop.body`, the per-element struct-drop loop the scalar/String cases
    never emit) + 2 ASAN (`asan_freshtemp_vec_struct_get_no_double_free`;
    `asan_freshtemp_vec_struct_string_field_read_no_double_free` — the borrow reads
-   the very String the agg drop frees). **Still open:** ENUM elements
-   (`Vec[Enum]` — boxed/shared payloads have more edge cases, though
-   `vec_elem_agg_drop_for_type_expr` already handles them, so likely a gate-only
-   follow-on); deeper-nested `Vec[Vec[String]]` (two-level heap leaks the innermost
+   the very String the agg drop frees).
+
+   **Slice 3g — user-ENUM elements (gate lift over 3f). — DONE 2026-06-29.**
+   `make_toks().get(i)` / `.first()` / `.last()` on a fresh-temp `Vec[Tok]` where
+   `Tok` is a user enum with a heap-bearing variant (`Word { s: String }`) now
+   compile. This is a **pure typechecker gate lift** — zero codegen change: 3f's
+   `vec_elem_agg_drop_for_type_expr` already routes a non-shared enum to
+   `emit_enum_drop_switch` (synthesizing `__karac_drop_<Enum>`) and a `shared
+   enum` to a per-element rc-dec, so the helper's existing try-agg-then-fallback
+   threads the enum drop into the `FreeVecBuffer` identically to the struct case.
+   The gate adds `is_user_enum` (checked via `self.env.enums`) alongside
+   `is_user_struct` for `get`/`first`/`last`; `get` returns `Option[ref Tok]`, a
+   borrow `scrutinee_is_borrow_call` suppresses, so each element's variant payload
+   is freed once at frame exit while the borrow reads it (verified matching the
+   borrow on its variant and reading the payload String through it, `s.len()`).
+   Before the lift `Vec[Enum].get` on a temp hard-errored ("no handler for method
+   'get' on non-identifier receiver"). Codegen output matched the interpreter
+   oracle (`53`/`20`/`53`). Verified: no double-free (macOS ASAN) and no leak
+   (Linux LSan). **Tests:** 1 IR (`test_ir_freshtemp_vec_enum_get_emits_agg_drop`
+   → `__vrecv_tmp` **and** `cleanup.adrop.body` + `__karac_drop_Tok`) + 1 ASAN
+   (`asan_freshtemp_vec_enum_get_no_double_free` — loops, ≥36-byte payloads,
+   reads the payload String through the borrow). **Still open:** deeper-nested
+   `Vec[Vec[String]]` (two-level heap leaks the innermost
    even for named bindings — an upstream recursion limit, not a temp-specific gap);
    `get_unchecked` on `Vec[String]`; `iter` on a temp (the
    iterator must keep the temp alive across the loop); and (the `vector_method_

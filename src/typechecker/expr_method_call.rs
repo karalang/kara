@@ -1426,12 +1426,21 @@ impl<'a> super::TypeChecker<'a> {
                 // `track_vec_of_aggs_var`). `get`/`first`/`last` return
                 // `Option[ref Rec]`, a borrow `scrutinee_is_borrow_call`
                 // suppresses, so each element's heap fields are freed once at
-                // frame exit while the borrow reads it. ENUMS are excluded here
-                // (boxed/shared payloads have more edge cases — a follow-on); so
-                // are `contains` (struct content-eq) and `get_unchecked`.
+                // frame exit while the borrow reads it. A user ENUM element
+                // (`Vec[Tok]`, `Tok` a variant carrying a `String`/`Vec`/shared
+                // payload) rides the SAME machinery:
+                // `vec_elem_agg_drop_for_type_expr` already routes a non-shared
+                // enum to `emit_enum_drop_switch` (and a `shared enum` to a
+                // per-element rc-dec), so the per-element drop is threaded
+                // identically — no new codegen mechanism. Still excluded:
+                // `contains` (enum content-eq) and `get_unchecked`.
                 let is_user_struct = matches!(
                     &resolved,
                     Type::Named { name, args } if args.is_empty() && self.env.structs.contains_key(name)
+                );
+                let is_user_enum = matches!(
+                    &resolved,
+                    Type::Named { name, args } if args.is_empty() && self.env.enums.contains_key(name)
                 );
                 let record = (is_scalar
                     && matches!(
@@ -1440,7 +1449,8 @@ impl<'a> super::TypeChecker<'a> {
                     ))
                     || (is_string && matches!(method, "get" | "first" | "last" | "contains"))
                     || (is_pod_vec && matches!(method, "get" | "first" | "last"))
-                    || (is_user_struct && matches!(method, "get" | "first" | "last"));
+                    || (is_user_struct && matches!(method, "get" | "first" | "last"))
+                    || (is_user_enum && matches!(method, "get" | "first" | "last"));
                 if record {
                     let te = Self::type_to_type_expr(&resolved);
                     self.temp_recv_elem_types
