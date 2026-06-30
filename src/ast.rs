@@ -263,6 +263,14 @@ pub type MethodUnwrapInnerTypesTable = std::collections::HashMap<(usize, usize),
 /// through `compile_vec_method` (general-owned-temp-tracking spike, slice 3b).
 pub type TempRecvElemTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
 
+/// Sibling of `TempRecvElemTypesTable` for `Map`/`Set` fresh-temp receivers
+/// (`make_map().get(k)`, `make_set().contains(x)`): `MethodCall` span → the
+/// receiver's whole `Map[K, V]` / `Set[T]` `TypeExpr`. Codegen materializes the
+/// handle, registers K/V (or elem) for the redispatch through
+/// `compile_map_method` / `compile_set_method`, and drop-tracks the handle
+/// (`FreeMapHandle`) (general-owned-temp-tracking spike, slice 3d).
+pub type TempRecvMapSetTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
+
 /// Side-table populated by the lowering pass from the typechecker's
 /// `channel_elem_types` map. Maps each `Sender.send` / `Receiver.recv` /
 /// `Receiver.try_recv` `MethodCall` expression's span to the channel
@@ -547,6 +555,10 @@ pub struct Program {
     /// empty otherwise. Fresh-temp `Vec`/`VecDeque` receiver scalar element
     /// types for codegen's slice-3b read-method redispatch.
     pub temp_recv_elem_types: TempRecvElemTypesTable,
+    /// Set by the lowering pass from `TypeCheckResult.temp_recv_mapset_types`;
+    /// empty otherwise. Fresh-temp `Map`/`Set` receiver types for codegen's
+    /// slice-3d read-method redispatch + handle drop-tracking.
+    pub temp_recv_mapset_types: TempRecvMapSetTypesTable,
     /// Set by the lowering pass from `TypeCheckResult.channel_elem_types`;
     /// empty otherwise. Channel-op element types for codegen's
     /// `karac_runtime_channel_*` lowering.

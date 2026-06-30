@@ -19010,6 +19010,74 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_freshtemp_map_get_emits_handle_free() {
+        // Slice 3d: `make_map().get(k)` on a fresh-temp `Map[i64,i64]` receiver.
+        // The map handle is a plain `ptr`, materialized into a `__mrecv_tmp`
+        // slot; the read borrows the map, so the temp handle must be drop-tracked
+        // with a `FreeMapHandle` (scalar K/V → plain `karac_map_free`) at the
+        // enclosing frame's exit. Without it the whole map handle leaks
+        // (LeakSanitizer on Linux CI). The `Some(v)` borrow is NOT independently
+        // dropped (`scrutinee_is_borrow_call`).
+        let src = r#"
+fn make_map() -> Map[i64, i64] {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1_i64, 100_i64);
+    return m;
+}
+
+fn main() {
+    match make_map().get(1_i64) {
+        Some(v) => println(v),
+        None => println(0_i64),
+    };
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("__mrecv_tmp"),
+            "expected the fresh Map receiver handle materialized into __mrecv_tmp; got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("karac_map_free"),
+            "expected a FreeMapHandle drain (karac_map_free) for the fresh-temp Map receiver; \
+             got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_freshtemp_set_contains_emits_handle_free() {
+        // Slice 3d: `make_set().contains(x)` on a fresh-temp `Set[i64]`. Like the
+        // Map case the handle is materialized into `__mrecv_tmp` and drop-tracked
+        // (`karac_map_free` — a Set is a map under the hood). `contains` returns
+        // `bool` (no borrow), so the only obligation is freeing the handle once.
+        let src = r#"
+fn make_set() -> Set[i64] {
+    let mut s: Set[i64] = Set.new();
+    s.insert(7_i64);
+    return s;
+}
+
+fn main() {
+    println(make_set().contains(7_i64));
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("__mrecv_tmp"),
+            "expected the fresh Set receiver handle materialized into __mrecv_tmp; got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("karac_map_free"),
+            "expected a FreeMapHandle drain (karac_map_free) for the fresh-temp Set receiver; \
+             got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_ir_operand_temp_string_concat_emits_free() {
         // Slice 3c: a fresh-temp String operand of a string binop
         // (`make_s() + " x"`) must emit a `cap > 0`-guarded `freearg.free` of the

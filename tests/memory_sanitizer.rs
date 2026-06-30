@@ -3042,6 +3042,79 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_freshtemp_map_get_no_double_free() {
+        // Slice 3d: `make_map().get(k)` on a fresh-temp `Map[i64,i64]` receiver
+        // in a loop. `get` returns `Option[ref V]` borrowing a value slot inside
+        // the map handle, which the `__mrecv_tmp` `FreeMapHandle` frees at frame
+        // exit. Two hazards: (1) DOUBLE-FREE — the `Some(v)` arm binds a borrow
+        // (`scrutinee_is_borrow_call` must suppress its independent drop for a
+        // temp receiver); (2) LEAK — the whole map handle must be freed once per
+        // iteration. macOS ASAN catches (1); Linux LSan catches (2). The loop
+        // forces per-iteration accumulation.
+        assert_clean_asan_run(
+            r#"
+fn make_map() -> Map[i64, i64] {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1_i64, 100_i64);
+    m.insert(2_i64, 200_i64);
+    m.insert(3_i64, 300_i64);
+    return m;
+}
+
+fn main() {
+    let mut i = 1;
+    while i < 4 {
+        match make_map().get(i) {
+            Some(v) => println(v),
+            None => println(0_i64),
+        };
+        i = i + 1;
+    };
+}
+"#,
+            &["100", "200", "300"],
+            "freshtemp_map_get_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_freshtemp_map_contains_key_set_contains_no_double_free() {
+        // Slice 3d: the `bool`-returning reads — `Map.contains_key` and
+        // `Set.contains` — on fresh-temp receivers. No borrow escapes, so the
+        // sole obligation is freeing the handle once per call. A `FreeMapHandle`
+        // that double-freed would crash here (macOS ASAN); a missing one leaks
+        // the handle (Linux LSan).
+        assert_clean_asan_run(
+            r#"
+fn make_map() -> Map[i64, i64] {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(5_i64, 50_i64);
+    return m;
+}
+
+fn make_set() -> Set[i64] {
+    let mut s: Set[i64] = Set.new();
+    s.insert(7_i64);
+    s.insert(9_i64);
+    return s;
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 2 {
+        println(make_map().contains_key(5_i64));
+        println(make_set().contains(7_i64));
+        println(make_set().contains(42_i64));
+        i = i + 1;
+    };
+}
+"#,
+            &["true", "true", "false", "true", "true", "false"],
+            "freshtemp_map_contains_key_set_contains_no_double_free",
+        );
+    }
+
     // ── B-2026-06-10-6: inline-heap `Option[T]` payload drop ──────
     //
     // An `Option[String]` / `Option[Vec[_]]` dropped WITHOUT being

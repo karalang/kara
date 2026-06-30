@@ -3127,6 +3127,14 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(result);
         }
 
+        // Slice 3d sibling — read methods (`get`/`contains_key`/`contains`) on a
+        // FRESH-TEMP `Map`/`Set` receiver (`make_map().get(k)`). The handle is a
+        // plain `ptr` (no struct shape to detect), so it keys off the
+        // typechecker's `temp_recv_mapset_types`; no-ops (`Ok(None)`) when absent.
+        if let Some(result) = self.try_compile_freshtemp_mapset_read_method(object, method, args)? {
+            return Ok(result);
+        }
+
         // Last-resort before the dispatch-fail error: a String collection
         // method (`split`, `contains`, …) on a **non-identifier** receiver
         // (`"a,b,c".split(",")`, `make_csv().split(",")`). The collection
@@ -3483,6 +3491,127 @@ impl<'ctx> super::Codegen<'ctx> {
         self.variables.remove(&synth);
         self.vec_elem_types.remove(&synth);
         self.var_elem_type_exprs.remove(&synth);
+        self.var_type_names.remove(&synth);
+
+        result.map(Some)
+    }
+
+    /// General owned-temp tracking, slice 3d — read methods on a FRESH-TEMP
+    /// (non-identifier) `Map`/`Set` receiver: `make_map().get(k)`,
+    /// `make_map().contains_key(k)`, `make_set().contains(x)`. The Map/Set
+    /// handle is a plain `ptr`, so unlike the Vec path there's no struct shape
+    /// to key off — the receiver's whole `Map[K,V]` / `Set[T]` `TypeExpr` is
+    /// recorded span-keyed by the typechecker in `temp_recv_mapset_types`
+    /// (`compile_map_method` needs K+V; the handle drop is classified from the
+    /// full type). With it in hand: compile the receiver to its handle,
+    /// materialize the handle into a synthetic slot, register K/V (or elem) so
+    /// the identifier-keyed `compile_map_method` / `compile_set_method` resolve
+    /// it, drop-track the handle (a `FreeMapHandle` via `track_map_var`,
+    /// classified by `map_temp_cleanup_parts`, at the enclosing frame's exit —
+    /// the read methods borrow the map, so the caller owns the temp), then
+    /// re-dispatch.
+    ///
+    /// Returns `Ok(None)` when there's no recorded type (not a serviceable
+    /// fresh-temp Map/Set read), so the caller falls through unchanged.
+    ///
+    /// Scoped to SCALAR K/V/elem (the typechecker only records those): `Map.get`
+    /// returns `Option[ref V]` aliasing a value slot inside the map, suppressed
+    /// from independent drop at the match arm by `scrutinee_is_borrow_call`
+    /// (which keys off the method, not the receiver), and a scalar V owns no
+    /// nested heap, so the single `FreeMapHandle` is the complete drop;
+    /// `contains_key` / `contains` return `bool` (no borrow). The drop-track is
+    /// gated on `expr_yields_fresh_owned_temp`. Heap K/V (per-entry String/Vec
+    /// drop) is a follow-on.
+    fn try_compile_freshtemp_mapset_read_method(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        if matches!(&object.kind, ExprKind::Identifier(_) | ExprKind::SelfValue) {
+            return Ok(None);
+        }
+        let span_key = (object.span.offset, object.span.length);
+        let Some(recv_te) = self.temp_recv_mapset_types.get(&span_key).cloned() else {
+            return Ok(None);
+        };
+        let cur_fn = self
+            .current_fn
+            .ok_or_else(|| "fresh-temp Map/Set read method outside fn".to_string())?;
+
+        // Extract the container head + K/V (or elem) TypeExprs from the recorded
+        // `Map[K,V]` / `Set[T]` type.
+        let crate::ast::TypeKind::Path(path) = &recv_te.kind else {
+            return Ok(None);
+        };
+        let head = path
+            .segments
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("")
+            .to_string();
+        let nth = |i: usize| -> Option<TypeExpr> {
+            match path.generic_args.as_ref()?.get(i)? {
+                crate::ast::GenericArg::Type(t) => Some(t.clone()),
+                _ => None,
+            }
+        };
+
+        let recv_val = self.compile_expr(object)?;
+        // The handle must be a plain pointer; bail otherwise (the typechecker
+        // gate should guarantee it, but stay shape-defensive).
+        if !recv_val.is_pointer_value() {
+            return Ok(None);
+        }
+        let slot = self.create_entry_alloca(cur_fn, "__mrecv_tmp", recv_val.get_type());
+        self.builder.build_store(slot, recv_val).unwrap();
+
+        // Drop the fresh-owned handle at the enclosing frame's exit, classified
+        // from the full receiver type (scalar K/V → no per-entry heap drop).
+        if self.expr_yields_fresh_owned_temp(object) {
+            let (key_is_vec, val_is_vec, key_shared, val_shared) =
+                self.map_temp_cleanup_parts(&recv_te);
+            self.track_map_var(slot, key_is_vec, val_is_vec, val_shared, key_shared);
+        }
+
+        // Register the synth name so the identifier-keyed dispatch resolves the
+        // slot + the K/V (or elem) LLVM types. Unique per call site.
+        let synth = format!("__mrecv_tmp_{}", self.indexed_elem_counter);
+        self.indexed_elem_counter += 1;
+        self.variables.insert(
+            synth.clone(),
+            super::VarSlot {
+                ptr: slot,
+                ty: recv_val.get_type(),
+            },
+        );
+
+        let result = if head == "Set" {
+            self.var_type_names.insert(synth.clone(), "Set".to_string());
+            if let Some(elem) = nth(0) {
+                self.set_elem_types
+                    .insert(synth.clone(), self.llvm_type_for_type_expr(&elem));
+            }
+            let r = self.compile_set_method(&synth, method, args);
+            self.set_elem_types.remove(&synth);
+            r
+        } else {
+            self.var_type_names.insert(synth.clone(), "Map".to_string());
+            if let Some(k) = nth(0) {
+                self.map_key_types
+                    .insert(synth.clone(), self.llvm_type_for_type_expr(&k));
+            }
+            if let Some(v) = nth(1) {
+                self.map_val_types
+                    .insert(synth.clone(), self.llvm_type_for_type_expr(&v));
+            }
+            let r = self.compile_map_method(&synth, method, args);
+            self.map_key_types.remove(&synth);
+            self.map_val_types.remove(&synth);
+            r
+        };
+
+        self.variables.remove(&synth);
         self.var_type_names.remove(&synth);
 
         result.map(Some)

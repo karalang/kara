@@ -988,6 +988,15 @@ pub struct TypeCheckResult {
     /// aliasing the soon-freed temp buffer (general-owned-temp-tracking spike,
     /// slice 3b).
     pub temp_recv_elem_types: HashMap<SpanKey, TypeExpr>,
+    /// Sibling of `temp_recv_elem_types` for `Map`/`Set` fresh-temp receivers
+    /// (`make_map().get(k)`, `make_set().contains(x)`): span of the MethodCall →
+    /// the receiver's whole `Map[K, V]` / `Set[T]` `TypeExpr` (codegen needs K+V
+    /// for `compile_map_method`, so a single element type doesn't suffice — and
+    /// the `Map`/`Set` handle drop is classified from the full type). Separate
+    /// table (not the Vec one) so a `Vec[Map[..]]` element type can never be
+    /// mistaken for a Map *receiver*. Scalar K/V/elem only (general-owned-temp
+    /// spike, slice 3d).
+    pub temp_recv_mapset_types: HashMap<SpanKey, TypeExpr>,
     /// Channel-op element types: span of a `Sender.send` / `Receiver.recv` /
     /// `Receiver.try_recv` MethodCall → the channel element `T` `TypeExpr`.
     /// Same key shape / no-collision rationale as `method_unwrap_inner_types`
@@ -1251,6 +1260,9 @@ pub struct TypeChecker<'a> {
     /// MethodCall span → scalar element `TypeExpr` of a fresh-temp
     /// `Vec`/`VecDeque` receiver. See the public copy on `TypeCheckResult`.
     pub(super) temp_recv_elem_types: HashMap<SpanKey, TypeExpr>,
+    /// MethodCall span → `Map[K,V]` / `Set[T]` `TypeExpr` of a fresh-temp
+    /// Map/Set receiver. See the public copy on `TypeCheckResult`.
+    pub(super) temp_recv_mapset_types: HashMap<SpanKey, TypeExpr>,
     /// MethodCall span → channel element `TypeExpr` for `Sender.send` /
     /// `Receiver.recv` / `Receiver.try_recv`. See the public copy on
     /// `TypeCheckResult` for the full rationale.
@@ -1465,6 +1477,7 @@ impl<'a> TypeChecker<'a> {
             impl_trait_captures: HashMap::new(),
             method_unwrap_inner_types: HashMap::new(),
             temp_recv_elem_types: HashMap::new(),
+            temp_recv_mapset_types: HashMap::new(),
             channel_elem_types: HashMap::new(),
             task_join_return_types: HashMap::new(),
             user_effect_resources: HashMap::new(),
@@ -1644,6 +1657,7 @@ impl<'a> TypeChecker<'a> {
             impl_trait_captures: self.impl_trait_captures,
             method_unwrap_inner_types: self.method_unwrap_inner_types,
             temp_recv_elem_types: self.temp_recv_elem_types,
+            temp_recv_mapset_types: self.temp_recv_mapset_types,
             channel_elem_types: self.channel_elem_types,
             task_join_return_types: self.task_join_return_types,
             bare_assoc_fn_targets: self.bare_assoc_fn_targets,

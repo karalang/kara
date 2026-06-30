@@ -1407,6 +1407,64 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // Sibling of the Vec block above for `Map`/`Set` fresh-temp receivers
+        // (`make_map().get(k)`, `make_set().contains(x)`): record the receiver's
+        // whole `Map[K,V]` / `Set[T]` type — codegen needs K+V to redispatch
+        // through `compile_map_method` and to classify the handle's
+        // `FreeMapHandle` drop, so a single element type doesn't suffice. Same
+        // `Call`/`MethodCall` fresh-temp gate. Scalar K/V/elem only: `Map.get`
+        // returns `Option[ref V]` (a borrow the receiver-shape-agnostic
+        // `scrutinee_is_borrow_call` already suppresses), and a scalar V owns no
+        // nested heap, so the single `FreeMapHandle` is the complete drop;
+        // `contains_key`/`contains` return `bool` (no borrow). Heap K/V (per-entry
+        // String/Vec drop) is a follow-on.
+        if matches!(
+            &object.kind,
+            ExprKind::Call { .. } | ExprKind::MethodCall { .. }
+        ) {
+            let subs = &self.env.substitutions;
+            let is_scalar = |t: &Type| {
+                matches!(
+                    resolve_type_var_top(t, subs),
+                    Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char
+                )
+            };
+            let record = match &obj_ty {
+                Type::Named { name, args }
+                    if name == "Map"
+                        && args.len() == 2
+                        && matches!(method, "get" | "contains_key")
+                        && is_scalar(&args[0])
+                        && is_scalar(&args[1]) =>
+                {
+                    Some(Type::Named {
+                        name: "Map".to_string(),
+                        args: vec![
+                            resolve_type_var_top(&args[0], subs),
+                            resolve_type_var_top(&args[1], subs),
+                        ],
+                    })
+                }
+                Type::Named { name, args }
+                    if name == "Set"
+                        && args.len() == 1
+                        && method == "contains"
+                        && is_scalar(&args[0]) =>
+                {
+                    Some(Type::Named {
+                        name: "Set".to_string(),
+                        args: vec![resolve_type_var_top(&args[0], subs)],
+                    })
+                }
+                _ => None,
+            };
+            if let Some(resolved_recv) = record {
+                let te = Self::type_to_type_expr(&resolved_recv);
+                self.temp_recv_mapset_types
+                    .insert(SpanKey::from_span(span), te);
+            }
+        }
+
         // Option/Result unwrap-family side-table: record the inner `T` /
         // success-`T` so codegen's `compile_method_call` arm for
         // `unwrap`/`expect`/`is_*`/`unwrap_or` knows the LLVM shape of the

@@ -369,8 +369,7 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    struct/enum/`Map`/`Set` elements (need element-drop threading, `elem_agg_drop`,
    the helper doesn't carry; the String case works *because* `String` reuses
    `vec_struct_type` so the inline recursion already covers it);
-   `get_unchecked` on `Vec[String]`; `Map`/`Set` temp receivers (`Map.get` — a
-   separate `compile_map_method` redispatch needing K+V); `iter` on a temp (the
+   `get_unchecked` on `Vec[String]`; `iter` on a temp (the
    iterator must keep the temp alive across the loop); and (the `vector_method_
    receivers` model — receiver `(T, N)` recorded at the collided span — remains a
    second copy-able precedent for any future receiver-type table);
@@ -406,7 +405,39 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    dead (string `+` is a Call by codegen time); the macOS ASAN test had passed
    *vacuously* on the leak it couldn't see — the IR `freearg.free` assertion is
    what flagged the misplacement.
-   None of 3b/3b-heap/3b-c blocks slices 4–6 (the scrutinee/tail/drop-order
+   **Slice 3d — `Map`/`Set` fresh-temp receivers. — DONE 2026-06-29.**
+   `make_map().get(k)` / `.contains_key(k)` and `make_set().contains(x)` on a
+   fresh-temp receiver now compile (they hard-errored — "no handler for method
+   'get' on non-identifier receiver"). The Map/Set handle is a plain `ptr` (no
+   `{ptr,len,cap}` struct to detect, unlike Vec), so a dedicated typechecker
+   table `temp_recv_mapset_types` (sibling to `temp_recv_elem_types`) records the
+   receiver's **whole** `Map[K,V]` / `Set[T]` `TypeExpr` — `compile_map_method`
+   needs K+V, and the handle's `FreeMapHandle` drop is classified from the full
+   type (a single element type doesn't suffice). A *separate* table from the Vec
+   one so a `Vec[Map[..]]` element type can never be mistaken for a Map
+   *receiver*. Codegen's `try_compile_freshtemp_mapset_read_method`
+   (`method_call.rs`) materializes the handle into a `__mrecv_tmp` slot,
+   registers `map_key_types`/`map_val_types` (or `set_elem_types`) for the synth
+   name, drop-tracks the handle via `track_map_var` (classified by the existing
+   `map_temp_cleanup_parts`, gated on `expr_yields_fresh_owned_temp`), then
+   re-dispatches through the identifier-keyed `compile_map_method` /
+   `compile_set_method`. **Scoped to SCALAR K/V/elem**: `Map.get` returns
+   `Option[ref V]` (the borrow suppressed by the receiver-shape-agnostic
+   `scrutinee_is_borrow_call`, which covers `get`), and a scalar V owns no nested
+   heap, so the single `FreeMapHandle` (`karac_map_free` — no per-entry drop) is
+   the complete drop; `contains_key`/`contains` return `bool` (no borrow).
+   Codegen output matched the interpreter oracle (`200`/`true`/`false`). Verified:
+   no double-free (macOS ASAN) and no leak (Linux LSan — `Compiling karac`
+   confirmed, zero reports). **Tests:** 2 IR
+   (`test_ir_freshtemp_map_get_emits_handle_free`,
+   `test_ir_freshtemp_set_contains_emits_handle_free` → `__mrecv_tmp` **and**
+   `karac_map_free`) + 2 ASAN (`asan_freshtemp_map_get_no_double_free` — looped
+   get; `asan_freshtemp_map_contains_key_set_contains_no_double_free`). **Still
+   open under 3d:** heap K/V (per-entry String/Vec drop — `FreeMapHandle` already
+   does it but the `Option[ref String]` value borrow's lifetime across the freed
+   handle needs the same verification the Vec[String] case got); `Map.values`/
+   `keys`/`iter` on a temp.
+   None of 3b/3b-heap/3b-c/3d blocks slices 4–6 (the scrutinee/tail/drop-order
    payoff needs the receiver-temp mechanism this slice establishes, which
    `materialize_owned_temp` now provides).
 4. **Scrutinee sub-frame (= line-489 slice 3). — fresh-temp enum wholesale +

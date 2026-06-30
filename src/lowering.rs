@@ -67,6 +67,14 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
         .iter()
         .map(|(k, v)| ((k.0, k.1), v.clone()))
         .collect();
+    // Sibling table for `Map`/`Set` fresh-temp receivers — codegen materializes
+    // the handle, registers K/V (or elem) for the redispatch, and drop-tracks
+    // the handle (`FreeMapHandle`). Same keying (MethodCall span).
+    program.temp_recv_mapset_types = tc
+        .temp_recv_mapset_types
+        .iter()
+        .map(|(k, v)| ((k.0, k.1), v.clone()))
+        .collect();
     // Forward the channel-op element-type table so codegen's
     // `karac_runtime_channel_*` lowering knows the LLVM shape of `T` to size
     // the type-erased transfer + shape the recv/try_recv out slot. Sibling
