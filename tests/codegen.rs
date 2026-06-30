@@ -671,18 +671,20 @@ mod codegen_tests {
         assert_eq!(out.as_deref(), Some("42\n"));
     }
 
-    /// Passing the owning struct as a call argument is an escape — still rejected
-    /// (the aggregate may only be CALLED-through, read, or RETURNED).
+    /// Passing the owning struct BY VALUE to a borrows-only callee (one that only
+    /// CALLS its closure field) is a BORROW — now supported (owner by-value arg-pass
+    /// slice below). `(h.f)(5) = 5 + 21 = 26`; the env is freed once at the caller's
+    /// scope exit. A callee that RETURNS or PROJECTS the owner is still rejected (see
+    /// the `_arg_to_returning_callee` / `_arg_to_projecting_callee` rejections).
     #[test]
-    fn heap_env_struct_passed_as_arg_is_rejected() {
-        let err = ir_result(
+    fn heap_env_struct_passed_by_value_to_borrows_only_callee_runs() {
+        let out = run_program(
             "struct H { f: Fn(i64) -> i64 }\n\
              fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
              fn use_h(h: H) -> i64 { (h.f)(5i64) }\n\
              fn main() { let h = H { f: make(21i64) }; println(f\"{use_h(h)}\"); }\n",
-        )
-        .expect_err("passing a heap-env-owning struct as an arg must be rejected");
-        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+        );
+        assert_eq!(out.as_deref(), Some("26\n"));
     }
 
     // (A heap-env BINDING passed as an arg to a borrows-only aggregate BUILDER
@@ -1184,6 +1186,116 @@ mod codegen_tests {
              fn main() { let f = make(3i64); let r = keep(f); println(f\"{(r[0])(1i64)}\"); }\n",
         )
         .expect_err("passing a heap-env binding to a param-storing callee must be rejected");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
+    // ── Owner by-value arg-pass slice (B-2026-06-22-2) ──
+    // A heap-env STRUCT OWNER (`let a = H { f: make(k) }`) passed BY VALUE to a
+    // borrows-only callee — one that only CALLS the owner's closure field(s) via
+    // `(h.f)(x)` and never returns / projects / stores / re-binds the owner or its
+    // fields — is a pure BORROW: the callee touches the shared RC env but never
+    // frees it (a param gets no Fn-field `FreeClosureEnv`), and the CALLER retains
+    // sole ownership and RC-drops the env once at scope exit (no inc, no move-out —
+    // a call arg is not a return move-out, so the owner's env slot is not
+    // neutralized). The owner stays a live, usable owner after the call. Tuple /
+    // array / Vec owner args are a later slice and stay rejected.
+
+    /// The canonical owner borrow: `use_it(h) { (h.f)(5) }` only calls the field.
+    /// `(h.f)(5) = 5 + 10 = 15`; the env box is freed exactly once at `a`'s scope exit.
+    #[test]
+    fn heap_env_struct_owner_passed_by_value_runs() {
+        let out = run_program(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn use_it(h: H) -> i64 { (h.f)(5i64) }\n\
+             fn main() { let a = H { f: make(10i64) }; println(f\"{use_it(a)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("15\n"));
+    }
+
+    /// A two-closure owner borrowed — both fields are called; each env is freed once.
+    /// `(h.f)(1) + (h.g)(2) = 11 + 22 = 33`.
+    #[test]
+    fn heap_env_struct_owner_arg_two_closures_runs() {
+        let out = run_program(
+            "struct H { f: Fn(i64) -> i64, g: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn use_it(h: H) -> i64 { (h.f)(1i64) + (h.g)(2i64) }\n\
+             fn main() { let a = H { f: make(10i64), g: make(20i64) }; \
+              println(f\"{use_it(a)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("33\n"));
+    }
+
+    /// A sibling POD field rides along; the borrows-only callee ignores it and only
+    /// calls the closure. `(h.f)(5) = 15`.
+    #[test]
+    fn heap_env_struct_owner_arg_pod_sibling_runs() {
+        let out = run_program(
+            "struct H { f: Fn(i64) -> i64, count: i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn use_it(h: H) -> i64 { (h.f)(5i64) }\n\
+             fn main() { let a = H { f: make(10i64), count: 7i64 }; \
+              println(f\"{use_it(a)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("15\n"));
+    }
+
+    /// The owner stays usable AFTER the borrow call (a borrow leaves ownership
+    /// untouched): `use_it(a)` then `(a.f)(1)`. `15 + 11 = 26`; freed once.
+    #[test]
+    fn heap_env_struct_owner_arg_then_reused_runs() {
+        let out = run_program(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn use_it(h: H) -> i64 { (h.f)(5i64) }\n\
+             fn main() { let a = H { f: make(10i64) }; let r = use_it(a); \
+              println(f\"{r + (a.f)(1i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("26\n"));
+    }
+
+    /// A callee that RETURNS the owner (`keep(h: H) -> H { h }`) retains the env
+    /// past the call, so it is NOT borrows-only — the owner arg-pass stays rejected.
+    #[test]
+    fn heap_env_struct_owner_arg_to_returning_callee_is_rejected() {
+        let err = ir_result(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn keep(h: H) -> H { h }\n\
+             fn main() { let a = H { f: make(10i64) }; let b = keep(a); \
+              println(f\"{(b.f)(5i64)}\"); }\n",
+        )
+        .expect_err("passing an owner to a param-returning callee must be rejected");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
+    /// A callee that PROJECTS the closure field out (`steal(h) -> Fn { h.f }`)
+    /// escapes the env, so it is NOT borrows-only — the arg-pass stays rejected
+    /// (only the CALL form `(h.f)(x)` is a borrow; `h.f` in value position escapes).
+    #[test]
+    fn heap_env_struct_owner_arg_to_projecting_callee_is_rejected() {
+        let err = ir_result(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn steal(h: H) -> Fn(i64) -> i64 { h.f }\n\
+             fn main() { let a = H { f: make(10i64) }; let g = steal(a); \
+              println(f\"{g(5i64)}\"); }\n",
+        )
+        .expect_err("passing an owner to a field-projecting callee must be rejected");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
+    /// A TUPLE owner passed by value is a later slice — still rejected (only the
+    /// STRUCT owner arg-pass is sanctioned here).
+    #[test]
+    fn heap_env_tuple_owner_arg_is_rejected() {
+        let err = ir_result(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn use_t(t: (Fn(i64) -> i64, i64)) -> i64 { (t.0)(5i64) }\n\
+             fn main() { let a = (make(10i64), 0i64); println(f\"{use_t(a)}\"); }\n",
+        )
+        .expect_err("tuple owner arg-pass is not yet supported");
         assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
     }
 

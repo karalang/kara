@@ -870,9 +870,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let ExprKind::Identifier(callee_name) = &callee.kind {
                         if let Some(callee_fn) = self.fn_asts.get(callee_name) {
                             return args.iter().enumerate().any(|(i, a)| {
+                                // The arg is borrowed when it is a heap-env BINDING
+                                // (`let f = make()`) or a heap-env STRUCT OWNER
+                                // (`let h = H { f: make() }`) passed by value to a
+                                // borrows-only param — the callee only CALLS it
+                                // (`f(x)` / `(h.f)(x)`), so the caller retains sole
+                                // ownership and RC-drops the env once (no inc, no
+                                // move-out). Tuple / array / Vec owner args are a
+                                // later slice — they re-flag and stay rejected.
                                 let borrowed = !a.mut_marker
                                     && matches!(&a.value.kind,
-                                        ExprKind::Identifier(n) if binds.contains(n))
+                                        ExprKind::Identifier(n)
+                                            if binds.contains(n)
+                                                || self.heap_env_aggregate_owners.contains_key(n))
                                     && self.fn_param_is_borrows_only(callee_fn, i);
                                 !borrowed && mis(&a.value)
                             });
@@ -1115,6 +1125,20 @@ impl<'ctx> super::Codegen<'ctx> {
                         if n == pname {
                             // `pname(args)` — the sanctioned borrow-call. The callee
                             // occurrence does not escape; the args still might.
+                            return any_args(args);
+                        }
+                    }
+                    // Owner field-call `(pname.field)(args)`: invokes a closure
+                    // stored in the owner param's field WITHOUT moving the env out of
+                    // the owner, so the param is BORROWED — the caller still owns the
+                    // owner + its env. Only the CALL form is sanctioned; `pname.field`
+                    // in value position (a closure projection) stays an escape via the
+                    // `FieldAccess` arm. Self-contained, so a binding param (a closure
+                    // value, which has no fields) never reaches this — `pname.x` on a
+                    // closure is a type error. Disabled inside a nested closure
+                    // (`in_closure`), where any mention of `pname` is a capture.
+                    if let ExprKind::FieldAccess { object, .. } = &callee.kind {
+                        if matches!(&object.kind, ExprKind::Identifier(n) if n == pname) {
                             return any_args(args);
                         }
                     }

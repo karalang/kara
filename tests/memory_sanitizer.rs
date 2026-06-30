@@ -697,6 +697,60 @@ fn main() {
         );
     }
 
+    /// Owner by-value arg-pass slice (B-2026-06-22-2): a heap-env STRUCT OWNER
+    /// (`let a = H { f: make(k), g: make(k) }`) passed BY VALUE to a borrows-only
+    /// callee (one that only CALLS the owner's closure fields via `(h.f)(x)`) is a
+    /// pure BORROW — the callee never frees the shared RC envs (a param gets no
+    /// Fn-field `FreeClosureEnv`), and the CALLER retains sole ownership and
+    /// RC-drops each env EXACTLY once at scope exit (no inc, no move-out — a call
+    /// arg is not a return move-out, so the owner's env slots are not neutralized).
+    /// The owner stays usable after the call (`(a.f)(1) + (a.g)(1)`). Without the
+    /// borrow-only treatment the callee would free the caller's boxes early (UAF)
+    /// or the owner would free them twice; an erroneous inc would leak them.
+    #[test]
+    fn asan_heap_env_struct_owner_arg_pass_borrow_freed_no_leak() {
+        assert_clean_asan_run(
+            r#"
+struct H { f: Fn(i64) -> i64, g: Fn(i64) -> i64 }
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn use_it(h: H) -> i64 { (h.f)(1i64) + (h.g)(2i64) }
+fn main() {
+    let a = H { f: make(10i64), g: make(20i64) };
+    let r = use_it(a);
+    println(f"{r + (a.f)(1i64) + (a.g)(1i64)}");
+}
+"#,
+            &["65"],
+            "asan_heap_env_struct_owner_arg_pass_borrow_freed_no_leak",
+        );
+    }
+
+    /// Owner by-value arg-pass with a sibling HEAP String field: the struct owner is
+    /// passed by value to a borrows-only callee. The `Fn` env is borrowed (caller
+    /// frees once), and the sibling `String` is handled by the normal owned-struct
+    /// arg-pass copy semantics — the caller's owner stays valid and readable after
+    /// the call (`a.name`), each heap allocation freed exactly once. Guards against
+    /// a String double-free (if the param drop and the caller's owner drop both
+    /// freed a shared buffer) or a leak.
+    #[test]
+    fn asan_heap_env_struct_owner_arg_pass_string_sibling_freed_no_leak() {
+        assert_clean_asan_run(
+            r#"
+struct H { f: Fn(i64) -> i64, name: String }
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn use_it(h: H) -> i64 { (h.f)(1i64) }
+fn main() {
+    let a = H { f: make(10i64), name: "an independently long heap string payload here" };
+    let r = use_it(a);
+    println(f"{r + (a.f)(2i64)}");
+    println(a.name);
+}
+"#,
+            &["23", "an independently long heap string payload here"],
+            "asan_heap_env_struct_owner_arg_pass_string_sibling_freed_no_leak",
+        );
+    }
+
     /// Owner-copy slice (B-2026-06-22-2): `let s = a` where `a` is a heap-env
     /// STRUCT owner. The struct copy shallow-copies the `Fn` field so `s` aliases
     /// `a`'s SAME RC env box; the copy INCs the shared env and registers `s`'s own
