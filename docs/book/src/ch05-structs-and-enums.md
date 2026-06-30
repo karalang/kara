@@ -151,3 +151,71 @@ shared struct Node {
 A `shared struct` is automatically reference-counted. Multiple owners can point to the same data without explicit `Rc` or `Arc` wrappers. The compiler picks the right reference-counting strategy behind the scenes.
 
 Use `shared` when your data naturally has multiple owners. Use regular structs (the default) for everything else.
+
+### Mutable fields
+
+A field of a `shared struct` is read-only unless you declare it `mut`. Because a
+shared value can have several owners, mutation through a shared reference is
+opt-in per field — marking a field `mut` is how you say "this one is meant to
+change in place":
+
+```kara
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],   // reassignable; `val` is not
+}
+```
+
+(Plain value structs don't need this — there you control mutation with a `mut`
+binding, `let mut p = Point { ... }`. The per-field `mut` is specific to
+`shared`, where the binding alone can't decide it.)
+
+### A linked list
+
+The recursive `shared struct` + `Option` pair is the standard singly-linked
+list — each node owns the next, and `None` marks the end:
+
+```kara
+shared struct ListNode {
+    val: i64,
+    mut next: Option[ListNode],
+}
+
+// Build a list from a slice, tail to head, preserving order.
+fn from_slice(xs: Slice[i64]) -> Option[ListNode] {
+    let mut head: Option[ListNode] = None;
+    let mut i = xs.len() - 1;
+    while i >= 0 {
+        head = Some(ListNode { val: xs[i], next: head });
+        i = i - 1;
+    }
+    head
+}
+```
+
+Walk it by unwrapping each node. `if let` peels off one `Some` and recurses on
+`.next`; `while let` does the same thing iteratively, rebinding the cursor until
+it hits `None`:
+
+```kara
+fn sum(node: Option[ListNode]) -> i64 {
+    if let Some(n) = node {
+        n.val + sum(n.next)
+    } else {
+        0i64
+    }
+}
+
+fn length(node: Option[ListNode]) -> i64 {
+    let mut count = 0i64;
+    let mut cur = node;
+    while let Some(n) = cur {
+        count = count + 1;
+        cur = n.next;
+    }
+    count
+}
+```
+
+Trees are the same shape with two children instead of one (`mut left`,
+`mut right`) — see the `TreeNode` example in [Ownership](./ch12-ownership.md#shared-types).
