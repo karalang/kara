@@ -453,8 +453,29 @@ impl<'ctx> super::Codegen<'ctx> {
                         single && self.heap_env_tuple_owners.contains_key(&names[0]);
                     let is_array_owner =
                         single && self.heap_env_array_owners.contains_key(&names[0]);
+                    let is_vec_owner = single && self.heap_env_vec_owners.contains(&names[0]);
                     if sanctioned {
                         false
+                    } else if is_vec_owner {
+                        // A `Vec[Fn]` owner is bound three ways:
+                        //   * construction `let v: Vec[Fn] = Vec.new()` /
+                        //     `Vec.with_capacity(n)`: the constructor is innocuous —
+                        //     the heap-env stores are separate `v.push(..)` statements,
+                        //     sanctioned in the `MethodCall` arm; walk it so a misuse in
+                        //     a capacity arg still flags.
+                        //   * a Vec-returning CALL relay `let r = build(k)` (Vec-escape
+                        //     caller-adopt): walk the call so the by-value arg-pass
+                        //     sanction in the `Call` arm applies (same as `is_owner`).
+                        //   * owner MOVE `let w = v` (Identifier RHS): the buffer + its
+                        //     dynamic env-drop loop transfer to `w` (codegen zeroes
+                        //     `v`'s cap, suppressing v's whole cleanup; `w` registers its
+                        //     own loop) — a sanctioned move, not walked. The Identifier
+                        //     RHS is exactly the move; everything else is construction /
+                        //     relay and is walked as before.
+                        match &value.kind {
+                            ExprKind::Identifier(_) => false,
+                            _ => self.expr_has_heap_env_misuse(value, &binds),
+                        }
                     } else if is_array_owner {
                         // Array construction `let a: Array[Fn,N] = [<src>, ..]`: each
                         // sanctioned heap-env store element (a FRESH call or a heap-env
@@ -1766,6 +1787,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 if self.call_returns_heap_env_vec(value) {
                     if let [b] = pattern.binding_names().as_slice() {
                         owners.insert(b.clone());
+                    }
+                }
+            }
+        }
+        // Owner MOVE `let w = v` (`v` already a Vec owner): forward scan, so the
+        // move-dest `w` becomes an owner and a chain `let w = v; let x = w`
+        // propagates. Unlike the struct/tuple/array owner COPY (inc-on-copy),
+        // `let w = v` for a Vec is a MOVE — codegen zeroes `v`'s cap, which the
+        // `cap > 0` guard in the `FreeVecBuffer` cleanup uses to skip v's WHOLE
+        // cleanup (the per-element env-drop loop AND the buffer free), while `w`
+        // registers its own dynamic env-drop loop (no inc). Runs last so push-based
+        // and relay owners are already in `owners` before a move references them.
+        for stmt in &func.body.stmts {
+            if let StmtKind::Let { pattern, value, .. } = &stmt.kind {
+                if let ExprKind::Identifier(src) = &value.kind {
+                    if owners.contains(src) {
+                        if let [b] = pattern.binding_names().as_slice() {
+                            owners.insert(b.clone());
+                        }
                     }
                 }
             }

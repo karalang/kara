@@ -1380,21 +1380,61 @@ mod codegen_tests {
         assert_eq!(out.as_deref(), Some("42\n"));
     }
 
-    /// A Vec owner copy is the next slice — still rejected.
+    /// A `Vec[Fn]` owner may be MOVED (`let w = v`): unlike the struct / tuple /
+    /// array owner COPY (inc-on-copy), a Vec binding-to-binding is a MOVE — codegen
+    /// zeroes `v`'s cap, which the `cap > 0` guard in the `FreeVecBuffer` cleanup
+    /// uses to skip v's WHOLE cleanup (the per-element env-drop loop AND the buffer
+    /// free), while `w` registers its own dynamic env-drop loop. No inc; the buffer
+    /// and its element envs transfer to `w`, freed exactly once. `(w[0])(5)=15`.
     #[test]
-    fn heap_env_vec_owner_copy_is_rejected() {
-        let err = ir_result(
+    fn heap_env_vec_owner_moved_runs() {
+        let out = run_program(
             "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
              fn main() { let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(make(10i64)); \
               let w = v; println(f\"{(w[0])(5i64)}\"); }\n",
-        )
-        .expect_err("Vec owner copy is not yet supported");
-        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+        );
+        assert_eq!(out.as_deref(), Some("15\n"));
     }
 
-    // (Vec escape stays rejected — covered by `heap_env_vec_returned_is_rejected`
-    // in the Vec-store block above; its buffer-transfer + drop-loop relocation is
-    // the next slice.)
+    /// A multi-element `Vec[Fn]` owner moved — the dynamic drop loop frees every
+    /// element env once. `(w[0])(1)+(w[1])(1) = 11+21 = 32`.
+    #[test]
+    fn heap_env_vec_owner_move_multi_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(make(10i64)); \
+              v.push(make(20i64)); let w = v; println(f\"{(w[0])(1i64) + (w[1])(1i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("32\n"));
+    }
+
+    /// A move chain `let w = v; let x = w` — the buffer hops owner twice; each move
+    /// zeroes the prior owner's cap, so only the final owner `x` frees it (once).
+    /// `(x[0])(1) = 101`.
+    #[test]
+    fn heap_env_vec_owner_move_chain_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(make(100i64)); \
+              let w = v; let x = w; println(f\"{(x[0])(1i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("101\n"));
+    }
+
+    /// Vec owner move then ESCAPE: `let w = v; w` — the moved owner `w` is itself a
+    /// returnable Vec owner (the Vec-return fixpoint sees the move-dest via
+    /// `collect_vec_owners`; the drop loop relocates to the caller). The buffer is
+    /// freed once at the caller's scope exit.
+    #[test]
+    fn heap_env_vec_owner_move_then_escape_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn build(k: i64) -> Vec[Fn(i64) -> i64] \
+              { let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(make(k)); let w = v; w }\n\
+             fn main() { let r = build(20i64); println(f\"{(r[0])(22i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
 
     #[test]
     fn escaping_capturing_closure_via_let_is_rejected() {

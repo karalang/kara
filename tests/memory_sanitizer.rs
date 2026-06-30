@@ -808,6 +808,37 @@ fn main() {
         );
     }
 
+    /// Owner-copy slice (B-2026-06-22-2), VEC: `let w = v` where `v` is a heap-env
+    /// `Vec[Fn]` owner is a MOVE (not a copy) — codegen zeroes `v`'s cap, which the
+    /// `cap > 0` guard in the `FreeVecBuffer` cleanup uses to skip v's WHOLE cleanup
+    /// (the dynamic per-element env-drop loop AND the buffer free), while `w`
+    /// registers its own loop. Each element env (and the buffer) is freed EXACTLY
+    /// once. Covers a multi-element buffer, a move chain (`v`→`w`→`x`, the cap
+    /// zeroed at each hop so only the final owner frees), and move-then-ESCAPE
+    /// (`build` returns the moved owner `w` — drop-loop relocation + caller adopt).
+    /// Without the cap-zero, both `v` and `w` would run the drop loop (double-free);
+    /// without `w`'s registration, the moved buffer would leak.
+    #[test]
+    fn asan_heap_env_vec_owner_move_freed_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn build(k: i64) -> Vec[Fn(i64) -> i64] { let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(make(k)); v.push(make(k + 5i64)); let w = v; w }
+fn main() {
+    let mut v: Vec[Fn(i64) -> i64] = Vec.new();
+    v.push(make(10i64));
+    v.push(make(20i64));
+    let w = v;
+    let x = w;
+    let r = build(30i64);
+    println(f"{(x[0])(1i64) + (x[1])(1i64) + (r[0])(2i64) + (r[1])(2i64)}");
+}
+"#,
+            &["101"],
+            "asan_heap_env_vec_owner_move_freed_no_leak",
+        );
+    }
+
     // ── Baseline: no heap allocations ─────────────────────────────
     // Sanity-checks the harness itself — should trivially pass on any host
     // with a working `cc + ASAN`. If this fails, the infrastructure is
