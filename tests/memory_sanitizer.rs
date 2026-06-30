@@ -697,6 +697,37 @@ fn main() {
         );
     }
 
+    /// Owner-copy slice (B-2026-06-22-2): `let s = a` where `a` is a heap-env
+    /// STRUCT owner. The struct copy shallow-copies the `Fn` field so `s` aliases
+    /// `a`'s SAME RC env box; the copy INCs the shared env and registers `s`'s own
+    /// `FreeClosureEnv`, so each owner RC-drops once and the box is freed EXACTLY
+    /// once (COPY semantics — `a` stays live). Covers a 3-owner copy chain
+    /// (`a`→`s`→`t`, rc reaches 3, three balanced drops), a sibling HEAP String
+    /// field (DEEP-copied to independent buffers, composing with the env inc), and
+    /// owner-copy-then-ESCAPE (`build` returns the copy `s` — move-out + caller
+    /// adopt). Asserts no leak (LSan) and no use-after-free / double-free (ASAN).
+    /// Without the inc the first owner's drop would free the box the others still
+    /// alias (UAF / double-free); a stray extra inc would leak it.
+    #[test]
+    fn asan_heap_env_owner_copy_freed_no_leak() {
+        assert_clean_asan_run(
+            r#"
+struct H { f: Fn(i64) -> i64, name: String }
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn build(k: i64) -> H { let a = H { f: make(k), name: "an independently heap-copied payload" }; let s = a; s }
+fn main() {
+    let a = H { f: make(10i64), name: "another sufficiently long heap string here" };
+    let s = a;
+    let t = s;
+    let r = build(20i64);
+    println(f"{(a.f)(1i64) + (s.f)(1i64) + (t.f)(1i64) + (r.f)(2i64)}");
+}
+"#,
+            &["55"],
+            "asan_heap_env_owner_copy_freed_no_leak",
+        );
+    }
+
     // ── Baseline: no heap allocations ─────────────────────────────
     // Sanity-checks the harness itself — should trivially pass on any host
     // with a working `cc + ASAN`. If this fails, the infrastructure is

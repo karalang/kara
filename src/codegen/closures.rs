@@ -1446,6 +1446,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let [b] = pattern.binding_names().as_slice() {
                         binds.insert(b.clone());
                     }
+                } else if let ExprKind::Identifier(src) = &value.kind {
+                    // Owner COPY (`let s = a`, `a` an aggregate owner): forward scan,
+                    // so `s` adopts `a`'s owned fields and a copy-of-a-copy
+                    // (`let t = s`) chains. COPY semantics — `a` stays a live owner,
+                    // and codegen INCs the shared RC env so each owner RC-drops once
+                    // (mirrors the `let g = f` binding copy). Sits after the
+                    // binding-source check (a heap-env binding copy is `binds`, not
+                    // an owner) and before the literal/call owner-construction arms.
+                    if let Some(fields) = owners.get(src).cloned() {
+                        if let [b] = pattern.binding_names().as_slice() {
+                            owners.insert(b.clone(), fields);
+                        }
+                    }
                 } else if let Some(fields) = self.aggregate_call_owner_fields(value, agg_map) {
                     if let [b] = pattern.binding_names().as_slice() {
                         owners.insert(b.clone(), fields);

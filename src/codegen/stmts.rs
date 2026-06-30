@@ -3450,6 +3450,14 @@ impl<'ctx> super::Codegen<'ctx> {
                                 alloca,
                                 var_name,
                             );
+                            // Owner-copy slice (B-2026-06-22-2): `let s = a` where
+                            // `a` is a heap-env struct owner — INC the shared RC env
+                            // of each owned field and register `s`'s own instance
+                            // `FreeClosureEnv` (COPY semantics; `a` stays live). No-op
+                            // unless the RHS is an identifier naming a struct owner.
+                            self.register_owner_copy_struct_heap_env_field_drops(
+                                value, alloca, var_name,
+                            );
                         }
                     }
                 }

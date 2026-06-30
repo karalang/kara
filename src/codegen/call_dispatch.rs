@@ -2460,6 +2460,55 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Owner-copy slice (B-2026-06-22-2): for `let s = a` where `a` is a heap-env
+    /// struct OWNER, register `s`'s instance `FreeClosureEnv` on each owned field
+    /// and INC the shared RC env. The struct value was COPIED (Kāra struct copy:
+    /// heap Vec/String fields deep-copy to independent buffers, but a `Fn` field is
+    /// an inline fat pointer copied SHALLOW — so `s`'s field aliases `a`'s SAME env
+    /// box). COPY semantics (not move): `a` stays a live owner, so each owner must
+    /// RC-drop the shared box exactly once — hence the inc, mirroring the `let g = f`
+    /// closure-copy and the binding-source struct STORE. Records `s`'s owned fields
+    /// so `s` may itself be copied / moved-out / returned. The struct's `Fn` field
+    /// GEP is the `fat_alloca` the cleanup expects (and the value to inc). A no-op
+    /// unless `value` is an identifier naming a struct owner.
+    pub(super) fn register_owner_copy_struct_heap_env_field_drops(
+        &mut self,
+        value: &Expr,
+        struct_alloca: PointerValue<'ctx>,
+        var_name: &str,
+    ) {
+        let ExprKind::Identifier(src) = &value.kind else {
+            return;
+        };
+        let Some(fields) = self.heap_env_owner_fields.get(src).cloned() else {
+            return;
+        };
+        for (struct_name, idx) in &fields {
+            let Some(st) = self.struct_types.get(struct_name).copied() else {
+                continue;
+            };
+            let field_gep = self
+                .builder
+                .build_struct_gep(st, struct_alloca, *idx, "clo.owncopy.field")
+                .unwrap();
+            // Co-own the box with the source owner: load the (shallow-copied) field
+            // fat pointer and bump its env refcount, so `s`'s and `a`'s drops each
+            // free it once.
+            let fat = self
+                .builder
+                .build_load(self.closure_value_type(), field_gep, "clo.owncopy.fat")
+                .unwrap();
+            self.emit_heap_closure_env_inc(fat);
+            if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                frame.push(super::state::CleanupAction::FreeClosureEnv {
+                    fat_alloca: field_gep,
+                });
+            }
+        }
+        self.heap_env_owner_fields
+            .insert(var_name.to_string(), fields);
+    }
+
     /// Tuple-store slice (B-2026-06-22-2): for `let t = (<src>, ..)`, register an
     /// instance `FreeClosureEnv` on each tuple element whose initializer is a
     /// sanctioned heap-env closure STORE. A FRESH call (`(make(k), ..)`) leaves the

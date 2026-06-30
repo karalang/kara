@@ -1187,6 +1187,111 @@ mod codegen_tests {
         assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
     }
 
+    // ── Owner-copy slice (B-2026-06-22-2) ──
+    // `let s = a` where `a` is a heap-env STRUCT owner. Kāra struct copy is COPY
+    // semantics in codegen (heap Vec/String fields deep-copy to independent
+    // buffers; a `Fn` field is shallow-copied, so `s` aliases `a`'s SAME RC env
+    // box). The copy INCs the shared env and registers `s`'s own instance
+    // `FreeClosureEnv`, so each owner RC-drops once and the box is freed exactly
+    // once. `a` stays a live, usable owner. Tuple / array / Vec owner copy is the
+    // next slice and stays rejected.
+
+    /// Both the source and the copy are usable (COPY semantics): `(a.f)(1) = 11`,
+    /// `(s.f)(2) = 12`. The inc balances each owner's RC-drop.
+    #[test]
+    fn heap_env_owner_struct_copied_runs() {
+        let out = run_program(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let a = H { f: make(10i64) }; let s = a; \
+              println(f\"{(a.f)(1i64)}\"); println(f\"{(s.f)(2i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("11\n12\n"));
+    }
+
+    /// A copy-of-a-copy chain `let s = a; let t = s` is transitively all owners of
+    /// the one shared RC env — each copy increments it, so three owners free it
+    /// exactly once. `(a.f)(1)+(s.f)(1)+(t.f)(1) = 101*3 = 303`.
+    #[test]
+    fn heap_env_owner_struct_copy_chain_runs() {
+        let out = run_program(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let a = H { f: make(100i64) }; let s = a; let t = s; \
+              println(f\"{(a.f)(1i64) + (s.f)(1i64) + (t.f)(1i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("303\n"));
+    }
+
+    /// A sibling POD data field copies trivially; `(s.f)(5)+s.count+a.count =
+    /// 15+7+7 = 29`. The type-driven struct copy duplicates `count`; only the `Fn`
+    /// field's env is RC-shared.
+    #[test]
+    fn heap_env_owner_struct_copy_with_data_field_runs() {
+        let out = run_program(
+            "struct H { f: Fn(i64) -> i64, count: i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let a = H { f: make(10i64), count: 7i64 }; let s = a; \
+              println(f\"{(s.f)(5i64) + s.count + a.count}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("29\n"));
+    }
+
+    /// A sibling HEAP String field is DEEP-copied by the normal struct copy (each
+    /// owner gets an independent buffer), composing with the closure-env inc — no
+    /// double-free of the string, no leak of the env.
+    #[test]
+    fn heap_env_owner_struct_copy_with_string_field_runs() {
+        let out = run_program(
+            "struct H { f: Fn(i64) -> i64, name: String }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let a = H { f: make(10i64), name: \"a long enough heap string payload\" }; \
+              let s = a; println(f\"{(s.f)(5i64)}\"); println(s.name); }\n",
+        );
+        assert_eq!(
+            out.as_deref(),
+            Some("15\na long enough heap string payload\n")
+        );
+    }
+
+    /// Owner copy then ESCAPE: `let a = ..; let s = a; s` — the copy `s` is itself a
+    /// returnable owner (move-out neutralizes `s`; the caller adopts). With the
+    /// inc, the box is freed once across `a`'s scope-exit drop and the caller's.
+    #[test]
+    fn heap_env_owner_struct_copy_then_escape_runs() {
+        let out = run_program(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn build(k: i64) -> H { let a = H { f: make(k) }; let s = a; s }\n\
+             fn main() { let r = build(20i64); println(f\"{(r.f)(22i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// A TUPLE owner copy is the next slice — still rejected (the owner identifier
+    /// in a non-call position aliases the env without RC accounting).
+    #[test]
+    fn heap_env_tuple_owner_copy_is_rejected() {
+        let err = ir_result(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let a = (make(10i64), 0i64); let s = a; println(f\"{(s.0)(5i64)}\"); }\n",
+        )
+        .expect_err("tuple owner copy is not yet supported");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
+    /// A Vec owner copy is the next slice — still rejected.
+    #[test]
+    fn heap_env_vec_owner_copy_is_rejected() {
+        let err = ir_result(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(make(10i64)); \
+              let w = v; println(f\"{(w[0])(5i64)}\"); }\n",
+        )
+        .expect_err("Vec owner copy is not yet supported");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
     // (Vec escape stays rejected — covered by `heap_env_vec_returned_is_rejected`
     // in the Vec-store block above; its buffer-transfer + drop-loop relocation is
     // the next slice.)
