@@ -10581,6 +10581,23 @@ fn test_stats_max_ok() {
     typecheck_ok("fn f() -> Option[f64] { let xs = [1.0_f64, 2.0_f64]; Stats.max(xs) }");
 }
 
+#[test]
+fn test_stats_percentile_ok() {
+    typecheck_ok("fn f() -> f64 { let xs = [1.0_f64, 2.0_f64]; Stats.percentile(xs, 50.0_f64) }");
+}
+
+#[test]
+fn test_stats_argmin_argmax_ok() {
+    typecheck_ok("fn f() -> Option[i64] { let xs = [1.0_f64, 2.0_f64]; Stats.argmin(xs) }");
+    typecheck_ok("fn f() -> Option[i64] { let xs = [1.0_f64, 2.0_f64]; Stats.argmax(xs) }");
+}
+
+#[test]
+fn test_stats_sort_argsort_ok() {
+    typecheck_ok("fn f() -> Vec[f64] { let xs = [1.0_f64, 2.0_f64]; Stats.sort(xs) }");
+    typecheck_ok("fn f() -> Vec[i64] { let xs = [1.0_f64, 2.0_f64]; Stats.argsort(xs) }");
+}
+
 // ── Set[T] ───────────────────────────────────────────────────────
 
 #[test]

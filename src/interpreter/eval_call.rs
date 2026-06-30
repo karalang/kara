@@ -783,7 +783,8 @@ impl<'a> super::Interpreter<'a> {
                     }
                 }
                 "Stats.sum" | "Stats.prod" | "Stats.mean" | "Stats.variance" | "Stats.stddev"
-                | "Stats.median" | "Stats.min" | "Stats.max" => {
+                | "Stats.median" | "Stats.min" | "Stats.max" | "Stats.percentile"
+                | "Stats.argmin" | "Stats.argmax" | "Stats.sort" | "Stats.argsort" => {
                     let xs: Vec<f64> = if let Some(arg) = args.first() {
                         match self.eval_expr_inner(&arg.value) {
                             Value::Array(rc) => rc
@@ -801,7 +802,17 @@ impl<'a> super::Interpreter<'a> {
                     } else {
                         vec![]
                     };
-                    return eval_stats_fn(&path_str, &xs, span);
+                    // `percentile(xs, p)` reads its second argument; every other
+                    // `Stats` function is unary.
+                    let p = match args.get(1) {
+                        Some(arg) => match self.eval_expr_inner(&arg.value) {
+                            Value::Float(f) => Some(f),
+                            Value::Int(i) => Some(i as f64),
+                            _ => None,
+                        },
+                        None => None,
+                    };
+                    return eval_stats_fn(&path_str, &xs, p, span);
                 }
                 // `String.from_utf8(bytes: Vec[u8]) -> Result[String, Utf8Error]`.
                 // UTF-8-validating String constructor. Error variant mapping

@@ -116,7 +116,7 @@ pub(super) fn value_discriminant(v: &Value) -> u8 {
 
 // ── Stats stdlib helpers ─────────────────────────────────────────────────────
 
-pub(super) fn eval_stats_fn(name: &str, xs: &[f64], span: &Span) -> Value {
+pub(super) fn eval_stats_fn(name: &str, xs: &[f64], p: Option<f64>, span: &Span) -> Value {
     match name {
         "Stats.sum" => Value::Float(xs.iter().sum()),
         "Stats.prod" => Value::Float(xs.iter().product()),
@@ -197,6 +197,81 @@ pub(super) fn eval_stats_fn(name: &str, xs: &[f64], span: &Span) -> Value {
                     data: EnumData::Unit,
                 },
             }
+        }
+        // `percentile(p)` — NumPy/`np.percentile` convention: `p ∈ [0, 100]`
+        // (distinct from `Column.quantile`'s `[0, 1]`), linear interpolation
+        // between the two nearest ranks. `median ≡ percentile(50)`. Empty
+        // slice or `p` out of range traps, mirroring the other f64 reductions.
+        "Stats.percentile" => {
+            if xs.is_empty() {
+                panic!(
+                    "Stats.percentile() called on empty slice at {}:{}",
+                    span.line, span.column
+                );
+            }
+            let p = p.unwrap_or(f64::NAN);
+            if !(0.0..=100.0).contains(&p) {
+                panic!(
+                    "Stats.percentile() p must be in [0, 100], got {} at {}:{}",
+                    p, span.line, span.column
+                );
+            }
+            let mut sorted = xs.to_vec();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let pos = (p / 100.0) * (sorted.len() - 1) as f64;
+            let lo = pos.floor() as usize;
+            let hi = if lo + 1 < sorted.len() { lo + 1 } else { lo };
+            let frac = pos - lo as f64;
+            Value::Float(sorted[lo] + frac * (sorted[hi] - sorted[lo]))
+        }
+        // `argmin` / `argmax` → `Option[i64]` (the index of the first min/max;
+        // `None` on an empty slice, mirroring `min`/`max`'s `Option[f64]`).
+        "Stats.argmin" | "Stats.argmax" => {
+            let want_max = name == "Stats.argmax";
+            let mut best: Option<usize> = None;
+            for (i, &x) in xs.iter().enumerate() {
+                match best {
+                    None => best = Some(i),
+                    Some(b) => {
+                        let take = if want_max { x > xs[b] } else { x < xs[b] };
+                        if take {
+                            best = Some(i);
+                        }
+                    }
+                }
+            }
+            match best {
+                Some(i) => Value::EnumVariant {
+                    enum_name: "Option".to_string(),
+                    variant: "Some".to_string(),
+                    data: EnumData::Tuple(vec![Value::Int(i as i64)]),
+                },
+                None => Value::EnumVariant {
+                    enum_name: "Option".to_string(),
+                    variant: "None".to_string(),
+                    data: EnumData::Unit,
+                },
+            }
+        }
+        // `sort` → a fresh ascending `Vec[f64]` (the slice is borrowed and
+        // unchanged); empty → empty.
+        "Stats.sort" => {
+            let mut sorted = xs.to_vec();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let elems: Vec<Value> = sorted.into_iter().map(Value::Float).collect();
+            Value::Array(std::sync::Arc::new(std::sync::RwLock::new(elems)))
+        }
+        // `argsort` → `Vec[i64]` of the indices that sort `xs` ascending
+        // (stable: ties keep input order); empty → empty.
+        "Stats.argsort" => {
+            let mut idx: Vec<usize> = (0..xs.len()).collect();
+            idx.sort_by(|&a, &b| {
+                xs[a]
+                    .partial_cmp(&xs[b])
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let elems: Vec<Value> = idx.into_iter().map(|i| Value::Int(i as i64)).collect();
+            Value::Array(std::sync::Arc::new(std::sync::RwLock::new(elems)))
         }
         _ => Value::Unit,
     }

@@ -36,4 +36,26 @@ impl Stats {
 
     #[compiler_builtin]
     fn max(xs: Slice[f64]) -> Option[f64] { None }
+
+    // `percentile(p)` uses the NumPy convention: `p` in [0, 100], linear
+    // interpolation between ranks (`median == percentile(50)`). Distinct from
+    // `Column.quantile`, whose argument is in [0, 1].
+    #[compiler_builtin]
+    fn percentile(xs: Slice[f64], p: f64) -> f64 { 0.0 }
+
+    // `argmin` / `argmax` return the index of the first min / max, or `None`
+    // for an empty slice (mirroring `min` / `max`).
+    #[compiler_builtin]
+    fn argmin(xs: Slice[f64]) -> Option[i64] { None }
+
+    #[compiler_builtin]
+    fn argmax(xs: Slice[f64]) -> Option[i64] { None }
+
+    // `sort` returns a fresh ascending copy; `argsort` returns the indices that
+    // sort the slice ascending (stable). The input slice is left unchanged.
+    #[compiler_builtin]
+    fn sort(xs: Slice[f64]) -> Vec[f64] { vec![] }
+
+    #[compiler_builtin]
+    fn argsort(xs: Slice[f64]) -> Vec[i64] { vec![] }
 }

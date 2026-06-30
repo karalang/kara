@@ -9748,6 +9748,67 @@ fn test_stats_min_empty() {
     assert_eq!(output, "none\n");
 }
 
+#[test]
+fn test_stats_percentile() {
+    // NumPy convention: p in [0, 100], linear interpolation.
+    // sorted [1, 1, 2, 3, 4, 5, 9]: p50 = median = 3; p0 = 1; p100 = 9;
+    // p25 -> pos 0.25*6 = 1.5 -> 1 + 0.5*(2-1) = 1.5.
+    let output = run("fn main() {\n\
+         let xs = [3.0_f64, 1.0_f64, 4.0_f64, 1.0_f64, 5.0_f64, 9.0_f64, 2.0_f64];\n\
+         println(Stats.percentile(xs, 50.0_f64));\n\
+         println(Stats.percentile(xs, 0.0_f64));\n\
+         println(Stats.percentile(xs, 100.0_f64));\n\
+         println(Stats.percentile(xs, 25.0_f64));\n\
+     }");
+    assert_eq!(output, "3\n1\n9\n1.5\n");
+}
+
+#[test]
+fn test_stats_argmin_argmax() {
+    // First-occurrence index of min / max; xs = [3, 1, 4, 1, 5, 9, 2].
+    let output = run("fn main() {\n\
+         let xs = [3.0_f64, 1.0_f64, 4.0_f64, 1.0_f64, 5.0_f64, 9.0_f64, 2.0_f64];\n\
+         match Stats.argmin(xs) { Some(i) => println(i), None => println(-1), }\n\
+         match Stats.argmax(xs) { Some(i) => println(i), None => println(-1), }\n\
+     }");
+    assert_eq!(output, "1\n5\n");
+}
+
+#[test]
+fn test_stats_argmin_empty_is_none() {
+    let output = run("fn main() {\n\
+         let xs: Vec[f64] = Vec[0.0_f64];\n\
+         let ys = xs[1..];\n\
+         match Stats.argmin(ys) { Some(i) => println(i), None => println(-1), }\n\
+     }");
+    assert_eq!(output, "-1\n");
+}
+
+#[test]
+fn test_stats_sort() {
+    // Ascending copy; the source slice is unchanged.
+    let output = run("fn main() {\n\
+         let xs = [3.0_f64, 1.0_f64, 2.0_f64];\n\
+         let s: Vec[f64] = Stats.sort(xs);\n\
+         println(s[0]);\n\
+         println(s[2]);\n\
+     }");
+    assert_eq!(output, "1\n3\n");
+}
+
+#[test]
+fn test_stats_argsort() {
+    // Indices that sort xs ascending; xs = [3, 1, 2] -> [1, 2, 0].
+    let output = run("fn main() {\n\
+         let xs = [3.0_f64, 1.0_f64, 2.0_f64];\n\
+         let a: Vec[i64] = Stats.argsort(xs);\n\
+         println(a[0]);\n\
+         println(a[1]);\n\
+         println(a[2]);\n\
+     }");
+    assert_eq!(output, "1\n2\n0\n");
+}
+
 // ── Encoding namespace (Base64 / Hex / Url) ───────────────────────
 
 #[test]
