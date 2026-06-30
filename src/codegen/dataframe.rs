@@ -61,12 +61,36 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// One entry: `{ ptr name_data, i64 name_len, ptr col_ctrl, i64
-    /// elem_size }`.
+    /// elem_size, i64 kind }`. `kind` is the element-type class the erased
+    /// pointer + `elem_size` can't recover (f64 / i64 are both 8 bytes):
+    /// 0 = other (bool / non-numeric non-string), 1 = signed int,
+    /// 2 = unsigned int, 3 = float, 4 = String. `describe()` reads it to
+    /// pick the numeric columns and how to widen each element to f64.
     pub(super) fn dataframe_entry_struct_type(&self) -> StructType<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default()).into();
         let i64_ty = self.context.i64_type().into();
         self.context
-            .struct_type(&[ptr_ty, i64_ty, ptr_ty, i64_ty], false)
+            .struct_type(&[ptr_ty, i64_ty, ptr_ty, i64_ty, i64_ty], false)
+    }
+
+    /// The element-type `kind` tag stored in a DataFrame entry (see
+    /// `dataframe_entry_struct_type`).
+    pub(super) fn dataframe_kind_for_info(&self, info: &super::state::ColumnVarInfo<'ctx>) -> u64 {
+        if self.column_elem_is_string(info.elem) {
+            return 4;
+        }
+        match info.elem {
+            BasicTypeEnum::FloatType(_) => 3,
+            BasicTypeEnum::IntType(it) if it.get_bit_width() == 1 => 0, // bool
+            BasicTypeEnum::IntType(_) => {
+                if info.elem_unsigned {
+                    2
+                } else {
+                    1
+                }
+            }
+            _ => 0,
+        }
     }
 
     /// GEP + load a control-block field. 0 = entries (ptr), 1 = len (i64),
@@ -551,19 +575,9 @@ impl<'ctx> super::Codegen<'ctx> {
         if !self.dataframe_var_infos.contains(var.as_str()) {
             return Ok(None);
         }
-        // `describe()` typechecks and runs under `karac run`, but the native
-        // backend defers it: a `DataFrame` entry is type-erased (it carries
-        // only `elem_size`, which is 8 for i64 / f64 / String alike), so the
-        // build backend can't yet tell which columns are numeric — fail
-        // loudly rather than miscompile. A follow-on slice adds a per-column
-        // element-kind tag to the entry.
         if method == "describe" {
-            return Err(
-                "DataFrame.describe is not yet supported by the native backend \
-                 (`karac build`); it works under `karac run` and lands in a \
-                 follow-on codegen slice (needs a per-column element-kind tag)"
-                    .to_string(),
-            );
+            let src = self.dataframe_ptr_for_var(var)?;
+            return Ok(Some(self.compile_dataframe_describe(src)?));
         }
         if !matches!(
             method,
@@ -595,6 +609,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let info = self.dataframe_insert_col_info(&args[1].value)?;
                 let elem_size_u = self.column_elem_size(info.elem)?;
                 let elem_size = i64_t.const_int(elem_size_u, false);
+                let kind = i64_t.const_int(self.dataframe_kind_for_info(&info), false);
 
                 let (name_data, name_len) = self.df_string_parts(&args[0].value)?;
                 let saved = self.pending_let_column_info.take();
@@ -611,7 +626,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.column_free_allocations(src_col, elem_size);
                 }
 
-                self.dataframe_store_entry(control, name_data, name_len, owned_col, elem_size)?;
+                self.dataframe_store_entry(
+                    control, name_data, name_len, owned_col, elem_size, kind,
+                )?;
                 Ok(Some(self.context.i8_type().const_zero().into()))
             }
             "column" => {
@@ -892,8 +909,9 @@ impl<'ctx> super::Codegen<'ctx> {
         let elem_size = self
             .df_entry_load(entry, 3, "df.sel.esize")
             .into_int_value();
+        let kind = self.df_entry_load(entry, 4, "df.sel.kind").into_int_value();
         let owned = self.column_deep_copy(col, elem_size)?;
-        self.dataframe_append_entry(new_ctrl, name_data, name_len, owned, elem_size)?;
+        self.dataframe_append_entry(new_ctrl, name_data, name_len, owned, elem_size, kind)?;
         let j_next = self
             .builder
             .build_int_add(j, i64_t.const_int(1, false), "df.sel.inc")
@@ -946,6 +964,7 @@ impl<'ctx> super::Codegen<'ctx> {
         name_len: IntValue<'ctx>,
         owned_col: PointerValue<'ctx>,
         elem_size: IntValue<'ctx>,
+        kind: IntValue<'ctx>,
     ) -> Result<(), String> {
         let fn_val = self
             .current_fn
@@ -1007,11 +1026,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 elem_size,
             )
             .unwrap();
+        self.builder
+            .build_store(self.df_entry_field_slot(entry, 4, "df.ins.r.kind"), kind)
+            .unwrap();
         self.builder.build_unconditional_branch(done_bb).unwrap();
 
         // Append a new column at the end.
         self.builder.position_at_end(append_bb);
-        self.dataframe_append_entry(control, name_data, name_len, owned_col, elem_size)?;
+        self.dataframe_append_entry(control, name_data, name_len, owned_col, elem_size, kind)?;
         self.builder.build_unconditional_branch(done_bb).unwrap();
 
         self.builder.position_at_end(done_bb);
@@ -1030,6 +1052,7 @@ impl<'ctx> super::Codegen<'ctx> {
         name_len: IntValue<'ctx>,
         owned_col: PointerValue<'ctx>,
         elem_size: IntValue<'ctx>,
+        kind: IntValue<'ctx>,
     ) -> Result<(), String> {
         self.dataframe_ensure_capacity(control)?;
         let entries = self
@@ -1049,6 +1072,9 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.builder
             .build_store(self.df_entry_field_slot(entry, 3, "df.ap.size"), elem_size)
+            .unwrap();
+        self.builder
+            .build_store(self.df_entry_field_slot(entry, 4, "df.ap.kind"), kind)
             .unwrap();
         let i64_t = self.context.i64_type();
         let new_len = self
@@ -1228,5 +1254,147 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_unconditional_branch(skip_bb).unwrap();
 
         self.builder.position_at_end(skip_bb);
+    }
+
+    /// `DataFrame.describe() -> DataFrame` — summary statistics over the
+    /// numeric columns. Builds a fresh frame: a leading `statistic`
+    /// `Column[String]` label column + one `Column[f64]` per numeric source
+    /// column (same name, source order) holding the 8 stats over the
+    /// column's valid slots. Non-numeric (`kind` ∉ {1,2,3}) and all-null
+    /// columns are skipped (pandas posture). Byte-identical to `karac run`.
+    fn compile_dataframe_describe(
+        &mut self,
+        src_control: PointerValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "DataFrame.describe outside function".to_string())?;
+        let i64_t = self.context.i64_type();
+        let result = self.compile_dataframe_new()?.into_pointer_value();
+
+        // 1. statistic label column (Column[String], kind 4, elem_size 24).
+        let labels = ["count", "mean", "std", "min", "25%", "50%", "75%", "max"];
+        let stat_col = self.build_label_column(&labels)?;
+        let stat_name = self.build_str_bytes_global("statistic".as_bytes(), "df.desc.sn");
+        self.dataframe_append_entry(
+            result,
+            stat_name,
+            i64_t.const_int("statistic".len() as u64, false),
+            stat_col,
+            i64_t.const_int(24, false),
+            i64_t.const_int(4, false),
+        )?;
+
+        // 2. one Column[f64] per numeric source column with valid values.
+        let entries = self
+            .df_load_field(src_control, 0, "df.desc.entries")
+            .into_pointer_value();
+        let len = self
+            .df_load_field(src_control, 1, "df.desc.len")
+            .into_int_value();
+        let i_slot = self.create_entry_alloca(fn_val, "df.desc.i", i64_t.into());
+        self.builder
+            .build_store(i_slot, i64_t.const_zero())
+            .unwrap();
+        let head = self.context.append_basic_block(fn_val, "df.desc.head");
+        let body = self.context.append_basic_block(fn_val, "df.desc.body");
+        let proc = self.context.append_basic_block(fn_val, "df.desc.proc");
+        let build = self.context.append_basic_block(fn_val, "df.desc.build");
+        let cont = self.context.append_basic_block(fn_val, "df.desc.cont");
+        let exit = self.context.append_basic_block(fn_val, "df.desc.exit");
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(head);
+        let i = self
+            .builder
+            .build_load(i64_t, i_slot, "df.desc.iv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, len, "df.desc.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, body, exit)
+            .unwrap();
+
+        self.builder.position_at_end(body);
+        let entry = self.df_entry_ptr(entries, i);
+        let kind = self
+            .df_entry_load(entry, 4, "df.desc.kind")
+            .into_int_value();
+        // numeric iff kind ∈ {1, 2, 3}.
+        let ge1 = self
+            .builder
+            .build_int_compare(
+                IntPredicate::UGE,
+                kind,
+                i64_t.const_int(1, false),
+                "df.desc.ge1",
+            )
+            .unwrap();
+        let le3 = self
+            .builder
+            .build_int_compare(
+                IntPredicate::ULE,
+                kind,
+                i64_t.const_int(3, false),
+                "df.desc.le3",
+            )
+            .unwrap();
+        let is_num = self.builder.build_and(ge1, le3, "df.desc.num").unwrap();
+        self.builder
+            .build_conditional_branch(is_num, proc, cont)
+            .unwrap();
+
+        self.builder.position_at_end(proc);
+        let col = self
+            .df_entry_load(entry, 2, "df.desc.col")
+            .into_pointer_value();
+        let esize = self
+            .df_entry_load(entry, 3, "df.desc.esize")
+            .into_int_value();
+        let nd = self
+            .df_entry_load(entry, 0, "df.desc.nd")
+            .into_pointer_value();
+        let nl = self.df_entry_load(entry, 1, "df.desc.nl").into_int_value();
+        let nvalid = self.compile_column_count(col, true)?.into_int_value();
+        // Skip an all-null numeric column (matches the interpreter, which has
+        // no valid numeric value to classify / reduce).
+        let has = self
+            .builder
+            .build_int_compare(IntPredicate::UGT, nvalid, i64_t.const_zero(), "df.desc.has")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(has, build, cont)
+            .unwrap();
+
+        self.builder.position_at_end(build);
+        let stats_col = self.compile_describe_stats_column(col, kind, esize, nvalid)?;
+        self.dataframe_append_entry(
+            result,
+            nd,
+            nl,
+            stats_col,
+            i64_t.const_int(8, false),
+            i64_t.const_int(3, false),
+        )?;
+        self.builder.build_unconditional_branch(cont).unwrap();
+
+        self.builder.position_at_end(cont);
+        let iv = self
+            .builder
+            .build_load(i64_t, i_slot, "df.desc.iv2")
+            .unwrap()
+            .into_int_value();
+        let inext = self
+            .builder
+            .build_int_add(iv, i64_t.const_int(1, false), "df.desc.inc")
+            .unwrap();
+        self.builder.build_store(i_slot, inext).unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(exit);
+        Ok(result.into())
     }
 }

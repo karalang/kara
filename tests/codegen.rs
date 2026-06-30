@@ -49895,6 +49895,41 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_dataframe_describe() {
+        // describe() — per-numeric-column stats (count/mean/std/min/quartiles/
+        // max), a String column skipped, a leading statistic label column,
+        // null-skipping. Byte-identical to the interpreter twin.
+        let out = run_program(
+            "fn main() {\n\
+                 let mut df: DataFrame = DataFrame.new();\n\
+                 df.insert(\"age\", Column.from_vec([20, 30, 40, 50]));\n\
+                 let names: Vec[String] = [\"a\", \"b\", \"c\", \"d\"];\n\
+                 df.insert(\"name\", Column.from_vec(names));\n\
+                 let score: Column[f64] = Column.from_iter_nullable([Some(1.0), None, Some(3.0), Some(5.0)]);\n\
+                 df.insert(\"score\", score);\n\
+                 let d: DataFrame = df.describe();\n\
+                 println(d.width());\n\
+                 println(d.height());\n\
+                 for n in d.column_names() { println(n); }\n\
+                 let a: Column[f64] = d.column(\"age\");\n\
+                 for v in a.iter_valid() { println(v); }\n\
+                 let sc: Column[f64] = d.column(\"score\");\n\
+                 for v in sc.iter_valid() { println(v); }\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            // width 3 (statistic + age + score; name skipped), height 8.
+            // age [20,30,40,50]: 4/35/std/20/27.5/35/42.5/50.
+            // score valid [1,3,5]: 3/3/2/1/2/3/4/5.
+            assert_eq!(
+                out,
+                "3\n8\nstatistic\nage\nscore\n4\n35\n12.909944487358056\n20\n27.5\n35\n42.5\n50\n3\n3\n2\n1\n2\n3\n4\n5\n",
+                "describe() must match the interpreter (numeric-only, null-skipping, labels)"
+            );
+        }
+    }
+
     // ── Shape-generic function body — tensor-param indexing ──────────
     // A `fn f[N](a: Tensor[T, [N, N]], ...)` body that indexes its tensor
     // params (`a[i, j]`) lowers in codegen: `compile_mono_function`

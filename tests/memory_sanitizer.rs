@@ -12024,6 +12024,75 @@ fn main() {
         );
     }
 
+    /// `DataFrame.describe()` heap lifecycle (phase-11 describe codegen). The
+    /// result is a fresh frame: a `statistic` `Column[String]` of static
+    /// labels (`cap == 0`, so drop skips them — no rodata free) and one
+    /// `Column[f64]` per numeric source column (fresh control / data / bitmap,
+    /// freed by the result frame's `FreeDataFrame`). Each stats column
+    /// allocates and frees an f64 scratch buffer. The source frame is borrowed
+    /// (its own drop unaffected). A missing free leaks (Linux detect_leaks);
+    /// the scratch buffer or a stats column freed twice trips ASAN. Reuse of
+    /// the source frame after describe pins it wasn't consumed.
+    #[test]
+    fn asan_dataframe_describe_lifecycle_clean() {
+        let label = "dataframe_describe_lifecycle";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+fn main() {
+    let mut df: DataFrame = DataFrame.new();
+    df.insert("age", Column.from_vec([20, 30, 40, 50]));
+    // a String column (skipped by describe) + a null-bearing float column.
+    let names: Vec[String] = ["alpha_padding_aaaaaaaaaaaaaaa", "beta_padding_bbbbbbbbbbbbbbbb", "gamma_padding_ccccccccccccccc", "delta_padding_ddddddddddddddd"];
+    df.insert("name", Column.from_vec(names));
+    let score: Column[f64] = Column.from_iter_nullable([Some(1.0), None, Some(3.0), Some(5.0)]);
+    df.insert("score", score);
+    // describe builds a fresh frame (statistic + age + score).
+    let d: DataFrame = df.describe();
+    println(d.width());
+    println(d.height());
+    let lab: Column[String] = d.column("statistic");
+    println(lab.valid_count());
+    let a: Column[f64] = d.column("age");
+    for v in a.iter_valid() { println(v); }
+    // source frame still usable (borrowed by describe, not consumed).
+    println(df.width());
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             check describe fresh-frame build / static-label cap=0 / f64 scratch free",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec![
+                "3",
+                "8",
+                "8",
+                "4",
+                "35",
+                "12.909944487358056",
+                "20",
+                "27.5",
+                "35",
+                "42.5",
+                "50",
+                "3"
+            ],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     /// Column transform heap lifecycle (phase-11 follow-on slice): the
     /// Column-returning transforms `fillna` / `dropna` and the
     /// `from_iter_nullable` constructor each malloc a *fresh* control

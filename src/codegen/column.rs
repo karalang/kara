@@ -42,7 +42,7 @@
 //! interpreter-only (`karac run`).
 
 use inkwell::types::{BasicTypeEnum, StructType};
-use inkwell::values::{BasicValueEnum, FloatValue, IntValue, PointerValue};
+use inkwell::values::{BasicValueEnum, FloatValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 
 use super::state::ColumnVarInfo;
@@ -2033,7 +2033,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// `null_count()` (`valid == false`) / `valid_count()` (`valid ==
     /// true`) — one pass over `[0, len)` counting matching validity bits.
-    fn compile_column_count(
+    pub(super) fn compile_column_count(
         &mut self,
         control: PointerValue<'ctx>,
         count_valid: bool,
@@ -3254,6 +3254,655 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_call(self.free_fn, &[buf.into()], "")
             .unwrap();
         Ok(result.into())
+    }
+
+    // ── DataFrame.describe() support (phase-11) ─────────────────
+
+    /// A static `String` value `{ ptr → rodata, len, cap = 0 }`. `cap == 0`
+    /// marks it static (the String drop / free paths skip it); a `column`
+    /// copy-out re-clones it to a freeable heap String. Used to synthesize
+    /// the `describe()` `statistic` label column.
+    pub(super) fn build_static_string_value(&mut self, s: &str) -> StructValue<'ctx> {
+        let data_ptr = self.build_str_bytes_global(s.as_bytes(), "df.stat");
+        let str_ty = self.vec_struct_type();
+        let i64_t = self.context.i64_type();
+        let mut agg = str_ty.get_undef();
+        agg = self
+            .builder
+            .build_insert_value(agg, data_ptr, 0, "stat.data")
+            .unwrap()
+            .into_struct_value();
+        agg = self
+            .builder
+            .build_insert_value(agg, i64_t.const_int(s.len() as u64, false), 1, "stat.len")
+            .unwrap()
+            .into_struct_value();
+        agg = self
+            .builder
+            .build_insert_value(agg, i64_t.const_zero(), 2, "stat.cap")
+            .unwrap()
+            .into_struct_value();
+        agg
+    }
+
+    /// Build a fresh all-valid `Column[String]` of the given static labels
+    /// (the `describe()` `statistic` column). `pub(super)` for the DataFrame
+    /// lowering.
+    pub(super) fn build_label_column(
+        &mut self,
+        labels: &[&str],
+    ) -> Result<PointerValue<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let i8_t = self.context.i8_type();
+        let str_st: BasicTypeEnum = self.vec_struct_type().into();
+        let n = i64_t.const_int(labels.len() as u64, false);
+        let control = self.column_alloc(str_st, n, n)?;
+        let data = self
+            .column_load_field(control, 0, "df.lbl.data")
+            .into_pointer_value();
+        for (j, label) in labels.iter().enumerate() {
+            let sv = self.build_static_string_value(label);
+            let slot = unsafe {
+                self.builder
+                    .build_gep(
+                        str_st,
+                        data,
+                        &[i64_t.const_int(j as u64, false)],
+                        "df.lbl.slot",
+                    )
+                    .unwrap()
+            };
+            self.builder.build_store(slot, sv).unwrap();
+        }
+        let bm = self
+            .column_load_field(control, 1, "df.lbl.bm")
+            .into_pointer_value();
+        let bm_bytes = self.column_bitmap_bytes(n);
+        self.builder
+            .build_memset(bm, 1, i8_t.const_int(0xFF, false), bm_bytes)
+            .map_err(|e| format!("build_label_column bitmap memset failed: {e:?}"))?;
+        Ok(control)
+    }
+
+    /// Read `data[i]` of a type-erased numeric column as `f64`, dispatching
+    /// at runtime on the column's `kind` (1 = signed int, 2 = unsigned int,
+    /// 3 = float) and `elem_size` (1/2/4/8). The data buffer's element stride
+    /// is `elem_size`, so a `gep` with the matching concrete LLVM type and
+    /// index `i` lands on the right element. For `describe()`, where the
+    /// element type isn't statically known per column.
+    fn column_load_elem_as_f64(
+        &self,
+        data: PointerValue<'ctx>,
+        i: IntValue<'ctx>,
+        kind: IntValue<'ctx>,
+        elem_size: IntValue<'ctx>,
+    ) -> FloatValue<'ctx> {
+        let i64_t = self.context.i64_type();
+        let f64_t = self.context.f64_type();
+        let fn_val = self.current_fn.expect("load-elem-as-f64 in function");
+        let result = self.builder.build_alloca(f64_t, "df.lf.res").unwrap();
+
+        let is_float = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                kind,
+                i64_t.const_int(3, false),
+                "df.lf.isf",
+            )
+            .unwrap();
+        let fbb = self.context.append_basic_block(fn_val, "df.lf.float");
+        let ibb = self.context.append_basic_block(fn_val, "df.lf.int");
+        let done = self.context.append_basic_block(fn_val, "df.lf.done");
+        self.builder
+            .build_conditional_branch(is_float, fbb, ibb)
+            .unwrap();
+
+        // Float: f64 (size 8) or f32 (size 4 → fpext).
+        self.builder.position_at_end(fbb);
+        let is8 = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                elem_size,
+                i64_t.const_int(8, false),
+                "df.lf.f8",
+            )
+            .unwrap();
+        let f8 = self.context.append_basic_block(fn_val, "df.lf.f8b");
+        let f4 = self.context.append_basic_block(fn_val, "df.lf.f4b");
+        self.builder.build_conditional_branch(is8, f8, f4).unwrap();
+        self.builder.position_at_end(f8);
+        let v8 = self.column_gep_load(data, f64_t.into(), i, "df.lf.v8");
+        self.builder.build_store(result, v8).unwrap();
+        self.builder.build_unconditional_branch(done).unwrap();
+        self.builder.position_at_end(f4);
+        let v4 = self
+            .column_gep_load(data, self.context.f32_type().into(), i, "df.lf.v4")
+            .into_float_value();
+        let v4e = self
+            .builder
+            .build_float_ext(v4, f64_t, "df.lf.f4ext")
+            .unwrap();
+        self.builder.build_store(result, v4e).unwrap();
+        self.builder.build_unconditional_branch(done).unwrap();
+
+        // Int: load the matching width, then s/u-to-float by signedness.
+        self.builder.position_at_end(ibb);
+        let is_unsigned = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                kind,
+                i64_t.const_int(2, false),
+                "df.lf.isu",
+            )
+            .unwrap();
+        let widths = [
+            (8u64, self.context.i64_type()),
+            (4, self.context.i32_type()),
+            (2, self.context.i16_type()),
+            (1, self.context.i8_type()),
+        ];
+        // Chain of size checks; the last (size 1) is the fallthrough.
+        let mut next = self.context.append_basic_block(fn_val, "df.lf.iw0");
+        self.builder.build_unconditional_branch(next).unwrap();
+        for (idx, (w, ity)) in widths.iter().enumerate() {
+            self.builder.position_at_end(next);
+            let cur = next;
+            let is_last = idx == widths.len() - 1;
+            let body = self.context.append_basic_block(fn_val, "df.lf.iwb");
+            let cont = if is_last {
+                body // unused
+            } else {
+                self.context.append_basic_block(fn_val, "df.lf.iwn")
+            };
+            if is_last {
+                self.builder.position_at_end(cur);
+                self.builder.build_unconditional_branch(body).unwrap();
+            } else {
+                let match_w = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        elem_size,
+                        i64_t.const_int(*w, false),
+                        "df.lf.iwc",
+                    )
+                    .unwrap();
+                self.builder.position_at_end(cur);
+                self.builder
+                    .build_conditional_branch(match_w, body, cont)
+                    .unwrap();
+            }
+            self.builder.position_at_end(body);
+            let iv = self
+                .column_gep_load(data, (*ity).into(), i, "df.lf.iv")
+                .into_int_value();
+            let sval = self
+                .builder
+                .build_signed_int_to_float(iv, f64_t, "df.lf.s")
+                .unwrap();
+            let uval = self
+                .builder
+                .build_unsigned_int_to_float(iv, f64_t, "df.lf.u")
+                .unwrap();
+            let sel = self
+                .builder
+                .build_select(is_unsigned, uval, sval, "df.lf.sel")
+                .unwrap();
+            self.builder.build_store(result, sel).unwrap();
+            self.builder.build_unconditional_branch(done).unwrap();
+            if !is_last {
+                next = cont;
+            }
+        }
+
+        self.builder.position_at_end(done);
+        self.builder
+            .build_load(f64_t, result, "df.lf.out")
+            .unwrap()
+            .into_float_value()
+    }
+
+    /// In-place ascending insertion sort of an `f64` buffer of `n` elements
+    /// (NaN settles to the front under `fcmp ogt`, matching the quantile
+    /// posture).
+    fn column_sort_f64_inplace(&self, buf: PointerValue<'ctx>, n: IntValue<'ctx>) {
+        let i64_t = self.context.i64_type();
+        let f64_t = self.context.f64_type();
+        let fn_val = self.current_fn.expect("sort in function");
+        let si = self.builder.build_alloca(i64_t, "df.is.si").unwrap();
+        let sj = self.builder.build_alloca(i64_t, "df.is.sj").unwrap();
+        let key = self.builder.build_alloca(f64_t, "df.is.key").unwrap();
+        self.builder
+            .build_store(si, i64_t.const_int(1, false))
+            .unwrap();
+        let oh = self.context.append_basic_block(fn_val, "df.is.oh");
+        let ob = self.context.append_basic_block(fn_val, "df.is.ob");
+        let ih = self.context.append_basic_block(fn_val, "df.is.ih");
+        let ick = self.context.append_basic_block(fn_val, "df.is.ick");
+        let ish = self.context.append_basic_block(fn_val, "df.is.ish");
+        let ipl = self.context.append_basic_block(fn_val, "df.is.ipl");
+        let oc = self.context.append_basic_block(fn_val, "df.is.oc");
+        let oe = self.context.append_basic_block(fn_val, "df.is.oe");
+        self.builder.build_unconditional_branch(oh).unwrap();
+        self.builder.position_at_end(oh);
+        let siv = self
+            .builder
+            .build_load(i64_t, si, "df.is.siv")
+            .unwrap()
+            .into_int_value();
+        let omore = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, siv, n, "df.is.om")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(omore, ob, oe)
+            .unwrap();
+        self.builder.position_at_end(ob);
+        let ks = unsafe {
+            self.builder
+                .build_gep(f64_t, buf, &[siv], "df.is.ks")
+                .unwrap()
+        };
+        let kv = self.builder.build_load(f64_t, ks, "df.is.kv").unwrap();
+        self.builder.build_store(key, kv).unwrap();
+        self.builder
+            .build_store(
+                sj,
+                self.builder
+                    .build_int_sub(siv, i64_t.const_int(1, false), "df.is.sj0")
+                    .unwrap(),
+            )
+            .unwrap();
+        self.builder.build_unconditional_branch(ih).unwrap();
+        self.builder.position_at_end(ih);
+        let sjv = self
+            .builder
+            .build_load(i64_t, sj, "df.is.sjv")
+            .unwrap()
+            .into_int_value();
+        let ge0 = self
+            .builder
+            .build_int_compare(IntPredicate::SGE, sjv, i64_t.const_zero(), "df.is.ge0")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(ge0, ick, ipl)
+            .unwrap();
+        self.builder.position_at_end(ick);
+        let bjs = unsafe {
+            self.builder
+                .build_gep(f64_t, buf, &[sjv], "df.is.bjs")
+                .unwrap()
+        };
+        let bj = self
+            .builder
+            .build_load(f64_t, bjs, "df.is.bj")
+            .unwrap()
+            .into_float_value();
+        let kc = self
+            .builder
+            .build_load(f64_t, key, "df.is.kc")
+            .unwrap()
+            .into_float_value();
+        let gt = self
+            .builder
+            .build_float_compare(FloatPredicate::OGT, bj, kc, "df.is.gt")
+            .unwrap();
+        self.builder.build_conditional_branch(gt, ish, ipl).unwrap();
+        self.builder.position_at_end(ish);
+        let sjp1 = self
+            .builder
+            .build_int_add(sjv, i64_t.const_int(1, false), "df.is.sjp1")
+            .unwrap();
+        let dst = unsafe {
+            self.builder
+                .build_gep(f64_t, buf, &[sjp1], "df.is.dst")
+                .unwrap()
+        };
+        self.builder.build_store(dst, bj).unwrap();
+        self.builder
+            .build_store(
+                sj,
+                self.builder
+                    .build_int_sub(sjv, i64_t.const_int(1, false), "df.is.dec")
+                    .unwrap(),
+            )
+            .unwrap();
+        self.builder.build_unconditional_branch(ih).unwrap();
+        self.builder.position_at_end(ipl);
+        let sjv2 = self
+            .builder
+            .build_load(i64_t, sj, "df.is.sjv2")
+            .unwrap()
+            .into_int_value();
+        let pp1 = self
+            .builder
+            .build_int_add(sjv2, i64_t.const_int(1, false), "df.is.pp1")
+            .unwrap();
+        let ps = unsafe {
+            self.builder
+                .build_gep(f64_t, buf, &[pp1], "df.is.ps")
+                .unwrap()
+        };
+        let kf = self.builder.build_load(f64_t, key, "df.is.kf").unwrap();
+        self.builder.build_store(ps, kf).unwrap();
+        self.builder.build_unconditional_branch(oc).unwrap();
+        self.builder.position_at_end(oc);
+        self.builder
+            .build_store(
+                si,
+                self.builder
+                    .build_int_add(siv, i64_t.const_int(1, false), "df.is.sin")
+                    .unwrap(),
+            )
+            .unwrap();
+        self.builder.build_unconditional_branch(oh).unwrap();
+        self.builder.position_at_end(oe);
+    }
+
+    /// Build a fresh all-valid `Column[f64]` holding the 8 `describe()`
+    /// statistics `[count, mean, std, min, 25%, 50%, 75%, max]` over the
+    /// valid slots of `src_col` (a numeric column of class `kind` /
+    /// `elem_size`; `n` = its valid count, guaranteed > 0 by the caller).
+    /// `std` is the sample (n-1) form — `NaN` for a single value (describe
+    /// never traps). Quartiles use the same linear interpolation as
+    /// `Column.quantile`.
+    pub(super) fn compile_describe_stats_column(
+        &mut self,
+        src_col: PointerValue<'ctx>,
+        kind: IntValue<'ctx>,
+        elem_size: IntValue<'ctx>,
+        n: IntValue<'ctx>,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let f64_t = self.context.f64_type();
+        let i8_t = self.context.i8_type();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "describe stats outside function".to_string())?;
+
+        // Scratch f64 buffer of the n valid values (read via runtime dispatch).
+        let nbytes = self
+            .builder
+            .build_int_mul(n, i64_t.const_int(8, false), "df.st.nb")
+            .unwrap();
+        let buf = self
+            .builder
+            .build_call(self.malloc_fn, &[nbytes.into()], "df.st.buf")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let len = self
+            .column_load_field(src_col, 2, "df.st.len")
+            .into_int_value();
+        let data = self
+            .column_load_field(src_col, 0, "df.st.data")
+            .into_pointer_value();
+        let bm = self
+            .column_load_field(src_col, 1, "df.st.bm")
+            .into_pointer_value();
+        let sum = self.builder.build_alloca(f64_t, "df.st.sum").unwrap();
+        self.builder.build_store(sum, f64_t.const_zero()).unwrap();
+        let i = self.builder.build_alloca(i64_t, "df.st.i").unwrap();
+        let j = self.builder.build_alloca(i64_t, "df.st.j").unwrap();
+        self.builder.build_store(i, i64_t.const_zero()).unwrap();
+        self.builder.build_store(j, i64_t.const_zero()).unwrap();
+        let h = self.context.append_basic_block(fn_val, "df.st.h");
+        let b = self.context.append_basic_block(fn_val, "df.st.b");
+        let a = self.context.append_basic_block(fn_val, "df.st.a");
+        let c = self.context.append_basic_block(fn_val, "df.st.c");
+        let e = self.context.append_basic_block(fn_val, "df.st.e");
+        self.builder.build_unconditional_branch(h).unwrap();
+        self.builder.position_at_end(h);
+        let iv = self
+            .builder
+            .build_load(i64_t, i, "df.st.iv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, iv, len, "df.st.more")
+            .unwrap();
+        self.builder.build_conditional_branch(more, b, e).unwrap();
+        self.builder.position_at_end(b);
+        let valid = self.column_load_valid_bit(bm, iv);
+        self.builder.build_conditional_branch(valid, a, c).unwrap();
+        self.builder.position_at_end(a);
+        let xf = self.column_load_elem_as_f64(data, iv, kind, elem_size);
+        let jv = self
+            .builder
+            .build_load(i64_t, j, "df.st.jv")
+            .unwrap()
+            .into_int_value();
+        let slot = unsafe {
+            self.builder
+                .build_gep(f64_t, buf, &[jv], "df.st.slot")
+                .unwrap()
+        };
+        self.builder.build_store(slot, xf).unwrap();
+        let s0 = self
+            .builder
+            .build_load(f64_t, sum, "df.st.s0")
+            .unwrap()
+            .into_float_value();
+        self.builder
+            .build_store(
+                sum,
+                self.builder.build_float_add(s0, xf, "df.st.s1").unwrap(),
+            )
+            .unwrap();
+        self.builder
+            .build_store(
+                j,
+                self.builder
+                    .build_int_add(jv, i64_t.const_int(1, false), "df.st.j2")
+                    .unwrap(),
+            )
+            .unwrap();
+        self.builder.build_unconditional_branch(c).unwrap();
+        self.builder.position_at_end(c);
+        self.builder
+            .build_store(
+                i,
+                self.builder
+                    .build_int_add(iv, i64_t.const_int(1, false), "df.st.i2")
+                    .unwrap(),
+            )
+            .unwrap();
+        self.builder.build_unconditional_branch(h).unwrap();
+        self.builder.position_at_end(e);
+
+        let nf = self
+            .builder
+            .build_unsigned_int_to_float(n, f64_t, "df.st.nf")
+            .unwrap();
+        let sumv = self
+            .builder
+            .build_load(f64_t, sum, "df.st.sumv")
+            .unwrap()
+            .into_float_value();
+        let mean = self
+            .builder
+            .build_float_div(sumv, nf, "df.st.mean")
+            .unwrap();
+
+        // std (sample): n >= 2 ? sqrt(Σ(x-mean)² / (n-1)) : NaN.
+        let two = i64_t.const_int(2, false);
+        let has2 = self
+            .builder
+            .build_int_compare(IntPredicate::UGE, n, two, "df.st.has2")
+            .unwrap();
+        let ss = self.builder.build_alloca(f64_t, "df.st.ss").unwrap();
+        self.builder.build_store(ss, f64_t.const_zero()).unwrap();
+        let k = self.builder.build_alloca(i64_t, "df.st.k").unwrap();
+        self.builder.build_store(k, i64_t.const_zero()).unwrap();
+        let sh = self.context.append_basic_block(fn_val, "df.st.sh");
+        let sb = self.context.append_basic_block(fn_val, "df.st.sb");
+        let se = self.context.append_basic_block(fn_val, "df.st.se");
+        self.builder.build_unconditional_branch(sh).unwrap();
+        self.builder.position_at_end(sh);
+        let kv = self
+            .builder
+            .build_load(i64_t, k, "df.st.kv")
+            .unwrap()
+            .into_int_value();
+        let kmore = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, kv, n, "df.st.kmore")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(kmore, sb, se)
+            .unwrap();
+        self.builder.position_at_end(sb);
+        let xs = unsafe {
+            self.builder
+                .build_gep(f64_t, buf, &[kv], "df.st.xs")
+                .unwrap()
+        };
+        let xv = self
+            .builder
+            .build_load(f64_t, xs, "df.st.xv")
+            .unwrap()
+            .into_float_value();
+        let d = self.builder.build_float_sub(xv, mean, "df.st.d").unwrap();
+        let d2 = self.builder.build_float_mul(d, d, "df.st.d2").unwrap();
+        let ssv = self
+            .builder
+            .build_load(f64_t, ss, "df.st.ssv")
+            .unwrap()
+            .into_float_value();
+        self.builder
+            .build_store(
+                ss,
+                self.builder.build_float_add(ssv, d2, "df.st.ss2").unwrap(),
+            )
+            .unwrap();
+        self.builder
+            .build_store(
+                k,
+                self.builder
+                    .build_int_add(kv, i64_t.const_int(1, false), "df.st.k2")
+                    .unwrap(),
+            )
+            .unwrap();
+        self.builder.build_unconditional_branch(sh).unwrap();
+        self.builder.position_at_end(se);
+        let ssf = self
+            .builder
+            .build_load(f64_t, ss, "df.st.ssf")
+            .unwrap()
+            .into_float_value();
+        let nm1 = self
+            .builder
+            .build_float_sub(nf, f64_t.const_float(1.0), "df.st.nm1")
+            .unwrap();
+        let var = self.builder.build_float_div(ssf, nm1, "df.st.var").unwrap();
+        let std_ok = self.column_sqrt_f64(var);
+        let nan = f64_t.const_float(f64::NAN);
+        let std = self
+            .builder
+            .build_select(has2, std_ok, nan, "df.st.std")
+            .unwrap()
+            .into_float_value();
+
+        // Sort the scratch for min / max / quantiles.
+        self.column_sort_f64_inplace(buf, n);
+        let load_at = |me: &Self, idx: IntValue<'ctx>, nm: &str| -> FloatValue<'ctx> {
+            let p = unsafe { me.builder.build_gep(f64_t, buf, &[idx], nm).unwrap() };
+            me.builder
+                .build_load(f64_t, p, nm)
+                .unwrap()
+                .into_float_value()
+        };
+        let min = load_at(self, i64_t.const_zero(), "df.st.min");
+        let nm1i = self
+            .builder
+            .build_int_sub(n, i64_t.const_int(1, false), "df.st.nm1i")
+            .unwrap();
+        let max = load_at(self, nm1i, "df.st.max");
+        let q = |me: &Self, p: f64, nm: &str| -> FloatValue<'ctx> {
+            // pos = p*(n-1); lo=floor; hi=min(lo+1,n-1); buf[lo]+frac*(buf[hi]-buf[lo]).
+            let pos = me
+                .builder
+                .build_float_mul(f64_t.const_float(p), nm1, &format!("{nm}.pos"))
+                .unwrap();
+            let lo = me
+                .builder
+                .build_float_to_unsigned_int(pos, i64_t, &format!("{nm}.lo"))
+                .unwrap();
+            let lof = me
+                .builder
+                .build_unsigned_int_to_float(lo, f64_t, &format!("{nm}.lof"))
+                .unwrap();
+            let frac = me
+                .builder
+                .build_float_sub(pos, lof, &format!("{nm}.frac"))
+                .unwrap();
+            let lop1 = me
+                .builder
+                .build_int_add(lo, i64_t.const_int(1, false), &format!("{nm}.lop1"))
+                .unwrap();
+            let hiok = me
+                .builder
+                .build_int_compare(IntPredicate::ULT, lop1, n, &format!("{nm}.hiok"))
+                .unwrap();
+            let hi = me
+                .builder
+                .build_select(hiok, lop1, lo, &format!("{nm}.hi"))
+                .unwrap()
+                .into_int_value();
+            let blo = load_at(me, lo, &format!("{nm}.blo"));
+            let bhi = load_at(me, hi, &format!("{nm}.bhi"));
+            let diff = me
+                .builder
+                .build_float_sub(bhi, blo, &format!("{nm}.diff"))
+                .unwrap();
+            let sc = me
+                .builder
+                .build_float_mul(frac, diff, &format!("{nm}.sc"))
+                .unwrap();
+            me.builder
+                .build_float_add(blo, sc, &format!("{nm}.r"))
+                .unwrap()
+        };
+        let q25 = q(self, 0.25, "df.st.q25");
+        let q50 = q(self, 0.50, "df.st.q50");
+        let q75 = q(self, 0.75, "df.st.q75");
+        self.builder
+            .build_call(self.free_fn, &[buf.into()], "")
+            .unwrap();
+
+        // Build the result Column[f64] of the 8 stats (all valid).
+        let eight = i64_t.const_int(8, false);
+        let out = self.column_alloc(f64_t.into(), eight, eight)?;
+        let out_data = self
+            .column_load_field(out, 0, "df.st.odata")
+            .into_pointer_value();
+        let stats = [nf, mean, std, min, q25, q50, q75, max];
+        for (idx, v) in stats.iter().enumerate() {
+            let slot = unsafe {
+                self.builder
+                    .build_gep(
+                        f64_t,
+                        out_data,
+                        &[i64_t.const_int(idx as u64, false)],
+                        "df.st.oslot",
+                    )
+                    .unwrap()
+            };
+            self.builder.build_store(slot, *v).unwrap();
+        }
+        let out_bm = self
+            .column_load_field(out, 1, "df.st.obm")
+            .into_pointer_value();
+        let bm8 = self.column_bitmap_bytes(eight);
+        self.builder
+            .build_memset(out_bm, 1, i8_t.const_int(0xFF, false), bm8)
+            .map_err(|e| format!("describe stats bitmap memset failed: {e:?}"))?;
+        Ok(out)
     }
 
     // ── Indexing ────────────────────────────────────────────────
