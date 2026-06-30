@@ -3164,6 +3164,15 @@ impl<'ctx> super::Codegen<'ctx> {
                                     self.register_container_call_heap_env_elem_drops(
                                         value, var_name,
                                     );
+                                    // Owner copy `let s = t` (`t` a tuple owner):
+                                    // COPY semantics — inc the shared RC env per
+                                    // owned element + register `s`'s own
+                                    // per-element `FreeClosureEnv` (`t` stays live).
+                                    // No-op unless `value` is an identifier naming
+                                    // a tuple owner.
+                                    self.register_owner_copy_container_heap_env_elem_drops(
+                                        value, var_name,
+                                    );
                                     if self.aggregate_has_heap_field(agg_ty) {
                                         // Proven LLVM-type path: a tuple whose heap
                                         // is a directly-visible Vec/String field
@@ -3228,6 +3237,14 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // Container-escape caller-adopt: `let r = build(k)`
                                 // where `build` returns a closure-owning array.
                                 self.register_container_call_heap_env_elem_drops(value, var_name);
+                                // Owner copy `let s = a` (`a` an array owner):
+                                // COPY semantics — inc the shared RC env per owned
+                                // element + register `s`'s own per-element
+                                // `FreeClosureEnv` (`a` stays live). No-op unless
+                                // `value` is an identifier naming an array owner.
+                                self.register_owner_copy_container_heap_env_elem_drops(
+                                    value, var_name,
+                                );
                             }
                         }
                     }

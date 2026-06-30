@@ -1607,6 +1607,20 @@ impl<'ctx> super::Codegen<'ctx> {
                         array_owners.insert(b, idxs);
                     }
                 }
+                // Owner COPY (`let s = t`, `t` a tuple / array owner): forward
+                // scan, so `s` adopts `t`'s owned element idxs and a copy-of-a-copy
+                // (`let u = s`) chains. COPY semantics — `t` stays a live owner, and
+                // codegen INCs the shared RC env per owned element so each owner
+                // RC-drops once (the tuple/array twin of the struct owner-copy arm
+                // in `collect_heap_env_binds_and_owners`). Sits before the
+                // call-relay `_` arm (an Identifier is never a Call).
+                ExprKind::Identifier(src) => {
+                    if let Some(idxs) = tuple_owners.get(src).cloned() {
+                        tuple_owners.insert(b, idxs);
+                    } else if let Some(idxs) = array_owners.get(src).cloned() {
+                        array_owners.insert(b, idxs);
+                    }
+                }
                 _ => {
                     if let Some(idxs) =
                         self.container_call_owner_elems(value, &self.fns_returning_heap_env_tuple)

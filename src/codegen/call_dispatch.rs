@@ -2509,6 +2509,93 @@ impl<'ctx> super::Codegen<'ctx> {
             .insert(var_name.to_string(), fields);
     }
 
+    /// Owner-copy slice (B-2026-06-22-2): for `let s = t` where `t` is a heap-env
+    /// TUPLE or ARRAY owner, register `s`'s instance `FreeClosureEnv` on each owned
+    /// element and INC the shared RC env. The by-value aggregate was COPIED: a `Fn`
+    /// element is an inline `{ fn_ptr, env_ptr }` fat pointer copied SHALLOW, so
+    /// `s`'s element aliases `t`'s SAME env box (a Fn-and-POD owner has no heap
+    /// Vec/String sibling to deep-copy or move — the move path
+    /// `suppress_source_vec_cleanup_for_arg` only fires when the aggregate has a
+    /// directly-visible heap field, which a Fn+POD owner does not). COPY semantics
+    /// (not move): `t` stays a live owner, so each owner RC-drops the shared box
+    /// exactly once — hence the inc, mirroring
+    /// `register_owner_copy_struct_heap_env_field_drops`. `s` is already in
+    /// `heap_env_tuple_owners` / `_array` (the guard's `collect_tuple_array_owners`
+    /// forward scan marked the copy), so a later move-out of `s`
+    /// (`neutralize_moved_container_env_slots`) and the container-return fixpoint
+    /// reach `s` with no extra bookkeeping here. The tuple/array twin of the struct
+    /// owner-copy registrar; only the element GEP form differs (array
+    /// `build_gep [0, idx]` vs tuple `build_struct_gep`). A no-op unless `value` is
+    /// an identifier naming a tuple/array owner.
+    pub(super) fn register_owner_copy_container_heap_env_elem_drops(
+        &mut self,
+        value: &Expr,
+        var_name: &str,
+    ) {
+        let ExprKind::Identifier(src) = &value.kind else {
+            return;
+        };
+        let Some(slot) = self.variables.get(var_name).copied() else {
+            return;
+        };
+        let fat_ty = self.closure_value_type();
+        if let Some(idxs) = self.heap_env_tuple_owners.get(src).cloned() {
+            let inkwell::types::BasicTypeEnum::StructType(agg_ty) = slot.ty else {
+                return;
+            };
+            // Deterministic IR: emit the per-element inc + cleanup in sorted index
+            // order (the owner set is a HashSet with randomized iteration).
+            let mut sorted: Vec<usize> = idxs.into_iter().collect();
+            sorted.sort_unstable();
+            for idx in sorted {
+                let elem_gep = self
+                    .builder
+                    .build_struct_gep(agg_ty, slot.ptr, idx as u32, "clo.owncopy.tup.envslot")
+                    .unwrap();
+                let fat = self
+                    .builder
+                    .build_load(fat_ty, elem_gep, "clo.owncopy.tup.fat")
+                    .unwrap();
+                self.emit_heap_closure_env_inc(fat);
+                if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                    frame.push(super::state::CleanupAction::FreeClosureEnv {
+                        fat_alloca: elem_gep,
+                    });
+                }
+            }
+        } else if let Some(idxs) = self.heap_env_array_owners.get(src).cloned() {
+            let inkwell::types::BasicTypeEnum::ArrayType(arr_ty) = slot.ty else {
+                return;
+            };
+            let i64_t = self.context.i64_type();
+            let zero = i64_t.const_int(0, false);
+            let mut sorted: Vec<usize> = idxs.into_iter().collect();
+            sorted.sort_unstable();
+            for idx in sorted {
+                let elem_gep = unsafe {
+                    self.builder
+                        .build_gep(
+                            arr_ty,
+                            slot.ptr,
+                            &[zero, i64_t.const_int(idx as u64, false)],
+                            "clo.owncopy.arr.envslot",
+                        )
+                        .unwrap()
+                };
+                let fat = self
+                    .builder
+                    .build_load(fat_ty, elem_gep, "clo.owncopy.arr.fat")
+                    .unwrap();
+                self.emit_heap_closure_env_inc(fat);
+                if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                    frame.push(super::state::CleanupAction::FreeClosureEnv {
+                        fat_alloca: elem_gep,
+                    });
+                }
+            }
+        }
+    }
+
     /// Tuple-store slice (B-2026-06-22-2): for `let t = (<src>, ..)`, register an
     /// instance `FreeClosureEnv` on each tuple element whose initializer is a
     /// sanctioned heap-env closure STORE. A FRESH call (`(make(k), ..)`) leaves the

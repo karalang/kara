@@ -1268,16 +1268,116 @@ mod codegen_tests {
         assert_eq!(out.as_deref(), Some("42\n"));
     }
 
-    /// A TUPLE owner copy is the next slice — still rejected (the owner identifier
-    /// in a non-call position aliases the env without RC accounting).
+    /// A TUPLE owner may be COPIED (`let s = t`): the `Fn` element is an inline fat
+    /// pointer shallow-copied (shared env box), so both `t` and `s` invoke it; the
+    /// inc-on-copy balances the two scope-exit RC drops. The POD sibling (`0i64`)
+    /// copies trivially. `(a.0)(1)=11`, `(s.0)(2)=12`.
     #[test]
-    fn heap_env_tuple_owner_copy_is_rejected() {
-        let err = ir_result(
+    fn heap_env_tuple_owner_copied_runs() {
+        let out = run_program(
             "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
-             fn main() { let a = (make(10i64), 0i64); let s = a; println(f\"{(s.0)(5i64)}\"); }\n",
-        )
-        .expect_err("tuple owner copy is not yet supported");
-        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+             fn main() { let a = (make(10i64), 0i64); let s = a; \
+              println(f\"{(a.0)(1i64)}\"); println(f\"{(s.0)(2i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("11\n12\n"));
+    }
+
+    /// The closure element at a NON-zero tuple index copies correctly (the
+    /// per-element GEP picks index 1). `(a.1)(1)=11`, `(s.1)(2)=12`.
+    #[test]
+    fn heap_env_tuple_owner_copied_at_index_one_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let a = (0i64, make(10i64)); let s = a; \
+              println(f\"{(a.1)(1i64)}\"); println(f\"{(s.1)(2i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("11\n12\n"));
+    }
+
+    /// The ARRAY twin: a fixed-size `Array[Fn,1]` owner copied; both `a` and `s`
+    /// invoke the shared closure. The array element GEP is `[0, idx]` (vs the
+    /// tuple's `build_struct_gep`).
+    #[test]
+    fn heap_env_array_owner_copied_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let a: Array[Fn(i64) -> i64, 1] = [make(10i64)]; let s = a; \
+              println(f\"{(a[0])(1i64)}\"); println(f\"{(s[0])(2i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("11\n12\n"));
+    }
+
+    /// A two-element `Fn` array copied — every element's env is inc'd, so both
+    /// `a` and `s` invoke both closures. `(s[0])(1)+(s[1])(1)+(a[0])(1) =
+    /// 11+21+11 = 43`.
+    #[test]
+    fn heap_env_array_owner_copied_multi_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let a: Array[Fn(i64) -> i64, 2] = [make(10i64), make(20i64)]; let s = a; \
+              println(f\"{(s[0])(1i64) + (s[1])(1i64) + (a[0])(1i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("43\n"));
+    }
+
+    /// A tuple copy-of-a-copy chain `let s = a; let t = s` — three owners of one
+    /// shared env box, each inc'ing it, so it is freed exactly once.
+    /// `(a.0)(1)+(s.0)(1)+(t.0)(1) = 101*3 = 303`.
+    #[test]
+    fn heap_env_tuple_owner_copy_chain_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let a = (make(100i64), 0i64); let s = a; let t = s; \
+              println(f\"{(a.0)(1i64) + (s.0)(1i64) + (t.0)(1i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("303\n"));
+    }
+
+    /// Tuple owner copy then ESCAPE: `let a = ..; let s = a; s` — the copy `s` is
+    /// itself a returnable tuple owner (the container-return fixpoint sees the copy
+    /// via `collect_tuple_array_owners`; move-out neutralizes `s`, the caller
+    /// adopts). With the inc, the box is freed once across `a`'s scope-exit drop
+    /// and the caller's.
+    #[test]
+    fn heap_env_tuple_owner_copy_then_escape_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn build(k: i64) -> (Fn(i64) -> i64, i64) \
+              { let a = (make(k), 0i64); let s = a; s }\n\
+             fn main() { let r = build(20i64); println(f\"{(r.0)(22i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// A tuple owner copy composes with a sibling HEAP String element: the
+    /// String's buffer is SHARED (the source's drop is suppressed via cap-zero, the
+    /// copy frees it once) and readable from BOTH owners, while the `Fn` element's
+    /// env is RC-inc'd — no double-free of the string, no leak of the env. Unlike
+    /// the struct owner copy (which DEEP-copies the String to independent buffers),
+    /// the tuple copy shares the read-only buffer; both forms are sound. `(s.0)(5)=15`.
+    #[test]
+    fn heap_env_tuple_owner_copy_with_string_field_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let a = (make(10i64), \"a long enough heap string payload\"); let s = a; \
+              println(f\"{(s.0)(5i64)}\"); println(s.1); println(a.1); }\n",
+        );
+        assert_eq!(
+            out.as_deref(),
+            Some("15\na long enough heap string payload\na long enough heap string payload\n")
+        );
+    }
+
+    /// The ARRAY twin of owner-copy-then-escape.
+    #[test]
+    fn heap_env_array_owner_copy_then_escape_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn build(k: i64) -> Array[Fn(i64) -> i64, 1] \
+              { let a: Array[Fn(i64) -> i64, 1] = [make(k)]; let s = a; s }\n\
+             fn main() { let r = build(20i64); println(f\"{(r[0])(22i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
     }
 
     /// A Vec owner copy is the next slice — still rejected.

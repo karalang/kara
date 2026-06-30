@@ -728,6 +728,86 @@ fn main() {
         );
     }
 
+    /// Owner-copy slice (B-2026-06-22-2), TUPLE: `let s = t` where `t` is a heap-env
+    /// tuple owner. The tuple copy shallow-copies the inline `Fn` fat pointer so
+    /// `s`'s element aliases `t`'s SAME RC env box; the copy INCs the shared env and
+    /// registers `s`'s own per-element `FreeClosureEnv`, so each owner RC-drops once
+    /// and the box is freed EXACTLY once (COPY semantics — `t` stays live). Covers a
+    /// 3-owner copy chain (`a`→`s`→`t`, rc reaches 3, three balanced drops) and
+    /// owner-copy-then-ESCAPE (`build` returns the copy `s` — move-out neutralizes
+    /// `s`, the caller adopts). Without the inc the first owner's drop would free the
+    /// box the others still alias (UAF / double-free); a stray extra inc would leak.
+    #[test]
+    fn asan_heap_env_tuple_owner_copy_freed_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn build(k: i64) -> (Fn(i64) -> i64, i64) { let a = (make(k), 0i64); let s = a; s }
+fn main() {
+    let a = (make(10i64), 0i64);
+    let s = a;
+    let t = s;
+    let r = build(20i64);
+    println(f"{(a.0)(1i64) + (s.0)(1i64) + (t.0)(1i64) + (r.0)(2i64)}");
+}
+"#,
+            &["55"],
+            "asan_heap_env_tuple_owner_copy_freed_no_leak",
+        );
+    }
+
+    /// The ARRAY twin: a fixed-size `Array[Fn,2]` owner copied (chain + escape).
+    /// Exercises the array element-GEP path (`[0, idx]`) across BOTH elements — each
+    /// env is inc'd and freed exactly once. `build` returns a 2-element array copy
+    /// `s` (multi-element move-out + caller adopt).
+    #[test]
+    fn asan_heap_env_array_owner_copy_freed_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn build(k: i64) -> Array[Fn(i64) -> i64, 2] { let a: Array[Fn(i64) -> i64, 2] = [make(k), make(k + 5i64)]; let s = a; s }
+fn main() {
+    let a: Array[Fn(i64) -> i64, 2] = [make(10i64), make(20i64)];
+    let s = a;
+    let t = s;
+    let r = build(30i64);
+    println(f"{(a[0])(1i64) + (s[1])(1i64) + (t[0])(1i64) + (r[0])(2i64) + (r[1])(2i64)}");
+}
+"#,
+            &["112"],
+            "asan_heap_env_array_owner_copy_freed_no_leak",
+        );
+    }
+
+    /// Owner-copy slice (B-2026-06-22-2), tuple with a HEAP String SIBLING: the
+    /// String's buffer is SHARED (the source's drop is suppressed via cap-zero, the
+    /// copy frees it exactly once) while the `Fn` element env is RC-inc'd. LSan/ASAN
+    /// confirm the string is freed exactly once and the env exactly once — no leak,
+    /// no double-free, no use-after-free (both owners read the shared buffer before
+    /// scope exit). Composes the closure-env inc with the pre-existing tuple-copy
+    /// heap-field move.
+    #[test]
+    fn asan_heap_env_tuple_owner_copy_string_sibling_freed_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn main() {
+    let a = (make(10i64), "an independently long heap string payload here");
+    let s = a;
+    println(f"{(a.0)(1i64) + (s.0)(2i64)}");
+    println(s.1);
+    println(a.1);
+}
+"#,
+            &[
+                "23",
+                "an independently long heap string payload here",
+                "an independently long heap string payload here",
+            ],
+            "asan_heap_env_tuple_owner_copy_string_sibling_freed_no_leak",
+        );
+    }
+
     // ── Baseline: no heap allocations ─────────────────────────────
     // Sanity-checks the harness itself — should trivially pass on any host
     // with a working `cc + ASAN`. If this fails, the infrastructure is
