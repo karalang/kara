@@ -241,6 +241,67 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(join_bb);
     }
 
+    /// RC-drop a heap-env closure given a loaded closure fat pointer: extract
+    /// the env box (field 1), skip a null env, else decrement its refcount and
+    /// `free` the box at zero. Shared by the scope-exit `FreeClosureEnv` cleanup
+    /// (which loads the fat from the binding's alloca first) and the
+    /// binding-reassignment drop-old path (`g = make(j)` / `g = f`), which drops
+    /// `g`'s CURRENT env before overwriting the slot (B-2026-06-22-2).
+    pub(super) fn emit_heap_closure_env_dec(&self, fat: BasicValueEnum<'ctx>) {
+        let fn_val = self
+            .current_fn
+            .expect("heap-closure env dec emitted inside a function");
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let env_box = self
+            .builder
+            .build_extract_value(fat.into_struct_value(), 1, "clo.dec.env")
+            .unwrap()
+            .into_pointer_value();
+        let null = ptr_ty.const_null();
+        let live = self
+            .builder
+            .build_int_compare(IntPredicate::NE, env_box, null, "clo.dec.live")
+            .unwrap();
+        let dec_bb = self.context.append_basic_block(fn_val, "clo.dec.do");
+        let free_bb = self.context.append_basic_block(fn_val, "clo.dec.free");
+        let join_bb = self.context.append_basic_block(fn_val, "clo.dec.join");
+        self.builder
+            .build_conditional_branch(live, dec_bb, join_bb)
+            .unwrap();
+        self.builder.position_at_end(dec_bb);
+        let i64_t = self.context.i64_type();
+        // The refcount is field 0 of the RC box; a `{ i64 }` GEP reaches it
+        // regardless of the captured payload that follows.
+        let rc_box_ty = self.context.struct_type(&[i64_t.into()], false);
+        let rc_ptr = self
+            .builder
+            .build_struct_gep(rc_box_ty, env_box, 0, "clo.dec.rc")
+            .unwrap();
+        let rc = self
+            .builder
+            .build_load(i64_t, rc_ptr, "clo.dec.rcval")
+            .unwrap()
+            .into_int_value();
+        let dec = self
+            .builder
+            .build_int_sub(rc, i64_t.const_int(1, false), "clo.dec.dec1")
+            .unwrap();
+        self.builder.build_store(rc_ptr, dec).unwrap();
+        let is_zero = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, dec, i64_t.const_zero(), "clo.dec.z")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_zero, free_bb, join_bb)
+            .unwrap();
+        self.builder.position_at_end(free_bb);
+        self.builder
+            .build_call(self.free_fn, &[env_box.into()], "")
+            .unwrap();
+        self.builder.build_unconditional_branch(join_bb).unwrap();
+        self.builder.position_at_end(join_bb);
+    }
+
     /// Phase D: allocate a headerless cluster member — `malloc` of the
     /// twin struct's size, no rc word, no rc=1 store. Callers must hold
     /// a `shared_gep_layout` result with base 0 for the same type; the
@@ -4717,62 +4778,15 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             CleanupAction::FreeClosureEnv { fat_alloca } => {
                 // Slice 1 (B-2026-06-22-2): RC-drop a heap-env closure binding.
-                // Load the fat pointer, extract the env box (field 1); skip a
-                // null env; else decrement the refcount and `free` the box at 0.
+                // Load the fat pointer and hand it to the shared dec helper,
+                // which extracts the env box (field 1), skips a null env, and
+                // decrements / frees the box at zero.
                 let fat_ty = self.closure_value_type();
                 let fat = self
                     .builder
                     .build_load(fat_ty, *fat_alloca, "cleanup.clo.fat")
-                    .unwrap()
-                    .into_struct_value();
-                let env_box = self
-                    .builder
-                    .build_extract_value(fat, 1, "cleanup.clo.env")
-                    .unwrap()
-                    .into_pointer_value();
-                let null = ptr_ty.const_null();
-                let live = self
-                    .builder
-                    .build_int_compare(IntPredicate::NE, env_box, null, "cleanup.clo.live")
                     .unwrap();
-                let dec_bb = self.context.append_basic_block(fn_val, "cleanup.clo.dec");
-                let free_bb = self.context.append_basic_block(fn_val, "cleanup.clo.free");
-                let join_bb = self.context.append_basic_block(fn_val, "cleanup.clo.join");
-                self.builder
-                    .build_conditional_branch(live, dec_bb, join_bb)
-                    .unwrap();
-                self.builder.position_at_end(dec_bb);
-                let i64_t = self.context.i64_type();
-                // The refcount is field 0 of the RC box; a `{ i64 }` GEP reaches
-                // it regardless of the captured payload that follows.
-                let rc_box_ty = self.context.struct_type(&[i64_t.into()], false);
-                let rc_ptr = self
-                    .builder
-                    .build_struct_gep(rc_box_ty, env_box, 0, "cleanup.clo.rc")
-                    .unwrap();
-                let rc = self
-                    .builder
-                    .build_load(i64_t, rc_ptr, "cleanup.clo.rcval")
-                    .unwrap()
-                    .into_int_value();
-                let dec = self
-                    .builder
-                    .build_int_sub(rc, i64_t.const_int(1, false), "cleanup.clo.dec1")
-                    .unwrap();
-                self.builder.build_store(rc_ptr, dec).unwrap();
-                let is_zero = self
-                    .builder
-                    .build_int_compare(IntPredicate::EQ, dec, i64_t.const_zero(), "cleanup.clo.z")
-                    .unwrap();
-                self.builder
-                    .build_conditional_branch(is_zero, free_bb, join_bb)
-                    .unwrap();
-                self.builder.position_at_end(free_bb);
-                self.builder
-                    .build_call(self.free_fn, &[env_box.into()], "")
-                    .unwrap();
-                self.builder.build_unconditional_branch(join_bb).unwrap();
-                self.builder.position_at_end(join_bb);
+                self.emit_heap_closure_env_dec(fat);
             }
             // Phase 6 "Channel AOT codegen lowering" — refcount-drop a
             // channel end at scope exit. Load the shared `*mut KaracChannel`

@@ -1442,6 +1442,108 @@ mod codegen_tests {
         assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
     }
 
+    // ── Heap-env closure binding REASSIGNMENT (B-2026-06-22-2) ──
+    // `g = make(j)` (fresh env, a MOVE) or `g = f` (binding source, the SHARED
+    // env, a COPY) where `g` is a heap-env closure binding. Codegen drops `g`'s
+    // CURRENT env (RC setter rule: inc new → store → release old), stores the new
+    // fat pointer, and incs the new env on a binding copy — so each env is freed
+    // EXACTLY once and (on a copy) the source `f` stays a live co-owner. Works at
+    // the top level, nested in a branch / loop (the drop-old fires once per
+    // execution), and composes with the return-of-binding escape. Field / element
+    // reassignment (`r.f = g`, `v[i] = make(j)`) is a later slice and stays
+    // rejected.
+
+    /// `g = f` is a COPY: `g` now invokes `f`'s closure (`g(5) = 15`) and `f`
+    /// stays usable (`f(1) = 11`) — the shared env is inc'd then freed once. 26.
+    #[test]
+    fn heap_env_binding_reassigned_copy_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let f = make(10i64); let mut g = make(20i64); g = f; \
+              println(f\"{g(5i64) + f(1i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("26\n"));
+    }
+
+    /// `g = make(j)` is a MOVE to a fresh env: `g`'s old env is dropped, the new
+    /// one freed once at scope exit. `g(5) = 5 + 30 = 35`.
+    #[test]
+    fn heap_env_binding_reassigned_to_fresh_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let mut g = make(20i64); g = make(30i64); \
+              println(f\"{g(5i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("35\n"));
+    }
+
+    /// A reassignment nested in a branch (`if true { g = f }`): the drop-old fires
+    /// only when the branch runs. `g(5) = 5 + 100 = 105`.
+    #[test]
+    fn heap_env_binding_reassigned_in_branch_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let f = make(100i64); let mut g = make(20i64); \
+              if true { g = f; } println(f\"{g(5i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("105\n"));
+    }
+
+    /// A reassignment in a LOOP (`while .. { g = make(i*10) }`): each iteration
+    /// drops the prior env before storing the next, so every intermediate env is
+    /// freed once. Last is `make(30)`; `g(5) = 35`.
+    #[test]
+    fn heap_env_binding_reassigned_in_loop_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let mut g = make(0i64); let mut i = 1i64; \
+              while i <= 3i64 { g = make(i * 10i64); i = i + 1i64; } \
+              println(f\"{g(5i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("35\n"));
+    }
+
+    /// Reassignment composes with the return-of-binding escape: `build` reassigns
+    /// `g` then returns it (move-out neutralizes `g`'s slot, the caller adopts the
+    /// fresh env). `g = make(40)`; `r(2) = 42`.
+    #[test]
+    fn heap_env_binding_reassigned_then_returned_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn build(b: i64) -> Fn(i64) -> i64 \
+              { let mut g = make(20i64); g = make(b); g }\n\
+             fn main() { let r = build(40i64); println(f\"{r(2i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("42\n"));
+    }
+
+    /// Reassigning a closure FIELD of a struct owner (`r.f = make(j)`) is a later
+    /// slice — still rejected (only binding reassignment is sanctioned here).
+    #[test]
+    fn heap_env_struct_field_reassign_is_rejected() {
+        let err = ir_result(
+            "struct H { f: Fn(i64) -> i64 }\n\
+             fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let mut h = H { f: make(10i64) }; h.f = make(20i64); \
+              println(f\"{(h.f)(5i64)}\"); }\n",
+        )
+        .expect_err("struct field reassignment is not yet supported");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
+    /// Reassigning a `Vec[Fn]` ELEMENT (`v[i] = make(j)`) is a later slice — still
+    /// rejected.
+    #[test]
+    fn heap_env_vec_element_reassign_is_rejected() {
+        let err = ir_result(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(make(10i64)); \
+              v[0i64] = make(20i64); println(f\"{(v[0i64])(5i64)}\"); }\n",
+        )
+        .expect_err("Vec element reassignment is not yet supported");
+        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+    }
+
     // ── Owner-copy slice (B-2026-06-22-2) ──
     // `let s = a` where `a` is a heap-env STRUCT owner. Kāra struct copy is COPY
     // semantics in codegen (heap Vec/String fields deep-copy to independent

@@ -850,6 +850,73 @@ fn main() {
         );
     }
 
+    /// Reassignment slice (B-2026-06-22-2): `g = f` where both are heap-env closure
+    /// bindings is a COPY — the reassignment drops `g`'s OLD env, incs the SHARED
+    /// env `f` holds, and stores it, so `g` and `f` co-own one box freed EXACTLY
+    /// once while `g`'s original env is freed once at the reassignment. Both `g`
+    /// and `f` are used after (`g(1) + f(1)`), confirming the source stays a live
+    /// co-owner. Without the drop-old the original `g` env leaks; without the inc
+    /// the shared box is freed twice (the source's and `g`'s scope-exit drops).
+    #[test]
+    fn asan_heap_env_binding_reassign_copy_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn main() {
+    let f = make(10i64);
+    let mut g = make(20i64);
+    g = f;
+    println(f"{g(1i64) + f(1i64)}");
+}
+"#,
+            &["22"],
+            "asan_heap_env_binding_reassign_copy_no_leak",
+        );
+    }
+
+    /// `g = make(j)` is a MOVE to a fresh env: the reassignment drops `g`'s old env
+    /// (freed once) and `g` becomes the sole owner of the fresh one (freed once at
+    /// scope exit). Without the drop-old the original env leaks. `g(5) = 35`.
+    #[test]
+    fn asan_heap_env_binding_reassign_to_fresh_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn main() {
+    let mut g = make(20i64);
+    g = make(30i64);
+    println(f"{g(5i64)}");
+}
+"#,
+            &["35"],
+            "asan_heap_env_binding_reassign_to_fresh_no_leak",
+        );
+    }
+
+    /// The strongest leak case: reassigning in a LOOP. Each of the 50 iterations
+    /// drops the prior env before storing the next, so every intermediate env box
+    /// is freed once — without the per-assignment drop-old, 50 unreachable env
+    /// boxes would leak (LSan-caught). The final `make(50*10)`; `g(5) = 505`.
+    #[test]
+    fn asan_heap_env_binding_reassign_in_loop_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn main() {
+    let mut g = make(0i64);
+    let mut i = 1i64;
+    while i <= 50i64 {
+        g = make(i * 10i64);
+        i = i + 1i64;
+    }
+    println(f"{g(5i64)}");
+}
+"#,
+            &["505"],
+            "asan_heap_env_binding_reassign_in_loop_no_leak",
+        );
+    }
+
     /// Owner-copy slice (B-2026-06-22-2): `let s = a` where `a` is a heap-env
     /// STRUCT owner. The struct copy shallow-copies the `Fn` field so `s` aliases
     /// `a`'s SAME RC env box; the copy INCs the shared env and registers `s`'s own

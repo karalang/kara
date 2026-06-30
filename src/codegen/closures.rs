@@ -579,8 +579,19 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.expr_has_heap_env_misuse(e, &binds)
                     }
                 }
-                StmtKind::Assign { target, value }
-                | StmtKind::CompoundAssign { target, value, .. } => {
+                StmtKind::Assign { target, value } => {
+                    // Sanctioned heap-env binding reassignment (`g = make(j)` /
+                    // `g = f`) is not walked — the bare `g` target / `f` source
+                    // would otherwise self-flag; codegen drops the old env + incs
+                    // the new on a copy, so each env is freed once.
+                    if self.is_heap_env_binding_reassign(target, value, &binds) {
+                        false
+                    } else {
+                        self.expr_has_heap_env_misuse(target, &binds)
+                            || self.expr_has_heap_env_misuse(value, &binds)
+                    }
+                }
+                StmtKind::CompoundAssign { target, value, .. } => {
                     self.expr_has_heap_env_misuse(target, &binds)
                         || self.expr_has_heap_env_misuse(value, &binds)
                 }
@@ -741,6 +752,28 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Reassignment slice (B-2026-06-22-2): `g = make(j)` (fresh env, a MOVE)
+    /// or `g = f` (binding source, the SHARED env, a COPY) where `g` is a
+    /// heap-env closure binding. This is the sanctioned reassignment shape —
+    /// codegen drops `g`'s CURRENT env, stores the new fat pointer, and incs
+    /// the new env on a binding copy (the source `f` stays a live co-owner), so
+    /// each env is freed EXACTLY once. Position-agnostic: works at the top level
+    /// of the function body and nested in a branch / loop (the drop-old fires
+    /// per execution of the assignment), since the codegen Assign hook keys only
+    /// off the target name being in `heap_env_closure_vars`. `CompoundAssign`
+    /// (`g += ..`) is never a closure reassignment and is not sanctioned here.
+    /// Any other target / value shape returns false (walked / rejected as before).
+    fn is_heap_env_binding_reassign(
+        &self,
+        target: &Expr,
+        value: &Expr,
+        binds: &HashSet<String>,
+    ) -> bool {
+        matches!(&target.kind, ExprKind::Identifier(g) if binds.contains(g))
+            && (self.is_heap_env_producing_call(value)
+                || matches!(&value.kind, ExprKind::Identifier(f) if binds.contains(f)))
+    }
+
     /// Statement-level companion to [`expr_has_heap_env_misuse`] for a nested
     /// block (an `if`/`for`/`while` body, a `defer`, …). Exhaustive over
     /// `StmtKind`. NOTE: a nested `let g = make(..)` is NOT a sanctioned binding
@@ -755,8 +788,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 StmtKind::LetUninit { .. } => false,
                 StmtKind::Expr(e) => self.expr_has_heap_env_misuse(e, binds),
-                StmtKind::Assign { target, value }
-                | StmtKind::CompoundAssign { target, value, .. } => {
+                StmtKind::Assign { target, value } => {
+                    // A heap-env binding reassignment nested in a branch / loop
+                    // (`if c { g = f }`, `for .. { g = make(i) }`) is sanctioned
+                    // too — `g` / `f` are top-level bindings still in scope, and
+                    // the codegen drop-old fires once per execution of the assign.
+                    if self.is_heap_env_binding_reassign(target, value, binds) {
+                        false
+                    } else {
+                        self.expr_has_heap_env_misuse(target, binds)
+                            || self.expr_has_heap_env_misuse(value, binds)
+                    }
+                }
+                StmtKind::CompoundAssign { target, value, .. } => {
                     self.expr_has_heap_env_misuse(target, binds)
                         || self.expr_has_heap_env_misuse(value, binds)
                 }

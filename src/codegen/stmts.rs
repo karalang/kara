@@ -3787,6 +3787,37 @@ impl<'ctx> super::Codegen<'ctx> {
                     if self.try_store_module_binding(name, val) {
                         return Ok(());
                     }
+                    // Heap-env closure binding reassignment (B-2026-06-22-2):
+                    // `g = make(j)` (fresh env, a MOVE) or `g = f` (binding
+                    // source, the SHARED env, a COPY). RC setter rule (retain
+                    // new → store → release old): save `g`'s CURRENT fat, inc
+                    // the new env when the RHS is a binding copy (a fresh
+                    // `make(j)` already carries its +1), store the new fat, then
+                    // RC-drop the saved old env. Each env is freed EXACTLY once;
+                    // on a copy the source `f` stays a live co-owner (its own
+                    // scope-exit `FreeClosureEnv` balances the inc). The
+                    // release-LAST order is harmless here (closure env boxes are
+                    // independent — the new env is never reachable through the
+                    // old) but mirrors the shared-T / `Option[shared]` setter
+                    // arms below for one consistent shape. Sits ahead of those
+                    // arms; a closure binding is in none of their type maps.
+                    if self.heap_env_closure_vars.contains(name) {
+                        if let Some(slot) = self.variables.get(name).copied() {
+                            let old_fat = self
+                                .builder
+                                .build_load(slot.ty, slot.ptr, "clo.reassign.old")
+                                .unwrap();
+                            let rhs_is_binding_copy = matches!(&value.kind,
+                                ExprKind::Identifier(n)
+                                    if self.heap_env_closure_vars.contains(n));
+                            if rhs_is_binding_copy {
+                                self.emit_heap_closure_env_inc(val);
+                            }
+                            self.builder.build_store(slot.ptr, val).unwrap();
+                            self.emit_heap_closure_env_dec(old_fat);
+                            return Ok(());
+                        }
+                    }
                     // For shared types, the ARC setter rule: retain new →
                     // store → release old. The release MUST run last —
                     // when the new value is reachable *through* the old one
