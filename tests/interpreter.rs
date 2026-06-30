@@ -17594,6 +17594,85 @@ fn test_dataframe_select_missing_column_traps() {
     );
 }
 
+#[test]
+fn test_dataframe_describe_numeric_columns() {
+    // describe() — per-numeric-column stats; the String column is skipped;
+    // a leading `statistic` label column; always 8 stat rows.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"age\", Column.from_vec([20i64, 30i64, 40i64, 50i64]));\n\
+             df.insert(\"name\", Column.from_vec([\"a\", \"b\", \"c\", \"d\"]));\n\
+             let d: DataFrame = df.describe();\n\
+             println(d.width());\n\
+             println(d.height());\n\
+             for n in d.column_names() { println(n); }\n\
+             let a: Column[f64] = d.column(\"age\");\n\
+             for v in a.iter_valid() { println(v); }\n\
+         }",
+    );
+    // width 2 (statistic + age; `name` skipped), height 8; age stats:
+    // count 4, mean 35, std (sample) 12.909…, min 20, 27.5/35/42.5, max 50.
+    assert_eq!(
+        out,
+        "2\n8\nstatistic\nage\n4\n35\n12.909944487358056\n20\n27.5\n35\n42.5\n50\n"
+    );
+}
+
+#[test]
+fn test_dataframe_describe_skips_nulls_and_labels() {
+    // Stats are over the valid (non-null) slots only; the `statistic` column
+    // carries the canonical labels in order.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             let score: Column[f64] = Column.from_iter_nullable([Some(1.0), None, Some(3.0), Some(5.0)]);\n\
+             df.insert(\"score\", score);\n\
+             let d: DataFrame = df.describe();\n\
+             let lab: Column[String] = d.column(\"statistic\");\n\
+             for s in lab.iter_valid() { println(s); }\n\
+             let c: Column[f64] = d.column(\"score\");\n\
+             for v in c.iter_valid() { println(v); }\n\
+         }",
+    );
+    // valid = [1, 3, 5]: count 3, mean 3, std 2, min 1, 2/3/4, max 5.
+    assert_eq!(
+        out,
+        "count\nmean\nstd\nmin\n25%\n50%\n75%\nmax\n3\n3\n2\n1\n2\n3\n4\n5\n"
+    );
+}
+
+#[test]
+fn test_dataframe_describe_single_value_std_is_nan() {
+    // Sample std is undefined for a single value -> NaN (describe never traps).
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"x\", Column.from_vec([7.0]));\n\
+             let d: DataFrame = df.describe();\n\
+             let c: Column[f64] = d.column(\"x\");\n\
+             match c[2] { Some(x) => println(x), None => println(0.0) }\n\
+         }",
+    );
+    // row 2 is `std`.
+    assert_eq!(out, "NaN\n");
+}
+
+#[test]
+fn test_dataframe_describe_no_numeric_columns() {
+    // Only non-numeric columns -> just the `statistic` label column.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"name\", Column.from_vec([\"a\", \"b\"]));\n\
+             let d: DataFrame = df.describe();\n\
+             println(d.width());\n\
+             println(d.height());\n\
+         }",
+    );
+    assert_eq!(out, "1\n8\n");
+}
+
 // ── `ref name @ PATTERN` — explicit-ref @ bindings (design.md § @
 // Bindings): bindings borrow, scrutinee stays usable after ──────────
 

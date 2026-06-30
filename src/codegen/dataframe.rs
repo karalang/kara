@@ -551,6 +551,20 @@ impl<'ctx> super::Codegen<'ctx> {
         if !self.dataframe_var_infos.contains(var.as_str()) {
             return Ok(None);
         }
+        // `describe()` typechecks and runs under `karac run`, but the native
+        // backend defers it: a `DataFrame` entry is type-erased (it carries
+        // only `elem_size`, which is 8 for i64 / f64 / String alike), so the
+        // build backend can't yet tell which columns are numeric — fail
+        // loudly rather than miscompile. A follow-on slice adds a per-column
+        // element-kind tag to the entry.
+        if method == "describe" {
+            return Err(
+                "DataFrame.describe is not yet supported by the native backend \
+                 (`karac build`); it works under `karac run` and lands in a \
+                 follow-on codegen slice (needs a per-column element-kind tag)"
+                    .to_string(),
+            );
+        }
         if !matches!(
             method,
             "insert" | "column" | "has_column" | "width" | "height" | "column_names" | "select"

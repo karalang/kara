@@ -42,6 +42,97 @@ fn deep_copy_column(v: &Value) -> Value {
     }
 }
 
+/// The valid (non-null) values of a column as `f64`, **iff** the column is
+/// numeric — every valid slot is an `Int` / `Float` and there is at least
+/// one. Returns `None` for a non-numeric column or one with no valid value
+/// (which `describe()` then skips, like pandas). The tree-walk interpreter
+/// has no static element type, so numeric-ness is decided by inspecting the
+/// values; the codegen slice will use the column's static element type
+/// (the documented run/build reconciliation point for the all-null edge).
+fn numeric_valid_f64(
+    data: &Arc<RwLock<Vec<Value>>>,
+    valid: &Arc<RwLock<Vec<bool>>>,
+) -> Option<Vec<f64>> {
+    let d = data.read().unwrap();
+    let v = valid.read().unwrap();
+    let mut out = Vec::new();
+    for (&ok, x) in v.iter().zip(d.iter()) {
+        if !ok {
+            continue;
+        }
+        match x {
+            Value::Int(i) => out.push(*i as f64),
+            Value::Float(f) => out.push(*f),
+            // A valid non-numeric slot disqualifies the whole column.
+            _ => return None,
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// The eight `describe()` statistics over a non-empty value list, in the
+/// canonical order `[count, mean, std, min, 25%, 50%, 75%, max]`. `std` is
+/// the **sample** (`n-1`) form — `NaN` for a single value (describe never
+/// traps on size). Quartiles use NumPy/pandas linear interpolation,
+/// matching the `Column.quantile` lowering.
+fn describe_stats(vals: &[f64]) -> [f64; 8] {
+    let n = vals.len();
+    let count = n as f64;
+    let sum: f64 = vals.iter().sum();
+    let mean = sum / count;
+    let std = if n >= 2 {
+        let ss: f64 = vals
+            .iter()
+            .map(|x| {
+                let d = x - mean;
+                d * d
+            })
+            .sum();
+        (ss / (count - 1.0)).sqrt()
+    } else {
+        f64::NAN
+    };
+    let mut sorted = vals.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let quantile = |p: f64| -> f64 {
+        if n == 1 {
+            return sorted[0];
+        }
+        let pos = p * (count - 1.0);
+        let lo = pos.floor() as usize;
+        let hi = pos.ceil() as usize;
+        if lo == hi {
+            sorted[lo]
+        } else {
+            let frac = pos - lo as f64;
+            sorted[lo] + frac * (sorted[hi] - sorted[lo])
+        }
+    };
+    [
+        count,
+        mean,
+        std,
+        sorted[0],
+        quantile(0.25),
+        quantile(0.5),
+        quantile(0.75),
+        sorted[n - 1],
+    ]
+}
+
+/// Build an all-valid `Value::Column` from a value list.
+fn all_valid_column(data: Vec<Value>) -> Value {
+    let n = data.len();
+    Value::Column {
+        data: Arc::new(RwLock::new(data)),
+        valid: Arc::new(RwLock::new(vec![true; n])),
+    }
+}
+
 impl<'a> super::Interpreter<'a> {
     /// `DataFrame.new` constructor dispatched from `eval_call.rs`. Returns
     /// `None` for an unrecognized path (caller falls through).
@@ -220,6 +311,34 @@ impl<'a> super::Interpreter<'a> {
                 }
                 Some(Value::DataFrame {
                     columns: Arc::new(RwLock::new(picked)),
+                })
+            }
+            // Summary statistics over the numeric columns → a fresh table:
+            // a leading `statistic` label column + one `Column[f64]` per
+            // numeric source column (same name, source order). Non-numeric
+            // / all-null columns are skipped (pandas posture). Always 8 rows.
+            "describe" => {
+                let cols = columns.read().unwrap();
+                let labels = ["count", "mean", "std", "min", "25%", "50%", "75%", "max"];
+                let stat_data: Vec<Value> = labels
+                    .iter()
+                    .map(|s| Value::String(s.to_string()))
+                    .collect();
+                let mut out: Vec<(String, Value)> =
+                    vec![("statistic".to_string(), all_valid_column(stat_data))];
+                for (name, col) in cols.iter() {
+                    let Value::Column { data, valid } = col else {
+                        continue;
+                    };
+                    let Some(vals) = numeric_valid_f64(data, valid) else {
+                        continue;
+                    };
+                    let stats = describe_stats(&vals);
+                    let cdata: Vec<Value> = stats.iter().map(|&x| Value::Float(x)).collect();
+                    out.push((name.clone(), all_valid_column(cdata)));
+                }
+                Some(Value::DataFrame {
+                    columns: Arc::new(RwLock::new(out)),
                 })
             }
             _ => None,

@@ -107,4 +107,18 @@ impl DataFrame {
     fn select(ref self, cols: Vec[String]) -> DataFrame {
         DataFrame { handle_id: 0 }
     }
+
+    // Summary statistics over the *numeric* columns — a fresh table with
+    // a leading `statistic: Column[String]` label column
+    // (`["count", "mean", "std", "min", "25%", "50%", "75%", "max"]`) and
+    // one `Column[f64]` per numeric source column (same name, in source
+    // order) holding those eight statistics over the column's valid
+    // (non-null) slots. Non-numeric columns (and columns with no valid
+    // numeric value) are skipped, mirroring pandas `describe()`. `std` is
+    // the sample (n-1) form; it is `NaN` for fewer than 2 valid values
+    // (describe never traps on column size). Row count is always 8.
+    #[compiler_builtin]
+    fn describe(ref self) -> DataFrame {
+        DataFrame { handle_id: 0 }
+    }
 }

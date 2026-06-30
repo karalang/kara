@@ -1816,7 +1816,14 @@ impl<'a> super::TypeChecker<'a> {
         if is_dataframe
             && matches!(
                 method,
-                "column" | "insert" | "has_column" | "column_names" | "width" | "height" | "select"
+                "column"
+                    | "insert"
+                    | "has_column"
+                    | "column_names"
+                    | "width"
+                    | "height"
+                    | "select"
+                    | "describe"
             )
         {
             let arity = |m: &str| match m {
@@ -1862,7 +1869,7 @@ impl<'a> super::TypeChecker<'a> {
                     args: vec![Type::Str],
                 },
                 "width" | "height" => Type::Int(IntSize::I64),
-                "select" => Type::Named {
+                "select" | "describe" => Type::Named {
                     name: "DataFrame".to_string(),
                     args: vec![],
                 },

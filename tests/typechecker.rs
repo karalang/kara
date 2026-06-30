@@ -26657,6 +26657,33 @@ fn test_dataframe_select_types_and_arg_checked() {
     );
 }
 
+#[test]
+fn test_dataframe_describe_types_and_arity() {
+    // describe() -> DataFrame, no args; the result is a usable DataFrame.
+    typecheck_ok(
+        "fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"a\", Column.from_vec([1i64]));\n\
+             let summary: DataFrame = df.describe();\n\
+             let _w: i64 = summary.width();\n\
+             let _c: Column[f64] = summary.column(\"a\");\n\
+         }",
+    );
+    // describe takes no arguments.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let df: DataFrame = DataFrame.new();\n\
+             let _ = df.describe(\"a\");\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("describe expects 0")),
+        "{errors:?}",
+    );
+}
+
 // ── Effect-resource dispatch types untyped `let` bindings ─────────
 //
 // bugs.md "Untyped `let` from an effect-resource method call doesn't
