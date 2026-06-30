@@ -881,7 +881,29 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let Some(bits) = narrow_bits {
                         return self.compile_narrow_int_binop(&op, lhs, rhs, bits, is_unsigned);
                     }
-                    return self.compile_binop_typed(&op, lhs, rhs, is_unsigned);
+                    let result = self.compile_binop_typed(&op, lhs, rhs, is_unsigned)?;
+                    // General owned-temp tracking, slice 3c: free a fresh-temp
+                    // String OPERAND orphaned by the lowered string binop. `+`
+                    // and the comparison ops on `String` desugar to this
+                    // `String.add`/`eq`/`lt`/... assoc call (lowering.rs
+                    // `rewrite_binary`); `compile_string_binop` reads each
+                    // operand's bytes (concat copies into a fresh result buffer,
+                    // a comparison scans) but takes no ownership, so a fresh-owned
+                    // operand — `make_str() + "x"`, `make_str() == s`, a
+                    // `substring`/slice, or the inner `String.add` of a chained
+                    // concat (itself a fresh-temp Call) — leaks its buffer once
+                    // per evaluation, unbounded in a loop. `free_fresh_owned_str_arg`
+                    // self-gates to fresh-owned shapes (Call/MethodCall, fresh
+                    // slice) with a `cap > 0` backstop, so a named binding,
+                    // rodata literal, or borrow operand is never (double-)freed.
+                    // Emitted AFTER the binop so every read of the operand buffers
+                    // dominates the free. String only — int/float operands aren't
+                    // heap (the helper no-ops on a non-vec-struct value anyway).
+                    if type_name == "String" {
+                        self.free_fresh_owned_str_arg(&_args[0].value, lhs);
+                        self.free_fresh_owned_str_arg(&_args[1].value, rhs);
+                    }
+                    return Ok(result);
                 }
             }
             if method == "neg" && _args.len() == 1 {

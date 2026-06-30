@@ -2365,6 +2365,111 @@ fn main() {
     }
 
     #[test]
+    fn asan_operand_temp_string_concat_freed() {
+        // General owned-temp tracking, slice 3c: a fresh-temp String OPERAND of
+        // a string binop. `make_s() + " [suffix]"` reads the fresh `make_s()`
+        // buffer into a new concat result but never frees the operand, so it
+        // leaks once per iteration (LeakSanitizer on Linux CI). The concat
+        // RESULT is bound to `r` and freed by its binding (the operand is the
+        // only new leak); a regression that frees the operand twice — or that
+        // frees the still-read operand before the concat copies it — double-frees
+        // / UAFs (macOS ASAN). ≥36-byte operand defeats LSan short-string
+        // reachability; the loop forces per-iteration accumulation.
+        assert_clean_asan_run(
+            r#"
+fn make_s() -> String {
+    let s: String = "a freshly allocated heap operand string over thirty-six bytes";
+    return s;
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let r = make_s() + " [suffix]";
+        println(r);
+        i = i + 1;
+    };
+}
+"#,
+            &[
+                "a freshly allocated heap operand string over thirty-six bytes [suffix]",
+                "a freshly allocated heap operand string over thirty-six bytes [suffix]",
+                "a freshly allocated heap operand string over thirty-six bytes [suffix]",
+            ],
+            "operand_temp_string_concat_freed",
+        );
+    }
+
+    #[test]
+    fn asan_operand_temp_chained_concat_freed() {
+        // Slice 3c chained case: `make_s() + " mid " + <tail>` parses as
+        // `(make_s() + " mid ") + <tail>`. The fresh `make_s()` operand of the
+        // INNER `+` is freed there; the inner `+` RESULT is itself a fresh temp
+        // consumed as the outer `+`'s left operand and must also be freed (it is
+        // a `Binary{Add}` operand, recognized as a fresh String concat). Three
+        // distinct buffers — `make_s()`, the inner concat, the outer concat (the
+        // last bound to `r`) — each freed exactly once: no leak, no double-free.
+        assert_clean_asan_run(
+            r#"
+fn make_s() -> String {
+    let s: String = "a freshly allocated heap operand string over thirty-six bytes";
+    return s;
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let r = make_s() + " mid " + "tail padded out beyond thirty-six bytes here";
+        println(r);
+        i = i + 1;
+    };
+}
+"#,
+            &[
+                "a freshly allocated heap operand string over thirty-six bytes mid tail padded out beyond thirty-six bytes here",
+                "a freshly allocated heap operand string over thirty-six bytes mid tail padded out beyond thirty-six bytes here",
+                "a freshly allocated heap operand string over thirty-six bytes mid tail padded out beyond thirty-six bytes here",
+            ],
+            "operand_temp_chained_concat_freed",
+        );
+    }
+
+    #[test]
+    fn asan_operand_temp_named_binding_not_double_freed() {
+        // Slice 3c negative / double-free guard: a NAMED String binding used as
+        // a binop operand (`s + " [suffix]"`) must NOT be freed by the
+        // operand-temp path — `s` is an `Identifier` (not a fresh-temp shape),
+        // so it owns its buffer and frees it at iteration-scope exit. If the
+        // operand-free wrongly fired on `s`, the binding's own free would
+        // double-free it each iteration (macOS ASAN). The concat result `r` is
+        // freed by its own binding.
+        assert_clean_asan_run(
+            r#"
+fn make_s() -> String {
+    let s: String = "a freshly allocated heap operand string over thirty-six bytes";
+    return s;
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let s = make_s();
+        let r = s + " [suffix]";
+        println(r);
+        i = i + 1;
+    };
+}
+"#,
+            &[
+                "a freshly allocated heap operand string over thirty-six bytes [suffix]",
+                "a freshly allocated heap operand string over thirty-six bytes [suffix]",
+                "a freshly allocated heap operand string over thirty-six bytes [suffix]",
+            ],
+            "operand_temp_named_binding_not_double_freed",
+        );
+    }
+
+    #[test]
     fn asan_primitive_to_string_owning() {
         // `x.to_string()` mallocs an owning String (same shape as the f-string
         // builder). Exercise the let-bound, printed-temp, and concatenated

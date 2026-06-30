@@ -374,14 +374,40 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    iterator must keep the temp alive across the loop); and (the `vector_method_
    receivers` model — receiver `(T, N)` recorded at the collided span — remains a
    second copy-able precedent for any future receiver-type table);
-   (b) user-`impl` methods on fresh-temp receivers (also unsupported today);
-   (c) **operator-operand temps** (`make_str() + "x"`) — the lowered
-   `String.add(make_str(), "x")` passes the fresh operand as an *owned* arg to
-   an inline intrinsic that copies but never frees it, so closing that leak is
-   an owned-arg-to-intrinsic concern distinct from the borrow-receiver shape
-   handled here (`asan_operand_temp_freed` lands with it). Each is its own
-   bounded, ASAN-gated slice; none blocks slices 4–6 (the scrutinee/tail/drop-
-   order payoff needs the receiver-temp mechanism this slice establishes, which
+   (b) user-`impl` methods on fresh-temp receivers (also unsupported today).
+   **Slice 3b-c — operator-operand temps. — DONE 2026-06-29.** `make_str() + "x"`
+   leaked the fresh `make_str()` operand. Confirmed the spike's diagnosis: a
+   String `+` (and `==`/`<`/… comparison) desugars in `lowering.rs`
+   `rewrite_binary` to a `String.add`/`eq`/`lt`/… **assoc call** (because
+   `primitive_type_name(Type::Str) == "String"`), so it never reaches the
+   `ExprKind::Binary` codegen arm — the fix had to land at the lowered call site,
+   `compile_assoc_call`'s primitive-binop arm (`assoc_call.rs`), where the
+   operand exprs *and* their compiled values are both in hand. There,
+   `compile_string_binop` reads each operand's `{ptr,len}` (concat copies into a
+   fresh result buffer; a comparison scans) but takes no ownership, so a
+   fresh-owned operand orphaned its buffer once per evaluation. The fix reuses
+   the existing `free_fresh_owned_str_arg` (the Set/Map fresh-string-arg helper)
+   on each operand after the binop computes its result — no new mechanism. It
+   self-gates to fresh-owned shapes (`Call`/`MethodCall`, fresh `String[a..b]`
+   slice) with a `cap > 0` backstop, so a named binding / rodata literal / borrow
+   operand is never (double-)freed. **Chained concat falls out for free**:
+   `make_str() + "a" + "b"` lowers to `String.add(String.add(make_str(), "a"),
+   "b")`, and the inner `String.add` is itself a fresh-temp `Call` that
+   `expr_yields_fresh_owned_temp` already recognizes — so the intermediate is
+   freed by the outer call's operand-free, no `Binary`-special-casing needed.
+   Verified: no double-free (macOS ASAN) and no leak (Linux LSan — `Compiling
+   karac` confirmed, 3/3, zero reports). **Tests:** 2 IR
+   (`test_ir_operand_temp_string_concat_emits_free` → `freearg.free`;
+   `test_ir_string_concat_literals_no_operand_free` → the static-literal negative,
+   no operand free) + 3 ASAN (`asan_operand_temp_string_concat_freed`,
+   `…_chained_concat_freed`, `…_named_binding_not_double_freed` — the
+   named-operand double-free guard). **Pitfall recorded:** the first attempt put
+   the free in the `ExprKind::Binary` codegen arm and the IR test caught it as
+   dead (string `+` is a Call by codegen time); the macOS ASAN test had passed
+   *vacuously* on the leak it couldn't see — the IR `freearg.free` assertion is
+   what flagged the misplacement.
+   None of 3b/3b-heap/3b-c blocks slices 4–6 (the scrutinee/tail/drop-order
+   payoff needs the receiver-temp mechanism this slice establishes, which
    `materialize_owned_temp` now provides).
 4. **Scrutinee sub-frame (= line-489 slice 3). — fresh-temp enum wholesale +
    partial drop LANDED via B (2026-06-07) for if-let/match/let-else; while-let +

@@ -18867,6 +18867,57 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_operand_temp_string_concat_emits_free() {
+        // Slice 3c: a fresh-temp String operand of a string binop
+        // (`make_s() + " x"`) must emit a `cap > 0`-guarded `freearg.free` of the
+        // operand buffer after the concat copies it. Without it the operand
+        // buffer leaks (LeakSanitizer on Linux CI). `make_s()` is the only fresh
+        // owned String in the program, so a `freearg.free` block can only be the
+        // operand free this slice adds.
+        let src = r#"
+fn make_s() -> String {
+    let s: String = "a fresh heap operand string padded beyond thirty-six bytes";
+    return s;
+}
+
+fn main() {
+    let r = make_s() + " [suffix]";
+    println(r);
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("freearg.free"),
+            "expected a cap>0-guarded operand free (freearg.free) for the fresh-temp \
+             String concat operand; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_string_concat_literals_no_operand_free() {
+        // Slice 3c negative: a string concat of two STATIC LITERALS
+        // (`"a" + "b"`) has no fresh-owned operand — both operands are rodata
+        // (`cap == 0`), so the operand-temp path must NOT emit a `freearg.free`.
+        // (The concat RESULT is freed by its `r` binding via the normal
+        // FreeVecBuffer path, not the operand `freearg.free` block.) Guards
+        // against the gate over-firing on non-fresh operands.
+        let src = r#"
+fn main() {
+    let r = "left part padded beyond thirty-six bytes ok " + "right part too";
+    println(r);
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            !ir.contains("freearg.free"),
+            "a concat of static-literal operands must not emit an operand free \
+             (freearg.free); got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_ir_discarded_block_tail_temp_freed() {
         // Slice 5 (tail-expr temp drop): a fresh `Vec` produced in the tail
         // of a statement-position block (`{ make_vec() }`) is the block's
