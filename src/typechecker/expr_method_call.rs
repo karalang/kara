@@ -1514,11 +1514,18 @@ impl<'a> super::TypeChecker<'a> {
                         | Type::Str
                 ) || matches!(&r, Type::Named { name, args } if name == "String" && args.is_empty())
             };
+            // `iter` is recorded for the for-loop temp path (`for (k, v) in
+            // make_map().iter()`): the for-loop peels `.iter()`, recurses on the
+            // receiver, and codegen's `try_compile_for_mapset_value` reconstructs
+            // the handle from this side-table (the collided `.iter()` span holds
+            // `Iterator[(K,V)]` in `expr_types`, so `owned_temp_drops` misses).
+            // Same scalar/String K/V constraint as `get` — the `FreeMapHandle`
+            // per-entry drop only frees scalar/String entries.
             let record = match &obj_ty {
                 Type::Named { name, args }
                     if name == "Map"
                         && args.len() == 2
-                        && matches!(method, "get" | "contains_key")
+                        && matches!(method, "get" | "contains_key" | "iter")
                         && is_scalar_or_string(&args[0])
                         && is_scalar_or_string(&args[1]) =>
                 {
@@ -1533,7 +1540,7 @@ impl<'a> super::TypeChecker<'a> {
                 Type::Named { name, args }
                     if name == "Set"
                         && args.len() == 1
-                        && method == "contains"
+                        && matches!(method, "contains" | "iter")
                         && is_scalar_or_string(&args[0]) =>
                 {
                     Some(Type::Named {

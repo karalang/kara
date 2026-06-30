@@ -19418,6 +19418,50 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_freshtemp_map_iter_emits_materialize_and_handle_free() {
+        // Slice 3i: `for (k, v) in make_map().iter()` on a fresh-temp
+        // `Map[String, i64]`. The for-loop peels `.iter()` and recurses on the
+        // receiver `make_map()`, whose span collides with the `.iter()` MethodCall
+        // — `expr_types` holds `Iterator[(String, i64)]`, so `owned_temp_drops`
+        // has NO entry. Pre-fix the loop fell through `try_compile_for_vec_value`
+        // (non-Vec → None) to the silent skip (body never ran, output 0). The
+        // fresh-temp Map/Set gate now records the whole `Map[String, i64]`
+        // span-keyed in `temp_recv_mapset_types`; codegen materializes the handle
+        // into a `__for_mapset_` synth local, drives the map iterator, and frees
+        // the handle + each stored String key via `karac_map_free_with_drop_vec`
+        // at scope exit. Without the materialize the body is skipped; without the
+        // per-entry drop the String keys leak (Linux LSan).
+        let src = r#"
+fn make_map() -> Map[String, i64] {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("a heap map key padded out beyond thirty-six bytes ok", 10_i64);
+    return m;
+}
+
+fn main() {
+    let mut total = 0_i64;
+    for (k, v) in make_map().iter() {
+        total = total + v + k.len();
+    };
+    println(total);
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("__for_mapset_"),
+            "expected the fresh-temp Map[String, i64] iterable materialized into a \
+             __for_mapset_ synth local (not the silent body-skip); got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("karac_map_free_with_drop_vec"),
+            "expected the materialized map temp's handle freed with per-entry String \
+             drop (karac_map_free_with_drop_vec); got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_ir_freshtemp_vec_string_contains_emits_per_element_drop() {
         // Slice 3b-heap follow-on: `contains` on a fresh-temp `Vec[String]`.
         // `contains` returns `bool` (no borrow escapes), but the receiver temp

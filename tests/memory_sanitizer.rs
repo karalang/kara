@@ -3442,6 +3442,81 @@ fn main() {
     }
 
     #[test]
+    fn asan_freshtemp_map_iter_string_key_no_double_free() {
+        // Slice 3i: `for (k, v) in make_map().iter()` on a fresh-temp
+        // `Map[String, i64]`, looped. The for-loop peels `.iter()` and recurses on
+        // the temp receiver; codegen materializes the handle into a
+        // `__for_mapset_` synth local whose `FreeMapHandle`
+        // (`karac_map_free_with_drop_vec`) frees the handle + each stored String
+        // key at scope exit. Pre-fix the body was silently skipped (output 0).
+        // Hazards: (1) each iteration's `k` String struct points into the map's
+        // storage (a borrow) and must NOT be independently dropped, else it
+        // double-frees the key the handle drop also frees (macOS ASAN); (2) every
+        // stored String key must be freed by the per-entry drop, else they leak
+        // (Linux LSan). ≥36-byte keys defeat LSan short-string reachability; outer
+        // loop re-materializes the temp each pass.
+        assert_clean_asan_run(
+            r#"
+fn make_map() -> Map[String, i64] {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("first map key padded out beyond thirty-six bytes ok", 10_i64);
+    m.insert("second map key padded out beyond thirty-six bytes o", 20_i64);
+    return m;
+}
+
+fn main() {
+    let mut pass = 0;
+    while pass < 3 {
+        let mut total = 0_i64;
+        for (k, v) in make_map().iter() {
+            total = total + v + k.len();
+        };
+        println(total);
+        pass = pass + 1;
+    };
+}
+"#,
+            &["132", "132", "132"],
+            "freshtemp_map_iter_string_key_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_freshtemp_set_bare_string_no_double_free() {
+        // Slice 3i companion: `for x in make_set()` (bare, no `.iter()`) on a
+        // fresh-temp `Set[String]`. The bare form reaches the materialize path via
+        // `owned_temp_drops` (Set is droppable) rather than
+        // `temp_recv_mapset_types`; same `__for_mapset_` synth local + handle drop.
+        // Each iteration's `x` String borrows the set's storage (must not be
+        // independently dropped → macOS ASAN), and every stored element must be
+        // freed by the per-entry drop (→ Linux LSan). Loops to accumulate leaks.
+        assert_clean_asan_run(
+            r#"
+fn make_set() -> Set[String] {
+    let mut s: Set[String] = Set.new();
+    s.insert("first set element padded out beyond thirty-six byte");
+    s.insert("second set element padded out beyond thirty-six byt");
+    return s;
+}
+
+fn main() {
+    let mut pass = 0;
+    while pass < 3 {
+        let mut total = 0_i64;
+        for x in make_set() {
+            total = total + x.len();
+        };
+        println(total);
+        pass = pass + 1;
+    };
+}
+"#,
+            &["102", "102", "102"],
+            "freshtemp_set_bare_string_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_freshtemp_vec_string_first_last_no_double_free() {
         // Slice 3b-heap companion: `first`/`last` on a fresh-temp `Vec[String]`
         // — the other two borrow-returning (`Option[ref String]`) read methods

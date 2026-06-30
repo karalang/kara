@@ -288,6 +288,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     return Ok(result);
                 }
+                // Fresh-temp `Map[K,V]` / `Set[T]` iterable (`for (k, v) in
+                // make_map()`, `for x in make_set().iter()`) — same
+                // materialize-iterate-drop shape, driving the map/set iterator.
+                if let Some(result) =
+                    self.try_compile_for_mapset_value(label, pattern, iterable, body)?
+                {
+                    return Ok(result);
+                }
                 // Unknown iterable — skip body, return unit
                 Ok(self.context.i64_type().const_int(0, false).into())
             }
@@ -418,6 +426,86 @@ impl<'ctx> super::Codegen<'ctx> {
         self.vec_elem_types.remove(&synth);
         self.slice_elem_types.remove(&synth);
         self.var_elem_type_exprs.remove(&synth);
+        result.map(Some)
+    }
+
+    /// Iterate a value-producing iterable whose type is a `Map[K,V]` / `Set[T]`
+    /// (a fresh-temp `make_map()` / `make_set()` — the Map/Set sibling of
+    /// `try_compile_for_vec_value`). The bare form `for (k, v) in make_map()`
+    /// reaches here with the receiver's `Map[K,V]` in `owned_temp_drops` (Map/Set
+    /// are in the droppable set); the `.iter()` form `for (k, v) in
+    /// make_map().iter()` peels `.iter()` and recurses on the receiver, whose
+    /// span collides with the `.iter()` MethodCall — `expr_types` holds
+    /// `Iterator[(K,V)]` there, so `owned_temp_drops` misses and the whole
+    /// `Map[K,V]` / `Set[T]` is recovered from `temp_recv_mapset_types` (recorded
+    /// by the fresh-temp Map/Set gate). Without this both forms silently skip the
+    /// body (`try_compile_for_vec_value` returns None for a non-Vec) — the loop
+    /// summed to 0 vs the interpreter. Materializes the handle into a synth local,
+    /// registers it (map_key_types/map_val_types or set_elem_types via
+    /// `register_var_from_type_expr`), queues the per-entry-heap-aware
+    /// `FreeMapHandle` cleanup, then drives `compile_for_map_var` /
+    /// `compile_for_set_var` via the recursed Identifier iterable.
+    fn try_compile_for_mapset_value(
+        &mut self,
+        label: Option<&str>,
+        pattern: &Pattern,
+        iterable: &Expr,
+        body: &Block,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        use super::state::VarSlot;
+        let key = (iterable.span.offset, iterable.span.length);
+        let te = if let Some(te) = self.owned_temp_drops.get(&key).cloned() {
+            te
+        } else if let Some(te) = self.temp_recv_mapset_types.get(&key).cloned() {
+            te
+        } else {
+            return Ok(None);
+        };
+        let head = match &te.kind {
+            TypeKind::Path(p) => p.segments.last().map(|s| s.as_str()),
+            _ => None,
+        };
+        if !matches!(head, Some("Map") | Some("Set")) {
+            return Ok(None);
+        }
+        let val = self.compile_expr(iterable)?;
+        let fn_val = self.current_fn.unwrap();
+        let synth = format!("__for_mapset_{}", self.indexed_elem_counter);
+        self.indexed_elem_counter += 1;
+        let alloca = self.create_entry_alloca(fn_val, &synth, val.get_type());
+        self.builder.build_store(alloca, val).unwrap();
+        self.variables.insert(
+            synth.clone(),
+            VarSlot {
+                ptr: alloca,
+                ty: val.get_type(),
+            },
+        );
+        self.register_var_from_type_expr(&synth, &te);
+        // Queue the materialized handle's scope-exit cleanup. `FreeMapHandle`
+        // frees the handle and (per `map_temp_cleanup_parts`) drains each stored
+        // String/Vec/shared key+value, so a `Map[String, _]` / `Set[String]` temp
+        // doesn't leak its entry buffers. Note the arg order: cleanup_parts yields
+        // (key_is_vec, val_is_vec, key_shared, val_shared) but `track_map_var`
+        // takes (.., val_shared, key_shared).
+        let (key_is_vec, val_is_vec, key_shared, val_shared) = self.map_temp_cleanup_parts(&te);
+        self.track_map_var(alloca, key_is_vec, val_is_vec, val_shared, key_shared);
+        let synth_expr = Expr {
+            kind: ExprKind::Identifier(synth.clone()),
+            span: iterable.span.clone(),
+        };
+        let result = self.compile_for(label, pattern, &synth_expr, body);
+        // Drop synth registries (the queued cleanup references the alloca).
+        self.variables.remove(&synth);
+        self.map_key_types.remove(&synth);
+        self.map_val_types.remove(&synth);
+        self.map_key_type_names.remove(&synth);
+        self.map_key_type_exprs.remove(&synth);
+        self.set_elem_types.remove(&synth);
+        self.set_elem_type_names.remove(&synth);
+        self.set_elem_type_exprs.remove(&synth);
+        self.var_elem_type_exprs.remove(&synth);
+        self.var_type_names.remove(&synth);
         result.map(Some)
     }
 

@@ -456,11 +456,41 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    **and** `cleanup.drop.inner.free`, proving the materialize fired, not the silent
    skip) + 2 ASAN (`asan_freshtemp_vec_iter_string_no_double_free`;
    `asan_freshtemp_vec_into_iter_struct_no_double_free` — reads the heap field
-   through the bound element). **Still open:** deeper-nested
-   `Vec[Vec[String]]` (two-level heap leaks the innermost
-   even for named bindings — an upstream recursion limit, not a temp-specific gap);
-   `get_unchecked` on `Vec[String]`; `Map.values()`/`keys()`/`iter()` on a temp
-   (the for-loop peel currently only recovers Vec element types, not Map/Set);
+   through the bound element).
+
+   **Slice 3i — `for (k,v) in make_map()` / `for x in make_set()` (+ `.iter()`).
+   — DONE 2026-06-30.** The Map/Set sibling of 3h — same silent-skip-to-0
+   miscompile. TWO entry shapes: the **bare** form `for (k, v) in make_map()`
+   reached the for-loop `_ =>` arm with the receiver's `Map[K,V]` already in
+   `owned_temp_drops` (Map/Set are in the droppable set) but
+   `try_compile_for_vec_value` returns None for a non-Vec, so the body was
+   skipped; the **`.iter()`** form peels `.iter()`/recurses, hits the collided
+   span (`Iterator[(K,V)]` clobbers `Map[K,V]` in `expr_types`), so
+   `owned_temp_drops` misses entirely. Fix: (1) new codegen
+   `try_compile_for_mapset_value` — the Map/Set twin of the Vec helper:
+   materialize the handle into a `__for_mapset_` synth local,
+   `register_var_from_type_expr` (map_key_types/map_val_types or set_elem_types),
+   queue the per-entry-heap-aware `FreeMapHandle` cleanup
+   (`map_temp_cleanup_parts` → `track_map_var`), then drive
+   `compile_for_map_var` / `compile_for_set_var` via the recursed Identifier; it
+   reads `owned_temp_drops` (bare) **or** falls back to `temp_recv_mapset_types`
+   (`.iter()`). Wired in the `_ =>` arm after the Vec attempt. (2) the fresh-temp
+   Map/Set gate (slice 3d) now records `temp_recv_mapset_types` for `iter` too
+   (Map: `get`/`contains_key`/`iter`; Set: `contains`/`iter`), same scalar/String
+   K/V constraint (the `FreeMapHandle` per-entry drop only frees scalar/String).
+   Verified scalar Map, String-key Map, Set[String], both bare and `.iter()`, all
+   match the interpreter (`130`/`33`/`107`); no double-free (macOS ASAN), no leak
+   (Linux LSan). **Tests:** 1 IR
+   (`test_ir_freshtemp_map_iter_emits_materialize_and_handle_free` →
+   `__for_mapset_` **and** `karac_map_free_with_drop_vec`) + 2 ASAN
+   (`asan_freshtemp_map_iter_string_key_no_double_free`;
+   `asan_freshtemp_set_bare_string_no_double_free` — covers both the `.iter()` and
+   bare entry shapes). **Still open:** `Map.keys()`/`.values()` on a temp (single-
+   value iteration over just keys or just values — a different binding shape, and
+   `.keys()`/`.values()` aren't a for-loop peel today even for named maps); heap
+   K/V (`Map[String, Vec[T]]` etc.) on temps; deeper-nested `Vec[Vec[String]]`
+   (two-level heap leaks the innermost even for named bindings — an upstream
+   recursion limit, not a temp-specific gap); `get_unchecked` on `Vec[String]`;
    user-`impl` methods on fresh-temp receivers (also unsupported today); and (the
    `vector_method_receivers` model — receiver `(T, N)` recorded at the collided
    span — remains a second copy-able precedent for any future receiver-type
