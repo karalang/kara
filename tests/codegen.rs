@@ -48736,6 +48736,75 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_dataframe_insert_length_mismatch_traps() {
+        // The Arrow equal-length invariant: inserting a column whose length
+        // differs from the table's row count traps (matches the interpreter).
+        let captured = run_program_capturing(
+            "fn main() {\n\
+                 let mut df: DataFrame = DataFrame.new();\n\
+                 df.insert(\"a\", Column.from_vec([1, 2, 3]));\n\
+                 df.insert(\"b\", Column.from_vec([1, 2]));\n\
+                 println(df.width());\n\
+             }\n",
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("column length does not match"),
+                "expected the equal-length trap, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_dataframe_column_names() {
+        // column_names() -> Vec[String] in schema order, for-iterable.
+        let out = run_program(
+            "fn main() {\n\
+                 let mut df: DataFrame = DataFrame.new();\n\
+                 df.insert(\"age\", Column.from_vec([1, 2]));\n\
+                 df.insert(\"name\", Column.from_vec([3, 4]));\n\
+                 for n in df.column_names() { println(n); }\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "age\nname\n",
+                "column_names must yield schema-order names"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_dataframe_select_subset_reorder() {
+        // select picks a column subset in the given order (a reorder); the
+        // result is a fresh frame whose columns are copies; the source is
+        // unchanged. Byte-identical to the interpreter twin.
+        let out = run_program(
+            "fn main() {\n\
+                 let mut df: DataFrame = DataFrame.new();\n\
+                 df.insert(\"a\", Column.from_vec([1, 2]));\n\
+                 df.insert(\"b\", Column.from_vec([3, 4]));\n\
+                 df.insert(\"c\", Column.from_vec([5, 6]));\n\
+                 let sub: DataFrame = df.select([\"c\", \"a\"]);\n\
+                 println(sub.width());\n\
+                 println(sub.height());\n\
+                 for n in sub.column_names() { println(n); }\n\
+                 let c0: Column[i64] = sub.column(\"c\");\n\
+                 match c0[1] { Some(v) => println(v), None => println(-1) }\n\
+                 println(df.width());\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "2\n2\nc\na\n6\n3\n",
+                "select subset/reorder must match the interpreter"
+            );
+        }
+    }
+
     // ── Shape-generic function body — tensor-param indexing ──────────
     // A `fn f[N](a: Tensor[T, [N, N]], ...)` body that indexes its tensor
     // params (`a[i, j]`) lowers in codegen: `compile_mono_function`

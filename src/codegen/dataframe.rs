@@ -35,12 +35,13 @@
 //! freeing each column (data + bitmap + control) and each name buffer,
 //! then the entries buffer and the control block.
 //!
-//! **Scope (interpreter-MVP parity, this slice).** `new`; `insert`
-//! (copy-in, replace-or-append); `column(name) -> Column[T]` (copy-out);
-//! `has_column`; `width`; `height`. The equal-length runtime guard,
-//! `select`, and `column_names` are follow-on slices. Column element
-//! types are the numeric primitives and `bool`, matching the Column
-//! codegen surface.
+//! **Scope (full interpreter-MVP parity).** `new`; `insert` (copy-in,
+//! replace-or-append, equal-length runtime guard); `column(name) ->
+//! Column[T]` (copy-out); `has_column`; `width`; `height`;
+//! `column_names() -> Vec[String]` (fresh name copies); `select(cols) ->
+//! DataFrame` (fresh frame of column copies). Column element types are
+//! the numeric primitives and `bool`, matching the Column codegen
+//! surface.
 
 use inkwell::types::{BasicTypeEnum, StructType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
@@ -331,6 +332,138 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok((found, index))
     }
 
+    /// Scan for the first entry whose name *differs* from `(name_data,
+    /// name_len)`, returning `(has_other: i1, height: i64)` — `height` is
+    /// that column's length (the table's row count for the equal-length
+    /// guard). `has_other` is false (height 0) when every column shares the
+    /// name (or the frame is empty), in which case the guard is skipped.
+    fn dataframe_other_height(
+        &mut self,
+        control: PointerValue<'ctx>,
+        name_data: PointerValue<'ctx>,
+        name_len: IntValue<'ctx>,
+    ) -> Result<(IntValue<'ctx>, IntValue<'ctx>), String> {
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "DataFrame guard outside function".to_string())?;
+        let i64_t = self.context.i64_type();
+        let i32_t = self.context.i32_type();
+
+        let entries = self
+            .df_load_field(control, 0, "df.oh.entries")
+            .into_pointer_value();
+        let len = self.df_load_field(control, 1, "df.oh.len").into_int_value();
+
+        let i_slot = self.create_entry_alloca(fn_val, "df.oh.i", i64_t.into());
+        let has_slot = self.create_entry_alloca(fn_val, "df.oh.has", i64_t.into());
+        let h_slot = self.create_entry_alloca(fn_val, "df.oh.h", i64_t.into());
+        self.builder
+            .build_store(i_slot, i64_t.const_zero())
+            .unwrap();
+        self.builder
+            .build_store(has_slot, i64_t.const_zero())
+            .unwrap();
+        self.builder
+            .build_store(h_slot, i64_t.const_zero())
+            .unwrap();
+
+        let cond_bb = self.context.append_basic_block(fn_val, "df.oh.cond");
+        let body_bb = self.context.append_basic_block(fn_val, "df.oh.body");
+        let cmp_bb = self.context.append_basic_block(fn_val, "df.oh.cmp");
+        let other_bb = self.context.append_basic_block(fn_val, "df.oh.other");
+        let next_bb = self.context.append_basic_block(fn_val, "df.oh.next");
+        let exit_bb = self.context.append_basic_block(fn_val, "df.oh.exit");
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.builder.position_at_end(cond_bb);
+        let i = self
+            .builder
+            .build_load(i64_t, i_slot, "df.oh.iv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, len, "df.oh.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, body_bb, exit_bb)
+            .unwrap();
+
+        // body: a different name_len means a different name → other.
+        self.builder.position_at_end(body_bb);
+        let entry = self.df_entry_ptr(entries, i);
+        let e_name_len = self.df_entry_load(entry, 1, "df.oh.elen").into_int_value();
+        let len_eq = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, name_len, e_name_len, "df.oh.leneq")
+            .unwrap();
+        // len differs → definitely other; len equal → compare bytes.
+        self.builder
+            .build_conditional_branch(len_eq, cmp_bb, other_bb)
+            .unwrap();
+
+        self.builder.position_at_end(cmp_bb);
+        let e_name_data = self
+            .df_entry_load(entry, 0, "df.oh.edata")
+            .into_pointer_value();
+        let cmp = self
+            .builder
+            .build_call(
+                self.memcmp_fn,
+                &[name_data.into(), e_name_data.into(), name_len.into()],
+                "df.oh.memcmp",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let same = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, cmp, i32_t.const_zero(), "df.oh.same")
+            .unwrap();
+        // same name → keep scanning; different → other.
+        self.builder
+            .build_conditional_branch(same, next_bb, other_bb)
+            .unwrap();
+
+        // other: record this column's length, exit.
+        self.builder.position_at_end(other_bb);
+        let col = self
+            .df_entry_load(entry, 2, "df.oh.col")
+            .into_pointer_value();
+        let h = self.column_len_field(col);
+        self.builder
+            .build_store(has_slot, i64_t.const_int(1, false))
+            .unwrap();
+        self.builder.build_store(h_slot, h).unwrap();
+        self.builder.build_unconditional_branch(exit_bb).unwrap();
+
+        self.builder.position_at_end(next_bb);
+        let i_next = self
+            .builder
+            .build_int_add(i, i64_t.const_int(1, false), "df.oh.inc")
+            .unwrap();
+        self.builder.build_store(i_slot, i_next).unwrap();
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.builder.position_at_end(exit_bb);
+        let has_i64 = self
+            .builder
+            .build_load(i64_t, has_slot, "df.oh.hasv")
+            .unwrap()
+            .into_int_value();
+        let has = self
+            .builder
+            .build_int_compare(IntPredicate::NE, has_i64, i64_t.const_zero(), "df.oh.hasb")
+            .unwrap();
+        let height = self
+            .builder
+            .build_load(i64_t, h_slot, "df.oh.hv")
+            .unwrap()
+            .into_int_value();
+        Ok((has, height))
+    }
+
     /// Extract `(data_ptr, len)` from a compiled Kāra `String` value (a
     /// `{ptr, len, cap}` struct).
     fn df_string_parts(
@@ -420,7 +553,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         if !matches!(
             method,
-            "insert" | "column" | "has_column" | "width" | "height"
+            "insert" | "column" | "has_column" | "width" | "height" | "column_names" | "select"
         ) {
             return Ok(None);
         }
@@ -473,6 +606,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.compile_dataframe_column(control, name_data, name_len)?,
                 ))
             }
+            "column_names" => Ok(Some(self.compile_dataframe_column_names(control)?)),
+            "select" => Ok(Some(
+                self.compile_dataframe_select(control, &args[0].value)?,
+            )),
             _ => unreachable!(),
         }
     }
@@ -521,6 +658,223 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(phi.as_basic_value())
     }
 
+    /// `column_names() -> Vec[String]` — a fresh Vec of the entry names,
+    /// in schema order. Each String element owns a fresh copy of its name
+    /// (malloc + memcpy, `cap == len`), independent of the frame's name
+    /// buffers — so the Vec's own drop frees the copies and never touches
+    /// the frame.
+    fn compile_dataframe_column_names(
+        &mut self,
+        control: PointerValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "DataFrame.column_names outside function".to_string())?;
+        let i64_t = self.context.i64_type();
+        let vec_st = self.vec_struct_type();
+        let entries = self
+            .df_load_field(control, 0, "df.cn.entries")
+            .into_pointer_value();
+        let len = self.df_load_field(control, 1, "df.cn.len").into_int_value();
+
+        // Buffer of `len` String structs.
+        let elem_size = vec_st.size_of().unwrap();
+        let buf_bytes = self
+            .builder
+            .build_int_mul(len, elem_size, "df.cn.bytes")
+            .unwrap();
+        let buf = self
+            .builder
+            .build_call(self.malloc_fn, &[buf_bytes.into()], "df.cn.buf")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+
+        let i_slot = self.create_entry_alloca(fn_val, "df.cn.i", i64_t.into());
+        self.builder
+            .build_store(i_slot, i64_t.const_zero())
+            .unwrap();
+        let cond_bb = self.context.append_basic_block(fn_val, "df.cn.cond");
+        let body_bb = self.context.append_basic_block(fn_val, "df.cn.body");
+        let after_bb = self.context.append_basic_block(fn_val, "df.cn.after");
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.builder.position_at_end(cond_bb);
+        let i = self
+            .builder
+            .build_load(i64_t, i_slot, "df.cn.iv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, len, "df.cn.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, body_bb, after_bb)
+            .unwrap();
+
+        self.builder.position_at_end(body_bb);
+        let entry = self.df_entry_ptr(entries, i);
+        let e_name = self
+            .df_entry_load(entry, 0, "df.cn.ename")
+            .into_pointer_value();
+        let e_len = self.df_entry_load(entry, 1, "df.cn.elen").into_int_value();
+        let name_copy = self.df_copy_name(e_name, e_len)?;
+        let slot = unsafe {
+            self.builder
+                .build_gep(vec_st, buf, &[i], "df.cn.slot")
+                .unwrap()
+        };
+        self.builder
+            .build_store(
+                self.builder
+                    .build_struct_gep(vec_st, slot, 0, "df.cn.s.data")
+                    .unwrap(),
+                name_copy,
+            )
+            .unwrap();
+        self.builder
+            .build_store(
+                self.builder
+                    .build_struct_gep(vec_st, slot, 1, "df.cn.s.len")
+                    .unwrap(),
+                e_len,
+            )
+            .unwrap();
+        self.builder
+            .build_store(
+                self.builder
+                    .build_struct_gep(vec_st, slot, 2, "df.cn.s.cap")
+                    .unwrap(),
+                e_len,
+            )
+            .unwrap();
+        let i_next = self
+            .builder
+            .build_int_add(i, i64_t.const_int(1, false), "df.cn.inc")
+            .unwrap();
+        self.builder.build_store(i_slot, i_next).unwrap();
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.builder.position_at_end(after_bb);
+        Ok(self.build_vec_value(buf, len, len))
+    }
+
+    /// `select(cols) -> DataFrame` — a fresh frame holding copies of the
+    /// named columns, in the given order (subset / reorder). Iterates the
+    /// `Vec[String]` argument; each name is looked up in the source (a
+    /// missing name traps), its column deep-copied into the new frame
+    /// (always appended — the interpreter allows a name more than once).
+    /// The source frame is borrowed (unchanged).
+    fn compile_dataframe_select(
+        &mut self,
+        src_control: PointerValue<'ctx>,
+        cols_arg: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "DataFrame.select outside function".to_string())?;
+        let i64_t = self.context.i64_type();
+        let vec_st = self.vec_struct_type();
+
+        let new_ctrl = self.compile_dataframe_new()?.into_pointer_value();
+
+        // The `Vec[String]` of requested names.
+        let cols_val = self.compile_expr(cols_arg)?;
+        let cols_struct = cols_val.into_struct_value();
+        let cols_data = self
+            .builder
+            .build_extract_value(cols_struct, 0, "df.sel.cdata")
+            .unwrap()
+            .into_pointer_value();
+        let cols_len = self
+            .builder
+            .build_extract_value(cols_struct, 1, "df.sel.clen")
+            .unwrap()
+            .into_int_value();
+
+        let j_slot = self.create_entry_alloca(fn_val, "df.sel.j", i64_t.into());
+        self.builder
+            .build_store(j_slot, i64_t.const_zero())
+            .unwrap();
+        let cond_bb = self.context.append_basic_block(fn_val, "df.sel.cond");
+        let body_bb = self.context.append_basic_block(fn_val, "df.sel.body");
+        let after_bb = self.context.append_basic_block(fn_val, "df.sel.after");
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.builder.position_at_end(cond_bb);
+        let j = self
+            .builder
+            .build_load(i64_t, j_slot, "df.sel.jv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, j, cols_len, "df.sel.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, body_bb, after_bb)
+            .unwrap();
+
+        self.builder.position_at_end(body_bb);
+        let name_slot = unsafe {
+            self.builder
+                .build_gep(vec_st, cols_data, &[j], "df.sel.nslot")
+                .unwrap()
+        };
+        let name_data = self
+            .builder
+            .build_load(
+                self.context.ptr_type(AddressSpace::default()),
+                self.builder
+                    .build_struct_gep(vec_st, name_slot, 0, "df.sel.nd.p")
+                    .unwrap(),
+                "df.sel.ndata",
+            )
+            .unwrap()
+            .into_pointer_value();
+        let name_len = self
+            .builder
+            .build_load(
+                i64_t,
+                self.builder
+                    .build_struct_gep(vec_st, name_slot, 1, "df.sel.nl.p")
+                    .unwrap(),
+                "df.sel.nlen",
+            )
+            .unwrap()
+            .into_int_value();
+        let (found, index) = self.dataframe_find_index(src_control, name_data, name_len)?;
+        self.emit_column_guard(found, "DataFrame.select: no column with that name")?;
+        let entries = self
+            .df_load_field(src_control, 0, "df.sel.entries")
+            .into_pointer_value();
+        let entry = self.df_entry_ptr(entries, index);
+        let col = self
+            .df_entry_load(entry, 2, "df.sel.col")
+            .into_pointer_value();
+        let elem_size = self
+            .df_entry_load(entry, 3, "df.sel.esize")
+            .into_int_value();
+        let owned = self.column_deep_copy(col, elem_size)?;
+        self.dataframe_append_entry(new_ctrl, name_data, name_len, owned, elem_size)?;
+        let j_next = self
+            .builder
+            .build_int_add(j, i64_t.const_int(1, false), "df.sel.inc")
+            .unwrap();
+        self.builder.build_store(j_slot, j_next).unwrap();
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.builder.position_at_end(after_bb);
+        // The `cols` Vec[String] is only read (names are copied in via
+        // `df_copy_name`); it is not consumed, so its own scope cleanup /
+        // the caller's owned-temp drop frees it. (Freeing it here would
+        // double-free a literal-arg temp.)
+        let _ = cols_struct;
+        Ok(new_ctrl.into())
+    }
+
     /// `column(name) -> Column[T]` — find the named column, deep-copy it
     /// out (value semantics), trap on a missing name.
     fn compile_dataframe_column(
@@ -560,6 +914,27 @@ impl<'ctx> super::Codegen<'ctx> {
         let fn_val = self
             .current_fn
             .ok_or_else(|| "DataFrame.insert outside function".to_string())?;
+        // Equal-length (Arrow) invariant: a new / replacement column must
+        // match the table's row count, measured against any *other*
+        // (different-named) existing column — replacing the sole column may
+        // change the height (nothing else to disagree). A mismatch traps,
+        // matching the interpreter.
+        let new_len = self.column_len_field(owned_col);
+        let (has_other, other_h) = self.dataframe_other_height(control, name_data, name_len)?;
+        let len_eq = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, new_len, other_h, "df.ins.leneq")
+            .unwrap();
+        let not_other = self.builder.build_not(has_other, "df.ins.noother").unwrap();
+        let len_ok = self
+            .builder
+            .build_or(not_other, len_eq, "df.ins.lenok")
+            .unwrap();
+        self.emit_column_guard(
+            len_ok,
+            "DataFrame.insert: column length does not match the table's row count",
+        )?;
+
         // Replace an existing same-named column, else append.
         let (found, index) = self.dataframe_find_index(control, name_data, name_len)?;
         let replace_bb = self.context.append_basic_block(fn_val, "df.ins.replace");
@@ -593,52 +968,55 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.builder.build_unconditional_branch(done_bb).unwrap();
 
-        // Append: grow if needed, copy name in, store new entry, len++.
+        // Append a new column at the end.
         self.builder.position_at_end(append_bb);
+        self.dataframe_append_entry(control, name_data, name_len, owned_col, elem_size)?;
+        self.builder.build_unconditional_branch(done_bb).unwrap();
+
+        self.builder.position_at_end(done_bb);
+        Ok(())
+    }
+
+    /// Append one column at the end (grow if needed, copy the name in,
+    /// store the entry, len++). Used by `insert`'s append branch and by
+    /// `select` (which always appends — the interpreter allows a name to
+    /// appear more than once in the selection). Caller is positioned at a
+    /// straight-line block (no branching here).
+    fn dataframe_append_entry(
+        &mut self,
+        control: PointerValue<'ctx>,
+        name_data: PointerValue<'ctx>,
+        name_len: IntValue<'ctx>,
+        owned_col: PointerValue<'ctx>,
+        elem_size: IntValue<'ctx>,
+    ) -> Result<(), String> {
         self.dataframe_ensure_capacity(control)?;
         let entries = self
-            .df_load_field(control, 0, "df.ins.a.entries")
+            .df_load_field(control, 0, "df.ap.entries")
             .into_pointer_value();
-        let len = self
-            .df_load_field(control, 1, "df.ins.a.len")
-            .into_int_value();
+        let len = self.df_load_field(control, 1, "df.ap.len").into_int_value();
         let entry = self.df_entry_ptr(entries, len);
         let name_copy = self.df_copy_name(name_data, name_len)?;
         self.builder
-            .build_store(
-                self.df_entry_field_slot(entry, 0, "df.ins.a.name"),
-                name_copy,
-            )
+            .build_store(self.df_entry_field_slot(entry, 0, "df.ap.name"), name_copy)
             .unwrap();
         self.builder
-            .build_store(
-                self.df_entry_field_slot(entry, 1, "df.ins.a.nlen"),
-                name_len,
-            )
+            .build_store(self.df_entry_field_slot(entry, 1, "df.ap.nlen"), name_len)
             .unwrap();
         self.builder
-            .build_store(
-                self.df_entry_field_slot(entry, 2, "df.ins.a.col"),
-                owned_col,
-            )
+            .build_store(self.df_entry_field_slot(entry, 2, "df.ap.col"), owned_col)
             .unwrap();
         self.builder
-            .build_store(
-                self.df_entry_field_slot(entry, 3, "df.ins.a.size"),
-                elem_size,
-            )
+            .build_store(self.df_entry_field_slot(entry, 3, "df.ap.size"), elem_size)
             .unwrap();
         let i64_t = self.context.i64_type();
         let new_len = self
             .builder
-            .build_int_add(len, i64_t.const_int(1, false), "df.ins.a.newlen")
+            .build_int_add(len, i64_t.const_int(1, false), "df.ap.newlen")
             .unwrap();
         self.builder
-            .build_store(self.df_field_slot(control, 1, "df.ins.a.lens"), new_len)
+            .build_store(self.df_field_slot(control, 1, "df.ap.lens"), new_len)
             .unwrap();
-        self.builder.build_unconditional_branch(done_bb).unwrap();
-
-        self.builder.position_at_end(done_bb);
         Ok(())
     }
 

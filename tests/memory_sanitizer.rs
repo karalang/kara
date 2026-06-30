@@ -11005,6 +11005,54 @@ fn main() {
         );
     }
 
+    /// DataFrame `column_names` / `select` heap lifecycle (phase-11 Arrow
+    /// Q6 codegen, slice 2c): `column_names` mallocs a fresh `Vec[String]`
+    /// whose elements are independent name copies (freed by the Vec's own
+    /// drop, never the frame's name buffers); `select` mallocs a fresh
+    /// frame holding column copies (its own `FreeDataFrame` drop). The
+    /// `cols` literal arg is freed by the caller's owned-temp drop (freeing
+    /// it in `select` would double-free). A missing free leaks (Linux
+    /// detect_leaks); a double free is caught everywhere.
+    #[test]
+    fn asan_dataframe_column_names_select_clean() {
+        let label = "dataframe_names_select";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+fn main() {
+    let mut df: DataFrame = DataFrame.new();
+    df.insert("a", Column.from_vec([1, 2]));
+    df.insert("b", Column.from_vec([3, 4]));
+    let names: Vec[String] = df.column_names();
+    println(names.len());
+    let sub: DataFrame = df.select(["b", "a"]);
+    println(sub.width());
+    let col: Column[i64] = sub.column("b");
+    println(col.len());
+    println(df.width());
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             check column_names Vec[String] drop + select fresh-frame drop",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["2", "2", "2", "2"],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     /// Column transform heap lifecycle (phase-11 follow-on slice): the
     /// Column-returning transforms `fillna` / `dropna` and the
     /// `from_iter_nullable` constructor each malloc a *fresh* control
