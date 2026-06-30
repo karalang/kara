@@ -17408,6 +17408,46 @@ fn test_dataframe_column_missing_traps() {
     );
 }
 
+#[test]
+fn test_dataframe_select_subset_and_reorder() {
+    // select picks a column subset in the given order (a reorder here);
+    // the result is a fresh frame whose columns view the source buffers.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"a\", Column.from_vec([1i64, 2i64]));\n\
+             df.insert(\"b\", Column.from_vec([3i64, 4i64]));\n\
+             df.insert(\"c\", Column.from_vec([5i64, 6i64]));\n\
+             let sub: DataFrame = df.select([\"c\", \"a\"]);\n\
+             println(sub.width());\n\
+             println(sub.height());\n\
+             for n in sub.column_names() { println(n); }\n\
+             let c0: Column[i64] = sub.column(\"c\");\n\
+             match c0[1] { Some(v) => { println(v); } None => { println(-1i64); } }\n\
+             println(df.width());\n\
+         }",
+    );
+    // sub: 2 cols, 2 rows, names [c, a]; c[1] == 6; source df still 3 wide.
+    assert_eq!(out, "2\n2\nc\na\n6\n3\n");
+}
+
+#[test]
+fn test_dataframe_select_missing_column_traps() {
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"a\", Column.from_vec([1i64]));\n\
+             let _ = df.select([\"a\", \"zzz\"]);\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("no column named 'zzz'")),
+        "{errors:?}",
+    );
+}
+
 // ── `ref name @ PATTERN` — explicit-ref @ bindings (design.md § @
 // Bindings): bindings borrow, scrutinee stays usable after ──────────
 

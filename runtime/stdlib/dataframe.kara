@@ -98,4 +98,13 @@ impl DataFrame {
     fn height(ref self) -> i64 {
         0
     }
+
+    // A fresh table holding only the named columns, in the given order
+    // (a column subset / reorder — no predicate, no row filtering). The
+    // selected columns are views sharing the source's buffers (like
+    // `column`); a name absent from this table is a runtime error.
+    #[compiler_builtin]
+    fn select(ref self, cols: Vec[String]) -> DataFrame {
+        DataFrame { handle_id: 0 }
+    }
 }

@@ -26511,6 +26511,30 @@ fn test_dataframe_column_name_must_be_string() {
     );
 }
 
+#[test]
+fn test_dataframe_select_types_and_arg_checked() {
+    // select(Vec[String]) -> DataFrame; the result is a usable DataFrame.
+    typecheck_ok(
+        "fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"a\", Column.from_vec([1i64]));\n\
+             let sub: DataFrame = df.select([\"a\"]);\n\
+             let _w: i64 = sub.width();\n\
+         }",
+    );
+    // A non-Vec[String] argument is rejected.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let df: DataFrame = DataFrame.new();\n\
+             let _ = df.select([1i64, 2i64]);\n\
+         }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "expected select(Vec[i64]) to mismatch Vec[String], got none",
+    );
+}
+
 // ── Effect-resource dispatch types untyped `let` bindings ─────────
 //
 // bugs.md "Untyped `let` from an effect-resource method call doesn't

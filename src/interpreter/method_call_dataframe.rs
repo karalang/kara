@@ -161,6 +161,43 @@ impl<'a> super::Interpreter<'a> {
                 });
                 Some(Value::Int(h as i64))
             }
+            // A fresh table with only the named columns, in the given
+            // order (subset / reorder; views share the source buffers).
+            // A name absent from this table is a runtime error.
+            "select" => {
+                let Value::Array(rc) = self.eval_expr_inner(&args.first()?.value) else {
+                    return Some(self.record_runtime_error(
+                        "DataFrame.select expects a Vec[String] of column names",
+                        span,
+                    ));
+                };
+                let wanted = rc.read().unwrap();
+                let cols = columns.read().unwrap();
+                let mut picked: Vec<(String, Value)> = Vec::with_capacity(wanted.len());
+                for nv in wanted.iter() {
+                    let Value::String(name) = nv else {
+                        return Some(self.record_runtime_error(
+                            format!(
+                                "DataFrame.select column name must be a String, got {}",
+                                nv.variant_name()
+                            ),
+                            span,
+                        ));
+                    };
+                    match cols.iter().find(|(n, _)| n == name) {
+                        Some((_, col)) => picked.push((name.clone(), col.clone())),
+                        None => {
+                            return Some(self.record_runtime_error(
+                                format!("DataFrame.select: no column named '{name}'"),
+                                span,
+                            ));
+                        }
+                    }
+                }
+                Some(Value::DataFrame {
+                    columns: Arc::new(RwLock::new(picked)),
+                })
+            }
             _ => None,
         }
     }

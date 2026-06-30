@@ -1638,12 +1638,12 @@ impl<'a> super::TypeChecker<'a> {
         if is_dataframe
             && matches!(
                 method,
-                "column" | "insert" | "has_column" | "column_names" | "width" | "height"
+                "column" | "insert" | "has_column" | "column_names" | "width" | "height" | "select"
             )
         {
             let arity = |m: &str| match m {
                 "insert" => 2usize,
-                "column" | "has_column" => 1,
+                "column" | "has_column" | "select" => 1,
                 _ => 0,
             };
             let want = arity(method);
@@ -1657,11 +1657,21 @@ impl<'a> super::TypeChecker<'a> {
             }
             // Infer every arg (side effects / diagnostics); the leading
             // `name` of `column` / `has_column` / `insert` must be a
-            // String. `insert`'s `col` arg type isn't bound from the
-            // receiver (the baked-generic limitation) — accepted as-is.
+            // String, and `select`'s arg a `Vec[String]`. `insert`'s `col`
+            // arg type isn't bound from the receiver (the baked-generic
+            // limitation) — accepted as-is.
             let arg_tys: Vec<Type> = args.iter().map(|a| self.infer_expr(&a.value)).collect();
             if matches!(method, "column" | "has_column" | "insert") {
                 self.check_assignable(&Type::Str, &arg_tys[0], args[0].value.span.clone());
+            } else if method == "select" {
+                self.check_assignable(
+                    &Type::Named {
+                        name: "Vec".to_string(),
+                        args: vec![Type::Str],
+                    },
+                    &arg_tys[0],
+                    args[0].value.span.clone(),
+                );
             }
             return match method {
                 "column" => Type::Named {
@@ -1674,6 +1684,10 @@ impl<'a> super::TypeChecker<'a> {
                     args: vec![Type::Str],
                 },
                 "width" | "height" => Type::Int(IntSize::I64),
+                "select" => Type::Named {
+                    name: "DataFrame".to_string(),
+                    args: vec![],
+                },
                 // insert
                 _ => Type::Unit,
             };
