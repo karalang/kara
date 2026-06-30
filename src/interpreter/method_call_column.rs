@@ -23,9 +23,93 @@
 
 use std::sync::{Arc, RwLock};
 
-use crate::ast::CallArg;
+use crate::ast::{BinOp, CallArg};
 use crate::interpreter::value::{EnumData, Value};
 use crate::token::Span;
+
+/// Numeric value as `f64` — for the float-result statistics (`mean` /
+/// `var` / `std` / `median` / `quantile` / `corr`). Non-numeric values
+/// (never reached for a typechecked numeric column) fall back to `0.0`.
+fn val_f64(v: &Value) -> f64 {
+    match v {
+        Value::Int(i) => *i as f64,
+        Value::Float(f) => *f,
+        _ => 0.0,
+    }
+}
+
+/// Collect the valid (non-null) slot values of a column, in order — the
+/// SQL/pandas posture for every aggregate (nulls are skipped).
+fn collect_valid(data: &Arc<RwLock<Vec<Value>>>, valid: &Arc<RwLock<Vec<bool>>>) -> Vec<Value> {
+    let d = data.read().unwrap();
+    let v = valid.read().unwrap();
+    v.iter()
+        .zip(d.iter())
+        .filter(|(&ok, _)| ok)
+        .map(|(_, x)| x.clone())
+        .collect()
+}
+
+/// The min (or max) of a non-empty value list — the scalar `<` posture
+/// (NaN compares false against everything, so it neither displaces nor is
+/// taken), mirroring `Tensor`'s `tensor_minmax_reduce`.
+fn column_minmax(is_min: bool, vals: Vec<Value>) -> Value {
+    let mut it = vals.into_iter();
+    let mut acc = it.next().expect("non-empty");
+    for x in it {
+        let take = match (&acc, &x) {
+            (Value::Int(a), Value::Int(b)) => {
+                if is_min {
+                    b < a
+                } else {
+                    b > a
+                }
+            }
+            (Value::Float(a), Value::Float(b)) => {
+                if is_min {
+                    b < a
+                } else {
+                    b > a
+                }
+            }
+            _ => false,
+        };
+        if take {
+            acc = x;
+        }
+    }
+    acc
+}
+
+/// Median of an already-ascending-sorted non-empty slice — the middle
+/// element (odd length) or the mean of the two middle elements (even).
+fn median_sorted(xs: &[f64]) -> f64 {
+    let n = xs.len();
+    if n % 2 == 1 {
+        xs[n / 2]
+    } else {
+        (xs[n / 2 - 1] + xs[n / 2]) / 2.0
+    }
+}
+
+/// The `q`-quantile (`q` in `[0, 1]`) of an ascending-sorted non-empty
+/// slice via linear interpolation between order statistics (NumPy /
+/// pandas default `'linear'` method).
+fn quantile_sorted(xs: &[f64], q: f64) -> f64 {
+    let n = xs.len();
+    if n == 1 {
+        return xs[0];
+    }
+    let pos = q * (n as f64 - 1.0);
+    let lo = pos.floor() as usize;
+    let hi = pos.ceil() as usize;
+    if lo == hi {
+        xs[lo]
+    } else {
+        let frac = pos - lo as f64;
+        xs[lo] + frac * (xs[hi] - xs[lo])
+    }
+}
 
 /// Build an `Option[T]` value — `Some(v)` / `None`, the interpreter's
 /// `Value::EnumVariant` Option representation.
@@ -257,7 +341,171 @@ impl<'a> super::Interpreter<'a> {
                     valid: Arc::new(RwLock::new(vec![true; n])),
                 })
             }
+            // Statistical reductions over the valid slots (nulls skipped —
+            // SQL/pandas aggregate semantics). `sum`/`min`/`max` preserve the
+            // element type `T`; `mean`/`var`/`std`/`median`/`quantile` always
+            // yield `f64` (the numerical world promotes; `Value` can't
+            // distinguish f32/f64 — the `Tensor.mean` rule). `corr` is the
+            // Pearson correlation of two `Column[f64]`.
+            "sum" | "mean" | "min" | "max" | "var" | "std" | "median" | "quantile" => {
+                Some(self.eval_column_reduce(method, data, valid, args, span))
+            }
+            "corr" => Some(self.eval_column_corr(data, valid, args, span)),
             _ => None,
         }
+    }
+
+    /// The unary statistical reductions on `Column[T: Numeric]`. Operates on
+    /// the valid slots only; an empty valid set traps (mirroring the Tensor
+    /// empty-reduce trap, since `min`/`max` have no identity and the
+    /// float-result forms would divide by zero). `var`/`std` are the
+    /// **sample** (Bessel-corrected, `n-1`) forms — the pandas-Series /
+    /// SQL-`stddev` default — so they additionally require ≥ 2 valid values.
+    fn eval_column_reduce(
+        &mut self,
+        method: &str,
+        data: &Arc<RwLock<Vec<Value>>>,
+        valid: &Arc<RwLock<Vec<bool>>>,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Value {
+        let vals = collect_valid(data, valid);
+        let n = vals.len();
+        if n == 0 {
+            return self.record_runtime_error(
+                format!("cannot compute `{method}` on a column with no valid values"),
+                span,
+            );
+        }
+        match method {
+            "sum" => {
+                let mut acc = vals[0].clone();
+                for x in vals.into_iter().skip(1) {
+                    acc = self.eval_binary(&BinOp::Add, acc, x, span);
+                    if self.pending_cf.is_some() {
+                        return Value::Unit;
+                    }
+                }
+                acc
+            }
+            "min" => column_minmax(true, vals),
+            "max" => column_minmax(false, vals),
+            "mean" => {
+                let s: f64 = vals.iter().map(val_f64).sum();
+                Value::Float(s / n as f64)
+            }
+            "var" | "std" => {
+                if n < 2 {
+                    return self.record_runtime_error(
+                        format!(
+                            "`{method}` requires at least 2 valid values \
+                             (sample variance is undefined for fewer)"
+                        ),
+                        span,
+                    );
+                }
+                let mean = vals.iter().map(val_f64).sum::<f64>() / n as f64;
+                let ss: f64 = vals
+                    .iter()
+                    .map(|v| {
+                        let d = val_f64(v) - mean;
+                        d * d
+                    })
+                    .sum();
+                let var = ss / (n as f64 - 1.0);
+                Value::Float(if method == "std" { var.sqrt() } else { var })
+            }
+            "median" => {
+                let mut xs: Vec<f64> = vals.iter().map(val_f64).collect();
+                xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                Value::Float(median_sorted(&xs))
+            }
+            "quantile" => {
+                let q = match args.first().map(|a| self.eval_expr_inner(&a.value)) {
+                    Some(Value::Float(q)) => q,
+                    Some(Value::Int(i)) => i as f64,
+                    _ => {
+                        return self.record_runtime_error(
+                            "Column.quantile expects a float argument in [0, 1]".to_string(),
+                            span,
+                        )
+                    }
+                };
+                if !(0.0..=1.0).contains(&q) {
+                    return self.record_runtime_error(
+                        format!("Column.quantile q must be in [0, 1], got {q}"),
+                        span,
+                    );
+                }
+                let mut xs: Vec<f64> = vals.iter().map(val_f64).collect();
+                xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                Value::Float(quantile_sorted(&xs, q))
+            }
+            _ => unreachable!("eval_column_reduce: unrouted method '{method}'"),
+        }
+    }
+
+    /// `c.corr(other)` — Pearson correlation between two equal-length
+    /// `Column[f64]`. Uses the slots where **both** columns are valid
+    /// (pairwise-complete observations, the pandas posture); requires ≥ 2
+    /// such pairs. A zero-variance operand yields `NaN` (pandas returns NaN
+    /// rather than trapping). Length mismatch traps.
+    fn eval_column_corr(
+        &mut self,
+        data: &Arc<RwLock<Vec<Value>>>,
+        valid: &Arc<RwLock<Vec<bool>>>,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Value {
+        let Some(arg) = args.first() else {
+            return self
+                .record_runtime_error("Column.corr expects one Column argument".to_string(), span);
+        };
+        let Value::Column {
+            data: odata,
+            valid: ovalid,
+        } = self.eval_expr_inner(&arg.value)
+        else {
+            return self
+                .record_runtime_error("Column.corr argument must be a Column".to_string(), span);
+        };
+        let d = data.read().unwrap();
+        let v = valid.read().unwrap();
+        let od = odata.read().unwrap();
+        let ov = ovalid.read().unwrap();
+        if d.len() != od.len() {
+            return self.record_runtime_error(
+                format!("Column.corr length mismatch: {} vs {}", d.len(), od.len()),
+                span,
+            );
+        }
+        let mut xs = Vec::new();
+        let mut ys = Vec::new();
+        for i in 0..d.len() {
+            if v[i] && ov[i] {
+                xs.push(val_f64(&d[i]));
+                ys.push(val_f64(&od[i]));
+            }
+        }
+        let n = xs.len();
+        if n < 2 {
+            return self.record_runtime_error(
+                "Column.corr requires at least 2 valid paired values".to_string(),
+                span,
+            );
+        }
+        let mx = xs.iter().sum::<f64>() / n as f64;
+        let my = ys.iter().sum::<f64>() / n as f64;
+        let (mut sxy, mut sxx, mut syy) = (0.0, 0.0, 0.0);
+        for i in 0..n {
+            let dx = xs[i] - mx;
+            let dy = ys[i] - my;
+            sxy += dx * dy;
+            sxx += dx * dx;
+            syy += dy * dy;
+        }
+        let denom = (sxx * syy).sqrt();
+        let r = if denom == 0.0 { f64::NAN } else { sxy / denom };
+        Value::Float(r)
     }
 }

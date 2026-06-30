@@ -144,4 +144,72 @@ impl[T] Column[T] {
     fn dropna(ref self) -> Column[T] {
         Column { handle_id: 0 }
     }
+
+    // --- Statistical reductions (phase-11 stats). All operate on the
+    // valid (non-null) slots only — SQL/pandas aggregate semantics. An
+    // empty valid set is a runtime error (no identity for min/max; the
+    // float-result forms divide by zero). `sum`/`min`/`max` preserve the
+    // element type; `mean`/`var`/`std`/`median`/`quantile` always yield
+    // `f64`. The result-type / numeric-element checks are an interpreter
+    // and typechecker intercept (baked generic dispatch can't bind `T`
+    // from the receiver) — these bodies are surface-only stubs.
+
+    // Sum of the valid slots (overflow traps as for scalar `+`).
+    #[compiler_builtin]
+    fn sum(ref self) -> T {
+        loop {}
+    }
+
+    // Arithmetic mean of the valid slots, always `f64`.
+    #[compiler_builtin]
+    fn mean(ref self) -> f64 {
+        0.0
+    }
+
+    // Smallest valid slot (NaN neither displaces nor is taken).
+    #[compiler_builtin]
+    fn min(ref self) -> T {
+        loop {}
+    }
+
+    // Largest valid slot.
+    #[compiler_builtin]
+    fn max(ref self) -> T {
+        loop {}
+    }
+
+    // **Sample** variance of the valid slots (Bessel `n-1`; the
+    // pandas-Series / SQL-`stddev` default). Requires ≥ 2 valid values.
+    #[compiler_builtin]
+    fn var(ref self) -> f64 {
+        0.0
+    }
+
+    // Sample standard deviation — `sqrt(var())`.
+    #[compiler_builtin]
+    fn std(ref self) -> f64 {
+        0.0
+    }
+
+    // Median of the valid slots (mean of the two middle values for an
+    // even count), always `f64`.
+    #[compiler_builtin]
+    fn median(ref self) -> f64 {
+        0.0
+    }
+
+    // The `q`-quantile (`q` in `[0, 1]`) of the valid slots via linear
+    // interpolation (NumPy / pandas default), always `f64`.
+    #[compiler_builtin]
+    fn quantile(ref self, q: f64) -> f64 {
+        0.0
+    }
+
+    // Pearson correlation with another equal-length `Column[f64]`, over
+    // the pairwise-valid slots (≥ 2 required). A zero-variance operand
+    // yields `NaN`. Only defined on `Column[f64]`.
+    #[compiler_builtin]
+    fn corr(ref self, other: Column[f64]) -> f64 {
+        0.0
+    }
 }

@@ -17318,6 +17318,131 @@ fn test_column_length_mismatch_traps() {
     );
 }
 
+// ── Column[T] stats — scalar statistical reductions (phase-11) ───────
+
+#[test]
+fn test_column_sum_mean_min_max_skip_nulls() {
+    // Reductions operate on the valid slots only (nulls skipped). sum/min/max
+    // preserve the element type (i64); mean is always f64.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let c: Column[i64] = Column.from_iter_nullable([Some(2i64), None, Some(4i64), Some(6i64)]);\n\
+             println(c.sum());\n\
+             println(c.min());\n\
+             println(c.max());\n\
+             println(c.mean());\n\
+         }",
+    );
+    // valid = [2, 4, 6]: sum 12, min 2, max 6, mean 4.0
+    assert_eq!(out, "12\n2\n6\n4\n");
+}
+
+#[test]
+fn test_column_var_std_sample() {
+    // Sample (n-1) variance / std over the valid f64 slots.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let c: Column[f64] = Column.from_vec([2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0]);\n\
+             println(c.var());\n\
+             println(c.std());\n\
+         }",
+    );
+    // mean 5.0, ss = 32, sample var = 32/7 = 4.571428..., std = sqrt
+    assert_eq!(out, "4.571428571428571\n2.138089935299395\n");
+}
+
+#[test]
+fn test_column_median_and_quantile() {
+    // median (even count -> mean of two middle) and quantile via linear interp.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let c: Column[f64] = Column.from_vec([1.0, 2.0, 3.0, 4.0]);\n\
+             println(c.median());\n\
+             println(c.quantile(0.0));\n\
+             println(c.quantile(0.5));\n\
+             println(c.quantile(1.0));\n\
+         }",
+    );
+    // sorted [1,2,3,4]: median 2.5; q0=1, q0.5=2.5, q1=4
+    assert_eq!(out, "2.5\n1\n2.5\n4\n");
+}
+
+#[test]
+fn test_column_corr_pearson() {
+    // Pearson correlation: perfectly correlated -> 1.0.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let a: Column[f64] = Column.from_vec([1.0, 2.0, 3.0, 4.0]);\n\
+             let b: Column[f64] = Column.from_vec([2.0, 4.0, 6.0, 8.0]);\n\
+             println(a.corr(b));\n\
+         }",
+    );
+    assert_eq!(out, "1\n");
+}
+
+#[test]
+fn test_column_corr_uses_pairwise_valid() {
+    // Only slots where BOTH columns are valid contribute to corr.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let a: Column[f64] = Column.from_iter_nullable([Some(1.0), Some(2.0), None, Some(4.0)]);\n\
+             let b: Column[f64] = Column.from_iter_nullable([Some(2.0), Some(4.0), Some(99.0), Some(8.0)]);\n\
+             println(a.corr(b));\n\
+         }",
+    );
+    // pairs (1,2)(2,4)(4,8) -> perfectly correlated -> 1.0
+    assert_eq!(out, "1\n");
+}
+
+#[test]
+fn test_column_reduce_empty_traps() {
+    // A column with no valid values can't be reduced (no identity).
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let mut c: Column[i64] = Column.new();\n\
+             c.push_null();\n\
+             println(c.sum());\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("no valid values")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_column_var_requires_two_values_traps() {
+    // Sample variance is undefined for fewer than 2 valid values.
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let c: Column[f64] = Column.from_vec([3.0]);\n\
+             println(c.var());\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("at least 2 valid values")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_column_quantile_out_of_range_traps() {
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let c: Column[f64] = Column.from_vec([1.0, 2.0, 3.0]);\n\
+             println(c.quantile(1.5));\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("must be in [0, 1]")),
+        "{errors:?}",
+    );
+}
+
 // ── DataFrame interpreter MVP (phase-11 Arrow Q6) ────────────────────
 
 #[test]

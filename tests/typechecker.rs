@@ -26432,6 +26432,128 @@ fn test_column_binop_error_cases() {
     }
 }
 
+// ── Column[T] stats — statistical reductions (phase-11) ──────────────
+
+#[test]
+fn test_column_stats_result_types_infer() {
+    // sum/min/max -> T (here i64); mean/var/std/median/quantile -> f64;
+    // corr(Column[f64]) -> f64. Each pinned by feeding into a typed binding.
+    typecheck_ok(
+        "fn main() {\n\
+             let c: Column[i64] = Column.from_vec([1i64, 2i64, 3i64]);\n\
+             let s: i64 = c.sum();\n\
+             let lo: i64 = c.min();\n\
+             let hi: i64 = c.max();\n\
+             let m: f64 = c.mean();\n\
+             let v: f64 = c.var();\n\
+             let sd: f64 = c.std();\n\
+             let md: f64 = c.median();\n\
+             let q: f64 = c.quantile(0.5);\n\
+             let f: Column[f64] = Column.from_vec([1.0, 2.0]);\n\
+             let g: Column[f64] = Column.from_vec([2.0, 4.0]);\n\
+             let r: f64 = f.corr(g);\n\
+             let _ = (s, lo, hi, m, v, sd, md, q, r);\n\
+         }",
+    );
+}
+
+#[test]
+fn test_column_sum_is_int_mean_is_float() {
+    // sum() preserves the integer element type — usable as an array index;
+    // mean() is f64 — rejected as an index. (Numeric coercion is permissive
+    // at let-bindings, so indexing is the context that distinguishes them.)
+    typecheck_ok(
+        "fn main() {\n\
+             let c: Column[i64] = Column.from_vec([1i64, 2i64]);\n\
+             let v: Vec[i64] = [10i64, 20i64];\n\
+             let _ = v[c.sum()];\n\
+         }",
+    );
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let c: Column[i64] = Column.from_vec([1i64, 2i64]);\n\
+             let v: Vec[i64] = [10i64, 20i64];\n\
+             let _ = v[c.mean()];\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("index must be an integer")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_column_mean_on_non_numeric_rejected() {
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let c: Column[String] = Column.from_vec([\"x\"]);\n\
+             let _ = c.mean();\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("requires a numeric element type")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_column_corr_requires_f64_column() {
+    // corr is only defined on Column[f64]; an i64 receiver is rejected, and
+    // a non-Column[f64] argument is rejected.
+    let recv = typecheck_errors(
+        "fn main() {\n\
+             let a: Column[i64] = Column.from_vec([1i64]);\n\
+             let b: Column[i64] = Column.from_vec([2i64]);\n\
+             let _ = a.corr(b);\n\
+         }",
+    );
+    assert!(
+        recv.iter()
+            .any(|e| e.message.contains("Column.corr requires an f64 column")),
+        "{recv:?}",
+    );
+    // A non-Column argument is rejected (the arg must be `Column[f64]`).
+    // (An `i64`-element column arg widens to `Column[f64]`, so a bare scalar
+    // is the meaningful negative.)
+    let arg = typecheck_errors(
+        "fn main() {\n\
+             let a: Column[f64] = Column.from_vec([1.0]);\n\
+             let _ = a.corr(5i64);\n\
+         }",
+    );
+    assert!(!arg.is_empty(), "non-Column corr argument must be rejected");
+}
+
+#[test]
+fn test_column_stats_arity_checked() {
+    // sum/mean/... take 0 args; quantile/corr take 1.
+    let s = typecheck_errors(
+        "fn main() {\n\
+             let c: Column[f64] = Column.from_vec([1.0]);\n\
+             let _ = c.sum(2i64);\n\
+         }",
+    );
+    assert!(
+        s.iter().any(|e| e.message.contains("Column.sum expects 0")),
+        "{s:?}",
+    );
+    let q = typecheck_errors(
+        "fn main() {\n\
+             let c: Column[f64] = Column.from_vec([1.0]);\n\
+             let _ = c.quantile();\n\
+         }",
+    );
+    assert!(
+        q.iter()
+            .any(|e| e.message.contains("Column.quantile expects 1")),
+        "{q:?}",
+    );
+}
+
 // ── DataFrame interpreter MVP (phase-11 Arrow Q6) ────────────────────
 
 #[test]

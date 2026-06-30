@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use super::env::{FunctionSig, ImplInfo};
 use super::inference::{resolve_type_var_top, substitute_type_params, unify_types};
 use super::types::{
-    clone_self_type_for, iterator_item_type_for, method_callee_type_name,
+    clone_self_type_for, is_numeric, iterator_item_type_for, method_callee_type_name,
     receiver_for_method_lookup, type_display, ConstArg, FloatSize, IntSize, SubstValue, Type,
     UIntSize, VariantTypeInfo,
 };
@@ -1690,6 +1690,101 @@ impl<'a> super::TypeChecker<'a> {
                         name: "Column".to_string(),
                         args: vec![elem],
                     },
+                };
+            }
+        }
+
+        // Column[T] statistical reductions (phase-11 stats). All operate on
+        // the valid (non-null) slots — SQL/pandas aggregate semantics.
+        // `sum`/`min`/`max` -> T; `mean`/`var`/`std`/`median`/`quantile` ->
+        // f64 (the numerical world promotes integer stats to float, and
+        // `Value` can't distinguish f32/f64 — the `Tensor.mean` rule).
+        // `corr` is Pearson over two `Column[f64]` -> f64. Baked generic
+        // dispatch can't bind `T` (nor the result type) from the receiver,
+        // so the whole surface is typed here from the receiver's element.
+        if matches!(
+            method,
+            "sum" | "mean" | "min" | "max" | "var" | "std" | "median" | "quantile" | "corr"
+        ) {
+            let column_elem = match &obj_ty {
+                Type::Named { name, args } if name == "Column" && args.len() == 1 => {
+                    Some(args[0].clone())
+                }
+                Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                    Type::Named { name, args } if name == "Column" && args.len() == 1 => {
+                        Some(args[0].clone())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(elem) = column_elem {
+                let nargs = usize::from(matches!(method, "quantile" | "corr"));
+                if args.len() != nargs {
+                    self.type_error(
+                        format!(
+                            "Column.{method} expects {nargs} argument(s), got {}",
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Error;
+                }
+                // `corr` is f64-only and binary (the other column); the rest
+                // accept any numeric element.
+                if method == "corr" {
+                    if !matches!(elem, Type::Float(FloatSize::F64)) {
+                        self.type_error(
+                            format!(
+                                "Column.corr requires an f64 column, found '{}'",
+                                type_display(&elem)
+                            ),
+                            span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                        self.infer_expr(&args[0].value);
+                        return Type::Error;
+                    }
+                    let arg_ty = self.infer_expr(&args[0].value);
+                    let expected = Type::Named {
+                        name: "Column".to_string(),
+                        args: vec![Type::Float(FloatSize::F64)],
+                    };
+                    self.check_assignable(&expected, &arg_ty, args[0].value.span.clone());
+                    return Type::Float(FloatSize::F64);
+                }
+                if !is_numeric(&elem) && !self.type_param_has_numeric_bound(&elem) {
+                    self.type_error(
+                        format!(
+                            "Column.{method} requires a numeric element type, found '{}'",
+                            type_display(&elem)
+                        ),
+                        span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Error;
+                }
+                // `quantile(q)` — `q` is an f64 in [0, 1] (range checked at
+                // runtime, since it isn't a compile-time constant in general).
+                if method == "quantile" {
+                    let q_ty = self.infer_expr(&args[0].value);
+                    self.check_assignable(
+                        &Type::Float(FloatSize::F64),
+                        &q_ty,
+                        args[0].value.span.clone(),
+                    );
+                }
+                return match method {
+                    "sum" | "min" | "max" => elem,
+                    // mean / var / std / median / quantile
+                    _ => Type::Float(FloatSize::F64),
                 };
             }
         }
