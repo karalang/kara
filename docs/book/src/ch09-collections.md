@@ -103,3 +103,65 @@ fn min_max(items: Vec[i64]) -> (i64, i64) {
     (items.min(), items.max())
 }
 ```
+
+## Nested collections — grids
+
+Collections nest. The workhorse 2D structure is a `Vec[Vec[i64]]` — a vector of
+rows, each a vector of cells. Build one by pushing row literals:
+
+```kara
+let mut grid: Vec[Vec[i64]] = Vec.new();
+grid.push([1, 2, 3]);
+grid.push([4, 5, 6]);
+
+println(grid.len());        // 2 — number of rows
+println(grid[0].len());    // 3 — number of columns
+println(grid[1][2]);       // 6 — row 1, column 2
+```
+
+`grid[i][j]` reads a cell; the same place assigns to one:
+
+```kara
+grid[0][1] = 20;           // mutate one cell in place
+```
+
+For a grid sized at runtime — the usual starting point for a dynamic-programming
+table — fill it with zeros up front. `Vec.filled(n, value)` builds an `n`-element
+vector, and nesting it gives an `r × c` grid:
+
+```kara
+let mut dp: Vec[Vec[i64]] = Vec.filled(rows, Vec.filled(cols, 0i64));
+```
+
+Each row is an **independent** copy — writing `dp[0][0] = 9` leaves `dp[1][0]`
+untouched. (Collections have value semantics; the inner `Vec.filled` is copied
+into each slot, not shared.)
+
+Traverse a grid by index. Pull each row out with `let row = g[i]`, then walk its
+cells — exactly the shape the inner loop wants:
+
+```kara
+fn cell_sum(g: ref Vec[Vec[i64]]) -> i64 {
+    let rows = g.len();
+    let mut total = 0i64;
+    let mut i = 0i64;
+    while i < rows {
+        let row = g[i];
+        let cols = row.len();
+        let mut j = 0i64;
+        while j < cols {
+            total = total + row[j];
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    total
+}
+```
+
+The parameter is `ref Vec[Vec[i64]]` — the grid is borrowed for reading, so the
+caller keeps ownership. To mutate cells through a parameter, take `mut ref
+Vec[Vec[i64]]` (see [Ownership](./ch12-ownership.md)).
+
+Rows need not be the same length — a `Vec[Vec[i64]]` is naturally jagged, which
+is what you want for adjacency lists and triangular tables.
