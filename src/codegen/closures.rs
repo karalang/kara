@@ -755,17 +755,19 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Reassignment slice (B-2026-06-22-2). A sanctioned heap-env closure
     /// reassignment is `<place> = make(j)` (fresh env, a MOVE) or
     /// `<place> = f` (binding source, the SHARED env, a COPY), where `<place>`
-    /// is either a heap-env closure BINDING `g` (`g = ..`), or a closure FIELD of
+    /// is one of: a heap-env closure BINDING `g` (`g = ..`); a closure FIELD of
     /// a heap-env struct owner (`r.f = ..` — `r` in `heap_env_aggregate_owners`,
-    /// `f` one of its closure fields).
+    /// `f` one of its closure fields); or an ELEMENT of a `Vec[Fn]` owner
+    /// (`v[i] = ..` — `v` in `heap_env_vec_owners`).
     /// Codegen drops the place's CURRENT env, stores the new fat pointer, and
     /// incs the new env on a binding copy (the source `f` stays a live
     /// co-owner), so each env is freed EXACTLY once. Position-agnostic: works at
     /// the top level of the function body and nested in a branch / loop (the
     /// drop-old fires per execution), since the codegen Assign hooks key only off
-    /// the target being a heap-env binding / owner field. `CompoundAssign`
-    /// (`g += ..`) is never a closure reassignment and is not sanctioned here.
-    /// Any other target / value shape returns false (walked / rejected as before).
+    /// the target being a heap-env binding / owner field / Vec element.
+    /// `CompoundAssign` (`g += ..`) is never a closure reassignment and is not
+    /// sanctioned here. Any other target / value shape returns false (walked /
+    /// rejected as before).
     fn is_heap_env_reassign(&self, target: &Expr, value: &Expr, binds: &HashSet<String>) -> bool {
         // The RHS must be a sanctioned reassignment SOURCE: a fresh heap-env
         // call (`make(j)`) or a heap-env closure binding (`f`, a copy).
@@ -781,6 +783,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     if self.heap_env_aggregate_owners
                         .get(r)
                         .is_some_and(|fs| fs.contains(field)))
+            }
+            ExprKind::Index { object, .. } => {
+                matches!(&object.kind, ExprKind::Identifier(v)
+                    if self.heap_env_vec_owners.contains(v))
             }
             _ => false,
         }

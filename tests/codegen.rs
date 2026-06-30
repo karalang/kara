@@ -1593,17 +1593,79 @@ mod codegen_tests {
         assert_eq!(out.as_deref(), Some("73\n"));
     }
 
-    /// Reassigning a `Vec[Fn]` ELEMENT (`v[i] = make(j)`) is the final remaining
-    /// reassignment form — still rejected.
+    // ── Heap-env Vec ELEMENT reassignment (B-2026-06-22-2) — closes the epic ──
+    // `v[i] = make(j)` (fresh env, a MOVE) or `v[i] = g` (binding source, the
+    // SHARED env, a COPY) where `v` is a heap-env `Vec[Fn]` owner. The
+    // binding-reassignment shape with the slot = the bounds-checked element ptr.
+    // Codegen drops v[i]'s CURRENT env, incs the new env on a copy, and stores the
+    // new fat into the element slot; the Vec's dynamic (refcount-aware) element
+    // drop loop then frees whatever ends up stored once at scope exit. This is the
+    // last reassignment form — every heap-env closure place is now supported.
+
+    /// `v[i] = make(j)` is a MOVE to a fresh element env: v[i]'s old env is dropped,
+    /// the new one freed once by the drop loop. `(v[0])(5) = 5 + 20 = 25`.
     #[test]
-    fn heap_env_vec_element_reassign_is_rejected() {
-        let err = ir_result(
+    fn heap_env_vec_element_reassigned_to_fresh_runs() {
+        let out = run_program(
             "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
              fn main() { let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(make(10i64)); \
               v[0i64] = make(20i64); println(f\"{(v[0i64])(5i64)}\"); }\n",
-        )
-        .expect_err("Vec element reassignment is not yet supported");
-        assert!(err.contains("E_ESCAPING_CLOSURE_NOT_YET"), "got: {err}");
+        );
+        assert_eq!(out.as_deref(), Some("25\n"));
+    }
+
+    /// `v[i] = g` is a COPY: the element shares `g`'s env (inc'd, freed once) and
+    /// `g` stays usable. `(v[0])(5) = 105`, `g(1) = 101` → 206.
+    #[test]
+    fn heap_env_vec_element_reassigned_copy_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let g = make(100i64); let mut v: Vec[Fn(i64) -> i64] = Vec.new(); \
+              v.push(make(10i64)); v[0i64] = g; \
+              println(f\"{(v[0i64])(5i64) + g(1i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("206\n"));
+    }
+
+    /// In a multi-element Vec, reassigning ONE element leaves the others intact.
+    /// `(v[0])(1) = 51` (reassigned), `(v[1])(2) = 22` → 73.
+    #[test]
+    fn heap_env_vec_element_reassigned_multi_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let mut v: Vec[Fn(i64) -> i64] = Vec.new(); \
+              v.push(make(10i64)); v.push(make(20i64)); v[0i64] = make(50i64); \
+              println(f\"{(v[0i64])(1i64) + (v[1i64])(2i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("73\n"));
+    }
+
+    /// Reassigning the same element in a LOOP drops the prior env each iteration,
+    /// so every intermediate env is freed once. Last is `make(30)`; `(v[0])(5) = 35`.
+    #[test]
+    fn heap_env_vec_element_reassigned_in_loop_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(make(0i64)); \
+              let mut i = 1i64; while i <= 3i64 { v[0i64] = make(i * 10i64); i = i + 1i64; } \
+              println(f\"{(v[0i64])(5i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("35\n"));
+    }
+
+    /// A DYNAMIC index reassigns each element once over the loop (the element ptr is
+    /// computed from the runtime index). `(v[0])(0)+(v[1])(0)+(v[2])(0) =
+    /// 0 + 100 + 200 = 300`.
+    #[test]
+    fn heap_env_vec_element_reassigned_dynamic_index_runs() {
+        let out = run_program(
+            "fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }\n\
+             fn main() { let mut v: Vec[Fn(i64) -> i64] = Vec.new(); \
+              v.push(make(1i64)); v.push(make(2i64)); v.push(make(3i64)); \
+              let mut i = 0i64; while i < 3i64 { v[i] = make(i * 100i64); i = i + 1i64; } \
+              println(f\"{(v[0i64])(0i64) + (v[1i64])(0i64) + (v[2i64])(0i64)}\"); }\n",
+        );
+        assert_eq!(out.as_deref(), Some("300\n"));
     }
 
     // ── Owner-copy slice (B-2026-06-22-2) ──

@@ -991,6 +991,90 @@ fn main() {
         );
     }
 
+    /// VEC ELEMENT reassignment slice (B-2026-06-22-2), the final form: `v[i] = g`
+    /// where `v` is a heap-env `Vec[Fn]` owner and `g` a heap-env binding is a COPY
+    /// — the reassignment drops `v[i]`'s OLD env, incs the SHARED env `g` holds, and
+    /// stores it into the element slot, so `v[i]` and `g` co-own one box freed
+    /// EXACTLY once (the Vec's refcount-aware drop loop decs it, `g`'s scope-exit
+    /// drop decs it) while `v[i]`'s original env is freed once at the reassignment.
+    /// Both `v[i]` and `g` are used after. A second element rides along untouched.
+    /// Without the drop-old the original element env leaks; without the inc the
+    /// shared box is freed twice.
+    #[test]
+    fn asan_heap_env_vec_element_reassign_copy_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn main() {
+    let g = make(100i64);
+    let mut v: Vec[Fn(i64) -> i64] = Vec.new();
+    v.push(make(10i64));
+    v.push(make(20i64));
+    v[0i64] = g;
+    println(f"{(v[0i64])(1i64) + g(1i64) + (v[1i64])(2i64)}");
+}
+"#,
+            &["224"],
+            "asan_heap_env_vec_element_reassign_copy_no_leak",
+        );
+    }
+
+    /// `v[i] = make(j)` is a MOVE to a fresh element env: the reassignment drops
+    /// `v[i]`'s old env (freed once) and the element becomes the sole owner of the
+    /// fresh one (freed once by the drop loop). Without the drop-old the original
+    /// element env leaks. `(v[0])(5) = 25`.
+    #[test]
+    fn asan_heap_env_vec_element_reassign_to_fresh_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn main() {
+    let mut v: Vec[Fn(i64) -> i64] = Vec.new();
+    v.push(make(10i64));
+    v[0i64] = make(20i64);
+    println(f"{(v[0i64])(5i64)}");
+}
+"#,
+            &["25"],
+            "asan_heap_env_vec_element_reassign_to_fresh_no_leak",
+        );
+    }
+
+    /// The strongest Vec-element leak case: reassigning over a DYNAMIC index in a
+    /// LOOP. Each of the 50 iterations drops the prior element env before storing
+    /// the next, across all elements, so every intermediate env box is freed once —
+    /// without the per-assignment drop-old, the overwritten env boxes would leak
+    /// (LSan-caught). Sum over the final pass: `(v[k])(0) = k*10` for k in 0..5 plus
+    /// the loop's last writes — the program prints the final-state sum `100`.
+    #[test]
+    fn asan_heap_env_vec_element_reassign_in_loop_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }
+fn main() {
+    let mut v: Vec[Fn(i64) -> i64] = Vec.new();
+    v.push(make(0i64));
+    v.push(make(0i64));
+    v.push(make(0i64));
+    v.push(make(0i64));
+    v.push(make(0i64));
+    let mut i = 0i64;
+    while i < 50i64 {
+        let mut k = 0i64;
+        while k < 5i64 {
+            v[k] = make(k * 10i64);
+            k = k + 1i64;
+        }
+        i = i + 1i64;
+    }
+    println(f"{(v[0i64])(0i64) + (v[1i64])(0i64) + (v[2i64])(0i64) + (v[3i64])(0i64) + (v[4i64])(0i64)}");
+}
+"#,
+            &["100"],
+            "asan_heap_env_vec_element_reassign_in_loop_no_leak",
+        );
+    }
+
     /// Owner-copy slice (B-2026-06-22-2): `let s = a` where `a` is a heap-env
     /// STRUCT owner. The struct copy shallow-copies the `Fn` field so `s` aliases
     /// `a`'s SAME RC env box; the copy INCs the shared env and registers `s`'s own

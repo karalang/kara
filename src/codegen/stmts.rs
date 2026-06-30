@@ -4198,6 +4198,17 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 } else if let ExprKind::Index { object, index } = &target.kind {
+                    // Heap-env closure Vec ELEMENT reassignment (`v[i] = make(j)` /
+                    // `v[i] = g`): drop v[i]'s CURRENT env, inc the new env on a
+                    // binding copy, store the new fat into the bounds-checked
+                    // element slot — the binding-reassignment shape with the slot =
+                    // the Vec element ptr. The Vec's dynamic (refcount-aware)
+                    // element drop loop then frees whatever is stored once at scope
+                    // exit. No-op (`false`) for any non-heap-env-Vec target, which
+                    // falls through to the generic index store.
+                    if self.try_compile_heap_env_vec_elem_reassign(object, index, val, value)? {
+                        return Ok(());
+                    }
                     self.compile_index_store(object, index, val)?;
                     // A tracked Vec/String binding moved into an OWNING Vec's
                     // heap-element slot (`out[j] = nb` where `out: Vec[Vec[T]]`)

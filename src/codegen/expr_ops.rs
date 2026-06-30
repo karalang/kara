@@ -859,6 +859,58 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(true)
     }
 
+    /// Heap-env closure Vec ELEMENT reassignment (B-2026-06-22-2): `v[i] = make(j)`
+    /// (fresh env, a MOVE) or `v[i] = g` (binding source, the SHARED env, a COPY)
+    /// where `v` is a heap-env `Vec[Fn]` owner. The binding-reassignment shape with
+    /// the slot = the bounds-checked element pointer (`lower_indexed_elem_ptr_vec`).
+    /// The element slot holds an inline closure fat pointer — exactly the shape the
+    /// Vec's DYNAMIC element drop loop (`__karac_vec_elem_closure_env_drop`) frees
+    /// at scope exit, and that loop is refcount-aware (dec + free at zero), so a
+    /// shared env co-owned by `v[i]` and a binding source is freed once. RC setter
+    /// rule (retain new → store → release old): compute the element ptr, save its
+    /// CURRENT fat, inc the new env on a binding copy (a fresh `make(j)` carries
+    /// its +1), store the new fat, then RC-drop the saved old env. So `v[i]`'s old
+    /// env is freed once at the reassignment, the new one once at `v`'s scope exit
+    /// (via the drop loop), and on a copy the source `g` stays a live co-owner.
+    /// Returns `Ok(true)` when handled; `false` for any non-heap-env-Vec target
+    /// (falls through to the generic `compile_index_store`). The misuse guard
+    /// rejects any escape of `v`, so the element env never outlives `v`.
+    pub(super) fn try_compile_heap_env_vec_elem_reassign(
+        &mut self,
+        object: &Expr,
+        index: &Expr,
+        new_val: BasicValueEnum<'ctx>,
+        value: &Expr,
+    ) -> Result<bool, String> {
+        let ExprKind::Identifier(vname) = &object.kind else {
+            return Ok(false);
+        };
+        if !self.heap_env_vec_owners.contains(vname) {
+            return Ok(false);
+        }
+        let vname = vname.clone();
+        // Bounds-checked element slot pointer; the slot holds the inline fat ptr.
+        let (elem_ptr, _elem_ty) = self.lower_indexed_elem_ptr_vec(&vname, index)?;
+        let old_fat = self
+            .builder
+            .build_load(
+                self.closure_value_type(),
+                elem_ptr,
+                "clo.velem.reassign.old",
+            )
+            .unwrap();
+        // Binding-source copy co-owns the shared env — inc it; a fresh `make(j)`
+        // already carries its +1.
+        let rhs_is_binding_copy = matches!(&value.kind,
+            ExprKind::Identifier(n) if self.heap_env_closure_vars.contains(n));
+        if rhs_is_binding_copy {
+            self.emit_heap_closure_env_inc(new_val);
+        }
+        self.builder.build_store(elem_ptr, new_val).unwrap();
+        self.emit_heap_closure_env_dec(old_fat);
+        Ok(true)
+    }
+
     pub(super) fn compile_field_store(
         &mut self,
         object: &Expr,
