@@ -19180,6 +19180,43 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_freshtemp_map_string_value_get_emits_drop_free() {
+        // Slice 3d-heap: `make_map().get(k)` on a fresh-temp `Map[i64, String]`.
+        // The value is heap, so unlike the scalar case the handle drop must take
+        // the per-entry-drop variant `karac_map_free_with_drop_vec` (frees each
+        // entry's String buffer before the handle) rather than plain
+        // `karac_map_free`. Without it the entry Strings leak (LeakSanitizer on
+        // Linux CI). The `Some(s)` value borrow is NOT independently dropped
+        // (`scrutinee_is_borrow_call`), so each entry String is freed once.
+        let src = r#"
+fn vmap() -> Map[i64, String] {
+    let mut m: Map[i64, String] = Map.new();
+    m.insert(1_i64, "a value string padded out beyond thirty-six bytes ok");
+    return m;
+}
+
+fn main() {
+    match vmap().get(1_i64) {
+        Some(s) => println(s),
+        None => println("none"),
+    };
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("__mrecv_tmp"),
+            "expected the fresh Map[i64,String] receiver materialized into __mrecv_tmp; got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("karac_map_free_with_drop_vec"),
+            "expected the per-entry-drop handle free (karac_map_free_with_drop_vec) for a \
+             heap-value Map temp receiver; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_ir_operand_temp_string_concat_emits_free() {
         // Slice 3c: a fresh-temp String operand of a string binop
         // (`make_s() + " x"`) must emit a `cap > 0`-guarded `freearg.free` of the

@@ -1423,19 +1423,34 @@ impl<'a> super::TypeChecker<'a> {
             ExprKind::Call { .. } | ExprKind::MethodCall { .. }
         ) {
             let subs = &self.env.substitutions;
-            let is_scalar = |t: &Type| {
+            // Scalar OR owned `String` (which resolves to `Type::Str` here, as in
+            // the Vec[String] slice). A String K/V makes the handle's
+            // `FreeMapHandle` per-entry drop the element buffers
+            // (`map_temp_cleanup_parts` classifies `key_is_vec`/`val_is_vec` from
+            // the type), and a `Map[_, String].get` returns `Option[ref String]`
+            // whose arm binding is suppressed by `scrutinee_is_borrow_call` — the
+            // same single-free shape the `Vec[String]` slice established. Other
+            // heap K/V (`Vec[T]`, user struct/enum, nested Map) are excluded —
+            // they need element-drop threading the helper doesn't carry.
+            let is_scalar_or_string = |t: &Type| {
+                let r = resolve_type_var_top(t, subs);
                 matches!(
-                    resolve_type_var_top(t, subs),
-                    Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char
-                )
+                    r,
+                    Type::Int(_)
+                        | Type::UInt(_)
+                        | Type::Float(_)
+                        | Type::Bool
+                        | Type::Char
+                        | Type::Str
+                ) || matches!(&r, Type::Named { name, args } if name == "String" && args.is_empty())
             };
             let record = match &obj_ty {
                 Type::Named { name, args }
                     if name == "Map"
                         && args.len() == 2
                         && matches!(method, "get" | "contains_key")
-                        && is_scalar(&args[0])
-                        && is_scalar(&args[1]) =>
+                        && is_scalar_or_string(&args[0])
+                        && is_scalar_or_string(&args[1]) =>
                 {
                     Some(Type::Named {
                         name: "Map".to_string(),
@@ -1449,7 +1464,7 @@ impl<'a> super::TypeChecker<'a> {
                     if name == "Set"
                         && args.len() == 1
                         && method == "contains"
-                        && is_scalar(&args[0]) =>
+                        && is_scalar_or_string(&args[0]) =>
                 {
                     Some(Type::Named {
                         name: "Set".to_string(),

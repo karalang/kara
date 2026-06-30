@@ -3514,14 +3514,21 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Returns `Ok(None)` when there's no recorded type (not a serviceable
     /// fresh-temp Map/Set read), so the caller falls through unchanged.
     ///
-    /// Scoped to SCALAR K/V/elem (the typechecker only records those): `Map.get`
-    /// returns `Option[ref V]` aliasing a value slot inside the map, suppressed
-    /// from independent drop at the match arm by `scrutinee_is_borrow_call`
-    /// (which keys off the method, not the receiver), and a scalar V owns no
-    /// nested heap, so the single `FreeMapHandle` is the complete drop;
-    /// `contains_key` / `contains` return `bool` (no borrow). The drop-track is
-    /// gated on `expr_yields_fresh_owned_temp`. Heap K/V (per-entry String/Vec
-    /// drop) is a follow-on.
+    /// Type-generic over the recorded K/V/elem: the typechecker records SCALAR
+    /// and owned-`String` K/V/elem (slice 3d + 3d-heap). The helper itself needs
+    /// no per-type branching — `map_temp_cleanup_parts` classifies `key_is_vec`/
+    /// `val_is_vec` from the `TypeExpr`, so a `String` K/V makes the single
+    /// `FreeMapHandle` per-entry free the element buffers
+    /// (`karac_map_free_with_drop_vec`), and `compile_map_method` resolves the
+    /// String LLVM type for the lookup. `Map.get` returns `Option[ref V]`
+    /// aliasing a value slot inside the map; the arm binding's independent drop
+    /// is suppressed by `scrutinee_is_borrow_call` (keys off the method, not the
+    /// receiver), so for a String V the per-entry buffer is freed exactly once at
+    /// frame exit while the borrow reads it — the same single-free shape the
+    /// `Vec[String]` slice established. `contains_key`/`contains` return `bool`
+    /// (no borrow). The drop-track is gated on `expr_yields_fresh_owned_temp`.
+    /// Other heap K/V (`Vec[T]`, user struct/enum, nested Map) are excluded by
+    /// the typechecker gate — they need element-drop threading not carried here.
     fn try_compile_freshtemp_mapset_read_method(
         &mut self,
         object: &Expr,

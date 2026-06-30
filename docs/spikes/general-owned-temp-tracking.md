@@ -432,11 +432,31 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    (`test_ir_freshtemp_map_get_emits_handle_free`,
    `test_ir_freshtemp_set_contains_emits_handle_free` → `__mrecv_tmp` **and**
    `karac_map_free`) + 2 ASAN (`asan_freshtemp_map_get_no_double_free` — looped
-   get; `asan_freshtemp_map_contains_key_set_contains_no_double_free`). **Still
-   open under 3d:** heap K/V (per-entry String/Vec drop — `FreeMapHandle` already
-   does it but the `Option[ref String]` value borrow's lifetime across the freed
-   handle needs the same verification the Vec[String] case got); `Map.values`/
-   `keys`/`iter` on a temp.
+   get; `asan_freshtemp_map_contains_key_set_contains_no_double_free`).
+   **Slice 3d-heap — `String` K/V (and Set elem). — DONE 2026-06-29.**
+   `make_map().get(k)` on `Map[String, i64]` (heap key), `Map[i64, String]` (heap
+   value), `Map[String, String]`, and `Set[String].contains` now compile. Like
+   the `Vec[String]` slice this was a **one-spot typechecker gate lift** with no
+   codegen-helper change: the gate now records the receiver type when K/V/elem is
+   scalar *or* owned `String` (`Type::Str`). Everything downstream already
+   composed — `map_temp_cleanup_parts` classifies `key_is_vec`/`val_is_vec` from
+   the `TypeExpr`, so the handle drop takes the per-entry variant
+   `karac_map_free_with_drop_vec` (frees each entry's key/value String buffer
+   before the handle); `compile_map_method` resolves the String LLVM type for the
+   lookup; and `Map[_, String].get`'s `Option[ref String]` value borrow is
+   suppressed from independent drop by the receiver-shape-agnostic
+   `scrutinee_is_borrow_call` — the same single-free shape `Vec[String]`
+   established, so each entry String is freed exactly once at frame exit while the
+   borrow reads it. Codegen output matched the interpreter oracle
+   (`22`/`true`/`<value-string>`). Verified: no double-free (macOS ASAN) and no
+   leak (Linux LSan — `Compiling karac` confirmed, zero reports). **Tests:** 1 IR
+   (`test_ir_freshtemp_map_string_value_get_emits_drop_free` → `__mrecv_tmp`
+   **and** `karac_map_free_with_drop_vec`, the per-entry drop the scalar case
+   never emits) + 2 ASAN (`asan_freshtemp_map_string_key_no_double_free`;
+   `asan_freshtemp_map_string_value_no_double_free` — the heap-value `Option[ref
+   String]` borrow, the riskiest double-free case). **Still open under 3d:** other
+   heap K/V (`Vec[T]`, user struct/enum, nested `Map` — need element-drop
+   threading the helper doesn't carry); `Map.values`/`keys`/`iter` on a temp.
    None of 3b/3b-heap/3b-c/3d blocks slices 4–6 (the scrutinee/tail/drop-order
    payoff needs the receiver-temp mechanism this slice establishes, which
    `materialize_owned_temp` now provides).

@@ -3182,6 +3182,81 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_freshtemp_map_string_key_no_double_free() {
+        // Slice 3d-heap: `make_map().get(k)` / `.contains_key(k)` on a fresh-temp
+        // `Map[String, i64]` (heap KEY). The handle drop must per-entry free each
+        // key String (`karac_map_free_with_drop_vec`) before the handle. The
+        // value is scalar (`Option[ref i64]` — no value borrow concern); the
+        // looked-up key arg is a static literal. Leak (entry keys) caught by
+        // Linux LSan; a double-free of the handle/keys by macOS ASAN. ≥36-byte
+        // keys defeat LSan short-string reachability; loop accumulates.
+        assert_clean_asan_run(
+            r#"
+fn kmap() -> Map[String, i64] {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("alpha key padded out well beyond thirty-six bytes ok", 11_i64);
+    m.insert("beta key padded out well beyond thirty-six bytes okk", 22_i64);
+    return m;
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        match kmap().get("beta key padded out well beyond thirty-six bytes okk") {
+            Some(v) => println(v),
+            None => println(0_i64),
+        };
+        println(kmap().contains_key("alpha key padded out well beyond thirty-six bytes ok"));
+        i = i + 1;
+    };
+}
+"#,
+            &["22", "true", "22", "true", "22", "true"],
+            "freshtemp_map_string_key_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_freshtemp_map_string_value_no_double_free() {
+        // Slice 3d-heap, the riskiest case: `make_map().get(k)` on a fresh-temp
+        // `Map[i64, String]` (heap VALUE). `get` returns `Option[ref String]`
+        // borrowing a value String *inside* the handle, which the
+        // `karac_map_free_with_drop_vec` per-entry drop frees at frame exit. The
+        // `Some(s)` arm binds a `ref String` that must NOT be dropped
+        // independently (`scrutinee_is_borrow_call`) — otherwise it double-frees
+        // the entry String the handle drop also frees (macOS ASAN). A handle drop
+        // that skipped the per-entry free leaks every value String (Linux LSan).
+        assert_clean_asan_run(
+            r#"
+fn vmap() -> Map[i64, String] {
+    let mut m: Map[i64, String] = Map.new();
+    m.insert(1_i64, "first value string padded out beyond thirty-six bytes");
+    m.insert(2_i64, "second value string padded out beyond thirty-six byte");
+    m.insert(3_i64, "third value string padded out beyond thirty-six bytess");
+    return m;
+}
+
+fn main() {
+    let mut i = 1;
+    while i < 4 {
+        match vmap().get(i) {
+            Some(s) => println(s),
+            None => println("none"),
+        };
+        i = i + 1;
+    };
+}
+"#,
+            &[
+                "first value string padded out beyond thirty-six bytes",
+                "second value string padded out beyond thirty-six byte",
+                "third value string padded out beyond thirty-six bytess",
+            ],
+            "freshtemp_map_string_value_no_double_free",
+        );
+    }
+
     // ── B-2026-06-10-6: inline-heap `Option[T]` payload drop ──────
     //
     // An `Option[String]` / `Option[Vec[_]]` dropped WITHOUT being
