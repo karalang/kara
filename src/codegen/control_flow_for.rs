@@ -306,6 +306,24 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Returns `Ok(None)` when the iterable isn't a Vec-typed value (the
     /// owned-temp side-table has no Vec entry at its span) — caller skips
     /// the body, preserving the prior unknown-iterable behaviour.
+    /// Reconstruct a `Vec[elem]` `TypeExpr` from a bare element `TypeExpr`.
+    /// Used by the fresh-temp `.iter()` for-loop path, where only the element
+    /// type survives (span-keyed in `temp_recv_elem_types`) — the receiver's
+    /// `Vec[T]` was clobbered to `Iterator[T]` in `expr_types`. The synthesized
+    /// type drives `register_var_from_type_expr` (vec_elem_types +
+    /// var_elem_type_exprs) and the `is_vec` gate identically to a real
+    /// `owned_temp_drops` Vec entry.
+    pub(super) fn vec_type_expr_from_element(elem_te: &TypeExpr) -> TypeExpr {
+        TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec!["Vec".to_string()],
+                generic_args: Some(vec![GenericArg::Type(elem_te.clone())]),
+                span: elem_te.span.clone(),
+            }),
+            span: elem_te.span.clone(),
+        }
+    }
+
     fn try_compile_for_vec_value(
         &mut self,
         label: Option<&str>,
@@ -315,7 +333,21 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         use super::state::VarSlot;
         let key = (iterable.span.offset, iterable.span.length);
-        let Some(te) = self.owned_temp_drops.get(&key).cloned() else {
+        let te = if let Some(te) = self.owned_temp_drops.get(&key).cloned() {
+            te
+        } else if let Some(elem_te) = self.temp_recv_elem_types.get(&key).cloned() {
+            // `for x in make_vec().iter()` — the for-loop peeled `.iter()` and
+            // recursed on the fresh-temp receiver, whose span collides with the
+            // `.iter()` MethodCall. `expr_types` at that span holds `Iterator[T]`
+            // (it clobbered the receiver's `Vec[T]`), so `owned_temp_drops` has no
+            // entry. The fresh-temp gate recorded the *element* type span-keyed in
+            // `temp_recv_elem_types`; reconstruct `Vec[elem]` so the
+            // materialize-iterate-drop path runs (without it the body is silently
+            // skipped — output 0). The element-drop threading below
+            // (`var_elem_type_exprs` → agg/map drops) is identical to the
+            // read-method path, so heap elements are freed once at scope exit.
+            super::Codegen::vec_type_expr_from_element(&elem_te)
+        } else {
             return Ok(None);
         };
         let is_vec = matches!(

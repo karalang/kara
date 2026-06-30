@@ -1450,7 +1450,25 @@ impl<'a> super::TypeChecker<'a> {
                     || (is_string && matches!(method, "get" | "first" | "last" | "contains"))
                     || (is_pod_vec && matches!(method, "get" | "first" | "last"))
                     || (is_user_struct && matches!(method, "get" | "first" | "last"))
-                    || (is_user_enum && matches!(method, "get" | "first" | "last"));
+                    || (is_user_enum && matches!(method, "get" | "first" | "last"))
+                    // `for x in make_vec().iter()` / `.into_iter()` — a fresh-temp
+                    // receiver iterated in a for-loop. The element type drives the
+                    // same materialize-iterate-drop path as the read methods, but
+                    // here the for-loop peels `.iter()` and recurses on the
+                    // receiver: at the collided MethodCall span `expr_types` holds
+                    // `Iterator[T]` (clobbering the receiver's `Vec[T]`), so
+                    // `owned_temp_drops` has no entry and the loop body is silently
+                    // skipped (output 0 vs the interpreter). Recording the element
+                    // span-keyed lets codegen reconstruct `Vec[elem]`. Every
+                    // element shape above is supported (scalar/String/POD-Vec/user
+                    // struct/user enum) — the for-loop reuses the read-method
+                    // cleanup threading verbatim.
+                    || ((is_scalar
+                        || is_string
+                        || is_pod_vec
+                        || is_user_struct
+                        || is_user_enum)
+                        && matches!(method, "iter" | "into_iter"));
                 if record {
                     let te = Self::type_to_type_expr(&resolved);
                     self.temp_recv_elem_types

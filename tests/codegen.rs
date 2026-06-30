@@ -19375,6 +19375,49 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_freshtemp_vec_iter_emits_materialize_and_drop() {
+        // Slice 3h: `for s in names().iter()` on a fresh-temp `Vec[String]`. The
+        // for-loop peels `.iter()` and recurses on the receiver `names()`, whose
+        // span collides with the `.iter()` MethodCall — so `expr_types` holds
+        // `Iterator[String]` and `owned_temp_drops` has NO Vec entry. Pre-fix the
+        // loop fell through to the silent skip (body never ran, output 0). The
+        // fresh-temp gate now records the element type span-keyed in
+        // `temp_recv_elem_types`; codegen reconstructs `Vec[String]`, materializes
+        // the temp into a `__for_vec_` synth local, iterates, and frees each
+        // element String in the per-element `cleanup.drop.inner.free` loop before
+        // the outer buffer. Without the materialize the body is skipped; without
+        // the per-element drop the element Strings leak (Linux LSan).
+        let src = r#"
+fn names() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("a heap string element padded beyond thirty-six bytes ok");
+    return v;
+}
+
+fn main() {
+    let mut total = 0_i64;
+    for s in names().iter() {
+        total = total + s.len();
+    };
+    println(total);
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("__for_vec_"),
+            "expected the fresh-temp Vec[String] iterable materialized into a \
+             __for_vec_ synth local (not the silent body-skip); got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("cleanup.drop.inner.free"),
+            "expected the vec-struct per-element drop loop (cleanup.drop.inner.free) \
+             freeing each element String buffer of the materialized iter temp; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_ir_freshtemp_vec_string_contains_emits_per_element_drop() {
         // Slice 3b-heap follow-on: `contains` on a fresh-temp `Vec[String]`.
         // `contains` returns `bool` (no borrow escapes), but the receiver temp

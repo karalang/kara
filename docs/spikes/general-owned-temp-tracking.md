@@ -427,14 +427,44 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    (Linux LSan). **Tests:** 1 IR (`test_ir_freshtemp_vec_enum_get_emits_agg_drop`
    → `__vrecv_tmp` **and** `cleanup.adrop.body` + `__karac_drop_Tok`) + 1 ASAN
    (`asan_freshtemp_vec_enum_get_no_double_free` — loops, ≥36-byte payloads,
-   reads the payload String through the borrow). **Still open:** deeper-nested
+   reads the payload String through the borrow).
+
+   **Slice 3h — `for x in make_vec().iter()` / `.into_iter()`. — DONE
+   2026-06-30.** A fresh-temp Vec iterated in a for-loop. This was a **silent
+   miscompile, not a hard error**: the for-loop dispatch (`control_flow_for.rs`)
+   peels a transparent `.iter()`/`.into_iter()` and recurses on the receiver, but
+   `MethodCall.span == receiver.span`, so at the collided span `expr_types` holds
+   the method result `Iterator[T]` (clobbering the receiver's `Vec[T]`). The
+   `owned_temp_drops` table (built in lowering from `expr_types`, droppable set
+   `{Vec,VecDeque,String,Map,Set}`) therefore had **no entry**, so
+   `try_compile_for_vec_value` returned `None` and the loop body was skipped —
+   `make_v().iter()` summed to `0` where the interpreter gave `105`. Fix in two
+   parts: (1) the fresh-temp Vec gate now records the **element type** span-keyed
+   in `temp_recv_elem_types` for `iter`/`into_iter` across every supported element
+   shape (scalar/String/POD-Vec/user struct/user enum) — the gate already derived
+   the element from the receiver `Vec[T]`, so it runs before the `iter` return
+   path; (2) `try_compile_for_vec_value` falls back to `temp_recv_elem_types` when
+   `owned_temp_drops` misses, reconstructing `Vec[elem]` via the new
+   `vec_type_expr_from_element` so the existing materialize-into-`__for_vec_`-local
+   → iterate → scope-exit-drop path runs unchanged. The element-drop threading
+   (`var_elem_type_exprs` → `track_vec_var` / `track_vec_of_aggs_var` /
+   `track_vec_of_maps_var`) is the same the read-method slices use, so heap
+   elements free once at scope exit. `.into_iter()` rides the same path. Verified
+   scalar/String/struct/enum all match the interpreter (`60`/`102`/`58`,
+   `104`/`107`); no double-free (macOS ASAN), no leak (Linux LSan). **Tests:** 1
+   IR (`test_ir_freshtemp_vec_iter_emits_materialize_and_drop` → `__for_vec_`
+   **and** `cleanup.drop.inner.free`, proving the materialize fired, not the silent
+   skip) + 2 ASAN (`asan_freshtemp_vec_iter_string_no_double_free`;
+   `asan_freshtemp_vec_into_iter_struct_no_double_free` — reads the heap field
+   through the bound element). **Still open:** deeper-nested
    `Vec[Vec[String]]` (two-level heap leaks the innermost
    even for named bindings — an upstream recursion limit, not a temp-specific gap);
-   `get_unchecked` on `Vec[String]`; `iter` on a temp (the
-   iterator must keep the temp alive across the loop); and (the `vector_method_
-   receivers` model — receiver `(T, N)` recorded at the collided span — remains a
-   second copy-able precedent for any future receiver-type table);
-   (b) user-`impl` methods on fresh-temp receivers (also unsupported today).
+   `get_unchecked` on `Vec[String]`; `Map.values()`/`keys()`/`iter()` on a temp
+   (the for-loop peel currently only recovers Vec element types, not Map/Set);
+   user-`impl` methods on fresh-temp receivers (also unsupported today); and (the
+   `vector_method_receivers` model — receiver `(T, N)` recorded at the collided
+   span — remains a second copy-able precedent for any future receiver-type
+   table).
    **Slice 3b-c — operator-operand temps. — DONE 2026-06-29.** `make_str() + "x"`
    leaked the fresh `make_str()` operand. Confirmed the spike's diagnosis: a
    String `+` (and `==`/`<`/… comparison) desugars in `lowering.rs`

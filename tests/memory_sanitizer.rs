@@ -3365,6 +3365,83 @@ fn main() {
     }
 
     #[test]
+    fn asan_freshtemp_vec_iter_string_no_double_free() {
+        // Slice 3h: `for s in make_v().iter()` on a fresh-temp `Vec[String]`,
+        // looped. The for-loop peels `.iter()` and recurses on the temp receiver;
+        // codegen materializes it into a `__for_vec_` synth local whose
+        // `FreeVecBuffer` (per-element vec-struct recursion) frees each element
+        // String + the outer buffer at scope exit. Pre-fix the body was silently
+        // skipped (output 0). Hazards: (1) each iteration binds `s` borrowing an
+        // element inside the temp's buffer that must NOT be independently dropped,
+        // else it double-frees the element String the buffer drop also frees
+        // (macOS ASAN); (2) every element String must be freed by the per-element
+        // drop before the buffer, else they leak (Linux LSan). ≥36-byte strings
+        // defeat LSan short-string reachability; outer loop re-materializes the
+        // temp each pass to accumulate any per-pass leak.
+        assert_clean_asan_run(
+            r#"
+fn make_v() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("first iter string padded out beyond thirty-six bytes");
+    v.push("second iter string padded out beyond thirty-six byte");
+    return v;
+}
+
+fn main() {
+    let mut pass = 0;
+    while pass < 3 {
+        let mut total = 0_i64;
+        for s in make_v().iter() {
+            total = total + s.len();
+        };
+        println(total);
+        pass = pass + 1;
+    };
+}
+"#,
+            &["104", "104", "104"],
+            "freshtemp_vec_iter_string_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_freshtemp_vec_into_iter_struct_no_double_free() {
+        // Slice 3h companion: `for r in make_recs().into_iter()` on a fresh-temp
+        // `Vec[Rec]` (Rec has a String field), reading the heap field through the
+        // bound element (`r.name.len()`). Exercises the agg-drop threading
+        // (`track_vec_of_aggs_var` → `__karac_drop_struct_Rec`) on the
+        // materialized iter temp: each element's String field must be freed once
+        // by the per-element drop before the buffer. `.into_iter()` rides the same
+        // materialize path as `.iter()` here. Loops to accumulate any leak.
+        assert_clean_asan_run(
+            r#"
+struct Rec { name: String, n: i64 }
+
+fn make_recs() -> Vec[Rec] {
+    let mut v: Vec[Rec] = Vec.new();
+    v.push(Rec { name: "alpha rec name padded out beyond thirty-six bytes ok", n: 1_i64 });
+    v.push(Rec { name: "beta rec name padded out beyond thirty-six bytes okk", n: 2_i64 });
+    return v;
+}
+
+fn main() {
+    let mut pass = 0;
+    while pass < 3 {
+        let mut total = 0_i64;
+        for r in make_recs().into_iter() {
+            total = total + r.n + r.name.len();
+        };
+        println(total);
+        pass = pass + 1;
+    };
+}
+"#,
+            &["107", "107", "107"],
+            "freshtemp_vec_into_iter_struct_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_freshtemp_vec_string_first_last_no_double_free() {
         // Slice 3b-heap companion: `first`/`last` on a fresh-temp `Vec[String]`
         // — the other two borrow-returning (`Option[ref String]`) read methods
