@@ -75,6 +75,28 @@ fn char_count(text: ref String) -> usize {
 
 Both versions behave identically. The inference just saves you the annotation. We'll cover ownership in depth in [Chapter 12](./ch12-ownership.md).
 
+To take a *sequence* without copying it — and without locking the caller into
+one container type — declare the parameter as `Slice[T]`. A `Vec[T]` or an
+`Array[T, N]` both coerce to a slice at the call, so one signature serves every
+caller:
+
+```kara
+fn sum(xs: Slice[i64]) -> i64 {
+    let mut acc = 0i64;
+    for x in xs { acc = acc + x; }
+    acc
+}
+
+let v: Vec[i64]    = [1, 2, 3];
+let a: Array[i64, 2] = [10, 20];
+sum(v);   // Vec coerces
+sum(a);   // Array coerces too
+```
+
+This is the standard shape for a function that reads a list of values. See
+[Slices](./ch12-ownership.md#slices) for sub-ranges, mutable slices, and the
+full story.
+
 ## Methods
 
 Functions can be attached to types using `impl` blocks:
