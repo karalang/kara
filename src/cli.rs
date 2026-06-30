@@ -2999,6 +2999,10 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::typechecker::TypeErrorKind::MainReturnType => "E0266",
                 // Slice C — `main() -> Result[(), E]` where `E` lacks `Display`.
                 crate::typechecker::TypeErrorKind::MainErrNotDisplay => "E0267",
+                // `s[i]` (scalar index) on a `String` — UTF-8 is
+                // variable-width, so `[]` is rejected in favour of
+                // `s.char_at(i)` / `s.bytes()[i]` (design.md § Character type).
+                crate::typechecker::TypeErrorKind::StringNotIndexable => "E0268",
                 // FE-2 — a `#[gpu]` function uses a non-GPU-safe type.
                 crate::typechecker::TypeErrorKind::GpuNotSafe => "E0801",
             };
@@ -7738,6 +7742,7 @@ fn type_error_code(kind: &crate::typechecker::TypeErrorKind) -> &'static str {
         K::BranchTypeMismatch => "E0212",
         K::ReturnTypeMismatch => "E0213",
         K::GpuNotSafe => "E0801",
+        K::StringNotIndexable => "E0268",
         _ => "E0200",
     }
 }

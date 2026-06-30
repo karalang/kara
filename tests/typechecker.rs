@@ -850,6 +850,54 @@ fn test_string_slice_result_concatenates_as_string() {
 }
 
 #[test]
+fn test_string_scalar_index_rejected_with_newcomer_diagnostic() {
+    // `s[i]` (scalar integer index) on a String is a compile error
+    // (design.md § Character type): UTF-8 is variable-width, so `[]`
+    // would hide an O(n) scan. The typechecker must reject it BEFORE
+    // the interpreter, which previously hit an `unreachable!` on the
+    // (Value::String, Value::Int) operand pair. The diagnostic is the
+    // newcomer-friendly one specified in design.md.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let s: String = \"hello\";\n\
+             let c = s[0];\n\
+         }",
+    );
+    let msg = &errors[0].message;
+    assert!(
+        msg.contains("String does not support indexing with []"),
+        "unexpected message: {msg}"
+    );
+    assert!(
+        msg.contains("would hide an O(n) scan"),
+        "missing O(n) rationale: {msg}"
+    );
+    assert!(
+        msg.contains("use s.char_at(i) for the i-th character (O(n))"),
+        "missing char_at help: {msg}"
+    );
+    assert!(
+        msg.contains("or s.bytes()[i] for raw byte access (O(1))"),
+        "missing bytes() help: {msg}"
+    );
+}
+
+#[test]
+fn test_string_char_at_and_bytes_index_still_work() {
+    // The two alternatives the diagnostic points at must keep
+    // typechecking: `s.char_at(i)` (a method call yielding Option[char])
+    // and `s.bytes()[i]` (indexing the Slice[u8] view). These are
+    // distinct paths from the rejected `s[i]`.
+    typecheck_ok(
+        "fn main() {\n\
+             let s: String = \"hello\";\n\
+             let c: Option[char] = s.char_at(0);\n\
+             let b: u8 = s.bytes()[0];\n\
+         }",
+    );
+}
+
+#[test]
 fn test_map_clone_returns_self_type() {
     typecheck_ok(
         "fn main() {\n\

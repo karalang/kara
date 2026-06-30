@@ -399,6 +399,13 @@ pub enum TypeErrorKind {
     BranchTypeMismatch,
     ReturnTypeMismatch,
     InvalidTupleIndex,
+    /// `s[i]` (scalar index) applied to a `String`. UTF-8 is
+    /// variable-width, so `[]` would hide an O(n) scan; the spec
+    /// rejects it in favour of `s.char_at(i)` / `s.bytes()[i]`
+    /// (design.md § Character type). Run-fatal: the interpreter has no
+    /// `Value::String[Value::Int]` lowering, so a downgrade-and-run
+    /// would hit an `unreachable!` rather than emit a clean diagnostic.
+    StringNotIndexable,
     LabelMismatch,
     NonContiguousLabels,
     InvalidPipePlaceholder,
@@ -723,13 +730,20 @@ impl TypeErrorKind {
     /// `f → bool` (`E_FLOAT_AS_BOOL`), `char → narrow int`
     /// (`E_CHAR_AS_NARROW_INT`), the pointer-provenance casts, and the
     /// refinement source mismatch — every cast the checker rejects has no
-    /// well-defined `as` lowering, so running it is unsound. Genuinely soft
-    /// type errors (mismatches, arity, exhaustiveness) keep downgrading so
+    /// well-defined `as` lowering, so running it is unsound. Also
+    /// `TypeErrorKind::StringNotIndexable`: `s[i]` on a `String` has no
+    /// `Value::String[Value::Int]` interpreter lowering, so downgrading it
+    /// would trip an `unreachable!` instead of printing the diagnostic.
+    /// Genuinely soft type errors (mismatches, arity, exhaustiveness) keep
+    /// downgrading so
     /// a script author can still iterate. The partition is intentionally
     /// narrow and additive: widen it only for kinds that *corrupt the run*,
     /// never for ones worth iterating through.
     pub fn is_run_fatal(&self) -> bool {
-        matches!(self, TypeErrorKind::InvalidCast)
+        matches!(
+            self,
+            TypeErrorKind::InvalidCast | TypeErrorKind::StringNotIndexable
+        )
     }
 }
 
@@ -756,6 +770,7 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::BranchTypeMismatch
         | TypeErrorKind::ReturnTypeMismatch
         | TypeErrorKind::InvalidTupleIndex
+        | TypeErrorKind::StringNotIndexable
         | TypeErrorKind::LabelMismatch
         | TypeErrorKind::NonContiguousLabels
         | TypeErrorKind::OnceFnIntoFnSlot => Some(DC::TypeMismatch),

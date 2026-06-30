@@ -2261,6 +2261,36 @@ impl<'a> super::TypeChecker<'a> {
                         }
                     };
                 }
+                // `s[i]` on a `String` is a compile error (design.md
+                // § Character type): UTF-8 is variable-width, so scalar
+                // indexing would hide an O(n) scan behind `[]` syntax that
+                // reads as O(1). Range slicing `s[a..b]` is a deliberate,
+                // explicit exception handled by the range path above (it
+                // returns a fresh `String`); only scalar indexing reaches
+                // here. Without this rejection the (String, Int) operand
+                // pair falls through to `_ => Type::Error` *silently* — no
+                // diagnostic — so the program typechecks and reaches the
+                // interpreter, where `Value::String[Value::Int]` trips an
+                // `unreachable!` (eval_expr.rs). `s.char_at(i)` (a method
+                // call) and `s.bytes()[i]` (indexing the `Slice[u8]` view)
+                // are separate paths and keep working.
+                let is_string = matches!(&obj_ty, Type::Str)
+                    || matches!(&obj_ty, Type::Ref(inner) | Type::MutRef(inner)
+                        if matches!(inner.as_ref(), Type::Str));
+                if is_string {
+                    self.type_error(
+                        "String does not support indexing with []\n  \
+                         s[i] would hide an O(n) scan — Strings are UTF-8 encoded \
+                         and characters\n  \
+                         are variable-width.\n  \
+                         help: use s.char_at(i) for the i-th character (O(n)),\n        \
+                         or s.bytes()[i] for raw byte access (O(1))"
+                            .to_string(),
+                        expr.span.clone(),
+                        TypeErrorKind::StringNotIndexable,
+                    );
+                    return Type::Error;
+                }
                 match &obj_ty {
                     Type::Array { element, .. } => *element.clone(),
                     Type::Slice { element, .. } => *element.clone(),
