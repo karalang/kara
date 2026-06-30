@@ -1818,16 +1818,17 @@ impl<'ctx> super::Codegen<'ctx> {
         match &expr.kind {
             ExprKind::Identifier(n) => self.var_type_names.get(n.as_str()).cloned(),
             ExprKind::SelfValue => self.var_type_names.get("self").cloned(),
-            // `Stats.min(…)` / `Stats.max(…)` return `Option[f64]` (intercepted
-            // in `try_compile_stats_call`). A direct `match Stats.min(v) { … }`
-            // needs the scrutinee's enum resolved so the arm patterns bind.
+            // `Stats.min`/`max` → `Option[f64]`, `Stats.argmin`/`argmax` →
+            // `Option[i64]` (intercepted in `try_compile_stats_call`). A direct
+            // `match Stats.argmin(v) { … }` needs the scrutinee's enum resolved
+            // so the arm patterns bind.
             ExprKind::Call { callee, .. }
                 if matches!(
                     &callee.kind,
                     ExprKind::Path { segments, .. }
                         if segments.len() == 2
                             && segments[0] == "Stats"
-                            && matches!(segments[1].as_str(), "min" | "max")
+                            && matches!(segments[1].as_str(), "min" | "max" | "argmin" | "argmax")
                 ) =>
             {
                 Some("Option".to_string())

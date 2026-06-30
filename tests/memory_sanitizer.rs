@@ -12646,6 +12646,54 @@ fn main() {
         );
     }
 
+    /// `Stats.percentile`/`sort`/`argsort` codegen lifecycle (phase-11).
+    /// `percentile` mallocs + frees an f64 scratch (memcpy-sort-read-free).
+    /// `sort` / `argsort` each malloc a buffer and hand it back as an OWNED
+    /// `Vec` whose `let`-binding frees it at scope exit — a missing free leaks
+    /// (Linux detect_leaks), a double free trips ASAN. The source `Vec` is
+    /// borrowed (still usable after), and a fresh `vec![…]` temp argument is
+    /// freed via `materialize_owned_temp`.
+    #[test]
+    fn asan_stats_methods_lifecycle_clean() {
+        let label = "stats_methods_lifecycle";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(
+            r#"
+fn main() {
+    let v: Vec[f64] = vec![40.0, 10.0, 30.0, 20.0, 50.0];
+    println(Stats.percentile(v, 50.0));
+    let s: Vec[f64] = Stats.sort(v);
+    println(s[0]);
+    println(s[4]);
+    let a: Vec[i64] = Stats.argsort(v);
+    println(a[0]);
+    println(a[4]);
+    // fresh vec![…] temp argument: read then freed (no leak).
+    let s2: Vec[f64] = Stats.sort(vec![3.0, 1.0, 2.0]);
+    println(s2[0]);
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             check the percentile scratch + sort/argsort owned-Vec free",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["30", "10", "50", "1", "4", "1"],
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     /// `Column[String]` heap-element lifecycle (phase-11 Column[String]
     /// codegen slice): each String column owns its element heaps. `from_vec`
     /// deep-clones the source Vec's strings IN (the source Vec is borrowed and

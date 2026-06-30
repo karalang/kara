@@ -49958,6 +49958,82 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_stats_percentile() {
+        // NumPy convention p in [0, 100], linear interpolation; byte-identical
+        // to the interpreter. sorted [1, 1, 2, 3, 4, 5, 9].
+        let out = run_program(
+            "fn main() {\n\
+                 let v: Vec[f64] = vec![3.0, 1.0, 4.0, 1.0, 5.0, 9.0, 2.0];\n\
+                 println(Stats.percentile(v, 50.0));\n\
+                 println(Stats.percentile(v, 0.0));\n\
+                 println(Stats.percentile(v, 100.0));\n\
+                 println(Stats.percentile(v, 25.0));\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "3\n1\n9\n1.5\n", "percentile p0/p25/p50/p100");
+        }
+    }
+
+    #[test]
+    fn test_e2e_stats_argmin_argmax_sort_argsort() {
+        // argmin/argmax -> Option[i64] (first-index); sort -> Vec[f64];
+        // argsort -> Vec[i64]. xs = [3, 1, 4, 1, 5, 9, 2].
+        let out = run_program(
+            "fn main() {\n\
+                 let v: Vec[f64] = vec![3.0, 1.0, 4.0, 1.0, 5.0, 9.0, 2.0];\n\
+                 match Stats.argmin(v) { Some(i) => println(i), None => println(-1), }\n\
+                 match Stats.argmax(v) { Some(i) => println(i), None => println(-1), }\n\
+                 let s: Vec[f64] = Stats.sort(v);\n\
+                 println(s[0]);\n\
+                 println(s[6]);\n\
+                 let a: Vec[i64] = Stats.argsort(v);\n\
+                 println(a[0]);\n\
+                 println(a[6]);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            // argmin idx 1 (first 1.0), argmax idx 5 (9.0); sort [1..9];
+            // argsort first index of smallest = 1, last = index of 9 = 5.
+            assert_eq!(out, "1\n5\n1\n9\n1\n5\n", "argmin/argmax/sort/argsort");
+        }
+    }
+
+    #[test]
+    fn test_e2e_stats_argmin_empty_is_none_and_percentile_traps() {
+        // argmin on empty -> None.
+        let out = run_program(
+            "fn main() {\n\
+                 let v: Vec[f64] = vec![];\n\
+                 match Stats.argmin(v) { Some(i) => println(i), None => println(-1), }\n\
+                 let a: Vec[i64] = Stats.argsort(v);\n\
+                 println(a.len());\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "-1\n0\n",
+                "empty argmin -> None, empty argsort -> len 0"
+            );
+        }
+        // percentile out of range traps.
+        let captured = run_program_capturing(
+            "fn main() {\n\
+                 let v: Vec[f64] = vec![1.0, 2.0, 3.0];\n\
+                 println(Stats.percentile(v, 150.0));\n\
+             }\n",
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("[0, 100]"),
+                "expected percentile-range trap, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+        }
+    }
+
     // ── Column[String] codegen — heap-element lifecycle (phase-11) ──
 
     #[test]
