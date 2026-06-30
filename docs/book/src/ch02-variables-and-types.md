@@ -62,6 +62,30 @@ let color = 0xFF_AA_00;    // hex
 let permissions = 0o755;   // octal
 ```
 
+A bare integer literal defaults to `i64` and a bare float to `f64`, but a
+literal **coerces to fit its context** — the annotated type of a binding, a
+function parameter, or a struct field — as long as the value fits:
+
+```kara
+let n = 0;                 // i64 by default
+let b: u8 = 200;           // literal coerces to u8
+fn takes_byte(x: u8) { ... }
+takes_byte(255);           // literal coerces to u8 at the call
+```
+
+When a literal has **no context to coerce toward** — or you want to override the
+default — pin its type with a suffix:
+
+```kara
+let mask = 0xFFu8;         // u8, not i64
+let ratio = 1.0f32;        // f32, not f64
+let zero = 0i64;           // explicit i64
+```
+
+You'll see the suffix form (`0i64`, `1u8`) throughout numeric code. Most of the
+time the default or a binding annotation is enough; reach for a suffix when
+inference has nothing to anchor to.
+
 ## Strings
 
 Kāra has two string types:
@@ -92,12 +116,34 @@ println(f"{x} + {y} = {x + y}");  // "10 + 20 = 30"
 
 ## Type conversions
 
-Kāra does not do implicit type conversions (except narrowing integer literals to annotated types). Use `as` for numeric casts:
+Kāra does not implicitly convert *values* of one numeric type to another — only
+*literals* coerce to context (above). To convert a typed value, use `as`:
 
 ```kara
 let x: i64 = 1000;
-let y: i32 = x as i32;
+let y: i32 = x as i32;     // widening — always safe
 ```
+
+`as` covers every numeric pair, with semantics worth knowing:
+
+```kara
+let small: u8 = 7;
+let wide = small as i64;   // widening — value preserved (7)
+
+let big: i64 = 300;
+let trunc = big as u8;     // narrowing — wraps modulo 2^8 (300 -> 44)
+
+let avg = total as f64 / count as f64;   // int -> float, before dividing
+let k = 3.9 as i64;        // float -> int — truncates toward zero (3)
+```
+
+Narrowing can change the value (it keeps the low bits), so cast down only when
+you know it fits. Going `int -> float -> int` is the usual way to do real
+division: cast to `f64` *first*, or integer division truncates the result.
+
+One conversion `as` won't do is `u8 -> char` — not every integer is a valid
+Unicode scalar. Use `char.try_from`, which returns a `Result`; see
+[Strings and Bytes](./ch09b-strings-and-bytes.md#building-strings).
 
 ## Shadowing
 
