@@ -21,7 +21,7 @@ allocates(Heap)         — allocates memory
 panics                  — might crash (no resource needed)
 ```
 
-The six built-in verbs are: `reads`, `writes`, `sends`, `receives`, `allocates`, `panics`.
+These six are the **resource verbs**: `reads`, `writes`, `sends`, `receives`, `allocates`, `panics`. They answer *"can these two operations conflict?"* — which is what drives the auto-parallelization below.
 
 Resources are user-defined. You declare what exists in your domain:
 
@@ -31,6 +31,25 @@ effect resource Database;
 effect resource Cache;
 effect resource Net;
 ```
+
+One verb can name several resources at once — `writes(Display, Audio)` is shorter than writing `writes` twice.
+
+### Execution verbs: `blocks` and `suspends`
+
+The resource verbs say *what* a function touches. Two more verbs say *how it runs* — information the scheduler needs to decide *where* to place a task:
+
+- **`blocks`** — the call may park the OS thread in a kernel wait (a `sleep`, a synchronous file read, a contended lock). While it waits, that thread can do nothing else, so the scheduler routes blocking tasks to a separate pool.
+- **`suspends`** — the call may cooperatively yield: the task steps aside and the thread is freed to run other work, resuming later. This is Kāra's async — there is **no `async`/`await`, no `Future`, no function coloring.** You write a plain call; the compiler inserts the yield point because the callee is declared `suspends`.
+
+```kara
+fn sleep(d: Duration) with blocks { ... }                          // parks the thread
+fn http_get(url: String) -> Response with sends(Net) suspends { ... }   // yields while waiting
+fn compute(x: f64) -> f64 { ... }                                  // neither — runs anywhere
+```
+
+Execution verbs take no resource — a function either may block/suspend or it may not. They don't take part in conflict analysis (placement is a separate axis from conflict), and like resource verbs they're inferred on private functions but **must be declared on public ones**: hiding whether a function blocks would defeat the point.
+
+That's the full set: six resource verbs plus these two execution verbs, eight in all.
 
 ## Private functions: effects are inferred
 
