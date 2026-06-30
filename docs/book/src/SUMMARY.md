@@ -17,6 +17,7 @@
 - [Error Handling](./ch07-error-handling.md)
 - [Traits and Generics](./ch08-traits-and-generics.md)
 - [Collections](./ch09-collections.md)
+- [Strings and Bytes](./ch09b-strings-and-bytes.md)
 - [Closures and Iterators](./ch10-closures-and-iterators.md)
 
 # What Makes Kāra Different
