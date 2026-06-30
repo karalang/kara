@@ -3404,14 +3404,19 @@ impl<'ctx> super::Codegen<'ctx> {
     ///
     /// Element-type-generic: the typechecker records SCALAR elements for all
     /// five read methods, and STRING elements for the borrow-returning
-    /// `get`/`first`/`last` (slice 3b-heap). For a String element the recorded
+    /// `get`/`first`/`last` plus `contains` (slice 3b-heap). For a String
+    /// element the recorded
     /// `TypeExpr` lowers to `vec_struct_type`, so `track_vec_var`'s
     /// `FreeVecBuffer` takes the vec-struct recursion and per-element frees each
     /// `String` buffer before the outer buffer — and the `Option[ref String]`
-    /// the method returns is suppressed from independent drop at the match arm
-    /// by `scrutinee_is_borrow_call` (which keys off the method, not the
-    /// receiver shape), so the per-element storage is freed exactly once at
-    /// frame exit while the borrow reads it. A scalar element owns no nested
+    /// `get`/`first`/`last` return is suppressed from independent drop at the
+    /// match arm by `scrutinee_is_borrow_call` (which keys off the method, not
+    /// the receiver shape), so the per-element storage is freed exactly once at
+    /// frame exit while the borrow reads it. `contains` returns `bool` — no
+    /// borrow escapes, so it carries no suppression obligation; it only needs
+    /// the same per-element receiver free, and the compared arg is borrowed not
+    /// consumed (a fresh-owned arg is the separate 3b-c operand-temp leak). A
+    /// scalar element owns no nested
     /// heap, so the outer-buffer `FreeVecBuffer` is its complete drop. The
     /// drop-track is gated on `expr_yields_fresh_owned_temp`, and the `cap > 0`
     /// guard inside `FreeVecBuffer` is a second backstop, so a (hypothetical)

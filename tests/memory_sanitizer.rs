@@ -2716,9 +2716,10 @@ fn main() {
         // — the other two borrow-returning (`Option[ref String]`) read methods
         // routed through `scrutinee_is_borrow_call`. Same single-free / borrow-
         // not-dropped obligation as `get`; verifies the method set, not just
-        // `get`. `contains`/`get_unchecked` stay scalar-only (owned-arg eq /
-        // bare-ref let-binding suppression — separate follow-ons), so they are
-        // intentionally absent here.
+        // `get`. (`contains` on a String temp is covered separately below;
+        // `get_unchecked` — bare `ref String` via a builtin-method let-binding
+        // suppression path that doesn't fire, plus an `unsafe` block — stays
+        // scalar-only as a follow-on.)
         assert_clean_asan_run(
             r#"
 fn names() -> Vec[String] {
@@ -2745,6 +2746,41 @@ fn main() {
                 "last padded element string beyond thirty-six bytes okk",
             ],
             "freshtemp_vec_string_first_last_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_freshtemp_vec_string_contains_no_double_free() {
+        // Slice 3b-heap follow-on: `contains` on a fresh-temp `Vec[String]` in
+        // a loop. Unlike `get`/`first`/`last`, `contains` returns `bool` — no
+        // borrow escapes, so there is no arm-binding to suppress; the only
+        // obligation is that the receiver temp's per-element String buffers AND
+        // outer buffer are freed once per iteration (the `FreeVecBuffer`
+        // vec-struct recursion). A regression that frees only the outer buffer
+        // leaks the three element Strings (LeakSanitizer on Linux CI); the
+        // compared arg is a static literal (`cap = 0`), so it is not part of the
+        // free accounting. ≥36-byte elements defeat LSan short-string
+        // reachability; the loop forces per-iteration accumulation.
+        assert_clean_asan_run(
+            r#"
+fn names() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("alpha element string padded well past thirty-six bytes");
+    v.push("beta element string also padded past thirty-six bytes!!");
+    v.push("gamma element string likewise padded beyond thirty-six b");
+    return v;
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        println(names().contains("beta element string also padded past thirty-six bytes!!"));
+        i = i + 1;
+    };
+}
+"#,
+            &["true", "true", "true"],
+            "freshtemp_vec_string_contains_no_double_free",
         );
     }
 

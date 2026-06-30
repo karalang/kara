@@ -1343,18 +1343,27 @@ impl<'a> super::TypeChecker<'a> {
         // Element scope: SCALAR elements service all five read methods — a
         // scalar element owns no nested heap, so the single outer
         // `FreeVecBuffer` is the complete, double-free-free drop. STRING
-        // elements (slice 3b-heap) service only the borrow-returning
-        // `get`/`first`/`last`: their `Option[ref String]` payload aliases an
-        // element inside the soon-freed temp buffer, but `scrutinee_is_borrow_call`
-        // (receiver-shape-agnostic — it keys off the *method*, not the object)
-        // already suppresses the `Some(s)` arm binding's independent drop, and
-        // the `FreeVecBuffer` vec-struct recursion frees each per-element String
-        // buffer, so the borrow is the sole reader of storage freed exactly once
-        // at frame exit. `contains` (owned-String arg + element equality) and
-        // `get_unchecked` (bare `ref String`, a let-binding suppression path,
-        // not the match path) stay scalar-only — distinct follow-ons. Other heap
-        // elements (`Vec[T]`, user struct/enum, Map/Set) need element-drop
-        // threading (`elem_agg_drop`) the helper doesn't carry — also follow-ons.
+        // elements (slice 3b-heap) service the borrow-returning
+        // `get`/`first`/`last` plus `contains`:
+        //   - `get`/`first`/`last` return `Option[ref String]` aliasing an
+        //     element inside the soon-freed temp buffer, but
+        //     `scrutinee_is_borrow_call` (receiver-shape-agnostic — it keys off
+        //     the *method*, not the object) already suppresses the `Some(s)`
+        //     arm binding's independent drop, and the `FreeVecBuffer` vec-struct
+        //     recursion frees each per-element String buffer, so the borrow is
+        //     the sole reader of storage freed exactly once at frame exit.
+        //   - `contains` returns `bool` — no borrow escapes, so there is no
+        //     aliasing/suppression obligation at all; it only needs the receiver
+        //     temp per-element freed, which the same `FreeVecBuffer` recursion
+        //     does. The compared arg is borrowed, not consumed (the named
+        //     `Vec[String].contains` path already does element `==` via memcmp
+        //     without freeing the arg); a *fresh-owned* arg (`contains(make_str())`)
+        //     is the separate 3b-c operand-temp leak, out of scope here.
+        // `get_unchecked` (bare `ref String` via a let-binding suppression path
+        // that doesn't cover builtin methods, and it needs an `unsafe` block)
+        // stays scalar-only — a distinct follow-on. Other heap elements
+        // (`Vec[T]`, user struct/enum, Map/Set) need element-drop threading
+        // (`elem_agg_drop`) the helper doesn't carry — also follow-ons.
         if matches!(
             &object.kind,
             ExprKind::Call { .. } | ExprKind::MethodCall { .. }
@@ -1389,7 +1398,7 @@ impl<'a> super::TypeChecker<'a> {
                         method,
                         "get" | "first" | "last" | "get_unchecked" | "contains"
                     ))
-                    || (is_string && matches!(method, "get" | "first" | "last"));
+                    || (is_string && matches!(method, "get" | "first" | "last" | "contains"));
                 if record {
                     let te = Self::type_to_type_expr(&resolved);
                     self.temp_recv_elem_types

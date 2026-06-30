@@ -345,19 +345,30 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    reached verbatim through `compile_vec_method`. So each per-element buffer is
    freed exactly once at frame exit while the borrow reads it: no double-free
    (macOS ASAN) and no leak (Linux LSan, run locally via `scripts/lsan-local.sh`
-   — `Compiling karac` confirmed, 2/2, zero LeakSanitizer reports). `contains`
-   (owned-String arg + element equality) and `get_unchecked` (bare `ref String`
-   via a let-binding suppression path, not the match path) stay scalar-only —
-   their suppression shapes differ, so they are distinct follow-ons. **Tests:** 1
-   IR (`test_ir_freshtemp_vec_string_get_emits_per_element_drop` → `__vrecv_tmp`
-   **and** `cleanup.drop.inner.free`, the per-element String free the scalar case
-   never emits) + 2 ASAN (`asan_freshtemp_vec_string_get_no_double_free` — looped
-   get, ≥36-byte elements so an LSan-reachable-short-string false-pass can't mask
-   a regression; `asan_freshtemp_vec_string_first_last_no_double_free`).
+   — `Compiling karac` confirmed, zero LeakSanitizer reports). **`contains` on a
+   fresh-temp `Vec[String]` also landed** (same date, same one-line gate
+   addition): it returns `bool`, so *no* borrow escapes and there is no
+   suppression obligation at all — the receiver temp just takes the same
+   per-element `FreeVecBuffer` recursion, and the compared arg is borrowed (a
+   static literal in the tests), not consumed. A *fresh-owned* `contains` arg
+   (`contains(make_str())`) is the separate 3b-c operand-temp leak, still out of
+   scope. `get_unchecked` (bare `ref String` via a let-binding suppression path
+   — `is_borrow_returning_call_expr` — that doesn't fire for builtin methods,
+   plus it needs an `unsafe` block) stays scalar-only as a distinct follow-on.
+   **Tests:** 2 IR (`test_ir_freshtemp_vec_string_get_emits_per_element_drop` and
+   `…_contains_emits_per_element_drop` → `__vrecv_tmp` **and**
+   `cleanup.drop.inner.free`, the per-element String free the scalar case never
+   emits) + 3 ASAN (`asan_freshtemp_vec_string_get_no_double_free` — looped get,
+   ≥36-byte elements so an LSan-reachable-short-string false-pass can't mask a
+   regression; `…_first_last_no_double_free`; `…_contains_no_double_free`).
+   LSan-gate caveat re-confirmed (`lsan-docker-stale-karac-after-rebase`): the
+   first run reused a stale shared-volume karac+test-binary (`running 2 tests`,
+   no `Compiling karac`); `cargo clean -p karac` in the volume forced the real
+   `running 3 tests` / 3-passed run.
    **Still open under 3b:** other heap-element receivers — `Vec[T]`/user
    struct/enum/`Map`/`Set` elements (need element-drop threading, `elem_agg_drop`,
    the helper doesn't carry; the String case works *because* `String` reuses
-   `vec_struct_type` so the inline recursion already covers it); `contains` /
+   `vec_struct_type` so the inline recursion already covers it);
    `get_unchecked` on `Vec[String]`; `Map`/`Set` temp receivers (`Map.get` — a
    separate `compile_map_method` redispatch needing K+V); `iter` on a temp (the
    iterator must keep the temp alive across the loop); and (the `vector_method_

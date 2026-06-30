@@ -18720,6 +18720,41 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_freshtemp_vec_string_contains_emits_per_element_drop() {
+        // Slice 3b-heap follow-on: `contains` on a fresh-temp `Vec[String]`.
+        // `contains` returns `bool` (no borrow escapes), but the receiver temp
+        // still owns three element String buffers + the outer buffer, so it must
+        // materialize into `__vrecv_tmp` and take the same per-element vec-struct
+        // recursion (`cleanup.drop.inner.free`) the borrow-returning methods do.
+        // Without it the element Strings leak. The compared arg is a static
+        // literal, not part of the free accounting.
+        let src = r#"
+fn names() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("a heap string element padded beyond thirty-six bytes ok");
+    return v;
+}
+
+fn main() {
+    println(names().contains("a heap string element padded beyond thirty-six bytes ok"));
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("__vrecv_tmp"),
+            "expected the fresh Vec[String] contains-receiver materialized into __vrecv_tmp; \
+             got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("cleanup.drop.inner.free"),
+            "expected the vec-struct per-element drop loop (cleanup.drop.inner.free) \
+             freeing each element String buffer of the fresh-temp contains receiver; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_ir_discarded_block_tail_temp_freed() {
         // Slice 5 (tail-expr temp drop): a fresh `Vec` produced in the tail
         // of a statement-position block (`{ make_vec() }`) is the block's
