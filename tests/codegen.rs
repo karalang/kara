@@ -20285,6 +20285,50 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_println_char_call_return() {
+        // B-2026-06-30: a `char` crossing a CALL-RETURN SSA boundary lost its
+        // source type on the print path, so `println(f())` for `fn f() -> char`
+        // formatted the i32 scalar as its integer codepoint (`65` instead of
+        // `A`). The interpreter (`karac run`) rendered the glyph, so this was a
+        // run/build divergence. `expr_is_char` gained a free-fn `Call` arm and a
+        // general `MethodCall` arm (both keyed on `fn_return_type_names`),
+        // mirroring `expr_is_unsigned_int`. Covers: direct free-fn return,
+        // f-string interpolation of a call, a method (`self`-typed) return, and
+        // a multibyte (3-byte UTF-8) free-fn return. The `let`-bound call form
+        // already worked (the binding picks up `char` via the untyped-let
+        // type-expr recovery) and is included as a non-regression guard.
+        let out = run_program(
+            r#"
+fn f() -> char { 'A' }
+fn pick() -> char { 'Z' }
+fn jp() -> char { '日' }
+struct Box { c: char }
+impl Box {
+    fn get(self) -> char { self.c }
+}
+fn main() {
+    println(f());
+    println(f"{f()}");
+    let c = pick();
+    println(c);
+    let b = Box { c: 'M' };
+    println(b.get());
+    println(jp());
+    println(f"x={jp()}y");
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(
+                lines,
+                vec!["A", "A", "Z", "M", "日", "x=日y"],
+                "char call/method returns must render the glyph, not the codepoint"
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_char_literal_value_round_trip() {
         // Regression guard for the pre-fix `CharLit → 0` gap: the
         // codepoint cast to i64 must be the actual value (65 for 'A'),

@@ -1994,15 +1994,39 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 false
             }
-            // `<char>.clone()` returns a char — recurse on the receiver so the
-            // result is still rendered as a glyph by print / f-string lowering
-            // (clone is scalar identity for primitives; see compile_method_call).
+            // Method-call result. `<char>.clone()` is scalar identity, so
+            // recurse on the receiver (the result is still rendered as a glyph
+            // by print / f-string lowering; see compile_method_call). Any other
+            // method resolves the receiver's type name and looks up the impl
+            // method's declared return type under the synth `Type.method` key
+            // (registered by `make_impl_method_function`). Without this last
+            // arm `println(b.get())` for `fn get(self) -> char` formats the i32
+            // scalar as its integer codepoint (77 instead of 'M') — the
+            // call-return SSA boundary drops the source `char` type. Mirror of
+            // the `expr_is_unsigned_int` method-call arm.
             ExprKind::MethodCall {
                 object,
                 method,
                 args,
                 ..
-            } if method == "clone" && args.is_empty() => self.expr_is_char(object),
+            } => {
+                if method == "clone" && args.is_empty() {
+                    return self.expr_is_char(object);
+                }
+                let recv_ty = match &object.kind {
+                    ExprKind::Identifier(n) => self.var_type_names.get(n.as_str()),
+                    ExprKind::SelfValue => self.var_type_names.get("self"),
+                    _ => None,
+                };
+                if let Some(ty) = recv_ty {
+                    return self
+                        .fn_return_type_names
+                        .get(&format!("{ty}.{method}"))
+                        .map(|s| s == "char")
+                        .unwrap_or(false);
+                }
+                false
+            }
             // `someStruct.charField` — a char-typed struct field. Needed so the
             // synthetic-f-string struct Display (see synth_display.rs) renders
             // char fields as glyphs, matching the interpreter.
@@ -2025,6 +2049,23 @@ impl<'ctx> super::Codegen<'ctx> {
                             if p.segments.last().map(|s| s == "char").unwrap_or(false))
                     })
                     .unwrap_or(false)
+            }
+            // Free-function call result — the callee's declared return-type
+            // name (registered in `fn_return_type_names` during the function
+            // walk) carries the char type. Without this arm `println(f())` /
+            // `f"{f()}"` for `fn f() -> char` formats the i32 scalar as its
+            // integer codepoint (65 instead of 'A') — the call-return SSA
+            // boundary drops the source `char` type. Mirror of the
+            // `expr_is_unsigned_int` Call arm.
+            ExprKind::Call { callee, .. } => {
+                if let ExprKind::Identifier(n) = &callee.kind {
+                    return self
+                        .fn_return_type_names
+                        .get(n.as_str())
+                        .map(|s| s == "char")
+                        .unwrap_or(false);
+                }
+                false
             }
             _ => false,
         }
