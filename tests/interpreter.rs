@@ -17318,6 +17318,96 @@ fn test_column_length_mismatch_traps() {
     );
 }
 
+// ── DataFrame interpreter MVP (phase-11 Arrow Q6) ────────────────────
+
+#[test]
+fn test_dataframe_build_lookup_and_accessors() {
+    // Heterogeneous build via new() + insert; lookup round-trips values,
+    // width/height/column_names report the schema-lite shape.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"age\", Column.from_vec([30i64, 25i64, 40i64]));\n\
+             df.insert(\"name\", Column.from_vec([\"a\", \"b\", \"c\"]));\n\
+             println(df.width());\n\
+             println(df.height());\n\
+             let ages: Column[i64] = df.column(\"age\");\n\
+             println(ages.len());\n\
+             match ages[0] { Some(v) => { println(v); } None => { println(-1i64); } }\n\
+             for n in df.column_names() { println(n); }\n\
+         }",
+    );
+    assert_eq!(out, "2\n3\n3\n30\nage\nname\n");
+}
+
+#[test]
+fn test_dataframe_has_column() {
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"x\", Column.from_vec([1i64]));\n\
+             println(df.has_column(\"x\"));\n\
+             println(df.has_column(\"y\"));\n\
+         }",
+    );
+    assert_eq!(out, "true\nfalse\n");
+}
+
+#[test]
+fn test_dataframe_insert_replace_keeps_height() {
+    // Re-inserting an existing name replaces the column; height unchanged,
+    // width unchanged, the new values win.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"a\", Column.from_vec([1i64, 2i64]));\n\
+             df.insert(\"a\", Column.from_vec([9i64, 8i64]));\n\
+             println(df.width());\n\
+             println(df.height());\n\
+             let a: Column[i64] = df.column(\"a\");\n\
+             match a[0] { Some(v) => { println(v); } None => { println(-1i64); } }\n\
+         }",
+    );
+    assert_eq!(out, "1\n2\n9\n");
+}
+
+#[test]
+fn test_dataframe_insert_length_mismatch_traps() {
+    // The Arrow equal-length invariant: a column whose length differs from
+    // the table's row count is a runtime error.
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"a\", Column.from_vec([1i64, 2i64, 3i64]));\n\
+             df.insert(\"b\", Column.from_vec([1i64, 2i64]));\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("has length 2 but the table has 3 row(s)")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_dataframe_column_missing_traps() {
+    // Looking up an absent column is a runtime error.
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"a\", Column.from_vec([1i64]));\n\
+             let _c: Column[i64] = df.column(\"nope\");\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("no column named 'nope'")),
+        "{errors:?}",
+    );
+}
+
 // ── `ref name @ PATTERN` — explicit-ref @ bindings (design.md § @
 // Bindings): bindings borrow, scrutinee stays usable after ──────────
 

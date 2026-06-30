@@ -253,6 +253,45 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // DataFrame `column(name)` at a check-mode position
+        // (`let c: Column[T] = df.column("x");`). Its synth-mode return is
+        // `Column[?fresh]` — the element type can't be bound from a
+        // non-generic `DataFrame` receiver, so the fresh typevar doesn't
+        // unify against the declared `Column[T]` through `check_assignable`
+        // (the same hazard `Vec.with_capacity` hits above). Adopt the
+        // expected `Column` type directly once the receiver is confirmed a
+        // DataFrame and the name arg is a String. Unannotated
+        // `let c = df.column("x");` takes the synth path in
+        // `expr_method_call.rs` and pins `?fresh` from a downstream use.
+        if let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &expr.kind
+        {
+            if method == "column" && args.len() == 1 {
+                if let Type::Named { name, .. } = expected {
+                    if name == "Column" {
+                        let recv = self.infer_expr(object);
+                        let is_df = match &recv {
+                            Type::Named { name, .. } => name == "DataFrame",
+                            Type::Ref(i) | Type::MutRef(i) => {
+                                matches!(i.as_ref(), Type::Named { name, .. } if name == "DataFrame")
+                            }
+                            _ => false,
+                        };
+                        if is_df {
+                            let name_ty = self.infer_expr(&args[0].value);
+                            self.check_assignable(&Type::Str, &name_ty, args[0].value.span.clone());
+                            self.record_expr_type(&expr.span, expected);
+                            return expected.clone();
+                        }
+                    }
+                }
+            }
+        }
+
         // Empty prefix-literal (`Vec[]` / `Array[]` / `Set[]` / `Map[]`) at
         // a check-mode position: recover via the expected type. Synthesis-
         // mode use (no annotation, no expected-type carrier) hits the

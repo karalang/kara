@@ -26432,6 +26432,85 @@ fn test_column_binop_error_cases() {
     }
 }
 
+// ── DataFrame interpreter MVP (phase-11 Arrow Q6) ────────────────────
+
+#[test]
+fn test_dataframe_surface_typechecks() {
+    // The slice-1 surface types: insert (-> Unit), width/height (-> i64),
+    // has_column (-> bool), column_names (-> Vec[String]), and column
+    // (-> Column[T]) with T bound per call from the binding annotation —
+    // two calls bind two different element types from one frame.
+    typecheck_ok(
+        "fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"age\", Column.from_vec([1i64, 2i64]));\n\
+             df.insert(\"name\", Column.from_vec([\"a\", \"b\"]));\n\
+             let w: i64 = df.width();\n\
+             let h: i64 = df.height();\n\
+             let has: bool = df.has_column(\"age\");\n\
+             let names: Vec[String] = df.column_names();\n\
+             let ages: Column[i64] = df.column(\"age\");\n\
+             let who: Column[String] = df.column(\"name\");\n\
+             let _ = (w, h, has, names, ages, who);\n\
+         }",
+    );
+}
+
+#[test]
+fn test_dataframe_column_names_is_vec_string() {
+    // column_names() is Vec[String] — binding to Vec[i64] is a mismatch.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let df: DataFrame = DataFrame.new();\n\
+             let bad: Vec[i64] = df.column_names();\n\
+         }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "expected column_names Vec[String]-vs-Vec[i64] mismatch, got none",
+    );
+}
+
+#[test]
+fn test_dataframe_method_arity_checked() {
+    // insert takes 2 args; column / has_column take 1; width / height 0.
+    let i = typecheck_errors(
+        "fn main() {\n\
+             let mut df: DataFrame = DataFrame.new();\n\
+             df.insert(\"a\");\n\
+         }",
+    );
+    assert!(
+        i.iter().any(|e| e.message.contains("insert expects 2")),
+        "{i:?}",
+    );
+    let w = typecheck_errors(
+        "fn main() {\n\
+             let df: DataFrame = DataFrame.new();\n\
+             let _ = df.width(7i64);\n\
+         }",
+    );
+    assert!(
+        w.iter().any(|e| e.message.contains("width expects 0")),
+        "{w:?}",
+    );
+}
+
+#[test]
+fn test_dataframe_column_name_must_be_string() {
+    // The leading `name` arg of column / has_column / insert is a String.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let df: DataFrame = DataFrame.new();\n\
+             let _c: Column[i64] = df.column(5i64);\n\
+         }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "expected a String-name mismatch for column(5i64), got none",
+    );
+}
+
 // ── Effect-resource dispatch types untyped `let` bindings ─────────
 //
 // bugs.md "Untyped `let` from an effect-resource method call doesn't

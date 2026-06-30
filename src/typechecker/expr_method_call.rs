@@ -1620,6 +1620,65 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // DataFrame methods (phase-11 Arrow, interpreter MVP). `DataFrame`
+        // is non-generic, so a result that mentions an element type can't
+        // bind it from the receiver: `column(name)` types as `Column[?]`
+        // — a fresh var pinned by the binding annotation / downstream use
+        // (the `Column.new()` posture; a wrong annotation isn't caught
+        // statically, the codegen slice tightens it). The concrete-typed
+        // methods are handled here too so the whole surface is predictable
+        // for a brand-new builtin rather than leaning on baked dispatch.
+        let is_dataframe = match &obj_ty {
+            Type::Named { name, .. } => name == "DataFrame",
+            Type::Ref(inner) | Type::MutRef(inner) => {
+                matches!(inner.as_ref(), Type::Named { name, .. } if name == "DataFrame")
+            }
+            _ => false,
+        };
+        if is_dataframe
+            && matches!(
+                method,
+                "column" | "insert" | "has_column" | "column_names" | "width" | "height"
+            )
+        {
+            let arity = |m: &str| match m {
+                "insert" => 2usize,
+                "column" | "has_column" => 1,
+                _ => 0,
+            };
+            let want = arity(method);
+            if args.len() != want {
+                self.type_error(
+                    format!("{method} expects {want} argument(s), got {}", args.len()),
+                    span.clone(),
+                    TypeErrorKind::WrongNumberOfArgs,
+                );
+                return Type::Error;
+            }
+            // Infer every arg (side effects / diagnostics); the leading
+            // `name` of `column` / `has_column` / `insert` must be a
+            // String. `insert`'s `col` arg type isn't bound from the
+            // receiver (the baked-generic limitation) — accepted as-is.
+            let arg_tys: Vec<Type> = args.iter().map(|a| self.infer_expr(&a.value)).collect();
+            if matches!(method, "column" | "has_column" | "insert") {
+                self.check_assignable(&Type::Str, &arg_tys[0], args[0].value.span.clone());
+            }
+            return match method {
+                "column" => Type::Named {
+                    name: "Column".to_string(),
+                    args: vec![self.env.fresh_type_var()],
+                },
+                "has_column" => Type::Bool,
+                "column_names" => Type::Named {
+                    name: "Vec".to_string(),
+                    args: vec![Type::Str],
+                },
+                "width" | "height" => Type::Int(IntSize::I64),
+                // insert
+                _ => Type::Unit,
+            };
+        }
+
         // Iterator-source methods: `iter()` / `into_iter()` on any iterable
         // collection produce an `Iterator[Item = T]` value. Handled here in
         // one place so per-collection method handlers don't have to repeat

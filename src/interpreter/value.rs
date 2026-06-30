@@ -159,6 +159,21 @@ pub enum Value {
         data: Arc<RwLock<Vec<Value>>>,
         valid: Arc<RwLock<Vec<bool>>>,
     },
+    /// `DataFrame` — schema-bearing table of named columns (phase-11
+    /// data-science stdlib, Arrow commitment; interpreter MVP). An
+    /// insertion-ordered list of `(name, Value::Column)` pairs — the
+    /// order IS the Arrow schema order, and a linear scan resolves a
+    /// name lookup at MVP scale. Each entry's `Value` is a
+    /// `Value::Column` whose `Arc<RwLock<...>>` cells the frame shares
+    /// (so `column(name)` hands back a view, par-block capture stays
+    /// sound, and the frame is a thin shared owner). Every column is
+    /// kept the same length (the row count / `height`) — the Arrow
+    /// equal-length invariant, enforced at `insert`. The codegen slice
+    /// will lower this to the real Arrow schema + a uniform `AnyColumn`
+    /// store; the interpreter only needs the logical semantics.
+    DataFrame {
+        columns: Arc<RwLock<Vec<(String, Value)>>>,
+    },
     Map(Vec<(Value, Value)>),
     Struct {
         name: String,
@@ -789,6 +804,23 @@ impl std::fmt::Display for Value {
             Value::Column { valid, .. } => {
                 write!(f, "Column[len={}]", valid.read().unwrap().len())
             }
+            // Summary form — column names + shape; element dump would
+            // flood output.
+            Value::DataFrame { columns } => {
+                let cols = columns.read().unwrap();
+                let names: Vec<&str> = cols.iter().map(|(n, _)| n.as_str()).collect();
+                let height = cols.first().map_or(0, |(_, c)| match c {
+                    Value::Column { valid, .. } => valid.read().unwrap().len(),
+                    _ => 0,
+                });
+                write!(
+                    f,
+                    "DataFrame[{} x {}: {}]",
+                    cols.len(),
+                    height,
+                    names.join(", ")
+                )
+            }
             Value::Tuple(vals) => {
                 write!(f, "(")?;
                 for (i, v) in vals.iter().enumerate() {
@@ -1121,6 +1153,7 @@ impl Value {
             Value::AstItem(_) => "AstItem",
             Value::Tensor { .. } => "Tensor",
             Value::Column { .. } => "Column",
+            Value::DataFrame { .. } => "DataFrame",
             Value::Tuple(_) => "Tuple",
             Value::Array(_) => "Array",
             Value::Vector(_) => "Vector",

@@ -867,6 +867,11 @@ impl<'a> super::Interpreter<'a> {
         if let Some(v) = self.try_eval_column_method(method, &obj, args, span) {
             return v;
         }
+        // DataFrame methods (`insert` / `column` / `column_names` / …) —
+        // a non-DataFrame receiver returns `None` and falls through.
+        if let Some(v) = self.try_eval_dataframe_method(method, &obj, args, span) {
+            return v;
+        }
         if let Some(v) = self.try_eval_iterator_method(method, object, &obj, args, span) {
             return v;
         }

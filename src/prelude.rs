@@ -279,6 +279,10 @@ pub const PRELUDE_TYPES: &[&str] = &[
     // `Column[T]` nullable 1-D Arrow column (phase-11 data-science
     // stdlib, interpreter MVP). See `runtime/stdlib/column.kara`.
     "Column",
+    // `DataFrame` schema-bearing table of named columns (phase-11
+    // data-science stdlib, interpreter MVP). See
+    // `runtime/stdlib/dataframe.kara`.
+    "DataFrame",
     // `Semaphore` application-layer backpressure primitive (phase-8 P1).
     // See `runtime/stdlib/semaphore.kara`.
     "Semaphore",
@@ -859,6 +863,13 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     // null accessors, `c[i] -> Option[T]` indexing; see
     // `runtime/stdlib/column.kara`.
     ("column.kara", include_str!("../runtime/stdlib/column.kara")),
+    // `DataFrame` schema-bearing table of named columns — new/insert,
+    // column lookup, has_column/column_names/width/height; see
+    // `runtime/stdlib/dataframe.kara`.
+    (
+        "dataframe.kara",
+        include_str!("../runtime/stdlib/dataframe.kara"),
+    ),
     // `std.time` — native async `sleep_ms` (the leaf `suspends` timer
     // primitive; auto-par divergence slice A2a-2.2). See
     // `runtime/stdlib/time.kara`.

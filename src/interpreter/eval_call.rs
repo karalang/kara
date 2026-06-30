@@ -760,6 +760,13 @@ impl<'a> super::Interpreter<'a> {
                         return v;
                     }
                 }
+                // Phase-11 DataFrame constructor (interpreter MVP) — see
+                // runtime/stdlib/dataframe.kara.
+                "DataFrame.new" => {
+                    if let Some(v) = self.eval_dataframe_new(&path_str) {
+                        return v;
+                    }
+                }
                 "Semaphore.new" => {
                     if let Some(v) = self.eval_semaphore_new(args) {
                         return v;

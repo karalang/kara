@@ -1,0 +1,101 @@
+// runtime/stdlib/dataframe.kara
+//
+// `DataFrame` — schema-bearing table of named `Column`s (Phase 11
+// data-science stdlib; design.md § DataFrame, Q6). Interpreter MVP
+// surface: construction (`new`), the column builder (`insert`), lookup
+// (`column`), and the schema-lite / shape accessors (`has_column` /
+// `column_names` / `width` / `height`). Heavier surface — `select` /
+// `filter` / `row_iter` / a typed `schema()` object / `df[...]` indexing
+// / the Arrow-buffer codegen lowering — lands in follow-on slices
+// (tracker at `phase-11-stdlib-longtail.md § DataFrame`).
+//
+// **Non-generic by design.** A table holds *heterogeneous* columns
+// (`age: Column[i64]`, `name: Column[String]`), so the type can't carry
+// a single element param — `DataFrame` is bare, no `[T]`. Construction
+// is therefore a builder rather than a map literal (a
+// `Map[String, Column[T]]` constructor is unspellable for a mixed
+// schema): `new()` then `insert[T](name, col)`, where each `insert` is
+// an ordinary method-level-generic call binding `T` per call from its
+// argument and storing the column type-erased.
+//
+// **`column(name) -> Column[T]`.** `T` can't come from the receiver
+// (the frame has none) nor from the string arg (not a compile-time
+// schema key), so the typechecker types it as `Column[?fresh]` pinned by
+// the binding annotation / downstream use — the `Column.new()` posture.
+// A *wrong* annotation isn't caught statically (the general baked-generic
+// limitation); the interpreter is the runtime gate, the codegen slice
+// (with an internal `AnyColumn`) tightens it.
+//
+// **Dispatch.** `DataFrame.new` fires through `eval_call.rs`'s
+// `"DataFrame.new"` path-string arm; the `insert` / `column` /
+// `has_column` / `column_names` / `width` / `height` instance methods
+// through `try_eval_dataframe_method`
+// (`src/interpreter/method_call_dataframe.rs`), which intercepts before
+// these `#[compiler_builtin]` bodies (surface-only stubs). The
+// typechecker intercepts the same six in
+// `src/typechecker/expr_method_call.rs` (mirroring the Column intercept)
+// so `column` types as `Column[T]` without leaning on baked dispatch.
+//
+// **Representation.** The interpreter holds a `Value::DataFrame` with an
+// insertion-ordered list of `(name, Value::Column)` pairs — the order IS
+// the Arrow schema order. The columns already ride `Arc<RwLock<...>>`
+// shared cells, so the frame is a thin shared owner over them
+// (par-capture-sound), and `column(name)` returns a `Column` sharing the
+// same cells (the honest `ref` view). The struct body below is an opaque
+// surface-only declaration (the handle field is never read), mirroring
+// `Column` / `Tensor`.
+
+struct DataFrame {
+    // Opaque — interpreter intercepts all construction and access.
+    handle_id: i64,
+}
+
+impl DataFrame {
+    // Fresh empty table — no columns, zero rows.
+    #[compiler_builtin]
+    fn new() -> DataFrame {
+        DataFrame { handle_id: 0 }
+    }
+
+    // Add (or replace) a named column. The element type `T` is bound
+    // per call from `col`; the column is moved in and stored type-erased.
+    // When the table is non-empty, `col.len()` must equal the current row
+    // count (`height()`) — the Arrow equal-length invariant; a mismatch
+    // is a runtime error.
+    #[compiler_builtin]
+    fn insert[T](mut ref self, name: String, col: Column[T]) {}
+
+    // Look up a column by name, as `Column[T]` — a view sharing the
+    // stored column's buffer. `T` comes from the binding annotation /
+    // downstream use (see the header note). A missing name is a runtime
+    // error.
+    #[compiler_builtin]
+    fn column[T](ref self, name: String) -> Column[T] {
+        Column.new()
+    }
+
+    // Whether a column with this name exists.
+    #[compiler_builtin]
+    fn has_column(ref self, name: String) -> bool {
+        false
+    }
+
+    // The column names in insertion (Arrow schema) order.
+    #[compiler_builtin]
+    fn column_names(ref self) -> Vec[String] {
+        Vec.new()
+    }
+
+    // Number of columns.
+    #[compiler_builtin]
+    fn width(ref self) -> i64 {
+        0
+    }
+
+    // Number of rows (0 for an empty table; otherwise every column's
+    // length, which the equal-length invariant keeps uniform).
+    #[compiler_builtin]
+    fn height(ref self) -> i64 {
+        0
+    }
+}
