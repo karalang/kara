@@ -1393,12 +1393,37 @@ impl<'a> super::TypeChecker<'a> {
                         &resolved,
                         Type::Named { name, args } if name == "String" && args.is_empty()
                     );
+                // A one-level nested `Vec[scalar]` / `VecDeque[scalar]` element
+                // (`Vec[Vec[i64]]` — matrices, adjacency lists). The element is a
+                // `vec_struct_type`, so the `FreeVecBuffer` vec-struct recursion
+                // (the documented `Vec[Vec[T]]` one-level path) per-element frees
+                // each inner POD buffer, and `get`/`first`/`last` return
+                // `Option[ref Vec[scalar]]` — a borrow `scrutinee_is_borrow_call`
+                // suppresses. INNER must be scalar: a `Vec[Vec[String]]` would
+                // leak the innermost String buffers (two-level nesting exceeds the
+                // one-level recursion) — excluded. `contains` (Vec content-eq) and
+                // `get_unchecked` stay out for nested Vec.
+                let is_pod_vec = matches!(
+                    &resolved,
+                    Type::Named { name, args }
+                        if (name == "Vec" || name == "VecDeque")
+                            && args.len() == 1
+                            && matches!(
+                                resolve_type_var_top(&args[0], &self.env.substitutions),
+                                Type::Int(_)
+                                    | Type::UInt(_)
+                                    | Type::Float(_)
+                                    | Type::Bool
+                                    | Type::Char
+                            )
+                );
                 let record = (is_scalar
                     && matches!(
                         method,
                         "get" | "first" | "last" | "get_unchecked" | "contains"
                     ))
-                    || (is_string && matches!(method, "get" | "first" | "last" | "contains"));
+                    || (is_string && matches!(method, "get" | "first" | "last" | "contains"))
+                    || (is_pod_vec && matches!(method, "get" | "first" | "last"));
                 if record {
                     let te = Self::type_to_type_expr(&resolved);
                     self.temp_recv_elem_types

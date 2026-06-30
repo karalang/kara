@@ -365,10 +365,29 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    first run reused a stale shared-volume karac+test-binary (`running 2 tests`,
    no `Compiling karac`); `cargo clean -p karac` in the volume forced the real
    `running 3 tests` / 3-passed run.
-   **Still open under 3b:** other heap-element receivers — `Vec[T]`/user
-   struct/enum/`Map`/`Set` elements (need element-drop threading, `elem_agg_drop`,
-   the helper doesn't carry; the String case works *because* `String` reuses
-   `vec_struct_type` so the inline recursion already covers it);
+   **Slice 3e — nested `Vec[Vec[scalar]]` elements. — DONE 2026-06-29.**
+   `make_grid().get(i)` / `.first()` / `.last()` on a fresh-temp `Vec[Vec[i64]]`
+   (matrices/grids/adjacency lists) now compile. Another **one-spot gate lift**:
+   the gate records a `Vec[scalar]` / `VecDeque[scalar]` element for
+   `get`/`first`/`last`. The element is a `vec_struct_type`, so the same
+   `FreeVecBuffer` vec-struct recursion (`cleanup.drop.inner.free`) that frees
+   `Vec[String]`'s per-element buffers frees each inner row's data buffer (the
+   documented one-level `Vec[Vec[T]]` path), and `get` returns
+   `Option[ref Vec[i64]]` — a borrow `scrutinee_is_borrow_call` suppresses, so
+   each inner buffer is freed exactly once. **Inner must be SCALAR**: a
+   `Vec[Vec[String]]` would leak the innermost String buffers (two-level nesting
+   exceeds the one-level recursion) — excluded. `contains`/`get_unchecked` stay
+   out for nested Vec. Codegen output matched the interpreter oracle (`20`).
+   Verified: no double-free (macOS ASAN) and no leak (Linux LSan — `Compiling
+   karac` confirmed, zero reports). **Tests:** 1 IR
+   (`test_ir_freshtemp_vec_nested_get_emits_per_element_drop` → `__vrecv_tmp`
+   **and** `cleanup.drop.inner.free`) + 1 ASAN
+   (`asan_freshtemp_vec_nested_get_no_double_free` — looped, multi-element rows).
+   **Still open under 3b/3e:** deeper-heap element receivers — `Vec[Vec[String]]`
+   / `Vec[String]`-or-Map nested two levels, `Vec[T]`/user struct/enum/`Map`/`Set`
+   *with heap fields* (need element-drop threading, `elem_agg_drop`, the helper
+   doesn't carry; the String + one-level-POD-Vec cases work *because* the element
+   reuses `vec_struct_type` so the inline recursion already covers it);
    `get_unchecked` on `Vec[String]`; `iter` on a temp (the
    iterator must keep the temp alive across the loop); and (the `vector_method_
    receivers` model — receiver `(T, N)` recorded at the collided span — remains a

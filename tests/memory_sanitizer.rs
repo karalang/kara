@@ -3110,6 +3110,53 @@ fn main() {
     }
 
     #[test]
+    fn asan_freshtemp_vec_nested_get_no_double_free() {
+        // Slice 3e: `make_grid().get(i)` on a fresh-temp `Vec[Vec[i64]]` in a
+        // loop. `get` returns `Option[ref Vec[i64]]` — a borrow into an inner row
+        // *inside* the temp's outer buffer, which `__vrecv_tmp`'s `FreeVecBuffer`
+        // frees at frame exit. Hazards mirror the `Vec[String]` case: (1) the
+        // `Some(r)` arm binds a `ref Vec[i64]` that must NOT be independently
+        // dropped (`scrutinee_is_borrow_call`), else it double-frees the inner
+        // row the vec-struct recursion also frees (macOS ASAN); (2) the inner row
+        // data buffers must be per-element freed before the outer buffer, else
+        // they leak (Linux LSan). Each row has several elements so its buffer is
+        // a real heap allocation; the loop accumulates.
+        assert_clean_asan_run(
+            r#"
+fn make_grid() -> Vec[Vec[i64]] {
+    let mut g: Vec[Vec[i64]] = Vec.new();
+    let mut a: Vec[i64] = Vec.new();
+    a.push(10_i64);
+    a.push(11_i64);
+    a.push(12_i64);
+    a.push(13_i64);
+    g.push(a);
+    let mut b: Vec[i64] = Vec.new();
+    b.push(20_i64);
+    b.push(21_i64);
+    b.push(22_i64);
+    b.push(23_i64);
+    g.push(b);
+    return g;
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 2 {
+        match make_grid().get(i) {
+            Some(r) => println(r[1]),
+            None => println(0_i64),
+        };
+        i = i + 1;
+    };
+}
+"#,
+            &["11", "21"],
+            "freshtemp_vec_nested_get_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_freshtemp_vec_string_first_last_no_double_free() {
         // Slice 3b-heap companion: `first`/`last` on a fresh-temp `Vec[String]`
         // — the other two borrow-returning (`Option[ref String]`) read methods

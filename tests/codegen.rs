@@ -19139,6 +19139,46 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_freshtemp_vec_nested_get_emits_per_element_drop() {
+        // Slice 3e: `make_grid().get(i)` on a fresh-temp `Vec[Vec[i64]]`. The
+        // element is itself a `{ptr,len,cap}` Vec, so the same vec-struct
+        // recursion the `Vec[String]` case uses (`cleanup.drop.inner.free`)
+        // per-element frees each inner row's data buffer before the outer buffer.
+        // Without it the inner row buffers leak (LeakSanitizer on Linux CI). The
+        // `Some(row)` borrow is `Option[ref Vec[i64]]` — NOT independently
+        // dropped (`scrutinee_is_borrow_call`). Inner element is scalar (POD), so
+        // the one-level recursion is complete (no innermost leak).
+        let src = r#"
+fn make_grid() -> Vec[Vec[i64]] {
+    let mut g: Vec[Vec[i64]] = Vec.new();
+    let mut row: Vec[i64] = Vec.new();
+    row.push(10_i64);
+    g.push(row);
+    return g;
+}
+
+fn main() {
+    match make_grid().get(0) {
+        Some(r) => println(r[0]),
+        None => println(0_i64),
+    };
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("__vrecv_tmp"),
+            "expected the fresh Vec[Vec[i64]] receiver materialized into __vrecv_tmp; got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("cleanup.drop.inner.free"),
+            "expected the vec-struct per-element drop loop (cleanup.drop.inner.free) \
+             freeing each inner row buffer of the fresh-temp nested-Vec receiver; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_ir_freshtemp_vec_string_contains_emits_per_element_drop() {
         // Slice 3b-heap follow-on: `contains` on a fresh-temp `Vec[String]`.
         // `contains` returns `bool` (no borrow escapes), but the receiver temp

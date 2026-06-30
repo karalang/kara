@@ -3411,12 +3411,15 @@ impl<'ctx> super::Codegen<'ctx> {
     /// existing case.
     ///
     /// Element-type-generic: the typechecker records SCALAR elements for all
-    /// five read methods, and STRING elements for the borrow-returning
-    /// `get`/`first`/`last` plus `contains` (slice 3b-heap). For a String
-    /// element the recorded
+    /// five read methods, STRING elements for the borrow-returning
+    /// `get`/`first`/`last` plus `contains` (slice 3b-heap), and one-level nested
+    /// `Vec[scalar]` / `VecDeque[scalar]` elements (`Vec[Vec[i64]]`) for
+    /// `get`/`first`/`last` (slice 3e). For a String *or* nested-Vec element the
+    /// recorded
     /// `TypeExpr` lowers to `vec_struct_type`, so `track_vec_var`'s
     /// `FreeVecBuffer` takes the vec-struct recursion and per-element frees each
-    /// `String` buffer before the outer buffer — and the `Option[ref String]`
+    /// inner buffer (a `String`'s bytes, or a row's POD data) before the outer
+    /// buffer — and the `Option[ref String]` / `Option[ref Vec[scalar]]`
     /// `get`/`first`/`last` return is suppressed from independent drop at the
     /// match arm by `scrutinee_is_borrow_call` (which keys off the method, not
     /// the receiver shape), so the per-element storage is freed exactly once at
