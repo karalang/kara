@@ -11100,6 +11100,35 @@ fn test_deref_double() {
     assert_eq!(output, "10\n");
 }
 
+// ── Implicit assign-through on a `mut ref` scalar (B-2026-06-30-9/10) ──
+// design.md § "Compound assignment on `mut ref` lvalues" (:5306): `a = a + b`
+// on a `mut ref T` lvalue desugars to `*a = *a + b` — no explicit deref
+// needed. The interpreter already applied this; these lock in run/build parity
+// (the codegen counterparts live in tests/codegen.rs).
+#[test]
+fn test_mut_ref_scalar_implicit_assign_through() {
+    // `x = x + 1i64` (no `*`) reads through the borrow and writes back.
+    let output = run("fn inc(x: mut ref i64) { x = x + 1i64; }\n\
+         fn main() { let mut n: i64 = 10i64; inc(mut n); println(n); }");
+    assert_eq!(output, "11\n");
+}
+
+#[test]
+fn test_mut_ref_scalar_compound_assign_through() {
+    // `x += 1i64` on a `mut ref i64` — the compound-assign sibling.
+    let output = run("fn inc(x: mut ref i64) { x += 1i64; }\n\
+         fn main() { let mut n: i64 = 10i64; inc(mut n); println(n); }");
+    assert_eq!(output, "11\n");
+}
+
+#[test]
+fn test_mut_ref_scalar_narrow_int_assign_through() {
+    // `mut ref i32` with an unsuffixed literal — the pointee width is preserved.
+    let output = run("fn inc(x: mut ref i32) { x = x + 1; }\n\
+         fn main() { let mut n: i32 = 41; inc(mut n); println(n); }");
+    assert_eq!(output, "42\n");
+}
+
 // ── std.http ──────────────────────────────────────────────────────────────────
 
 #[test]

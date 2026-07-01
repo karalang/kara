@@ -3032,6 +3032,69 @@ fn main() {
         assert_eq!(run_program(src).as_deref(), Some("14\n"));
     }
 
+    // ── Assign-through on a `mut ref` scalar PARAMETER (B-2026-06-30-9/10) ──
+    //
+    // `a = a + b` on a `mut ref T` scalar lvalue desugars to `*a = *a + b`
+    // (design.md :5306): the RHS reads through the borrow, and the write must
+    // propagate to the caller's `T`. Two distinct bugs were fixed together:
+    //   1. typecheck (B-2026-06-30-9) — the arithmetic arm of `infer_binary`
+    //      didn't auto-deref a numeric-scalar borrow operand, so `x = x + 1`
+    //      HARD-errored on `check`/`build` while `run` warned-and-applied.
+    //   2. codegen (B-2026-06-30-10) — even once typecheck passed, the Assign /
+    //      CompoundAssign identifier store wrote into the borrow-param's alloca
+    //      (which holds the POINTER) instead of THROUGH it, so the built binary
+    //      silently printed the un-incremented value (10) while `run` printed 11.
+    // These lock the build side to the interpreter's answer (11) — sibling of
+    // B-2026-06-30-6 (that fixed `mut ref Vec` element typing; this fixes a
+    // `mut ref` scalar used directly).
+
+    /// `x = x + 1i64` (explicit assign, no `*`) on a `mut ref i64` param
+    /// updates the caller's value in the built binary — was 10 (silent
+    /// clobber-the-pointer miscompile), now 11 matching `karac run`.
+    #[test]
+    fn mut_ref_scalar_param_implicit_assign_through_e2e() {
+        let src = "fn inc(x: mut ref i64) { x = x + 1i64; }\n\
+                   fn main() {\n\
+                   \x20   let mut n: i64 = 10i64; inc(mut n); println(n);\n\
+                   }\n";
+        assert_eq!(run_program(src).as_deref(), Some("11\n"));
+    }
+
+    /// `x += 1i64` (compound assign) on a `mut ref i64` param — the compound
+    /// sibling, same store-through fix.
+    #[test]
+    fn mut_ref_scalar_param_compound_assign_through_e2e() {
+        let src = "fn inc(x: mut ref i64) { x += 1i64; }\n\
+                   fn main() {\n\
+                   \x20   let mut n: i64 = 10i64; inc(mut n); println(n);\n\
+                   }\n";
+        assert_eq!(run_program(src).as_deref(), Some("11\n"));
+    }
+
+    /// `mut ref i32` with an UNSUFFIXED literal (`x + 1`): the borrow strip runs
+    /// before Q4 literal promotion, so the literal is recorded as `i32` and the
+    /// store-through coerces to the narrow slot width — prints 42 on both
+    /// surfaces (a width mismatch here would corrupt the value or fail to link).
+    #[test]
+    fn mut_ref_scalar_param_narrow_int_assign_through_e2e() {
+        let src = "fn inc(x: mut ref i32) { x = x + 1; }\n\
+                   fn main() {\n\
+                   \x20   let mut n: i32 = 41; inc(mut n); println(n);\n\
+                   }\n";
+        assert_eq!(run_program(src).as_deref(), Some("42\n"));
+    }
+
+    /// A `ref i64` (immutable borrow) operand reads through the borrow in
+    /// arithmetic and returns the value — no assign-through. Prints 11.
+    #[test]
+    fn ref_scalar_param_read_through_arithmetic_e2e() {
+        let src = "fn plus1(x: ref i64) -> i64 { x + 1i64 }\n\
+                   fn main() {\n\
+                   \x20   let n: i64 = 10i64; println(plus1(n));\n\
+                   }\n";
+        assert_eq!(run_program(src).as_deref(), Some("11\n"));
+    }
+
     // ── Borrow-elision for read-only `let r = v[i]` (B-2026-06-19-6) ──
 
     /// Count `karac_clone_Vec*` call sites inside the `@main` function body.

@@ -3796,6 +3796,30 @@ impl<'ctx> super::Codegen<'ctx> {
                     None
                 };
                 if let ExprKind::Identifier(name) = &target.kind {
+                    // Assign-through for a numeric-scalar `mut ref` param
+                    // (design.md § "Compound assignment on `mut ref` lvalues"
+                    // :5306 — `a = a + b` on a `mut ref T` lvalue writes
+                    // through to the caller's `T`). The alloca holds the borrow
+                    // POINTER (the param is registered in `ref_params`), so the
+                    // generic `build_store(slot.ptr, …)` below would clobber the
+                    // pointer with the value instead of writing the pointee — a
+                    // silent miscompile (the caller's value never changes; the
+                    // interpreter, which mutates through the borrow, would then
+                    // disagree with the built binary). `get_data_ptr` loads the
+                    // borrow pointer, giving the caller's storage address. Scalar
+                    // only: a `mut ref Vec`/`String`/struct mutates through
+                    // methods / field stores that already deref via
+                    // `get_data_ptr`, and routing their whole-value moves here
+                    // would bypass the heap move-tracking further down.
+                    if let Some(&inner_ty) = self.ref_params.get(name) {
+                        if inner_ty.is_int_type() || inner_ty.is_float_type() {
+                            if let Some(ptr) = self.get_data_ptr(name) {
+                                let cval = self.coerce_scalar_to_type(val, inner_ty);
+                                self.builder.build_store(ptr, cval).unwrap();
+                                return Ok(());
+                            }
+                        }
+                    }
                     // Slice 9: module-level `let mut BINDING = …;`
                     // identifier-LHS assignment writes directly to
                     // the LLVM global. The typechecker (slice 5)
@@ -4375,6 +4399,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     // short-circuits before the local-slot fallback.
                     if self.try_store_module_binding(name, result) {
                         return Ok(());
+                    }
+                    // Assign-through for a numeric-scalar `mut ref` param — the
+                    // compound-assign sibling of the plain-Assign block above
+                    // (see its comment for the full rationale). The alloca holds
+                    // the borrow pointer; store the binop result THROUGH it
+                    // (`get_data_ptr`) rather than into the alloca, so `x += 1`
+                    // on a `mut ref i64` updates the caller's value.
+                    if let Some(&inner_ty) = self.ref_params.get(name) {
+                        if inner_ty.is_int_type() || inner_ty.is_float_type() {
+                            if let Some(ptr) = self.get_data_ptr(name) {
+                                let cval = self.coerce_scalar_to_type(result, inner_ty);
+                                self.builder.build_store(ptr, cval).unwrap();
+                                return Ok(());
+                            }
+                        }
                     }
                     if let Some(slot) = self.variables.get(name).copied() {
                         self.builder.build_store(slot.ptr, result).unwrap();

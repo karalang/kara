@@ -24601,6 +24601,78 @@ fn for_loop_mut_ref_vec_of_string_element_stays_borrowed() {
     );
 }
 
+// ── Arithmetic on a `mut ref` / `ref` numeric SCALAR reads through the
+// borrow ── (B-2026-06-30-9) design.md § "Compound assignment on `mut ref`
+// lvalues" (:5306): `a = a + b` on a `mut ref T` lvalue desugars to `*a = *a +
+// b`, so the RHS reads through the borrow and the binop operates on the bare
+// scalar `T`. Before the fix the arithmetic arm of `infer_binary` did NOT
+// auto-deref a numeric-scalar `ref`/`mut ref` operand (`is_numeric` is false
+// for `Type::MutRef(i64)`), so `x = x + 1i64` HARD-errored under
+// `karac check`/`build` ("arithmetic operator requires numeric type, found 'mut
+// ref i64'") while `karac run` warned-and-applied — a check/build ↔ run
+// divergence. The sibling of B-2026-06-30-6 (which fixed the `mut ref Vec`
+// ELEMENT typing; this fixes a `mut ref` scalar PARAMETER used directly). This
+// makes arithmetic consistent with comparison, which already strips borrows via
+// `strip_refs_for_compare`.
+#[test]
+fn mut_ref_scalar_param_arithmetic_assign_typechecks() {
+    // The exact repro: `x = x + 1i64` on a `mut ref i64` parameter. The RHS
+    // reads through the borrow, so the binop is `i64 + i64` and typechecks.
+    typecheck_ok(
+        "fn inc(x: mut ref i64) { x = x + 1i64; }\n\
+         fn main() { let mut n: i64 = 10i64; inc(mut n); println(n); }",
+    );
+}
+
+#[test]
+fn mut_ref_scalar_param_unsuffixed_literal_arithmetic() {
+    // An UNSUFFIXED literal (`x + 1`) on a `mut ref i32` must still promote to
+    // the pointee type — the borrow strip runs BEFORE Q4 literal promotion, so
+    // the literal is recorded as `i32` (not the default `i64`), keeping the
+    // codegen literal width consistent.
+    typecheck_ok(
+        "fn inc(x: mut ref i32) { x = x + 1; }\n\
+         fn main() { let mut n: i32 = 41; inc(mut n); println(n); }",
+    );
+}
+
+#[test]
+fn ref_scalar_param_read_through_in_arithmetic() {
+    // The immutable-borrow sibling: `x + 1i64` on a `ref i64` reads through the
+    // borrow and yields `i64`. (No assign-through — `ref` is read-only.)
+    typecheck_ok(
+        "fn plus1(x: ref i64) -> i64 { x + 1i64 }\n\
+         fn main() { let n: i64 = 10i64; println(plus1(n)); }",
+    );
+}
+
+#[test]
+fn mut_ref_scalar_float_param_arithmetic_typechecks() {
+    // Float scalars read through the borrow too.
+    typecheck_ok(
+        "fn scale(x: mut ref f64) { x = x * 2.0 + 0.5; }\n\
+         fn main() { let mut n: f64 = 10.0; scale(mut n); println(n); }",
+    );
+}
+
+#[test]
+fn mut_ref_non_numeric_scalar_arithmetic_still_errors() {
+    // The strip is gated on a NUMERIC pointee, so a borrow of a non-numeric
+    // type still reaches the "requires numeric type" diagnostic (reporting the
+    // original `mut ref bool`, not a stripped inner type).
+    let errors =
+        typecheck_errors("fn f(x: mut ref bool) { x = x + x; }\nfn main() { println(0); }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::InvalidBinaryOp
+                && e.message
+                    .contains("arithmetic operator requires numeric type")
+                && e.message.contains("mut ref bool")),
+        "expected InvalidBinaryOp naming 'mut ref bool', got: {errors:?}"
+    );
+}
+
 #[test]
 fn par_enum_atomic_and_mutex_variant_fields_accepted() {
     typecheck_ok(

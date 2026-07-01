@@ -47,6 +47,20 @@ fn strip_refs_for_compare(ty: &Type) -> &Type {
     }
 }
 
+/// Peel a single `ref` / `mut ref` off a numeric SCALAR operand so arithmetic
+/// reads through the borrow (design.md § "Compound assignment on `mut ref`
+/// lvalues": `a = a + b` on a `mut ref T` lvalue desugars to `*a = *a + b`, so
+/// the RHS reads through the borrow and the binop operates on the bare scalar
+/// `T`). A non-numeric or unborrowed type passes through untouched, so a borrow
+/// of a non-numeric type still reaches the "requires numeric type" diagnostic.
+/// Scalar borrows don't nest, so one level suffices.
+fn deref_numeric_scalar(ty: Type) -> Type {
+    match &ty {
+        Type::Ref(inner) | Type::MutRef(inner) if is_numeric(inner) => (**inner).clone(),
+        _ => ty,
+    }
+}
+
 /// The `[elem, shape]` generic-arg list of a `Tensor[T, Shape]` type,
 /// peeling one `ref` / `mut ref`. `None` for any non-tensor type. Used by
 /// `infer_binary` to route element-wise tensor arithmetic and by the
@@ -1307,6 +1321,33 @@ impl<'a> super::TypeChecker<'a> {
         if matches!(left_ty, Type::Vector { .. }) || matches!(right_ty, Type::Vector { .. }) {
             return self.infer_vector_binary(op, &left_ty, &right_ty, left, right, span);
         }
+
+        // Auto-deref a `ref` / `mut ref` wrapper around a numeric SCALAR
+        // operand for arithmetic. design.md § "Compound assignment on `mut
+        // ref` lvalues" (:5306) mandates read-through: `a = a + b` on a `mut
+        // ref T` lvalue desugars to `*a = *a + b`, so the RHS reads through the
+        // borrow and the binop operates on the bare scalar `T` — both operand
+        // types and the result type. This mirrors the ref-stripping comparison
+        // already does (`strip_refs_for_compare`), keeping arithmetic
+        // consistent. Placed BEFORE Q4 literal promotion so an unsuffixed
+        // literal operand (`x + 1`) still promotes to the pointee type and
+        // records its span; a borrow left un-stripped makes `is_numeric` false,
+        // which would skip promotion and risk a codegen literal-width mismatch.
+        // The tensor / Column / Vector paths above have already returned, so
+        // any borrow surviving here wraps a scalar; stripping only when the
+        // pointee is numeric preserves the "requires numeric type" diagnostic
+        // for a non-numeric borrow.
+        let (left_ty, right_ty) = if matches!(
+            op,
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod
+        ) {
+            (
+                deref_numeric_scalar(left_ty),
+                deref_numeric_scalar(right_ty),
+            )
+        } else {
+            (left_ty, right_ty)
+        };
 
         // Q4 literal promotion: for arithmetic, comparison, and equality ops,
         // when one operand is a suffix-free numeric literal and the other is a
