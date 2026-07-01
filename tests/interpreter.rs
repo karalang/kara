@@ -18235,3 +18235,49 @@ fn for_loop_borrowed_nested_vec_scalar_autoderefs() {
     );
     assert_eq!(out, "10\n");
 }
+
+// ── Iterating a `mut ref` collection is read-only, like bare shared `for` ──
+
+/// (B-2026-06-30-6) The run side of the build/run agreement for the mutable-
+/// borrow sibling of B-2026-06-30-4. Bare `for` over a `mut ref Vec[i64]`
+/// borrows via `.iter()` (design.md line 2739), so the Copy scalar element
+/// binds as a by-value `i64` and is usable in arithmetic — no `mut ref i64`
+/// warning. In-place element mutation via bare `for` is NOT supported (that is
+/// `.iter_mut()`'s role), so `x = x * 2` writes only the loop local: the Vec is
+/// unchanged and `v[0]`/`v[1]` print `3`/`4`. `karac build` (see the codegen
+/// sibling) prints the SAME — the point is that all surfaces now AGREE (the old
+/// bug was `check`/`build` HARD-erroring while `run` warned-and-proceeded).
+#[test]
+fn for_loop_mut_ref_vec_scalar_element_is_read_only() {
+    let out = run_no_errors(
+        "fn double_all(xs: mut ref Vec[i64]) {\n\
+         \x20   for x in xs { x = x * 2; }\n\
+         }\n\
+         fn main() {\n\
+         \x20   let mut v: Vec[i64] = Vec.new(); v.push(3i64); v.push(4i64);\n\
+         \x20   double_all(mut v);\n\
+         \x20   println(v[0]); println(v[1]);\n\
+         }\n",
+    );
+    assert_eq!(out, "3\n4\n");
+}
+
+/// (B-2026-06-30-6) Reassign-and-use of the by-value loop local IS a working
+/// pattern: `x = x * 2` scales the local, `total + x` reads it, so the sum is
+/// `(3*2)+(4*2) = 14`. This is why the fix binds by value rather than rejecting
+/// loop-var assignment — a hard error would wrongly reject this valid program.
+#[test]
+fn for_loop_mut_ref_vec_scalar_reassign_and_use() {
+    let out = run_no_errors(
+        "fn sum_scaled(xs: mut ref Vec[i64]) -> i64 {\n\
+         \x20   let mut total = 0i64;\n\
+         \x20   for x in xs { x = x * 2; total = total + x; }\n\
+         \x20   total\n\
+         }\n\
+         fn main() {\n\
+         \x20   let mut v: Vec[i64] = Vec.new(); v.push(3i64); v.push(4i64);\n\
+         \x20   println(sum_scaled(mut v));\n\
+         }\n",
+    );
+    assert_eq!(out, "14\n");
+}

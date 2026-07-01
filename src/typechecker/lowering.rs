@@ -1147,16 +1147,49 @@ impl<'a> super::TypeChecker<'a> {
                 // warned under `karac run` but HARD-errored under `karac build`,
                 // a run/build divergence. Aggregates (`ref Vec[i64]`, `ref
                 // String`, structs) keep the borrow form so the move-out-of-
-                // borrow rejection above still fires. Only the SHARED-borrow
-                // arm unwraps: `mut ref` iteration keeps `mut ref T` so an
-                // element can still be mutated in place. B-2026-06-30-4.
+                // borrow rejection above still fires. The `mut ref` arm below
+                // unwraps scalars the SAME way (B-2026-06-30-6): bare `for` is
+                // read-only shared iteration regardless of the collection's own
+                // borrow form (design.md line 2739 — `for x in c` desugars to
+                // `c.iter()`), so a `mut ref Vec[i64]` element is a by-value
+                // `i64` too, never `mut ref i64`. B-2026-06-30-4.
                 if is_borrow_copy_scalar(&elem) {
                     elem
                 } else {
                     Type::Ref(Box::new(elem))
                 }
             }
-            Type::MutRef(inner) => Type::MutRef(Box::new(self.element_type_of(inner))),
+            Type::MutRef(inner) => {
+                // Bare `for` over a `mut ref` collection is STILL shared /
+                // read-only iteration: design.md § Iteration (line 2739) —
+                // `for x in collection` desugars to `collection.iter()`, which
+                // borrows and yields `ref T`, REGARDLESS of the collection's own
+                // borrow form (line 2758 reaffirms: "bare `for` calls `.iter()`
+                // (which borrows)"). Mutable iteration is the explicit
+                // `.iter_mut()` path (`for x in xs.iter_mut()` → `mut ref T`),
+                // not bare `for`. So a `mut ref` collection's bare-`for` element
+                // is treated exactly like the shared `Type::Ref` arm above: a
+                // Copy scalar binds BY VALUE (`for x in (mut ref Vec[i64])` →
+                // `x: i64`), keeping it usable in arithmetic. Without this the
+                // element was `mut ref i64`, which arithmetic does not auto-
+                // deref: `x * 2` warned under `karac run` but HARD-errored under
+                // `karac build` — a run/build divergence (the mutable-borrow
+                // sibling of B-2026-06-30-4). Binding by value also keeps the
+                // loop var's type HONEST: it is a read-only shared element, so a
+                // `x = x * 2` write is a plain local reassignment that does NOT
+                // reach the collection (bare `for` never mutates — use
+                // `xs[i] = ...` over `0..xs.len()`, or the future `.iter_mut()`),
+                // and is consistent across run / check / build. Aggregates
+                // (`mut ref Vec`, `mut ref String`, structs) keep the borrow
+                // form so the move-out-of-borrow rejection is preserved.
+                // B-2026-06-30-6.
+                let elem = self.element_type_of(inner);
+                if is_borrow_copy_scalar(&elem) {
+                    elem
+                } else {
+                    Type::MutRef(Box::new(elem))
+                }
+            }
             // Primitive borrowed views — element type is the inner type.
             Type::Array { element, .. } | Type::Slice { element, .. } => *element.clone(),
             Type::Named { name, args } => {
@@ -1189,14 +1222,16 @@ impl<'a> super::TypeChecker<'a> {
 }
 
 /// True for the Copy scalar primitives that bind BY VALUE when iterated out of
-/// a *shared* borrowed collection (`for x in (ref Vec[T])`). Copying a scalar
-/// is not a move, so yielding the bare `T` (rather than `ref T`) is sound and
-/// keeps the loop variable usable in arithmetic — matching `Slice[T]`
+/// a borrowed collection — shared `for x in (ref Vec[T])` (B-2026-06-30-4) or
+/// mutable `for x in (mut ref Vec[T])` (B-2026-06-30-6). Bare `for` borrows via
+/// `.iter()` in both cases (design.md line 2739), so copying a scalar out is
+/// not a move: yielding the bare `T` (rather than `ref T` / `mut ref T`) is
+/// sound and keeps the loop variable usable in arithmetic — matching `Slice[T]`
 /// iteration and the `Str` → `char` peel in `element_type_of`. Aggregates
 /// (`Vec`/`String`/struct/enum) are deliberately excluded so their borrow form
 /// is preserved and moving an element out of a borrowed collection stays
 /// rejected. `Str` is absent because borrowed `String` iteration is already
-/// peeled to `char` before the borrow arms run. B-2026-06-30-4.
+/// peeled to `char` before the borrow arms run.
 fn is_borrow_copy_scalar(ty: &Type) -> bool {
     matches!(
         ty,

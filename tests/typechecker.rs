@@ -24531,6 +24531,76 @@ fn for_loop_borrowed_vec_of_string_element_stays_borrowed() {
     );
 }
 
+// ── Iterating a `mut ref` collection is read-only, like bare shared `for` ──
+// (B-2026-06-30-6) Bare `for` over a `mut ref Vec` still borrows via `.iter()`
+// (design.md line 2739 — `for x in c` desugars to `c.iter()`, which yields
+// `ref T`), so a Copy scalar element binds BY VALUE (`i64`), never `mut ref
+// i64` — the mutable-borrow sibling of B-2026-06-30-4. Before the fix
+// `element_type_of`'s `MutRef` arm bound `mut ref i64`, which arithmetic did
+// not auto-deref: `x * 2` warned under `karac run` while `karac build`
+// HARD-errored ("arithmetic operator requires numeric type, found 'mut ref
+// i64'") — a run/build divergence. (In-place element mutation is the domain of
+// the explicit `.iter_mut()` path, not bare `for`.)
+
+#[test]
+fn for_loop_mut_ref_vec_scalar_element_usable_in_arithmetic() {
+    // The exact repro shape: iterate a `mut ref Vec[i64]` and use the element
+    // in arithmetic. The loop var is a by-value `i64`, so `x * 2` typechecks
+    // (was a hard `error[typecheck]` on `karac build`/`check`).
+    typecheck_ok(
+        "fn double_all(xs: mut ref Vec[i64]) {\n\
+         \x20   for x in xs { x = x * 2; }\n\
+         }\n\
+         fn main() { println(0); }",
+    );
+}
+
+#[test]
+fn for_loop_mut_ref_vec_scalar_reassign_and_use() {
+    // Reassign-and-use of the loop local is a LEGITIMATE pattern, not a bug to
+    // reject: `x = x * 2` scales the by-value local, then `total + x` reads it.
+    // A hard error on for-loop-variable assignment would wrongly reject this,
+    // which is why the fix binds the element by value rather than rejecting.
+    typecheck_ok(
+        "fn sum_scaled(xs: mut ref Vec[i64]) -> i64 {\n\
+         \x20   let mut total = 0i64;\n\
+         \x20   for x in xs { x = x * 2; total = total + x; }\n\
+         \x20   total\n\
+         }\n\
+         fn main() { println(0); }",
+    );
+}
+
+#[test]
+fn for_loop_mut_ref_nested_vec_scalar_usable_in_arithmetic() {
+    // The unwrap composes through borrow depth for `mut ref` too: only the
+    // innermost Copy scalar binds by value; each intermediate `Vec` element
+    // stays `mut ref Vec[..]`.
+    typecheck_ok(
+        "fn cell_sum(g: mut ref Vec[Vec[i64]]) -> i64 {\n\
+         \x20   let mut total = 0i64;\n\
+         \x20   for row in g { for x in row { total = total + x; } }\n\
+         \x20   total\n\
+         }\n\
+         fn main() { println(0); }",
+    );
+}
+
+#[test]
+fn for_loop_mut_ref_vec_of_string_element_stays_borrowed() {
+    // Non-scalar (non-Copy) elements are NOT unwrapped — a `mut ref Vec[String]`
+    // still yields a borrowed `mut ref String` element, so reading through it
+    // works and the move-out-of-borrow rejection is preserved.
+    typecheck_ok(
+        "fn total_len(words: mut ref Vec[String]) -> i64 {\n\
+         \x20   let mut n = 0i64;\n\
+         \x20   for w in words { n = n + w.len(); }\n\
+         \x20   n\n\
+         }\n\
+         fn main() { println(0); }",
+    );
+}
+
 #[test]
 fn par_enum_atomic_and_mutex_variant_fields_accepted() {
     typecheck_ok(

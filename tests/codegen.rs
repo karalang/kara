@@ -2992,6 +2992,46 @@ fn main() {
         assert_eq!(run_program(src).as_deref(), Some("10\n"));
     }
 
+    /// Iterating a `mut ref Vec[i64]` binds the Copy scalar element BY VALUE
+    /// (`i64`, not `mut ref i64`) — bare `for` borrows via `.iter()` regardless
+    /// of the collection's borrow form (design.md line 2739). Before the fix
+    /// `karac build` HARD-errored on `x * 2` ("arithmetic operator requires
+    /// numeric type, found 'mut ref i64'") while `karac run` warned-and-
+    /// proceeded — a run/build divergence (the mutable-borrow sibling of
+    /// B-2026-06-30-4). (B-2026-06-30-6.) This locks the build side: the loop
+    /// mutates only the loop local (bare `for` is read-only — in-place element
+    /// mutation is `.iter_mut()`'s job), so the Vec is unchanged and the
+    /// program prints `3`/`4`, exactly matching `karac run`.
+    #[test]
+    fn for_loop_mut_ref_vec_scalar_element_is_read_only() {
+        let src = "fn double_all(xs: mut ref Vec[i64]) {\n\
+                   \x20   for x in xs { x = x * 2; }\n\
+                   }\n\
+                   fn main() {\n\
+                   \x20   let mut v: Vec[i64] = Vec.new(); v.push(3i64); v.push(4i64);\n\
+                   \x20   double_all(mut v);\n\
+                   \x20   println(v[0]); println(v[1]);\n\
+                   }\n";
+        assert_eq!(run_program(src).as_deref(), Some("3\n4\n"));
+    }
+
+    /// Reassign-and-use of the by-value loop local computes correctly on the
+    /// build side too: `x = x * 2` scales the local, `total + x` reads it, so
+    /// `(3*2)+(4*2) = 14` — matching `karac run`. (B-2026-06-30-6.)
+    #[test]
+    fn for_loop_mut_ref_vec_scalar_reassign_and_use() {
+        let src = "fn sum_scaled(xs: mut ref Vec[i64]) -> i64 {\n\
+                   \x20   let mut total = 0i64;\n\
+                   \x20   for x in xs { x = x * 2; total = total + x; }\n\
+                   \x20   total\n\
+                   }\n\
+                   fn main() {\n\
+                   \x20   let mut v: Vec[i64] = Vec.new(); v.push(3i64); v.push(4i64);\n\
+                   \x20   println(f\"{sum_scaled(mut v)}\");\n\
+                   }\n";
+        assert_eq!(run_program(src).as_deref(), Some("14\n"));
+    }
+
     // ── Borrow-elision for read-only `let r = v[i]` (B-2026-06-19-6) ──
 
     /// Count `karac_clone_Vec*` call sites inside the `@main` function body.
