@@ -117,9 +117,23 @@ pub(super) fn value_discriminant(v: &Value) -> u8 {
 // ── Stats stdlib helpers ─────────────────────────────────────────────────────
 
 pub(super) fn eval_stats_fn(name: &str, xs: &[f64], p: Option<f64>, span: &Span) -> Value {
+    use crate::reduce_kernel::{quantile_linear_sorted, reduce_f64, ReduceOp, ReduceOutcome};
+
+    // The `Stats.*` slice is population-form variance/stddev (÷ n), distinct
+    // from `Column.var`/`std`'s sample (÷ n−1) form, and its empty-input
+    // policy is per-op: `sum`/`prod` return the identity, `min`/`max`/`arg*`
+    // return `None`, `sort`/`argsort` return empty, and
+    // `mean`/`variance`/`stddev`/`median`/`percentile` trap. The `panic!`
+    // trap mechanism (vs `Column`/`Tensor`'s `record_runtime_error`) is
+    // preserved here at the call site; the arithmetic funnels through
+    // `crate::reduce_kernel`.
+    let float = |o: ReduceOutcome| match o {
+        ReduceOutcome::Scalar(f) => Value::Float(f),
+        _ => unreachable!("stats scalar op returned non-scalar outcome"),
+    };
     match name {
-        "Stats.sum" => Value::Float(xs.iter().sum()),
-        "Stats.prod" => Value::Float(xs.iter().product()),
+        "Stats.sum" => float(reduce_f64(xs, ReduceOp::Sum)),
+        "Stats.prod" => float(reduce_f64(xs, ReduceOp::Prod)),
         "Stats.mean" => {
             if xs.is_empty() {
                 panic!(
@@ -127,7 +141,7 @@ pub(super) fn eval_stats_fn(name: &str, xs: &[f64], p: Option<f64>, span: &Span)
                     span.line, span.column
                 );
             }
-            Value::Float(xs.iter().sum::<f64>() / xs.len() as f64)
+            float(reduce_f64(xs, ReduceOp::Mean))
         }
         "Stats.variance" => {
             if xs.is_empty() {
@@ -136,9 +150,7 @@ pub(super) fn eval_stats_fn(name: &str, xs: &[f64], p: Option<f64>, span: &Span)
                     span.line, span.column
                 );
             }
-            let mean = xs.iter().sum::<f64>() / xs.len() as f64;
-            let var = xs.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / xs.len() as f64;
-            Value::Float(var)
+            float(reduce_f64(xs, ReduceOp::Var { bessel: false }))
         }
         "Stats.stddev" => {
             if xs.is_empty() {
@@ -147,9 +159,7 @@ pub(super) fn eval_stats_fn(name: &str, xs: &[f64], p: Option<f64>, span: &Span)
                     span.line, span.column
                 );
             }
-            let mean = xs.iter().sum::<f64>() / xs.len() as f64;
-            let var = xs.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / xs.len() as f64;
-            Value::Float(var.sqrt())
+            float(reduce_f64(xs, ReduceOp::Std { bessel: false }))
         }
         "Stats.median" => {
             if xs.is_empty() {
@@ -158,46 +168,16 @@ pub(super) fn eval_stats_fn(name: &str, xs: &[f64], p: Option<f64>, span: &Span)
                     span.line, span.column
                 );
             }
-            let mut sorted = xs.to_vec();
-            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            let mid = sorted.len() / 2;
-            let median = if sorted.len().is_multiple_of(2) {
-                (sorted[mid - 1] + sorted[mid]) / 2.0
-            } else {
-                sorted[mid]
-            };
-            Value::Float(median)
+            float(reduce_f64(xs, ReduceOp::Median))
         }
-        "Stats.min" => {
-            let result = xs.iter().copied().reduce(f64::min);
-            match result {
-                Some(v) => Value::EnumVariant {
-                    enum_name: "Option".to_string(),
-                    variant: "Some".to_string(),
-                    data: EnumData::Tuple(vec![Value::Float(v)]),
-                },
-                None => Value::EnumVariant {
-                    enum_name: "Option".to_string(),
-                    variant: "None".to_string(),
-                    data: EnumData::Unit,
-                },
-            }
-        }
-        "Stats.max" => {
-            let result = xs.iter().copied().reduce(f64::max);
-            match result {
-                Some(v) => Value::EnumVariant {
-                    enum_name: "Option".to_string(),
-                    variant: "Some".to_string(),
-                    data: EnumData::Tuple(vec![Value::Float(v)]),
-                },
-                None => Value::EnumVariant {
-                    enum_name: "Option".to_string(),
-                    variant: "None".to_string(),
-                    data: EnumData::Unit,
-                },
-            }
-        }
+        "Stats.min" => match reduce_f64(xs, ReduceOp::Min) {
+            ReduceOutcome::OptScalar(Some(v)) => stats_option_some(Value::Float(v)),
+            _ => stats_option_none(),
+        },
+        "Stats.max" => match reduce_f64(xs, ReduceOp::Max) {
+            ReduceOutcome::OptScalar(Some(v)) => stats_option_some(Value::Float(v)),
+            _ => stats_option_none(),
+        },
         // `percentile(p)` — NumPy/`np.percentile` convention: `p ∈ [0, 100]`
         // (distinct from `Column.quantile`'s `[0, 1]`), linear interpolation
         // between the two nearest ranks. `median ≡ percentile(50)`. Empty
@@ -216,64 +196,107 @@ pub(super) fn eval_stats_fn(name: &str, xs: &[f64], p: Option<f64>, span: &Span)
                     p, span.line, span.column
                 );
             }
-            let mut sorted = xs.to_vec();
-            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let ReduceOutcome::F64Vec(sorted) = reduce_f64(xs, ReduceOp::Sort) else {
+                unreachable!("Sort returns F64Vec")
+            };
             let pos = (p / 100.0) * (sorted.len() - 1) as f64;
-            let lo = pos.floor() as usize;
-            let hi = if lo + 1 < sorted.len() { lo + 1 } else { lo };
-            let frac = pos - lo as f64;
-            Value::Float(sorted[lo] + frac * (sorted[hi] - sorted[lo]))
+            Value::Float(quantile_linear_sorted(&sorted, pos))
         }
         // `argmin` / `argmax` → `Option[i64]` (the index of the first min/max;
         // `None` on an empty slice, mirroring `min`/`max`'s `Option[f64]`).
         "Stats.argmin" | "Stats.argmax" => {
-            let want_max = name == "Stats.argmax";
-            let mut best: Option<usize> = None;
-            for (i, &x) in xs.iter().enumerate() {
-                match best {
-                    None => best = Some(i),
-                    Some(b) => {
-                        let take = if want_max { x > xs[b] } else { x < xs[b] };
-                        if take {
-                            best = Some(i);
-                        }
-                    }
-                }
-            }
-            match best {
-                Some(i) => Value::EnumVariant {
-                    enum_name: "Option".to_string(),
-                    variant: "Some".to_string(),
-                    data: EnumData::Tuple(vec![Value::Int(i as i64)]),
-                },
-                None => Value::EnumVariant {
-                    enum_name: "Option".to_string(),
-                    variant: "None".to_string(),
-                    data: EnumData::Unit,
-                },
+            let op = if name == "Stats.argmax" {
+                ReduceOp::Argmax
+            } else {
+                ReduceOp::Argmin
+            };
+            match reduce_f64(xs, op) {
+                ReduceOutcome::OptIndex(Some(i)) => stats_option_some(Value::Int(i)),
+                _ => stats_option_none(),
             }
         }
         // `sort` → a fresh ascending `Vec[f64]` (the slice is borrowed and
         // unchanged); empty → empty.
         "Stats.sort" => {
-            let mut sorted = xs.to_vec();
-            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let ReduceOutcome::F64Vec(sorted) = reduce_f64(xs, ReduceOp::Sort) else {
+                unreachable!("Sort returns F64Vec")
+            };
             let elems: Vec<Value> = sorted.into_iter().map(Value::Float).collect();
             Value::Array(std::sync::Arc::new(std::sync::RwLock::new(elems)))
         }
         // `argsort` → `Vec[i64]` of the indices that sort `xs` ascending
         // (stable: ties keep input order); empty → empty.
         "Stats.argsort" => {
-            let mut idx: Vec<usize> = (0..xs.len()).collect();
-            idx.sort_by(|&a, &b| {
-                xs[a]
-                    .partial_cmp(&xs[b])
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            let elems: Vec<Value> = idx.into_iter().map(|i| Value::Int(i as i64)).collect();
+            let ReduceOutcome::I64Vec(idx) = reduce_f64(xs, ReduceOp::Argsort) else {
+                unreachable!("Argsort returns I64Vec")
+            };
+            let elems: Vec<Value> = idx.into_iter().map(Value::Int).collect();
             Value::Array(std::sync::Arc::new(std::sync::RwLock::new(elems)))
         }
         _ => Value::Unit,
+    }
+}
+
+/// Numeric `Value` (`Int`/`Float`) as `f64`; non-numeric values (never
+/// reached for a typechecked numeric container) fall back to `0.0`. Shared by
+/// the `Column` and `Tensor` float-result reductions.
+pub(super) fn value_as_f64(v: &Value) -> f64 {
+    match v {
+        Value::Int(i) => *i as f64,
+        Value::Float(f) => *f,
+        _ => 0.0,
+    }
+}
+
+/// Min (or max) `Value` of a non-empty list, preserving the element type
+/// (bare `T`, not `f64`): strict `<`/`>` keeps the first on a tie, and NaN
+/// compares false against everything so it is never selected over a real
+/// value (the scalar `<` posture). Shared by `Column.min`/`max` and
+/// `Tensor.min`/`max`. Panics on an empty list — every caller guards
+/// emptiness first.
+pub(super) fn minmax_value_reduce(is_min: bool, vals: Vec<Value>) -> Value {
+    let mut it = vals.into_iter();
+    let mut acc = it.next().expect("non-empty");
+    for x in it {
+        let take = match (&acc, &x) {
+            (Value::Int(a), Value::Int(b)) => {
+                if is_min {
+                    b < a
+                } else {
+                    b > a
+                }
+            }
+            (Value::Float(a), Value::Float(b)) => {
+                if is_min {
+                    b < a
+                } else {
+                    b > a
+                }
+            }
+            _ => false,
+        };
+        if take {
+            acc = x;
+        }
+    }
+    acc
+}
+
+/// `Some(v)` in the interpreter's `Value::EnumVariant` Option representation.
+fn stats_option_some(v: Value) -> Value {
+    Value::EnumVariant {
+        enum_name: "Option".to_string(),
+        variant: "Some".to_string(),
+        data: EnumData::Tuple(vec![v]),
+    }
+}
+
+/// `None` in the interpreter's `Value::EnumVariant` Option representation.
+fn stats_option_none() -> Value {
+    Value::EnumVariant {
+        enum_name: "Option".to_string(),
+        variant: "None".to_string(),
+        data: EnumData::Unit,
     }
 }
 

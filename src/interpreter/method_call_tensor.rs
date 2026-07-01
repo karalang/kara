@@ -25,6 +25,11 @@ use crate::ast::{BinOp, CallArg, Expr, ExprKind, TypeExpr, TypeKind};
 use crate::interpreter::value::Value;
 use crate::token::Span;
 
+// `mean`/`mean_axis` read numeric elements as `f64`, and `min`/`max` keep the
+// bare element type — both shared with `Column` in `super::helpers`.
+use super::helpers::minmax_value_reduce;
+use super::helpers::value_as_f64 as value_to_f64;
+
 /// Element-fill class for `Tensor.zeros` / `Tensor.ones` — the only
 /// distinction the dynamically-typed interpreter's `Value` makes among
 /// numeric element types (integer widths collapse to `Value::Int`, both
@@ -207,14 +212,6 @@ pub(super) fn index_components(idx: &Value) -> Option<Vec<i64>> {
 /// Numeric value as `f64` — for `mean` / `mean_axis`, which always yield a
 /// float regardless of the element type. Non-numeric values (never reached
 /// for a typechecked reduce) fall back to `0.0`.
-fn value_to_f64(v: &Value) -> f64 {
-    match v {
-        Value::Int(i) => *i as f64,
-        Value::Float(f) => *f,
-        _ => 0.0,
-    }
-}
-
 impl<'a> super::Interpreter<'a> {
     /// Scalar fill `Value` for `Tensor.zeros` / `Tensor.ones`, picked
     /// from the element-type hint threaded off the enclosing `let`'s
@@ -505,8 +502,8 @@ impl<'a> super::Interpreter<'a> {
         match method {
             "sum" => self.tensor_fold_reduce(&BinOp::Add, elems, span),
             "prod" => self.tensor_fold_reduce(&BinOp::Mul, elems, span),
-            "min" => Self::tensor_minmax_reduce(true, elems),
-            "max" => Self::tensor_minmax_reduce(false, elems),
+            "min" => minmax_value_reduce(true, elems),
+            "max" => minmax_value_reduce(false, elems),
             "mean" => {
                 let s = self.tensor_fold_reduce(&BinOp::Add, elems, span);
                 if self.pending_cf.is_some() {
@@ -526,37 +523,6 @@ impl<'a> super::Interpreter<'a> {
             acc = self.eval_binary(op, acc, x, span);
             if self.pending_cf.is_some() {
                 return Value::Unit;
-            }
-        }
-        acc
-    }
-
-    /// Keep the min (or max) element of a non-empty `elems`. NaN compares
-    /// false against everything, so it neither displaces nor is taken — the
-    /// scalar `<` posture; NaN propagation is a v1.5 refinement.
-    fn tensor_minmax_reduce(is_min: bool, elems: Vec<Value>) -> Value {
-        let mut it = elems.into_iter();
-        let mut acc = it.next().expect("non-empty");
-        for x in it {
-            let take = match (&acc, &x) {
-                (Value::Int(a), Value::Int(b)) => {
-                    if is_min {
-                        b < a
-                    } else {
-                        b > a
-                    }
-                }
-                (Value::Float(a), Value::Float(b)) => {
-                    if is_min {
-                        b < a
-                    } else {
-                        b > a
-                    }
-                }
-                _ => false,
-            };
-            if take {
-                acc = x;
             }
         }
         acc

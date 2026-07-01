@@ -25,16 +25,21 @@ use std::sync::{Arc, RwLock};
 
 use crate::ast::{BinOp, CallArg};
 use crate::interpreter::value::{EnumData, Value};
+use crate::reduce_kernel::{quantile_linear_sorted, reduce_f64, ReduceOp, ReduceOutcome};
 use crate::token::Span;
 
-/// Numeric value as `f64` — for the float-result statistics (`mean` /
-/// `var` / `std` / `median` / `quantile` / `corr`). Non-numeric values
-/// (never reached for a typechecked numeric column) fall back to `0.0`.
-fn val_f64(v: &Value) -> f64 {
-    match v {
-        Value::Int(i) => *i as f64,
-        Value::Float(f) => *f,
-        _ => 0.0,
+// The float-result statistics (`mean`/`var`/`std`/`median`/`quantile`/`corr`)
+// read numeric slots as `f64`, and `min`/`max` keep the bare element type —
+// both are shared with `Tensor` in `super::helpers`.
+use super::helpers::minmax_value_reduce;
+use super::helpers::value_as_f64 as val_f64;
+
+/// Unwrap a scalar [`ReduceOutcome`] (the float-result reductions) into a
+/// `Value::Float`.
+fn float_outcome(o: ReduceOutcome) -> Value {
+    match o {
+        ReduceOutcome::Scalar(f) => Value::Float(f),
+        _ => unreachable!("column float reduction returned a non-scalar outcome"),
     }
 }
 
@@ -48,67 +53,6 @@ fn collect_valid(data: &Arc<RwLock<Vec<Value>>>, valid: &Arc<RwLock<Vec<bool>>>)
         .filter(|(&ok, _)| ok)
         .map(|(_, x)| x.clone())
         .collect()
-}
-
-/// The min (or max) of a non-empty value list — the scalar `<` posture
-/// (NaN compares false against everything, so it neither displaces nor is
-/// taken), mirroring `Tensor`'s `tensor_minmax_reduce`.
-fn column_minmax(is_min: bool, vals: Vec<Value>) -> Value {
-    let mut it = vals.into_iter();
-    let mut acc = it.next().expect("non-empty");
-    for x in it {
-        let take = match (&acc, &x) {
-            (Value::Int(a), Value::Int(b)) => {
-                if is_min {
-                    b < a
-                } else {
-                    b > a
-                }
-            }
-            (Value::Float(a), Value::Float(b)) => {
-                if is_min {
-                    b < a
-                } else {
-                    b > a
-                }
-            }
-            _ => false,
-        };
-        if take {
-            acc = x;
-        }
-    }
-    acc
-}
-
-/// Median of an already-ascending-sorted non-empty slice — the middle
-/// element (odd length) or the mean of the two middle elements (even).
-fn median_sorted(xs: &[f64]) -> f64 {
-    let n = xs.len();
-    if n % 2 == 1 {
-        xs[n / 2]
-    } else {
-        (xs[n / 2 - 1] + xs[n / 2]) / 2.0
-    }
-}
-
-/// The `q`-quantile (`q` in `[0, 1]`) of an ascending-sorted non-empty
-/// slice via linear interpolation between order statistics (NumPy /
-/// pandas default `'linear'` method).
-fn quantile_sorted(xs: &[f64], q: f64) -> f64 {
-    let n = xs.len();
-    if n == 1 {
-        return xs[0];
-    }
-    let pos = q * (n as f64 - 1.0);
-    let lo = pos.floor() as usize;
-    let hi = pos.ceil() as usize;
-    if lo == hi {
-        xs[lo]
-    } else {
-        let frac = pos - lo as f64;
-        xs[lo] + frac * (xs[hi] - xs[lo])
-    }
 }
 
 /// Build an `Option[T]` value — `Some(v)` / `None`, the interpreter's
@@ -388,11 +332,16 @@ impl<'a> super::Interpreter<'a> {
                 }
                 acc
             }
-            "min" => column_minmax(true, vals),
-            "max" => column_minmax(false, vals),
+            "min" => minmax_value_reduce(true, vals),
+            "max" => minmax_value_reduce(false, vals),
+            // The f64-result reductions funnel through `crate::reduce_kernel`
+            // (shared with `Stats.*`). `var`/`std` are the **sample** (Bessel,
+            // ÷ n−1) forms, so `bessel: true` — distinct from `Stats`'
+            // population form; the ≥ 2-valid-value guard the sample form needs
+            // stays here at the call site.
             "mean" => {
-                let s: f64 = vals.iter().map(val_f64).sum();
-                Value::Float(s / n as f64)
+                let xs: Vec<f64> = vals.iter().map(val_f64).collect();
+                float_outcome(reduce_f64(&xs, ReduceOp::Mean))
             }
             "var" | "std" => {
                 if n < 2 {
@@ -404,21 +353,17 @@ impl<'a> super::Interpreter<'a> {
                         span,
                     );
                 }
-                let mean = vals.iter().map(val_f64).sum::<f64>() / n as f64;
-                let ss: f64 = vals
-                    .iter()
-                    .map(|v| {
-                        let d = val_f64(v) - mean;
-                        d * d
-                    })
-                    .sum();
-                let var = ss / (n as f64 - 1.0);
-                Value::Float(if method == "std" { var.sqrt() } else { var })
+                let xs: Vec<f64> = vals.iter().map(val_f64).collect();
+                let op = if method == "std" {
+                    ReduceOp::Std { bessel: true }
+                } else {
+                    ReduceOp::Var { bessel: true }
+                };
+                float_outcome(reduce_f64(&xs, op))
             }
             "median" => {
-                let mut xs: Vec<f64> = vals.iter().map(val_f64).collect();
-                xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                Value::Float(median_sorted(&xs))
+                let xs: Vec<f64> = vals.iter().map(val_f64).collect();
+                float_outcome(reduce_f64(&xs, ReduceOp::Median))
             }
             "quantile" => {
                 let q = match args.first().map(|a| self.eval_expr_inner(&a.value)) {
@@ -439,7 +384,10 @@ impl<'a> super::Interpreter<'a> {
                 }
                 let mut xs: Vec<f64> = vals.iter().map(val_f64).collect();
                 xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                Value::Float(quantile_sorted(&xs, q))
+                // `q ∈ [0, 1] → pos ∈ [0, n−1]` (vs `Stats.percentile`'s
+                // `[0, 100]`); same linear-interpolation kernel.
+                let pos = q * (n as f64 - 1.0);
+                Value::Float(quantile_linear_sorted(&xs, pos))
             }
             _ => unreachable!("eval_column_reduce: unrouted method '{method}'"),
         }
