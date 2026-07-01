@@ -115,6 +115,25 @@ impl<'a> super::Interpreter<'a> {
             }
             "load" => {
                 if let Value::Atomic(cell) = obj {
+                    // Backstop for the run/build divergence (B-2026-06-30-5):
+                    // codegen rejects the implicit-ordering form, so the
+                    // interpreter must too, or `karac run` would silently
+                    // accept a program `karac build` refuses. The typechecker
+                    // (run-fatal `AtomicMissingOrdering`) catches most call
+                    // shapes earlier, but a field access through a `ref`/`mut
+                    // ref` struct param types as `Type::Error` (fields.rs), so
+                    // those slip past typecheck and land here — this guard is
+                    // what keeps them consistent.
+                    if args.len() != 1 {
+                        return Some(
+                            self.record_runtime_error(
+                                "Atomic.load requires an explicit MemoryOrdering argument \
+                             (there is no implicit-ordering form)"
+                                    .to_string(),
+                                span,
+                            ),
+                        );
+                    }
                     // Ordering argument accepted but ignored — the `Mutex`
                     // already serialises every op, which is stronger than any
                     // requested ordering.
@@ -123,6 +142,17 @@ impl<'a> super::Interpreter<'a> {
             }
             "store" => {
                 if let Value::Atomic(cell) = obj {
+                    // Arity backstop — see the `load` arm above (B-2026-06-30-5).
+                    if args.len() != 2 {
+                        return Some(
+                            self.record_runtime_error(
+                                "Atomic.store requires (value, MemoryOrdering) — the \
+                             MemoryOrdering argument is not optional"
+                                    .to_string(),
+                                span,
+                            ),
+                        );
+                    }
                     // Evaluate the argument *before* taking the lock: the
                     // interpreter could otherwise re-enter and touch the same
                     // atomic, and `std::sync::Mutex` is not re-entrant.
@@ -149,6 +179,18 @@ impl<'a> super::Interpreter<'a> {
             // accepted and ignored.
             "fetch_add" | "fetch_sub" | "fetch_and" | "fetch_or" | "fetch_xor" | "swap" => {
                 if let Value::Atomic(cell) = obj {
+                    // Arity backstop — see the `load` arm above (B-2026-06-30-5).
+                    // Gated on `Value::Atomic`, so the same-named Vec/Slice
+                    // `swap(i, j)` (a non-atomic receiver) is untouched.
+                    if args.len() != 2 {
+                        return Some(self.record_runtime_error(
+                            format!(
+                                "Atomic.{method} requires (value, MemoryOrdering) — the \
+                                 MemoryOrdering argument is not optional"
+                            ),
+                            span,
+                        ));
+                    }
                     // Eval the operand before locking (re-entrancy guard, as in
                     // `store`).
                     let arg_val = args
@@ -185,6 +227,20 @@ impl<'a> super::Interpreter<'a> {
             // orderings ignored.
             "compare_exchange" => {
                 if let Value::Atomic(cell) = obj {
+                    // Arity backstop — see the `load` arm above (B-2026-06-30-5).
+                    // CAS takes (old, new, success: MemoryOrdering, failure:
+                    // MemoryOrdering); both orderings are required.
+                    if args.len() != 4 {
+                        return Some(
+                            self.record_runtime_error(
+                                "Atomic.compare_exchange requires (old, new, success: \
+                             MemoryOrdering, failure: MemoryOrdering) — both ordering \
+                             arguments are required"
+                                    .to_string(),
+                                span,
+                            ),
+                        );
+                    }
                     // Eval both operands before locking (re-entrancy guard).
                     // `new` is evaluated unconditionally — these are value
                     // arguments per the CAS signature, so this matches Rust

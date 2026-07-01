@@ -2,7 +2,7 @@ par struct Counter { count: Atomic[i64] }
 
 fn send_welcome(user_id: i64, counter: ref Counter) {
     println("welcome user");
-    counter.count.fetch_add(1);
+    let _ = counter.count.fetch_add(1, MemoryOrdering.Relaxed);
 }
 
 fn main() {
@@ -12,6 +12,6 @@ fn main() {
         send_welcome(2, counter);
         send_welcome(3, counter);
     }
-    let total: i64 = counter.count.load();
+    let total: i64 = counter.count.load(MemoryOrdering.Relaxed);
     println("done");
 }

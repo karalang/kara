@@ -10,7 +10,7 @@
     {
       "iteration": 1,
       "note": "After receiving E0408, the LLM lifts the counter into a `par struct Counter { count: Atomic[i64] }`, passes it by `ref`, and increments via `fetch_add`. The par { } block is preserved — the fix made the counter race-free, it did NOT serialize the work. Build clean.",
-      "kara_source": "par struct Counter { count: Atomic[i64] }\n\nfn send_welcome(user_id: i64, counter: ref Counter) {\n    println(\"welcome user\");\n    counter.count.fetch_add(1);\n}\n\nfn main() {\n    let counter: Counter = Counter { count: Atomic.new(0) };\n    par {\n        send_welcome(1, counter);\n        send_welcome(2, counter);\n        send_welcome(3, counter);\n    }\n    let total: i64 = counter.count.load();\n    println(\"done\");\n}\n"
+      "kara_source": "par struct Counter { count: Atomic[i64] }\n\nfn send_welcome(user_id: i64, counter: ref Counter) {\n    println(\"welcome user\");\n    let _ = counter.count.fetch_add(1, MemoryOrdering.Relaxed);\n}\n\nfn main() {\n    let counter: Counter = Counter { count: Atomic.new(0) };\n    par {\n        send_welcome(1, counter);\n        send_welcome(2, counter);\n        send_welcome(3, counter);\n    }\n    let total: i64 = counter.count.load(MemoryOrdering.Relaxed);\n    println(\"done\");\n}\n"
     }
   ]
 }

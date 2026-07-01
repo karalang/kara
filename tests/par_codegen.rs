@@ -283,6 +283,78 @@ mod par_codegen_tests {
         Some(String::from_utf8_lossy(&output.stdout).to_string())
     }
 
+    // ── Atomic op arity — run/build agreement (B-2026-06-30-5) ─────
+
+    /// E2E: the explicit-ordering atomic form (`fetch_add(v, ord)` through a
+    /// `ref` param + `load(ord)` on the owned binding) compiles and runs,
+    /// printing `3`. This is the codegen half of the run/build agreement the
+    /// arity bug broke — its interpreter twin is
+    /// `test_atomic_fetch_add_load_explicit_agrees_with_codegen` in
+    /// tests/interpreter.rs, and both assert `3`.
+    #[test]
+    fn test_e2e_atomic_fetch_add_load_explicit() {
+        let out = run_program(
+            r#"
+par struct Counter { count: Atomic[i64] }
+fn bump(c: ref Counter) { let _ = c.count.fetch_add(1, MemoryOrdering.Relaxed); }
+fn main() {
+    let c = Counter { count: Atomic.new(0) };
+    par { bump(c); bump(c); bump(c); }
+    println(c.count.load(MemoryOrdering.Relaxed));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "3",
+                "explicit atomic fetch_add/load must total 3 (interpreter parity); got {out:?}"
+            );
+        }
+    }
+
+    /// Regression: codegen must keep REJECTING the implicit-ordering form (the
+    /// `build` side of B-2026-06-30-5) rather than silently defaulting an
+    /// ordering. Uses a `ref`-param receiver whose field types as `Type::Error`
+    /// in the typechecker (fields.rs), so codegen — not typecheck — is the
+    /// rejecting layer under test. `compile_to_object` needs no runtime
+    /// archive, so this runs everywhere the llvm feature is built.
+    #[test]
+    fn test_atomic_implicit_ordering_rejected_by_codegen() {
+        use karac::codegen::compile_to_object;
+        let src = r#"
+par struct Counter { count: Atomic[i64] }
+fn bump(c: ref Counter) { let _ = c.count.fetch_add(1); }
+fn main() {
+    let c = Counter { count: Atomic.new(0) };
+    bump(c);
+    println(c.count.load(MemoryOrdering.Relaxed));
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "source must parse");
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let obj_path = format!("/tmp/karac_atomic_reject_{}.o", std::process::id());
+        let err = compile_to_object(
+            &parsed.program,
+            &obj_path,
+            Some(&ownership),
+            Some(&analysis),
+        )
+        .expect_err("codegen must reject the implicit-ordering fetch_add");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Atomic.fetch_add") && msg.contains("MemoryOrdering"),
+            "codegen rejection should name the op + required ordering; got: {msg}"
+        );
+        let _ = std::fs::remove_file(&obj_path);
+    }
+
     // ── IR-level tests ────────────────────────────────────────────
 
     #[test]

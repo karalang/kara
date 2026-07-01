@@ -438,6 +438,17 @@ pub enum TypeErrorKind {
     /// `Value::String[Value::Int]` lowering, so a downgrade-and-run
     /// would hit an `unreachable!` rather than emit a clean diagnostic.
     StringNotIndexable,
+    /// An `Atomic[T]` operation (`load` / `store` / `fetch_add` /
+    /// `fetch_sub` / `fetch_and` / `fetch_or` / `fetch_xor` / `swap`) was
+    /// called without its required explicit `MemoryOrdering` argument.
+    /// Every atomic op is spec'd with an explicit ordering and has NO
+    /// implicit-ordering form (deferred.md § Atomic Operations); codegen
+    /// already rejected the implicit form, while the interpreter silently
+    /// accepted it (ignoring the absent ordering) — a `run`/`build`
+    /// divergence (B-2026-06-30-5). Run-fatal: leaving it soft would let
+    /// `karac run`'s lenient path downgrade-and-execute a program that
+    /// `karac build` rejects, re-opening the divergence this kind closes.
+    AtomicMissingOrdering,
     LabelMismatch,
     NonContiguousLabels,
     InvalidPipePlaceholder,
@@ -788,8 +799,16 @@ impl TypeErrorKind {
     /// reject at the same phase as `check`/`build` — a single compile-time
     /// source of truth — rather than letting `run` fall through to that
     /// runtime guard while `build` rejects statically.
-    /// Genuinely soft type errors (mismatches, arity, exhaustiveness) keep
-    /// downgrading so
+    /// And `TypeErrorKind::AtomicMissingOrdering`: an atomic op called
+    /// without its required `MemoryOrdering` is rejected by codegen but
+    /// silently *accepted* by the interpreter (which ignores the absent
+    /// ordering and produces output `karac build` refuses to emit) — a
+    /// straight `run`/`build` divergence (B-2026-06-30-5). This is the one
+    /// arity error that is *not* soft: there is no implicit-ordering form
+    /// to iterate toward (the spec defines none), so downgrading it would
+    /// only re-open the divergence rather than aid iteration.
+    /// Genuinely soft type errors (most mismatches, arity, exhaustiveness)
+    /// keep downgrading so
     /// a script author can still iterate. The partition is intentionally
     /// narrow and additive: widen it only for kinds that *corrupt the run*,
     /// never for ones worth iterating through.
@@ -799,6 +818,7 @@ impl TypeErrorKind {
             TypeErrorKind::InvalidCast
                 | TypeErrorKind::StringNotIndexable
                 | TypeErrorKind::SharedFieldNotMut
+                | TypeErrorKind::AtomicMissingOrdering
         )
     }
 }
@@ -831,7 +851,9 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::NonContiguousLabels
         | TypeErrorKind::OnceFnIntoFnSlot => Some(DC::TypeMismatch),
 
-        TypeErrorKind::WrongNumberOfArgs => Some(DC::WrongNumberOfArgs),
+        TypeErrorKind::WrongNumberOfArgs | TypeErrorKind::AtomicMissingOrdering => {
+            Some(DC::WrongNumberOfArgs)
+        }
         TypeErrorKind::NoMethodFound
         | TypeErrorKind::AmbiguousAssocFn
         | TypeErrorKind::AmbiguousMethod

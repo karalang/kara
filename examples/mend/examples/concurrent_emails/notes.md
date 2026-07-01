@@ -63,7 +63,7 @@ parallelism**:
 
 ```
 par struct Counter { count: Atomic[i64] }
-// counter.count.fetch_add(1) inside each branch
+// counter.count.fetch_add(1, MemoryOrdering.Relaxed) inside each branch
 ```
 
 `karac check` → clean. The compiler didn't push the programmer back to

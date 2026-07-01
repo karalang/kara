@@ -5848,6 +5848,77 @@ fn test_memory_ordering_enum_resolves() {
 }
 
 #[test]
+fn test_atomic_op_missing_ordering_rejected() {
+    // Every `Atomic[T]` operation is spec'd with an explicit `MemoryOrdering`
+    // and has NO implicit-ordering form (deferred.md § Atomic Operations). The
+    // typechecker previously let these fall through to the silent `Type::Error`
+    // arm with NO arity check, so the implicit form passed typecheck and ran
+    // fine under the interpreter (which ignores the ordering) while codegen
+    // rejected it — a run/build divergence (B-2026-06-30-5). The error must be
+    // `AtomicMissingOrdering` and must be run-fatal, so `karac run`'s lenient
+    // path can't downgrade-and-execute a program `karac build` rejects.
+    for (call, method, want) in [
+        ("a.load()", "load", "(ordering: MemoryOrdering)"),
+        (
+            "let _ = a.fetch_add(1)",
+            "fetch_add",
+            "(value, ordering: MemoryOrdering)",
+        ),
+        ("a.store(1)", "store", "(value, ordering: MemoryOrdering)"),
+        (
+            "let _ = a.swap(1)",
+            "swap",
+            "(value, ordering: MemoryOrdering)",
+        ),
+    ] {
+        let src = format!(
+            "fn main() {{\n\
+                 let mut a: Atomic[i64] = Atomic.new(0);\n\
+                 {call};\n\
+             }}"
+        );
+        let errors = typecheck_errors(&src);
+        let e = errors
+            .iter()
+            .find(|e| e.kind == TypeErrorKind::AtomicMissingOrdering)
+            .unwrap_or_else(|| {
+                panic!("expected AtomicMissingOrdering for `{call}`, got: {errors:?}")
+            });
+        assert!(
+            e.message.contains(&format!("Atomic.{method} takes {want}")),
+            "unexpected message for `{call}`: {}",
+            e.message
+        );
+        assert!(
+            e.message.contains("explicit MemoryOrdering"),
+            "message must demand an explicit ordering for `{call}`: {}",
+            e.message
+        );
+        assert!(
+            e.kind.is_run_fatal(),
+            "AtomicMissingOrdering must be run-fatal so `karac run` and \
+             `karac build` agree on rejecting `{call}`"
+        );
+    }
+}
+
+#[test]
+fn test_atomic_op_with_explicit_ordering_typechecks() {
+    // The explicit forms typecheck, and the return types are now modeled (they
+    // used to be a universally-assignable `Type::Error`): `load`/`fetch_*`/
+    // `swap` yield the inner `T`, `store` yields `Unit`.
+    typecheck_ok(
+        "fn main() {\n\
+             let mut a: Atomic[i64] = Atomic.new(0);\n\
+             let _prev: i64 = a.fetch_add(1, MemoryOrdering.Relaxed);\n\
+             a.store(5, MemoryOrdering.Release);\n\
+             let _cur: i64 = a.load(MemoryOrdering.Acquire);\n\
+             let _old: i64 = a.swap(9, MemoryOrdering.SeqCst);\n\
+         }",
+    );
+}
+
+#[test]
 fn test_ordering_helper_methods_typecheck() {
     // `impl Ordering { fn is_lt … }` (design.md lines 5162-5168) lives in
     // baked source. Both the typechecker (via `register_baked_stdlib`'s

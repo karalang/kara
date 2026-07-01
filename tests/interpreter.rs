@@ -4621,6 +4621,52 @@ fn test_atomic_bool() {
     assert_eq!(output, "false\n");
 }
 
+#[test]
+fn test_atomic_fetch_add_load_explicit_agrees_with_codegen() {
+    // The explicit-ordering form is the canonical shape (deferred.md § Atomic
+    // Operations; book ch14). This mirrors `examples/mend/.../solution.kara`
+    // and the codegen E2E `test_e2e_atomic_fetch_add_load_explicit` in
+    // par_codegen.rs — both must print `3`, pinning run/build agreement on the
+    // fetch_add + load pair the arity bug split (B-2026-06-30-5).
+    let src = "par struct Counter { count: Atomic[i64] }\n\
+         fn bump(c: ref Counter) { let _ = c.count.fetch_add(1, MemoryOrdering.Relaxed); }\n\
+         fn main() {\n\
+             let c = Counter { count: Atomic.new(0) };\n\
+             par { bump(c); bump(c); bump(c); }\n\
+             println(c.count.load(MemoryOrdering.Relaxed));\n\
+         }";
+    assert_eq!(run_no_errors(src), "3\n");
+}
+
+#[test]
+fn test_atomic_implicit_ordering_rejected_by_interpreter() {
+    // Interpreter backstop for the run/build divergence (B-2026-06-30-5):
+    // codegen rejects the implicit-ordering form, so `karac run` must too.
+    // The typechecker catches the owned/self/local shapes (run-fatal
+    // `AtomicMissingOrdering`, see tests/typechecker.rs), but a field access
+    // through a `ref`/`mut ref` struct param types as `Type::Error`
+    // (fields.rs) and slips past typecheck — this receiver shape is exactly
+    // the one the guard in the interpreter's atomic arms exists to catch, so
+    // `karac run` still rejects rather than silently accepting the count.
+    let src = "par struct Counter { count: Atomic[i64] }\n\
+         fn bump(c: ref Counter) { let _ = c.count.fetch_add(1); }\n\
+         fn main() {\n\
+             let c = Counter { count: Atomic.new(0) };\n\
+             bump(c);\n\
+             println(c.count.load(MemoryOrdering.Relaxed));\n\
+         }";
+    let errors = runtime_errors(src);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("Atomic.fetch_add")
+                && e.message.contains("MemoryOrdering")),
+        "interpreter must reject implicit-ordering fetch_add through a ref \
+         param, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
 // ── par-shared Atomic: concurrent read-modify-write (regression) ──
 //
 // `Value::Atomic` is `Arc<Mutex<Value>>`, so a par struct's Atomic field is

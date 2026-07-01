@@ -3006,6 +3006,10 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // B-2026-06-30-3 — reassignment of a non-`mut` field on a
                 // `shared struct` / `par struct` (design.md § Shared Types).
                 crate::typechecker::TypeErrorKind::SharedFieldNotMut => "E0269",
+                // An `Atomic[T]` op (`load`/`store`/`fetch_*`/`swap`) called
+                // without its required explicit `MemoryOrdering` argument
+                // (deferred.md § Atomic Operations — no implicit-ordering form).
+                crate::typechecker::TypeErrorKind::AtomicMissingOrdering => "E0270",
                 // FE-2 — a `#[gpu]` function uses a non-GPU-safe type.
                 crate::typechecker::TypeErrorKind::GpuNotSafe => "E0801",
             };
@@ -7747,6 +7751,7 @@ fn type_error_code(kind: &crate::typechecker::TypeErrorKind) -> &'static str {
         K::GpuNotSafe => "E0801",
         K::StringNotIndexable => "E0268",
         K::SharedFieldNotMut => "E0269",
+        K::AtomicMissingOrdering => "E0270",
         _ => "E0200",
     }
 }

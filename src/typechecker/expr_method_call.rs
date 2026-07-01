@@ -2157,6 +2157,91 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // `Atomic[T]` load / store / read-modify-write ops — each takes an
+        // explicit `MemoryOrdering` argument and has NO implicit-ordering
+        // overload (deferred.md § Atomic Operations, lines 339–345):
+        //   `load(ord) -> T`, `store(val, ord)`, and the RMW family
+        //   `fetch_add` / `fetch_sub` / `fetch_and` / `fetch_or` /
+        //   `fetch_xor` / `swap` — all `(val, ord) -> T`.
+        // Without this arm these fell through to the silent `Type::Error`
+        // catch-all below: arity went unchecked, so the implicit-ordering form
+        // (`c.fetch_add(1)`) passed typecheck and ran fine under the
+        // interpreter (which ignores the ordering) while codegen rejected it —
+        // a run/build divergence (B-2026-06-30-5). Requiring the ordering here,
+        // with a run-fatal `AtomicMissingOrdering`, makes `run` and `build`
+        // agree: both reject the implicit form. Modeling the real return type
+        // (`T` for load/RMW, `Unit` for store) also replaces the
+        // universally-assignable `Type::Error` with the correct type. The
+        // receiver gate (`Atomic[T]`, possibly behind a borrow) leaves the
+        // same-named Vec/Slice `swap(i, j)` method untouched — it falls through
+        // to its own handling below. `compare_exchange` (4 args, `Result`-typed)
+        // is handled separately above. The ordering arg's `MemoryOrdering.X`
+        // shape is validated at codegen.
+        if matches!(
+            method,
+            "load"
+                | "store"
+                | "fetch_add"
+                | "fetch_sub"
+                | "fetch_and"
+                | "fetch_or"
+                | "fetch_xor"
+                | "swap"
+        ) {
+            let inner = match &obj_ty {
+                Type::Named { name, args } if name == "Atomic" && args.len() == 1 => {
+                    Some(args[0].clone())
+                }
+                Type::Ref(b) | Type::MutRef(b) => match b.as_ref() {
+                    Type::Named { name, args } if name == "Atomic" && args.len() == 1 => {
+                        Some(args[0].clone())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(inner) = inner {
+                // `load` takes (ordering); `store` and every RMW op take
+                // (value, ordering). Both forms require the trailing ordering.
+                let want = if method == "load" { 1 } else { 2 };
+                if args.len() != want {
+                    let shape = if method == "load" {
+                        "(ordering: MemoryOrdering)"
+                    } else {
+                        "(value, ordering: MemoryOrdering)"
+                    };
+                    self.type_error(
+                        format!(
+                            "Atomic.{method} takes {shape} — {want} argument{}; every atomic \
+                             operation requires an explicit MemoryOrdering (there is no \
+                             implicit-ordering form), found {}",
+                            if want == 1 { "" } else { "s" },
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::AtomicMissingOrdering,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else if method == "load" {
+                    // The single argument is the ordering — inferred for
+                    // recording; its `MemoryOrdering.X` shape is a codegen check.
+                    self.infer_expr(&args[0].value);
+                } else {
+                    // store / RMW: the leading value must be assignable to the
+                    // atomic's inner type `T`; the trailing ordering is inferred.
+                    // (`swap` accepts any `T`, including `Atomic[bool]`.)
+                    let val_ty = self.infer_expr(&args[0].value);
+                    self.check_assignable(&inner, &val_ty, args[0].value.span.clone());
+                    self.infer_expr(&args[1].value);
+                }
+                let ret = if method == "store" { Type::Unit } else { inner };
+                self.record_expr_type(span, &ret);
+                return ret;
+            }
+        }
+
         // `Vec[T].push(item: T)` slot check (round 12.46 / Step 4). Vec is a
         // built-in prelude type with no impl block, so without this dispatch
         // `push` falls through to the silent `Type::Error` arm below and the
