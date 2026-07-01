@@ -5299,6 +5299,33 @@ fn main() {
         }
     }
 
+    /// `String.sorted()` — characters sorted ascending into a fresh String, the
+    /// canonical anagram key (LeetCode #49). Lowered through the
+    /// `karac_string_sorted` runtime helper, so codegen computes the
+    /// byte-identical result as the interpreter's `chars().sort_unstable()`
+    /// (`src/interpreter/method_call_seq.rs`) — sorting by Unicode scalar value,
+    /// not raw byte, so multi-byte input agrees across backends. Covers a literal
+    /// receiver, an identifier receiver (non-mutating: `w` prints unchanged after
+    /// `w.sorted()`), the empty string, and the anagram equality it exists for.
+    #[test]
+    fn e2e_string_sorted_codegen() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 println(\"eat\".sorted());\n\
+                 println(\"tea\".sorted());\n\
+                 let w: String = \"listen\";\n\
+                 println(w.sorted());\n\
+                 println(w);\n\
+                 println(\"\".sorted());\n\
+                 println(\"dcba\".sorted());\n\
+                 let anag = \"eat\".sorted() == \"tea\".sorted();\n\
+                 println(f\"{anag}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "aet\naet\neilnst\nlisten\n\nabcd\ntrue\n");
+        }
+    }
+
     #[test]
     fn e2e_string_method_nonident_receiver_codegen() {
         // String collection methods on a NON-identifier receiver — a string

@@ -2795,6 +2795,9 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) karac_string_to_lowercase_fn: FunctionValue<'ctx>,
     pub(crate) karac_string_to_uppercase_fn: FunctionValue<'ctx>,
     pub(crate) karac_string_trim_fn: FunctionValue<'ctx>,
+    /// `String.sorted()` — chars sorted ascending into a fresh String (the
+    /// anagram key). Same `(data, len, *mut out_len) -> ptr` xform shape.
+    pub(crate) karac_string_sorted_fn: FunctionValue<'ctx>,
     /// `karac_string_replace(data, len, from, from_len, to, to_len, *mut out_len)
     /// -> ptr` — every `from` replaced with `to` (Rust `str::replace`).
     pub(crate) karac_string_replace_fn: FunctionValue<'ctx>,
@@ -5079,6 +5082,11 @@ impl<'ctx> Codegen<'ctx> {
             string_xform_ty,
             Some(Linkage::External),
         );
+        let karac_string_sorted_fn = module.add_function(
+            "karac_string_sorted",
+            string_xform_ty,
+            Some(Linkage::External),
+        );
         // karac_string_replace(data, len, from, from_len, to, to_len, out_len) -> ptr
         let string_replace_ty = ptr_type.fn_type(
             &[ptr_md, i64_ty, ptr_md, i64_ty, ptr_md, i64_ty, ptr_md],
@@ -5401,6 +5409,7 @@ impl<'ctx> Codegen<'ctx> {
             karac_string_to_lowercase_fn,
             karac_string_to_uppercase_fn,
             karac_string_trim_fn,
+            karac_string_sorted_fn,
             karac_string_replace_fn,
             clone_fn_cache: HashMap::new(),
             try_clone_fn_cache: HashMap::new(),

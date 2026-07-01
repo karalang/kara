@@ -1974,6 +1974,34 @@ fn main() {
         );
     }
 
+    // `String.sorted()` returns a FRESH heap buffer (`karac_string_sorted`), the
+    // same allocate-and-hand-back shape as trim / to_uppercase — the scope-cleanup
+    // machinery must free it exactly once, and it must never alias the receiver's
+    // buffer (the literal's rodata must not be freed). Looped 1000× so LSan catches
+    // a per-iter leak (a result never freed) and local ASAN catches a double-free
+    // (a result aliasing the receiver). The 36-byte payload stays heap-allocated
+    // past any short-buffer fast path (lsan-reachability-short-string-leaks.md).
+    #[test]
+    fn asan_string_sorted_no_leak_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 1000 {
+        let s: String = "zyxwvutsrqponmlkjihgfedcba9876543210";
+        let k = s.sorted();
+        total = total + k.len();
+        i = i + 1;
+    }
+    println(f"{total}");
+}
+"#,
+            &["36000"],
+            "string_sorted_loop",
+        );
+    }
+
     // ── bound `s.chars()` iterator materialized as Vec[char] — clone ownership ──
     //
     // B-2026-06-18-5: `let it = s.chars()` materializes an eager `Vec[char]`

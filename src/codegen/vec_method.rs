@@ -1428,6 +1428,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     "str.xform",
                 ))
             }
+            // `String.sorted() -> String` — chars sorted ascending, the anagram
+            // key (LeetCode #49). Guarded on `string_vars` so a String receiver
+            // routes to `karac_string_sorted` while a `Vec[T].sorted()` still
+            // falls through to the Vec arms / catch-all (same pattern as the
+            // `push` String-vs-Vec disambiguation above).
+            "sorted" if self.string_vars.contains(var_name) => {
+                let (recv_data, recv_len) = self.load_string_data_len(vec_ty, data_ptr, "ss");
+                let func = self.karac_string_sorted_fn;
+                Ok(self.build_string_xform_result(
+                    func,
+                    vec![recv_data.into(), recv_len.into()],
+                    "str.sorted",
+                ))
+            }
             // `String.replace(from, to) -> String` via `karac_string_replace`
             // (Rust `str::replace`). Receiver + both args are passed as
             // `(ptr, len)` pairs.

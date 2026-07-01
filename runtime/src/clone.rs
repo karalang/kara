@@ -240,6 +240,27 @@ pub unsafe extern "C" fn karac_string_to_uppercase(
     alloc_string_result(upped.as_bytes(), out_len)
 }
 
+/// `String.sorted()` — return a fresh String whose characters (Unicode scalar
+/// values) are sorted ascending. Mirrors the interpreter's
+/// `chars().sort_unstable()` byte-for-byte (`src/interpreter/method_call_seq.rs`),
+/// so `run` and `build` agree on multi-byte input, not just ASCII. The
+/// canonical anagram key: two strings are anagrams iff their `sorted()` forms
+/// are equal. Returns a fresh owned buffer.
+///
+/// # Safety
+/// See [`karac_string_to_lowercase`].
+#[no_mangle]
+pub unsafe extern "C" fn karac_string_sorted(
+    data: *const u8,
+    len: i64,
+    out_len: *mut i64,
+) -> *mut u8 {
+    let mut chars: Vec<char> = str_from_raw(data, len).chars().collect();
+    chars.sort_unstable();
+    let sorted: String = chars.into_iter().collect();
+    alloc_string_result(sorted.as_bytes(), out_len)
+}
+
 /// `String.trim()` — strip leading and trailing Unicode whitespace (Rust
 /// `str::trim`), returning a fresh OWNED copy of the trimmed range (Kāra's trim
 /// allocates rather than borrowing a view).
