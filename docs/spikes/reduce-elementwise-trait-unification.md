@@ -1,10 +1,18 @@
 # Design spike — trait-dispatched Reduce / ElementwiseMap / ElementwiseOrd unification
 
-**Status:** ⬜ **OPEN — planned 2026-06-30, not started.** Unifies the three
-copy-pasted reduce/element-wise/ordering implementations (Tensor, Column,
+**Status:** 🟡 **S0 LANDED 2026-06-30 (`bcaff37d`); S1–S6 open.** Unifies the
+three copy-pasted reduce/element-wise/ordering implementations (Tensor, Column,
 `Stats.*`) behind one internal kernel, then layers **user-extensible** surface
-traits on top. Two layers, bottom-up: the internal kernel (slices S0–S5) is the
-load-bearing refactor and is fully covered by a byte-identical native oracle;
+traits on top. **S0 (interpreter twin + shared vocabulary) is on `main`:** new
+[`src/reduce_kernel.rs`](../../src/reduce_kernel.rs) holds the plain-data
+`ReduceOp` vocabulary + the interpreter f64 math (`reduce_f64`,
+`quantile_linear_sorted`); `Stats.*` and `Column`'s f64 reductions now funnel
+through it (deleting the stats-math `Column` re-derived), and the byte-identical
+`tensor_minmax_reduce`/`column_minmax` + `value_to_f64`/`val_f64` duplicates
+collapsed into shared `interpreter::helpers`. Zero behavior change — codegen
+run-vs-build oracle 1921/0, interpreter 1046/0. Two layers, bottom-up: the
+internal kernel (slices S0–S5) is the load-bearing refactor and is fully covered
+by a byte-identical native oracle;
 the surface traits (S6) sit on top — builtins *override* the generic default
 methods with the fast kernel, user types get the fold-based defaults
 monomorphized. Closes the two open `std.stats` long-tail items (**non-f64
@@ -77,7 +85,7 @@ else is copy-paste. Each interpreter twin (`eval_stats_fn`,
 
 | Slice | Scope | Notable |
 |---|---|---|
-| **S0** | Descriptors + interpreter twin. **Zero behavior change.** | Prove byte-identical: full `codegen` + `memory_sanitizer` + `par_codegen` suites, numbers unchanged. |
+| **S0** ✅ | Descriptors + interpreter twin. **Zero behavior change.** *(landed `bcaff37d`)* | Proved byte-identical: interpreter 1046/0, codegen E2E+oracle 1921/0. `ReduceOp` vocabulary + `reduce_f64` in `src/reduce_kernel.rs`; `Stats.*`/`Column` f64 reductions + shared min-max/`value_as_f64` funneled through it. |
 | **S1** | Route Tensor `emit_scalar_reduce_loop`, Column sum/mean/minmax, Stats fold/minmax/mean → `emit_reduce`. | Preserve exact seeds, empty policy, return shape **per surface**. |
 | **S2** | Fold Column var/std (÷n−1) + Stats variance/stddev (÷n) into `emit_reduce` with `Var{bessel}`. | Don't change either surface's numbers. |
 | **S3** | Unify ElementwiseMap: Tensor binop/neg + Column binop/neg (null-prop via access). Stats has none. | — |
