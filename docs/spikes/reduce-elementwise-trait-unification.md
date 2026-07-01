@@ -1,0 +1,175 @@
+# Design spike — trait-dispatched Reduce / ElementwiseMap / ElementwiseOrd unification
+
+**Status:** ⬜ **OPEN — planned 2026-06-30, not started.** Unifies the three
+copy-pasted reduce/element-wise/ordering implementations (Tensor, Column,
+`Stats.*`) behind one internal kernel, then layers **user-extensible** surface
+traits on top. Two layers, bottom-up: the internal kernel (slices S0–S5) is the
+load-bearing refactor and is fully covered by a byte-identical native oracle;
+the surface traits (S6) sit on top — builtins *override* the generic default
+methods with the fast kernel, user types get the fold-based defaults
+monomorphized. Closes the two open `std.stats` long-tail items (**non-f64
+element types** and **trait-dispatched Reduce/ElementwiseOrd unification**) from
+[phase-11-stdlib-longtail.md](../implementation_checklist/phase-11-stdlib-longtail.md)
+and lands **Column `median`/`quantile` in codegen** (today interpreter-only) as
+fallout of S4. This file is the architecture of record; update its `Status:`
+line (and the `docs/spikes/README.md` row) as slices land.
+
+Cross-refs: [design.md](../design.md), the arm64 ASan aggregate-load fix baked
+into `Stats.*` codegen ([`src/codegen/stats.rs`](../../src/codegen/stats.rs)),
+and the codegen surfaces in
+[phase-7-codegen.md](../implementation_checklist/phase-7-codegen.md).
+
+---
+
+## 1. The problem
+
+Three families implement the *same* reduction over numeric container data, each
+hardcoded to its own container shape and element assumptions:
+
+| Family | Reduce loop | Element access | Elem types | Var form | Empty policy | min/max return |
+|---|---|---|---|---|---|---|
+| **Tensor** | `emit_scalar_reduce_loop` ([`tensor.rs:2843`](../../src/codegen/tensor.rs)) | flat contiguous data ptr | all numeric | — | trap | bare `T` |
+| **Column** | per-method loops ([`column.rs:2168`](../../src/codegen/column.rs)) | Arrow bitmap-gated + valid-count | numeric | sample (÷n−1) | trap / ≥2 | bare `T` |
+| **Stats** | `stats_fold`/`stats_minmax`/… ([`stats.rs`](../../src/codegen/stats.rs)) | `Slice[f64]` via spill-alloca scalar-GEP | **f64 only** | population (÷n) | −0.0/1.0/None/trap | `Option[f64]` |
+
+Plus element-wise maps (Tensor binop/neg, Column binop/neg with
+null-propagation; Stats has none) and ordering ops (min/max/median/percentile/
+argmin/argmax/sort/argsort, each re-implementing a scratch sort + comparator).
+
+The **only** things that genuinely differ across the three are: (a) how you read
+`(len, element[i], is_valid[i])`, (b) the element kind, and (c) per-surface
+semantic knobs (Bessel correction, empty policy, result wrapping). Everything
+else is copy-paste. Each interpreter twin (`eval_stats_fn`,
+`eval_tensor_reduce`, `eval_column_reduce`) duplicates the same split.
+
+---
+
+## 2. Layer 1 — internal kernel (S0–S5)
+
+### 2.1 Descriptors (`src/codegen/kernel.rs`, new + interpreter twin)
+
+- **`ContainerAccess`** — the one axis that differs across surfaces:
+  - `FlatContiguous{ data, len }` — Tensor.
+  - `ArrowNullable{ data, bitmap, len }` — Column; yields `is_valid[i]`.
+  - `SlicePtr{ data, len }` — Stats/Slice. **Constructed via the spill-alloca
+    scalar-GEP pattern so the arm64-Linux ASan aggregate-load-→-null bug fix
+    (see `stats.rs` header comment) is inherited, not re-derived per call site.**
+- **`ElemKind`** — LLVM type + signed/unsigned/float. Drives seed, accumulator
+  type, and comparison predicate (`OGT`/`OLT` vs `SGT`/`SLT` vs `UGT`/`ULT`).
+  **This is the axis that unlocks non-f64.**
+- **`ReduceOp` / `MapOp` / `OrdOp`** — the operation plus per-surface knobs:
+  `Var{ bessel: bool }`, `EmptyPolicy` (`Trap` / `Identity(-0.0|1.0)` / `None` /
+  `RequireN(2)`), `ResultWrap` (`Bare` / `Option`).
+
+### 2.2 Emitters
+
+- `emit_reduce(access, kind, op) -> value` — one fold loop; seed / empty-guard /
+  validity-gate / post-process (mean division, Bessel) all parameterized.
+- `emit_elementwise_map(access, kind, op, other?) -> container` — unary + binary;
+  null-propagation delegated to `access`.
+- `emit_ord_op(access, kind, op)` + shared `emit_sort_scratch(access, kind)` —
+  one comparator-parameterized scratch sort backing median/percentile/argmin/
+  argmax/sorted/argsort and min/max ordering.
+- Interpreter twin: single `reduce_over` / `map_over` / `ord_over` so all three
+  eval paths funnel through one implementation.
+
+### 2.3 Slices
+
+| Slice | Scope | Notable |
+|---|---|---|
+| **S0** | Descriptors + interpreter twin. **Zero behavior change.** | Prove byte-identical: full `codegen` + `memory_sanitizer` + `par_codegen` suites, numbers unchanged. |
+| **S1** | Route Tensor `emit_scalar_reduce_loop`, Column sum/mean/minmax, Stats fold/minmax/mean → `emit_reduce`. | Preserve exact seeds, empty policy, return shape **per surface**. |
+| **S2** | Fold Column var/std (÷n−1) + Stats variance/stddev (÷n) into `emit_reduce` with `Var{bessel}`. | Don't change either surface's numbers. |
+| **S3** | Unify ElementwiseMap: Tensor binop/neg + Column binop/neg (null-prop via access). Stats has none. | — |
+| **S4** | Unify ElementwiseOrd + `emit_sort_scratch`; route Stats median/percentile/argmin/argmax/sort/argsort + Tensor/Column min/max ordering. | **Bonus: lands Column `median`/`quantile` codegen** (today interpreter-only). |
+| **S5** | Non-f64 element kinds for Stats (`Slice[i64]`/`f32`/…). Thread `ElemKind` from typechecker binding annotation. | Return rules: mean/var/std→f64; sum/prod→T. Closes the non-f64 gap. |
+
+Each S1–S5 keeps a **native byte-identical oracle** (Slipstream-style) per
+touched surface, and A/B across `run` / `KARAC_AUTO_PAR=0` / default auto-par.
+
+---
+
+## 3. Layer 2 — user-extensible surface traits (S6, gated sub-epic)
+
+### 3.1 Target trait shapes (design sketch)
+
+```kara
+trait Reduce[T] {
+    fn fold[A](ref self, init: A, f: fn(A, T) -> A) -> A;                    // the primitive
+    fn sum(ref self) -> T where T: Add + Zero { self.fold(T::zero(), |a, x| a + x) }   // default
+    fn product(ref self) -> T where T: Mul + One { ... }                    // default, overridable
+    fn min(ref self) -> Option[T] where T: Ord { ... }
+    fn max(ref self) -> Option[T] where T: Ord { ... }
+}
+trait ElementwiseMap[T] {
+    fn map(ref self, f: fn(T) -> T) -> Self;                                // same-elem-type first cut
+    fn zip_with(ref self, other: ref Self, f: fn(T, T) -> T) -> Self;
+}
+trait ElementwiseOrd[T: Ord] {
+    fn argmin(ref self) -> Option[i64];
+    fn argmax(ref self) -> Option[i64];
+    fn sorted(ref self) -> Vec[T];
+    fn argsort(ref self) -> Vec[i64];
+}
+```
+
+### 3.2 Dispatch story (fits the existing static-mono model — no vtables)
+
+- Typecheck resolves `x.sum()` → `Reduce::sum` for `x`'s type.
+- If the resolved impl method is `#[compiler_builtin]` (Tensor/Column/Slice) →
+  **codegen intercepts → kernel** (S0–S5). Fast path, unchanged behavior.
+- Else (user type) → **monomorphize the default/user body** — the generic
+  fold-based path. Slower but correct; consistent with Kāra's per-concrete-type
+  monomorphization (no runtime trait-object ABI).
+
+### 3.3 Prerequisite spikes (gate S6 — resolve before committing)
+
+User-extensibility roughly doubles the surface-trait cost because it needs
+language features the current trait system may lack. **S6-pre** must
+confirm/build each:
+
+1. **Default trait-method bodies** — stdlib traits today (`Ord`, `Add`) are
+   signature-only (`;`); default bodies are likely a *new* feature.
+2. **Generic methods inside traits** (`fold[A]`) + **`where` on trait methods**.
+3. **`fn`-value params through monomorphized generic calls** — closures work
+   (heap-env epic CLOSED), but must verify they thread through generic
+   trait-method monomorphization.
+4. **Blanket / over-container impls** (`impl[T] Reduce[T] for Vec[T]`) — Vec
+   Hash+Eq are *implicitly admitted*, not real impls; real blanket impls may be
+   new.
+5. **Element-type-changing `map` deferred** — `Tensor[i64].map(fn(i64)->f64)`
+   needs HKT-ish associated-type constructors. First cut restricts `map` to
+   same element type (`fn(T)->T`); flag the limitation.
+
+### 3.4 S6 slices (after S6-pre)
+
+- **S6a** — declare the three traits in stdlib; Tensor/Column/Slice
+  `#[compiler_builtin]`-impl them (routing to kernels). Compiler-internal
+  dispatch end-to-end first.
+- **S6b** — default method bodies + generic `fold` + `where`; enable a *user*
+  `impl Reduce[T] for MyType` to monomorphize.
+- **S6c** — `ElementwiseMap` / `ElementwiseOrd` user impls; blanket `Vec[T]` impls.
+
+---
+
+## 4. Cross-cutting invariants (bake in, don't discover mid-slice)
+
+1. **No number changes** — population vs sample variance, and all empty
+   policies, stay op-level, never a global rule (breaks the oracle otherwise).
+2. **Owned-temp free** (B-2026-06-29-1): unified paths keep
+   `materialize_owned_temp` and `PrefixCollectionLiteral` in the gate.
+3. **Type-erased Column** carries no elem tag in the pointer — non-f64
+   `ElemKind` threads from the typechecker binding annotation.
+4. Per slice: own worktree (`EnterWorktree`), commit proactively, LSan gate
+   (`scripts/lsan-local.sh`), ff-merge to main + remove worktree, record any
+   surfaced compiler bugs in [`docs/bug-ledger.jsonl`](../bug-ledger.jsonl).
+
+---
+
+## 5. Sequencing & risk
+
+S0–S5 are low-risk, independently shippable, and each is oracle-verifiable — the
+committed spine. **S6-pre is the real unknown**: if default-method-bodies +
+generic trait methods turn out large, S6 splits off as a follow-on epic while
+S0–S5 have already delivered the dedup, Column median/quantile codegen, and
+non-f64 stats.
