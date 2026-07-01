@@ -791,6 +791,13 @@ pub(super) fn integer_width_bits(ty: &Type) -> Option<u32> {
 pub(super) fn method_callee_type_name(ty: &Type) -> Option<String> {
     match ty {
         Type::Named { name, .. } => Some(name.clone()),
+        // A `shared struct` / `shared enum` (or `par`) receiver is a real
+        // `Type.method` call site — its RC-pointer value carries the same
+        // inherent/impl methods a value receiver does. Without this arm the
+        // `method_callee_types` side-table skips every shared-receiver call, so
+        // codegen's `dispatch_key` is `None` for them — which broke fresh-temp
+        // shared method dispatch (`make_shared().m()`) until this was added.
+        Type::Shared(name) => Some(name.clone()),
         Type::Str => Some("String".to_string()),
         Type::Slice { .. } => Some("Slice".to_string()),
         Type::Array { .. } => Some("Array".to_string()),

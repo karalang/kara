@@ -524,15 +524,52 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    for-loop shape isn't recognised); `self.field[i].method()` errors
    ("indexed-receiver … requires the indexed container to be a named variable").
    Both reproduce on clean `main` via a plain `let c = make(); c.method()` and are
-   independent method-body-lowering gaps. **Still open (temp surface):** enum /
-   shared-struct fresh-temp method receivers (heap-pointer self / RC drop —
-   different ABI); `Map.keys()`/`.values()` on a temp (a different binding shape,
+   independent method-body-lowering gaps. **Still open (temp surface):**
+   `Map.keys()`/`.values()` on a temp (a different binding shape,
    not a for-loop peel even for named maps); heap K/V (`Map[String, Vec[T]]`) on
    temps; deeper-nested `Vec[Vec[String]]` (two-level heap leaks the innermost
    even for named bindings — an upstream recursion limit); `get_unchecked` on
    `Vec[String]`; and (the `vector_method_receivers` model — receiver `(T, N)`
    recorded at the collided span — remains a second copy-able precedent for any
    future receiver-type table).
+   **Slice 3k — user `impl`-block methods on fresh-temp ENUM and SHARED
+   struct/enum receivers. — DONE 2026-06-30.** The follow-on to 3j: `make().m()`
+   where the return type is a value enum, a `shared struct`, or a `shared enum`.
+   All three hard-errored identically to 3j ("no handler for method '…' on
+   non-identifier receiver") while the interpreter and the `let`-bound codegen
+   forms worked. **Two parts.** (1) The **shared** cases had a deeper upstream
+   miss: a shared receiver's type is `Type::Shared(name)`, and
+   `method_callee_type_name` (typechecker, `types.rs`) had **no `Type::Shared`
+   arm** — so `method_callee_types` never recorded the `Type.method` key for any
+   shared-receiver call, program-wide, and codegen's `dispatch_key` was `None`.
+   The let-bound path never noticed because it dispatches via
+   `inferred_receiver_type`/`var_type_names`, not the callee key. Added the arm
+   (`Type::Shared(name) => Some(name)`), which now records shared method-call
+   sites like any named one (a strict addition — the only other caller of that
+   helper is numeric-receiver-gated). Value enums already recorded their key
+   (`Type::Named`), which is why enum receivers reached the codegen helper but
+   still bailed on its struct-only gate. (2) Extended
+   `try_compile_freshtemp_user_method`'s gate from "non-shared struct only" to
+   accept value enum / shared struct / shared enum, and routed each to the drop
+   its `let`-binding site uses: shared struct/enum (and `par`) →
+   `track_rc_var(synth, ptr, heap_type)` (heap type from `shared_types`) = one
+   scope-exit `RcDec` running the recursive `__karac_rc_drop_<T>`; value enum →
+   `track_enum_var` (no-op for scalar payloads, `__karac_drop_<Enum>` switch for
+   heap-bearing variants); non-shared struct → unchanged. Same UNCONDITIONAL
+   fresh-owned tracking as 3j: the method borrows or shallow-copies `self` and
+   emits no receiver drop, so the caller's temp is the sole owner (one dec / one
+   drop frees exactly once — net-zero on the RC count for the shared case, so it
+   drives rc→0). Verified enum `75`, shared struct `137`, heap-bearing enum `55`,
+   shared `Vec[String]`-field struct `2`, shared enum `51` — all matching the
+   interpreter under `run` and `build`; macOS ASAN clean (no double-free), Linux
+   LSan clean (no leak — the RC-dec correctness the shared path hinges on).
+   **Tests:** 3 IR (`test_ir_freshtemp_enum_method_materializes_and_drops` →
+   `__urecv_tmp` + `__karac_drop_Msg`; `…_shared_struct_method…` → `__urecv_tmp`
+   + `__karac_rc_drop_Bag`; `…_shared_enum_method…` → `__urecv_tmp` +
+   `__karac_rc_drop_Expr`) + 3 ASAN (heap-payload enum, shared `Vec[String]`
+   field, shared enum — each looped). **Still open (temp surface):** unchanged
+   from 3j's list minus this slice (`Map.keys()`/`.values()` on a temp, heap K/V
+   Maps on temps, `Vec[Vec[String]]`, `get_unchecked` on `Vec[String]`).
    **Slice 3b-c — operator-operand temps. — DONE 2026-06-29.** `make_str() + "x"`
    leaked the fresh `make_str()` operand. Confirmed the spike's diagnosis: a
    String `+` (and `==`/`<`/… comparison) desugars in `lowering.rs`

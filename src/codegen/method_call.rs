@@ -3449,10 +3449,17 @@ impl<'ctx> super::Codegen<'ctx> {
         else {
             return Ok(None);
         };
-        // Non-shared user struct only. Shared structs are RC (heap-pointer self,
-        // RC drop — a different ABI); enum receivers are a follow-on.
-        if !self.struct_types.contains_key(&type_name) || self.shared_types.contains_key(&type_name)
-        {
+        // Accept any user type that carries `impl`-block methods: a non-shared
+        // struct, a value enum, or a shared struct/enum (RC). The three differ
+        // only in the scope-exit DROP they need for the materialized temp (see
+        // the drop-track block below); the DISPATCH is uniform — store the
+        // receiver into a synth local and re-enter `compile_method_call` with an
+        // Identifier, which resolves the same for all three. The `qualified`
+        // function-existence check below is the real "is this a method" gate.
+        let is_shared = self.shared_types.contains_key(&type_name);
+        let is_value_enum = !is_shared && self.enum_layouts.contains_key(&type_name);
+        let is_plain_struct = !is_shared && self.struct_types.contains_key(&type_name);
+        if !(is_shared || is_value_enum || is_plain_struct) {
             return Ok(None);
         }
         let qualified = format!("{type_name}.{method}");
@@ -3479,26 +3486,42 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Drop-track the materialized temp UNCONDITIONALLY (for a fresh-owned
         // receiver), mirroring the `let`-binding path in `stmts.rs`, which always
-        // `track_struct_var`s a struct local regardless of how it's later used.
-        // This is correct for BOTH self modes: a `ref self` / `mut ref self`
-        // method borrows, so the caller obviously owns the temp; and an owned
-        // `self` method does NOT drop `self` either (the user-impl dispatch passes
-        // the receiver by shallow value copy and emits no receiver drop — proven
-        // by LSan: the owned-`self` case leaked the field `Vec` once per call
-        // without this), so the caller's binding/temp remains the sole owner. Only
-        // when the receiver is NOT a fresh-owned temp (a borrow-returning call) do
-        // we skip — we don't own it. Route to the user-`impl Drop` wrapper when the
-        // type has one, else the synthesized struct-field drop.
+        // tracks a fresh local regardless of how it's later used. This is correct
+        // for BOTH self modes: a `ref self` / `mut ref self` method borrows, so the
+        // caller obviously owns the temp; and an owned `self` method does NOT drop
+        // `self` either (the user-impl dispatch passes the receiver by shallow
+        // value copy and emits no receiver drop — proven by LSan: the owned-`self`
+        // struct case leaked the field `Vec` once per call without this), so the
+        // caller's binding/temp remains the sole owner. Only when the receiver is
+        // NOT a fresh-owned temp (a borrow-returning call) do we skip — we don't
+        // own it. The drop machinery differs by kind, each mirroring the matching
+        // `let`-binding site in `stmts.rs`:
+        //   • shared struct / enum (or `par`): one scope-exit `RcDec` on the box —
+        //     `track_rc_var` with the heap type from `shared_types`. The method
+        //     borrows / shallow-copies `self`, net-zero on the count, so this
+        //     single dec frees the box (identical to `let c = make(); c.m()`).
+        //   • value enum: `track_enum_var` — a no-op for scalar payloads, a
+        //     recursive drop-switch for heap-bearing variants.
+        //   • non-shared struct: user-`impl Drop` wrapper when present, else the
+        //     synthesized struct-field drop.
         if self.expr_yields_fresh_owned_temp(object) {
-            let has_user_drop = self
-                .program_snapshot
-                .as_deref()
-                .map(|p| p.drop_method_keys.contains_key(&type_name))
-                .unwrap_or(false);
-            if has_user_drop {
-                self.track_user_drop_var(&type_name, &synth, slot);
+            if is_shared {
+                if let Some(heap_type) = self.shared_types.get(&type_name).map(|i| i.heap_type) {
+                    self.track_rc_var(&synth, val.into_pointer_value(), heap_type);
+                }
+            } else if is_value_enum {
+                self.track_enum_var(&type_name, slot);
             } else {
-                self.track_struct_var(&type_name, slot);
+                let has_user_drop = self
+                    .program_snapshot
+                    .as_deref()
+                    .map(|p| p.drop_method_keys.contains_key(&type_name))
+                    .unwrap_or(false);
+                if has_user_drop {
+                    self.track_user_drop_var(&type_name, &synth, slot);
+                } else {
+                    self.track_struct_var(&type_name, slot);
+                }
             }
         }
 

@@ -3671,6 +3671,110 @@ fn main() {
     }
 
     #[test]
+    fn asan_freshtemp_enum_method_no_double_free() {
+        // Slice 3k: a user method on a fresh-temp VALUE-ENUM receiver
+        // (`make().size()`), looped. The `Text` variant owns a heap `String`; the
+        // temp materializes into `__urecv_tmp` and is drop-tracked via
+        // `track_enum_var`, whose scope-exit `EnumDrop` runs `__karac_drop_Msg` to
+        // free the payload String once. Hazards: the temp must free exactly once
+        // (macOS ASAN catches a double-free), and the payload String must free at
+        // all (Linux LSan catches a leak). ≥36-byte payload defeats LSan
+        // short-string reachability; the loop re-materializes each pass.
+        assert_clean_asan_run(
+            r#"
+enum Msg { Text(String), Empty }
+impl Msg {
+    fn size(self) -> i64 {
+        match self {
+            Msg.Text(s) => return s.len(),
+            Msg.Empty => return 0_i64,
+        };
+    }
+}
+fn make() -> Msg { Msg.Text("a message payload string padded beyond thirty-six bytes") }
+fn main() {
+    let mut p = 0;
+    while p < 3 {
+        println(make().size());
+        p = p + 1;
+    };
+}
+"#,
+            &["55", "55", "55"],
+            "freshtemp_enum_method_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_freshtemp_shared_struct_method_no_double_free() {
+        // Slice 3k: a user method on a fresh-temp SHARED-STRUCT receiver
+        // (`make().count()`), looped. `make()` returns an RC box at rc==1 owning a
+        // `Vec[String]` field; the temp materializes into `__urecv_tmp` and is
+        // drop-tracked as ONE scope-exit `RcDec` (`track_rc_var`) — the method
+        // borrows / shallow-copies `self`, net-zero on the count, so this single
+        // dec drives rc→0 and `__karac_rc_drop_Bag` frees the box + both field
+        // Strings. A spurious second dec would free-at-rc==0 twice (macOS ASAN);
+        // no dec leaks the whole box (Linux LSan). ≥36-byte field strings + the
+        // loop expose either fault.
+        assert_clean_asan_run(
+            r#"
+shared struct Bag { items: Vec[String] }
+impl Bag { fn count(self) -> i64 { self.items.len() } }
+fn make() -> Bag {
+    let mut v: Vec[String] = Vec.new();
+    v.push("first field string padded beyond thirty-six bytes ok");
+    v.push("second field string padded beyond thirty-six byte");
+    Bag { items: v }
+}
+fn main() {
+    let mut p = 0;
+    while p < 3 {
+        println(make().count());
+        p = p + 1;
+    };
+}
+"#,
+            &["2", "2", "2"],
+            "freshtemp_shared_struct_method_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_freshtemp_shared_enum_method_no_double_free() {
+        // Slice 3k: the shared-ENUM sibling. A `shared enum` receiver is `Shared`
+        // and RC-managed, so it rides the same `track_rc_var` path as the shared
+        // struct (`track_enum_var` no-ops for shared enums — DP3). The temp
+        // materializes into `__urecv_tmp` and one scope-exit `RcDec` →
+        // `__karac_rc_drop_Expr` frees the box and the live `Name` payload String.
+        // Same double-free (ASAN) / leak (LSan) hazards as the shared-struct case;
+        // guards that the shared-enum branch isn't mis-routed to the value-enum
+        // drop (which would double-count).
+        assert_clean_asan_run(
+            r#"
+shared enum Expr { Lit(i64), Name(String) }
+impl Expr {
+    fn weight(self) -> i64 {
+        match self {
+            Expr.Lit(n) => return n,
+            Expr.Name(s) => return s.len(),
+        };
+    }
+}
+fn make() -> Expr { Expr.Name("an expr name payload padded beyond thirty-six bytes") }
+fn main() {
+    let mut p = 0;
+    while p < 3 {
+        println(make().weight());
+        p = p + 1;
+    };
+}
+"#,
+            &["51", "51", "51"],
+            "freshtemp_shared_enum_method_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_freshtemp_vec_string_first_last_no_double_free() {
         // Slice 3b-heap companion: `first`/`last` on a fresh-temp `Vec[String]`
         // — the other two borrow-returning (`Option[ref String]`) read methods

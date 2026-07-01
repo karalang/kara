@@ -19728,6 +19728,129 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_freshtemp_enum_method_materializes_and_drops() {
+        // Slice 3k: a user impl-block method on a fresh-temp VALUE-ENUM receiver
+        // (`make().size()`) where the enum has a heap-bearing variant
+        // (`Text(String)`). The identifier-keyed user-impl dispatch resolves only
+        // Identifier/self receivers, so a call-result receiver hard-errored ("no
+        // handler for method ... on non-identifier receiver"). The fresh-temp path
+        // materializes the receiver into a `__urecv_tmp` synth local and — because
+        // the enum owns heap — drop-tracks it via `track_enum_var`, whose
+        // scope-exit `EnumDrop` runs the synthesized `__karac_drop_Msg` switch to
+        // free the live variant's String. Without the materialize the call fails to
+        // compile; without the drop the `Text` payload String leaks (Linux LSan).
+        let src = r#"
+enum Msg { Text(String), Empty }
+impl Msg {
+    fn size(self) -> i64 {
+        match self {
+            Msg.Text(s) => s.len(),
+            Msg.Empty => 0_i64,
+        }
+    }
+}
+fn make() -> Msg { Msg.Text("a message payload string padded beyond thirty-six bytes") }
+fn main() {
+    println(make().size());
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("__urecv_tmp"),
+            "expected the fresh-temp enum receiver materialized into __urecv_tmp; got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("__karac_drop_Msg"),
+            "expected the value-enum temp receiver drop-tracked via the \
+             __karac_drop_Msg drop-switch (frees the Text payload String); got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_freshtemp_shared_struct_method_materializes_and_rc_drops() {
+        // Slice 3k: a user impl-block method on a fresh-temp SHARED-STRUCT receiver
+        // (`make().count()`). The receiver's obj type is `Shared("Bag")`, whose
+        // `method_callee_type_name` arm was missing — so `method_callee_types`
+        // never recorded the `Bag.count` key and codegen's `dispatch_key` was
+        // `None`, dropping the shared case through to the hard error even after the
+        // struct/enum cases compiled. With the arm added, the fresh-temp path
+        // recovers `Bag`, materializes the RC-pointer receiver into `__urecv_tmp`,
+        // and drop-tracks it as one scope-exit `RcDec` (`track_rc_var`) — the
+        // method borrows / shallow-copies `self`, net-zero on the count, so this
+        // single dec frees the box via the recursive `__karac_rc_drop_Bag` (which
+        // frees the `Vec[String]` field). Without the materialize the call fails to
+        // compile; without the dec the whole box + field leaks (Linux LSan).
+        let src = r#"
+shared struct Bag { items: Vec[String] }
+impl Bag {
+    fn count(self) -> i64 { self.items.len() }
+}
+fn make() -> Bag {
+    let mut v: Vec[String] = Vec.new();
+    v.push("a field payload string padded beyond thirty-six bytes ok");
+    Bag { items: v }
+}
+fn main() {
+    println(make().count());
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("__urecv_tmp"),
+            "expected the fresh-temp shared-struct receiver materialized into __urecv_tmp; got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("__karac_rc_drop_Bag"),
+            "expected the shared-struct temp receiver drop-tracked via a scope-exit \
+             RcDec running __karac_rc_drop_Bag (frees the box + Vec[String] field); got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_freshtemp_shared_enum_method_materializes_and_rc_drops() {
+        // Slice 3k: the shared-ENUM sibling. A `shared enum` receiver is also
+        // `Shared(name)` and RC-managed, so it rides the same `track_rc_var` path
+        // as the shared struct (`shared_types` carries both, keyed by name with a
+        // shared heap type). The fresh-temp path materializes into `__urecv_tmp`
+        // and queues one `RcDec` → `__karac_rc_drop_Expr` frees the box (and any
+        // heap payload). `track_enum_var` no-ops for a shared enum (DP3), so the
+        // shared branch is what carries the drop — verified here so a future change
+        // that routes shared enums through the value-enum branch (which would
+        // double-count / mis-drop) is caught.
+        let src = r#"
+shared enum Expr { Lit(i64), Name(String) }
+impl Expr {
+    fn weight(self) -> i64 {
+        match self {
+            Expr.Lit(n) => n,
+            Expr.Name(s) => s.len(),
+        }
+    }
+}
+fn make() -> Expr { Expr.Name("an expr name payload padded beyond thirty-six bytes") }
+fn main() {
+    println(make().weight());
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("__urecv_tmp"),
+            "expected the fresh-temp shared-enum receiver materialized into __urecv_tmp; got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("__karac_rc_drop_Expr"),
+            "expected the shared-enum temp receiver drop-tracked via a scope-exit \
+             RcDec running __karac_rc_drop_Expr; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_ir_freshtemp_vec_string_contains_emits_per_element_drop() {
         // Slice 3b-heap follow-on: `contains` on a fresh-temp `Vec[String]`.
         // `contains` returns `bool` (no borrow escapes), but the receiver temp
