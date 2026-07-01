@@ -5952,6 +5952,40 @@ fn test_ord_cmp_returns_comparison_ordering() {
     );
 }
 
+#[test]
+fn test_redefining_one_stdlib_type_keeps_sibling_module_items() {
+    // B-2026-06-30-11 regression guard. Redefining ONE always-injected stdlib
+    // type (`struct Response`, exported by `http.kara`) must NOT drop that
+    // module's SIBLING items — `Server`, `Request`, `impl Server`, `impl
+    // Request`. The original #34 collision-skip dropped the WHOLE colliding
+    // module, so `Server.serve(...)` hard-errored `no associated function
+    // 'serve' on type 'Server'` at typecheck and the entire
+    // `tests/http_server.rs` serve / serve_tls / http2 suite went red (18
+    // failures). The fix (`register_baked_stdlib`) drops only the redefined
+    // type + impls whose target is that type, so siblings survive: `Server.serve`
+    // / `Server.serve_tls` still resolve, `req.path()` (an `impl Request`
+    // method) still resolves, and the handler returns the *user's* `Response`.
+    let result = typecheck_ok(
+        "struct Response { status: i64, body: String }\n\
+         fn handle(req: Request) -> Response {\n\
+             Response { status: 200, body: req.path() }\n\
+         }\n\
+         fn main() {\n\
+             let _r = Server.serve(\"127.0.0.1:0\", handle);\n\
+             let _t = Server.serve_tls(\"127.0.0.1:0\", \"\", \"\", handle);\n\
+         }",
+    );
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::NoMethodFound),
+        "sibling `Server.serve` / `serve_tls` must resolve despite a redefined \
+         `Response`; got: {:?}",
+        result.errors
+    );
+}
+
 // ── process::exit ──────────────────────────────────────────────
 
 #[test]

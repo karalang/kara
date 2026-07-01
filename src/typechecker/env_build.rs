@@ -513,13 +513,31 @@ impl<'a> super::TypeChecker<'a> {
         // `user_redefines_stdlib_type`, #6/#34): when the USER program redefines
         // a struct/enum that an always-injected stdlib module exports — e.g. the
         // self-hosted compiler's `struct Parser` vs `std.cli`'s `Parser`, or its
-        // `struct Span` vs `std.tracing`'s `Span` — skip that WHOLE stdlib
-        // module so the user's definition owns the name (and its associated
-        // functions: `Parser.new(tokens)` then resolves to the user impl, not
-        // the prelude's `Parser.new(program: String)`). Skipping only the
-        // colliding type is unsafe — the module's own bodies reference its types
-        // through the shared env. Safe: a program redefining a module's public
-        // type can't use that module anyway.
+        // `struct Span` vs `std.tracing`'s `Span` — the user's definition (and
+        // its impls) must own the name, so `Parser.new(tokens)` resolves to the
+        // user impl, not the prelude's `Parser.new(program: String)`.
+        //
+        // Scope of the skip: ONLY the items the redefinition actually shadows —
+        // the stdlib `struct`/`enum` of the collided name, plus any impl block
+        // whose target type is that name. Sibling items in the same module
+        // (other types, their impls, free functions) stay always-injected.
+        //
+        // This is deliberately per-item, not per-module. The original #34 fix
+        // dropped the WHOLE colliding module, which silently broke every program
+        // that redefined one stdlib type while still using the module's OTHERS:
+        // a `struct Response { ... }` (a common name) collided with
+        // `http.kara`'s `Response` and took `Server` / `Request` / `impl Server`
+        // down with it, so `Server.serve(...)` hard-errored `no associated
+        // function 'serve' on type 'Server'` at typecheck (B-2026-06-30-11 — the
+        // whole `tests/http_server.rs` serve/serve_tls/http2 suite). Dropping
+        // only the collided type + its impls fixes #34 just as well (the user's
+        // `struct Parser` + `impl Parser` become the sole `Parser` surface,
+        // std.cli's `struct Parser` and `impl Parser` both gone) without
+        // amputating the rest of the module. A kept sibling impl whose signature
+        // names the redefined type now references the user's type through the
+        // shared env — the same shadowing behavior a program gets today for any
+        // stdlib type it redefines; only sites that actually call such a sibling
+        // are affected, and those were already the user's to reconcile.
         //
         // Gated on `!self.compiling_stdlib`: when a baked stdlib module compiles
         // standalone (`lower_stdlib_source`), self.program IS that module, so its
@@ -540,17 +558,33 @@ impl<'a> super::TypeChecker<'a> {
                 })
                 .collect()
         };
+        // Head type name of an impl block's target (`impl Response` → "Response",
+        // `impl[T] Box[T]` → "Box"), so an impl on a redefined type is dropped
+        // alongside the type. `None` for non-path targets (tuples, etc.), which
+        // never collide with a user struct/enum name.
+        fn impl_target_name(imp: &ImplBlock) -> Option<&str> {
+            match &imp.target_type.kind {
+                TypeKind::Path(path) => path.segments.last().map(|s| s.as_str()),
+                _ => None,
+            }
+        }
         let baked: Vec<Item> = crate::prelude::STDLIB_PROGRAMS
             .iter()
-            .filter(|(_, p)| {
-                user_types.is_empty()
-                    || !p.items.iter().any(|it| match it {
-                        Item::StructDef(s) => user_types.contains(s.name.as_str()),
-                        Item::EnumDef(e) => user_types.contains(e.name.as_str()),
-                        _ => false,
-                    })
+            .flat_map(|(_, p)| p.items.iter())
+            .filter(|it| {
+                if user_types.is_empty() {
+                    return true;
+                }
+                match it {
+                    Item::StructDef(s) => !user_types.contains(s.name.as_str()),
+                    Item::EnumDef(e) => !user_types.contains(e.name.as_str()),
+                    Item::ImplBlock(i) => {
+                        impl_target_name(i).is_none_or(|n| !user_types.contains(n))
+                    }
+                    _ => true,
+                }
             })
-            .flat_map(|(_, p)| p.items.iter().cloned())
+            .cloned()
             .collect();
         for item in &baked {
             match item {
