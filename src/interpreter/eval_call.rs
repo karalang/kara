@@ -270,6 +270,16 @@ impl<'a> super::Interpreter<'a> {
                     };
                     return Value::Mutex(Arc::new(Mutex::new(val)));
                 }
+                // `TaskGroup.new()` — the scope-local fan-out container
+                // (design.md § Structured Concurrency / TaskGroup). Codegen
+                // wires this to `karac_runtime_taskgroup_new`; the tree-walk
+                // interpreter runs spawned children eagerly at each
+                // `.spawn(closure)` site (see `eval_taskgroup_spawn`), so the
+                // group is a stateless marker. Sibling of `Atomic.new` /
+                // `Mutex.new` above. (B-2026-06-30-8 — run/build agreement.)
+                "TaskGroup.new" => {
+                    return Value::TaskGroup;
+                }
                 // Debugger Contract slice 5: `std.runtime` introspection
                 // surface (`runtime/stdlib/runtime.kara`). The tree-walk
                 // interpreter has its own par-block evaluation path and does
@@ -1066,6 +1076,9 @@ impl<'a> super::Interpreter<'a> {
                 "assert_ne" => {
                     return self.eval_builtin_assert_ne(args, span);
                 }
+                "spawn" => {
+                    return self.eval_spawn(args, span);
+                }
                 "collect_all_vec" => {
                     return self.eval_collect_all_vec(args, span);
                 }
@@ -1787,6 +1800,51 @@ impl<'a> super::Interpreter<'a> {
             results.push(r);
         }
         Value::Tuple(results)
+    }
+
+    /// Free-function `spawn(closure)` — unscoped task creation (design.md
+    /// § Explicit Concurrency; `runtime/stdlib/task_group.kara`). Returns a
+    /// `Value::TaskHandle` carrying the child's result; `.join()` delivers
+    /// it. Exactly one closure argument, guaranteed by the stdlib
+    /// `#[compiler_builtin]` signature `fn spawn[T](f: OnceFn() -> T) ->
+    /// TaskHandle[T]`. Runs the child eagerly on the calling thread — see
+    /// [`Self::eval_spawn_closure`] for why the interpreter's eager model
+    /// matches the parallel codegen for the shapes ScopeLocal permits.
+    pub(crate) fn eval_spawn(&mut self, args: &[CallArg], _span: &Span) -> Value {
+        let Some(arg0) = args.first() else {
+            return Value::TaskHandle(Box::new(Value::Unit));
+        };
+        self.eval_spawn_closure(arg0)
+    }
+
+    /// Eagerly run a spawned closure and box its result into a
+    /// `Value::TaskHandle`. Shared by free `spawn(closure)` and
+    /// `TaskGroup.spawn(closure)`.
+    ///
+    /// The tree-walk interpreter has no deferred-task substrate for the
+    /// *dynamic* spawn/join shape: `par {}` can use `std::thread::scope`
+    /// because its branches are lexically bounded, but a `TaskHandle` can be
+    /// `.join()`ed at an arbitrary later point, and the interpreter holds
+    /// `program` / `typecheck_result` as borrows that cannot cross into a
+    /// `'static` `std::thread::spawn`. So a spawned child runs synchronously
+    /// at its spawn site and its result is stashed for the later `.join()`.
+    /// This is observably identical to the genuinely-parallel codegen for
+    /// the order-independent fan-out/join programs the typechecker's
+    /// `ScopeLocal` rules permit (a handle cannot escape its spawning scope,
+    /// so cross-task communication is confined to shared `Atomic`/`Mutex`
+    /// cells, whose interpreter models are already thread-safe). A panicking
+    /// child dominates via `pending_cf` — the same fail-fast the caller sees
+    /// from `par {}` and `collect_all`.
+    pub(crate) fn eval_spawn_closure(&mut self, closure_arg: &CallArg) -> Value {
+        let closure = self.eval_expr_inner(&closure_arg.value);
+        if self.pending_cf.is_some() {
+            return Value::TaskHandle(Box::new(Value::Unit));
+        }
+        let result = self.invoke_function_value(closure, Vec::new());
+        // On a panicking child `pending_cf` is now set and `result` is the
+        // set_cf sentinel; box it anyway — the caller propagates the signal
+        // before the handle is ever `.join()`ed (mirrors `collect_all`).
+        Value::TaskHandle(Box::new(result))
     }
 
     pub(crate) fn eval_collect_all_vec(&mut self, args: &[CallArg], _span: &Span) -> Value {

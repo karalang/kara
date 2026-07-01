@@ -232,6 +232,29 @@ pub enum Value {
     /// deadlocks, matching codegen's real spinlock (std `Mutex` is not
     /// re-entrant). See [`eval_expr`]'s `ExprKind::Lock` arm.
     Mutex(Arc<Mutex<Value>>),
+    /// `TaskGroup` scope-local fan-out container (design.md § Structured
+    /// Concurrency / TaskGroup). The tree-walk interpreter runs each
+    /// spawned child **eagerly and synchronously** at its `.spawn(closure)`
+    /// call site (see `eval_taskgroup_spawn`), because the dynamic
+    /// spawn/join shape has no lexical scope the interpreter could hang a
+    /// `std::thread::scope` off of the way `par {}` does. So the group
+    /// carries no live task state — it is a marker the method-dispatch path
+    /// recognises to route `.spawn` / `.cancel`, and one that scope-exit
+    /// drop treats as a no-op (every child has already run to completion).
+    /// Codegen lowers the genuinely-parallel version against
+    /// `karac_runtime_taskgroup_*`; the eager model produces identical
+    /// output for the order-independent fan-out/join programs the
+    /// typechecker's `ScopeLocal` rules permit, keeping `karac run` and
+    /// `karac build` in agreement (B-2026-06-30-8).
+    TaskGroup,
+    /// `TaskHandle[T]` join handle returned by `spawn(closure)` /
+    /// `tg.spawn(closure)`. In the interpreter's eager model the child has
+    /// already run by the time the handle exists, so the handle simply
+    /// carries the computed result value; `.join()` returns it. The
+    /// `ScopeLocal` marker (typechecker-enforced) keeps the handle from
+    /// escaping its spawning scope, so an owned boxed result needs no
+    /// cross-thread sharing.
+    TaskHandle(Box<Value>),
     /// SortedSet[T: Ord] — B-tree–backed ordered set keyed by OrdValue.
     /// BTreeMap provides O(log n) insert/remove/contains with iteration in
     /// ascending key order. The () value makes it a set (not a map).
@@ -955,6 +978,8 @@ impl std::fmt::Display for Value {
             Value::TotalFloat64(v) => write!(f, "F64({})", v),
             Value::Atomic(v) => write!(f, "Atomic({})", v.lock().unwrap()),
             Value::Mutex(v) => write!(f, "Mutex({})", v.lock().unwrap()),
+            Value::TaskGroup => write!(f, "TaskGroup"),
+            Value::TaskHandle(v) => write!(f, "TaskHandle({})", v),
             Value::SortedSet(set) => {
                 write!(f, "SortedSet{{")?;
                 for (i, k) in set.keys().enumerate() {
@@ -1167,6 +1192,8 @@ impl Value {
             Value::TotalFloat64(_) => "TotalFloat64",
             Value::Atomic(_) => "Atomic",
             Value::Mutex(_) => "Mutex",
+            Value::TaskGroup => "TaskGroup",
+            Value::TaskHandle(_) => "TaskHandle",
             Value::SortedSet(_) => "SortedSet",
             Value::SortedMap(_) => "SortedMap",
             Value::Set(_) => "Set",

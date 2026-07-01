@@ -764,6 +764,38 @@ impl<'a> super::Interpreter<'a> {
             other => other,
         };
 
+        // Structured-concurrency dispatch (design.md § Structured
+        // Concurrency / TaskGroup). The tree-walk interpreter runs spawned
+        // children eagerly (see `eval_spawn_closure`), so these are the
+        // receiver-typed entry points that route the `TaskGroup` /
+        // `TaskHandle` surface declared in `runtime/stdlib/task_group.kara`.
+        // Gated on the concrete receiver value, so they never shadow a same-
+        // named method on another type (`Command.spawn`, `String.join`, …).
+        match &obj {
+            // `tg.spawn(closure)` — run the child now, return its
+            // `TaskHandle`. `mut ref self`, but the group is a stateless
+            // marker, so there is nothing to write back to `tg`.
+            Value::TaskGroup if method == "spawn" => {
+                let Some(arg0) = args.first() else {
+                    return Value::TaskHandle(Box::new(Value::Unit));
+                };
+                return self.eval_spawn_closure(arg0);
+            }
+            // `tg.cancel()` — cooperative cancellation. In the eager model
+            // every child has already run to completion by the time control
+            // returns to the spawner, so there is nothing left to cancel.
+            Value::TaskGroup if method == "cancel" => {
+                return Value::Unit;
+            }
+            // `handle.join()` — deliver the child's already-computed result.
+            // `.join()` consumes `self` (typechecker-enforced), so a single
+            // read of the boxed value is sound.
+            Value::TaskHandle(result) if method == "join" => {
+                return (**result).clone();
+            }
+            _ => {}
+        }
+
         // Slice F (`std.json`): `j.stringify()` on a `Json`-typed
         // receiver. Walks the enum tree to a `serde_json::Value` and
         // calls `serde_json::to_string`. Locked design (ii)'s insertion-

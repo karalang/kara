@@ -355,6 +355,66 @@ fn main() {
         let _ = std::fs::remove_file(&obj_path);
     }
 
+    // ── TaskGroup / spawn — run/build agreement (B-2026-06-30-8) ───
+
+    /// E2E: the canonical explicit-join TaskGroup fan-out — spawn two
+    /// children, join each handle, sum. Compiles and runs, printing `60`
+    /// (worker(10)=20 + worker(20)=40). This is the codegen half of the
+    /// run/build agreement the interpreter's missing TaskGroup rule broke
+    /// (`TaskGroup.new` hit the "not wired in the tree-walk interpreter"
+    /// internal error); its interpreter twin is
+    /// `test_taskgroup_spawn_join_agrees_with_codegen` in
+    /// tests/interpreter.rs, and both assert `60`.
+    #[test]
+    fn test_e2e_taskgroup_spawn_join() {
+        let out = run_program(
+            r#"
+fn worker(n: i64) -> i64 { n * 2 }
+fn main() {
+    let mut tg = TaskGroup.new();
+    let h1: TaskHandle[i64] = tg.spawn(|| worker(10));
+    let h2: TaskHandle[i64] = tg.spawn(|| worker(20));
+    let r1: i64 = h1.join();
+    let r2: i64 = h2.join();
+    println(r1 + r2);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "60",
+                "TaskGroup spawn/join fan-out must total 60 (interpreter parity); got {out:?}"
+            );
+        }
+    }
+
+    /// E2E: free `spawn(closure)` + `handle.join()` — the unscoped sibling of
+    /// `tg.spawn`. Prints `42`. Interpreter twin is
+    /// `test_free_spawn_join_agrees_with_codegen` in tests/interpreter.rs;
+    /// before B-2026-06-30-8 `karac run` panicked on the unresolved `spawn`
+    /// identifier while `karac build` compiled it fine.
+    #[test]
+    fn test_e2e_free_spawn_join() {
+        let out = run_program(
+            r#"
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn main() {
+    let h: TaskHandle[i64] = spawn(|| add(40, 2));
+    let r: i64 = h.join();
+    println(r);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "42",
+                "free spawn/join must print 42 (interpreter parity); got {out:?}"
+            );
+        }
+    }
+
     // ── IR-level tests ────────────────────────────────────────────
 
     #[test]

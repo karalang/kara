@@ -4667,6 +4667,54 @@ fn test_atomic_implicit_ordering_rejected_by_interpreter() {
     );
 }
 
+// ── TaskGroup / spawn — run/build agreement (B-2026-06-30-8) ──────
+//
+// `TaskGroup.new()` / `tg.spawn(closure)` / `handle.join()` and the free
+// `spawn(closure)` were accepted by the typechecker and lowered by codegen
+// (`karac build`), but the tree-walk interpreter (`karac run`) had no
+// evaluation rule — `TaskGroup.new` hit the "not wired in the tree-walk
+// interpreter" internal error and free `spawn` panicked as an unresolved
+// identifier. Same run/build-divergence class as the Atomic-ordering split
+// above (B-2026-06-30-5). The interpreter now runs each spawned child
+// eagerly at its spawn site (join-at-spawn), which is observably identical
+// to the parallel codegen for the order-independent fan-out/join shape the
+// `ScopeLocal` rules permit — see `Value::TaskGroup` in value.rs and
+// `eval_spawn_closure` in eval_call.rs for the model + its bounds.
+
+#[test]
+fn test_taskgroup_spawn_join_agrees_with_codegen() {
+    // Canonical explicit-join fan-out: spawn two children, join each handle,
+    // sum the results. Mirrors the codegen E2E
+    // `test_e2e_taskgroup_spawn_join` in par_codegen.rs — both must print
+    // `60` (worker(10)=20 + worker(20)=40), pinning `karac run` ↔ `karac
+    // build` agreement on the TaskGroup surface.
+    let src = "fn worker(n: i64) -> i64 { n * 2 }\n\
+         fn main() {\n\
+             let mut tg = TaskGroup.new();\n\
+             let h1: TaskHandle[i64] = tg.spawn(|| worker(10));\n\
+             let h2: TaskHandle[i64] = tg.spawn(|| worker(20));\n\
+             let r1: i64 = h1.join();\n\
+             let r2: i64 = h2.join();\n\
+             println(r1 + r2);\n\
+         }";
+    assert_eq!(run_no_errors(src), "60\n");
+}
+
+#[test]
+fn test_free_spawn_join_agrees_with_codegen() {
+    // Free `spawn(closure)` — the unscoped sibling of `tg.spawn`. Mirrors
+    // the codegen E2E `test_e2e_free_spawn_join` in par_codegen.rs; both
+    // print `42`. Before B-2026-06-30-8 this panicked in the interpreter
+    // ("variable 'spawn' not found") while `karac build` compiled it fine.
+    let src = "fn add(a: i64, b: i64) -> i64 { a + b }\n\
+         fn main() {\n\
+             let h: TaskHandle[i64] = spawn(|| add(40, 2));\n\
+             let r: i64 = h.join();\n\
+             println(r);\n\
+         }";
+    assert_eq!(run_no_errors(src), "42\n");
+}
+
 // ── par-shared Atomic: concurrent read-modify-write (regression) ──
 //
 // `Value::Atomic` is `Arc<Mutex<Value>>`, so a par struct's Atomic field is
