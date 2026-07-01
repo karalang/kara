@@ -40,7 +40,7 @@
 
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicValueEnum, IntValue, PointerValue};
-use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
+use inkwell::{AddressSpace, IntPredicate};
 
 use crate::ast::{BinOp, CallArg, Expr, ExprKind, GenericArg, ShapeDim, TypeExpr, TypeKind};
 use crate::reduce_kernel::ReduceOp;
@@ -2832,7 +2832,7 @@ impl<'ctx> super::Codegen<'ctx> {
         } {
             let is_float = elem.is_float_type();
             // Seed: `0` for `sum`/`mean` (additive identity), `1` for `prod`,
-            // element-typed — matching `emit_scalar_reduce_loop`'s seeds.
+            // element-typed.
             let seed: BasicValueEnum<'ctx> = if matches!(op, ReduceOp::Prod) {
                 if is_float {
                     elem.into_float_type().const_float(1.0).into()
@@ -2852,128 +2852,15 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             return self.emit_reduce_fold(&access, op, seed);
         }
-        self.emit_scalar_reduce_loop(method, elem, is_unsigned, data, count)
-    }
-
-    /// The accumulate loop for a full reduce over `count` elements at `data`.
-    /// `sum`/`mean` seed 0 + Add; `prod` seeds 1 + Mul; `min`/`max` seed
-    /// `data[0]` and compare-select (NaN never displaces — the scalar `<`
-    /// posture). Returns the accumulator (for `mean`, the raw sum).
-    fn emit_scalar_reduce_loop(
-        &mut self,
-        method: &str,
-        elem: BasicTypeEnum<'ctx>,
-        is_unsigned: bool,
-        data: PointerValue<'ctx>,
-        count: IntValue<'ctx>,
-    ) -> Result<BasicValueEnum<'ctx>, String> {
-        let fn_val = self.current_fn.unwrap();
-        let i64_t = self.context.i64_type();
-        let is_float = elem.is_float_type();
-        let load_at = |s: &Self, i: IntValue<'ctx>| -> BasicValueEnum<'ctx> {
-            let p = unsafe { s.builder.build_gep(elem, data, &[i], "t.red.ep").unwrap() };
-            s.builder.build_load(elem, p, "t.red.ev").unwrap()
+        // `min` / `max` — the empty tensor already trapped above, so the
+        // shared seed-from-element-0 compare-select loop is safe.
+        let access = ContainerAccess {
+            data,
+            len: count,
+            elem,
+            unsigned: is_unsigned,
         };
-        // Seed + start index.
-        let (seed, start): (BasicValueEnum<'ctx>, u64) = match method {
-            "sum" | "mean" => (
-                if is_float {
-                    elem.into_float_type().const_zero().into()
-                } else {
-                    elem.into_int_type().const_zero().into()
-                },
-                0,
-            ),
-            "prod" => (
-                if is_float {
-                    elem.into_float_type().const_float(1.0).into()
-                } else {
-                    elem.into_int_type().const_int(1, false).into()
-                },
-                0,
-            ),
-            "min" | "max" => (load_at(self, i64_t.const_zero()), 1),
-            _ => unreachable!("emit_scalar_reduce_loop: '{method}'"),
-        };
-        let acc_slot = self.create_entry_alloca(fn_val, "t.red.acc", elem);
-        self.builder.build_store(acc_slot, seed).unwrap();
-        let iv = self.create_entry_alloca(fn_val, "t.red.i", i64_t.into());
-        self.builder
-            .build_store(iv, i64_t.const_int(start, false))
-            .unwrap();
-        let head = self.context.append_basic_block(fn_val, "t.red.head");
-        let body = self.context.append_basic_block(fn_val, "t.red.body");
-        let exit = self.context.append_basic_block(fn_val, "t.red.exit");
-        self.builder.build_unconditional_branch(head).unwrap();
-        self.builder.position_at_end(head);
-        let i = self
-            .builder
-            .build_load(i64_t, iv, "t.red.iv")
-            .unwrap()
-            .into_int_value();
-        let cont = self
-            .builder
-            .build_int_compare(IntPredicate::ULT, i, count, "t.red.cont")
-            .unwrap();
-        self.builder
-            .build_conditional_branch(cont, body, exit)
-            .unwrap();
-        self.builder.position_at_end(body);
-        let x = load_at(self, i);
-        let acc = self.builder.build_load(elem, acc_slot, "t.red.a").unwrap();
-        let new = match method {
-            "sum" | "mean" => self.compile_binop_typed(&BinOp::Add, acc, x, is_unsigned)?,
-            "prod" => self.compile_binop_typed(&BinOp::Mul, acc, x, is_unsigned)?,
-            "min" | "max" => {
-                let is_min = method == "min";
-                let take = if is_float {
-                    let pred = if is_min {
-                        FloatPredicate::OLT
-                    } else {
-                        FloatPredicate::OGT
-                    };
-                    self.builder
-                        .build_float_compare(
-                            pred,
-                            x.into_float_value(),
-                            acc.into_float_value(),
-                            "t.red.cmp",
-                        )
-                        .unwrap()
-                } else {
-                    let pred = match (is_min, is_unsigned) {
-                        (true, false) => IntPredicate::SLT,
-                        (true, true) => IntPredicate::ULT,
-                        (false, false) => IntPredicate::SGT,
-                        (false, true) => IntPredicate::UGT,
-                    };
-                    self.builder
-                        .build_int_compare(
-                            pred,
-                            x.into_int_value(),
-                            acc.into_int_value(),
-                            "t.red.cmp",
-                        )
-                        .unwrap()
-                };
-                self.builder
-                    .build_select(take, x, acc, "t.red.sel")
-                    .unwrap()
-            }
-            _ => unreachable!(),
-        };
-        self.builder.build_store(acc_slot, new).unwrap();
-        let ni = self
-            .builder
-            .build_int_add(i, i64_t.const_int(1, false), "t.red.ni")
-            .unwrap();
-        self.builder.build_store(iv, ni).unwrap();
-        self.builder.build_unconditional_branch(head).unwrap();
-        self.builder.position_at_end(exit);
-        Ok(self
-            .builder
-            .build_load(elem, acc_slot, "t.red.out")
-            .unwrap())
+        self.emit_reduce_minmax(&access, method == "max")
     }
 
     /// `sum_axis(n)` / `mean_axis(n)` → a fresh rank-1-lower tensor (rank-1
@@ -3031,9 +2918,20 @@ impl<'ctx> super::Codegen<'ctx> {
         self.emit_tensor_guard(nonempty, "cannot reduce an empty tensor")?;
 
         if rank == 1 {
-            // Reduce the single axis to a scalar.
-            let acc =
-                self.emit_scalar_reduce_loop("sum", in_elem, in_unsigned, src_data, rdims[0])?;
+            // Reduce the single axis to a scalar — a contiguous `sum` fold
+            // (seed 0), then divide for `mean_axis`.
+            let seed: BasicValueEnum<'ctx> = if in_elem.is_float_type() {
+                in_elem.into_float_type().const_zero().into()
+            } else {
+                in_elem.into_int_type().const_zero().into()
+            };
+            let access = ContainerAccess {
+                data: src_data,
+                len: rdims[0],
+                elem: in_elem,
+                unsigned: in_unsigned,
+            };
+            let acc = self.emit_reduce_fold(&access, ReduceOp::Sum, seed)?;
             if is_mean {
                 let sum_f = self.to_float(acc)?;
                 let n_f = self

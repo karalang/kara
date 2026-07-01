@@ -363,7 +363,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `min` / `max` → `Option[f64]`. Empty input is `None`; otherwise fold the
     /// buffer (seeded with element 0, matching the interpreter's `reduce`).
     fn stats_minmax(
-        &self,
+        &mut self,
         data: PointerValue<'ctx>,
         len: IntValue<'ctx>,
         is_max: bool,
@@ -382,68 +382,18 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_conditional_branch(nonempty, some_bb, none_bb)
             .unwrap();
 
-        // Non-empty: seed = data[0], fold from index 1.
+        // Non-empty: the shared compare-select emitter seeds element 0 and
+        // folds from index 1. Its `Option[f64]` payload is the result's bits.
         self.builder.position_at_end(some_bb);
-        let acc = self.builder.build_alloca(f64_t, "stats.mm.acc").unwrap();
-        let seed = self.stats_load(data, i64_t.const_zero());
-        self.builder.build_store(acc, seed).unwrap();
-        let i = self.builder.build_alloca(i64_t, "stats.mm.i").unwrap();
-        self.builder
-            .build_store(i, i64_t.const_int(1, false))
-            .unwrap();
-        let h = self.context.append_basic_block(fn_val, "stats.mm.h");
-        let b = self.context.append_basic_block(fn_val, "stats.mm.b");
-        let e = self.context.append_basic_block(fn_val, "stats.mm.e");
-        self.builder.build_unconditional_branch(h).unwrap();
-        self.builder.position_at_end(h);
-        let iv = self
-            .builder
-            .build_load(i64_t, i, "stats.mm.iv")
-            .unwrap()
-            .into_int_value();
-        let more = self
-            .builder
-            .build_int_compare(IntPredicate::ULT, iv, len, "stats.mm.more")
-            .unwrap();
-        self.builder.build_conditional_branch(more, b, e).unwrap();
-        self.builder.position_at_end(b);
-        let x = self.stats_load(data, iv);
-        let cur = self
-            .builder
-            .build_load(f64_t, acc, "stats.mm.cur")
-            .unwrap()
-            .into_float_value();
-        // `x < cur` (min) / `x > cur` (max) → take x, matching `f64::min`/`max`
-        // (a NaN comparison is false, so the accumulator is retained).
-        let pred = if is_max {
-            FloatPredicate::OGT
-        } else {
-            FloatPredicate::OLT
+        let access = ContainerAccess {
+            data,
+            len,
+            elem: f64_t.into(),
+            unsigned: false,
         };
-        let take = self
-            .builder
-            .build_float_compare(pred, x, cur, "stats.mm.take")
-            .unwrap();
-        let next = self
-            .builder
-            .build_select(take, x, cur, "stats.mm.next")
-            .unwrap()
-            .into_float_value();
-        self.builder.build_store(acc, next).unwrap();
-        self.builder
-            .build_store(
-                i,
-                self.builder
-                    .build_int_add(iv, i64_t.const_int(1, false), "stats.mm.i2")
-                    .unwrap(),
-            )
-            .unwrap();
-        self.builder.build_unconditional_branch(h).unwrap();
-        self.builder.position_at_end(e);
         let result = self
-            .builder
-            .build_load(f64_t, acc, "stats.mm.res")
-            .unwrap()
+            .emit_reduce_minmax(&access, is_max)
+            .expect("Stats min/max fold cannot fail")
             .into_float_value();
         let word = self
             .builder

@@ -21,7 +21,7 @@
 
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicValueEnum, IntValue, PointerValue};
-use inkwell::IntPredicate;
+use inkwell::{FloatPredicate, IntPredicate};
 
 use crate::ast::BinOp;
 use crate::reduce_kernel::ReduceOp;
@@ -160,5 +160,111 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             Ok(total)
         }
+    }
+
+    /// The shared `min`/`max` reduction over a **non-empty** contiguous access
+    /// — the caller guards emptiness first (`Tensor` traps, `Stats` wraps the
+    /// result in `Option` with a `None` arm for the empty case). Seeds `acc`
+    /// with element 0 and folds from index 1, taking the strictly smaller
+    /// (`min`) / larger (`max`) element via compare-select. A NaN comparison is
+    /// false, so NaN neither displaces the accumulator nor is taken — the
+    /// scalar `<`/`>` posture matching `f64::min`/`max` and the interpreter.
+    /// Returns the bare element-typed extreme.
+    pub(super) fn emit_reduce_minmax(
+        &mut self,
+        access: &ContainerAccess<'ctx>,
+        is_max: bool,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "reduce minmax outside function".to_string())?;
+        let is_float = access.elem.is_float_type();
+
+        let acc = self
+            .builder
+            .build_alloca(access.elem, "kern.mm.acc")
+            .unwrap();
+        let seed = self.access_load(access, i64_t.const_zero());
+        self.builder.build_store(acc, seed).unwrap();
+        let i = self.builder.build_alloca(i64_t, "kern.mm.i").unwrap();
+        self.builder
+            .build_store(i, i64_t.const_int(1, false))
+            .unwrap();
+
+        let head = self.context.append_basic_block(fn_val, "kern.mm.head");
+        let body = self.context.append_basic_block(fn_val, "kern.mm.body");
+        let exit = self.context.append_basic_block(fn_val, "kern.mm.exit");
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(head);
+        let iv = self
+            .builder
+            .build_load(i64_t, i, "kern.mm.iv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, iv, access.len, "kern.mm.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, body, exit)
+            .unwrap();
+
+        self.builder.position_at_end(body);
+        let x = self.access_load(access, iv);
+        let cur = self
+            .builder
+            .build_load(access.elem, acc, "kern.mm.cur")
+            .unwrap();
+        // `x ⋖ cur` → take x. Float uses ordered predicates (NaN → false);
+        // int uses the signedness-correct predicate.
+        let take = if is_float {
+            let pred = if is_max {
+                FloatPredicate::OGT
+            } else {
+                FloatPredicate::OLT
+            };
+            self.builder
+                .build_float_compare(
+                    pred,
+                    x.into_float_value(),
+                    cur.into_float_value(),
+                    "kern.mm.cmp",
+                )
+                .unwrap()
+        } else {
+            let pred = match (is_max, access.unsigned) {
+                (false, false) => IntPredicate::SLT,
+                (false, true) => IntPredicate::ULT,
+                (true, false) => IntPredicate::SGT,
+                (true, true) => IntPredicate::UGT,
+            };
+            self.builder
+                .build_int_compare(
+                    pred,
+                    x.into_int_value(),
+                    cur.into_int_value(),
+                    "kern.mm.cmp",
+                )
+                .unwrap()
+        };
+        let next = self
+            .builder
+            .build_select(take, x, cur, "kern.mm.sel")
+            .unwrap();
+        self.builder.build_store(acc, next).unwrap();
+        let i2 = self
+            .builder
+            .build_int_add(iv, i64_t.const_int(1, false), "kern.mm.i2")
+            .unwrap();
+        self.builder.build_store(i, i2).unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(exit);
+        Ok(self
+            .builder
+            .build_load(access.elem, acc, "kern.mm.out")
+            .unwrap())
     }
 }
