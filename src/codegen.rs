@@ -51,6 +51,7 @@ mod functions;
 mod helpers;
 mod http;
 mod json;
+mod kernel;
 #[cfg(all(feature = "llvm", feature = "lljit_prototype"))]
 mod lljit;
 #[cfg(all(feature = "llvm", feature = "lljit_prototype"))]

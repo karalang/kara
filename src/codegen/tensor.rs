@@ -43,8 +43,10 @@ use inkwell::values::{BasicValueEnum, IntValue, PointerValue};
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 
 use crate::ast::{BinOp, CallArg, Expr, ExprKind, GenericArg, ShapeDim, TypeExpr, TypeKind};
+use crate::reduce_kernel::ReduceOp;
 use crate::token::Span;
 
+use super::kernel::ContainerAccess;
 use super::state::TensorVarInfo;
 
 /// True iff `te` names an unsigned integer primitive — drives the
@@ -2819,21 +2821,38 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.emit_tensor_guard(nonempty, "cannot reduce an empty tensor")?;
         let data = self.tensor_data_ptr_dyn(t_ptr, rank, "t.red.data");
-        let acc = self.emit_scalar_reduce_loop(method, elem, is_unsigned, data, count)?;
-        if method == "mean" {
-            let sum_f = self.to_float(acc)?;
-            let count_f = self
-                .builder
-                .build_unsigned_int_to_float(count, self.context.f64_type(), "t.red.cf")
-                .unwrap();
-            let m = self
-                .builder
-                .build_float_div(sum_f, count_f, "t.red.mean")
-                .unwrap();
-            Ok(m.into())
-        } else {
-            Ok(acc)
+        // `sum`/`prod`/`mean` funnel through the shared contiguous-fold emitter
+        // (`emit_reduce_fold` divides internally for `mean`); `min`/`max` keep
+        // the seed-from-element-0 compare-select loop, unified in a later slice.
+        if let Some(op) = match method {
+            "sum" => Some(ReduceOp::Sum),
+            "prod" => Some(ReduceOp::Prod),
+            "mean" => Some(ReduceOp::Mean),
+            _ => None,
+        } {
+            let is_float = elem.is_float_type();
+            // Seed: `0` for `sum`/`mean` (additive identity), `1` for `prod`,
+            // element-typed — matching `emit_scalar_reduce_loop`'s seeds.
+            let seed: BasicValueEnum<'ctx> = if matches!(op, ReduceOp::Prod) {
+                if is_float {
+                    elem.into_float_type().const_float(1.0).into()
+                } else {
+                    elem.into_int_type().const_int(1, false).into()
+                }
+            } else if is_float {
+                elem.into_float_type().const_zero().into()
+            } else {
+                elem.into_int_type().const_zero().into()
+            };
+            let access = ContainerAccess {
+                data,
+                len: count,
+                elem,
+                unsigned: is_unsigned,
+            };
+            return self.emit_reduce_fold(&access, op, seed);
         }
+        self.emit_scalar_reduce_loop(method, elem, is_unsigned, data, count)
     }
 
     /// The accumulate loop for a full reduce over `count` elements at `data`.

@@ -33,7 +33,9 @@
 use inkwell::values::{BasicValueEnum, FloatValue, IntValue, PointerValue};
 use inkwell::{FloatPredicate, IntPredicate};
 
+use super::kernel::ContainerAccess;
 use crate::ast::{CallArg, Expr, ExprKind};
+use crate::reduce_kernel::ReduceOp;
 use crate::token::Span;
 
 impl<'ctx> super::Codegen<'ctx> {
@@ -154,76 +156,33 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(Some(result))
     }
 
-    /// `sum` (seed `0.0`, add) / `prod` (seed `1.0`, multiply) over the whole
+    /// `sum` (seed `-0.0`, add) / `prod` (seed `1.0`, multiply) over the whole
     /// contiguous `f64` buffer. Empty input yields the seed (parity with the
-    /// interpreter — no trap).
+    /// interpreter — no trap). Funnels through the shared
+    /// [`emit_reduce_fold`](super::Codegen::emit_reduce_fold) — the additive
+    /// seed is NEGATIVE zero to match the interpreter's `xs.iter().sum::<f64>()`
+    /// (Rust's float `Sum` identity is `-0.0`): an empty `Stats.sum` prints
+    /// `-0`, and `-0.0 + x == x` leaves every non-empty result unchanged.
     fn stats_fold(
-        &self,
+        &mut self,
         data: PointerValue<'ctx>,
         len: IntValue<'ctx>,
         is_mul: bool,
     ) -> FloatValue<'ctx> {
-        let i64_t = self.context.i64_type();
         let f64_t = self.context.f64_type();
-        let fn_val = self.current_fn.expect("stats fold in function");
-        let acc = self.builder.build_alloca(f64_t, "stats.fold.acc").unwrap();
-        // Additive seed is NEGATIVE zero to match the interpreter's
-        // `xs.iter().sum::<f64>()` (Rust's float `Sum` identity is `-0.0`):
-        // an empty `Stats.sum` prints `-0`, and `-0.0 + x == x` leaves every
-        // non-empty result unchanged.
-        let seed = if is_mul {
-            f64_t.const_float(1.0)
-        } else {
-            f64_t.const_float(-0.0)
+        let access = ContainerAccess {
+            data,
+            len,
+            elem: f64_t.into(),
+            unsigned: false,
         };
-        self.builder.build_store(acc, seed).unwrap();
-        let i = self.builder.build_alloca(i64_t, "stats.fold.i").unwrap();
-        self.builder.build_store(i, i64_t.const_zero()).unwrap();
-        let h = self.context.append_basic_block(fn_val, "stats.fold.h");
-        let b = self.context.append_basic_block(fn_val, "stats.fold.b");
-        let e = self.context.append_basic_block(fn_val, "stats.fold.e");
-        self.builder.build_unconditional_branch(h).unwrap();
-        self.builder.position_at_end(h);
-        let iv = self
-            .builder
-            .build_load(i64_t, i, "stats.fold.iv")
-            .unwrap()
-            .into_int_value();
-        let more = self
-            .builder
-            .build_int_compare(IntPredicate::ULT, iv, len, "stats.fold.more")
-            .unwrap();
-        self.builder.build_conditional_branch(more, b, e).unwrap();
-        self.builder.position_at_end(b);
-        let x = self.stats_load(data, iv);
-        let cur = self
-            .builder
-            .build_load(f64_t, acc, "stats.fold.cur")
-            .unwrap()
-            .into_float_value();
-        let next = if is_mul {
-            self.builder
-                .build_float_mul(cur, x, "stats.fold.mul")
-                .unwrap()
+        let (op, seed) = if is_mul {
+            (ReduceOp::Prod, f64_t.const_float(1.0))
         } else {
-            self.builder
-                .build_float_add(cur, x, "stats.fold.add")
-                .unwrap()
+            (ReduceOp::Sum, f64_t.const_float(-0.0))
         };
-        self.builder.build_store(acc, next).unwrap();
-        self.builder
-            .build_store(
-                i,
-                self.builder
-                    .build_int_add(iv, i64_t.const_int(1, false), "stats.fold.i2")
-                    .unwrap(),
-            )
-            .unwrap();
-        self.builder.build_unconditional_branch(h).unwrap();
-        self.builder.position_at_end(e);
-        self.builder
-            .build_load(f64_t, acc, "stats.fold.out")
-            .unwrap()
+        self.emit_reduce_fold(&access, op, seed.into())
+            .expect("Stats sum/prod fold cannot fail")
             .into_float_value()
     }
 
