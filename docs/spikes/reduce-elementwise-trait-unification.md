@@ -1,6 +1,6 @@
 # Design spike — trait-dispatched Reduce / ElementwiseMap / ElementwiseOrd unification
 
-**Status:** 🟡 **S0–S1b LANDED 2026-06-30 (`bcaff37d`, `73af27b0`, `bce493c7`);
+**Status:** 🟡 **S0–S1b LANDED 2026-06-30 (`bcaff37d`, `73af27b0`, `7adcc380`);
 S1c + S2–S6 open.** Unifies the three copy-pasted reduce/element-wise/ordering
 implementations (Tensor, Column, `Stats.*`) behind one internal kernel, then
 layers **user-extensible** surface traits on top. **S0 (interpreter twin +
@@ -95,7 +95,7 @@ else is copy-paste. Each interpreter twin (`eval_stats_fn`,
 | Slice | Scope | Notable |
 |---|---|---|
 | **S0** ✅ | Descriptors + interpreter twin. **Zero behavior change.** *(landed `bcaff37d`)* | Proved byte-identical: interpreter 1046/0, codegen E2E+oracle 1921/0. `ReduceOp` vocabulary + `reduce_f64` in `src/reduce_kernel.rs`; `Stats.*`/`Column` f64 reductions + shared min-max/`value_as_f64` funneled through it. |
-| **S1** 🟡 | Route Tensor `emit_scalar_reduce_loop`, Column sum/mean/minmax, Stats fold/minmax/mean → `emit_reduce`. Preserve exact seeds, empty policy, return shape **per surface**. | **S1a ✅ (`73af27b0`):** `ContainerAccess` + `emit_reduce_fold`; Stats + Tensor `sum`/`prod`/`mean`. **S1b ✅ (`bce493c7`):** `emit_reduce_minmax`; Tensor + Stats `min`/`max`, axis-sum rerouted, `emit_scalar_reduce_loop` deleted (oracle 1935/0, par 127/0). **S1c:** Column Arrow-nullable validity gate + its reductions. |
+| **S1** 🟡 | Route Tensor `emit_scalar_reduce_loop`, Column sum/mean/minmax, Stats fold/minmax/mean → `emit_reduce`. Preserve exact seeds, empty policy, return shape **per surface**. | **S1a ✅ (`73af27b0`):** `ContainerAccess` + `emit_reduce_fold`; Stats + Tensor `sum`/`prod`/`mean`. **S1b ✅ (`7adcc380`):** `emit_reduce_minmax`; Tensor + Stats `min`/`max`, axis-sum rerouted, `emit_scalar_reduce_loop` deleted (oracle 1935/0, par 127/0). **S1c:** Column Arrow-nullable validity gate + its reductions. |
 | **S2** | Fold Column var/std (÷n−1) + Stats variance/stddev (÷n) into `emit_reduce` with `Var{bessel}`. | Don't change either surface's numbers. |
 | **S3** | Unify ElementwiseMap: Tensor binop/neg + Column binop/neg (null-prop via access). Stats has none. | — |
 | **S4** | Unify ElementwiseOrd + `emit_sort_scratch`; route Stats median/percentile/argmin/argmax/sort/argsort + Tensor/Column min/max ordering. | **Bonus: lands Column `median`/`quantile` codegen** (today interpreter-only). |
