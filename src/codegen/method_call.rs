@@ -3151,6 +3151,22 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(result);
         }
 
+        // Slice 3j — a USER impl-block method on a FRESH-TEMP (non-identifier)
+        // struct receiver (`make_thing().method()`). The identifier-keyed
+        // user-impl dispatch above resolves only Identifier / self receivers
+        // (`inferred_receiver_type` reads `var_type_names`), so a call-result
+        // receiver falls through here even though `Type.method` exists.
+        // Materialize the receiver into a synth local and re-dispatch.
+        if let Some(result) = self.try_compile_freshtemp_user_method(
+            object,
+            method,
+            args,
+            dispatch_key.as_deref(),
+            call_span,
+        )? {
+            return Ok(result);
+        }
+
         let receiver_desc = match &object.kind {
             ExprKind::Identifier(name) => format!("variable '{}'", name),
             _ => "non-identifier receiver".to_string(),
@@ -3387,6 +3403,115 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_type_names.remove(&synth);
         self.vec_elem_types.remove(&synth);
         self.string_vars.remove(&synth);
+
+        result.map(Some)
+    }
+
+    /// Slice 3j — a USER impl-block method on a FRESH-TEMP (non-identifier)
+    /// receiver whose type is a non-shared user struct (`make_thing().method()`,
+    /// `build().total()`). The identifier-keyed user-impl dispatch
+    /// (`inferred_receiver_type` → `Type.method`) resolves only Identifier / self
+    /// receivers, so a call-result receiver falls through to the dispatch-fail
+    /// error even though `Type.method` exists — a silent hard error, not a
+    /// miscompile. Recover the struct type from the typechecker's `Type.method`
+    /// callee key, materialize the receiver value into a synth local, register it
+    /// under that struct name (so the recursion's `inferred_receiver_type`
+    /// resolves and `get_data_ptr` yields the ptr-self ABI address), drop-track it
+    /// **iff `self` is borrowed** (`ref self` / `mut ref self` — the caller owns
+    /// the temp; owned `self` moves it into the method, which drops its fields, so
+    /// tracking the caller's shallow copy too would double-free the shared heap
+    /// buffers), then re-dispatch through the identifier path by recursing into
+    /// `compile_method_call` with a synth Identifier receiver (which hits the
+    /// user-impl arm *before* reaching this helper again — no infinite recursion).
+    ///
+    /// Returns `Ok(None)` when the receiver isn't a serviceable fresh-temp user
+    /// struct (no callee key, not a known struct, shared, or `Type.method`
+    /// absent), so the caller falls through to its own diagnostic — a pure
+    /// addition that can't change any existing case. Enum / shared-struct
+    /// receivers (heap-pointer self, RC drop) are follow-ons.
+    fn try_compile_freshtemp_user_method(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+        dispatch_key: Option<&str>,
+        call_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        // Identifier / self receivers already route through the main user-impl
+        // dispatch.
+        if matches!(&object.kind, ExprKind::Identifier(_) | ExprKind::SelfValue) {
+            return Ok(None);
+        }
+        // Recover the struct type from the `Type.method` callee key.
+        let Some(type_name) = dispatch_key
+            .and_then(|k| k.rsplit_once('.'))
+            .map(|(t, _)| t.to_string())
+        else {
+            return Ok(None);
+        };
+        // Non-shared user struct only. Shared structs are RC (heap-pointer self,
+        // RC drop — a different ABI); enum receivers are a follow-on.
+        if !self.struct_types.contains_key(&type_name) || self.shared_types.contains_key(&type_name)
+        {
+            return Ok(None);
+        }
+        let qualified = format!("{type_name}.{method}");
+        if self.module.get_function(&qualified).is_none() {
+            return Ok(None);
+        }
+        let cur_fn = self
+            .current_fn
+            .ok_or_else(|| "user-method receiver materialization outside fn".to_string())?;
+        let val = self.compile_expr(object)?;
+        let slot = self.create_entry_alloca(cur_fn, "__urecv_tmp", val.get_type());
+        self.builder.build_store(slot, val).unwrap();
+
+        let synth = format!("__urecv_tmp_{}", self.indexed_elem_counter);
+        self.indexed_elem_counter += 1;
+        self.variables.insert(
+            synth.clone(),
+            super::VarSlot {
+                ptr: slot,
+                ty: val.get_type(),
+            },
+        );
+        self.var_type_names.insert(synth.clone(), type_name.clone());
+
+        // Drop-track the materialized temp UNCONDITIONALLY (for a fresh-owned
+        // receiver), mirroring the `let`-binding path in `stmts.rs`, which always
+        // `track_struct_var`s a struct local regardless of how it's later used.
+        // This is correct for BOTH self modes: a `ref self` / `mut ref self`
+        // method borrows, so the caller obviously owns the temp; and an owned
+        // `self` method does NOT drop `self` either (the user-impl dispatch passes
+        // the receiver by shallow value copy and emits no receiver drop — proven
+        // by LSan: the owned-`self` case leaked the field `Vec` once per call
+        // without this), so the caller's binding/temp remains the sole owner. Only
+        // when the receiver is NOT a fresh-owned temp (a borrow-returning call) do
+        // we skip — we don't own it. Route to the user-`impl Drop` wrapper when the
+        // type has one, else the synthesized struct-field drop.
+        if self.expr_yields_fresh_owned_temp(object) {
+            let has_user_drop = self
+                .program_snapshot
+                .as_deref()
+                .map(|p| p.drop_method_keys.contains_key(&type_name))
+                .unwrap_or(false);
+            if has_user_drop {
+                self.track_user_drop_var(&type_name, &synth, slot);
+            } else {
+                self.track_struct_var(&type_name, slot);
+            }
+        }
+
+        let synth_expr = Expr {
+            kind: ExprKind::Identifier(synth.clone()),
+            span: object.span.clone(),
+        };
+        let result = self.compile_method_call(&synth_expr, method, args, call_span);
+
+        // Drop the dispatch-only registrations (the queued drop, if any,
+        // references the alloca, not the name, so it stays armed).
+        self.variables.remove(&synth);
+        self.var_type_names.remove(&synth);
 
         result.map(Some)
     }

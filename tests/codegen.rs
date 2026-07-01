@@ -19486,6 +19486,85 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_freshtemp_user_method_ref_self_materializes_and_drops() {
+        // Slice 3j: a user impl-block method (`ref self`) on a fresh-temp struct
+        // receiver (`make_counter().total()`) where the struct owns a `Vec[String]`
+        // field. The identifier-keyed user-impl dispatch resolves only
+        // Identifier/self receivers, so a call-result receiver hard-errored ("no
+        // handler for method ... on non-identifier receiver"). The fresh-temp path
+        // recovers the struct type from the `Type.method` callee key, materializes
+        // the receiver into a `__urecv_tmp` synth local, passes its address as the
+        // `ref self` receiver, and — because `self` is borrowed — drop-tracks the
+        // temp so its `Vec[String]` field is freed via `__karac_drop_struct_Counter`
+        // at scope exit. Without the materialize the call fails to compile; without
+        // the drop the field Vec + its Strings leak (Linux LSan).
+        let src = r#"
+struct Counter { items: Vec[String], base: i64 }
+impl Counter {
+    fn total(ref self) -> i64 { return self.base + self.items.len(); }
+}
+fn make_counter() -> Counter {
+    let mut c = Counter { items: Vec.new(), base: 100_i64 };
+    c.items.push("a heap field string padded beyond thirty-six bytes ok");
+    return c;
+}
+fn main() {
+    println(make_counter().total());
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("__urecv_tmp"),
+            "expected the fresh-temp struct receiver materialized into __urecv_tmp; got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("__karac_drop_struct_Counter"),
+            "expected the borrowed (`ref self`) temp receiver drop-tracked via \
+             __karac_drop_struct_Counter (frees the Vec[String] field); got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_freshtemp_user_method_owned_self_materializes_and_drops() {
+        // Slice 3j companion: an OWNED-`self` user method on a fresh-temp struct
+        // receiver. The user-impl dispatch passes the receiver by shallow value
+        // copy and emits NO receiver drop — an owned-`self` method does not drop
+        // `self` (proven by LSan: without a caller-side drop the field `Vec` leaks
+        // once per call). So the fresh-temp path drop-tracks the temp here too
+        // (`__karac_drop_struct_Counter`), exactly as the borrowed-`self` case and
+        // the `let`-binding path do — the caller's temp is the sole owner. The
+        // receiver materializes into `__urecv_tmp`.
+        let src = r#"
+struct Counter { items: Vec[String], base: i64 }
+impl Counter {
+    fn consume(self) -> i64 { return self.base + self.items.len(); }
+}
+fn make_counter() -> Counter {
+    let mut c = Counter { items: Vec.new(), base: 100_i64 };
+    c.items.push("a heap field string padded beyond thirty-six bytes ok");
+    return c;
+}
+fn main() {
+    println(make_counter().consume());
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("__urecv_tmp"),
+            "expected the fresh-temp struct receiver materialized into __urecv_tmp; got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("__karac_drop_struct_Counter"),
+            "expected the owned-self temp receiver drop-tracked via \
+             __karac_drop_struct_Counter (the method does not drop self); got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_ir_freshtemp_vec_string_contains_emits_per_element_drop() {
         // Slice 3b-heap follow-on: `contains` on a fresh-temp `Vec[String]`.
         // `contains` returns `bool` (no borrow escapes), but the receiver temp

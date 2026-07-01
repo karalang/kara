@@ -3517,6 +3517,84 @@ fn main() {
     }
 
     #[test]
+    fn asan_freshtemp_user_method_ref_self_no_double_free() {
+        // Slice 3j: a `ref self` user method on a fresh-temp struct receiver
+        // (`make_counter().m_get()`), looped. The struct owns a `Vec[String]`
+        // field; the temp materializes into `__urecv_tmp` and — because `self` is
+        // borrowed — is drop-tracked so its field Vec + Strings free once via
+        // `__karac_drop_struct_Counter` at scope exit. The method reads a field
+        // String through `self.items.get(0)` (an `Option[ref String]` borrow, not
+        // consumed). Hazards: (1) the borrowed temp must be freed exactly once —
+        // the method borrows, so the caller owns it (macOS ASAN would catch a
+        // double-free against any spurious second drop); (2) the field Strings
+        // must be freed by the struct drop, else they leak (Linux LSan). ≥36-byte
+        // field strings defeat LSan short-string reachability; the outer loop
+        // re-materializes the temp each pass.
+        assert_clean_asan_run(
+            r#"
+struct Counter { items: Vec[String], base: i64 }
+impl Counter {
+    fn m_get(ref self) -> i64 {
+        match self.items.get(0) {
+            Some(s) => return self.base + s.len(),
+            None => return self.base,
+        };
+    }
+}
+fn make_counter() -> Counter {
+    let mut c = Counter { items: Vec.new(), base: 100_i64 };
+    c.items.push("first field string padded beyond thirty-six bytes ok");
+    c.items.push("second field string padded beyond thirty-six byte");
+    return c;
+}
+fn main() {
+    let mut p = 0;
+    while p < 3 {
+        println(make_counter().m_get());
+        p = p + 1;
+    };
+}
+"#,
+            &["152", "152", "152"],
+            "freshtemp_user_method_ref_self_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_freshtemp_user_method_owned_self_no_double_free() {
+        // Slice 3j companion: an OWNED-`self` user method on a fresh-temp struct
+        // receiver (`make_counter().consume()`), looped. Owned `self` moves the
+        // receiver into the method, which drops its `Vec[String]` field at method
+        // scope exit — so the fresh-temp path must NOT drop-track the caller's
+        // shallow copy, else the field Vec + Strings are freed twice (macOS ASAN).
+        // Conversely the method's own drop must fire, else they leak (Linux LSan).
+        // The looped re-materialization accumulates either fault.
+        assert_clean_asan_run(
+            r#"
+struct Counter { items: Vec[String], base: i64 }
+impl Counter {
+    fn consume(self) -> i64 { return self.base + self.items.len(); }
+}
+fn make_counter() -> Counter {
+    let mut c = Counter { items: Vec.new(), base: 100_i64 };
+    c.items.push("first field string padded beyond thirty-six bytes ok");
+    c.items.push("second field string padded beyond thirty-six byte");
+    return c;
+}
+fn main() {
+    let mut p = 0;
+    while p < 3 {
+        println(make_counter().consume());
+        p = p + 1;
+    };
+}
+"#,
+            &["102", "102", "102"],
+            "freshtemp_user_method_owned_self_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_freshtemp_vec_string_first_last_no_double_free() {
         // Slice 3b-heap companion: `first`/`last` on a fresh-temp `Vec[String]`
         // — the other two borrow-returning (`Option[ref String]`) read methods

@@ -485,16 +485,54 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    `__for_mapset_` **and** `karac_map_free_with_drop_vec`) + 2 ASAN
    (`asan_freshtemp_map_iter_string_key_no_double_free`;
    `asan_freshtemp_set_bare_string_no_double_free` — covers both the `.iter()` and
-   bare entry shapes). **Still open:** `Map.keys()`/`.values()` on a temp (single-
-   value iteration over just keys or just values — a different binding shape, and
-   `.keys()`/`.values()` aren't a for-loop peel today even for named maps); heap
-   K/V (`Map[String, Vec[T]]` etc.) on temps; deeper-nested `Vec[Vec[String]]`
-   (two-level heap leaks the innermost even for named bindings — an upstream
-   recursion limit, not a temp-specific gap); `get_unchecked` on `Vec[String]`;
-   user-`impl` methods on fresh-temp receivers (also unsupported today); and (the
-   `vector_method_receivers` model — receiver `(T, N)` recorded at the collided
-   span — remains a second copy-able precedent for any future receiver-type
-   table).
+   bare entry shapes).
+
+   **Slice 3j — user `impl`-block methods on fresh-temp struct receivers. —
+   DONE 2026-06-30.** `make_thing().method()` on a non-shared user struct
+   hard-errored ("no handler for method '…' on non-identifier receiver") — a
+   silent hard error, not a miscompile. The identifier-keyed user-impl dispatch
+   resolves the receiver type via `inferred_receiver_type`, which reads
+   `var_type_names` and so returns `None` for a Call/MethodCall receiver, dropping
+   through to the diagnostic even though the `Type.method` function exists. Fix: a
+   new codegen `try_compile_freshtemp_user_method` (sibling of
+   `try_compile_nonident_collection_method`) — recover the struct type from the
+   typechecker's `Type.method` callee key (`dispatch_key`), materialize the
+   receiver into a `__urecv_tmp` synth local, register it under that struct name,
+   and re-dispatch by recursing into `compile_method_call` with a synth Identifier
+   receiver (which hits the user-impl arm *before* reaching the helper again — no
+   infinite recursion). **Drop handling: track UNCONDITIONALLY** (for a
+   fresh-owned receiver), mirroring the `let`-binding path in `stmts.rs`, which
+   always `track_struct_var`s a struct local — `track_user_drop_var` when the type
+   has an `impl Drop`, else `track_struct_var` → `__karac_drop_struct_<S>`. This
+   holds for BOTH self modes: a `ref self` method obviously leaves the caller
+   owning the temp, and — the non-obvious part LSan caught — an owned `self` method
+   also does NOT drop `self` (the user-impl dispatch passes the receiver by shallow
+   value copy and emits no receiver drop), so the caller's temp is still the sole
+   owner. The first cut gated tracking on `self_is_ref`; macOS ASAN passed
+   (double-free-only) but the Linux LSan gate flagged the owned-`self` field `Vec`
+   leaking once per call — a textbook "don't conclude no-leak from a green Mac ASAN
+   run". Only a NON-fresh-owned receiver (a borrow-returning call) skips tracking.
+   Verified ref-self (reading a field String via `self.items.get(0)`) and
+   owned-self, both matching the interpreter (`102`/`152`); no double-free (macOS
+   ASAN), no leak (Linux LSan — including the owned-self case the first cut leaked). **Tests:** 2
+   IR (`test_ir_freshtemp_user_method_ref_self_materializes_and_drops`;
+   `test_ir_freshtemp_user_method_owned_self_materializes_and_drops` — both assert
+   `__urecv_tmp` **and** `__karac_drop_struct_Counter`) + 2 ASAN (ref-self and
+   owned-self, looped). **NOTE — pre-existing bugs surfaced while
+   probing (NOT temp-specific, unfixed here):** `for s in self.field.iter()`
+   inside a method iterates 0 (even for a `let`-bound struct — the `self.field`
+   for-loop shape isn't recognised); `self.field[i].method()` errors
+   ("indexed-receiver … requires the indexed container to be a named variable").
+   Both reproduce on clean `main` via a plain `let c = make(); c.method()` and are
+   independent method-body-lowering gaps. **Still open (temp surface):** enum /
+   shared-struct fresh-temp method receivers (heap-pointer self / RC drop —
+   different ABI); `Map.keys()`/`.values()` on a temp (a different binding shape,
+   not a for-loop peel even for named maps); heap K/V (`Map[String, Vec[T]]`) on
+   temps; deeper-nested `Vec[Vec[String]]` (two-level heap leaks the innermost
+   even for named bindings — an upstream recursion limit); `get_unchecked` on
+   `Vec[String]`; and (the `vector_method_receivers` model — receiver `(T, N)`
+   recorded at the collided span — remains a second copy-able precedent for any
+   future receiver-type table).
    **Slice 3b-c — operator-operand temps. — DONE 2026-06-29.** `make_str() + "x"`
    leaked the fresh `make_str()` operand. Confirmed the spike's diagnosis: a
    String `+` (and `==`/`<`/… comparison) desugars in `lowering.rs`
