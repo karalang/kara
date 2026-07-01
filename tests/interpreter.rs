@@ -18162,3 +18162,30 @@ fn main() {
     );
     assert_eq!(out, "7\n9\n");
 }
+
+// ── Iterating a borrowed nested collection auto-derefs scalar elements ──
+
+/// (B-2026-06-30-4) The run side of the build/run agreement: iterating a
+/// SHARED-borrowed `ref Vec[Vec[i64]]` binds the inner element as a usable
+/// `i64`, so `total + x` computes `1+2+3+4 = 10` with no runtime error (and,
+/// after the typechecker fix, no `expected 'i64', found 'ref i64'` warning).
+/// The codegen sibling (`tests/codegen.rs`) locks the build side to the same
+/// result.
+#[test]
+fn for_loop_borrowed_nested_vec_scalar_autoderefs() {
+    let out = run_no_errors(
+        "fn cell_sum(g: ref Vec[Vec[i64]]) -> i64 {\n\
+         \x20   let mut total = 0i64;\n\
+         \x20   for row in g { for x in row { total = total + x; } }\n\
+         \x20   total\n\
+         }\n\
+         fn main() {\n\
+         \x20   let mut grid: Vec[Vec[i64]] = Vec.new();\n\
+         \x20   let mut r0: Vec[i64] = Vec.new(); r0.push(1i64); r0.push(2i64);\n\
+         \x20   let mut r1: Vec[i64] = Vec.new(); r1.push(3i64); r1.push(4i64);\n\
+         \x20   grid.push(r0); grid.push(r1);\n\
+         \x20   println(cell_sum(grid));\n\
+         }\n",
+    );
+    assert_eq!(out, "10\n");
+}

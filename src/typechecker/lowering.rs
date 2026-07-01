@@ -1134,7 +1134,28 @@ impl<'a> super::TypeChecker<'a> {
             //     move an element *out of a borrowed collection*. Keeping the
             //     borrow form rejects the move (and forces an explicit
             //     `.clone()`), matching the move-out-of-borrow rule.
-            Type::Ref(inner) => Type::Ref(Box::new(self.element_type_of(inner))),
+            Type::Ref(inner) => {
+                let elem = self.element_type_of(inner);
+                // A borrowed Copy *scalar* element (`for x in (ref Vec[i64])`,
+                // and the inner loop of a nested `ref Vec[Vec[i64]]`) binds BY
+                // VALUE as the bare scalar, NOT `ref i64`. Copying a scalar out
+                // of a shared borrow is not a move, so it is sound, it keeps the
+                // element usable in arithmetic (`total + x`), and it matches
+                // both `Slice[i64]` iteration (yields `i64`) and the `Str` →
+                // `char` peel above. Without this the inner element was `ref
+                // i64`, which arithmetic does not auto-deref — `total + x`
+                // warned under `karac run` but HARD-errored under `karac build`,
+                // a run/build divergence. Aggregates (`ref Vec[i64]`, `ref
+                // String`, structs) keep the borrow form so the move-out-of-
+                // borrow rejection above still fires. Only the SHARED-borrow
+                // arm unwraps: `mut ref` iteration keeps `mut ref T` so an
+                // element can still be mutated in place. B-2026-06-30-4.
+                if is_borrow_copy_scalar(&elem) {
+                    elem
+                } else {
+                    Type::Ref(Box::new(elem))
+                }
+            }
             Type::MutRef(inner) => Type::MutRef(Box::new(self.element_type_of(inner))),
             // Primitive borrowed views — element type is the inner type.
             Type::Array { element, .. } | Type::Slice { element, .. } => *element.clone(),
@@ -1165,4 +1186,20 @@ impl<'a> super::TypeChecker<'a> {
             _ => ty.clone(),
         }
     }
+}
+
+/// True for the Copy scalar primitives that bind BY VALUE when iterated out of
+/// a *shared* borrowed collection (`for x in (ref Vec[T])`). Copying a scalar
+/// is not a move, so yielding the bare `T` (rather than `ref T`) is sound and
+/// keeps the loop variable usable in arithmetic — matching `Slice[T]`
+/// iteration and the `Str` → `char` peel in `element_type_of`. Aggregates
+/// (`Vec`/`String`/struct/enum) are deliberately excluded so their borrow form
+/// is preserved and moving an element out of a borrowed collection stays
+/// rejected. `Str` is absent because borrowed `String` iteration is already
+/// peeled to `char` before the borrow arms run. B-2026-06-30-4.
+fn is_borrow_copy_scalar(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char
+    )
 }

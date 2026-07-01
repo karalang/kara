@@ -2968,6 +2968,30 @@ fn main() {
         assert_eq!(run_program(src).as_deref(), Some("2\n"));
     }
 
+    /// Iterating a SHARED-borrowed nested `Vec[Vec[i64]]` binds the inner
+    /// element BY VALUE (`i64`, not `ref i64`), so it is usable in arithmetic.
+    /// Before the fix `karac build` HARD-errored on `total + x` ("expected
+    /// 'i64', found 'ref i64'") while `karac run` warned-and-proceeded — a
+    /// run/build divergence. (B-2026-06-30-4.) This locks the build side:
+    /// `for x in row` over a `ref Vec[i64]` row compiles and computes the same
+    /// `1+2+3+4 = 10` the interpreter does.
+    #[test]
+    fn for_loop_borrowed_nested_vec_scalar_autoderefs() {
+        let src = "fn cell_sum(g: ref Vec[Vec[i64]]) -> i64 {\n\
+                   \x20   let mut total = 0i64;\n\
+                   \x20   for row in g { for x in row { total = total + x; } }\n\
+                   \x20   total\n\
+                   }\n\
+                   fn main() {\n\
+                   \x20   let mut grid: Vec[Vec[i64]] = Vec.new();\n\
+                   \x20   let mut r0: Vec[i64] = Vec.new(); r0.push(1i64); r0.push(2i64);\n\
+                   \x20   let mut r1: Vec[i64] = Vec.new(); r1.push(3i64); r1.push(4i64);\n\
+                   \x20   grid.push(r0); grid.push(r1);\n\
+                   \x20   println(f\"{cell_sum(grid)}\");\n\
+                   }\n";
+        assert_eq!(run_program(src).as_deref(), Some("10\n"));
+    }
+
     // ── Borrow-elision for read-only `let r = v[i]` (B-2026-06-19-6) ──
 
     /// Count `karac_clone_Vec*` call sites inside the `@main` function body.

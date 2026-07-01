@@ -14,7 +14,10 @@ use std::collections::HashSet;
 use super::const_eval::primitive_const_type;
 use super::env::StructInfo;
 use super::types::Type;
-use super::{extract_derived_traits, extract_must_use_message, find_struct_def, TypeErrorKind};
+use super::{
+    extract_derived_traits, extract_must_use_message, find_struct_def,
+    shared_struct_mut_field_names, TypeErrorKind,
+};
 
 impl<'a> super::TypeChecker<'a> {
     pub(super) fn infer_field_access(&mut self, object: &Expr, field: &str, span: &Span) -> Type {
@@ -194,6 +197,28 @@ impl<'a> super::TypeChecker<'a> {
                     // on an imported struct from outside the defining module.
                     if !is_pub {
                         self.check_cross_module_field_access(&type_name, field, span);
+                    }
+                    // Shared/par struct write-permission gate. When this field
+                    // access is the immediate LHS of an assignment (`is_lhs`,
+                    // captured at entry and reset for nested reads above), a
+                    // non-`mut` field of a `shared`/`par struct` cannot be
+                    // reassigned — an immutable field may only be set in the
+                    // constructing literal. Promotes the interpreter's
+                    // defense-in-depth `write_shared_struct_field` runtime guard
+                    // to a compile error, so `karac run`/`check`/`build` all
+                    // reject rather than `build` silently accepting the write.
+                    // B-2026-06-30-3.
+                    if is_lhs
+                        && (struct_info.is_shared || struct_info.is_par)
+                        && !struct_info.mut_fields.contains(field)
+                    {
+                        self.type_error(
+                            format!(
+                                "shared struct field '{type_name}.{field}' is not declared mut"
+                            ),
+                            span.clone(),
+                            TypeErrorKind::SharedFieldNotMut,
+                        );
                     }
                     return ftype.clone();
                 }
@@ -476,6 +501,7 @@ impl<'a> super::TypeChecker<'a> {
             generic_params: gp,
             fields,
             field_attrs,
+            mut_fields: shared_struct_mut_field_names(&sdef.fields),
             derived_traits: extract_derived_traits(&sdef.attributes),
             no_rc: sdef.no_rc,
             is_shared: sdef.is_shared,

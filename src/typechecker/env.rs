@@ -30,6 +30,15 @@ pub struct StructInfo {
     /// that read per-field hints — e.g. protobuf's `sint*`/`fixed*` wire-type
     /// overrides, which are indistinguishable from `int*` at the Kāra type.
     pub field_attrs: std::collections::HashMap<String, Vec<String>>,
+    /// Field names that may be *reassigned* through a shared handle on a
+    /// `shared`/`par struct` — those declared `mut` or whose type is an
+    /// interior-mutable concurrency primitive (`Atomic[T]` / `Mutex[T]`).
+    /// Populated by `shared_struct_mut_field_names`; empty for non-shared
+    /// structs (the `SharedFieldNotMut` assignment gate only consults it when
+    /// `is_shared || is_par`) and for synthetic/intrinsic stubs. Lets the
+    /// typechecker reject `s.immutable_field = v` at compile time, matching the
+    /// interpreter's runtime `write_shared_struct_field` guard. B-2026-06-30-3.
+    pub mut_fields: HashSet<String>,
     pub derived_traits: HashSet<String>,
     pub no_rc: bool,
     pub is_shared: bool,

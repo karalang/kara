@@ -24313,6 +24313,153 @@ fn par_struct_plain_immutable_field_accepted() {
     typecheck_ok("par struct Config { retries: i64, host: String }");
 }
 
+// ── Shared/par struct field-reassignment write-permission gate ──
+// (B-2026-06-30-3) A field that is NOT declared `mut` on a reference-semantic
+// `shared struct` / `par struct` may only be set in the constructing literal,
+// never reassigned through the shared handle. Promotes the interpreter's
+// runtime `write_shared_struct_field` guard to a compile error so `karac run`,
+// `karac check`, and `karac build` all reject — closing the divergence where
+// `build` silently accepted the mutation.
+
+#[test]
+fn shared_struct_non_mut_field_reassign_rejected() {
+    let errors = typecheck_errors(
+        "shared struct ListNode { val: i64, next: Option[ListNode] }\n\
+         fn main() {\n\
+         \x20   let n = ListNode { val: 1, next: None };\n\
+         \x20   n.next = None;\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::SharedFieldNotMut
+                && e.message.contains("ListNode.next")
+                && e.message.contains("is not declared mut")),
+        "expected SharedFieldNotMut for `n.next = ...`, got: {errors:?}"
+    );
+}
+
+#[test]
+fn shared_struct_mut_field_reassign_accepted() {
+    // The `mut`-declared field is freely reassignable through the shared
+    // handle; reading a non-`mut` sibling is always fine.
+    typecheck_ok(
+        "shared struct Counter { mut count: i64, label: i64 }\n\
+         fn main() {\n\
+         \x20   let c = Counter { count: 0, label: 7 };\n\
+         \x20   c.count = 5;\n\
+         \x20   println(c.count);\n\
+         \x20   println(c.label);\n\
+         }",
+    );
+}
+
+#[test]
+fn shared_struct_atomic_field_reassign_accepted() {
+    // An interior-mutable field (`Atomic[T]` / `Mutex[T]`) is reassignable
+    // WITHOUT `mut` — mirrors the interpreter's `is_interior_mutable_field_type`
+    // carve-out so the gate never false-rejects a concurrency-primitive field.
+    typecheck_ok(
+        "shared struct Cell { slot: Atomic[i64] }\n\
+         fn main() {\n\
+         \x20   let c = Cell { slot: Atomic.new(0i64) };\n\
+         \x20   c.slot = Atomic.new(1i64);\n\
+         }",
+    );
+}
+
+#[test]
+fn par_struct_non_mut_field_reassign_rejected() {
+    // The same gate covers `par struct` (also reference-semantic, Arc-backed).
+    let errors = typecheck_errors(
+        "par struct Config { retries: i64, count: Atomic[i64] }\n\
+         fn main() {\n\
+         \x20   let cfg = Config { retries: 3, count: Atomic.new(0i64) };\n\
+         \x20   cfg.retries = 4;\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::SharedFieldNotMut
+                && e.message.contains("Config.retries")),
+        "expected SharedFieldNotMut for `cfg.retries = ...`, got: {errors:?}"
+    );
+}
+
+#[test]
+fn plain_struct_field_reassign_not_gated() {
+    // The shared/par write-permission gate must NOT bleed into ordinary
+    // value-semantic structs — a plain struct's fields are reassignable
+    // through a `mut` binding with no field-level `mut` required.
+    typecheck_ok(
+        "struct Point { x: i64, y: i64 }\n\
+         fn main() {\n\
+         \x20   let mut p = Point { x: 1, y: 2 };\n\
+         \x20   p.x = 9;\n\
+         \x20   println(p.x);\n\
+         }",
+    );
+}
+
+#[test]
+fn shared_field_not_mut_is_run_fatal() {
+    // `karac run` must reject the non-`mut` shared-field write at compile time
+    // (run-fatal), not warn-and-proceed into the interpreter's defense-in-depth
+    // runtime guard — so `run`/`check`/`build` agree on the same phase.
+    assert!(TypeErrorKind::SharedFieldNotMut.is_run_fatal());
+}
+
+// ── Iterating a borrowed nested collection auto-derefs scalar elements ──
+// (B-2026-06-30-4) Iterating a SHARED-borrowed `Vec` of a Copy scalar binds
+// the element BY VALUE (`i64`), not `ref i64`, matching `Slice[i64]`. Before
+// the fix the inner loop of a `ref Vec[Vec[i64]]` bound `ref i64`, which
+// arithmetic did not auto-deref: `karac run` warned-and-proceeded while
+// `karac build` HARD-errored on `total + x` (a run/build divergence).
+
+#[test]
+fn for_loop_borrowed_nested_vec_scalar_element_usable_in_arithmetic() {
+    typecheck_ok(
+        "fn cell_sum(g: ref Vec[Vec[i64]]) -> i64 {\n\
+         \x20   let mut total = 0i64;\n\
+         \x20   for row in g { for x in row { total = total + x; } }\n\
+         \x20   total\n\
+         }\n\
+         fn main() { println(0); }",
+    );
+}
+
+#[test]
+fn for_loop_borrowed_triple_nested_vec_scalar_usable_in_arithmetic() {
+    // The unwrap composes through arbitrary borrow depth: only the innermost
+    // Copy-scalar element is bound by value; each intermediate `Vec` element
+    // stays `ref Vec[..]`.
+    typecheck_ok(
+        "fn deep_sum(g: ref Vec[Vec[Vec[i64]]]) -> i64 {\n\
+         \x20   let mut t = 0i64;\n\
+         \x20   for a in g { for b in a { for c in b { t = t + c; } } }\n\
+         \x20   t\n\
+         }\n\
+         fn main() { println(0); }",
+    );
+}
+
+#[test]
+fn for_loop_borrowed_vec_of_string_element_stays_borrowed() {
+    // Non-scalar (non-Copy) elements are NOT unwrapped — a `ref Vec[String]`
+    // still yields a borrowed `String` element, so reading through it works
+    // and the move-out-of-borrow rejection above is preserved.
+    typecheck_ok(
+        "fn total_len(words: ref Vec[String]) -> i64 {\n\
+         \x20   let mut n = 0i64;\n\
+         \x20   for w in words { n = n + w.len(); }\n\
+         \x20   n\n\
+         }\n\
+         fn main() { println(0); }",
+    );
+}
+
 #[test]
 fn par_enum_atomic_and_mutex_variant_fields_accepted() {
     typecheck_ok(

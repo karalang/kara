@@ -164,6 +164,38 @@ pub(super) fn extract_must_use_message(attributes: &[Attribute]) -> Option<Strin
         .map(|a| a.string_value.clone().unwrap_or_default())
 }
 
+/// The set of field names of a `shared struct` / `par struct` that may be
+/// *reassigned* (`s.field = v`) through a shared handle. A field is
+/// reassignable iff it is declared `mut`, OR its type is a concurrency
+/// primitive (`Atomic[T]` / `Mutex[T]`) that provides interior mutability
+/// without the `mut` keyword. Mirrors the interpreter's identically-shaped
+/// `mut_field_names` rule (`f.is_mut || is_interior_mutable_field_type(..)`,
+/// `src/interpreter.rs`) so the typechecker's compile-time
+/// `SharedFieldNotMut` gate and the interpreter's runtime
+/// `write_shared_struct_field` guard agree on which fields are writable.
+/// B-2026-06-30-3.
+pub(super) fn shared_struct_mut_field_names(fields: &[StructField]) -> HashSet<String> {
+    fields
+        .iter()
+        .filter(|f| f.is_mut || field_ty_is_interior_mutable(&f.ty))
+        .map(|f| f.name.clone())
+        .collect()
+}
+
+/// True when `ty` denotes a concurrency primitive (`Atomic[T]` / `Mutex[T]`),
+/// whose interior mutability lets a non-`mut` field of a shared/par struct
+/// still be written. The typechecker-side twin of the interpreter's
+/// `is_interior_mutable_field_type`; kept here (not imported from the
+/// interpreter) to respect the phase-layering invariant — the interpreter is
+/// downstream of the typechecker.
+fn field_ty_is_interior_mutable(ty: &TypeExpr) -> bool {
+    matches!(
+        &ty.kind,
+        TypeKind::Path(p)
+            if matches!(p.segments.last().map(String::as_str), Some("Atomic") | Some("Mutex"))
+    )
+}
+
 /// Returns `true` when `attributes` contains `#[repr(C)]` or
 /// `#[repr(C, packed)]`. v1 unions accept only these two repr shapes
 /// (transparent / packed-without-C / Rust-default / int-tagged
@@ -482,6 +514,20 @@ pub enum TypeErrorKind {
     /// `lock` requires a `Mutex[T]` value (design.md § Standalone `Mutex[T]`
     /// values). (Phase 6 `Mutex`.)
     LockTargetNotMutex,
+    /// Reassignment (`s.field = v`) of a field that is NOT declared `mut` on a
+    /// `shared struct` / `par struct`. Shared/par values are reference-semantic
+    /// (RC/Arc), aliasable through many handles, so per-field `mut` is the
+    /// declared write-permission: an immutable field may only be set in the
+    /// constructing literal, never reassigned. Mirrors the interpreter's
+    /// `write_shared_struct_field` runtime guard (whose error message this
+    /// reuses verbatim) — promoting that runtime error to a compile error so
+    /// `karac run`, `karac check`, and `karac build` agree at compile time
+    /// rather than `build` silently accepting the mutation. Run-fatal: the
+    /// write has no defined effect through the shared handle, so downgrading it
+    /// to a warning under `karac run` would let the interpreter's defense-in-
+    /// depth guard fire at runtime instead. See design.md § Shared Types.
+    /// B-2026-06-30-3.
+    SharedFieldNotMut,
     /// A refutable pattern (one that may not match all values) appears where
     /// only irrefutable patterns are allowed — function parameters, closure
     /// parameters, `let` bindings. Use `if let` or `match` for refutable cases.
@@ -734,6 +780,14 @@ impl TypeErrorKind {
     /// `TypeErrorKind::StringNotIndexable`: `s[i]` on a `String` has no
     /// `Value::String[Value::Int]` interpreter lowering, so downgrading it
     /// would trip an `unreachable!` instead of printing the diagnostic.
+    /// And `TypeErrorKind::SharedFieldNotMut`: reassigning a non-`mut` field
+    /// of a `shared`/`par struct` is a statically-decidable write-permission
+    /// violation the interpreter only catches via a defense-in-depth *runtime*
+    /// guard (`write_shared_struct_field`) that explicitly notes "the
+    /// typechecker already rejects this". Keeping it run-fatal makes `run`
+    /// reject at the same phase as `check`/`build` — a single compile-time
+    /// source of truth — rather than letting `run` fall through to that
+    /// runtime guard while `build` rejects statically.
     /// Genuinely soft type errors (mismatches, arity, exhaustiveness) keep
     /// downgrading so
     /// a script author can still iterate. The partition is intentionally
@@ -742,7 +796,9 @@ impl TypeErrorKind {
     pub fn is_run_fatal(&self) -> bool {
         matches!(
             self,
-            TypeErrorKind::InvalidCast | TypeErrorKind::StringNotIndexable
+            TypeErrorKind::InvalidCast
+                | TypeErrorKind::StringNotIndexable
+                | TypeErrorKind::SharedFieldNotMut
         )
     }
 }
@@ -823,6 +879,7 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::ScopeLocalEscape
         | TypeErrorKind::ParFieldNotConcurrent
         | TypeErrorKind::ParMutSelfReceiver
+        | TypeErrorKind::SharedFieldNotMut
         | TypeErrorKind::LockTargetNotMutex
         | TypeErrorKind::InvalidRefinementPredicate
         | TypeErrorKind::RangePatternBoundNotConst

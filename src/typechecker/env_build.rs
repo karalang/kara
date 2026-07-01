@@ -22,7 +22,7 @@ use super::types::{
 };
 use super::{
     extract_derived_traits, extract_must_use_message, find_item_visibility, has_display_snake_case,
-    has_repr_c, normalize_bounds_into_where_clause, TypeErrorKind,
+    has_repr_c, normalize_bounds_into_where_clause, shared_struct_mut_field_names, TypeErrorKind,
 };
 
 impl<'a> super::TypeChecker<'a> {
@@ -72,6 +72,10 @@ impl<'a> super::TypeChecker<'a> {
                             generic_params: gp,
                             fields: Vec::new(),
                             field_attrs: std::collections::HashMap::new(),
+                            // Empty-fields stub; `env_add_struct` overwrites
+                            // this entry with the fully-lowered fields and the
+                            // real `mut_fields` set below.
+                            mut_fields: HashSet::new(),
                             derived_traits,
                             no_rc: s.no_rc,
                             is_shared: s.is_shared,
@@ -663,6 +667,7 @@ impl<'a> super::TypeChecker<'a> {
                     generic_params: vec!["T".to_string()],
                     fields: vec![],
                     field_attrs: std::collections::HashMap::new(),
+                    mut_fields: HashSet::new(),
                     derived_traits: HashSet::new(),
                     no_rc: false,
                     is_shared: false,
@@ -712,6 +717,7 @@ impl<'a> super::TypeChecker<'a> {
                     ),
                 ],
                 field_attrs: std::collections::HashMap::new(),
+                mut_fields: HashSet::new(),
                 derived_traits: HashSet::new(),
                 no_rc: false,
                 is_shared: false,
@@ -732,6 +738,7 @@ impl<'a> super::TypeChecker<'a> {
                     ("payload_ty".to_string(), type_pseudo(), true),
                 ],
                 field_attrs: std::collections::HashMap::new(),
+                mut_fields: HashSet::new(),
                 derived_traits: HashSet::new(),
                 no_rc: false,
                 is_shared: false,
@@ -819,6 +826,7 @@ impl<'a> super::TypeChecker<'a> {
                     generic_params: vec!["T".to_string()],
                     fields: vec![],
                     field_attrs: std::collections::HashMap::new(),
+                    mut_fields: HashSet::new(),
                     derived_traits: HashSet::new(),
                     no_rc: false,
                     is_shared: false,
@@ -1544,6 +1552,7 @@ impl<'a> super::TypeChecker<'a> {
                 generic_params: gp,
                 fields,
                 field_attrs,
+                mut_fields: shared_struct_mut_field_names(&s.fields),
                 derived_traits,
                 no_rc: s.no_rc,
                 is_shared: s.is_shared,
