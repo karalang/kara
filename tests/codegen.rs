@@ -20130,6 +20130,77 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_freshtemp_map_entries_emits_materialize_and_handle_free() {
+        // Slice 3m: `make_map().entries()` on a fresh-temp `Map[i64,i64]`.
+        // `.entries()` materializes a fresh `Vec[(i64,i64)]`, but the MAP receiver
+        // is a fresh owned temp — materialized into `__mrecv_tmp` and freed once
+        // (`karac_map_free`, scalar K/V) at frame exit. The returned tuple Vec is
+        // owned by the `let` binding. Sibling of the keys/values slice (3l); the
+        // typechecker gate now records `entries` too.
+        let src = r#"
+fn make_map() -> Map[i64, i64] {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1_i64, 100_i64);
+    return m;
+}
+
+fn main() {
+    let es: Vec[(i64, i64)] = make_map().entries();
+    println(es.len());
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("__mrecv_tmp"),
+            "expected the fresh Map receiver handle materialized into __mrecv_tmp; got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("karac_map_free"),
+            "expected a FreeMapHandle drain (karac_map_free) for the fresh-temp Map \
+             `.entries()` receiver; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_freshtemp_map_string_value_entries_emits_drop_free() {
+        // Slice 3m-heap: `make_map().entries()` on a fresh-temp `Map[i64,String]`.
+        // The receiver handle drop takes the per-entry variant
+        // `karac_map_free_with_drop_vec` (frees each stored value String before
+        // the handle). `.entries()` CLONES each `(K,V)` pair into the returned
+        // `Vec[(i64,String)]`, so the handle free and the tuple-Vec free are
+        // independent single frees (the tuple-element drop is the SAME machinery
+        // the named-map `Vec[(i64,String)]` entries path uses). Receiver
+        // materializes into `__mrecv_tmp`.
+        let src = r#"
+fn vmap() -> Map[i64, String] {
+    let mut m: Map[i64, String] = Map.new();
+    m.insert(1_i64, "a value string padded out beyond thirty-six bytes ok");
+    return m;
+}
+
+fn main() {
+    let es: Vec[(i64, String)] = vmap().entries();
+    println(es.len());
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("__mrecv_tmp"),
+            "expected the fresh Map[i64,String] `.entries()` receiver materialized into \
+             __mrecv_tmp; got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("karac_map_free_with_drop_vec"),
+            "expected the per-entry-drop handle free (karac_map_free_with_drop_vec) for a \
+             heap-value Map temp `.entries()` receiver; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_ir_operand_temp_string_concat_emits_free() {
         // Slice 3c: a fresh-temp String operand of a string binop
         // (`make_s() + " x"`) must emit a `cap > 0`-guarded `freearg.free` of the

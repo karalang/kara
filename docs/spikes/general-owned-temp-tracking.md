@@ -590,14 +590,33 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    String-key `104`, String-value `2` — all matching the interpreter under `run`
    and `build`; macOS ASAN clean, Linux LSan clean (the two-owner shape — handle
    per-entry drop + cloned-element result Vec — frees each String exactly once).
-   `entries()` (a `Vec[(K,V)]`) is deferred — its tuple element would need
-   tuple-element drop threading for String K/V. **Tests:** 2 IR
+   (`entries()` followed in slice 3m below.) **Tests:** 2 IR
    (`test_ir_freshtemp_map_keys_emits_materialize_and_handle_free` → `__mrecv_tmp`
    + `karac_map_free`; `…_map_string_keys…` → `__mrecv_tmp` +
    `karac_map_free_with_drop_vec`) + 3 ASAN (scalar keys+values, String-key keys,
-   String-value values — each looped). **Still open (temp surface):**
-   `Map.entries()` on a temp; heap K/V (`Map[String, Vec[T]]`) on temps;
-   deeper-nested `Vec[Vec[String]]`; `get_unchecked` on `Vec[String]`.
+   String-value values — each looped).
+   **Slice 3m — `make_map().entries()` on a fresh-temp Map. — DONE 2026-06-30.**
+   The keys/values sibling (slice 3l). `.entries()` materializes a fresh
+   `Vec[(K,V)]`; `make_map().entries()` hard-errored identically ("no handler for
+   method 'entries' on non-identifier receiver") in both `let`-bind and for-loop
+   forms. The 3l note flagged entries as needing "tuple-element drop threading for
+   String K/V" — that turned out to be a non-issue: the returned `Vec[(K,V)]`'s
+   tuple-element drop is the SAME machinery the NAMED-map path already uses
+   (`let es: Vec[(i64,String)] = m.entries()` is a live codegen test), and the
+   fresh-temp case reuses the identical result-Vec handling — only the Map
+   RECEIVER temp is new, and its handle drop (`track_map_var`) is method-agnostic.
+   So this was the same one-line typechecker gate lift as 3l: add `entries` to the
+   fresh-temp Map arm's method match (same scalar/String K/V constraint). **No
+   codegen change.** Verified scalar `2`/`303`, String-key `137`, String-value
+   `105` — all matching the interpreter under `run` and `build`; macOS ASAN clean,
+   Linux LSan clean (handle per-entry drop + cloned-pair result Vec free each
+   String once). **Tests:** 2 IR
+   (`test_ir_freshtemp_map_entries_emits_materialize_and_handle_free` →
+   `__mrecv_tmp` + `karac_map_free`; `…_string_value_entries…` → `__mrecv_tmp` +
+   `karac_map_free_with_drop_vec`) + 3 ASAN (scalar, String-key, String-value —
+   each looped). **Still open (temp surface):** heap K/V (`Map[String, Vec[T]]`)
+   on temps — value/element not scalar-or-String, so the fresh-temp Map gate still
+   excludes it; deeper-nested `Vec[Vec[String]]`; `get_unchecked` on `Vec[String]`.
    **Slice 3b-c — operator-operand temps. — DONE 2026-06-29.** `make_str() + "x"`
    leaked the fresh `make_str()` operand. Confirmed the spike's diagnosis: a
    String `+` (and `==`/`<`/… comparison) desugars in `lowering.rs`

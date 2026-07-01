@@ -1522,23 +1522,25 @@ impl<'a> super::TypeChecker<'a> {
             // Same scalar/String K/V constraint as `get` — the `FreeMapHandle`
             // per-entry drop only frees scalar/String entries.
             //
-            // `keys` / `values` materialize a fresh `Vec[K]` / `Vec[V]` and take
-            // the same fresh-temp Map path (codegen re-dispatches through
-            // `compile_map_method` → `compile_map_keys_values_entries`, which
-            // CLONES each scalar/String element into the result Vec, so freeing
-            // the map handle afterward — `track_map_var` — never dangles the
-            // returned Vec). The returned Vec is owned by the enclosing binding /
-            // for-loop like any collection method result; only the Map RECEIVER
-            // temp needs this side-table so codegen recognizes the fresh-temp
-            // shape at all. `entries` (a `Vec[(K,V)]`) is deferred — its tuple
-            // element would need tuple-element drop threading for String K/V.
+            // `keys` / `values` / `entries` materialize a fresh `Vec[K]` /
+            // `Vec[V]` / `Vec[(K,V)]` and take the same fresh-temp Map path
+            // (codegen re-dispatches through `compile_map_method` →
+            // `compile_map_keys_values_entries`, which CLONES each scalar/String
+            // element into the result Vec, so freeing the map handle afterward —
+            // `track_map_var` — never dangles the returned Vec). The returned Vec
+            // is owned by the enclosing binding / for-loop like any collection
+            // method result — `entries` needs no extra tuple-element handling
+            // here: its `Vec[(K,V)]` result drop is the SAME machinery the
+            // named-map `let es: Vec[(i64,String)] = m.entries()` path already
+            // uses; only the Map RECEIVER temp needs this side-table so codegen
+            // recognizes the fresh-temp shape at all.
             let record = match &obj_ty {
                 Type::Named { name, args }
                     if name == "Map"
                         && args.len() == 2
                         && matches!(
                             method,
-                            "get" | "contains_key" | "iter" | "keys" | "values"
+                            "get" | "contains_key" | "iter" | "keys" | "values" | "entries"
                         )
                         && is_scalar_or_string(&args[0])
                         && is_scalar_or_string(&args[1]) =>

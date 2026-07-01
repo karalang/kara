@@ -4093,6 +4093,99 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_freshtemp_map_entries_scalar_no_double_free() {
+        // Slice 3m: `make_map().entries()` on a fresh-temp `Map[i64,i64]`, looped.
+        // `.entries()` materializes a fresh `Vec[(i64,i64)]`; the MAP receiver is a
+        // fresh owned temp freed once (`karac_map_free`) at frame exit. Scalar K/V
+        // → no per-entry heap. A leaked handle (Linux LSan) or a double-freed
+        // handle (macOS ASAN) is the hazard; the loop re-materializes each pass.
+        assert_clean_asan_run(
+            r#"
+fn make_map() -> Map[i64, i64] {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1_i64, 100_i64);
+    m.insert(2_i64, 200_i64);
+    return m;
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let es: Vec[(i64, i64)] = make_map().entries();
+        println(es.len());
+        i = i + 1;
+    };
+}
+"#,
+            &["2", "2", "2"],
+            "freshtemp_map_entries_scalar_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_freshtemp_map_entries_string_key_no_double_free() {
+        // Slice 3m-heap: `make_map().entries()` on a fresh-temp `Map[String, i64]`
+        // (heap KEY), iterated, looped. Two independent heap owners: (1) the map
+        // handle, whose per-entry drop (`karac_map_free_with_drop_vec`) frees each
+        // stored key String; (2) the returned `Vec[(String,i64)]`, into which
+        // `.entries()` CLONED each pair — freed by the for-loop's tuple-Vec drop.
+        // Both free exactly once: a double-free (aliased clone-vs-stored key) is
+        // caught by macOS ASAN, a leak of either by Linux LSan. ≥36-byte keys
+        // defeat LSan short-string reachability; the loop accumulates.
+        assert_clean_asan_run(
+            r#"
+fn kmap() -> Map[String, i64] {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("alpha key padded out well beyond thirty-six bytes ok", 11_i64);
+    m.insert("beta key padded out well beyond thirty-six bytes okk", 22_i64);
+    return m;
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let mut s = 0;
+        for pair in kmap().entries() { s = s + pair.0.len() + pair.1; }
+        println(s);
+        i = i + 1;
+    };
+}
+"#,
+            &["137", "137", "137"],
+            "freshtemp_map_entries_string_key_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_freshtemp_map_entries_string_value_no_double_free() {
+        // Slice 3m-heap sibling: `make_map().entries()` on a fresh-temp
+        // `Map[i64, String]` (heap VALUE), iterated, looped. Same two-owner shape
+        // — the handle's per-entry drop frees the stored value Strings, and the
+        // returned `Vec[(i64,String)]` (cloned pairs) frees its own tuple elements
+        // via the SAME machinery the named-map entries path uses. Guards the same
+        // double-free / leak hazards on the value side.
+        assert_clean_asan_run(
+            r#"
+fn vmap() -> Map[i64, String] {
+    let mut m: Map[i64, String] = Map.new();
+    m.insert(1_i64, "alpha value padded out beyond thirty-six bytes okay");
+    m.insert(2_i64, "beta value padded out beyond thirty-six bytes okayy");
+    return m;
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let mut s = 0;
+        for pair in vmap().entries() { s = s + pair.0 + pair.1.len(); }
+        println(s);
+        i = i + 1;
+    };
+}
+"#,
+            &["105", "105", "105"],
+            "freshtemp_map_entries_string_value_no_double_free",
+        );
+    }
+
     // ── B-2026-06-10-6: inline-heap `Option[T]` payload drop ──────
     //
     // An `Option[String]` / `Option[Vec[_]]` dropped WITHOUT being
