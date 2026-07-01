@@ -1521,11 +1521,25 @@ impl<'a> super::TypeChecker<'a> {
             // `Iterator[(K,V)]` in `expr_types`, so `owned_temp_drops` misses).
             // Same scalar/String K/V constraint as `get` — the `FreeMapHandle`
             // per-entry drop only frees scalar/String entries.
+            //
+            // `keys` / `values` materialize a fresh `Vec[K]` / `Vec[V]` and take
+            // the same fresh-temp Map path (codegen re-dispatches through
+            // `compile_map_method` → `compile_map_keys_values_entries`, which
+            // CLONES each scalar/String element into the result Vec, so freeing
+            // the map handle afterward — `track_map_var` — never dangles the
+            // returned Vec). The returned Vec is owned by the enclosing binding /
+            // for-loop like any collection method result; only the Map RECEIVER
+            // temp needs this side-table so codegen recognizes the fresh-temp
+            // shape at all. `entries` (a `Vec[(K,V)]`) is deferred — its tuple
+            // element would need tuple-element drop threading for String K/V.
             let record = match &obj_ty {
                 Type::Named { name, args }
                     if name == "Map"
                         && args.len() == 2
-                        && matches!(method, "get" | "contains_key" | "iter")
+                        && matches!(
+                            method,
+                            "get" | "contains_key" | "iter" | "keys" | "values"
+                        )
                         && is_scalar_or_string(&args[0])
                         && is_scalar_or_string(&args[1]) =>
                 {

@@ -20054,6 +20054,82 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_freshtemp_map_keys_emits_materialize_and_handle_free() {
+        // Slice 3l: `make_map().keys()` on a fresh-temp `Map[i64,i64]`. `.keys()`
+        // materializes a fresh `Vec[i64]` of the keys, but the MAP receiver is
+        // itself a fresh owned temp that must be freed once it's been read. The
+        // fresh-temp Map path materializes the handle into `__mrecv_tmp` and
+        // drop-tracks it (`FreeMapHandle` — scalar K/V → plain `karac_map_free`)
+        // at the enclosing frame's exit. Without it the map handle leaks
+        // (LeakSanitizer on Linux CI). The returned `Vec[i64]` is owned by the
+        // `let` binding and freed independently. This was a hard error pre-fix
+        // ("no handler for method 'keys' on non-identifier receiver") — the
+        // typechecker's fresh-temp Map gate didn't record `keys`/`values`, so
+        // codegen's `temp_recv_mapset_types` lookup missed and the helper bailed.
+        let src = r#"
+fn make_map() -> Map[i64, i64] {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1_i64, 100_i64);
+    return m;
+}
+
+fn main() {
+    let ks: Vec[i64] = make_map().keys();
+    println(ks.len());
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("__mrecv_tmp"),
+            "expected the fresh Map receiver handle materialized into __mrecv_tmp; got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("karac_map_free"),
+            "expected a FreeMapHandle drain (karac_map_free) for the fresh-temp Map \
+             `.keys()` receiver; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_freshtemp_map_string_keys_emits_drop_free() {
+        // Slice 3l-heap: `make_map().values()` on a fresh-temp `Map[i64,String]`.
+        // The map's values are heap Strings, so the receiver handle drop must take
+        // the per-entry variant `karac_map_free_with_drop_vec` (frees each entry's
+        // String before the handle) rather than plain `karac_map_free`.
+        // `.values()` CLONES each String into the returned `Vec[String]`, so the
+        // handle free and the result Vec free are independent single frees — no
+        // double-free (macOS ASAN), no leak (Linux LSan). Receiver materializes
+        // into `__mrecv_tmp`.
+        let src = r#"
+fn vmap() -> Map[i64, String] {
+    let mut m: Map[i64, String] = Map.new();
+    m.insert(1_i64, "a value string padded out beyond thirty-six bytes ok");
+    return m;
+}
+
+fn main() {
+    let vs: Vec[String] = vmap().values();
+    println(vs.len());
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("__mrecv_tmp"),
+            "expected the fresh Map[i64,String] `.values()` receiver materialized into \
+             __mrecv_tmp; got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("karac_map_free_with_drop_vec"),
+            "expected the per-entry-drop handle free (karac_map_free_with_drop_vec) for a \
+             heap-value Map temp `.values()` receiver; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_ir_operand_temp_string_concat_emits_free() {
         // Slice 3c: a fresh-temp String operand of a string binop
         // (`make_s() + " x"`) must emit a `cap > 0`-guarded `freearg.free` of the
