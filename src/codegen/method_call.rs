@@ -2069,6 +2069,76 @@ impl<'ctx> super::Codegen<'ctx> {
                 let agg = self.builder.build_insert_value(agg, tag, 0, "ord").unwrap();
                 return Ok(agg.into_struct_value().into());
             }
+            // String.cmp(other) -> Ordering — byte-lexicographic, the method
+            // form of the `<`/`>` operators. `karac_string_cmp` returns -1/0/+1
+            // (the same order Vec[String].sort / binary_search use), and the
+            // Ordering tags are Less=0 / Equal=1 / Greater=2, so tag = cmp + 1
+            // maps them directly. Guarded on the receiver being a String so a
+            // user struct's `.cmp` (derived Ord, a different lowering) still
+            // falls through unchanged.
+            if let (BasicValueEnum::StructValue(l), BasicValueEnum::StructValue(r)) = (lhs, rhs) {
+                if self.inferred_receiver_type(object).as_deref() == Some("String") {
+                    let i64_t = self.context.i64_type();
+                    let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                    let l_ptr = self
+                        .builder
+                        .build_extract_value(l, 0, "cmp.l.ptr")
+                        .unwrap()
+                        .into_pointer_value();
+                    let l_len = self
+                        .builder
+                        .build_extract_value(l, 1, "cmp.l.len")
+                        .unwrap()
+                        .into_int_value();
+                    let r_ptr = self
+                        .builder
+                        .build_extract_value(r, 0, "cmp.r.ptr")
+                        .unwrap()
+                        .into_pointer_value();
+                    let r_len = self
+                        .builder
+                        .build_extract_value(r, 1, "cmp.r.len")
+                        .unwrap()
+                        .into_int_value();
+                    let cmp_fn =
+                        self.module
+                            .get_function("karac_string_cmp")
+                            .unwrap_or_else(|| {
+                                let fn_ty = i64_t.fn_type(
+                                    &[ptr_ty.into(), i64_t.into(), ptr_ty.into(), i64_t.into()],
+                                    false,
+                                );
+                                self.module.add_function(
+                                    "karac_string_cmp",
+                                    fn_ty,
+                                    Some(inkwell::module::Linkage::External),
+                                )
+                            });
+                    let raw = self
+                        .builder
+                        .build_call(
+                            cmp_fn,
+                            &[l_ptr.into(), l_len.into(), r_ptr.into(), r_len.into()],
+                            "cmp.scmp",
+                        )
+                        .unwrap()
+                        .try_as_basic_value()
+                        .unwrap_basic()
+                        .into_int_value();
+                    let tag = self
+                        .builder
+                        .build_int_add(raw, i64_t.const_int(1, false), "cmp.tag")
+                        .unwrap();
+                    let ord_struct_ty = self
+                        .enum_layouts
+                        .get("Ordering")
+                        .map(|l| l.llvm_type)
+                        .unwrap_or_else(|| self.context.struct_type(&[i64_t.into()], false));
+                    let agg = ord_struct_ty.get_undef();
+                    let agg = self.builder.build_insert_value(agg, tag, 0, "ord").unwrap();
+                    return Ok(agg.into_struct_value().into());
+                }
+            }
         }
 
         // `.as_slice()` / `.as_slice_mut()` on Array, Vec, or Slice —

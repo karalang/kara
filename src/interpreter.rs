@@ -1209,27 +1209,38 @@ impl<'a> Interpreter<'a> {
 
         // Register built-in comparison-Ordering enum variants
         // (Less / Equal / Greater — returned by `Ord.cmp`).
+        //
+        // Bind BOTH the qualified (`Ordering.Less`) and bare (`Less`) names.
+        // The pattern matcher classifies a bare PascalCase identifier as a
+        // unit-variant pattern only when `env.get(name)` returns a unit
+        // `EnumVariant` (pattern_match.rs) — the same mechanism user-enum unit
+        // variants rely on. Registering ONLY the qualified name made bare
+        // `match o { Less => … }` fall through to a catch-all binding, so the
+        // first arm always matched: `match x.cmp(y) { Less/Equal/Greater }`
+        // silently returned Less under `karac run` while codegen was correct —
+        // a run/build divergence for every `.cmp()` consumer, int and String
+        // alike (bug-ledger B-2026-06-30-14). MemoryOrdering shared the bug.
         for variant in ["Less", "Equal", "Greater"] {
-            self.env.define(
-                format!("Ordering.{}", variant),
-                Value::EnumVariant {
-                    enum_name: "Ordering".to_string(),
-                    variant: variant.to_string(),
-                    data: EnumData::Unit,
-                },
-            );
+            let value = Value::EnumVariant {
+                enum_name: "Ordering".to_string(),
+                variant: variant.to_string(),
+                data: EnumData::Unit,
+            };
+            self.env
+                .define(format!("Ordering.{}", variant), value.clone());
+            self.env.define(variant.to_string(), value);
         }
         // Register built-in MemoryOrdering enum variants
         // (Relaxed / Acquire / Release / AcqRel / SeqCst — used by Atomic[T]).
         for variant in ["Relaxed", "Acquire", "Release", "AcqRel", "SeqCst"] {
-            self.env.define(
-                format!("MemoryOrdering.{}", variant),
-                Value::EnumVariant {
-                    enum_name: "MemoryOrdering".to_string(),
-                    variant: variant.to_string(),
-                    data: EnumData::Unit,
-                },
-            );
+            let value = Value::EnumVariant {
+                enum_name: "MemoryOrdering".to_string(),
+                variant: variant.to_string(),
+                data: EnumData::Unit,
+            };
+            self.env
+                .define(format!("MemoryOrdering.{}", variant), value.clone());
+            self.env.define(variant.to_string(), value);
         }
 
         // Ambient program-rooted resources: register the names and install

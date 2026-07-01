@@ -1872,6 +1872,41 @@ fn test_qualified_enum_variant_construction() {
 }
 
 #[test]
+fn test_match_bare_ordering_variant_from_cmp() {
+    // `match x.cmp(y) { Less => .., Equal => .., Greater => .. }` with BARE
+    // (unqualified) Ordering variant patterns. The interpreter registered the
+    // Ordering variants only under their qualified names ("Ordering.Less"), so
+    // `env.get("Less")` was None and the pattern matcher classified bare `Less`
+    // as a catch-all binding — the FIRST arm always matched, silently returning
+    // Less for every comparison (int AND String) under `karac run` while codegen
+    // was correct. B-2026-06-30-14. Now the bare names are bound too, so the
+    // right arm fires (peer to codegen's e2e_string_cmp / int cmp coverage).
+    assert_eq!(
+        run("fn tag(a: i64, b: i64) -> i64 {\n\
+                 match a.cmp(b) { Less => 0, Equal => 1, Greater => 2 }\n\
+             }\n\
+             fn main() {\n\
+                 println(tag(1, 2));\n\
+                 println(tag(2, 1));\n\
+                 println(tag(3, 3));\n\
+             }"),
+        "0\n2\n1\n"
+    );
+    // String receiver — the same bare-variant match over `String.cmp`.
+    assert_eq!(
+        run("fn tag(a: String, b: String) -> i64 {\n\
+                 match a.cmp(b) { Less => 0, Equal => 1, Greater => 2 }\n\
+             }\n\
+             fn main() {\n\
+                 println(tag(\"abc\", \"abd\"));\n\
+                 println(tag(\"abd\", \"abc\"));\n\
+                 println(tag(\"abc\", \"abc\"));\n\
+             }"),
+        "0\n2\n1\n"
+    );
+}
+
+#[test]
 fn test_qualified_enum_variant_constructor_cross_boundary() {
     // A method returning a qualified-constructed `Result` whose value is
     // matched in the caller — the original repro for the interpreter panic.

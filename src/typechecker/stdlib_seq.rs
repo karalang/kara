@@ -246,6 +246,45 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Bool
             }
+            "cmp" => {
+                // cmp(other: String) -> Ordering — the total byte-lexicographic
+                // order, i.e. the method form of the `<`/`>` operators (which
+                // already lower through `karac_string_cmp`). `impl Ord for
+                // String` IS registered in env_build, but String's method
+                // dispatch is a closed list that never consulted the trait
+                // impl, so `s.cmp(t)` hard-errored under `karac check`/`build`
+                // while `karac run` merely warned-and-computed it — a run/check
+                // divergence (bug-ledger B-2026-06-30-13). The interpreter and
+                // codegen both compare via the same `karac_string_cmp` byte
+                // order that `Vec[String].sort` / `binary_search` use, so the
+                // method agrees with the operators and across backends.
+                if args.len() != 1 {
+                    self.type_error(
+                        format!("'cmp' expects 1 argument, found {}", args.len()),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    let arg_ty = self.infer_expr(&args[0].value);
+                    if !is_str_like(&arg_ty) {
+                        self.type_error(
+                            format!(
+                                "'cmp' expects a String argument, found '{}'",
+                                type_display(&arg_ty)
+                            ),
+                            args[0].value.span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    }
+                }
+                Type::Named {
+                    name: "Ordering".to_string(),
+                    args: Vec::new(),
+                }
+            }
             "sorted" => {
                 if !args.is_empty() {
                     self.type_error(

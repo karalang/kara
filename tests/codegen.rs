@@ -5326,6 +5326,36 @@ fn main() {
         }
     }
 
+    /// `String.cmp(other) -> Ordering` — the method form of `<`/`>`, lowered
+    /// through `karac_string_cmp` (byte-lexicographic, the same order
+    /// `Vec[String].sort`/`binary_search` use) into an `Ordering` tag. Exercises
+    /// all three arms via a bare-variant match plus use inside a `sort_by`
+    /// comparator. Must match the interpreter oracle
+    /// (interpreter.rs::test_match_bare_ordering_variant_from_cmp). B-2026-06-30-13.
+    #[test]
+    fn e2e_string_cmp_codegen() {
+        if let Some(out) = run_program(
+            "fn tag(a: String, b: String) -> i64 {\n\
+                 match a.cmp(b) { Less => 0, Equal => 1, Greater => 2 }\n\
+             }\n\
+             fn main() {\n\
+                 let r1 = tag(\"abc\", \"abd\");\n\
+                 let r2 = tag(\"abd\", \"abc\");\n\
+                 let r3 = tag(\"abc\", \"abc\");\n\
+                 let r4 = tag(\"ab\", \"abc\");\n\
+                 println(f\"{r1}\");\n\
+                 println(f\"{r2}\");\n\
+                 println(f\"{r3}\");\n\
+                 println(f\"{r4}\");\n\
+                 let mut v: Vec[String] = [\"banana\", \"apple\", \"cherry\"];\n\
+                 v.sort_by(|x, y| x.cmp(y));\n\
+                 println(v[0]);\n\
+             }",
+        ) {
+            assert_eq!(out, "0\n2\n1\n0\napple\n");
+        }
+    }
+
     #[test]
     fn e2e_string_method_nonident_receiver_codegen() {
         // String collection methods on a NON-identifier receiver — a string
