@@ -19279,6 +19279,80 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_vec_of_vec_of_string_drop_emits_recursive_elem_drop() {
+        // Slice 3n: a `Vec[Vec[String]]` (two-level heap) dropped at scope exit.
+        // The inline `FreeVecBuffer` vec-struct fast path is ONE level deep — it
+        // frees each inner `Vec[String]`'s data buffer but not that buffer's
+        // String char-buffers, leaking the innermost Strings. The fix routes the
+        // `Vec[String]` ELEMENT through `vec_elem_agg_drop_for_type_expr`'s new
+        // recursive-`Vec` arm, which returns the strictly-recursive
+        // `karac_drop_Vec_String` — invoked per outer element in the agg-drop
+        // loop (`cleanup.adrop`), dropping every level. Its presence proves the
+        // two-level leak is closed; the one-level fast path never emits a
+        // per-element drop CALL (it inlines the buffer free).
+        let src = r#"
+fn build() -> Vec[Vec[String]] {
+    let mut outer: Vec[Vec[String]] = Vec.new();
+    let mut a: Vec[String] = Vec.new();
+    a.push("a heap element string padded out beyond thirty-six bytes");
+    outer.push(a);
+    return outer;
+}
+
+fn main() {
+    let vv = build();
+    println(vv.len());
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("karac_drop_Vec_String"),
+            "expected the recursive per-element drop fn karac_drop_Vec_String for the \
+             Vec[Vec[String]] scope-exit drop (frees each inner Vec's Strings + buffer); \
+             got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("cleanup.adrop"),
+            "expected the agg-drop loop calling the recursive per-element drop over each \
+             inner Vec[String]; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_vec_of_vec_of_scalar_drop_keeps_one_level_fast_path() {
+        // Slice 3n negative: a `Vec[Vec[i64]]` (inner SCALAR) is correctly handled
+        // by the one-level vec-struct fast path (each inner buffer holds only
+        // scalars — nothing deeper to free), so the fix must NOT route it through
+        // the recursive per-element drop. `te_owns_heap_below_buffer` returns false
+        // for a scalar inner, so `vec_elem_agg_drop_for_type_expr` keeps `None` and
+        // the drop stays on the inline fast path — no `karac_drop_Vec_i64` call,
+        // no agg-drop loop. Guards the minimal-blast-radius gate.
+        let src = r#"
+fn build() -> Vec[Vec[i64]] {
+    let mut outer: Vec[Vec[i64]] = Vec.new();
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1_i64);
+    outer.push(a);
+    return outer;
+}
+
+fn main() {
+    let vv = build();
+    println(vv.len());
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            !ir.contains("karac_drop_Vec_i64"),
+            "Vec[Vec[i64]] must stay on the one-level fast path (scalar inner has no \
+             deeper heap) — no recursive karac_drop_Vec_i64 should be emitted; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_ir_ref_arg_nested_vec_elem_freed() {
         // Slice 2 part B: a fresh `Vec[String]` passed to a `ref Vec[String]`
         // param is materialized into a `ref_rvalue_arg` temp. The prior path

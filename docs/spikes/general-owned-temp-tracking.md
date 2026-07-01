@@ -616,7 +616,42 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    `karac_map_free_with_drop_vec`) + 3 ASAN (scalar, String-key, String-value —
    each looped). **Still open (temp surface):** heap K/V (`Map[String, Vec[T]]`)
    on temps — value/element not scalar-or-String, so the fresh-temp Map gate still
-   excludes it; deeper-nested `Vec[Vec[String]]`; `get_unchecked` on `Vec[String]`.
+   excludes it; `get_unchecked` on `Vec[String]`.
+   **Slice 3n — two-level `Vec[Vec[String]]` scope-exit drop (leaks NAMED
+   bindings, not just temps). — DONE 2026-06-30.** The first slice in this family
+   that fixes a leak on ordinary NAMED bindings, not a fresh-temp gap: a
+   `Vec[Vec[String]]` (or deeper) dropped at scope exit leaked the innermost String
+   char-buffers. The inline `FreeVecBuffer` cleanup's vec-struct fast path is ONE
+   level deep — it frees each inner `Vec[String]`'s data buffer but treats that
+   buffer's elements as opaque (documented limit; measured on LeetCode #3629). A
+   strictly-recursive `karac_drop_Vec_<elem>` family (`emit_vec_drop_fn` →
+   `emit_drop_fn_for_type_expr`, `clone_drop.rs`) already existed — its own doc
+   says it "closes the deeper-nesting leak the existing FreeVecBuffer cleanup
+   carries" — but was `#[allow(dead_code)]`, never wired in. **Fix:** a new
+   recursive-`Vec` arm in `vec_elem_agg_drop_for_type_expr` (runtime.rs) returns
+   `emit_vec_drop_fn(inner)` for a `Vec[Inner]` ELEMENT, so every existing consult
+   site (let-binding `stmts.rs`, for-loop, fresh-temp, nested `synth_drop.rs`)
+   routes such an element through the agg-drop branch (`cleanup.adrop`), which
+   calls the recursive per-element drop — dropping every level. The whole
+   `FreeVecBuffer` body is under a `cap>0` guard, and the agg-drop branch is
+   mutually exclusive with the one-level fast path (`elem_agg_drop: Some` vs
+   `None`) with a SHARED outer-buffer free, so a moved-out source (cap zeroed by
+   the existing move suppression) skips both — no double-free. **Two-way gate for
+   minimal blast radius + correctness:** the arm fires only when `Inner`
+   (a) actually owns heap below the buffer (`te_owns_heap_below_buffer` — a
+   `Vec[Vec[scalar]]` element is correctly one-level and STAYS on the fast path,
+   IR-pinned), and (b) is a shape the recursive family fully frees
+   (`te_recursive_drop_fully_supported` — String / nested Vec / Map / Set / tuple;
+   NOT user struct/enum, whose per-element heap the family would silently no-op, so
+   those keep their existing path). Functional output unchanged (`run`==`build`);
+   Linux LSan confirms the innermost Strings now free (looped scope-exit drop).
+   **Tests:** 2 IR (`test_ir_vec_of_vec_of_string_drop_emits_recursive_elem_drop`
+   → `karac_drop_Vec_String` + `cleanup.adrop`; `…_scalar_drop_keeps_one_level…` →
+   NO `karac_drop_Vec_i64`, the negative gate) + 1 ASAN
+   (`asan_vec_of_vec_of_string_scope_exit_drop_no_leak`, looped). **Still open
+   (temp surface):** heap K/V (`Map[String, Vec[T]]`) on temps; `Vec[Vec[<user
+   struct>]]` (the recursive family no-ops struct elements — needs the struct
+   agg-drop threaded through the recursive drop); `get_unchecked` on `Vec[String]`.
    **Slice 3b-c — operator-operand temps. — DONE 2026-06-29.** `make_str() + "x"`
    leaked the fresh `make_str()` operand. Confirmed the spike's diagnosis: a
    String `+` (and `==`/`<`/… comparison) desugars in `lowering.rs`

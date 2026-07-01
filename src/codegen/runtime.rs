@@ -1608,7 +1608,106 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.enum_layouts.contains_key(&name) {
             return self.emit_enum_drop_switch(&name);
         }
+        // A `Vec[Inner]` ELEMENT (i.e. the container is `Vec[Vec[Inner]]` or
+        // deeper) whose `Inner` itself owns heap below the buffer level
+        // (`Vec[Vec[String]]`, `Vec[Vec[Vec[T]]]`, `Vec[Vec[Map[..]]]`, …). The
+        // inline `FreeVecBuffer` vec-struct fast path is ONE level deep: it frees
+        // each inner Vec's DATA buffer but treats that buffer's elements as
+        // opaque, leaking any heap they own (the innermost String char-buffers).
+        // Route to the strictly-recursive `emit_vec_drop_fn`, which drops every
+        // level via the `karac_drop_Vec_<elem>` family. Gated two ways so blast
+        // radius stays minimal and correctness is guaranteed: (a) `Inner` must
+        // actually own heap — a `Vec[Vec[scalar]]` element is correctly handled
+        // one-level by the fast path, so it keeps `None` and stays there; and
+        // (b) the whole `Inner` subtree must be a shape the recursive drop family
+        // fully frees (String / nested Vec / Map / Set / tuple-thereof) — it
+        // would silently NO-OP a user struct/enum element, so a
+        // `Vec[Vec[<struct>]]` stays on the (equally-leaky-but-unchanged) fast
+        // path rather than gaining a misleading no-op drop.
+        if name == "Vec" {
+            if let TypeKind::Path(p) = &elem_te.kind {
+                if let Some(GenericArg::Type(inner)) =
+                    p.generic_args.as_ref().and_then(|a| a.first())
+                {
+                    if self.te_owns_heap_below_buffer(inner)
+                        && self.te_recursive_drop_fully_supported(inner)
+                    {
+                        return Some(self.emit_vec_drop_fn(inner));
+                    }
+                }
+            }
+        }
         None
+    }
+
+    /// True iff `te` owns heap that a ONE-level `Vec` buffer free would miss —
+    /// i.e. a `Vec[te]` element needs recursive per-element dropping. A bare
+    /// scalar owns nothing; a `String` / collection / heap-bearing tuple does.
+    /// (A user struct/enum is conservatively "owns heap" but is separately
+    /// excluded by `te_recursive_drop_fully_supported`, so it never reaches the
+    /// recursive path from here.)
+    fn te_owns_heap_below_buffer(&self, te: &TypeExpr) -> bool {
+        match &te.kind {
+            TypeKind::Tuple(elems) => elems.iter().any(|e| self.te_owns_heap_below_buffer(e)),
+            TypeKind::Path(p) => {
+                let head = p.segments.first().map(String::as_str).unwrap_or("");
+                !matches!(
+                    head,
+                    "i8" | "i16"
+                        | "i32"
+                        | "i64"
+                        | "u8"
+                        | "u16"
+                        | "u32"
+                        | "u64"
+                        | "usize"
+                        | "isize"
+                        | "f32"
+                        | "f64"
+                        | "bool"
+                        | "char"
+                )
+            }
+            _ => true,
+        }
+    }
+
+    /// True iff `emit_drop_fn_for_type_expr(te)` fully frees `te`'s heap — the
+    /// recursive drop family (`emit_vec_drop_fn` / `emit_map_drop_fn` /
+    /// `emit_string_drop_fn` / `emit_tuple_drop_fn`) bottoms out cleanly in
+    /// scalar / String / collection / tuple. A user struct/enum (or Option /
+    /// Result) is NOT covered — the family routes it to `emit_primitive_drop_fn`
+    /// (a no-op), which would silently drop nothing — so this returns false for
+    /// those, keeping such elements on their existing (struct/enum agg-drop or
+    /// the one-level fast) path instead of a wrong no-op.
+    fn te_recursive_drop_fully_supported(&self, te: &TypeExpr) -> bool {
+        match &te.kind {
+            TypeKind::Tuple(elems) => elems
+                .iter()
+                .all(|e| self.te_recursive_drop_fully_supported(e)),
+            TypeKind::Path(p) => {
+                let head = p.segments.first().map(String::as_str).unwrap_or("");
+                let arg = |i: usize| -> Option<&TypeExpr> {
+                    match p.generic_args.as_ref()?.get(i)? {
+                        GenericArg::Type(t) => Some(t),
+                        _ => None,
+                    }
+                };
+                match head {
+                    "String" | "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64"
+                    | "usize" | "isize" | "f32" | "f64" | "bool" | "char" => true,
+                    "Vec" | "VecDeque" | "Set" | "SortedSet" => {
+                        arg(0).is_some_and(|t| self.te_recursive_drop_fully_supported(t))
+                    }
+                    "Map" | "SortedMap" => {
+                        arg(0).is_some_and(|k| self.te_recursive_drop_fully_supported(k))
+                            && arg(1).is_some_and(|v| self.te_recursive_drop_fully_supported(v))
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
     }
 
     /// Synthesize (or fetch) `__karac_vec_elem_full_drop_<S>` — the per-element
@@ -4129,13 +4228,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 // leak. Closes the 2026-05-13 cumulative-retention
                 // bug measured on LeetCode #3629 bfs_sieve, where
                 // `Vec[Vec[i64]]` leaked ~32 MB per `min_jumps`
-                // call. One-level recursion handles the bench
-                // workloads and the documented common case
-                // (`Vec[Vec[T]]`, `Vec[String]`); deeper nesting
-                // (`Vec[Vec[Vec[T]]]`) still leaks the innermost
-                // buffers — tracked as a follow-up in `deferred.md`
-                // § *Recursive Drop for Heap-Owned Collection
-                // Elements > deeper-nesting limitation*.
+                // call. This inline path is ONE level deep — it frees
+                // each element's own buffer but treats that buffer's
+                // contents as opaque, so it is exact for a
+                // `Vec[Vec[scalar]]` / `Vec[String]` element (nothing
+                // deeper to free) but would leak the innermost heap of
+                // a `Vec[Vec[String]]` / deeper. Slice 3n closes that:
+                // when the element is a `Vec[heap-inner]`,
+                // `vec_elem_agg_drop_for_type_expr` returns the
+                // strictly-recursive `karac_drop_Vec_<inner>` and the
+                // element takes the `agg_drop` branch below instead of
+                // this fast path — so this inline path now only ever
+                // sees exactly the one-level-correct shapes.
                 if let Some(et) = elem_ty {
                     if let Some(agg_drop) = elem_agg_drop {
                         // Named user struct/enum elements: run each live

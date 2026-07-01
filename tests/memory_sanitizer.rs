@@ -10232,6 +10232,46 @@ fn main() {
     }
 
     #[test]
+    fn asan_vec_of_vec_of_string_scope_exit_drop_no_leak() {
+        // Two-level nested heap: a `Vec[Vec[String]]` dropped at scope exit. The
+        // inline `FreeVecBuffer` cleanup's vec-struct fast path is ONE level deep —
+        // it frees each inner `Vec[String]`'s data buffer but treats that buffer's
+        // elements as opaque, so the innermost String char-buffers leak (documented
+        // one-level limit; the recursive `emit_vec_drop_fn` family existed but was
+        // unwired). This routes the `Vec[heap-inner]` element through the recursive
+        // per-element drop (`karac_drop_Vec_String`), which drops every level. The
+        // binding is only `.len()`-read (never consumed), so it drops whole at
+        // scope exit. ≥36-byte innermost strings defeat LSan short-string
+        // reachability; the loop re-materializes each pass. Leak (innermost
+        // Strings) is the Linux-LSan gate; a double-free would show on macOS ASAN.
+        assert_clean_asan_run(
+            r#"
+fn build() -> Vec[Vec[String]] {
+    let mut outer: Vec[Vec[String]] = Vec.new();
+    let mut a: Vec[String] = Vec.new();
+    a.push("alpha string padded out well beyond thirty-six bytes ok");
+    a.push("beta string padded out well beyond thirty-six bytes okk");
+    outer.push(a);
+    let mut b: Vec[String] = Vec.new();
+    b.push("gamma string padded out well beyond thirty-six byte");
+    outer.push(b);
+    return outer;
+}
+fn main() {
+    let mut i = 0;
+    while i < 4 {
+        let vv = build();
+        println(vv.len());
+        i = i + 1;
+    };
+}
+"#,
+            &["2", "2", "2", "2"],
+            "vec_of_vec_of_string_scope_exit_drop_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_discarded_rc_temp_freed() {
         // A discarded fresh shared-struct (RC box): the producing call returns
         // one owned reference, so `materialize_owned_temp` queues a single
