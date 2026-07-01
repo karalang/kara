@@ -120,3 +120,12 @@ green history, so a node-version hiccup never blocks `main`.
   streak; required-but-flaky teaches everyone to ignore red.
 - The four-archive recipe and the ASAN/node/wasm-tools prereqs are in
   `CLAUDE.md` § "Codegen E2E + memory_sanitizer require the runtime library".
+- **`tests/cli.rs` "test child binary hung" is a load false-positive, not a bug**
+  (diagnosed 2026-06-30). The `output_with_hang_watchdog` 15s timer kills a
+  `karac` child that's merely *starved* under machine saturation (e.g. a second
+  agent/`cargo test` thrashing the same cores), and a starved child reads
+  identically to a deadlocked one → bimodal "~0.7s or exactly 15.01s". Ruled out
+  a karac FD-leak / pool deadlock: faithful `Command::output()` on `karac run`
+  is 26ms, and 640-way concurrent spawns finish in <1s with zero hangs on an
+  unloaded box. Don't chase it in code — just don't run the full cli suite while
+  another heavy session shares the machine.
