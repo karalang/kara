@@ -45,9 +45,11 @@ use inkwell::types::{BasicTypeEnum, StructType};
 use inkwell::values::{BasicValueEnum, FloatValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 
+use super::kernel::ContainerAccess;
 use super::state::ColumnVarInfo;
 use super::tensor::type_expr_is_unsigned_int;
 use crate::ast::{BinOp, CallArg, Expr, ExprKind, GenericArg, TypeExpr, TypeKind};
+use crate::reduce_kernel::ReduceOp;
 use crate::token::Span;
 
 impl<'ctx> super::Codegen<'ctx> {
@@ -2171,10 +2173,6 @@ impl<'ctx> super::Codegen<'ctx> {
         elem: BasicTypeEnum<'ctx>,
         unsigned: bool,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let i64_t = self.context.i64_type();
-        let fn_val = self
-            .current_fn
-            .ok_or_else(|| "Column.sum outside function".to_string())?;
         let len = self
             .column_load_field(control, 2, "col.sum.len")
             .into_int_value();
@@ -2184,78 +2182,17 @@ impl<'ctx> super::Codegen<'ctx> {
         let bitmap = self
             .column_load_field(control, 1, "col.sum.bm")
             .into_pointer_value();
-        let idx = self.builder.build_alloca(i64_t, "col.sum.i").unwrap();
-        let acc = self.builder.build_alloca(elem, "col.sum.acc").unwrap();
-        let cnt = self.builder.build_alloca(i64_t, "col.sum.cnt").unwrap();
-        self.builder.build_store(idx, i64_t.const_zero()).unwrap();
-        self.builder
-            .build_store(acc, self.column_zero_elem(elem))
-            .unwrap();
-        self.builder.build_store(cnt, i64_t.const_zero()).unwrap();
-
-        let head = self.context.append_basic_block(fn_val, "col.sum.head");
-        let body = self.context.append_basic_block(fn_val, "col.sum.body");
-        let add = self.context.append_basic_block(fn_val, "col.sum.add");
-        let cont = self.context.append_basic_block(fn_val, "col.sum.cont");
-        let exit = self.context.append_basic_block(fn_val, "col.sum.exit");
-        self.builder.build_unconditional_branch(head).unwrap();
-        self.builder.position_at_end(head);
-        let i = self
-            .builder
-            .build_load(i64_t, idx, "col.sum.iv")
-            .unwrap()
-            .into_int_value();
-        let more = self
-            .builder
-            .build_int_compare(IntPredicate::ULT, i, len, "col.sum.more")
-            .unwrap();
-        self.builder
-            .build_conditional_branch(more, body, exit)
-            .unwrap();
-        self.builder.position_at_end(body);
-        let valid = self.column_load_valid_bit(bitmap, i);
-        self.builder
-            .build_conditional_branch(valid, add, cont)
-            .unwrap();
-        self.builder.position_at_end(add);
-        let x = self.column_gep_load(data, elem, i, "col.sum.x");
-        let a = self.builder.build_load(elem, acc, "col.sum.a").unwrap();
-        let a2 = self.compile_binop_typed(&BinOp::Add, a, x, unsigned)?;
-        self.builder.build_store(acc, a2).unwrap();
-        let c = self
-            .builder
-            .build_load(i64_t, cnt, "col.sum.c")
-            .unwrap()
-            .into_int_value();
-        let c2 = self
-            .builder
-            .build_int_add(c, i64_t.const_int(1, false), "col.sum.c2")
-            .unwrap();
-        self.builder.build_store(cnt, c2).unwrap();
-        self.builder.build_unconditional_branch(cont).unwrap();
-        self.builder.position_at_end(cont);
-        let next = self
-            .builder
-            .build_int_add(i, i64_t.const_int(1, false), "col.sum.next")
-            .unwrap();
-        self.builder.build_store(idx, next).unwrap();
-        self.builder.build_unconditional_branch(head).unwrap();
-
-        self.builder.position_at_end(exit);
-        let cnt_v = self
-            .builder
-            .build_load(i64_t, cnt, "col.sum.cntv")
-            .unwrap()
-            .into_int_value();
-        let ok = self
-            .builder
-            .build_int_compare(IntPredicate::UGT, cnt_v, i64_t.const_zero(), "col.sum.ok")
-            .unwrap();
-        self.emit_column_guard(ok, "cannot compute `sum` on a column with no valid values")?;
-        Ok(self
-            .builder
-            .build_load(elem, acc, "col.sum.result")
-            .unwrap())
+        // The shared validity-gated fold (`emit_reduce_fold` dispatches on the
+        // `bitmap`): fold `+` over valid slots, guard the all-null case.
+        let access = ContainerAccess {
+            data,
+            len,
+            elem,
+            unsigned,
+            bitmap: Some(bitmap),
+        };
+        let seed = self.column_zero_elem(elem);
+        self.emit_reduce_fold(&access, ReduceOp::Sum, seed)
     }
 
     /// `min() -> T` / `max() -> T` — the smallest / largest valid slot,
@@ -2269,11 +2206,6 @@ impl<'ctx> super::Codegen<'ctx> {
         unsigned: bool,
         is_min: bool,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let i64_t = self.context.i64_type();
-        let bool_t = self.context.bool_type();
-        let fn_val = self
-            .current_fn
-            .ok_or_else(|| "Column.minmax outside function".to_string())?;
         let len = self
             .column_load_field(control, 2, "col.mm.len")
             .into_int_value();
@@ -2283,88 +2215,17 @@ impl<'ctx> super::Codegen<'ctx> {
         let bitmap = self
             .column_load_field(control, 1, "col.mm.bm")
             .into_pointer_value();
-        let idx = self.builder.build_alloca(i64_t, "col.mm.i").unwrap();
-        let acc = self.builder.build_alloca(elem, "col.mm.acc").unwrap();
-        let seeded = self.builder.build_alloca(bool_t, "col.mm.seeded").unwrap();
-        self.builder.build_store(idx, i64_t.const_zero()).unwrap();
-        self.builder
-            .build_store(acc, self.column_zero_elem(elem))
-            .unwrap();
-        self.builder
-            .build_store(seeded, bool_t.const_zero())
-            .unwrap();
-
-        let head = self.context.append_basic_block(fn_val, "col.mm.head");
-        let body = self.context.append_basic_block(fn_val, "col.mm.body");
-        let upd = self.context.append_basic_block(fn_val, "col.mm.upd");
-        let cont = self.context.append_basic_block(fn_val, "col.mm.cont");
-        let exit = self.context.append_basic_block(fn_val, "col.mm.exit");
-        self.builder.build_unconditional_branch(head).unwrap();
-        self.builder.position_at_end(head);
-        let i = self
-            .builder
-            .build_load(i64_t, idx, "col.mm.iv")
-            .unwrap()
-            .into_int_value();
-        let more = self
-            .builder
-            .build_int_compare(IntPredicate::ULT, i, len, "col.mm.more")
-            .unwrap();
-        self.builder
-            .build_conditional_branch(more, body, exit)
-            .unwrap();
-        self.builder.position_at_end(body);
-        let valid = self.column_load_valid_bit(bitmap, i);
-        self.builder
-            .build_conditional_branch(valid, upd, cont)
-            .unwrap();
-        self.builder.position_at_end(upd);
-        let x = self.column_gep_load(data, elem, i, "col.mm.x");
-        let cur = self.builder.build_load(elem, acc, "col.mm.cur").unwrap();
-        let s = self
-            .builder
-            .build_load(bool_t, seeded, "col.mm.s")
-            .unwrap()
-            .into_int_value();
-        // Strict compare `x ⋖ cur`; if not yet seeded, always take.
-        let op = if is_min { BinOp::Lt } else { BinOp::Gt };
-        let cmp = self
-            .compile_binop_typed(&op, x, cur, unsigned)?
-            .into_int_value();
-        let not_seeded = self.builder.build_not(s, "col.mm.ns").unwrap();
-        let take = self
-            .builder
-            .build_or(not_seeded, cmp, "col.mm.take")
-            .unwrap();
-        let newacc = self
-            .builder
-            .build_select(take, x, cur, "col.mm.new")
-            .unwrap();
-        self.builder.build_store(acc, newacc).unwrap();
-        self.builder
-            .build_store(seeded, bool_t.const_int(1, false))
-            .unwrap();
-        self.builder.build_unconditional_branch(cont).unwrap();
-        self.builder.position_at_end(cont);
-        let next = self
-            .builder
-            .build_int_add(i, i64_t.const_int(1, false), "col.mm.next")
-            .unwrap();
-        self.builder.build_store(idx, next).unwrap();
-        self.builder.build_unconditional_branch(head).unwrap();
-
-        self.builder.position_at_end(exit);
-        let s = self
-            .builder
-            .build_load(bool_t, seeded, "col.mm.sf")
-            .unwrap()
-            .into_int_value();
-        let method = if is_min { "min" } else { "max" };
-        self.emit_column_guard(
-            s,
-            &format!("cannot compute `{method}` on a column with no valid values"),
-        )?;
-        Ok(self.builder.build_load(elem, acc, "col.mm.result").unwrap())
+        // The shared validity-gated compare-select (`emit_reduce_minmax`
+        // dispatches on the `bitmap`): seed on the first valid slot, guard the
+        // all-null case.
+        let access = ContainerAccess {
+            data,
+            len,
+            elem,
+            unsigned,
+            bitmap: Some(bitmap),
+        };
+        self.emit_reduce_minmax(&access, !is_min)
     }
 
     /// `mean() -> f64` — `Σ valid / count` as `f64`; empty traps. The

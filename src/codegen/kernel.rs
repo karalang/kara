@@ -6,12 +6,15 @@
 //! (S0). It is the codegen counterpart of `src/reduce_kernel.rs`.
 //!
 //! The three surfaces share one index-fold skeleton; the axes that genuinely
-//! differ — the element source ([`ContainerAccess`]), the element kind, and
-//! per-surface knobs (seed, empty policy, result wrapping) — are parameters,
-//! not forks. **S1 migrates the contiguous no-validity fold family
-//! (`sum`/`prod`/`mean`) of `Stats` and `Tensor`;** the Arrow-nullable
-//! validity gate (`Column`), the `min`/`max` ordering family, and the
-//! non-f64 `ElemKind` axis land in later sub-slices.
+//! differ — the element source ([`ContainerAccess`], incl. the optional Arrow
+//! validity `bitmap`), the element kind, and per-surface knobs (seed, empty
+//! policy, result wrapping) — are parameters, not forks. **S1 migrates the
+//! `sum`/`prod`/`mean` fold family and the `min`/`max` ordering family of all
+//! three surfaces:** `Stats` + `Tensor` (dense, `bitmap: None`) and `Column`
+//! (Arrow-nullable, `bitmap: Some` → the `*_gated` variants that fold valid
+//! slots only and guard the all-null case in-emitter). Column `mean`/`var`/
+//! `std` accumulate in `f64` and keep their own path (S2), and the non-f64
+//! `ElemKind` axis for `Stats` lands later (S5).
 //!
 //! **Byte-identical.** The emitters here reduce to the exact instructions the
 //! hand-rolled loops emitted (`compile_binop_typed` lowers f64 `Add`/`Mul` to
@@ -26,20 +29,26 @@ use inkwell::{FloatPredicate, IntPredicate};
 use crate::ast::BinOp;
 use crate::reduce_kernel::ReduceOp;
 
-/// How a reduction reads its elements. One flat, contiguous, non-nullable
-/// numeric buffer — the `Stats` `Slice[f64]` and the `Tensor` C-order data
-/// block. Element `i` is `data[i]` at LLVM type `elem`; there is no validity
-/// bitmap (the `Column` Arrow-nullable form is a later slice).
+/// How a reduction reads its elements. Element `i` is `data[i]` at LLVM type
+/// `elem` over `[0, len)`. The three surfaces differ only in `bitmap`:
+///   * `None` — a flat, contiguous, non-nullable buffer (`Stats`' `Slice[f64]`
+///     and the `Tensor` C-order data block); every slot is read.
+///   * `Some(bm)` — the `Column` Apache-Arrow validity bitmap; only slots whose
+///     bit is set are folded (nulls skipped, the SQL/pandas posture), and the
+///     valid count drives the empty guard / `mean` divisor.
 pub(super) struct ContainerAccess<'ctx> {
     /// Base pointer of the element buffer.
     pub data: PointerValue<'ctx>,
     /// Number of elements.
     pub len: IntValue<'ctx>,
-    /// LLVM type of one element (`f64` for `Stats`; the tensor's `T`).
+    /// LLVM type of one element (`f64` for `Stats`; the tensor's / column's `T`).
     pub elem: BasicTypeEnum<'ctx>,
     /// Whether integer elements are unsigned (drives the fold's overflow
     /// semantics through `compile_binop_typed`). Ignored for float elements.
     pub unsigned: bool,
+    /// The Arrow validity bitmap (`Column`), or `None` for a dense buffer
+    /// (`Stats`/`Tensor`).
+    pub bitmap: Option<PointerValue<'ctx>>,
 }
 
 impl<'ctx> super::Codegen<'ctx> {
@@ -83,6 +92,11 @@ impl<'ctx> super::Codegen<'ctx> {
         op: ReduceOp,
         seed: BasicValueEnum<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // Arrow-nullable receiver (`Column`) — the validity-gated variant folds
+        // valid slots only and guards the empty-valid-set case in-emitter.
+        if let Some(bitmap) = access.bitmap {
+            return self.emit_reduce_fold_gated(access, bitmap, op, seed);
+        }
         let fold_op = match op {
             ReduceOp::Sum | ReduceOp::Mean => BinOp::Add,
             ReduceOp::Prod => BinOp::Mul,
@@ -170,11 +184,19 @@ impl<'ctx> super::Codegen<'ctx> {
     /// false, so NaN neither displaces the accumulator nor is taken — the
     /// scalar `<`/`>` posture matching `f64::min`/`max` and the interpreter.
     /// Returns the bare element-typed extreme.
+    ///
+    /// For an Arrow-nullable receiver (`Column`) the validity-gated variant is
+    /// used instead: it can't seed with element 0 (which may be null), so it
+    /// seeds on the first valid slot via a `seeded` flag and guards the
+    /// all-null case in-emitter.
     pub(super) fn emit_reduce_minmax(
         &mut self,
         access: &ContainerAccess<'ctx>,
         is_max: bool,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        if let Some(bitmap) = access.bitmap {
+            return self.emit_reduce_minmax_gated(access, bitmap, is_max);
+        }
         let i64_t = self.context.i64_type();
         let fn_val = self
             .current_fn
@@ -265,6 +287,235 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(self
             .builder
             .build_load(access.elem, acc, "kern.mm.out")
+            .unwrap())
+    }
+
+    /// Validity-gated fold (`Column.sum`): fold the valid slots only, tracking
+    /// the valid count, then guard the empty-valid-set case in-emitter (SQL/
+    /// pandas skip-nulls posture). Element-typed accumulator, bare-`T` result.
+    /// `Column.mean`/`var`/`std` accumulate in `f64` and keep their own path.
+    fn emit_reduce_fold_gated(
+        &mut self,
+        access: &ContainerAccess<'ctx>,
+        bitmap: PointerValue<'ctx>,
+        op: ReduceOp,
+        seed: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let (fold_op, method) = match op {
+            ReduceOp::Sum => (BinOp::Add, "sum"),
+            ReduceOp::Prod => (BinOp::Mul, "prod"),
+            other => {
+                return Err(format!(
+                    "emit_reduce_fold_gated: unsupported op {other:?} (element-typed gated fold \
+                     is Sum/Prod; mean/var/std accumulate in f64)"
+                ))
+            }
+        };
+        let i64_t = self.context.i64_type();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "gated reduce fold outside function".to_string())?;
+
+        let acc = self
+            .builder
+            .build_alloca(access.elem, "kern.gf.acc")
+            .unwrap();
+        self.builder.build_store(acc, seed).unwrap();
+        let idx = self.builder.build_alloca(i64_t, "kern.gf.i").unwrap();
+        self.builder.build_store(idx, i64_t.const_zero()).unwrap();
+        let cnt = self.builder.build_alloca(i64_t, "kern.gf.cnt").unwrap();
+        self.builder.build_store(cnt, i64_t.const_zero()).unwrap();
+
+        let head = self.context.append_basic_block(fn_val, "kern.gf.head");
+        let body = self.context.append_basic_block(fn_val, "kern.gf.body");
+        let add = self.context.append_basic_block(fn_val, "kern.gf.add");
+        let cont = self.context.append_basic_block(fn_val, "kern.gf.cont");
+        let exit = self.context.append_basic_block(fn_val, "kern.gf.exit");
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(head);
+        let iv = self
+            .builder
+            .build_load(i64_t, idx, "kern.gf.iv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, iv, access.len, "kern.gf.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, body, exit)
+            .unwrap();
+
+        self.builder.position_at_end(body);
+        let valid = self.column_load_valid_bit(bitmap, iv);
+        self.builder
+            .build_conditional_branch(valid, add, cont)
+            .unwrap();
+
+        self.builder.position_at_end(add);
+        let x = self.access_load(access, iv);
+        let a = self
+            .builder
+            .build_load(access.elem, acc, "kern.gf.a")
+            .unwrap();
+        let a2 = self.compile_binop_typed(&fold_op, a, x, access.unsigned)?;
+        self.builder.build_store(acc, a2).unwrap();
+        let c = self
+            .builder
+            .build_load(i64_t, cnt, "kern.gf.c")
+            .unwrap()
+            .into_int_value();
+        let c2 = self
+            .builder
+            .build_int_add(c, i64_t.const_int(1, false), "kern.gf.c2")
+            .unwrap();
+        self.builder.build_store(cnt, c2).unwrap();
+        self.builder.build_unconditional_branch(cont).unwrap();
+
+        self.builder.position_at_end(cont);
+        let next = self
+            .builder
+            .build_int_add(iv, i64_t.const_int(1, false), "kern.gf.next")
+            .unwrap();
+        self.builder.build_store(idx, next).unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(exit);
+        let cnt_v = self
+            .builder
+            .build_load(i64_t, cnt, "kern.gf.cntv")
+            .unwrap()
+            .into_int_value();
+        let ok = self
+            .builder
+            .build_int_compare(IntPredicate::UGT, cnt_v, i64_t.const_zero(), "kern.gf.ok")
+            .unwrap();
+        self.emit_column_guard(
+            ok,
+            &format!("cannot compute `{method}` on a column with no valid values"),
+        )?;
+        Ok(self
+            .builder
+            .build_load(access.elem, acc, "kern.gf.result")
+            .unwrap())
+    }
+
+    /// Validity-gated `min`/`max` (`Column.min`/`max`): seed on the first valid
+    /// slot via a `seeded` flag (nulls may precede it, so element 0 can't seed),
+    /// take the strictly smaller/larger valid element via compare-select, and
+    /// guard the all-null case in-emitter. Bare-`T` result.
+    fn emit_reduce_minmax_gated(
+        &mut self,
+        access: &ContainerAccess<'ctx>,
+        bitmap: PointerValue<'ctx>,
+        is_max: bool,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let bool_t = self.context.bool_type();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "gated reduce minmax outside function".to_string())?;
+        // Dummy seed (overwritten on the first valid slot via the `seeded`
+        // flag); `const_zero` matches `column_zero_elem`.
+        let zero = match access.elem {
+            BasicTypeEnum::FloatType(ft) => ft.const_zero().into(),
+            BasicTypeEnum::IntType(it) => it.const_zero().into(),
+            other => other.const_zero(),
+        };
+
+        let idx = self.builder.build_alloca(i64_t, "kern.gm.i").unwrap();
+        let acc = self
+            .builder
+            .build_alloca(access.elem, "kern.gm.acc")
+            .unwrap();
+        let seeded = self.builder.build_alloca(bool_t, "kern.gm.seeded").unwrap();
+        self.builder.build_store(idx, i64_t.const_zero()).unwrap();
+        self.builder.build_store(acc, zero).unwrap();
+        self.builder
+            .build_store(seeded, bool_t.const_zero())
+            .unwrap();
+
+        let head = self.context.append_basic_block(fn_val, "kern.gm.head");
+        let body = self.context.append_basic_block(fn_val, "kern.gm.body");
+        let upd = self.context.append_basic_block(fn_val, "kern.gm.upd");
+        let cont = self.context.append_basic_block(fn_val, "kern.gm.cont");
+        let exit = self.context.append_basic_block(fn_val, "kern.gm.exit");
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(head);
+        let iv = self
+            .builder
+            .build_load(i64_t, idx, "kern.gm.iv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, iv, access.len, "kern.gm.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, body, exit)
+            .unwrap();
+
+        self.builder.position_at_end(body);
+        let valid = self.column_load_valid_bit(bitmap, iv);
+        self.builder
+            .build_conditional_branch(valid, upd, cont)
+            .unwrap();
+
+        self.builder.position_at_end(upd);
+        let x = self.access_load(access, iv);
+        let cur = self
+            .builder
+            .build_load(access.elem, acc, "kern.gm.cur")
+            .unwrap();
+        let s = self
+            .builder
+            .build_load(bool_t, seeded, "kern.gm.s")
+            .unwrap()
+            .into_int_value();
+        // Strict compare `x ⋖ cur`; take unconditionally when not yet seeded.
+        let cmp_op = if is_max { BinOp::Gt } else { BinOp::Lt };
+        let cmp = self
+            .compile_binop_typed(&cmp_op, x, cur, access.unsigned)?
+            .into_int_value();
+        let not_seeded = self.builder.build_not(s, "kern.gm.ns").unwrap();
+        let take = self
+            .builder
+            .build_or(not_seeded, cmp, "kern.gm.take")
+            .unwrap();
+        let newacc = self
+            .builder
+            .build_select(take, x, cur, "kern.gm.new")
+            .unwrap();
+        self.builder.build_store(acc, newacc).unwrap();
+        self.builder
+            .build_store(seeded, bool_t.const_int(1, false))
+            .unwrap();
+        self.builder.build_unconditional_branch(cont).unwrap();
+
+        self.builder.position_at_end(cont);
+        let next = self
+            .builder
+            .build_int_add(iv, i64_t.const_int(1, false), "kern.gm.next")
+            .unwrap();
+        self.builder.build_store(idx, next).unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(exit);
+        let s = self
+            .builder
+            .build_load(bool_t, seeded, "kern.gm.sf")
+            .unwrap()
+            .into_int_value();
+        let method = if is_max { "max" } else { "min" };
+        self.emit_column_guard(
+            s,
+            &format!("cannot compute `{method}` on a column with no valid values"),
+        )?;
+        Ok(self
+            .builder
+            .build_load(access.elem, acc, "kern.gm.result")
             .unwrap())
     }
 }

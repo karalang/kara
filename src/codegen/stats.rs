@@ -175,6 +175,7 @@ impl<'ctx> super::Codegen<'ctx> {
             len,
             elem: f64_t.into(),
             unsigned: false,
+            bitmap: None,
         };
         let (op, seed) = if is_mul {
             (ReduceOp::Prod, f64_t.const_float(1.0))
@@ -390,6 +391,7 @@ impl<'ctx> super::Codegen<'ctx> {
             len,
             elem: f64_t.into(),
             unsigned: false,
+            bitmap: None,
         };
         let result = self
             .emit_reduce_minmax(&access, is_max)

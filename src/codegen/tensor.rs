@@ -2849,6 +2849,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 len: count,
                 elem,
                 unsigned: is_unsigned,
+                bitmap: None,
             };
             return self.emit_reduce_fold(&access, op, seed);
         }
@@ -2859,6 +2860,7 @@ impl<'ctx> super::Codegen<'ctx> {
             len: count,
             elem,
             unsigned: is_unsigned,
+            bitmap: None,
         };
         self.emit_reduce_minmax(&access, method == "max")
     }
@@ -2930,6 +2932,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 len: rdims[0],
                 elem: in_elem,
                 unsigned: in_unsigned,
+                bitmap: None,
             };
             let acc = self.emit_reduce_fold(&access, ReduceOp::Sum, seed)?;
             if is_mean {
