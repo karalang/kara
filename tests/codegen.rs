@@ -18652,6 +18652,129 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_for_self_field_vec_iter_in_impl_method() {
+        // Silent-miscompile gate: `for s in self.items.iter()` inside an
+        // impl method iterated ZERO times in codegen while the interpreter
+        // iterated correctly (`self` parses as `SelfValue`, which
+        // `try_compile_for_field_iter`'s inner-receiver match didn't handle
+        // — it fell through to the dispatcher's silent `_ =>` skip). The
+        // `ref self` receiver also needs ref-param-aware pointer resolution
+        // (`get_data_ptr`), since the alloca holds a pointer-TO-struct.
+        // Also exercises the bare form `for s in self.items` (no `.iter()`),
+        // which routes through the same helper. Expected sum: base 100 +
+        // len(52) + len(49) == 201. String payloads are >36 bytes so the
+        // LSan gate exercises real heap element frees.
+        let out = run_program(
+            r#"
+struct Counter { items: Vec[String], base: i64 }
+impl Counter {
+    fn total_iter(ref self) -> i64 {
+        let mut t = self.base;
+        for s in self.items.iter() { t = t + s.len(); };
+        return t;
+    }
+    fn total_bare(ref self) -> i64 {
+        let mut t = self.base;
+        for s in self.items { t = t + s.len(); };
+        return t;
+    }
+    fn count(ref self) -> i64 { return self.items.len(); }
+}
+fn make_counter() -> Counter {
+    let mut c = Counter { items: Vec.new(), base: 100_i64 };
+    c.items.push("first field string padded beyond thirty-six bytes ok");
+    c.items.push("second field string padded beyond thirty-six byte");
+    return c;
+}
+fn main() {
+    let c = make_counter();
+    println(c.total_iter());
+    println(c.total_bare());
+    println(c.count());
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["201", "201", "2"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_for_self_field_vec_iter_shared_struct() {
+        // Shared-struct sibling of the plain-struct self-field for-loop fix.
+        // A `shared struct` receiver reached the loop via the same
+        // `try_compile_for_field_iter` helper but the hand-rolled resolver
+        // single-loaded `slot.ptr` — one indirection short for a `ref self`
+        // shared handle (the alloca holds a pointer-TO-handle) — so the field
+        // GEP read a garbage `{ptr,len,cap}` → 0 iterations. Delegating to
+        // `lower_field_access_ptr` (which walks `compile_expr(self)`'s full
+        // ref-param deref chain) resolves the heap struct pointer correctly on
+        // both owned and `ref self` shared receivers. Expected: base 10 +
+        // len(55) + len(54) == 119.
+        let out = run_program(
+            r#"
+shared struct SBag { mut items: Vec[String], base: i64 }
+impl SBag {
+    fn total(ref self) -> i64 {
+        let mut t = self.base;
+        for s in self.items.iter() { t = t + s.len(); };
+        return t;
+    }
+}
+fn main() {
+    let b = SBag { items: Vec.new(), base: 10_i64 };
+    b.items.push("shared field string padded beyond thirty-six bytes okay");
+    b.items.push("another shared field string beyond thirty-six bytes ok");
+    println(b.total());
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["119"]);
+        }
+    }
+
+    #[test]
+    fn test_ir_for_self_field_vec_iter_emits_loop_body() {
+        // Structural guard for the silent-skip regression: the compiled
+        // `total_iter` must contain a real for-vec loop over the field —
+        // the `for.cond` / `for.body` blocks and the element load. When the
+        // SelfValue arm was missing, the body was skipped entirely and none
+        // of these appeared (the loop lowered to nothing).
+        let ir = ir_for(
+            r#"
+struct Counter { items: Vec[String], base: i64 }
+impl Counter {
+    fn total_iter(ref self) -> i64 {
+        let mut t = self.base;
+        for s in self.items.iter() { t = t + s.len(); };
+        return t;
+    }
+}
+fn main() {
+    let mut c = Counter { items: Vec.new(), base: 0_i64 };
+    c.items.push("x");
+    println(c.total_iter());
+}
+"#,
+        );
+        assert!(
+            ir.contains("for.cond") && ir.contains("for.body"),
+            "for-loop over `self.items.iter()` must emit a real loop body \
+             (for.cond/for.body), not the silent 0-iteration skip\n--- ir ---\n{ir}"
+        );
+        // The field GEP for a plain (non-shared) struct hangs off `fr_pl_items`
+        // (emitted by the shared `lower_field_access_ptr` resolver).
+        assert!(
+            ir.contains("fr_pl_items"),
+            "the field pointer GEP (`fr_pl_<field>`) must be emitted for the \
+             self-field vec source\n--- ir ---\n{ir}"
+        );
+    }
+
+    #[test]
     fn test_e2e_field_receiver_indexed_inner_vec_push() {
         // Slice FR follow-up (2026-05-16): `outer[i].field.method(...)`
         // chained Index→FieldAccess→method dispatch. The inner Index

@@ -3318,6 +3318,82 @@ fn main() {
     }
 
     #[test]
+    fn asan_for_self_field_vec_iter_no_double_free() {
+        // `for s in self.items.iter()` inside an impl method (`ref self`) —
+        // the silent-0-iteration miscompile fix. The loop binds each field
+        // String element as a BORROW: the enclosing `Counter` owns the field
+        // Vec and frees each element String exactly once at the struct's own
+        // scope-exit drop, so the loop body must NOT independently free `s`
+        // (else double-free on macOS ASAN), and every element String must be
+        // freed once by the struct drop (else leak on Linux LSan). Two
+        // counters are built and totalled so the field buffers are freed on a
+        // real path. ≥36-byte payloads defeat LSan short-string reachability.
+        assert_clean_asan_run(
+            r#"
+struct Counter { items: Vec[String], base: i64 }
+impl Counter {
+    fn total(ref self) -> i64 {
+        let mut t = self.base;
+        for s in self.items.iter() { t = t + s.len(); };
+        return t;
+    }
+}
+fn make_counter(tag: i64) -> Counter {
+    let mut c = Counter { items: Vec.new(), base: tag };
+    c.items.push("first field string padded well beyond thirty-six bytes ok");
+    c.items.push("second field string padded well beyond thirty-six byte");
+    return c;
+}
+fn main() {
+    let a = make_counter(100_i64);
+    println(a.total());
+    let b = make_counter(200_i64);
+    println(b.total());
+}
+"#,
+            &["211", "311"],
+            "for_self_field_vec_iter_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_for_shared_self_field_vec_iter_no_double_free() {
+        // Shared-struct sibling of `asan_for_self_field_vec_iter_no_double_free`.
+        // `for s in self.items.iter()` on a `shared struct` `ref self` receiver:
+        // the field Vec[String] is owned by the RC struct and freed once when
+        // the last handle drops, so the loop's `s` bindings must be borrows (no
+        // per-iteration free → no double-free on macOS ASAN; every element freed
+        // once by the struct drop → no leak on Linux LSan). ≥36-byte payloads
+        // defeat LSan short-string reachability.
+        assert_clean_asan_run(
+            r#"
+shared struct SBag { mut items: Vec[String], base: i64 }
+impl SBag {
+    fn total(ref self) -> i64 {
+        let mut t = self.base;
+        for s in self.items.iter() { t = t + s.len(); };
+        return t;
+    }
+}
+fn make_bag(tag: i64) -> SBag {
+    let b = SBag { items: Vec.new(), base: tag };
+    b.items.push("shared field string padded well beyond thirty-six bytes ok");
+    b.items.push("another shared field string well beyond thirty-six byte");
+    return b;
+}
+fn main() {
+    let a = make_bag(10_i64);
+    println(a.total());
+    let b = make_bag(20_i64);
+    println(b.total());
+}
+"#,
+            &["123", "133"],
+            "for_shared_self_field_vec_iter_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_freshtemp_vec_enum_get_no_double_free() {
         // Slice 3g: `make_toks().get(i)` on a fresh-temp `Vec[Tok]` where `Tok`
         // is a user enum with a heap-bearing variant (`Word { s: String }`), in
