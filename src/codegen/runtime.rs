@@ -1584,8 +1584,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // tag-guarded `karac_drop_Option_<payload>`. Gated to inline
         // {ptr,len,cap} payloads (String / Vec-of-supported) — a scalar
         // payload has no cap word to guard on, and boxed/handle payloads
-        // aren't the inline overlay shape. `Result` (two payload types) stays
-        // unhandled.
+        // aren't the inline overlay shape. (`Result` gets its own tag-dispatch
+        // arm below — slice 3q.)
         if name == "Option" {
             if let TypeKind::Path(p) = &elem_te.kind {
                 if let Some(GenericArg::Type(payload)) =
@@ -1598,7 +1598,25 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             return None;
         }
+        // `Result[T, E]` element (slice 3q, the Option sibling): dispatch on
+        // the tag and drop the live side's inline payload overlay via
+        // `karac_drop_Result_<ok>_<err>`. Gated so every heap-owning side is
+        // an inline String/Vec overlay shape and at least one side owns heap
+        // (an all-scalar Result stays on the correct heapless fast path).
         if name == "Result" {
+            if let TypeKind::Path(p) = &elem_te.kind {
+                let arg = |i: usize| -> Option<&TypeExpr> {
+                    match p.generic_args.as_ref()?.get(i)? {
+                        GenericArg::Type(t) => Some(t),
+                        _ => None,
+                    }
+                };
+                if let (Some(ok), Some(err)) = (arg(0), arg(1)) {
+                    if self.result_payload_inline_recursive_drop_ok(ok, err) {
+                        return self.emit_result_drop_fn(ok, err);
+                    }
+                }
+            }
             return None;
         }
         // B-2026-06-14-28 — a `shared` struct / enum element (`Vec[Expr]`,
@@ -1670,7 +1688,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (A user struct/enum is conservatively "owns heap" but is separately
     /// excluded by `te_recursive_drop_fully_supported`, so it never reaches the
     /// recursive path from here.)
-    fn te_owns_heap_below_buffer(&self, te: &TypeExpr) -> bool {
+    pub(super) fn te_owns_heap_below_buffer(&self, te: &TypeExpr) -> bool {
         match &te.kind {
             TypeKind::Tuple(elems) => elems.iter().any(|e| self.te_owns_heap_below_buffer(e)),
             TypeKind::Path(p) => {
@@ -1736,16 +1754,22 @@ impl<'ctx> super::Codegen<'ctx> {
                     // tag-guarded `emit_option_drop_fn` frees the inline `Some`
                     // payload, reached via the same named-type delegation.
                     // Unsupported payloads (scalar / boxed / handle / tuple)
-                    // stay false. `Result` stays false (two payload types, no
-                    // drop fn yet).
+                    // stay false.
                     "Option" => {
                         arg(0).is_some_and(|t| self.option_payload_inline_recursive_drop_ok(t))
                     }
+                    // `Result[T, E]` (slice 3q): same delegation shape.
+                    "Result" => match (arg(0), arg(1)) {
+                        (Some(ok), Some(err)) => {
+                            self.result_payload_inline_recursive_drop_ok(ok, err)
+                        }
+                        _ => false,
+                    },
                     // A user struct / enum / shared type: its own drop synthesis
                     // (reached via the `emit_drop_fn_for_type_expr` named-type
                     // delegation) frees every heap field / variant payload, so a
-                    // `Vec[..<struct>..]` element recurses correctly. `Result`
-                    // and unknown names stay false.
+                    // `Vec[..<struct>..]` element recurses correctly. Unknown
+                    // names stay false.
                     _ => {
                         self.struct_types.contains_key(head)
                             || self.enum_layouts.contains_key(head)
@@ -1764,6 +1788,25 @@ impl<'ctx> super::Codegen<'ctx> {
     /// cap word (w2 would be read as garbage), a boxed/wide payload lives
     /// behind a box pointer, and Map/Set handles are single pointers — none
     /// are the inline overlay shape, so they're all excluded.
+    /// `Result[T, E]` sibling of the Option gate: true iff at least one side
+    /// owns heap (else there is nothing to drop — the heapless fast path is
+    /// already exact) and EVERY heap-owning side is an inline
+    /// `{ptr,len,cap}`-overlay shape the recursive family fully frees
+    /// (String / Vec-of-supported). A heapless side (scalar / unit) is fine —
+    /// its arm just emits no drop call.
+    pub(super) fn result_payload_inline_recursive_drop_ok(
+        &self,
+        ok_te: &TypeExpr,
+        err_te: &TypeExpr,
+    ) -> bool {
+        let side_ok = |te: &TypeExpr| {
+            !self.te_owns_heap_below_buffer(te) || self.option_payload_inline_recursive_drop_ok(te)
+        };
+        (self.te_owns_heap_below_buffer(ok_te) || self.te_owns_heap_below_buffer(err_te))
+            && side_ok(ok_te)
+            && side_ok(err_te)
+    }
+
     pub(super) fn option_payload_inline_recursive_drop_ok(&self, payload_te: &TypeExpr) -> bool {
         match &payload_te.kind {
             TypeKind::Path(p) => {

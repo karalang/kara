@@ -19622,6 +19622,64 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_inferred_let_vec_result_string_gets_result_drop() {
+        // Slice 3q: a `Vec[Result[String, i64]]` element gets the tag-dispatching
+        // `karac_drop_Result_<ok>_<err>` — on `Ok` the payload {ptr,len,cap}
+        // overlay frees via the String drop; the scalar `Err` arm emits no call.
+        // Asserted on the INFERRED spelling (`..._str_i64` — the un-annotated
+        // `let v = build(1)` main-side binding, per the 3p spelling-trap lesson:
+        // the annotated producer local emits the `String`-spelled fn that is
+        // runtime-suppressed by the return move-out, so module presence of THAT
+        // name proves nothing about the consumer).
+        let src = r#"
+fn build(n: i64) -> Vec[Result[String, i64]] {
+    let mut v: Vec[Result[String, i64]] = Vec.new();
+    v.push(Ok(f"alpha ok payload padded out beyond thirty-six bytes {n}"));
+    v.push(Err(7_i64));
+    return v;
+}
+fn main() {
+    let v = build(1);
+    println(v.len());
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("karac_drop_Result_str_i64"),
+            "expected the inferred main-side binding to get the tag-dispatching \
+             Result element drop (karac_drop_Result_str_i64); got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_vec_of_result_all_scalar_keeps_fast_path() {
+        // Slice 3q negative: `Vec[Result[i64, i64]]` owns no heap on either side
+        // — emitting a Result drop would read w2 as a cap and free garbage. The
+        // `result_payload_inline_recursive_drop_ok` gate (at-least-one-heap-side)
+        // keeps it on the correct heapless fast path.
+        let src = r#"
+fn build() -> Vec[Result[i64, i64]] {
+    let mut v: Vec[Result[i64, i64]] = Vec.new();
+    v.push(Ok(1_i64));
+    v.push(Err(2_i64));
+    return v;
+}
+fn main() {
+    let v = build();
+    println(v.len());
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            !ir.contains("karac_drop_Result_"),
+            "Vec[Result[i64,i64]] must NOT get a Result element drop (no heap side); \
+             got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_ir_ref_arg_nested_vec_elem_freed() {
         // Slice 2 part B: a fresh `Vec[String]` passed to a `ref Vec[String]`
         // param is materialized into a `ref_rvalue_arg` temp. The prior path

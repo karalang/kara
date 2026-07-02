@@ -721,11 +721,51 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    `test_ir_inferred_let_vec_option_string_gets_option_drop` → the inferred-
    spelling `karac_drop_Option_str`) + 4 ASAN (scope-exit one-level + two-level
    Option[String] (f-strings, LSan-RED pre-fix), the push-binding double-free
-   regression, Option[Vec[i64]]). **Still open (drop surface):** `Result`
-   elements; boxed/wide Option payloads; the `Map`-value drop leg (deferred gap
-   (d)); struct fields that are THEMSELVES structs-with-heap (pre-existing
-   `emit_struct_drop_synthesis` limit, orthogonal); `get_unchecked` on
-   `Vec[String]`; heap K/V (`Map[String, Vec[T]]`) on temps.
+   regression, Option[Vec[i64]]).
+   **Slice 3q — `Vec[Result[T,E]]` element drop + the loop-element
+   consume-from-copy double-free (fixes a 3p regression that reached main). —
+   DONE 2026-07-01.** Three parts. **(1) Result elements:** the Option sibling —
+   `emit_result_drop_fn` synthesizes the tag-DISPATCHING
+   `karac_drop_Result_<ok>_<err>` (`Ok`/`Err` payloads OVERLAY the same w0..w2;
+   the live side's inline `{ptr,len,cap}` overlay is handed to that side's
+   recursive drop; a heapless side — `Err(i64)` — emits no call). Gated by
+   `result_payload_inline_recursive_drop_ok`: at least one side owns heap AND
+   every heap side is an inline String/Vec shape; `Vec[Result[i64,i64]]` is
+   IR-pinned to the heapless fast path. Push family disarms a moved Result
+   binding (`suppress_inline_result_payload_cleanup_for_moved_arg`, cap-zero
+   field 3 — Ok/Err share the cap word). LSan-RED pre-fix (every payload).
+   **(2) Loop-element consume-from-copy double-free — a 3p REGRESSION that
+   reached main (08fbb440):** `for o in v { match o { Some(s) => … } }` over a
+   `Vec[Option[String]]` SIGTRAP'd — the loop binding is a bit-copy of the
+   container's element; the `Some(s)` arm bound the payload out and registered
+   its own free, double-freeing against the (3p-armed) container element drop.
+   The 3p adversarial probe had run BEFORE the `str`-spelling fix armed the drop
+   on that shape, so it validated nothing — probe order matters: re-run EVERY
+   adversarial probe after the last code change. Fix: `mark_for_loop_borrow_if_
+   heap` (types_lowering) now also marks Option/Result-with-armed-payload loop
+   elements in `for_loop_borrow_vars`, and `scrutinee_is_borrowed_binding`
+   consults that set — a payload-consuming arm ALIASES the borrowed element and
+   registers no free; the container's element drop is the single owner. Inert
+   for the set's other consumer (`maybe_defensive_copy_param_arg` requires
+   `vec_elem_types` membership, which Option/Result loop vars lack).
+   **(3) The `if let`/`while let`/`let…else` bind sites never consulted the
+   borrow flag at all** (only `match` set `pattern_binding_is_borrow`), so the
+   if-let form still crashed after the match fix. All three sites now OR-in
+   `scrutinee_is_borrowed_binding(value)` around `bind_pattern_values` —
+   full codegen suite (1952) confirms no regression from the wider flag.
+   Verified rmix `240` / oadv `188` / iflet `184` / vres `2×3` / radv `1×4` —
+   all matching the interpreter, zero macOS leaks, Linux LSan result-filter
+   10/10 + loop-element-filter 6/6. **Tests:** 2 IR
+   (`test_ir_inferred_let_vec_result_string_gets_result_drop` → the
+   inferred-spelled `karac_drop_Result_str_i64`, per the 3p spelling-trap
+   lesson; `…_all_scalar_keeps_fast_path` → NO `karac_drop_Result_`) + 5 ASAN
+   (Result scope-exit f-strings; Result push-binding; loop-element match over
+   Option AND Result; loop-element if-let over Option — the last three pin the
+   regression class). **Still open (drop surface):** boxed/wide Option/Result
+   payloads; the `Map`-value drop leg (deferred gap (d)); struct fields that are
+   THEMSELVES structs-with-heap (pre-existing `emit_struct_drop_synthesis`
+   limit, orthogonal); `get_unchecked` on `Vec[String]`; heap K/V
+   (`Map[String, Vec[T]]`) on temps.
    **Slice 3b-c — operator-operand temps. — DONE 2026-06-29.** `make_str() + "x"`
    leaked the fresh `make_str()` operand. Confirmed the spike's diagnosis: a
    String `+` (and `==`/`<`/… comparison) desugars in `lowering.rs`

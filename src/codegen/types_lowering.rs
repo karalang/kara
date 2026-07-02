@@ -1181,7 +1181,7 @@ impl<'ctx> super::Codegen<'ctx> {
             PatternKind::Binding(name) => {
                 if let Some(elem_te) = self.var_elem_type_exprs.get(source_var).cloned() {
                     self.register_var_from_type_expr(name, &elem_te);
-                    self.mark_for_loop_borrow_if_heap(name);
+                    self.mark_for_loop_borrow_if_heap(name, &elem_te);
                 }
             }
             // `for (k, v) in m` — only legal tuple iteration shape today
@@ -1191,13 +1191,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let PatternKind::Binding(k_name) = &pats[0].kind {
                     if let Some(k_te) = self.map_key_type_exprs.get(source_var).cloned() {
                         self.register_var_from_type_expr(k_name, &k_te);
-                        self.mark_for_loop_borrow_if_heap(k_name);
+                        self.mark_for_loop_borrow_if_heap(k_name, &k_te);
                     }
                 }
                 if let PatternKind::Binding(v_name) = &pats[1].kind {
                     if let Some(v_te) = self.var_elem_type_exprs.get(source_var).cloned() {
                         self.register_var_from_type_expr(v_name, &v_te);
-                        self.mark_for_loop_borrow_if_heap(v_name);
+                        self.mark_for_loop_borrow_if_heap(v_name, &v_te);
                     }
                 }
             }
@@ -1206,12 +1206,42 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// Mark a `for`-loop element binding as a heap borrow needing a defensive
-    /// copy at retaining-consume sites (see `for_loop_borrow_vars`). Only
-    /// String / Vec (`{ptr,len,cap}`) elements qualify — scalars carry no
-    /// buffer to alias, so consuming them is a plain bit-copy.
-    pub(super) fn mark_for_loop_borrow_if_heap(&mut self, name: &str) {
+    /// copy at retaining-consume sites (see `for_loop_borrow_vars`). String /
+    /// Vec (`{ptr,len,cap}`) elements qualify, and — slice 3q — so does an
+    /// `Option`/`Result` element whose heap payload the container's per-element
+    /// drop now frees (`karac_drop_Option_/Result_*`): the loop binding is a
+    /// bit-copy of the container's element, so a `match o { Some(s) => … }` arm
+    /// must treat it as BORROWED (`scrutinee_is_borrowed_binding` consults this
+    /// set) — a payload binding that registered its own free would double-free
+    /// against the container's element drop (found live: exit-133 on
+    /// iterate+match over `Vec[Option[String]]`/`Vec[Result[String,_]]`).
+    /// Scalars carry no buffer to alias, so consuming them is a plain bit-copy
+    /// and stays unmarked (an unarmed container keeps the old consume+free
+    /// balance).
+    pub(super) fn mark_for_loop_borrow_if_heap(&mut self, name: &str, elem_te: &TypeExpr) {
         if self.vec_elem_types.contains_key(name) {
             self.for_loop_borrow_vars.insert(name.to_string());
+            return;
+        }
+        if let TypeKind::Path(pp) = &elem_te.kind {
+            let head = pp.segments.first().map(String::as_str).unwrap_or("");
+            let arg = |i: usize| -> Option<&TypeExpr> {
+                match pp.generic_args.as_ref()?.get(i)? {
+                    GenericArg::Type(t) => Some(t),
+                    _ => None,
+                }
+            };
+            let armed = match head {
+                "Option" => arg(0).is_some_and(|t| self.option_payload_inline_recursive_drop_ok(t)),
+                "Result" => match (arg(0), arg(1)) {
+                    (Some(ok), Some(err)) => self.result_payload_inline_recursive_drop_ok(ok, err),
+                    _ => false,
+                },
+                _ => false,
+            };
+            if armed {
+                self.for_loop_borrow_vars.insert(name.to_string());
+            }
         }
     }
 

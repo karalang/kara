@@ -1596,9 +1596,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // for a nested element, which (like a Vec element) has no `let`
                 // cleanup to rc-dec its shared fields — and (3p) routes an
                 // `Option[String]` / `Option[Vec[..]]` element to the tag-guarded
-                // `emit_option_drop_fn`. Returns None for a heapless struct/enum
-                // (and for Result / unsupported Option payloads), which falls
-                // through to the primitive no-op below. `te` here is never a
+                // `emit_option_drop_fn`, and (3q) a `Result[T, E]` element to the
+                // tag-dispatching `emit_result_drop_fn`. Returns None for a
+                // heapless struct/enum (and unsupported Option/Result payloads),
+                // which falls through to the primitive no-op below. `te` here is never a
                 // Vec/Map/Set/String (those return above), so this can't re-enter
                 // the collection arms — no unbounded recursion.
                 if let Some(f) = self.vec_elem_agg_drop_for_type_expr(te) {
@@ -1711,6 +1712,135 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.position_at_end(bb);
         }
         drop_fn
+    }
+
+    /// Emit `karac_drop_Result_<ok>_<err>` — the `Result[T, E]` sibling of
+    /// `emit_option_drop_fn` (owned-temp slice 3q). Same type-erased
+    /// `{tag, w0, w1, w2}` layout; the `Ok` and `Err` payloads OVERLAY the
+    /// same words w0..w2, so a GEP to field 1 is the live variant's payload
+    /// `{ptr, len, cap}` — dispatch on the tag and hand the overlay to that
+    /// side's recursive drop fn. A HEAPLESS side (scalar / unit — e.g. the
+    /// `E` in `Result[String, i64]`) emits no call for its arm (there is no
+    /// cap word to read); the caller's gate
+    /// (`result_payload_inline_recursive_drop_ok`) guarantees every
+    /// heap-owning side is an inline String/Vec overlay shape. Returns None
+    /// only when the program has no Result layout registered.
+    pub(super) fn emit_result_drop_fn(
+        &mut self,
+        ok_te: &TypeExpr,
+        err_te: &TypeExpr,
+    ) -> Option<FunctionValue<'ctx>> {
+        let (result_ty, ok_tag, err_tag) = {
+            let layout = self.enum_layouts.get("Result")?;
+            (
+                layout.llvm_type,
+                layout.tags.get("Ok").copied().unwrap_or(0),
+                layout.tags.get("Err").copied().unwrap_or(1),
+            )
+        };
+        let type_name = format!(
+            "Result_{}_{}",
+            Self::display_mangle_te(ok_te),
+            Self::display_mangle_te(err_te)
+        );
+        if let Some(&f) = self.drop_fn_cache.get(&type_name) {
+            return Some(f);
+        }
+        let fn_name = format!("karac_drop_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.drop_fn_cache.insert(type_name, f);
+            return Some(f);
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        // Recurse first (sub-emitters may move the builder); a heapless side
+        // gets no drop fn and its arm is a plain fall-through.
+        let ok_drop = self
+            .te_owns_heap_below_buffer(ok_te)
+            .then(|| self.emit_drop_fn_for_type_expr(ok_te));
+        let err_drop = self
+            .te_owns_heap_below_buffer(err_te)
+            .then(|| self.emit_drop_fn_for_type_expr(err_te));
+
+        let saved_bb = self.builder.get_insert_block();
+        let drop_fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        let drop_fn = self
+            .module
+            .add_function(&fn_name, drop_fn_ty, Some(Linkage::Internal));
+        self.drop_fn_cache.insert(type_name, drop_fn);
+
+        let entry_bb = self.context.append_basic_block(drop_fn, "entry");
+        let ok_bb = self.context.append_basic_block(drop_fn, "ok");
+        let not_ok_bb = self.context.append_basic_block(drop_fn, "not.ok");
+        let err_bb = self.context.append_basic_block(drop_fn, "err");
+        let exit_bb = self.context.append_basic_block(drop_fn, "exit");
+
+        self.builder.position_at_end(entry_bb);
+        let val = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let tag_ptr = self
+            .builder
+            .build_struct_gep(result_ty, val, 0, "tag.p")
+            .unwrap();
+        let tag = self
+            .builder
+            .build_load(i64_t, tag_ptr, "tag")
+            .unwrap()
+            .into_int_value();
+        let payload_base = self
+            .builder
+            .build_struct_gep(result_ty, val, 1, "payload")
+            .unwrap();
+        let is_ok = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                tag,
+                i64_t.const_int(ok_tag, false),
+                "is.ok",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_ok, ok_bb, not_ok_bb)
+            .unwrap();
+
+        self.builder.position_at_end(ok_bb);
+        if let Some(f) = ok_drop {
+            self.builder
+                .build_call(f, &[payload_base.into()], "")
+                .unwrap();
+        }
+        self.builder.build_unconditional_branch(exit_bb).unwrap();
+
+        self.builder.position_at_end(not_ok_bb);
+        let is_err = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                tag,
+                i64_t.const_int(err_tag, false),
+                "is.err",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_err, err_bb, exit_bb)
+            .unwrap();
+
+        self.builder.position_at_end(err_bb);
+        if let Some(f) = err_drop {
+            self.builder
+                .build_call(f, &[payload_base.into()], "")
+                .unwrap();
+        }
+        self.builder.build_unconditional_branch(exit_bb).unwrap();
+
+        self.builder.position_at_end(exit_bb);
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Some(drop_fn)
     }
 
     /// Emit `karac_drop_Option_<payload>` — the tag-guarded drop for an

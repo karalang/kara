@@ -74,7 +74,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // enclosing frame, where a then-block inside a loop would inc once
         // per iteration but dec only once at the enclosing scope's exit.
         self.scope_cleanup_actions.push(Vec::new());
+        // Borrowed identifier scrutinee (slice 3q): a `ref` param or a
+        // for-loop ELEMENT binding whose container's per-element drop is armed
+        // (`scrutinee_is_borrowed_binding`). A payload binding must alias, not
+        // register its own free — the owner (caller / container element drop)
+        // frees once. Mirrors the `match` path's flag; without it,
+        // `for o in v { if let Some(s) = o { … } }` over a
+        // `Vec[Option[String]]` double-freed the payload (exit 133).
+        let saved_borrow_flag = self.pattern_binding_is_borrow;
+        self.pattern_binding_is_borrow =
+            self.pattern_binding_is_borrow || self.scrutinee_is_borrowed_binding(value);
         self.bind_pattern_values(pattern, val)?;
+        self.pattern_binding_is_borrow = saved_borrow_flag;
         // B-track: zero the caps of moved-in fields so the source EnumDrop
         // (registered above) frees only the *unbound* heap fields, not the ones
         // the pattern's bindings now own. Then-arm only — the else/miss edge
@@ -227,7 +238,12 @@ impl<'ctx> super::Codegen<'ctx> {
         if freshtemp_enum.is_none() {
             self.track_freshtemp_boxed_enum_scrutinee(value, &[pattern], val);
         }
+        // Borrowed identifier scrutinee — see the if-let site (slice 3q).
+        let saved_borrow_flag = self.pattern_binding_is_borrow;
+        self.pattern_binding_is_borrow =
+            self.pattern_binding_is_borrow || self.scrutinee_is_borrowed_binding(value);
         self.bind_pattern_values(pattern, val)?;
+        self.pattern_binding_is_borrow = saved_borrow_flag;
         if let Some((alloca, enum_name)) = &freshtemp_enum {
             self.suppress_destructured_enum_payload_cleanup_at(*alloca, enum_name, pattern);
         }
@@ -329,7 +345,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // Match edge: bind into the current (enclosing) scope and fall
         // through. `val` is defined before the branch and dominates here.
         self.builder.position_at_end(match_bb);
+        // Borrowed identifier scrutinee — see the if-let site (slice 3q).
+        let saved_borrow_flag = self.pattern_binding_is_borrow;
+        self.pattern_binding_is_borrow =
+            self.pattern_binding_is_borrow || self.scrutinee_is_borrowed_binding(value);
         self.bind_pattern_values(pattern, val)?;
+        self.pattern_binding_is_borrow = saved_borrow_flag;
         if let Some((alloca, enum_name)) = &freshtemp_enum {
             self.suppress_destructured_enum_payload_cleanup_at(*alloca, enum_name, pattern);
         }

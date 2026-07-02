@@ -804,13 +804,19 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (the Weave dogfood's `ParseError` Display, matching a struct-variant
     /// `String` payload through `ref self`). The receiver-side counterpart of
     /// `scrutinee_is_borrow_call` (borrow-RETURNING accessors like `Map.get`).
+    /// Also true for a `for`-loop ELEMENT binding whose container's
+    /// per-element drop is armed (`for_loop_borrow_vars` — heap Vec/String
+    /// elements, and slice 3q's Option/Result-with-heap-payload elements):
+    /// the loop var is a bit-copy of the container's element, so a
+    /// payload-consuming arm must alias, not own — the container's element
+    /// drop is the single owner.
     pub(super) fn scrutinee_is_borrowed_binding(&self, scrutinee: &Expr) -> bool {
         let name = match &scrutinee.kind {
             ExprKind::SelfValue => "self",
             ExprKind::Identifier(n) => n.as_str(),
             _ => return false,
         };
-        self.ref_params.contains_key(name)
+        self.ref_params.contains_key(name) || self.for_loop_borrow_vars.contains(name)
     }
 
     pub(super) fn scrutinee_is_borrow_call(&self, scrutinee: &Expr) -> bool {
@@ -2785,6 +2791,37 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Ok(cap_ptr) =
             self.builder
                 .build_struct_gep(layout.llvm_type, slot.ptr, 3, "optpl.movearg.cap")
+        {
+            let _ = self.builder.build_store(cap_ptr, i64_t.const_int(0, false));
+        }
+    }
+
+    /// `Result[T, E]` sibling of
+    /// `suppress_inline_option_payload_cleanup_for_moved_arg` (slice 3q):
+    /// `v.push(r)` where `r: Result[String, E]` bit-copies the result
+    /// aggregate into the vec, whose per-element `karac_drop_Result_<ok>_<err>`
+    /// now frees the live payload there — so the source binding's
+    /// `FreeInlineResultPayload` would free the same buffer twice. Zero the
+    /// source's cap word (field 3 — Ok and Err overlay the same w0..w2) so its
+    /// `cap > 0` guard skips. No-op unless the arg is an identifier with an
+    /// armed inline-Result-payload cleanup.
+    pub(super) fn suppress_inline_result_payload_cleanup_for_moved_arg(&self, arg: &Expr) {
+        let ExprKind::Identifier(name) = &arg.kind else {
+            return;
+        };
+        if !self.inline_result_payload_vars.contains(name.as_str()) {
+            return;
+        }
+        let Some(slot) = self.variables.get(name.as_str()) else {
+            return;
+        };
+        let Some(layout) = self.enum_layouts.get("Result") else {
+            return;
+        };
+        let i64_t = self.context.i64_type();
+        if let Ok(cap_ptr) =
+            self.builder
+                .build_struct_gep(layout.llvm_type, slot.ptr, 3, "respl.movearg.cap")
         {
             let _ = self.builder.build_store(cap_ptr, i64_t.const_int(0, false));
         }

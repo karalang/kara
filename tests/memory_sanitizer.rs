@@ -10532,6 +10532,169 @@ fn main() {
     }
 
     #[test]
+    fn asan_vec_of_result_string_scope_exit_drop_no_leak() {
+        // Slice 3q: a `Vec[Result[String, String]]` dropped at scope exit,
+        // looped. The tag-dispatching `karac_drop_Result_<ok>_<err>` frees the
+        // live side's inline payload overlay per element (Ok and Err overlay the
+        // same w0..w2). LSan-RED pre-fix (every payload leaked, 6 allocs).
+        // Runtime f-string payloads per the 3p spelling-trap discipline.
+        assert_clean_asan_run(
+            r#"
+fn build(n: i64) -> Vec[Result[String, String]] {
+    let mut v: Vec[Result[String, String]] = Vec.new();
+    v.push(Ok(f"alpha ok payload padded out beyond thirty-six bytes {n}"));
+    v.push(Err(f"beta err payload padded out beyond thirty-six bytes {n}"));
+    return v;
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let v = build(i);
+        println(v.len());
+        i = i + 1;
+    };
+}
+"#,
+            &["2", "2", "2"],
+            "vec_of_result_string_scope_exit_drop_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_vec_push_result_binding_no_double_free() {
+        // Slice 3q: `let r = Ok(f"..."); v.push(r)` — the push family disarms
+        // the source binding's `FreeInlineResultPayload` (cap-zero, the Result
+        // sibling of the Option moved-arg suppression) so the container's
+        // element drop is the unique owner.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i = 0;
+    while i < 4 {
+        let mut v: Vec[Result[String, i64]] = Vec.new();
+        let r: Result[String, i64] = Ok(f"a payload padded out beyond thirty-six bytes {i}");
+        v.push(r);
+        println(v.len());
+        i = i + 1;
+    };
+}
+"#,
+            &["1", "1", "1", "1"],
+            "vec_push_result_binding_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_for_match_vec_option_element_no_double_free() {
+        // Slice 3q regression pin — this exact shape SIGTRAP'd (exit 133) after
+        // slice 3p armed the `Vec[Option[String]]` element drop: `for o in v`
+        // copies the element into the loop binding, and `match o { Some(s) => …
+        // }` bound the payload OUT of the copy, registering its own free — a
+        // double-free against the container's element drop. The loop binding is
+        // now marked in `for_loop_borrow_vars` (Option/Result-with-heap-payload
+        // elements) and `scrutinee_is_borrowed_binding` treats it as a borrow,
+        // so the arm binding aliases and the container's element drop is the
+        // single owner. Output must also match the interpreter (188).
+        assert_clean_asan_run(
+            r#"
+fn build(n: i64) -> Vec[Option[String]] {
+    let mut v: Vec[Option[String]] = Vec.new();
+    v.push(Some(f"alpha payload padded beyond thirty-six bytes {n}"));
+    v.push(None);
+    return v;
+}
+fn main() {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 4 {
+        let v = build(i);
+        for o in v {
+            match o {
+                Some(s) => { total = total + s.len(); },
+                None => { total = total + 1; },
+            };
+        }
+        i = i + 1;
+    };
+    println(total);
+}
+"#,
+            &["188"],
+            "for_match_vec_option_element_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_for_match_vec_result_element_no_double_free() {
+        // Slice 3q: the Result sibling of the loop-element match pin, with a
+        // mixed heap/scalar Result (Ok(String) / Err(i64)) — the Err arm binds a
+        // scalar (no free either way), the Ok arm reads the borrowed payload.
+        assert_clean_asan_run(
+            r#"
+fn build(n: i64) -> Vec[Result[String, i64]] {
+    let mut v: Vec[Result[String, i64]] = Vec.new();
+    v.push(Ok(f"alpha ok payload padded out beyond thirty-six bytes {n}"));
+    v.push(Err(7_i64));
+    return v;
+}
+fn main() {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 4 {
+        let v = build(i);
+        for r in v {
+            match r {
+                Ok(s) => { total = total + s.len(); },
+                Err(e) => { total = total + e; },
+            };
+        }
+        i = i + 1;
+    };
+    println(total);
+}
+"#,
+            &["240"],
+            "for_match_vec_result_element_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_for_iflet_vec_option_element_no_double_free() {
+        // Slice 3q: the `if let` sibling — the if-let/while-let/let-else bind
+        // sites never consulted `scrutinee_is_borrowed_binding` at all (only
+        // `match` set `pattern_binding_is_borrow`), so
+        // `for o in v { if let Some(s) = o { … } }` double-freed even after the
+        // match path was fixed. All three bind sites now set the flag for a
+        // borrowed identifier scrutinee.
+        assert_clean_asan_run(
+            r#"
+fn build(n: i64) -> Vec[Option[String]] {
+    let mut v: Vec[Option[String]] = Vec.new();
+    v.push(Some(f"alpha payload padded beyond thirty-six bytes {n}"));
+    v.push(None);
+    return v;
+}
+fn main() {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 4 {
+        let v = build(i);
+        for o in v {
+            if let Some(s) = o {
+                total = total + s.len();
+            }
+        }
+        i = i + 1;
+    };
+    println(total);
+}
+"#,
+            &["184"],
+            "for_iflet_vec_option_element_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_discarded_rc_temp_freed() {
         // A discarded fresh shared-struct (RC box): the producing call returns
         // one owned reference, so `materialize_owned_temp` queues a single
