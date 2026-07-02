@@ -1292,8 +1292,22 @@ impl<'ctx> super::Codegen<'ctx> {
             // `owned_vecstr_params`) leaves it orphaned without a caller-scope
             // drop. Materialize it here exactly like a direct fresh call result
             // (B-2026-06-14-32).
+            // B-2026-07-02-6 follow-on: a COLLECTION-LITERAL arg compiled to a
+            // heap Vec (`f([10, 20, 30])`, `f([7; 3])`) is the same orphaned
+            // fresh-heap shape as #20 — by-value Vec params are caller-retains
+            // (the callee never frees; confirmed by the by_val IR having no
+            // free), so without a caller-scope materialization the literal's
+            // buffer leaks once per call. `llvm_ty_is_vec_struct` keeps stack
+            // `[N x T]` array literals (Array-typed params) out.
+            let is_collection_literal_arg = matches!(
+                &a.value.kind,
+                ExprKind::ArrayLiteral(_)
+                    | ExprKind::PrefixCollectionLiteral { .. }
+                    | ExprKind::RepeatLiteral { .. }
+            );
             let is_fresh_heap_call_arg = (self.expr_yields_fresh_owned_temp(&a.value)
-                || self.expr_is_inline_temp_vec_heap_index(&a.value))
+                || self.expr_is_inline_temp_vec_heap_index(&a.value)
+                || is_collection_literal_arg)
                 && self.llvm_ty_is_vec_struct(val.get_type())
                 && !self.rhs_stages_fstr_acc(&a.value);
             // A fresh bare-`shared` (RC-box) call / variant-constructor result

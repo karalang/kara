@@ -4569,6 +4569,13 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             BasicTypeEnum::StructType(_) => {
                 // Vec value `{ptr,len,cap}`: pull out the data ptr + len.
+                // B-2026-07-02-6 follow-on: the slice header only BORROWS the
+                // literal's heap buffer (a `Slice[T]` param never owns), so
+                // queue a caller-scope free for the backing Vec — without it
+                // every `f([1, 2, 3])` against a Slice param leaked its
+                // buffer (LSan-red; macOS leaks missed it via a reachable
+                // stack slot).
+                self.materialize_owned_temp(compiled, (expr.span.offset, expr.span.length));
                 let sv = compiled.into_struct_value();
                 let data = self
                     .builder

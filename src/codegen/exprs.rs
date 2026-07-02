@@ -947,15 +947,69 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.compile_struct_init(name, fields)
                 }
             }
-            ExprKind::ArrayLiteral(elems) => self.compile_array_literal(elems),
+            // B-2026-07-02-6: thread the contextual element width recorded
+            // for this literal's own span (call-arg / field / return sinks)
+            // into the literal compiler via the pending-hint carrier. No-op
+            // when an explicit hint is already set or no record exists.
+            ExprKind::ArrayLiteral(elems) => match self.literal_span_elem_hint(&expr.span) {
+                Some(h) => {
+                    let saved = self.pending_let_elem_type;
+                    self.pending_let_elem_type = Some(h);
+                    let r = self.compile_array_literal(elems);
+                    self.pending_let_elem_type = saved;
+                    r
+                }
+                None => self.compile_array_literal(elems),
+            },
             ExprKind::PrefixCollectionLiteral { type_name, items } if type_name == "Vec" => {
-                self.compile_vec_prefix_literal(items)
+                match self.literal_span_elem_hint(&expr.span) {
+                    Some(h) => {
+                        let saved = self.pending_let_elem_type;
+                        self.pending_let_elem_type = Some(h);
+                        let r = self.compile_vec_prefix_literal(items);
+                        self.pending_let_elem_type = saved;
+                        r
+                    }
+                    None => self.compile_vec_prefix_literal(items),
+                }
             }
             ExprKind::RepeatLiteral {
                 type_name,
                 value,
                 count,
-            } => self.compile_repeat_literal(type_name.as_deref(), value, count),
+            } => {
+                // B-2026-07-02-6 follow-on: a BARE `[v; n]` at a `Vec[T]`-typed
+                // non-`let` sink (call arg, return, field) lowered to a stack
+                // `[N x T]` array and failed module verification against the
+                // `{ptr,i64,i64}` Vec ABI ("Call parameter type does not match
+                // function signature"). The typechecker records the literal's
+                // contextual type; when that record says Vec, route through
+                // the same heap-fill path the explicit `Vec[v; n]` form takes,
+                // coercing the fill value to the recorded element width.
+                let vec_elem_te = if type_name.is_none() {
+                    self.enum_inst_type_exprs
+                        .get(&(expr.span.offset, expr.span.length))
+                        .cloned()
+                        .as_ref()
+                        .and_then(super::helpers::vec_inner_type_expr)
+                } else {
+                    None
+                };
+                match vec_elem_te {
+                    Some(elem_te) => {
+                        let val = self.compile_expr(value)?;
+                        let target = self.llvm_type_for_type_expr(&elem_te);
+                        let val = if target.is_int_type() || target.is_float_type() {
+                            self.coerce_literal_elem_to_type(val, target)
+                        } else {
+                            val
+                        };
+                        let n = self.compile_expr(count)?.into_int_value();
+                        self.build_vec_filled(n, val, Some(elem_te))
+                    }
+                    None => self.compile_repeat_literal(type_name.as_deref(), value, count),
+                }
+            }
             ExprKind::Tuple(elems) => self.compile_tuple(elems),
             ExprKind::TupleIndex { object, index } => {
                 self.compile_tuple_index(object, *index as usize)

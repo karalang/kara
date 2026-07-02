@@ -10,6 +10,7 @@
 //! `compile_index_store`).
 
 use crate::ast::*;
+use crate::token::Span;
 
 use inkwell::types::{BasicType, BasicTypeEnum, StructType};
 use inkwell::values::{BasicValueEnum, IntValue, PointerValue};
@@ -440,6 +441,70 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
     }
 
+    /// The narrow-scalar coercion hint for a collection LITERAL's elements.
+    /// B-2026-07-02-6: literal lowering derived the element type from the
+    /// first compiled item — an int literal is i64 — so a
+    /// `let v: Vec[i32] = [10, 20, 30]` stored i64-PACKED data behind an
+    /// i32-typed binding; every subsequent read (indexing, iteration,
+    /// `Column.from_vec`'s memcpy) reinterpreted the bytes at the narrow
+    /// stride — silent wrong answers (`v[2]` read element 1's low half,
+    /// `Column[i32].sum()` summed ceil(bytes/8) elements). The typechecker
+    /// records the literal ITSELF at the default width (`Vec[i64]`), so the
+    /// only carrier of the narrow truth is the LET annotation /
+    /// consuming-constructor param — threaded here via the existing
+    /// `pending_let_elem_type` (set by the let path from `vec_elem_types`,
+    /// and by `Column.from_vec` for inline literal args). Scalar
+    /// int/float hints only; aggregate element types keep the
+    /// first-item-derived layout.
+    fn literal_pending_elem_hint(&self) -> Option<BasicTypeEnum<'ctx>> {
+        self.pending_let_elem_type
+            .filter(|t| t.is_int_type() || t.is_float_type())
+    }
+
+    /// Span-record fallback for the literal element hint. The typechecker
+    /// re-records a collection literal admitted against a scalar-element
+    /// `Vec`/`VecDeque` context at its CONTEXTUAL type (the B-2026-07-02-6
+    /// re-record arm in `typechecker/exprs.rs`), and the lowering pass
+    /// carries every `Named`-with-args record into `enum_inst_type_exprs`.
+    /// This covers the non-`let` sinks — call args, method args, struct
+    /// fields, returns — where no explicit `pending_let_elem_type` was
+    /// threaded. The explicit hint wins when set (annotated lets,
+    /// `Column.from_vec` inline args): those carriers are name-collision-
+    /// free where span keys can collide across f-string re-parses.
+    pub(super) fn literal_span_elem_hint(&self, span: &Span) -> Option<BasicTypeEnum<'ctx>> {
+        if self.pending_let_elem_type.is_some() {
+            return None;
+        }
+        let te = self
+            .enum_inst_type_exprs
+            .get(&(span.offset, span.length))?
+            .clone();
+        let elem = super::helpers::vec_inner_type_expr(&te)?;
+        let ty = self.llvm_type_for_type_expr(&elem);
+        (ty.is_int_type() || ty.is_float_type()).then_some(ty)
+    }
+
+    /// Literal-element coercion — `coerce_scalar_to_type` plus the
+    /// int→float leg (`let v: Vec[f64] = [1, 2, 3]` — the i64 item must
+    /// `sitofp` into the double slot; pre-fix the packed int BITS read
+    /// back as denormal garbage). Signed conversion on purpose:
+    /// unsuffixed int literals are signed, and a float-element context
+    /// only arises from an explicit annotation.
+    pub(super) fn coerce_literal_elem_to_type(
+        &self,
+        val: BasicValueEnum<'ctx>,
+        target: BasicTypeEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        match (val, target) {
+            (BasicValueEnum::IntValue(iv), BasicTypeEnum::FloatType(ft)) => self
+                .builder
+                .build_signed_int_to_float(iv, ft, "lit.sitofp")
+                .unwrap()
+                .into(),
+            _ => self.coerce_scalar_to_type(val, target),
+        }
+    }
+
     pub(super) fn compile_array_literal(
         &mut self,
         elems: &[Expr],
@@ -447,10 +512,18 @@ impl<'ctx> super::Codegen<'ctx> {
         if elems.is_empty() {
             return Ok(self.context.i64_type().const_int(0, false).into());
         }
+        let elem_hint = self.literal_pending_elem_hint();
         let vals: Vec<BasicValueEnum<'ctx>> = elems
             .iter()
-            .map(|e| self.compile_expr(e))
-            .collect::<Result<_, _>>()?;
+            .map(|e| {
+                let v = self.compile_expr(e)?;
+                // B-2026-07-02-6 — see `literal_pending_elem_hint`.
+                Ok(match elem_hint {
+                    Some(h) => self.coerce_literal_elem_to_type(v, h),
+                    None => v,
+                })
+            })
+            .collect::<Result<_, String>>()?;
         let elem_ty = vals[0].get_type();
         let arr_ty = elem_ty.array_type(vals.len() as u32);
         let mut agg = arr_ty.get_undef();
@@ -520,10 +593,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // compile_expr call may emit side-effecting IR — e.g.
         // `String.clone()` allocates — so the order matters; we
         // preserve source order.)
+        let elem_hint = self.literal_pending_elem_hint();
         let vals: Vec<BasicValueEnum<'ctx>> = items
             .iter()
-            .map(|e| self.compile_expr(e))
-            .collect::<Result<_, _>>()?;
+            .map(|e| {
+                let v = self.compile_expr(e)?;
+                // B-2026-07-02-6 — see `literal_pending_elem_hint`.
+                Ok(match elem_hint {
+                    Some(h) => self.coerce_literal_elem_to_type(v, h),
+                    None => v,
+                })
+            })
+            .collect::<Result<_, String>>()?;
         let elem_ty = vals[0].get_type();
         let n_const = i64_t.const_int(items.len() as u64, false);
 

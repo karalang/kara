@@ -2841,8 +2841,17 @@ impl<'ctx> super::Codegen<'ctx> {
                             | ExprKind::Unsafe(_)
                             | ExprKind::LabeledBlock { .. }
                     );
+                    // B-2026-07-02-6 follow-on: collection-literal args share
+                    // #20's orphaned-fresh-heap shape (see the free-fn arm).
+                    let is_collection_literal_arg = matches!(
+                        &a.value.kind,
+                        ExprKind::ArrayLiteral(_)
+                            | ExprKind::PrefixCollectionLiteral { .. }
+                            | ExprKind::RepeatLiteral { .. }
+                    );
                     let is_fresh_heap_call_arg = (self.expr_yields_fresh_owned_temp(&a.value)
-                        || self.expr_is_inline_temp_vec_heap_index(&a.value))
+                        || self.expr_is_inline_temp_vec_heap_index(&a.value)
+                        || is_collection_literal_arg)
                         && self.llvm_ty_is_vec_struct(val.get_type())
                         && !self.rhs_stages_fstr_acc(&a.value);
                     if is_block_arg || is_fresh_heap_call_arg {

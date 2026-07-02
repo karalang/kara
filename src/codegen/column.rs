@@ -829,7 +829,18 @@ impl<'ctx> super::Codegen<'ctx> {
             .first()
             .map(|a| &a.value)
             .ok_or_else(|| "Column.from_vec: missing values argument".to_string())?;
-        let arg_val = self.compile_expr(arg_expr)?;
+        // B-2026-07-02-6: an INLINE literal arg (`Column.from_vec([10, 20,
+        // 30])` on a `Column[i32]`) has no let annotation to thread the
+        // narrow element width — set the pending hint from the column's
+        // element so the literal packs at the width the memcpy below
+        // assumes. Scalar elements only (String columns deep-clone).
+        let saved_hint = self.pending_let_elem_type;
+        if elem.is_int_type() || elem.is_float_type() {
+            self.pending_let_elem_type = Some(elem);
+        }
+        let arg_val = self.compile_expr(arg_expr);
+        self.pending_let_elem_type = saved_hint;
+        let arg_val = arg_val?;
 
         // Bare array-literal bindings (`let v = [1, 2, 3];`) compile to an
         // `[N x T]` aggregate even though the typechecker types them

@@ -45925,6 +45925,138 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_narrow_literal_vec_packs_at_annotated_width() {
+        // B-2026-07-02-6: `let mut v: Vec[i32] = [10, 20, 30]` stored
+        // i64-PACKED data behind an i32-typed binding (the literal compiler
+        // derived the element type from the first item — int literals are
+        // i64) — every read reinterpreted bytes at the i32 stride: `v[2]`
+        // returned element 1's low half, iteration summed garbage, and
+        // `Column.from_vec`'s memcpy propagated the mispacking
+        // (`Column[i32].sum()` summed ceil(bytes/8) elements — 30 instead
+        // of 60). The literal compilers now coerce items to the annotated
+        // narrow width via the pending-let element hint.
+        let src = r#"
+fn main() {
+    let mut v: Vec[i32] = [10, 20, 30];
+    println(v[0]);
+    println(v[2]);
+    v.push(40);
+    println(v[3]);
+    let mut total = 0;
+    for x in v {
+        total = total + (x as i64);
+    }
+    println(total);
+    let c: Column[i32] = Column.from_vec([10, 20, 30]);
+    println(c.sum());
+    let e: Column[i8] = Column.from_vec([1, 2, 3]);
+    println(e.sum());
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        assert_eq!(out, "10\n30\n40\n100\n60\n6\n");
+    }
+
+    #[test]
+    fn test_e2e_narrow_literal_all_sinks_pack_contextual_width() {
+        // B-2026-07-02-6 general fix: the typechecker re-records a collection
+        // literal admitted against a scalar-element Vec/Slice/ref-Vec context
+        // at its CONTEXTUAL type, and codegen's literal compilers read that
+        // span record — so narrow packing holds at EVERY sink, not just
+        // annotated lets: by-value fn args, `ref` args, `Slice[T]` params,
+        // return position, struct fields, method args, int→float element
+        // coercion (sitofp, not bit-landing), and bare `[v; n]` repeat
+        // literals in arg position (pre-fix those failed module verification
+        // against the Vec ABI).
+        let src = r#"
+fn total(v: Vec[i32]) -> i64 {
+    let mut t = 0;
+    for x in v {
+        t = t + (x as i64);
+    }
+    return t;
+}
+
+fn total_ref(v: ref Vec[i32]) -> i64 {
+    let mut t = 0;
+    for x in v {
+        t = t + (x as i64);
+    }
+    return t;
+}
+
+fn total_slice(v: Slice[i32]) -> i64 {
+    let mut t = 0;
+    for x in v {
+        t = t + (x as i64);
+    }
+    return t;
+}
+
+fn make() -> Vec[i32] {
+    return [10, 20, 30];
+}
+
+struct Holder {
+    v: Vec[i32],
+}
+
+impl Holder {
+    fn tally(self, extra: Vec[i32]) -> i64 {
+        let mut t = 0;
+        for x in self.v {
+            t = t + (x as i64);
+        }
+        for x in extra {
+            t = t + (x as i64);
+        }
+        return t;
+    }
+}
+
+fn main() {
+    println(total([10, 20, 30]));
+    println(total_ref([10, 20, 30]));
+    println(total_slice([10, 20, 30]));
+    println(total([7; 3]));
+    let m = make();
+    println(m[2]);
+    let h = Holder { v: [1, 2, 3] };
+    println(h.tally([4, 5, 6]));
+    let f: Vec[f64] = [1, 2, 3];
+    println(f[1]);
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        assert_eq!(out, "60\n60\n60\n21\n30\n21\n2\n");
+    }
+
+    #[test]
+    fn test_e2e_narrow_column_elemwise_overflow_traps() {
+        // B-2026-07-01-3 (codegen half, already correct — pinned):
+        // `Column[i32]` element-wise `+ 1` on INT_MAX traps at the element
+        // width.
+        let src = r#"
+fn main() {
+    let c: Column[i32] = Column.from_vec([2147483647]);
+    let d = c + 1;
+    match d[0] {
+        Some(x) => { println(x); },
+        None => { println("null"); },
+    }
+}
+"#;
+        let captured = run_program_capturing(src).expect("program should compile");
+        let combined = format!("{}{}", captured.stdout, captured.stderr);
+        assert!(
+            combined.contains("integer overflow"),
+            "expected the i32 element-wise overflow trap; stdout={:?} stderr={:?}",
+            captured.stdout,
+            captured.stderr
+        );
+    }
+
+    #[test]
     fn test_e2e_vec_sort_unordered_element_still_rejected() {
         // A user-struct element has no default order — still rejected
         // loudly, pointing at sort_by.

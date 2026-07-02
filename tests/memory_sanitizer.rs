@@ -18577,6 +18577,69 @@ fn main() {
     }
 
     #[test]
+    fn asan_narrow_literal_arg_sink_buffers() {
+        // B-2026-07-02-6: collection literals compiled directly at call-arg
+        // sinks (by-value `Vec[i32]`, borrow-only `ref Vec[i32]` and
+        // `Slice[i32]` params, bare `[v; n]` repeat in arg position) each
+        // malloc a heap buffer at the call site; the borrow sinks must free
+        // the temp after the call (the callee never owns it) and the
+        // by-value sink's callee-drop must fire exactly once.
+        assert_clean_asan_run(
+            r#"
+fn by_val(v: Vec[i32]) -> i64 {
+    let mut t = 0;
+    for x in v {
+        t = t + (x as i64);
+    }
+    return t;
+}
+
+fn by_ref(v: ref Vec[i32]) -> i64 {
+    let mut t = 0;
+    for x in v {
+        t = t + (x as i64);
+    }
+    return t;
+}
+
+fn by_slice(v: Slice[i32]) -> i64 {
+    let mut t = 0;
+    for x in v {
+        t = t + (x as i64);
+    }
+    return t;
+}
+
+struct Acc {
+    base: i64,
+}
+
+impl Acc {
+    fn tally(self, v: Vec[i32]) -> i64 {
+        let mut t = self.base;
+        for x in v {
+            t = t + (x as i64);
+        }
+        return t;
+    }
+}
+
+fn main() {
+    let a = by_val([10, 20, 30]);
+    let b = by_ref([10, 20, 30]);
+    let c = by_slice([10, 20, 30]);
+    let d = by_val([7; 3]);
+    let acc = Acc { base: 0 };
+    let e = acc.tally([1, 2, 3]);
+    println(a + b + c + d + e);
+}
+"#,
+            &["207"],
+            "narrow_literal_arg_sink_buffers",
+        );
+    }
+
+    #[test]
     fn asan_parvec_deep_nested_slot() {
         // B-2026-07-02-4: `Vec[Vec[Vec[i64]]]` slot + index-read binding
         // (the 16-byte w1 repro).

@@ -577,6 +577,57 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         self.check_assignable(expected, &actual, expr.span.clone());
+        // B-2026-07-02-6: a collection literal admitted against a
+        // differently-widthed scalar element context (`total([10, 20, 30])`
+        // with `v: Vec[i32]` — call args, method args, struct fields,
+        // returns alike) kept its synth-mode default-width record
+        // (`Vec[i64]`) in `expr_types`, so codegen packed the buffer at
+        // the wrong stride and every read misindexed. Re-record the
+        // literal at its CONTEXTUAL type — acceptance semantics are
+        // unchanged (`check_assignable` above already ruled); only the
+        // recorded width moves. Codegen's literal compilers read this
+        // back through `enum_inst_type_exprs` (`literal_span_elem_hint`).
+        // Scalar-element `Vec`/`VecDeque` only: wider element types have
+        // no width to mispack, and `Array`-expected literals already
+        // record `expected` in their dedicated check-mode arm above.
+        if actual != Type::Error
+            && matches!(
+                &expr.kind,
+                ExprKind::ArrayLiteral(_)
+                    | ExprKind::PrefixCollectionLiteral { .. }
+                    | ExprKind::RepeatLiteral { .. }
+            )
+        {
+            fn is_scalar_numeric(t: &Type) -> bool {
+                matches!(t, Type::Int(_) | Type::UInt(_) | Type::Float(_))
+            }
+            // `ref Vec[T]` / `mut ref Vec[T]` params carry the Vec inside a
+            // Ref wrapper; `Slice[T]` params materialize the literal as a
+            // Vec buffer first (the slice header is synthesized at the call
+            // boundary), so record the literal as `Vec[T]` there too.
+            let ctx = match expected {
+                Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+                other => other,
+            };
+            let contextual = match ctx {
+                Type::Named { name, args }
+                    if (name == "Vec" || name == "VecDeque")
+                        && args.len() == 1
+                        && is_scalar_numeric(&args[0]) =>
+                {
+                    Some(ctx.clone())
+                }
+                Type::Slice { element, .. } if is_scalar_numeric(element) => Some(Type::Named {
+                    name: "Vec".to_string(),
+                    args: vec![(**element).clone()],
+                }),
+                _ => None,
+            };
+            if let Some(t) = contextual {
+                self.record_expr_type(&expr.span, &t);
+                return t;
+            }
+        }
         actual
     }
 

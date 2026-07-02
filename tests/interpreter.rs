@@ -2589,6 +2589,43 @@ fn test_user_drop_enum_move_fires_once() {
     );
 }
 
+// ── B-2026-07-01-3 narrow-element container arithmetic widths ──
+
+#[test]
+fn test_column_narrow_element_binop_overflow_traps() {
+    // Pre-fix the interpreter evaluated `Column[i32] + 1` at i64 width and
+    // silently produced 2147483648 where codegen trapped `integer
+    // overflow` — `narrow_oob` now peels `Column[T]`/`Tensor[T, S]`
+    // recorded types down to the element before the width check.
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let c: Column[i32] = Column.from_vec([2147483647]);\n\
+             let d = c + 1;\n\
+             match d[0] { Some(x) => { println(x); }, None => { println(0); } }\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("integer overflow")),
+        "expected the i32 element-width overflow trap; got {:?}",
+        errors
+    );
+}
+
+#[test]
+fn test_column_narrow_element_binop_in_range_ok() {
+    // Non-overflowing narrow element ops keep working after the peel.
+    let out = run_no_errors(
+        "fn main() {\n\
+             let c: Column[i32] = Column.from_vec([100, 200]);\n\
+             let d = c + 1;\n\
+             match d[1] { Some(x) => { println(x); }, None => { println(0); } }\n\
+         }",
+    );
+    assert_eq!(out, "201\n");
+}
+
 // ── B-2026-06-30-15 value_compare Array arm (nested Vec sort) ──
 
 #[test]

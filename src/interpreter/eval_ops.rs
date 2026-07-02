@@ -660,6 +660,20 @@ impl<'a> super::Interpreter<'a> {
         let Some(ty) = self.typecheck_result.expr_types.get(&key) else {
             return false;
         };
+        // B-2026-07-01-3: element-wise `Column[T] ⊕ x` / `Tensor[T, S] ⊕ x`
+        // recurses through the scalar arms with the CONTAINER expression's
+        // span, whose recorded type is `Column[i32]`-shaped — peel down to
+        // the element so a narrow-element container op range-checks exactly
+        // like the scalar op (codegen already traps at the element's LLVM
+        // width; the interpreter silently produced out-of-range values).
+        let ty = match ty {
+            Type::Named { name, args }
+                if (name == "Column" || name == "Tensor") && !args.is_empty() =>
+            {
+                &args[0]
+            }
+            other => other,
+        };
         let (lo, hi): (i64, i64) = match ty {
             Type::Int(IntSize::I8) => (-128, 127),
             Type::Int(IntSize::I16) => (-32768, 32767),
