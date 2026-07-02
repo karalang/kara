@@ -241,11 +241,21 @@ pub unsafe extern "C" fn karac_string_to_uppercase(
 }
 
 /// `String.sorted()` — return a fresh String whose characters (Unicode scalar
-/// values) are sorted ascending. Mirrors the interpreter's
+/// values) are sorted ascending. Result matches the interpreter's
 /// `chars().sort_unstable()` byte-for-byte (`src/interpreter/method_call_seq.rs`),
 /// so `run` and `build` agree on multi-byte input, not just ASCII. The
 /// canonical anagram key: two strings are anagrams iff their `sorted()` forms
 /// are equal. Returns a fresh owned buffer.
+///
+/// **ASCII fast-path.** Below `0x80` a byte's value *is* its Unicode scalar
+/// value, so byte order == char order and the UTF-8 decode → `Vec<char>` → sort
+/// → re-encode round-trip is unnecessary: copy the bytes once (via
+/// `alloc_string_result`) and sort the result buffer IN PLACE. One allocation +
+/// a byte sort, versus the char path's three allocations + two UTF-8 passes —
+/// ~2× faster on the `sorted()` hot path (kata #49's dominant cost) and
+/// byte-identical to the char path for any ASCII string (which is the common
+/// case). Multi-byte input falls through to the char sort, preserving the
+/// Unicode-scalar semantics the interpreter defines.
 ///
 /// # Safety
 /// See [`karac_string_to_lowercase`].
@@ -255,6 +265,20 @@ pub unsafe extern "C" fn karac_string_sorted(
     len: i64,
     out_len: *mut i64,
 ) -> *mut u8 {
+    let n = if len < 0 { 0 } else { len as usize };
+    let bytes: &[u8] = if n == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(data, n)
+    };
+    if bytes.is_ascii() {
+        let out = alloc_string_result(bytes, out_len);
+        if !out.is_null() {
+            std::slice::from_raw_parts_mut(out, n).sort_unstable();
+        }
+        return out;
+    }
+    // Multi-byte UTF-8: sort by Unicode scalar value, matching the interpreter.
     let mut chars: Vec<char> = str_from_raw(data, len).chars().collect();
     chars.sort_unstable();
     let sorted: String = chars.into_iter().collect();
@@ -585,6 +609,64 @@ mod tests {
         unsafe {
             assert_eq!(slice_str("héllo", 1, 3, 2), "é");
             assert_eq!(slice_str("héllo", 0, 1, 1), "h");
+        }
+    }
+
+    /// Read back the heap buffer `karac_string_sorted` returns as a `String`.
+    unsafe fn sorted_str(s: &str) -> String {
+        let mut out_len: i64 = -1;
+        let ptr = karac_string_sorted(s.as_ptr(), s.len() as i64, &mut out_len);
+        if s.is_empty() {
+            assert!(ptr.is_null(), "empty input sorts to null");
+            assert_eq!(out_len, 0);
+            return String::new();
+        }
+        let bytes = std::slice::from_raw_parts(ptr, out_len as usize);
+        let out = String::from_utf8(bytes.to_vec()).unwrap();
+        assert_eq!(
+            *ptr.add(out_len as usize),
+            0,
+            "buffer must be NUL-terminated"
+        );
+        out
+    }
+
+    /// The reference sort: what the interpreter (and the pre-fast-path codegen
+    /// helper) does — collect chars, sort by Unicode scalar, re-encode.
+    fn char_sort(s: &str) -> String {
+        let mut chars: Vec<char> = s.chars().collect();
+        chars.sort_unstable();
+        chars.into_iter().collect()
+    }
+
+    #[test]
+    fn sorted_ascii_fast_path_matches_char_sort() {
+        // ASCII input takes the byte-sort fast-path; the result must be
+        // byte-identical to the char-sort reference for every ASCII string.
+        unsafe {
+            for s in [
+                "hgfedcba",
+                "tea",
+                "dcba",
+                "",
+                "the quick brown fox",
+                "aaa",
+                "z",
+            ] {
+                assert_eq!(sorted_str(s), char_sort(s), "ascii sort mismatch for {s:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn sorted_multibyte_falls_back_to_char_sort() {
+        // Any non-ASCII byte routes to the char path, sorting by Unicode scalar
+        // value — so it stays byte-identical to the interpreter on multi-byte
+        // input (e.g. 'é'=U+00E9 sorts after the ASCII letters).
+        unsafe {
+            for s in ["zébra", "héllo", "café ☕ münchen", "ñ", "日本語"] {
+                assert_eq!(sorted_str(s), char_sort(s), "utf8 sort mismatch for {s:?}");
+            }
         }
     }
 }
