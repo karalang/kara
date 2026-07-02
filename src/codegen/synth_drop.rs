@@ -1560,7 +1560,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     return false;
                 };
                 match name.as_str() {
-                    "Vec" | "VecDeque" | "String" | "Map" | "HashMap" | "Set" | "HashSet" => true,
+                    // Both String spellings — an INFERRED TypeExpr (e.g. a
+                    // tuple element te out of `enum_inst_type_exprs`) renders
+                    // `type_to_type_expr(Type::Str)`'s lowercase `str`;
+                    // matching only `String` silently classified such tuples
+                    // as heapless and their drop synthesis no-op'd (the 3p
+                    // spelling-trap lesson, fourth site).
+                    "Vec" | "VecDeque" | "String" | "str" | "Map" | "HashMap" | "Set"
+                    | "HashSet" => true,
                     "Option" | "Result" => false,
                     _ => {
                         if self.shared_types.contains_key(name) {
@@ -1659,7 +1666,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_struct_gep(tuple_ty, base_ptr, idx, "drop.tup.elem.p")
                         .unwrap();
                     match name.as_str() {
-                        "Vec" | "VecDeque" | "String" => {
+                        // Both String spellings — inferred tuple tes spell
+                        // `str` (the 3p trap; this emitter is the drop half,
+                        // `zero_tuple_elem_cap_at` the move-suppression dual
+                        // — both must agree or a moved tuple double-frees).
+                        "Vec" | "VecDeque" | "String" | "str" => {
                             if matches!(llvm_field, inkwell::types::BasicTypeEnum::StructType(st) if st == vec_ty)
                             {
                                 let data_pp = self
@@ -1780,7 +1791,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     return;
                 };
                 match name {
-                    "Vec" | "VecDeque" | "String" => {
+                    // Both String spellings — the move-suppression dual of
+                    // `emit_tuple_elem_drops`' String arm (see there).
+                    "Vec" | "VecDeque" | "String" | "str" => {
                         if matches!(llvm_field, inkwell::types::BasicTypeEnum::StructType(st) if st == vec_ty)
                         {
                             if let Ok(cap_ptr) =
@@ -2776,7 +2789,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                     if matches!(
                         seg.as_str(),
-                        "Vec" | "VecDeque" | "String" | "Map" | "HashMap" | "Set" | "HashSet"
+                        // Both String spellings (inferred tes spell `str`).
+                        "Vec"
+                            | "VecDeque"
+                            | "String"
+                            | "str"
+                            | "Map"
+                            | "HashMap"
+                            | "Set"
+                            | "HashSet"
                     ) {
                         return true;
                     }

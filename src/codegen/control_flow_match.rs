@@ -1075,6 +1075,13 @@ impl<'ctx> super::Codegen<'ctx> {
     /// destructured-field legs — a `false` keeps the status-quo alias
     /// (never a partial clone).
     fn borrow_payload_clone_supported(&mut self, te: &TypeExpr) -> bool {
+        // Whole-tuple payloads (slice 3v): supported when every heap element
+        // is (the tuple clone/drop synthesizers recurse per element).
+        if let TypeKind::Tuple(elems) = &te.kind {
+            return elems.iter().all(|e| {
+                !self.te_owns_heap_below_buffer(e) || self.borrow_payload_clone_supported(e)
+            });
+        }
         let TypeKind::Path(pp) = &te.kind else {
             return false;
         };
@@ -1089,7 +1096,11 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         match head {
             "String" | "str" => true,
-            "Vec" | "Map" | "Set" => self.te_recursive_drop_fully_supported(te),
+            // Slice 3v: VecDeque re-admitted — it shares Vec's linear
+            // {ptr,len,cap} layout (push_front is a memmove insert at index
+            // 0), and the clone/drop dispatchers now route it through the
+            // Vec arms.
+            "Vec" | "VecDeque" | "Map" | "Set" => self.te_recursive_drop_fully_supported(te),
             _ => {
                 (self.struct_types.contains_key(head) || self.enum_layouts.contains_key(head))
                     && !self.shared_types.contains_key(head)
@@ -1119,12 +1130,31 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(slot.ty, tmp, "borrow.clone.v")
             .unwrap();
         self.builder.build_store(slot.ptr, cloned).unwrap();
+        // Whole-TUPLE binding (slice 3v): track the cloned tuple via the
+        // per-element te drop synthesis — a NON-tail consume (`f(x)`
+        // by-value, where the callee copies) would otherwise leak the clone
+        // (the tail-move suppressions no-op an already-suppressed drop, so
+        // tracking is safe for the tail path too).
+        if let TypeKind::Tuple(elem_tes) = &te.kind {
+            if let BasicTypeEnum::StructType(agg_ty) = slot.ty {
+                let elem_tes = elem_tes.clone();
+                if let Some(drop_fn) = self.synthesize_tuple_drop_fn_te(agg_ty, &elem_tes) {
+                    if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                        frame.push(crate::codegen::state::CleanupAction::StructDrop {
+                            struct_alloca: slot.ptr,
+                            drop_fn,
+                        });
+                    }
+                }
+            }
+            return;
+        }
         let TypeKind::Path(pp) = &te.kind else {
             return;
         };
         let head = pp.segments.first().map(|s| s.as_str()).unwrap_or("");
         match head {
-            "String" | "str" | "Vec" => {
+            "String" | "str" | "Vec" | "VecDeque" => {
                 let elem_ty = self.inline_heap_payload_elem(te);
                 self.track_vec_var(slot.ptr, elem_ty);
             }
@@ -2379,58 +2409,19 @@ impl<'ctx> super::Codegen<'ctx> {
         ) {
             if let Some(te) = self.pattern_binding_inner_types.get(&key) {
                 if let TypeKind::Tuple(elem_tes) = &te.kind {
+                    // Slice 3v (leg B): rebuild via the word-correct recursive
+                    // helper (#44's `reconstruct_struct_from_words`). The prior
+                    // inline walk assumed every element was a single word and
+                    // `insertvalue`d a bare i64 into a multi-word slot — a
+                    // `Some(x)` binding an `(String, i64)` payload died in
+                    // module verification ("Invalid InsertValueInst operands"),
+                    // from ANY source (Map.get, Vec.pop, plain bindings).
                     let elem_llvm_tys: Vec<BasicTypeEnum<'ctx>> = elem_tes
                         .iter()
                         .map(|et| self.llvm_type_for_type_expr(et))
                         .collect();
                     let tuple_ty = self.context.struct_type(&elem_llvm_tys, false);
-                    let mut agg = tuple_ty.get_undef();
-                    let mut cursor = 0usize;
-                    for (i, elem_ty) in elem_llvm_tys.iter().enumerate() {
-                        let n = Self::llvm_type_word_count(*elem_ty).max(1);
-                        let end = (cursor + n).min(field_words.len());
-                        let slice = &field_words[cursor..end];
-                        // Primitive single-word elements coerce the
-                        // word back to the declared LLVM type (int/bool
-                        // bit-cast); multi-word elements aren't expected
-                        // here but fall back to the first word as a
-                        // safety net.
-                        let raw = slice
-                            .first()
-                            .copied()
-                            .unwrap_or_else(|| i64_t.const_int(0, false));
-                        let elem_val: BasicValueEnum<'ctx> = match *elem_ty {
-                            BasicTypeEnum::IntType(it) if it.get_bit_width() != 64 => self
-                                .builder
-                                .build_int_truncate(raw, it, "tup.elem.tr")
-                                .unwrap()
-                                .into(),
-                            BasicTypeEnum::IntType(_) => raw.into(),
-                            // Float tuple element: bitcast the payload word back
-                            // to the float (f64 direct; f32 from the low 32
-                            // bits). Mirrors the single-word float fix — needed
-                            // for any tuple-payload enum carrying a float, incl.
-                            // the lexer's `Token::Float(f64, …)`.
-                            BasicTypeEnum::FloatType(ft) if ft == self.context.f64_type() => {
-                                self.builder.build_bit_cast(raw, ft, "tup.f64.bc").unwrap()
-                            }
-                            BasicTypeEnum::FloatType(ft) => {
-                                let i32_t = self.context.i32_type();
-                                let lo = self
-                                    .builder
-                                    .build_int_truncate(raw, i32_t, "tup.f32.tr")
-                                    .unwrap();
-                                self.builder.build_bit_cast(lo, ft, "tup.f32.bc").unwrap()
-                            }
-                            _ => raw.into(),
-                        };
-                        agg = self
-                            .builder
-                            .build_insert_value(agg, elem_val, i as u32, "tup.bind.iv")
-                            .unwrap()
-                            .into_struct_value();
-                        cursor = end;
-                    }
+                    let agg = self.reconstruct_struct_from_words(tuple_ty, field_words)?;
                     return Ok(agg.into());
                 }
             }

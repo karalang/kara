@@ -1696,7 +1696,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // named-type arm delegates to). `Option` / `Result` inners remain
         // excluded (the delegate no-ops them), so those stay on the one-level
         // fast path rather than gaining a misleading no-op drop.
-        if name == "Vec" {
+        // `VecDeque` rides the same arm (slice 3v) — it shares Vec's linear
+        // {ptr,len,cap} layout (`push_front` is a memmove insert at index 0,
+        // not a ring buffer), so `emit_vec_drop_fn`'s 0..len walk + buffer
+        // free is exact for a `Vec[VecDeque[..]]` element too.
+        if name == "Vec" || name == "VecDeque" {
             if let TypeKind::Path(p) = &elem_te.kind {
                 if let Some(GenericArg::Type(inner)) =
                     p.generic_args.as_ref().and_then(|a| a.first())
@@ -1849,7 +1853,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 match head {
                     // Both spellings — see `te_recursive_drop_fully_supported`.
                     "String" | "str" => true,
-                    "Vec" => p
+                    "Vec" | "VecDeque" => p
                         .generic_args
                         .as_ref()
                         .and_then(|a| a.first())

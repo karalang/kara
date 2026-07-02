@@ -45,7 +45,9 @@ impl<'ctx> super::Codegen<'ctx> {
             TypeKind::Tuple(elems) if !elems.is_empty() => self.emit_tuple_clone_fn(elems),
             TypeKind::Path(p) => {
                 let head = p.segments.first().map(String::as_str);
-                if head == Some("Vec") {
+                // VecDeque: same linear layout — the Vec deep-clone is
+                // exact (slice 3v).
+                if head == Some("Vec") || head == Some("VecDeque") {
                     if let Some(GenericArg::Type(elem_te)) =
                         p.generic_args.as_ref().and_then(|a| a.first()).cloned()
                     {
@@ -1548,7 +1550,11 @@ impl<'ctx> super::Codegen<'ctx> {
             TypeKind::Tuple(elems) if !elems.is_empty() => self.emit_tuple_drop_fn(elems),
             TypeKind::Path(p) => {
                 let head = p.segments.first().map(String::as_str);
-                if head == Some("Vec") {
+                // VecDeque shares Vec's linear {ptr,len,cap} layout (its
+                // push_front is a memmove insert at index 0, not a ring
+                // buffer), so the 0..len element walk + buffer free is
+                // exact for it too (slice 3v).
+                if head == Some("Vec") || head == Some("VecDeque") {
                     if let Some(GenericArg::Type(elem_te)) =
                         p.generic_args.as_ref().and_then(|a| a.first()).cloned()
                     {

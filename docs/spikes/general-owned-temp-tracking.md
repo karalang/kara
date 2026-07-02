@@ -766,6 +766,42 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    THEMSELVES structs-with-heap (pre-existing `emit_struct_drop_synthesis`
    limit, orthogonal); `get_unchecked` on `Vec[String]`; heap K/V
    (`Map[String, Vec[T]]`) on temps.
+   **Slice 3v — the drop-surface tail: VecDeque admission, `get_unchecked`
+   aliasing, whole-tuple clone tracking (+ three more `str`-spelling
+   sites). — DONE 2026-07-02.** Four small legs. **(1) VecDeque:** it
+   shares Vec's linear `{ptr,len,cap}` layout (`push_front` is a memmove
+   insert at index 0, not a ring buffer), so the recursive drop/clone
+   family is exact for it — the gates just never admitted the head.
+   Admitted at: both dispatchers (`emit_drop_fn_for_type_expr` /
+   `emit_clone_fn_for_type_expr` route VecDeque through the Vec arms),
+   `vec_elem_agg_drop_for_type_expr`'s Vec arm, the Option inline-payload
+   gate, and the 3s clone gate + tracking arm. `Vec[VecDeque[String]]`
+   and `Vec[Option[VecDeque[String]]]` both leaked strings pre-fix.
+   **(2) `let s = v.get_unchecked(i)`** bound a shallow element alias with
+   an OWNED track — exit 133 at the two scope exits. It now routes through
+   the same deep-clone as `let s = v[i]`
+   (`clone_owned_vec_index_element` gained a get_unchecked MethodCall arm;
+   the borrow-elision analysis has no spans for method calls, so the clone
+   is unconditional). **(3) Whole-tuple clone tracking:** 3u's whole-tuple
+   escape clone was UNTRACKED — a non-tail consume (`Some(x) => {
+   take(x); }`) leaked the clone. `clone_and_track_borrow_binding` now
+   registers a `StructDrop` via `synthesize_tuple_drop_fn_te`, and
+   `borrow_payload_clone_supported` admits tuple tes per element. Chasing
+   the leak surfaced **three more `str`-spelling sites** (the 3p trap, now
+   sites 4–6): `type_expr_has_drop_heap` (the tuple-drop-synthesis guard —
+   inferred-spelled tuples classified as HEAPLESS and every consumer
+   no-op'd), `emit_tuple_elem_drops`' String arm, and its move-suppression
+   dual `zero_tuple_elem_cap_at` (fixed in tandem — drop/suppress asymmetry
+   is a double-free), plus the box-drop needs-content classifier. **(4)**
+   The 3u tuple-BINDING reconstruction fix rode along: the
+   `pattern_binding_types == "Tuple"` branch of `reconstruct_payload_value`
+   assumed single-word elements and `insertvalue`'d a raw i64 into a
+   `{ptr,i64,i64}` slot — `Some(x)` binding an `(String, i64)` payload
+   died in module verification from ANY source; it now rebuilds via #44's
+   word-correct `reconstruct_struct_from_words`. **Verified:** 5/5 tail3v
+   ASAN under Linux LSan (fresh compile), 9-probe matrix matches the
+   interpreter with zero local leaks. **Tests:** 5 ASAN. The spike's
+   drop-surface Still-open list is now EMPTY of known items.
    **Slice 3u — boxed + inline-STRUCT Option/Result payloads as container
    elements, and the tuple-payload escape clone. — DONE 2026-07-02.** Two
    legs, five of six tests LSan-red pre-fix. **(Leg B, the drop surface):**

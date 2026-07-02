@@ -1640,14 +1640,26 @@ impl<'ctx> super::Codegen<'ctx> {
         value: &Expr,
         val: BasicValueEnum<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let ExprKind::Index { object, index } = &value.kind else {
-            return Ok(val);
+        // Slice 3v (leg C): `let s = v.get_unchecked(i)` under `unsafe` is
+        // the same shallow element alias as `v[i]` — the loaded value's
+        // buffer belongs to the container, but the binding registered an
+        // owned track (exit 133 double-free at the two scope exits; the
+        // interpreter's value-copy semantics say the binding owns a COPY).
+        // Route it through the same deep-clone; the borrow-elision analysis
+        // has no spans for method calls, so the clone is unconditional here.
+        let object = match &value.kind {
+            ExprKind::Index { object, index } => {
+                // A String *range* slice (`s[a..b]`) already returns a
+                // freshly-allocated owned buffer — only a plain element
+                // index (`v[i]`) shallow-aliases.
+                if matches!(&index.kind, ExprKind::Range { .. }) {
+                    return Ok(val);
+                }
+                object
+            }
+            ExprKind::MethodCall { object, method, .. } if method == "get_unchecked" => object,
+            _ => return Ok(val),
         };
-        // A String *range* slice (`s[a..b]`) already returns a freshly-allocated
-        // owned buffer — only a plain element index (`v[i]`) shallow-aliases.
-        if matches!(&index.kind, ExprKind::Range { .. }) {
-            return Ok(val);
-        }
         // Element TypeExpr of the indexed object. Named-Vec var only: `v[i]`,
         // not `self.field[i]` / `matrix[i][j]` (those keep the prior behaviour;
         // the named-binding case is the common — and reported — one).

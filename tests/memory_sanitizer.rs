@@ -18213,4 +18213,143 @@ fn main() {
             "boxelem_tuple_payload_escape_no_double_free",
         );
     }
+
+    #[test]
+    fn asan_tail3v_vec_of_vecdeque_scope_drop_no_leak() {
+        // Slice 3v: `Vec[VecDeque[String]]` — VecDeque shares Vec's linear
+        // {ptr,len,cap} layout (memmove push_front, not a ring), so the
+        // recursive element drop is exact; the gates simply never admitted
+        // the VecDeque head (strings leaked, one per element, pre-fix).
+        assert_clean_asan_run(
+            r#"
+fn build(n: i64) -> Vec[VecDeque[String]] {
+    let mut d: VecDeque[String] = VecDeque.new();
+    d.push_back(f"deque payload padded beyond thirty-six bytes {n}");
+    let mut v: Vec[VecDeque[String]] = Vec.new();
+    v.push(d);
+    v
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let v = build(i);
+        println(v.len());
+        i = i + 1;
+    };
+}
+"#,
+            &["1", "1", "1"],
+            "tail3v_vec_of_vecdeque_scope_drop_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_tail3v_vecdeque_option_elem_no_leak() {
+        // Slice 3v: `Vec[Option[VecDeque[String]]]` — the VecDeque admission
+        // must reach through the Option payload gates too.
+        assert_clean_asan_run(
+            r#"
+fn build(n: i64) -> Vec[Option[VecDeque[String]]] {
+    let mut d: VecDeque[String] = VecDeque.new();
+    d.push_back(f"deque payload padded beyond thirty-six bytes {n}");
+    let mut v: Vec[Option[VecDeque[String]]] = Vec.new();
+    v.push(Some(d));
+    v
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let v = build(i);
+        println(v.len());
+        i = i + 1;
+    };
+}
+"#,
+            &["1", "1", "1"],
+            "tail3v_vecdeque_option_elem_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_tail3v_get_unchecked_binding_no_double_free() {
+        // Slice 3v: `let s = v.get_unchecked(0)` bound a shallow element
+        // alias with an OWNED track — exit 133 at the two scope exits. Now
+        // routes through the same deep-clone as `let s = v[i]`.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let mut v: Vec[String] = Vec.new();
+        v.push(f"unchecked payload padded beyond thirty-six bytes {i}");
+        unsafe {
+            let s = v.get_unchecked(0);
+            println(s.len());
+        }
+        println(v.len());
+        i = i + 1;
+    };
+}
+"#,
+            &["50", "1", "50", "1", "50", "1"],
+            "tail3v_get_unchecked_binding_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_tail3v_whole_tuple_nontail_consume_no_leak() {
+        // Slice 3v: `Some(x) => { take(x); }` over a Map.get tuple payload —
+        // the whole-tuple clone (3u leg A) is now TRACKED via
+        // `synthesize_tuple_drop_fn_te`, whose `type_expr_has_drop_heap`
+        // guard needed the inferred `str` spelling (4th/5th trap sites:
+        // the classifier, the tuple drop emitter, and its cap-zero dual).
+        assert_clean_asan_run(
+            r#"
+fn take(t: (String, i64)) -> i64 {
+    t.1
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let mut m: Map[i64, (String, i64)] = Map.new();
+        m.insert(i, (f"tuple payload padded beyond thirty-six bytes {i}", i));
+        match m.get(i) {
+            Some(x) => { println(take(x)); },
+            None => { println(0 - 1); },
+        }
+        i = i + 1;
+    };
+}
+"#,
+            &["0", "1", "2"],
+            "tail3v_whole_tuple_nontail_consume_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_tail3v_whole_tuple_tail_move_no_double_free() {
+        // Slice 3v: the tail-move sibling — `let t = match m.get(i) {
+        // Some(x) => x, … }` then consume `t`; the cloned tuple's track and
+        // the arm-tail move suppression must compose (single free).
+        assert_clean_asan_run(
+            r#"
+fn take(t: (String, i64)) -> i64 { t.1 }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let mut m: Map[i64, (String, i64)] = Map.new();
+        m.insert(i, (f"tuple payload padded beyond thirty-six bytes {i}", i));
+        let t = match m.get(i) {
+            Some(x) => x,
+            None => (f"none-{i}", 0 - 1),
+        };
+        println(take(t));
+        i = i + 1;
+    };
+}
+"#,
+            &["0", "1", "2"],
+            "tail3v_whole_tuple_tail_move_no_double_free",
+        );
+    }
 }
