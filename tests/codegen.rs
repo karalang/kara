@@ -26296,9 +26296,13 @@ fn main() {
 
     #[test]
     fn test_e2e_slice_get_unchecked_in_bounds_returns_element() {
+        // `at` borrows the slice (`ref Slice[i64]`) so the same slice can be
+        // read across three calls without an ownership-move error — the
+        // check-clean shape enabled by the B-2026-07-02-28 ref-Slice
+        // get_unchecked codegen deref fix.
         let out = run_program(
             r#"
-fn at(xs: Slice[i64], i: i64) -> i64 {
+fn at(xs: ref Slice[i64], i: i64) -> i64 {
     unsafe { xs.get_unchecked(i) }
 }
 fn main() {
@@ -26306,9 +26310,10 @@ fn main() {
     v.push(10);
     v.push(20);
     v.push(30);
-    println(at(v, 0));
-    println(at(v, 1));
-    println(at(v, 2));
+    let s: Slice[i64] = v.as_slice();
+    println(at(s, 0));
+    println(at(s, 1));
+    println(at(s, 2));
 }
 "#,
         );
@@ -51297,9 +51302,13 @@ fn main() {
         // arithmetic + comparison (-> Column[bool]) + col-scalar broadcast
         // + unary neg, all with null propagation. a=[10,null,30],
         // b=[1,2,null].
+        // Helper params are `ref Column[..]` (borrowed), so the same column
+        // can be read across multiple calls without an ownership-move error —
+        // the check-clean shape enabled by the B-2026-07-02-27 ref-Column
+        // codegen deref fix.
         let out = run_program(
-            "fn fst(c: Column[i64], i: i64) -> i64 { match c[i] { Some(v) => v, None => -999 } }\n\
-             fn fstb(c: Column[bool], i: i64) -> i64 { match c[i] { Some(v) => { if v { 1 } else { 0 } }, None => -9 } }\n\
+            "fn fst(c: ref Column[i64], i: i64) -> i64 { match c[i] { Some(v) => v, None => -999 } }\n\
+             fn fstb(c: ref Column[bool], i: i64) -> i64 { match c[i] { Some(v) => { if v { 1 } else { 0 } }, None => -9 } }\n\
              fn main() {\n\
                  let mut a: Column[i64] = Column.new();\n\
                  a.push(10); a.push_null(); a.push(30);\n\

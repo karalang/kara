@@ -195,17 +195,6 @@ pub const OWNERSHIP_GATE_GRANDFATHERED: &[&str] = &[
     // visible-after-pop semantics, but its classification doesn't
     // route through callee_param_modes. Remove when fixed.
     "test_with_provider_e2e_mut_ref_self_mutation_visible_after_pop",
-    //
-    // ── B-2026-07-02-27 / B-2026-07-02-28: `ref` builtin-container
-    // params mis-lower under codegen ──────────────────────────────────
-    // The check-clean rewrite of these tests (helper params declared
-    // `ref Column[..]` / `ref Slice[..]`) MISCOMPILES: `ref Column`
-    // produces silent empty output; `ref Slice` + `get_unchecked`
-    // reads the slice header words as elements. The tests keep the
-    // bare (consuming) params — which the gate flags on reuse — until
-    // the codegen ref-param deref lands. Remove when fixed.
-    "test_e2e_column_3vl_arithmetic",
-    "test_e2e_slice_get_unchecked_in_bounds_returns_element",
 ];
 
 /// Fail loudly when an E2E test program flunks the ownership checker.
