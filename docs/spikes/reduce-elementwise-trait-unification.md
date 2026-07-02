@@ -1,7 +1,7 @@
 # Design spike — trait-dispatched Reduce / ElementwiseMap / ElementwiseOrd unification
 
-**Status:** 🟡 **S0–S3 COMPLETE (S0–S1 2026-06-30 `bcaff37d`, `73af27b0`,
-`7adcc380`, `29b55062`; S2–S3 2026-07-01, S3 `b0a40963`+`eb21e300`); S4–S6 open.** Unifies the three copy-pasted
+**Status:** 🟡 **S0–S4 COMPLETE (S0–S1 2026-06-30 `bcaff37d`, `73af27b0`,
+`7adcc380`, `29b55062`; S2–S4 2026-07-01, S3 `b0a40963`+`eb21e300`, S4 `2ff34611`); S5–S6 open.** Unifies the three copy-pasted
 reduce/element-wise/ordering implementations (Tensor, Column, `Stats.*`) behind
 one internal kernel, then layers **user-extensible** surface traits on top. **S0
 (interpreter twin + shared vocabulary):**
@@ -33,19 +33,28 @@ int `0−x`); Tensor `⊕`/`-t` and Column `⊕`/comparisons/`-c` route through 
 S3 probing surfaced and fixed two pre-existing run-vs-build neg divergences
 (B-2026-07-01-1 tensor `-0.0`, B-2026-07-01-2 column `i64::MIN` wrap) and
 open-ledgered the interpreter narrow-int width-laxity class (B-2026-07-01-3).
-**Remaining on the kernel:** the non-f64 `ElemKind` axis for
-Stats (S5), and the ElementwiseOrd family (S4).
-Refactor byte-identical — codegen run-vs-build oracle 1943/0 (1945 with the two
-new neg regressions), par_codegen 127/0, interpreter 1056/0. Two layers, bottom-up: the
+**S4 (ordering family):** `emit_sort_scratch` — ONE insertion-sort skeleton
+keyed by `SortKey` (`Value` f64 sort / `IndexInto` stable argsort) — behind
+`column_sort_f64_inplace` (now an adapter serving Stats `sort`/`median`/
+`percentile`, Column `median`/`quantile` via `column_sorted_valid_f64`, and
+the `DataFrame.describe` quartiles) plus `Stats.argsort`'s keyed index sort;
+and `emit_reduce_argminmax` (first-occurrence compare-select, float+int
+predicates) behind `Stats.argmin`/`argmax` (`Option` wrap stays at the call
+site). ~400 lines of duplicated sort IR-builder code deleted. Note: the
+"lands Column `median`/`quantile` codegen" bonus predicted below was already
+delivered by an earlier slice (`column_sorted_valid_f64` predates S4); S4
+instead retired that function's inline duplicate of the sort.
+**Remaining on the kernel:** the non-f64 `ElemKind` axis for Stats (S5).
+Refactor byte-identical — codegen run-vs-build oracle 1945/0, par_codegen
+127/0, interpreter 1056/0. Two layers, bottom-up: the
 internal kernel (slices S0–S5) is the load-bearing refactor and is fully covered
 by a byte-identical native oracle;
 the surface traits (S6) sit on top — builtins *override* the generic default
 methods with the fast kernel, user types get the fold-based defaults
 monomorphized. Closes the two open `std.stats` long-tail items (**non-f64
 element types** and **trait-dispatched Reduce/ElementwiseOrd unification**) from
-[phase-11-stdlib-longtail.md](../implementation_checklist/phase-11-stdlib-longtail.md)
-and lands **Column `median`/`quantile` in codegen** (today interpreter-only) as
-fallout of S4. This file is the architecture of record; update its `Status:`
+[phase-11-stdlib-longtail.md](../implementation_checklist/phase-11-stdlib-longtail.md).
+This file is the architecture of record; update its `Status:`
 line (and the `docs/spikes/README.md` row) as slices land.
 
 Cross-refs: [design.md](../design.md), the arm64 ASan aggregate-load fix baked
@@ -115,7 +124,7 @@ else is copy-paste. Each interpreter twin (`eval_stats_fn`,
 | **S1** ✅ | Route Tensor `emit_scalar_reduce_loop`, Column sum/minmax, Stats fold/minmax/mean → `emit_reduce`. Preserve exact seeds, empty policy, return shape **per surface**. | **S1a (`73af27b0`):** `ContainerAccess` + `emit_reduce_fold`; Stats + Tensor `sum`/`prod`/`mean`. **S1b (`7adcc380`):** `emit_reduce_minmax`; Tensor + Stats `min`/`max`, axis-sum rerouted, `emit_scalar_reduce_loop` deleted. **S1c (`29b55062`):** `bitmap` axis + `*_gated` variants; Column `sum`/`min`/`max` migrated (oracle 1937/0, par 127/0). Column `mean` → S2. |
 | **S2** ✅ | Fold the f64-accumulator family — Column `mean`/`var`/`std` (÷n−1) + Stats `variance`/`stddev` (÷n) — into a shared f64-sum-and-count emitter with a Bessel knob. | **Landed 2026-07-01.** `emit_sum_f64_and_count` (dense-or-gated `Σ x as f64` + count) + `emit_variance_from` (`mean` → `Σ(x−mean)²` → `count − (bessel?1:0)` divide) in `kernel.rs`; Column `mean`/`var`/`std` + Stats `variance`/`stddev` migrated, `column_sum_f64_and_count` + Stats' variance loop deleted, elements widen via shared `column_elem_to_f64`. Numbers unchanged — oracle **1943/0**, par 127/0. |
 | **S3** ✅ | Unify ElementwiseMap: Tensor binop/neg + Column binop/neg (null-prop via access). Stats has none. | **Landed 2026-07-01 (`b0a40963` refactor + `eb21e300` neg fix).** `emit_elementwise_map` (`MapOther` second-operand axis, `MapKernelOp` op axis, gated = AND-of-bitmaps → dst bitmap + zero placeholder); Tensor `emit_tensor_binop_loop` now a thin adapter, Column's 3 loops deleted; interpreter twin `map_binop_slots` + `broadcast_pair` behind all four `eval_*_binop` paths. Probing **fixed 2 pre-existing neg divergences** — tensor `-0.0` (fsub→fneg, B-2026-07-01-1) and column `i64::MIN` silent wrap (ineg→checked `0−x`, B-2026-07-01-2) — and open-ledgered interp narrow-int width laxity (B-2026-07-01-3). Oracle 1945/0, par 127/0, interp 1056/0. |
-| **S4** | Unify ElementwiseOrd + `emit_sort_scratch`; route Stats median/percentile/argmin/argmax/sort/argsort + Tensor/Column min/max ordering. | **Bonus: lands Column `median`/`quantile` codegen** (today interpreter-only). |
+| **S4** ✅ | Unify ElementwiseOrd + `emit_sort_scratch`; route Stats median/percentile/argmin/argmax/sort/argsort + Tensor/Column min/max ordering. | **Landed 2026-07-01 (`2ff34611`).** `emit_sort_scratch` (`SortKey::Value` / `::IndexInto` stable argsort) + `emit_reduce_argminmax` in `kernel.rs`; `column_sort_f64_inplace` → adapter, `column_sorted_valid_f64`'s inline sort + `stats_argsort`'s keyed sort + `stats_argminmax`'s loop deleted (~400 lines). Tensor/Column min/max ordering was already S1b/c; the predicted Column `median`/`quantile` bonus had already landed pre-S4 (`column_sorted_valid_f64`) — S4 retired its duplicate sort instead. Oracle 1945/0, par 127/0. |
 | **S5** | Non-f64 element kinds for Stats (`Slice[i64]`/`f32`/…). Thread `ElemKind` from typechecker binding annotation. | Return rules: mean/var/std→f64; sum/prod→T. Closes the non-f64 gap. |
 
 Each S1–S5 keeps a **native byte-identical oracle** (Slipstream-style) per
@@ -205,5 +214,4 @@ confirm/build each:
 S0–S5 are low-risk, independently shippable, and each is oracle-verifiable — the
 committed spine. **S6-pre is the real unknown**: if default-method-bodies +
 generic trait methods turn out large, S6 splits off as a follow-on epic while
-S0–S5 have already delivered the dedup, Column median/quantile codegen, and
-non-f64 stats.
+S0–S5 have already delivered the dedup and non-f64 stats.
