@@ -19680,6 +19680,131 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_map_struct_value_binding_emits_val_drop_fn() {
+        // Slice 3r (deferred gap (d)): a `Map[i64, Holder]` binding where the
+        // struct value owns heap routes its scope-exit free through
+        // `karac_map_free_with_val_drop_fn`, passing the synthesized
+        // `__karac_drop_struct_Holder` per-value walk. The flag-based helper
+        // (`karac_map_free_with_drop_vec`) can only free `{ptr,len,cap}`
+        // overlays and leaked the struct's String field.
+        let src = r#"
+struct Holder { name: String, id: i64 }
+
+fn main() {
+    let mut m: Map[i64, Holder] = Map.new();
+    let h = Holder { name: "a heap string padded out beyond thirty-six bytes!", id: 1 };
+    m.insert(1, h);
+    println(m.len());
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("call void @karac_map_free_with_val_drop_fn"),
+            "expected the struct-valued map's scope-exit free to route through \
+             karac_map_free_with_val_drop_fn (the symbol is always declared — the \
+             CALL is the signal); got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("__karac_drop_struct_Holder"),
+            "expected the synthesized per-value struct drop __karac_drop_struct_Holder \
+             passed as the val_drop_fn; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_map_string_value_keeps_flag_fast_path() {
+        // Slice 3r gate: a plain `Map[i64, String]` value is EXACTLY the
+        // one-level `{ptr,len,cap}` overlay — `map_val_drop_fn_for_type_expr`
+        // returns None and the free stays on the flag-based
+        // `karac_map_free_with_drop_vec` (no per-value fn call overhead).
+        let src = r#"
+fn main() {
+    let mut m: Map[i64, String] = Map.new();
+    m.insert(1, "a heap string padded out beyond thirty-six bytes!");
+    println(m.len());
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            !ir.contains("call void @karac_map_free_with_val_drop_fn"),
+            "Map[i64, String] must stay on the flag-based fast path — no \
+             karac_map_free_with_val_drop_fn CALL (the declaration is unconditional); \
+             got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("karac_map_free_with_drop_vec"),
+            "expected the flag-based karac_map_free_with_drop_vec for the String value; \
+             got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_map_inner_map_value_emits_recursive_map_drop() {
+        // Slice 3r: `Map[i64, Map[i64, String]]` — the value drop fn is the
+        // upgraded `karac_drop_Map_i64_String` (the 0.c placeholder freed only
+        // the handle), which itself routes the inner map through the
+        // flag-based free so the deepest Strings drop.
+        let src = r#"
+fn main() {
+    let mut inner: Map[i64, String] = Map.new();
+    inner.insert(1, "a heap string padded out beyond thirty-six bytes!");
+    let mut m: Map[i64, Map[i64, String]] = Map.new();
+    m.insert(2, inner);
+    println(m.len());
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("call void @karac_map_free_with_val_drop_fn"),
+            "expected the outer map's free CALL through karac_map_free_with_val_drop_fn; \
+             got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("karac_drop_Map_i64_String"),
+            "expected the synthesized recursive inner-map drop karac_drop_Map_i64_String; \
+             got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_inferred_map_struct_value_binding_gets_val_drop_fn() {
+        // Slice 3r + the 3p `str`-spelling discipline: an UNANNOTATED
+        // cross-fn binding (`let m = build();`) derives its value TypeExpr
+        // from `type_to_type_expr` (which spells `str`, not `String`) — the
+        // selection must still arm the per-value drop fn for the struct
+        // value's String field.
+        let src = r#"
+struct Holder { name: String, id: i64 }
+
+fn build() -> Map[i64, Holder] {
+    let mut m: Map[i64, Holder] = Map.new();
+    let h = Holder { name: "a heap string padded out beyond thirty-six bytes!", id: 1 };
+    m.insert(1, h);
+    return m;
+}
+
+fn main() {
+    let m = build();
+    println(m.len());
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("call void @karac_map_free_with_val_drop_fn"),
+            "expected the INFERRED struct-valued map binding to arm the per-value drop \
+             CALL (val TypeExpr comes from type_to_type_expr — both spellings must \
+             gate); got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_ir_ref_arg_nested_vec_elem_freed() {
         // Slice 2 part B: a fresh `Vec[String]` passed to a `ref Vec[String]`
         // param is materialized into a `ref_rvalue_arg` temp. The prior path

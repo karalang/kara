@@ -701,7 +701,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// erased `Option` layout can't carry this; drives
     /// `CleanupAction::FreeInlineOptionMapPayload`. B-2026-06-10-6 follow-on.
     pub(super) fn option_inline_map_payload(
-        &self,
+        &mut self,
         te: &TypeExpr,
     ) -> Option<crate::codegen::state::MapElemDrop<'ctx>> {
         let TypeKind::Path(p) = &te.kind else {

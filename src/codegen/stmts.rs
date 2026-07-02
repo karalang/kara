@@ -3544,7 +3544,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         && (self.map_key_types.contains_key(var_name.as_str())
                             || self.set_elem_types.contains_key(var_name.as_str()))
                     {
-                        if let Some(slot) = self.variables.get(var_name.as_str()) {
+                        if let Some(slot) = self.variables.get(var_name.as_str()).copied() {
                             // `key_is_vec` reads from `map_key_types` for Map
                             // bindings or `set_elem_types` for Set bindings
                             // (Set lowers to Map[T, ()] with the elem type
@@ -3566,12 +3566,25 @@ impl<'ctx> super::Codegen<'ctx> {
                                 self.map_val_shared_heap_type_for(var_name.as_str());
                             let key_shared_heap =
                                 self.map_key_shared_heap_type_for(var_name.as_str());
-                            self.track_map_var(
+                            // Slice 3r: per-value drop fn for non-overlay heap
+                            // values; owns the whole value side when present.
+                            let val_drop_fn = self
+                                .var_elem_type_exprs
+                                .get(var_name.as_str())
+                                .cloned()
+                                .and_then(|vte| self.map_val_drop_fn_for_type_expr(&vte));
+                            let (val_is_vec, val_shared_heap) = if val_drop_fn.is_some() {
+                                (false, None)
+                            } else {
+                                (val_is_vec, val_shared_heap)
+                            };
+                            self.track_map_var_with_val_drop(
                                 slot.ptr,
                                 key_is_vec,
                                 val_is_vec,
                                 val_shared_heap,
                                 key_shared_heap,
+                                val_drop_fn,
                             );
                         }
                     }
@@ -3692,7 +3705,21 @@ impl<'ctx> super::Codegen<'ctx> {
                         && !handled_result
                         && not_borrow
                         && self.try_track_discarded_inline_option_map(tail, val);
-                    if !handled_option && !handled_result && !handled_option_map {
+                    // Slice 3r: a discarded BOXED-payload Option temp
+                    // (`m.insert(k, v2);` displacing a struct value,
+                    // `m.remove(k);` moving one out) owns both the box and
+                    // the payload's interior heap — the inline trackers
+                    // above all decline wide payloads.
+                    let handled_boxed_option = !handled_option
+                        && !handled_result
+                        && !handled_option_map
+                        && not_borrow
+                        && self.try_track_discarded_boxed_option(tail, val);
+                    if !handled_option
+                        && !handled_result
+                        && !handled_option_map
+                        && !handled_boxed_option
+                    {
                         self.materialize_owned_temp(val, (tail.span.offset, tail.span.length));
                     }
                     self.drain_top_frame_with_emit();
@@ -5058,12 +5085,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 .is_some_and(|t| self.llvm_ty_is_vec_struct(t));
             let val_shared_heap = self.map_val_shared_heap_type_for(name);
             let key_shared_heap = self.map_key_shared_heap_type_for(name);
-            self.track_map_var(
+            // Slice 3r: per-value drop fn for non-overlay heap values.
+            let val_drop_fn = self
+                .var_elem_type_exprs
+                .get(name)
+                .cloned()
+                .and_then(|vte| self.map_val_drop_fn_for_type_expr(&vte));
+            let (val_is_vec, val_shared_heap) = if val_drop_fn.is_some() {
+                (false, None)
+            } else {
+                (val_is_vec, val_shared_heap)
+            };
+            self.track_map_var_with_val_drop(
                 alloca,
                 key_is_vec,
                 val_is_vec,
                 val_shared_heap,
                 key_shared_heap,
+                val_drop_fn,
             );
             return;
         }
@@ -5241,12 +5280,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 .is_some_and(|t| self.llvm_ty_is_vec_struct(t));
             let val_shared_heap = self.map_val_shared_heap_type_for(var_name);
             let key_shared_heap = self.map_key_shared_heap_type_for(var_name);
-            self.track_map_var(
+            // Slice 3r: per-value drop fn for non-overlay heap values.
+            let val_drop_fn = self
+                .var_elem_type_exprs
+                .get(var_name)
+                .cloned()
+                .and_then(|vte| self.map_val_drop_fn_for_type_expr(&vte));
+            let (val_is_vec, val_shared_heap) = if val_drop_fn.is_some() {
+                (false, None)
+            } else {
+                (val_is_vec, val_shared_heap)
+            };
+            self.track_map_var_with_val_drop(
                 alloca,
                 key_is_vec,
                 val_is_vec,
                 val_shared_heap,
                 key_shared_heap,
+                val_drop_fn,
             );
             return;
         }

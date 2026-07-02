@@ -3252,8 +3252,17 @@ impl<'ctx> super::Codegen<'ctx> {
             // payloads (`emit_struct_drop_synthesis` returns `None`). Mirrors
             // the named-let box drop, which carries the inner struct name from
             // the typed binding.
+            // Slice 3r leg 2: a BORROW-returning scrutinee (`m.get(k)` on a
+            // Map) hands back a bit-copy whose interior heap ALIASES the
+            // bucket's stored value — only the box allocation itself is fresh
+            // (built by `coerce_to_payload_words`' boxing path per call).
+            // Running the inner struct walk here freed the map's own value
+            // content: the first `get` silently disarmed the bucket, the
+            // second double-freed (exit 133). Box-only free for borrow
+            // scrutinees; the map's own cleanup owns the interior.
+            let scrutinee_is_borrow = self.scrutinee_is_borrow_call(scrutinee);
             let inner_struct_name: Option<String> = match &payload.kind {
-                PatternKind::Binding(_) => {
+                PatternKind::Binding(_) if !scrutinee_is_borrow => {
                     let pkey = (payload.span.offset, payload.span.length);
                     self.pattern_binding_types.get(&pkey).cloned().filter(|n| {
                         self.struct_types.contains_key(n) && !self.shared_types.contains_key(n)

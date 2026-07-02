@@ -2142,16 +2142,21 @@ impl<'ctx> super::Codegen<'ctx> {
         drop_fn
     }
 
-    /// Emit `karac_drop_Map_<K>_<V>` — **placeholder this slice (0.c)**.
-    /// Body delegates to the existing `karac_map_free` runtime, preserving
-    /// today's type-erased Map drop behavior. Slice 1+ replaces this body
-    /// (per K/V tuple) with a monomorphized drop sequence that inlines the
-    /// per-K and per-V drops without going through the runtime fn.
+    /// Emit `karac_drop_Map_<K>_<V>` — releases a Map/Set HANDLE slot's
+    /// full ownership: the K/V halves are classified from the TypeExprs
+    /// exactly like a standalone binding (`map_temp_cleanup_parts`) and the
+    /// body delegates to `emit_free_one_map_handle` — shared-half rc_dec
+    /// walks, then `karac_map_free_with_val_drop_fn` /
+    /// `karac_map_free_with_drop_vec` / plain `karac_map_free`. The
+    /// value-side recursion goes through `map_val_drop_fn_for_type_expr`,
+    /// so a `Map[i64, Map[i64, String]]` value drops its inner map's
+    /// strings, arbitrarily deep (slice 3r; this replaced the 0.c
+    /// placeholder body that freed only the handle and leaked all
+    /// per-entry heap content when reached as a nested element).
     ///
-    /// The placeholder exists so the framework is complete enough that
-    /// callers can request a drop fn for any TypeExpr; it does not commit
-    /// to the monomorphized layout.
-    #[allow(dead_code)]
+    /// The fn is added to the module + cache BEFORE the body is built, so
+    /// (hypothetical) self-referential shapes resolve to the declared fn
+    /// instead of recursing the synthesizer.
     pub(super) fn emit_map_drop_fn(
         &mut self,
         key_te: &TypeExpr,
@@ -2170,27 +2175,56 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
-        let saved_bb = self.builder.get_insert_block();
         let drop_fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
         let drop_fn = self
             .module
             .add_function(&fn_name, drop_fn_ty, Some(Linkage::Internal));
         self.drop_fn_cache.insert(type_name, drop_fn);
 
+        // Classify the halves BEFORE positioning into the body — the
+        // value-side synthesis may emit sibling drop fns (it repositions
+        // the builder internally and restores, but keeping all `&mut`
+        // synthesis ahead of the body build mirrors the family's
+        // recurse-first discipline). A `()` value TypeExpr (the Set
+        // lowering) classifies as fully inert.
+        let key_is_vec = {
+            let kt = self.llvm_type_for_type_expr(key_te);
+            self.llvm_ty_is_vec_struct(kt)
+        };
+        let key_shared = self.shared_heap_type_for_type_expr(key_te);
+        let val_shared = self.shared_heap_type_for_type_expr(val_te);
+        let val_drop_fn = self.map_val_drop_fn_for_type_expr(val_te);
+        let val_is_unit = matches!(&val_te.kind, TypeKind::Tuple(elems) if elems.is_empty());
+        let val_is_vec = if val_drop_fn.is_some() || val_shared.is_some() || val_is_unit {
+            false
+        } else {
+            let vt = self.llvm_type_for_type_expr(val_te);
+            self.llvm_ty_is_vec_struct(vt)
+        };
+
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        self.current_fn = Some(drop_fn);
         let entry_bb = self.context.append_basic_block(drop_fn, "entry");
         self.builder.position_at_end(entry_bb);
         let val = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
-        // Load the Map handle from the alloca and pass to karac_map_free.
+        // The param points at the SLOT holding the opaque handle.
         let handle = self
             .builder
             .build_load(ptr_ty, val, "map.handle")
             .unwrap()
             .into_pointer_value();
-        self.builder
-            .build_call(self.karac_map_free_fn, &[handle.into()], "")
-            .unwrap();
+        let drop = crate::codegen::state::MapElemDrop {
+            key_is_vec,
+            val_is_vec,
+            val_shared_heap_type: val_shared,
+            key_shared_heap_type: key_shared,
+            val_drop_fn,
+        };
+        self.emit_free_one_map_handle(handle, &drop);
         self.builder.build_return(None).unwrap();
 
+        self.current_fn = saved_fn;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }

@@ -17234,4 +17234,347 @@ fn main() {
             "asan_boxed_option_moved_into_struct_literal_no_uaf",
         );
     }
+
+    #[test]
+    fn asan_mapval_inner_map_insert_get_no_uaf() {
+        // Slice 3r leg 1 (gap (d) sibling): `m.insert(k, inner)` where `inner`
+        // is a Map binding never suppressed the source's `FreeMapHandle` — the
+        // inner handle was freed at the builder's scope exit and the outer
+        // map's stored handle dangled (SIGSEGV on `m.get(k)` read-back; the
+        // suppression walk had arms for Vec/String/shared/enum/struct/tuple
+        // but none for a Map/Set-handle binding). Fixed with a branch-safe
+        // null-store of the source slot (`karac_map_free*` null-checks).
+        assert_clean_asan_run(
+            r#"
+fn build(n: i64) -> Map[i64, Map[i64, String]] {
+    let mut inner: Map[i64, String] = Map.new();
+    inner.insert(n, f"inner payload padded out beyond thirty-six bytes {n}");
+    let mut m: Map[i64, Map[i64, String]] = Map.new();
+    m.insert(n, inner);
+    m
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let m = build(i);
+        match m.get(i) {
+            Some(inner) => {
+                match inner.get(i) {
+                    Some(s) => { println(s.len()); },
+                    None => { println("inner-missing"); },
+                }
+            },
+            None => { println("outer-missing"); },
+        }
+        i = i + 1;
+    };
+}
+"#,
+            &["50", "50", "50"],
+            "mapval_inner_map_insert_get_no_uaf",
+        );
+    }
+
+    #[test]
+    fn asan_mapval_struct_double_get_no_double_free() {
+        // Slice 3r leg 2: `Option[Holder]` is a WIDE payload (4 words > the
+        // 3-word inline area), so a `match m.get(k)` scrutinee boxes the
+        // bit-copied value — and `track_freshtemp_boxed_enum_scrutinee` armed
+        // the box drop's INNER struct walk, freeing the `name` buffer the box
+        // merely borrows from the bucket. The second `get` double-freed it
+        // (exit 133 pre-fix). A borrow-call scrutinee now gets a box-only free.
+        assert_clean_asan_run(
+            r#"
+struct Holder {
+    name: String,
+    id: i64,
+}
+fn build(n: i64) -> Map[i64, Holder] {
+    let mut m: Map[i64, Holder] = Map.new();
+    let h = Holder { name: f"holder payload padded out beyond thirty-six bytes {n}", id: n };
+    m.insert(n, h);
+    m
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let m = build(i);
+        match m.get(i) {
+            Some(h) => { println(h.name.len() + h.id); },
+            None => { println("missing"); },
+        }
+        match m.get(i) {
+            Some(h) => { println(h.id); },
+            None => { println("missing"); },
+        }
+        i = i + 1;
+    };
+}
+"#,
+            &["51", "0", "52", "1", "53", "2"],
+            "mapval_struct_double_get_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_mapval_struct_scope_exit_drop_no_leak() {
+        // Slice 3r leg 3 (deferred gap (d)): a struct value's heap content was
+        // never freed by the map's scope-exit cleanup — `val_is_vec` only
+        // covers the `{ptr,len,cap}` overlay, and `Holder` isn't that shape.
+        // The FreeMapHandle arm now routes through
+        // `karac_map_free_with_val_drop_fn` with the synthesized
+        // `karac_drop_*` value drop. LSan-RED pre-fix (one name buffer per
+        // build). Runtime f-string payloads per the 3p spelling-trap
+        // discipline.
+        assert_clean_asan_run(
+            r#"
+struct Holder {
+    name: String,
+    id: i64,
+}
+fn build(n: i64) -> Map[i64, Holder] {
+    let mut m: Map[i64, Holder] = Map.new();
+    let h = Holder { name: f"holder payload padded out beyond thirty-six bytes {n}", id: n };
+    m.insert(n, h);
+    m
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let m = build(i);
+        println(m.len());
+        i = i + 1;
+    };
+}
+"#,
+            &["1", "1", "1"],
+            "mapval_struct_scope_exit_drop_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_mapval_nested_vec_scope_exit_drop_no_leak() {
+        // Slice 3r leg 3 (deferred gap (d), the `Map[K, Vec[Vec[T]]]` value
+        // leg): `val_is_vec = 1` freed only the value's OUTER buffer; the
+        // middle Vec's element buffers and their strings leaked (176 bytes per
+        // build pre-fix). The per-value drop fn is the recursive
+        // `karac_drop_Vec_<elem>` from the slice-3n family.
+        assert_clean_asan_run(
+            r#"
+fn build(n: i64) -> Map[i64, Vec[Vec[String]]] {
+    let mut inner: Vec[String] = Vec.new();
+    inner.push(f"nested payload padded out beyond thirty-six bytes {n}");
+    let mut outer: Vec[Vec[String]] = Vec.new();
+    outer.push(inner);
+    let mut m: Map[i64, Vec[Vec[String]]] = Map.new();
+    m.insert(n, outer);
+    m
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let m = build(i);
+        println(m.len());
+        i = i + 1;
+    };
+}
+"#,
+            &["1", "1", "1"],
+            "mapval_nested_vec_scope_exit_drop_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_mapval_inner_map_scope_exit_drop_no_leak() {
+        // Slice 3r leg 3 (deferred gap (d)): an inner-Map VALUE — once leg 1's
+        // insert move-suppression makes the bucket the handle's owner — must be
+        // freed by the outer map's cleanup via the per-value drop fn
+        // (`karac_drop_Map_*`, which recursively releases the inner map's own
+        // String values). LSan-RED after leg 1 alone (inner handle + its
+        // stored strings leak per build).
+        assert_clean_asan_run(
+            r#"
+fn build(n: i64) -> Map[i64, Map[i64, String]] {
+    let mut inner: Map[i64, String] = Map.new();
+    inner.insert(n, f"inner payload padded out beyond thirty-six bytes {n}");
+    let mut m: Map[i64, Map[i64, String]] = Map.new();
+    m.insert(n, inner);
+    m
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let m = build(i);
+        println(m.len());
+        i = i + 1;
+    };
+}
+"#,
+            &["1", "1", "1"],
+            "mapval_inner_map_scope_exit_drop_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_mapval_vec_of_struct_valued_maps_no_leak() {
+        // Slice 3r: `Vec[Map[i64, Holder]]` — the Vec's element-drop loop
+        // frees each handle via `emit_free_one_map_handle` with the same
+        // per-value drop fn a standalone binding gets
+        // (`vec_elem_map_drop_for_type_expr` → `map_temp_cleanup_parts`).
+        assert_clean_asan_run(
+            r#"
+struct Holder { name: String, id: i64 }
+fn build(n: i64) -> Map[i64, Holder] {
+    let mut m: Map[i64, Holder] = Map.new();
+    let h = Holder { name: f"holder payload padded out beyond thirty-six bytes {n}", id: n };
+    m.insert(n, h);
+    m
+}
+fn main() {
+    let mut v: Vec[Map[i64, Holder]] = Vec.new();
+    v.push(build(1));
+    v.push(build(2));
+    println(v.len());
+}
+"#,
+            &["2"],
+            "mapval_vec_of_struct_valued_maps_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_mapval_iterate_struct_values_no_double_free() {
+        // Slice 3r: `for (k, v) in m` over a struct-valued map with the
+        // per-value drop armed — the loop binding is a bit-copy of the
+        // bucket's value; it must alias (not own), or every iteration
+        // double-frees against the map's scope-exit value drop.
+        assert_clean_asan_run(
+            r#"
+struct Holder { name: String, id: i64 }
+fn main() {
+    let mut m: Map[i64, Holder] = Map.new();
+    let h = Holder { name: f"holder payload padded out beyond thirty-six bytes {7}", id: 7 };
+    m.insert(7, h);
+    let mut total = 0;
+    for (k, v) in m {
+        total = total + k + v.id + (v.name.len() as i64);
+    }
+    println(total);
+}
+"#,
+            &["65"],
+            "mapval_iterate_struct_values_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_mapval_overwrite_displaced_struct_value_no_leak() {
+        // Slice 3r: inserting over an existing key displaces the OLD value
+        // into the discarded `Option[Holder]` result (boxed — Holder is a
+        // wide payload); the fresh-temp boxed-Option machinery must free
+        // both the box and the displaced value's interior heap.
+        assert_clean_asan_run(
+            r#"
+struct Holder { name: String, id: i64 }
+fn main() {
+    let mut m: Map[i64, Holder] = Map.new();
+    let h1 = Holder { name: f"first payload padded out beyond thirty-six bytes {7}", id: 7 };
+    let h2 = Holder { name: f"second payload padded out beyond thirty-six bytes {8}", id: 8 };
+    m.insert(7, h1);
+    m.insert(7, h2);
+    println(m.len());
+}
+"#,
+            &["1"],
+            "mapval_overwrite_displaced_struct_value_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_mapval_triple_nested_map_value_no_leak() {
+        // Slice 3r: `Map[i64, Map[i64, Map[i64, String]]]` — the upgraded
+        // `karac_drop_Map_<K>_<V>` recurses through
+        // `map_val_drop_fn_for_type_expr` per level (the 0.c placeholder
+        // freed only the handle), so the deepest strings drop.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut inner2: Map[i64, String] = Map.new();
+    inner2.insert(1, f"deepest payload padded out beyond thirty-six bytes {1}");
+    let mut inner1: Map[i64, Map[i64, String]] = Map.new();
+    inner1.insert(2, inner2);
+    let mut m: Map[i64, Map[i64, Map[i64, String]]] = Map.new();
+    m.insert(3, inner1);
+    println(m.len());
+}
+"#,
+            &["1"],
+            "mapval_triple_nested_map_value_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_mapval_string_key_struct_value_no_leak() {
+        // Slice 3r: `Map[String, Holder]` — the key half keeps the
+        // `drop_key` flag contract while the value half rides the drop fn;
+        // `karac_map_free_with_val_drop_fn` handles both simultaneously.
+        assert_clean_asan_run(
+            r#"
+struct Holder { name: String, id: i64 }
+fn main() {
+    let mut m: Map[String, Holder] = Map.new();
+    let h = Holder { name: f"holder payload padded out beyond thirty-six bytes {7}", id: 7 };
+    m.insert(f"key padded out beyond thirty-six bytes for lsan {7}", h);
+    println(m.len());
+}
+"#,
+            &["1"],
+            "mapval_string_key_struct_value_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_mapval_remove_struct_value_no_leak() {
+        // Slice 3r: `m.remove(k)` moves the stored value out into a
+        // DISCARDED `Option[Holder]` (boxed — wide payload); the
+        // discarded-boxed-Option tracker must free the box AND the
+        // payload's interior heap (`try_track_discarded_boxed_option`).
+        assert_clean_asan_run(
+            r#"
+struct Holder { name: String, id: i64 }
+fn main() {
+    let mut m: Map[i64, Holder] = Map.new();
+    let h = Holder { name: f"holder payload padded out beyond thirty-six bytes {7}", id: 7 };
+    m.insert(7, h);
+    m.remove(7);
+    println(m.len());
+}
+"#,
+            &["0"],
+            "mapval_remove_struct_value_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_mapval_clear_struct_value_no_leak() {
+        // Slice 3r: `m.clear()` on a struct-valued map — the clear arm now
+        // routes through `karac_map_clear_with_val_drop_fn` (the clear
+        // sibling of the scope-exit per-value walk); the flag-based clear
+        // leaked every stored value's heap (64 bytes here, visible even to
+        // macOS `leaks`).
+        assert_clean_asan_run(
+            r#"
+struct Holder { name: String, id: i64 }
+fn main() {
+    let mut m: Map[i64, Holder] = Map.new();
+    let h = Holder { name: f"holder payload padded out beyond thirty-six bytes {7}", id: 7 };
+    m.insert(7, h);
+    m.clear();
+    println(m.len());
+}
+"#,
+            &["0"],
+            "mapval_clear_struct_value_no_leak",
+        );
+    }
 }

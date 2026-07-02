@@ -2741,6 +2741,13 @@ pub(super) struct Codegen<'ctx> {
     /// primitive-only `Map[i64, i64]` case stays on plain
     /// `karac_map_free` for zero overhead.
     pub(crate) karac_map_free_with_drop_vec_fn: FunctionValue<'ctx>,
+    /// `karac_map_free_with_val_drop_fn(map: ptr, drop_key: i32,
+    /// val_drop_fn: ptr)` — slice 3r (deferred gap (d)): frees each live
+    /// entry's VALUE via a synthesized `karac_drop_<T>(ptr)` (values that
+    /// aren't the one-level Vec/String overlay: user structs/enums, inner
+    /// Maps/Sets, Option/Result, Vec-with-heap-elements). Key side keeps
+    /// the flag contract of `karac_map_free_with_drop_vec`.
+    pub(crate) karac_map_free_with_val_drop_fn_fn: FunctionValue<'ctx>,
     pub(crate) karac_map_insert_old_fn: FunctionValue<'ctx>,
     /// Borrowed-String-key insert: deep-copies the key only on a fresh
     /// insertion, so a slice-into-source key (`m.insert(s[a..b], v)`)
@@ -2755,6 +2762,9 @@ pub(super) struct Codegen<'ctx> {
     /// frees heap key/value buffers first (peer of
     /// `karac_map_free_with_drop_vec`); selected for heap-keyed/valued maps.
     pub(crate) karac_map_clear_with_drop_vec_fn: FunctionValue<'ctx>,
+    /// `karac_map_clear_with_val_drop_fn(map, drop_key, val_drop_fn)` — the
+    /// clear sibling of `karac_map_free_with_val_drop_fn` (slice 3r).
+    pub(crate) karac_map_clear_with_val_drop_fn_fn: FunctionValue<'ctx>,
     pub(crate) karac_map_iter_new_fn: FunctionValue<'ctx>,
     pub(crate) karac_map_iter_next_fn: FunctionValue<'ctx>,
     pub(crate) karac_map_iter_free_fn: FunctionValue<'ctx>,
@@ -4900,6 +4910,23 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // karac_map_free_with_val_drop_fn(map: ptr, drop_key: i32,
+        // val_drop_fn: ptr) -> void — slice 3r (deferred gap (d)): runs a
+        // synthesized `karac_drop_<T>(ptr)` on every live entry's VALUE blob
+        // in place before deallocating the bucket storage. Selected when the
+        // value type owns heap beyond the one-level `{ptr,len,cap}` overlay
+        // (`Map[K, Holder]`, `Map[K, Map[J, W]]`, `Map[K, Vec[String]]`).
+        // The key side keeps the flag contract (keys are Hash-constrained to
+        // scalar / Vec/String shapes).
+        let map_free_with_val_drop_fn_ty = context
+            .void_type()
+            .fn_type(&[ptr_md, i32_ty, ptr_md], false);
+        let karac_map_free_with_val_drop_fn_fn = module.add_function(
+            "karac_map_free_with_val_drop_fn",
+            map_free_with_val_drop_fn_ty,
+            Some(Linkage::External),
+        );
+
         // karac_map_insert_old(map: ptr, key: ptr, val: ptr, out_old_val: ptr) -> i1
         let map_insert_old_ty = context
             .bool_type()
@@ -4963,6 +4990,14 @@ impl<'ctx> Codegen<'ctx> {
         let karac_map_clear_with_drop_vec_fn = module.add_function(
             "karac_map_clear_with_drop_vec",
             map_free_with_drop_ty,
+            Some(Linkage::External),
+        );
+
+        // karac_map_clear_with_val_drop_fn(map, drop_key: i32, val_drop_fn: ptr)
+        // — the clear sibling of `karac_map_free_with_val_drop_fn` (slice 3r).
+        let karac_map_clear_with_val_drop_fn_fn = module.add_function(
+            "karac_map_clear_with_val_drop_fn",
+            map_free_with_val_drop_fn_ty,
             Some(Linkage::External),
         );
 
@@ -5392,6 +5427,7 @@ impl<'ctx> Codegen<'ctx> {
             karac_map_new_fn,
             karac_map_free_fn,
             karac_map_free_with_drop_vec_fn,
+            karac_map_free_with_val_drop_fn_fn,
             karac_map_insert_old_fn,
             karac_map_insert_borrowed_str_old_fn,
             karac_map_get_fn,
@@ -5400,6 +5436,7 @@ impl<'ctx> Codegen<'ctx> {
             karac_map_len_fn,
             karac_map_clear_fn,
             karac_map_clear_with_drop_vec_fn,
+            karac_map_clear_with_val_drop_fn_fn,
             karac_map_iter_new_fn,
             karac_map_iter_next_fn,
             karac_map_iter_free_fn,

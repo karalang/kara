@@ -3807,9 +3807,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // Drop the fresh-owned handle at the enclosing frame's exit, classified
         // from the full receiver type (scalar K/V → no per-entry heap drop).
         if self.expr_yields_fresh_owned_temp(object) {
-            let (key_is_vec, val_is_vec, key_shared, val_shared) =
+            let (key_is_vec, val_is_vec, key_shared, val_shared, val_drop_fn) =
                 self.map_temp_cleanup_parts(&recv_te);
-            self.track_map_var(slot, key_is_vec, val_is_vec, val_shared, key_shared);
+            self.track_map_var_with_val_drop(
+                slot,
+                key_is_vec,
+                val_is_vec,
+                val_shared,
+                key_shared,
+                val_drop_fn,
+            );
         }
 
         // Register the synth name so the identifier-keyed dispatch resolves the

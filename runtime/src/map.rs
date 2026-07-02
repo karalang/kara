@@ -370,6 +370,50 @@ pub unsafe extern "C" fn karac_map_free_with_drop_vec(
     m.free_storage();
 }
 
+/// `karac_map_free` variant that runs a synthesized per-VALUE drop function
+/// on every live entry before deallocating the bucket storage — the
+/// "values that aren't Vec/String" leg of the recursive-drop work
+/// (deferred gap (d), owned-temp slice 3r). Selected by codegen when the
+/// value type owns heap but does NOT follow the `{ptr, i64, i64}` overlay
+/// (`Map[K, Holder]`, `Map[K, Map[J, W]]`, `Map[K, Option[String]]`) or
+/// follows it but needs per-element recursion (`Map[K, Vec[String]]`,
+/// `Map[K, Vec[Vec[T]]]` — the flag-based helper frees only the value's
+/// outer buffer).
+///
+/// `drop_key != 0` keeps the flag-based KEY contract of
+/// `karac_map_free_with_drop_vec` (keys are Hash-constrained to the
+/// Vec/String overlay or scalars, so the key side never needs a fn).
+/// `val_drop_fn` receives a pointer to the value blob IN PLACE (the same
+/// address `val_ptr` yields) and must free the value's owned heap without
+/// touching the blob storage itself — exactly the synthesized
+/// `karac_drop_<T>(ptr)` family's contract. A null fn is tolerated
+/// (degrades to `karac_map_free_with_drop_vec(map, drop_key, 0)`).
+#[no_mangle]
+pub unsafe extern "C" fn karac_map_free_with_val_drop_fn(
+    map: *mut c_void,
+    drop_key: i32,
+    val_drop_fn: Option<unsafe extern "C" fn(*mut c_void)>,
+) {
+    if map.is_null() {
+        return;
+    }
+    let mut m = Box::from_raw(map as *mut KaracMap);
+    if drop_key != 0 || val_drop_fn.is_some() {
+        for slot in 0..m.capacity {
+            if *m.status.add(slot) != BUCKET_OCCUPIED {
+                continue;
+            }
+            if drop_key != 0 {
+                m.free_stored_key(slot);
+            }
+            if let Some(f) = val_drop_fn {
+                f(m.val_ptr(slot) as *mut c_void);
+            }
+        }
+    }
+    m.free_storage();
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn karac_map_insert(
     map: *mut c_void,
@@ -693,6 +737,39 @@ pub unsafe extern "C" fn karac_map_clear_with_drop_vec(
                 if cap > 0 && !data_ptr.is_null() {
                     free(data_ptr as *mut c_void);
                 }
+            }
+        }
+    }
+    ptr::write_bytes(m.status, BUCKET_EMPTY, m.capacity);
+    m.len = 0;
+    m.tombstones = 0;
+}
+
+/// `karac_map_clear` variant for a VALUE with a synthesized drop fn
+/// (slice 3r, deferred gap (d)) — the clear sibling of
+/// `karac_map_free_with_val_drop_fn`: runs `val_drop_fn` on every live
+/// entry's value blob (and frees `{ptr,len,cap}` keys per `drop_key`)
+/// before resetting the statuses. The map stays alive and reusable.
+#[no_mangle]
+pub unsafe extern "C" fn karac_map_clear_with_val_drop_fn(
+    map: *mut c_void,
+    drop_key: i32,
+    val_drop_fn: Option<unsafe extern "C" fn(*mut c_void)>,
+) {
+    if map.is_null() {
+        return;
+    }
+    let m = &mut *(map as *mut KaracMap);
+    if drop_key != 0 || val_drop_fn.is_some() {
+        for slot in 0..m.capacity {
+            if *m.status.add(slot) != BUCKET_OCCUPIED {
+                continue;
+            }
+            if drop_key != 0 {
+                m.free_stored_key(slot);
+            }
+            if let Some(f) = val_drop_fn {
+                f(m.val_ptr(slot) as *mut c_void);
             }
         }
     }

@@ -151,6 +151,21 @@ impl<'ctx> super::Codegen<'ctx> {
         let val_is_vec = self.llvm_ty_is_vec_struct(val_ty);
         let val_shared_heap = self.map_val_shared_heap_type_for(var_name);
         let key_shared_heap = self.map_key_shared_heap_type_for(var_name);
+        // Slice 3r (deferred gap (d)): a value that owns heap beyond the
+        // one-level `{ptr,len,cap}` overlay gets a synthesized per-value
+        // drop fn; it owns the whole value side, so the flag/shared halves
+        // are forced off (the selector returns None for shared V and for
+        // values the flag free handles exactly).
+        let val_drop_fn = self
+            .var_elem_type_exprs
+            .get(var_name)
+            .cloned()
+            .and_then(|te| self.map_val_drop_fn_for_type_expr(&te));
+        let (val_is_vec, val_shared_heap) = if val_drop_fn.is_some() {
+            (false, None)
+        } else {
+            (val_is_vec, val_shared_heap)
+        };
         // Slice c-repl.B.5.3b: skip the scope-exit FreeMapHandle when
         // the let binding is destined for the cross-cell snapshot
         // global — the snapshot owns the handle's lifetime (until the
@@ -163,12 +178,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // is queue-driven (skip the queue push, no further action
         // needed at scope exit).
         if !self.snapshot_capture.contains_key(var_name) {
-            self.track_map_var(
+            self.track_map_var_with_val_drop(
                 slot_ptr,
                 key_is_vec,
                 val_is_vec,
                 val_shared_heap,
                 key_shared_heap,
+                val_drop_fn,
             );
         }
         // Record the binding's surface type name, mirroring the place-source
@@ -1306,7 +1322,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(heap_ty) = self.map_key_shared_heap_type_for(var_name) {
                     self.emit_map_shared_half_rc_dec_walk(map_handle, heap_ty, false);
                 }
-                if key_is_vec || val_is_vec {
+                // Slice 3r (deferred gap (d)): a value beyond the one-level
+                // `{ptr,len,cap}` overlay clears through the per-value drop
+                // fn (the clear sibling of the scope-exit routing).
+                let val_drop_fn = self
+                    .var_elem_type_exprs
+                    .get(var_name)
+                    .cloned()
+                    .and_then(|vte| self.map_val_drop_fn_for_type_expr(&vte));
+                if let Some(val_fn) = val_drop_fn {
+                    let i32_t = self.context.i32_type();
+                    let key_flag = i32_t.const_int(if key_is_vec { 1 } else { 0 }, false);
+                    let fn_ptr = val_fn.as_global_value().as_pointer_value();
+                    self.builder
+                        .build_call(
+                            self.karac_map_clear_with_val_drop_fn_fn,
+                            &[map_handle.into(), key_flag.into(), fn_ptr.into()],
+                            "",
+                        )
+                        .unwrap();
+                } else if key_is_vec || val_is_vec {
                     let i32_t = self.context.i32_type();
                     let key_flag = i32_t.const_int(if key_is_vec { 1 } else { 0 }, false);
                     let val_flag = i32_t.const_int(if val_is_vec { 1 } else { 0 }, false);

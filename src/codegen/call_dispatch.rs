@@ -3079,8 +3079,16 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => return,
         };
         if head == "Map" || head == "Set" {
-            let (key_is_vec, val_is_vec, key_shared, val_shared) = self.map_temp_cleanup_parts(&te);
-            self.track_map_var(slot, key_is_vec, val_is_vec, val_shared, key_shared);
+            let (key_is_vec, val_is_vec, key_shared, val_shared, val_drop_fn) =
+                self.map_temp_cleanup_parts(&te);
+            self.track_map_var_with_val_drop(
+                slot,
+                key_is_vec,
+                val_is_vec,
+                val_shared,
+                key_shared,
+                val_drop_fn,
+            );
         }
     }
 
@@ -3409,6 +3417,28 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.dataframe_var_infos.contains(var_name) {
             let _ = self.builder.build_store(slot.ptr, ptr_ty.const_null());
             return;
+        }
+        // Map / Set handle binding (slice 3r, gap (d) sibling): null the
+        // source slot so its queued `FreeMapHandle` no-ops — the runtime
+        // free (`karac_map_free` / `karac_map_free_with_drop_vec`)
+        // null-checks the handle. Before this arm, `m.insert(k, inner)` /
+        // a struct-literal Map field left the source's cleanup armed: the
+        // inner handle was freed at the source's scope exit and the
+        // consumer's stored copy dangled (SIGSEGV on read-back). The
+        // null-store is BRANCH-SAFE (a runtime store on this path only),
+        // unlike `suppress_map_cleanup_for_tail_identifier`'s compile-time
+        // frame removal — a branch-buried consume must not leak the
+        // not-taken path's handle. Gated to a plain pointer slot holding
+        // the handle by value; a `ref Map` param's slot points into the
+        // caller's frame and owns nothing.
+        if let Some(tn) = self.var_type_names.get(var_name) {
+            if matches!(tn.as_str(), "Map" | "Set")
+                && !self.ref_params.contains_key(var_name)
+                && slot.ty.is_pointer_type()
+            {
+                let _ = self.builder.build_store(slot.ptr, ptr_ty.const_null());
+                return;
+            }
         }
         // Shared-struct / shared-enum binding (RC-tier): the binding
         // holds a `ptr` whose pointee is the heap object with the i64

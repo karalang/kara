@@ -293,10 +293,15 @@ impl<'ctx> super::Codegen<'ctx> {
                         if let Some(full_te) = self.pattern_binding_inner_types.get(&key).cloned() {
                             self.register_var_from_type_expr(name, &full_te);
                             if !self.pattern_binding_is_borrow {
-                                let (key_is_vec, val_is_vec, key_shared, val_shared) =
+                                let (key_is_vec, val_is_vec, key_shared, val_shared, val_drop_fn) =
                                     self.map_temp_cleanup_parts(&full_te);
-                                self.track_map_var(
-                                    alloca, key_is_vec, val_is_vec, val_shared, key_shared,
+                                self.track_map_var_with_val_drop(
+                                    alloca,
+                                    key_is_vec,
+                                    val_is_vec,
+                                    val_shared,
+                                    key_shared,
+                                    val_drop_fn,
                                 );
                             }
                         }

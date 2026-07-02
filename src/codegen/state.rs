@@ -349,6 +349,12 @@ pub(crate) struct MapElemDrop<'ctx> {
     /// Heap-struct type for a shared-struct/enum KEY (or `Set[shared T]`
     /// element).
     pub(crate) key_shared_heap_type: Option<StructType<'ctx>>,
+    /// Synthesized per-VALUE drop fn (`karac_drop_<T>(ptr)`) for a value
+    /// that owns heap beyond the one-level `{ptr,len,cap}` overlay —
+    /// slice 3r (deferred gap (d)). Mutually exclusive with `val_is_vec`
+    /// and `val_shared_heap_type`; routes the free through
+    /// `karac_map_free_with_val_drop_fn`.
+    pub(crate) val_drop_fn: Option<inkwell::values::FunctionValue<'ctx>>,
 }
 
 /// Tagged kind for per-scope destructor actions emitted at scope exit.
@@ -617,6 +623,8 @@ pub(crate) enum CleanupAction<'ctx> {
         /// a shared-type heap layout). Closes the `Map[shared K, V]`
         /// / `Set[shared T]` leak (2026-05-16).
         key_shared_heap_type: Option<StructType<'ctx>>,
+        /// Synthesized per-VALUE drop fn — see [`MapElemDrop::val_drop_fn`].
+        val_drop_fn: Option<inkwell::values::FunctionValue<'ctx>>,
     },
     /// Phase 8 `File` handle slice F4b: scope-exit close for a
     /// pattern-bound File handle. The alloca holds the opaque `ptr`
@@ -968,6 +976,8 @@ pub(crate) enum SlotOwnership<'ctx> {
         val_is_vec: bool,
         val_shared_heap_type: Option<StructType<'ctx>>,
         key_shared_heap_type: Option<StructType<'ctx>>,
+        /// Slice 3r per-VALUE drop fn — see [`MapElemDrop::val_drop_fn`].
+        val_drop_fn: Option<FunctionValue<'ctx>>,
     },
     /// `FreeFileHandle` — close at parent scope exit.
     File,

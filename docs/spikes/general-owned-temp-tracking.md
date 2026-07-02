@@ -766,6 +766,66 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    THEMSELVES structs-with-heap (pre-existing `emit_struct_drop_synthesis`
    limit, orthogonal); `get_unchecked` on `Vec[String]`; heap K/V
    (`Map[String, Vec[T]]`) on temps.
+   **Slice 3r — the Map-VALUE drop leg (deferred gap (d)) + two Map-value
+   correctness bugs. — DONE 2026-07-01.** Three legs, every one LSan-red-
+   confirmed before the fix. **(1) `m.insert(k, <Map/Set binding>)` was a
+   UAF (SIGSEGV):** the consume-site suppression walk
+   (`suppress_source_vec_cleanup_for_arg_ex`) had arms for
+   Vec/String/Tensor/Column/DataFrame/shared/enum/struct/tuple but NONE for a
+   Map/Set-handle binding — the inner map's `FreeMapHandle` stayed armed, freed
+   the handle at the builder's scope exit, and the outer map's stored handle
+   dangled (`karac_map_get` SEGV on read-back). Fix: a Map/Set arm that
+   NULL-STORES the source slot (`karac_map_free*` null-check) — branch-safe
+   (runtime store on this path only), unlike the compile-time frame removal
+   `suppress_map_cleanup_for_tail_identifier` uses; gated off `ref` params.
+   **(2) `Map.get` on a WIDE payload double-freed (exit 133 on the second
+   get):** `Option[Holder]` (4 words > the 3-word inline area) boxes the
+   bit-copied value, and `track_freshtemp_boxed_enum_scrutinee` armed the box
+   drop's INNER struct walk — freeing the `name` buffer the box merely BORROWS
+   from the bucket. A borrow-call scrutinee (`scrutinee_is_borrow_call`) now
+   gets a box-only free; the map's own cleanup owns the interior. **(3) The
+   gap-(d) core:** new runtime entry `karac_map_free_with_val_drop_fn(map,
+   drop_key, val_drop_fn)` (+ `karac_map_clear_with_val_drop_fn`) runs a
+   synthesized `karac_drop_<V>(ptr)` on every live entry's value blob IN PLACE
+   before releasing bucket storage — the key half keeps the flag contract
+   (keys are Hash-constrained to scalar/overlay shapes). Selection:
+   `map_val_drop_fn_for_type_expr` (None → status quo) fires for user
+   structs/enums with heap (`Map[K, Holder]`), inner `Map`/`Set` values,
+   Option/Result inline payloads, and Vec-shaped values whose ELEMENT owns heap
+   (`Map[K, Vec[String]]`, `Map[K, Vec[Vec[T]]]` — the flag free released only
+   the outer buffer); shared V stays on the rc-dec walk, plain String/Vec[POD]
+   stays on the flags. It rides `MapElemDrop.val_drop_fn` +
+   `FreeMapHandle.val_drop_fn` through the shared `emit_free_one_map_handle`,
+   so EVERY consumer inherits it: let-bindings (all 3 stmts.rs derivations +
+   `compile_map_new_stmt`), fresh temps (`map_temp_cleanup_parts`, now 5-tuple
+   &mut), `Vec[Map]` elements, pattern binds, ref-rvalue args, for-loop map
+   temps, auto-par SlotOwnership transfer, and `Map.clear`. The 0.c placeholder
+   `emit_map_drop_fn` (freed only the handle when reached as a nested element)
+   was upgraded to classify K/V like a standalone binding and recurse —
+   `Map[i64, Map[i64, Map[i64, String]]]` drops its deepest strings. **Bonus
+   from the probes:** a DISCARDED statement-position boxed-payload Option temp
+   (`m.insert(k, v2);` displacing a struct value, `m.remove(k);` moving one
+   out, any discarded `Option[WideStruct]`-returning call) leaked box+interior
+   — new `try_track_discarded_boxed_option` in the stmts.rs discard chain
+   (inline trackers all decline wide payloads). **Verified:** 12/12 mapval ASAN
+   under Linux LSan (fresh `Compiling karac` confirmed), all probes match the
+   interpreter incl. iteration (`for (k,v) in m` aliases — clean), Vec[Map]
+   elements, triple nesting, `Map[String, Holder]` both-halves, remove,
+   overwrite, clear; auto-par A/B clean on 7 probes. **Tests:** 4 IR
+   (val-drop-fn CALL for struct values — the symbol is always declared, assert
+   the call; String-value flag fast path retained; recursive
+   `karac_drop_Map_i64_String` for inner-map values; INFERRED unannotated
+   cross-fn binding arms the fn per the 3p spelling discipline) + 12 ASAN.
+   **Ledgered, not fixed here:** B-2026-07-01-12 — `let s = match m.get(k) {
+   Some(x) => x, … }` moves the borrow-bound ALIAS out of the arm and
+   double-frees against the map's stored value (pre-existing: crashes TODAY on
+   plain `Map[i64, String]`, exit 133; interpreter fine). The escapee needs a
+   deep-clone at the arm-tail move — the 3q consume-from-copy discipline at the
+   arm-tail site. **Still open (drop surface):** that arm-tail move-out
+   (B-2026-07-01-12); boxed/wide Option/Result payloads as Vec ELEMENTS; struct
+   fields that are THEMSELVES structs-with-heap (pre-existing
+   `emit_struct_drop_synthesis` limit, orthogonal); `get_unchecked` on
+   `Vec[String]`.
    **Slice 3b-c — operator-operand temps. — DONE 2026-06-29.** `make_str() + "x"`
    leaked the fresh `make_str()` operand. Confirmed the spike's diagnosis: a
    String `+` (and `==`/`<`/… comparison) desugars in `lowering.rs`

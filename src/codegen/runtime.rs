@@ -1308,6 +1308,25 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(heap_ty) = drop.key_shared_heap_type {
             self.emit_map_shared_half_rc_dec_walk(handle, heap_ty, false);
         }
+        // Slice 3r (deferred gap (d)): a synthesized per-VALUE drop fn
+        // (`karac_drop_<V>(ptr)`) owns the whole value-side release —
+        // route through `karac_map_free_with_val_drop_fn`, keeping the
+        // key side on the flag contract. Mutually exclusive with
+        // `val_is_vec` / `val_shared_heap_type` by construction
+        // (`map_val_drop_fn_for_type_expr` returns None for those).
+        if let Some(val_fn) = drop.val_drop_fn {
+            let i32_t = self.context.i32_type();
+            let key_flag = i32_t.const_int(if drop.key_is_vec { 1 } else { 0 }, false);
+            let fn_ptr = val_fn.as_global_value().as_pointer_value();
+            self.builder
+                .build_call(
+                    self.karac_map_free_with_val_drop_fn_fn,
+                    &[handle.into(), key_flag.into(), fn_ptr.into()],
+                    "",
+                )
+                .unwrap();
+            return;
+        }
         if drop.key_is_vec || drop.val_is_vec {
             let i32_t = self.context.i32_type();
             let key_flag = i32_t.const_int(if drop.key_is_vec { 1 } else { 0 }, false);
@@ -1499,10 +1518,18 @@ impl<'ctx> super::Codegen<'ctx> {
             if !val.is_pointer_value() {
                 return None;
             }
-            let (key_is_vec, val_is_vec, key_shared, val_shared) = self.map_temp_cleanup_parts(&te);
+            let (key_is_vec, val_is_vec, key_shared, val_shared, val_drop_fn) =
+                self.map_temp_cleanup_parts(&te);
             let slot = self.create_entry_alloca(cur_fn, "__owned_tmp", val.get_type());
             self.builder.build_store(slot, val).unwrap();
-            self.track_map_var(slot, key_is_vec, val_is_vec, val_shared, key_shared);
+            self.track_map_var_with_val_drop(
+                slot,
+                key_is_vec,
+                val_is_vec,
+                val_shared,
+                key_shared,
+                val_drop_fn,
+            );
             return Some(slot);
         }
 
@@ -1529,7 +1556,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// classification is the same `map_temp_cleanup_parts` derivation a
     /// standalone Map binding uses.
     pub(super) fn vec_elem_map_drop_for_type_expr(
-        &self,
+        &mut self,
         elem_te: &TypeExpr,
     ) -> Option<crate::codegen::state::MapElemDrop<'ctx>> {
         let head = match &elem_te.kind {
@@ -1539,13 +1566,14 @@ impl<'ctx> super::Codegen<'ctx> {
         if head != "Map" && head != "Set" {
             return None;
         }
-        let (key_is_vec, val_is_vec, key_shared_heap_type, val_shared_heap_type) =
+        let (key_is_vec, val_is_vec, key_shared_heap_type, val_shared_heap_type, val_drop_fn) =
             self.map_temp_cleanup_parts(elem_te);
         Some(crate::codegen::state::MapElemDrop {
             key_is_vec,
             val_is_vec,
             val_shared_heap_type,
             key_shared_heap_type,
+            val_drop_fn,
         })
     }
 
@@ -2055,13 +2083,14 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `(key_is_vec, val_is_vec, key_shared_heap, val_shared_heap)`; a `Set`
     /// lowers to `Map[T, ()]`, so its value half is inert.
     pub(super) fn map_temp_cleanup_parts(
-        &self,
+        &mut self,
         te: &TypeExpr,
     ) -> (
         bool,
         bool,
         Option<StructType<'ctx>>,
         Option<StructType<'ctx>>,
+        Option<FunctionValue<'ctx>>,
     ) {
         fn nth(path: &PathExpr, i: usize) -> Option<&TypeExpr> {
             match path.generic_args.as_ref()?.get(i)? {
@@ -2071,7 +2100,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let path = match &te.kind {
             TypeKind::Path(p) => p,
-            _ => return (false, false, None, None),
+            _ => return (false, false, None, None, None),
         };
         let head = path.segments.first().map(|s| s.as_str()).unwrap_or("");
         let k = nth(path, 0);
@@ -2079,13 +2108,113 @@ impl<'ctx> super::Codegen<'ctx> {
             k.is_some_and(|t| self.llvm_ty_is_vec_struct(self.llvm_type_for_type_expr(t)));
         let key_shared = k.and_then(|t| self.shared_heap_type_for_type_expr(t));
         if head == "Set" {
-            return (key_is_vec, false, key_shared, None);
+            return (key_is_vec, false, key_shared, None, None);
         }
-        let v = nth(path, 1);
-        let val_is_vec =
-            v.is_some_and(|t| self.llvm_ty_is_vec_struct(self.llvm_type_for_type_expr(t)));
-        let val_shared = v.and_then(|t| self.shared_heap_type_for_type_expr(t));
-        (key_is_vec, val_is_vec, key_shared, val_shared)
+        let v = nth(path, 1).cloned();
+        let val_is_vec = v
+            .as_ref()
+            .is_some_and(|t| self.llvm_ty_is_vec_struct(self.llvm_type_for_type_expr(t)));
+        let val_shared = v
+            .as_ref()
+            .and_then(|t| self.shared_heap_type_for_type_expr(t));
+        // Slice 3r (deferred gap (d)): per-VALUE drop fn for a value that
+        // owns heap beyond the one-level `{ptr,len,cap}` overlay. When it
+        // fires, it owns the whole value side — the flag/shared halves are
+        // forced off (the helper returns None for shared / plain-overlay
+        // values, so this only rewrites cases the flags mishandled).
+        let val_drop_fn = v
+            .as_ref()
+            .and_then(|t| self.map_val_drop_fn_for_type_expr(t));
+        if val_drop_fn.is_some() {
+            return (key_is_vec, false, key_shared, None, val_drop_fn);
+        }
+        (key_is_vec, val_is_vec, key_shared, val_shared, val_drop_fn)
+    }
+
+    /// Slice 3r (deferred gap (d)) selection: the synthesized per-VALUE
+    /// drop fn for a `Map[K, V]` binding/temp whose V owns heap beyond
+    /// what the flag-based runtime walk releases. Returns `None` (keep the
+    /// existing fast paths) for:
+    /// - shared V — the codegen-side rc_dec walk owns it;
+    /// - `String` / plain `Vec`/`VecDeque` with a heapless element — the
+    ///   one-level `val_is_vec` overlay free is exact;
+    /// - a V the recursive drop family can't fully free (boxed payloads,
+    ///   unknown heads) — status-quo leak rather than a partial free that
+    ///   would look done.
+    ///
+    /// Fires for: user structs/enums with heap fields (`Map[K, Holder]`),
+    /// inner `Map`/`Set` values, `Option`/`Result` with supported inline
+    /// payloads, and `Vec`-shaped values whose ELEMENT owns heap
+    /// (`Map[K, Vec[String]]`, `Map[K, Vec[Vec[T]]]` — the flag free
+    /// releases only the outer buffer). Delegates the actual synthesis to
+    /// `emit_drop_fn_for_type_expr` / `vec_elem_agg_drop_for_type_expr`,
+    /// the slice-3n/3o/3p/3q recursive drop family.
+    pub(super) fn map_val_drop_fn_for_type_expr(
+        &mut self,
+        val_te: &TypeExpr,
+    ) -> Option<FunctionValue<'ctx>> {
+        let path = match &val_te.kind {
+            TypeKind::Path(p) => p,
+            // Tuple values: the agg-drop synthesizer handles all-heap-leaf
+            // tuples; anything it declines stays on the status quo.
+            TypeKind::Tuple(_) => {
+                return if self.te_owns_heap_below_buffer(val_te)
+                    && self.te_recursive_drop_fully_supported(val_te)
+                {
+                    Some(self.emit_drop_fn_for_type_expr(val_te))
+                } else {
+                    None
+                };
+            }
+            _ => return None,
+        };
+        // Shared V: the rc_dec walk (val_shared_heap_type) owns the value
+        // side; a drop fn here would double-dec.
+        if self.shared_heap_type_for_type_expr(val_te).is_some() {
+            return None;
+        }
+        let head = path.segments.first().map(|s| s.as_str()).unwrap_or("");
+        let arg = |i: usize| -> Option<&TypeExpr> {
+            match path.generic_args.as_ref()?.get(i)? {
+                GenericArg::Type(t) => Some(t),
+                _ => None,
+            }
+        };
+        match head {
+            // Exact one-level overlay — keep `val_is_vec`.
+            "String" | "str" => None,
+            "Vec" | "VecDeque" => {
+                let elem = arg(0)?.clone();
+                if self.te_owns_heap_below_buffer(&elem)
+                    && self.te_recursive_drop_fully_supported(&elem)
+                {
+                    Some(self.emit_drop_fn_for_type_expr(val_te))
+                } else {
+                    // Heapless element → the flag free is exact. A
+                    // heap-owning-but-unsupported element keeps the
+                    // status-quo one-level free (never a double-free).
+                    None
+                }
+            }
+            "Map" | "Set" => {
+                if self.te_recursive_drop_fully_supported(val_te) {
+                    Some(self.emit_drop_fn_for_type_expr(val_te))
+                } else {
+                    None
+                }
+            }
+            // Option/Result and named user types (struct/enum).
+            _ => {
+                if !self.te_owns_heap_below_buffer(val_te) {
+                    return None;
+                }
+                // Option/Result inline-payload gates, user struct/enum
+                // membership, and the both-spellings String trap all live
+                // inside the central synthesizer; a None keeps the value
+                // on the status-quo path.
+                self.vec_elem_agg_drop_for_type_expr(val_te)
+            }
+        }
     }
 
     /// Register a SoA-laid-out Vec for scope-exit cleanup. Mirrors
@@ -2756,6 +2885,31 @@ impl<'ctx> super::Codegen<'ctx> {
         val_shared_heap_type: Option<StructType<'ctx>>,
         key_shared_heap_type: Option<StructType<'ctx>>,
     ) {
+        self.track_map_var_with_val_drop(
+            map_alloca,
+            key_is_vec,
+            val_is_vec,
+            val_shared_heap_type,
+            key_shared_heap_type,
+            None,
+        );
+    }
+
+    /// `track_map_var` with the slice-3r per-VALUE drop fn (deferred gap
+    /// (d)): a `Some(karac_drop_<V>)` routes the scope-exit free through
+    /// `karac_map_free_with_val_drop_fn`, which runs the fn on every live
+    /// entry's value blob in place. Callers must keep `val_is_vec = false`
+    /// and `val_shared_heap_type = None` when passing a fn — the fn owns
+    /// the whole value-side release (see `map_val_drop_fn_for_type_expr`).
+    pub(super) fn track_map_var_with_val_drop(
+        &mut self,
+        map_alloca: PointerValue<'ctx>,
+        key_is_vec: bool,
+        val_is_vec: bool,
+        val_shared_heap_type: Option<StructType<'ctx>>,
+        key_shared_heap_type: Option<StructType<'ctx>>,
+        val_drop_fn: Option<FunctionValue<'ctx>>,
+    ) {
         if let Some(frame) = self.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::FreeMapHandle {
                 map_alloca,
@@ -2763,6 +2917,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 val_is_vec,
                 val_shared_heap_type,
                 key_shared_heap_type,
+                val_drop_fn,
             });
         }
     }
@@ -3017,6 +3172,75 @@ impl<'ctx> super::Codegen<'ctx> {
             return true;
         }
         false
+    }
+
+    /// BOXED-payload sibling of `try_track_discarded_inline_option` (slice
+    /// 3r): a statement-position `Option[Wide]` temporary — the discarded
+    /// result of `m.insert(k, v2)` over an existing key (the displaced old
+    /// value) or `m.remove(k)` (the moved-out value) on a struct-valued map
+    /// — carries a heap BOX (`coerce_to_payload_words`' boxing path fires
+    /// when the payload exceeds the 3-word inline area). Nothing owned it:
+    /// both the box allocation and the payload's interior heap (`Holder`'s
+    /// `name`) leaked once per displaced/removed entry. Queue a
+    /// `BoxedEnumDrop` with the payload struct's `__karac_drop_struct_<T>`
+    /// as the inner walk — the discarded value is FULLY owned here (unlike
+    /// a borrow-call `match` scrutinee, whose box-only free leg 2 pinned),
+    /// so the interior walk is correct. Returns false (keep other discard
+    /// paths probing) for a non-`Option` te, a payload that fits inline, or
+    /// a payload that isn't a non-shared user struct.
+    pub(super) fn try_track_discarded_boxed_option(
+        &mut self,
+        tail: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> bool {
+        let key = (tail.span.offset, tail.span.length);
+        let Some(te) = self.enum_inst_type_exprs.get(&key).cloned() else {
+            return false;
+        };
+        let TypeKind::Path(p) = &te.kind else {
+            return false;
+        };
+        if p.segments.last().map(|s| s.as_str()) != Some("Option") {
+            return false;
+        }
+        let Some(GenericArg::Type(payload_te)) =
+            p.generic_args.as_ref().and_then(|a| a.first()).cloned()
+        else {
+            return false;
+        };
+        let TypeKind::Path(pp) = &payload_te.kind else {
+            return false;
+        };
+        let Some(struct_name) = pp.segments.last().cloned() else {
+            return false;
+        };
+        if !self.struct_types.contains_key(struct_name.as_str())
+            || self.shared_types.contains_key(struct_name.as_str())
+        {
+            return false;
+        }
+        // Inline payloads (≤ 3 words) are the inline tracker's job.
+        let payload_ty = self.llvm_type_for_type_expr(&payload_te);
+        if Self::llvm_type_word_count(payload_ty) <= 3 {
+            return false;
+        }
+        let Some(cur_fn) = self
+            .builder
+            .get_insert_block()
+            .and_then(|bb| bb.get_parent())
+        else {
+            return false;
+        };
+        let slot = self.create_entry_alloca(cur_fn, "__owned_boxed_opt_tmp", val.get_type());
+        self.builder.build_store(slot, val).unwrap();
+        self.track_boxed_enum_var(
+            "__owned_boxed_opt_tmp",
+            slot,
+            "Option",
+            "Some",
+            Some(struct_name.as_str()),
+        );
+        true
     }
 
     /// `Result[T, E]` sibling of `track_inline_option_payload_var`. Registers
@@ -5046,6 +5270,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 val_is_vec,
                 val_shared_heap_type,
                 key_shared_heap_type,
+                val_drop_fn,
             } => {
                 let handle = self
                     .builder
@@ -5055,7 +5280,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Single-handle free shared with the `Vec[Map]`/`Vec[Set]`
                 // element-drop loop. The shared-half rc_dec walks run first
                 // (they read live bucket bytes, before the storage release);
-                // then `karac_map_free_with_drop_vec` when either half owns
+                // then `karac_map_free_with_val_drop_fn` when the value has
+                // a synthesized drop fn (slice 3r), else
+                // `karac_map_free_with_drop_vec` when either half owns
                 // Vec/String heap, else plain `karac_map_free`. Closes the
                 // 2026-05-13/14/16 map leaks; see `emit_free_one_map_handle`.
                 let drop = crate::codegen::state::MapElemDrop {
@@ -5063,6 +5290,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     val_is_vec: *val_is_vec,
                     val_shared_heap_type: *val_shared_heap_type,
                     key_shared_heap_type: *key_shared_heap_type,
+                    val_drop_fn: *val_drop_fn,
                 };
                 self.emit_free_one_map_handle(handle, &drop);
             }
