@@ -452,15 +452,34 @@ impl<'ctx> super::Codegen<'ctx> {
             .variables
             .get(name)
             .ok_or_else(|| format!("Undefined column variable '{}'", name))?;
-        Ok(self
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        // An owned Column binding's alloca holds a single `ptr` = the
+        // control-block pointer; one load reaches the control block.
+        //
+        // A `ref Column[T]` / `mut ref Column[T]` parameter's alloca holds the
+        // BORROW pointer the call site passed — which is `get_data_ptr(caller)`
+        // = the address of the CALLER's Column alloca (i.e. a pointer TO the
+        // control-block pointer, not the control block itself). Reaching the
+        // control block therefore needs a SECOND load. Without it every field
+        // read (len/data/bitmap) dereferences the caller's stack slot as if it
+        // were the control struct — a `len` of garbage (often 0) makes the
+        // callee silently emit no output (B-2026-07-02-27). The ref-param
+        // double-indirection mirrors `get_data_ptr`'s ref arm, adjusted for the
+        // extra pointer layer a Column control block carries versus an inline
+        // Vec/Slice header.
+        let first = self
             .builder
-            .build_load(
-                self.context.ptr_type(AddressSpace::default()),
-                slot.ptr,
-                &format!("{}.col", name),
-            )
+            .build_load(ptr_ty, slot.ptr, &format!("{}.col", name))
             .unwrap()
-            .into_pointer_value())
+            .into_pointer_value();
+        if self.ref_params.contains_key(name) {
+            return Ok(self
+                .builder
+                .build_load(ptr_ty, first, &format!("{}.col.deref", name))
+                .unwrap()
+                .into_pointer_value());
+        }
+        Ok(first)
     }
 
     /// GEP + load a control-block field. Index 0 = data (ptr),
