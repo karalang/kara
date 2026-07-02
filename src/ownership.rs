@@ -1894,6 +1894,25 @@ fn impl_target_name(target_type: &TypeExpr) -> Option<String> {
 /// `"Type.method"` for static methods.
 pub(crate) fn collect_callee_param_modes(program: &Program) -> HashMap<String, Vec<OwnershipMode>> {
     let mut map = HashMap::new();
+    // Baked-stdlib static methods FIRST (B-2026-07-01-10): the ownership
+    // pass previously saw only the USER program's items, so a baked
+    // signature's declared `ref` mode never reached call-arg
+    // classification — every `Stats.sum(v)`-style call consumed its
+    // argument and two statistics over one dataset was rejected by
+    // `karac check` (while the runtime semantics never consumed it).
+    // Stdlib entries are inserted first so a user redefinition of the
+    // same key wins below.
+    for (_, sp) in crate::prelude::STDLIB_PROGRAMS.iter() {
+        collect_callee_param_modes_into(sp, &mut map);
+    }
+    collect_callee_param_modes_into(program, &mut map);
+    map
+}
+
+fn collect_callee_param_modes_into(
+    program: &Program,
+    map: &mut HashMap<String, Vec<OwnershipMode>>,
+) {
     for item in &program.items {
         match item {
             Item::Function(f) => {
@@ -1919,7 +1938,6 @@ pub(crate) fn collect_callee_param_modes(program: &Program) -> HashMap<String, V
             _ => {}
         }
     }
-    map
 }
 
 /// Collect per-position parameter ownership modes for every *instance*
@@ -1936,6 +1954,20 @@ pub(crate) fn collect_callee_param_modes(program: &Program) -> HashMap<String, V
 /// consume, spuriously RC-promoting a borrowed struct arg (B-2026-06-12-8).
 pub(crate) fn collect_method_param_modes(program: &Program) -> HashMap<String, Vec<OwnershipMode>> {
     let mut map = HashMap::new();
+    // Baked-stdlib instance methods first — the `MethodCall` twin of the
+    // stdlib walk in `collect_callee_param_modes` (B-2026-07-01-10); user
+    // entries override below.
+    for (_, sp) in crate::prelude::STDLIB_PROGRAMS.iter() {
+        collect_method_param_modes_into(sp, &mut map);
+    }
+    collect_method_param_modes_into(program, &mut map);
+    map
+}
+
+fn collect_method_param_modes_into(
+    program: &Program,
+    map: &mut HashMap<String, Vec<OwnershipMode>>,
+) {
     for item in &program.items {
         match item {
             Item::ImplBlock(impl_block) => {
@@ -1968,7 +2000,6 @@ pub(crate) fn collect_method_param_modes(program: &Program) -> HashMap<String, V
             _ => {}
         }
     }
-    map
 }
 
 /// `impl Trait` slice 4 — for each callee that returns a `-> impl Trait`,

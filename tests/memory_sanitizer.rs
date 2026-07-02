@@ -18352,4 +18352,40 @@ fn main() {
             "tail3v_whole_tuple_tail_move_no_double_free",
         );
     }
+
+    #[test]
+    fn asan_statsref_reuse_and_fresh_temp_no_leak_no_double_free() {
+        // B-2026-07-01-10: `Stats.*` params are now `ref Slice[f64]` and
+        // the baked modes reach the ownership pass — reusing one dataset
+        // across calls must neither leak nor double-free (the borrow arg
+        // is NOT freed by the callee; a FRESH temp arg still frees via the
+        // ref-rvalue materialization).
+        assert_clean_asan_run(
+            r#"
+fn make(n: i64) -> Vec[f64] {
+    let mut v: Vec[f64] = Vec.new();
+    let mut i = 0;
+    while i < n {
+        v.push(1.5);
+        i = i + 1;
+    };
+    v
+}
+fn main() {
+    let mut v: Vec[f64] = Vec.new();
+    v.push(1.0);
+    v.push(2.0);
+    v.push(3.0);
+    println(Stats.sum(v));
+    println(Stats.mean(v));
+    let sorted = Stats.sort(v);
+    println(sorted.len());
+    println(Stats.sum(make(4)));
+    println(v.len());
+}
+"#,
+            &["6", "2", "3", "6", "3"],
+            "statsref_reuse_and_fresh_temp_no_leak_no_double_free",
+        );
+    }
 }

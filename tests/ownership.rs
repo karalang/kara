@@ -7979,3 +7979,43 @@ fn exclusive_borrow_disjoint_fields_ok() {
          }",
     );
 }
+
+// ── B-2026-07-01-10 — baked-stdlib `ref` params reach the ownership pass ──
+
+#[test]
+fn stats_calls_borrow_not_consume() {
+    // `Stats.*` params are declared `xs: ref Slice[f64]` in
+    // runtime/stdlib/stats.kara, but `collect_callee_param_modes` walked
+    // only the USER program's items — the baked `ref` never reached
+    // call-arg classification, every call consumed its argument, and two
+    // statistics over one dataset was rejected ("value 'v' moved here,
+    // used again here"). The collectors now walk STDLIB_PROGRAMS first.
+    ownership_ok(
+        "fn main() {\n\
+             let mut v: Vec[f64] = Vec.new();\n\
+             v.push(1.0);\n\
+             v.push(2.0);\n\
+             let a = Stats.sum(v);\n\
+             let b = Stats.mean(v);\n\
+             let c = Stats.median(v);\n\
+             println(a + b + c);\n\
+             println(v.len());\n\
+         }",
+    );
+}
+
+#[test]
+fn stats_borrow_then_mutate_then_borrow_ok() {
+    // A `ref` arg borrow ends at the call, so mutating between two Stats
+    // calls is legal.
+    ownership_ok(
+        "fn main() {\n\
+             let mut v: Vec[f64] = Vec.new();\n\
+             v.push(1.0);\n\
+             let a = Stats.sum(v);\n\
+             v.push(2.0);\n\
+             let b = Stats.sum(v);\n\
+             println(a + b);\n\
+         }",
+    );
+}

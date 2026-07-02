@@ -10,6 +10,16 @@
 // `env_add_impl` walk; the interpreter still dispatches each call by
 // matching on the path string `"Stats.<method>"` in `eval_call`.
 //
+// Parameter mode (B-2026-07-01-10): every `xs` is `ref Slice[f64]` — a
+// BORROW. The runtime semantics never consumed the argument (the codegen
+// module doc documents "the slice is a borrow" and only frees fresh-temp
+// args), but the original bare `Slice[f64]` declaration made the
+// ownership checker treat every call as a MOVE, so two statistics over
+// one dataset (`Stats.sum(v); Stats.mean(v)`) was rejected by
+// `karac check`. `ref` restores the documented semantics; the
+// typechecker's `infer_stats_call` intercept and the codegen/interpreter
+// dispatch are unchanged (they never consulted the declared mode).
+//
 // Element kinds (S5, reduce-elementwise-trait-unification spike): the
 // signatures below are written at `Slice[f64]`, but the typechecker's
 // `infer_stats_call` intercept types the whole surface from the
@@ -25,48 +35,48 @@ struct Stats { }
 
 impl Stats {
     #[compiler_builtin]
-    fn sum(xs: Slice[f64]) -> f64 { 0.0 }
+    fn sum(xs: ref Slice[f64]) -> f64 { 0.0 }
 
     #[compiler_builtin]
-    fn prod(xs: Slice[f64]) -> f64 { 0.0 }
+    fn prod(xs: ref Slice[f64]) -> f64 { 0.0 }
 
     #[compiler_builtin]
-    fn mean(xs: Slice[f64]) -> f64 { 0.0 }
+    fn mean(xs: ref Slice[f64]) -> f64 { 0.0 }
 
     #[compiler_builtin]
-    fn variance(xs: Slice[f64]) -> f64 { 0.0 }
+    fn variance(xs: ref Slice[f64]) -> f64 { 0.0 }
 
     #[compiler_builtin]
-    fn stddev(xs: Slice[f64]) -> f64 { 0.0 }
+    fn stddev(xs: ref Slice[f64]) -> f64 { 0.0 }
 
     #[compiler_builtin]
-    fn median(xs: Slice[f64]) -> f64 { 0.0 }
+    fn median(xs: ref Slice[f64]) -> f64 { 0.0 }
 
     #[compiler_builtin]
-    fn min(xs: Slice[f64]) -> Option[f64] { None }
+    fn min(xs: ref Slice[f64]) -> Option[f64] { None }
 
     #[compiler_builtin]
-    fn max(xs: Slice[f64]) -> Option[f64] { None }
+    fn max(xs: ref Slice[f64]) -> Option[f64] { None }
 
     // `percentile(p)` uses the NumPy convention: `p` in [0, 100], linear
     // interpolation between ranks (`median == percentile(50)`). Distinct from
     // `Column.quantile`, whose argument is in [0, 1].
     #[compiler_builtin]
-    fn percentile(xs: Slice[f64], p: f64) -> f64 { 0.0 }
+    fn percentile(xs: ref Slice[f64], p: f64) -> f64 { 0.0 }
 
     // `argmin` / `argmax` return the index of the first min / max, or `None`
     // for an empty slice (mirroring `min` / `max`).
     #[compiler_builtin]
-    fn argmin(xs: Slice[f64]) -> Option[i64] { None }
+    fn argmin(xs: ref Slice[f64]) -> Option[i64] { None }
 
     #[compiler_builtin]
-    fn argmax(xs: Slice[f64]) -> Option[i64] { None }
+    fn argmax(xs: ref Slice[f64]) -> Option[i64] { None }
 
     // `sort` returns a fresh ascending copy; `argsort` returns the indices that
     // sort the slice ascending (stable). The input slice is left unchanged.
     #[compiler_builtin]
-    fn sort(xs: Slice[f64]) -> Vec[f64] { vec![] }
+    fn sort(xs: ref Slice[f64]) -> Vec[f64] { vec![] }
 
     #[compiler_builtin]
-    fn argsort(xs: Slice[f64]) -> Vec[i64] { vec![] }
+    fn argsort(xs: ref Slice[f64]) -> Vec[i64] { vec![] }
 }
