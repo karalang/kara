@@ -1451,14 +1451,55 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         }
         let cur_fn = self.current_fn.unwrap();
-        if matches!(&arg.kind, ExprKind::Call { .. }) {
-            if let Some(enum_name) = self
-                .enum_name_of_expr(arg)
-                .filter(|n| self.enum_has_heap_payload(n))
-            {
+        // Fresh enum-variant temp shapes: `E.V(args)` / bare-ctor `V(args)`
+        // (Call), unit variant `E.V` (Path), and struct variant `E.V { .. }`
+        // (StructLiteral whose enum owner `enum_name_of_expr` recognizes; a
+        // plain struct literal yields `None` and falls to the struct arm
+        // below). `Identifier` args are deliberately NOT matched — a
+        // let-bound enum's drop is owned by its binding (let-path), and the
+        // arg-pass move-suppression handles the transfer.
+        let fresh_enum_temp = match &arg.kind {
+            ExprKind::Call { .. } | ExprKind::Path { .. } | ExprKind::StructLiteral { .. } => {
+                self.enum_name_of_expr(arg)
+            }
+            _ => None,
+        };
+        if let Some(enum_name) = fresh_enum_temp {
+            // B-2026-06-10 carry-forward (enum arm): a Drop-typed enum
+            // temporary materialized directly as a call argument
+            // (`consume(Sig.A(1))` where `Sig: Drop`) is caller-owned,
+            // exactly like the struct-literal case below — but this arm
+            // only ever registered the payload-walking `EnumDrop`, so
+            // the user `drop` body never fired (and a heap-FREE enum
+            // registered nothing at all). Mirror the let-path
+            // (`stmts.rs` — `var_type_names` → `track_user_drop_var`):
+            // register the `karac_drop_<Enum>` wrapper when the enum
+            // has a validated user Drop and isn't shared (shared enums
+            // run the body via the RC path, `emit_shared_enum_rc_drop_fn`).
+            // Unlike the struct case, UserDrop and EnumDrop are
+            // COMPLEMENTARY here, not mutually exclusive: the wrapper's
+            // field-cleanup half (`emit_struct_drop_synthesis`) is a
+            // no-op for enum type names, so the payload walk must still
+            // be registered separately — the same dual registration the
+            // let-path produces (`karac_drop_E` + `__karac_drop_E` on
+            // the same slot). Coroutine-compiled callees never reach
+            // this helper (early return upstream), so no double-drop.
+            let has_user_drop = self
+                .program_snapshot
+                .as_deref()
+                .map(|p| p.drop_method_keys.contains_key(&enum_name))
+                .unwrap_or(false);
+            let user_drop = has_user_drop && !self.shared_types.contains_key(&enum_name);
+            let heap_payload = self.enum_has_heap_payload(&enum_name);
+            if user_drop || heap_payload {
                 let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
                 self.builder.build_store(slot, val).unwrap();
-                self.track_enum_var(&enum_name, slot);
+                if user_drop {
+                    self.track_user_drop_var(&enum_name, "__owned_agg_tmp", slot);
+                }
+                if heap_payload {
+                    self.track_enum_var(&enum_name, slot);
+                }
             }
         } else if let ExprKind::Tuple(tuple_elems) = &arg.kind {
             // #21 — a tuple LITERAL arg. The callee now entry-copies a

@@ -8884,6 +8884,38 @@ fn main() {
     }
 
     #[test]
+    fn asan_user_drop_heap_enum_inline_temp_arg_leak_free() {
+        // B-2026-06-10 carry-forward (enum arm): an inline enum temp with
+        // BOTH a heap String payload and a user `impl Drop`, passed
+        // directly as a call argument, registers the `karac_drop_<E>`
+        // wrapper (user body) AND the payload-walking `__karac_drop_<E>`
+        // on the same caller slot — complementary registrations, unlike
+        // the struct case where the wrapper subsumes field cleanup. Must
+        // be leak-clean (payload freed exactly once — the callee's entry
+        // copy and the caller temp each free their own buffer) with the
+        // user body firing once per temp. ≥36-byte payload defeats LSan's
+        // short-string reachability masking.
+        assert_clean_asan_run(
+            r#"
+enum Msg { Text(String), Nil }
+impl Drop for Msg {
+    fn drop(mut ref self) {
+        println(1);
+    }
+}
+fn consume(m: Msg) {}
+fn main() {
+    consume(Msg.Text("this is a long heap string payload over 36 bytes"));
+    consume(Msg.Nil);
+    println(0);
+}
+"#,
+            &["1", "1", "0"],
+            "user_drop_heap_enum_inline_temp_arg_leak_free",
+        );
+    }
+
+    #[test]
     fn asan_auto_par_shared_struct_option_return_slot() {
         // A par group with two effectful stmts where one returns
         // `Option[shared T]` consumed in the parent scope. Pre-fix

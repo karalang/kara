@@ -13452,6 +13452,108 @@ fn main() {
         );
     }
 
+    #[test]
+    fn test_e2e_user_drop_fires_once_for_inline_temp_enum_call_arg() {
+        // B-2026-06-10 carry-forward (enum arm): a Drop-typed ENUM
+        // temporary passed directly as a call argument must run its user
+        // `drop` exactly once, across all three fresh-temp shapes —
+        // payload constructor `Sig.A(7)` (Call), unit variant `Sig.B`
+        // (Path), and struct variant `Sig.C { x }` (StructLiteral with an
+        // enum owner). Pre-fix, the Call arm registered only the
+        // payload-walking EnumDrop (nothing at all for a heap-free enum),
+        // so the user body never fired. The let-bound arg pins the
+        // pre-existing binding path against double-drop regressions.
+        let out = run_program(
+            r#"
+enum Sig { A(i64), B, C { x: i64 } }
+impl Drop for Sig {
+    fn drop(mut ref self) { println("dropped"); }
+}
+fn consume(s: Sig) {}
+fn main() {
+    consume(Sig.A(7));
+    consume(Sig.B);
+    consume(Sig.C { x: 3 });
+    let g = Sig.B;
+    consume(g);
+    println("after");
+}
+"#,
+        )
+        .expect("program should compile and run");
+        assert_eq!(
+            out.matches("dropped").count(),
+            4,
+            "three inline enum temps + one let-bound binding must each \
+             drop exactly once; got:\n{out}"
+        );
+        assert!(
+            out.contains("after"),
+            "program body should run to completion; got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_user_drop_and_payload_free_for_heap_enum_temp_arg() {
+        // Heap-payload sibling: for an enum with BOTH a String payload and
+        // a user Drop, the inline temp registers the `karac_drop_<E>`
+        // wrapper (user body) AND the payload-walking `__karac_drop_<E>`
+        // — complementary for enums, unlike structs where the wrapper
+        // subsumes field cleanup. Exactly-once on the body; the payload
+        // free is asserted leak-side by the Linux LSan CI gate (the
+        // ≥36-byte payload defeats short-string reachability masking).
+        let out = run_program(
+            r#"
+enum Msg { Text(String), Nil }
+impl Drop for Msg {
+    fn drop(mut ref self) { println("msg dropped"); }
+}
+fn consume(m: Msg) {}
+fn main() {
+    consume(Msg.Text("this is a long heap string payload over 36 bytes"));
+    consume(Msg.Nil);
+    println("after");
+}
+"#,
+        )
+        .expect("program should compile and run");
+        assert_eq!(
+            out.matches("msg dropped").count(),
+            2,
+            "both inline heap-enum temps must run the user drop exactly \
+             once; got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn test_ir_enum_temp_arg_registers_user_drop_wrapper() {
+        // IR-level pin for the enum carry-forward: the inline unit-variant
+        // temp `consume(Sig.B)` must route through the `karac_drop_Sig`
+        // user-drop wrapper in `main`. A heap-free enum synthesizes no
+        // `__karac_drop_Sig` payload walker (that gate is unchanged).
+        let ir = ir_for(
+            r#"
+enum Sig { A(i64), B }
+impl Drop for Sig {
+    fn drop(mut ref self) { }
+}
+fn consume(s: Sig) {}
+fn main() {
+    consume(Sig.B);
+}
+"#,
+        );
+        let main_body = function_body(&ir, "main").unwrap_or_else(|| {
+            panic!("main body not found in IR:\n{}", ir);
+        });
+        assert!(
+            main_body.contains("call void @karac_drop_Sig("),
+            "expected `main` to call `@karac_drop_Sig(...)` for the \
+             inline unit-variant temp; body was:\n{}",
+            main_body
+        );
+    }
+
     // ── phase-7 L938 user-`impl Drop` dispatch for shared structs ──
     //
     // A `shared struct` with `impl Drop` routes through the RC path
