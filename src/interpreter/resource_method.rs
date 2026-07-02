@@ -158,6 +158,7 @@ impl<'a> super::Interpreter<'a> {
         span: &Span,
     ) -> Value {
         match (resource, method) {
+            #[cfg(not(target_arch = "wasm32"))]
             ("Clock", "now") => {
                 let secs = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -165,6 +166,14 @@ impl<'a> super::Interpreter<'a> {
                     .unwrap_or(0);
                 Value::Int(secs)
             }
+            // wasm32 (the browser playground): `SystemTime::now()` panics
+            // (`sys/time/unsupported`), which would trap the whole wasm
+            // module — surface a runtime diagnostic instead.
+            #[cfg(target_arch = "wasm32")]
+            ("Clock", "now") => self.record_runtime_error(
+                "Clock.now is unavailable in the browser playground (no wall clock on wasm)",
+                span,
+            ),
             ("RandomSource", "next_u64") => {
                 // Xorshift64 — adequate for the interpreter's non-cryptographic
                 // use; real entropy comes through LLVM codegen later. The

@@ -16,13 +16,16 @@
 //! `Clock`/`RandomSource` ambient resources read `SystemTime` in
 //! `resource_method.rs`.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
 use crate::ast::*;
 use crate::token::Span;
 
 use super::value::Value;
-use super::{RateLimiterEntry, TokenBucket};
+use super::RateLimiterEntry;
+#[cfg(not(target_arch = "wasm32"))]
+use super::TokenBucket;
 
 impl<'a> super::Interpreter<'a> {
     /// `RateLimiter.new_token_bucket(rate, capacity) -> RateLimiter`.
@@ -67,11 +70,25 @@ impl<'a> super::Interpreter<'a> {
         _span: &Span,
     ) -> Option<Value> {
         match method {
+            #[cfg(not(target_arch = "wasm32"))]
             "try_acquire" => self.eval_rate_limiter_try_acquire(obj, args),
+            // wasm32 (the browser playground): the lazy-refill bucket reads
+            // `Instant::now()`, which panics (`sys/time/unsupported`) and
+            // would trap the whole wasm module — surface a runtime
+            // diagnostic instead.
+            #[cfg(target_arch = "wasm32")]
+            "try_acquire" => {
+                let _ = (obj, args);
+                Some(self.record_runtime_error(
+                    "RateLimiter.try_acquire is unavailable in the browser playground (no monotonic clock on wasm)",
+                    _span,
+                ))
+            }
             _ => None,
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn eval_rate_limiter_try_acquire(&mut self, obj: &Value, args: &[CallArg]) -> Option<Value> {
         let handle = rate_limiter_handle(obj)?;
         let key = match args.first().map(|a| self.eval_expr_inner(&a.value))? {
@@ -108,6 +125,7 @@ impl<'a> super::Interpreter<'a> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn rate_limiter_handle(obj: &Value) -> Option<i64> {
     let Value::Struct { name, fields } = obj else {
         return None;

@@ -435,6 +435,7 @@ pub fn raii_across_yield_check(
 /// instrumenting every recursion site with `stacker::maybe_grow`. Panics
 /// inside the closure propagate back to the caller via `resume_unwind`
 /// so test assertions and runtime panics still surface normally.
+#[cfg(not(target_arch = "wasm32"))]
 fn run_on_interp_thread<R, F>(f: F) -> R
 where
     R: Send,
@@ -450,6 +451,21 @@ where
             Err(payload) => std::panic::resume_unwind(payload),
         }
     })
+}
+
+/// wasm32 (the browser playground): thread spawning is unsupported —
+/// `std::thread::Builder::spawn_scoped` returns `Err(Unsupported)` and
+/// the `.expect` above turned EVERY playground `run` into a wasm trap.
+/// Run inline on the caller's stack instead; the browser main thread's
+/// stack is what the playground gets, and the fat-stack workaround only
+/// matters for the Windows cargo-test default (see above).
+#[cfg(target_arch = "wasm32")]
+fn run_on_interp_thread<R, F>(f: F) -> R
+where
+    R: Send,
+    F: FnOnce() -> R + Send,
+{
+    f()
 }
 
 /// Run a program through all phases and execute it via the interpreter.

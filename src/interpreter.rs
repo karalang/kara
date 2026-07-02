@@ -515,12 +515,23 @@ fn returns_self_or_type(return_type: Option<&TypeExpr>, type_name: &str) -> bool
 /// Seed the per-interpreter xorshift state from the system clock's
 /// sub-second nanoseconds, OR'd with `1` so the state can never be zero
 /// (xorshift's fixed point).
+#[cfg(not(target_arch = "wasm32"))]
 fn seed_rand_state() -> u64 {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
         .unwrap_or(0);
     nanos | 1
+}
+
+/// wasm32 (the browser playground): `SystemTime::now()` panics
+/// (`sys/time/unsupported`) — and it ran in `Interpreter::new`, so it
+/// trapped EVERY playground run before the program even started. Fixed
+/// golden-ratio seed instead: `RandomSource` is deterministic in the
+/// playground, which beats trapping the whole wasm module.
+#[cfg(target_arch = "wasm32")]
+fn seed_rand_state() -> u64 {
+    0x9E37_79B9_7F4A_7C15 | 1
 }
 
 impl<'a> Interpreter<'a> {
@@ -536,7 +547,11 @@ impl<'a> Interpreter<'a> {
             error_trace: Vec::new(),
             error_trace_truncated: false,
             source_filename: String::new(),
-            sequential_mode: false,
+            // wasm32 (the browser playground) has no threads, so
+            // `eval_par_block`'s `thread::scope` would trap; sequential
+            // `par {}` matches the wasm codegen story (seq_scheduler,
+            // FIFO-deterministic).
+            sequential_mode: cfg!(target_arch = "wasm32"),
             runtime_errors: Vec::new(),
             comptime_user_errors: Vec::new(),
             provider_stack: vec![HashMap::new()],

@@ -394,6 +394,11 @@ impl<'a> super::Interpreter<'a> {
     /// instead parks the task on the reactor's timer wheel so siblings in a
     /// `par {}` overlap; the interpreter is sequential, so a thread sleep
     /// matches its execution model. Negative / missing arg → no-op.
+    ///
+    /// wasm32 (the browser playground runs this interpreter client-side):
+    /// `std::thread::sleep` panics (`sys/unsupported`) and the synchronous
+    /// tree-walk cannot block the browser main thread anyway, so the pause
+    /// is a no-op there — the arg is still evaluated for its effects.
     pub(crate) fn eval_builtin_sleep_ms(&mut self, args: &[CallArg], span: &Span) -> Value {
         self.track_effect("suspends");
         let ms = match args.first() {
@@ -402,6 +407,7 @@ impl<'a> super::Interpreter<'a> {
         };
         if let Value::Int(ms) = ms {
             if ms > 0 {
+                #[cfg(not(target_arch = "wasm32"))]
                 std::thread::sleep(std::time::Duration::from_millis(ms as u64));
             }
         }
