@@ -2121,7 +2121,11 @@ impl<'ctx> super::Codegen<'ctx> {
     /// signedness; `f32` extends to `f64`; `f64` is returned as-is. Bool /
     /// non-numeric never reach here (the typechecker requires a numeric
     /// element for every stat).
-    fn column_elem_to_f64(&self, val: BasicValueEnum<'ctx>, unsigned: bool) -> FloatValue<'ctx> {
+    pub(super) fn column_elem_to_f64(
+        &self,
+        val: BasicValueEnum<'ctx>,
+        unsigned: bool,
+    ) -> FloatValue<'ctx> {
         let f64_t = self.context.f64_type();
         match val {
             BasicValueEnum::FloatValue(fv) => {
@@ -2228,9 +2232,38 @@ impl<'ctx> super::Codegen<'ctx> {
         self.emit_reduce_minmax(&access, !is_min)
     }
 
-    /// `mean() -> f64` — `Σ valid / count` as `f64`; empty traps. The
-    /// `(sum_f64, count)` pair is also the first pass of `var` / `std`, so
-    /// this is factored into `column_sum_f64_and_count`.
+    /// Build the shared [`ContainerAccess`] for this column's data block +
+    /// Arrow validity bitmap — the `bitmap: Some` receiver the kernel's
+    /// `*_gated` / f64-accumulator emitters fold over.
+    fn column_access(
+        &mut self,
+        control: PointerValue<'ctx>,
+        elem: BasicTypeEnum<'ctx>,
+        unsigned: bool,
+        tag: &str,
+    ) -> ContainerAccess<'ctx> {
+        let len = self
+            .column_load_field(control, 2, &format!("{tag}.len"))
+            .into_int_value();
+        let data = self
+            .column_load_field(control, 0, &format!("{tag}.data"))
+            .into_pointer_value();
+        let bitmap = self
+            .column_load_field(control, 1, &format!("{tag}.bm"))
+            .into_pointer_value();
+        ContainerAccess {
+            data,
+            len,
+            elem,
+            unsigned,
+            bitmap: Some(bitmap),
+        }
+    }
+
+    /// `mean() -> f64` — `Σ valid / count` as `f64`; an all-null / empty column
+    /// traps. Shares the overflow-safe f64 first pass
+    /// ([`emit_sum_f64_and_count`](super::Codegen::emit_sum_f64_and_count))
+    /// with `var` / `std`.
     fn compile_column_mean(
         &mut self,
         control: PointerValue<'ctx>,
@@ -2238,7 +2271,8 @@ impl<'ctx> super::Codegen<'ctx> {
         unsigned: bool,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let f64_t = self.context.f64_type();
-        let (sum, cnt) = self.column_sum_f64_and_count(control, elem, unsigned)?;
+        let access = self.column_access(control, elem, unsigned, "col.mean");
+        let (sum, cnt) = self.emit_sum_f64_and_count(&access)?;
         let ok = self
             .builder
             .build_int_compare(
@@ -2257,104 +2291,13 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(mean.into())
     }
 
-    /// One pass over the valid slots accumulating `(Σ x as f64, count)`.
-    fn column_sum_f64_and_count(
-        &mut self,
-        control: PointerValue<'ctx>,
-        elem: BasicTypeEnum<'ctx>,
-        unsigned: bool,
-    ) -> Result<(FloatValue<'ctx>, IntValue<'ctx>), String> {
-        let i64_t = self.context.i64_type();
-        let f64_t = self.context.f64_type();
-        let fn_val = self
-            .current_fn
-            .ok_or_else(|| "Column f64-sum outside function".to_string())?;
-        let len = self
-            .column_load_field(control, 2, "col.fsum.len")
-            .into_int_value();
-        let data = self
-            .column_load_field(control, 0, "col.fsum.data")
-            .into_pointer_value();
-        let bitmap = self
-            .column_load_field(control, 1, "col.fsum.bm")
-            .into_pointer_value();
-        let idx = self.builder.build_alloca(i64_t, "col.fsum.i").unwrap();
-        let acc = self.builder.build_alloca(f64_t, "col.fsum.acc").unwrap();
-        let cnt = self.builder.build_alloca(i64_t, "col.fsum.cnt").unwrap();
-        self.builder.build_store(idx, i64_t.const_zero()).unwrap();
-        self.builder.build_store(acc, f64_t.const_zero()).unwrap();
-        self.builder.build_store(cnt, i64_t.const_zero()).unwrap();
-
-        let head = self.context.append_basic_block(fn_val, "col.fsum.head");
-        let body = self.context.append_basic_block(fn_val, "col.fsum.body");
-        let add = self.context.append_basic_block(fn_val, "col.fsum.add");
-        let cont = self.context.append_basic_block(fn_val, "col.fsum.cont");
-        let exit = self.context.append_basic_block(fn_val, "col.fsum.exit");
-        self.builder.build_unconditional_branch(head).unwrap();
-        self.builder.position_at_end(head);
-        let i = self
-            .builder
-            .build_load(i64_t, idx, "col.fsum.iv")
-            .unwrap()
-            .into_int_value();
-        let more = self
-            .builder
-            .build_int_compare(IntPredicate::ULT, i, len, "col.fsum.more")
-            .unwrap();
-        self.builder
-            .build_conditional_branch(more, body, exit)
-            .unwrap();
-        self.builder.position_at_end(body);
-        let valid = self.column_load_valid_bit(bitmap, i);
-        self.builder
-            .build_conditional_branch(valid, add, cont)
-            .unwrap();
-        self.builder.position_at_end(add);
-        let x = self.column_gep_load(data, elem, i, "col.fsum.x");
-        let xf = self.column_elem_to_f64(x, unsigned);
-        let a = self
-            .builder
-            .build_load(f64_t, acc, "col.fsum.a")
-            .unwrap()
-            .into_float_value();
-        let a2 = self.builder.build_float_add(a, xf, "col.fsum.a2").unwrap();
-        self.builder.build_store(acc, a2).unwrap();
-        let c = self
-            .builder
-            .build_load(i64_t, cnt, "col.fsum.c")
-            .unwrap()
-            .into_int_value();
-        let c2 = self
-            .builder
-            .build_int_add(c, i64_t.const_int(1, false), "col.fsum.c2")
-            .unwrap();
-        self.builder.build_store(cnt, c2).unwrap();
-        self.builder.build_unconditional_branch(cont).unwrap();
-        self.builder.position_at_end(cont);
-        let next = self
-            .builder
-            .build_int_add(i, i64_t.const_int(1, false), "col.fsum.next")
-            .unwrap();
-        self.builder.build_store(idx, next).unwrap();
-        self.builder.build_unconditional_branch(head).unwrap();
-
-        self.builder.position_at_end(exit);
-        let sum = self
-            .builder
-            .build_load(f64_t, acc, "col.fsum.sum")
-            .unwrap()
-            .into_float_value();
-        let count = self
-            .builder
-            .build_load(i64_t, cnt, "col.fsum.count")
-            .unwrap()
-            .into_int_value();
-        Ok((sum, count))
-    }
-
     /// `var() -> f64` / `std() -> f64` — the **sample** (Bessel `n-1`)
     /// variance / standard deviation over the valid slots. Requires ≥ 2
     /// valid values (else traps; sample variance is undefined for fewer).
+    /// Both passes live in the shared kernel
+    /// ([`emit_sum_f64_and_count`](super::Codegen::emit_sum_f64_and_count) +
+    /// [`emit_variance_from`](super::Codegen::emit_variance_from) with
+    /// `bessel: true`); `std` sqrts the variance.
     fn compile_column_var(
         &mut self,
         control: PointerValue<'ctx>,
@@ -2363,12 +2306,8 @@ impl<'ctx> super::Codegen<'ctx> {
         is_std: bool,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let i64_t = self.context.i64_type();
-        let f64_t = self.context.f64_type();
-        let fn_val = self
-            .current_fn
-            .ok_or_else(|| "Column.var outside function".to_string())?;
-        // Pass 1 — mean.
-        let (sum, cnt) = self.column_sum_f64_and_count(control, elem, unsigned)?;
+        let access = self.column_access(control, elem, unsigned, "col.var");
+        let (sum, cnt) = self.emit_sum_f64_and_count(&access)?;
         let two = i64_t.const_int(2, false);
         let ok = self
             .builder
@@ -2379,88 +2318,7 @@ impl<'ctx> super::Codegen<'ctx> {
             ok,
             &format!("`{method}` requires at least 2 valid values (sample variance is undefined for fewer)"),
         )?;
-        let cntf = self
-            .builder
-            .build_unsigned_int_to_float(cnt, f64_t, "col.var.cntf")
-            .unwrap();
-        let mean = self
-            .builder
-            .build_float_div(sum, cntf, "col.var.mean")
-            .unwrap();
-
-        // Pass 2 — Σ (x - mean)².
-        let len = self
-            .column_load_field(control, 2, "col.var.len")
-            .into_int_value();
-        let data = self
-            .column_load_field(control, 0, "col.var.data")
-            .into_pointer_value();
-        let bitmap = self
-            .column_load_field(control, 1, "col.var.bm")
-            .into_pointer_value();
-        let idx = self.builder.build_alloca(i64_t, "col.var.i").unwrap();
-        let ss = self.builder.build_alloca(f64_t, "col.var.ss").unwrap();
-        self.builder.build_store(idx, i64_t.const_zero()).unwrap();
-        self.builder.build_store(ss, f64_t.const_zero()).unwrap();
-        let head = self.context.append_basic_block(fn_val, "col.var.head");
-        let body = self.context.append_basic_block(fn_val, "col.var.body");
-        let add = self.context.append_basic_block(fn_val, "col.var.add");
-        let cont = self.context.append_basic_block(fn_val, "col.var.cont");
-        let exit = self.context.append_basic_block(fn_val, "col.var.exit");
-        self.builder.build_unconditional_branch(head).unwrap();
-        self.builder.position_at_end(head);
-        let i = self
-            .builder
-            .build_load(i64_t, idx, "col.var.iv")
-            .unwrap()
-            .into_int_value();
-        let more = self
-            .builder
-            .build_int_compare(IntPredicate::ULT, i, len, "col.var.more")
-            .unwrap();
-        self.builder
-            .build_conditional_branch(more, body, exit)
-            .unwrap();
-        self.builder.position_at_end(body);
-        let valid = self.column_load_valid_bit(bitmap, i);
-        self.builder
-            .build_conditional_branch(valid, add, cont)
-            .unwrap();
-        self.builder.position_at_end(add);
-        let x = self.column_gep_load(data, elem, i, "col.var.x");
-        let xf = self.column_elem_to_f64(x, unsigned);
-        let d = self.builder.build_float_sub(xf, mean, "col.var.d").unwrap();
-        let d2 = self.builder.build_float_mul(d, d, "col.var.d2").unwrap();
-        let s = self
-            .builder
-            .build_load(f64_t, ss, "col.var.s")
-            .unwrap()
-            .into_float_value();
-        let s2 = self.builder.build_float_add(s, d2, "col.var.s2").unwrap();
-        self.builder.build_store(ss, s2).unwrap();
-        self.builder.build_unconditional_branch(cont).unwrap();
-        self.builder.position_at_end(cont);
-        let next = self
-            .builder
-            .build_int_add(i, i64_t.const_int(1, false), "col.var.next")
-            .unwrap();
-        self.builder.build_store(idx, next).unwrap();
-        self.builder.build_unconditional_branch(head).unwrap();
-        self.builder.position_at_end(exit);
-        let ss_v = self
-            .builder
-            .build_load(f64_t, ss, "col.var.ssv")
-            .unwrap()
-            .into_float_value();
-        let one = f64_t.const_float(1.0);
-        let denom = self
-            .builder
-            .build_float_sub(cntf, one, "col.var.denom")
-            .unwrap();
-        let var = self
-            .builder
-            .build_float_div(ss_v, denom, "col.var.var")
-            .unwrap();
+        let var = self.emit_variance_from(&access, sum, cnt, true)?;
         if is_std {
             Ok(self.column_sqrt_f64(var).into())
         } else {

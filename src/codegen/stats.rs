@@ -208,7 +208,11 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(self.builder.build_float_div(sum, nf, "stats.mean").unwrap())
     }
 
-    /// Population `variance` = `Σ(xᵢ − mean)² / n`; empty input traps.
+    /// Population `variance` = `Σ(xᵢ − mean)² / n`; empty input traps. Both
+    /// passes live in the shared kernel
+    /// ([`emit_sum_f64_and_count`](super::Codegen::emit_sum_f64_and_count) +
+    /// [`emit_variance_from`](super::Codegen::emit_variance_from) with
+    /// `bessel: false` for the ÷ n population form) over a dense `f64` access.
     fn stats_variance(
         &mut self,
         data: PointerValue<'ctx>,
@@ -221,70 +225,15 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_int_compare(IntPredicate::UGT, len, i64_t.const_zero(), "stats.var.ne")
             .unwrap();
         self.emit_column_guard(nonempty, "Stats.variance() called on empty slice")?;
-        let mean = self.stats_mean(data, len)?;
-        let fn_val = self.current_fn.expect("stats variance in function");
-        let acc = self.builder.build_alloca(f64_t, "stats.var.acc").unwrap();
-        self.builder.build_store(acc, f64_t.const_zero()).unwrap();
-        let i = self.builder.build_alloca(i64_t, "stats.var.i").unwrap();
-        self.builder.build_store(i, i64_t.const_zero()).unwrap();
-        let h = self.context.append_basic_block(fn_val, "stats.var.h");
-        let b = self.context.append_basic_block(fn_val, "stats.var.b");
-        let e = self.context.append_basic_block(fn_val, "stats.var.e");
-        self.builder.build_unconditional_branch(h).unwrap();
-        self.builder.position_at_end(h);
-        let iv = self
-            .builder
-            .build_load(i64_t, i, "stats.var.iv")
-            .unwrap()
-            .into_int_value();
-        let more = self
-            .builder
-            .build_int_compare(IntPredicate::ULT, iv, len, "stats.var.more")
-            .unwrap();
-        self.builder.build_conditional_branch(more, b, e).unwrap();
-        self.builder.position_at_end(b);
-        let x = self.stats_load(data, iv);
-        let d = self
-            .builder
-            .build_float_sub(x, mean, "stats.var.d")
-            .unwrap();
-        let sq = self.builder.build_float_mul(d, d, "stats.var.sq").unwrap();
-        let cur = self
-            .builder
-            .build_load(f64_t, acc, "stats.var.cur")
-            .unwrap()
-            .into_float_value();
-        self.builder
-            .build_store(
-                acc,
-                self.builder
-                    .build_float_add(cur, sq, "stats.var.a2")
-                    .unwrap(),
-            )
-            .unwrap();
-        self.builder
-            .build_store(
-                i,
-                self.builder
-                    .build_int_add(iv, i64_t.const_int(1, false), "stats.var.i2")
-                    .unwrap(),
-            )
-            .unwrap();
-        self.builder.build_unconditional_branch(h).unwrap();
-        self.builder.position_at_end(e);
-        let total = self
-            .builder
-            .build_load(f64_t, acc, "stats.var.total")
-            .unwrap()
-            .into_float_value();
-        let nf = self
-            .builder
-            .build_unsigned_int_to_float(len, f64_t, "stats.var.nf")
-            .unwrap();
-        Ok(self
-            .builder
-            .build_float_div(total, nf, "stats.var")
-            .unwrap())
+        let access = ContainerAccess {
+            data,
+            len,
+            elem: f64_t.into(),
+            unsigned: false,
+            bitmap: None,
+        };
+        let (sum, cnt) = self.emit_sum_f64_and_count(&access)?;
+        self.emit_variance_from(&access, sum, cnt, false)
     }
 
     /// `median` — copy the buffer into a fresh scratch alloc, sort it, take the

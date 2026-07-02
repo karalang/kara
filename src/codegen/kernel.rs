@@ -12,9 +12,12 @@
 //! `sum`/`prod`/`mean` fold family and the `min`/`max` ordering family of all
 //! three surfaces:** `Stats` + `Tensor` (dense, `bitmap: None`) and `Column`
 //! (Arrow-nullable, `bitmap: Some` → the `*_gated` variants that fold valid
-//! slots only and guard the all-null case in-emitter). Column `mean`/`var`/
-//! `std` accumulate in `f64` and keep their own path (S2), and the non-f64
-//! `ElemKind` axis for `Stats` lands later (S5).
+//! slots only and guard the all-null case in-emitter). **S2 adds the
+//! f64-accumulator family** ([`emit_sum_f64_and_count`] +
+//! [`emit_variance_from`]): `Column.mean`/`var`/`std` (sample, ÷ n−1) and
+//! `Stats.variance`/`stddev` (population, ÷ n) fold their overflow-safe `f64`
+//! sum through one dense-or-gated pass and share the `Var { bessel }` divisor
+//! knob. The non-f64 `ElemKind` axis for `Stats` lands later (S5).
 //!
 //! **Byte-identical.** The emitters here reduce to the exact instructions the
 //! hand-rolled loops emitted (`compile_binop_typed` lowers f64 `Add`/`Mul` to
@@ -23,7 +26,7 @@
 //! by the run-vs-build oracle.
 
 use inkwell::types::BasicTypeEnum;
-use inkwell::values::{BasicValueEnum, IntValue, PointerValue};
+use inkwell::values::{BasicValueEnum, FloatValue, IntValue, PointerValue};
 use inkwell::{FloatPredicate, IntPredicate};
 
 use crate::ast::BinOp;
@@ -516,6 +519,232 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(self
             .builder
             .build_load(access.elem, acc, "kern.gm.result")
+            .unwrap())
+    }
+
+    /// One pass over `access` accumulating `(Σ x as f64, count)`. A dense
+    /// access (`bitmap: None`) sums every slot and `count == len`; a gated
+    /// access (`bitmap: Some`) sums only valid slots (`count` = #valid). Each
+    /// element widens to `f64` via
+    /// [`column_elem_to_f64`](super::Codegen::column_elem_to_f64) — the
+    /// identity on `f64`, a signed/unsigned int→f64 conversion otherwise. This
+    /// is the overflow-safe first pass shared by `Column.mean`/`var`/`std` and
+    /// `Stats.variance`/`stddev`: the `f64` accumulator can't overflow the way
+    /// an element-typed integer fold would. The **empty policy stays at the
+    /// call site** — each surface guards its own minimum count (`Stats` `n ≥ 1`,
+    /// `Column.mean` `n ≥ 1`, `Column.var`/`std` `n ≥ 2`) with its own message
+    /// against the returned `count`.
+    pub(super) fn emit_sum_f64_and_count(
+        &mut self,
+        access: &ContainerAccess<'ctx>,
+    ) -> Result<(FloatValue<'ctx>, IntValue<'ctx>), String> {
+        let i64_t = self.context.i64_type();
+        let f64_t = self.context.f64_type();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "f64-sum outside function".to_string())?;
+
+        let idx = self.builder.build_alloca(i64_t, "kern.fs.i").unwrap();
+        let acc = self.builder.build_alloca(f64_t, "kern.fs.acc").unwrap();
+        let cnt = self.builder.build_alloca(i64_t, "kern.fs.cnt").unwrap();
+        self.builder.build_store(idx, i64_t.const_zero()).unwrap();
+        self.builder.build_store(acc, f64_t.const_zero()).unwrap();
+        self.builder.build_store(cnt, i64_t.const_zero()).unwrap();
+
+        let head = self.context.append_basic_block(fn_val, "kern.fs.head");
+        let body = self.context.append_basic_block(fn_val, "kern.fs.body");
+        let add = self.context.append_basic_block(fn_val, "kern.fs.add");
+        let cont = self.context.append_basic_block(fn_val, "kern.fs.cont");
+        let exit = self.context.append_basic_block(fn_val, "kern.fs.exit");
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(head);
+        let iv = self
+            .builder
+            .build_load(i64_t, idx, "kern.fs.iv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, iv, access.len, "kern.fs.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, body, exit)
+            .unwrap();
+
+        // Dense: every slot contributes. Gated: only valid slots — nulls skip
+        // straight to `cont` without touching the accumulator or count.
+        self.builder.position_at_end(body);
+        match access.bitmap {
+            Some(bitmap) => {
+                let valid = self.column_load_valid_bit(bitmap, iv);
+                self.builder
+                    .build_conditional_branch(valid, add, cont)
+                    .unwrap();
+            }
+            None => {
+                self.builder.build_unconditional_branch(add).unwrap();
+            }
+        }
+
+        self.builder.position_at_end(add);
+        let x = self.access_load(access, iv);
+        let xf = self.column_elem_to_f64(x, access.unsigned);
+        let a = self
+            .builder
+            .build_load(f64_t, acc, "kern.fs.a")
+            .unwrap()
+            .into_float_value();
+        let a2 = self.builder.build_float_add(a, xf, "kern.fs.a2").unwrap();
+        self.builder.build_store(acc, a2).unwrap();
+        let c = self
+            .builder
+            .build_load(i64_t, cnt, "kern.fs.c")
+            .unwrap()
+            .into_int_value();
+        let c2 = self
+            .builder
+            .build_int_add(c, i64_t.const_int(1, false), "kern.fs.c2")
+            .unwrap();
+        self.builder.build_store(cnt, c2).unwrap();
+        self.builder.build_unconditional_branch(cont).unwrap();
+
+        self.builder.position_at_end(cont);
+        let next = self
+            .builder
+            .build_int_add(iv, i64_t.const_int(1, false), "kern.fs.next")
+            .unwrap();
+        self.builder.build_store(idx, next).unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(exit);
+        let sum = self
+            .builder
+            .build_load(f64_t, acc, "kern.fs.sum")
+            .unwrap()
+            .into_float_value();
+        let count = self
+            .builder
+            .build_load(i64_t, cnt, "kern.fs.count")
+            .unwrap()
+            .into_int_value();
+        Ok((sum, count))
+    }
+
+    /// Variance from a precomputed `(sum, count)` first pass (from
+    /// [`emit_sum_f64_and_count`](Self::emit_sum_f64_and_count)). Computes
+    /// `mean = sum / count`, sums the squared deviations `Σ (x − mean)²` over
+    /// the access in a second pass (dense: every slot; gated: valid slots
+    /// only), then divides by the Bessel-adjusted denominator — `count − 1`
+    /// when `bessel` (the **sample** form, `Column.var`/`std`), `count`
+    /// otherwise (the **population** form, `Stats.variance`/`stddev`). The
+    /// caller has already guarded the minimum count against `count`; `std`
+    /// callers `sqrt` the returned variance.
+    pub(super) fn emit_variance_from(
+        &mut self,
+        access: &ContainerAccess<'ctx>,
+        sum: FloatValue<'ctx>,
+        count: IntValue<'ctx>,
+        bessel: bool,
+    ) -> Result<FloatValue<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let f64_t = self.context.f64_type();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "variance outside function".to_string())?;
+        let cntf = self
+            .builder
+            .build_unsigned_int_to_float(count, f64_t, "kern.var.cntf")
+            .unwrap();
+        let mean = self
+            .builder
+            .build_float_div(sum, cntf, "kern.var.mean")
+            .unwrap();
+
+        // Pass 2 — Σ (x − mean)² over the dense-or-gated access.
+        let idx = self.builder.build_alloca(i64_t, "kern.var.i").unwrap();
+        let ss = self.builder.build_alloca(f64_t, "kern.var.ss").unwrap();
+        self.builder.build_store(idx, i64_t.const_zero()).unwrap();
+        self.builder.build_store(ss, f64_t.const_zero()).unwrap();
+
+        let head = self.context.append_basic_block(fn_val, "kern.var.head");
+        let body = self.context.append_basic_block(fn_val, "kern.var.body");
+        let add = self.context.append_basic_block(fn_val, "kern.var.add");
+        let cont = self.context.append_basic_block(fn_val, "kern.var.cont");
+        let exit = self.context.append_basic_block(fn_val, "kern.var.exit");
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(head);
+        let iv = self
+            .builder
+            .build_load(i64_t, idx, "kern.var.iv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, iv, access.len, "kern.var.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, body, exit)
+            .unwrap();
+
+        self.builder.position_at_end(body);
+        match access.bitmap {
+            Some(bitmap) => {
+                let valid = self.column_load_valid_bit(bitmap, iv);
+                self.builder
+                    .build_conditional_branch(valid, add, cont)
+                    .unwrap();
+            }
+            None => {
+                self.builder.build_unconditional_branch(add).unwrap();
+            }
+        }
+
+        self.builder.position_at_end(add);
+        let x = self.access_load(access, iv);
+        let xf = self.column_elem_to_f64(x, access.unsigned);
+        let d = self
+            .builder
+            .build_float_sub(xf, mean, "kern.var.d")
+            .unwrap();
+        let d2 = self.builder.build_float_mul(d, d, "kern.var.d2").unwrap();
+        let s = self
+            .builder
+            .build_load(f64_t, ss, "kern.var.s")
+            .unwrap()
+            .into_float_value();
+        let s2 = self.builder.build_float_add(s, d2, "kern.var.s2").unwrap();
+        self.builder.build_store(ss, s2).unwrap();
+        self.builder.build_unconditional_branch(cont).unwrap();
+
+        self.builder.position_at_end(cont);
+        let next = self
+            .builder
+            .build_int_add(iv, i64_t.const_int(1, false), "kern.var.next")
+            .unwrap();
+        self.builder.build_store(idx, next).unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(exit);
+        let ss_v = self
+            .builder
+            .build_load(f64_t, ss, "kern.var.ssv")
+            .unwrap()
+            .into_float_value();
+        // Population divides by `count`; sample (Bessel) by `count − 1`. The
+        // population branch keeps `cntf` unmodified so `Stats.variance` stays
+        // byte-identical (no dead `− 0.0`).
+        let denom = if bessel {
+            self.builder
+                .build_float_sub(cntf, f64_t.const_float(1.0), "kern.var.denom")
+                .unwrap()
+        } else {
+            cntf
+        };
+        Ok(self
+            .builder
+            .build_float_div(ss_v, denom, "kern.var.out")
             .unwrap())
     }
 }
