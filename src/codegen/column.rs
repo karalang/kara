@@ -45,7 +45,7 @@ use inkwell::types::{BasicTypeEnum, StructType};
 use inkwell::values::{BasicValueEnum, FloatValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 
-use super::kernel::ContainerAccess;
+use super::kernel::{ContainerAccess, MapDest, MapKernelOp, MapOther};
 use super::state::ColumnVarInfo;
 use super::tensor::type_expr_is_unsigned_int;
 use crate::ast::{BinOp, CallArg, Expr, ExprKind, GenericArg, TypeExpr, TypeKind};
@@ -547,7 +547,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (the `from_iter_nullable` per-slot `Some`/`None` case, where
     /// validity isn't a compile-time constant). `byte = valid ? (byte |
     /// mask) : (byte & ~mask)`.
-    fn column_write_bit_runtime(
+    pub(super) fn column_write_bit_runtime(
         &self,
         bitmap: PointerValue<'ctx>,
         idx: IntValue<'ctx>,
@@ -3792,10 +3792,6 @@ impl<'ctx> super::Codegen<'ctx> {
         right: &Expr,
         span: &Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let i64_t = self.context.i64_type();
-        let fn_val = self
-            .current_fn
-            .ok_or_else(|| "column binop outside function".to_string())?;
         let result_ci = self
             .column_typed_exprs
             .get(&(span.offset, span.length))
@@ -3841,54 +3837,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 .column_load_field(dst, 1, "col.bin.dbm")
                 .into_pointer_value();
 
-            let idx = self.builder.build_alloca(i64_t, "col.bin.i").unwrap();
-            self.builder.build_store(idx, i64_t.const_zero()).unwrap();
-            let head = self.context.append_basic_block(fn_val, "col.bin.head");
-            let body = self.context.append_basic_block(fn_val, "col.bin.body");
-            let comp = self.context.append_basic_block(fn_val, "col.bin.comp");
-            let skip = self.context.append_basic_block(fn_val, "col.bin.skip");
-            let cont = self.context.append_basic_block(fn_val, "col.bin.cont");
-            let exit = self.context.append_basic_block(fn_val, "col.bin.exit");
-            self.builder.build_unconditional_branch(head).unwrap();
-            self.builder.position_at_end(head);
-            let i = self
-                .builder
-                .build_load(i64_t, idx, "col.bin.iv")
-                .unwrap()
-                .into_int_value();
-            let more = self
-                .builder
-                .build_int_compare(IntPredicate::ULT, i, len, "col.bin.more")
-                .unwrap();
-            self.builder
-                .build_conditional_branch(more, body, exit)
-                .unwrap();
-            self.builder.position_at_end(body);
-            let lv = self.column_load_valid_bit(lbm, i);
-            let rv = self.column_load_valid_bit(rbm, i);
-            let both = self.builder.build_and(lv, rv, "col.bin.both").unwrap();
-            self.column_write_bit_runtime(dst_bm, i, both);
-            self.builder
-                .build_conditional_branch(both, comp, skip)
-                .unwrap();
-            self.builder.position_at_end(comp);
-            let a = self.column_gep_load(ldata, lelem, i, "col.bin.a");
-            let b = self.column_gep_load(rdata, relem, i, "col.bin.b");
-            let r = self.compile_binop_typed(op, a, b, lunsigned)?;
-            let r = self.coerce_scalar_to_type(r, result_elem);
-            self.column_gep_store(dst_data, result_elem, i, r);
-            self.builder.build_unconditional_branch(cont).unwrap();
-            self.builder.position_at_end(skip);
-            self.column_gep_store(dst_data, result_elem, i, self.column_zero_elem(result_elem));
-            self.builder.build_unconditional_branch(cont).unwrap();
-            self.builder.position_at_end(cont);
-            let next = self
-                .builder
-                .build_int_add(i, i64_t.const_int(1, false), "col.bin.next")
-                .unwrap();
-            self.builder.build_store(idx, next).unwrap();
-            self.builder.build_unconditional_branch(head).unwrap();
-            self.builder.position_at_end(exit);
+            // The shared gated map: result bit = lv AND rv (null propagation),
+            // per-element op via `compile_binop_typed` in the valid branch only.
+            let lhs = ContainerAccess {
+                data: ldata,
+                len,
+                elem: lelem,
+                unsigned: lunsigned,
+                bitmap: Some(lbm),
+            };
+            let other = MapOther::Access(ContainerAccess {
+                data: rdata,
+                len,
+                elem: relem,
+                unsigned: lunsigned,
+                bitmap: Some(rbm),
+            });
+            let dest = MapDest {
+                data: dst_data,
+                elem: result_elem,
+                bitmap: Some(dst_bm),
+            };
+            self.emit_elementwise_map(&lhs, &other, &MapKernelOp::Binop(op), &dest)?;
             self.column_free_if_fresh_temp(left, lp);
             self.column_free_if_fresh_temp(right, rp);
             return Ok(dst.into());
@@ -3918,55 +3888,24 @@ impl<'ctx> super::Codegen<'ctx> {
             .column_load_field(dst, 1, "col.bs.dbm")
             .into_pointer_value();
 
-        let idx = self.builder.build_alloca(i64_t, "col.bs.i").unwrap();
-        self.builder.build_store(idx, i64_t.const_zero()).unwrap();
-        let head = self.context.append_basic_block(fn_val, "col.bs.head");
-        let body = self.context.append_basic_block(fn_val, "col.bs.body");
-        let comp = self.context.append_basic_block(fn_val, "col.bs.comp");
-        let skip = self.context.append_basic_block(fn_val, "col.bs.skip");
-        let cont = self.context.append_basic_block(fn_val, "col.bs.cont");
-        let exit = self.context.append_basic_block(fn_val, "col.bs.exit");
-        self.builder.build_unconditional_branch(head).unwrap();
-        self.builder.position_at_end(head);
-        let i = self
-            .builder
-            .build_load(i64_t, idx, "col.bs.iv")
-            .unwrap()
-            .into_int_value();
-        let more = self
-            .builder
-            .build_int_compare(IntPredicate::ULT, i, len, "col.bs.more")
-            .unwrap();
-        self.builder
-            .build_conditional_branch(more, body, exit)
-            .unwrap();
-        self.builder.position_at_end(body);
-        let v = self.column_load_valid_bit(cbm, i);
-        self.column_write_bit_runtime(dst_bm, i, v);
-        self.builder
-            .build_conditional_branch(v, comp, skip)
-            .unwrap();
-        self.builder.position_at_end(comp);
-        let x = self.column_gep_load(cdata, celem, i, "col.bs.x");
-        let r = if scalar_on_left {
-            self.compile_binop_typed(op, scalar, x, cunsigned)?
-        } else {
-            self.compile_binop_typed(op, x, scalar, cunsigned)?
+        // The shared gated map with a broadcast scalar (`on_left` for `2 - c`).
+        let lhs = ContainerAccess {
+            data: cdata,
+            len,
+            elem: celem,
+            unsigned: cunsigned,
+            bitmap: Some(cbm),
         };
-        let r = self.coerce_scalar_to_type(r, result_elem);
-        self.column_gep_store(dst_data, result_elem, i, r);
-        self.builder.build_unconditional_branch(cont).unwrap();
-        self.builder.position_at_end(skip);
-        self.column_gep_store(dst_data, result_elem, i, self.column_zero_elem(result_elem));
-        self.builder.build_unconditional_branch(cont).unwrap();
-        self.builder.position_at_end(cont);
-        let next = self
-            .builder
-            .build_int_add(i, i64_t.const_int(1, false), "col.bs.next")
-            .unwrap();
-        self.builder.build_store(idx, next).unwrap();
-        self.builder.build_unconditional_branch(head).unwrap();
-        self.builder.position_at_end(exit);
+        let other = MapOther::Scalar {
+            value: scalar,
+            on_left: scalar_on_left,
+        };
+        let dest = MapDest {
+            data: dst_data,
+            elem: result_elem,
+            bitmap: Some(dst_bm),
+        };
+        self.emit_elementwise_map(&lhs, &other, &MapKernelOp::Binop(op), &dest)?;
         self.column_free_if_fresh_temp(col_expr, cp);
         Ok(dst.into())
     }
@@ -3977,10 +3916,6 @@ impl<'ctx> super::Codegen<'ctx> {
         operand: &Expr,
         span: &Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let i64_t = self.context.i64_type();
-        let fn_val = self
-            .current_fn
-            .ok_or_else(|| "column neg outside function".to_string())?;
         let result_ci = self
             .column_typed_exprs
             .get(&(span.offset, span.length))
@@ -4005,61 +3940,21 @@ impl<'ctx> super::Codegen<'ctx> {
             .column_load_field(dst, 1, "col.neg.dbm")
             .into_pointer_value();
 
-        let idx = self.builder.build_alloca(i64_t, "col.neg.i").unwrap();
-        self.builder.build_store(idx, i64_t.const_zero()).unwrap();
-        let head = self.context.append_basic_block(fn_val, "col.neg.head");
-        let body = self.context.append_basic_block(fn_val, "col.neg.body");
-        let comp = self.context.append_basic_block(fn_val, "col.neg.comp");
-        let skip = self.context.append_basic_block(fn_val, "col.neg.skip");
-        let cont = self.context.append_basic_block(fn_val, "col.neg.cont");
-        let exit = self.context.append_basic_block(fn_val, "col.neg.exit");
-        self.builder.build_unconditional_branch(head).unwrap();
-        self.builder.position_at_end(head);
-        let i = self
-            .builder
-            .build_load(i64_t, idx, "col.neg.iv")
-            .unwrap()
-            .into_int_value();
-        let more = self
-            .builder
-            .build_int_compare(IntPredicate::ULT, i, len, "col.neg.more")
-            .unwrap();
-        self.builder
-            .build_conditional_branch(more, body, exit)
-            .unwrap();
-        self.builder.position_at_end(body);
-        let v = self.column_load_valid_bit(cbm, i);
-        self.column_write_bit_runtime(dst_bm, i, v);
-        self.builder
-            .build_conditional_branch(v, comp, skip)
-            .unwrap();
-        self.builder.position_at_end(comp);
-        let x = self.column_gep_load(cdata, celem, i, "col.neg.x");
-        let r = match x {
-            BasicValueEnum::FloatValue(fv) => self
-                .builder
-                .build_float_neg(fv, "col.neg.f")
-                .unwrap()
-                .into(),
-            BasicValueEnum::IntValue(iv) => {
-                self.builder.build_int_neg(iv, "col.neg.i2").unwrap().into()
-            }
-            other => other,
+        // The shared gated map, unary: a bare `fneg`/`ineg` per valid slot
+        // (the Column posture — no `i64::MIN` trap, unlike Tensor's `0 - x`).
+        let lhs = ContainerAccess {
+            data: cdata,
+            len,
+            elem: celem,
+            unsigned: false,
+            bitmap: Some(cbm),
         };
-        let r = self.coerce_scalar_to_type(r, result_elem);
-        self.column_gep_store(dst_data, result_elem, i, r);
-        self.builder.build_unconditional_branch(cont).unwrap();
-        self.builder.position_at_end(skip);
-        self.column_gep_store(dst_data, result_elem, i, self.column_zero_elem(result_elem));
-        self.builder.build_unconditional_branch(cont).unwrap();
-        self.builder.position_at_end(cont);
-        let next = self
-            .builder
-            .build_int_add(i, i64_t.const_int(1, false), "col.neg.next")
-            .unwrap();
-        self.builder.build_store(idx, next).unwrap();
-        self.builder.build_unconditional_branch(head).unwrap();
-        self.builder.position_at_end(exit);
+        let dest = MapDest {
+            data: dst_data,
+            elem: result_elem,
+            bitmap: Some(dst_bm),
+        };
+        self.emit_elementwise_map(&lhs, &MapOther::Unary, &MapKernelOp::NegNative, &dest)?;
         self.column_free_if_fresh_temp(operand, cp);
         Ok(dst.into())
     }
@@ -4074,22 +3969,6 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> BasicValueEnum<'ctx> {
         let slot = unsafe { self.builder.build_gep(elem, data, &[i], name).unwrap() };
         self.builder.build_load(elem, slot, name).unwrap()
-    }
-
-    /// `data[i] = v` store with the element type.
-    fn column_gep_store(
-        &self,
-        data: PointerValue<'ctx>,
-        elem: BasicTypeEnum<'ctx>,
-        i: IntValue<'ctx>,
-        v: BasicValueEnum<'ctx>,
-    ) {
-        let slot = unsafe {
-            self.builder
-                .build_gep(elem, data, &[i], "col.store")
-                .unwrap()
-        };
-        self.builder.build_store(slot, v).unwrap();
     }
 
     // ── Cleanup ─────────────────────────────────────────────────

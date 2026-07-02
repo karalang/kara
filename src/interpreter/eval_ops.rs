@@ -388,6 +388,59 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// Interpreter twin of codegen's `emit_elementwise_map` loop (S3,
+    /// `src/codegen/kernel.rs`): fold each **present** slot through the
+    /// scalar `eval_binary` — inheriting the exact scalar semantics (int
+    /// overflow trap, div-by-zero trap) and the `pending_cf` early-out — and
+    /// stamp a `None` slot (a null under SQL null propagation) with a
+    /// never-read `Value::Unit` placeholder + an invalid bit. All four
+    /// element-wise binop paths (tensor⊕tensor, tensor⊕scalar, col⊕col,
+    /// col⊕scalar) build their slot vector and funnel through here. Returns
+    /// `None` when control flow pended mid-loop.
+    #[allow(clippy::type_complexity)]
+    fn map_binop_slots(
+        &mut self,
+        op: &BinOp,
+        slots: Vec<Option<(Value, Value)>>,
+        span: &Span,
+    ) -> Option<(Vec<Value>, Vec<bool>)> {
+        let mut data = Vec::with_capacity(slots.len());
+        let mut valid = Vec::with_capacity(slots.len());
+        for slot in slots {
+            match slot {
+                Some((l, r)) => {
+                    data.push(self.eval_binary(op, l, r, span));
+                    if self.pending_cf.is_some() {
+                        return None;
+                    }
+                    valid.push(true);
+                }
+                None => {
+                    data.push(Value::Unit);
+                    valid.push(false);
+                }
+            }
+        }
+        Some((data, valid))
+    }
+
+    /// Order a broadcast pair by `scalar_on_left`, promoting an int scalar to
+    /// float when the element is float — the Q4 literal-promotion case
+    /// (`t + 2` on a float tensor): codegen sees a float literal via
+    /// lowering's rewrite, and this keeps the interpreter byte-for-byte in
+    /// step.
+    fn broadcast_pair(x: Value, scalar: &Value, scalar_on_left: bool) -> (Value, Value) {
+        let s = match (&x, scalar) {
+            (Value::Float(_), Value::Int(i)) => Value::Float(*i as f64),
+            _ => scalar.clone(),
+        };
+        if scalar_on_left {
+            (s, x)
+        } else {
+            (x, s)
+        }
+    }
+
     /// Element-wise `Tensor ⊕ Tensor`. Runtime shape-equality re-check (the
     /// `run_program` bypass), then a fresh tensor whose elements are the
     /// per-position scalar results. Both buffers are cloned out before the
@@ -415,13 +468,10 @@ impl<'a> super::Interpreter<'a> {
         }
         let a = ada.read().unwrap().clone();
         let b = bda.read().unwrap().clone();
-        let mut out = Vec::with_capacity(a.len());
-        for (x, y) in a.into_iter().zip(b) {
-            out.push(self.eval_binary(op, x, y, span));
-            if self.pending_cf.is_some() {
-                return Value::Unit;
-            }
-        }
+        let slots = a.into_iter().zip(b).map(Some).collect();
+        let Some((out, _)) = self.map_binop_slots(op, slots, span) else {
+            return Value::Unit;
+        };
         Value::Tensor {
             dims: ad.clone(),
             data: Arc::new(RwLock::new(out)),
@@ -429,11 +479,8 @@ impl<'a> super::Interpreter<'a> {
     }
 
     /// Element-wise `Tensor ⊕ scalar` (or `scalar ⊕ Tensor` when
-    /// `scalar_on_left`). Broadcasts the scalar across every element. An int
-    /// scalar is coerced to float when the element is float — the Q4
-    /// literal-promotion case (`t + 2` on a float tensor): codegen sees a
-    /// float literal via lowering's rewrite, and this keeps the interpreter
-    /// byte-for-byte in step.
+    /// `scalar_on_left`). Broadcasts the scalar across every element (with
+    /// the int→float promotion of [`Self::broadcast_pair`]).
     fn eval_tensor_scalar_binop(
         &mut self,
         op: &BinOp,
@@ -444,22 +491,13 @@ impl<'a> super::Interpreter<'a> {
         span: &Span,
     ) -> Value {
         let elems = data.read().unwrap().clone();
-        let mut out = Vec::with_capacity(elems.len());
-        for x in elems {
-            let s = match (&x, &scalar) {
-                (Value::Float(_), Value::Int(i)) => Value::Float(*i as f64),
-                _ => scalar.clone(),
-            };
-            let v = if scalar_on_left {
-                self.eval_binary(op, s, x, span)
-            } else {
-                self.eval_binary(op, x, s, span)
-            };
-            out.push(v);
-            if self.pending_cf.is_some() {
-                return Value::Unit;
-            }
-        }
+        let slots = elems
+            .into_iter()
+            .map(|x| Some(Self::broadcast_pair(x, &scalar, scalar_on_left)))
+            .collect();
+        let Some((out, _)) = self.map_binop_slots(op, slots, span) else {
+            return Value::Unit;
+        };
         Value::Tensor {
             dims: dims.clone(),
             data: Arc::new(RwLock::new(out)),
@@ -497,20 +535,16 @@ impl<'a> super::Interpreter<'a> {
                 span,
             );
         }
-        let mut out_data = Vec::with_capacity(a.len());
-        let mut out_valid = Vec::with_capacity(a.len());
-        for (((x, y), &ok_a), &ok_b) in a.into_iter().zip(b).zip(avalid.iter()).zip(bvalid.iter()) {
-            if ok_a && ok_b {
-                out_data.push(self.eval_binary(op, x, y, span));
-                if self.pending_cf.is_some() {
-                    return Value::Unit;
-                }
-                out_valid.push(true);
-            } else {
-                out_data.push(Value::Unit);
-                out_valid.push(false);
-            }
-        }
+        let slots = a
+            .into_iter()
+            .zip(b)
+            .zip(avalid.iter())
+            .zip(bvalid.iter())
+            .map(|(((x, y), &ok_a), &ok_b)| (ok_a && ok_b).then_some((x, y)))
+            .collect();
+        let Some((out_data, out_valid)) = self.map_binop_slots(op, slots, span) else {
+            return Value::Unit;
+        };
         Value::Column {
             data: Arc::new(RwLock::new(out_data)),
             valid: Arc::new(RwLock::new(out_valid)),
@@ -519,10 +553,9 @@ impl<'a> super::Interpreter<'a> {
 
     /// Element-wise `Column ⊕ scalar` (or `scalar ⊕ Column` when
     /// `scalar_on_left`) with null propagation. Valid slots compute against
-    /// the broadcast scalar; null slots stay null. An int scalar is coerced
-    /// to float when the slot is float (the Q4 literal-promotion case, kept
-    /// in step with codegen's float-literal rewrite — mirrors the Tensor
-    /// scalar path).
+    /// the broadcast scalar (with the int→float promotion of
+    /// [`Self::broadcast_pair`], mirroring the Tensor scalar path); null
+    /// slots stay null.
     fn eval_column_scalar_binop(
         &mut self,
         op: &BinOp,
@@ -534,26 +567,14 @@ impl<'a> super::Interpreter<'a> {
     ) -> Value {
         let elems = data.read().unwrap().clone();
         let valids = valid.read().unwrap().clone();
-        let mut out_data = Vec::with_capacity(elems.len());
-        for (&ok, x) in valids.iter().zip(elems) {
-            if !ok {
-                out_data.push(Value::Unit);
-                continue;
-            }
-            let s = match (&x, &scalar) {
-                (Value::Float(_), Value::Int(i)) => Value::Float(*i as f64),
-                _ => scalar.clone(),
-            };
-            let v = if scalar_on_left {
-                self.eval_binary(op, s, x, span)
-            } else {
-                self.eval_binary(op, x, s, span)
-            };
-            if self.pending_cf.is_some() {
-                return Value::Unit;
-            }
-            out_data.push(v);
-        }
+        let slots = valids
+            .iter()
+            .zip(elems)
+            .map(|(&ok, x)| ok.then(|| Self::broadcast_pair(x, &scalar, scalar_on_left)))
+            .collect();
+        let Some((out_data, _)) = self.map_binop_slots(op, slots, span) else {
+            return Value::Unit;
+        };
         Value::Column {
             data: Arc::new(RwLock::new(out_data)),
             valid: Arc::new(RwLock::new(valids)),

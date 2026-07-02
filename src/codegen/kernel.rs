@@ -17,7 +17,12 @@
 //! [`emit_variance_from`]): `Column.mean`/`var`/`std` (sample, ÷ n−1) and
 //! `Stats.variance`/`stddev` (population, ÷ n) fold their overflow-safe `f64`
 //! sum through one dense-or-gated pass and share the `Var { bessel }` divisor
-//! knob. The non-f64 `ElemKind` axis for `Stats` lands later (S5).
+//! knob. **S3 adds the element-wise map family** ([`emit_elementwise_map`]):
+//! Tensor `⊕`/`-t` (dense) and Column `⊕`/`-c` (validity-gated with SQL null
+//! propagation) share one map skeleton, parameterized on the second operand
+//! ([`MapOther`]: container / broadcast scalar / none) and the per-element op
+//! ([`MapKernelOp`]: `compile_binop_typed` vs Column's native `fneg`/`ineg`).
+//! The non-f64 `ElemKind` axis for `Stats` lands later (S5).
 //!
 //! **Byte-identical.** The emitters here reduce to the exact instructions the
 //! hand-rolled loops emitted (`compile_binop_typed` lowers f64 `Add`/`Mul` to
@@ -51,6 +56,40 @@ pub(super) struct ContainerAccess<'ctx> {
     pub unsigned: bool,
     /// The Arrow validity bitmap (`Column`), or `None` for a dense buffer
     /// (`Stats`/`Tensor`).
+    pub bitmap: Option<PointerValue<'ctx>>,
+}
+
+/// The second operand of an element-wise map (S3).
+pub(super) enum MapOther<'ctx> {
+    /// A second container operand (tensor⊕tensor / col⊕col), loaded at its
+    /// own element type each iteration.
+    Access(ContainerAccess<'ctx>),
+    /// A broadcast scalar; `on_left` puts it on the operator's left
+    /// (`2 - t` / `2 - c`).
+    Scalar {
+        value: BasicValueEnum<'ctx>,
+        on_left: bool,
+    },
+    /// No second operand (unary negation).
+    Unary,
+}
+
+/// The per-element operation of an element-wise map (S3).
+pub(super) enum MapKernelOp<'a> {
+    /// A scalar binary op through `compile_binop_typed` — inherits the exact
+    /// scalar semantics (int overflow trap, div-by-zero trap, signedness).
+    Binop(&'a BinOp),
+    /// A bare `fneg`/`ineg` on the element — the Column `-c` posture (no
+    /// `i64::MIN` trap, unlike Tensor's `0 - x` form).
+    NegNative,
+}
+
+/// Where an element-wise map writes (S3): the result buffer, its element
+/// type (computed elements are coerced to it), and the result validity
+/// bitmap for the gated (`Column`) form.
+pub(super) struct MapDest<'ctx> {
+    pub data: PointerValue<'ctx>,
+    pub elem: BasicTypeEnum<'ctx>,
     pub bitmap: Option<PointerValue<'ctx>>,
 }
 
@@ -520,6 +559,169 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_load(access.elem, acc, "kern.gm.result")
             .unwrap())
+    }
+
+    /// The shared element-wise map loop (S3) — one pass writing
+    /// `dest[i] = op(lhs[i], other[i])` over `[0, lhs.len)`. One skeleton
+    /// behind Tensor `⊕`/`-t` (dense) and Column `⊕`/`-c` (Arrow-nullable);
+    /// the genuinely-different axes are parameters:
+    ///   * **validity** — gated iff any operand access carries a `bitmap`.
+    ///     A result slot is valid iff **all** gated operands are valid at
+    ///     `i` (SQL null propagation): the bit-AND is stamped into
+    ///     `dest.bitmap`, then only the valid branch computes — so a null
+    ///     slot's placeholder never trips a div-by-zero / overflow trap —
+    ///     and the invalid branch stores a zero placeholder (never read;
+    ///     the bitmap masks it). Dense mode has no validity state at all.
+    ///   * **the second operand** ([`MapOther`]) — container / broadcast
+    ///     scalar (`on_left` for `2 - t`) / none.
+    ///   * **the per-element op** ([`MapKernelOp`]) — `Binop` via
+    ///     `compile_binop_typed` (Tensor `-t` is `Binop(Sub)` + zero scalar
+    ///     on the left, so `i64::MIN` traps like the interpreter's
+    ///     `checked_neg`); `NegNative` is Column's bare `fneg`/`ineg`.
+    ///
+    /// The computed element is coerced to `dest.elem` via
+    /// `coerce_scalar_to_type` (identity when the types already match —
+    /// every Tensor case). Allocation, shape/length guards, and fresh-temp
+    /// frees stay at the call sites.
+    pub(super) fn emit_elementwise_map(
+        &mut self,
+        lhs: &ContainerAccess<'ctx>,
+        other: &MapOther<'ctx>,
+        op: &MapKernelOp<'_>,
+        dest: &MapDest<'ctx>,
+    ) -> Result<(), String> {
+        let i64_t = self.context.i64_type();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "elementwise map outside function".to_string())?;
+        let gated =
+            lhs.bitmap.is_some() || matches!(other, MapOther::Access(a) if a.bitmap.is_some());
+        if gated && dest.bitmap.is_none() {
+            return Err("elementwise map: gated operands need a dest bitmap".to_string());
+        }
+
+        let idx = self.builder.build_alloca(i64_t, "kern.map.i").unwrap();
+        self.builder.build_store(idx, i64_t.const_zero()).unwrap();
+        let head = self.context.append_basic_block(fn_val, "kern.map.head");
+        let body = self.context.append_basic_block(fn_val, "kern.map.body");
+        let comp = self.context.append_basic_block(fn_val, "kern.map.comp");
+        // `skip` exists only in gated mode (the null-slot placeholder arm).
+        let skip = if gated {
+            Some(self.context.append_basic_block(fn_val, "kern.map.skip"))
+        } else {
+            None
+        };
+        let cont = self.context.append_basic_block(fn_val, "kern.map.cont");
+        let exit = self.context.append_basic_block(fn_val, "kern.map.exit");
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(head);
+        let iv = self
+            .builder
+            .build_load(i64_t, idx, "kern.map.iv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, iv, lhs.len, "kern.map.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, body, exit)
+            .unwrap();
+
+        self.builder.position_at_end(body);
+        if gated {
+            // Valid iff every gated operand is valid at `i` — AND the bits,
+            // stamp the result bitmap, branch compute-vs-placeholder.
+            let mut valid: Option<IntValue<'ctx>> = None;
+            if let Some(bm) = lhs.bitmap {
+                valid = Some(self.column_load_valid_bit(bm, iv));
+            }
+            if let MapOther::Access(a) = other {
+                if let Some(bm) = a.bitmap {
+                    let v = self.column_load_valid_bit(bm, iv);
+                    valid = Some(match valid {
+                        Some(prev) => self.builder.build_and(prev, v, "kern.map.both").unwrap(),
+                        None => v,
+                    });
+                }
+            }
+            let valid = valid.expect("gated implies at least one bitmap");
+            self.column_write_bit_runtime(dest.bitmap.unwrap(), iv, valid);
+            self.builder
+                .build_conditional_branch(valid, comp, skip.unwrap())
+                .unwrap();
+        } else {
+            self.builder.build_unconditional_branch(comp).unwrap();
+        }
+
+        self.builder.position_at_end(comp);
+        let a = self.access_load(lhs, iv);
+        let r = match (op, other) {
+            (MapKernelOp::Binop(bin), MapOther::Access(acc)) => {
+                let b = self.access_load(acc, iv);
+                self.compile_binop_typed(bin, a, b, lhs.unsigned)?
+            }
+            (MapKernelOp::Binop(bin), MapOther::Scalar { value, on_left }) => {
+                let (l, r) = if *on_left { (*value, a) } else { (a, *value) };
+                self.compile_binop_typed(bin, l, r, lhs.unsigned)?
+            }
+            (MapKernelOp::Binop(_), MapOther::Unary) => {
+                return Err("elementwise map: binop needs a second operand".to_string())
+            }
+            (MapKernelOp::NegNative, MapOther::Unary) => match a {
+                BasicValueEnum::FloatValue(fv) => self
+                    .builder
+                    .build_float_neg(fv, "kern.map.fneg")
+                    .unwrap()
+                    .into(),
+                BasicValueEnum::IntValue(int_v) => self
+                    .builder
+                    .build_int_neg(int_v, "kern.map.ineg")
+                    .unwrap()
+                    .into(),
+                other_v => other_v,
+            },
+            (MapKernelOp::NegNative, _) => {
+                return Err("elementwise map: native neg is unary".to_string())
+            }
+        };
+        let r = self.coerce_scalar_to_type(r, dest.elem);
+        let rp = unsafe {
+            self.builder
+                .build_gep(dest.elem, dest.data, &[iv], "kern.map.rp")
+                .unwrap()
+        };
+        self.builder.build_store(rp, r).unwrap();
+        self.builder.build_unconditional_branch(cont).unwrap();
+
+        if let Some(skip_bb) = skip {
+            // Null slot: zero placeholder (matches `column_zero_elem`).
+            self.builder.position_at_end(skip_bb);
+            let zero: BasicValueEnum<'ctx> = match dest.elem {
+                BasicTypeEnum::FloatType(ft) => ft.const_zero().into(),
+                BasicTypeEnum::IntType(it) => it.const_zero().into(),
+                other_t => other_t.const_zero(),
+            };
+            let zp = unsafe {
+                self.builder
+                    .build_gep(dest.elem, dest.data, &[iv], "kern.map.zp")
+                    .unwrap()
+            };
+            self.builder.build_store(zp, zero).unwrap();
+            self.builder.build_unconditional_branch(cont).unwrap();
+        }
+
+        self.builder.position_at_end(cont);
+        let next = self
+            .builder
+            .build_int_add(iv, i64_t.const_int(1, false), "kern.map.next")
+            .unwrap();
+        self.builder.build_store(idx, next).unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(exit);
+        Ok(())
     }
 
     /// One pass over `access` accumulating `(Σ x as f64, count)`. A dense

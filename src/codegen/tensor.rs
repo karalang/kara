@@ -46,7 +46,7 @@ use crate::ast::{BinOp, CallArg, Expr, ExprKind, GenericArg, ShapeDim, TypeExpr,
 use crate::reduce_kernel::ReduceOp;
 use crate::token::Span;
 
-use super::kernel::ContainerAccess;
+use super::kernel::{ContainerAccess, MapDest, MapKernelOp, MapOther};
 use super::state::TensorVarInfo;
 
 /// True iff `te` names an unsigned integer primitive — drives the
@@ -2237,10 +2237,13 @@ impl<'ctx> super::Codegen<'ctx> {
     /// The per-element loop for an element-wise op. `a_data` is the left
     /// (C-order) tensor's data. For tensor⊕tensor `b_data` is the right
     /// tensor's data; for tensor⊕scalar `scalar` holds the broadcast value
-    /// (`scalar_on_left` puts it on the operator's left, e.g. `2 - t`). Each
-    /// element pair routes through `compile_binop_typed`, so the per-element
-    /// op inherits the exact scalar semantics — int overflow trap, div-by-
-    /// zero trap, signed/unsigned division — matching the interpreter.
+    /// (`scalar_on_left` puts it on the operator's left, e.g. `2 - t`). Thin
+    /// adapter over the shared kernel
+    /// [`emit_elementwise_map`](super::Codegen::emit_elementwise_map) (dense —
+    /// no bitmaps); each element pair routes through `compile_binop_typed`, so
+    /// the per-element op inherits the exact scalar semantics — int overflow
+    /// trap, div-by-zero trap, signed/unsigned division — matching the
+    /// interpreter.
     #[allow(clippy::too_many_arguments)]
     fn emit_tensor_binop_loop(
         &mut self,
@@ -2254,66 +2257,33 @@ impl<'ctx> super::Codegen<'ctx> {
         is_unsigned: bool,
         scalar_on_left: bool,
     ) -> Result<(), String> {
-        let fn_val = self.current_fn.unwrap();
-        let i64_t = self.context.i64_type();
-        let head = self.context.append_basic_block(fn_val, "t.bin.head");
-        let body = self.context.append_basic_block(fn_val, "t.bin.body");
-        let exit = self.context.append_basic_block(fn_val, "t.bin.exit");
-        let iv = self.create_entry_alloca(fn_val, "t.bin.i", i64_t.into());
-        self.builder
-            .build_store(iv, i64_t.const_int(0, false))
-            .unwrap();
-        self.builder.build_unconditional_branch(head).unwrap();
-        self.builder.position_at_end(head);
-        let i = self
-            .builder
-            .build_load(i64_t, iv, "t.bin.iv")
-            .unwrap()
-            .into_int_value();
-        let cont = self
-            .builder
-            .build_int_compare(IntPredicate::ULT, i, count, "t.bin.cont")
-            .unwrap();
-        self.builder
-            .build_conditional_branch(cont, body, exit)
-            .unwrap();
-        self.builder.position_at_end(body);
-        let a_val = {
-            let p = unsafe {
-                self.builder
-                    .build_gep(elem, a_data, &[i], "t.bin.ap")
-                    .unwrap()
-            };
-            self.builder.build_load(elem, p, "t.bin.av").unwrap()
+        let lhs = ContainerAccess {
+            data: a_data,
+            len: count,
+            elem,
+            unsigned: is_unsigned,
+            bitmap: None,
         };
         let other = match (b_data, scalar) {
-            (Some(bd), _) => {
-                let p = unsafe { self.builder.build_gep(elem, bd, &[i], "t.bin.bp").unwrap() };
-                self.builder.build_load(elem, p, "t.bin.bv").unwrap()
-            }
-            (None, Some(s)) => s,
+            (Some(bd), _) => MapOther::Access(ContainerAccess {
+                data: bd,
+                len: count,
+                elem,
+                unsigned: is_unsigned,
+                bitmap: None,
+            }),
+            (None, Some(s)) => MapOther::Scalar {
+                value: s,
+                on_left: scalar_on_left,
+            },
             (None, None) => return Err("tensor binop loop: no second operand".to_string()),
         };
-        let (lhs, rhs) = if scalar_on_left {
-            (other, a_val)
-        } else {
-            (a_val, other)
+        let dest = MapDest {
+            data: res_data,
+            elem,
+            bitmap: None,
         };
-        let r = self.compile_binop_typed(op, lhs, rhs, is_unsigned)?;
-        let rp = unsafe {
-            self.builder
-                .build_gep(elem, res_data, &[i], "t.bin.rp")
-                .unwrap()
-        };
-        self.builder.build_store(rp, r).unwrap();
-        let ni = self
-            .builder
-            .build_int_add(i, i64_t.const_int(1, false), "t.bin.ni")
-            .unwrap();
-        self.builder.build_store(iv, ni).unwrap();
-        self.builder.build_unconditional_branch(head).unwrap();
-        self.builder.position_at_end(exit);
-        Ok(())
+        self.emit_elementwise_map(&lhs, &other, &MapKernelOp::Binop(op), &dest)
     }
 
     /// Element-wise `Tensor ⊕ Tensor` / `Tensor ⊕ scalar` for `+ - * /`.
