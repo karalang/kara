@@ -29439,3 +29439,99 @@ fn gpu_sl1_accepts_struct_of_primitives_arg() {
          fn main() { let _ = batch(Vec3 { x: 1.0, y: 2.0, z: 3.0 }); }",
     );
 }
+
+// ── B-2026-07-02-7: out-of-range integer literals at narrow int contexts ──
+//
+// Pre-fix every one of these was silently admitted and the two surfaces
+// DIVERGED (the interpreter kept the wide value while codegen truncated at
+// the type's honest width): `let x: u8 = -1` printed -1 under `karac run`
+// and 18446744073709551615 under `karac build`; `f(70000)` against an `i16`
+// param printed 70000 vs 4464; `300u8` printed 300 vs 44.
+
+#[test]
+fn test_int_literal_out_of_range_rejected_at_narrow_contexts() {
+    for (src, needle) in [
+        // annotated let, positive + negated + negative-into-unsigned
+        ("fn main() { let x: i8 = 200; println(x); }", "out of range"),
+        (
+            "fn main() { let x: i8 = -200; println(x); }",
+            "out of range",
+        ),
+        (
+            "fn main() { let x: u8 = -1; println(x); }",
+            "cannot initialize unsigned",
+        ),
+        (
+            "fn main() { let x: u64 = -1; println(x); }",
+            "cannot initialize unsigned",
+        ),
+        // suffixed literal violates its own suffix, any position
+        ("fn main() { let x = 300u8; println(x); }", "out of range"),
+        (
+            "fn main() { let x = -1u8; println(x); }",
+            "cannot initialize unsigned",
+        ),
+        // fn-arg position
+        (
+            "fn f(x: i16) -> i64 { return x as i64; }\nfn main() { println(f(70000)); }",
+            "out of range",
+        ),
+        // struct-field init
+        (
+            "struct S { b: u8, }\nfn main() { let s = S { b: 300 }; println(s.b); }",
+            "out of range",
+        ),
+        // collection elements: Vec context, Array context, repeat value
+        (
+            "fn main() { let v: Vec[i8] = [1, 200]; println(v[0]); }",
+            "out of range",
+        ),
+        (
+            "fn main() { let a: Array[i8, 1] = [200]; println(a[0]); }",
+            "out of range",
+        ),
+        (
+            "fn main() { let v: Vec[i8] = [200; 3]; println(v[0]); }",
+            "out of range",
+        ),
+        // return position
+        (
+            "fn f() -> u8 { return 300; }\nfn main() { println(f()); }",
+            "out of range",
+        ),
+    ] {
+        let errors = typecheck_errors(src);
+        assert!(
+            errors.iter().any(|e| e.message.contains(needle)),
+            "expected a literal-range error containing {:?} for {:?}; got {:?}",
+            needle,
+            src,
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn test_int_literal_boundaries_still_admitted() {
+    // Exact bounds of every narrow width (plus a large in-range u64) must
+    // keep typechecking — the range check is inclusive.
+    typecheck_ok(
+        "fn main() {\n\
+             let a: u8 = 255;\n\
+             let b: u8 = 0;\n\
+             let c: i8 = 127;\n\
+             let d: i8 = -128;\n\
+             let e: i16 = -32768;\n\
+             let f: i16 = 32767;\n\
+             let g: u32 = 4294967295;\n\
+             let h: i32 = -2147483648;\n\
+             let i: i32 = 2147483647;\n\
+             let j: u64 = 9223372036854775807;\n\
+             let k = 255u8;\n\
+             let l = -128i8;\n\
+             println((a as i64) + (b as i64) + (c as i64) + (d as i64));\n\
+             println((e as i64) + (f as i64) + (g as i64) + (h as i64));\n\
+             println((i as i64) + (j as i64) + (k as i64) + (l as i64));\n\
+         }",
+    );
+}

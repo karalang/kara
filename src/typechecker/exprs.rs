@@ -70,6 +70,24 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Type) -> Type {
+        // B-2026-07-02-7: an UNSUFFIXED integer literal (bare or negated) at
+        // a narrow-int-typed position must fit that type's range — `let x:
+        // i8 = 200`, `f(70000)` against `i16`, `S { b: 300 }` against `u8`,
+        // and return/match-arm positions alike were silently admitted (the
+        // wide value flowed to the interpreter while codegen truncated at
+        // the honest width — a silent run-vs-build divergence). `ref T`
+        // scalar borrows peel to the inner type. Non-literal expressions
+        // and non-narrow contexts fall through untouched.
+        if let Some(value) = Self::unsuffixed_int_literal_value(expr) {
+            let ctx = match expected {
+                Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+                other => other,
+            };
+            if !self.check_int_literal_fits(value, ctx, &expr.span) {
+                self.record_expr_type(&expr.span, &Type::Error);
+                return Type::Error;
+            }
+        }
         // Fallible-allocation constructor `?`-form at check-mode
         // (phase-8-stdlib-floor item 8): `let v: Vec[T] =
         // Vec.try_with_capacity(n)?`. The `?` unwraps `Result[Vec[?T],
@@ -624,6 +642,31 @@ impl<'a> super::TypeChecker<'a> {
                 _ => None,
             };
             if let Some(t) = contextual {
+                // B-2026-07-02-7: the Vec-context arm synthesizes elements
+                // (unlike the Array arm, which `check_expr`s each element and
+                // gets the literal-range validation for free), so validate
+                // direct integer-literal elements against the contextual
+                // element type here — `let v: Vec[i8] = [200]` silently
+                // diverged (interp 200 vs build -56).
+                if let Type::Named { args, .. } = &t {
+                    let elem = &args[0];
+                    let elem_exprs: Vec<&Expr> = match &expr.kind {
+                        ExprKind::ArrayLiteral(items) => items.iter().collect(),
+                        ExprKind::PrefixCollectionLiteral { items, .. } => items.iter().collect(),
+                        ExprKind::RepeatLiteral { value, .. } => vec![value.as_ref()],
+                        _ => Vec::new(),
+                    };
+                    let mut all_fit = true;
+                    for e in elem_exprs {
+                        if let Some(v) = Self::unsuffixed_int_literal_value(e) {
+                            all_fit &= self.check_int_literal_fits(v, elem, &e.span);
+                        }
+                    }
+                    if !all_fit {
+                        self.record_expr_type(&expr.span, &Type::Error);
+                        return Type::Error;
+                    }
+                }
                 self.record_expr_type(&expr.span, &t);
                 return t;
             }
@@ -1970,10 +2013,92 @@ impl<'a> super::TypeChecker<'a> {
         ty
     }
 
+    /// B-2026-07-02-7: the inclusive `i64`-literal range of a narrow scalar
+    /// int type. `None` for types a decimal `i64` literal can never overflow
+    /// (i64/i128; u64/u128 above the negative check baked into the min of 0)
+    /// and for every non-int type.
+    fn int_literal_range(ty: &Type) -> Option<(i128, i128)> {
+        Some(match ty {
+            Type::Int(IntSize::I8) => (i8::MIN as i128, i8::MAX as i128),
+            Type::Int(IntSize::I16) => (i16::MIN as i128, i16::MAX as i128),
+            Type::Int(IntSize::I32) => (i32::MIN as i128, i32::MAX as i128),
+            Type::UInt(UIntSize::U8) => (0, u8::MAX as i128),
+            Type::UInt(UIntSize::U16) => (0, u16::MAX as i128),
+            Type::UInt(UIntSize::U32) => (0, u32::MAX as i128),
+            Type::UInt(UIntSize::U64) => (0, u64::MAX as i128),
+            // A literal is an i64: only its sign can violate u128.
+            Type::UInt(UIntSize::U128) => (0, i128::MAX),
+            _ => return None,
+        })
+    }
+
+    /// Emit the out-of-range diagnostic when `value` does not fit `ty`'s
+    /// literal range. Returns whether the literal fits (true = no error).
+    /// Pre-fix every out-of-range literal was silently admitted and the two
+    /// surfaces DIVERGED (interp keeps the wide value, codegen truncates at
+    /// its honest width): `let x: u8 = -1` printed -1 vs
+    /// 18446744073709551615, `f(70000)` against `i16` printed 70000 vs 4464.
+    pub(super) fn check_int_literal_fits(&mut self, value: i128, ty: &Type, span: &Span) -> bool {
+        let Some((min, max)) = Self::int_literal_range(ty) else {
+            return true;
+        };
+        if value < min || value > max {
+            let msg = if value < 0 && min == 0 {
+                format!(
+                    "negative integer literal {} cannot initialize unsigned type '{}'",
+                    value,
+                    type_display(ty)
+                )
+            } else {
+                format!(
+                    "integer literal {} out of range for '{}' (expected {}..={})",
+                    value,
+                    type_display(ty),
+                    min,
+                    max
+                )
+            };
+            self.type_error(msg, span.clone(), TypeErrorKind::TypeMismatch);
+            return false;
+        }
+        true
+    }
+
+    /// The compile-time integer value of a bare `200` / negated `-200`
+    /// UNSUFFIXED literal expression, in i128 (so `-(i64::MIN)` shapes can't
+    /// wrap). Suffixed literals return `None` — their range is validated
+    /// against their own suffix at synthesis.
+    fn unsuffixed_int_literal_value(expr: &Expr) -> Option<i128> {
+        match &expr.kind {
+            ExprKind::Integer(n, None) => Some(*n as i128),
+            ExprKind::Unary {
+                op: UnaryOp::Neg,
+                operand,
+            } => match &operand.kind {
+                ExprKind::Integer(n, None) => Some(-(*n as i128)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     fn infer_expr_inner(&mut self, expr: &Expr) -> Type {
         match &expr.kind {
             // Literals
-            ExprKind::Integer(_, sfx) => self.type_from_int_suffix(*sfx, expr.span.clone()),
+            ExprKind::Integer(n, sfx) => {
+                let ty = self.type_from_int_suffix(*sfx, expr.span.clone());
+                // B-2026-07-02-7: a SUFFIXED literal's own suffix defines its
+                // range — `300u8` was admitted and silently diverged (interp
+                // printed 300, codegen truncated to 44). Unsuffixed literals
+                // are validated against their CONTEXTUAL type in `check_expr`.
+                let neg_validated = self
+                    .neg_validated_suffixed_literal
+                    .is_some_and(|k| k == (expr.span.offset, expr.span.length));
+                if sfx.is_some() && !neg_validated {
+                    self.check_int_literal_fits(*n as i128, &ty, &expr.span);
+                }
+                ty
+            }
             ExprKind::Float(_, sfx) => Self::type_from_float_suffix(*sfx),
             ExprKind::CharLit(_) => Type::Char,
             ExprKind::ByteLit(_) => Type::UInt(UIntSize::U8),
@@ -2024,7 +2149,29 @@ impl<'a> super::TypeChecker<'a> {
             // Operators
             ExprKind::Binary { op, left, right } => self.infer_binary(op, left, right, &expr.span),
             ExprKind::Pipe { left, right } => self.infer_pipe(left, right, &expr.span),
-            ExprKind::Unary { op, operand } => self.infer_unary(op, operand, &expr.span),
+            ExprKind::Unary { op, operand } => {
+                // B-2026-07-02-7: a negated SUFFIXED literal (`-1u8`) — the
+                // negated value must fit the suffix's own range (the plain
+                // suffixed check in the Integer arm above only sees the
+                // positive operand). Pre-fix `-1u8` printed -1 under `karac
+                // run` and 255 under `karac build`.
+                let saved_neg_key = self.neg_validated_suffixed_literal;
+                if matches!(op, UnaryOp::Neg) {
+                    if let ExprKind::Integer(n, Some(sfx)) = &operand.kind {
+                        let ty = self.type_from_int_suffix(Some(*sfx), operand.span.clone());
+                        self.check_int_literal_fits(-(*n as i128), &ty, &expr.span);
+                        // The negated value ruled; suppress the Integer arm's
+                        // positive-operand check for this operand (`-128i8` —
+                        // bare `128i8` is out of range, the negated form is
+                        // not).
+                        self.neg_validated_suffixed_literal =
+                            Some((operand.span.offset, operand.span.length));
+                    }
+                }
+                let ty = self.infer_unary(op, operand, &expr.span);
+                self.neg_validated_suffixed_literal = saved_neg_key;
+                ty
+            }
 
             // Postfix
             ExprKind::Question(inner) => {

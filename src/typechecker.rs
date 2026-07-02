@@ -1333,6 +1333,12 @@ pub struct TypeChecker<'a> {
     pub(super) current_fn_is_gpu: bool,
     /// True when type-checking inside a defer/errdefer block.
     pub(super) in_defer: bool,
+    /// B-2026-07-02-7: span of a suffixed integer literal that is the direct
+    /// operand of a unary `-` (`-128i8`). The Unary arm validates the NEGATED
+    /// value against the suffix's range; the Integer arm must then skip its
+    /// positive-operand check for that span (bare `128i8` is out of range,
+    /// `-128i8` is not).
+    pub(super) neg_validated_suffixed_literal: Option<(usize, usize)>,
     /// `?` cross-error From conversions (span → target error type name).
     pub(super) question_conversions: HashMap<SpanKey, String>,
     /// `x.into()` conversions (span of the MethodCall → target type name).
@@ -1572,6 +1578,7 @@ impl<'a> TypeChecker<'a> {
             break_value_types: Vec::new(),
             current_self_type: None,
             in_defer: false,
+            neg_validated_suffixed_literal: None,
             question_conversions: HashMap::new(),
             into_conversions: HashMap::new(),
             try_into_conversions: HashMap::new(),
