@@ -1120,6 +1120,58 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_auto_par_sort_and_pop_serialize_against_reads() {
+        // `v.sort()` / `v.pop()` / `v.remove(i)` WRITE the receiver, and the
+        // following reads of `v` must serialize against them under the DEFAULT
+        // auto-par build. Pre-fix, `method_effects_imply_receiver_mutation`
+        // found no effect key for `sort`/`pop`/`remove` (only `push`/`insert`
+        // family methods were seeded in the effectchecker's builtin table), so
+        // the analyzer saw no data dependency and raced the mutation against
+        // the read:
+        //   - sort: non-deterministic duplicated/lost elements (the read ran
+        //     mid permute-back) — a 2-element Vec[String] printed
+        //     `omega,omega` on ~25% of runs;
+        //   - pop/remove: 100% deterministic stale read (the branch captured
+        //     a pre-mutation {ptr,len,cap} header copy), printing the
+        //     un-popped len.
+        // (B-2026-07-02-8; same class as B-2026-06-20-16's histogram write.)
+        // Multiple independent sections make the group former's job easy —
+        // each section's internal chain is what must stay ordered.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v1: Vec[String] = Vec.new();
+    v1.push("zeta".to_string()); v1.push("alpha".to_string());
+    v1.sort();
+    for x in v1 { println(x); }
+
+    let mut v2: Vec[String] = Vec.new();
+    v2.push("delta".to_string()); v2.push("beta".to_string());
+    v2.sort();
+    for x in v2 { println(x); }
+
+    let mut v3: Vec[i64] = Vec.new();
+    v3.push(1_i64); v3.push(2_i64); v3.push(3_i64);
+    v3.pop();
+    println(v3.len());
+
+    let mut v4: Vec[i64] = Vec.new();
+    v4.push(8_i64); v4.push(9_i64);
+    v4.remove(0_i64);
+    println(v4.len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "alpha\nzeta\nbeta\ndelta\n2\n1\n",
+                "sort/pop/remove must serialize against subsequent reads \
+                 under the default auto-par build; got {out:?}"
+            );
+        }
+    }
+
     /// Slice 1b (Phase 7 — Par codegen: cancellation and error
     /// propagation, 2026-05-20). A par-block with Result-typed
     /// branches AND a join expression emits a parent-side err-walk

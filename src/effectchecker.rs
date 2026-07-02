@@ -635,6 +635,28 @@ impl<'a> EffectChecker<'a> {
             "Vec.from_slice",
             "Vec.push",
             "Vec.extend_from_slice",
+            // In-place reordering + element-removal methods — seeded both
+            // because `allocates(Heap)` is accurate for the reorder family
+            // (the runtime sort paths allocate index/scratch buffers and
+            // `karac_vec_reverse` a tmp element; over-approximate for
+            // pop/remove, matching the VecDeque precedent below) and so
+            // `method_effects_imply_receiver_mutation` treats them as
+            // receiver-mutating. Without these, `v.sort()` co-grouped with a
+            // sibling read of `v` showed no data dependency and the DEFAULT
+            // auto-par build raced the sort's permute-back against the read
+            // (non-deterministic duplicated/lost elements), while `v.pop()` /
+            // `v.remove(i)` followed by `v.len()` read a stale pre-mutation
+            // {ptr,len,cap} branch-capture copy 100% deterministically
+            // (B-2026-07-02-8; same class as B-2026-06-20-16). The mutation
+            // gate matches on the `.{method}` name suffix, so these
+            // `Vec.`-qualified seeds also serialize `Map.remove` /
+            // `Set.remove` / VecDeque `.pop()`.
+            "Vec.sort",
+            "Vec.sort_by",
+            "Vec.sort_by_key",
+            "Vec.reverse",
+            "Vec.pop",
+            "Vec.remove",
             // `VecDeque[T]`'s mutating method surface — seeded as
             // `allocates(Heap)` so the auto-parallelizer's
             // `method_effects_imply_receiver_mutation` lookup
