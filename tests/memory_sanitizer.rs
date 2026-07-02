@@ -17577,4 +17577,258 @@ fn main() {
             "mapval_clear_struct_value_no_leak",
         );
     }
+
+    #[test]
+    fn asan_getmove_match_string_payload_moveout_no_double_free() {
+        // Slice 3s (B-2026-07-01-12): `let s = match m.get(k) { Some(x) => x,
+        // … }` — Map.get is VALUE-typed (`Option[V]`), so the typechecker
+        // blesses the move-out, but codegen bound `x` as an ALIAS of the
+        // bucket's value (borrow-mode bind) and the escaping arm-tail handed
+        // that alias to `s`, which frees it — double-free against the map's
+        // `drop_val` walk (exit 133 pre-fix). The arm now deep-clones the
+        // payload when the arm body moves the binding.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let mut m: Map[i64, String] = Map.new();
+        m.insert(i, f"map string payload padded beyond thirty-six bytes {i}");
+        let s = match m.get(i) {
+            Some(x) => x,
+            None => f"none-{i}",
+        };
+        println(s.len());
+        i = i + 1;
+    };
+}
+"#,
+            &["51", "51", "51"],
+            "getmove_match_string_payload_moveout_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_getmove_match_struct_payload_moveout_no_double_free() {
+        // Slice 3s: the struct-payload sibling — `Holder` rides the boxed
+        // wide-payload path through the scrutinee, and the bound copy's
+        // `name` aliases the bucket's until the arm-move clone.
+        assert_clean_asan_run(
+            r#"
+struct Holder { name: String, id: i64 }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let mut m: Map[i64, Holder] = Map.new();
+        let h = Holder { name: f"holder payload padded beyond thirty-six bytes {i}", id: i };
+        m.insert(i, h);
+        let out = match m.get(i) {
+            Some(x) => x,
+            None => Holder { name: f"none-{i}", id: 0 },
+        };
+        println(out.name.len() + out.id);
+        i = i + 1;
+    };
+}
+"#,
+            &["47", "48", "49"],
+            "getmove_match_struct_payload_moveout_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_getmove_iflet_string_payload_moveout_no_double_free() {
+        // Slice 3s: the if-let form of the arm-tail move-out.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let mut m: Map[i64, String] = Map.new();
+        m.insert(i, f"map string payload padded beyond thirty-six bytes {i}");
+        let s = if let Some(x) = m.get(i) { x } else { f"none-{i}" };
+        println(s.len());
+        i = i + 1;
+    };
+}
+"#,
+            &["51", "51", "51"],
+            "getmove_iflet_string_payload_moveout_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_getmove_match_arm_push_consume_no_double_free() {
+        // Slice 3s: the NON-tail consume — the arm body pushes the bound
+        // payload into a Vec. The move-detector must classify a method-arg
+        // occurrence as a move (the Vec bit-copies + suppresses, so without
+        // the clone the Vec and the map both own the same buffer).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut out: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < 3 {
+        let mut m: Map[i64, String] = Map.new();
+        m.insert(i, f"map string payload padded beyond thirty-six bytes {i}");
+        match m.get(i) {
+            Some(x) => { out.push(x); },
+            None => {},
+        }
+        i = i + 1;
+    };
+    println(out.len());
+}
+"#,
+            &["3"],
+            "getmove_match_arm_push_consume_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_getmove_get_or_result_binding_no_double_free() {
+        // Slice 3s adjacency probe: `let s = m.get_or(k, default)` byte-copies
+        // the stored value out as the RESULT — the binding must own an
+        // independent copy (or the map's value walk double-frees).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let mut m: Map[i64, String] = Map.new();
+        m.insert(i, f"map string payload padded beyond thirty-six bytes {i}");
+        let s = m.get_or(i, f"default-{i}");
+        println(s.len());
+        i = i + 1;
+    };
+}
+"#,
+            &["51", "51", "51"],
+            "getmove_get_or_result_binding_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_getmove_iter_value_push_no_double_free() {
+        // Slice 3s adjacency probe: `for (k, v) in m { out.push(v); }` — the
+        // iteration value binding pushed into a Vec must not leave the Vec
+        // and the map co-owning one buffer.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut out: Vec[String] = Vec.new();
+    let mut m: Map[i64, String] = Map.new();
+    let mut i = 0;
+    while i < 3 {
+        m.insert(i, f"map string payload padded beyond thirty-six bytes {i}");
+        i = i + 1;
+    };
+    for (k, v) in m {
+        out.push(v);
+    }
+    println(out.len());
+}
+"#,
+            &["3"],
+            "getmove_iter_value_push_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_getmove_iflet_readonly_no_double_free() {
+        // Slice 3s: READ-ONLY `if let Some(x) = m.get(k)` crashed pre-fix —
+        // if-let (unlike match) never consulted `scrutinee_is_borrow_call`,
+        // so the aliased payload got an owned track and the arm-end drain
+        // freed the bucket's buffer (exit 133 on plain Map[i64, String]).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let mut m: Map[i64, String] = Map.new();
+        m.insert(i, f"map string payload padded beyond thirty-six bytes {i}");
+        if let Some(x) = m.get(i) {
+            println(x.len());
+        }
+        i = i + 1;
+    };
+}
+"#,
+            &["51", "51", "51"],
+            "getmove_iflet_readonly_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_getmove_iflet_owned_tail_move_no_double_free() {
+        // Slice 3s: `if let Some(x) = v.pop() { x }` with an OWNED scrutinee
+        // crashed pre-fix — if-let had NO then-tail move suppression (match
+        // has had it for arms all along), so the drain freed the escaping
+        // buffer and the caller's binding double-freed. Distinct from the
+        // borrow-clone leg: this is the owned-binding tail-move hole.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let mut v: Vec[String] = Vec.new();
+        v.push(f"vec string payload padded beyond thirty-six bytes {i}");
+        let s = if let Some(x) = v.pop() { x } else { f"none-{i}" };
+        println(s.len());
+        i = i + 1;
+    };
+}
+"#,
+            &["51", "51", "51"],
+            "getmove_iflet_owned_tail_move_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_getmove_whilelet_get_readonly_no_double_free() {
+        // Slice 3s: `while let Some(x) = m.get(i)` — the while-let bind site
+        // gets the same borrow-call classification as match/if-let.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut m: Map[i64, String] = Map.new();
+    m.insert(0, f"map string payload padded beyond thirty-six bytes {0}");
+    let mut i = 0;
+    while let Some(x) = m.get(i) {
+        println(x.len());
+        i = i + 1;
+    }
+    println(i);
+}
+"#,
+            &["51", "1"],
+            "getmove_whilelet_get_readonly_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_getmove_letelse_get_escaping_binding_no_double_free() {
+        // Slice 3s: a `let Some(s) = m.get(k) else { … }` binding escapes
+        // into the enclosing scope by construction — the payload clone is
+        // unconditional there (no arm to analyze).
+        assert_clean_asan_run(
+            r#"
+fn read(m: ref Map[i64, String]) -> i64 {
+    let Some(s) = m.get(7) else { return 0 }
+    s.len()
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let mut m: Map[i64, String] = Map.new();
+        m.insert(7, f"map string payload padded beyond thirty-six bytes {7}");
+        println(read(m));
+        i = i + 1;
+    };
+}
+"#,
+            &["51", "51", "51"],
+            "getmove_letelse_get_escaping_binding_no_double_free",
+        );
+    }
 }

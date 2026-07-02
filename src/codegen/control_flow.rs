@@ -82,9 +82,20 @@ impl<'ctx> super::Codegen<'ctx> {
         // `for o in v { if let Some(s) = o { … } }` over a
         // `Vec[Option[String]]` double-freed the payload (exit 133).
         let saved_borrow_flag = self.pattern_binding_is_borrow;
-        self.pattern_binding_is_borrow =
-            self.pattern_binding_is_borrow || self.scrutinee_is_borrowed_binding(value);
+        // Slice 3s: `scrutinee_is_borrow_call` was consulted by `match` but
+        // NOT here — a read-only `if let Some(x) = m.get(k)` registered an
+        // owned track for the aliased payload and double-freed against the
+        // map's stored-value drop (exit 133 on plain `Map[i64, String]`).
+        self.pattern_binding_is_borrow = self.pattern_binding_is_borrow
+            || self.scrutinee_is_borrowed_binding(value)
+            || self.scrutinee_is_borrow_call(value);
         self.bind_pattern_values(pattern, val)?;
+        // Slice 3s (B-2026-07-01-12): clone an ESCAPING borrow-mode payload
+        // binding — the then-block moving `x` out must own an independent
+        // copy (the map retains its stored value).
+        if self.pattern_binding_is_borrow {
+            self.clone_escaping_borrow_payload_binding(value, pattern, Some(&[]), &[then_block])?;
+        }
         self.pattern_binding_is_borrow = saved_borrow_flag;
         // B-track: zero the caps of moved-in fields so the source EnumDrop
         // (registered above) frees only the *unbound* heap fields, not the ones
@@ -109,6 +120,21 @@ impl<'ctx> super::Codegen<'ctx> {
             .get_terminator()
             .is_some();
         if !then_terminated {
+            // Slice 3s: move-aware then-tail suppression — `if let Some(x) =
+            // … { x }` moves the tracked binding into the if-let's value
+            // (the caller now owns it), so zero the source's cap / retract
+            // its handle cleanup before the frame drains. Mirrors
+            // `compile_match`'s arm-tail block verbatim; WITHOUT it the
+            // drain freed the escaping buffer and the caller's binding
+            // double-freed (exit 133 — pre-existing for OWNED scrutinees
+            // like `v.pop()`, not just the Map.get borrow class).
+            if let Some(fe) = then_block.final_expr.as_deref() {
+                self.suppress_source_vec_cleanup_for_arg(fe);
+                if let ExprKind::Identifier(nm) = &fe.kind {
+                    let nm = nm.clone();
+                    self.suppress_map_cleanup_for_tail_identifier(&nm);
+                }
+            }
             self.drain_top_frame_with_emit();
         } else {
             self.scope_cleanup_actions.pop();
@@ -239,10 +265,16 @@ impl<'ctx> super::Codegen<'ctx> {
             self.track_freshtemp_boxed_enum_scrutinee(value, &[pattern], val);
         }
         // Borrowed identifier scrutinee — see the if-let site (slice 3q).
+        // Slice 3s adds the borrow-CALL half (`m.get` scrutinee) + the
+        // escaping-payload clone, mirroring if-let.
         let saved_borrow_flag = self.pattern_binding_is_borrow;
-        self.pattern_binding_is_borrow =
-            self.pattern_binding_is_borrow || self.scrutinee_is_borrowed_binding(value);
+        self.pattern_binding_is_borrow = self.pattern_binding_is_borrow
+            || self.scrutinee_is_borrowed_binding(value)
+            || self.scrutinee_is_borrow_call(value);
         self.bind_pattern_values(pattern, val)?;
+        if self.pattern_binding_is_borrow {
+            self.clone_escaping_borrow_payload_binding(value, pattern, Some(&[]), &[body])?;
+        }
         self.pattern_binding_is_borrow = saved_borrow_flag;
         if let Some((alloca, enum_name)) = &freshtemp_enum {
             self.suppress_destructured_enum_payload_cleanup_at(*alloca, enum_name, pattern);
@@ -346,10 +378,17 @@ impl<'ctx> super::Codegen<'ctx> {
         // through. `val` is defined before the branch and dominates here.
         self.builder.position_at_end(match_bb);
         // Borrowed identifier scrutinee — see the if-let site (slice 3q).
+        // Slice 3s adds the borrow-CALL half. A `let…else` binding escapes
+        // into the enclosing scope by construction, so the payload clone is
+        // unconditional (`escape_exprs = None`) — no arm to analyze.
         let saved_borrow_flag = self.pattern_binding_is_borrow;
-        self.pattern_binding_is_borrow =
-            self.pattern_binding_is_borrow || self.scrutinee_is_borrowed_binding(value);
+        self.pattern_binding_is_borrow = self.pattern_binding_is_borrow
+            || self.scrutinee_is_borrowed_binding(value)
+            || self.scrutinee_is_borrow_call(value);
         self.bind_pattern_values(pattern, val)?;
+        if self.pattern_binding_is_borrow {
+            self.clone_escaping_borrow_payload_binding(value, pattern, None, &[])?;
+        }
         self.pattern_binding_is_borrow = saved_borrow_flag;
         if let Some((alloca, enum_name)) = &freshtemp_enum {
             self.suppress_destructured_enum_payload_cleanup_at(*alloca, enum_name, pattern);

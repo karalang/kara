@@ -1752,7 +1752,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (the delegate returns None for them → a no-op drop), so a
     /// `Vec[Vec[Option[String]]]` element stays false and keeps its existing
     /// (one-level fast) path rather than a wrong no-op.
-    fn te_recursive_drop_fully_supported(&self, te: &TypeExpr) -> bool {
+    pub(super) fn te_recursive_drop_fully_supported(&self, te: &TypeExpr) -> bool {
         match &te.kind {
             TypeKind::Tuple(elems) => elems
                 .iter()

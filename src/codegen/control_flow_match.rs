@@ -299,6 +299,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 if !handled_via_ptr {
                     self.bind_pattern_values(&arm.pattern, scrut)?;
+                    // Slice 3s (B-2026-07-01-12): a borrow-mode `Some(x)` bind
+                    // over a `Map.get` scrutinee whose arm (guard or body)
+                    // MOVES `x` gets a deep clone + owned tracking — the
+                    // escaping value must not alias the bucket's storage.
+                    if self.pattern_binding_is_borrow {
+                        let mut scope: Vec<&Expr> = vec![&arm.body];
+                        if let Some(g) = &arm.guard {
+                            scope.push(g);
+                        }
+                        self.clone_escaping_borrow_payload_binding(
+                            scrutinee,
+                            &arm.pattern,
+                            Some(&scope),
+                            &[],
+                        )?;
+                    }
                 }
             }
 
@@ -842,6 +858,407 @@ impl<'ctx> super::Codegen<'ctx> {
             self.inferred_receiver_type(object).as_deref(),
             Some("Client")
         )
+    }
+
+    /// Slice 3s (B-2026-07-01-12): the payload TypeExpr of a VALUE-typed
+    /// borrow-call scrutinee whose bound-out payload must be DEEP-CLONED
+    /// when the arm body moves it. `Map.get(k)` is the class: its result is
+    /// `Option[V]` (value-typed — the typechecker blesses a move-out), but
+    /// codegen binds the payload as an ALIAS of the bucket's value; an
+    /// escaping binding hands that alias to an owner that frees it, double-
+    /// freeing against the map's stored-value drop (`drop_val` walk or the
+    /// 3r per-value drop fn). `Vec`/`Slice` `get`/`first`/`last` return
+    /// `Option[ref T]` and the typechecker REJECTS escapes, so their `te`
+    /// here is a `Ref` (non-`Path` arg) and they self-gate to `None`.
+    ///
+    /// Returns `Some(payload_te)` only when the payload owns heap, is not
+    /// shared (the rc-inc path owns those), and the clone/drop family fully
+    /// supports the shape — anything else keeps the status-quo alias (a
+    /// pre-existing, narrower leak/double-free is never made worse by a
+    /// partial clone).
+    fn borrow_get_payload_clone_te(&mut self, scrutinee: &Expr) -> Option<TypeExpr> {
+        if !self.scrutinee_is_borrow_call(scrutinee) {
+            return None;
+        }
+        // Only `get` — `first`/`last` have no Map overload, and their Vec
+        // forms are ref-typed (rejected escapes).
+        let ExprKind::MethodCall { method, .. } = &scrutinee.kind else {
+            return None;
+        };
+        if method != "get" {
+            return None;
+        }
+        let key = (scrutinee.span.offset, scrutinee.span.length);
+        let te = self.enum_inst_type_exprs.get(&key)?.clone();
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        if p.segments.last().map(|s| s.as_str()) != Some("Option") {
+            return None;
+        }
+        let GenericArg::Type(payload_te) = p.generic_args.as_ref()?.first()? else {
+            return None;
+        };
+        let payload_te = payload_te.clone();
+        // A `ref`-typed payload (Vec accessors) or tuple payload is not this
+        // slice's class — Path heads only.
+        let TypeKind::Path(pp) = &payload_te.kind else {
+            return None;
+        };
+        let head = pp.segments.first()?.as_str();
+        if !self.te_owns_heap_below_buffer(&payload_te) {
+            return None;
+        }
+        if self.shared_heap_type_for_type_expr(&payload_te).is_some() {
+            return None;
+        }
+        let supported = match head {
+            "String" | "str" => true,
+            // NOT `VecDeque` — the clone dispatcher has no VecDeque arm, so
+            // it would fall through to the SHALLOW primitive clone (an
+            // alias, worse than the status quo).
+            "Vec" | "Map" | "Set" => self.te_recursive_drop_fully_supported(&payload_te),
+            _ => {
+                (self.struct_types.contains_key(head) || self.enum_layouts.contains_key(head))
+                    && !self.shared_types.contains_key(head)
+                    && self.te_recursive_drop_fully_supported(&payload_te)
+            }
+        };
+        supported.then_some(payload_te)
+    }
+
+    /// Slice 3s fixup: after a borrow-mode `Some(x)` bind over a `Map.get`
+    /// scrutinee, when the arm (guard + body for `match`, the given block
+    /// for `if let`/`while let`, unconditionally for `let…else`) MOVES the
+    /// bound name, replace the alias in `x`'s slot with a DEEP CLONE and
+    /// register normal owned tracking — from then on `x` is
+    /// indistinguishable from an owned binding, so every existing move-out
+    /// suppression (arm-tail identity, push/insert source-zeroing, tail
+    /// return) applies unchanged, and a non-moved clone is freed by the
+    /// scope frame's drain. Read-only arms never reach the clone (the
+    /// escape walk returns false), keeping the hot `match m.get(k) {
+    /// Some(c) => …read… }` shape zero-cost. `escape_scope`: `Some(exprs)`
+    /// → analyze those; `None` → the binding outlives analysis reach
+    /// (`let…else`), always clone.
+    pub(super) fn clone_escaping_borrow_payload_binding(
+        &mut self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        escape_exprs: Option<&[&Expr]>,
+        escape_blocks: &[&Block],
+    ) -> Result<(), String> {
+        let Some(payload_te) = self.borrow_get_payload_clone_te(scrutinee) else {
+            return Ok(());
+        };
+        // Whole-payload `Some(x)` binding only — destructuring payloads
+        // (`Some((a, b))`, `Some(H { f })`) keep the status-quo alias and
+        // stay with B-2026-07-01-12's residual note.
+        let PatternKind::TupleVariant {
+            path,
+            patterns: subs,
+        } = &pattern.kind
+        else {
+            return Ok(());
+        };
+        if path.last().map(|s| s.as_str()) != Some("Some") || subs.len() != 1 {
+            return Ok(());
+        }
+        let PatternKind::Binding(name) = &subs[0].kind else {
+            return Ok(());
+        };
+        let name = name.clone();
+        let escapes = match escape_exprs {
+            None => true,
+            Some(exprs) => {
+                exprs.iter().any(|e| self.borrow_binding_escapes(e, &name))
+                    || escape_blocks
+                        .iter()
+                        .any(|b| self.borrow_binding_escapes_block(b, &name))
+            }
+        };
+        if !escapes {
+            return Ok(());
+        }
+        let Some(slot) = self.variables.get(&name).copied() else {
+            return Ok(());
+        };
+        let Some(fn_val) = self.current_fn else {
+            return Ok(());
+        };
+        // Deep-clone in place: karac_clone_<T>(src, dst) into a tmp, then
+        // copy the tmp back over the binding slot. The map's copy is
+        // untouched; the binding now owns an independent value.
+        let clone_fn = self.emit_clone_fn_for_type_expr(&payload_te);
+        let tmp = self.create_entry_alloca(fn_val, "borrow.clone.tmp", slot.ty);
+        self.builder
+            .build_call(clone_fn, &[slot.ptr.into(), tmp.into()], "")
+            .unwrap();
+        let cloned = self
+            .builder
+            .build_load(slot.ty, tmp, "borrow.clone.v")
+            .unwrap();
+        self.builder.build_store(slot.ptr, cloned).unwrap();
+        // Owned tracking, mirroring the non-borrow pattern-bind arms.
+        let TypeKind::Path(pp) = &payload_te.kind else {
+            return Ok(());
+        };
+        let head = pp.segments.first().map(|s| s.as_str()).unwrap_or("");
+        match head {
+            "String" | "str" | "Vec" => {
+                let elem_ty = self.inline_heap_payload_elem(&payload_te);
+                self.track_vec_var(slot.ptr, elem_ty);
+            }
+            "Map" | "Set" => {
+                let (key_is_vec, val_is_vec, key_shared, val_shared, val_drop_fn) =
+                    self.map_temp_cleanup_parts(&payload_te);
+                self.track_map_var_with_val_drop(
+                    slot.ptr,
+                    key_is_vec,
+                    val_is_vec,
+                    val_shared,
+                    key_shared,
+                    val_drop_fn,
+                );
+            }
+            _ => {
+                if self.struct_types.contains_key(head) {
+                    let head = head.to_string();
+                    self.track_struct_var(&head, slot.ptr);
+                } else if self.enum_layouts.contains_key(head) {
+                    let head = head.to_string();
+                    self.track_enum_var(&head, slot.ptr);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Conservative escape analysis for a borrow-mode payload binding: does
+    /// `name` occur in a MOVE position anywhere in `e`? Borrow positions —
+    /// where a BARE `name` does not count — are: method receiver, field /
+    /// tuple-index / index base, binary/unary operands, f-string
+    /// interpolations, `println`-family call args, cast operands, and index
+    /// keys. EVERYTHING else that mentions the name (call/method args, arm
+    /// or block tails, `return`/`break` values, let/assign RHS, composite
+    /// literals, closures, `match` scrutinees, …) counts as a move — a
+    /// false positive only costs one clone; a false negative is a
+    /// double-free, so unrecognized shapes must land on the move side. The
+    /// match is EXHAUSTIVE over `ExprKind` on purpose: a future variant
+    /// fails the build here and forces a classification.
+    pub(super) fn borrow_binding_escapes(&self, e: &Expr, name: &str) -> bool {
+        // A bare identifier reached in a value position IS the move.
+        let bare = |x: &Expr| matches!(&x.kind, ExprKind::Identifier(n) if n == name);
+        // Recurse into a borrow position: a bare `name` there is fine, but
+        // anything nested deeper gets the full walk.
+        let borrow_pos = |s: &Self, x: &Expr| !bare(x) && s.borrow_binding_escapes(x, name);
+        match &e.kind {
+            ExprKind::Identifier(n) => n == name,
+            ExprKind::Integer(..)
+            | ExprKind::Float(..)
+            | ExprKind::CharLit(_)
+            | ExprKind::ByteLit(_)
+            | ExprKind::StringLit(_)
+            | ExprKind::MultiStringLit(_)
+            | ExprKind::CStringLit { .. }
+            | ExprKind::Bool(_)
+            | ExprKind::Path { .. }
+            | ExprKind::SelfValue
+            | ExprKind::SelfType
+            | ExprKind::PipePlaceholder
+            | ExprKind::OffsetOf { .. }
+            | ExprKind::Continue { .. }
+            | ExprKind::Error => false,
+            ExprKind::InterpolatedStringLit(parts) => parts.iter().any(|p| match p {
+                ParsedInterpolationPart::Text(_) => false,
+                ParsedInterpolationPart::Expr(x) => borrow_pos(self, x),
+            }),
+            ExprKind::Binary { left, right, .. } => {
+                borrow_pos(self, left) || borrow_pos(self, right)
+            }
+            ExprKind::Unary { operand, .. } => borrow_pos(self, operand),
+            ExprKind::Cast { expr, .. } => borrow_pos(self, expr),
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                borrow_pos(self, object)
+            }
+            ExprKind::Index { object, index } => {
+                borrow_pos(self, object) || borrow_pos(self, index)
+            }
+            ExprKind::MethodCall { object, args, .. } => {
+                borrow_pos(self, object)
+                    || args
+                        .iter()
+                        .any(|a| self.borrow_binding_escapes(&a.value, name))
+            }
+            ExprKind::OptionalChain { object, args, .. } => {
+                borrow_pos(self, object)
+                    || args
+                        .iter()
+                        .flatten()
+                        .any(|a| self.borrow_binding_escapes(&a.value, name))
+            }
+            ExprKind::Call { callee, args } => {
+                // `println`-family builtins borrow their args.
+                let is_print = matches!(
+                    &callee.kind,
+                    ExprKind::Identifier(f)
+                        if matches!(f.as_str(), "println" | "print" | "eprintln" | "eprint")
+                );
+                self.borrow_binding_escapes(callee, name)
+                    || args.iter().any(|a| {
+                        if is_print {
+                            borrow_pos(self, &a.value)
+                        } else {
+                            self.borrow_binding_escapes(&a.value, name)
+                        }
+                    })
+            }
+            ExprKind::Question(x) => self.borrow_binding_escapes(x, name),
+            ExprKind::NilCoalesce { left, right } | ExprKind::Pipe { left, right } => {
+                self.borrow_binding_escapes(left, name) || self.borrow_binding_escapes(right, name)
+            }
+            ExprKind::Block(b)
+            | ExprKind::Comptime(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Par(b) => self.borrow_binding_escapes_block(b, name),
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                self.borrow_binding_escapes(condition, name)
+                    || self.borrow_binding_escapes_block(then_block, name)
+                    || else_branch
+                        .as_deref()
+                        .is_some_and(|x| self.borrow_binding_escapes(x, name))
+            }
+            ExprKind::IfLet {
+                value,
+                then_block,
+                else_branch,
+                ..
+            } => {
+                self.borrow_binding_escapes(value, name)
+                    || self.borrow_binding_escapes_block(then_block, name)
+                    || else_branch
+                        .as_deref()
+                        .is_some_and(|x| self.borrow_binding_escapes(x, name))
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                // A bare-`name` scrutinee could destructure the alias's
+                // payload out — conservative move.
+                self.borrow_binding_escapes(scrutinee, name)
+                    || arms.iter().any(|a| {
+                        a.guard
+                            .as_ref()
+                            .is_some_and(|g| self.borrow_binding_escapes(g, name))
+                            || self.borrow_binding_escapes(&a.body, name)
+                    })
+            }
+            ExprKind::While {
+                condition, body, ..
+            } => {
+                self.borrow_binding_escapes(condition, name)
+                    || self.borrow_binding_escapes_block(body, name)
+            }
+            ExprKind::WhileLet { value, body, .. } => {
+                self.borrow_binding_escapes(value, name)
+                    || self.borrow_binding_escapes_block(body, name)
+            }
+            ExprKind::For { iterable, body, .. } => {
+                self.borrow_binding_escapes(iterable, name)
+                    || self.borrow_binding_escapes_block(body, name)
+            }
+            ExprKind::Loop { body, .. } | ExprKind::LabeledBlock { body, .. } => {
+                self.borrow_binding_escapes_block(body, name)
+            }
+            // A closure capturing the name (any mode) — conservative move.
+            ExprKind::Closure { body, .. } => self.borrow_binding_escapes(body, name),
+            ExprKind::Return(v) => v
+                .as_deref()
+                .is_some_and(|x| self.borrow_binding_escapes(x, name)),
+            ExprKind::Break { value, .. } => value
+                .as_deref()
+                .is_some_and(|x| self.borrow_binding_escapes(x, name)),
+            ExprKind::Tuple(xs) | ExprKind::ArrayLiteral(xs) => {
+                xs.iter().any(|x| self.borrow_binding_escapes(x, name))
+            }
+            ExprKind::PrefixCollectionLiteral { items, .. } => {
+                items.iter().any(|x| self.borrow_binding_escapes(x, name))
+            }
+            ExprKind::RepeatLiteral { value, count, .. } => {
+                self.borrow_binding_escapes(value, name) || self.borrow_binding_escapes(count, name)
+            }
+            ExprKind::MapLiteral(pairs) => pairs.iter().any(|(k, v)| {
+                self.borrow_binding_escapes(k, name) || self.borrow_binding_escapes(v, name)
+            }),
+            ExprKind::StructLiteral { fields, spread, .. } => {
+                fields
+                    .iter()
+                    .any(|f| self.borrow_binding_escapes(&f.value, name))
+                    || spread
+                        .as_deref()
+                        .is_some_and(|x| self.borrow_binding_escapes(x, name))
+            }
+            ExprKind::Range { start, end, .. } => {
+                start
+                    .as_deref()
+                    .is_some_and(|x| self.borrow_binding_escapes(x, name))
+                    || end
+                        .as_deref()
+                        .is_some_and(|x| self.borrow_binding_escapes(x, name))
+            }
+            ExprKind::Lock { mutex, body, .. } => {
+                self.borrow_binding_escapes(mutex, name)
+                    || self.borrow_binding_escapes_block(body, name)
+            }
+            ExprKind::Providers { bindings, body } => {
+                bindings
+                    .iter()
+                    .any(|b| self.borrow_binding_escapes(&b.value, name))
+                    || self.borrow_binding_escapes_block(body, name)
+            }
+        }
+    }
+
+    /// Block walker for `borrow_binding_escapes`. A block-local `let`
+    /// shadowing `name` would end the binding's reach, but tracking shadow
+    /// scopes here buys little — treating post-shadow uses as the outer
+    /// binding only ever adds a clone (false positive), never misses a
+    /// move.
+    pub(super) fn borrow_binding_escapes_block(&self, b: &Block, name: &str) -> bool {
+        b.stmts.iter().any(|s| match &s.kind {
+            StmtKind::Let { value, .. } => self.borrow_binding_escapes(value, name),
+            StmtKind::LetUninit { .. } => false,
+            StmtKind::LetElse {
+                value, else_block, ..
+            } => {
+                self.borrow_binding_escapes(value, name)
+                    || self.borrow_binding_escapes_block(else_block, name)
+            }
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                self.borrow_binding_escapes_block(body, name)
+            }
+            StmtKind::Assign { target, value } => {
+                // Assigning INTO the alias (`x = …`) drops the old aliased
+                // value — conservative move; RHS bare `x` is a plain move.
+                self.borrow_binding_escapes(target, name)
+                    || self.borrow_binding_escapes(value, name)
+            }
+            StmtKind::MultiAssign { targets, values } => targets
+                .iter()
+                .chain(values.iter())
+                .any(|x| self.borrow_binding_escapes(x, name)),
+            StmtKind::CompoundAssign { target, value, .. } => {
+                self.borrow_binding_escapes(target, name)
+                    || self.borrow_binding_escapes(value, name)
+            }
+            StmtKind::Expr(x) => self.borrow_binding_escapes(x, name),
+        }) || b
+            .final_expr
+            .as_deref()
+            .is_some_and(|x| self.borrow_binding_escapes(x, name))
     }
 
     /// Returns an i1 (bool) value: 1 if the scrutinee matches the pattern.

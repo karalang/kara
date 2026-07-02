@@ -19805,6 +19805,64 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_map_get_moveout_arm_emits_payload_clone() {
+        // Slice 3s (B-2026-07-01-12): `let s = match m.get(k) { Some(x) => x,
+        // … }` — the escaping borrow-mode payload binding is deep-cloned
+        // (`karac_clone_str` — the INFERRED spelling; `enum_inst_type_exprs`
+        // renders `Option[str]`) so `s` owns an independent buffer and the
+        // map keeps its stored value.
+        let src = r#"
+fn main() {
+    let mut m: Map[i64, String] = Map.new();
+    m.insert(7, "a heap string padded out beyond thirty-six bytes!");
+    let s = match m.get(7) {
+        Some(x) => x,
+        None => "n".to_string(),
+    };
+    println(s.len());
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("call void @karac_clone_str")
+                || ir.contains("call void @karac_clone_String"),
+            "expected the escaping Map.get payload binding deep-cloned \
+             (karac_clone_str / karac_clone_String call); got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("borrow.clone.tmp"),
+            "expected the borrow-payload clone fixup temp; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_map_get_readonly_arm_emits_no_clone() {
+        // Slice 3s perf gate: a READ-ONLY arm (`Some(x) => x.len()`) never
+        // reaches the clone — the escape walk classifies receiver-position
+        // uses as borrows, keeping the hot map-read shape zero-cost.
+        let src = r#"
+fn main() {
+    let mut m: Map[i64, String] = Map.new();
+    m.insert(7, "a heap string padded out beyond thirty-six bytes!");
+    let n = match m.get(7) {
+        Some(x) => x.len(),
+        None => 0,
+    };
+    println(n);
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            !ir.contains("borrow.clone.tmp"),
+            "a read-only arm must not clone the borrowed payload (escape walk \
+             false); got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_ir_ref_arg_nested_vec_elem_freed() {
         // Slice 2 part B: a fresh `Vec[String]` passed to a `ref Vec[String]`
         // param is materialized into a `ref_rvalue_arg` temp. The prior path

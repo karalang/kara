@@ -81,7 +81,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         return self.emit_map_clone_fn(&elem_te, &unit_te);
                     }
                 }
-                if head == Some("String") {
+                // Both spellings — an annotation writes `String`, but
+                // `type_to_type_expr(Type::Str)` (the source of every
+                // INFERRED TypeExpr, e.g. `enum_inst_type_exprs` entries)
+                // renders lowercase `str`. Matching only `String` silently
+                // fell through to the SHALLOW primitive clone for inferred
+                // shapes — an aliased buffer, not a copy (the 3p
+                // spelling-trap lesson, here on the clone side).
+                if head == Some("String") || head == Some("str") {
                     return self.emit_string_clone_fn();
                 }
                 // User struct / enum: deep-clone the heap payload (the

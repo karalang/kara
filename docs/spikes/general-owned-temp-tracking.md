@@ -766,6 +766,53 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    THEMSELVES structs-with-heap (pre-existing `emit_struct_drop_synthesis`
    limit, orthogonal); `get_unchecked` on `Vec[String]`; heap K/V
    (`Map[String, Vec[T]]`) on temps.
+   **Slice 3s — the borrow-bound `Map.get` payload move-out (B-2026-07-01-12)
+   + two more pre-existing crashes the probes surfaced. — DONE 2026-07-01.**
+   `Map.get` is VALUE-typed (`Option[V]` — the typechecker blesses a payload
+   move-out; `Vec`/`Slice` accessors return `Option[ref T]` and REJECT
+   escapes, so this is Map-only), but codegen binds the payload as an ALIAS
+   of the bucket's value. Three legs: **(1) The escaping-payload clone:**
+   `clone_escaping_borrow_payload_binding` runs after a borrow-mode
+   `Some(x)` bind (match / if-let / while-let; unconditional for `let…else`
+   — its binding escapes by construction) and, when the arm MOVES the name,
+   replaces the alias in the binding's slot with a deep clone
+   (`emit_clone_fn_for_type_expr`) + registers normal OWNED tracking — from
+   then on every existing move-out suppression applies unchanged, and a
+   non-moved clone is freed by the frame drain. Escape analysis
+   (`borrow_binding_escapes`) is an EXHAUSTIVE `ExprKind` walker,
+   conservative toward clone: bare-identifier borrow positions (method
+   receiver, field/index base, binary/unary operands, f-string
+   interpolations, `println`-family args, cast operands) don't count;
+   everything else that mentions the name (call/method args, tails,
+   return/break values, let/assign RHS, composite literals, closures, match
+   scrutinees) does. A read-only arm (`Some(c) => c + 1`, `Some(s) =>
+   s.len()`) never clones — IR-pinned. Payload gate: owns-heap, non-shared,
+   clone-family-supported (String/str both spellings, Vec, Map/Set, user
+   struct/enum; VecDeque excluded — no clone arm, a shallow fallthrough
+   would alias). Fixed the clone dispatcher's own `str`-spelling hole
+   (`emit_clone_fn_for_type_expr` matched only `String` — inferred
+   `Option[str]` payloads fell through to the SHALLOW primitive clone; the
+   3p lesson on the clone side). **(2) if-let/while-let/let-else never
+   consulted `scrutinee_is_borrow_call`** (only match did): a READ-ONLY
+   `if let Some(x) = m.get(k) { println(x.len()); }` crashed exit 133 on
+   plain `Map[i64, String]` — the aliased payload got an owned track. All
+   three sites now OR it in (the 3q flag-parity lesson, second verse).
+   **(3) if-let had NO then-tail move suppression at all** — `let s = if
+   let Some(x) = v.pop() { x } else { … }` crashed for OWNED scrutinees
+   too (match has had arm-tail suppression all along). `compile_if_let` now
+   mirrors match's arm-tail block (`suppress_source_vec_cleanup_for_arg` +
+   the Map handle retract) before the then-frame drain. **Verified:** 10/10
+   getmove ASAN under Linux LSan (fresh compile), 15-probe matrix matches
+   the interpreter (match/if-let/while-let/let-else × String/struct/guard ×
+   read-only/move; `get_or` + `for (k,v)` iteration pinned as
+   already-correct regressions), auto-par A/B clean, plain-`if` branch move
+   probed clean (pre-existing handling). **Tests:** 2 IR (clone fires on the
+   escaping arm — `borrow.clone.tmp` + `karac_clone_str`; NO clone on a
+   read-only arm) + 10 ASAN. **Residual (stays with B-2026-07-01-12's
+   ledger note):** destructuring payload patterns (`Some((a, b))`,
+   `Some(H { f })`) over a `Map.get` scrutinee keep the status-quo alias;
+   `VecDeque` payloads keep the alias until the clone family grows a
+   VecDeque arm.
    **Slice 3r — the Map-VALUE drop leg (deferred gap (d)) + two Map-value
    correctness bugs. — DONE 2026-07-01.** Three legs, every one LSan-red-
    confirmed before the fix. **(1) `m.insert(k, <Map/Set binding>)` was a
