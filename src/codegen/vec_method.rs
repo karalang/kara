@@ -1929,6 +1929,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     let n = n.clone();
                     self.suppress_map_cleanup_for_tail_identifier(&n);
                 }
+                // Option-binding source moved into a `Vec[Option[String]]`
+                // (slice 3p): the per-element `karac_drop_Option_<payload>`
+                // now frees the payload inside the container, so the source
+                // binding's `FreeInlineOptionPayload` must be disarmed
+                // (cap-zeroed) or both free the same payload buffer (SIGTRAP).
+                // The Option sibling of the cap-zeroing / map-suppression
+                // above. No-op for non-Option / non-identifier args.
+                self.suppress_inline_option_payload_cleanup_for_moved_arg(&args[0].value);
 
                 // Vec-store slice (B-2026-06-22-2): pushing a heap-env closure
                 // BINDING (`v.push(f)`) into a heap-env Vec owner co-owns the env
@@ -2087,6 +2095,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     let n = n.clone();
                     self.suppress_map_cleanup_for_tail_identifier(&n);
                 }
+                // Option-binding source moved into a `Vec[Option[String]]`
+                // (slice 3p): the per-element `karac_drop_Option_<payload>`
+                // now frees the payload inside the container, so the source
+                // binding's `FreeInlineOptionPayload` must be disarmed
+                // (cap-zeroed) or both free the same payload buffer (SIGTRAP).
+                // The Option sibling of the cap-zeroing / map-suppression
+                // above. No-op for non-Option / non-identifier args.
+                self.suppress_inline_option_payload_cleanup_for_moved_arg(&args[0].value);
 
                 let data_ptr_ptr = self
                     .builder
@@ -2271,6 +2287,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     let n = n.clone();
                     self.suppress_map_cleanup_for_tail_identifier(&n);
                 }
+                // Option-binding source moved into a `Vec[Option[String]]`
+                // (slice 3p): the per-element `karac_drop_Option_<payload>`
+                // now frees the payload inside the container, so the source
+                // binding's `FreeInlineOptionPayload` must be disarmed
+                // (cap-zeroed) or both free the same payload buffer (SIGTRAP).
+                // The Option sibling of the cap-zeroing / map-suppression
+                // above. No-op for non-Option / non-identifier args.
+                self.suppress_inline_option_payload_cleanup_for_moved_arg(&args[0].value);
 
                 let data_ptr_ptr = self
                     .builder
@@ -2409,6 +2433,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     let n = n.clone();
                     self.suppress_map_cleanup_for_tail_identifier(&n);
                 }
+                // Option-binding source moved into a `Vec[Option[String]]`
+                // (slice 3p): the per-element `karac_drop_Option_<payload>`
+                // now frees the payload inside the container, so the source
+                // binding's `FreeInlineOptionPayload` must be disarmed
+                // (cap-zeroed) or both free the same payload buffer (SIGTRAP).
+                // The Option sibling of the cap-zeroing / map-suppression
+                // above. No-op for non-Option / non-identifier args.
+                self.suppress_inline_option_payload_cleanup_for_moved_arg(&args[0].value);
 
                 let data_ptr_ptr = self
                     .builder

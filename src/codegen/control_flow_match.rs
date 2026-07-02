@@ -2758,6 +2758,38 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Container-move sibling of `suppress_inline_option_payload_cleanup`
+    /// (owned-temp slice 3p): `v.push(o)` where `o: Option[String]` bit-copies
+    /// the option aggregate (tag + payload words) into the vec's buffer, and
+    /// the per-element `karac_drop_Option_<payload>` now frees the payload
+    /// there — so the source binding's `FreeInlineOptionPayload` would free
+    /// the same buffer twice (SIGTRAP). Zero the source's cap word (option
+    /// field 3) so its `cap > 0` guard skips; the container becomes the
+    /// unique owner. The Option sibling of the push arm's
+    /// `suppress_source_vec_cleanup_for_arg` cap-zeroing. No-op unless the
+    /// arg is an identifier with an armed inline-Option-payload cleanup.
+    pub(super) fn suppress_inline_option_payload_cleanup_for_moved_arg(&self, arg: &Expr) {
+        let ExprKind::Identifier(name) = &arg.kind else {
+            return;
+        };
+        if !self.inline_option_payload_vars.contains(name.as_str()) {
+            return;
+        }
+        let Some(slot) = self.variables.get(name.as_str()) else {
+            return;
+        };
+        let Some(layout) = self.enum_layouts.get("Option") else {
+            return;
+        };
+        let i64_t = self.context.i64_type();
+        if let Ok(cap_ptr) =
+            self.builder
+                .build_struct_gep(layout.llvm_type, slot.ptr, 3, "optpl.movearg.cap")
+        {
+            let _ = self.builder.build_store(cap_ptr, i64_t.const_int(0, false));
+        }
+    }
+
     /// `Result[T, E]` sibling of `suppress_inline_option_payload_cleanup`.
     /// When the scrutinee is an identifier whose binding registered a
     /// `FreeInlineResultPayload` and the arm binds the `Ok`/`Err` payload

@@ -10246,21 +10246,21 @@ fn main() {
         // Strings) is the Linux-LSan gate; a double-free would show on macOS ASAN.
         assert_clean_asan_run(
             r#"
-fn build() -> Vec[Vec[String]] {
+fn build(n: i64) -> Vec[Vec[String]] {
     let mut outer: Vec[Vec[String]] = Vec.new();
     let mut a: Vec[String] = Vec.new();
-    a.push("alpha string padded out well beyond thirty-six bytes ok");
-    a.push("beta string padded out well beyond thirty-six bytes okk");
+    a.push(f"alpha string padded out well beyond thirty-six bytes {n}");
+    a.push(f"beta string padded out well beyond thirty-six bytes {n}");
     outer.push(a);
     let mut b: Vec[String] = Vec.new();
-    b.push("gamma string padded out well beyond thirty-six byte");
+    b.push(f"gamma string padded out well beyond thirty-six byte {n}");
     outer.push(b);
     return outer;
 }
 fn main() {
     let mut i = 0;
     while i < 4 {
-        let vv = build();
+        let vv = build(i);
         println(vv.len());
         i = i + 1;
     };
@@ -10283,18 +10283,18 @@ fn main() {
         assert_clean_asan_run(
             r#"
 struct Rec { name: String, n: i64 }
-fn build() -> Vec[Vec[Rec]] {
+fn build(n: i64) -> Vec[Vec[Rec]] {
     let mut outer: Vec[Vec[Rec]] = Vec.new();
     let mut a: Vec[Rec] = Vec.new();
-    a.push(Rec { name: "alpha string padded out beyond thirty-six bytes ok", n: 1_i64 });
-    a.push(Rec { name: "beta string padded out beyond thirty-six bytes okk", n: 2_i64 });
+    a.push(Rec { name: f"alpha string padded out beyond thirty-six bytes {n}", n: 1_i64 });
+    a.push(Rec { name: f"beta string padded out beyond thirty-six bytes {n}", n: 2_i64 });
     outer.push(a);
     return outer;
 }
 fn main() {
     let mut i = 0;
     while i < 3 {
-        let vv = build();
+        let vv = build(i);
         println(vv.len());
         i = i + 1;
     };
@@ -10314,10 +10314,10 @@ fn main() {
         assert_clean_asan_run(
             r#"
 enum Tok { Word(String), Num(i64) }
-fn build() -> Vec[Vec[Tok]] {
+fn build(n: i64) -> Vec[Vec[Tok]] {
     let mut outer: Vec[Vec[Tok]] = Vec.new();
     let mut a: Vec[Tok] = Vec.new();
-    a.push(Tok.Word("alpha string padded out beyond thirty-six bytes ok"));
+    a.push(Tok.Word(f"alpha string padded out beyond thirty-six bytes {n}"));
     a.push(Tok.Num(2_i64));
     outer.push(a);
     return outer;
@@ -10325,7 +10325,7 @@ fn build() -> Vec[Vec[Tok]] {
 fn main() {
     let mut i = 0;
     while i < 3 {
-        let vv = build();
+        let vv = build(i);
         println(vv.len());
         i = i + 1;
     };
@@ -10348,17 +10348,17 @@ fn main() {
         assert_clean_asan_run(
             r#"
 shared struct Node { label: String }
-fn build() -> Vec[Vec[Node]] {
+fn build(n: i64) -> Vec[Vec[Node]] {
     let mut outer: Vec[Vec[Node]] = Vec.new();
     let mut a: Vec[Node] = Vec.new();
-    a.push(Node { label: "alpha string padded out beyond thirty-six bytes ok" });
+    a.push(Node { label: f"alpha string padded out beyond thirty-six bytes {n}" });
     outer.push(a);
     return outer;
 }
 fn main() {
     let mut i = 0;
     while i < 3 {
-        let vv = build();
+        let vv = build(i);
         println(vv.len());
         i = i + 1;
     };
@@ -10366,6 +10366,136 @@ fn main() {
 "#,
             &["1", "1", "1"],
             "vec_of_vec_of_shared_struct_scope_exit_drop_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_vec_of_option_string_scope_exit_drop_no_leak() {
+        // Slice 3p: a `Vec[Option[String]]` dropped at scope exit, looped. An
+        // `Option[String]` ELEMENT is the type-erased `{tag, w0, w1, w2}` layout
+        // whose `Some` payload {ptr,len,cap} overlays w0..w2 — not a vec-struct,
+        // so the one-level fast path skipped it, and `vec_elem_agg_drop_for_-
+        // type_expr` early-returned None for Option (the type-erased enum drop
+        // switch can't know the payload type — B-2026-06-10-6's concrete-typed
+        // binding cleanup covers only BINDINGS, not Vec elements). The `Some`
+        // payload Strings leaked. Fixed by the payload-type-aware
+        // `karac_drop_Option_String` threaded through the agg-drop loop:
+        // tag-guarded (None elements skipped), payload dropped via the recursive
+        // family. Leak is the Linux-LSan gate; a double-free (payload freed by
+        // both the element drop and a binding) shows on macOS ASAN. Payloads are
+        // runtime f-strings so the heap allocation actually happens — a constant
+        // literal folds to a static cap=0 string and hides the path
+        // (B-2026-06-10-6's discipline).
+        assert_clean_asan_run(
+            r#"
+fn build(n: i64) -> Vec[Option[String]] {
+    let mut v: Vec[Option[String]] = Vec.new();
+    v.push(Some(f"alpha string padded out beyond thirty-six bytes {n}"));
+    v.push(None);
+    v.push(Some(f"beta string padded out beyond thirty-six bytes {n}"));
+    return v;
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let v = build(i);
+        println(v.len());
+        i = i + 1;
+    };
+}
+"#,
+            &["3", "3", "3"],
+            "vec_of_option_string_scope_exit_drop_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_vec_of_vec_of_option_string_scope_exit_drop_no_leak() {
+        // Slice 3p two-level sibling: `Vec[Vec[Option[String]]]`. The recursive
+        // `karac_drop_Vec_Option_String` (3n's family) calls the tag-guarded
+        // Option drop per innermost element. Guards that the Option arm composes
+        // with the nested-Vec recursion. Runtime f-string payloads (real heap).
+        assert_clean_asan_run(
+            r#"
+fn build(n: i64) -> Vec[Vec[Option[String]]] {
+    let mut outer: Vec[Vec[Option[String]]] = Vec.new();
+    let mut a: Vec[Option[String]] = Vec.new();
+    a.push(Some(f"alpha string padded out beyond thirty-six bytes {n}"));
+    a.push(None);
+    outer.push(a);
+    return outer;
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let vv = build(i);
+        println(vv.len());
+        i = i + 1;
+    };
+}
+"#,
+            &["1", "1", "1"],
+            "vec_of_vec_of_option_string_scope_exit_drop_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_vec_push_option_binding_no_double_free() {
+        // Slice 3p double-free regression (caught by this exact probe during
+        // development, exit 133): `let o = Some(f"..."); v.push(o)` — the push
+        // bit-copies the option aggregate into the vec, whose per-element
+        // `karac_drop_Option_String` now frees the payload; the source binding
+        // `o`'s `FreeInlineOptionPayload` would free the SAME buffer. The push
+        // family (push/push_back/try_push/push_front/try_push_front) disarms the
+        // source via `suppress_inline_option_payload_cleanup_for_moved_arg`
+        // (cap-zeroes option field 3), making the container the unique owner.
+        // macOS ASAN catches the double-free; Linux LSan the leak if the element
+        // drop went missing instead.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i = 0;
+    while i < 4 {
+        let mut v: Vec[Option[String]] = Vec.new();
+        let o = Some(f"a payload string padded beyond thirty-six bytes {i}");
+        v.push(o);
+        println(v.len());
+        i = i + 1;
+    };
+}
+"#,
+            &["1", "1", "1", "1"],
+            "vec_push_option_binding_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_vec_of_option_vec_scope_exit_drop_no_leak() {
+        // Slice 3p Vec-payload sibling: `Vec[Option[Vec[i64]]]`. The payload
+        // drop recurses through `karac_drop_Vec_i64` (the payload's own family
+        // fn) — the inner Vec's data buffer frees once per `Some` element.
+        assert_clean_asan_run(
+            r#"
+fn build(n: i64) -> Vec[Option[Vec[i64]]] {
+    let mut v: Vec[Option[Vec[i64]]] = Vec.new();
+    let mut inner: Vec[i64] = Vec.new();
+    inner.push(n);
+    inner.push(n + 1);
+    v.push(Some(inner));
+    v.push(None);
+    return v;
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let v = build(i);
+        println(v.len());
+        i = i + 1;
+    };
+}
+"#,
+            &["2", "2", "2"],
+            "vec_of_option_vec_scope_exit_drop_no_leak",
         );
     }
 

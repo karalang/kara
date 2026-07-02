@@ -1575,7 +1575,30 @@ impl<'ctx> super::Codegen<'ctx> {
             TypeKind::Path(p) => p.segments.first()?.clone(),
             _ => return None,
         };
-        if matches!(name.as_str(), "Option" | "Result") {
+        // An `Option[String]` / `Option[Vec[..]]` element (slice 3p): the
+        // type-erased `{tag, w0, w1, w2}` layout's generic `EnumDrop` switch
+        // can't free the payload (it doesn't know the payload type — it'd be
+        // wrong for `Option[i64]`), and B-2026-06-10-6's concrete-typed
+        // `FreeInlineOptionPayload` covers only BINDINGS, so a `Some` payload
+        // inside a Vec element leaked. Route to the payload-type-aware
+        // tag-guarded `karac_drop_Option_<payload>`. Gated to inline
+        // {ptr,len,cap} payloads (String / Vec-of-supported) — a scalar
+        // payload has no cap word to guard on, and boxed/handle payloads
+        // aren't the inline overlay shape. `Result` (two payload types) stays
+        // unhandled.
+        if name == "Option" {
+            if let TypeKind::Path(p) = &elem_te.kind {
+                if let Some(GenericArg::Type(payload)) =
+                    p.generic_args.as_ref().and_then(|a| a.first())
+                {
+                    if self.option_payload_inline_recursive_drop_ok(payload) {
+                        return self.emit_option_drop_fn(payload);
+                    }
+                }
+            }
+            return None;
+        }
+        if name == "Result" {
             return None;
         }
         // B-2026-06-14-28 — a `shared` struct / enum element (`Vec[Expr]`,
@@ -1697,8 +1720,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 };
                 match head {
-                    "String" | "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64"
-                    | "usize" | "isize" | "f32" | "f64" | "bool" | "char" => true,
+                    // Both String spellings: annotations write `String`; the
+                    // typechecker's `type_to_type_expr(Type::Str)` (the source
+                    // of every INFERRED binding's TypeExpr) renders `str`.
+                    "String" | "str" | "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32"
+                    | "u64" | "usize" | "isize" | "f32" | "f64" | "bool" | "char" => true,
                     "Vec" | "VecDeque" | "Set" | "SortedSet" => {
                         arg(0).is_some_and(|t| self.te_recursive_drop_fully_supported(t))
                     }
@@ -1706,16 +1732,54 @@ impl<'ctx> super::Codegen<'ctx> {
                         arg(0).is_some_and(|k| self.te_recursive_drop_fully_supported(k))
                             && arg(1).is_some_and(|v| self.te_recursive_drop_fully_supported(v))
                     }
+                    // `Option[String]` / `Option[Vec[..]]` (slice 3p): the
+                    // tag-guarded `emit_option_drop_fn` frees the inline `Some`
+                    // payload, reached via the same named-type delegation.
+                    // Unsupported payloads (scalar / boxed / handle / tuple)
+                    // stay false. `Result` stays false (two payload types, no
+                    // drop fn yet).
+                    "Option" => {
+                        arg(0).is_some_and(|t| self.option_payload_inline_recursive_drop_ok(t))
+                    }
                     // A user struct / enum / shared type: its own drop synthesis
                     // (reached via the `emit_drop_fn_for_type_expr` named-type
                     // delegation) frees every heap field / variant payload, so a
-                    // `Vec[..<struct>..]` element recurses correctly. `Option` /
-                    // `Result` and unknown names stay false.
+                    // `Vec[..<struct>..]` element recurses correctly. `Result`
+                    // and unknown names stay false.
                     _ => {
                         self.struct_types.contains_key(head)
                             || self.enum_layouts.contains_key(head)
                             || self.shared_types.contains_key(head)
                     }
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// True iff `Option[payload_te]` is a shape `emit_option_drop_fn` handles:
+    /// the payload's `{ptr, len, cap}` must OVERLAY the type-erased option's
+    /// words w0..w2 inline — i.e. exactly a `String` or a `Vec[..]` whose own
+    /// subtree the recursive drop family fully frees. A scalar payload has no
+    /// cap word (w2 would be read as garbage), a boxed/wide payload lives
+    /// behind a box pointer, and Map/Set handles are single pointers — none
+    /// are the inline overlay shape, so they're all excluded.
+    pub(super) fn option_payload_inline_recursive_drop_ok(&self, payload_te: &TypeExpr) -> bool {
+        match &payload_te.kind {
+            TypeKind::Path(p) => {
+                let head = p.segments.first().map(String::as_str).unwrap_or("");
+                match head {
+                    // Both spellings — see `te_recursive_drop_fully_supported`.
+                    "String" | "str" => true,
+                    "Vec" => p
+                        .generic_args
+                        .as_ref()
+                        .and_then(|a| a.first())
+                        .is_some_and(|a| {
+                            matches!(a, GenericArg::Type(t)
+                                if self.te_recursive_drop_fully_supported(t))
+                        }),
+                    _ => false,
                 }
             }
             _ => false,

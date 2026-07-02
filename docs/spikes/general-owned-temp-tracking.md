@@ -679,11 +679,53 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    (`test_ir_vec_of_vec_of_struct_drop_emits_struct_elem_drop` →
    `__karac_drop_struct_Rec` + `cleanup.adrop`; `…_enum_drop_emits_enum_elem_drop`
    → `__karac_drop_Tok`) + 3 ASAN (struct field, enum payload, shared struct — each
-   looped). **Still open (drop surface):** `Vec[Vec[Option[String]]]` / nested
-   `Option`/`Result` elements; the `Map`-value drop leg (deferred gap (d)); struct
-   fields that are THEMSELVES structs-with-heap (a pre-existing
-   `emit_struct_drop_synthesis` nested-struct-field limit, orthogonal); `get_unchecked`
-   on `Vec[String]`; heap K/V (`Map[String, Vec[T]]`) on temps.
+   looped).
+   **Slice 3p — `Vec[Option[String]]` element drop + the inferred-`str` spelling
+   hole. — DONE 2026-06-30.** Two intertwined fixes. **(1) Option elements:** an
+   `Option[String]` / `Option[Vec[..]]` Vec element is the type-erased
+   `{tag,w0,w1,w2}` layout — not a vec-struct, so the one-level fast path skipped
+   it, and `vec_elem_agg_drop_for_type_expr` early-returned None for Option (the
+   type-erased `EnumDrop` switch can't type the payload; B-2026-06-10-6's
+   concrete-typed `FreeInlineOptionPayload` covers only BINDINGS). Every `Some`
+   payload in a Vec leaked (LSan-RED-confirmed pre-fix: 6 leaks = every payload).
+   New `emit_option_drop_fn` (`clone_drop.rs`): tag-guarded
+   `karac_drop_Option_<payload>` — on `Some`, the payload `{ptr,len,cap}` overlays
+   w0..w2 (GEP field 1 IS the payload ptr), handed to the payload's recursive
+   drop; cap-guard makes rodata literals no-op. Gated by
+   `option_payload_inline_recursive_drop_ok` to inline overlay shapes ONLY
+   (String / Vec-of-supported) — a scalar payload has no cap word (w2 garbage),
+   boxed/wide payloads live behind a box ptr, Map/Set handles aren't vec-structs;
+   `Vec[Option[i64]]` is IR-pinned to stay on the (correct, heapless) fast path.
+   `Result` stays unhandled. **Double-free found & fixed during the slice:**
+   `let o = Some(f"..."); v.push(o)` SIGTRAP'd — the element drop AND the source
+   binding's `FreeInlineOptionPayload` freed the same buffer. The push family
+   (push/push_back/try_push/push_front/try_push_front) now disarms the source via
+   `suppress_inline_option_payload_cleanup_for_moved_arg` (cap-zeroes option
+   field 3), the Option sibling of the existing Vec/Map source suppressions.
+   **(2) The `str` spelling hole (latent in 3n/3o too):** an ANNOTATED binding's
+   element TypeExpr spells `String`, but an INFERRED one (`let v = build(1)`)
+   comes from `type_to_type_expr(Type::Str)` which renders lowercase **`str`** —
+   and every `"String"`-keyed gate missed it, so cross-fn-return unannotated
+   bindings silently kept the leaky fast path while the module still CONTAINED
+   the correctly-spelled drop fn (from the producer's annotated local,
+   runtime-suppressed by the return move-out) — which is why a module-presence IR
+   assertion alone was a trap, and why 3n/3o's ASAN tests were vacuously green
+   (their payloads were cap=0 literals; B-2026-06-10-6's f-string discipline
+   applies to ALL nested-drop tests). Fixed by accepting `str` alongside `String`
+   in `emit_drop_fn_for_type_expr`'s String arm,
+   `te_recursive_drop_fully_supported`, and the Option payload gate; the 3n/3o
+   ASAN tests are strengthened to runtime f-string payloads (now genuinely red
+   without the fixes). **Tests:** 3 IR (`test_ir_vec_of_option_string_drop_emits_
+   option_elem_drop` → `karac_drop_Option_String` + `cleanup.adrop`;
+   `…_option_scalar_drop_keeps_fast_path` → NO `karac_drop_Option_i64`;
+   `test_ir_inferred_let_vec_option_string_gets_option_drop` → the inferred-
+   spelling `karac_drop_Option_str`) + 4 ASAN (scope-exit one-level + two-level
+   Option[String] (f-strings, LSan-RED pre-fix), the push-binding double-free
+   regression, Option[Vec[i64]]). **Still open (drop surface):** `Result`
+   elements; boxed/wide Option payloads; the `Map`-value drop leg (deferred gap
+   (d)); struct fields that are THEMSELVES structs-with-heap (pre-existing
+   `emit_struct_drop_synthesis` limit, orthogonal); `get_unchecked` on
+   `Vec[String]`; heap K/V (`Map[String, Vec[T]]`) on temps.
    **Slice 3b-c — operator-operand temps. — DONE 2026-06-29.** `make_str() + "x"`
    leaked the fresh `make_str()` operand. Confirmed the spike's diagnosis: a
    String `+` (and `==`/`<`/… comparison) desugars in `lowering.rs`

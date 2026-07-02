@@ -1576,22 +1576,31 @@ impl<'ctx> super::Codegen<'ctx> {
                         return self.emit_map_drop_fn(&elem_te, &unit_te);
                     }
                 }
-                if head == Some("String") {
+                // Both spellings: an ANNOTATION writes `String`, but the
+                // typechecker's `type_to_type_expr(Type::Str)` — the source of
+                // every INFERRED binding's TypeExpr (`let v = build()`) — renders
+                // the lowercase `str`. Matching only `String` made the family
+                // silently no-op String payloads on inferred shapes (slice 3p
+                // found this via the cross-fn-return `Vec[Option[String]]` leak
+                // that reproduced ONLY without the annotation).
+                if head == Some("String") || head == Some("str") {
                     return self.emit_string_drop_fn();
                 }
-                // User struct / enum / shared element (owned-temp slice 3o). The
-                // recursive drop family otherwise bottoms out in the primitive
-                // no-op for a named user type — wrong for a struct/enum that owns
-                // heap (its String/Vec fields, or a shared field's RC box, would
-                // leak). Delegate to the Vec-element-aware synthesizer
+                // User struct / enum / shared / Option element (owned-temp slices
+                // 3o + 3p). The recursive drop family otherwise bottoms out in the
+                // primitive no-op for a named user type — wrong for a struct/enum
+                // that owns heap (its String/Vec fields, or a shared field's RC
+                // box, would leak). Delegate to the Vec-element-aware synthesizer
                 // (`vec_elem_agg_drop_for_type_expr`), which frees value heap
                 // fields AND rc-decs shared fields/elements — the correct choice
                 // for a nested element, which (like a Vec element) has no `let`
-                // cleanup to rc-dec its shared fields. Returns None for a heapless
-                // struct/enum (and for Option/Result), which falls through to the
-                // primitive no-op below. `te` here is never a Vec/Map/Set/String
-                // (those return above), so this can't re-enter the collection
-                // arms — no unbounded recursion.
+                // cleanup to rc-dec its shared fields — and (3p) routes an
+                // `Option[String]` / `Option[Vec[..]]` element to the tag-guarded
+                // `emit_option_drop_fn`. Returns None for a heapless struct/enum
+                // (and for Result / unsupported Option payloads), which falls
+                // through to the primitive no-op below. `te` here is never a
+                // Vec/Map/Set/String (those return above), so this can't re-enter
+                // the collection arms — no unbounded recursion.
                 if let Some(f) = self.vec_elem_agg_drop_for_type_expr(te) {
                     self.drop_fn_cache.insert(type_name, f);
                     return f;
@@ -1702,6 +1711,103 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.position_at_end(bb);
         }
         drop_fn
+    }
+
+    /// Emit `karac_drop_Option_<payload>` — the tag-guarded drop for an
+    /// `Option[String]` / `Option[Vec[..]]` VALUE in the type-erased
+    /// `{tag, w0, w1, w2}` layout (owned-temp slice 3p). Reads the tag; on
+    /// `Some`, the payload's `{ptr, len, cap}` overlays words w0..w2 (all
+    /// i64-sized/aligned), so a GEP to field 1 IS a pointer to the payload
+    /// struct — hand it to the payload's own recursive drop fn
+    /// (`karac_drop_String` / `karac_drop_Vec_<elem>`), which cap-guards the
+    /// free (a rodata cap=0 literal payload no-ops). `None` elements skip
+    /// entirely. This is what lets a `Vec[Option[String]]` element free its
+    /// payload — the type-erased `EnumDrop` switch can't (it doesn't know the
+    /// payload type; B-2026-06-10-6's concrete-typed cleanup covers only
+    /// BINDINGS). Caller gates the payload to inline {ptr,len,cap} shapes
+    /// (`option_payload_inline_recursive_drop_ok`) — a scalar payload has no
+    /// cap word (w2 would be garbage), a boxed/wide payload isn't inline, and
+    /// Map/Set handles aren't vec-structs, so none of those reach here.
+    /// Returns None only when the program has no Option layout registered.
+    pub(super) fn emit_option_drop_fn(
+        &mut self,
+        payload_te: &TypeExpr,
+    ) -> Option<FunctionValue<'ctx>> {
+        let (option_ty, some_tag) = {
+            let layout = self.enum_layouts.get("Option")?;
+            (
+                layout.llvm_type,
+                layout.tags.get("Some").copied().unwrap_or(1),
+            )
+        };
+        let payload_name = Self::display_mangle_te(payload_te);
+        let type_name = format!("Option_{payload_name}");
+        if let Some(&f) = self.drop_fn_cache.get(&type_name) {
+            return Some(f);
+        }
+        let fn_name = format!("karac_drop_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.drop_fn_cache.insert(type_name, f);
+            return Some(f);
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        // Recurse first — sub-emitter may switch the builder's insert block.
+        let payload_drop = self.emit_drop_fn_for_type_expr(payload_te);
+
+        let saved_bb = self.builder.get_insert_block();
+        let drop_fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        let drop_fn = self
+            .module
+            .add_function(&fn_name, drop_fn_ty, Some(Linkage::Internal));
+        self.drop_fn_cache.insert(type_name, drop_fn);
+
+        let entry_bb = self.context.append_basic_block(drop_fn, "entry");
+        let some_bb = self.context.append_basic_block(drop_fn, "some");
+        let exit_bb = self.context.append_basic_block(drop_fn, "exit");
+
+        self.builder.position_at_end(entry_bb);
+        let val = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let tag_ptr = self
+            .builder
+            .build_struct_gep(option_ty, val, 0, "tag.p")
+            .unwrap();
+        let tag = self
+            .builder
+            .build_load(i64_t, tag_ptr, "tag")
+            .unwrap()
+            .into_int_value();
+        let is_some = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                tag,
+                i64_t.const_int(some_tag, false),
+                "is.some",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_some, some_bb, exit_bb)
+            .unwrap();
+
+        self.builder.position_at_end(some_bb);
+        let payload_base = self
+            .builder
+            .build_struct_gep(option_ty, val, 1, "payload")
+            .unwrap();
+        self.builder
+            .build_call(payload_drop, &[payload_base.into()], "")
+            .unwrap();
+        self.builder.build_unconditional_branch(exit_bb).unwrap();
+
+        self.builder.position_at_end(exit_bb);
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Some(drop_fn)
     }
 
     /// Emit `karac_drop_Vec_<elem>` — iterate `0..len` calling the per-

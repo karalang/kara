@@ -19455,6 +19455,71 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_vec_of_option_string_drop_emits_option_elem_drop() {
+        // Slice 3p: a `Vec[Option[String]]` dropped at scope exit. The
+        // `Option[String]` element is the type-erased `{tag,w0,w1,w2}` layout —
+        // not a vec-struct, so the one-level fast path skipped it, and the
+        // type-erased `EnumDrop` switch can't free a payload it can't type. The
+        // payload-type-aware `karac_drop_Option_String` (tag-guarded; payload
+        // {ptr,len,cap} overlays w0..w2) is threaded through the agg-drop loop
+        // so each `Some` payload frees; `None` elements skip.
+        let src = r#"
+fn build(n: i64) -> Vec[Option[String]] {
+    let mut v: Vec[Option[String]] = Vec.new();
+    v.push(Some(f"a payload string padded beyond thirty-six bytes {n}"));
+    v.push(None);
+    return v;
+}
+
+fn main() {
+    let v = build(1_i64);
+    println(v.len());
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("karac_drop_Option_String"),
+            "expected the tag-guarded payload drop karac_drop_Option_String for the \
+             Vec[Option[String]] scope-exit drop; got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("cleanup.adrop"),
+            "expected the agg-drop loop running the Option element drop; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_vec_of_option_scalar_drop_keeps_fast_path() {
+        // Slice 3p negative: a `Vec[Option[i64]]` element owns NO heap — its
+        // payload is a scalar with no cap word to guard on, so emitting the
+        // Option drop would read w2 as garbage and free a junk pointer. The
+        // `option_payload_inline_recursive_drop_ok` gate must keep it on the
+        // (correct, heapless) fast path: no `karac_drop_Option_i64` anywhere.
+        let src = r#"
+fn build() -> Vec[Option[i64]] {
+    let mut v: Vec[Option[i64]] = Vec.new();
+    v.push(Some(7_i64));
+    v.push(None);
+    return v;
+}
+
+fn main() {
+    let v = build();
+    println(v.len());
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            !ir.contains("karac_drop_Option_i64"),
+            "Vec[Option[i64]] must NOT get an Option element drop (scalar payload has \
+             no cap word — the drop would free garbage); got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_ir_ref_arg_nested_vec_elem_freed() {
         // Slice 2 part B: a fresh `Vec[String]` passed to a `ref Vec[String]`
         // param is materialized into a `ref_rvalue_arg` temp. The prior path
@@ -54212,6 +54277,52 @@ fn main() {
         assert!(
             src_zero < inner_drop,
             "source-zero must precede the boxed payload's drop\n--- body ---\n{body}"
+        );
+    }
+}
+
+#[cfg(feature = "llvm")]
+mod inferred_elem_drop_3p {
+    //! Slice 3p spelling regression. An ANNOTATED binding's element TypeExpr
+    //! spells `String`; an INFERRED binding's comes from the typechecker's
+    //! `type_to_type_expr(Type::Str)`, which renders the lowercase `str`. The
+    //! drop-family gates originally matched only `String`, so the cross-fn
+    //! `let v = build(1)` (no annotation) silently missed the Option element
+    //! drop — the module still CONTAINED `karac_drop_Option_String` (from
+    //! `build`'s annotated local, runtime-suppressed by the return move-out),
+    //! which is exactly why a module-presence assertion alone was a trap. This
+    //! test pins the INFERRED spelling: main's binding must synthesize and
+    //! call `karac_drop_Option_str`.
+    #[test]
+    fn test_ir_inferred_let_vec_option_string_gets_option_drop() {
+        let src = r#"
+fn build(n: i64) -> Vec[Option[String]] {
+    let mut v: Vec[Option[String]] = Vec.new();
+    v.push(Some(f"alpha string padded out beyond thirty-six bytes {n}"));
+    v.push(None);
+    return v;
+}
+fn main() {
+    let v = build(1);
+    println(v.len());
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let ir = karac::codegen::compile_to_ir(&parsed.program, None, None).expect("codegen");
+        assert!(
+            ir.contains("karac_drop_Option_str"),
+            "expected the INFERRED (un-annotated) `let v = build(1)` binding to get the \
+             Option element drop under the typechecker's lowercase `str` spelling \
+             (karac_drop_Option_str); got:\n{}",
+            ir
         );
     }
 }
