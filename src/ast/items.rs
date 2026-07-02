@@ -8,8 +8,8 @@
 use crate::token::Span;
 
 use super::{
-    Attribute, Block, Expr, GenericParams, PathExpr, Pattern, PatternKind, TraitBound, TypeExpr,
-    Visibility, WhereClause,
+    Attribute, Block, Expr, ExprKind, GenericParams, PathExpr, Pattern, PatternKind, StmtKind,
+    TraitBound, TypeExpr, Visibility, WhereClause,
 };
 
 // ── Item deprecation payload ─────────────────────────────────────
@@ -1200,4 +1200,84 @@ pub struct DistinctTypeDef {
     pub unstable: Option<Unstable>,
     /// See [`Function::lint_overrides`]. Slice-4a broadens attachment.
     pub lint_overrides: Vec<crate::lints::LintLevelOverride>,
+}
+
+/// B-2026-07-01-7 passthrough analysis — whether `f` can RETURN its
+/// positional parameter `arg_index` (its body has a tail expression or a
+/// `return` statement that is exactly that parameter's bare identifier).
+/// Conservative toward `true`: when ANY return site passes the parameter
+/// through, the caller-side temp-drop registration for an argument in that
+/// slot is skipped — the value flows out to the caller's consumer of the
+/// RESULT, whose own binding/temp drop covers it. A `false` means every
+/// return site provably yields something else, so the argument dies inside
+/// the call and the caller-side temp drop is correct. (Cost of the
+/// conservative `true` on mixed-path fns: the non-passthrough paths' arg
+/// drop side effect is skipped — a leak-of-side-effect, never a
+/// double-drop.) Shared by codegen's `track_inline_owned_aggregate_arg`
+/// gate and the interpreter's `run_fresh_temp_arg_drops` gate so both
+/// surfaces agree.
+pub fn fn_returns_param(f: &Function, arg_index: usize) -> bool {
+    let Some(param) = f.params.get(arg_index) else {
+        return false;
+    };
+    let PatternKind::Binding(param_name) = &param.pattern.kind else {
+        return false;
+    };
+    fn expr_is_ident(e: &Expr, name: &str) -> bool {
+        matches!(&e.kind, ExprKind::Identifier(n) if n == name)
+    }
+    fn walk_expr(e: &Expr, name: &str) -> bool {
+        match &e.kind {
+            ExprKind::Return(Some(inner)) => expr_is_ident(inner, name) || walk_expr(inner, name),
+            ExprKind::Block(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Par(b) => walk_block(b, name),
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                walk_expr(condition, name)
+                    || walk_block(then_block, name)
+                    || else_branch.as_deref().is_some_and(|x| walk_expr(x, name))
+            }
+            ExprKind::IfLet {
+                value,
+                then_block,
+                else_branch,
+                ..
+            } => {
+                walk_expr(value, name)
+                    || walk_block(then_block, name)
+                    || else_branch.as_deref().is_some_and(|x| walk_expr(x, name))
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                walk_expr(scrutinee, name)
+                    || arms.iter().any(|a| {
+                        // An arm TAIL that is the bare param is a return site
+                        // when the match is itself a tail — conservative: any
+                        // bare-param arm tail counts.
+                        expr_is_ident(&a.body, name) || walk_expr(&a.body, name)
+                    })
+            }
+            ExprKind::While { body, .. }
+            | ExprKind::WhileLet { body, .. }
+            | ExprKind::For { body, .. }
+            | ExprKind::Loop { body, .. }
+            | ExprKind::LabeledBlock { body, .. } => walk_block(body, name),
+            _ => false,
+        }
+    }
+    fn walk_block(b: &Block, name: &str) -> bool {
+        b.stmts.iter().any(|st| match &st.kind {
+            StmtKind::Expr(e) => walk_expr(e, name),
+            _ => false,
+        }) || b
+            .final_expr
+            .as_deref()
+            .is_some_and(|fe| expr_is_ident(fe, name) || walk_expr(fe, name))
+    }
+    walk_block(&f.body, param_name)
 }

@@ -844,11 +844,24 @@ impl<'a> super::Interpreter<'a> {
                 }
             }
             StmtKind::Expr(expr) => {
-                self.eval_expr_inner(expr);
+                let discarded = self.eval_expr_inner(expr);
                 // If a control flow signal was set during expression evaluation,
                 // propagate it immediately
                 if let Some(cf) = self.pending_cf.take() {
                     return Err(cf);
+                }
+                // B-2026-07-01-7 (discard position): `make();` where the
+                // callee's declared return type has a user `impl Drop` —
+                // the discarded temp's body must fire (codegen twin:
+                // `try_track_discarded_user_drop_temp`).
+                if let ExprKind::Call { callee, .. } = &expr.kind {
+                    if let ExprKind::Identifier(fn_name) = &callee.kind {
+                        if let Some(tn) = self.user_fn_return_type_name(fn_name) {
+                            if self.program.drop_method_keys.contains_key(&tn) {
+                                self.run_user_drop_body_on_value(&tn, discarded);
+                            }
+                        }
+                    }
                 }
             }
         }

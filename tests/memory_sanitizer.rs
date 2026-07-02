@@ -18388,4 +18388,43 @@ fn main() {
             "statsref_reuse_and_fresh_temp_no_leak_no_double_free",
         );
     }
+
+    #[test]
+    fn asan_fnret_drop_temp_arg_passthrough_and_discard_single_fire() {
+        // B-2026-07-01-7: fn-call-RETURNED Drop temps — as a consume arg
+        // (drops once after the call), DISCARDED at statement position
+        // (drops once), and passed THROUGH a `pass(g) -> Guard { g }`
+        // into a binding (drops exactly once via the binding; the
+        // passthrough guard skips the arg-temp registration — pre-guard
+        // this shape double-fired AND double-freed the heap field on
+        // both surfaces, probe f6). Heap-carrying Guard so the wrapper's
+        // field cleanup is exercised; program structured so NLL and
+        // scope-exit drop orders coincide (output is surface-identical).
+        assert_clean_asan_run(
+            r#"
+struct Guard { name: String, id: i64 }
+impl Drop for Guard {
+    fn drop(mut ref self) { println(self.id); }
+}
+fn make(n: i64) -> Guard {
+    Guard { name: f"guard payload padded beyond thirty-six bytes {n}", id: n }
+}
+fn consume(g: Guard) { println(100 + g.id); }
+fn pass(g: Guard) -> Guard { g }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        consume(make(i));
+        i = i + 1;
+    };
+    make(60);
+    println(999);
+    let x = pass(make(50));
+    println(x.name.len());
+}
+"#,
+            &["100", "0", "101", "1", "102", "2", "60", "999", "47", "50"],
+            "fnret_drop_temp_arg_passthrough_and_discard_single_fire",
+        );
+    }
 }

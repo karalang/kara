@@ -1434,7 +1434,11 @@ impl<'a> super::Interpreter<'a> {
                 // value after the call returns (the caller-side temp-drop
                 // position codegen uses). Identifier args are excluded —
                 // the caller binding's own NLL drop covers those.
-                self.run_fresh_temp_arg_drops(args, &arg_vals);
+                // B-2026-07-01-7: the callee name feeds the passthrough
+                // guard (`fn_returns_param`) — an arg the callee can RETURN
+                // flows out to the result's consumer and must not also drop
+                // here.
+                self.run_fresh_temp_arg_drops(&fn_name, args, &arg_vals);
 
                 match result {
                     Ok(v) => v,
@@ -1474,8 +1478,24 @@ impl<'a> super::Interpreter<'a> {
     /// `track_inline_owned_aggregate_arg` shapes exactly (fixed there as
     /// B-2026-07-01-6); bare Identifier args are the caller binding's own
     /// drop. Shared types are excluded (their teardown is refcount-driven).
-    fn run_fresh_temp_arg_drops(&mut self, args: &[CallArg], arg_vals: &[Value]) {
+    fn run_fresh_temp_arg_drops(
+        &mut self,
+        callee_name: &str,
+        args: &[CallArg],
+        arg_vals: &[Value],
+    ) {
         for (i, arg) in args.iter().enumerate() {
+            // B-2026-07-01-7 passthrough guard — mirrored with codegen's
+            // `call_arg_flows_into_return`: when the callee can return
+            // this parameter, the temp flows out and the RESULT's consumer
+            // owns the drop; firing here too double-ran the body
+            // (`let x = pass(Guard { id: 7 })` printed twice, probe f6).
+            if self.program.items.iter().any(|item| {
+                matches!(item, crate::ast::Item::Function(f)
+                    if f.name == callee_name && crate::ast::fn_returns_param(f, i))
+            }) {
+                continue;
+            }
             let type_name: Option<String> = match &arg.value.kind {
                 ExprKind::StructLiteral { path, .. } => {
                     let n = path.last().cloned();
@@ -1487,7 +1507,17 @@ impl<'a> super::Interpreter<'a> {
                     })
                 }
                 ExprKind::Call { callee, .. } => match &callee.kind {
-                    ExprKind::Identifier(v) => self.find_enum_for_variant(v),
+                    ExprKind::Identifier(v) => self.find_enum_for_variant(v).or_else(|| {
+                        // Fn-call-RETURNED Drop temp (B-2026-07-01-7):
+                        // `consume(make())` — resolve the producing fn's
+                        // declared return-type head. Shared types are
+                        // filtered by the drop_method_keys + struct gate in
+                        // the caller below plus the SharedStruct value shape
+                        // (run_user_drop_body_on_value binds whatever value
+                        // arrived; the drop_method_keys gate is the
+                        // authoritative filter).
+                        self.user_fn_return_type_name(v)
+                    }),
                     ExprKind::Path { segments, .. } if segments.len() == 2 => self
                         .qualified_enum_variant_is_unit(&segments[0], &segments[1])
                         .map(|_| segments[0].clone()),
@@ -1511,6 +1541,21 @@ impl<'a> super::Interpreter<'a> {
                 self.run_user_drop_body_on_value(&tn, v.clone());
             }
         }
+    }
+
+    /// Declared return-type HEAD name of a user free function, for the
+    /// fn-returned Drop temp classification (B-2026-07-01-7). `None` for
+    /// unknown names, methods, and functions without a declared return.
+    pub(crate) fn user_fn_return_type_name(&self, fn_name: &str) -> Option<String> {
+        self.program.items.iter().find_map(|item| match item {
+            crate::ast::Item::Function(f) if f.name == fn_name => {
+                f.return_type.as_ref().and_then(|te| match &te.kind {
+                    crate::ast::TypeKind::Path(p) => p.segments.last().cloned(),
+                    _ => None,
+                })
+            }
+            _ => None,
+        })
     }
 
     /// Recognize the `with_provider[R](provider, closure)` call shape. Returns

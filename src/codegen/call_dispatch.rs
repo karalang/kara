@@ -1323,8 +1323,16 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             // Register the caller-side drop for an inline owned-aggregate arg
             // (tuple/struct literal — B-2026-06-11-4 part b; enum-variant
-            // constructor — B-2026-06-12-10). Shared with the method-call path.
-            self.track_inline_owned_aggregate_arg(val, &a.value);
+            // constructor — B-2026-06-12-10; fn-RETURNED Drop temp —
+            // B-2026-07-01-7). Shared with the method-call path. Skipped
+            // when the CALLEE can return this parameter (the passthrough
+            // guard): `pass(make())` / `let x = pass(Guard{..})` flow the
+            // value out to the caller's consumer of the RESULT, whose own
+            // binding/temp drop covers it — registering here too was a
+            // DOUBLE user-drop firing (both surfaces, probe f6).
+            if !self.call_arg_flows_into_return(&name, i) {
+                self.track_inline_owned_aggregate_arg(val, &a.value);
+            }
         }
 
         // Niche-ABI arg pack — see `pack_niche_abi_args`. Runs AFTER the
@@ -1412,6 +1420,67 @@ impl<'ctx> super::Codegen<'ctx> {
         self.shared_types.get(&type_name).map(|i| i.heap_type)
     }
 
+    /// B-2026-07-01-7 passthrough guard — whether the free-fn callee
+    /// `callee_name`'s body can RETURN its parameter `arg_index`
+    /// (`crate::ast::fn_returns_param` — any bare-param return site counts,
+    /// conservative toward skipping). Resolved from the program snapshot's
+    /// top-level functions; unknown callees (externs, builtins) → `false`
+    /// (register — the status-quo caller-drops convention).
+    pub(super) fn call_arg_flows_into_return(&self, callee_name: &str, arg_index: usize) -> bool {
+        let Some(program) = self.program_snapshot.as_deref() else {
+            return false;
+        };
+        program.items.iter().any(|item| {
+            matches!(item, crate::ast::Item::Function(f)
+                if f.name == callee_name && crate::ast::fn_returns_param(f, arg_index))
+        })
+    }
+
+    /// B-2026-07-01-7 (discard position): register the caller-side
+    /// UserDrop for a DISCARDED statement-position fn result whose
+    /// declared return type has a user `impl Drop` (`make();` — silent on
+    /// both surfaces before this). Type-gated exactly like the arg-temp
+    /// arm; shared types stay with the rc machinery.
+    pub(super) fn try_track_discarded_user_drop_temp(
+        &mut self,
+        tail: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) {
+        let ExprKind::Call { callee, .. } = &tail.kind else {
+            return;
+        };
+        let ExprKind::Identifier(fn_name) = &callee.kind else {
+            return;
+        };
+        let Some(ret_ty_name) = self.fn_return_type_names.get(fn_name).cloned() else {
+            return;
+        };
+        let has_user_drop = self
+            .program_snapshot
+            .as_deref()
+            .map(|p| p.drop_method_keys.contains_key(&ret_ty_name))
+            .unwrap_or(false);
+        if !has_user_drop || self.shared_types.contains_key(&ret_ty_name) {
+            return;
+        }
+        let is_enum = self.enum_layouts.contains_key(&ret_ty_name);
+        if !is_enum && !self.struct_types.contains_key(&ret_ty_name) {
+            return;
+        }
+        let inkwell::types::BasicTypeEnum::StructType(agg_ty) = val.get_type() else {
+            return;
+        };
+        let Some(cur_fn) = self.current_fn else {
+            return;
+        };
+        let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
+        self.builder.build_store(slot, val).unwrap();
+        self.track_user_drop_var(&ret_ty_name, "__owned_agg_tmp", slot);
+        if is_enum && self.enum_has_heap_payload(&ret_ty_name) {
+            self.track_enum_var(&ret_ty_name, slot);
+        }
+    }
+
     /// Register the caller-side drop for an inline owned-**aggregate** call
     /// argument — a fresh temp with no consuming binding that the callee owns
     /// by deep-copy (`make_aggregate_param_callee_owned`, the #14 model: the
@@ -1458,6 +1527,40 @@ impl<'ctx> super::Codegen<'ctx> {
         // below). `Identifier` args are deliberately NOT matched — a
         // let-bound enum's drop is owned by its binding (let-path), and the
         // arg-pass move-suppression handles the transfer.
+        // Fn-call-RETURNED Drop temp (B-2026-07-01-7): `consume(make())`
+        // where `make() -> Guard`/`-> Sig` and the type has a user Drop —
+        // `enum_name_of_expr`'s Call arm resolves only VARIANT ctors, so a
+        // plain fn call matched nothing and the user body never fired.
+        // Resolve the producing fn's return type; register the same
+        // caller-side UserDrop the ctor arms use (the wrapper also runs
+        // the struct field cleanup; enums get the dual EnumDrop payload
+        // walk). Shared types stay with the rc machinery; the passthrough
+        // guard at the call sites already skipped flow-through args.
+        if let ExprKind::Call { callee, .. } = &arg.kind {
+            if let ExprKind::Identifier(fn_name) = &callee.kind {
+                if let Some(ret_ty_name) = self.fn_return_type_names.get(fn_name).cloned() {
+                    let has_user_drop = self
+                        .program_snapshot
+                        .as_deref()
+                        .map(|p| p.drop_method_keys.contains_key(&ret_ty_name))
+                        .unwrap_or(false);
+                    if has_user_drop && !self.shared_types.contains_key(&ret_ty_name) {
+                        let is_enum = self.enum_layouts.contains_key(&ret_ty_name);
+                        let is_struct = self.struct_types.contains_key(&ret_ty_name);
+                        if is_enum || is_struct {
+                            let slot =
+                                self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
+                            self.builder.build_store(slot, val).unwrap();
+                            self.track_user_drop_var(&ret_ty_name, "__owned_agg_tmp", slot);
+                            if is_enum && self.enum_has_heap_payload(&ret_ty_name) {
+                                self.track_enum_var(&ret_ty_name, slot);
+                            }
+                            return;
+                        }
+                    }
+                }
+            }
+        }
         let fresh_enum_temp = match &arg.kind {
             ExprKind::Call { .. } | ExprKind::Path { .. } | ExprKind::StructLiteral { .. } => {
                 self.enum_name_of_expr(arg)

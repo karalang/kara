@@ -3715,6 +3715,15 @@ impl<'ctx> super::Codegen<'ctx> {
                         && !handled_option_map
                         && not_borrow
                         && self.try_track_discarded_boxed_option(tail, val);
+                    // B-2026-07-01-7 (discard position): `make();` where
+                    // `make() -> Guard`/`-> Sig` with a user Drop — the
+                    // discarded temp is caller-owned and its body must fire
+                    // (both surfaces were silent). Complementary to the
+                    // heap-content trackers above; its registration is
+                    // type-gated internally.
+                    if not_borrow {
+                        self.try_track_discarded_user_drop_temp(tail, val);
+                    }
                     if !handled_option
                         && !handled_result
                         && !handled_option_map

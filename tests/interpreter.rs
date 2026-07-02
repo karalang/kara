@@ -2589,6 +2589,74 @@ fn test_user_drop_enum_move_fires_once() {
     );
 }
 
+// ── B-2026-07-01-7 fn-returned Drop temps + passthrough guard ──
+
+#[test]
+fn test_user_drop_fires_for_fn_returned_temp_arg_and_discard() {
+    // `consume(make())` (fn-returned temp arg) and a bare `make();`
+    // (discarded statement position) each fire the user body exactly
+    // once; a `mint(ctor)` whose callee returns a FRESH value keeps BOTH
+    // drops (arg temp + result binding) — the passthrough guard is
+    // per-callee syntactic analysis, not type-based.
+    let (output, _drops) = run_program_with_drops(
+        "struct Guard { id: i64 }\n\
+         impl Drop for Guard {\n\
+             fn drop(mut ref self) {\n\
+                 println(self.id);\n\
+             }\n\
+         }\n\
+         fn make() -> Guard { Guard { id: 7 } }\n\
+         fn consume(g: Guard) { println(100); }\n\
+         fn mint(g: Guard) -> Guard { Guard { id: g.id + 1 } }\n\
+         fn main() {\n\
+             consume(make());\n\
+             make();\n\
+             let x = mint(Guard { id: 20 });\n\
+             println(x.id);\n\
+         }",
+    );
+    assert_eq!(
+        output,
+        vec![
+            "100\n".to_string(),
+            "7\n".to_string(),
+            "7\n".to_string(),
+            "20\n".to_string(),
+            "21\n".to_string(),
+            "21\n".to_string()
+        ],
+        "expected consume-arg fire, discard fire, mint arg+result fires; got {:?}",
+        output
+    );
+}
+
+#[test]
+fn test_user_drop_passthrough_arg_fires_once() {
+    // `let x = pass(Guard { id: 7 })` where `pass` returns its param —
+    // the arg-temp registration is SKIPPED (fn_returns_param guard) and
+    // only x's binding drop fires. Pre-guard this double-fired.
+    let (output, _drops) = run_program_with_drops(
+        "struct Guard { id: i64 }\n\
+         impl Drop for Guard {\n\
+             fn drop(mut ref self) {\n\
+                 println(self.id);\n\
+             }\n\
+         }\n\
+         fn pass(g: Guard) -> Guard { g }\n\
+         fn main() {\n\
+             let x = pass(Guard { id: 7 });\n\
+             println(x.id);\n\
+         }",
+    );
+    let fires = output.iter().filter(|l| l.as_str() == "7\n").count();
+    // x.id prints one "7"; exactly one MORE from the single drop.
+    assert_eq!(
+        fires, 2,
+        "expected exactly one drop firing for the passed-through value; got {:?}",
+        output
+    );
+}
+
 // ── phase-7 L938 user-`impl Drop` for SHARED structs (interpreter) ──
 //
 // A `shared struct` is `Value::SharedStruct(Arc<…>)`; the user body
