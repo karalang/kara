@@ -648,10 +648,42 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    **Tests:** 2 IR (`test_ir_vec_of_vec_of_string_drop_emits_recursive_elem_drop`
    → `karac_drop_Vec_String` + `cleanup.adrop`; `…_scalar_drop_keeps_one_level…` →
    NO `karac_drop_Vec_i64`, the negative gate) + 1 ASAN
-   (`asan_vec_of_vec_of_string_scope_exit_drop_no_leak`, looped). **Still open
-   (temp surface):** heap K/V (`Map[String, Vec[T]]`) on temps; `Vec[Vec[<user
-   struct>]]` (the recursive family no-ops struct elements — needs the struct
-   agg-drop threaded through the recursive drop); `get_unchecked` on `Vec[String]`.
+   (`asan_vec_of_vec_of_string_scope_exit_drop_no_leak`, looped).
+   **Slice 3o — `Vec[Vec[<user struct / enum / shared>]]` scope-exit drop. — DONE
+   2026-06-30.** Extends 3n's recursion to the element shapes 3n deliberately
+   excluded: a `Vec[Vec[Rec]]` (Rec owning a `String`/`Vec` field), `Vec[Vec[Tok]]`
+   (Tok a heap-variant enum), or `Vec[Vec[Node]]` (Node a `shared struct`) leaked
+   the innermost field/payload heap. 3n bridged into the recursive
+   `emit_vec_drop_fn` family, but that family's per-element drop
+   (`emit_drop_fn_for_type_expr`, `clone_drop.rs`) NO-OP'd a named user type
+   (routed it to `emit_primitive_drop_fn`), so 3n's gate excluded struct/enum
+   inners. **Fix (one delegation + one gate loosen):** `emit_drop_fn_for_type_expr`
+   now, for a named user type after the Vec/Map/Set/String arms, delegates to
+   `vec_elem_agg_drop_for_type_expr` — the Vec-ELEMENT-aware synthesizer that
+   already frees value heap fields (`__karac_drop_struct_<S>`), drops enum payloads
+   (`__karac_drop_<Enum>`), and rc-decs shared elements
+   (`__karac_vec_elem_rc_dec_<T>`) — returning None (→ the primitive no-op) only
+   for a heapless struct/enum or `Option`/`Result`. With the delegation making the
+   family complete for user types, `te_recursive_drop_fully_supported` was loosened
+   to admit `struct_types` / `enum_layouts` / `shared_types`, so 3n's arm now fires
+   for those inners. The choice of the Vec-element-aware drop (not the plain
+   `emit_struct_drop_synthesis`) is what makes it correct for a nested element:
+   like a Vec element, it has no `let` cleanup to rc-dec its shared fields, so the
+   combined/rc-dec variant is required (the plain struct drop would leak shared
+   field boxes). Because the delegation lives in the shared family, it also closes
+   the sibling `collections.rs` inline-temp-Vec-free path for struct elements for
+   free. `Option`/`Result` inners stay excluded (still one-level). Functional
+   output unchanged (`run`==`build`); macOS ASAN clean (no double-free across the
+   full suite); Linux LSan clean (innermost field Strings / enum payloads / shared
+   boxes now free). **Tests:** 2 IR
+   (`test_ir_vec_of_vec_of_struct_drop_emits_struct_elem_drop` →
+   `__karac_drop_struct_Rec` + `cleanup.adrop`; `…_enum_drop_emits_enum_elem_drop`
+   → `__karac_drop_Tok`) + 3 ASAN (struct field, enum payload, shared struct — each
+   looped). **Still open (drop surface):** `Vec[Vec[Option[String]]]` / nested
+   `Option`/`Result` elements; the `Map`-value drop leg (deferred gap (d)); struct
+   fields that are THEMSELVES structs-with-heap (a pre-existing
+   `emit_struct_drop_synthesis` nested-struct-field limit, orthogonal); `get_unchecked`
+   on `Vec[String]`; heap K/V (`Map[String, Vec[T]]`) on temps.
    **Slice 3b-c — operator-operand temps. — DONE 2026-06-29.** `make_str() + "x"`
    leaked the fresh `make_str()` operand. Confirmed the spike's diagnosis: a
    String `+` (and `==`/`<`/… comparison) desugars in `lowering.rs`

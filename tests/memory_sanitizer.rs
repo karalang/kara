@@ -10272,6 +10272,104 @@ fn main() {
     }
 
     #[test]
+    fn asan_vec_of_vec_of_struct_scope_exit_drop_no_leak() {
+        // Slice 3o: a `Vec[Vec[Rec]]` where `Rec` owns a heap `String` field,
+        // dropped at scope exit, looped. 3n's recursive drop handled collection
+        // inners; 3o threads the struct-field drop (`__karac_drop_struct_Rec`)
+        // through the recursive `karac_drop_Vec_Rec` so each element's `name`
+        // String frees. Leak (innermost field Strings) is the Linux-LSan gate;
+        // a double-free (aliased element vs its clone) shows on macOS ASAN.
+        // ≥36-byte field strings defeat LSan short-string reachability.
+        assert_clean_asan_run(
+            r#"
+struct Rec { name: String, n: i64 }
+fn build() -> Vec[Vec[Rec]] {
+    let mut outer: Vec[Vec[Rec]] = Vec.new();
+    let mut a: Vec[Rec] = Vec.new();
+    a.push(Rec { name: "alpha string padded out beyond thirty-six bytes ok", n: 1_i64 });
+    a.push(Rec { name: "beta string padded out beyond thirty-six bytes okk", n: 2_i64 });
+    outer.push(a);
+    return outer;
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let vv = build();
+        println(vv.len());
+        i = i + 1;
+    };
+}
+"#,
+            &["1", "1", "1"],
+            "vec_of_vec_of_struct_scope_exit_drop_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_vec_of_vec_of_enum_scope_exit_drop_no_leak() {
+        // Slice 3o enum sibling: a `Vec[Vec[Tok]]` where `Tok` has a heap variant
+        // (`Word(String)`). The enum drop-switch (`__karac_drop_Tok`) threaded
+        // through the recursive `karac_drop_Vec_Tok` frees each live `Word`
+        // payload String. Same leak/double-free hazards as the struct case.
+        assert_clean_asan_run(
+            r#"
+enum Tok { Word(String), Num(i64) }
+fn build() -> Vec[Vec[Tok]] {
+    let mut outer: Vec[Vec[Tok]] = Vec.new();
+    let mut a: Vec[Tok] = Vec.new();
+    a.push(Tok.Word("alpha string padded out beyond thirty-six bytes ok"));
+    a.push(Tok.Num(2_i64));
+    outer.push(a);
+    return outer;
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let vv = build();
+        println(vv.len());
+        i = i + 1;
+    };
+}
+"#,
+            &["1", "1", "1"],
+            "vec_of_vec_of_enum_scope_exit_drop_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_vec_of_vec_of_shared_struct_scope_exit_drop_no_leak() {
+        // Slice 3o shared sibling: a `Vec[Vec[Node]]` where `Node` is a `shared
+        // struct` owning a `String`. A shared element's per-element drop is an
+        // RC-dec (`__karac_vec_elem_rc_dec_Node`), threaded through the recursive
+        // `karac_drop_Vec_Node`; at rc→0 the box (and its String) frees. A missing
+        // dec leaks the whole box (Linux LSan); a double-dec frees the box twice
+        // (macOS ASAN). The `te_recursive_drop_fully_supported` gate admits shared
+        // types via `shared_types`.
+        assert_clean_asan_run(
+            r#"
+shared struct Node { label: String }
+fn build() -> Vec[Vec[Node]] {
+    let mut outer: Vec[Vec[Node]] = Vec.new();
+    let mut a: Vec[Node] = Vec.new();
+    a.push(Node { label: "alpha string padded out beyond thirty-six bytes ok" });
+    outer.push(a);
+    return outer;
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let vv = build();
+        println(vv.len());
+        i = i + 1;
+    };
+}
+"#,
+            &["1", "1", "1"],
+            "vec_of_vec_of_shared_struct_scope_exit_drop_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_discarded_rc_temp_freed() {
         // A discarded fresh shared-struct (RC box): the producing call returns
         // one owned reference, so `materialize_owned_temp` queues a single

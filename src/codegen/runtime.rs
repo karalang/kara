@@ -1620,10 +1620,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // actually own heap — a `Vec[Vec[scalar]]` element is correctly handled
         // one-level by the fast path, so it keeps `None` and stays there; and
         // (b) the whole `Inner` subtree must be a shape the recursive drop family
-        // fully frees (String / nested Vec / Map / Set / tuple-thereof) — it
-        // would silently NO-OP a user struct/enum element, so a
-        // `Vec[Vec[<struct>]]` stays on the (equally-leaky-but-unchanged) fast
-        // path rather than gaining a misleading no-op drop.
+        // fully frees (String / nested Vec / Map / Set / tuple, and — since slice
+        // 3o — user struct / enum / shared, whose own drop synthesis the family's
+        // named-type arm delegates to). `Option` / `Result` inners remain
+        // excluded (the delegate no-ops them), so those stay on the one-level
+        // fast path rather than gaining a misleading no-op drop.
         if name == "Vec" {
             if let TypeKind::Path(p) = &elem_te.kind {
                 if let Some(GenericArg::Type(inner)) =
@@ -1675,11 +1676,13 @@ impl<'ctx> super::Codegen<'ctx> {
     /// True iff `emit_drop_fn_for_type_expr(te)` fully frees `te`'s heap — the
     /// recursive drop family (`emit_vec_drop_fn` / `emit_map_drop_fn` /
     /// `emit_string_drop_fn` / `emit_tuple_drop_fn`) bottoms out cleanly in
-    /// scalar / String / collection / tuple. A user struct/enum (or Option /
-    /// Result) is NOT covered — the family routes it to `emit_primitive_drop_fn`
-    /// (a no-op), which would silently drop nothing — so this returns false for
-    /// those, keeping such elements on their existing (struct/enum agg-drop or
-    /// the one-level fast) path instead of a wrong no-op.
+    /// scalar / String / collection / tuple, and — as of slice 3o —
+    /// user struct / enum / shared (the family's named-type arm delegates to
+    /// `vec_elem_agg_drop_for_type_expr`, which frees value heap fields and
+    /// rc-decs shared fields/elements). `Option` / `Result` remain UNCOVERED
+    /// (the delegate returns None for them → a no-op drop), so a
+    /// `Vec[Vec[Option[String]]]` element stays false and keeps its existing
+    /// (one-level fast) path rather than a wrong no-op.
     fn te_recursive_drop_fully_supported(&self, te: &TypeExpr) -> bool {
         match &te.kind {
             TypeKind::Tuple(elems) => elems
@@ -1703,7 +1706,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         arg(0).is_some_and(|k| self.te_recursive_drop_fully_supported(k))
                             && arg(1).is_some_and(|v| self.te_recursive_drop_fully_supported(v))
                     }
-                    _ => false,
+                    // A user struct / enum / shared type: its own drop synthesis
+                    // (reached via the `emit_drop_fn_for_type_expr` named-type
+                    // delegation) frees every heap field / variant payload, so a
+                    // `Vec[..<struct>..]` element recurses correctly. `Option` /
+                    // `Result` and unknown names stay false.
+                    _ => {
+                        self.struct_types.contains_key(head)
+                            || self.enum_layouts.contains_key(head)
+                            || self.shared_types.contains_key(head)
+                    }
                 }
             }
             _ => false,

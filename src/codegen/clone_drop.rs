@@ -1579,6 +1579,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 if head == Some("String") {
                     return self.emit_string_drop_fn();
                 }
+                // User struct / enum / shared element (owned-temp slice 3o). The
+                // recursive drop family otherwise bottoms out in the primitive
+                // no-op for a named user type — wrong for a struct/enum that owns
+                // heap (its String/Vec fields, or a shared field's RC box, would
+                // leak). Delegate to the Vec-element-aware synthesizer
+                // (`vec_elem_agg_drop_for_type_expr`), which frees value heap
+                // fields AND rc-decs shared fields/elements — the correct choice
+                // for a nested element, which (like a Vec element) has no `let`
+                // cleanup to rc-dec its shared fields. Returns None for a heapless
+                // struct/enum (and for Option/Result), which falls through to the
+                // primitive no-op below. `te` here is never a Vec/Map/Set/String
+                // (those return above), so this can't re-enter the collection
+                // arms — no unbounded recursion.
+                if let Some(f) = self.vec_elem_agg_drop_for_type_expr(te) {
+                    self.drop_fn_cache.insert(type_name, f);
+                    return f;
+                }
                 self.emit_primitive_drop_fn(&type_name)
             }
             _ => self.emit_primitive_drop_fn(&type_name),

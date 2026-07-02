@@ -19383,6 +19383,78 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_vec_of_vec_of_struct_drop_emits_struct_elem_drop() {
+        // Slice 3o: extends 3n's recursive drop to a `Vec[Vec[<user struct>]]`
+        // element where the struct owns heap (`Rec { name: String }`). 3n's gate
+        // excluded struct inners because the recursive drop family no-op'd a named
+        // user type; 3o's `emit_drop_fn_for_type_expr` now delegates a struct
+        // element to `vec_elem_agg_drop_for_type_expr` → `__karac_drop_struct_Rec`.
+        // So the outer drop recurses: `karac_drop_Vec_Rec` (per inner Vec, in the
+        // `cleanup.adrop` loop) calls `__karac_drop_struct_Rec` per element, which
+        // frees each `Rec.name` String. Without it the innermost field Strings
+        // leak (Linux LSan).
+        let src = r#"
+struct Rec { name: String, n: i64 }
+fn build() -> Vec[Vec[Rec]] {
+    let mut outer: Vec[Vec[Rec]] = Vec.new();
+    let mut a: Vec[Rec] = Vec.new();
+    a.push(Rec { name: "a field string padded out beyond thirty-six bytes ok", n: 1_i64 });
+    outer.push(a);
+    return outer;
+}
+
+fn main() {
+    let vv = build();
+    println(vv.len());
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("__karac_drop_struct_Rec"),
+            "expected the struct-field drop __karac_drop_struct_Rec threaded through the \
+             recursive Vec[Vec[Rec]] drop (frees each Rec.name String); got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("cleanup.adrop"),
+            "expected the agg-drop loop dropping each inner Vec[Rec] via the recursive \
+             per-element drop; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_vec_of_vec_of_enum_drop_emits_enum_elem_drop() {
+        // Slice 3o: the enum sibling. `Vec[Vec[Tok]]` where `Tok` has a heap
+        // variant (`Word(String)`). The struct/enum delegation routes a `Tok`
+        // element to `emit_enum_drop_switch` → `__karac_drop_Tok`, threaded through
+        // the recursive `karac_drop_Vec_Tok` so each live variant's payload String
+        // frees. Without it the `Word` payloads leak.
+        let src = r#"
+enum Tok { Word(String), Num(i64) }
+fn build() -> Vec[Vec[Tok]] {
+    let mut outer: Vec[Vec[Tok]] = Vec.new();
+    let mut a: Vec[Tok] = Vec.new();
+    a.push(Tok.Word("a token payload string padded beyond thirty-six bytes"));
+    outer.push(a);
+    return outer;
+}
+
+fn main() {
+    let vv = build();
+    println(vv.len());
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("__karac_drop_Tok"),
+            "expected the enum drop-switch __karac_drop_Tok threaded through the recursive \
+             Vec[Vec[Tok]] drop (frees each Word payload String); got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_ir_ref_arg_nested_vec_elem_freed() {
         // Slice 2 part B: a fresh `Vec[String]` passed to a `ref Vec[String]`
         // param is materialized into a `ref_rvalue_arg` temp. The prior path
