@@ -580,7 +580,16 @@ impl<'a> UseClassifier<'a> {
                 self.walk_block(body, Mode::Reading);
             }
             ExprKind::For { iterable, body, .. } => {
-                self.walk_expr(iterable, Mode::Consuming);
+                // design.md § Iterable: "The collection is always borrowed
+                // — `for` never consumes it. To consume a collection while
+                // iterating, call `.into_iter()` explicitly." A consuming
+                // iterable sub-expression (`for x in v.into_iter()`) still
+                // classifies itself via the method-receiver walk; the For
+                // construct contributes only a read. Walking this as
+                // Consuming made `for x in v { } … v.len()` a use-after-
+                // move under `karac check` (B-2026-07-02-8) — the legacy
+                // state-machine walker (`expr_check.rs`) already reads.
+                self.walk_expr(iterable, Mode::Reading);
                 self.walk_block(body, Mode::Reading);
             }
             ExprKind::Loop { body, .. } => {

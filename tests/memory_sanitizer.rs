@@ -14,6 +14,8 @@
 //! once on first invocation) or if `KARAC_SKIP_ASAN_TESTS=1` is set in the
 //! environment.
 
+mod common;
+
 #[cfg(feature = "llvm")]
 mod memory_sanitizer_tests {
     use karac::codegen::{compile_to_object, link_executable_with_sanitizer};
@@ -107,6 +109,7 @@ mod memory_sanitizer_tests {
         // exactly the divergence that hid the Option[shared] boxing
         // collision (b027fc15 bug 3) from the whole ASAN corpus.
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_ownership_clean(&ownership, src);
 
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let obj_path = format!("/tmp/karac_asan_{}_{}.o", std::process::id(), id);
@@ -235,6 +238,7 @@ mod memory_sanitizer_tests {
         karac::lower(&mut parsed.program, &typed);
         let effects = karac::effectcheck(&parsed.program);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_ownership_clean(&ownership, src);
         let analysis = karac::concurrency_analyze(&parsed.program, &effects);
 
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -5616,6 +5620,7 @@ fn main() {
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_ownership_clean(&ownership, src);
 
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let obj_path = format!("/tmp/karac_asan_ow_{}_{}.o", std::process::id(), id);

@@ -38,10 +38,10 @@ struct Stdout { }
 
 impl Stdout {
     #[compiler_builtin]
-    fn print(s: String) { }
+    fn print(s: ref String) { }
 
     #[compiler_builtin]
-    fn println(s: String) { }
+    fn println(s: ref String) { }
 
     #[compiler_builtin]
     fn flush() { }
@@ -51,10 +51,10 @@ struct Stderr { }
 
 impl Stderr {
     #[compiler_builtin]
-    fn print(s: String) { }
+    fn print(s: ref String) { }
 
     #[compiler_builtin]
-    fn println(s: String) { }
+    fn println(s: ref String) { }
 
     #[compiler_builtin]
     fn flush() { }

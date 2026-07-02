@@ -101,6 +101,7 @@ mod par_codegen_tests {
         }
         parsed.program.callee_effectful = table;
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_ownership_clean(&ownership, src);
         compile_to_ir(&parsed.program, Some(&ownership), None).expect("codegen failed")
     }
 
@@ -132,6 +133,7 @@ mod par_codegen_tests {
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_ownership_clean(&ownership, src);
         let ir = compile_to_ir(&parsed.program, Some(&ownership), None)
             .expect("collect_all_vec must lower under karac build in slice 1b");
         assert!(
@@ -175,6 +177,7 @@ mod par_codegen_tests {
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_ownership_clean(&ownership, src);
         let ir = compile_to_ir(&parsed.program, Some(&ownership), None)
             .expect("inline-Result + f-string closure VALUES must lower to verifier-clean IR");
         // The closure fns return the 6-word type-erased Result struct, not
@@ -210,6 +213,7 @@ mod par_codegen_tests {
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_ownership_clean(&ownership, src);
         let ir = compile_to_ir(&parsed.program, Some(&ownership), None)
             .expect("collect_all must lower under karac build");
         assert!(
@@ -256,6 +260,7 @@ mod par_codegen_tests {
         karac::lower(&mut parsed.program, &typed);
         let effects = karac::effectcheck(&parsed.program);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_ownership_clean(&ownership, src);
         let analysis = karac::concurrency_analyze(&parsed.program, &effects);
 
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -338,6 +343,7 @@ fn main() {
         karac::lower(&mut parsed.program, &typed);
         let effects = karac::effectcheck(&parsed.program);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_ownership_clean(&ownership, src);
         let analysis = karac::concurrency_analyze(&parsed.program, &effects);
         let obj_path = format!("/tmp/karac_atomic_reject_{}.o", std::process::id());
         let err = compile_to_object(
@@ -2206,6 +2212,7 @@ fn main() {
         let effects = karac::effectcheck(&parsed.program);
         let analysis = karac::concurrency_analyze(&parsed.program, &effects);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_ownership_clean(&ownership, src);
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let pid = std::process::id();
         let obj = format!("/tmp/karac_bug3_{pid}_{id}.o");

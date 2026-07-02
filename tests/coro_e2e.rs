@@ -30,6 +30,8 @@
 
 #![cfg(feature = "llvm")]
 
+mod common;
+
 #[cfg(test)]
 mod tests {
     use std::io::{BufRead, BufReader};
@@ -641,6 +643,7 @@ mod tests {
             build_callee_purely_polymorphic_effects_set(&effects);
 
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_ownership_clean(&ownership, src);
 
         let pid = std::process::id();
         let nanos = std::time::SystemTime::now()
@@ -1817,7 +1820,8 @@ mod tests {
         parsed.program.call_effect_subs = build_call_effect_subs_table(&effects);
         parsed.program.callee_purely_polymorphic_effects =
             build_callee_purely_polymorphic_effects_set(&effects);
-        let _ownership = karac::ownershipcheck(&parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_ownership_clean(&ownership, src);
 
         // Load concurrency analysis — the CLI `karac build` path passes it, and
         // it is what surfaced the coro+auto-par interaction (a coroutine body

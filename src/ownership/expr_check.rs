@@ -1037,6 +1037,24 @@ impl<'a> super::OwnershipChecker<'a> {
                     captures.push((name.clone(), mode));
                 }
                 captures.sort_by(|a, b| a.0.cmp(&b.0));
+                // Rule 2½ prefix pinning applies to the per-NAME capture
+                // map too, not just the per-path map below — the closure-
+                // escape check (`check_closure_ref_capture_escapes`) reads
+                // THIS map, so without the pin an `own |x| x + k` closure
+                // still registered `k` as `Ref` and E0508 fired on the
+                // design-blessed clean-escape spelling (design.md Rule 2
+                // sub-case (i): own captures move into the closure; the
+                // escape is clean). B-2026-07-02-6.
+                if let Some(declared) = capture_mode {
+                    let pinned = match declared {
+                        CaptureMode::Own => OwnershipMode::Own,
+                        CaptureMode::Ref => OwnershipMode::Ref,
+                        CaptureMode::MutRef => OwnershipMode::MutRef,
+                    };
+                    for (_, m) in captures.iter_mut() {
+                        *m = pinned.clone();
+                    }
+                }
                 self.closure_captures
                     .insert(SpanKey::from_span(&expr.span), captures);
 

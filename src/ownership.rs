@@ -1894,14 +1894,36 @@ fn impl_target_name(target_type: &TypeExpr) -> Option<String> {
 /// `"Type.method"` for static methods.
 pub(crate) fn collect_callee_param_modes(program: &Program) -> HashMap<String, Vec<OwnershipMode>> {
     let mut map = HashMap::new();
-    // Baked-stdlib static methods FIRST (B-2026-07-01-10): the ownership
+    // Compiler-intrinsic free functions FIRST (B-2026-07-02-7): the print
+    // family and `with_provider` have no declared signature anywhere (not
+    // in the user program, not in the baked stdlib — they are typechecker/
+    // codegen intrinsics), so their call args fell through to the
+    // conservative consume-everything default and `println(s); s.len()`
+    // was rejected by `karac check` — contradicting design.md § Display
+    // ("borrows the receiver — the same value can appear in multiple `{}`
+    // slots without being consumed"; printing is a read, never a consume,
+    // on both execution surfaces). `with_provider(value, body)`'s value
+    // slot is likewise non-consuming per the documented mutation-visible-
+    // after-pop semantics (classified `Ref` here — the provider machinery
+    // owns the mutation plumbing; `Ref` only asserts "not consumed").
+    // The body Fn slot stays `Own` (it is a once-invoked closure — calling
+    // it consumes owned captures). Inserted first so stdlib/user
+    // definitions of the same key win below.
+    for name in ["print", "println", "eprint", "eprintln"] {
+        map.insert(name.to_string(), vec![OwnershipMode::Ref]);
+    }
+    map.insert(
+        "with_provider".to_string(),
+        vec![OwnershipMode::Ref, OwnershipMode::Own],
+    );
+    // Baked-stdlib static methods next (B-2026-07-01-10): the ownership
     // pass previously saw only the USER program's items, so a baked
     // signature's declared `ref` mode never reached call-arg
     // classification — every `Stats.sum(v)`-style call consumed its
     // argument and two statistics over one dataset was rejected by
     // `karac check` (while the runtime semantics never consumed it).
-    // Stdlib entries are inserted first so a user redefinition of the
-    // same key wins below.
+    // Stdlib entries are inserted before the user walk so a user
+    // redefinition of the same key wins below.
     for (_, sp) in crate::prelude::STDLIB_PROGRAMS.iter() {
         collect_callee_param_modes_into(sp, &mut map);
     }

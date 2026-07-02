@@ -4398,6 +4398,7 @@ fn main() {
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_ownership_clean(&ownership, src);
 
         let id = std::process::id();
         let obj_path = format!("/tmp/karac_size_{}.o", id);
@@ -6392,6 +6393,11 @@ fn main() {
         // prepend-builder shape segfaulted while 1100+ E2E tests stayed
         // green. The suite tests what ships.
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        // And ships only ownership-CLEAN programs — `karac check` rejects
+        // on ownership errors, so a test program that flunks the checker
+        // feeds codegen input production never reaches (that masked
+        // B-2026-07-01-10 for weeks).
+        super::common::assert_ownership_clean(&ownership, src);
 
         // W3.3 — LLJIT dispatch under env-var control. Routes the whole
         // 543-test E2E suite through `LLJITEngine` instead of the AOT
@@ -24291,6 +24297,7 @@ fn main() {
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_ownership_clean(&ownership, src);
         compile_to_ir(&parsed.program, Some(&ownership), None).expect("codegen failed")
     }
 
@@ -27098,6 +27105,7 @@ fn main() {
         karac::lower(&mut parsed.program, &typed);
         // Ownership-loaded, same rationale as `run_program_capturing_inner`.
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_ownership_clean(&ownership, src);
 
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let obj_path = format!("/tmp/karac_e2e_envtrace_{}_{}.o", std::process::id(), id);
@@ -31288,7 +31296,8 @@ fn main() {
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
         let effects = karac::effectcheck(&parsed.program);
-        let _ = karac::ownershipcheck(&parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_ownership_clean(&ownership, src);
         let analysis = karac::concurrency_analyze(&parsed.program, &effects);
 
         // The analysis should at minimum have an entry for `main`.
@@ -35093,7 +35102,8 @@ fn main() {
         parsed.program.call_effect_subs = build_call_effect_subs_table(&effects);
         parsed.program.callee_purely_polymorphic_effects =
             build_callee_purely_polymorphic_effects_set(&effects);
-        let _ownership = karac::ownershipcheck(&parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_ownership_clean(&ownership, src);
         let ir = compile_to_ir_with_coro_split(&parsed.program, None, None)
             .expect("coro split codegen failed");
 
@@ -50843,7 +50853,7 @@ fn main() {
              shared struct Sh { mut b: u8, mut tail: i64 }\n\
              \n\
              impl S {\n\
-                 fn get_b(self) -> u8 {\n        return self.b;\n    }\n\
+                 fn get_b(ref self) -> u8 {\n        return self.b;\n    }\n\
              }\n\
              \n\
              fn poke(s: mut ref S) {\n    s.b = 201;\n}\n\
@@ -53977,6 +53987,7 @@ fn main() {
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_ownership_clean(&ownership, src);
 
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let pid = std::process::id();
@@ -54065,6 +54076,7 @@ fn main() {
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_ownership_clean(&ownership, src);
         let obj = format!("/tmp/karac_ffi_cunwind_{}.o", std::process::id());
         let result = compile_to_object_with_options(
             &parsed.program,

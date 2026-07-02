@@ -30,6 +30,8 @@
 //! of this file as documentation of what the polymorphic-`serve[E]`
 //! follow-up needs to test.
 
+mod common;
+
 #[cfg(feature = "llvm")]
 mod http_server_tests {
     use std::io::{BufRead, BufReader, Read, Write};
@@ -103,6 +105,7 @@ mod http_server_tests {
         karac::lower(&mut parsed.program, &typed);
         let _effects = karac::effectcheck(&parsed.program);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        super::common::assert_ownership_clean(&ownership, src);
         let pid = std::process::id();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
