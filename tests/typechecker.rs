@@ -3619,7 +3619,7 @@ fn test_opaque_type_through_mut_ref_accepted() {
 
 #[test]
 fn test_opaque_type_through_const_pointer_accepted() {
-    // B-2026-07-01-9: raw pointers are sized regardless of pointee —
+    // B-2026-07-01-11: raw pointers are sized regardless of pointee —
     // `*const Foo` for an opaque foreign `Foo` is the canonical C
     // opaque-handle FFI shape. The slice-1b indirection walker passed
     // `parent_is_ref = false` through `TypeKind::Pointer`, so this
