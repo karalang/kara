@@ -21,7 +21,8 @@
 //! Tensor `⊕`/`-t` (dense) and Column `⊕`/`-c` (validity-gated with SQL null
 //! propagation) share one map skeleton, parameterized on the second operand
 //! ([`MapOther`]: container / broadcast scalar / none) and the per-element op
-//! ([`MapKernelOp`]: `compile_binop_typed` vs Column's native `fneg`/`ineg`).
+//! ([`MapKernelOp`]: `compile_binop_typed`, or `Neg` = IEEE `fneg` / checked
+//! int `0 - x` matching the interpreter's `eval_unary`).
 //! The non-f64 `ElemKind` axis for `Stats` lands later (S5).
 //!
 //! **Byte-identical.** The emitters here reduce to the exact instructions the
@@ -79,9 +80,14 @@ pub(super) enum MapKernelOp<'a> {
     /// A scalar binary op through `compile_binop_typed` — inherits the exact
     /// scalar semantics (int overflow trap, div-by-zero trap, signedness).
     Binop(&'a BinOp),
-    /// A bare `fneg`/`ineg` on the element — the Column `-c` posture (no
-    /// `i64::MIN` trap, unlike Tensor's `0 - x` form).
-    NegNative,
+    /// Element negation with the scalar `-x` semantics (the interpreter's
+    /// `eval_unary`): a true IEEE `fneg` for floats (`-0.0` for `0.0` — NOT
+    /// `0.0 - x`, which loses the signed zero) and a **checked** `0 - x` for
+    /// ints (traps on `MIN`, like `checked_neg`). Fixed B-2026-07-01-1/-2:
+    /// Tensor `-t` used `fsub 0.0, x` (`+0.0` for `0.0`) and Column `-c`
+    /// used a bare wrapping `ineg` (silent `i64::MIN` wrap) — both diverged
+    /// from `karac run` at exactly those edges.
+    Neg,
 }
 
 /// Where an element-wise map writes (S3): the result buffer, its element
@@ -575,9 +581,9 @@ impl<'ctx> super::Codegen<'ctx> {
     ///   * **the second operand** ([`MapOther`]) — container / broadcast
     ///     scalar (`on_left` for `2 - t`) / none.
     ///   * **the per-element op** ([`MapKernelOp`]) — `Binop` via
-    ///     `compile_binop_typed` (Tensor `-t` is `Binop(Sub)` + zero scalar
-    ///     on the left, so `i64::MIN` traps like the interpreter's
-    ///     `checked_neg`); `NegNative` is Column's bare `fneg`/`ineg`.
+    ///     `compile_binop_typed`, or `Neg` with the scalar `-x` semantics
+    ///     (IEEE `fneg` for floats, checked `0 - x` for ints) that both
+    ///     Tensor `-t` and Column `-c` route through.
     ///
     /// The computed element is coerced to `dest.elem` via
     /// `coerce_scalar_to_type` (identity when the types already match —
@@ -669,22 +675,24 @@ impl<'ctx> super::Codegen<'ctx> {
             (MapKernelOp::Binop(_), MapOther::Unary) => {
                 return Err("elementwise map: binop needs a second operand".to_string())
             }
-            (MapKernelOp::NegNative, MapOther::Unary) => match a {
+            (MapKernelOp::Neg, MapOther::Unary) => match a {
+                // True IEEE negation — `-0.0` for `0.0` (a `0.0 - x` would
+                // lose the signed zero; B-2026-07-01-1).
                 BasicValueEnum::FloatValue(fv) => self
                     .builder
                     .build_float_neg(fv, "kern.map.fneg")
                     .unwrap()
                     .into(),
-                BasicValueEnum::IntValue(int_v) => self
-                    .builder
-                    .build_int_neg(int_v, "kern.map.ineg")
-                    .unwrap()
-                    .into(),
+                // Checked `0 - x` — traps on `MIN` like the interpreter's
+                // `checked_neg` (a bare `ineg` silently wraps;
+                // B-2026-07-01-2).
+                BasicValueEnum::IntValue(int_v) => {
+                    let zero: BasicValueEnum<'ctx> = int_v.get_type().const_zero().into();
+                    self.compile_binop_typed(&BinOp::Sub, zero, a, lhs.unsigned)?
+                }
                 other_v => other_v,
             },
-            (MapKernelOp::NegNative, _) => {
-                return Err("elementwise map: native neg is unary".to_string())
-            }
+            (MapKernelOp::Neg, _) => return Err("elementwise map: neg is unary".to_string()),
         };
         let r = self.coerce_scalar_to_type(r, dest.elem);
         let rp = unsafe {

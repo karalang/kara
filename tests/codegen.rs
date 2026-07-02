@@ -51964,6 +51964,52 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_tensor_neg_signed_zero() {
+        // B-2026-07-01-1: `-t` on a float tensor must be a true IEEE `fneg`
+        // — `-0.0` for element `0.0` — matching the interpreter's `-f`. The
+        // old `0.0 - x` lowering lost the signed zero (printed `0`).
+        let out = run_program(
+            "fn main() {\n\
+                 let t: Tensor[f64, [2]] = Tensor.from([0.0, 1.5]);\n\
+                 let n = -t;\n\
+                 println(n[0]);\n\
+                 println(n[1]);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "-0\n-1.5\n",
+                "float tensor neg must preserve the signed zero (fneg, not 0 - x)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_column_neg_i64_min_traps() {
+        // B-2026-07-01-2: `-c` on a Column[i64] slot holding i64::MIN must
+        // trap with the scalar checked-neg overflow (like the interpreter),
+        // not silently wrap the way the old bare `ineg` lowering did.
+        let captured = run_program_capturing(
+            "fn main() {\n\
+                 let big = -9223372036854775807;\n\
+                 let mut c: Column[i64] = Column.new();\n\
+                 c.push(big - 1);\n\
+                 let m = -c;\n\
+                 match m[0] { Some(v) => { println(v); }, None => { println(-1); } }\n\
+             }\n",
+        );
+        if let Some(c) = captured {
+            let all = format!("{}{}", c.stdout, c.stderr);
+            assert!(
+                all.contains("integer overflow"),
+                "expected the checked-neg overflow trap on i64::MIN, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_tensor_int_arithmetic_chained() {
         // Int tensors, chained `a + b + c` and `(a + b) * c` (the fresh-temp
         // intermediate free path), integer division. Output vs `karac run`.

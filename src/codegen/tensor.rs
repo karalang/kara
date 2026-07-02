@@ -2388,9 +2388,11 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// Element-wise negation `-t` — a fresh tensor with each element negated
-    /// (`0 - x` via the scalar binop, so int overflow on `i64::MIN` traps
-    /// like the interpreter's `checked_neg`). The operand is read; a fresh-
-    /// temp operand is freed after the copy.
+    /// via the kernel's `MapKernelOp::Neg` (the scalar `-x` semantics: IEEE
+    /// `fneg` for floats — `-0.0` for `0.0`, matching the interpreter's `-f`;
+    /// B-2026-07-01-1 — and checked `0 - x` for ints, so `i64::MIN` traps
+    /// like `checked_neg`). The operand is read; a fresh-temp operand is
+    /// freed after the copy.
     pub(super) fn compile_tensor_neg(
         &mut self,
         operand: &Expr,
@@ -2416,23 +2418,19 @@ impl<'ctx> super::Codegen<'ctx> {
         let (res, res_data) = self.tensor_alloc_runtime(rank, count, elem_size);
         self.tensor_copy_header_dims(tptr, res, rank);
         let t_data = self.tensor_data_ptr_dyn(tptr, rank, "t.neg.td");
-        // `0 - x` per element — zero of the element type, broadcast on the left.
-        let zero: BasicValueEnum<'ctx> = if elem.is_float_type() {
-            elem.into_float_type().const_zero().into()
-        } else {
-            elem.into_int_type().const_zero().into()
-        };
-        self.emit_tensor_binop_loop(
-            &BinOp::Sub,
+        let lhs = ContainerAccess {
+            data: t_data,
+            len: count,
             elem,
-            count,
-            res_data,
-            t_data,
-            None,
-            Some(zero),
-            is_unsigned,
-            true,
-        )?;
+            unsigned: is_unsigned,
+            bitmap: None,
+        };
+        let dest = MapDest {
+            data: res_data,
+            elem,
+            bitmap: None,
+        };
+        self.emit_elementwise_map(&lhs, &MapOther::Unary, &MapKernelOp::Neg, &dest)?;
         if self.tensor_operand_is_owned_fresh_temp(operand) {
             self.builder
                 .build_call(self.free_fn, &[tptr.into()], "")

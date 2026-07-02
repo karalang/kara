@@ -3940,8 +3940,9 @@ impl<'ctx> super::Codegen<'ctx> {
             .column_load_field(dst, 1, "col.neg.dbm")
             .into_pointer_value();
 
-        // The shared gated map, unary: a bare `fneg`/`ineg` per valid slot
-        // (the Column posture — no `i64::MIN` trap, unlike Tensor's `0 - x`).
+        // The shared gated map, unary: scalar `-x` semantics per valid slot —
+        // IEEE `fneg` for floats, checked `0 - x` for ints (traps on
+        // `i64::MIN` like the interpreter's `checked_neg`; B-2026-07-01-2).
         let lhs = ContainerAccess {
             data: cdata,
             len,
@@ -3954,7 +3955,7 @@ impl<'ctx> super::Codegen<'ctx> {
             elem: result_elem,
             bitmap: Some(dst_bm),
         };
-        self.emit_elementwise_map(&lhs, &MapOther::Unary, &MapKernelOp::NegNative, &dest)?;
+        self.emit_elementwise_map(&lhs, &MapOther::Unary, &MapKernelOp::Neg, &dest)?;
         self.column_free_if_fresh_temp(operand, cp);
         Ok(dst.into())
     }
