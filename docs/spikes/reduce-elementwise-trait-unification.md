@@ -1,7 +1,7 @@
 # Design spike — trait-dispatched Reduce / ElementwiseMap / ElementwiseOrd unification
 
-**Status:** 🟡 **S0–S1 COMPLETE 2026-06-30 (`bcaff37d`, `73af27b0`, `7adcc380`,
-`29b55062`); S2–S6 open.** Unifies the three copy-pasted
+**Status:** 🟡 **S0–S2 COMPLETE (S0–S1 2026-06-30 `bcaff37d`, `73af27b0`,
+`7adcc380`, `29b55062`; S2 2026-07-01); S3–S6 open.** Unifies the three copy-pasted
 reduce/element-wise/ordering implementations (Tensor, Column, `Stats.*`) behind
 one internal kernel, then layers **user-extensible** surface traits on top. **S0
 (interpreter twin + shared vocabulary):**
@@ -16,10 +16,15 @@ fold` + `emit_reduce_minmax` and their `_gated` (validity) variants. All three
 surfaces' `sum`/`prod`/`mean`/`min`/`max` funnel through them — Stats + Tensor
 (dense), Column (validity-gated, folds valid slots + guards all-null). The old
 ~120-line `emit_scalar_reduce_loop` was deleted and Column shed ~150 lines.
-Seeds and empty policy stay per-surface at the call sites. **Remaining on the
-kernel:** Column `mean`/`var`/`std` (f64-accumulator; S2), the non-f64
-`ElemKind` axis for Stats (S5), and the ElementwiseMap/Ord families (S3/S4).
-Zero behavior change — codegen run-vs-build oracle 1937/0, par_codegen 127/0,
+Seeds and empty policy stay per-surface at the call sites. **S2 (f64-accumulator
+family):** `emit_sum_f64_and_count` (dense-or-gated overflow-safe `Σ x as f64` +
+count) and `emit_variance_from` (`mean = sum/count` → `Σ(x−mean)²` → Bessel-
+adjusted divide, `bessel` knob) now back Column `mean`/`var`/`std` (sample, ÷ n−1)
+and Stats `variance`/`stddev` (population, ÷ n); `column_sum_f64_and_count` and
+Stats' hand-rolled variance loop are deleted, elements widen through the shared
+`column_elem_to_f64`. **Remaining on the kernel:** the non-f64 `ElemKind` axis for
+Stats (S5), and the ElementwiseMap/Ord families (S3/S4).
+Zero behavior change — codegen run-vs-build oracle 1943/0, par_codegen 127/0,
 interpreter 1046/0. Two layers, bottom-up: the
 internal kernel (slices S0–S5) is the load-bearing refactor and is fully covered
 by a byte-identical native oracle;
@@ -97,7 +102,7 @@ else is copy-paste. Each interpreter twin (`eval_stats_fn`,
 |---|---|---|
 | **S0** ✅ | Descriptors + interpreter twin. **Zero behavior change.** *(landed `bcaff37d`)* | Proved byte-identical: interpreter 1046/0, codegen E2E+oracle 1921/0. `ReduceOp` vocabulary + `reduce_f64` in `src/reduce_kernel.rs`; `Stats.*`/`Column` f64 reductions + shared min-max/`value_as_f64` funneled through it. |
 | **S1** ✅ | Route Tensor `emit_scalar_reduce_loop`, Column sum/minmax, Stats fold/minmax/mean → `emit_reduce`. Preserve exact seeds, empty policy, return shape **per surface**. | **S1a (`73af27b0`):** `ContainerAccess` + `emit_reduce_fold`; Stats + Tensor `sum`/`prod`/`mean`. **S1b (`7adcc380`):** `emit_reduce_minmax`; Tensor + Stats `min`/`max`, axis-sum rerouted, `emit_scalar_reduce_loop` deleted. **S1c (`29b55062`):** `bitmap` axis + `*_gated` variants; Column `sum`/`min`/`max` migrated (oracle 1937/0, par 127/0). Column `mean` → S2. |
-| **S2** | Fold the f64-accumulator family — Column `mean`/`var`/`std` (÷n−1) + Stats `variance`/`stddev` (÷n) — into a shared f64-sum-and-count emitter with `Var{bessel}`. Column `mean` moved here from S1 (it accumulates in f64 to stay overflow-safe, sharing `column_sum_f64_and_count` with var/std). | Don't change either surface's numbers. |
+| **S2** ✅ | Fold the f64-accumulator family — Column `mean`/`var`/`std` (÷n−1) + Stats `variance`/`stddev` (÷n) — into a shared f64-sum-and-count emitter with a Bessel knob. | **Landed 2026-07-01.** `emit_sum_f64_and_count` (dense-or-gated `Σ x as f64` + count) + `emit_variance_from` (`mean` → `Σ(x−mean)²` → `count − (bessel?1:0)` divide) in `kernel.rs`; Column `mean`/`var`/`std` + Stats `variance`/`stddev` migrated, `column_sum_f64_and_count` + Stats' variance loop deleted, elements widen via shared `column_elem_to_f64`. Numbers unchanged — oracle **1943/0**, par 127/0. |
 | **S3** | Unify ElementwiseMap: Tensor binop/neg + Column binop/neg (null-prop via access). Stats has none. | — |
 | **S4** | Unify ElementwiseOrd + `emit_sort_scratch`; route Stats median/percentile/argmin/argmax/sort/argsort + Tensor/Column min/max ordering. | **Bonus: lands Column `median`/`quantile` codegen** (today interpreter-only). |
 | **S5** | Non-f64 element kinds for Stats (`Slice[i64]`/`f32`/…). Thread `ElemKind` from typechecker binding annotation. | Return rules: mean/var/std→f64; sum/prod→T. Closes the non-f64 gap. |
