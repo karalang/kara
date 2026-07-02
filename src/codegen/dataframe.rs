@@ -168,15 +168,17 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Load the control pointer from a DataFrame binding's slot.
     pub(super) fn dataframe_ptr_for_var(&self, name: &str) -> Result<PointerValue<'ctx>, String> {
-        let slot = self
-            .variables
-            .get(name)
+        // `get_data_ptr`, not `variables[name].ptr` directly — ref-param
+        // slots hold a pointer to the caller's slot, one deref shy of the
+        // control pointer (B-2026-07-02-27, same shape as Column).
+        let place = self
+            .get_data_ptr(name)
             .ok_or_else(|| format!("Undefined DataFrame variable '{name}'"))?;
         Ok(self
             .builder
             .build_load(
                 self.context.ptr_type(AddressSpace::default()),
-                slot.ptr,
+                place,
                 &format!("{name}.df"),
             )
             .unwrap()

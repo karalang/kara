@@ -45997,6 +45997,63 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_ref_params_of_handle_backed_builtins() {
+        // B-2026-07-02-27: a `ref Column[i64]` (and ref Tensor / ref
+        // DataFrame) parameter's slot holds a pointer to the CALLER's
+        // slot, but `column_ptr_for_var` (and the tensor/dataframe
+        // twins) loaded the control pointer with a single deref — the
+        // caller's alloca address was read as a control block, so the
+        // callee saw stack garbage (empty column / wrong data). Covers:
+        // ref param, ref forwarded through a second ref call, `mut ref`
+        // push mutating through the borrow, indexing through the ref
+        // (the original ledger repro), and an owned-param control.
+        let src = r#"
+fn colsum(c: ref Column[i64]) -> i64 {
+    c.sum()
+}
+fn colsum2(c: ref Column[i64]) -> i64 {
+    colsum(c)
+}
+fn colown(c: Column[i64]) -> i64 {
+    c.sum()
+}
+fn colpush(c: mut ref Column[i64]) {
+    c.push(5);
+}
+fn fst(c: ref Column[i64], i: i64) -> i64 {
+    match c[i] {
+        Some(v) => v,
+        None => -1,
+    }
+}
+fn tsum(t: ref Tensor[i64, [3]]) -> i64 {
+    t.sum()
+}
+fn dfrows(d: ref DataFrame) -> i64 {
+    d.height()
+}
+fn main() {
+    let c: Column[i64] = Column.from_vec([10, 20, 30]);
+    println(colsum(c));
+    println(colsum2(c));
+    println(fst(c, 1));
+    let mut cm: Column[i64] = Column.from_vec([1, 2]);
+    colpush(mut cm);
+    println(cm.sum());
+    let t: Tensor[i64, [3]] = Tensor.from([7, 8, 9]);
+    println(tsum(t));
+    let mut d = DataFrame.new();
+    d.insert("a", Column.from_vec([1, 2, 3, 4]));
+    println(dfrows(d));
+    let c2: Column[i64] = Column.from_vec([100, 200]);
+    println(colown(c2));
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        assert_eq!(out, "60\n60\n20\n8\n24\n4\n300\n");
+    }
+
+    #[test]
     fn test_e2e_narrow_literal_all_sinks_pack_contextual_width() {
         // B-2026-07-02-6 general fix: the typechecker re-records a collection
         // literal admitted against a scalar-element Vec/Slice/ref-Vec context
