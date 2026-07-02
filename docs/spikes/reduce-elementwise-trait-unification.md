@@ -1,7 +1,9 @@
 # Design spike — trait-dispatched Reduce / ElementwiseMap / ElementwiseOrd unification
 
-**Status:** 🟡 **S0–S4 COMPLETE (S0–S1 2026-06-30 `bcaff37d`, `73af27b0`,
-`7adcc380`, `29b55062`; S2–S5 2026-07-01, S3 `b0a40963`+`eb21e300`, S4 `2ff34611`); S6 open.** Unifies the three copy-pasted
+**Status:** 🟡 **S0–S5 + S6-pre COMPLETE (S0–S1 2026-06-30 `bcaff37d`, `73af27b0`,
+`7adcc380`, `29b55062`; S2–S5 2026-07-01, S3 `b0a40963`+`eb21e300`, S4 `2ff34611`;
+S6-pre probe matrix 2026-07-02 — see §3.3, which also surfaced + fixed
+B-2026-07-02-10..13); S6a–S6c open.** Unifies the three copy-pasted
 reduce/element-wise/ordering implementations (Tensor, Column, `Stats.*`) behind
 one internal kernel, then layers **user-extensible** surface traits on top. **S0
 (interpreter twin + shared vocabulary):**
@@ -196,6 +198,28 @@ confirm/build each:
 5. **Element-type-changing `map` deferred** — `Tensor[i64].map(fn(i64)->f64)`
    needs HKT-ish associated-type constructors. First cut restricts `map` to
    same element type (`fn(T)->T`); flag the limitation.
+
+#### S6-pre findings (probed 2026-07-02, both `run` and `build` surfaces)
+
+| # | Feature | `run` | `build` | Verdict |
+|---|---|---|---|---|
+| 1 | Default body as fallback (impl omits the method) | ✗ typecheck "no method" | ✗ same | **Missing feature.** Bodies PARSE (`TraitMethod.body: Option<Block>`) but no phase falls back to them. The S6b work item. |
+| 1b | Impl *overrides* a default body | ✓ | ✓ | Works. |
+| 2a | Trait-level generic `T` as method return (`impl Wrap[i64]`) | ✓ (after B-2026-07-02-10) | ✓ | Works. The `run` failure was NOT trait-related — builtin-name shadowing (`first` swallowed by the seq arm), fixed this slice. |
+| 2b | Generic method inside a trait (`twice[A]`) | ✓ | ✗ loud ("no handler for method") | Codegen gap — impl-method monomorphization doesn't exist. S6b work item. |
+| 2c | `where T: Display` on a trait method | ✓ | ✓ | Works. (`where Self: Sized` does NOT parse — SelfType rejected in where clauses; not needed by the S6 design.) |
+| 3 | `Fn`-value params through generic monos | ✓ | ✓ (after B-2026-07-02-11) | **Was a silent miscompile** (`apply(20, |v| v*2+2)` returned 0); fixed this slice along with the whole Vec-param-in-mono surface (B-2026-07-02-11) and un-annotated closure param ABI (B-2026-07-02-12). |
+| 4a | Blanket impl over a user generic struct (`impl[T] Total for Holder[T]`) | ✓ | ✓ | Works — pleasant surprise. |
+| 4b | Blanket impl over builtin containers (`impl[T] Total for Vec[T]`) | ✗ runtime "type 'unknown'" | ✗ loud codegen reject | Missing feature (S6c). `karac check` ADMITS it — a check-passes/run-fails admission gap. |
+| 5 | `T.zero()` assoc fn via a bound (`fn make[T: Zeroish]() -> T`) | ✓ | ✓ | Works — the `T::zero()` default-body pattern in the design sketch is viable today. |
+
+**Net assessment:** the trait system is much further along than feared. The
+real S6 feature work reduces to (i) default-body fallback dispatch (all three
+phases), (ii) codegen monomorphization of impl/trait methods with their own
+generic params, (iii) trait impls over builtin containers. `where` on methods,
+blanket impls over user types, and assoc-fns-via-bounds already work. Four
+pre-existing compiler bugs surfaced (and were fixed) by the probing —
+B-2026-07-02-10..13, see the ledger.
 
 ### 3.4 S6 slices (after S6-pre)
 
