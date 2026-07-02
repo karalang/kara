@@ -3618,6 +3618,50 @@ fn test_opaque_type_through_mut_ref_accepted() {
 }
 
 #[test]
+fn test_opaque_type_through_const_pointer_accepted() {
+    // B-2026-07-01-9: raw pointers are sized regardless of pointee —
+    // `*const Foo` for an opaque foreign `Foo` is the canonical C
+    // opaque-handle FFI shape. The slice-1b indirection walker passed
+    // `parent_is_ref = false` through `TypeKind::Pointer`, so this
+    // wrongly fired `E_OPAQUE_TYPE_REQUIRES_INDIRECTION` once raw-
+    // pointer parser surface landed (the flagged slice-1b carry-forward).
+    typecheck_ok(
+        "unsafe extern \"C\" {\n\
+             type Foo;\n\
+             fn use_it(p: *const Foo) -> i64;\n\
+         }\n\
+         fn main() {}",
+    );
+}
+
+#[test]
+fn test_opaque_type_through_mut_pointer_accepted() {
+    typecheck_ok(
+        "unsafe extern \"C\" {\n\
+             type Foo;\n\
+             fn mutate(p: *mut Foo) -> i64;\n\
+         }\n\
+         fn main() {}",
+    );
+}
+
+#[test]
+fn test_opaque_type_by_value_inside_generic_behind_pointer_rejected() {
+    // Boundary pin for the pointer exemption: the pointer makes only its
+    // IMMEDIATE pointee sized — `Foo` by value inside `Vec` stays
+    // rejected even when the Vec itself sits behind a raw pointer
+    // (generic args reset `parent_is_ref`, same as `ref Vec[Foo]`).
+    let errors = typecheck_errors(
+        "unsafe extern \"C\" {\n\
+             type Foo;\n\
+             fn sneaky(p: *const Vec[Foo]) -> i64;\n\
+         }\n\
+         fn main() {}",
+    );
+    assert_error_code_present(&errors, "E_OPAQUE_TYPE_REQUIRES_INDIRECTION");
+}
+
+#[test]
 fn test_opaque_type_field_access_through_ref_rejected() {
     let errors = typecheck_errors(
         "unsafe extern \"C\" {\n\

@@ -26,8 +26,11 @@ impl<'a> super::TypeChecker<'a> {
         // Top-level entry: by default the type is in a sized-by-value
         // position. Slice 1b's `E_OPAQUE_TYPE_REQUIRES_INDIRECTION` check
         // flips `parent_is_ref` to `true` only when descending through
-        // `TypeKind::Ref` / `TypeKind::MutRef`, so opaque-foreign-type names
-        // are accepted at `ref Foo` / `mut ref Foo` and rejected everywhere
+        // `TypeKind::Ref` / `TypeKind::MutRef` / `TypeKind::Pointer` (raw
+        // pointers are sized regardless of pointee, just like references —
+        // the slice-1b carry-forward closed once `*const T` surface landed),
+        // so opaque-foreign-type names are accepted at `ref Foo` /
+        // `mut ref Foo` / `*const Foo` / `*mut Foo` and rejected everywhere
         // else (fn params/return, struct fields, enum payloads, let
         // bindings, generic args, tuples, arrays, etc.).
         self.lower_type_expr_inner(ty, generic_scope, false)
@@ -45,12 +48,13 @@ impl<'a> super::TypeChecker<'a> {
                 // Slice 1b: opaque foreign types declared via `unsafe extern
                 // "ABI" { type Foo; }` have no known size and cannot appear
                 // by value. `parent_is_ref` is `true` only when the
-                // immediate parent is `Ref` / `MutRef`, so `Vec[Foo]` (Foo
-                // by-value inside Vec) and `ref Vec[Foo]` (Foo still
-                // by-value inside Vec) both correctly emit; `ref Foo` and
-                // `mut ref Foo` do not. The lowered type is returned
-                // unchanged so downstream phases see the user's intent for
-                // recovery purposes.
+                // immediate parent is `Ref` / `MutRef` / `Pointer`, so
+                // `Vec[Foo]` (Foo by-value inside Vec) and `ref Vec[Foo]`
+                // (Foo still by-value inside Vec) both correctly emit;
+                // `ref Foo`, `mut ref Foo`, `*const Foo`, and `*mut Foo`
+                // do not. The lowered type is returned unchanged so
+                // downstream phases see the user's intent for recovery
+                // purposes.
                 if !parent_is_ref {
                     if let Type::Named { name, .. } = &lowered {
                         if self.env.opaque_foreign_types.contains(name) {
@@ -59,7 +63,8 @@ impl<'a> super::TypeChecker<'a> {
                                     "error[E_OPAQUE_TYPE_REQUIRES_INDIRECTION]: opaque \
                                      foreign type '{name}' has no known size and cannot \
                                      appear by value here; wrap it in `ref {name}` / \
-                                     `mut ref {name}` to use it through indirection"
+                                     `mut ref {name}` (or `*const {name}` / `*mut {name}` \
+                                     in FFI signatures) to use it through indirection"
                                 ),
                                 ty.span.clone(),
                                 TypeErrorKind::TypeMismatch,
@@ -81,9 +86,14 @@ impl<'a> super::TypeChecker<'a> {
                     size: ConstArg::Literal(0), // const eval deferred
                 }
             }
+            // Raw pointers are sized regardless of their pointee, exactly
+            // like references — `*const Foo` for opaque foreign `Foo` is the
+            // canonical C opaque-handle FFI shape and must not fire
+            // `E_OPAQUE_TYPE_REQUIRES_INDIRECTION` (phase-5 slice-1b
+            // carry-forward, closed once `*const T` parser surface landed).
             TypeKind::Pointer { is_mut, inner } => Type::Pointer {
                 is_mut: *is_mut,
-                inner: Box::new(self.lower_type_expr_inner(inner, generic_scope, false)),
+                inner: Box::new(self.lower_type_expr_inner(inner, generic_scope, true)),
             },
             TypeKind::FnType {
                 params,
