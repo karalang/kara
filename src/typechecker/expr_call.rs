@@ -677,7 +677,7 @@ impl<'a> super::TypeChecker<'a> {
         // numeric coercion silently admitted ANY numeric element against
         // them, typing every result f64 — while `karac build` read the raw
         // buffer at f64, bit-reinterpreting integer elements into denormal
-        // garbage (B-2026-07-01-6). This intercept types the surface from
+        // garbage (B-2026-07-01-9). This intercept types the surface from
         // the argument's element like the Column stats intercept does:
         // f64 keeps the existing table; i64 gets the element-typed rules
         // (`sum`/`prod` → i64, `min`/`max` → Option[i64], `sort` → Vec[i64];

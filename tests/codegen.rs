@@ -51077,7 +51077,7 @@ fn main() {
 
     #[test]
     fn test_e2e_stats_i64_full_surface() {
-        // B-2026-07-01-6: integer slices previously bit-reinterpreted as
+        // B-2026-07-01-9: integer slices previously bit-reinterpreted as
         // doubles under `karac build` (denormal garbage) while `karac run`
         // computed real values. Now the element kind threads from the
         // typechecker: sum/prod fold at i64 (element-typed results),

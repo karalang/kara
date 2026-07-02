@@ -124,7 +124,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // slice element (`i64` | `f64`) at the call span; before that table
         // existed the buffer was ALWAYS read at f64, silently
         // bit-reinterpreting integer elements into denormal garbage
-        // (B-2026-07-01-6). Missing entry (recovery paths) = f64.
+        // (B-2026-07-01-9). Missing entry (recovery paths) = f64.
         let is_int = self
             .stats_elem_types
             .get(&(call_span.offset, call_span.length))
