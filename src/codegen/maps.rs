@@ -827,6 +827,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.suppress_source_vec_cleanup_for_arg(&args[0].value);
                 }
                 self.suppress_source_vec_cleanup_for_arg(&args[1].value);
+                // Slice 3u: a moved boxed-payload Option/Result binding
+                // (`m.insert(k, o)` on a Map[K, Option[Wide]]) — null the
+                // source's box word so its BoxedEnumDrop skips; the map's
+                // per-value drop owns the box now.
+                self.suppress_boxed_enum_payload_cleanup_for_moved_arg(&args[1].value);
+                // Inline-payload siblings (the 3p/3q push-family pair, here
+                // for the map VALUE argument).
+                self.suppress_inline_option_payload_cleanup_for_moved_arg(&args[1].value);
+                self.suppress_inline_result_payload_cleanup_for_moved_arg(&args[1].value);
                 let fn_val = self.current_fn.unwrap();
                 let old_slot = self.create_entry_alloca(fn_val, "map.insert.old", val_ty);
                 let existed = if let Some(view) = borrowed_key {

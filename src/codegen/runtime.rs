@@ -1619,7 +1619,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(GenericArg::Type(payload)) =
                     p.generic_args.as_ref().and_then(|a| a.first())
                 {
-                    if self.option_payload_inline_recursive_drop_ok(payload) {
+                    if self.option_payload_inline_recursive_drop_ok(payload)
+                        || self.option_payload_struct_or_enum_drop_ok(payload)
+                    {
                         return self.emit_option_drop_fn(payload);
                     }
                 }
@@ -1783,9 +1785,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     // payload, reached via the same named-type delegation.
                     // Unsupported payloads (scalar / boxed / handle / tuple)
                     // stay false.
-                    "Option" => {
-                        arg(0).is_some_and(|t| self.option_payload_inline_recursive_drop_ok(t))
-                    }
+                    "Option" => arg(0).is_some_and(|t| {
+                        self.option_payload_inline_recursive_drop_ok(t)
+                            || self.option_payload_struct_or_enum_drop_ok(t)
+                    }),
                     // `Result[T, E]` (slice 3q): same delegation shape.
                     "Result" => match (arg(0), arg(1)) {
                         (Some(ok), Some(err)) => {
@@ -1828,7 +1831,11 @@ impl<'ctx> super::Codegen<'ctx> {
         err_te: &TypeExpr,
     ) -> bool {
         let side_ok = |te: &TypeExpr| {
-            !self.te_owns_heap_below_buffer(te) || self.option_payload_inline_recursive_drop_ok(te)
+            !self.te_owns_heap_below_buffer(te)
+                || self.option_payload_inline_recursive_drop_ok(te)
+                // Slice 3u: struct/enum sides (inline in the 5-word area,
+                // or boxed beyond it) — the emitter's per-side branches.
+                || self.option_payload_struct_or_enum_drop_ok(te)
         };
         (self.te_owns_heap_below_buffer(ok_te) || self.te_owns_heap_below_buffer(err_te))
             && side_ok(ok_te)
@@ -1855,6 +1862,27 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => false,
         }
+    }
+
+    /// Slice 3u: an Option/Result payload that is a NON-shared user STRUCT
+    /// or value ENUM the recursive drop family fully frees. Covers BOTH
+    /// widths: an inline payload's i64 words overlay w0.. layout-compatibly
+    /// with the type's LLVM aggregate (all 8-byte fields), so the emitters'
+    /// in-place GEP path drops it directly; a WIDER-than-area payload was
+    /// heap-boxed at pack time and the emitters' 3u boxed branch (load w0,
+    /// null-guard, inner drop, free box) owns it. Sibling of
+    /// `option_payload_inline_recursive_drop_ok` (the String/Vec overlay
+    /// gate); a `false` keeps the status-quo fast path.
+    pub(super) fn option_payload_struct_or_enum_drop_ok(&self, payload_te: &TypeExpr) -> bool {
+        let TypeKind::Path(p) = &payload_te.kind else {
+            return false;
+        };
+        let head = p.segments.first().map(String::as_str).unwrap_or("");
+        if self.shared_types.contains_key(head) {
+            return false;
+        }
+        (self.struct_types.contains_key(head) || self.enum_layouts.contains_key(head))
+            && self.te_recursive_drop_fully_supported(payload_te)
     }
 
     /// Synthesize (or fetch) `__karac_vec_elem_full_drop_<S>` — the per-element

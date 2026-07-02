@@ -904,8 +904,12 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         };
         let payload_te = payload_te.clone();
-        // A `ref`-typed payload (Vec accessors) or tuple payload is not this
-        // slice's class — Path heads only.
+        // Slice 3u: a TUPLE payload passes through whole — the fixup's
+        // Tuple-pattern arm gates each ELEMENT individually. A `ref`-typed
+        // payload (Vec accessors) still self-gates to None below.
+        if matches!(payload_te.kind, TypeKind::Tuple(_)) {
+            return Some(payload_te);
+        }
         let TypeKind::Path(pp) = &payload_te.kind else {
             return None;
         };
@@ -1015,6 +1019,30 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                     if self.borrow_binding_escape_check(&bind_name, escape_exprs, escape_blocks) {
                         self.clone_and_track_borrow_binding(&bind_name, &field_te);
+                    }
+                }
+            }
+            // Slice 3u: TUPLE destructure of the borrowed payload
+            // (`Some((a, b)) => a` over `m.get(k)`) — clone each ESCAPING
+            // heap element; read-only elements stay zero-cost aliases.
+            PatternKind::Tuple(elems) => {
+                let TypeKind::Tuple(elem_tes) = &payload_te.kind else {
+                    return Ok(());
+                };
+                let pairs: Vec<(String, TypeExpr)> = elems
+                    .iter()
+                    .zip(elem_tes.iter())
+                    .filter_map(|(ep, ete)| match &ep.kind {
+                        PatternKind::Binding(n) => Some((n.clone(), ete.clone())),
+                        _ => None,
+                    })
+                    .collect();
+                for (bind_name, elem_te) in pairs {
+                    if !self.borrow_payload_clone_supported(&elem_te) {
+                        continue;
+                    }
+                    if self.borrow_binding_escape_check(&bind_name, escape_exprs, escape_blocks) {
+                        self.clone_and_track_borrow_binding(&bind_name, &elem_te);
                     }
                 }
             }
@@ -3344,6 +3372,38 @@ impl<'ctx> super::Codegen<'ctx> {
     /// unique owner. The Option sibling of the push arm's
     /// `suppress_source_vec_cleanup_for_arg` cap-zeroing. No-op unless the
     /// arg is an identifier with an armed inline-Option-payload cleanup.
+    /// Slice 3u: the BOXED sibling of the two inline moved-arg suppressors
+    /// below — `v.push(o)` / `m.insert(k, o)` where `o` is a boxed-payload
+    /// Option/Result binding (`boxed_enum_payload_vars`) bit-copies the
+    /// `{tag, w0..}` aggregate into the container, whose per-element drop
+    /// (3u) now owns the box — the source's `BoxedEnumDrop` must skip.
+    /// Null the BOX WORD (field 1): the drop's null-guard then no-ops.
+    /// Variant-agnostic (works for Result's Ok/Err alike) and branch-safe
+    /// (a runtime store on this path only). A heapless live variant's w0 is
+    /// data, but its `BoxedEnumDrop` tag-guard never reads it and the
+    /// container's copy already captured the real words.
+    pub(super) fn suppress_boxed_enum_payload_cleanup_for_moved_arg(&self, arg: &Expr) {
+        let ExprKind::Identifier(name) = &arg.kind else {
+            return;
+        };
+        if !self.boxed_enum_payload_vars.contains(name.as_str()) {
+            return;
+        }
+        let Some(slot) = self.variables.get(name.as_str()) else {
+            return;
+        };
+        let BasicTypeEnum::StructType(enum_ty) = slot.ty else {
+            return;
+        };
+        let i64_t = self.context.i64_type();
+        if let Ok(w0_ptr) = self
+            .builder
+            .build_struct_gep(enum_ty, slot.ptr, 1, "boxpl.movearg.w0")
+        {
+            let _ = self.builder.build_store(w0_ptr, i64_t.const_int(0, false));
+        }
+    }
+
     pub(super) fn suppress_inline_option_payload_cleanup_for_moved_arg(&self, arg: &Expr) {
         let ExprKind::Identifier(name) = &arg.kind else {
             return;

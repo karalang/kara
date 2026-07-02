@@ -1813,9 +1813,41 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(ok_bb);
         if let Some(f) = ok_drop {
-            self.builder
-                .build_call(f, &[payload_base.into()], "")
-                .unwrap();
+            // Slice 3u: boxed side — see the Option emitter's boxed branch.
+            let ok_words = Self::llvm_type_word_count(self.llvm_type_for_type_expr(ok_te));
+            if ok_words > 5 {
+                let w0 = self
+                    .builder
+                    .build_load(i64_t, payload_base, "ok.box.w0")
+                    .unwrap()
+                    .into_int_value();
+                let box_ptr = self
+                    .builder
+                    .build_int_to_ptr(w0, ptr_ty, "ok.box.p")
+                    .unwrap();
+                let is_null = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        box_ptr,
+                        ptr_ty.const_null(),
+                        "ok.box.isnull",
+                    )
+                    .unwrap();
+                let free_bb = self.context.append_basic_block(drop_fn, "ok.box.free");
+                self.builder
+                    .build_conditional_branch(is_null, exit_bb, free_bb)
+                    .unwrap();
+                self.builder.position_at_end(free_bb);
+                self.builder.build_call(f, &[box_ptr.into()], "").unwrap();
+                self.builder
+                    .build_call(self.free_fn, &[box_ptr.into()], "")
+                    .unwrap();
+            } else {
+                self.builder
+                    .build_call(f, &[payload_base.into()], "")
+                    .unwrap();
+            }
         }
         self.builder.build_unconditional_branch(exit_bb).unwrap();
 
@@ -1835,9 +1867,40 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(err_bb);
         if let Some(f) = err_drop {
-            self.builder
-                .build_call(f, &[payload_base.into()], "")
-                .unwrap();
+            let err_words = Self::llvm_type_word_count(self.llvm_type_for_type_expr(err_te));
+            if err_words > 5 {
+                let w0 = self
+                    .builder
+                    .build_load(i64_t, payload_base, "err.box.w0")
+                    .unwrap()
+                    .into_int_value();
+                let box_ptr = self
+                    .builder
+                    .build_int_to_ptr(w0, ptr_ty, "err.box.p")
+                    .unwrap();
+                let is_null = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        box_ptr,
+                        ptr_ty.const_null(),
+                        "err.box.isnull",
+                    )
+                    .unwrap();
+                let free_bb = self.context.append_basic_block(drop_fn, "err.box.free");
+                self.builder
+                    .build_conditional_branch(is_null, exit_bb, free_bb)
+                    .unwrap();
+                self.builder.position_at_end(free_bb);
+                self.builder.build_call(f, &[box_ptr.into()], "").unwrap();
+                self.builder
+                    .build_call(self.free_fn, &[box_ptr.into()], "")
+                    .unwrap();
+            } else {
+                self.builder
+                    .build_call(f, &[payload_base.into()], "")
+                    .unwrap();
+            }
         }
         self.builder.build_unconditional_branch(exit_bb).unwrap();
 
@@ -1933,9 +1996,42 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_struct_gep(option_ty, val, 1, "payload")
             .unwrap();
-        self.builder
-            .build_call(payload_drop, &[payload_base.into()], "")
-            .unwrap();
+        // Slice 3u: a payload WIDER than the 3-word inline area was heap-
+        // BOXED at pack time (`coerce_to_payload_words`) — w0 holds the box
+        // pointer, not the first payload word. Load it (null-guarded,
+        // mirroring the `BoxedEnumDrop` arm), run the payload's drop on the
+        // box, then free the box itself. The inline path is untouched:
+        // w0.. IS the payload in place (String/Vec overlay, or — also new
+        // in 3u — an inline struct/enum whose i64 words are layout-
+        // compatible with its LLVM aggregate).
+        let payload_words = Self::llvm_type_word_count(self.llvm_type_for_type_expr(payload_te));
+        if payload_words > 3 {
+            let w0 = self
+                .builder
+                .build_load(i64_t, payload_base, "box.w0")
+                .unwrap()
+                .into_int_value();
+            let box_ptr = self.builder.build_int_to_ptr(w0, ptr_ty, "box.p").unwrap();
+            let is_null = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, box_ptr, ptr_ty.const_null(), "box.isnull")
+                .unwrap();
+            let free_bb = self.context.append_basic_block(drop_fn, "box.free");
+            self.builder
+                .build_conditional_branch(is_null, exit_bb, free_bb)
+                .unwrap();
+            self.builder.position_at_end(free_bb);
+            self.builder
+                .build_call(payload_drop, &[box_ptr.into()], "")
+                .unwrap();
+            self.builder
+                .build_call(self.free_fn, &[box_ptr.into()], "")
+                .unwrap();
+        } else {
+            self.builder
+                .build_call(payload_drop, &[payload_base.into()], "")
+                .unwrap();
+        }
         self.builder.build_unconditional_branch(exit_bb).unwrap();
 
         self.builder.position_at_end(exit_bb);

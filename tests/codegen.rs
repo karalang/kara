@@ -19932,6 +19932,73 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_vec_option_boxed_struct_elem_drop() {
+        // Slice 3u: `Vec[Option[Holder]]` — Holder (4 words) exceeds the
+        // 3-word inline area, so the element drop's Some path deboxes
+        // (`box.free` branch) and runs the struct drop + frees the box.
+        let src = r#"
+struct Holder { name: String, id: i64 }
+fn main() {
+    let mut v: Vec[Option[Holder]] = Vec.new();
+    v.push(Some(Holder { name: "a heap string padded out beyond thirty-six bytes!", id: 1 }));
+    println(v.len());
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("karac_drop_Option_Holder"),
+            "expected the boxed-payload element drop karac_drop_Option_Holder; got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("box.free"),
+            "expected the boxed Some path (null-guarded box drop + free); got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_vec_result_inline_struct_elem_drop() {
+        // Slice 3u: `Vec[Result[Holder, i64]]` — Holder FITS Result's 5-word
+        // area (inline struct payload); the element drop GEPs to w0 and runs
+        // the struct drop in place (no box branch on the Ok side).
+        let src = r#"
+struct Holder { name: String, id: i64 }
+fn main() {
+    let mut v: Vec[Result[Holder, i64]] = Vec.new();
+    v.push(Ok(Holder { name: "a heap string padded out beyond thirty-six bytes!", id: 1 }));
+    println(v.len());
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("karac_drop_Result_Holder_i64"),
+            "expected the inline-struct-payload element drop karac_drop_Result_Holder_i64; \
+             got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_vec_option_scalar_keeps_fast_path_3u() {
+        // Slice 3u gate: an all-scalar payload stays on the heapless fast
+        // path — no per-element Option drop is synthesized.
+        let src = r#"
+fn main() {
+    let mut v: Vec[Option[i64]] = Vec.new();
+    v.push(Some(1));
+    println(v.len());
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            !ir.contains("karac_drop_Option_"),
+            "Vec[Option[i64]] must stay on the heapless fast path; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_ir_ref_arg_nested_vec_elem_freed() {
         // Slice 2 part B: a fresh `Vec[String]` passed to a `ref Vec[String]`
         // param is materialized into a `ref_rvalue_arg` temp. The prior path

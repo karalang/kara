@@ -766,6 +766,45 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    THEMSELVES structs-with-heap (pre-existing `emit_struct_drop_synthesis`
    limit, orthogonal); `get_unchecked` on `Vec[String]`; heap K/V
    (`Map[String, Vec[T]]`) on temps.
+   **Slice 3u — boxed + inline-STRUCT Option/Result payloads as container
+   elements, and the tuple-payload escape clone. — DONE 2026-07-02.** Two
+   legs, five of six tests LSan-red pre-fix. **(Leg B, the drop surface):**
+   the 3p/3q element-drop gates admitted only inline String/Vec overlay
+   payloads — `Vec[Option[Holder]]` (Holder 4 words > Option's 3-word area
+   → heap-BOXED per element) leaked box + interior, and
+   `Vec[Result[Holder, i64]]` (Holder FITS Result's 5-word area → INLINE
+   struct payload) leaked the struct's heap fields. Key insight: the
+   emitters' in-place GEP path is ALREADY correct for inline struct/enum
+   payloads (the i64 words overlay layout-compatibly with the LLVM
+   aggregate — every field 8-byte), so inline support was purely a GATE
+   change (`option_payload_struct_or_enum_drop_ok`: non-shared
+   struct/enum + fully-supported). Boxed support adds a width-keyed branch
+   to `emit_option_drop_fn` / `emit_result_drop_fn` (payload words > area →
+   load w0, null-guard, inner drop on the box, `free(box)` — areas 3/5
+   mirror the pack side). Gates extended at `vec_elem_agg_drop_for_type_
+   expr`, `te_recursive_drop_fully_supported`, and the Result side_ok, so
+   Map values (3r) and deeper nesting inherit. Two armed-drop
+   interactions: loop elements (`for o in v { match o { … } }`) marked in
+   `for_loop_borrow_vars` (gate extension only — the 3q machinery does the
+   rest), and MOVED boxed bindings (`v.push(o)` / `m.insert(k, o)`)
+   disarmed by NULLING THE BOX WORD (field 1 — variant-agnostic for
+   Result's Ok/Err, branch-safe, rides `BoxedEnumDrop`'s existing
+   null-guard; a tag-store can't work because Result has no None). The
+   insert site also gained the 3p/3q INLINE moved-arg pair it was missing.
+   **(Leg A):** `Some((a, b)) => a` over `m.get(k)` crashed (exit 133) —
+   the 3s escaping-borrow clone now handles TUPLE payload destructures
+   (per-element gate + escape check + clone_and_track; read-only elements
+   stay aliases) and whole-tuple bindings (`Some(t) => t`) clone through
+   `emit_tuple_clone_fn`. **Verified:** 6/6 boxelem ASAN under Linux LSan
+   (fresh compile), 10-probe matrix matches the interpreter with zero
+   local leaks, auto-par A/B clean. **Tests:** 3 IR
+   (`karac_drop_Option_Holder` + the `box.free` debox branch;
+   `karac_drop_Result_Holder_i64` inline; `Vec[Option[i64]]` fast-path
+   retention) + 6 ASAN. **Residuals:** a whole-tuple borrow binding
+   escaping via a NON-tail consume (`f(x)` by-value) may leak its clone
+   (untracked — tuple tes have no Path head for the tracking arm; crash →
+   leak downgrade); `VecDeque` payloads still excluded (no clone/drop
+   arms).
    **Slice 3t — struct-pattern destructure of Option/Result payloads
    (`Some(Holder {{ name, id }})`) was UNIMPLEMENTED in codegen. — DONE
    2026-07-02.** The interpreter handled every shape; codegen failed on ALL

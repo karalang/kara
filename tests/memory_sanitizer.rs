@@ -18041,4 +18041,176 @@ fn main() {
             "structpat_whilelet_pop_destructure_no_double_free",
         );
     }
+
+    #[test]
+    fn asan_boxelem_vec_option_wide_struct_scope_drop_no_leak() {
+        // Slice 3u: `Vec[Option[Holder]]` — Holder (4 words) exceeds
+        // Option's 3-word inline area, so each Some element carries a heap
+        // BOX. The 3p element-drop gate admitted only inline String/Vec
+        // payloads; boxed elements leaked box + interior (336 bytes / 3
+        // iterations pre-fix). The extended `karac_drop_Option_Holder`
+        // walks the box (inner struct drop + free) on the Some tag.
+        assert_clean_asan_run(
+            r#"
+struct Holder { name: String, id: i64 }
+fn build(n: i64) -> Vec[Option[Holder]] {
+    let mut v: Vec[Option[Holder]] = Vec.new();
+    v.push(Some(Holder { name: f"holder payload padded beyond thirty-six bytes {n}", id: n }));
+    v.push(None);
+    v
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let v = build(i);
+        println(v.len());
+        i = i + 1;
+    };
+}
+"#,
+            &["2", "2", "2"],
+            "boxelem_vec_option_wide_struct_scope_drop_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_boxelem_vec_result_inline_struct_scope_drop_no_leak() {
+        // Slice 3u: `Vec[Result[Holder, i64]]` — Holder (4 words) FITS
+        // Result's 5-word area, so the Ok payload is INLINE — the
+        // struct-payload flavor the 3q gate (String/Vec overlays only)
+        // declined. The payload words overlay w0.. contiguously, so the
+        // element drop GEPs to w0 and calls the struct's drop in place.
+        assert_clean_asan_run(
+            r#"
+struct Holder { name: String, id: i64 }
+fn build(n: i64) -> Vec[Result[Holder, i64]] {
+    let mut v: Vec[Result[Holder, i64]] = Vec.new();
+    v.push(Ok(Holder { name: f"holder payload padded beyond thirty-six bytes {n}", id: n }));
+    v.push(Err(n));
+    v
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let v = build(i);
+        println(v.len());
+        i = i + 1;
+    };
+}
+"#,
+            &["2", "2", "2"],
+            "boxelem_vec_result_inline_struct_scope_drop_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_boxelem_vec_option_inline_struct_scope_drop_no_leak() {
+        // Slice 3u: `Vec[Option[Pair]]` — Pair (3 words) fits Option's
+        // inline area: the Option-side inline-STRUCT payload flavor.
+        assert_clean_asan_run(
+            r#"
+struct Pair { s: String }
+fn build(n: i64) -> Vec[Option[Pair]] {
+    let mut v: Vec[Option[Pair]] = Vec.new();
+    v.push(Some(Pair { s: f"pair payload padded beyond thirty-six bytes {n}" }));
+    v.push(None);
+    v
+}
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let v = build(i);
+        println(v.len());
+        i = i + 1;
+    };
+}
+"#,
+            &["2", "2", "2"],
+            "boxelem_vec_option_inline_struct_scope_drop_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_boxelem_push_boxed_binding_no_double_free() {
+        // Slice 3u: `let o = Some(Holder{...}); v.push(o)` — the moved
+        // BOXED binding's `BoxedEnumDrop` must disarm (tag=None store, the
+        // boxed sibling of the inline cap-zero) or it double-frees against
+        // the newly-armed element drop.
+        assert_clean_asan_run(
+            r#"
+struct Holder { name: String, id: i64 }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let mut v: Vec[Option[Holder]] = Vec.new();
+        let o: Option[Holder] = Some(Holder { name: f"holder payload padded beyond thirty-six bytes {i}", id: i });
+        v.push(o);
+        println(v.len());
+        i = i + 1;
+    };
+}
+"#,
+            &["1", "1", "1"],
+            "boxelem_push_boxed_binding_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_boxelem_loop_elem_destructure_consume_no_double_free() {
+        // Slice 3u: `for o in v { match o { Some(Holder { name, id }) => …
+        // } }` — the loop binding is a bit-copy of the element; with the
+        // element drop armed it must be marked as a BORROW
+        // (`for_loop_borrow_vars`, extended to boxed/inline-struct
+        // payloads) so the destructured fields alias.
+        assert_clean_asan_run(
+            r#"
+struct Holder { name: String, id: i64 }
+fn main() {
+    let mut v: Vec[Option[Holder]] = Vec.new();
+    let mut i = 0;
+    while i < 3 {
+        v.push(Some(Holder { name: f"holder payload padded beyond thirty-six bytes {i}", id: i }));
+        i = i + 1;
+    };
+    let mut total = 0;
+    for o in v {
+        match o {
+            Some(Holder { name, id }) => { total = total + (name.len() as i64) + id; },
+            None => {},
+        }
+    }
+    println(total);
+}
+"#,
+            &["144"],
+            "boxelem_loop_elem_destructure_consume_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_boxelem_tuple_payload_escape_no_double_free() {
+        // Slice 3u leg A: `Some((a, b)) => a` over `m.get(k)` — the tuple
+        // flavor of the 3s escaping-borrow clone (exit 133 pre-fix). The
+        // escaping tuple ELEMENT is cloned; read-only elements stay
+        // aliases.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let mut m: Map[i64, (String, i64)] = Map.new();
+        m.insert(i, (f"tuple payload padded beyond thirty-six bytes {i}", i));
+        let s = match m.get(i) {
+            Some((a, b)) => a,
+            None => f"none-{i}",
+        };
+        println(s.len());
+        i = i + 1;
+    };
+}
+"#,
+            &["46", "46", "46"],
+            "boxelem_tuple_payload_escape_no_double_free",
+        );
+    }
 }

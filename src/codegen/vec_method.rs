@@ -1940,6 +1940,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the same way.
                 self.suppress_inline_option_payload_cleanup_for_moved_arg(&args[0].value);
                 self.suppress_inline_result_payload_cleanup_for_moved_arg(&args[0].value);
+                self.suppress_boxed_enum_payload_cleanup_for_moved_arg(&args[0].value);
 
                 // Vec-store slice (B-2026-06-22-2): pushing a heap-env closure
                 // BINDING (`v.push(f)`) into a heap-env Vec owner co-owns the env
@@ -2109,6 +2110,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the same way.
                 self.suppress_inline_option_payload_cleanup_for_moved_arg(&args[0].value);
                 self.suppress_inline_result_payload_cleanup_for_moved_arg(&args[0].value);
+                self.suppress_boxed_enum_payload_cleanup_for_moved_arg(&args[0].value);
 
                 let data_ptr_ptr = self
                     .builder
@@ -2304,6 +2306,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the same way.
                 self.suppress_inline_option_payload_cleanup_for_moved_arg(&args[0].value);
                 self.suppress_inline_result_payload_cleanup_for_moved_arg(&args[0].value);
+                self.suppress_boxed_enum_payload_cleanup_for_moved_arg(&args[0].value);
 
                 let data_ptr_ptr = self
                     .builder
@@ -2453,6 +2456,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the same way.
                 self.suppress_inline_option_payload_cleanup_for_moved_arg(&args[0].value);
                 self.suppress_inline_result_payload_cleanup_for_moved_arg(&args[0].value);
+                self.suppress_boxed_enum_payload_cleanup_for_moved_arg(&args[0].value);
 
                 let data_ptr_ptr = self
                     .builder

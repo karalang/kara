@@ -1232,7 +1232,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             };
             let armed = match head {
-                "Option" => arg(0).is_some_and(|t| self.option_payload_inline_recursive_drop_ok(t)),
+                "Option" => arg(0).is_some_and(|t| {
+                    self.option_payload_inline_recursive_drop_ok(t)
+                        || self.option_payload_struct_or_enum_drop_ok(t)
+                }),
                 "Result" => match (arg(0), arg(1)) {
                     (Some(ok), Some(err)) => self.result_payload_inline_recursive_drop_ok(ok, err),
                     _ => false,
