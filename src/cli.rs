@@ -10486,55 +10486,24 @@ fn cmd_test(filter: Option<String>, all: bool) {
     // under `[dev-dependencies]` is resolved and recorded into the
     // lockfile alongside the build-mode deps. Errors surface as a
     // `dep_resolution_error` event and abort before any run_start.
+    // The resolution is kept (resolver-block follow-up (f)): its
+    // path-dep packages are walked below so root-package tests can
+    // `import <pkg>.…` exactly as production code under `karac build`
+    // can. `run_dep_resolution` emits through `emit_dep_diagnostic`,
+    // whose Jsonl arm produces the same `dep_resolution_error`
+    // envelope as before (registry/git unsupported still downgrade —
+    // they surface as `dep_resolution_warning` and resolution is
+    // skipped, matching the build flow).
     let has_resolvable_deps =
         !mf.dependencies.is_empty() || !mf.dev_dependencies.is_empty() || mf.kara_version.is_some();
-    if has_resolvable_deps {
-        let loader = crate::dep_graph::FsLoader;
-        let options = crate::dep_graph::DepGraphOptions {
-            offline_root: None,
-            include_dev_deps: true,
-        };
-        let graph_result =
-            crate::dep_graph::build_dep_graph_with_options(&root, mf.clone(), &loader, options);
-        match graph_result {
-            Ok(graph) => {
-                let active = crate::dep_resolver::active_toolchain_version();
-                match crate::dep_resolver::resolve(&graph, &active) {
-                    Ok(resolution) => {
-                        persist_lockfile(&root, &resolution, OutputMode::Jsonl);
-                    }
-                    Err(boxed) => {
-                        let code = boxed.code();
-                        // Registry/git unsupported downgrade to a note here too —
-                        // the test surface continues even when those v1.1.x
-                        // deps can't yet be fetched, matching the build flow.
-                        if !matches!(code, "E_REGISTRY_DEP_UNSUPPORTED" | "E_GIT_DEP_UNSUPPORTED") {
-                            emit_test_event(
-                                "dep_resolution_error",
-                                &format!(
-                                    "\"code\":{},\"message\":{}",
-                                    json_string(code),
-                                    json_string(&boxed.to_string()),
-                                ),
-                            );
-                            process::exit(1);
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                emit_test_event(
-                    "dep_resolution_error",
-                    &format!(
-                        "\"code\":{},\"message\":{}",
-                        json_string(e.code()),
-                        json_string(&e.to_string()),
-                    ),
-                );
-                process::exit(1);
-            }
+    let dep_resolution: Option<crate::dep_resolver::Resolution> = if has_resolvable_deps {
+        match run_dep_resolution(&root, mf.clone(), OutputMode::Jsonl, None, true) {
+            Ok(r) => r,
+            Err(()) => process::exit(1),
         }
-    }
+    } else {
+        None
+    };
 
     let walk_opts = WalkerOpts {
         include_tests: true,
@@ -10551,8 +10520,22 @@ fn cmd_test(filter: Option<String>, all: bool) {
         }
     };
 
-    let built = match module::build_program_tree_with(
+    // Cross-package module loading for the test surface (phase-5 line
+    // 898 follow-up iii / resolver-block follow-up (f)): walk each
+    // resolved path-dep so its modules join the tree under package-
+    // prefixed paths. Dep test companions stay excluded —
+    // `dep_package_walks` walks deps with `include_tests: false`, so
+    // `merge_test_companions` below only ever folds the *root*
+    // package's `_test.kara` files; only the root package's tests run.
+    let dep_walks =
+        match dep_package_walks(dep_resolution.as_ref(), walk_opts.target, OutputMode::Jsonl) {
+            Ok(v) => v,
+            Err(()) => process::exit(1),
+        };
+
+    let built = match module::build_program_tree_with_deps(
         &walked,
+        &dep_walks,
         BuildTreeOpts {
             merge_test_companions: true,
         },
@@ -10645,10 +10628,24 @@ fn cmd_test(filter: Option<String>, all: bool) {
     let mut passed = 0usize;
     let mut failed = 0usize;
     let mut skipped = 0usize;
-    let mut current_module: Option<usize> = None;
-    // Per-module state: built lazily on first test in each module.
-    let mut current_program: Option<Program> = None;
-    let mut current_typed: Option<TypeCheckResult> = None;
+
+    // One merged execution program for the whole suite, mirroring `karac
+    // run`'s super-program. The previous per-module items-only `Program`
+    // meant any name imported from a sibling module — or, with cross-
+    // package loading, from a path-dep — resolved and typechecked at the
+    // tree level but was *absent* at execution: the interpreter hit its
+    // "should be caught by resolver" unreachable panic, and the JIT path
+    // failed to compile the missing symbol. Merging all modules is
+    // execution-equivalent to `karac run` and `karac build`, both of
+    // which already concatenate the full tree (dep modules included), so
+    // it imposes no constraint those surfaces don't. The resolve +
+    // typecheck here feed the executor only — the compile-failure
+    // contract already ran tree-wide above, imports and visibility
+    // included, so a test body reaches this point only if every name it
+    // touches resolved under module scoping.
+    let exec_program = build_super_program_for_run(&tree);
+    let exec_resolved = Resolver::new(&exec_program).resolve();
+    let exec_typed = crate::typechecker::TypeChecker::new(&exec_program, &exec_resolved).check();
 
     // One persistent JIT runner for the whole suite (amortizes LLVM init
     // across tests; re-spawns on a faulting test). Lazily spawns on the
@@ -10749,34 +10746,15 @@ fn cmd_test(filter: Option<String>, all: bool) {
             continue;
         }
 
-        // Lazily prepare per-module Program + typecheck result so we don't
-        // re-parse / re-resolve / re-typecheck for every test in the same
-        // module. Tests are sorted by `module_id`, so each `current_module`
-        // transition happens exactly once per module.
-        if current_module != Some(t.module_id) {
-            let m = &tree.modules[t.module_id];
-            // `Item::TestCase` lowering has already happened at the
-            // global tree level (see `lower_and_discover_test_cases`),
-            // so cloning the module's items hands the standard
-            // resolver / typechecker / interpreter pipeline a regular
-            // `Item::Function` body that `run_test_function(t.fn_name)`
-            // looks up through the usual `call_function` path.
-            let program = Program {
-                items: m.items.clone(),
-                ..Program::default()
-            };
-            let resolved = Resolver::new(&program)
-                .with_tree(&tree, t.module_id as ModuleId)
-                .resolve();
-            let typed = crate::typechecker::TypeChecker::new(&program, &resolved)
-                .with_tree(&tree, t.module_id as ModuleId)
-                .check();
-            current_program = Some(program);
-            current_typed = Some(typed);
-            current_module = Some(t.module_id);
-        }
-        let program_ref = current_program.as_ref().unwrap();
-        let typed_ref = current_typed.as_ref().unwrap();
+        // `Item::TestCase` lowering has already happened at the global
+        // tree level (see `lower_and_discover_test_cases`), so the merged
+        // program hands the standard resolver / typechecker / interpreter
+        // pipeline a regular `Item::Function` body that
+        // `run_test_function(t.fn_name)` looks up through the usual
+        // `call_function` path (mangled names embed the module label, so
+        // merging cannot collide two modules' test functions).
+        let program_ref = &exec_program;
+        let typed_ref = &exec_typed;
         let module = &tree.modules[t.module_id];
 
         let test_file_path = module

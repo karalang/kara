@@ -21,7 +21,7 @@
 //! `ModulePath` is a plain `Vec<String>` for v1; interning is a later
 //! optimization once lookup / clone becomes a hotspot.
 
-use crate::ast::{ExternItem, ImportDecl, Item, Program, Visibility};
+use crate::ast::{ExternItem, ImportDecl, ImportItem, Item, Program, Visibility};
 use crate::parser::ParseError;
 use crate::prelude;
 use crate::walker::{self, WalkResult};
@@ -354,9 +354,52 @@ pub fn build_program_tree_with_deps(
                 (Some(p), Some(t)) => {
                     let mut items = p.items.clone();
                     let prod_count = items.len();
-                    items.extend(t.items.iter().cloned());
+                    // A test companion legitimately re-declares imports its
+                    // production sibling already has — each file states its
+                    // own imports, and the natural companion imports the
+                    // same helpers the code under test uses. Exact
+                    // re-imports (same module path, same source name, same
+                    // binding) are deduped here so the merged module does
+                    // not trip E0101 duplicate-definition; a same-binding
+                    // import from a *different* path or source name is kept
+                    // and surfaces as the genuine conflict it is.
+                    let prod_bound: std::collections::HashSet<(&[String], &str, Option<&str>)> = p
+                        .imports
+                        .iter()
+                        .flat_map(|d| {
+                            d.items.iter().map(|ii| {
+                                (d.path.as_slice(), ii.name.as_str(), ii.alias.as_deref())
+                            })
+                        })
+                        .collect();
+                    let dedup_import = |d: &ImportDecl| -> Option<ImportDecl> {
+                        let kept: Vec<ImportItem> = d
+                            .items
+                            .iter()
+                            .filter(|ii| {
+                                !prod_bound.contains(&(
+                                    d.path.as_slice(),
+                                    ii.name.as_str(),
+                                    ii.alias.as_deref(),
+                                ))
+                            })
+                            .cloned()
+                            .collect();
+                        if kept.is_empty() {
+                            None
+                        } else {
+                            Some(ImportDecl {
+                                items: kept,
+                                ..d.clone()
+                            })
+                        }
+                    };
+                    items.extend(t.items.iter().filter_map(|it| match it {
+                        Item::Import(d) => dedup_import(d).map(Item::Import),
+                        other => Some(other.clone()),
+                    }));
                     let mut imports = p.imports.clone();
-                    imports.extend(t.imports.iter().cloned());
+                    imports.extend(t.imports.iter().filter_map(dedup_import));
                     (
                         p.file.clone(),
                         items,

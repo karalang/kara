@@ -19211,3 +19211,218 @@ fn test_xpkg_transitive_path_dep_resolves() {
     }
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+// ── Cross-package module loading — `karac test` surface ─────────
+//
+// Resolver-block follow-up (f): the test runner mirrors the build path's
+// dep wiring — `run_dep_resolution` with `include_dev_deps: true`, path-dep
+// walks, `build_program_tree_with_deps` — so a root package's tests can
+// `import <pkg>.…` from both `[dependencies]` and `[dev-dependencies]`.
+// Dep test companions stay excluded: only the root package's tests run.
+
+#[test]
+fn test_xpkg_test_runner_imports_path_dep_items() {
+    let tmp = xpkg_fixture("xpkg-test-dep");
+    write(
+        &tmp.join("app/src/main_test.kara"),
+        "import mathx.double;\nimport mathx.geo.area;\n\
+         test \"dep double\" { assert_eq(double(21), 42); }\n\
+         test \"dep area\" { assert_eq(area(3, 4), 12); }\n",
+    );
+    let out = karac_bin()
+        .current_dir(tmp.join("app"))
+        .arg("test")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "tests importing path-dep items should pass; stdout:\n{stdout}"
+    );
+    let lines = jsonl_lines(&stdout);
+    assert!(lines[0].contains("\"total_tests\":2"), "got: {lines:?}");
+    let pass_count = lines
+        .iter()
+        .filter(|l| event_kind(l) == Some("test_pass"))
+        .count();
+    assert_eq!(pass_count, 2, "expected 2 test_pass events; got: {lines:?}");
+}
+
+#[test]
+fn test_xpkg_test_runner_resolves_dev_dependency_imports() {
+    // A dep declared ONLY under [dev-dependencies] is invisible to `karac
+    // build` but must resolve for `karac test` — the test/build split.
+    let tmp = slice7_tempdir("xpkg-test-devdep");
+    std::fs::create_dir_all(tmp.join("app/src")).unwrap();
+    std::fs::create_dir_all(tmp.join("helper/src")).unwrap();
+    write(
+        &tmp.join("app/kara.toml"),
+        "[package]\nname = \"app\"\n\n[dev-dependencies]\nhelper = { path = \"../helper\" }\n",
+    );
+    write(
+        &tmp.join("helper/kara.toml"),
+        "[package]\nname = \"helper\"\n",
+    );
+    write(
+        &tmp.join("helper/src/lib.kara"),
+        "pub fn fake_val() -> i64 { 99 }\n",
+    );
+    write(&tmp.join("app/src/main.kara"), "fn main() {}\n");
+    write(
+        &tmp.join("app/src/main_test.kara"),
+        "import helper.fake_val;\ntest \"dev dep import\" { assert_eq(fake_val(), 99); }\n",
+    );
+    let out = karac_bin()
+        .current_dir(tmp.join("app"))
+        .arg("test")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "dev-dep import should pass under `karac test`; stdout:\n{stdout}"
+    );
+    let lines = jsonl_lines(&stdout);
+    let summary = lines.last().unwrap();
+    assert!(summary.contains("\"passed\":1"), "got: {lines:?}");
+}
+
+#[test]
+fn test_xpkg_test_runner_excludes_dep_test_companions() {
+    // The dep package ships its own `_test.kara` companion; a consumer
+    // never compiles or runs its deps' tests. Only the root's one test
+    // must be discovered.
+    let tmp = xpkg_fixture("xpkg-test-depcompanion");
+    write(
+        &tmp.join("mathx/src/lib_test.kara"),
+        "test \"dep internal\" { assert_eq(1, 2); }\n",
+    );
+    write(
+        &tmp.join("app/src/main_test.kara"),
+        "import mathx.double;\ntest \"root only\" { assert_eq(double(2), 4); }\n",
+    );
+    let out = karac_bin()
+        .current_dir(tmp.join("app"))
+        .arg("test")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "root suite must pass (a failing dep test running would flunk it); stdout:\n{stdout}"
+    );
+    let lines = jsonl_lines(&stdout);
+    assert!(
+        lines[0].contains("\"total_tests\":1"),
+        "dep companion tests must not be discovered; got: {lines:?}"
+    );
+    assert!(
+        !stdout.contains("dep internal"),
+        "dep test name must not appear; stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn test_xpkg_test_runner_nonpub_item_rejected() {
+    // Cross-package visibility applies to test files exactly as to
+    // production code: importing a non-`pub` dep item is a compile
+    // failure, surfaced as a resolve_error event with exit non-zero and
+    // no run_start.
+    let tmp = xpkg_fixture("xpkg-test-nonpub");
+    write(
+        &tmp.join("app/src/main_test.kara"),
+        "import mathx.internal_only;\ntest \"sneaky\" { assert_eq(internal_only(1), 1); }\n",
+    );
+    let out = karac_bin()
+        .current_dir(tmp.join("app"))
+        .arg("test")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !out.status.success(),
+        "non-pub import must fail; stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("\"type\":\"resolve_error\"") && stdout.contains("E0222"),
+        "E0222 resolve_error expected; stdout:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("run_start"),
+        "compile failure must precede any run_start; stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn test_test_companion_reimport_dedup_keeps_genuine_conflicts() {
+    // A companion re-declaring the exact import its production sibling has
+    // is deduped at companion-merge (exercised by
+    // test_xpkg_test_runner_imports_path_dep_items, whose fixture imports
+    // the same dep items in both files). The dedup must NOT swallow a
+    // genuine conflict: the same bound name imported from a *different*
+    // module stays and errors as a duplicate definition.
+    let tmp = scratch_project("test-companion-import-conflict");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(
+        &tmp.join("src/util.kara"),
+        "pub fn triple(x: i64) -> i64 { x * 3 }\n",
+    );
+    write(
+        &tmp.join("src/other.kara"),
+        "pub fn triple(x: i64) -> i64 { x * 30 }\n",
+    );
+    write(
+        &tmp.join("src/main.kara"),
+        "import util.triple;\nfn main() { let _ = triple(1); }\n",
+    );
+    write(
+        &tmp.join("src/main_test.kara"),
+        "import other.triple;\ntest \"conflict\" { assert_eq(triple(4), 12); }\n",
+    );
+    let out = karac_bin().current_dir(&tmp).arg("test").output().unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !out.status.success(),
+        "same binding from a different module must still conflict; stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("\"type\":\"resolve_error\"") && stdout.contains("already defined"),
+        "duplicate-definition resolve_error expected; stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn test_test_cross_module_import_executes() {
+    // Same root cause as the dep case, single package: the per-test
+    // execution program used to hold only the test module's own items, so
+    // a name imported from a sibling module resolved and typechecked but
+    // panicked the interpreter at execution ("should be caught by
+    // resolver"). The runner now executes against the merged
+    // super-program, like `karac run`.
+    let tmp = scratch_project("test-cross-module-import");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(&tmp.join("src/main.kara"), "fn main() {}\n");
+    write(
+        &tmp.join("src/util.kara"),
+        "pub fn triple(x: i64) -> i64 { x * 3 }\n",
+    );
+    write(
+        &tmp.join("src/main_test.kara"),
+        "import util.triple;\ntest \"sibling import\" { assert_eq(triple(4), 12); }\n",
+    );
+    let out = karac_bin().current_dir(&tmp).arg("test").output().unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "sibling-module import should execute; stdout:\n{stdout}"
+    );
+    let lines = jsonl_lines(&stdout);
+    let summary = lines.last().unwrap();
+    assert!(summary.contains("\"passed\":1"), "got: {lines:?}");
+}
