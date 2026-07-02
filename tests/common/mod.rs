@@ -108,7 +108,7 @@ pub const OWNERSHIP_GATE_GRANDFATHERED: &[&str] = &[
     // these shapes. The corpus deliberately pins that codegen surface
     // with the bare (inferred-ref) closure spelling, so it stays
     // ownership-red until rewritten against the check-clean `own |..|`
-    // spelling (usable now that B-2026-07-02-6 honors the prefix).
+    // spelling (usable now that B-2026-07-02-20 honors the prefix).
     "heap_env_*",
     // Same corpus, ASAN lane (tests/memory_sanitizer.rs).
     "asan_heap_env_*",
@@ -147,7 +147,7 @@ pub const OWNERSHIP_GATE_GRANDFATHERED: &[&str] = &[
     "test_ir_par_branch_emits_method_check_for_effectful_callee",
     "test_ir_par_branch_skips_method_check_for_pure_callee",
     //
-    // ── B-2026-07-02-9: comparison operators consume their operands ─
+    // ── B-2026-07-02-23: comparison operators consume their operands ─
     // `a == b` / `a < b` on String — and on user types even when the
     // resolved PartialEq/Eq impls declare `ref self, ref Self` —
     // classify the operands as consumed (design.md: comparisons
@@ -159,14 +159,14 @@ pub const OWNERSHIP_GATE_GRANDFATHERED: &[&str] = &[
     "test_server_serve_handler_iterates_headers",
     "test_server_serve_handler_reads_query_param",
     //
-    // ── B-2026-07-02-10: named-fn values treated as affine ──────────
+    // ── B-2026-07-02-24: named-fn values treated as affine ──────────
     // `let g = doubler; let h = doubler;` flags `doubler` as moved —
     // fn items have no captures and are freely duplicable per design.md
     // § First-Class Functions. Remove when fixed.
     "fn_value_let_bound_named_fn_passed_and_called",
     "fn_value_named_fn_reused_across_call_sites",
     //
-    // ── B-2026-07-02-11: field-path use kills the whole root ────────
+    // ── B-2026-07-02-25: field-path use kills the whole root ────────
     // `eval(b.left) + eval(b.right)` flags `b` as moved-whole at the
     // first field-path call arg, and `match t.0 {..} match t.1 {..}`
     // does the same for tuple projections — no partial-move tracking
@@ -189,14 +189,14 @@ pub const OWNERSHIP_GATE_GRANDFATHERED: &[&str] = &[
     "asan_struct_wrapped_recursive_tree_freed_once",
     "asan_vec_of_shared_enum_elements_freed_no_leak",
     //
-    // ── B-2026-07-02-12: with_provider value arg classified consume ─
+    // ── B-2026-07-02-26: with_provider value arg classified consume ─
     // `with_provider[Metric](p, ..); println(p.n)` — the special
     // form's value slot is non-consuming per its documented mutation-
     // visible-after-pop semantics, but its classification doesn't
     // route through callee_param_modes. Remove when fixed.
     "test_with_provider_e2e_mut_ref_self_mutation_visible_after_pop",
     //
-    // ── B-2026-07-02-13 / B-2026-07-02-14: `ref` builtin-container
+    // ── B-2026-07-02-27 / B-2026-07-02-28: `ref` builtin-container
     // params mis-lower under codegen ──────────────────────────────────
     // The check-clean rewrite of these tests (helper params declared
     // `ref Column[..]` / `ref Slice[..]`) MISCOMPILES: `ref Column`

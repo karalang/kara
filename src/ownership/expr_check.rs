@@ -1044,7 +1044,7 @@ impl<'a> super::OwnershipChecker<'a> {
                 // still registered `k` as `Ref` and E0508 fired on the
                 // design-blessed clean-escape spelling (design.md Rule 2
                 // sub-case (i): own captures move into the closure; the
-                // escape is clean). B-2026-07-02-6.
+                // escape is clean). B-2026-07-02-20.
                 if let Some(declared) = capture_mode {
                     let pinned = match declared {
                         CaptureMode::Own => OwnershipMode::Own,

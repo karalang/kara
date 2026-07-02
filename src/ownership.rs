@@ -1894,7 +1894,7 @@ fn impl_target_name(target_type: &TypeExpr) -> Option<String> {
 /// `"Type.method"` for static methods.
 pub(crate) fn collect_callee_param_modes(program: &Program) -> HashMap<String, Vec<OwnershipMode>> {
     let mut map = HashMap::new();
-    // Compiler-intrinsic free functions FIRST (B-2026-07-02-7): the print
+    // Compiler-intrinsic free functions FIRST (B-2026-07-02-21): the print
     // family and `with_provider` have no declared signature anywhere (not
     // in the user program, not in the baked stdlib — they are typechecker/
     // codegen intrinsics), so their call args fell through to the

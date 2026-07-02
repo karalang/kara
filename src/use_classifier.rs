@@ -587,7 +587,7 @@ impl<'a> UseClassifier<'a> {
                 // classifies itself via the method-receiver walk; the For
                 // construct contributes only a read. Walking this as
                 // Consuming made `for x in v { } … v.len()` a use-after-
-                // move under `karac check` (B-2026-07-02-8) — the legacy
+                // move under `karac check` (B-2026-07-02-22) — the legacy
                 // state-machine walker (`expr_check.rs`) already reads.
                 self.walk_expr(iterable, Mode::Reading);
                 self.walk_block(body, Mode::Reading);
