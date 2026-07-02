@@ -4966,3 +4966,109 @@ fn impl_override_wins_over_trait_inline_hint() {
         "cold axis still inherited when impl only overrides inline axis"
     );
 }
+
+// ── B-2026-07-02-5: `par { }` sibling-branch binding reads ──
+//
+// Each top-level statement in an explicit `par { }` block is a concurrent
+// branch with its own scope. Pre-fix the resolver treated `par` like a
+// sequential block, so a branch reading a sibling branch's binding sailed
+// through resolution — the interpreter then panicked (`unreachable:
+// variable 'x' not found ... should be caught by resolver`) and codegen
+// errored ungracefully.
+
+#[test]
+fn test_par_sibling_branch_read_rejected() {
+    let errors = resolve_errors(
+        "fn build() -> Vec[i64] { return [1, 2, 3]; }\n\
+         fn main() {\n\
+             par {\n\
+                 let x = build();\n\
+                 let y = build();\n\
+                 println(x.len() + y.len());\n\
+             }\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("sibling `par` branch")),
+        "expected the cross-branch diagnostic; got {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_par_sibling_branch_assign_rejected() {
+    // An assignment TARGETING a sibling branch's binding is the same
+    // cross-branch access (`x = 2` is its own top-level statement, i.e.
+    // its own branch).
+    let errors = resolve_errors(
+        "fn main() {\n\
+             par {\n\
+                 let mut x = 1;\n\
+                 x = 2;\n\
+                 println(\"done\");\n\
+             }\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("sibling `par` branch")),
+        "expected the cross-branch diagnostic; got {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_par_nested_par_still_sees_outer_siblings_as_illegal() {
+    // A nested `par` inside branch 2 reading branch 1's binding is still a
+    // cross-branch read of the OUTER par — the sibling set must survive
+    // nesting.
+    let errors = resolve_errors(
+        "fn main() {\n\
+             let t = par {\n\
+                 let a = 1;\n\
+                 let b = par {\n\
+                     let c = a + 1;\n\
+                     c\n\
+                 };\n\
+                 a + b\n\
+             };\n\
+             println(t);\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("sibling `par` branch")),
+        "expected the cross-branch diagnostic; got {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_par_tail_expression_sees_all_branch_bindings() {
+    // The join point: the block's tail expression combines branch results
+    // (design.md § Explicit Concurrency) — every branch binding is in
+    // scope there, including through tuple destructuring and reads of
+    // OUTER (pre-`par`) bindings inside branches.
+    resolve_ok(
+        "fn f() -> i64 { return 10; }\n\
+         fn g() -> i64 { return 20; }\n\
+         fn main() {\n\
+             let base = 100;\n\
+             let (a, b) = par {\n\
+                 let p = f() + base;\n\
+                 let q = g() + base;\n\
+                 (p, q)\n\
+             };\n\
+             let t = par {\n\
+                 let x = 1;\n\
+                 let y = { let x = 10; x + 1 };\n\
+                 x + y\n\
+             };\n\
+             println(a + b + t);\n\
+         }",
+    );
+}

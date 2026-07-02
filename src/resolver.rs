@@ -981,6 +981,15 @@ pub struct Resolver<'a> {
     /// to the function-body control flow; closure bodies cannot target
     /// outer labels).
     pub(crate) loop_labels: Vec<(Option<String>, LabelKind)>,
+    /// B-2026-07-02-5: while resolving a statement-branch of an explicit
+    /// `par { }` block, the binding names introduced by SIBLING branches
+    /// (name → the sibling binding's span). Each top-level statement of a
+    /// `par { }` is a concurrent branch with its own scope, so sibling
+    /// bindings are not in scope — but a bare "undefined name" diagnostic
+    /// hides the actual rule. `error_undefined_name` consults this map to
+    /// emit the tailored cross-branch diagnostic instead. Empty outside
+    /// `par` branch resolution; saved/merged/restored around nested `par`s.
+    pub(crate) par_sibling_bindings: HashMap<String, Span>,
     /// True iff the program being resolved is the synthetic stdlib package
     /// (baked into the compiler binary by CR-202 slice 3). When false,
     /// `#[compiler_builtin]` on any item is rejected with `E0237`. The flag
@@ -1016,6 +1025,7 @@ impl<'a> Resolver<'a> {
             errors: Vec::new(),
             current_impl_type: None,
             loop_labels: Vec::new(),
+            par_sibling_bindings: HashMap::new(),
             is_stdlib_source: false,
             is_test_file: false,
             target_tombstones: HashMap::new(),
@@ -1097,6 +1107,26 @@ impl<'a> Resolver<'a> {
     }
 
     fn error_undefined_name(&mut self, name: &str, span: Span) {
+        // B-2026-07-02-5: the name exists — as a binding of a SIBLING branch
+        // of the enclosing `par { }` block. Each top-level statement of a
+        // `par { }` is a concurrent branch with its own scope, so the read
+        // is illegal; say so instead of "undefined name" (pre-fix this shape
+        // slipped resolution entirely and panicked the interpreter /
+        // errored ungracefully in codegen).
+        if let Some(sibling_span) = self.par_sibling_bindings.get(name) {
+            self.errors.push(ResolveError {
+                message: format!(
+                    "cannot read '{}' from a sibling `par` branch: each top-level statement in a `par {{ }}` block is a concurrent branch with its own scope (bound at {}:{}); combine branch results in the block's tail expression instead",
+                    name, sibling_span.line, sibling_span.column,
+                ),
+                span,
+                kind: ResolveErrorKind::UndefinedName,
+                suggestion: None,
+                replacement: None,
+                stub_hint: None,
+            });
+            return;
+        }
         // Phase-10 `#[target(...)]`: a name that exists in source but was
         // filtered for the current compilation target gets the targeted
         // diagnostic instead of a bare undefined-name + fuzzy suggestion.

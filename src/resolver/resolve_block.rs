@@ -19,6 +19,7 @@
 //! Lives in a sibling `impl<'a> super::Resolver<'a>` block.
 
 use crate::ast::*;
+use crate::token::Span;
 
 use super::{ResolveError, ResolveErrorKind, ScopeKind, SymbolKind};
 
@@ -46,6 +47,85 @@ impl<'a> super::Resolver<'a> {
         if let Some(ref expr) = block.final_expr {
             self.resolve_expr(expr);
         }
+    }
+
+    /// The bindings a `par`-branch statement introduces into the block:
+    /// `(name, span, is_mut)` per binding. Non-binding statements
+    /// (expression statements, assignments, defer, ...) introduce none.
+    fn par_branch_bindings(stmt: &Stmt) -> Vec<(String, Span, bool)> {
+        match &stmt.kind {
+            StmtKind::Let {
+                is_mut, pattern, ..
+            } => pattern
+                .binding_name_spans()
+                .into_iter()
+                .map(|(n, sp)| (n, sp, *is_mut))
+                .collect(),
+            StmtKind::LetUninit {
+                is_mut,
+                name,
+                name_span,
+                ..
+            } => vec![(name.clone(), name_span.clone(), *is_mut)],
+            StmtKind::LetElse { pattern, .. } => pattern
+                .binding_name_spans()
+                .into_iter()
+                .map(|(n, sp)| (n, sp, false))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Resolve an explicit `par { }` block (B-2026-07-02-5). Statement
+    /// semantics differ from a sequential block in exactly one way: each
+    /// top-level statement is a concurrent BRANCH resolved in its own
+    /// child scope, with sibling branches' bindings invisible — reads of
+    /// them get the tailored cross-branch diagnostic via
+    /// `par_sibling_bindings` (consulted in `error_undefined_name`).
+    /// The block's TAIL expression is the join point: every branch's
+    /// bindings are (re-)defined into the block scope before it resolves,
+    /// so `par { let a = f(); let b = g(); (a, b) }` keeps working.
+    pub(crate) fn resolve_par_block(&mut self, block: &Block) {
+        let branch_bindings: Vec<Vec<(String, Span, bool)>> =
+            block.stmts.iter().map(Self::par_branch_bindings).collect();
+
+        self.table.push_scope(ScopeKind::Block);
+        for (i, stmt) in block.stmts.iter().enumerate() {
+            // Merge the outer frame (nested `par`s: an outer par's sibling
+            // set stays active inside an inner branch) with this par's
+            // OTHER branches. This branch's own bindings are absent —
+            // they define normally into the branch scope below, so reads
+            // of them resolve and never reach the diagnostic.
+            let saved = self.par_sibling_bindings.clone();
+            for (j, binds) in branch_bindings.iter().enumerate() {
+                if j != i {
+                    for (name, span, _) in binds {
+                        self.par_sibling_bindings.insert(name.clone(), span.clone());
+                    }
+                }
+            }
+            self.table.push_scope(ScopeKind::Block);
+            self.resolve_stmt(stmt);
+            self.table.pop_scope();
+            self.par_sibling_bindings = saved;
+        }
+        // Join point: all branch bindings become visible for the tail.
+        for binds in &branch_bindings {
+            for (name, span, is_mut) in binds {
+                if let Err(e) = self.table.define_shadowable(
+                    name.clone(),
+                    SymbolKind::Variable { is_mut: *is_mut },
+                    span.clone(),
+                    false,
+                ) {
+                    self.errors.push(e);
+                }
+            }
+        }
+        if let Some(ref expr) = block.final_expr {
+            self.resolve_expr(expr);
+        }
+        self.table.pop_scope();
     }
 
     pub(crate) fn resolve_stmt(&mut self, stmt: &Stmt) {
@@ -596,8 +676,22 @@ impl<'a> super::Resolver<'a> {
                 }
             }
 
-            ExprKind::Seq(block) | ExprKind::Par(block) => {
+            ExprKind::Seq(block) => {
                 self.resolve_block(block);
+            }
+
+            // B-2026-07-02-5: each top-level statement of an explicit
+            // `par { }` block is a concurrent branch with its own scope —
+            // sibling bindings are NOT visible to each other (design.md
+            // § Explicit Concurrency: branches "bind [values] to `let`
+            // bindings and combine them at the end of the block"). The
+            // previous shared arm resolved `par` like a sequential block,
+            // so a branch reading a sibling binding sailed through
+            // resolution and panicked the interpreter (`unreachable:
+            // variable 'x' not found ... should be caught by resolver`) /
+            // errored ungracefully in codegen.
+            ExprKind::Par(block) => {
+                self.resolve_par_block(block);
             }
 
             ExprKind::Lock {
