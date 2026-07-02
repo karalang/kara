@@ -613,7 +613,9 @@ impl<'a> super::Interpreter<'a> {
                             None
                         }
                     }
-                    _ => return Some(Value::Unit),
+                    // Not a seq receiver — fall through to the impl-block /
+                    // missing-dispatch tail instead of swallowing to Unit.
+                    _ => return None,
                 };
                 return Some(match elem {
                     Some(v) => Value::EnumVariant {
@@ -643,7 +645,9 @@ impl<'a> super::Interpreter<'a> {
                             None
                         }
                     }
-                    _ => return Some(Value::Unit),
+                    // Not a seq receiver — fall through to the impl-block /
+                    // missing-dispatch tail instead of swallowing to Unit.
+                    _ => return None,
                 };
                 return Some(match elem {
                     Some(v) => Value::EnumVariant {
@@ -693,7 +697,8 @@ impl<'a> super::Interpreter<'a> {
                     }
                     return Some(Value::Unit);
                 }
-                return Some(Value::Unit);
+                // Not a seq receiver — fall through (see `first`).
+                return None;
             }
             "get" => {
                 let array_view: Option<Vec<Value>> = match &obj {

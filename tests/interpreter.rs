@@ -18748,3 +18748,34 @@ fn for_loop_mut_ref_vec_scalar_reassign_and_use() {
     );
     assert_eq!(out, "14\n");
 }
+
+/// (B-2026-07-02-10) A user struct method that shares a builtin container
+/// method name (`first`, `last`, `get_unchecked`) must dispatch to the
+/// user's impl, not be captured by the builtin seq arm — which swallowed
+/// non-seq receiver shapes into `Value::Unit`, so `b.first()` on a struct
+/// silently returned `()`. Surfaced by the S6-pre trait probes: any trait
+/// impl whose method names overlap Vec/Slice builtins hit this.
+#[test]
+fn struct_method_named_like_seq_builtin_dispatches_to_impl() {
+    let out = run_no_errors(
+        "trait Wrap[T] {\n\
+         \x20   fn first(ref self) -> T;\n\
+         }\n\
+         struct Box2 { n: i64 }\n\
+         impl Wrap[i64] for Box2 {\n\
+         \x20   fn first(ref self) -> i64 { return self.n; }\n\
+         }\n\
+         impl Box2 {\n\
+         \x20   fn last(ref self) -> i64 { return self.n * 10; }\n\
+         \x20   fn get_unchecked(ref self) -> i64 { return self.n + 1; }\n\
+         }\n\
+         fn main() {\n\
+         \x20   let b = Box2 { n: 7 };\n\
+         \x20   println(b.first());\n\
+         \x20   println(b.first() + 1);\n\
+         \x20   println(b.last());\n\
+         \x20   println(b.get_unchecked());\n\
+         }\n",
+    );
+    assert_eq!(out, "7\n8\n70\n8\n");
+}

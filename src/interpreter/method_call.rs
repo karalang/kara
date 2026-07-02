@@ -162,6 +162,221 @@ impl<'a> super::Interpreter<'a> {
         0
     }
 
+    /// Dispatch `method` to an impl-block method registered in the env as
+    /// `Type.method` for this receiver's type, executing the body with
+    /// method contracts, struct invariants, and the `mut ref self` CICO
+    /// write-back. Returns `None` when no impl method is registered (or the
+    /// registration is not a function value) — callers fall through to the
+    /// builtin arms / the final missing-dispatch error.
+    ///
+    /// Called twice from `eval_method_call`: early for struct-shaped
+    /// receivers, so a user method that shares a builtin container name
+    /// (`first`, `last`, `get_unchecked`, …) dispatches to the user's impl
+    /// instead of being captured by a builtin arm that swallows receiver
+    /// shapes it doesn't handle into `Value::Unit` (B-2026-07-02-10) — and at
+    /// the dispatch tail for every other receiver shape, as before.
+    fn try_eval_impl_method(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+        span: &Span,
+        obj: &Value,
+    ) -> Option<Value> {
+        let type_name = self.value_type_name(obj);
+        let method_key = format!("{}.{}", type_name, method);
+        if let Some(func) = self.env.get(&method_key) {
+            let mut arg_vals: Vec<Value> = vec![clone_receiver(obj)];
+            arg_vals.extend(args.iter().map(|a| self.eval_expr_inner(&a.value)));
+
+            if let Value::Function {
+                param_patterns,
+                param_defaults,
+                body,
+                closure_env,
+                ..
+            } = func
+            {
+                self.env.push_scope();
+                if let Some(ref captured) = closure_env {
+                    for (k, v) in captured {
+                        self.env.define(k.clone(), v.clone());
+                    }
+                }
+                // `param_patterns` already includes the `self` binding for
+                // self-taking methods (prepended at impl-registration time),
+                // so a straight in-order bind handles both receiver and args.
+                for (i, pat) in param_patterns.iter().enumerate() {
+                    let val = if let Some(v) = arg_vals.get(i) {
+                        v.clone()
+                    } else if let Some(Some(default_expr)) = param_defaults.get(i) {
+                        self.eval_expr_inner(default_expr)
+                    } else {
+                        continue;
+                    };
+                    self.bind_pattern(pat, val);
+                }
+                // Method `requires` / `ensures` contracts (design.md
+                // § Contracts) — same enforcement as free functions, applied
+                // on the method-dispatch path. `requires` at entry (self +
+                // params in scope), `old(arg)` pre-state captured before the
+                // body, `ensures` at the return point with `result` bound.
+                let mcontract = self.method_contract(&type_name, method);
+                let mut contract_fault: Option<String> = None;
+                if let Some((requires, _)) = &mcontract {
+                    for req in requires {
+                        match self.eval_contract_predicate(req) {
+                            super::ContractOutcome::Held => {}
+                            super::ContractOutcome::Violated => {
+                                contract_fault =
+                                    Some("contract violated: requires clause".to_string());
+                                break;
+                            }
+                            super::ContractOutcome::Panicked(msg) => {
+                                contract_fault =
+                                    Some(format!("contract predicate panicked: {msg}"));
+                                break;
+                            }
+                        }
+                    }
+                }
+                let mut pushed_old = false;
+                if contract_fault.is_none() {
+                    if let Some((_, ensures)) = &mcontract {
+                        let mut snap = std::collections::HashMap::new();
+                        for ens in ensures {
+                            let ens_body = ens.body.clone();
+                            self.capture_old_in_expr(&ens_body, &mut snap);
+                        }
+                        if !snap.is_empty() {
+                            self.old_snapshots.push(snap);
+                            pushed_old = true;
+                        }
+                    }
+                }
+
+                let result = if contract_fault.is_some() {
+                    Ok(Value::Unit)
+                } else {
+                    self.eval_body_growing(&body)
+                };
+
+                if contract_fault.is_none() {
+                    if let Some((_, ensures)) = &mcontract {
+                        let ret_val = match &result {
+                            Ok(v) => Some(v.clone()),
+                            Err(ControlFlow::Return(v)) => Some(v.clone()),
+                            _ => None,
+                        };
+                        if let Some(rv) = ret_val {
+                            for ens in ensures {
+                                self.env.push_scope();
+                                if let Some(param) = &ens.param {
+                                    self.env.define(param.clone(), rv.clone());
+                                }
+                                let outcome = self.eval_contract_predicate(&ens.body);
+                                self.env.pop_scope();
+                                match outcome {
+                                    super::ContractOutcome::Held => {}
+                                    super::ContractOutcome::Violated => {
+                                        contract_fault =
+                                            Some("contract violated: ensures clause".to_string());
+                                        break;
+                                    }
+                                    super::ContractOutcome::Panicked(msg) => {
+                                        contract_fault =
+                                            Some(format!("contract predicate panicked: {msg}"));
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if pushed_old {
+                    self.old_snapshots.pop();
+                }
+
+                // Struct-invariant check at method exit (design.md
+                // § Contracts rule 3): `impl invariant` fires at every method
+                // exit, plain `invariant` at `pub` method exits — both
+                // re-checked with `self` bound to the (possibly mutated)
+                // receiver value.
+                if contract_fault.is_none() {
+                    let invariants = self.method_invariants_to_check(&type_name, method);
+                    if !invariants.is_empty() {
+                        if let Some(self_val) = self.env.get("self") {
+                            for inv in &invariants {
+                                self.env.push_scope();
+                                self.env.define("self".to_string(), self_val.clone());
+                                let outcome = self.eval_contract_predicate(inv);
+                                self.env.pop_scope();
+                                match outcome {
+                                    super::ContractOutcome::Held => {}
+                                    super::ContractOutcome::Violated => {
+                                        contract_fault =
+                                            Some("contract violated: invariant".to_string());
+                                        break;
+                                    }
+                                    super::ContractOutcome::Panicked(msg) => {
+                                        contract_fault =
+                                            Some(format!("contract predicate panicked: {msg}"));
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // CICO write-back for a `mut ref self` receiver. The method
+                // ran against a by-value copy of the receiver bound to `self`
+                // in this scope; copy that (possibly mutated) value back to the
+                // call-site place before the scope is popped, mirroring the
+                // free-function `mut ref T` write-back in `eval_call.rs`. Gated
+                // strictly on `MutRef` so an owned (consuming) or `ref self`
+                // receiver is never written back. The place dispatch matches
+                // `StmtKind::Assign` (identifier / field / index), plus
+                // `SelfValue` so a nested self-method call (`self.adv()` inside
+                // `skip_ws`) propagates the mutation up the receiver chain.
+                let self_writeback = if matches!(
+                    self.method_self_param(&type_name, method),
+                    Some(crate::ast::SelfParam::MutRef)
+                ) {
+                    self.env.get("self")
+                } else {
+                    None
+                };
+
+                self.env.pop_scope();
+
+                if let Some(self_val) = self_writeback {
+                    match &object.kind {
+                        ExprKind::Identifier(name) => self.env.set(name, self_val),
+                        ExprKind::FieldAccess { object, field } => {
+                            self.set_field(object, field, self_val)
+                        }
+                        ExprKind::Index { object, index } => {
+                            self.set_index(object, index, self_val)
+                        }
+                        ExprKind::SelfValue => self.env.set("self", self_val),
+                        _ => {}
+                    }
+                }
+
+                if let Some(msg) = contract_fault {
+                    return Some(self.record_runtime_error(msg, span));
+                }
+                return Some(match result {
+                    Ok(v) => v,
+                    Err(ControlFlow::Return(v)) => v,
+                    Err(cf) => self.set_cf(cf),
+                });
+            }
+        }
+        None
+    }
+
     pub(crate) fn eval_method_call(
         &mut self,
         object: &Expr,
@@ -989,6 +1204,22 @@ impl<'a> super::Interpreter<'a> {
         if let Some(v) = self.try_eval_vector_method(method, object, &obj, args, span) {
             return v;
         }
+        // A struct-shaped receiver with a registered impl method dispatches
+        // to that impl BEFORE the builtin container arms below. Without this,
+        // a user method sharing a builtin seq name (`first`, `last`,
+        // `get_unchecked`, …) was captured by the builtin arm, which swallows
+        // receiver shapes it doesn't handle into `Value::Unit` — a trait
+        // impl's `first()` on a user struct silently returned `()`
+        // (B-2026-07-02-10). Struct-shaped runtime types (HTTP Request, Arena,
+        // Interner, …) keep their native intercepts: those run above this
+        // hop, and their `#[compiler_builtin]` methods are never
+        // env-registered, so the lookup misses and falls through.
+        if matches!(&obj, Value::Struct { .. } | Value::SharedStruct(_)) {
+            if let Some(v) = self.try_eval_impl_method(object, method, args, span, &obj) {
+                return v;
+            }
+        }
+
         if let Some(v) = self.try_eval_seq_method(method, object, clone_receiver(&obj), args, span)
         {
             return v;
@@ -1339,196 +1570,8 @@ impl<'a> super::Interpreter<'a> {
 
         // Try to find method via impl block
         let type_name = self.value_type_name(&obj);
-        let method_key = format!("{}.{}", type_name, method);
-
-        if let Some(func) = self.env.get(&method_key) {
-            let mut arg_vals: Vec<Value> = vec![obj];
-            arg_vals.extend(args.iter().map(|a| self.eval_expr_inner(&a.value)));
-
-            if let Value::Function {
-                param_patterns,
-                param_defaults,
-                body,
-                closure_env,
-                ..
-            } = func
-            {
-                self.env.push_scope();
-                if let Some(ref captured) = closure_env {
-                    for (k, v) in captured {
-                        self.env.define(k.clone(), v.clone());
-                    }
-                }
-                // `param_patterns` already includes the `self` binding for
-                // self-taking methods (prepended at impl-registration time),
-                // so a straight in-order bind handles both receiver and args.
-                for (i, pat) in param_patterns.iter().enumerate() {
-                    let val = if let Some(v) = arg_vals.get(i) {
-                        v.clone()
-                    } else if let Some(Some(default_expr)) = param_defaults.get(i) {
-                        self.eval_expr_inner(default_expr)
-                    } else {
-                        continue;
-                    };
-                    self.bind_pattern(pat, val);
-                }
-                // Method `requires` / `ensures` contracts (design.md
-                // § Contracts) — same enforcement as free functions, applied
-                // on the method-dispatch path. `requires` at entry (self +
-                // params in scope), `old(arg)` pre-state captured before the
-                // body, `ensures` at the return point with `result` bound.
-                let mcontract = self.method_contract(&type_name, method);
-                let mut contract_fault: Option<String> = None;
-                if let Some((requires, _)) = &mcontract {
-                    for req in requires {
-                        match self.eval_contract_predicate(req) {
-                            super::ContractOutcome::Held => {}
-                            super::ContractOutcome::Violated => {
-                                contract_fault =
-                                    Some("contract violated: requires clause".to_string());
-                                break;
-                            }
-                            super::ContractOutcome::Panicked(msg) => {
-                                contract_fault =
-                                    Some(format!("contract predicate panicked: {msg}"));
-                                break;
-                            }
-                        }
-                    }
-                }
-                let mut pushed_old = false;
-                if contract_fault.is_none() {
-                    if let Some((_, ensures)) = &mcontract {
-                        let mut snap = std::collections::HashMap::new();
-                        for ens in ensures {
-                            let ens_body = ens.body.clone();
-                            self.capture_old_in_expr(&ens_body, &mut snap);
-                        }
-                        if !snap.is_empty() {
-                            self.old_snapshots.push(snap);
-                            pushed_old = true;
-                        }
-                    }
-                }
-
-                let result = if contract_fault.is_some() {
-                    Ok(Value::Unit)
-                } else {
-                    self.eval_body_growing(&body)
-                };
-
-                if contract_fault.is_none() {
-                    if let Some((_, ensures)) = &mcontract {
-                        let ret_val = match &result {
-                            Ok(v) => Some(v.clone()),
-                            Err(ControlFlow::Return(v)) => Some(v.clone()),
-                            _ => None,
-                        };
-                        if let Some(rv) = ret_val {
-                            for ens in ensures {
-                                self.env.push_scope();
-                                if let Some(param) = &ens.param {
-                                    self.env.define(param.clone(), rv.clone());
-                                }
-                                let outcome = self.eval_contract_predicate(&ens.body);
-                                self.env.pop_scope();
-                                match outcome {
-                                    super::ContractOutcome::Held => {}
-                                    super::ContractOutcome::Violated => {
-                                        contract_fault =
-                                            Some("contract violated: ensures clause".to_string());
-                                        break;
-                                    }
-                                    super::ContractOutcome::Panicked(msg) => {
-                                        contract_fault =
-                                            Some(format!("contract predicate panicked: {msg}"));
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                if pushed_old {
-                    self.old_snapshots.pop();
-                }
-
-                // Struct-invariant check at method exit (design.md
-                // § Contracts rule 3): `impl invariant` fires at every method
-                // exit, plain `invariant` at `pub` method exits — both
-                // re-checked with `self` bound to the (possibly mutated)
-                // receiver value.
-                if contract_fault.is_none() {
-                    let invariants = self.method_invariants_to_check(&type_name, method);
-                    if !invariants.is_empty() {
-                        if let Some(self_val) = self.env.get("self") {
-                            for inv in &invariants {
-                                self.env.push_scope();
-                                self.env.define("self".to_string(), self_val.clone());
-                                let outcome = self.eval_contract_predicate(inv);
-                                self.env.pop_scope();
-                                match outcome {
-                                    super::ContractOutcome::Held => {}
-                                    super::ContractOutcome::Violated => {
-                                        contract_fault =
-                                            Some("contract violated: invariant".to_string());
-                                        break;
-                                    }
-                                    super::ContractOutcome::Panicked(msg) => {
-                                        contract_fault =
-                                            Some(format!("contract predicate panicked: {msg}"));
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // CICO write-back for a `mut ref self` receiver. The method
-                // ran against a by-value copy of the receiver bound to `self`
-                // in this scope; copy that (possibly mutated) value back to the
-                // call-site place before the scope is popped, mirroring the
-                // free-function `mut ref T` write-back in `eval_call.rs`. Gated
-                // strictly on `MutRef` so an owned (consuming) or `ref self`
-                // receiver is never written back. The place dispatch matches
-                // `StmtKind::Assign` (identifier / field / index), plus
-                // `SelfValue` so a nested self-method call (`self.adv()` inside
-                // `skip_ws`) propagates the mutation up the receiver chain.
-                let self_writeback = if matches!(
-                    self.method_self_param(&type_name, method),
-                    Some(crate::ast::SelfParam::MutRef)
-                ) {
-                    self.env.get("self")
-                } else {
-                    None
-                };
-
-                self.env.pop_scope();
-
-                if let Some(self_val) = self_writeback {
-                    match &object.kind {
-                        ExprKind::Identifier(name) => self.env.set(name, self_val),
-                        ExprKind::FieldAccess { object, field } => {
-                            self.set_field(object, field, self_val)
-                        }
-                        ExprKind::Index { object, index } => {
-                            self.set_index(object, index, self_val)
-                        }
-                        ExprKind::SelfValue => self.env.set("self", self_val),
-                        _ => {}
-                    }
-                }
-
-                if let Some(msg) = contract_fault {
-                    return self.record_runtime_error(msg, span);
-                }
-                return match result {
-                    Ok(v) => v,
-                    Err(ControlFlow::Return(v)) => v,
-                    Err(cf) => self.set_cf(cf),
-                };
-            }
+        if let Some(v) = self.try_eval_impl_method(object, method, args, span, &obj) {
+            return v;
         }
 
         // No dispatch arm matched. For well-typed programs the typechecker has
