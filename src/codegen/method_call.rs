@@ -2303,17 +2303,32 @@ impl<'ctx> super::Codegen<'ctx> {
                     let data_ptr = self.get_data_ptr(name).unwrap();
                     return self.compile_vec_method(name, data_ptr, method, args);
                 }
-                // Slice[T] / mut Slice[T] read-only methods. The slice's
-                // stack alloca holds the 2-field `{ptr, i64}` struct (see
-                // `slice_struct_type`); GEP field 1 is the length.
+                // Slice[T] / mut Slice[T] read-only methods. For an OWNED
+                // slice the stack alloca holds the 2-field `{ptr, i64}` struct
+                // directly (see `slice_struct_type`); for a `ref Slice[T]` /
+                // `mut ref Slice[T]` parameter the alloca holds a pointer TO
+                // that struct instead. `get_data_ptr` normalizes both to a
+                // pointer at the `{ptr, i64}` header (owned → the alloca as-is,
+                // ref → one load through it), so every method below GEPs off
+                // `slice_ptr`, not the raw `slot.ptr`. Using `slot.ptr` for a
+                // ref param GEP'd into the pointer-to-header itself and read
+                // the caller's stack words as if they were slice fields —
+                // `get_unchecked` then indexed the header struct instead of the
+                // buffer and printed the data-pointer / len as "elements"
+                // (B-2026-07-02-28). The `xs[i]` index path already routes
+                // through `get_data_ptr` (`compile_slice_index`); this mirrors
+                // it for the method family.
                 if self.slice_elem_types.contains_key(name.as_str()) {
                     let i64_t = self.context.i64_type();
                     let slice_ty = self.slice_struct_type();
+                    let slice_ptr = self.get_data_ptr(name).ok_or_else(|| {
+                        format!("Slice.{method}: no data pointer for slice '{name}'")
+                    })?;
                     match method {
                         "len" => {
                             let len_ptr = self
                                 .builder
-                                .build_struct_gep(slice_ty, slot.ptr, 1, "slice.len.ptr")
+                                .build_struct_gep(slice_ty, slice_ptr, 1, "slice.len.ptr")
                                 .unwrap();
                             let len = self
                                 .builder
@@ -2324,7 +2339,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         "is_empty" => {
                             let len_ptr = self
                                 .builder
-                                .build_struct_gep(slice_ty, slot.ptr, 1, "slice.len.ptr")
+                                .build_struct_gep(slice_ty, slice_ptr, 1, "slice.len.ptr")
                                 .unwrap();
                             let len = self
                                 .builder
@@ -2356,7 +2371,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             let idx_val = self.compile_expr(&args[0].value)?.into_int_value();
                             let data_pp = self
                                 .builder
-                                .build_struct_gep(slice_ty, slot.ptr, 0, "s.uchk.data.pp")
+                                .build_struct_gep(slice_ty, slice_ptr, 0, "s.uchk.data.pp")
                                 .unwrap();
                             let data = self
                                 .builder
@@ -2393,7 +2408,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             let data = {
                                 let p = self
                                     .builder
-                                    .build_struct_gep(slice_ty, slot.ptr, 0, "bs.s.data.p")
+                                    .build_struct_gep(slice_ty, slice_ptr, 0, "bs.s.data.p")
                                     .unwrap();
                                 self.builder
                                     .build_load(ptr_ty, p, "bs.s.data")
@@ -2403,7 +2418,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             let len = {
                                 let p = self
                                     .builder
-                                    .build_struct_gep(slice_ty, slot.ptr, 1, "bs.s.len.p")
+                                    .build_struct_gep(slice_ty, slice_ptr, 1, "bs.s.len.p")
                                     .unwrap();
                                 self.builder
                                     .build_load(i64_t, p, "bs.s.len")
