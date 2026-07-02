@@ -2073,11 +2073,18 @@ impl<'ctx> super::Codegen<'ctx> {
             // form of the `<`/`>` operators. `karac_string_cmp` returns -1/0/+1
             // (the same order Vec[String].sort / binary_search use), and the
             // Ordering tags are Less=0 / Equal=1 / Greater=2, so tag = cmp + 1
-            // maps them directly. Guarded on the receiver being a String so a
-            // user struct's `.cmp` (derived Ord, a different lowering) still
-            // falls through unchanged.
+            // maps them directly. Guard on the operand LAYOUT (the String
+            // {ptr,len,cap} header) rather than `inferred_receiver_type`, which
+            // only resolves NAMED receivers — a string LITERAL (`"a".cmp(b)`) or
+            // an INDEX (`v[0].cmp(v[1])`) receiver typechecks + runs but has no
+            // var-name to look up, so the earlier name-only guard left them
+            // falling through to the "not yet supported" catch-all (a run/build
+            // divergence). The typechecker admits `.cmp` only on int/char/bool/
+            // String, and int/char/bool are `IntValue` (handled above), so any
+            // `{ptr,len,cap}`-shaped struct pair reaching here IS a String;
+            // user-struct `.cmp` is rejected at typecheck and never arrives.
             if let (BasicValueEnum::StructValue(l), BasicValueEnum::StructValue(r)) = (lhs, rhs) {
-                if self.inferred_receiver_type(object).as_deref() == Some("String") {
+                if l.get_type() == self.vec_struct_type() {
                     let i64_t = self.context.i64_type();
                     let ptr_ty = self.context.ptr_type(AddressSpace::default());
                     let l_ptr = self

@@ -5356,6 +5356,30 @@ fn main() {
         }
     }
 
+    /// `String.cmp` on NON-identifier receivers — a string LITERAL
+    /// (`"abd".cmp("abc")`) and an INDEX into a `Vec[String]` (`v[0].cmp(v[1])`).
+    /// Both typecheck and run, but B-13's first codegen guard keyed on
+    /// `inferred_receiver_type` (which resolves only NAMED receivers), so these
+    /// fell through to "method 'cmp' is not yet supported in codegen" — a
+    /// run/build divergence. The operand-layout guard (the String {ptr,len,cap}
+    /// header) covers every receiver shape. B-2026-07-02-9.
+    #[test]
+    fn e2e_string_cmp_nonident_receiver_codegen() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let lit = match \"abd\".cmp(\"abc\") { Less => 0, Equal => 1, Greater => 2 };\n\
+                 println(f\"{lit}\");\n\
+                 let v: Vec[String] = [\"nat\", \"abc\", \"zzz\"];\n\
+                 let i0 = match v[0].cmp(v[1]) { Less => 0, Equal => 1, Greater => 2 };\n\
+                 println(f\"{i0}\");\n\
+                 let i1 = match v[1].cmp(v[2]) { Less => 0, Equal => 1, Greater => 2 };\n\
+                 println(f\"{i1}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "2\n2\n0\n");
+        }
+    }
+
     #[test]
     fn e2e_string_method_nonident_receiver_codegen() {
         // String collection methods on a NON-identifier receiver — a string
