@@ -590,6 +590,15 @@ impl Env {
                     Value::SharedStruct(inner) => {
                         Some((inner.name.clone(), Some(Arc::strong_count(inner))))
                     }
+                    // Value ENUM binding (B-2026-07-01-8): before this arm the
+                    // interpreter never resolved an enum binding's type, so a
+                    // user `impl Drop for <Enum>` NEVER fired under `karac run`
+                    // (codegen fired it) — a run-vs-build divergence for any
+                    // RAII-observing program. Same no-count contract as the
+                    // value-struct arm; `invoke_user_drop_if_applicable`'s
+                    // `drop_method_keys` gate keeps builtin enums
+                    // (Option/Result/Ordering) inert.
+                    Value::EnumVariant { enum_name, .. } => Some((enum_name.clone(), None)),
                     _ => None,
                 };
             }

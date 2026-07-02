@@ -1425,6 +1425,17 @@ impl<'a> super::Interpreter<'a> {
                     return self.record_runtime_error(msg, span);
                 }
 
+                // Fresh-temp Drop-typed call args (B-2026-07-01-8, interp
+                // twin of codegen's B-2026-07-01-6): `consume(Guard { id: 7
+                // })` / `consume(Sig.A(1))` / `consume(Sig.B)` have no
+                // caller binding, so no `CleanupAction::Drop` ever fired
+                // their user body — silent under `karac run`, one drop per
+                // call under `karac build`. Run the body on the temp's
+                // value after the call returns (the caller-side temp-drop
+                // position codegen uses). Identifier args are excluded —
+                // the caller binding's own NLL drop covers those.
+                self.run_fresh_temp_arg_drops(args, &arg_vals);
+
                 match result {
                     Ok(v) => v,
                     Err(ControlFlow::Return(v)) => v,
@@ -1451,6 +1462,53 @@ impl<'a> super::Interpreter<'a> {
                      or the typechecker accepted a non-callable callee",
                     span.line, span.column, callee_variant
                 )
+            }
+        }
+    }
+
+    /// B-2026-07-01-8 second half — run the user `impl Drop` body for
+    /// each FRESH temporary call argument of a Drop-implementing type:
+    /// struct literals (`consume(Guard { id: 7 })`), tuple-variant enum
+    /// constructors (`consume(Sig.A(1))` — bare or `Enum.Variant`
+    /// qualified), and unit variants (`consume(Sig.B)`). Mirrors codegen's
+    /// `track_inline_owned_aggregate_arg` shapes exactly (fixed there as
+    /// B-2026-07-01-6); bare Identifier args are the caller binding's own
+    /// drop. Shared types are excluded (their teardown is refcount-driven).
+    fn run_fresh_temp_arg_drops(&mut self, args: &[CallArg], arg_vals: &[Value]) {
+        for (i, arg) in args.iter().enumerate() {
+            let type_name: Option<String> = match &arg.value.kind {
+                ExprKind::StructLiteral { path, .. } => {
+                    let n = path.last().cloned();
+                    // A SHARED struct literal builds a refcounted value —
+                    // its drop belongs to the rc machinery.
+                    n.filter(|n| {
+                        self.find_struct_def(n)
+                            .is_some_and(|d| !d.is_shared && !d.is_par)
+                    })
+                }
+                ExprKind::Call { callee, .. } => match &callee.kind {
+                    ExprKind::Identifier(v) => self.find_enum_for_variant(v),
+                    ExprKind::Path { segments, .. } if segments.len() == 2 => self
+                        .qualified_enum_variant_is_unit(&segments[0], &segments[1])
+                        .map(|_| segments[0].clone()),
+                    _ => None,
+                },
+                // Unit variant in path form (`consume(Sig.B)`).
+                ExprKind::Path { segments, .. } if segments.len() == 2 => self
+                    .qualified_enum_variant_is_unit(&segments[0], &segments[1])
+                    .map(|_| segments[0].clone()),
+                // Bare unit variant (`consume(B)` where B is a variant).
+                ExprKind::Identifier(v) if self.env.get(v).is_none() => {
+                    self.find_enum_for_variant(v)
+                }
+                _ => None,
+            };
+            let Some(tn) = type_name else { continue };
+            if !self.program.drop_method_keys.contains_key(&tn) {
+                continue;
+            }
+            if let Some(v) = arg_vals.get(i) {
+                self.run_user_drop_body_on_value(&tn, v.clone());
             }
         }
     }

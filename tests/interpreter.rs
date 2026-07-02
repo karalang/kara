@@ -2465,6 +2465,130 @@ fn test_user_drop_body_can_read_struct_fields() {
     assert_eq!(output, vec!["42\n".to_string()]);
 }
 
+// ── B-2026-07-01-8 enum-Drop + fresh-temp-arg parity (interpreter) ──
+
+#[test]
+fn test_user_drop_fires_for_value_enum_binding() {
+    // Pre-fix the interpreter NEVER ran a user `impl Drop` for a value
+    // ENUM binding in any position (`drop_target` resolved only
+    // Value::Struct) — `karac run` was silent where `karac build`
+    // printed one drop per value. NLL endpoint: `s` is unused after the
+    // let, so the body fires immediately after it.
+    let (output, _drops) = run_program_with_drops(
+        "enum Sig { A(i64), B }\n\
+         impl Drop for Sig {\n\
+             fn drop(mut ref self) {\n\
+                 println(7);\n\
+             }\n\
+         }\n\
+         fn main() {\n\
+             let s = Sig.A(1);\n\
+             println(0);\n\
+         }",
+    );
+    assert_eq!(
+        output,
+        vec!["7\n".to_string(), "0\n".to_string()],
+        "expected the enum binding's user drop body to fire (NLL: right after the unused let); got {:?}",
+        output
+    );
+}
+
+#[test]
+fn test_user_drop_fires_for_fresh_temp_struct_arg() {
+    // `consume(Guard { id: 7 })` — no caller binding, so no
+    // CleanupAction::Drop existed; the user body never fired under the
+    // interpreter (codegen fixed the same shape as B-2026-07-01-6). The
+    // temp's drop runs right after the call returns.
+    let (output, _drops) = run_program_with_drops(
+        "struct Guard { id: i64 }\n\
+         impl Drop for Guard {\n\
+             fn drop(mut ref self) {\n\
+                 println(self.id);\n\
+             }\n\
+         }\n\
+         fn consume(g: Guard) {\n\
+             println(0);\n\
+         }\n\
+         fn main() {\n\
+             consume(Guard { id: 7 });\n\
+             println(99);\n\
+         }",
+    );
+    assert_eq!(
+        output,
+        vec!["0\n".to_string(), "7\n".to_string(), "99\n".to_string()],
+        "expected the fresh struct temp arg's drop after the call; got {:?}",
+        output
+    );
+}
+
+#[test]
+fn test_user_drop_fires_for_fresh_temp_enum_arg() {
+    // The enum twin: tuple-variant ctor (`consume(Sig.A(1))`) and unit
+    // variant (`consume(Sig.B)`) temps each fire once after their call.
+    let (output, _drops) = run_program_with_drops(
+        "enum Sig { A(i64), B }\n\
+         impl Drop for Sig {\n\
+             fn drop(mut ref self) {\n\
+                 println(1);\n\
+             }\n\
+         }\n\
+         fn consume(s: Sig) {\n\
+             println(0);\n\
+         }\n\
+         fn main() {\n\
+             consume(Sig.A(7));\n\
+             consume(Sig.B);\n\
+             println(99);\n\
+         }",
+    );
+    assert_eq!(
+        output,
+        vec![
+            "0\n".to_string(),
+            "1\n".to_string(),
+            "0\n".to_string(),
+            "1\n".to_string(),
+            "99\n".to_string()
+        ],
+        "expected one drop per fresh enum temp arg; got {:?}",
+        output
+    );
+}
+
+#[test]
+fn test_user_drop_enum_move_fires_once() {
+    // Move suppression parity for enums: a let-rebind (`let b = a;`) and
+    // a tail return each transfer the drop obligation — exactly ONE body
+    // firing per value (the suppressors previously matched only
+    // Value::Struct, which would have double-fired once enum bindings
+    // started dropping).
+    let (output, _drops) = run_program_with_drops(
+        "enum Sig { A(i64), B }\n\
+         impl Drop for Sig {\n\
+             fn drop(mut ref self) {\n\
+                 println(1);\n\
+             }\n\
+         }\n\
+         fn make() -> Sig {\n\
+             let s = Sig.A(1);\n\
+             s\n\
+         }\n\
+         fn main() {\n\
+             let a = make();\n\
+             let b = a;\n\
+             println(0);\n\
+         }",
+    );
+    let drop_count = output.iter().filter(|l| l.as_str() == "1\n").count();
+    assert_eq!(
+        drop_count, 1,
+        "expected exactly one drop firing across tail-return + rebind moves; got {:?}",
+        output
+    );
+}
+
 // ── phase-7 L938 user-`impl Drop` for SHARED structs (interpreter) ──
 //
 // A `shared struct` is `Value::SharedStruct(Arc<…>)`; the user body

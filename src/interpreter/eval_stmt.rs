@@ -610,6 +610,14 @@ impl<'a> super::Interpreter<'a> {
             Some(v) => v,
             None => return,
         };
+        self.run_user_drop_body_on_value(type_name, value);
+    }
+
+    /// Value-based core of `run_user_drop_body` — also used by the
+    /// fresh-temp call-arg drop hook in `eval_call` (B-2026-07-01-8's
+    /// second half: `consume(Guard { id: 7 })` / `consume(Sig.A(1))` had
+    /// no binding for the name-keyed runner to resolve).
+    pub(crate) fn run_user_drop_body_on_value(&mut self, type_name: &str, value: Value) {
         let method_key = format!("{}.drop", type_name);
         let func = match self.env.get(&method_key) {
             Some(f) => f,
@@ -651,6 +659,10 @@ impl<'a> super::Interpreter<'a> {
         };
         let type_name = match self.env.get(&name) {
             Some(Value::Struct { name, .. }) => name.clone(),
+            // Enum-Drop parity (B-2026-07-01-8): with enum bindings now
+            // firing, a moved-out enum binding needs the same suppression
+            // or the source AND the destination both run the user body.
+            Some(Value::EnumVariant { enum_name, .. }) => enum_name.clone(),
             _ => return,
         };
         if !self.program.drop_method_keys.contains_key(&type_name) {
@@ -697,6 +709,8 @@ impl<'a> super::Interpreter<'a> {
         // Only suppress when the source's value has a user impl Drop.
         let type_name = match self.env.get(&source_name) {
             Some(Value::Struct { name, .. }) => name.clone(),
+            // Enum-Drop parity — see `suppress_tail_expr_user_drop`.
+            Some(Value::EnumVariant { enum_name, .. }) => enum_name.clone(),
             _ => return,
         };
         if !self.program.drop_method_keys.contains_key(&type_name) {
