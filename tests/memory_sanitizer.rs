@@ -18492,4 +18492,107 @@ fn main() {
             "gsort_tuple_and_float_elements",
         );
     }
+
+    #[test]
+    fn asan_parvec_autopar_slot_keeps_elem_agg_drop() {
+        // B-2026-07-02-4: the auto-par dispatch's parent-side re-track
+        // used plain one-level `track_vec_var`, DOWNGRADING a
+        // `Vec[Vec[String]]` slot's cleanup — every nested string leaked
+        // whenever the statement shape parallelized (KARAC_AUTO_PAR=0 was
+        // clean, which is how the class masqueraded as "index-read
+        // leaks"). This program's independent-lets shape triggers
+        // auto-par grouping; the re-track now mirrors the LET-site
+        // agg/map/tensor element dispatch. NOTE: leak tests must include
+        // auto-par-TRIGGERING shapes — loop-based builders serialize and
+        // never covered this path.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut outer: Vec[Vec[String]] = Vec.new();
+    let mut a: Vec[String] = Vec.new();
+    a.push(f"payload padded beyond thirty-six bytes {1}");
+    outer.push(a);
+    println(outer.len());
+}
+"#,
+            &["1"],
+            "parvec_autopar_slot_keeps_elem_agg_drop",
+        );
+    }
+
+    #[test]
+    fn asan_parvec_autopar_for_loop_after_crossing() {
+        // B-2026-07-02-4: the full-content variant — three rows crossing
+        // the auto-par boundary then iterated (192 bytes leaked pre-fix).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut outer: Vec[Vec[String]] = Vec.new();
+    let mut a: Vec[String] = Vec.new();
+    a.push(f"banana payload padded beyond thirty-six bytes {1}");
+    a.push(f"apple payload padded beyond thirty-six bytes {1}");
+    let mut b: Vec[String] = Vec.new();
+    b.push(f"apple payload padded beyond thirty-six bytes {1}");
+    let mut c: Vec[String] = Vec.new();
+    outer.push(a);
+    outer.push(b);
+    outer.push(c);
+    for row in outer {
+        println(row.len());
+    }
+}
+"#,
+            &["2", "1", "0"],
+            "parvec_autopar_for_loop_after_crossing",
+        );
+    }
+
+    #[test]
+    fn asan_parvec_explicit_par_join_slots_freed() {
+        // B-2026-07-02-4 explicit-par sibling: `par { let x = build(1);
+        // let y = build(2); x.len() + y.len() }` — Step 6 bound the Vec
+        // slots into the parent with NO cleanup at all (544 bytes/call
+        // pre-fix). The same rich element dispatch now registers there.
+        assert_clean_asan_run(
+            r#"
+fn build(n: i64) -> Vec[Vec[String]] {
+    let mut outer: Vec[Vec[String]] = Vec.new();
+    let mut a: Vec[String] = Vec.new();
+    a.push(f"payload padded beyond thirty-six bytes {n}");
+    outer.push(a);
+    outer
+}
+fn main() {
+    let total = par {
+        let x = build(1);
+        let y = build(2);
+        x.len() + y.len()
+    };
+    println(total);
+}
+"#,
+            &["2"],
+            "parvec_explicit_par_join_slots_freed",
+        );
+    }
+
+    #[test]
+    fn asan_parvec_deep_nested_slot() {
+        // B-2026-07-02-4: `Vec[Vec[Vec[i64]]]` slot + index-read binding
+        // (the 16-byte w1 repro).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut v: Vec[Vec[Vec[i64]]] = Vec.new();
+    let mut a: Vec[Vec[i64]] = Vec.new();
+    a.push(Vec[2]);
+    v.push(a);
+    let first = v[0];
+    println(first.len());
+}
+"#,
+            &["1"],
+            "parvec_deep_nested_slot",
+        );
+    }
 }

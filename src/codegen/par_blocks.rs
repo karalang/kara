@@ -263,6 +263,38 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.vec_elem_types
                             .entry(slot.binding_name.clone())
                             .or_insert_with(|| self.context.i64_type().into());
+                        // B-2026-07-02-4 (explicit-par sibling of the
+                        // auto-par dispatch fix in stmts.rs): a Vec/String
+                        // slot's heap crossed the par boundary with NO
+                        // parent-side cleanup at all — both slots' entire
+                        // contents and buffers leaked per invocation.
+                        // Register the same rich element dispatch the
+                        // LET site uses (agg/map/tensor element drops,
+                        // one-level fast path otherwise).
+                        let elem_ty = self.vec_elem_types.get(slot.binding_name.as_str()).copied();
+                        let elem_te = self
+                            .var_elem_type_exprs
+                            .get(slot.binding_name.as_str())
+                            .cloned();
+                        let is_tensor_elem = elem_te
+                            .as_ref()
+                            .map(|te| self.tensor_var_info_from_type_expr(te).is_some())
+                            .unwrap_or(false);
+                        let map_elem_drop = elem_te
+                            .as_ref()
+                            .and_then(|te| self.vec_elem_map_drop_for_type_expr(te));
+                        let agg_elem_drop = elem_te
+                            .as_ref()
+                            .and_then(|te| self.vec_elem_agg_drop_for_type_expr(te));
+                        if is_tensor_elem {
+                            self.track_vec_of_tensors_var(alloca);
+                        } else if let Some(map_drop) = map_elem_drop {
+                            self.track_vec_of_maps_var(alloca, map_drop);
+                        } else if let (Some(agg_drop), Some(et)) = (agg_elem_drop, elem_ty) {
+                            self.track_vec_of_aggs_var(alloca, et, agg_drop);
+                        } else {
+                            self.track_vec_var(alloca, elem_ty);
+                        }
                     }
                     // Moved-in ownership (Map / File / enum / struct /
                     // user-Drop / SoA slots): the branch removed its

@@ -610,7 +610,50 @@ impl<'ctx> super::Codegen<'ctx> {
                                 // Vec[Vec[T]] / Vec[String] slots.
                                 let elem_ty =
                                     self.vec_elem_types.get(slot.binding_name.as_str()).copied();
-                                self.track_vec_var(alloca, elem_ty);
+                                // B-2026-07-02-4: mirror the LET-site cleanup
+                                // dispatch (stmts.rs let path). The plain
+                                // `track_vec_var` re-track silently DOWNGRADED
+                                // a rich element cleanup to the one-level
+                                // buffer free — a `Vec[Vec[String]]` slot
+                                // crossing the par boundary lost its
+                                // `karac_drop_Vec_String` agg drop and leaked
+                                // every nested string (auto-par-only: the
+                                // KARAC_AUTO_PAR=0 build was clean, which is
+                                // how the class hid behind "index-read leak"
+                                // shapes — the reads merely changed the
+                                // dependency graph enough to parallelize).
+                                let elem_te = self
+                                    .var_elem_type_exprs
+                                    .get(slot.binding_name.as_str())
+                                    .cloned();
+                                let is_tensor_elem = elem_te
+                                    .as_ref()
+                                    .map(|te| self.tensor_var_info_from_type_expr(te).is_some())
+                                    .unwrap_or(false);
+                                let map_elem_drop = elem_te
+                                    .as_ref()
+                                    .and_then(|te| self.vec_elem_map_drop_for_type_expr(te));
+                                let agg_elem_drop = elem_te
+                                    .as_ref()
+                                    .and_then(|te| self.vec_elem_agg_drop_for_type_expr(te));
+                                let is_heap_env_vec = self
+                                    .heap_env_vec_owners
+                                    .contains(slot.binding_name.as_str());
+                                if is_heap_env_vec {
+                                    let drop_fn = self.emit_vec_elem_closure_env_drop_fn();
+                                    if let Some(et) = elem_ty {
+                                        self.track_vec_of_aggs_var(alloca, et, drop_fn);
+                                    }
+                                } else if is_tensor_elem {
+                                    self.track_vec_of_tensors_var(alloca);
+                                } else if let Some(map_drop) = map_elem_drop {
+                                    self.track_vec_of_maps_var(alloca, map_drop);
+                                } else if let (Some(agg_drop), Some(et)) = (agg_elem_drop, elem_ty)
+                                {
+                                    self.track_vec_of_aggs_var(alloca, et, agg_drop);
+                                } else {
+                                    self.track_vec_var(alloca, elem_ty);
+                                }
                             }
                             // Moved-in ownership (Map / File / enum /
                             // struct / user-Drop / SoA slots): the
