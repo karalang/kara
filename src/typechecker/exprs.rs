@@ -498,6 +498,17 @@ impl<'a> super::TypeChecker<'a> {
                     body_ty,
                 );
                 self.check_assignable(expected, &actual, expr.span.clone());
+                // B-2026-07-02-12: record the closure literal's resolved
+                // `Fn` type at its own span. The lowering pass folds
+                // Function-typed `expr_types` entries into
+                // `Program.fn_value_typed_exprs`, which codegen's
+                // `compile_closure` reads to type UN-ANNOTATED params
+                // (`|a| f"{a}!"` against a `Fn(String) -> String` slot).
+                // Without the record, codegen fell back to i64 params and
+                // the closure's actual signature mismatched the declared-Fn
+                // indirect-call ABI at every call site — String/Vec args
+                // read as integers, silently.
+                self.record_expr_type(&expr.span, &actual);
                 return actual;
             }
             // Arity mismatch: fall through to the synth path so the existing

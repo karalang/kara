@@ -472,6 +472,17 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `Column.from_vec` inline args): those carriers are name-collision-
     /// free where span keys can collide across f-string re-parses.
     pub(super) fn literal_span_elem_hint(&self, span: &Span) -> Option<BasicTypeEnum<'ctx>> {
+        // An active `pending_let_elem_type` (the let-binding's element width,
+        // pushed for the whole RHS) takes precedence: it is narrower-correct
+        // for direct-RHS literals and for builtin constructor args
+        // (`Column.from_vec([10, 20, 30])` must pack at the BINDING's i32,
+        // where the arg's own span record is the coarse pre-coercion Vec[i64]
+        // — see test_e2e_narrow_literal_vec_packs_at_annotated_width).
+        // USER-callee arguments are the shape where the ambient hint is
+        // WRONG (the callee's declared width rules, B-2026-07-02-13) — those
+        // are handled at the source: `compile_call` / `compile_generic_call`
+        // clear the pending hint around argument compilation, so literals
+        // there reach this fn with no ambient hint and use their span record.
         if self.pending_let_elem_type.is_some() {
             return None;
         }

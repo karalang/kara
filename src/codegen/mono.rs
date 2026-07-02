@@ -34,10 +34,17 @@ impl<'ctx> super::Codegen<'ctx> {
         let generic_fn = self.generic_fns[name].clone();
 
         // Compile argument values so we can infer concrete types.
-        let arg_vals: Vec<BasicValueEnum<'ctx>> = args
-            .iter()
-            .map(|a| self.compile_expr(&a.value))
-            .collect::<Result<_, _>>()?;
+        // B-2026-07-02-13: cleared pending-let hint for the arg compiles —
+        // argument literals pack at their own span-recorded (callee-declared)
+        // width, not the let binding's. Mirrors the `compile_call` user-fn
+        // arg loop; see `literal_span_elem_hint` for the precedence story.
+        let saved_pending_elem = self.pending_let_elem_type.take();
+        let saved_pending_elem_te = self.pending_let_elem_type_expr.take();
+        let arg_vals: Result<Vec<BasicValueEnum<'ctx>>, String> =
+            args.iter().map(|a| self.compile_expr(&a.value)).collect();
+        self.pending_let_elem_type = saved_pending_elem;
+        self.pending_let_elem_type_expr = saved_pending_elem_te;
+        let arg_vals: Vec<BasicValueEnum<'ctx>> = arg_vals?;
 
         // Infer type arguments from the argument value types.
         let mut subst = self.infer_type_args(&generic_fn, &arg_vals);
@@ -487,10 +494,42 @@ impl<'ctx> super::Codegen<'ctx> {
             None => return Ok(self.context.i64_type().const_int(0, false).into()),
         };
 
+        // Ref-mode params take a POINTER to the caller-side data, matching
+        // the pointer ABI `declare_mono_function` gives them — the same
+        // discipline the state-machine intercept above applies when storing
+        // args into state-struct fields. Identifier args resolve through
+        // `get_data_ptr`; rvalue args are materialized into an entry alloca.
+        // Without this the direct call passed the loaded value against a
+        // `ptr` signature slot and module verification failed ("Call
+        // parameter type does not match function signature") the moment a
+        // mono body actually used a `ref Vec[E]` param (B-2026-07-02-11
+        // registration made such bodies compile; before it they errored at
+        // the first collection-method touch).
+        let ref_flags = self.fn_param_ref.get(&mangled).cloned().unwrap_or_default();
         let compiled_args: Vec<BasicMetadataValueEnum<'ctx>> = arg_vals
             .iter()
-            .map(|v| BasicMetadataValueEnum::from(*v))
-            .collect();
+            .enumerate()
+            .map(|(i, v)| -> Result<BasicMetadataValueEnum<'ctx>, String> {
+                if ref_flags.get(i).copied().unwrap_or(false) {
+                    let ptr: BasicValueEnum<'ctx> = if let ExprKind::Identifier(var_name) =
+                        &args[i].value.kind
+                    {
+                        if let Some(ptr) = self.get_data_ptr(var_name) {
+                            ptr.into()
+                        } else {
+                            self.materialize_rvalue_for_ref_arg(*v, i)
+                        }
+                    } else if let Some(elem_ptr) = self.ref_arg_index_borrow_ptr(&args[i].value)? {
+                        elem_ptr.into()
+                    } else {
+                        self.materialize_rvalue_for_ref_arg(*v, i)
+                    };
+                    Ok(BasicMetadataValueEnum::from(ptr))
+                } else {
+                    Ok(BasicMetadataValueEnum::from(*v))
+                }
+            })
+            .collect::<Result<_, _>>()?;
 
         let call = self
             .builder
@@ -852,24 +891,17 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             let alloca = self.create_entry_alloca(fn_val, &param_name, param_val.get_type());
             self.builder.build_store(alloca, param_val).unwrap();
-            // Per-layout-monomorphization (slice 4): a SoA-carrying `ref`/
-            // `mut ref Vec[E]` param arrives as a POINTER to the caller's SoA
-            // struct (the signature is the pointer ABI — `active_param_soa_layout`
-            // returned `None` for the borrow form, so the by-value SoA branch
-            // above was skipped). Register it in `ref_params` so the SoA access
-            // paths (`compile_soa_index_read` / `compile_soa_method`) deref the
-            // slot once before GEPing groups/len — exactly the by-ref-reads
-            // discipline `compile_function` applies, which the mono prologue
-            // otherwise omits. Guarded on `active_soa_layout` (true iff
-            // `layout_subst[param]` is `Soa`) so only SoA borrow params get the
-            // entry; an `Aos` ref Vec param is unaffected. Without this the
-            // access path reads the pointer bytes as the SoA struct → garbage
-            // len → SIGTRAP, the same silent miscompile the same-name by-ref
-            // path fixed for `compile_function`.
-            if self.active_soa_layout(&param_name).is_some() {
-                if let Some(inner_ty) = self.inner_type_of_ref(&param.ty) {
-                    self.ref_params.insert(param_name.clone(), inner_ty);
-                }
+            // Track ref params: the alloca holds a pointer-to-data, so body
+            // reads deref the slot once — the by-ref-reads discipline
+            // `compile_function` applies. Originally SoA-gated (slice 4: a
+            // SoA-carrying `ref Vec[E]` param must deref before GEPing
+            // groups/len, else the access path reads the pointer bytes as
+            // the SoA struct → garbage len → SIGTRAP); generalized to every
+            // ref param by the B-2026-07-02-11 mono-param registration so a
+            // `ref Vec[E]` / `ref String` param's collection dispatch derefs
+            // correctly inside mono bodies too.
+            if let Some(inner_ty) = self.inner_type_of_ref(&param.ty) {
+                self.ref_params.insert(param_name.clone(), inner_ty);
             }
             // Track declared type name for struct/enum field resolution.
             if let TypeKind::Path(path) = &param.ty.kind {
@@ -878,29 +910,57 @@ impl<'ctx> super::Codegen<'ctx> {
                         .insert(param_name.clone(), type_name.clone());
                 }
             }
-            // Register `Tensor` params in `tensor_var_infos` so the body's
-            // multi-dim index (`a[i, j]`), `shape()`/`rank()`, and the
-            // shape-transform family recognize them. Without this a
-            // shape-generic body — `fn f[M, K, N](a: Tensor[T, [M, K]], …)`
-            // indexing / `shape()`-ing its tensor params — failed codegen
-            // with "Index operator applied to non-array type" (the params
-            // were bound as opaque pointers only). The shape literal's named
-            // `Dim` params (`M`, `K`) carry no static value, so they lower to
-            // runtime `?` dims read from the header; the element type
-            // resolves through the active `type_subst` (set by
-            // `compile_generic_call` around this call). Mirrors
-            // `compile_function`'s `register_var_from_type_expr` for the
-            // tensor case — the other collection side-tables stay on the
-            // minimal mono binding (full registration would change cleanup
-            // behavior for existing generic Vec/Map/String fns). A
-            // `ref Tensor` param registers off its inner type (the by-value
-            // ref-tensor ABI hands back the same block pointer).
-            let tensor_te = match &param.ty.kind {
-                TypeKind::Ref(inner) | TypeKind::MutRef(inner) => inner.as_ref(),
-                _ => &param.ty,
-            };
-            if let Some(info) = self.tensor_var_info_from_type_expr(tensor_te) {
-                self.tensor_var_infos.insert(param_name.clone(), info);
+            // B-2026-07-02-11: register the collection / String / struct
+            // side-tables for the parameter via the same registrar
+            // `compile_function` uses. This subsumes the older tensor-only
+            // registration (shape-generic bodies indexing `Tensor` params)
+            // and extends it to the whole collection surface: without it, a
+            // `for x in xs` over a `Vec` param inside a mono SILENTLY
+            // compiled to nothing (the for lowering's unknown-iterable
+            // fallback skips the body), and any collection method
+            // (`xs.len()`, `xs[i]`) failed loudly with "no handler for
+            // method". The active `type_subst` (set by `compile_generic_call`
+            // around this call) resolves generic element types (`Vec[T]`).
+            // A `ref`-mode param registers off its inner type, pairing with
+            // its `ref_params` entry above. SoA-active params keep the
+            // minimal binding — their access paths lower through
+            // `layout_subst` / `ref_params`, and the AoS vec side-tables
+            // would shadow that.
+            if self.active_soa_layout(&param_name).is_none() {
+                let registration_te = match &param.ty.kind {
+                    TypeKind::Ref(inner) | TypeKind::MutRef(inner) => inner.as_ref(),
+                    _ => &param.ty,
+                };
+                self.register_var_from_type_expr(&param_name, registration_te);
+                // Owned (bare, non-ref) String/Vec params: retaining consume
+                // sites must deep-copy — the same owned-header set
+                // `compile_function` records (see `owned_vecstr_params`).
+                if !matches!(
+                    param.ty.kind,
+                    TypeKind::Ref(_) | TypeKind::MutRef(_) | TypeKind::MutSlice(_)
+                ) && self.vec_elem_types.contains_key(&param_name)
+                {
+                    self.owned_vecstr_params.insert(param_name.clone());
+                }
+            }
+            // B-2026-07-02-11: a `Fn(...)`-typed param is a closure fat
+            // pointer; register its env-first closure-call ABI fn type so a
+            // body call `f(x)` routes through `compile_closure_call` —
+            // mirroring `compile_function`'s registration (functions.rs,
+            // B-2026-06-20-1), which this prologue omitted. Without it the
+            // call fell through to the unknown-callee const-0 placeholder, so
+            // `fn apply[T](x: T, f: Fn(T) -> T) -> T { f(x) }` silently
+            // returned 0 under `karac build` (correct under `karac run`).
+            // The active `type_subst` resolves generic refs (`T`) inside the
+            // `Fn` shape to this mono's concrete LLVM types.
+            if let TypeKind::FnType {
+                params,
+                return_type,
+                ..
+            } = &param.ty.kind
+            {
+                let fn_type = self.closure_abi_fn_type(params, return_type.as_deref());
+                self.closure_fn_types.insert(param_name.clone(), fn_type);
             }
             self.variables.insert(
                 param_name,

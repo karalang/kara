@@ -2554,9 +2554,29 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // 3. Determine param types. Source annotation wins, otherwise consult
         //    `pending_closure_param_hints` (caller pushdown — e.g. `Vec.sort_by`
-        //    handing the element type to a `|a, b|` comparator), otherwise
-        //    fall back to i64.
+        //    handing the element type to a `|a, b|` comparator), otherwise the
+        //    typechecker's inferred `Fn(...)` type at the closure's own span
+        //    (`fn_value_typed_exprs`, populated by the lowering pass from
+        //    `expr_types` — contextual inference from the callee's declared
+        //    `Fn` param covers the common un-annotated arg), otherwise fall
+        //    back to i64. B-2026-07-02-12: before the span fallback, an
+        //    un-annotated `|a| f"{a}!"` passed to a `Fn(String) -> String`
+        //    param compiled as `(ptr, i64) -> i64` while the call site
+        //    dispatched through the declared-`Fn` ABI — an indirect-call
+        //    signature mismatch that silently printed the String's pointer
+        //    word as an integer.
         let param_hints = self.pending_closure_param_hints.take();
+        let inferred_fn_te = self
+            .fn_value_typed_exprs
+            .get(&(closure_span.offset, closure_span.length))
+            .cloned();
+        let inferred_param_tes: Vec<Option<TypeExpr>> = match inferred_fn_te.as_ref() {
+            Some(TypeExpr {
+                kind: TypeKind::FnType { params: ps, .. },
+                ..
+            }) => ps.iter().map(|te| Some(te.clone())).collect(),
+            _ => Vec::new(),
+        };
         let param_llvm_types: Vec<BasicTypeEnum<'ctx>> = params
             .iter()
             .enumerate()
@@ -2568,6 +2588,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let Some(&hinted) = hints.get(i) {
                         return hinted;
                     }
+                }
+                if let Some(Some(te)) = inferred_param_tes.get(i) {
+                    return self.llvm_type_for_type_expr(te);
                 }
                 self.context.i64_type().into()
             })
@@ -2782,9 +2805,24 @@ impl<'ctx> super::Codegen<'ctx> {
             if let Some(te) = cp.ty.as_ref() {
                 if let TypeKind::Path(p) = &te.kind {
                     if let Some(seg) = p.segments.last() {
-                        self.record_var_type_name(param_name, seg.clone());
+                        self.record_var_type_name(param_name.clone(), seg.clone());
                     }
                 }
+            }
+            // B-2026-07-02-12: register the collection / String side-tables
+            // for the param from its effective type — the annotation when
+            // present, else the typechecker's inferred `Fn(...)` param type
+            // at the closure span (same source as the LLVM types above).
+            // Without this an un-annotated String param was invisible to
+            // `string_vars`, so an f-string interpolation in the body
+            // formatted the `{ptr,len,cap}` value's first word as an i64.
+            let effective_te = cp
+                .ty
+                .as_ref()
+                .or_else(|| inferred_param_tes.get(i).and_then(Option::as_ref));
+            if let Some(te) = effective_te {
+                let te = te.clone();
+                self.register_var_from_type_expr(&param_name, &te);
             }
         }
 

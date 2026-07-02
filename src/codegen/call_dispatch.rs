@@ -1048,6 +1048,19 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(&name)
             .cloned()
             .unwrap_or_default();
+        // B-2026-07-02-13: the pending-let element hint describes the LET
+        // BINDING's element width; a user callee's argument literals must
+        // pack at the CALLEE's declared width (their own span record), not
+        // the binding's — `let s: String = tail_str(vec![100, 200, 300]);`
+        // packed the arg elements as i8 and the callee read garbage,
+        // silently. Cleared for the argument loop, restored after (the hint
+        // still serves the direct-RHS constructor lowering that follows the
+        // call in other RHS shapes). Builtin constructor intercepts
+        // (`Column.from_vec`, `Vec.filled`, …) never reach this loop and
+        // keep the hint — their arg literal legitimately inherits the
+        // binding's width.
+        let saved_pending_elem = self.pending_let_elem_type.take();
+        let saved_pending_elem_te = self.pending_let_elem_type_expr.take();
         let mut compiled_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
         for (i, a) in args.iter().enumerate() {
             // B-2026-06-20-1: a bare named `fn` passed to a `Fn(...)`-typed
@@ -1348,6 +1361,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.track_inline_owned_aggregate_arg(val, &a.value);
             }
         }
+        // Restore the pending-let hint cleared above for the arg loop.
+        self.pending_let_elem_type = saved_pending_elem;
+        self.pending_let_elem_type_expr = saved_pending_elem_te;
 
         // Niche-ABI arg pack — see `pack_niche_abi_args`. Runs AFTER the
         // arg loop so the refcount bookkeeping above

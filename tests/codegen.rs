@@ -55032,6 +55032,120 @@ fn main() {
             "source-zero must precede the boxed payload's drop\n--- body ---\n{body}"
         );
     }
+    #[test]
+    fn test_e2e_fn_value_param_through_generic_mono() {
+        // B-2026-07-02-11: `fn apply[T](x: T, f: Fn(T) -> T) -> T { f(x) }`
+        // called with a closure silently returned 0 under `karac build`
+        // (the mono prologue never registered the `Fn`-typed param in
+        // `closure_fn_types`, so `f(x)` fell through to the unknown-callee
+        // const-0 placeholder). `karac run` was always correct.
+        let out = run_program(
+            "fn apply[T](x: T, f: Fn(T) -> T) -> T {\n\
+                 return f(x);\n\
+             }\n\
+             fn main() {\n\
+                 println(apply(20, |v| v * 2 + 2));\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "42\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_generic_mono_vec_param_for_loop_and_methods() {
+        // B-2026-07-02-11: a `for x in xs` over a `Vec` param inside ANY
+        // generic mono silently compiled to nothing (unknown-iterable
+        // fallback skips the body), and `xs.len()` / `xs[i]` failed loudly.
+        // The mono prologue now registers collection side-tables for params
+        // like `compile_function` does. Covers owned AND `ref` forms (the
+        // ref form also needed the direct-call pointer ABI for ref args).
+        let out = run_program(
+            "fn showall[A](xs: Vec[i64], tag: A) -> A {\n\
+                 println(xs.len());\n\
+                 println(xs[1]);\n\
+                 for x in xs {\n\
+                     println(x);\n\
+                 }\n\
+                 return tag;\n\
+             }\n\
+             fn showref[A](xs: ref Vec[i64], tag: A) -> A {\n\
+                 println(xs.len());\n\
+                 for x in xs {\n\
+                     println(x);\n\
+                 }\n\
+                 return tag;\n\
+             }\n\
+             fn main() {\n\
+                 println(showall(vec![5, 6], 9));\n\
+                 let v = vec![7, 8];\n\
+                 println(showref(v, 3));\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "2\n6\n5\n6\n9\n2\n7\n8\n3\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_unannotated_string_closure_param_abi() {
+        // B-2026-07-02-12: an un-annotated closure passed to a
+        // `Fn(String) -> String` param compiled as `(ptr, i64) -> i64` (the
+        // i64 fallback) while call sites dispatched through the declared-Fn
+        // ABI — the String's pointer word printed as an integer, silently.
+        // The typechecker now records the closure literal's resolved Fn type
+        // at its span; codegen types un-annotated params from it (and
+        // registers String/Vec params in the semantic side-tables so
+        // f-string interpolation formats them correctly). Exercises both the
+        // non-generic and the monomorphized-generic routes, including a
+        // String accumulator folded through a loop.
+        let out = run_program(
+            "fn cat(s: String, f: Fn(String) -> String) -> String {\n\
+                 return f(s);\n\
+             }\n\
+             fn fold3[A](xs: Vec[i64], init: A, f: Fn(A, i64) -> A) -> A {\n\
+                 let mut acc = init;\n\
+                 for x in xs {\n\
+                     acc = f(acc, x);\n\
+                 }\n\
+                 return acc;\n\
+             }\n\
+             fn main() {\n\
+                 println(cat(\"ab\", |a| f\"{a}!\"));\n\
+                 println(fold3(vec![1, 2, 3], 0, |a, x| a + x));\n\
+                 println(fold3(vec![1, 2, 3], \"\", |a, x| f\"{a}{x}\"));\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "ab!\n6\n123\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_let_elem_hint_does_not_leak_into_call_arg_literals() {
+        // B-2026-07-02-13: `let s: String = tail(vec![100, 200, 300]);`
+        // packed the ARGUMENT literal's elements as i8 (the let annotation's
+        // String elem width leaked via `pending_let_elem_type` into every
+        // literal nested in the RHS) — the callee read garbage, silently.
+        // The literal's own span-recorded type now wins over the ambient
+        // pending-let hint. No generics involved.
+        let out = run_program(
+            "fn tail_str(xs: Vec[i64]) -> String {\n\
+                 let mut out = \"\";\n\
+                 for x in xs {\n\
+                     out = f\"{out}{x}\";\n\
+                 }\n\
+                 return out;\n\
+             }\n\
+             fn main() {\n\
+                 let s: String = tail_str(vec![100, 200, 300]);\n\
+                 println(s);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "100200300\n");
+        }
+    }
 }
 
 #[cfg(feature = "llvm")]
