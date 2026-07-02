@@ -1642,6 +1642,36 @@ impl<'a> super::Resolver<'a> {
                             replacement: None,
                             stub_hint: None,
                         });
+                    } else if vis != Visibility::Pub {
+                        // Cross-package module loading (phase-5 line 898):
+                        // `Default` visibility is package-internal. When the
+                        // canonical defining module belongs to a different
+                        // package than the importer, only `pub` items are
+                        // importable — design.md § Package name in paths.
+                        let importer_pkg = self
+                            .current_module
+                            .and_then(|id| tree.module(id).package.as_deref());
+                        let def_pkg = tree
+                            .graph
+                            .lookup(&def_path)
+                            .and_then(|id| tree.module(id).package.as_deref());
+                        if importer_pkg != def_pkg {
+                            let def_label = def_pkg.unwrap_or("<root package>");
+                            self.errors.push(ResolveError {
+                                message: format!(
+                                    "`{}` in package `{}` is not `pub` — only `pub` items can be imported across packages",
+                                    def_name, def_label,
+                                ),
+                                span: item.span.clone(),
+                                kind: ResolveErrorKind::PrivateItemAccess,
+                                suggestion: Some(format!(
+                                    "mark `{}` as `pub` in package `{}`",
+                                    def_name, def_label,
+                                )),
+                                replacement: None,
+                                stub_hint: None,
+                            });
+                        }
                     }
                 }
             }

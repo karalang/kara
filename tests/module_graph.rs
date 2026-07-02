@@ -1763,3 +1763,166 @@ fn build_tree_rebases_module_spans_globally_unique() {
         overlap,
     );
 }
+
+// ── Cross-package module loading (phase-5 line 898) ─────────────
+
+/// Walk a dependency package rooted at `rel` inside the scratch dir and
+/// wrap it as a `DepPackageWalk` under `name`.
+fn dep_walk(d: &ScratchDir, rel: &str, name: &str) -> karac::module::DepPackageWalk {
+    karac::module::DepPackageWalk {
+        name: name.to_string(),
+        walked: walk_project(&d.root().join(rel), WalkerOpts::default())
+            .expect("dep walker succeeds"),
+    }
+}
+
+#[test]
+fn dep_modules_register_under_package_prefixed_paths() {
+    let d = ScratchDir::new("dep-prefix");
+    d.write(
+        "src/main.kara",
+        "import http.client.connect;\nfn main() {}\n",
+    );
+    d.write("dep/src/lib.kara", "pub fn hoisted() {}\n");
+    d.write("dep/src/client.kara", "pub fn connect() {}\n");
+
+    let w = walked(d.root());
+    let deps = [dep_walk(&d, "dep", "http")];
+    let built = karac::module::build_program_tree_with_deps(&w, &deps, Default::default())
+        .expect("build tree");
+    let idx = &built.tree.graph.by_path;
+    // Dep lib.kara hoists to the package-name root; submodule is prefixed.
+    let lib_id = idx
+        .get::<[String]>(&["http".to_string()])
+        .copied()
+        .expect("dep lib registered at [http]");
+    let client_id = idx
+        .get::<[String]>(&["http".to_string(), "client".to_string()])
+        .copied()
+        .expect("dep client registered at [http, client]");
+    assert_eq!(built.tree.modules[lib_id].package.as_deref(), Some("http"));
+    assert_eq!(
+        built.tree.modules[client_id].package.as_deref(),
+        Some("http")
+    );
+    // Root entry stays the root-package entry, not a dep module.
+    assert!(built.tree.modules[built.tree.root].package.is_none());
+    // The root's import of `http.client.connect` produced a graph edge.
+    assert!(
+        built
+            .tree
+            .graph
+            .edges
+            .iter()
+            .any(|&(u, v)| u == built.tree.root && v == client_id),
+        "import edge root -> http.client expected; edges: {:?}",
+        built.tree.graph.edges,
+    );
+}
+
+#[test]
+fn dep_intra_package_imports_are_rewritten_with_prefix() {
+    let d = ScratchDir::new("dep-import-rewrite");
+    d.write("src/main.kara", "import http.util.helper;\nfn main() {}\n");
+    d.write("dep/src/lib.kara", "pub fn hoisted() {}\n");
+    d.write(
+        "dep/src/util.kara",
+        "import hoisted;\nimport std.prelude.Vec;\npub fn helper() {}\n",
+    );
+
+    let w = walked(d.root());
+    let deps = [dep_walk(&d, "dep", "http")];
+    let built = karac::module::build_program_tree_with_deps(&w, &deps, Default::default())
+        .expect("build tree");
+    let util_id = built
+        .tree
+        .graph
+        .by_path
+        .get::<[String]>(&["http".to_string(), "util".to_string()])
+        .copied()
+        .expect("dep util registered");
+    let util = &built.tree.modules[util_id];
+    // `import hoisted;` (empty dotted prefix — a lib.kara-hoisted item)
+    // gains the package prefix; `import std.prelude.Vec;` is untouched.
+    let paths: Vec<Vec<String>> = util.imports.iter().map(|i| i.path.clone()).collect();
+    assert!(
+        paths.contains(&vec!["http".to_string()]),
+        "hoisted-root import rewritten to [http]; got {paths:?}",
+    );
+    assert!(
+        paths.contains(&vec!["std".to_string(), "prelude".to_string()]),
+        "std import left unprefixed; got {paths:?}",
+    );
+    // path_spans stays aligned with path after the rewrite.
+    for imp in &util.imports {
+        assert_eq!(
+            imp.path.len(),
+            imp.path_spans.len(),
+            "path_spans aligned for {:?}",
+            imp.path,
+        );
+    }
+}
+
+#[test]
+fn local_module_shadows_whole_dep_package() {
+    let d = ScratchDir::new("dep-shadow");
+    d.write("src/main.kara", "fn main() {}\n");
+    d.write("src/http.kara", "pub fn local_thing() {}\n");
+    d.write("dep/src/lib.kara", "pub fn hoisted() {}\n");
+    d.write("dep/src/client.kara", "pub fn connect() {}\n");
+
+    let w = walked(d.root());
+    let deps = [dep_walk(&d, "dep", "http")];
+    let built = karac::module::build_program_tree_with_deps(&w, &deps, Default::default())
+        .expect("build tree");
+    let idx = &built.tree.graph.by_path;
+    let http_id = idx
+        .get::<[String]>(&["http".to_string()])
+        .copied()
+        .expect("local http module registered");
+    assert!(
+        built.tree.modules[http_id].package.is_none(),
+        "local module wins the [http] path",
+    );
+    // The dep is skipped wholesale: even its non-colliding submodule is
+    // absent (design.md § Resolution order — shadowed packages are
+    // inaccessible, not partially merged).
+    assert!(
+        !idx.contains_key::<[String]>(&["http".to_string(), "client".to_string()]),
+        "shadowed dep contributes no modules",
+    );
+}
+
+#[test]
+fn dep_test_companions_are_skipped() {
+    let d = ScratchDir::new("dep-tests-skipped");
+    d.write("src/main.kara", "fn main() {}\n");
+    d.write("dep/src/lib.kara", "pub fn hoisted() {}\n");
+    d.write("dep/src/geo.kara", "pub fn area() {}\n");
+    d.write("dep/src/geo_test.kara", "fn test_area() {}\n");
+
+    let w = walked(d.root());
+    // Walk the dep WITH tests to prove the defensive skip in the tree
+    // builder (the CLI walks deps without tests; both layers must hold).
+    let dep = karac::module::DepPackageWalk {
+        name: "geo_pkg".to_string(),
+        walked: walk_project(
+            &d.root().join("dep"),
+            WalkerOpts {
+                include_tests: true,
+                ..WalkerOpts::default()
+            },
+        )
+        .expect("dep walker succeeds"),
+    };
+    let built = karac::module::build_program_tree_with_deps(&w, &[dep], Default::default())
+        .expect("build tree");
+    for m in built.tree.modules.iter().filter(|m| !m.is_synthetic) {
+        assert!(
+            !m.is_test_file,
+            "no dep test module may reach the tree: {:?}",
+            m.file,
+        );
+    }
+}

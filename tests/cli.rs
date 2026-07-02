@@ -18952,3 +18952,262 @@ console.log("FORCE_SEQ_OK");
     }
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+// ── Cross-package module loading (phase-5 line 898) ─────────────
+//
+// `import <pkg-name>.…` resolves into a resolved path-dependency's module
+// tree: the dep's `lib.kara` items are importable as `import pkg.Item`,
+// its submodules as `import pkg.sub.Item`, intra-dep imports keep working
+// via the tree-build prefix rewrite, and only `pub` items cross the
+// package boundary. The build path is strict (diagnostics + halt); the
+// `karac run` path merges deps leniently into the interpreter
+// super-program.
+
+/// Lay down a two-package fixture: a root `app` (binary) depending on a
+/// path-dep `mathx` (library with a hoisted lib.kara item, a submodule,
+/// and an intra-dep import of the hoisted item). Returns the app dir.
+fn xpkg_fixture(slug: &str) -> std::path::PathBuf {
+    let tmp = slice7_tempdir(slug);
+    std::fs::create_dir_all(tmp.join("app/src")).unwrap();
+    std::fs::create_dir_all(tmp.join("mathx/src")).unwrap();
+    std::fs::write(
+        tmp.join("app/kara.toml"),
+        r#"[package]
+name = "app"
+
+[dependencies]
+mathx = { path = "../mathx" }
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.join("mathx/kara.toml"), "[package]\nname = \"mathx\"\n").unwrap();
+    std::fs::write(
+        tmp.join("mathx/src/lib.kara"),
+        "pub fn double(x: i64) -> i64 { x * 2 }\nfn internal_only(x: i64) -> i64 { x }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.join("mathx/src/geo.kara"),
+        "import double;\npub fn area(w: i64, h: i64) -> i64 { double(w * h) / 2 }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.join("app/src/main.kara"),
+        "import mathx.double;\nimport mathx.geo.area;\n\nfn main() {\n    println(double(21));\n    println(area(3, 4));\n}\n",
+    )
+    .unwrap();
+    tmp
+}
+
+#[test]
+fn test_xpkg_import_typechecks_and_builds() {
+    let tmp = xpkg_fixture("xpkg-build");
+    let out = karac_bin()
+        .arg("build")
+        .current_dir(tmp.join("app"))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "cross-package build should succeed; stdout={stdout} stderr={stderr}",
+    );
+    // The summary names the dependency and its module count.
+    assert!(
+        stdout.contains("deps:    1 package(s), 2 module(s)"),
+        "dep summary expected; stdout={stdout}",
+    );
+    assert!(stdout.contains("mathx"), "dep name listed; stdout={stdout}");
+
+    // Under llvm the produced binary must run with the interpreter-
+    // identical output (A/B surface).
+    #[cfg(feature = "llvm")]
+    {
+        let exe = tmp.join("app/app");
+        assert!(exe.is_file(), "executable produced at {}", exe.display());
+        let run = std::process::Command::new(&exe).output().unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "42\n12\n",
+            "compiled output matches interpreter",
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn test_xpkg_run_interpreter_sees_dep_modules() {
+    let tmp = xpkg_fixture("xpkg-run");
+    let out = karac_bin()
+        .arg("run")
+        .arg("src/main.kara")
+        .current_dir(tmp.join("app"))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        out.status.success(),
+        "karac run should succeed; stdout={stdout} stderr={stderr}",
+    );
+    assert_eq!(stdout, "42\n12\n", "interpreter output");
+}
+
+#[test]
+fn test_xpkg_nonpub_item_rejected_across_packages() {
+    let tmp = xpkg_fixture("xpkg-nonpub");
+    std::fs::write(
+        tmp.join("app/src/main.kara"),
+        "import mathx.internal_only;\nfn main() { println(internal_only(1)); }\n",
+    )
+    .unwrap();
+    let out = karac_bin()
+        .arg("build")
+        .current_dir(tmp.join("app"))
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(!out.status.success(), "non-pub import must fail");
+    assert!(
+        stderr.contains("error[E0222]"),
+        "E0222 expected; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("only `pub` items can be imported across packages"),
+        "cross-package message expected; stderr={stderr}",
+    );
+}
+
+#[test]
+fn test_xpkg_local_module_shadows_dep() {
+    let tmp = xpkg_fixture("xpkg-shadow");
+    // A local `src/mathx.kara` fully shadows the dep of the same name.
+    std::fs::write(
+        tmp.join("app/src/mathx.kara"),
+        "pub fn local_thing() -> i64 { 7 }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.join("app/src/main.kara"),
+        "import mathx.local_thing;\nfn main() { println(local_thing()); }\n",
+    )
+    .unwrap();
+    let out = karac_bin()
+        .arg("build")
+        .current_dir(tmp.join("app"))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "local module wins; stdout={stdout} stderr={stderr}",
+    );
+
+    // And the dep's submodule is inaccessible while shadowed.
+    std::fs::write(
+        tmp.join("app/src/main.kara"),
+        "import mathx.geo.area;\nfn main() { println(area(3, 4)); }\n",
+    )
+    .unwrap();
+    let out = karac_bin()
+        .arg("build")
+        .current_dir(tmp.join("app"))
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(!out.status.success(), "shadowed dep must be inaccessible");
+    assert!(
+        stderr.contains("error[E0224]") && stderr.contains("mathx.geo"),
+        "E0224 unknown module expected; stderr={stderr}",
+    );
+}
+
+#[test]
+fn test_xpkg_binary_dep_rejected() {
+    let tmp = xpkg_fixture("xpkg-bindep");
+    // Replace the dep's lib entry with a binary entry.
+    std::fs::remove_file(tmp.join("mathx/src/lib.kara")).unwrap();
+    std::fs::remove_file(tmp.join("mathx/src/geo.kara")).unwrap();
+    std::fs::write(tmp.join("mathx/src/main.kara"), "fn main() {}\n").unwrap();
+    let out = karac_bin()
+        .arg("build")
+        .current_dir(tmp.join("app"))
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(!out.status.success(), "binary dep must halt the build");
+    assert!(
+        stderr.contains("in dependency `mathx`") && stderr.contains("not a library package"),
+        "non-library diagnostic expected; stderr={stderr}",
+    );
+}
+
+#[test]
+fn test_xpkg_transitive_path_dep_resolves() {
+    let tmp = xpkg_fixture("xpkg-transitive");
+    // mathx itself depends on basep; app only declares mathx.
+    std::fs::create_dir_all(tmp.join("basep/src")).unwrap();
+    std::fs::write(tmp.join("basep/kara.toml"), "[package]\nname = \"basep\"\n").unwrap();
+    std::fs::write(
+        tmp.join("basep/src/lib.kara"),
+        "pub fn base_val() -> i64 { 100 }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.join("mathx/kara.toml"),
+        "[package]\nname = \"mathx\"\n\n[dependencies]\nbasep = { path = \"../basep\" }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.join("mathx/src/geo.kara"),
+        "import double;\nimport basep.base_val;\npub fn area(w: i64, h: i64) -> i64 { double(w * h) / 2 + base_val() }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.join("app/src/main.kara"),
+        "import mathx.geo.area;\nfn main() { println(area(3, 4)); }\n",
+    )
+    .unwrap();
+    let run = karac_bin()
+        .arg("run")
+        .arg("src/main.kara")
+        .current_dir(tmp.join("app"))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        run.status.success(),
+        "transitive dep run; stdout={stdout} stderr={stderr}",
+    );
+    assert_eq!(stdout, "112\n", "12 + 100 through two package hops");
+
+    let out = karac_bin()
+        .arg("build")
+        .current_dir(tmp.join("app"))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "transitive dep build; stdout={stdout} stderr={stderr}",
+    );
+    assert!(
+        stdout.contains("deps:    2 package(s)"),
+        "both packages in summary; stdout={stdout}",
+    );
+    #[cfg(feature = "llvm")]
+    {
+        let exe = tmp.join("app/app");
+        let run = std::process::Command::new(&exe).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "112\n");
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}

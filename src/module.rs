@@ -71,6 +71,16 @@ pub struct Module {
     /// failures use this for the `location.file` field so diagnostics point
     /// at the test source, not the production sibling.
     pub test_file: Option<PathBuf>,
+    /// `Some(pkg)` when this module belongs to a resolved dependency package
+    /// (cross-package module loading, phase-5 line 898); `None` for the root
+    /// package's own modules and for synthetic stdlib modules. Dependency
+    /// modules are registered in `ModuleGraph::by_path` under paths prefixed
+    /// with the package name (`["http", "client"]`), and their own `import`
+    /// declarations are rewritten at tree-build time to carry the prefix, so
+    /// every downstream pass sees one self-consistent flat namespace. The
+    /// resolver reads this field to enforce cross-package visibility (only
+    /// `pub` items are importable from another package).
+    pub package: Option<String>,
 }
 
 /// Directed importer → importee edges plus a path-to-id index.
@@ -140,6 +150,19 @@ pub struct ModuleParseErrors {
 pub struct BuildTreeOk {
     pub tree: ProgramTree,
     pub parse_errors: Vec<ModuleParseErrors>,
+}
+
+/// One resolved dependency package's walked source set, ready to merge into
+/// the root project's [`ProgramTree`] (cross-package module loading, phase-5
+/// line 898). `name` is the package name from the dependency graph — the
+/// first segment user code writes in `import <name>.…` — and `walked` is the
+/// output of running [`walker::walk_project`] against the dependency's own
+/// package root. The caller (CLI) validates that the dependency is a library
+/// (`EntryKind::Lib`) before constructing this.
+#[derive(Debug, Clone)]
+pub struct DepPackageWalk {
+    pub name: String,
+    pub walked: WalkResult,
 }
 
 /// Per-call options for tree construction.
@@ -215,6 +238,30 @@ pub fn build_program_tree(walked: &WalkResult) -> Result<BuildTreeOk, BuildTreeE
 /// typechecker see one logical module per directory entry.
 pub fn build_program_tree_with(
     walked: &WalkResult,
+    opts: BuildTreeOpts,
+) -> Result<BuildTreeOk, BuildTreeError> {
+    build_program_tree_with_deps(walked, &[], opts)
+}
+
+/// As [`build_program_tree_with`] but merging resolved dependency packages
+/// into the tree (cross-package module loading, phase-5 line 898).
+///
+/// Each dependency's modules are registered under package-prefixed paths —
+/// dep `http`'s `src/client.kara` becomes module `["http", "client"]`, and
+/// its `src/lib.kara` entry becomes `["http"]` (so `import http.Item`
+/// reaches items hoisted from the dep's `lib.kara`, per design.md § Package
+/// name in paths). Dependency modules' own `import` declarations are
+/// rewritten in place to carry the prefix whenever they reference the dep's
+/// own module tree, so intra-dep imports keep working unmodified in source.
+///
+/// Shadowing follows design.md § Resolution order: if the root package has
+/// any module whose first path segment equals a dependency's name, that
+/// dependency is skipped entirely — the local module wins and the external
+/// package is inaccessible (un-shadowing via a manifest `alias` key is a
+/// tracked follow-up).
+pub fn build_program_tree_with_deps(
+    walked: &WalkResult,
+    deps: &[DepPackageWalk],
     opts: BuildTreeOpts,
 ) -> Result<BuildTreeOk, BuildTreeError> {
     if walked.modules.is_empty() {
@@ -354,6 +401,7 @@ pub fn build_program_tree_with(
                 is_synthetic: false,
                 test_items_start,
                 test_file,
+                package: None,
             };
             if is_entry && module.path.is_empty() {
                 root = Some(id);
@@ -376,12 +424,109 @@ pub fn build_program_tree_with(
                 is_synthetic: false,
                 test_items_start: None,
                 test_file: None,
+                package: None,
             };
             if is_entry && module.path.is_empty() {
                 root = Some(id);
             }
             by_path.entry(module.path.clone()).or_insert(id);
             modules.push(module);
+        }
+    }
+
+    // Cross-package module loading (phase-5 line 898): merge each resolved
+    // dependency package's modules into the tree under package-prefixed
+    // paths. Root-package modules were registered in `by_path` first, so a
+    // per-path collision resolves in the root's favor via `or_insert`; on
+    // top of that, a dependency whose name collides with any root top-level
+    // module segment is skipped wholesale (design.md § Resolution order —
+    // the local module wins and the external package is shadowed).
+    if !deps.is_empty() {
+        let root_first_segments: std::collections::HashSet<String> = modules
+            .iter()
+            .filter_map(|m| m.path.first().cloned())
+            .collect();
+        for dep in deps {
+            if root_first_segments.contains(&dep.name) {
+                continue; // shadowed by a local module — spec'd behavior
+            }
+            // First segments of the dep's own module tree, for the
+            // intra-package import rewrite below. The entry file's empty
+            // path contributes nothing; hoisted-root imports (`import x;`
+            // with an empty dotted prefix) are handled explicitly.
+            let own_first_segments: std::collections::HashSet<&String> = dep
+                .walked
+                .modules
+                .iter()
+                .filter_map(|w| w.path.first())
+                .collect();
+            for w in &dep.walked.modules {
+                // Dependency test companions never participate in a
+                // consumer's build. The CLI walks deps with
+                // `include_tests: false`, so this is a defensive skip.
+                if w.role == walker::ModuleRole::Test {
+                    continue;
+                }
+                let source = fs::read_to_string(&w.file).map_err(|e| BuildTreeError::Io {
+                    path: w.file.clone(),
+                    error: e.to_string(),
+                })?;
+                let parsed = crate::parse(&source);
+                if !parsed.errors.is_empty() {
+                    parse_errors.push(ModuleParseErrors {
+                        file: w.file.clone(),
+                        errors: parsed.errors.clone(),
+                    });
+                }
+                let module_doc_comment = parsed.program.module_doc_comment.clone();
+                let mut items = parsed.program.items;
+                // Rewrite the dep's own imports to carry the package
+                // prefix: `import util.helper` inside dep `http` becomes
+                // `import http.util.helper` so it resolves against this
+                // tree's flat namespace. Imports whose first segment is
+                // not one of the dep's own modules are left untouched —
+                // they reference either the stdlib (`std.…`) or one of
+                // the dep's own dependencies, both of which live at
+                // unprefixed paths in the merged tree.
+                for item in &mut items {
+                    if let Item::Import(imp) = item {
+                        let intra =
+                            imp.path.is_empty() || own_first_segments.contains(&imp.path[0]);
+                        if intra {
+                            let first_span = imp
+                                .path_spans
+                                .first()
+                                .cloned()
+                                .unwrap_or_else(|| imp.span.clone());
+                            imp.path.insert(0, dep.name.clone());
+                            imp.path_spans.insert(0, first_span);
+                        }
+                    }
+                }
+                let program = Program {
+                    items,
+                    ..Program::default()
+                };
+                let imports = extract_imports(&program);
+                let mut path = vec![dep.name.clone()];
+                path.extend(w.path.iter().cloned());
+                let id = modules.len();
+                let module = Module {
+                    id,
+                    path,
+                    file: w.file.clone(),
+                    items: program.items,
+                    imports,
+                    module_doc_comment,
+                    is_test_file: false,
+                    is_synthetic: false,
+                    test_items_start: None,
+                    test_file: None,
+                    package: Some(dep.name.clone()),
+                };
+                by_path.entry(module.path.clone()).or_insert(id);
+                modules.push(module);
+            }
         }
     }
 
@@ -401,6 +546,7 @@ pub fn build_program_tree_with(
         is_synthetic: true,
         test_items_start: None,
         test_file: None,
+        package: None,
     };
     by_path
         .entry(prelude_module.path.clone())
@@ -426,6 +572,7 @@ pub fn build_program_tree_with(
             is_synthetic: true,
             test_items_start: None,
             test_file: None,
+            package: None,
         };
         by_path.entry(module.path.clone()).or_insert(id);
         modules.push(module);
@@ -979,6 +1126,7 @@ mod tests {
             is_synthetic: false,
             test_items_start: None,
             test_file: None,
+            package: None,
         }
     }
 

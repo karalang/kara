@@ -3989,6 +3989,50 @@ fn build_super_program_for_run(tree: &ProgramTree) -> Program {
     }
 }
 
+/// Best-effort dependency walks for the lenient `karac run` path: resolve
+/// the manifest's `[dependencies]` and walk each path-dep, returning an
+/// empty list on any failure (no diagnostics — the strict build path owns
+/// error reporting, and `run`'s resolver pass surfaces unknown-module
+/// diagnostics naturally when dep modules are absent).
+fn quiet_dep_package_walks(root: &std::path::Path) -> Vec<module::DepPackageWalk> {
+    let Ok(mf) = manifest::load_from_root(root) else {
+        return Vec::new();
+    };
+    if mf.dependencies.is_empty() {
+        return Vec::new();
+    }
+    let loader = crate::dep_graph::FsLoader;
+    let options = crate::dep_graph::DepGraphOptions {
+        offline_root: None,
+        include_dev_deps: false,
+    };
+    let Ok(graph) = crate::dep_graph::build_dep_graph_with_options(root, mf, &loader, options)
+    else {
+        return Vec::new();
+    };
+    let active = crate::dep_resolver::active_toolchain_version();
+    let Ok(resolution) = crate::dep_resolver::resolve(&graph, &active) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for pkg in resolution.packages.values() {
+        let crate::dep_resolver::ResolvedSource::Path(dep_root) = &pkg.source else {
+            continue;
+        };
+        let Ok(walked) = walker::walk_project(dep_root, WalkerOpts::default()) else {
+            return Vec::new();
+        };
+        if walked.entry != walker::EntryKind::Lib {
+            return Vec::new();
+        }
+        out.push(module::DepPackageWalk {
+            name: pkg.name.clone(),
+            walked,
+        });
+    }
+    out
+}
+
 /// If `filename` is the entry of a multi-module project, build the merged
 /// super-program so `karac run` sees every sibling module's items (GAP-W3 —
 /// previously the interpreter only registered the entry file's items, so
@@ -4008,7 +4052,15 @@ fn try_build_run_super_program(filename: &str, no_manifest: bool) -> Option<Prog
     // files) is not ours to report on the run path — fall back to single-file
     // and let the normal flow surface any diagnostic.
     let walked = walker::walk_project(&root, WalkerOpts::default()).ok()?;
-    let built = module::build_program_tree(&walked).ok()?;
+    // Cross-package module loading (phase-5 line 898): merge resolved
+    // path-deps' modules so the interpreter sees imported dep items. Same
+    // lenient posture as the rest of this helper — any dep-resolution or
+    // dep-walk failure just proceeds without dependency modules, and the
+    // resolver surfaces its usual diagnostics downstream.
+    let dep_walks = quiet_dep_package_walks(&root);
+    let built =
+        module::build_program_tree_with_deps(&walked, &dep_walks, module::BuildTreeOpts::default())
+            .ok()?;
     // A clean tree is required — fall back to the single-file path (which will
     // surface the parse error against the entry file) if any module failed to
     // parse.
@@ -6534,9 +6586,14 @@ fn cmd_build_project(
     // (tracker line 884). The test runner re-invokes resolution with
     // `include_dev_deps=true` so `[dev-dependencies]` surface only
     // when actually compiling tests.
-    if has_deps && !run_dep_resolution(&root, mf.clone(), output, offline_root, false) {
-        process::exit(1);
-    }
+    let dep_resolution: Option<crate::dep_resolver::Resolution> = if has_deps {
+        match run_dep_resolution(&root, mf.clone(), output, offline_root, false) {
+            Ok(r) => r,
+            Err(()) => process::exit(1),
+        }
+    } else {
+        None
+    };
 
     // Project-mode platform-suffix selection must follow the *build* target,
     // not the host. A `--target=wasm_*` build has to select `_wasm` platform
@@ -6562,7 +6619,19 @@ fn cmd_build_project(
         }
     };
 
-    let built = match module::build_program_tree(&walked) {
+    // Cross-package module loading (phase-5 line 898): walk each resolved
+    // path-dep's source tree so its modules join the program tree under
+    // package-prefixed paths, making `import <pkg>.…` resolve.
+    let dep_walks = match dep_package_walks(dep_resolution.as_ref(), walk_opts.target, output) {
+        Ok(v) => v,
+        Err(()) => process::exit(1),
+    };
+
+    let built = match module::build_program_tree_with_deps(
+        &walked,
+        &dep_walks,
+        module::BuildTreeOpts::default(),
+    ) {
         Ok(ok) => ok,
         Err(e) => {
             emit_build_tree_error(&e, output);
@@ -6670,6 +6739,18 @@ fn cmd_build_project(
                     None => String::new(),
                 };
                 println!("  {path}{plat}  {}", m.file.display());
+            }
+            if !dep_walks.is_empty() {
+                let dep_module_count: usize =
+                    dep_walks.iter().map(|d| d.walked.modules.len()).sum();
+                println!(
+                    "deps:    {} package(s), {} module(s)",
+                    dep_walks.len(),
+                    dep_module_count
+                );
+                for d in &dep_walks {
+                    println!("  {}  {}", d.name, d.walked.src_dir.display());
+                }
             }
             if failed {
                 let total = parse_errors.iter().map(|pe| pe.errors.len()).sum::<usize>()
@@ -8031,13 +8112,19 @@ fn emit_manifest_error(e: &manifest::ManifestError, output: OutputMode) {
 /// manifest's `[dev-dependencies]` participate in resolution. Off in
 /// build mode; on in test mode. Dev-deps do not propagate through
 /// transitive children regardless of the flag.
+/// Resolve the project's dependency graph. `Err(())` means a fatal
+/// diagnostic was emitted and the build must halt. `Ok(Some(resolution))`
+/// carries the concrete package set for cross-package module loading
+/// (phase-5 line 898); `Ok(None)` is the legacy warning-and-continue path
+/// (unsupported registry/git sources outside offline mode), where the
+/// build proceeds without dependency modules.
 fn run_dep_resolution(
     root: &std::path::Path,
     mf: crate::manifest::Manifest,
     output: OutputMode,
     offline_root: Option<&std::path::Path>,
     include_dev_deps: bool,
-) -> bool {
+) -> Result<Option<crate::dep_resolver::Resolution>, ()> {
     let loader = crate::dep_graph::FsLoader;
     let options = crate::dep_graph::DepGraphOptions {
         offline_root,
@@ -8048,14 +8135,14 @@ fn run_dep_resolution(
         Err(e) => {
             let diag = crate::dep_diagnostic::render_dep_graph_error(&e);
             emit_dep_diagnostic(&diag, output, "error");
-            return false;
+            return Err(());
         }
     };
     let active = crate::dep_resolver::active_toolchain_version();
     match crate::dep_resolver::resolve_with_offline(&graph, &active, offline_root) {
         Ok(resolution) => {
             persist_lockfile(root, &resolution, output);
-            true
+            Ok(Some(resolution))
         }
         Err(boxed) => {
             let diag = crate::dep_diagnostic::render_resolver_error(&boxed);
@@ -8075,7 +8162,98 @@ fn run_dep_resolution(
                 }
             };
             emit_dep_diagnostic(&diag, output, severity);
-            severity == "warning"
+            if severity == "warning" {
+                Ok(None)
+            } else {
+                Err(())
+            }
+        }
+    }
+}
+
+/// Walk each resolved path-dependency's source tree for cross-package
+/// module loading (phase-5 line 898). Returns one [`module::DepPackageWalk`]
+/// per path-sourced package, in `Resolution`'s deterministic (BTreeMap,
+/// name-sorted) order. `Err(())` means a diagnostic was already emitted.
+///
+/// Dependencies must be library packages: a dep whose entry is
+/// `src/main.kara` (or which has no entry at all) is a hard error, since
+/// its items have nowhere to hoist and a binary cannot be imported.
+/// Dependency test companions are excluded (`include_tests: false`) — a
+/// consumer never compiles its deps' tests.
+fn dep_package_walks(
+    resolution: Option<&crate::dep_resolver::Resolution>,
+    target: walker::Platform,
+    output: OutputMode,
+) -> Result<Vec<module::DepPackageWalk>, ()> {
+    let Some(resolution) = resolution else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for pkg in resolution.packages.values() {
+        let crate::dep_resolver::ResolvedSource::Path(dep_root) = &pkg.source else {
+            continue; // Root is the project itself; registry/git never resolve today
+        };
+        let walk_opts = WalkerOpts {
+            target,
+            include_tests: false,
+        };
+        let walked = match walker::walk_project(dep_root, walk_opts) {
+            Ok(w) => w,
+            Err(e) => {
+                emit_dep_walk_error(&pkg.name, &e.to_string(), output);
+                return Err(());
+            }
+        };
+        if walked.entry != walker::EntryKind::Lib {
+            let why = match walked.entry {
+                walker::EntryKind::Bin => {
+                    "it has `src/main.kara` — a binary package cannot be imported"
+                }
+                _ => "it has no `src/lib.kara` entry file",
+            };
+            emit_dep_walk_error(
+                &pkg.name,
+                &format!(
+                    "dependency `{}` is not a library package: {}",
+                    pkg.name, why
+                ),
+                output,
+            );
+            return Err(());
+        }
+        out.push(module::DepPackageWalk {
+            name: pkg.name.clone(),
+            walked,
+        });
+    }
+    Ok(out)
+}
+
+/// Render a dependency-walk failure (walker error or non-library dep) in
+/// the active output mode. Mirrors `emit_walker_error`'s shape with the
+/// owning package named in the message.
+fn emit_dep_walk_error(pkg: &str, message: &str, output: OutputMode) {
+    match output {
+        OutputMode::Text => {
+            eprintln!("error[walker]: in dependency `{pkg}`: {message}");
+        }
+        OutputMode::Json => {
+            println!(
+                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"walker\",\"code\":\"walker\",\"package\":{},\"message\":{}}}]}}",
+                json_string(pkg),
+                json_string(message),
+            );
+        }
+        OutputMode::Jsonl => {
+            emit_jsonl_event(
+                "walker_error",
+                &format!(
+                    "\"code\":\"walker\",\"package\":{},\"message\":{}",
+                    json_string(pkg),
+                    json_string(message),
+                ),
+            );
         }
     }
 }
