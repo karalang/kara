@@ -37,6 +37,60 @@ pub(super) fn value_compare(a: &Value, b: &Value) -> std::cmp::Ordering {
                 }
             })
             .unwrap_or_else(|| xs.len().cmp(&ys.len())),
+        // Two Vecs (B-2026-06-30-15): lexicographic elementwise, then by
+        // length — the missing arm that made `Vec[Vec[..]].sort()` a silent
+        // NO-OP under the interpreter (both Arrays fell to the discriminant
+        // fallback → always Equal → stable sort preserved insertion order;
+        // the ledger's "the interpreter handles nested Vecs" premise was
+        // itself wrong). Same-Arc operands double-read-lock, which is fine
+        // single-threaded (and sorts hold only the OUTER vec's write lock).
+        (Value::Array(a), Value::Array(b)) => {
+            let av = a.read().unwrap();
+            let bv = b.read().unwrap();
+            av.iter()
+                .zip(bv.iter())
+                .find_map(|(x, y)| {
+                    let ord = value_compare(x, y);
+                    if ord != Ordering::Equal {
+                        Some(ord)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| av.len().cmp(&bv.len()))
+        }
+        // Two Slices: compare the viewed ranges the same way.
+        (
+            Value::Slice {
+                storage: sa,
+                start: a0,
+                len: la,
+                ..
+            },
+            Value::Slice {
+                storage: sb,
+                start: b0,
+                len: lb,
+                ..
+            },
+        ) => {
+            let av = sa.read().unwrap();
+            let bv = sb.read().unwrap();
+            let a_view = &av[*a0..*a0 + *la];
+            let b_view = &bv[*b0..*b0 + *lb];
+            a_view
+                .iter()
+                .zip(b_view.iter())
+                .find_map(|(x, y)| {
+                    let ord = value_compare(x, y);
+                    if ord != Ordering::Equal {
+                        Some(ord)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| la.cmp(lb))
+        }
         // Two Maps: lexicographic over (key, value) pairs in insertion order
         (Value::Map(a), Value::Map(b)) => a
             .iter()

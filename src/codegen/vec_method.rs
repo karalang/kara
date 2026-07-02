@@ -4465,10 +4465,22 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.emit_default_sort_thunk(elem_ty)
                 } else if self.vec_elem_type_name(var_name).as_deref() == Some("String") {
                     self.emit_default_sort_thunk_string()
+                } else if let Some(cmp_fn) = self
+                    .var_elem_type_exprs
+                    .get(var_name)
+                    .cloned()
+                    .and_then(|ete| self.emit_cmp_fn_for_type_expr(&ete))
+                {
+                    // B-2026-06-30-15: general default-order elements —
+                    // floats, nested Vec/VecDeque (lexicographic, matching
+                    // the interpreter's value_compare), tuples of ordered
+                    // leaves — via the recursive karac_cmp_<T> family.
+                    self.emit_cmp_family_sort_thunk(cmp_fn)
                 } else {
                     return Err(
-                        "Vec.sort() in codegen supports integer and String element types; \
-                         use sort_by(|a, b| a.cmp(b)) for other element types"
+                        "Vec.sort() in codegen supports integer, String, float, tuple, and \
+                         nested-Vec element types; use sort_by(|a, b| ...) for other element \
+                         types"
                             .to_string(),
                     );
                 };
@@ -5044,6 +5056,399 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `karac_vec_sort_by`'s contract; `ctx` is unused (no captures). Returns
     /// `-1 / 0 / +1` via a signed compare, mirroring the `.cmp` lowering in
     /// method_call.rs so `sort()` and `sort_by(|a, b| a.cmp(b))` agree.
+    /// B-2026-06-30-15 — recursive default-order comparator family:
+    /// `i64 karac_cmp_<T>(ptr a, ptr b)` over IN-PLACE values, mirroring
+    /// the interpreter's `value_compare` semantics: scalars by value
+    /// (signedness from the surface name), floats by partial order (NaN
+    /// compares Equal — `unwrap_or(Equal)` parity), String by
+    /// `karac_string_cmp`, `Vec`/`VecDeque` lexicographic elementwise then
+    /// by length, tuples per-field. Returns `None` for element shapes the
+    /// family can't order (user structs/enums, Map/Set, shared) — the
+    /// caller keeps its explicit error. Cached by mangled name via
+    /// `module.get_function` with the declare-before-body discipline the
+    /// clone/drop families use.
+    pub(super) fn emit_cmp_fn_for_type_expr(
+        &mut self,
+        te: &TypeExpr,
+    ) -> Option<FunctionValue<'ctx>> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let mangled = format!("karac_cmp_{}", Self::display_mangle_te(te));
+        if let Some(f) = self.module.get_function(&mangled) {
+            return Some(f);
+        }
+        enum Body<'c> {
+            IntScalar {
+                signed: bool,
+            },
+            FloatScalar,
+            Str,
+            VecLike {
+                child: FunctionValue<'c>,
+                elem_llvm: BasicTypeEnum<'c>,
+            },
+            Tuple {
+                children: Vec<FunctionValue<'c>>,
+                tuple_llvm: inkwell::types::StructType<'c>,
+            },
+        }
+        let body = match &te.kind {
+            TypeKind::Tuple(elems) if !elems.is_empty() => {
+                let mut children = Vec::with_capacity(elems.len());
+                for e in elems {
+                    children.push(self.emit_cmp_fn_for_type_expr(e)?);
+                }
+                let field_tys: Vec<BasicTypeEnum> = elems
+                    .iter()
+                    .map(|e| self.llvm_type_for_type_expr(e))
+                    .collect();
+                Body::Tuple {
+                    children,
+                    tuple_llvm: self.context.struct_type(&field_tys, false),
+                }
+            }
+            TypeKind::Path(p) => {
+                let head = p.segments.first().map(String::as_str).unwrap_or("");
+                match head {
+                    "i8" | "i16" | "i32" | "i64" | "isize" => Body::IntScalar { signed: true },
+                    "u8" | "u16" | "u32" | "u64" | "usize" | "bool" | "char" => {
+                        Body::IntScalar { signed: false }
+                    }
+                    "f32" | "f64" => Body::FloatScalar,
+                    // Both String spellings (the 3p discipline).
+                    "String" | "str" => Body::Str,
+                    "Vec" | "VecDeque" => {
+                        let elem_te = match p.generic_args.as_ref()?.first()? {
+                            GenericArg::Type(t) => t.clone(),
+                            _ => return None,
+                        };
+                        let child = self.emit_cmp_fn_for_type_expr(&elem_te)?;
+                        Body::VecLike {
+                            child,
+                            elem_llvm: self.llvm_type_for_type_expr(&elem_te),
+                        }
+                    }
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        };
+
+        let fn_ty = i64_t.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let cmp_fn = self
+            .module
+            .add_function(&mangled, fn_ty, Some(Linkage::Internal));
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        self.current_fn = Some(cmp_fn);
+        let entry = self.context.append_basic_block(cmp_fn, "entry");
+        self.builder.position_at_end(entry);
+        let a_ptr = cmp_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let b_ptr = cmp_fn.get_nth_param(1).unwrap().into_pointer_value();
+        let neg_one = i64_t.const_int((-1i64) as u64, true);
+        let pos_one = i64_t.const_int(1, false);
+        let zero = i64_t.const_zero();
+
+        match body {
+            Body::IntScalar { signed } => {
+                let elem_llvm = self.llvm_type_for_type_expr(te);
+                let a = self
+                    .builder
+                    .build_load(elem_llvm, a_ptr, "a")
+                    .unwrap()
+                    .into_int_value();
+                let b = self
+                    .builder
+                    .build_load(elem_llvm, b_ptr, "b")
+                    .unwrap()
+                    .into_int_value();
+                let (lt_p, gt_p) = if signed {
+                    (inkwell::IntPredicate::SLT, inkwell::IntPredicate::SGT)
+                } else {
+                    (inkwell::IntPredicate::ULT, inkwell::IntPredicate::UGT)
+                };
+                let lt = self.builder.build_int_compare(lt_p, a, b, "lt").unwrap();
+                let gt = self.builder.build_int_compare(gt_p, a, b, "gt").unwrap();
+                let gt_sel = self
+                    .builder
+                    .build_select(gt, pos_one, zero, "gtsel")
+                    .unwrap();
+                let r = self
+                    .builder
+                    .build_select(lt, neg_one.into(), gt_sel, "cmp")
+                    .unwrap();
+                self.builder.build_return(Some(&r)).unwrap();
+            }
+            Body::FloatScalar => {
+                let elem_llvm = self.llvm_type_for_type_expr(te);
+                let a = self
+                    .builder
+                    .build_load(elem_llvm, a_ptr, "a")
+                    .unwrap()
+                    .into_float_value();
+                let b = self
+                    .builder
+                    .build_load(elem_llvm, b_ptr, "b")
+                    .unwrap()
+                    .into_float_value();
+                let lt = self
+                    .builder
+                    .build_float_compare(inkwell::FloatPredicate::OLT, a, b, "lt")
+                    .unwrap();
+                let gt = self
+                    .builder
+                    .build_float_compare(inkwell::FloatPredicate::OGT, a, b, "gt")
+                    .unwrap();
+                let gt_sel = self
+                    .builder
+                    .build_select(gt, pos_one, zero, "gtsel")
+                    .unwrap();
+                let r = self
+                    .builder
+                    .build_select(lt, neg_one.into(), gt_sel, "cmp")
+                    .unwrap();
+                self.builder.build_return(Some(&r)).unwrap();
+            }
+            Body::Str => {
+                let vec_ty = self.vec_struct_type();
+                let a = self
+                    .builder
+                    .build_load(vec_ty, a_ptr, "a.str")
+                    .unwrap()
+                    .into_struct_value();
+                let b = self
+                    .builder
+                    .build_load(vec_ty, b_ptr, "b.str")
+                    .unwrap()
+                    .into_struct_value();
+                let a_data = self.builder.build_extract_value(a, 0, "ad").unwrap();
+                let a_len = self.builder.build_extract_value(a, 1, "al").unwrap();
+                let b_data = self.builder.build_extract_value(b, 0, "bd").unwrap();
+                let b_len = self.builder.build_extract_value(b, 1, "bl").unwrap();
+                let scmp = self
+                    .module
+                    .get_function("karac_string_cmp")
+                    .unwrap_or_else(|| {
+                        let fn_ty2 = i64_t.fn_type(
+                            &[ptr_ty.into(), i64_t.into(), ptr_ty.into(), i64_t.into()],
+                            false,
+                        );
+                        self.module.add_function(
+                            "karac_string_cmp",
+                            fn_ty2,
+                            Some(Linkage::External),
+                        )
+                    });
+                let r = self
+                    .builder
+                    .build_call(
+                        scmp,
+                        &[a_data.into(), a_len.into(), b_data.into(), b_len.into()],
+                        "strcmp",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic();
+                self.builder.build_return(Some(&r)).unwrap();
+            }
+            Body::VecLike { child, elem_llvm } => {
+                let vec_ty = self.vec_struct_type();
+                // Load both headers.
+                let a_hdr = self
+                    .builder
+                    .build_load(vec_ty, a_ptr, "a.hdr")
+                    .unwrap()
+                    .into_struct_value();
+                let b_hdr = self
+                    .builder
+                    .build_load(vec_ty, b_ptr, "b.hdr")
+                    .unwrap()
+                    .into_struct_value();
+                let a_data = self
+                    .builder
+                    .build_extract_value(a_hdr, 0, "a.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let a_len = self
+                    .builder
+                    .build_extract_value(a_hdr, 1, "a.len")
+                    .unwrap()
+                    .into_int_value();
+                let b_data = self
+                    .builder
+                    .build_extract_value(b_hdr, 0, "b.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let b_len = self
+                    .builder
+                    .build_extract_value(b_hdr, 1, "b.len")
+                    .unwrap()
+                    .into_int_value();
+                let min_gt = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SLT, a_len, b_len, "alt")
+                    .unwrap();
+                let min_len = self
+                    .builder
+                    .build_select(min_gt, a_len, b_len, "minlen")
+                    .unwrap()
+                    .into_int_value();
+                let idx = self.create_entry_alloca(cmp_fn, "i", i64_t.into());
+                self.builder.build_store(idx, i64_t.const_zero()).unwrap();
+                let cond_bb = self.context.append_basic_block(cmp_fn, "loop.cond");
+                let body_bb = self.context.append_basic_block(cmp_fn, "loop.body");
+                let neq_bb = self.context.append_basic_block(cmp_fn, "elem.neq");
+                let incr_bb = self.context.append_basic_block(cmp_fn, "loop.incr");
+                let len_bb = self.context.append_basic_block(cmp_fn, "len.cmp");
+                self.builder.build_unconditional_branch(cond_bb).unwrap();
+                self.builder.position_at_end(cond_bb);
+                let cur = self
+                    .builder
+                    .build_load(i64_t, idx, "cur")
+                    .unwrap()
+                    .into_int_value();
+                let in_range = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SLT, cur, min_len, "inr")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(in_range, body_bb, len_bb)
+                    .unwrap();
+                self.builder.position_at_end(body_bb);
+                let a_elem = unsafe {
+                    self.builder
+                        .build_gep(elem_llvm, a_data, &[cur], "a.el")
+                        .unwrap()
+                };
+                let b_elem = unsafe {
+                    self.builder
+                        .build_gep(elem_llvm, b_data, &[cur], "b.el")
+                        .unwrap()
+                };
+                let r = self
+                    .builder
+                    .build_call(child, &[a_elem.into(), b_elem.into()], "elcmp")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let nz = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::NE, r, zero, "nz")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(nz, neq_bb, incr_bb)
+                    .unwrap();
+                self.builder.position_at_end(neq_bb);
+                self.builder.build_return(Some(&r)).unwrap();
+                self.builder.position_at_end(incr_bb);
+                let next = self
+                    .builder
+                    .build_int_add(cur, i64_t.const_int(1, false), "next")
+                    .unwrap();
+                self.builder.build_store(idx, next).unwrap();
+                self.builder.build_unconditional_branch(cond_bb).unwrap();
+                self.builder.position_at_end(len_bb);
+                let llt = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SLT, a_len, b_len, "llt")
+                    .unwrap();
+                let lgt = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SGT, a_len, b_len, "lgt")
+                    .unwrap();
+                let gt_sel = self
+                    .builder
+                    .build_select(lgt, pos_one, zero, "lgts")
+                    .unwrap();
+                let r2 = self
+                    .builder
+                    .build_select(llt, neg_one.into(), gt_sel, "lencmp")
+                    .unwrap();
+                self.builder.build_return(Some(&r2)).unwrap();
+            }
+            Body::Tuple {
+                children,
+                tuple_llvm,
+            } => {
+                let mut next_bb = self.context.append_basic_block(cmp_fn, "t.f0");
+                self.builder.build_unconditional_branch(next_bb).unwrap();
+                for (i, child) in children.iter().enumerate() {
+                    self.builder.position_at_end(next_bb);
+                    let a_f = self
+                        .builder
+                        .build_struct_gep(tuple_llvm, a_ptr, i as u32, "a.f")
+                        .unwrap();
+                    let b_f = self
+                        .builder
+                        .build_struct_gep(tuple_llvm, b_ptr, i as u32, "b.f")
+                        .unwrap();
+                    let r = self
+                        .builder
+                        .build_call(*child, &[a_f.into(), b_f.into()], "fcmp")
+                        .unwrap()
+                        .try_as_basic_value()
+                        .unwrap_basic()
+                        .into_int_value();
+                    let nz = self
+                        .builder
+                        .build_int_compare(inkwell::IntPredicate::NE, r, zero, "nz")
+                        .unwrap();
+                    let ret_bb = self.context.append_basic_block(cmp_fn, "t.ret");
+                    let cont_bb = self
+                        .context
+                        .append_basic_block(cmp_fn, &format!("t.f{}", i + 1));
+                    self.builder
+                        .build_conditional_branch(nz, ret_bb, cont_bb)
+                        .unwrap();
+                    self.builder.position_at_end(ret_bb);
+                    self.builder.build_return(Some(&r)).unwrap();
+                    next_bb = cont_bb;
+                }
+                self.builder.position_at_end(next_bb);
+                self.builder.build_return(Some(&zero)).unwrap();
+            }
+        }
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Some(cmp_fn)
+    }
+
+    /// Adapt a `karac_cmp_<T>(a, b)` family fn to the sort-thunk ABI
+    /// `(ctx, a, b) -> i64` (ctx ignored).
+    fn emit_cmp_family_sort_thunk(&mut self, cmp_fn: FunctionValue<'ctx>) -> FunctionValue<'ctx> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let id = self.closure_counter;
+        self.closure_counter += 1;
+        let name = format!("__sort_family_cmp_{}", id);
+        let thunk_ty = i64_t.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
+        let thunk_fn = self
+            .module
+            .add_function(&name, thunk_ty, Some(Linkage::Internal));
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        self.current_fn = Some(thunk_fn);
+        let entry = self.context.append_basic_block(thunk_fn, "entry");
+        self.builder.position_at_end(entry);
+        let a = thunk_fn.get_nth_param(1).unwrap();
+        let b = thunk_fn.get_nth_param(2).unwrap();
+        let r = self
+            .builder
+            .build_call(cmp_fn, &[a.into(), b.into()], "cmp")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic();
+        self.builder.build_return(Some(&r)).unwrap();
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        thunk_fn
+    }
+
     pub(super) fn emit_default_sort_thunk(
         &mut self,
         elem_ty: BasicTypeEnum<'ctx>,

@@ -45902,17 +45902,37 @@ fn main() {
     }
 
     #[test]
-    fn test_e2e_vec_sort_non_integer_element_rejected() {
-        // `sort()` has a default comparator only for integer and String
-        // element types. A tuple-element Vec typechecks but must be rejected
-        // loudly in codegen (directing the user to sort_by) rather than
-        // silently leaving it unsorted. (Integer and String elements are
-        // covered by `test_e2e_vec_string_sort` and the integer sort tests.)
+    fn test_e2e_vec_sort_general_elements_supported() {
+        // B-2026-06-30-15: `sort()` now has a default comparator for the
+        // whole ordered-leaf family — tuples, floats, and nested Vecs sort
+        // lexicographically via the recursive `karac_cmp_<T>` thunks
+        // (matching the interpreter's `value_compare`). This test pinned
+        // the OLD rejection; it now pins the support.
         let src = r#"
 fn main() {
     let mut v: Vec[(i64, i64)] = Vec.new();
     v.push((3, 1));
     v.push((1, 2));
+    v.push((3, 0));
+    v.sort();
+    for t in v {
+        println(t.0 * 10 + t.1);
+    }
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        assert_eq!(out, "12\n30\n31\n");
+    }
+
+    #[test]
+    fn test_e2e_vec_sort_unordered_element_still_rejected() {
+        // A user-struct element has no default order — still rejected
+        // loudly, pointing at sort_by.
+        let src = r#"
+struct P { x: i64 }
+fn main() {
+    let mut v: Vec[P] = Vec.new();
+    v.push(P { x: 1 });
     v.sort();
     println(v.len());
 }
@@ -45927,10 +45947,10 @@ fn main() {
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
         let err = compile_to_ir(&parsed.program, None, None)
-            .expect_err("expected codegen to reject sort() on non-integer/non-String elements");
+            .expect_err("expected codegen to reject sort() on unordered element types");
         assert!(
-            err.contains("integer and String element types"),
-            "expected integer/String-only sort diagnostic; got: {}",
+            err.contains("use sort_by"),
+            "expected the sort_by-directing diagnostic; got: {}",
             err
         );
     }

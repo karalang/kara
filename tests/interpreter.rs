@@ -2589,6 +2589,43 @@ fn test_user_drop_enum_move_fires_once() {
     );
 }
 
+// ── B-2026-06-30-15 value_compare Array arm (nested Vec sort) ──
+
+#[test]
+fn test_nested_vec_sort_orders_lexicographically() {
+    // Pre-fix, two `Value::Array`s fell to value_compare's discriminant
+    // fallback (always Equal), so `Vec[Vec[i64]].sort()` was a silent
+    // NO-OP under the interpreter — probes just showed insertion order.
+    let output = run_program(
+        "fn main() {\n\
+             let mut outer: Vec[Vec[i64]] = Vec.new();\n\
+             outer.push(Vec[3, 1]);\n\
+             outer.push(Vec[2]);\n\
+             outer.push(Vec[2, 9]);\n\
+             outer.sort();\n\
+             let mut i = 0;\n\
+             while i < outer.len() {\n\
+                 println(outer[i][0]);\n\
+                 println(outer[i].len());\n\
+                 i = i + 1;\n\
+             };\n\
+         }",
+    );
+    assert_eq!(
+        output,
+        vec![
+            "2\n".to_string(),
+            "1\n".to_string(),
+            "2\n".to_string(),
+            "2\n".to_string(),
+            "3\n".to_string(),
+            "2\n".to_string()
+        ],
+        "expected ascending lexicographic order [2] < [2,9] < [3,1]; got {:?}",
+        output
+    );
+}
+
 // ── B-2026-07-01-7 fn-returned Drop temps + passthrough guard ──
 
 #[test]

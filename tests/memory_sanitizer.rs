@@ -18427,4 +18427,69 @@ fn main() {
             "fnret_drop_temp_arg_passthrough_and_discard_single_fire",
         );
     }
+
+    #[test]
+    fn asan_gsort_vec_of_vec_string_sorts_and_frees() {
+        // B-2026-06-30-15: `Vec[Vec[String]].sort()` — codegen previously
+        // errored ("supports integer and String element types") and the
+        // INTERPRETER silently no-op'd (value_compare had no Array arm, so
+        // nested Vecs compared Equal and stable sort preserved insertion
+        // order). Both fixed: the recursive `karac_cmp_Vec_String`
+        // lexicographic comparator + the interp Array/Slice compare arms.
+        // Assertions drain via pop() (owned move-out) — index reads of
+        // heap elements have a PRE-EXISTING leak class unrelated to sort.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut outer: Vec[Vec[String]] = Vec.new();
+    let mut a: Vec[String] = Vec.new();
+    a.push(f"banana payload padded beyond thirty-six bytes {1}");
+    a.push(f"apple payload padded beyond thirty-six bytes {1}");
+    let mut b: Vec[String] = Vec.new();
+    b.push(f"apple payload padded beyond thirty-six bytes {1}");
+    let mut c: Vec[String] = Vec.new();
+    outer.push(a);
+    outer.push(b);
+    outer.push(c);
+    outer.sort();
+    while let Some(row) = outer.pop() {
+        println(row.len());
+    }
+    println(outer.len());
+}
+"#,
+            &["2", "1", "0", "0"],
+            "gsort_vec_of_vec_string_sorts_and_frees",
+        );
+    }
+
+    #[test]
+    fn asan_gsort_tuple_and_float_elements() {
+        // B-2026-06-30-15: tuple elements (per-field lexicographic — (1,z)
+        // < (2,a) < (2,b)) and float elements both sort via the comparator
+        // family now; both previously errored in codegen.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut v: Vec[(i64, String)] = Vec.new();
+    v.push((2, f"bb padded beyond thirty-six bytes junk {1}"));
+    v.push((1, f"zz padded beyond thirty-six bytes junk {1}"));
+    v.push((2, f"aa padded beyond thirty-six bytes junk {1}"));
+    v.sort();
+    for t in v {
+        println(t.0);
+    }
+    let mut f: Vec[f64] = Vec.new();
+    f.push(2.5);
+    f.push(1.5);
+    f.push(3.5);
+    f.sort();
+    println(f[0]);
+    println(f[2]);
+}
+"#,
+            &["1", "2", "2", "1.5", "3.5"],
+            "gsort_tuple_and_float_elements",
+        );
+    }
 }
