@@ -33,7 +33,7 @@
 use inkwell::values::{BasicValueEnum, FloatValue, IntValue, PointerValue};
 use inkwell::{FloatPredicate, IntPredicate};
 
-use super::kernel::ContainerAccess;
+use super::kernel::{ContainerAccess, SortKey};
 use crate::ast::{CallArg, Expr, ExprKind};
 use crate::reduce_kernel::ReduceOp;
 use crate::token::Span;
@@ -477,15 +477,19 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// `argmin` / `argmax` → `Option[i64]`: the index of the FIRST min / max,
-    /// or `None` on an empty slice (mirroring `min`/`max`). Strict `<` / `>`
-    /// keeps the first occurrence (a later equal value never displaces it).
+    /// or `None` on an empty slice (mirroring `min`/`max`). The core loop is
+    /// the shared kernel compare-select
+    /// ([`emit_reduce_argminmax`](super::Codegen::emit_reduce_argminmax));
+    /// strict `<` / `>` keeps the first occurrence (a later equal value never
+    /// displaces it). The `Option` wrap stays here.
     fn stats_argminmax(
-        &self,
+        &mut self,
         data: PointerValue<'ctx>,
         len: IntValue<'ctx>,
         is_max: bool,
     ) -> BasicValueEnum<'ctx> {
         let i64_t = self.context.i64_type();
+        let f64_t = self.context.f64_type();
         let fn_val = self.current_fn.expect("stats argminmax in function");
         let nonempty = self
             .builder
@@ -499,65 +503,16 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
 
         self.builder.position_at_end(some_bb);
-        let bi = self.builder.build_alloca(i64_t, "stats.am.bi").unwrap();
-        self.builder.build_store(bi, i64_t.const_zero()).unwrap();
-        let i = self.builder.build_alloca(i64_t, "stats.am.i").unwrap();
-        self.builder
-            .build_store(i, i64_t.const_int(1, false))
-            .unwrap();
-        let h = self.context.append_basic_block(fn_val, "stats.am.h");
-        let b = self.context.append_basic_block(fn_val, "stats.am.b");
-        let e = self.context.append_basic_block(fn_val, "stats.am.e");
-        self.builder.build_unconditional_branch(h).unwrap();
-        self.builder.position_at_end(h);
-        let iv = self
-            .builder
-            .build_load(i64_t, i, "stats.am.iv")
-            .unwrap()
-            .into_int_value();
-        let more = self
-            .builder
-            .build_int_compare(IntPredicate::ULT, iv, len, "stats.am.more")
-            .unwrap();
-        self.builder.build_conditional_branch(more, b, e).unwrap();
-        self.builder.position_at_end(b);
-        let x = self.stats_load(data, iv);
-        let biv = self
-            .builder
-            .build_load(i64_t, bi, "stats.am.biv")
-            .unwrap()
-            .into_int_value();
-        let bx = self.stats_load(data, biv);
-        let pred = if is_max {
-            FloatPredicate::OGT
-        } else {
-            FloatPredicate::OLT
+        let access = ContainerAccess {
+            data,
+            len,
+            elem: f64_t.into(),
+            unsigned: false,
+            bitmap: None,
         };
-        let take = self
-            .builder
-            .build_float_compare(pred, x, bx, "stats.am.take")
-            .unwrap();
-        let newbi = self
-            .builder
-            .build_select(take, iv, biv, "stats.am.newbi")
-            .unwrap()
-            .into_int_value();
-        self.builder.build_store(bi, newbi).unwrap();
-        self.builder
-            .build_store(
-                i,
-                self.builder
-                    .build_int_add(iv, i64_t.const_int(1, false), "stats.am.i2")
-                    .unwrap(),
-            )
-            .unwrap();
-        self.builder.build_unconditional_branch(h).unwrap();
-        self.builder.position_at_end(e);
         let result_idx = self
-            .builder
-            .build_load(i64_t, bi, "stats.am.res")
-            .unwrap()
-            .into_int_value();
+            .emit_reduce_argminmax(&access, is_max)
+            .expect("Stats argmin/argmax fold cannot fail");
         let some_end_bb = self.builder.get_insert_block().unwrap();
         self.builder.build_unconditional_branch(merge_bb).unwrap();
 
@@ -657,146 +612,9 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_unconditional_branch(ih).unwrap();
         self.builder.position_at_end(ie);
 
-        // Insertion sort the indices keyed by data[idx] (stable via `>`).
-        let si = self.builder.build_alloca(i64_t, "stats.as.si").unwrap();
-        let sj = self.builder.build_alloca(i64_t, "stats.as.sj").unwrap();
-        let key = self.builder.build_alloca(i64_t, "stats.as.key").unwrap();
-        self.builder
-            .build_store(si, i64_t.const_int(1, false))
-            .unwrap();
-        let oh = self.context.append_basic_block(fn_val, "stats.as.oh");
-        let ob = self.context.append_basic_block(fn_val, "stats.as.ob");
-        let inh = self.context.append_basic_block(fn_val, "stats.as.inh");
-        let ick = self.context.append_basic_block(fn_val, "stats.as.ick");
-        let ish = self.context.append_basic_block(fn_val, "stats.as.ish");
-        let ipl = self.context.append_basic_block(fn_val, "stats.as.ipl");
-        let oc = self.context.append_basic_block(fn_val, "stats.as.oc");
-        let oe = self.context.append_basic_block(fn_val, "stats.as.oe");
-        self.builder.build_unconditional_branch(oh).unwrap();
-        self.builder.position_at_end(oh);
-        let siv = self
-            .builder
-            .build_load(i64_t, si, "stats.as.siv")
-            .unwrap()
-            .into_int_value();
-        let omore = self
-            .builder
-            .build_int_compare(IntPredicate::ULT, siv, len, "stats.as.omore")
-            .unwrap();
-        self.builder
-            .build_conditional_branch(omore, ob, oe)
-            .unwrap();
-        self.builder.position_at_end(ob);
-        let keyslot = unsafe {
-            self.builder
-                .build_gep(i64_t, buf, &[siv], "stats.as.keyslot")
-                .unwrap()
-        };
-        let keyv = self
-            .builder
-            .build_load(i64_t, keyslot, "stats.as.keyv")
-            .unwrap()
-            .into_int_value();
-        self.builder.build_store(key, keyv).unwrap();
-        self.builder
-            .build_store(
-                sj,
-                self.builder
-                    .build_int_sub(siv, i64_t.const_int(1, false), "stats.as.sj0")
-                    .unwrap(),
-            )
-            .unwrap();
-        self.builder.build_unconditional_branch(inh).unwrap();
-        self.builder.position_at_end(inh);
-        let sjv = self
-            .builder
-            .build_load(i64_t, sj, "stats.as.sjv")
-            .unwrap()
-            .into_int_value();
-        let ge0 = self
-            .builder
-            .build_int_compare(IntPredicate::SGE, sjv, i64_t.const_zero(), "stats.as.ge0")
-            .unwrap();
-        self.builder
-            .build_conditional_branch(ge0, ick, ipl)
-            .unwrap();
-        self.builder.position_at_end(ick);
-        // data[buf[sj]] vs data[key]
-        let bjslot = unsafe {
-            self.builder
-                .build_gep(i64_t, buf, &[sjv], "stats.as.bjslot")
-                .unwrap()
-        };
-        let bj_idx = self
-            .builder
-            .build_load(i64_t, bjslot, "stats.as.bjidx")
-            .unwrap()
-            .into_int_value();
-        let bj_val = self.stats_load(data, bj_idx);
-        let keyc = self
-            .builder
-            .build_load(i64_t, key, "stats.as.keyc")
-            .unwrap()
-            .into_int_value();
-        let key_val = self.stats_load(data, keyc);
-        let gt = self
-            .builder
-            .build_float_compare(FloatPredicate::OGT, bj_val, key_val, "stats.as.gt")
-            .unwrap();
-        self.builder.build_conditional_branch(gt, ish, ipl).unwrap();
-        self.builder.position_at_end(ish);
-        let sjp1 = self
-            .builder
-            .build_int_add(sjv, i64_t.const_int(1, false), "stats.as.sjp1")
-            .unwrap();
-        let dst = unsafe {
-            self.builder
-                .build_gep(i64_t, buf, &[sjp1], "stats.as.dst")
-                .unwrap()
-        };
-        self.builder.build_store(dst, bj_idx).unwrap();
-        self.builder
-            .build_store(
-                sj,
-                self.builder
-                    .build_int_sub(sjv, i64_t.const_int(1, false), "stats.as.sjm1")
-                    .unwrap(),
-            )
-            .unwrap();
-        self.builder.build_unconditional_branch(inh).unwrap();
-        self.builder.position_at_end(ipl);
-        let sjv2 = self
-            .builder
-            .build_load(i64_t, sj, "stats.as.sjv2")
-            .unwrap()
-            .into_int_value();
-        let place = self
-            .builder
-            .build_int_add(sjv2, i64_t.const_int(1, false), "stats.as.place")
-            .unwrap();
-        let pslot = unsafe {
-            self.builder
-                .build_gep(i64_t, buf, &[place], "stats.as.pslot")
-                .unwrap()
-        };
-        let keyf = self
-            .builder
-            .build_load(i64_t, key, "stats.as.keyf")
-            .unwrap()
-            .into_int_value();
-        self.builder.build_store(pslot, keyf).unwrap();
-        self.builder.build_unconditional_branch(oc).unwrap();
-        self.builder.position_at_end(oc);
-        self.builder
-            .build_store(
-                si,
-                self.builder
-                    .build_int_add(siv, i64_t.const_int(1, false), "stats.as.si2")
-                    .unwrap(),
-            )
-            .unwrap();
-        self.builder.build_unconditional_branch(oh).unwrap();
-        self.builder.position_at_end(oe);
+        // Stable index insertion sort keyed by `data[idx]` — the shared
+        // kernel scratch sort's `IndexInto` form.
+        self.emit_sort_scratch(buf, len, &SortKey::IndexInto(data));
         Ok(self.stats_build_vec(buf, len))
     }
 

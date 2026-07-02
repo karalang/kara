@@ -22,7 +22,12 @@
 //! propagation) share one map skeleton, parameterized on the second operand
 //! ([`MapOther`]: container / broadcast scalar / none) and the per-element op
 //! ([`MapKernelOp`]: `compile_binop_typed`, or `Neg` = IEEE `fneg` / checked
-//! int `0 - x` matching the interpreter's `eval_unary`).
+//! int `0 - x` matching the interpreter's `eval_unary`). **S4 adds the
+//! ordering family** ([`emit_sort_scratch`] + [`emit_reduce_argminmax`]): one
+//! insertion-sort skeleton, keyed by [`SortKey`] (`Value` f64 sort vs
+//! `IndexInto` stable argsort), behind `Stats.sort`/`median`/`percentile`/
+//! `argsort`, `Column.median`/`quantile`, and the `DataFrame.describe`
+//! quartiles; plus the first-occurrence argmin/argmax compare-select loop.
 //! The non-f64 `ElemKind` axis for `Stats` lands later (S5).
 //!
 //! **Byte-identical.** The emitters here reduce to the exact instructions the
@@ -97,6 +102,18 @@ pub(super) struct MapDest<'ctx> {
     pub data: PointerValue<'ctx>,
     pub elem: BasicTypeEnum<'ctx>,
     pub bitmap: Option<PointerValue<'ctx>>,
+}
+
+/// How the shared scratch sort keys its elements (S4).
+pub(super) enum SortKey<'ctx> {
+    /// The buffer elements ARE the `f64` sort keys — a value sort
+    /// (`Stats.sort`/`median`/`percentile`, `Column.median`/`quantile`,
+    /// `DataFrame.describe` quartiles).
+    Value,
+    /// The buffer holds `i64` indices into this `f64` data pointer; an
+    /// element's key is `data[idx]` (`Stats.argsort`). Stable — the strict
+    /// `>` inner compare leaves equal keys in input order.
+    IndexInto(PointerValue<'ctx>),
 }
 
 impl<'ctx> super::Codegen<'ctx> {
@@ -956,5 +973,311 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_float_div(ss_v, denom, "kern.var.out")
             .unwrap())
+    }
+
+    /// The shared in-place ascending insertion sort over a scratch buffer of
+    /// `n` elements (S4) — the one sort loop behind every ordering op:
+    /// `Stats.sort`/`median`/`percentile`/`argsort`, `Column.median`/
+    /// `quantile`, and the `DataFrame.describe` quartiles. [`SortKey`] picks
+    /// the element/key relationship: `Value` sorts an `f64` buffer by its own
+    /// elements; `IndexInto(data)` sorts an `i64` index buffer keyed by
+    /// `data[idx]` (argsort — stable, since the strict `>` never shifts an
+    /// equal key). NaN keys follow `fcmp ogt`: a NaN never shifts a smaller
+    /// element, so NaNs settle at the front — the scalar-comparison posture
+    /// (NaN unordered); quantiles over NaN-bearing data are undefined anyway.
+    ///
+    /// Insertion sort:
+    /// `for si in 1..n { key = buf[si]; sj = si-1;`
+    /// `  while sj >= 0 && key_of(buf[sj]) > key_of(key) { buf[sj+1] = buf[sj]; sj-- }`
+    /// `  buf[sj+1] = key }`
+    pub(super) fn emit_sort_scratch(
+        &self,
+        buf: PointerValue<'ctx>,
+        n: IntValue<'ctx>,
+        key: &SortKey<'ctx>,
+    ) {
+        let i64_t = self.context.i64_type();
+        let f64_t = self.context.f64_type();
+        let fn_val = self.current_fn.expect("scratch sort in function");
+        // Value sort moves f64 elements; argsort moves i64 indices.
+        let elem_t: BasicTypeEnum<'ctx> = match key {
+            SortKey::Value => f64_t.into(),
+            SortKey::IndexInto(_) => i64_t.into(),
+        };
+        // The f64 sort key of a loaded element.
+        let key_of = |el: BasicValueEnum<'ctx>, nm: &str| -> FloatValue<'ctx> {
+            match key {
+                SortKey::Value => el.into_float_value(),
+                SortKey::IndexInto(data) => {
+                    let slot = unsafe {
+                        self.builder
+                            .build_gep(f64_t, *data, &[el.into_int_value()], nm)
+                            .unwrap()
+                    };
+                    self.builder
+                        .build_load(f64_t, slot, nm)
+                        .unwrap()
+                        .into_float_value()
+                }
+            }
+        };
+
+        let si = self.builder.build_alloca(i64_t, "kern.is.si").unwrap();
+        let sj = self.builder.build_alloca(i64_t, "kern.is.sj").unwrap();
+        let key_a = self.builder.build_alloca(elem_t, "kern.is.key").unwrap();
+        self.builder
+            .build_store(si, i64_t.const_int(1, false))
+            .unwrap();
+        let oh = self.context.append_basic_block(fn_val, "kern.is.ohead");
+        let ob = self.context.append_basic_block(fn_val, "kern.is.obody");
+        let ih = self.context.append_basic_block(fn_val, "kern.is.ihead");
+        let ick = self.context.append_basic_block(fn_val, "kern.is.icheck");
+        let ish = self.context.append_basic_block(fn_val, "kern.is.ishift");
+        let ipl = self.context.append_basic_block(fn_val, "kern.is.iplace");
+        let oc = self.context.append_basic_block(fn_val, "kern.is.ocont");
+        let oe = self.context.append_basic_block(fn_val, "kern.is.oexit");
+        self.builder.build_unconditional_branch(oh).unwrap();
+
+        self.builder.position_at_end(oh);
+        let siv = self
+            .builder
+            .build_load(i64_t, si, "kern.is.siv")
+            .unwrap()
+            .into_int_value();
+        let omore = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, siv, n, "kern.is.omore")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(omore, ob, oe)
+            .unwrap();
+
+        self.builder.position_at_end(ob);
+        let key_slot = unsafe {
+            self.builder
+                .build_gep(elem_t, buf, &[siv], "kern.is.keyslot")
+                .unwrap()
+        };
+        let key_v = self
+            .builder
+            .build_load(elem_t, key_slot, "kern.is.keyv")
+            .unwrap();
+        self.builder.build_store(key_a, key_v).unwrap();
+        self.builder
+            .build_store(
+                sj,
+                self.builder
+                    .build_int_sub(siv, i64_t.const_int(1, false), "kern.is.sj0")
+                    .unwrap(),
+            )
+            .unwrap();
+        self.builder.build_unconditional_branch(ih).unwrap();
+
+        self.builder.position_at_end(ih);
+        let sjv = self
+            .builder
+            .build_load(i64_t, sj, "kern.is.sjv")
+            .unwrap()
+            .into_int_value();
+        // Signed `sj >= 0` (short-circuits before the buf[sj] read).
+        let ge0 = self
+            .builder
+            .build_int_compare(IntPredicate::SGE, sjv, i64_t.const_zero(), "kern.is.ge0")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(ge0, ick, ipl)
+            .unwrap();
+
+        self.builder.position_at_end(ick);
+        let bj_slot = unsafe {
+            self.builder
+                .build_gep(elem_t, buf, &[sjv], "kern.is.bjslot")
+                .unwrap()
+        };
+        let bj = self
+            .builder
+            .build_load(elem_t, bj_slot, "kern.is.bj")
+            .unwrap();
+        let bj_key = key_of(bj, "kern.is.bjkey");
+        let key_cur = self
+            .builder
+            .build_load(elem_t, key_a, "kern.is.keycur")
+            .unwrap();
+        let cur_key = key_of(key_cur, "kern.is.curkey");
+        let gt = self
+            .builder
+            .build_float_compare(FloatPredicate::OGT, bj_key, cur_key, "kern.is.gt")
+            .unwrap();
+        self.builder.build_conditional_branch(gt, ish, ipl).unwrap();
+
+        self.builder.position_at_end(ish);
+        // buf[sj+1] = buf[sj]
+        let sjp1 = self
+            .builder
+            .build_int_add(sjv, i64_t.const_int(1, false), "kern.is.sjp1")
+            .unwrap();
+        let dst = unsafe {
+            self.builder
+                .build_gep(elem_t, buf, &[sjp1], "kern.is.dst")
+                .unwrap()
+        };
+        self.builder.build_store(dst, bj).unwrap();
+        self.builder
+            .build_store(
+                sj,
+                self.builder
+                    .build_int_sub(sjv, i64_t.const_int(1, false), "kern.is.sjdec")
+                    .unwrap(),
+            )
+            .unwrap();
+        self.builder.build_unconditional_branch(ih).unwrap();
+
+        self.builder.position_at_end(ipl);
+        // buf[sj+1] = key (sj holds the final resting slot minus one).
+        let sjv2 = self
+            .builder
+            .build_load(i64_t, sj, "kern.is.sjv2")
+            .unwrap()
+            .into_int_value();
+        let placep1 = self
+            .builder
+            .build_int_add(sjv2, i64_t.const_int(1, false), "kern.is.placep1")
+            .unwrap();
+        let pslot = unsafe {
+            self.builder
+                .build_gep(elem_t, buf, &[placep1], "kern.is.pslot")
+                .unwrap()
+        };
+        let key_final = self
+            .builder
+            .build_load(elem_t, key_a, "kern.is.keyf")
+            .unwrap();
+        self.builder.build_store(pslot, key_final).unwrap();
+        self.builder.build_unconditional_branch(oc).unwrap();
+
+        self.builder.position_at_end(oc);
+        self.builder
+            .build_store(
+                si,
+                self.builder
+                    .build_int_add(siv, i64_t.const_int(1, false), "kern.is.sinext")
+                    .unwrap(),
+            )
+            .unwrap();
+        self.builder.build_unconditional_branch(oh).unwrap();
+
+        self.builder.position_at_end(oe);
+    }
+
+    /// The shared first-occurrence `argmin`/`argmax` over a **non-empty**
+    /// dense access (S4) — the index of the first smallest/largest element.
+    /// Tracks the best index, re-reading `data[best]` each iteration for the
+    /// compare; the strict `<`/`>` keeps the first occurrence (a later equal
+    /// value never displaces it), and a NaN comparison is false, so NaN
+    /// neither takes nor blocks the slot beyond position 0. The caller
+    /// guards emptiness (`Stats` wraps in `Option` with a `None` arm). A
+    /// gated (`Column`) form has no surface today — `Err` until one does.
+    pub(super) fn emit_reduce_argminmax(
+        &mut self,
+        access: &ContainerAccess<'ctx>,
+        is_max: bool,
+    ) -> Result<IntValue<'ctx>, String> {
+        if access.bitmap.is_some() {
+            return Err("emit_reduce_argminmax: no validity-gated surface exists yet".to_string());
+        }
+        let i64_t = self.context.i64_type();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "reduce argminmax outside function".to_string())?;
+        let is_float = access.elem.is_float_type();
+
+        let bi = self.builder.build_alloca(i64_t, "kern.am.bi").unwrap();
+        self.builder.build_store(bi, i64_t.const_zero()).unwrap();
+        let i = self.builder.build_alloca(i64_t, "kern.am.i").unwrap();
+        self.builder
+            .build_store(i, i64_t.const_int(1, false))
+            .unwrap();
+
+        let head = self.context.append_basic_block(fn_val, "kern.am.head");
+        let body = self.context.append_basic_block(fn_val, "kern.am.body");
+        let exit = self.context.append_basic_block(fn_val, "kern.am.exit");
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(head);
+        let iv = self
+            .builder
+            .build_load(i64_t, i, "kern.am.iv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, iv, access.len, "kern.am.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, body, exit)
+            .unwrap();
+
+        self.builder.position_at_end(body);
+        let x = self.access_load(access, iv);
+        let biv = self
+            .builder
+            .build_load(i64_t, bi, "kern.am.biv")
+            .unwrap()
+            .into_int_value();
+        let bx = self.access_load(access, biv);
+        // `x ⋖ data[best]` → take i. Float uses ordered predicates (NaN →
+        // false); int uses the signedness-correct predicate.
+        let take = if is_float {
+            let pred = if is_max {
+                FloatPredicate::OGT
+            } else {
+                FloatPredicate::OLT
+            };
+            self.builder
+                .build_float_compare(
+                    pred,
+                    x.into_float_value(),
+                    bx.into_float_value(),
+                    "kern.am.take",
+                )
+                .unwrap()
+        } else {
+            let pred = match (is_max, access.unsigned) {
+                (false, false) => IntPredicate::SLT,
+                (false, true) => IntPredicate::ULT,
+                (true, false) => IntPredicate::SGT,
+                (true, true) => IntPredicate::UGT,
+            };
+            self.builder
+                .build_int_compare(
+                    pred,
+                    x.into_int_value(),
+                    bx.into_int_value(),
+                    "kern.am.take",
+                )
+                .unwrap()
+        };
+        let newbi = self
+            .builder
+            .build_select(take, iv, biv, "kern.am.newbi")
+            .unwrap()
+            .into_int_value();
+        self.builder.build_store(bi, newbi).unwrap();
+        self.builder
+            .build_store(
+                i,
+                self.builder
+                    .build_int_add(iv, i64_t.const_int(1, false), "kern.am.i2")
+                    .unwrap(),
+            )
+            .unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(exit);
+        Ok(self
+            .builder
+            .build_load(i64_t, bi, "kern.am.res")
+            .unwrap()
+            .into_int_value())
     }
 }
