@@ -1102,6 +1102,13 @@ pub struct TypeCheckResult {
     /// return (`Vec`/`String`/struct) round-trips through `join` intact
     /// instead of being read as `i64`-shaped bytes (garbage + trap).
     pub task_join_return_types: HashMap<SpanKey, TypeExpr>,
+    /// `Stats.<fn>(xs, …)` Call span → the slice's element `TypeExpr`
+    /// (`i64` or `f64`), recorded by `infer_stats_call` (S5 — the non-f64
+    /// element axis). Codegen reads it to pick the element LLVM type for
+    /// the reduction; missing (older recorded programs / typecheck errors)
+    /// defaults to `f64`. The interpreter reads the ARG expression's type
+    /// from `expr_types` instead, so this table is codegen-only.
+    pub stats_elem_types: HashMap<SpanKey, TypeExpr>,
     /// Bare-call dispatch resolutions: span of a `Call(Identifier(name))` →
     /// resolved target type name (e.g. `"Wrapper"`). Populated when expected-
     /// type inference resolves a bare associated-function call to a concrete
@@ -1361,6 +1368,9 @@ pub struct TypeChecker<'a> {
     /// `Receiver.recv` / `Receiver.try_recv`. See the public copy on
     /// `TypeCheckResult` for the full rationale.
     pub(super) channel_elem_types: HashMap<SpanKey, TypeExpr>,
+    /// `Stats.<fn>` Call span → slice element `TypeExpr` (S5). See the
+    /// public copy on `TypeCheckResult`.
+    pub(super) stats_elem_types: HashMap<SpanKey, TypeExpr>,
     /// `TaskHandle[T].join()` MethodCall span → result type `T`. See the
     /// public copy on `TypeCheckResult` for the full rationale.
     pub(super) task_join_return_types: HashMap<SpanKey, TypeExpr>,
@@ -1573,6 +1583,7 @@ impl<'a> TypeChecker<'a> {
             temp_recv_elem_types: HashMap::new(),
             temp_recv_mapset_types: HashMap::new(),
             channel_elem_types: HashMap::new(),
+            stats_elem_types: HashMap::new(),
             task_join_return_types: HashMap::new(),
             user_effect_resources: HashMap::new(),
             user_resource_override_types: HashMap::new(),
@@ -1753,6 +1764,7 @@ impl<'a> TypeChecker<'a> {
             temp_recv_elem_types: self.temp_recv_elem_types,
             temp_recv_mapset_types: self.temp_recv_mapset_types,
             channel_elem_types: self.channel_elem_types,
+            stats_elem_types: self.stats_elem_types,
             task_join_return_types: self.task_join_return_types,
             bare_assoc_fn_targets: self.bare_assoc_fn_targets,
             path_call_method_dispatch: self.path_call_method_dispatch,

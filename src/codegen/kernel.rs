@@ -28,7 +28,12 @@
 //! `IndexInto` stable argsort), behind `Stats.sort`/`median`/`percentile`/
 //! `argsort`, `Column.median`/`quantile`, and the `DataFrame.describe`
 //! quartiles; plus the first-occurrence argmin/argmax compare-select loop.
-//! The non-f64 `ElemKind` axis for `Stats` lands later (S5).
+//! **S5 adds the non-f64 element axis for `Stats`**: the typechecker's
+//! `infer_stats_call` records the slice element (`i64` | `f64`) in
+//! `stats_elem_types`, and the `Stats.*` paths instantiate these same
+//! emitters at that element type — int folds/compares stay exact
+//! ([`SortKey::IntValue`]/[`SortKey::IndexIntoInt`] compare at signed i64),
+//! float statistics promote through `emit_sum_f64_and_count`.
 //!
 //! **Byte-identical.** The emitters here reduce to the exact instructions the
 //! hand-rolled loops emitted (`compile_binop_typed` lowers f64 `Add`/`Mul` to
@@ -104,16 +109,23 @@ pub(super) struct MapDest<'ctx> {
     pub bitmap: Option<PointerValue<'ctx>>,
 }
 
-/// How the shared scratch sort keys its elements (S4).
+/// How the shared scratch sort keys its elements (S4; i64 forms S5).
 pub(super) enum SortKey<'ctx> {
     /// The buffer elements ARE the `f64` sort keys — a value sort
     /// (`Stats.sort`/`median`/`percentile`, `Column.median`/`quantile`,
     /// `DataFrame.describe` quartiles).
     Value,
+    /// The buffer elements are `i64` sort keys compared at exact integer
+    /// precision (signed `>`) — the `Slice[i64]` value sort (S5); no lossy
+    /// float round-trip above 2⁵³.
+    IntValue,
     /// The buffer holds `i64` indices into this `f64` data pointer; an
     /// element's key is `data[idx]` (`Stats.argsort`). Stable — the strict
     /// `>` inner compare leaves equal keys in input order.
     IndexInto(PointerValue<'ctx>),
+    /// The buffer holds `i64` indices into this `i64` data pointer; keys
+    /// compare at exact integer precision (the `Slice[i64]` argsort, S5).
+    IndexIntoInt(PointerValue<'ctx>),
 }
 
 impl<'ctx> super::Codegen<'ctx> {
@@ -999,26 +1011,56 @@ impl<'ctx> super::Codegen<'ctx> {
         let i64_t = self.context.i64_type();
         let f64_t = self.context.f64_type();
         let fn_val = self.current_fn.expect("scratch sort in function");
-        // Value sort moves f64 elements; argsort moves i64 indices.
+        // Value sort moves f64/i64 elements; argsort moves i64 indices.
         let elem_t: BasicTypeEnum<'ctx> = match key {
             SortKey::Value => f64_t.into(),
-            SortKey::IndexInto(_) => i64_t.into(),
+            SortKey::IntValue | SortKey::IndexInto(_) | SortKey::IndexIntoInt(_) => i64_t.into(),
         };
-        // The f64 sort key of a loaded element.
-        let key_of = |el: BasicValueEnum<'ctx>, nm: &str| -> FloatValue<'ctx> {
+        // The sort key of a loaded element (f64 for the float forms, i64 for
+        // the exact-integer forms).
+        let key_of = |el: BasicValueEnum<'ctx>, nm: &str| -> BasicValueEnum<'ctx> {
             match key {
-                SortKey::Value => el.into_float_value(),
+                SortKey::Value | SortKey::IntValue => el,
                 SortKey::IndexInto(data) => {
                     let slot = unsafe {
                         self.builder
                             .build_gep(f64_t, *data, &[el.into_int_value()], nm)
                             .unwrap()
                     };
-                    self.builder
-                        .build_load(f64_t, slot, nm)
-                        .unwrap()
-                        .into_float_value()
+                    self.builder.build_load(f64_t, slot, nm).unwrap()
                 }
+                SortKey::IndexIntoInt(data) => {
+                    let slot = unsafe {
+                        self.builder
+                            .build_gep(i64_t, *data, &[el.into_int_value()], nm)
+                            .unwrap()
+                    };
+                    self.builder.build_load(i64_t, slot, nm).unwrap()
+                }
+            }
+        };
+        // Strict `key(a) > key(b)` — ordered `fcmp ogt` for float keys (NaN
+        // settles to the front), signed `icmp sgt` for exact-integer keys.
+        let key_gt = |a: BasicValueEnum<'ctx>, b: BasicValueEnum<'ctx>| -> IntValue<'ctx> {
+            match key {
+                SortKey::Value | SortKey::IndexInto(_) => self
+                    .builder
+                    .build_float_compare(
+                        FloatPredicate::OGT,
+                        a.into_float_value(),
+                        b.into_float_value(),
+                        "kern.is.gt",
+                    )
+                    .unwrap(),
+                SortKey::IntValue | SortKey::IndexIntoInt(_) => self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::SGT,
+                        a.into_int_value(),
+                        b.into_int_value(),
+                        "kern.is.gt",
+                    )
+                    .unwrap(),
             }
         };
 
@@ -1104,10 +1146,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(elem_t, key_a, "kern.is.keycur")
             .unwrap();
         let cur_key = key_of(key_cur, "kern.is.curkey");
-        let gt = self
-            .builder
-            .build_float_compare(FloatPredicate::OGT, bj_key, cur_key, "kern.is.gt")
-            .unwrap();
+        let gt = key_gt(bj_key, cur_key);
         self.builder.build_conditional_branch(gt, ish, ipl).unwrap();
 
         self.builder.position_at_end(ish);

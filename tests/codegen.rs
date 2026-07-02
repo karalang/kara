@@ -51073,6 +51073,92 @@ fn main() {
         }
     }
 
+    // ── Stats over i64 elements (S5 — the non-f64 element axis) ──────
+
+    #[test]
+    fn test_e2e_stats_i64_full_surface() {
+        // B-2026-07-01-6: integer slices previously bit-reinterpreted as
+        // doubles under `karac build` (denormal garbage) while `karac run`
+        // computed real values. Now the element kind threads from the
+        // typechecker: sum/prod fold at i64 (element-typed results),
+        // min/max/argmin/argmax/sort/argsort compare at exact i64, and the
+        // float statistics promote — all byte-identical to the interpreter.
+        let out = run_program(
+            "fn main() {\n\
+                 let xs: Vec[i64] = vec![4, 1, 3, 2];\n\
+                 println(Stats.sum(xs));\n\
+                 println(Stats.prod(xs));\n\
+                 println(Stats.mean(xs));\n\
+                 println(Stats.variance(xs));\n\
+                 println(Stats.median(xs));\n\
+                 println(Stats.percentile(xs, 25));\n\
+                 match Stats.min(xs) { Some(v) => println(v), None => println(-1) }\n\
+                 match Stats.max(xs) { Some(v) => println(v), None => println(-1) }\n\
+                 match Stats.argmin(xs) { Some(i) => println(i), None => println(-1) }\n\
+                 match Stats.argmax(xs) { Some(i) => println(i), None => println(-1) }\n\
+                 let s: Vec[i64] = Stats.sort(xs);\n\
+                 println(s[0]); println(s[3]);\n\
+                 let a: Vec[i64] = Stats.argsort(xs);\n\
+                 println(a[0]); println(a[3]);\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "10\n24\n2.5\n1.25\n2.5\n1.75\n1\n4\n1\n0\n1\n4\n1\n0\n",
+                "the i64 Stats surface must match the interpreter"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_stats_i64_exact_above_2_pow_53_and_empty_identities() {
+        // 2^53 and 2^53 + 1 are the same f64 — the i64 ordering ops must
+        // stay exact (no float round-trip). An empty Vec[i64] gets the
+        // INTEGER identities (sum 0, prod 1 — not the float -0.0).
+        let out = run_program(
+            "fn main() {\n\
+                 let a = 9007199254740993;\n\
+                 let b = 9007199254740992;\n\
+                 let xs: Vec[i64] = vec![a, b];\n\
+                 match Stats.max(xs) { Some(v) => println(v), None => println(-1) }\n\
+                 let s: Vec[i64] = Stats.sort(xs);\n\
+                 println(s[1]);\n\
+                 let e: Vec[i64] = vec![];\n\
+                 println(Stats.sum(e));\n\
+                 println(Stats.prod(e));\n\
+                 match Stats.min(e) { Some(v) => println(v), None => println(-1) }\n\
+             }\n",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "9007199254740993\n9007199254740993\n0\n1\n-1\n",
+                "i64 ordering must be exact above 2^53; empty identities are integer"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_stats_i64_sum_overflow_traps() {
+        // The i64 fold is CHECKED — overflow traps like the scalar `+`
+        // (matching the interpreter's reduce_i64), never wraps silently.
+        let captured = run_program_capturing(
+            "fn main() {\n\
+                 let big = 9223372036854775807;\n\
+                 let xs: Vec[i64] = vec![big, 1];\n\
+                 println(Stats.sum(xs));\n\
+             }\n",
+        );
+        if let Some(c) = captured {
+            let all = format!("{}{}", c.stdout, c.stderr);
+            assert!(
+                all.contains("integer overflow"),
+                "expected the checked-fold overflow trap, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+        }
+    }
+
     #[test]
     fn test_e2e_stats_percentile() {
         // NumPy convention p in [0, 100], linear interpolation; byte-identical

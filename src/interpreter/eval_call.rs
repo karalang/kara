@@ -22,7 +22,7 @@ use crate::token::Span;
 use super::exec::ControlFlow;
 use super::helpers::{
     base64_decode, base64_encode, decode_err, decode_ok_bytes, decode_ok_string, eval_http_get,
-    eval_http_post, eval_stats_fn, hex_decode, hex_encode, make_json_error,
+    eval_http_post, eval_stats_fn, eval_stats_fn_int, hex_decode, hex_encode, make_json_error,
     serde_json_to_kara_json, url_decode, url_encode,
 };
 use super::value::{EnumData, Value};
@@ -795,25 +795,54 @@ impl<'a> super::Interpreter<'a> {
                 "Stats.sum" | "Stats.prod" | "Stats.mean" | "Stats.variance" | "Stats.stddev"
                 | "Stats.median" | "Stats.min" | "Stats.max" | "Stats.percentile"
                 | "Stats.argmin" | "Stats.argmax" | "Stats.sort" | "Stats.argsort" => {
-                    let xs: Vec<f64> = if let Some(arg) = args.first() {
+                    let elems: Vec<Value> = if let Some(arg) = args.first() {
                         match self.eval_expr_inner(&arg.value) {
-                            Value::Array(rc) => rc
-                                .read()
-                                .unwrap()
-                                .iter()
-                                .map(|v| match v {
-                                    Value::Float(f) => *f,
-                                    Value::Int(i) => *i as f64,
-                                    _ => 0.0,
-                                })
-                                .collect(),
+                            Value::Array(rc) => rc.read().unwrap().clone(),
                             _ => vec![],
                         }
                     } else {
                         vec![]
                     };
-                    // `percentile(xs, p)` reads its second argument; every other
-                    // `Stats` function is unary.
+                    // Element kind (S5): the static i64/f64 decision comes
+                    // from the typechecker's recorded ARG type (so an EMPTY
+                    // `Vec[i64]` still gets the integer identities — `sum`
+                    // 0, not the float `-0.0`); without type info (`karac
+                    // run` executes despite typecheck errors) fall back to
+                    // value inspection: non-empty and all-Int → integer.
+                    let static_int = args.first().and_then(|arg| {
+                        let key =
+                            crate::resolver::SpanKey(arg.value.span.offset, arg.value.span.length);
+                        let ty = self.typecheck_result.expr_types.get(&key)?;
+                        let core = match ty {
+                            crate::typechecker::Type::Ref(inner)
+                            | crate::typechecker::Type::MutRef(inner) => inner.as_ref(),
+                            other => other,
+                        };
+                        let elem = match core {
+                            crate::typechecker::Type::Named { name, args }
+                                if name == "Vec" && args.len() == 1 =>
+                            {
+                                &args[0]
+                            }
+                            crate::typechecker::Type::Slice { element, .. } => element.as_ref(),
+                            crate::typechecker::Type::Array { element, .. } => element.as_ref(),
+                            _ => return None,
+                        };
+                        match elem {
+                            crate::typechecker::Type::Int(crate::typechecker::IntSize::I64) => {
+                                Some(true)
+                            }
+                            crate::typechecker::Type::Float(crate::typechecker::FloatSize::F64) => {
+                                Some(false)
+                            }
+                            _ => None,
+                        }
+                    });
+                    let int_mode = static_int.unwrap_or_else(|| {
+                        !elems.is_empty() && elems.iter().all(|v| matches!(v, Value::Int(_)))
+                    });
+                    // `percentile(xs, p)` reads its second argument; every
+                    // other `Stats` function is unary.
                     let p = match args.get(1) {
                         Some(arg) => match self.eval_expr_inner(&arg.value) {
                             Value::Float(f) => Some(f),
@@ -822,6 +851,25 @@ impl<'a> super::Interpreter<'a> {
                         },
                         None => None,
                     };
+                    if int_mode {
+                        let xs: Vec<i64> = elems
+                            .iter()
+                            .map(|v| match v {
+                                Value::Int(i) => *i,
+                                Value::Float(f) => *f as i64,
+                                _ => 0,
+                            })
+                            .collect();
+                        return eval_stats_fn_int(&path_str, &xs, p, span);
+                    }
+                    let xs: Vec<f64> = elems
+                        .iter()
+                        .map(|v| match v {
+                            Value::Float(f) => *f,
+                            Value::Int(i) => *i as f64,
+                            _ => 0.0,
+                        })
+                        .collect();
                     return eval_stats_fn(&path_str, &xs, p, span);
                 }
                 // `String.from_utf8(bytes: Vec[u8]) -> Result[String, Utf8Error]`.

@@ -46,7 +46,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         callee: &Expr,
         args: &[CallArg],
-        _call_span: &Span,
+        call_span: &Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         let method = match &callee.kind {
             ExprKind::Path { segments, .. } if segments.len() == 2 && segments[0] == "Stats" => {
@@ -120,18 +120,35 @@ impl<'ctx> super::Codegen<'ctx> {
             self.materialize_owned_temp(val, (arg.value.span.offset, arg.value.span.length));
         }
 
+        // Element kind (S5): the typechecker's `infer_stats_call` records the
+        // slice element (`i64` | `f64`) at the call span; before that table
+        // existed the buffer was ALWAYS read at f64, silently
+        // bit-reinterpreting integer elements into denormal garbage
+        // (B-2026-07-01-6). Missing entry (recovery paths) = f64.
+        let is_int = self
+            .stats_elem_types
+            .get(&(call_span.offset, call_span.length))
+            .map(|te| {
+                matches!(
+                    &te.kind,
+                    crate::ast::TypeKind::Path(p)
+                        if p.segments.len() == 1 && p.segments[0] == "i64"
+                )
+            })
+            .unwrap_or(false);
+
         let result = match method {
-            "sum" => self.stats_fold(data, len, false).into(),
-            "prod" => self.stats_fold(data, len, true).into(),
-            "mean" => self.stats_mean(data, len)?.into(),
-            "variance" => self.stats_variance(data, len)?.into(),
+            "sum" => self.stats_fold(data, len, false, is_int),
+            "prod" => self.stats_fold(data, len, true, is_int),
+            "mean" => self.stats_mean(data, len, is_int)?.into(),
+            "variance" => self.stats_variance(data, len, is_int)?.into(),
             "stddev" => {
-                let var = self.stats_variance(data, len)?;
+                let var = self.stats_variance(data, len, is_int)?;
                 self.column_sqrt_f64(var).into()
             }
-            "median" => self.stats_median(data, len)?.into(),
-            "min" => self.stats_minmax(data, len, false),
-            "max" => self.stats_minmax(data, len, true),
+            "median" => self.stats_median(data, len, is_int)?.into(),
+            "min" => self.stats_minmax(data, len, false, is_int),
+            "max" => self.stats_minmax(data, len, true, is_int),
             "percentile" => {
                 let p_arg = args
                     .get(1)
@@ -145,15 +162,65 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap(),
                     _ => return Err("Stats.percentile p must be numeric".to_string()),
                 };
-                self.stats_percentile(data, len, p)?.into()
+                self.stats_percentile(data, len, p, is_int)?.into()
             }
-            "argmin" => self.stats_argminmax(data, len, false),
-            "argmax" => self.stats_argminmax(data, len, true),
-            "sort" => self.stats_sort(data, len)?,
-            "argsort" => self.stats_argsort(data, len)?,
+            "argmin" => self.stats_argminmax(data, len, false, is_int),
+            "argmax" => self.stats_argminmax(data, len, true, is_int),
+            "sort" => self.stats_sort(data, len, is_int)?,
+            "argsort" => self.stats_argsort(data, len, is_int)?,
             _ => unreachable!(),
         };
         Ok(Some(result))
+    }
+
+    /// The dense [`ContainerAccess`] for a `Stats` slice at the element kind
+    /// the typechecker recorded (`i64` | `f64`; S5).
+    fn stats_access(
+        &self,
+        data: PointerValue<'ctx>,
+        len: IntValue<'ctx>,
+        is_int: bool,
+    ) -> ContainerAccess<'ctx> {
+        let elem: inkwell::types::BasicTypeEnum<'ctx> = if is_int {
+            self.context.i64_type().into()
+        } else {
+            self.context.f64_type().into()
+        };
+        ContainerAccess {
+            data,
+            len,
+            elem,
+            unsigned: false,
+            bitmap: None,
+        }
+    }
+
+    /// Load rank `i` of a sorted scratch buffer as `f64` — the direct load
+    /// for f64 elements, a `sitofp` for i64 elements (the sort stayed exact
+    /// at i64; only the picked ranks convert — S5).
+    fn stats_rank_as_f64(
+        &self,
+        buf: PointerValue<'ctx>,
+        i: IntValue<'ctx>,
+        is_int: bool,
+    ) -> FloatValue<'ctx> {
+        if !is_int {
+            return self.stats_load(buf, i);
+        }
+        let i64_t = self.context.i64_type();
+        let slot = unsafe {
+            self.builder
+                .build_gep(i64_t, buf, &[i], "stats.islot")
+                .unwrap()
+        };
+        let v = self
+            .builder
+            .build_load(i64_t, slot, "stats.ielem")
+            .unwrap()
+            .into_int_value();
+        self.builder
+            .build_signed_int_to_float(v, self.context.f64_type(), "stats.ielemf")
+            .unwrap()
     }
 
     /// `sum` (seed `-0.0`, add) / `prod` (seed `1.0`, multiply) over the whole
@@ -168,23 +235,28 @@ impl<'ctx> super::Codegen<'ctx> {
         data: PointerValue<'ctx>,
         len: IntValue<'ctx>,
         is_mul: bool,
-    ) -> FloatValue<'ctx> {
+        is_int: bool,
+    ) -> BasicValueEnum<'ctx> {
         let f64_t = self.context.f64_type();
-        let access = ContainerAccess {
-            data,
-            len,
-            elem: f64_t.into(),
-            unsigned: false,
-            bitmap: None,
-        };
-        let (op, seed) = if is_mul {
-            (ReduceOp::Prod, f64_t.const_float(1.0))
+        let i64_t = self.context.i64_type();
+        let access = self.stats_access(data, len, is_int);
+        // i64 folds are element-typed and CHECKED (overflow traps via
+        // `compile_binop_typed`, matching the interpreter's `reduce_i64`);
+        // their empty identities are the INTEGER 0 / 1 seeds.
+        let op = if is_mul {
+            ReduceOp::Prod
         } else {
-            (ReduceOp::Sum, f64_t.const_float(-0.0))
+            ReduceOp::Sum
         };
-        self.emit_reduce_fold(&access, op, seed.into())
+        let seed: BasicValueEnum<'ctx> = if is_int {
+            i64_t.const_int(u64::from(is_mul), false).into()
+        } else if is_mul {
+            f64_t.const_float(1.0).into()
+        } else {
+            f64_t.const_float(-0.0).into()
+        };
+        self.emit_reduce_fold(&access, op, seed)
             .expect("Stats sum/prod fold cannot fail")
-            .into_float_value()
     }
 
     /// `mean` = `sum / n`; empty input traps.
@@ -192,6 +264,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         data: PointerValue<'ctx>,
         len: IntValue<'ctx>,
+        is_int: bool,
     ) -> Result<FloatValue<'ctx>, String> {
         let i64_t = self.context.i64_type();
         let f64_t = self.context.f64_type();
@@ -200,7 +273,21 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_int_compare(IntPredicate::UGT, len, i64_t.const_zero(), "stats.mean.ne")
             .unwrap();
         self.emit_column_guard(nonempty, "Stats.mean() called on empty slice")?;
-        let sum = self.stats_fold(data, len, false);
+        if is_int {
+            // i64 elements: overflow-safe f64 accumulation (per-element
+            // `sitofp` + `fadd` — the interpreter's exact op order).
+            let access = self.stats_access(data, len, true);
+            let (sum, cnt) = self.emit_sum_f64_and_count(&access)?;
+            let cntf = self
+                .builder
+                .build_unsigned_int_to_float(cnt, f64_t, "stats.mean.cntf")
+                .unwrap();
+            return Ok(self
+                .builder
+                .build_float_div(sum, cntf, "stats.mean")
+                .unwrap());
+        }
+        let sum = self.stats_fold(data, len, false, false).into_float_value();
         let nf = self
             .builder
             .build_unsigned_int_to_float(len, f64_t, "stats.mean.nf")
@@ -217,21 +304,15 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         data: PointerValue<'ctx>,
         len: IntValue<'ctx>,
+        is_int: bool,
     ) -> Result<FloatValue<'ctx>, String> {
         let i64_t = self.context.i64_type();
-        let f64_t = self.context.f64_type();
         let nonempty = self
             .builder
             .build_int_compare(IntPredicate::UGT, len, i64_t.const_zero(), "stats.var.ne")
             .unwrap();
         self.emit_column_guard(nonempty, "Stats.variance() called on empty slice")?;
-        let access = ContainerAccess {
-            data,
-            len,
-            elem: f64_t.into(),
-            unsigned: false,
-            bitmap: None,
-        };
+        let access = self.stats_access(data, len, is_int);
         let (sum, cnt) = self.emit_sum_f64_and_count(&access)?;
         self.emit_variance_from(&access, sum, cnt, false)
     }
@@ -243,6 +324,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         data: PointerValue<'ctx>,
         len: IntValue<'ctx>,
+        is_int: bool,
     ) -> Result<FloatValue<'ctx>, String> {
         let i64_t = self.context.i64_type();
         let f64_t = self.context.f64_type();
@@ -263,11 +345,17 @@ impl<'ctx> super::Codegen<'ctx> {
             .try_as_basic_value()
             .unwrap_basic()
             .into_pointer_value();
-        // memcpy the f64 data into the scratch (so the source Vec is untouched).
+        // memcpy the 8-byte-element data into the scratch (so the source
+        // Vec is untouched); sort at the element kind — i64 stays exact.
         self.builder
             .build_memcpy(buf, 8, data, 8, nbytes)
             .map_err(|e| format!("stats median memcpy failed: {e:?}"))?;
-        self.column_sort_f64_inplace(buf, len);
+        let sort_key = if is_int {
+            SortKey::IntValue
+        } else {
+            SortKey::Value
+        };
+        self.emit_sort_scratch(buf, len, &sort_key);
 
         // mid = len / 2; even → (buf[mid-1] + buf[mid]) / 2, odd → buf[mid].
         let mid = self
@@ -287,12 +375,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 "stats.med.odd",
             )
             .unwrap();
-        let hi = self.stats_load(buf, mid);
+        let hi = self.stats_rank_as_f64(buf, mid, is_int);
         let lo_idx = self
             .builder
             .build_int_sub(mid, i64_t.const_int(1, false), "stats.med.loi")
             .unwrap();
-        let lo = self.stats_load(buf, lo_idx);
+        let lo = self.stats_rank_as_f64(buf, lo_idx, is_int);
         let avg = {
             let s = self.builder.build_float_add(lo, hi, "stats.med.s").unwrap();
             self.builder
@@ -317,9 +405,9 @@ impl<'ctx> super::Codegen<'ctx> {
         data: PointerValue<'ctx>,
         len: IntValue<'ctx>,
         is_max: bool,
+        is_int: bool,
     ) -> BasicValueEnum<'ctx> {
         let i64_t = self.context.i64_type();
-        let f64_t = self.context.f64_type();
         let fn_val = self.current_fn.expect("stats minmax in function");
         let nonempty = self
             .builder
@@ -333,24 +421,21 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
 
         // Non-empty: the shared compare-select emitter seeds element 0 and
-        // folds from index 1. Its `Option[f64]` payload is the result's bits.
+        // folds from index 1. The `Option[T]` payload word is the result's
+        // bits — an f64 bit-casts; an i64 IS the word (S5).
         self.builder.position_at_end(some_bb);
-        let access = ContainerAccess {
-            data,
-            len,
-            elem: f64_t.into(),
-            unsigned: false,
-            bitmap: None,
-        };
+        let access = self.stats_access(data, len, is_int);
         let result = self
             .emit_reduce_minmax(&access, is_max)
-            .expect("Stats min/max fold cannot fail")
-            .into_float_value();
-        let word = self
-            .builder
-            .build_bit_cast(result, i64_t, "stats.mm.word")
-            .unwrap()
-            .into_int_value();
+            .expect("Stats min/max fold cannot fail");
+        let word = if is_int {
+            result.into_int_value()
+        } else {
+            self.builder
+                .build_bit_cast(result.into_float_value(), i64_t, "stats.mm.word")
+                .unwrap()
+                .into_int_value()
+        };
         let some_end_bb = self.builder.get_insert_block().unwrap();
         self.builder.build_unconditional_branch(merge_bb).unwrap();
 
@@ -370,6 +455,7 @@ impl<'ctx> super::Codegen<'ctx> {
         data: PointerValue<'ctx>,
         len: IntValue<'ctx>,
         p: FloatValue<'ctx>,
+        is_int: bool,
     ) -> Result<FloatValue<'ctx>, String> {
         let i64_t = self.context.i64_type();
         let f64_t = self.context.f64_type();
@@ -411,7 +497,12 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_memcpy(buf, 8, data, 8, nbytes)
             .map_err(|e| format!("stats percentile memcpy failed: {e:?}"))?;
-        self.column_sort_f64_inplace(buf, len);
+        let sort_key = if is_int {
+            SortKey::IntValue
+        } else {
+            SortKey::Value
+        };
+        self.emit_sort_scratch(buf, len, &sort_key);
 
         // pos = (p / 100) · (n - 1); lo = ⌊pos⌋ (fptoui, pos ≥ 0);
         // hi = (lo+1 < n) ? lo+1 : lo; result = buf[lo] + frac·(buf[hi]-buf[lo]).
@@ -456,8 +547,8 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_float_sub(pos, lof, "stats.pct.fr")
             .unwrap();
-        let blo = self.stats_load(buf, lo);
-        let bhi = self.stats_load(buf, hi);
+        let blo = self.stats_rank_as_f64(buf, lo, is_int);
+        let bhi = self.stats_rank_as_f64(buf, hi, is_int);
         let diff = self
             .builder
             .build_float_sub(bhi, blo, "stats.pct.diff")
@@ -487,9 +578,9 @@ impl<'ctx> super::Codegen<'ctx> {
         data: PointerValue<'ctx>,
         len: IntValue<'ctx>,
         is_max: bool,
+        is_int: bool,
     ) -> BasicValueEnum<'ctx> {
         let i64_t = self.context.i64_type();
-        let f64_t = self.context.f64_type();
         let fn_val = self.current_fn.expect("stats argminmax in function");
         let nonempty = self
             .builder
@@ -503,13 +594,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
 
         self.builder.position_at_end(some_bb);
-        let access = ContainerAccess {
-            data,
-            len,
-            elem: f64_t.into(),
-            unsigned: false,
-            bitmap: None,
-        };
+        let access = self.stats_access(data, len, is_int);
         let result_idx = self
             .emit_reduce_argminmax(&access, is_max)
             .expect("Stats argmin/argmax fold cannot fail");
@@ -531,6 +616,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &self,
         data: PointerValue<'ctx>,
         len: IntValue<'ctx>,
+        is_int: bool,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let i64_t = self.context.i64_type();
         let nbytes = self
@@ -547,7 +633,12 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_memcpy(buf, 8, data, 8, nbytes)
             .map_err(|e| format!("stats sort memcpy failed: {e:?}"))?;
-        self.column_sort_f64_inplace(buf, len);
+        let sort_key = if is_int {
+            SortKey::IntValue
+        } else {
+            SortKey::Value
+        };
+        self.emit_sort_scratch(buf, len, &sort_key);
         Ok(self.stats_build_vec(buf, len))
     }
 
@@ -559,6 +650,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &self,
         data: PointerValue<'ctx>,
         len: IntValue<'ctx>,
+        is_int: bool,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let i64_t = self.context.i64_type();
         let fn_val = self.current_fn.expect("stats argsort in function");
@@ -613,8 +705,14 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(ie);
 
         // Stable index insertion sort keyed by `data[idx]` — the shared
-        // kernel scratch sort's `IndexInto` form.
-        self.emit_sort_scratch(buf, len, &SortKey::IndexInto(data));
+        // kernel scratch sort's `IndexInto` form (`IndexIntoInt` keys at
+        // exact i64 for integer slices — S5).
+        let sort_key = if is_int {
+            SortKey::IndexIntoInt(data)
+        } else {
+            SortKey::IndexInto(data)
+        };
+        self.emit_sort_scratch(buf, len, &sort_key);
         Ok(self.stats_build_vec(buf, len))
     }
 

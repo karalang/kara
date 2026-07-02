@@ -10751,6 +10751,60 @@ fn test_stats_sort_argsort_ok() {
     typecheck_ok("fn f() -> Vec[i64] { let xs = [1.0_f64, 2.0_f64]; Stats.argsort(xs) }");
 }
 
+// ── Stats over i64 elements (S5 — the non-f64 element axis) ──────
+
+#[test]
+fn test_stats_i64_elem_typed_results() {
+    // sum/prod are element-typed; min/max carry the element in the Option.
+    typecheck_ok("fn f() -> i64 { let xs: Vec[i64] = vec![3, 1, 2]; Stats.sum(xs) }");
+    typecheck_ok("fn f() -> i64 { let xs: Vec[i64] = vec![3, 1, 2]; Stats.prod(xs) }");
+    typecheck_ok("fn f() -> Option[i64] { let xs: Vec[i64] = vec![3, 1, 2]; Stats.min(xs) }");
+    typecheck_ok("fn f() -> Option[i64] { let xs: Vec[i64] = vec![3, 1, 2]; Stats.max(xs) }");
+    typecheck_ok("fn f() -> Vec[i64] { let xs: Vec[i64] = vec![3, 1, 2]; Stats.sort(xs) }");
+    typecheck_ok("fn f() -> Vec[i64] { let xs: Vec[i64] = vec![3, 1, 2]; Stats.argsort(xs) }");
+    typecheck_ok("fn f() -> Option[i64] { let xs: Vec[i64] = vec![3, 1, 2]; Stats.argmin(xs) }");
+}
+
+#[test]
+fn test_stats_i64_float_statistics_promote() {
+    typecheck_ok("fn f() -> f64 { let xs: Vec[i64] = vec![3, 1, 2]; Stats.mean(xs) }");
+    typecheck_ok("fn f() -> f64 { let xs: Vec[i64] = vec![3, 1, 2]; Stats.variance(xs) }");
+    typecheck_ok("fn f() -> f64 { let xs: Vec[i64] = vec![3, 1, 2]; Stats.median(xs) }");
+    typecheck_ok("fn f() -> f64 { let xs: Vec[i64] = vec![3, 1, 2]; Stats.percentile(xs, 50) }");
+}
+
+#[test]
+fn test_stats_narrow_elem_rejected() {
+    // Narrower numeric elements are a hard error (not silent f64 coercion):
+    // the interpreter evaluates at i64/f64 width, so i32/u8/f32 can't be
+    // width-faithful on both surfaces (B-2026-07-01-3); pre-S5 these
+    // bit-reinterpreted to denormal garbage under `karac build`.
+    let errs =
+        typecheck_errors("fn f() -> f64 { let xs: Vec[i32] = vec![3, 1, 2]; Stats.sum(xs) }");
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("supports f64 and i64 slice elements")),
+        "expected the elem-kind rejection, got {errs:?}"
+    );
+    let errs =
+        typecheck_errors("fn f() -> f64 { let xs: Vec[f32] = vec![3.0, 1.0]; Stats.mean(xs) }");
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("supports f64 and i64 slice elements")),
+        "expected the elem-kind rejection, got {errs:?}"
+    );
+}
+
+#[test]
+fn test_stats_non_slice_arg_rejected() {
+    let errs = typecheck_errors("fn f() -> f64 { Stats.sum(5) }");
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("expects a Slice[f64] or Slice[i64]")),
+        "expected the non-slice rejection, got {errs:?}"
+    );
+}
+
 // ── Set[T] ───────────────────────────────────────────────────────
 
 #[test]

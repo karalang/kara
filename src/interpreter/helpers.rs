@@ -237,6 +237,114 @@ pub(super) fn eval_stats_fn(name: &str, xs: &[f64], p: Option<f64>, span: &Span)
     }
 }
 
+/// The i64-element twin of [`eval_stats_fn`] (S5 — the non-f64 element axis;
+/// `docs/spikes/reduce-elementwise-trait-unification.md`). The genuinely-int
+/// ops stay exact at i64 through [`reduce_i64`]: `sum`/`prod` are
+/// element-typed **checked** folds (overflow traps like the `+`/`*`
+/// operators; empty → the INTEGER identities `0`/`1`, not the float
+/// `-0.0`/`1.0`), `min`/`max` → `Option[i64]`, `sort` → `Vec[i64]`, and
+/// `argmin`/`argmax`/`argsort` compare at i64 (no lossy float round-trip
+/// above 2⁵³). The float statistics (`mean`/`variance`/`stddev`/`median`/
+/// `percentile`) promote to `f64` — same trap policy as the f64 surface.
+pub(super) fn eval_stats_fn_int(name: &str, xs: &[i64], p: Option<f64>, span: &Span) -> Value {
+    use crate::reduce_kernel::{quantile_linear_sorted_i64, reduce_i64, ReduceOp, ReduceOutcome};
+
+    let run = |op: ReduceOp| match reduce_i64(xs, op) {
+        Ok(o) => o,
+        Err(_) => panic!(
+            "integer overflow in {}() at {}:{}",
+            name, span.line, span.column
+        ),
+    };
+    match name {
+        "Stats.sum" | "Stats.prod" => {
+            let op = if name == "Stats.sum" {
+                ReduceOp::Sum
+            } else {
+                ReduceOp::Prod
+            };
+            match run(op) {
+                ReduceOutcome::IntScalar(v) => Value::Int(v),
+                _ => unreachable!("int sum/prod returns IntScalar"),
+            }
+        }
+        "Stats.mean" | "Stats.variance" | "Stats.stddev" | "Stats.median" => {
+            if xs.is_empty() {
+                let m = name.strip_prefix("Stats.").unwrap_or(name);
+                panic!(
+                    "Stats.{}() called on empty slice at {}:{}",
+                    m, span.line, span.column
+                );
+            }
+            let op = match name {
+                "Stats.mean" => ReduceOp::Mean,
+                "Stats.variance" => ReduceOp::Var { bessel: false },
+                "Stats.stddev" => ReduceOp::Std { bessel: false },
+                _ => ReduceOp::Median,
+            };
+            match run(op) {
+                ReduceOutcome::Scalar(f) => Value::Float(f),
+                _ => unreachable!("int float-statistic returns Scalar"),
+            }
+        }
+        "Stats.min" | "Stats.max" => {
+            let op = if name == "Stats.min" {
+                ReduceOp::Min
+            } else {
+                ReduceOp::Max
+            };
+            match run(op) {
+                ReduceOutcome::OptIntScalar(Some(v)) => stats_option_some(Value::Int(v)),
+                _ => stats_option_none(),
+            }
+        }
+        "Stats.percentile" => {
+            if xs.is_empty() {
+                panic!(
+                    "Stats.percentile() called on empty slice at {}:{}",
+                    span.line, span.column
+                );
+            }
+            let p = p.unwrap_or(f64::NAN);
+            if !(0.0..=100.0).contains(&p) {
+                panic!(
+                    "Stats.percentile() p must be in [0, 100], got {} at {}:{}",
+                    p, span.line, span.column
+                );
+            }
+            let ReduceOutcome::I64Vec(sorted) = run(ReduceOp::Sort) else {
+                unreachable!("int Sort returns I64Vec")
+            };
+            let pos = (p / 100.0) * (sorted.len() - 1) as f64;
+            Value::Float(quantile_linear_sorted_i64(&sorted, pos))
+        }
+        "Stats.argmin" | "Stats.argmax" => {
+            let op = if name == "Stats.argmax" {
+                ReduceOp::Argmax
+            } else {
+                ReduceOp::Argmin
+            };
+            match run(op) {
+                ReduceOutcome::OptIndex(Some(i)) => stats_option_some(Value::Int(i)),
+                _ => stats_option_none(),
+            }
+        }
+        "Stats.sort" | "Stats.argsort" => {
+            let op = if name == "Stats.sort" {
+                ReduceOp::Sort
+            } else {
+                ReduceOp::Argsort
+            };
+            let ReduceOutcome::I64Vec(v) = run(op) else {
+                unreachable!("int sort/argsort returns I64Vec")
+            };
+            let elems: Vec<Value> = v.into_iter().map(Value::Int).collect();
+            Value::Array(std::sync::Arc::new(std::sync::RwLock::new(elems)))
+        }
+        _ => Value::Unit,
+    }
+}
+
 /// Numeric `Value` (`Int`/`Float`) as `f64`; non-numeric values (never
 /// reached for a typechecked numeric container) fall back to `0.0`. Shared by
 /// the `Column` and `Tensor` float-result reductions.

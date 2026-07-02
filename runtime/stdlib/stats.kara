@@ -9,6 +9,17 @@
 // The typechecker reads them via `register_baked_stdlib`'s
 // `env_add_impl` walk; the interpreter still dispatches each call by
 // matching on the path string `"Stats.<method>"` in `eval_call`.
+//
+// Element kinds (S5, reduce-elementwise-trait-unification spike): the
+// signatures below are written at `Slice[f64]`, but the typechecker's
+// `infer_stats_call` intercept types the whole surface from the
+// argument's element — `Slice[i64]`/`Vec[i64]` is fully supported with
+// element-typed rules (`sum`/`prod` → i64 CHECKED folds, `min`/`max` →
+// `Option[i64]`, `sort` → `Vec[i64]`, exact-i64 ordering above 2⁵³; the
+// float statistics `mean`/`variance`/`stddev`/`median`/`percentile`
+// still promote to f64). Any other numeric element (i32/u8/f32/…) is a
+// compile error until the interpreter evaluates narrow widths
+// faithfully (B-2026-07-01-3).
 
 struct Stats { }
 

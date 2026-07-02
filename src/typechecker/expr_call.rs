@@ -671,6 +671,44 @@ impl<'a> super::TypeChecker<'a> {
             return self.infer_explicit_generic_args_call(&name, &explicit_args, args, span);
         }
 
+        // `Stats.<fn>(xs, …)` — element-kind-aware result typing (S5,
+        // docs/spikes/reduce-elementwise-trait-unification.md). The baked
+        // `stats.kara` signatures are `Slice[f64]`-only and the permissive
+        // numeric coercion silently admitted ANY numeric element against
+        // them, typing every result f64 — while `karac build` read the raw
+        // buffer at f64, bit-reinterpreting integer elements into denormal
+        // garbage (B-2026-07-01-6). This intercept types the surface from
+        // the argument's element like the Column stats intercept does:
+        // f64 keeps the existing table; i64 gets the element-typed rules
+        // (`sum`/`prod` → i64, `min`/`max` → Option[i64], `sort` → Vec[i64];
+        // the float statistics still promote); any other element is a hard
+        // error instead of silent garbage. The element kind is recorded in
+        // `stats_elem_types` for codegen.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2
+                && segments[0] == "Stats"
+                && matches!(
+                    segments[1].as_str(),
+                    "sum"
+                        | "prod"
+                        | "mean"
+                        | "variance"
+                        | "stddev"
+                        | "median"
+                        | "min"
+                        | "max"
+                        | "percentile"
+                        | "argmin"
+                        | "argmax"
+                        | "sort"
+                        | "argsort"
+                )
+            {
+                let method = segments[1].clone();
+                return self.infer_stats_call(&method, args, span);
+            }
+        }
+
         // Type-parameter associated calls: `T.method(args)` parses as
         // `Call { callee: Path(["T", "method"]), args }`. Intercept this
         // shape before the generic call infrastructure tries to read `T`
@@ -1399,6 +1437,140 @@ impl<'a> super::TypeChecker<'a> {
                         .collect(),
                 ),
             ],
+        };
+        self.record_expr_type(span, &ty);
+        ty
+    }
+
+    /// `Stats.<method>(xs, …)` — the S5 element-kind-aware typing of the
+    /// `std.stats` free functions (see the intercept in [`Self::infer_call`]
+    /// for the rationale). The result table by element kind:
+    ///
+    /// | method | `Slice[f64]` | `Slice[i64]` |
+    /// |---|---|---|
+    /// | `sum` / `prod` | `f64` | `i64` (element-typed) |
+    /// | `mean`/`variance`/`stddev`/`median`/`percentile` | `f64` | `f64` (promotes) |
+    /// | `min` / `max` | `Option[f64]` | `Option[i64]` |
+    /// | `argmin` / `argmax` | `Option[i64]` | `Option[i64]` |
+    /// | `sort` | `Vec[f64]` | `Vec[i64]` |
+    /// | `argsort` | `Vec[i64]` | `Vec[i64]` |
+    ///
+    /// Any other element kind (`i32`/`u8`/`f32`/…) is a hard error: the
+    /// interpreter evaluates ints at i64 and floats at f64, so a narrower
+    /// element can't be width-faithful on both surfaces until the
+    /// interpreter width-laxity class (B-2026-07-01-3) is resolved — and
+    /// before this intercept those calls silently produced denormal garbage
+    /// under `karac build`. The chosen kind is recorded in
+    /// `stats_elem_types` at the call span for codegen.
+    fn infer_stats_call(&mut self, method: &str, args: &[CallArg], span: &Span) -> Type {
+        use super::types::FloatSize;
+        let f64_t = Type::Float(FloatSize::F64);
+        let i64_t = Type::Int(IntSize::I64);
+        let opt = |t: Type| Type::Named {
+            name: "Option".to_string(),
+            args: vec![t],
+        };
+        let vec_of = |t: Type| Type::Named {
+            name: "Vec".to_string(),
+            args: vec![t],
+        };
+
+        // Arity: `percentile(xs, p)` is binary; everything else is unary.
+        let nargs = if method == "percentile" { 2 } else { 1 };
+        if args.len() != nargs {
+            self.type_error(
+                format!(
+                    "Stats.{method} expects {nargs} argument(s), got {}",
+                    args.len()
+                ),
+                span.clone(),
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            for arg in args {
+                self.infer_expr(&arg.value);
+            }
+            return Type::Error;
+        }
+
+        let arg_ty = self.infer_expr(&args[0].value);
+        // Unwrap a borrow; extract the element from Vec / Slice / Array.
+        let core = match &arg_ty {
+            Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+            other => other,
+        };
+        let elem = match core {
+            Type::Named { name, args } if name == "Vec" && args.len() == 1 => Some(&args[0]),
+            Type::Slice { element, .. } => Some(element.as_ref()),
+            Type::Array { element, .. } => Some(element.as_ref()),
+            _ => None,
+        };
+        let is_int = match elem {
+            Some(Type::Int(IntSize::I64)) => true,
+            Some(Type::Float(FloatSize::F64)) => false,
+            // An unresolved element (`vec![]` pending inference) keeps the
+            // pre-S5 posture: the f64 signature.
+            Some(Type::TypeVar(_)) | Some(Type::Error) => false,
+            Some(other_elem) => {
+                self.type_error(
+                    format!(
+                        "Stats.{method} supports f64 and i64 slice elements, found \
+                         '{}' — convert the elements to f64 or i64 first",
+                        type_display(other_elem)
+                    ),
+                    args[0].value.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                for arg in args.iter().skip(1) {
+                    self.infer_expr(&arg.value);
+                }
+                return Type::Error;
+            }
+            None => {
+                if arg_ty != Type::Error {
+                    self.type_error(
+                        format!(
+                            "Stats.{method} expects a Slice[f64] or Slice[i64] argument, \
+                             found '{}'",
+                            type_display(&arg_ty)
+                        ),
+                        args[0].value.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
+                for arg in args.iter().skip(1) {
+                    self.infer_expr(&arg.value);
+                }
+                return Type::Error;
+            }
+        };
+
+        // `percentile(xs, p)` — `p` is an f64 in [0, 100] (range checked at
+        // runtime); an int literal coerces.
+        if method == "percentile" {
+            let p_ty = self.infer_expr(&args[1].value);
+            self.check_assignable(&f64_t, &p_ty, args[1].value.span.clone());
+        }
+
+        // Record the element kind for codegen (the reduction's LLVM element
+        // type — the buffer would otherwise be read as f64 regardless).
+        let elem_te = Self::type_to_type_expr(if is_int { &i64_t } else { &f64_t });
+        self.stats_elem_types
+            .insert(SpanKey(span.offset, span.length), elem_te);
+
+        let ty = match method {
+            "sum" | "prod" => {
+                if is_int {
+                    i64_t
+                } else {
+                    f64_t
+                }
+            }
+            "mean" | "variance" | "stddev" | "median" | "percentile" => f64_t,
+            "min" | "max" => opt(if is_int { i64_t } else { f64_t }),
+            "argmin" | "argmax" => opt(i64_t),
+            "sort" => vec_of(if is_int { i64_t } else { f64_t }),
+            "argsort" => vec_of(i64_t),
+            _ => unreachable!("infer_stats_call gate lists exactly the Stats methods"),
         };
         self.record_expr_type(span, &ty);
         ty

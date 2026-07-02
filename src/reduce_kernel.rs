@@ -60,20 +60,27 @@ pub enum ReduceOp {
     Argsort,
 }
 
-/// The result of [`reduce_f64`], shaped by the op. The interpreter maps each
-/// variant onto its `Value` representation (bare float, `Option[f64]`,
+/// The result of [`reduce_f64`] / [`reduce_i64`], shaped by the op (and, for
+/// the element-typed ops, the element kind — S5). The interpreter maps each
+/// variant onto its `Value` representation (bare float/int, `Option[f64]`/
 /// `Option[i64]`, `Vec[f64]`, `Vec[i64]`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReduceOutcome {
-    /// `Sum`, `Prod`, `Mean`, `Var`, `Std`, `Median`.
+    /// `Sum`, `Prod`, `Mean`, `Var`, `Std`, `Median` over f64 elements —
+    /// plus the always-f64 forms (`Mean`/`Var`/`Std`/`Median`) over i64
+    /// elements (integer statistics promote to float).
     Scalar(f64),
-    /// `Min`, `Max` — `None` iff the input was empty.
+    /// `Sum`, `Prod` over i64 elements (S5) — the element-typed folds.
+    IntScalar(i64),
+    /// `Min`, `Max` over f64 elements — `None` iff the input was empty.
     OptScalar(Option<f64>),
+    /// `Min`, `Max` over i64 elements (S5) — `None` iff the input was empty.
+    OptIntScalar(Option<i64>),
     /// `Argmin`, `Argmax` — `None` iff the input was empty.
     OptIndex(Option<i64>),
-    /// `Sort`.
+    /// `Sort` over f64 elements.
     F64Vec(Vec<f64>),
-    /// `Argsort`.
+    /// `Argsort` — and `Sort` over i64 elements (S5).
     I64Vec(Vec<i64>),
 }
 
@@ -99,6 +106,97 @@ pub fn reduce_f64(xs: &[f64], op: ReduceOp) -> ReduceOutcome {
         ReduceOp::Sort => ReduceOutcome::F64Vec(sorted_ascending(xs)),
         ReduceOp::Argsort => ReduceOutcome::I64Vec(argsorted_ascending(xs)),
     }
+}
+
+/// Evaluate `op` over an **i64** slice (S5 — the non-f64 element axis for
+/// `Stats.*` over `Slice[i64]`/`Vec[i64]`). The genuinely-int ops stay exact
+/// at all magnitudes: `Sum`/`Prod` are **checked** folds (`Err` on overflow —
+/// the caller traps with the scalar `integer overflow` message, matching the
+/// `+`/`*` operators and codegen's `compile_binop_typed` fold),
+/// `Min`/`Max`/`Argmin`/`Argmax`/`Sort`/`Argsort` compare at i64 (no lossy
+/// float round-trip above 2⁵³). The always-f64 statistics (`Mean`/`Var`/
+/// `Std`) convert each element to f64 and delegate to [`reduce_f64`] — the
+/// same per-element `sitofp`-then-accumulate order codegen emits, so the
+/// rounding agrees. `Median` sorts exactly at i64, then converts only the
+/// middle element(s) for the (possibly fractional) result. Empty policy
+/// mirrors [`reduce_f64`] except the identities are integer: empty `Sum` →
+/// `0`, empty `Prod` → `1`.
+pub fn reduce_i64(xs: &[i64], op: ReduceOp) -> Result<ReduceOutcome, IntFoldOverflow> {
+    Ok(match op {
+        ReduceOp::Sum => ReduceOutcome::IntScalar(
+            xs.iter()
+                .try_fold(0i64, |a, &x| a.checked_add(x))
+                .ok_or(IntFoldOverflow)?,
+        ),
+        ReduceOp::Prod => ReduceOutcome::IntScalar(
+            xs.iter()
+                .try_fold(1i64, |a, &x| a.checked_mul(x))
+                .ok_or(IntFoldOverflow)?,
+        ),
+        ReduceOp::Mean | ReduceOp::Var { .. } | ReduceOp::Std { .. } => {
+            let as_f64: Vec<f64> = xs.iter().map(|&x| x as f64).collect();
+            reduce_f64(&as_f64, op)
+        }
+        ReduceOp::Min => ReduceOutcome::OptIntScalar(xs.iter().copied().min()),
+        ReduceOp::Max => ReduceOutcome::OptIntScalar(xs.iter().copied().max()),
+        ReduceOp::Argmin => ReduceOutcome::OptIndex(arg_extreme_i64(xs, false)),
+        ReduceOp::Argmax => ReduceOutcome::OptIndex(arg_extreme_i64(xs, true)),
+        ReduceOp::Median => {
+            let mut sorted = xs.to_vec();
+            sorted.sort_unstable();
+            let n = sorted.len();
+            ReduceOutcome::Scalar(if n.is_multiple_of(2) {
+                (sorted[n / 2 - 1] as f64 + sorted[n / 2] as f64) / 2.0
+            } else {
+                sorted[n / 2] as f64
+            })
+        }
+        ReduceOp::Sort => {
+            let mut sorted = xs.to_vec();
+            sorted.sort_unstable();
+            ReduceOutcome::I64Vec(sorted)
+        }
+        ReduceOp::Argsort => {
+            let mut idx: Vec<usize> = (0..xs.len()).collect();
+            idx.sort_by_key(|&i| xs[i]);
+            ReduceOutcome::I64Vec(idx.into_iter().map(|i| i as i64).collect())
+        }
+    })
+}
+
+/// A checked `Sum`/`Prod` fold overflowed — the caller traps with the scalar
+/// `integer overflow` message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IntFoldOverflow;
+
+/// The index of the first max (`want_max`) / first min at exact i64
+/// precision; `None` for empty. Strict comparison keeps the earliest
+/// occurrence on a tie.
+fn arg_extreme_i64(xs: &[i64], want_max: bool) -> Option<i64> {
+    let mut best: Option<usize> = None;
+    for (i, &x) in xs.iter().enumerate() {
+        match best {
+            None => best = Some(i),
+            Some(b) => {
+                let take = if want_max { x > xs[b] } else { x < xs[b] };
+                if take {
+                    best = Some(i);
+                }
+            }
+        }
+    }
+    best.map(|i| i as i64)
+}
+
+/// Linear-interpolated order statistic of an **already-ascending-sorted**,
+/// non-empty **i64** slice at fractional position `pos ∈ [0, n−1]` — the
+/// integer-element twin of [`quantile_linear_sorted`]: the sort stayed exact
+/// at i64, and only the two picked ranks convert to f64 for interpolation.
+pub fn quantile_linear_sorted_i64(sorted: &[i64], pos: f64) -> f64 {
+    let lo = pos.floor() as usize;
+    let hi = if lo + 1 < sorted.len() { lo + 1 } else { lo };
+    let frac = pos - lo as f64;
+    sorted[lo] as f64 + frac * (sorted[hi] as f64 - sorted[lo] as f64)
 }
 
 /// The arithmetic mean of a non-empty slice.
@@ -288,5 +386,95 @@ mod tests {
         assert_eq!(quantile_linear_sorted(&sorted, 3.0), 4.0); // max
                                                                // median position (n-1)/2 = 1.5 → interpolate 2.0..3.0 → 2.5
         assert_eq!(quantile_linear_sorted(&sorted, 1.5), 2.5);
+    }
+
+    // ── S5: i64 element kind ──────────────────────────────────────────
+
+    #[test]
+    fn i64_sum_prod_are_checked_int_folds() {
+        assert_eq!(
+            reduce_i64(&[3, 1, 2], ReduceOp::Sum),
+            Ok(ReduceOutcome::IntScalar(6))
+        );
+        assert_eq!(
+            reduce_i64(&[3, 1, 2], ReduceOp::Prod),
+            Ok(ReduceOutcome::IntScalar(6))
+        );
+        // Integer identities on empty (NOT the float -0.0 / 1.0).
+        assert_eq!(
+            reduce_i64(&[], ReduceOp::Sum),
+            Ok(ReduceOutcome::IntScalar(0))
+        );
+        assert_eq!(
+            reduce_i64(&[], ReduceOp::Prod),
+            Ok(ReduceOutcome::IntScalar(1))
+        );
+        // Overflow is an Err, not a wrap.
+        assert_eq!(
+            reduce_i64(&[i64::MAX, 1], ReduceOp::Sum),
+            Err(IntFoldOverflow)
+        );
+        assert_eq!(
+            reduce_i64(&[i64::MAX, 2], ReduceOp::Prod),
+            Err(IntFoldOverflow)
+        );
+    }
+
+    #[test]
+    fn i64_ordering_ops_are_exact_above_2_pow_53() {
+        // 2^53 and 2^53 + 1 are indistinguishable as f64; the int paths
+        // must order them exactly.
+        let big = (1i64 << 53) + 1;
+        let xs = [big, 1i64 << 53];
+        assert_eq!(
+            reduce_i64(&xs, ReduceOp::Max),
+            Ok(ReduceOutcome::OptIntScalar(Some(big)))
+        );
+        assert_eq!(
+            reduce_i64(&xs, ReduceOp::Argmax),
+            Ok(ReduceOutcome::OptIndex(Some(0)))
+        );
+        assert_eq!(
+            reduce_i64(&xs, ReduceOp::Sort),
+            Ok(ReduceOutcome::I64Vec(vec![1i64 << 53, big]))
+        );
+        assert_eq!(
+            reduce_i64(&xs, ReduceOp::Argsort),
+            Ok(ReduceOutcome::I64Vec(vec![1, 0]))
+        );
+        assert_eq!(
+            reduce_i64(&[], ReduceOp::Min),
+            Ok(ReduceOutcome::OptIntScalar(None))
+        );
+    }
+
+    #[test]
+    fn i64_float_statistics_promote() {
+        let xs = [2i64, 4, 4, 4, 5, 5, 7, 9];
+        assert_eq!(
+            reduce_i64(&xs, ReduceOp::Mean),
+            Ok(ReduceOutcome::Scalar(5.0))
+        );
+        assert_eq!(
+            reduce_i64(&xs, ReduceOp::Var { bessel: false }),
+            Ok(ReduceOutcome::Scalar(4.0))
+        );
+        // Even-count median averages the two exact middles.
+        assert_eq!(
+            reduce_i64(&[4, 1, 3, 2], ReduceOp::Median),
+            Ok(ReduceOutcome::Scalar(2.5))
+        );
+        assert_eq!(
+            reduce_i64(&[3, 1, 2], ReduceOp::Median),
+            Ok(ReduceOutcome::Scalar(2.0))
+        );
+    }
+
+    #[test]
+    fn i64_quantile_interpolates_exact_ranks() {
+        let sorted = [1i64, 2, 3, 4];
+        assert_eq!(quantile_linear_sorted_i64(&sorted, 0.0), 1.0);
+        assert_eq!(quantile_linear_sorted_i64(&sorted, 3.0), 4.0);
+        assert_eq!(quantile_linear_sorted_i64(&sorted, 1.5), 2.5);
     }
 }

@@ -9938,6 +9938,95 @@ fn test_stats_argsort() {
     assert_eq!(output, "1\n2\n0\n");
 }
 
+// ── Stats over i64 elements (S5 — the non-f64 element axis) ──────
+
+#[test]
+fn test_stats_i64_element_typed_ops() {
+    // sum/prod fold at i64; min/max keep the element type; sort/argsort
+    // and argmin/argmax compare at exact i64.
+    let output = run("fn main() {\n\
+         let xs: Vec[i64] = vec![3, 1, 2];\n\
+         println(Stats.sum(xs));\n\
+         println(Stats.prod(xs));\n\
+         match Stats.min(xs) { Some(v) => println(v), None => println(-1) }\n\
+         match Stats.max(xs) { Some(v) => println(v), None => println(-1) }\n\
+         let s: Vec[i64] = Stats.sort(xs);\n\
+         println(s[0]);\n\
+         let a: Vec[i64] = Stats.argsort(xs);\n\
+         println(a[0]);\n\
+         match Stats.argmin(xs) { Some(i) => println(i), None => println(-1) }\n\
+     }");
+    assert_eq!(output, "6\n6\n1\n3\n1\n1\n1\n");
+}
+
+#[test]
+fn test_stats_i64_float_statistics_promote() {
+    let output = run("fn main() {\n\
+         let xs: Vec[i64] = vec![4, 1, 3, 2];\n\
+         println(Stats.mean(xs));\n\
+         println(Stats.median(xs));\n\
+         println(Stats.percentile(xs, 50));\n\
+         let v: Vec[i64] = vec![2, 4, 4, 4, 5, 5, 7, 9];\n\
+         println(Stats.variance(v));\n\
+         println(Stats.stddev(v));\n\
+     }");
+    assert_eq!(output, "2.5\n2.5\n2.5\n4\n2\n");
+}
+
+#[test]
+fn test_stats_i64_exact_above_2_pow_53() {
+    // 2^53 and 2^53 + 1 are the same f64; the int paths must stay exact.
+    let output = run("fn main() {\n\
+         let a = 9007199254740993;\n\
+         let b = 9007199254740992;\n\
+         let xs: Vec[i64] = vec![a, b];\n\
+         match Stats.max(xs) { Some(v) => println(v), None => println(-1) }\n\
+         match Stats.argmax(xs) { Some(i) => println(i), None => println(-1) }\n\
+         let s: Vec[i64] = Stats.sort(xs);\n\
+         println(s[1]);\n\
+     }");
+    assert_eq!(output, "9007199254740993\n0\n9007199254740993\n");
+}
+
+#[test]
+fn test_stats_i64_empty_integer_identities() {
+    // The STATIC element type drives the empty-input identities: an empty
+    // Vec[i64] sums to integer 0 (not the float -0.0) and prods to 1;
+    // min/max are None.
+    let output = run("fn main() {\n\
+         let e: Vec[i64] = vec![];\n\
+         println(Stats.sum(e));\n\
+         println(Stats.prod(e));\n\
+         match Stats.min(e) { Some(v) => println(v), None => println(-1) }\n\
+     }");
+    assert_eq!(output, "0\n1\n-1\n");
+}
+
+#[test]
+fn test_stats_i64_sum_overflow_traps() {
+    let result = std::panic::catch_unwind(|| {
+        run("fn main() {\n\
+             let big = 9223372036854775807;\n\
+             let xs: Vec[i64] = vec![big, 1];\n\
+             println(Stats.sum(xs));\n\
+         }")
+    });
+    match result {
+        Err(payload) => {
+            let msg = payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_default();
+            assert!(
+                msg.contains("integer overflow"),
+                "expected the overflow trap, got panic: {msg:?}"
+            );
+        }
+        Ok(out) => panic!("expected the checked-sum overflow trap, got output {out:?}"),
+    }
+}
+
 // ── Encoding namespace (Base64 / Hex / Url) ───────────────────────
 
 #[test]

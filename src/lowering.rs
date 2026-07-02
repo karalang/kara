@@ -84,6 +84,13 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
         .iter()
         .map(|(k, v)| ((k.0, k.1), v.clone()))
         .collect();
+    // `Stats.<fn>` call-span -> slice element TypeExpr (i64 | f64) so the
+    // codegen reduction reads the buffer at the right element type (S5).
+    program.stats_elem_types = tc
+        .stats_elem_types
+        .iter()
+        .map(|(k, v)| ((k.0, k.1), v.clone()))
+        .collect();
     // Forward the `TaskHandle[T].join()` result-type table so codegen sizes
     // the cross-task result transfer for a non-scalar `T` (a `Vec`/`String`/
     // struct spawn return). Sibling to `channel_elem_types`; same keying.

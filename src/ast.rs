@@ -282,6 +282,12 @@ pub type TempRecvMapSetTypesTable = std::collections::HashMap<(usize, usize), Ty
 /// channel handle.
 pub type ChannelElemTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
 
+/// Set by the lowering pass from `TypeCheckResult.stats_elem_types`. Maps a
+/// `Stats.<fn>(xs, …)` Call span to the slice's element `TypeExpr` (`i64` or
+/// `f64` — S5, the non-f64 element axis). Codegen reads it to pick the
+/// reduction's element LLVM type; a missing entry defaults to `f64`.
+pub type StatsElemTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
+
 /// `TaskHandle[T].join()` MethodCall span → the result type `T`. Lets codegen
 /// size the join out-slot and the cross-task result memcpy for a non-scalar
 /// `T` (a `Vec`/`String`/struct return from `spawn`); without it the join
@@ -563,6 +569,10 @@ pub struct Program {
     /// empty otherwise. Channel-op element types for codegen's
     /// `karac_runtime_channel_*` lowering.
     pub channel_elem_types: ChannelElemTypesTable,
+    /// Set by the lowering pass from `TypeCheckResult.stats_elem_types`;
+    /// empty otherwise. `Stats.<fn>` call-span → slice element `TypeExpr`
+    /// (S5). See [`StatsElemTypesTable`].
+    pub stats_elem_types: StatsElemTypesTable,
     /// Set by the lowering pass from `TypeCheckResult.task_join_return_types`;
     /// empty otherwise. `TaskHandle[T].join()` result types for codegen's
     /// cross-task result-transfer sizing (non-scalar spawn returns).
