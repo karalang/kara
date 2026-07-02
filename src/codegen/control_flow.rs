@@ -111,6 +111,10 @@ impl<'ctx> super::Codegen<'ctx> {
         self.suppress_inline_option_payload_cleanup(value, pattern);
         self.suppress_inline_result_payload_cleanup(value, pattern);
         self.suppress_inline_option_map_payload_cleanup(value, pattern);
+        // Slice 3t: boxed-payload struct-destructure field suppression
+        // (self-gated on `boxed_enum_payload_vars` membership — only a
+        // binding OWNED here is registered, so borrow scrutinees no-op).
+        self.suppress_boxed_payload_struct_destructure(value, pattern);
         self.tail_ret_inner = tail;
         let then_val = self.compile_block(then_block)?;
         let then_terminated = self
@@ -284,6 +288,10 @@ impl<'ctx> super::Codegen<'ctx> {
         self.suppress_inline_option_payload_cleanup(value, pattern);
         self.suppress_inline_result_payload_cleanup(value, pattern);
         self.suppress_inline_option_map_payload_cleanup(value, pattern);
+        // Slice 3t: boxed-payload struct-destructure field suppression
+        // (self-gated on `boxed_enum_payload_vars` membership — only a
+        // binding OWNED here is registered, so borrow scrutinees no-op).
+        self.suppress_boxed_payload_struct_destructure(value, pattern);
         self.compile_block(body)?;
         let body_has_terminator = self
             .builder
@@ -399,6 +407,10 @@ impl<'ctx> super::Codegen<'ctx> {
         self.suppress_inline_option_payload_cleanup(value, pattern);
         self.suppress_inline_result_payload_cleanup(value, pattern);
         self.suppress_inline_option_map_payload_cleanup(value, pattern);
+        // Slice 3t: boxed-payload struct-destructure field suppression
+        // (self-gated on `boxed_enum_payload_vars` membership — only a
+        // binding OWNED here is registered, so borrow scrutinees no-op).
+        self.suppress_boxed_payload_struct_destructure(value, pattern);
         Ok(())
     }
 

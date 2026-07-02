@@ -766,6 +766,51 @@ existing `asan_ref_arg_*` / `asan_tail_expr_*` family is the model).
    THEMSELVES structs-with-heap (pre-existing `emit_struct_drop_synthesis`
    limit, orthogonal); `get_unchecked` on `Vec[String]`; heap K/V
    (`Map[String, Vec[T]]`) on temps.
+   **Slice 3t — struct-pattern destructure of Option/Result payloads
+   (`Some(Holder {{ name, id }})`) was UNIMPLEMENTED in codegen. — DONE
+   2026-07-02.** The interpreter handled every shape; codegen failed on ALL
+   of them ("Undefined variable" / "no handler for method"), across match /
+   if-let / while-let, named bindings, fresh temps (`v.pop()`), and `Map.get`
+   scrutinees. Three parts. **(1) The width/shape helpers defaulted a
+   `PatternKind::Struct` sub-pattern to ONE word** —
+   `pattern_payload_word_count`, `pattern_payload_llvm_type`, and
+   `reconstruct_payload_value` (type-name resolution + the 1-word
+   `binding_is_struct` gate) all get Struct-pattern arms that resolve the
+   struct's real LLVM aggregate (enum struct-VARIANT patterns resolve
+   through their enum layout). The reconstruction then flows into the
+   EXISTING field-by-field rebuild and `bind_pattern_values`' plain-struct
+   destructure arm — no new bind machinery. **(2) The named-binding boxed
+   payload double-freed on destructure:** the let-site `BoxedEnumDrop`'s
+   inner `__karac_drop_struct_<T>` walk frees EVERY heap field in the box,
+   but the destructure bit-copies bound fields into leaf bindings with their
+   own cleanup. LLVM folds the two `free`s back-to-back — and DCE's the
+   whole malloc/free pair when the payload is never OBSERVED, so
+   `name.len()`-only probes were vacuously green (the 3q DCE-masking lesson;
+   `println(name)` was the shape that aborted).
+   `suppress_boxed_payload_struct_destructure` zeroes each CONSUMED field's
+   cap INSIDE the box (`zero_struct_field_move_cap` — Vec/String caps, enum
+   payload caps, nested recursion) at all four bind sites, so the box walk
+   keeps freeing only UNBOUND fields (`Some(Holder {{ id, .. }})` still
+   frees `name`; `Pair2` partial-destructure pinned). Boxed-width gate
+   mirrors the pack-side predicate (word count > area, 3/Option 5/Result) —
+   an inline payload's w0 is not a pointer. **(3) The 3s escaping-borrow
+   clone extended to FIELD granularity:** `Some(Holder {{ name, .. }}) =>
+   name` over `m.get(k)` handed out an alias of the bucket's field
+   (exit 133). `clone_escaping_borrow_payload_binding` now walks
+   destructure fields (shorthand + direct sub-bindings), cloning + tracking
+   only the ESCAPING heap fields via the shared
+   `clone_and_track_borrow_binding` / `borrow_payload_clone_supported`
+   refactor; read-only fields stay zero-cost aliases (IR-pinned).
+   **Verified:** 8/8 structpat ASAN under Linux LSan (fresh compile),
+   15-probe matrix matches the interpreter (match/if-let/while-let ×
+   named/fresh/Map.get × full/partial/two-heap-field/Vec-field ×
+   observed-payload), auto-par A/B clean ×5. **Tests:** 2 IR
+   (`boxfld.suppress` present for named boxed destructure; field-escape
+   clone fires / read-only stays clone-free) + 8 ASAN. **Residuals:**
+   tuple-payload destructure `Some((a, b))` over `Map.get` keeps the
+   status-quo alias on field ESCAPE (read-only fine — same class, tuple
+   flavor); deeper sub-patterns inside destructured fields
+   (`Some(H {{ inner: Inner {{ .. }} }})`) keep status-quo alias.
    **Slice 3s — the borrow-bound `Map.get` payload move-out (B-2026-07-01-12)
    + two more pre-existing crashes the probes surfaced. — DONE 2026-07-01.**
    `Map.get` is VALUE-typed (`Option[V]` — the typechecker blesses a payload

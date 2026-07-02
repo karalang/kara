@@ -356,6 +356,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.suppress_inline_option_payload_cleanup(scrutinee, &arm.pattern);
                     self.suppress_inline_result_payload_cleanup(scrutinee, &arm.pattern);
                     self.suppress_inline_option_map_payload_cleanup(scrutinee, &arm.pattern);
+                    // Slice 3t: struct-destructure of a BOXED payload — zero
+                    // the consumed fields inside the box so the binding's
+                    // BoxedEnumDrop inner walk frees only unbound fields.
+                    self.suppress_boxed_payload_struct_destructure(scrutinee, &arm.pattern);
                 }
                 // #15: a struct-FIELD enum scrutinee (`match spanned.tok { … }`).
                 // Runs regardless of the identifier/fresh-temp split above —
@@ -963,32 +967,121 @@ impl<'ctx> super::Codegen<'ctx> {
         if path.last().map(|s| s.as_str()) != Some("Some") || subs.len() != 1 {
             return Ok(());
         }
-        let PatternKind::Binding(name) = &subs[0].kind else {
-            return Ok(());
-        };
-        let name = name.clone();
-        let escapes = match escape_exprs {
+        match &subs[0].kind {
+            PatternKind::Binding(name) => {
+                let name = name.clone();
+                if self.borrow_binding_escape_check(&name, escape_exprs, escape_blocks) {
+                    self.clone_and_track_borrow_binding(&name, &payload_te);
+                }
+            }
+            // Slice 3t: struct-DESTRUCTURE of the borrowed payload
+            // (`Some(Holder { name, .. }) => name` over `m.get(k)`) — each
+            // escaping FIELD binding aliases the bucket's field buffer and
+            // needs its own clone + owned tracking, at field granularity
+            // (a read-only field stays a zero-cost alias).
+            PatternKind::Struct {
+                path: spath,
+                fields,
+                ..
+            } => {
+                let Some(struct_name) = spath.last().cloned() else {
+                    return Ok(());
+                };
+                let Some(field_names) = self.struct_field_names.get(&struct_name).cloned() else {
+                    return Ok(());
+                };
+                let field_tes = self
+                    .struct_field_type_exprs
+                    .get(&struct_name)
+                    .cloned()
+                    .unwrap_or_default();
+                for field_pat in fields {
+                    // The binding name: shorthand (`{ name }`) or a direct
+                    // sub-Binding (`{ name: n }`). Deeper sub-patterns keep
+                    // the status-quo alias.
+                    let bind_name = match field_pat.pattern.as_ref().map(|p| &p.kind) {
+                        None => field_pat.name.clone(),
+                        Some(PatternKind::Binding(n)) => n.clone(),
+                        _ => continue,
+                    };
+                    let Some(idx) = field_names.iter().position(|n| n == &field_pat.name) else {
+                        continue;
+                    };
+                    let Some(field_te) = field_tes.get(idx).cloned() else {
+                        continue;
+                    };
+                    if !self.borrow_payload_clone_supported(&field_te) {
+                        continue;
+                    }
+                    if self.borrow_binding_escape_check(&bind_name, escape_exprs, escape_blocks) {
+                        self.clone_and_track_borrow_binding(&bind_name, &field_te);
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Whether the arm scope moves `name` (see `borrow_binding_escapes`).
+    /// `escape_exprs = None` → the binding outlives analysis reach
+    /// (`let…else`) — always treat as escaping.
+    fn borrow_binding_escape_check(
+        &self,
+        name: &str,
+        escape_exprs: Option<&[&Expr]>,
+        escape_blocks: &[&Block],
+    ) -> bool {
+        match escape_exprs {
             None => true,
             Some(exprs) => {
-                exprs.iter().any(|e| self.borrow_binding_escapes(e, &name))
+                exprs.iter().any(|e| self.borrow_binding_escapes(e, name))
                     || escape_blocks
                         .iter()
-                        .any(|b| self.borrow_binding_escapes_block(b, &name))
+                        .any(|b| self.borrow_binding_escapes_block(b, name))
             }
-        };
-        if !escapes {
-            return Ok(());
         }
-        let Some(slot) = self.variables.get(&name).copied() else {
-            return Ok(());
+    }
+
+    /// The clone-family support gate shared by the whole-payload and
+    /// destructured-field legs — a `false` keeps the status-quo alias
+    /// (never a partial clone).
+    fn borrow_payload_clone_supported(&mut self, te: &TypeExpr) -> bool {
+        let TypeKind::Path(pp) = &te.kind else {
+            return false;
+        };
+        let Some(head) = pp.segments.first().map(|s| s.as_str()) else {
+            return false;
+        };
+        if !self.te_owns_heap_below_buffer(te) {
+            return false;
+        }
+        if self.shared_heap_type_for_type_expr(te).is_some() {
+            return false;
+        }
+        match head {
+            "String" | "str" => true,
+            "Vec" | "Map" | "Set" => self.te_recursive_drop_fully_supported(te),
+            _ => {
+                (self.struct_types.contains_key(head) || self.enum_layouts.contains_key(head))
+                    && !self.shared_types.contains_key(head)
+                    && self.te_recursive_drop_fully_supported(te)
+            }
+        }
+    }
+
+    /// Deep-clone the binding's slot in place and register owned tracking —
+    /// the escaping-borrow fixup tail shared by the whole-payload and
+    /// destructured-field legs. After this the binding is indistinguishable
+    /// from an owned one, so every existing move-out suppression applies.
+    fn clone_and_track_borrow_binding(&mut self, name: &str, te: &TypeExpr) {
+        let Some(slot) = self.variables.get(name).copied() else {
+            return;
         };
         let Some(fn_val) = self.current_fn else {
-            return Ok(());
+            return;
         };
-        // Deep-clone in place: karac_clone_<T>(src, dst) into a tmp, then
-        // copy the tmp back over the binding slot. The map's copy is
-        // untouched; the binding now owns an independent value.
-        let clone_fn = self.emit_clone_fn_for_type_expr(&payload_te);
+        let clone_fn = self.emit_clone_fn_for_type_expr(te);
         let tmp = self.create_entry_alloca(fn_val, "borrow.clone.tmp", slot.ty);
         self.builder
             .build_call(clone_fn, &[slot.ptr.into(), tmp.into()], "")
@@ -998,19 +1091,18 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(slot.ty, tmp, "borrow.clone.v")
             .unwrap();
         self.builder.build_store(slot.ptr, cloned).unwrap();
-        // Owned tracking, mirroring the non-borrow pattern-bind arms.
-        let TypeKind::Path(pp) = &payload_te.kind else {
-            return Ok(());
+        let TypeKind::Path(pp) = &te.kind else {
+            return;
         };
         let head = pp.segments.first().map(|s| s.as_str()).unwrap_or("");
         match head {
             "String" | "str" | "Vec" => {
-                let elem_ty = self.inline_heap_payload_elem(&payload_te);
+                let elem_ty = self.inline_heap_payload_elem(te);
                 self.track_vec_var(slot.ptr, elem_ty);
             }
             "Map" | "Set" => {
                 let (key_is_vec, val_is_vec, key_shared, val_shared, val_drop_fn) =
-                    self.map_temp_cleanup_parts(&payload_te);
+                    self.map_temp_cleanup_parts(te);
                 self.track_map_var_with_val_drop(
                     slot.ptr,
                     key_is_vec,
@@ -1030,7 +1122,6 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
-        Ok(())
     }
 
     /// Conservative escape analysis for a borrow-mode payload binding: does
@@ -1939,6 +2030,27 @@ impl<'ctx> super::Codegen<'ctx> {
                     None => 1,
                 }
             }
+            // Struct-pattern payload destructure (slice 3t): `Some(Holder {
+            // name, id })` — the payload's natural width is the struct's
+            // full LLVM word count. An enum struct-VARIANT pattern
+            // (`E.V { .. }`) resolves through its enum layout instead.
+            // Before this arm, the `_ => 1` default sized the payload as a
+            // single word, the reconstruction bound the raw word, and the
+            // struct bind arm's StructValue guard silently missed — every
+            // field stayed unbound ("Undefined variable").
+            PatternKind::Struct { path, .. } => {
+                if let Some(enum_name) = self.variant_pattern_enum_name(pat) {
+                    return self
+                        .enum_layouts
+                        .get(&enum_name)
+                        .map(|l| Self::llvm_type_word_count(l.llvm_type.into()))
+                        .unwrap_or(1);
+                }
+                path.last()
+                    .and_then(|n| self.struct_types.get(n.as_str()))
+                    .map(|st| Self::llvm_type_word_count((*st).into()))
+                    .unwrap_or(1)
+            }
             _ => 1,
         }
     }
@@ -2006,6 +2118,23 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap_or_else(|| self.context.i64_type().into()),
                     None => self.context.i64_type().into(),
                 }
+            }
+            // Struct-pattern payload destructure (slice 3t) — the twin of
+            // the `pattern_payload_word_count` arm: the reconstructed value
+            // must be typed as the struct's real LLVM aggregate (or the
+            // enum's tagged union for a struct-VARIANT pattern), not the
+            // i64 default, so the debox load and the field-by-field rebuild
+            // both see the right shape.
+            PatternKind::Struct { path, .. } => {
+                if let Some(enum_name) = self.variant_pattern_enum_name(pat) {
+                    if let Some(layout) = self.enum_layouts.get(&enum_name) {
+                        return layout.llvm_type.into();
+                    }
+                }
+                path.last()
+                    .and_then(|n| self.struct_types.get(n.as_str()))
+                    .map(|st| (*st).into())
+                    .unwrap_or_else(|| self.context.i64_type().into())
             }
             _ => self.context.i64_type().into(),
         }
@@ -2128,6 +2257,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 .get(&key)
                 .map(|n| self.struct_types.contains_key(n.as_str()))
                 .unwrap_or(false)
+                // Struct-pattern destructure (slice 3t): a 1-word struct
+                // payload (`struct P { x: i64 }`) must still rebuild the
+                // `{i64}` aggregate — the raw-word path would hand the
+                // struct bind arm an IntValue its guard rejects.
+                || matches!(
+                    &sub_pat.kind,
+                    PatternKind::Struct { path, .. }
+                        if path.last().is_some_and(|n| self.struct_types.contains_key(n.as_str()))
+                )
         };
         // Single-word: keep legacy single-i64 binding shape. The
         // PatternKind::Binding arm handles single-field struct
@@ -2270,8 +2408,23 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         // Multi-word: resolve the binding's surface type to choose the
-        // target LLVM aggregate type.
-        let type_name = self.pattern_binding_types.get(&key).cloned();
+        // target LLVM aggregate type. A Struct-PATTERN sub-pattern (slice
+        // 3t: `Some(Holder { name, id })`) has no `pattern_binding_types`
+        // entry at its own span — its name comes from the pattern path, and
+        // the existing field-by-field rebuild below (incl. the #44 nested
+        // sub-field recursion) then produces the correctly-typed aggregate
+        // for `bind_pattern_values`' plain-struct destructure arm.
+        let type_name =
+            self.pattern_binding_types
+                .get(&key)
+                .cloned()
+                .or_else(|| match &sub_pat.kind {
+                    PatternKind::Struct { path, .. } => path
+                        .last()
+                        .filter(|n| self.struct_types.contains_key(n.as_str()))
+                        .cloned(),
+                    _ => None,
+                });
         let target_ty: Option<BasicTypeEnum<'ctx>> =
             type_name.as_ref().and_then(|n| match n.as_str() {
                 "String" | "str" | "Vec" | "VecDeque" => Some(self.vec_struct_type().into()),
@@ -3381,6 +3534,130 @@ impl<'ctx> super::Codegen<'ctx> {
                 .builder
                 .build_store(tag_ptr, i64_t.const_int(none_tag, false));
         }
+    }
+
+    /// Slice 3t: disarm the BOXED payload's consumed-field frees when a
+    /// match/if-let arm STRUCT-DESTRUCTURES fields out of a boxed
+    /// Option/Result binding — `match o { Some(Holder { name, id }) => … }`
+    /// where `o`'s `Option[Holder]` payload was heap-boxed (wide). The
+    /// let-site `track_boxed_enum_var` queued a `BoxedEnumDrop` whose inner
+    /// `__karac_drop_struct_<T>` walk frees EVERY heap field in the box —
+    /// but the destructure bit-copied the bound fields into leaf bindings
+    /// that register their own cleanup, so the consumed fields double-freed
+    /// (LLVM even folds the two `free`s back-to-back; probes without an
+    /// OBSERVED payload were vacuously green — the malloc/free pair gets
+    /// DCE'd). Zero each CONSUMED field's cap inside the box
+    /// (`zero_struct_field_move_cap` — Vec/String cap, enum payload caps,
+    /// nested struct recursion) so the box's walk keeps freeing only the
+    /// UNBOUND fields (`Some(Holder { id, .. })` still frees `name`).
+    /// Inline (≤ payload-area) struct payloads have no Option-side cleanup
+    /// (no inline-struct free exists), so only the boxed width needs this.
+    pub(super) fn suppress_boxed_payload_struct_destructure(
+        &mut self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+    ) {
+        let ExprKind::Identifier(name) = &scrutinee.kind else {
+            return;
+        };
+        if !self.boxed_enum_payload_vars.contains(name.as_str()) {
+            return;
+        }
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return;
+        };
+        let variant = path.last().map(|s| s.as_str()).unwrap_or("");
+        let enum_name = match variant {
+            "Some" => "Option",
+            "Ok" | "Err" => "Result",
+            _ => return,
+        };
+        let Some(sub) = patterns.first() else {
+            return;
+        };
+        let PatternKind::Struct {
+            path: spath,
+            fields,
+            ..
+        } = &sub.kind
+        else {
+            return;
+        };
+        let Some(struct_name) = spath.last().cloned() else {
+            return;
+        };
+        let Some(&st) = self.struct_types.get(struct_name.as_str()) else {
+            return;
+        };
+        // Boxed iff the struct's width exceeds the enum's inline payload
+        // area — the same predicate the pack side (`coerce_to_payload_words`)
+        // and the unpack side (`reconstruct_payload_value`'s debox) use. An
+        // inline payload's w0 is NOT a pointer; zeroing through it would
+        // corrupt memory.
+        let area = if enum_name == "Option" { 3 } else { 5 };
+        if Self::llvm_type_word_count(st.into()) <= area {
+            return;
+        }
+        let Some(slot) = self.variables.get(name.as_str()).copied() else {
+            return;
+        };
+        let Some(layout) = self.enum_layouts.get(enum_name) else {
+            return;
+        };
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        // We are INSIDE the matched arm, so the live variant is `variant`
+        // and w0 (field 1) holds the box pointer. Defensive null-guard
+        // mirrors the BoxedEnumDrop arm.
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let Ok(w0_ptr) =
+            self.builder
+                .build_struct_gep(layout.llvm_type, slot.ptr, 1, "boxfld.suppress.w0")
+        else {
+            return;
+        };
+        let w0 = self
+            .builder
+            .build_load(self.context.i64_type(), w0_ptr, "boxfld.suppress.w0v")
+            .unwrap()
+            .into_int_value();
+        let box_ptr = self
+            .builder
+            .build_int_to_ptr(w0, ptr_ty, "boxfld.suppress.box")
+            .unwrap();
+        let is_null = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                box_ptr,
+                ptr_ty.const_null(),
+                "boxfld.suppress.isnull",
+            )
+            .unwrap();
+        let do_bb = self
+            .context
+            .append_basic_block(fn_val, "boxfld.suppress.do");
+        let join_bb = self
+            .context
+            .append_basic_block(fn_val, "boxfld.suppress.join");
+        self.builder
+            .build_conditional_branch(is_null, join_bb, do_bb)
+            .unwrap();
+        self.builder.position_at_end(do_bb);
+        for field_pat in fields {
+            // A `field: _` sub-pattern consumes nothing — the box keeps
+            // that field.
+            if matches!(
+                field_pat.pattern.as_ref().map(|p| &p.kind),
+                Some(PatternKind::Wildcard)
+            ) {
+                continue;
+            }
+            self.zero_struct_field_move_cap(box_ptr, &struct_name, &field_pat.name);
+        }
+        self.builder.build_unconditional_branch(join_bb).unwrap();
+        self.builder.position_at_end(join_bb);
     }
 
     /// Disarm the scope-exit inline-payload free of a `?`-operand binding.

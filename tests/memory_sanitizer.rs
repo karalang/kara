@@ -17831,4 +17831,214 @@ fn main() {
             "getmove_letelse_get_escaping_binding_no_double_free",
         );
     }
+
+    #[test]
+    fn asan_structpat_option_destructure_no_double_free() {
+        // Slice 3t: `Some(Holder { name, id })` was UNIMPLEMENTED in codegen
+        // (the payload-width helpers defaulted a Struct pattern to one word,
+        // the reconstruction bound the raw word, and every field stayed
+        // unbound — "Undefined variable"). Once fields bind, the named
+        // binding's BoxedEnumDrop inner walk also freed the consumed fields
+        // (double-free, DCE-masked unless the payload is observed) —
+        // `suppress_boxed_payload_struct_destructure` zeroes consumed field
+        // caps inside the box.
+        assert_clean_asan_run(
+            r#"
+struct Holder { name: String, id: i64 }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let o: Option[Holder] = Some(Holder { name: f"holder payload padded beyond thirty-six bytes {i}", id: i });
+        match o {
+            Some(Holder { name, id }) => { println(name.len() + id); },
+            None => { println("missing"); },
+        }
+        i = i + 1;
+    };
+}
+"#,
+            &["47", "48", "49"],
+            "structpat_option_destructure_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_structpat_partial_destructure_unbound_field_no_leak() {
+        // Slice 3t: `Some(Pair2 { first, .. })` — the UNBOUND `second` stays
+        // owned by the box; the per-field cap-zero must not disarm it (the
+        // box's inner walk is its only free).
+        assert_clean_asan_run(
+            r#"
+struct Pair2 { first: String, second: String }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let o: Option[Pair2] = Some(Pair2 { first: f"first payload padded beyond thirty-six bytes {i}", second: f"second payload padded beyond thirty-six bytes {i}" });
+        match o {
+            Some(Pair2 { first, .. }) => { println(first.len()); },
+            None => { println("missing"); },
+        }
+        i = i + 1;
+    };
+}
+"#,
+            &["46", "46", "46"],
+            "structpat_partial_destructure_unbound_field_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_structpat_result_ok_destructure_no_double_free() {
+        // Slice 3t: the Result sibling — `Ok(Holder { name, id })` over a
+        // named `Result[Holder, i64]` binding (boxed Ok payload).
+        assert_clean_asan_run(
+            r#"
+struct Holder { name: String, id: i64 }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let r: Result[Holder, i64] = Ok(Holder { name: f"holder payload padded beyond thirty-six bytes {i}", id: i });
+        match r {
+            Ok(Holder { name, id }) => { println(name.len() + id); },
+            Err(e) => { println(e); },
+        }
+        i = i + 1;
+    };
+}
+"#,
+            &["47", "48", "49"],
+            "structpat_result_ok_destructure_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_structpat_mapget_destructure_readonly_no_double_free() {
+        // Slice 3t: destructuring a `Map.get` payload READ-ONLY — the field
+        // bindings alias the bucket (borrow mode), the scrutinee's box is
+        // box-only-freed, the map keeps sole ownership.
+        assert_clean_asan_run(
+            r#"
+struct Holder { name: String, id: i64 }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let mut m: Map[i64, Holder] = Map.new();
+        m.insert(i, Holder { name: f"holder payload padded beyond thirty-six bytes {i}", id: i });
+        match m.get(i) {
+            Some(Holder { name, id }) => { println(name.len() + id); },
+            None => { println("missing"); },
+        }
+        i = i + 1;
+    };
+}
+"#,
+            &["47", "48", "49"],
+            "structpat_mapget_destructure_readonly_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_structpat_mapget_field_escape_no_double_free() {
+        // Slice 3t: an ESCAPING destructured field over a `Map.get`
+        // scrutinee (`Some(Holder { name, .. }) => name`) — the 3s clone
+        // fixup extended to FIELD granularity (read-only fields stay
+        // zero-cost aliases; the escapee owns an independent copy).
+        assert_clean_asan_run(
+            r#"
+struct Holder { name: String, id: i64 }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let mut m: Map[i64, Holder] = Map.new();
+        m.insert(i, Holder { name: f"holder payload padded beyond thirty-six bytes {i}", id: i });
+        let s = match m.get(i) {
+            Some(Holder { name, .. }) => name,
+            None => f"none-{i}",
+        };
+        println(s.len());
+        i = i + 1;
+    };
+}
+"#,
+            &["47", "47", "47"],
+            "structpat_mapget_field_escape_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_structpat_iflet_destructure_no_double_free() {
+        // Slice 3t: the if-let form of the boxed-payload struct destructure.
+        assert_clean_asan_run(
+            r#"
+struct Holder { name: String, id: i64 }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let o: Option[Holder] = Some(Holder { name: f"holder payload padded beyond thirty-six bytes {i}", id: i });
+        if let Some(Holder { name, id }) = o {
+            println(name.len() + id);
+        }
+        i = i + 1;
+    };
+}
+"#,
+            &["47", "48", "49"],
+            "structpat_iflet_destructure_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_structpat_vec_field_destructure_no_double_free() {
+        // Slice 3t: a `Vec[String]` FIELD destructured out — the consumed
+        // field's cap-zero must recurse correctly (the box walk would
+        // otherwise free the Vec's buffer AND its element strings that the
+        // binding now owns).
+        assert_clean_asan_run(
+            r#"
+struct Bag { items: Vec[String], id: i64 }
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let mut v: Vec[String] = Vec.new();
+        v.push(f"bag item payload padded beyond thirty-six bytes {i}");
+        let o: Option[Bag] = Some(Bag { items: v, id: i });
+        match o {
+            Some(Bag { items, id }) => { println((items[0].len() as i64) + id); },
+            None => { println("missing"); },
+        }
+        i = i + 1;
+    };
+}
+"#,
+            &["49", "50", "51"],
+            "structpat_vec_field_destructure_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_structpat_whilelet_pop_destructure_no_double_free() {
+        // Slice 3t: `while let Some(Holder { name, id }) = v.pop()` — the
+        // fresh-temp boxed scrutinee path (box-only free; fields owned by
+        // their bindings), looped.
+        assert_clean_asan_run(
+            r#"
+struct Holder { name: String, id: i64 }
+fn main() {
+    let mut v: Vec[Holder] = Vec.new();
+    let mut i = 0;
+    while i < 3 {
+        v.push(Holder { name: f"holder payload padded beyond thirty-six bytes {i}", id: i });
+        i = i + 1;
+    };
+    let mut total = 0;
+    while let Some(Holder { name, id }) = v.pop() {
+        total = total + (name.len() as i64) + id;
+    }
+    println(total);
+}
+"#,
+            &["144"],
+            "structpat_whilelet_pop_destructure_no_double_free",
+        );
+    }
 }

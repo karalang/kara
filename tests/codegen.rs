@@ -19863,6 +19863,75 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_structpat_boxed_destructure_suppresses_box_fields() {
+        // Slice 3t: `match o { Some(Holder { name, id }) => … }` over a named
+        // boxed `Option[Holder]` binding — the consumed fields' caps are
+        // zeroed INSIDE the box (`boxfld.suppress`) so the let-site
+        // BoxedEnumDrop inner walk frees only unbound fields.
+        let src = r#"
+struct Holder { name: String, id: i64 }
+fn main() {
+    let o: Option[Holder] = Some(Holder { name: "a heap string padded out beyond thirty-six bytes!", id: 1 });
+    match o {
+        Some(Holder { name, id }) => { println(name.len() + id); },
+        None => { println("missing"); },
+    }
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("boxfld.suppress"),
+            "expected the consumed-field cap-zero inside the boxed payload \
+             (boxfld.suppress blocks); got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_structpat_mapget_field_escape_clones() {
+        // Slice 3t: an escaping destructured FIELD over a `Map.get`
+        // scrutinee is deep-cloned (field-granular 3s fixup); a read-only
+        // sibling arm shape must stay clone-free (second assertion, separate
+        // program).
+        let src = r#"
+struct Holder { name: String, id: i64 }
+fn main() {
+    let mut m: Map[i64, Holder] = Map.new();
+    m.insert(1, Holder { name: "a heap string padded out beyond thirty-six bytes!", id: 1 });
+    let s = match m.get(1) {
+        Some(Holder { name, .. }) => name,
+        None => "n".to_string(),
+    };
+    println(s.len());
+}
+"#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("borrow.clone.tmp"),
+            "expected the escaping destructured field deep-cloned; got:\n{}",
+            ir
+        );
+        let src_ro = r#"
+struct Holder { name: String, id: i64 }
+fn main() {
+    let mut m: Map[i64, Holder] = Map.new();
+    m.insert(1, Holder { name: "a heap string padded out beyond thirty-six bytes!", id: 1 });
+    let n = match m.get(1) {
+        Some(Holder { name, .. }) => name.len(),
+        None => 0,
+    };
+    println(n);
+}
+"#;
+        let ir_ro = ir_for(src_ro);
+        assert!(
+            !ir_ro.contains("borrow.clone.tmp"),
+            "a read-only destructured field must stay a zero-cost alias; got:\n{}",
+            ir_ro
+        );
+    }
+
+    #[test]
     fn test_ir_ref_arg_nested_vec_elem_freed() {
         // Slice 2 part B: a fresh `Vec[String]` passed to a `ref Vec[String]`
         // param is materialized into a `ref_rvalue_arg` temp. The prior path
