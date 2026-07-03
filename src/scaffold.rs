@@ -721,12 +721,17 @@ mod tests {
     }
 
     fn tempdir() -> TempDirHandle {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        // Process-wide monotonic counter so two calls landing in the same
+        // clock tick under parallel test execution never collide on a path.
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
         let pid = std::process::id();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let path = std::env::temp_dir().join(format!("karac_scaffold_{pid}_{nanos}"));
+        let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("karac_scaffold_{pid}_{nanos}_{seq}"));
         fs::create_dir_all(&path).expect("tempdir create");
         TempDirHandle { path }
     }
