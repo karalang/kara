@@ -1089,6 +1089,41 @@ fn main() {
         }
     }
 
+    /// B-2026-07-03-4 (fixed as a side effect of B-2026-07-03-11, db020ee6):
+    /// a STATIC associated fn returning `-> Self`, bound to a local and then
+    /// used as a method receiver, produced `0` under the auto-par codegen path
+    /// (this harness compiles WITH `concurrency_analyze`, the auto-par surface)
+    /// while the sequential build and interpreter were correct (`14`). The
+    /// binding `let c = W.make()` re-derived its slot type from the unrewritten
+    /// `Self` shape and mis-materialized, so `c.twice()` dispatched against the
+    /// wrong type. The B-11 binding-type fixes (`record_var_type_name` central
+    /// resolution + the struct reverse-lookup hardening in stmts.rs) closed it;
+    /// this locks in the auto-par surface the B-11 E2E tests don't cover. The
+    /// static `-> Self` source is the specific trigger — the instance-`-> Self`
+    /// and concrete-static (`make() -> W`) variants were already fine.
+    #[test]
+    fn test_e2e_auto_par_static_self_assoc_fn_receiver() {
+        let out = run_program(
+            r#"
+struct W { v: i64 }
+trait Dbl { fn twice(self) -> Self; }
+impl W { fn make() -> Self { W { v: 7 } } }
+impl Dbl for W { fn twice(self) -> Self { W { v: self.v + self.v } } }
+fn main() {
+    let c = W.make();
+    let d = c.twice();
+    println(d.v);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "14\n",
+                "static `-> Self` assoc-fn receiver under auto-par; got {out:?}"
+            );
+        }
+    }
+
     #[test]
     fn test_e2e_auto_par_map_histogram_then_keys_no_race() {
         // `for w in words { *m.entry(w).or_insert(0) += 1 }` WRITES the map,
