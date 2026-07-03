@@ -29535,3 +29535,79 @@ fn test_int_literal_boundaries_still_admitted() {
          }",
     );
 }
+
+// ── S6a: trait-arg substitution through generic bounds ─────────────
+
+#[test]
+fn test_bound_trait_generic_args_substitute_in_method_dispatch() {
+    // S6a: `C: MyReduce[i64]` must type `c.total()` as i64, not the raw
+    // trait-level TypeParam `T` (pre-fix: "expected 'i64', found 'T'").
+    // `trait_bound_arg_subs` binds the bound's args to the trait's
+    // declared generic params before `dispatch_trait_assoc_fn` lowers
+    // the method signature.
+    typecheck_ok(
+        "trait MyReduce[T] {
+             fn total(ref self) -> T;
+         }
+         struct Holder[U] { v: U }
+         impl[U] MyReduce[U] for Holder[U] {
+             fn total(ref self) -> U {
+                 self.v
+             }
+         }
+         fn grand[C: MyReduce[i64]](c: ref C) -> i64 {
+             c.total()
+         }
+         fn main() {
+             let h = Holder { v: 41 };
+             let n: i64 = grand(h);
+             println(n);
+         }",
+    );
+}
+
+#[test]
+fn test_bound_trait_arg_naming_sibling_type_param_substitutes() {
+    // The bound's arg can name a SIBLING type param (`C: MyReduce[U]`)
+    // — `trait_bound_arg_subs` lowers args in the enclosing generic
+    // scope, so the method return unifies with the second param.
+    typecheck_ok(
+        "trait MyReduce[T] {
+             fn total(ref self) -> T;
+         }
+         struct Holder[U] { v: U }
+         impl[U] MyReduce[U] for Holder[U] {
+             fn total(ref self) -> U {
+                 self.v
+             }
+         }
+         fn pass_through[U, C: MyReduce[U]](c: ref C, fallback: U) -> U {
+             c.total()
+         }
+         fn main() {
+             let h = Holder { v: 41 };
+             let n: i64 = pass_through(h, 0);
+             println(n);
+         }",
+    );
+}
+
+#[test]
+fn test_stdlib_reduce_bound_types_methods_from_trait_args() {
+    // The baked `Reduce[T]` (S6a): `sum`/`min`/`max` type as the bound's
+    // arg, `mean` as f64, for both builtin implementors.
+    typecheck_ok(
+        "fn spread[C: Reduce[i64]](c: ref C) -> i64 {
+             c.max() - c.min()
+         }
+         fn avg[C: Reduce[i64]](c: ref C) -> f64 {
+             c.mean()
+         }
+         fn main() {
+             let c: Column[i64] = Column.from_vec([10, 20, 30]);
+             let t: Tensor[i64, [4]] = Tensor.from([2, 4, 6, 8]);
+             println(spread(c) + spread(t));
+             println(avg(c) + avg(t));
+         }",
+    );
+}

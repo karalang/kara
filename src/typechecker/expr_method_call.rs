@@ -115,6 +115,72 @@ impl<'a> super::TypeChecker<'a> {
         None
     }
 
+    /// Locate the AST `TraitDef` for `trait_name` — user program first,
+    /// then the baked stdlib, mirroring [`Self::find_trait_method`]'s
+    /// lookup order. Needed to read the trait's own `generic_params` when
+    /// binding a bound's generic args (`C: Reduce[i64]` → `T := i64`).
+    pub(super) fn find_trait_def<'p>(
+        &'p self,
+        trait_name: &str,
+    ) -> Option<&'p crate::ast::TraitDef> {
+        for item in &self.program.items {
+            if let Item::TraitDef(t) = item {
+                if t.name == trait_name {
+                    return Some(t);
+                }
+            }
+        }
+        for (_, program) in crate::prelude::STDLIB_PROGRAMS.iter() {
+            for item in &program.items {
+                if let Item::TraitDef(t) = item {
+                    if t.name == trait_name {
+                        return Some(t);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Bind a trait bound's generic args to the trait's declared generic
+    /// params: `C: Reduce[i64]` on `trait Reduce[T]` yields `[("T", i64)]`.
+    /// Bound args are lowered in the enclosing generic scope (they may name
+    /// sibling type params — `C: Reduce[U]`). Returns an empty vec when the
+    /// bound has no args, the trait is unknown (built-in / derive-only), or
+    /// the trait declares no generic params — the pre-existing Self-only
+    /// substitution then applies unchanged.
+    fn trait_bound_arg_subs(&mut self, bound: &crate::ast::TraitBound) -> Vec<(String, Type)> {
+        let Some(args) = &bound.generic_args else {
+            return Vec::new();
+        };
+        let Some(trait_name) = bound.path.last() else {
+            return Vec::new();
+        };
+        let param_names: Vec<String> = match self
+            .find_trait_def(trait_name)
+            .and_then(|t| t.generic_params.as_ref())
+        {
+            Some(gp) => gp.params.iter().map(|p| p.name.clone()).collect(),
+            None => return Vec::new(),
+        };
+        let arg_tes: Vec<crate::ast::TypeExpr> = args
+            .iter()
+            .filter_map(|a| match a {
+                crate::ast::GenericArg::Type(te) => Some(te.clone()),
+                _ => None,
+            })
+            .collect();
+        let scope: Vec<String> = self.enclosing_bounds.keys().cloned().collect();
+        param_names
+            .into_iter()
+            .zip(arg_tes)
+            .map(|(name, te)| {
+                let ty = self.lower_type_expr(&te, &scope);
+                (name, ty)
+            })
+            .collect()
+    }
+
     /// Attempt to dispatch `T.method(args)` where `T` is a generic type
     /// parameter (resolver records its bounds under the receiver's SymbolId).
     /// `callee_span` is the span of the `Path(["T", "method"])` expression
@@ -157,16 +223,16 @@ impl<'a> super::TypeChecker<'a> {
             Some(b) => b.clone(),
             None => Vec::new(),
         };
-        let candidates: Vec<(String, crate::ast::TraitMethod)> = bounds
+        let candidates: Vec<(crate::ast::TraitBound, crate::ast::TraitMethod)> = bounds
             .iter()
-            .filter_map(|b| b.path.last().cloned())
-            .filter_map(|trait_name| {
-                let m = self.find_trait_method(&trait_name, method)?;
+            .filter_map(|b| {
+                let trait_name = b.path.last()?;
+                let m = self.find_trait_method(trait_name, method)?;
                 // Only methods (with self_param) are receiver-form
                 // candidates. Associated functions (no self_param) reach
                 // the dispatch only through type-prefixed `T.method()`.
                 m.self_param.as_ref()?;
-                Some((trait_name, m.clone()))
+                Some((b.clone(), m.clone()))
             })
             .collect();
 
@@ -187,13 +253,25 @@ impl<'a> super::TypeChecker<'a> {
                 Type::Error
             }
             1 => {
-                let (_trait_name, trait_method) = candidates.into_iter().next().unwrap();
-                self.dispatch_trait_assoc_fn(type_param_name, &trait_method, args, span)
+                let (bound, trait_method) = candidates.into_iter().next().unwrap();
+                // Bind the bound's generic args to the trait's declared
+                // params (`C: Reduce[i64]` → `T := i64`) so the method's
+                // signature substitutes trait-level `T`s, not just `Self`
+                // — without this, `c.sum()` under `C: Reduce[i64]` typed
+                // as the raw TypeParam `T` (S6a, expected-i64-found-T).
+                let trait_subs = self.trait_bound_arg_subs(&bound);
+                self.dispatch_trait_assoc_fn(
+                    type_param_name,
+                    &trait_method,
+                    &trait_subs,
+                    args,
+                    span,
+                )
             }
             _ => {
                 let trait_list = candidates
                     .iter()
-                    .map(|(t, _)| format!("`{}`", t))
+                    .map(|(b, _)| format!("`{}`", b.path.last().cloned().unwrap_or_default()))
                     .collect::<Vec<_>>()
                     .join(", ");
                 for arg in args {
@@ -252,7 +330,7 @@ impl<'a> super::TypeChecker<'a> {
             Some(m.clone())
         });
         if let Some(m) = trait_method {
-            return self.dispatch_trait_assoc_fn(trait_name, &m, args, span);
+            return self.dispatch_trait_assoc_fn(trait_name, &m, &[], args, span);
         }
         // No trait-surface method — surface the focused diagnostic.
         for arg in args {
@@ -359,7 +437,7 @@ impl<'a> super::TypeChecker<'a> {
             }
             1 => {
                 let (_t, trait_method) = candidates.into_iter().next().unwrap();
-                self.dispatch_trait_assoc_fn("Self", &trait_method, args, span)
+                self.dispatch_trait_assoc_fn("Self", &trait_method, &[], args, span)
             }
             _ => {
                 let trait_list = candidates
@@ -409,7 +487,7 @@ impl<'a> super::TypeChecker<'a> {
             1 => {
                 let trait_name = candidates[0].clone();
                 let trait_method = self.find_trait_method(&trait_name, method)?.clone();
-                Some(self.dispatch_trait_assoc_fn(type_name, &trait_method, args, call_span))
+                Some(self.dispatch_trait_assoc_fn(type_name, &trait_method, &[], args, call_span))
             }
             _ => {
                 let trait_list = candidates
@@ -435,10 +513,17 @@ impl<'a> super::TypeChecker<'a> {
     /// substitution, then validate `args` against it. Used for type-parameter
     /// dispatch (`T.method()` where `T: Trait`). The returned type is the
     /// substituted return type; `Unit` for methods with no return.
+    ///
+    /// `trait_subs` binds the trait's own generic params from the bound's
+    /// args (`C: Reduce[i64]` → `[("T", i64)]`, via
+    /// [`Self::trait_bound_arg_subs`]); pass `&[]` at call sites without a
+    /// parameterized bound in hand — the Self-only substitution then
+    /// applies as before.
     pub(super) fn dispatch_trait_assoc_fn(
         &mut self,
         target: &str,
         method: &crate::ast::TraitMethod,
+        trait_subs: &[(String, Type)],
         args: &[CallArg],
         span: &Span,
     ) -> Type {
@@ -447,8 +532,15 @@ impl<'a> super::TypeChecker<'a> {
             "Self".to_string(),
             SubstValue::Type(Type::TypeParam(target.to_string())),
         );
+        for (name, ty) in trait_subs {
+            subs.insert(name.clone(), SubstValue::Type(ty.clone()));
+        }
 
         let mut scope = vec!["Self".to_string()];
+        // Trait-level generic params are in scope for the method signature
+        // (`fn sum(ref self) -> T` inside `trait Reduce[T]`) — without
+        // them, `lower_type_expr` treats `T` as an unknown named type.
+        scope.extend(trait_subs.iter().map(|(name, _)| name.clone()));
         if let Some(ref gp) = method.generic_params {
             scope.extend(gp.params.iter().map(|p| p.name.clone()));
         }

@@ -741,7 +741,7 @@ impl<'a> super::TypeChecker<'a> {
                         // stack to find the concrete impl.
                         self.bare_assoc_fn_targets
                             .insert(SpanKey::from_span(span), target.clone());
-                        Some(self.dispatch_trait_assoc_fn(target, &trait_method, args, span))
+                        Some(self.dispatch_trait_assoc_fn(target, &trait_method, &[], args, span))
                     }
                     _ => {
                         let trait_list = candidates
