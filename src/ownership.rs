@@ -1898,6 +1898,34 @@ fn impl_target_name(target_type: &TypeExpr) -> Option<String> {
     }
 }
 
+/// Resolve the `callee_param_modes` lookup key for a call's callee
+/// expression, INCLUDING the `with_provider[R](provider, closure)` special
+/// form (B-2026-07-02-26). That form parses as
+/// `Call(Index(Ident|Path("with_provider"), R), [provider, closure])`, so
+/// its callee is an `Index`, not a bare `Identifier`/`Path` — the ordinary
+/// key derivation returns `None` and both args fall to the consume default,
+/// wrongly flagging a post-pop use of the provider (`println(p.n)`) as a
+/// use-after-move. The provider is borrowed by the provider frame (its
+/// mutation is visible after pop), so the intrinsic `with_provider →
+/// [Ref, Own]` entry in `collect_callee_param_modes` is the right modes —
+/// this helper just routes the generic-callee shape to that key.
+pub(crate) fn callee_param_modes_key(callee: &Expr) -> Option<String> {
+    match &callee.kind {
+        ExprKind::Identifier(name) => Some(name.clone()),
+        ExprKind::Path { segments, .. } => Some(segments.join(".")),
+        // `with_provider[R]` — the generic special-form callee.
+        ExprKind::Index { object, .. } => {
+            let is_with_provider = match &object.kind {
+                ExprKind::Identifier(n) => n == "with_provider",
+                ExprKind::Path { segments, .. } => segments.as_slice() == ["with_provider"],
+                _ => false,
+            };
+            is_with_provider.then(|| "with_provider".to_string())
+        }
+        _ => None,
+    }
+}
+
 /// Collect per-position parameter ownership modes for every free function
 /// and every static (no-`self`) impl method. Used by Call-handling to
 /// decide whether each argument is consumed (Owned) or read (Ref / MutRef)

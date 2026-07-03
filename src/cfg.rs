@@ -27,6 +27,64 @@ use std::collections::{HashMap, HashSet};
 
 pub type BlockId = usize;
 
+/// One projection step of a place expression, distinguishing the
+/// statically-disjoint forms (named struct field, tuple index) from the
+/// dynamically-aliasing form (array/slice index). Used by the predicate's
+/// partial-move disjointness check (B-2026-07-02-25): consuming `b.left`
+/// and `b.right`, or `t.0` and `t.1`, touches disjoint sub-places, so the
+/// two consumes must not pair into a use-after-move — but `v[i]` and
+/// `v[j]` may alias at runtime, so index steps conservatively overlap.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlaceSeg {
+    /// `.field` — a named struct field. Two different field names are
+    /// statically disjoint.
+    Field(String),
+    /// `.0` / `.1` — a tuple position. Two different positions are
+    /// statically disjoint.
+    TupleIndex(usize),
+    /// `[..]` — an array/slice index or range. Indices are not statically
+    /// distinguished; any two `Index` steps conservatively overlap.
+    Index,
+}
+
+/// A place path relative to a root binding: the projection steps applied
+/// to reach the sub-place a use touches (empty = the whole binding).
+pub type PlacePath = Vec<PlaceSeg>;
+
+/// Whether two place paths under the SAME root are provably disjoint —
+/// i.e. neither is a prefix of the other and they diverge at a
+/// statically-distinguishing step (distinct field names or tuple
+/// positions). Any divergence involving an `Index` step is treated as a
+/// potential overlap (returns `false`), since indices are not statically
+/// resolved. Equal paths and prefix-related paths are NOT disjoint (the
+/// whole overlaps its parts, and a part overlaps itself). This mirrors the
+/// borrow checker's `places_overlap` place algebra, extended with tuple-
+/// position distinction (`Projection::Index` there conflates tuple and
+/// array indices; here `TupleIndex` is precise).
+pub fn place_paths_disjoint(a: &PlacePath, b: &PlacePath) -> bool {
+    for (sa, sb) in a.iter().zip(b.iter()) {
+        if sa == sb {
+            continue;
+        }
+        // First differing step. Disjoint only if BOTH are statically-
+        // distinguishing and differ; an `Index` on either side means we
+        // cannot prove disjointness.
+        return match (sa, sb) {
+            (PlaceSeg::Field(x), PlaceSeg::Field(y)) => x != y,
+            (PlaceSeg::TupleIndex(x), PlaceSeg::TupleIndex(y)) => x != y,
+            // Distinct kinds at the same depth (a field vs a tuple index)
+            // cannot arise for a well-typed place, but treat as disjoint
+            // rather than overlapping — they name different projections.
+            (PlaceSeg::Field(_), PlaceSeg::TupleIndex(_))
+            | (PlaceSeg::TupleIndex(_), PlaceSeg::Field(_)) => true,
+            // Any Index step: not statically resolvable → overlap.
+            _ => false,
+        };
+    }
+    // One path is a prefix of the other (or they are equal): they overlap.
+    false
+}
+
 /// A use-site of a binding within a basic block.
 #[derive(Debug, Clone)]
 pub struct UseSite {
@@ -39,6 +97,14 @@ pub struct UseSite {
     /// on `RcWitness` so the predicate-driven RC fallback path can
     /// emit `RcEntry` records with the correct `RcTrigger`.
     pub consume_origin: ConsumeOrigin,
+    /// The sub-place of `binding` this use touches, relative to the root
+    /// (empty = the whole binding). Populated for field-/tuple-path
+    /// consumes so the predicate can skip pairing two provably-disjoint
+    /// partial moves (`eval(b.left) + eval(b.right)`) — B-2026-07-02-25.
+    /// A read of the whole binding, or any use the classifier didn't tag
+    /// with a place, defaults to the empty path (overlaps everything), so
+    /// whole-root uses still conflict with a prior partial consume.
+    pub place: PlacePath,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,6 +184,15 @@ pub struct Classification {
     /// Includes consumes of inner-locals too — consumers filter against
     /// their `pre_live` set (only outer captures matter for mode).
     pub closure_capture_consumes: HashMap<SpanKey, HashMap<String, Span>>,
+    /// Per-use-leaf place path (B-2026-07-02-25). Keyed by the ROOT
+    /// identifier-leaf's `SpanKey`; value is the projection chain applied
+    /// to reach the sub-place the use touches (e.g. `b.left` records
+    /// `[Field("left")]` on `b`'s span, `t.0` records `[TupleIndex(0)]`
+    /// on `t`'s span). Sparse: spans absent from the map default to the
+    /// empty path (the whole binding). Threaded into `UseSite.place` by
+    /// the CFG builder so the predicate can skip pairing disjoint partial
+    /// moves of the same root.
+    pub consume_places: HashMap<SpanKey, PlacePath>,
 }
 
 /// A basic block in the CFG. Statements are not stored — only the use
@@ -438,6 +513,7 @@ impl<'a> CfgBuilder<'a> {
             kind,
             span,
             consume_origin,
+            place,
         } = use_site;
         // Inner-locals of an active cleanup-site lowering get mangled
         // here so the formal RC predicate doesn't pair their
@@ -449,7 +525,19 @@ impl<'a> CfgBuilder<'a> {
             kind,
             span,
             consume_origin,
+            place,
         });
+    }
+
+    /// The place path recorded by the classifier for the use-leaf at
+    /// `span` (empty = whole binding). Sparse: absent spans default to the
+    /// whole binding, so ordinary whole-value uses overlap everything.
+    fn place(&self, span: &Span) -> PlacePath {
+        self.classification
+            .consume_places
+            .get(&SpanKey::from_span(span))
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Walk a statement-block, returning the block id where execution
@@ -604,6 +692,7 @@ impl<'a> CfgBuilder<'a> {
                             kind: UseKind::Define,
                             span: pattern.span.clone(),
                             consume_origin: ConsumeOrigin::Direct,
+                            place: PlacePath::new(),
                         },
                     );
                 }
@@ -687,6 +776,7 @@ impl<'a> CfgBuilder<'a> {
             ExprKind::Identifier(name) => {
                 let kind = self.classify(&expr.span);
                 let consume_origin = self.consume_origin(&expr.span);
+                let place = self.place(&expr.span);
                 self.record_use(
                     cur,
                     UseSite {
@@ -694,6 +784,7 @@ impl<'a> CfgBuilder<'a> {
                         kind,
                         span: expr.span.clone(),
                         consume_origin,
+                        place,
                     },
                 );
                 cur
@@ -701,6 +792,7 @@ impl<'a> CfgBuilder<'a> {
             ExprKind::SelfValue => {
                 let kind = self.classify(&expr.span);
                 let consume_origin = self.consume_origin(&expr.span);
+                let place = self.place(&expr.span);
                 self.record_use(
                     cur,
                     UseSite {
@@ -708,6 +800,7 @@ impl<'a> CfgBuilder<'a> {
                         kind,
                         span: expr.span.clone(),
                         consume_origin,
+                        place,
                     },
                 );
                 cur
@@ -952,6 +1045,7 @@ impl<'a> CfgBuilder<'a> {
                             kind: UseKind::Define,
                             span: pattern.span.clone(),
                             consume_origin: ConsumeOrigin::Direct,
+                            place: PlacePath::new(),
                         },
                     );
                 }

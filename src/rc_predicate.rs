@@ -26,7 +26,10 @@
 //! `ownership.rs` continues to drive live RC fallback decisions.
 
 use crate::ast::{Function, ImplBlock, ImplItem, Item, Program};
-use crate::cfg::{build_cfg_with_classification, BlockId, Cfg, ConsumeOrigin, UseKind, UseSite};
+use crate::cfg::{
+    build_cfg_with_classification, place_paths_disjoint, BlockId, Cfg, ConsumeOrigin, UseKind,
+    UseSite,
+};
 use crate::dominator::{compute_dominators, DominatorTree};
 use crate::token::Span;
 use crate::typechecker::TypeCheckResult;
@@ -147,6 +150,13 @@ fn first_witness(
             // Reassign / Define markers are rebind signals — never the
             // U partner (a `let`/assign introduction is not a use).
             if matches!(u.kind, UseKind::Reassign | UseKind::Define) {
+                continue;
+            }
+            // B-2026-07-02-25: partial moves of provably-disjoint sub-
+            // places (`b.left` vs `b.right`, `t.0` vs `t.1`) don't touch
+            // each other, so they are not an RC pair. Whole-value uses
+            // carry the empty place, which overlaps everything.
+            if place_paths_disjoint(&c.place, &u.place) {
                 continue;
             }
             if dom.dominates(*cb, *ub) || dom.dominates(*ub, *cb) {
@@ -361,6 +371,13 @@ fn first_uam_witness(
             // partner (a `let`/assign introduction is not a use, so it
             // must not be reported as a "used again" UAM site).
             if matches!(u.kind, UseKind::Reassign | UseKind::Define) {
+                continue;
+            }
+            // B-2026-07-02-25: provably-disjoint sub-place partial moves
+            // (`b.left` then `b.right`) are not a use-after-move — they
+            // touch different sub-places. A whole-value use (empty place)
+            // after a partial move still pairs (empty overlaps everything).
+            if place_paths_disjoint(&c.place, &u.place) {
                 continue;
             }
             if !precedes(*cb, *ci, *ub, *ui, dom) {

@@ -37,11 +37,9 @@ impl<'a> super::OwnershipChecker<'a> {
     /// (function-typed values, complex expressions); those fall back to
     /// the prior conservative consume-everything behavior.
     pub(crate) fn callee_modes_for_call(&self, callee: &Expr) -> Option<&Vec<OwnershipMode>> {
-        let key = match &callee.kind {
-            ExprKind::Identifier(name) => name.clone(),
-            ExprKind::Path { segments, .. } => segments.join("."),
-            _ => return None,
-        };
+        // Includes the `with_provider[R]` generic special-form callee
+        // (B-2026-07-02-26) via `callee_param_modes_key`.
+        let key = super::callee_param_modes_key(callee)?;
         self.callee_param_modes.get(&key)
     }
 

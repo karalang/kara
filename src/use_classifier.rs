@@ -41,10 +41,10 @@ use crate::ast::{
     Block, Expr, ExprKind, Item, Pattern, PatternKind, Program, RestPattern, SelfParam, Stmt,
     StmtKind,
 };
-use crate::cfg::{Classification, ConsumeOrigin, UseKind};
+use crate::cfg::{Classification, ConsumeOrigin, PlacePath, PlaceSeg, UseKind};
 use crate::ownership::{
-    collect_callee_param_modes, collect_method_param_modes, collect_method_self_modes,
-    is_copy_type, OwnershipMode,
+    callee_param_modes_key, collect_callee_param_modes, collect_method_param_modes,
+    collect_method_self_modes, is_copy_type, OwnershipMode,
 };
 use crate::resolver::SpanKey;
 use crate::typechecker::{Type, TypeCheckResult};
@@ -510,11 +510,14 @@ impl<'a> UseClassifier<'a> {
             }
 
             // Field / tuple-index projection. In a consuming context on a
-            // non-Copy field, this is a partial move of the projection root.
+            // non-Copy field, this is a partial move of the projection root
+            // — record the projection place on the root identifier so the
+            // predicate can tell `b.left` from `b.right` and not pair two
+            // disjoint partial moves as a use-after-move (B-2026-07-02-25).
             // In a reading context, the root is just read.
             ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
                 if mode == Mode::Consuming && !self.expr_is_copy(expr) {
-                    self.walk_expr(object, Mode::Consuming);
+                    self.walk_place_consuming(expr, &mut PlacePath::new());
                 } else {
                     self.walk_expr(object, Mode::Reading);
                 }
@@ -731,18 +734,73 @@ impl<'a> UseClassifier<'a> {
     /// a Read. Non-projection receivers (calls, blocks, etc.) fall
     /// back to a Reading walk; there's no rooted binding to consume.
     fn walk_method_receiver_consuming(&mut self, recv: &Expr) {
-        match &recv.kind {
-            ExprKind::Identifier(_) | ExprKind::SelfValue => {
-                self.walk_expr(recv, Mode::Consuming);
+        self.walk_place_consuming(recv, &mut PlacePath::new());
+    }
+
+    /// Walk a place expression in consuming context, accumulating the
+    /// projection chain from the OUTER (widest) projection inward toward
+    /// the root binding, then record the full path against the root
+    /// identifier's span (B-2026-07-02-25). `path` is built root-first:
+    /// each recursion into `object` prepends nothing — the callers pass
+    /// the outermost projection first, so we push as we DESCEND and the
+    /// vector ends up ordered from the root outward, matching
+    /// `place_paths_disjoint`'s prefix semantics.
+    ///
+    /// Because a field access `b.left` nests as `FieldAccess { object: b,
+    /// field: "left" }`, the outermost node is the widest projection, and
+    /// the innermost is the root. We therefore collect on the way down and
+    /// reverse before recording so the path reads root→leaf (`[left]` for
+    /// `b.left`, `[a, b]` for `x.a.b`).
+    ///
+    /// Non-projection receivers (calls, blocks, etc.) fall back to a
+    /// Reading walk — there's no rooted binding to consume — and any
+    /// dynamic Index step makes the place non-disjointable, so we still
+    /// record the path (with `PlaceSeg::Index`) which conservatively
+    /// overlaps.
+    fn walk_place_consuming(&mut self, expr: &Expr, path: &mut PlacePath) {
+        match &expr.kind {
+            ExprKind::Identifier(name) => {
+                // Reached the root. Record the projection place (reversed
+                // to root→leaf order) against the root's span, then tag it
+                // Consume via the standard identifier classification so the
+                // Copy / unit-variant gates still apply.
+                if !path.is_empty() {
+                    let mut rooted = path.clone();
+                    rooted.reverse();
+                    self.classification
+                        .consume_places
+                        .insert(SpanKey::from_span(&expr.span), rooted);
+                }
+                let kind = self.classify_identifier(name, &expr.span, Mode::Consuming);
+                self.record(&expr.span, kind);
+                self.record_closure_capture_consume(name, kind, &expr.span);
             }
-            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
-                self.walk_method_receiver_consuming(object);
+            ExprKind::SelfValue => {
+                if !path.is_empty() {
+                    let mut rooted = path.clone();
+                    rooted.reverse();
+                    self.classification
+                        .consume_places
+                        .insert(SpanKey::from_span(&expr.span), rooted);
+                }
+                let kind = self.classify_identifier("self", &expr.span, Mode::Consuming);
+                self.record(&expr.span, kind);
+                self.record_closure_capture_consume("self", kind, &expr.span);
+            }
+            ExprKind::FieldAccess { object, field } => {
+                path.push(PlaceSeg::Field(field.clone()));
+                self.walk_place_consuming(object, path);
+            }
+            ExprKind::TupleIndex { object, index } => {
+                path.push(PlaceSeg::TupleIndex(*index as usize));
+                self.walk_place_consuming(object, path);
             }
             ExprKind::Index { object, index } => {
                 self.walk_expr(index, Mode::Reading);
-                self.walk_method_receiver_consuming(object);
+                path.push(PlaceSeg::Index);
+                self.walk_place_consuming(object, path);
             }
-            _ => self.walk_expr(recv, Mode::Reading),
+            _ => self.walk_expr(expr, Mode::Reading),
         }
     }
 
@@ -851,11 +909,9 @@ impl<'a> UseClassifier<'a> {
     }
 
     fn callee_modes_for_call(&self, callee: &Expr) -> Option<&Vec<OwnershipMode>> {
-        let key = match &callee.kind {
-            ExprKind::Identifier(name) => name.clone(),
-            ExprKind::Path { segments, .. } => segments.join("."),
-            _ => return None,
-        };
+        // Includes the `with_provider[R]` generic special-form callee
+        // (B-2026-07-02-26) via `callee_param_modes_key`.
+        let key = callee_param_modes_key(callee)?;
         self.callee_param_modes.get(&key)
     }
 
