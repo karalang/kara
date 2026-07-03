@@ -45,6 +45,7 @@ pub mod fork_threshold_queries;
 pub mod formatter;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod git_fetch;
+pub mod gpu_wgsl;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod install_spec;
 pub mod interpreter;
