@@ -1329,6 +1329,69 @@ impl<'a> super::TypeChecker<'a> {
         );
     }
 
+    /// Is `t` the abstract `Self` type, in either spelling it can take after
+    /// lowering — `TypeParam("Self")` (when "Self" is an in-scope generic
+    /// name) or the bare `Named { name: "Self", args: [] }` a `Self` type
+    /// annotation lowers to?
+    pub(super) fn is_self_type(t: &Type) -> bool {
+        matches!(t, Type::TypeParam(n) if n == "Self")
+            || matches!(t, Type::Named { name, args } if name == "Self" && args.is_empty())
+    }
+
+    /// Replace every `Self` leaf in `ty` with the concrete impl-target type
+    /// `concrete`, recursing through the compound-type forms that can appear
+    /// in a return position (`Option[Self]`, `Vec[Self]`, `(Self, Self)`,
+    /// `ref Self`, `fn() -> Self`, …). Used to resolve a method's `-> Self`
+    /// return type against the body's concrete tail expression. Exotic
+    /// nestings not enumerated here pass through unchanged — the transform
+    /// only ever *adds* resolution, so an unhandled shape degrades to the
+    /// prior "leave `Self` abstract" behavior rather than miscompiling.
+    pub(super) fn resolve_self_in_type(ty: Type, concrete: &Type) -> Type {
+        if Self::is_self_type(&ty) {
+            return concrete.clone();
+        }
+        let rec = |t: Type| Self::resolve_self_in_type(t, concrete);
+        match ty {
+            Type::Named { name, args } => Type::Named {
+                name,
+                args: args.into_iter().map(rec).collect(),
+            },
+            Type::Tuple(elems) => Type::Tuple(elems.into_iter().map(rec).collect()),
+            Type::Slice { element, mutable } => Type::Slice {
+                element: Box::new(rec(*element)),
+                mutable,
+            },
+            Type::Array { element, size } => Type::Array {
+                element: Box::new(rec(*element)),
+                size,
+            },
+            Type::Ref(inner) => Type::Ref(Box::new(rec(*inner))),
+            Type::MutRef(inner) => Type::MutRef(Box::new(rec(*inner))),
+            Type::Weak(inner) => Type::Weak(Box::new(rec(*inner))),
+            Type::Rc(inner) => Type::Rc(Box::new(rec(*inner))),
+            Type::Arc(inner) => Type::Arc(Box::new(rec(*inner))),
+            Type::Pointer { is_mut, inner } => Type::Pointer {
+                is_mut,
+                inner: Box::new(rec(*inner)),
+            },
+            Type::Function {
+                params,
+                return_type,
+            } => Type::Function {
+                params: params.into_iter().map(rec).collect(),
+                return_type: Box::new(rec(*return_type)),
+            },
+            Type::OnceFunction {
+                params,
+                return_type,
+            } => Type::OnceFunction {
+                params: params.into_iter().map(rec).collect(),
+                return_type: Box::new(rec(*return_type)),
+            },
+            other => other,
+        }
+    }
+
     fn check_function(
         &mut self,
         f: &Function,
@@ -1395,11 +1458,26 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
-        let return_type = f
+        let mut return_type = f
             .return_type
             .as_ref()
             .map(|t| self.lower_type_expr(t, &gp))
             .unwrap_or(Type::Unit);
+        // Resolve `Self` in the declared return type to the concrete impl
+        // target so the body's tail expression (which has the concrete type,
+        // e.g. `W` / `u8`) checks against `-> Self`. Inside a concrete `impl`,
+        // `Self` names the target type; `lower_type_expr` leaves the annotation
+        // as `Type::Named { name: "Self" }` (and, when "Self" is an in-scope
+        // generic name, `Type::TypeParam("Self")`), neither of which the body's
+        // concrete tail type is assignable to — so `fn m(self) -> Self { W { .. } }`
+        // otherwise fails with "expected 'Self', found 'W'". For a trait's
+        // *default* body the passed `self_type` is itself the abstract
+        // `TypeParam("Self")`, so we leave `Self` abstract there.
+        if let Some(st) = self_type {
+            if !Self::is_self_type(st) {
+                return_type = Self::resolve_self_in_type(return_type, st);
+            }
+        }
         self.current_return_type = Some(return_type.clone());
 
         // FE-2 — `GpuSafe` structural check. A `#[gpu]` function may use

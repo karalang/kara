@@ -3680,12 +3680,26 @@ impl<'a> super::TypeChecker<'a> {
                             .collect()
                     })
                     .unwrap_or_default();
+                // Resolve `Self` in the signature to the concrete receiver
+                // type. `recv_subs` only binds the impl's own generic params
+                // (e.g. `T`); a method declared `-> Self` (or taking
+                // `other: Self`) otherwise leaves `Self` unresolved at the call
+                // site, so `a.m()` would type as `Self` and downstream field
+                // access / codegen field-offset recovery fails (reads 0). In a
+                // concrete-receiver dispatch `Self` always names the receiver's
+                // type. (Self-receiver dispatch returned earlier at the
+                // `TypeParam("Self")` arm, so `receiver_for_lookup` is concrete
+                // here.)
                 let params: Vec<Type> = sig
                     .params
                     .iter()
                     .map(|p| substitute_type_params(p, &recv_subs))
+                    .map(|p| Self::resolve_self_in_type(p, &receiver_for_lookup))
                     .collect();
-                let return_type = substitute_type_params(&sig.return_type, &recv_subs);
+                let return_type = Self::resolve_self_in_type(
+                    substitute_type_params(&sig.return_type, &recv_subs),
+                    &receiver_for_lookup,
+                );
                 // Check argument count (excluding self)
                 if args.len() != params.len() {
                     self.type_error(

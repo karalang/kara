@@ -3348,6 +3348,43 @@ fn main() {
         }
     }
 
+    /// Regression (B-2026-07-03-2): a method declared `-> Self` returning a
+    /// struct must lower to a prototype whose LLVM return type matches the
+    /// concrete aggregate — the static-constructor, inherent-method, and
+    /// trait-impl forms all produce correct field values through `karac
+    /// build`. Before the fix `-> Self` hit the unknown-name `i64`
+    /// fall-through in `llvm_return_type` (module-verify failure), and once
+    /// past that the call-site result typed as the abstract `Self` so field
+    /// reads returned 0. Each result is bound to a local before the field
+    /// read (the chained `expr.method().field` aggregate form is a separate,
+    /// pre-existing codegen gap — B-2026-07-03-3). `twice` is called on a
+    /// literal-bound receiver, not on a static-`make()` result, to avoid the
+    /// distinct auto-par materialization gap B-2026-07-03-4.
+    #[test]
+    fn e2e_method_self_return_struct_lowers_and_reads_fields() {
+        if let Some(out) = run_program(
+            "struct W { v: i64 }\n\
+             trait Dbl { fn twice(self) -> Self; }\n\
+             impl W {\n\
+                 fn id(self) -> Self { self }\n\
+                 fn make() -> Self { W { v: 7 } }\n\
+             }\n\
+             impl Dbl for W { fn twice(self) -> Self { W { v: self.v + self.v } } }\n\
+             fn main() {\n\
+                 let a = W { v: 5 };\n\
+                 let b = a.id();\n\
+                 let c = W.make();\n\
+                 let e = W { v: 6 };\n\
+                 let d = e.twice();\n\
+                 println(f\"{b.v}\");\n\
+                 println(f\"{c.v}\");\n\
+                 println(f\"{d.v}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "5\n7\n12\n");
+        }
+    }
+
     /// Regression: `TaskHandle[T].join()` for a NON-scalar `T` (`Vec[i64]`)
     /// returns the spawned task's heap value intact. `recover_task_handle_
     /// join_return_ty` used to return `i64` unconditionally, so a `Vec`/

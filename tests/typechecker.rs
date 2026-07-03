@@ -17716,6 +17716,35 @@ fn typecheck_desugared_errors(source: &str) -> Vec<TypeError> {
 }
 
 #[test]
+fn method_self_return_type_resolves_to_impl_target() {
+    // A method declared `-> Self` returns a value of the concrete impl
+    // target (`W`), so the body's tail expression must check against the
+    // resolved target — not the abstract `Self`. Regression: `Self` in a
+    // return-type annotation lowers to `Type::Named { name: "Self" }`, which
+    // the body's concrete `W` is not assignable to, so every `-> Self`
+    // method (inherent, trait-impl, static constructor) was rejected with
+    // "expected 'Self', found 'W'". Only `karac run` (which executes past
+    // typecheck warnings) papered over it; `karac build` hard-failed. Covers
+    // the inherent method, the static constructor, and the trait-impl forms.
+    typecheck_desugared_ok(
+        "struct W { v: i64 }\n\
+         trait Dbl { fn twice(self) -> Self; }\n\
+         impl W {\n\
+             fn id(self) -> Self { self }\n\
+             fn make() -> Self { W { v: 0 } }\n\
+         }\n\
+         impl Dbl for W { fn twice(self) -> Self { W { v: self.v + self.v } } }\n\
+         fn main() {\n\
+             let a = W { v: 3 };\n\
+             let b = a.id();\n\
+             let c = W.make();\n\
+             let d = b.twice();\n\
+             let _ = c.v + d.v;\n\
+         }",
+    );
+}
+
+#[test]
 fn impl_trait_slice3_return_position_accepts_witness_implementing_trait() {
     // `fn make() -> impl Tagged` returns a `Beta` value; `Beta`
     // implements `Tagged`, so the body's tail-expr type satisfies

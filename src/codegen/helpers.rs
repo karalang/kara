@@ -302,9 +302,98 @@ pub(super) fn method_is_compiler_builtin(method: &Function) -> bool {
 /// (`ref_params`, `get_data_ptr`, `load_variable` deref) handles each
 /// case from there; ref-self mutations write back to the caller's
 /// storage via the pointer-typed self param.
+/// Rewrite every bare `Self` path in `te` to the concrete impl-target type
+/// `type_name`, recursing through the compound type forms. Applied to a
+/// synthesized impl-method's `-> Self` return type so its prototype's LLVM
+/// return type matches the concrete aggregate the body actually returns —
+/// otherwise `llvm_return_type` hits the unknown-name `i64` fall-through for
+/// `Self` and the module verifier rejects the mismatched `ret` (e.g.
+/// `ret { i64 } %field` against an `i64` fn type). Mirrors the typechecker's
+/// `resolve_self_in_type`.
+pub(super) fn rewrite_self_in_type_expr(te: &TypeExpr, type_name: &str) -> TypeExpr {
+    let kind = match &te.kind {
+        TypeKind::Path(p) => {
+            if p.segments.len() == 1 && p.segments[0] == "Self" && p.generic_args.is_none() {
+                TypeKind::Path(PathExpr {
+                    segments: vec![type_name.to_string()],
+                    generic_args: None,
+                    span: p.span.clone(),
+                })
+            } else {
+                TypeKind::Path(PathExpr {
+                    segments: p.segments.clone(),
+                    generic_args: p.generic_args.as_ref().map(|args| {
+                        args.iter()
+                            .map(|a| match a {
+                                GenericArg::Type(t) => {
+                                    GenericArg::Type(rewrite_self_in_type_expr(t, type_name))
+                                }
+                                other => other.clone(),
+                            })
+                            .collect()
+                    }),
+                    span: p.span.clone(),
+                })
+            }
+        }
+        TypeKind::Tuple(elems) => TypeKind::Tuple(
+            elems
+                .iter()
+                .map(|e| rewrite_self_in_type_expr(e, type_name))
+                .collect(),
+        ),
+        TypeKind::Array { element, size } => TypeKind::Array {
+            element: Box::new(rewrite_self_in_type_expr(element, type_name)),
+            size: size.clone(),
+        },
+        TypeKind::Pointer { is_mut, inner } => TypeKind::Pointer {
+            is_mut: *is_mut,
+            inner: Box::new(rewrite_self_in_type_expr(inner, type_name)),
+        },
+        TypeKind::Ref(inner) => {
+            TypeKind::Ref(Box::new(rewrite_self_in_type_expr(inner, type_name)))
+        }
+        TypeKind::MutRef(inner) => {
+            TypeKind::MutRef(Box::new(rewrite_self_in_type_expr(inner, type_name)))
+        }
+        TypeKind::MutSlice(inner) => {
+            TypeKind::MutSlice(Box::new(rewrite_self_in_type_expr(inner, type_name)))
+        }
+        TypeKind::Weak(inner) => {
+            TypeKind::Weak(Box::new(rewrite_self_in_type_expr(inner, type_name)))
+        }
+        TypeKind::FnType {
+            params,
+            return_type,
+            effect_spec,
+            is_once,
+        } => TypeKind::FnType {
+            params: params
+                .iter()
+                .map(|p| rewrite_self_in_type_expr(p, type_name))
+                .collect(),
+            return_type: return_type
+                .as_ref()
+                .map(|r| Box::new(rewrite_self_in_type_expr(r, type_name))),
+            effect_spec: effect_spec.clone(),
+            is_once: *is_once,
+        },
+        _ => te.kind.clone(),
+    };
+    TypeExpr {
+        kind,
+        span: te.span.clone(),
+    }
+}
+
 pub(super) fn make_impl_method_function(type_name: &str, method: &Function) -> Function {
     let mut f = method.clone();
     f.name = format!("{}.{}", type_name, method.name);
+    // Resolve `Self` in the return type to the concrete target so the
+    // prototype's LLVM return type matches the body's actual return value.
+    if let Some(rt) = f.return_type.as_ref() {
+        f.return_type = Some(rewrite_self_in_type_expr(rt, type_name));
+    }
     if let Some(self_kind) = method.self_param.as_ref() {
         let span = method.span.clone();
         let base = TypeExpr {
