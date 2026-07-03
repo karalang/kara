@@ -349,6 +349,15 @@ pub struct Manifest {
     /// `KARAC_REGISTRY_PROXY` env var (when non-empty) beats this, and this
     /// beats the built-in default. `None` when the key is absent.
     pub build_registry_proxy: Option<String>,
+    /// `[build].registry` — a per-project *direct* upstream registry URL,
+    /// the source a `--no-proxy` build fetches from directly (bypassing the
+    /// proxy; registry-proxy follow-ups (j)/(k), direct-from-source).
+    /// Validated at parse time to be a non-empty `http(s)://` string. It is
+    /// the lower tier of the direct-registry precedence chain resolved by
+    /// [`crate::registry_proxy::resolve_direct_registry_url`]: the
+    /// `KARAC_REGISTRY_URL` env var (when non-empty) beats this, and there is
+    /// no default (no live public upstream). `None` when the key is absent.
+    pub build_registry: Option<String>,
     /// `[lints]` table — project-wide lint posture, the global mirror of
     /// source-level `#[allow(...)]` / `#[deny(...)]`. Empty struct when
     /// the table is absent. The CLI lifts this into the typechecker's
@@ -880,6 +889,7 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
     let build_default_target = parse_build_default_target(path, &table)?;
     let build_targets = parse_build_targets(path, &table)?;
     let build_registry_proxy = parse_build_registry_proxy(path, &table)?;
+    let build_registry = parse_build_registry(path, &table)?;
     let lints = parse_lints_table(path, &table, &mut warnings)?;
     let (release_target_cpu, release_target_features) =
         parse_release_table(path, &table, &mut warnings)?;
@@ -911,6 +921,7 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
         build_default_target,
         build_targets,
         build_registry_proxy,
+        build_registry,
         lints,
         release_target_cpu,
         release_target_features,
@@ -1621,6 +1632,45 @@ fn parse_build_registry_proxy(
     path: &Path,
     table: &toml::Table,
 ) -> Result<Option<String>, ManifestError> {
+    parse_build_http_url_key(
+        path,
+        table,
+        "registry-proxy",
+        "a proxy URL string (e.g. \"https://proxy.example/\")",
+        "a non-empty proxy URL string",
+    )
+}
+
+/// Parse `[build].registry` — a per-project *direct* upstream registry URL
+/// (registry-proxy follow-ups (j)/(k), direct-from-source). Lets a package
+/// pin the registry it fetches from under `--no-proxy` in the manifest
+/// instead of relying on a per-shell `KARAC_REGISTRY_URL` export. Same
+/// validation shape as `[build].registry-proxy`: a non-empty `http(s)://`
+/// string, else a hard error so a typo surfaces. Absent is the common case.
+/// Resolution precedence against the env var lives in
+/// [`crate::registry_proxy::resolve_direct_registry_url`].
+fn parse_build_registry(path: &Path, table: &toml::Table) -> Result<Option<String>, ManifestError> {
+    parse_build_http_url_key(
+        path,
+        table,
+        "registry",
+        "a registry URL string (e.g. \"https://registry.example/\")",
+        "a non-empty registry URL string",
+    )
+}
+
+/// Shared parser for a `[build].<key>` value that must be a non-empty
+/// `http://` / `https://` string — the common shape of `registry-proxy` and
+/// `registry`. A wrong type, an empty value, or a non-HTTP scheme is a hard
+/// error (keyed `build.<key>`) rather than a silent drop, so a typo surfaces
+/// instead of quietly falling back to the default / to warn-and-continue.
+fn parse_build_http_url_key(
+    path: &Path,
+    table: &toml::Table,
+    key: &str,
+    wrong_type_expected: &'static str,
+    empty_expected: &'static str,
+) -> Result<Option<String>, ManifestError> {
     let Some(build_value) = table.get("build") else {
         return Ok(None);
     };
@@ -1629,28 +1679,29 @@ fn parse_build_registry_proxy(
     let Some(build_table) = build_value.as_table() else {
         return Ok(None);
     };
-    let Some(value) = build_table.get("registry-proxy") else {
+    let Some(value) = build_table.get(key) else {
         return Ok(None);
     };
+    let full_key = format!("build.{key}");
     let toml::Value::String(s) = value else {
         return Err(ManifestError::InvalidFieldType {
             path: path.to_path_buf(),
-            key: "build.registry-proxy".to_string(),
-            expected: "a proxy URL string (e.g. \"https://proxy.example/\")",
+            key: full_key,
+            expected: wrong_type_expected,
         });
     };
     let trimmed = s.trim();
     if trimmed.is_empty() {
         return Err(ManifestError::InvalidFieldType {
             path: path.to_path_buf(),
-            key: "build.registry-proxy".to_string(),
-            expected: "a non-empty proxy URL string",
+            key: full_key,
+            expected: empty_expected,
         });
     }
     if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
         return Err(ManifestError::InvalidFieldType {
             path: path.to_path_buf(),
-            key: "build.registry-proxy".to_string(),
+            key: full_key,
             expected: "a URL starting with http:// or https://",
         });
     }
@@ -3276,6 +3327,102 @@ registry-proxy = "ftp://proxy.example/"
         let err = parse_manifest(&p(), src).unwrap_err();
         assert!(
             matches!(err, ManifestError::InvalidFieldType { key, .. } if key == "build.registry-proxy")
+        );
+    }
+
+    // --- [build].registry (direct-from-source, follow-ups (j)/(k)) --------
+
+    #[test]
+    fn build_registry_captured_and_trimmed() {
+        let src = r#"[package]
+name = "hello"
+
+[build]
+registry = "  https://registry.example/  "
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(
+            m.build_registry.as_deref(),
+            Some("https://registry.example/")
+        );
+    }
+
+    #[test]
+    fn build_registry_absent_is_none() {
+        let src = r#"[package]
+name = "hello"
+
+[build]
+target = "native"
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.build_registry, None);
+    }
+
+    #[test]
+    fn build_registry_wrong_type_is_hard_error() {
+        let src = r#"[package]
+name = "hello"
+
+[build]
+registry = 42
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidFieldType { key, .. } => {
+                assert_eq!(key, "build.registry")
+            }
+            other => panic!("expected InvalidFieldType on `build.registry`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_registry_empty_is_hard_error() {
+        let src = r#"[package]
+name = "hello"
+
+[build]
+registry = "   "
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        assert!(
+            matches!(err, ManifestError::InvalidFieldType { key, .. } if key == "build.registry")
+        );
+    }
+
+    #[test]
+    fn build_registry_non_http_scheme_is_hard_error() {
+        let src = r#"[package]
+name = "hello"
+
+[build]
+registry = "ftp://registry.example/"
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        assert!(
+            matches!(err, ManifestError::InvalidFieldType { key, .. } if key == "build.registry")
+        );
+    }
+
+    #[test]
+    fn build_registry_and_proxy_coexist() {
+        // A project can pin both: the proxy for normal builds and the direct
+        // registry for `--no-proxy` builds. They are independent keys.
+        let src = r#"[package]
+name = "hello"
+
+[build]
+registry-proxy = "https://proxy.example/"
+registry = "https://registry.example/"
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(
+            m.build_registry_proxy.as_deref(),
+            Some("https://proxy.example/")
+        );
+        assert_eq!(
+            m.build_registry.as_deref(),
+            Some("https://registry.example/")
         );
     }
 

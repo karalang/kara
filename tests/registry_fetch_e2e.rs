@@ -220,6 +220,117 @@ fn build_without_configured_proxy_keeps_unsupported_warning() {
     );
 }
 
+/// Direct-from-source registry fetch under `--no-proxy` (registry-proxy
+/// follow-ups (j)/(k)). With the proxy bypassed, `karac build` fetches the
+/// registry dep *directly* from the configured upstream registry
+/// (`KARAC_REGISTRY_URL`), which serves the same catalog / pkg protocol. The
+/// reference server stands in for that upstream — identical wire protocol,
+/// different base URL. Proves the full fetch → extract → resolve → lock →
+/// import path runs with no proxy in the loop.
+#[test]
+fn build_no_proxy_fetches_direct_from_registry() {
+    let store = build_store("direct_dep", "1.0.0");
+    let base = start_server(store);
+    let cache = unique("cache-direct");
+
+    let proj = unique("proj-direct");
+    write(
+        &proj.join("kara.toml"),
+        b"[package]\nname = \"app\"\n\n[dependencies]\ndirect_dep = \"1.0\"\n",
+    );
+    write(
+        &proj.join("src/main.kara"),
+        b"import direct_dep.answer;\n\nfn main() {\n    let _ = answer();\n}\n",
+    );
+
+    let out = karac()
+        .arg("build")
+        .arg("--no-proxy")
+        // No KARAC_REGISTRY_PROXY — direct-from-source uses the upstream URL.
+        .env_remove("KARAC_REGISTRY_PROXY")
+        .env("KARAC_REGISTRY_URL", &base)
+        .env("KARAC_REGISTRY_CACHE_ROOT", &cache)
+        .current_dir(&proj)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    // The `--no-proxy` note reports direct-from-source, not warn-and-continue.
+    assert!(
+        stderr.contains("direct-from-source"),
+        "the --no-proxy note should report direct-from-source fetch;\nstderr={stderr}",
+    );
+    // The dep went down the fetch path, not the unsupported-warning path.
+    assert!(
+        !stderr.contains("E_REGISTRY_DEP_UNSUPPORTED"),
+        "registry dep should have been fetched direct-from-source, not reported unsupported;\nstderr={stderr}\nstdout={stdout}",
+    );
+    assert!(
+        !stderr.contains("E_REGISTRY_FETCH_FAILED"),
+        "direct fetch should have succeeded against the live upstream;\nstderr={stderr}",
+    );
+    assert!(
+        !stderr.contains("error["),
+        "expected a clean build past resolution;\nstderr={stderr}",
+    );
+
+    // Filesystem proof: the tarball was extracted into the cache root, exactly
+    // as the proxy path does — the provider stack is shared.
+    let extracted = cache.join("direct_dep").join("1.0.0").join("src");
+    assert!(
+        extracted.join("kara.toml").is_file() && extracted.join("src/lib.kara").is_file(),
+        "expected the direct-fetched package to be extracted under {}; entries missing",
+        extracted.display(),
+    );
+
+    // The lockfile records the dep against a registry source.
+    let lock = std::fs::read_to_string(proj.join("kara.lock")).unwrap_or_default();
+    assert!(
+        lock.contains("direct_dep") && lock.contains("registry"),
+        "kara.lock should pin the direct-fetched registry dep;\nlock={lock}",
+    );
+
+    let _ = std::fs::remove_dir_all(&proj);
+    let _ = std::fs::remove_dir_all(&cache);
+}
+
+/// The contract complement for `--no-proxy`: with no upstream registry
+/// configured (`KARAC_REGISTRY_URL` unset, no `[build].registry` pin), a
+/// registry dep must keep the warn-and-continue contract rather than attempt
+/// a direct fetch against nothing. Proves the direct-from-source path is gated
+/// on an explicit upstream, symmetric to the proxy path's
+/// `explicit_proxy_configured` gate.
+#[test]
+fn build_no_proxy_without_direct_registry_keeps_unsupported_warning() {
+    let proj = unique("proj-direct-unconfigured");
+    write(
+        &proj.join("kara.toml"),
+        b"[package]\nname = \"app\"\n\n[dependencies]\ndirect_dep = \"1.0\"\n",
+    );
+    write(&proj.join("src/main.kara"), b"fn main() {}\n");
+
+    let out = karac()
+        .arg("build")
+        .arg("--no-proxy")
+        .env_remove("KARAC_REGISTRY_PROXY")
+        .env_remove("KARAC_REGISTRY_URL")
+        .current_dir(&proj)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&proj);
+
+    assert!(
+        stderr.contains("warning[E_REGISTRY_DEP_UNSUPPORTED]"),
+        "an unconfigured direct registry must keep the warn-and-continue contract;\nstderr={stderr}",
+    );
+    assert!(
+        !stderr.contains("error[E_REGISTRY"),
+        "no registry error should surface without a configured upstream;\nstderr={stderr}",
+    );
+}
+
 /// `--output=json` must emit a machine-readable error envelope when a registry
 /// dependency fails to fetch against a configured proxy. Pins the shape
 /// registry-proxy carve-out (m) promised (`docs/implementation_checklist/

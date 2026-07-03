@@ -144,6 +144,31 @@ registry-proxy = "https://mirror.internal.example/kara"
 The manifest value must be a non-empty `http://` / `https://` URL; a malformed
 value is a parse error rather than a silent fallback to the default.
 
+## Direct-from-source (`--no-proxy`)
+
+A `--no-proxy` build bypasses the proxy and fetches each registry dependency
+**directly from the upstream registry**, which serves the *same* catalog / pkg
+endpoints documented above — only the base URL differs. The direct upstream URL
+is resolved by `registry_proxy::resolve_direct_registry_url`, highest precedence
+first:
+
+1. the `KARAC_REGISTRY_URL` environment variable (when non-empty);
+2. the project's `[build].registry` pin in `kara.toml`.
+
+```toml
+# kara.toml — the upstream registry a --no-proxy build fetches from directly
+[build]
+registry = "https://registry.internal.example/kara"
+```
+
+Unlike the proxy URL there is **no built-in default** — there is no live public
+upstream to fall back to — so a `--no-proxy` build with neither the env var nor
+the manifest pin set keeps the pre-fetch warn-and-continue contract
+(`E_REGISTRY_DEP_UNSUPPORTED`) instead of fetching against a non-existent
+address. The same `KARAC_REGISTRY_TOKEN` bearer credential authenticates a
+private direct registry (see **Authentication**). The manifest value has the
+same non-empty-`http(s)://`-or-parse-error validation as `[build].registry-proxy`.
+
 ## Not covered by v1
 
 These are tracked as registry-proxy follow-ups in the phase-5 checklist and do
@@ -153,7 +178,8 @@ not change the contract above when they land:
 - Multi-mirror / high-availability (d) and signature verification (f) — a
   signature would be a sibling field to `content_hash`. (Authentication (e) is
   now specified above under **Authentication**.)
-- Per-package proxy override (i) and `--no-proxy` direct-from-source fetch (j/k).
+- Per-package proxy override (i). (`--no-proxy` direct-from-source fetch (j/k)
+  landed 2026-07-03 — see **Direct-from-source (`--no-proxy`)** above.)
 - Publisher-side yanking — the `karac yank` *command* that marks a version
   withdrawn (l). The catalog's `yanked` array and the client's honoring of it
   are specified above under **Endpoint: catalog**; what remains deferred is the

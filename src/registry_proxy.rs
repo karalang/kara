@@ -38,6 +38,17 @@ pub const REGISTRY_TOKEN_ENV_VAR: &str = "KARAC_REGISTRY_TOKEN";
 /// otherwise the cache lives under `~/.kara/cache/registry/`.
 pub const REGISTRY_CACHE_ROOT_ENV_VAR: &str = "KARAC_REGISTRY_CACHE_ROOT";
 
+/// Environment variable carrying the *direct* upstream registry base URL —
+/// the source a `--no-proxy` build fetches from, bypassing the proxy
+/// (registry-proxy follow-ups (j)/(k), direct-from-source). A non-empty
+/// value names the upstream registry, which serves the same catalog / pkg
+/// protocol as the proxy (see `docs/registry-proxy-protocol.md`); an empty
+/// / whitespace value is ignored. Unlike the proxy there is *no* built-in
+/// default — there is no live public upstream to fall back to — so an
+/// unconfigured `--no-proxy` build keeps the pre-fetch warn-and-continue
+/// contract. Mirrors [`PROXY_URL_ENV_VAR`] on the direct-fetch side.
+pub const REGISTRY_URL_ENV_VAR: &str = "KARAC_REGISTRY_URL";
+
 /// Whether the user has opted out of the proxy. `--no-proxy` flips
 /// this to `Disabled`; the default setting is `Default`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,6 +168,45 @@ pub fn explicit_proxy_configured(manifest_pin: Option<&str>) -> bool {
         .unwrap_or(false);
     let pin_set = manifest_pin.map(|s| !s.trim().is_empty()).unwrap_or(false);
     env_set || pin_set
+}
+
+/// Resolve the effective *direct* upstream registry URL for a
+/// `--no-proxy` build (registry-proxy follow-ups (j)/(k)), highest
+/// precedence first:
+///
+/// 1. the [`REGISTRY_URL_ENV_VAR`] (`KARAC_REGISTRY_URL`) env var, when set
+///    non-empty (a per-shell override);
+/// 2. `manifest_pin` — the project's `[build].registry` pin, when present
+///    and non-empty.
+///
+/// Returns `None` when neither is set — there is deliberately *no* built-in
+/// default (unlike the proxy's [`DEFAULT_PROXY_URL`] placeholder), because
+/// there is no live public upstream registry to fetch from. An unconfigured
+/// `--no-proxy` build therefore keeps the pre-fetch warn-and-continue
+/// contract rather than fetching against a non-existent address. Mirrors the
+/// URL-derivation half of [`ProxyConfig::resolve`], minus the default tier.
+pub fn resolve_direct_registry_url(manifest_pin: Option<&str>) -> Option<String> {
+    std::env::var(REGISTRY_URL_ENV_VAR)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            manifest_pin
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        })
+}
+
+/// Whether a *direct* upstream registry is configured — the
+/// [`REGISTRY_URL_ENV_VAR`] env override or a project's `[build].registry`
+/// pin. The CLI activates direct-from-source registry fetch (under
+/// `--no-proxy`) only when this is `true`; otherwise a registry dep keeps
+/// the warn-and-continue contract. Convenience wrapper over
+/// [`resolve_direct_registry_url`]. Mirrors [`explicit_proxy_configured`] on
+/// the direct-fetch side.
+pub fn direct_registry_configured(manifest_pin: Option<&str>) -> bool {
+    resolve_direct_registry_url(manifest_pin).is_some()
 }
 
 /// Catalog metadata for a package: every published version (ascending
@@ -1178,6 +1228,55 @@ mod tests {
         let c = ProxyConfig::resolve(ProxyMode::Disabled, Some("https://manifest.example"));
         assert_eq!(c.mode, ProxyMode::Disabled);
         assert_eq!(c.url, "https://manifest.example");
+    }
+
+    // --- direct-from-source registry URL (follow-ups (j)/(k)) --------------
+
+    #[test]
+    fn direct_registry_env_beats_manifest() {
+        let _g = PROXY_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var(REGISTRY_URL_ENV_VAR, "https://env.registry");
+        let url = resolve_direct_registry_url(Some("https://manifest.registry"));
+        assert_eq!(url.as_deref(), Some("https://env.registry"));
+        std::env::remove_var(REGISTRY_URL_ENV_VAR);
+    }
+
+    #[test]
+    fn direct_registry_manifest_used_when_env_unset() {
+        let _g = PROXY_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var(REGISTRY_URL_ENV_VAR);
+        let url = resolve_direct_registry_url(Some("  https://manifest.registry  "));
+        // Trimmed, non-empty → carried.
+        assert_eq!(url.as_deref(), Some("https://manifest.registry"));
+    }
+
+    #[test]
+    fn direct_registry_none_when_env_and_manifest_absent() {
+        let _g = PROXY_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var(REGISTRY_URL_ENV_VAR);
+        // No built-in default (unlike the proxy) → None keeps warn-and-continue.
+        assert_eq!(resolve_direct_registry_url(None), None);
+    }
+
+    #[test]
+    fn direct_registry_ignores_whitespace_only_env_and_manifest() {
+        let _g = PROXY_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var(REGISTRY_URL_ENV_VAR, "   ");
+        assert_eq!(resolve_direct_registry_url(Some("   ")), None);
+        std::env::remove_var(REGISTRY_URL_ENV_VAR);
+    }
+
+    #[test]
+    fn direct_registry_configured_tracks_resolution() {
+        let _g = PROXY_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var(REGISTRY_URL_ENV_VAR);
+        assert!(!direct_registry_configured(None));
+        assert!(direct_registry_configured(Some(
+            "https://manifest.registry"
+        )));
+        std::env::set_var(REGISTRY_URL_ENV_VAR, "https://env.registry");
+        assert!(direct_registry_configured(None));
+        std::env::remove_var(REGISTRY_URL_ENV_VAR);
     }
 
     #[test]

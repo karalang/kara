@@ -8135,48 +8135,65 @@ fn run_dep_resolution(
 ) -> Result<Option<crate::dep_resolver::Resolution>, ()> {
     let loader = crate::dep_graph::FsLoader;
 
-    // Slice 4: activate the registry-proxy fetch path. A `ProxyRegistryProvider`
-    // — the cache → retry → live-HTTP decorator stack — is threaded into the
-    // graph walk so a `[dependencies]` registry entry is fetched, extracted,
-    // and recursed into exactly like a path-dep. Fetch is deliberately gated:
-    //   * `--offline`: never touch the network — the `vendor/` walk owns
-    //     resolution, so leave the provider off.
-    //   * `--no-proxy`: the operator opted out; keep the pre-fetch
-    //     warn-and-continue contract (`E_REGISTRY_DEP_UNSUPPORTED` warning).
-    //   * no explicit proxy configured: the built-in `DEFAULT_PROXY_URL` is a
-    //     not-yet-live placeholder, so fetching against it would only ever
-    //     fail — stay on the warn-and-continue path until an operator points
-    //     `KARAC_REGISTRY_PROXY` (or `[build].registry-proxy`) at a real
-    //     proxy (`explicit_proxy_configured`).
+    // Activate the registry fetch path. A `ProxyRegistryProvider` — the
+    // cache → retry → live-HTTP decorator stack — is threaded into the graph
+    // walk so a `[dependencies]` registry entry is fetched, extracted, and
+    // recursed into exactly like a path-dep. The *only* difference between
+    // the proxy path (slice 4) and the direct-from-source path (follow-ups
+    // (j)/(k)) is which base URL the HTTP client points at; the whole stack
+    // below (retry + tarball cache + extraction) is base-URL-agnostic.
+    //
+    // Decide the effective registry base URL, if any:
+    //   * `--offline` / no usable cache root: never touch the network — the
+    //     `vendor/` walk owns resolution — so no base URL, provider stays off.
+    //   * `--no-proxy` (direct-from-source, follow-ups (j)/(k)): fetch straight
+    //     from the configured upstream registry (`KARAC_REGISTRY_URL` /
+    //     `[build].registry`), bypassing the proxy. Unconfigured → `None`, so a
+    //     registry dep keeps the warn-and-continue contract
+    //     (`E_REGISTRY_DEP_UNSUPPORTED`) rather than fetching against nothing.
+    //   * otherwise (proxy path): fetch through the configured proxy. The
+    //     built-in `DEFAULT_PROXY_URL` is a not-yet-live placeholder, so this
+    //     only activates once an operator points `KARAC_REGISTRY_PROXY` (or
+    //     `[build].registry-proxy`) at a real proxy (`explicit_proxy_configured`).
+    //
     // The client stack and provider live in locals whose borrows outlive the
     // `build_dep_graph_with_options` call below (it returns an owned graph
     // with every registry resolution already materialized to disk).
     let cache_root = crate::registry_proxy::default_registry_cache_root();
-    let activate_fetch = !no_proxy
-        && offline_root.is_none()
-        && cache_root.is_some()
-        && crate::registry_proxy::explicit_proxy_configured(mf.build_registry_proxy.as_deref());
-    let client_stack: Option<Box<dyn crate::registry_proxy::ProxyClient>> = if activate_fetch {
-        let config = crate::registry_proxy::ProxyConfig::resolve(
-            crate::registry_proxy::ProxyMode::Default,
-            mf.build_registry_proxy.as_deref(),
-        );
-        let http = crate::registry_proxy::make_client(&config);
-        let retrying = crate::registry_proxy::RetryingProxyClient::new(
-            http,
-            crate::registry_proxy::RetryPolicy::default(),
-        );
-        // Tarball cache under <root>/<name>/<version>/package.tar.gz; the
-        // provider extracts to the sibling <root>/<name>/<version>/src, so the
-        // two share one root without colliding.
-        let caching = crate::registry_proxy::CachingProxyClient::new(
-            Box::new(retrying),
-            cache_root.clone().unwrap_or_default(),
-        );
-        Some(Box::new(caching))
+    let registry_base: Option<String> = if offline_root.is_some() || cache_root.is_none() {
+        None
+    } else if no_proxy {
+        crate::registry_proxy::resolve_direct_registry_url(mf.build_registry.as_deref())
+    } else if crate::registry_proxy::explicit_proxy_configured(mf.build_registry_proxy.as_deref()) {
+        Some(
+            crate::registry_proxy::ProxyConfig::resolve(
+                crate::registry_proxy::ProxyMode::Default,
+                mf.build_registry_proxy.as_deref(),
+            )
+            .url,
+        )
     } else {
         None
     };
+    let client_stack: Option<Box<dyn crate::registry_proxy::ProxyClient>> =
+        registry_base.map(|url| {
+            // A per-user `KARAC_REGISTRY_TOKEN` authenticates a private proxy
+            // or private direct registry alike.
+            let token = crate::registry_proxy::registry_token_from_env();
+            let http = crate::registry_proxy::HttpProxyClient::with_token(url, token);
+            let retrying = crate::registry_proxy::RetryingProxyClient::new(
+                Box::new(http),
+                crate::registry_proxy::RetryPolicy::default(),
+            );
+            // Tarball cache under <root>/<name>/<version>/package.tar.gz; the
+            // provider extracts to the sibling <root>/<name>/<version>/src, so
+            // the two share one root without colliding.
+            let caching = crate::registry_proxy::CachingProxyClient::new(
+                Box::new(retrying),
+                cache_root.clone().unwrap_or_default(),
+            );
+            Box::new(caching) as Box<dyn crate::registry_proxy::ProxyClient>
+        });
     let provider = client_stack.as_ref().map(|c| {
         crate::registry_extract::ProxyRegistryProvider::new(
             c.as_ref(),
@@ -8613,21 +8630,35 @@ fn emit_no_proxy_note(no_proxy: bool) {
     if !no_proxy {
         return;
     }
-    // Best-effort: if we're in a project, honor its `[build].registry-proxy`
-    // pin so the reported URL matches what a fetch would consult. Outside a
-    // project (or on a malformed manifest) fall through to env/default.
-    let manifest_proxy = std::env::current_dir()
+    // Best-effort: if we're in a project, honor its `[build]` pins so the
+    // reported URLs match what a fetch would consult. Outside a project (or on
+    // a malformed manifest) fall through to env/default.
+    let manifest = std::env::current_dir()
         .ok()
         .and_then(|cwd| manifest::load_from_cwd(&cwd).ok())
-        .and_then(|(_, mf)| mf.build_registry_proxy);
+        .map(|(_, mf)| mf);
+    let manifest_proxy = manifest
+        .as_ref()
+        .and_then(|mf| mf.build_registry_proxy.clone());
+    let manifest_registry = manifest.as_ref().and_then(|mf| mf.build_registry.clone());
     let config = crate::registry_proxy::ProxyConfig::resolve(
         crate::registry_proxy::ProxyMode::Disabled,
         manifest_proxy.as_deref(),
     );
-    eprintln!(
-        "note: --no-proxy active; registry deps will not consult the proxy at {} (registry-proxy fetch ships in v1.1.x)",
-        config.url
-    );
+    // When a direct upstream registry is configured (env or `[build].registry`),
+    // `--no-proxy` fetches direct-from-source (follow-ups (j)/(k)) rather than
+    // warn-and-continue; name the registry so the operator sees where deps come
+    // from. Otherwise keep the pre-fetch note.
+    match crate::registry_proxy::resolve_direct_registry_url(manifest_registry.as_deref()) {
+        Some(registry_url) => eprintln!(
+            "note: --no-proxy active; registry deps fetch direct-from-source at {registry_url} (proxy at {} bypassed)",
+            config.url
+        ),
+        None => eprintln!(
+            "note: --no-proxy active; registry deps will not consult the proxy at {} (set KARAC_REGISTRY_URL or [build].registry to fetch direct-from-source)",
+            config.url
+        ),
+    }
 }
 
 fn emit_walker_error(e: &walker::WalkerError, output: OutputMode) {

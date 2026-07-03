@@ -798,6 +798,7 @@ mod tests {
             build_default_target: None,
             build_targets: Vec::new(),
             build_registry_proxy: None,
+            build_registry: None,
             lints: manifest::ManifestLints::default(),
             release_target_cpu: None,
             release_target_features: None,
