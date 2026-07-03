@@ -88,6 +88,17 @@ fn build_fetches_and_resolves_a_git_dependency() {
     let upstream = make_upstream("git_dep");
     let cache = unique("cache");
 
+    // The commit the default branch resolves to — the lockfile must pin it.
+    let head_sha = {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&upstream)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+
     // A consumer project depending on the git package, importing its `answer`
     // fn so the cloned module is actually compiled.
     let proj = unique("proj");
@@ -146,11 +157,16 @@ fn build_fetches_and_resolves_a_git_dependency() {
         cache.display(),
     );
 
-    // 5. The lockfile records the dep against a git source.
+    // 5. The lockfile records the dep against a git source, pinned to the
+    //    resolved commit SHA (the `#<sha>` fragment — slice 3).
     let lock = std::fs::read_to_string(proj.join("kara.lock")).unwrap_or_default();
     assert!(
-        lock.contains("git_dep") && lock.contains("git"),
+        lock.contains("git_dep") && lock.contains("git+"),
         "kara.lock should pin the fetched git dep;\nlock={lock}",
+    );
+    assert!(
+        lock.contains(&format!("#{head_sha}")),
+        "kara.lock should pin the resolved commit `{head_sha}` as a #<sha> fragment;\nlock={lock}",
     );
 
     let _ = std::fs::remove_dir_all(&proj);

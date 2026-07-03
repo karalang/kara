@@ -32,7 +32,10 @@
 //! - `"root"` — the entry-point package
 //! - `"path+<path>"` — local path-dep; `<path>` is relative to the project root
 //! - `"registry+<url>"` — forward-compat placeholder for the registry-proxy fetch
-//! - `"git+<url>"` / `"git+<url>?branch=…"` / `…?tag=…` / `…?rev=…` — forward-compat placeholder
+//! - `"git+<url>"` / `"git+<url>?branch=…"` / `…?tag=…` / `…?rev=…`, each
+//!   optionally suffixed with a resolved-commit fragment `…#<sha>` (the
+//!   `?<ref>` query records the *requested* ref, the `#<sha>` fragment the
+//!   commit it resolved to — git-fetch slice 3)
 //!
 //! Optional fields on `[[package]]` tables:
 //! - `mirror = "<proxy-mirror-url>"` — only valid on `registry+` / `git+`
@@ -116,6 +119,13 @@ pub enum LockSource {
     Git {
         url: String,
         reference: Option<GitRef>,
+        /// The resolved commit SHA (git-fetch slice 3). Serialized as a
+        /// `#<sha>` fragment on the `git+…` source string, mirroring Cargo's
+        /// `git+<url>?<ref>#<sha>` form — the requested ref (query) records
+        /// *what was asked for*, the fragment records *what it resolved to*.
+        /// `None` for a lockfile written before a real clone (forward-compat
+        /// placeholder) or a hand-authored entry without a pin.
+        resolved_rev: Option<String>,
         /// Proxy mirror reference — see `Registry::mirror` above. Both
         /// halves are recorded into `kara.lock` per the tracker entry's
         /// "original git URL (for human readability) + proxy mirror
@@ -487,10 +497,16 @@ fn convert_source(src: &ResolvedSource, root_dir: &Path) -> LockSource {
             mirror: None,
         },
         // `dir` is machine-local (the checkout path) and intentionally not
-        // persisted — the lock keys reproducibility on url + ref.
-        ResolvedSource::Git { url, reference, .. } => LockSource::Git {
+        // persisted; `resolved_rev` IS — it's the reproducibility pin.
+        ResolvedSource::Git {
+            url,
+            reference,
+            resolved_rev,
+            ..
+        } => LockSource::Git {
             url: url.clone(),
             reference: reference.clone(),
+            resolved_rev: (!resolved_rev.is_empty()).then(|| resolved_rev.clone()),
             mirror: None,
         },
     }
@@ -501,12 +517,24 @@ fn encode_source(source: &LockSource) -> String {
         LockSource::Root => "root".to_string(),
         LockSource::Path(p) => format!("path+{}", p.display()),
         LockSource::Registry { url, .. } => format!("registry+{url}"),
-        LockSource::Git { url, reference, .. } => match reference {
-            None => format!("git+{url}"),
-            Some(GitRef::Branch(b)) => format!("git+{url}?branch={b}"),
-            Some(GitRef::Tag(t)) => format!("git+{url}?tag={t}"),
-            Some(GitRef::Rev(r)) => format!("git+{url}?rev={r}"),
-        },
+        LockSource::Git {
+            url,
+            reference,
+            resolved_rev,
+            ..
+        } => {
+            let base = match reference {
+                None => format!("git+{url}"),
+                Some(GitRef::Branch(b)) => format!("git+{url}?branch={b}"),
+                Some(GitRef::Tag(t)) => format!("git+{url}?tag={t}"),
+                Some(GitRef::Rev(r)) => format!("git+{url}?rev={r}"),
+            };
+            // Append the resolved commit as a `#<sha>` fragment (Cargo-style).
+            match resolved_rev {
+                Some(rev) => format!("{base}#{rev}"),
+                None => base,
+            }
+        }
     }
 }
 
@@ -536,6 +564,12 @@ fn decode_source(path: &Path, s: &str) -> Result<LockSource, LockfileError> {
         });
     }
     if let Some(rest) = s.strip_prefix("git+") {
+        // Split off the resolved-commit fragment (`…#<sha>`) first — it always
+        // trails the optional `?<ref>` query, so the last `#` separates it.
+        let (rest, resolved_rev) = match rest.split_once('#') {
+            Some((before, frag)) => (before, Some(frag.to_string())),
+            None => (rest, None),
+        };
         let (url, reference) = match rest.find('?') {
             Some(idx) => {
                 let url = rest[..idx].to_string();
@@ -559,6 +593,7 @@ fn decode_source(path: &Path, s: &str) -> Result<LockSource, LockfileError> {
         return Ok(LockSource::Git {
             url,
             reference,
+            resolved_rev,
             mirror: None,
         });
     }
@@ -584,9 +619,15 @@ fn apply_mirror(
             url,
             mirror: Some(m),
         }),
-        LockSource::Git { url, reference, .. } => Ok(LockSource::Git {
+        LockSource::Git {
             url,
             reference,
+            resolved_rev,
+            ..
+        } => Ok(LockSource::Git {
+            url,
+            reference,
+            resolved_rev,
             mirror: Some(m),
         }),
         LockSource::Root | LockSource::Path(_) => Err(LockfileError::InvalidField {
@@ -786,6 +827,7 @@ content_hash = "blake3:x"
                     source: LockSource::Git {
                         url: "https://github.com/foo/bar".to_string(),
                         reference: Some(GitRef::Branch("main".to_string())),
+                        resolved_rev: None,
                         mirror: None,
                     },
                     content_hash: "blake3:beta".to_string(),
@@ -797,6 +839,7 @@ content_hash = "blake3:x"
                     source: LockSource::Git {
                         url: "https://github.com/baz/qux".to_string(),
                         reference: Some(GitRef::Tag("v1.0".to_string())),
+                        resolved_rev: None,
                         mirror: None,
                     },
                     content_hash: "blake3:gamma".to_string(),
@@ -808,6 +851,9 @@ content_hash = "blake3:x"
                     source: LockSource::Git {
                         url: "https://github.com/quux/corge".to_string(),
                         reference: Some(GitRef::Rev("abc123".to_string())),
+                        // A resolved-commit pin — exercises the `#<sha>`
+                        // fragment round-trip through encode/decode.
+                        resolved_rev: Some("deadbeefcafe".to_string()),
                         mirror: None,
                     },
                     content_hash: "blake3:delta".to_string(),
@@ -819,6 +865,7 @@ content_hash = "blake3:x"
                     source: LockSource::Git {
                         url: "https://github.com/grault/garply".to_string(),
                         reference: None,
+                        resolved_rev: None,
                         mirror: None,
                     },
                     content_hash: "blake3:eps".to_string(),
@@ -843,10 +890,12 @@ content_hash = "blake3:x"
             LockSource::Git {
                 url,
                 reference: Some(GitRef::Branch(b)),
+                resolved_rev,
                 mirror,
             } => {
                 assert_eq!(url, "https://github.com/foo/bar");
                 assert_eq!(b, "main");
+                assert_eq!(resolved_rev, &None);
                 assert_eq!(mirror, &None);
             }
             other => panic!("expected Git+branch, got {other:?}"),
@@ -854,8 +903,13 @@ content_hash = "blake3:x"
         match &re_parsed.packages[2].source {
             LockSource::Git {
                 reference: Some(GitRef::Rev(r)),
+                resolved_rev,
                 ..
-            } => assert_eq!(r, "abc123"),
+            } => {
+                assert_eq!(r, "abc123");
+                // The `#<sha>` fragment survived the round-trip.
+                assert_eq!(resolved_rev.as_deref(), Some("deadbeefcafe"));
+            }
             other => panic!("expected Git+rev, got {other:?}"),
         }
         match &re_parsed.packages[3].source {
@@ -863,6 +917,7 @@ content_hash = "blake3:x"
                 url,
                 reference: None,
                 mirror,
+                ..
             } => {
                 assert_eq!(url, "https://github.com/grault/garply");
                 assert_eq!(mirror, &None);
@@ -932,6 +987,7 @@ content_hash = "blake3:x"
                 source: LockSource::Git {
                     url: "https://github.com/kara/graphql".to_string(),
                     reference: Some(GitRef::Branch("main".to_string())),
+                    resolved_rev: None,
                     mirror: Some("https://proxy.kara-lang.org/git/graphql@main".to_string()),
                 },
                 content_hash: "blake3:deadbeef".to_string(),
@@ -945,6 +1001,7 @@ content_hash = "blake3:x"
                 url,
                 reference,
                 mirror,
+                ..
             } => {
                 assert_eq!(url, "https://github.com/kara/graphql");
                 assert_eq!(reference, &Some(GitRef::Branch("main".to_string())));
@@ -1047,16 +1104,20 @@ dependencies = []
             url: "https://github.com/foo/bar".to_string(),
             reference: Some(GitRef::Tag("v1.0".to_string())),
             dir: PathBuf::from("/cache/git/bar"),
+            resolved_rev: "abcd1234".to_string(),
         };
         let lock_src = convert_source(&git, Path::new("/proj"));
         match lock_src {
             LockSource::Git {
                 url,
                 reference,
+                resolved_rev,
                 mirror,
             } => {
                 assert_eq!(url, "https://github.com/foo/bar");
                 assert_eq!(reference, Some(GitRef::Tag("v1.0".to_string())),);
+                // convert_source persists the resolved commit as the pin.
+                assert_eq!(resolved_rev.as_deref(), Some("abcd1234"));
                 assert_eq!(mirror, None);
             }
             other => panic!("expected Git, got {other:?}"),
@@ -1491,6 +1552,7 @@ dependencies = []
                         url: "https://github.com/foo/bar".to_string(),
                         reference: Some(GitRef::Branch("main".to_string())),
                         dir: PathBuf::from("/cache/git/bar"),
+                        resolved_rev: "feedface".to_string(),
                     },
                     declared_by: vec![],
                 },

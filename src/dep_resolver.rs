@@ -88,6 +88,12 @@ pub enum ResolvedSource {
         url: String,
         reference: Option<GitRef>,
         dir: PathBuf,
+        /// The commit SHA `HEAD` resolved to after checkout. Unlike `dir`
+        /// (machine-local, transient), this IS persisted to `kara.lock` as a
+        /// `#<sha>` fragment on the git source string — it's the
+        /// reproducibility pin (git-fetch slice 3). Empty only in test
+        /// fixtures that don't exercise a real clone.
+        resolved_rev: String,
     },
 }
 
@@ -412,6 +418,7 @@ pub fn resolve_with_offline(
                                 res.url.clone(),
                                 res.reference.clone(),
                                 res.dir.clone(),
+                                res.resolved_rev.clone(),
                                 sentinel.clone(),
                                 DeclarationEdge {
                                     parent: parent_name.clone(),
@@ -568,6 +575,7 @@ fn upsert_git(
     url: String,
     reference: Option<GitRef>,
     dir: PathBuf,
+    resolved_rev: String,
     version: semver::Version,
     edge: DeclarationEdge,
 ) -> Result<(), Box<ResolverError>> {
@@ -584,6 +592,7 @@ fn upsert_git(
                     url,
                     reference,
                     dir,
+                    resolved_rev,
                 },
             })),
         }
@@ -597,6 +606,7 @@ fn upsert_git(
                     url,
                     reference,
                     dir,
+                    resolved_rev,
                 },
                 declared_by: vec![edge],
             },
@@ -942,6 +952,7 @@ mod tests {
                 url: "https://git/lib".to_string(),
                 reference: Some(GitRef::Tag("v1.0".to_string())),
                 dir: PathBuf::from("/git/lib"),
+                resolved_rev: "abc123def".to_string(),
             }
         );
     }

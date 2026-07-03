@@ -22,8 +22,8 @@
 //!    them as unsupported.
 //!
 //! 4. **Git-dep walking** (git fetch slice 2) — the same shape, gated on a
-//!    [`crate::git_fetch::GitProvider`]: each `DependencySpec::Git` is cloned
-//!    + checked out and recursed into, its resolution recorded in
+//!    [`crate::git_fetch::GitProvider`]: each `DependencySpec::Git` is cloned,
+//!    checked out, and recursed into, its resolution recorded in
 //!    `git_resolutions`. Without a provider, git deps stop at the leaf.
 //!
 //! Output: `DepGraph { root_dir, manifests, derived_deps }` — `manifests`
