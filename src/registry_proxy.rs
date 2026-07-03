@@ -13,6 +13,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// Default proxy URL when neither the environment nor an explicit
 /// override is supplied.
@@ -431,6 +432,93 @@ impl ProxyClient for CachingProxyClient {
         let pkg = self.inner.fetch_package(package, version)?;
         self.write_cached(&pkg);
         Ok(pkg)
+    }
+}
+
+/// Bounded exponential-backoff retry policy for the [`RetryingProxyClient`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RetryPolicy {
+    /// Number of *retries* after the initial attempt (so total attempts =
+    /// `max_retries + 1`). Zero disables retrying.
+    pub max_retries: u32,
+    /// Delay before the first retry; doubles for each subsequent one
+    /// (`base_delay`, `2·base_delay`, `4·base_delay`, …). `Duration::ZERO`
+    /// retries with no wait — used by tests to stay fast.
+    pub base_delay: Duration,
+}
+
+impl Default for RetryPolicy {
+    /// Three retries starting at 200 ms (→ 200 ms, 400 ms, 800 ms): enough
+    /// to ride out a transient blip without stalling a build for long.
+    fn default() -> Self {
+        Self {
+            max_retries: 3,
+            base_delay: Duration::from_millis(200),
+        }
+    }
+}
+
+/// A [`ProxyClient`] decorator that retries **transport failures** with
+/// bounded exponential backoff (registry-proxy follow-up (h)), so a
+/// transient network blip doesn't fail a build.
+///
+/// Only [`ProxyClientError::Unreachable`] is retried — it is the one
+/// non-deterministic outcome. `PackageNotFound` / `VersionNotFound` /
+/// `MalformedResponse` are deterministic answers from a reachable proxy, so
+/// retrying them would only waste time; they propagate immediately. Wrap
+/// the live client with this, typically inside a [`CachingProxyClient`] so
+/// a cache hit skips the network (and the retries) entirely:
+/// `CachingProxyClient::new(Box::new(RetryingProxyClient::new(inner, policy)), root)`.
+pub struct RetryingProxyClient {
+    inner: Box<dyn ProxyClient>,
+    policy: RetryPolicy,
+}
+
+impl RetryingProxyClient {
+    /// Wrap `inner`, retrying transport failures per `policy`.
+    pub fn new(inner: Box<dyn ProxyClient>, policy: RetryPolicy) -> Self {
+        Self { inner, policy }
+    }
+
+    /// Run `op`, retrying while it returns `Unreachable` and attempts remain.
+    fn with_retries<T>(
+        &self,
+        mut op: impl FnMut() -> Result<T, ProxyClientError>,
+    ) -> Result<T, ProxyClientError> {
+        let mut attempt: u32 = 0;
+        loop {
+            match op() {
+                Ok(value) => return Ok(value),
+                Err(err) => {
+                    let retryable = matches!(err, ProxyClientError::Unreachable { .. });
+                    if !retryable || attempt >= self.policy.max_retries {
+                        return Err(err);
+                    }
+                    // Exponential backoff: base · 2^attempt, saturating so a
+                    // large `max_retries` can't overflow.
+                    let factor = 2u32.checked_pow(attempt).unwrap_or(u32::MAX);
+                    let delay = self.policy.base_delay.saturating_mul(factor);
+                    if !delay.is_zero() {
+                        std::thread::sleep(delay);
+                    }
+                    attempt += 1;
+                }
+            }
+        }
+    }
+}
+
+impl ProxyClient for RetryingProxyClient {
+    fn fetch_catalog(&self, package: &str) -> Result<FetchedManifest, ProxyClientError> {
+        self.with_retries(|| self.inner.fetch_catalog(package))
+    }
+
+    fn fetch_package(
+        &self,
+        package: &str,
+        version: &semver::Version,
+    ) -> Result<FetchedPackage, ProxyClientError> {
+        self.with_retries(|| self.inner.fetch_package(package, version))
     }
 }
 
@@ -1008,5 +1096,147 @@ mod tests {
             Some(std::path::PathBuf::from("/tmp/kara-custom-cache"))
         );
         std::env::remove_var(REGISTRY_CACHE_ROOT_ENV_VAR);
+    }
+
+    // ── RetryingProxyClient ─────────────────────────────────────
+
+    /// Test client that returns `Unreachable` for its first `fail_first`
+    /// calls, then succeeds. Counts total calls so a test can assert how
+    /// many attempts the retry wrapper made.
+    struct FlakyClient {
+        calls: Arc<AtomicUsize>,
+        fail_first: usize,
+        /// When true, fail with a non-retryable `PackageNotFound` instead of
+        /// the retryable `Unreachable`, to prove non-transport errors don't
+        /// retry.
+        fail_non_retryable: bool,
+    }
+
+    impl FlakyClient {
+        fn err(&self) -> ProxyClientError {
+            if self.fail_non_retryable {
+                ProxyClientError::PackageNotFound {
+                    name: "x".to_string(),
+                }
+            } else {
+                ProxyClientError::Unreachable {
+                    url: "x".to_string(),
+                    message: "flaky".to_string(),
+                }
+            }
+        }
+    }
+
+    impl ProxyClient for FlakyClient {
+        fn fetch_catalog(&self, package: &str) -> Result<FetchedManifest, ProxyClientError> {
+            let n = self.calls.fetch_add(1, AtomicOrdering::Relaxed);
+            if n < self.fail_first {
+                return Err(self.err());
+            }
+            Ok(FetchedManifest {
+                package: package.to_string(),
+                upstream_url: "u".to_string(),
+                versions: vec![v("1.0.0")],
+            })
+        }
+        fn fetch_package(
+            &self,
+            package: &str,
+            version: &semver::Version,
+        ) -> Result<FetchedPackage, ProxyClientError> {
+            let n = self.calls.fetch_add(1, AtomicOrdering::Relaxed);
+            if n < self.fail_first {
+                return Err(self.err());
+            }
+            Ok(FetchedPackage {
+                package: package.to_string(),
+                version: version.clone(),
+                upstream_url: String::new(),
+                mirror_url: "m".to_string(),
+                tarball_bytes: vec![1, 2, 3],
+                content_hash: "blake3:x".to_string(),
+            })
+        }
+    }
+
+    /// Zero-delay policy so retry tests never actually sleep.
+    fn instant_policy(max_retries: u32) -> RetryPolicy {
+        RetryPolicy {
+            max_retries,
+            base_delay: Duration::ZERO,
+        }
+    }
+
+    fn flaky(calls: &Arc<AtomicUsize>, fail_first: usize, non_retryable: bool) -> FlakyClient {
+        FlakyClient {
+            calls: Arc::clone(calls),
+            fail_first,
+            fail_non_retryable: non_retryable,
+        }
+    }
+
+    #[test]
+    fn retries_transient_unreachable_then_succeeds() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        // Fails twice (Unreachable), succeeds on the third attempt.
+        let client = RetryingProxyClient::new(Box::new(flaky(&calls, 2, false)), instant_policy(3));
+        let manifest = client
+            .fetch_catalog("http")
+            .expect("should succeed after retries");
+        assert_eq!(manifest.package, "http");
+        assert_eq!(calls.load(AtomicOrdering::Relaxed), 3); // 1 initial + 2 retries
+    }
+
+    #[test]
+    fn gives_up_after_max_retries() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        // Always Unreachable; 2 retries → 3 total attempts, then Err.
+        let client = RetryingProxyClient::new(
+            Box::new(flaky(&calls, usize::MAX, false)),
+            instant_policy(2),
+        );
+        let err = client.fetch_catalog("http").unwrap_err();
+        assert_eq!(err.code(), "E_PROXY_UNREACHABLE");
+        assert_eq!(calls.load(AtomicOrdering::Relaxed), 3);
+    }
+
+    #[test]
+    fn does_not_retry_non_transport_errors() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        // PackageNotFound is deterministic — must not be retried.
+        let client =
+            RetryingProxyClient::new(Box::new(flaky(&calls, usize::MAX, true)), instant_policy(3));
+        let err = client.fetch_catalog("http").unwrap_err();
+        assert_eq!(err.code(), "E_PROXY_PACKAGE_NOT_FOUND");
+        assert_eq!(calls.load(AtomicOrdering::Relaxed), 1); // no retries
+    }
+
+    #[test]
+    fn max_retries_zero_makes_a_single_attempt() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let client = RetryingProxyClient::new(
+            Box::new(flaky(&calls, usize::MAX, false)),
+            instant_policy(0),
+        );
+        assert!(client.fetch_catalog("http").is_err());
+        assert_eq!(calls.load(AtomicOrdering::Relaxed), 1);
+    }
+
+    #[test]
+    fn retry_applies_to_fetch_package_too() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let client = RetryingProxyClient::new(Box::new(flaky(&calls, 1, false)), instant_policy(3));
+        let pkg = client
+            .fetch_package("http", &v("1.0.0"))
+            .expect("should succeed after one retry");
+        assert_eq!(pkg.package, "http");
+        assert_eq!(calls.load(AtomicOrdering::Relaxed), 2); // 1 initial + 1 retry
+    }
+
+    #[test]
+    fn default_policy_is_three_retries() {
+        let p = RetryPolicy::default();
+        assert_eq!(p.max_retries, 3);
+        assert_eq!(p.base_delay, Duration::from_millis(200));
     }
 }

@@ -121,5 +121,5 @@ not change the contract above when they land:
 - Upstream mirroring / the server actually fetching from the origin (server-side).
 - Multi-mirror / high-availability (d), authentication (e), signature
   verification (f) — a signature would be a sibling field to `content_hash`.
-- Retry/backoff (h), per-package proxy override (i), `--no-proxy`
-  direct-from-source fetch (j/k), and `karac yank` status surfacing (l).
+- Per-package proxy override (i), `--no-proxy` direct-from-source fetch (j/k),
+  and `karac yank` status surfacing (l).
