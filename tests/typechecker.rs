@@ -29640,3 +29640,50 @@ fn test_stdlib_reduce_bound_types_methods_from_trait_args() {
          }",
     );
 }
+
+// ── S6b-1: owned-to-ref coercion binds container element type param ──
+
+#[test]
+fn test_ref_container_param_solves_element_type_param() {
+    // B-2026-07-02-41: `unify_types` gained an owned-`T`-to-`ref T`
+    // coercion arm so a `ref Vec[T]` slot called with an owned `Vec[i64]`
+    // arg solves `T = i64`. Without it `T` stayed a metavar (recorded as
+    // no substitution), and codegen — reading the erased `{ptr,len,cap}`
+    // LLVM shape — collided two element instantiations into one mono.
+    // Here the return type `T` must resolve to i64 so the `let x: i64`
+    // binding checks clean.
+    typecheck_ok(
+        "fn first[T](v: ref Vec[T]) -> T {
+             v[0]
+         }
+         fn main() {
+             let a: Vec[i64] = vec![1, 2, 3];
+             let x: i64 = first(a);
+             println(x);
+         }",
+    );
+}
+
+#[test]
+fn test_ref_container_param_element_mismatch_still_rejected() {
+    // The coercion binds the element param to the ACTUAL element, not
+    // whatever the context wants: `first(b)` on a `Vec[f64]` resolves to
+    // `f64`, so using it as an array index — an int-only context the
+    // permissive i64<->f64 let-coercion doesn't reach — is rejected.
+    // Proves the coercion pins the real element type, not a wrong one.
+    let errors = typecheck_errors(
+        "fn first[T](v: ref Vec[T]) -> T {
+             v[0]
+         }
+         fn main() {
+             let b: Vec[f64] = vec![1.5];
+             let arr: Vec[i64] = vec![10, 20];
+             println(arr[first(b)]);
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("index must be")),
+        "f64 array index should be rejected, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}

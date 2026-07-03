@@ -807,6 +807,20 @@ pub(super) fn unify_types(
         (Type::MutRef(x), y) if !matches!(y, Type::Ref(_) | Type::MutRef(_) | Type::Weak(_)) => {
             unify_types(x, y, substitutions, const_substitutions)
         }
+        // Owned-to-ref coercion at call boundaries: a `ref T` slot called
+        // with an owned `T` source (the ubiquitous borrow-of-owned form,
+        // `fn f(v: ref Vec[U]); f(myvec)`) must bind the inner type-param
+        // against the owned source so generic resolution pins `U`. The
+        // `(Ref, Ref)` identity arm above already covers a borrowed source;
+        // without THIS arm an owned arg falls through to `types_compatible`,
+        // which checks assignability but binds no metavar — so `U` stayed
+        // unsolved and two element-type instantiations of `f[U](v: ref
+        // Vec[U])` collided into one codegen monomorph (B-2026-07-02-41).
+        // Mirrors the `MutRef`-coercion arm directly above; the borrow-mode
+        // legality itself is enforced separately at the assignability layer.
+        (Type::Ref(x), y) if !matches!(y, Type::Ref(_) | Type::MutRef(_) | Type::Weak(_)) => {
+            unify_types(x, y, substitutions, const_substitutions)
+        }
         // Raw pointers — `*const T` / `*mut T` per design.md § Raw
         // pointers. Mutability is part of the shape; `*const T` does
         // *not* unify with `*mut T` (slot constness asymmetry — the
