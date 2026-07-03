@@ -944,7 +944,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     let variant = name.to_string();
                     self.compile_enum_struct_variant_init(&enum_name, &variant, fields)
                 } else {
-                    self.compile_struct_init(name, fields)
+                    // Per-instantiation layout for a generic struct literal:
+                    // recover this literal's recorded instantiation (`Box[f64]`)
+                    // from its span and build the mono struct type so a non-i64
+                    // field stores at its real width (B-2026-07-03-23).
+                    let mono_ty = self.struct_inst_mono_type_for_expr(expr);
+                    self.compile_struct_init(name, fields, mono_ty)
                 }
             }
             // B-2026-07-02-6: thread the contextual element width recorded
@@ -1803,6 +1808,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         name: &str,
         fields: &[FieldInit],
+        mono_ty: Option<inkwell::types::StructType<'ctx>>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         // FFI union literal (phase 5 line 569 slice 4). The typechecker
         // already enforces exactly-one-field shape (`E_UNION_LITERAL_REQUIRES_ONE_FIELD`,
@@ -1927,8 +1933,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 return Ok(ptr.into());
             }
         }
-        // Non-shared struct: stack-allocated aggregate.
-        if let Some(&st) = self.struct_types.get(name) {
+        // Non-shared struct: stack-allocated aggregate. Prefer the
+        // per-instantiation mono type (`Box[f64]` → `{double}`) so a non-i64
+        // field is stored at its real width; else the pre-built (all-i64
+        // default) type (B-2026-07-03-23).
+        if let Some(st) = mono_ty.or_else(|| self.struct_types.get(name).copied()) {
             let mut agg = st.get_undef();
             for (idx, field_init) in fields.iter().enumerate() {
                 // Borrowed-struct `ref` field (design.md Feature 4 Part 3):

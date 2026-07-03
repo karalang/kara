@@ -37,6 +37,61 @@ use super::state::SharedTypeInfo;
 impl<'ctx> super::Codegen<'ctx> {
     // ── Type resolution ───────────────────────────────────────────
 
+    /// Build the per-instantiation LLVM struct type for a generic OWNED struct
+    /// at concrete `args`: substitute the args into the struct's field TypeExprs
+    /// and lower each. `None` for a non-generic struct, an arg-count mismatch,
+    /// no recorded field TypeExprs, or all-non-Type args — the caller then falls
+    /// back to the pre-built `struct_types` entry. LLVM interns literal struct
+    /// types by body, so rebuilding on each call yields the same type — no cache
+    /// (B-2026-07-03-23).
+    pub(super) fn mono_struct_type(
+        &self,
+        name: &str,
+        args: &[GenericArg],
+    ) -> Option<inkwell::types::StructType<'ctx>> {
+        let params = self.struct_generic_params.get(name)?;
+        if params.is_empty() || params.len() != args.len() {
+            return None;
+        }
+        let field_tes = self.struct_field_type_exprs.get(name)?;
+        let mut subst: std::collections::HashMap<String, TypeExpr> =
+            std::collections::HashMap::new();
+        for (p, a) in params.iter().zip(args.iter()) {
+            if let GenericArg::Type(te) = a {
+                subst.insert(p.clone(), te.clone());
+            }
+        }
+        if subst.is_empty() {
+            return None;
+        }
+        let field_types: Vec<BasicTypeEnum<'ctx>> = field_tes
+            .iter()
+            .map(|te| {
+                let concrete = super::helpers::subst_type_params_in_type_expr(te, &subst);
+                self.llvm_type_for_type_expr(&concrete)
+            })
+            .collect();
+        Some(self.context.struct_type(&field_types, false))
+    }
+
+    /// The per-instantiation mono struct type for a struct-literal (or any
+    /// struct-typed) expression, recovered from the lowering pass's span-keyed
+    /// instantiation record (`enum_inst_type_exprs`, which captures every
+    /// `Named { args }` expr type — structs included). `None` when the expr has
+    /// no recorded generic instantiation (B-2026-07-03-23).
+    pub(super) fn struct_inst_mono_type_for_expr(
+        &self,
+        expr: &Expr,
+    ) -> Option<inkwell::types::StructType<'ctx>> {
+        let te = self.enum_inst_type_from_span(expr)?;
+        if let TypeKind::Path(p) = &te.kind {
+            let name = p.segments.last()?;
+            let args = p.generic_args.as_ref()?;
+            return self.mono_struct_type(name, args);
+        }
+        None
+    }
+
     pub(super) fn llvm_type_for_type_expr(&self, ty: &TypeExpr) -> BasicTypeEnum<'ctx> {
         match &ty.kind {
             TypeKind::Path(path) => {
@@ -191,6 +246,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `CleanupAction::DropChannelEnd` (refcount decrement).
                 if name == "Sender" || name == "Receiver" || name == "Channel" {
                     return self.context.ptr_type(AddressSpace::default()).into();
+                }
+                // Generic OWNED struct at a concrete instantiation (`Box[f64]`):
+                // lay its fields out per the concrete element type rather than
+                // the pre-built all-`i64` default (B-2026-07-03-23). Shared/par
+                // structs are non-generic at v1 and route through `shared_types`.
+                if let Some(args) = path.generic_args.as_ref() {
+                    if let Some(st) = self.mono_struct_type(name, args) {
+                        return st.into();
+                    }
                 }
                 self.llvm_type_for_name(name)
             }

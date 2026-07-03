@@ -386,6 +386,88 @@ pub(super) fn rewrite_self_in_type_expr(te: &TypeExpr, type_name: &str) -> TypeE
     }
 }
 
+/// Map-keyed twin of [`rewrite_self_in_type_expr`]: replace every bare
+/// single-segment type-param reference (`T`) whose name is a key in `subst`
+/// with the concrete argument `TypeExpr`, recursing through every compound type
+/// form and generic-argument position. Used to substitute a generic struct's
+/// declared field types against a concrete `Named { args }` instantiation for
+/// per-instantiation LLVM layout (`mono_struct_type`, B-2026-07-03-23).
+pub(super) fn subst_type_params_in_type_expr(
+    te: &TypeExpr,
+    subst: &std::collections::HashMap<String, TypeExpr>,
+) -> TypeExpr {
+    let kind = match &te.kind {
+        TypeKind::Path(p) => {
+            if p.segments.len() == 1 && p.generic_args.is_none() {
+                if let Some(concrete) = subst.get(&p.segments[0]) {
+                    return concrete.clone();
+                }
+            }
+            TypeKind::Path(PathExpr {
+                segments: p.segments.clone(),
+                generic_args: p.generic_args.as_ref().map(|args| {
+                    args.iter()
+                        .map(|a| match a {
+                            GenericArg::Type(t) => {
+                                GenericArg::Type(subst_type_params_in_type_expr(t, subst))
+                            }
+                            other => other.clone(),
+                        })
+                        .collect()
+                }),
+                span: p.span.clone(),
+            })
+        }
+        TypeKind::Tuple(elems) => TypeKind::Tuple(
+            elems
+                .iter()
+                .map(|e| subst_type_params_in_type_expr(e, subst))
+                .collect(),
+        ),
+        TypeKind::Array { element, size } => TypeKind::Array {
+            element: Box::new(subst_type_params_in_type_expr(element, subst)),
+            size: size.clone(),
+        },
+        TypeKind::Pointer { is_mut, inner } => TypeKind::Pointer {
+            is_mut: *is_mut,
+            inner: Box::new(subst_type_params_in_type_expr(inner, subst)),
+        },
+        TypeKind::Ref(inner) => {
+            TypeKind::Ref(Box::new(subst_type_params_in_type_expr(inner, subst)))
+        }
+        TypeKind::MutRef(inner) => {
+            TypeKind::MutRef(Box::new(subst_type_params_in_type_expr(inner, subst)))
+        }
+        TypeKind::MutSlice(inner) => {
+            TypeKind::MutSlice(Box::new(subst_type_params_in_type_expr(inner, subst)))
+        }
+        TypeKind::Weak(inner) => {
+            TypeKind::Weak(Box::new(subst_type_params_in_type_expr(inner, subst)))
+        }
+        TypeKind::FnType {
+            params,
+            return_type,
+            effect_spec,
+            is_once,
+        } => TypeKind::FnType {
+            params: params
+                .iter()
+                .map(|p| subst_type_params_in_type_expr(p, subst))
+                .collect(),
+            return_type: return_type
+                .as_ref()
+                .map(|r| Box::new(subst_type_params_in_type_expr(r, subst))),
+            effect_spec: effect_spec.clone(),
+            is_once: *is_once,
+        },
+        _ => te.kind.clone(),
+    };
+    TypeExpr {
+        kind,
+        span: te.span.clone(),
+    }
+}
+
 pub(super) fn make_impl_method_function(type_name: &str, method: &Function) -> Function {
     let mut f = method.clone();
     f.name = format!("{}.{}", type_name, method.name);

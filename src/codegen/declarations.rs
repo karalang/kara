@@ -333,6 +333,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     s.fields.iter().map(|f| f.ty.clone()).collect();
                 self.struct_field_type_exprs
                     .insert(s.name.clone(), field_type_exprs);
+                // Declared generic-param names, for generic-struct field
+                // monomorphization (`mono_struct_type`, B-2026-07-03-23).
+                let generic_params: Vec<String> = s
+                    .generic_params
+                    .as_ref()
+                    .map(|g| g.params.iter().map(|p| p.name.clone()).collect())
+                    .unwrap_or_default();
+                self.struct_generic_params
+                    .insert(s.name.clone(), generic_params);
                 // Field names for field-index lookups — registered here for
                 // every struct shape (shared/par/owned alike) so the lookup
                 // tables are complete before either enum sizing or the LLVM

@@ -1298,6 +1298,13 @@ pub(super) struct Codegen<'ctx> {
     /// `register_var_from_type_expr`. Populated alongside
     /// `struct_field_type_names` in `declare_structs`.
     pub(crate) struct_field_type_exprs: HashMap<String, Vec<crate::ast::TypeExpr>>,
+    /// Declared generic-param names of each OWNED (non-shared) struct, recorded
+    /// by `register_struct_metadata`. Empty vec for a non-generic struct. Lets
+    /// the generic-struct monomorphization path (`mono_struct_type`) zip a
+    /// concrete `Named { name, args }` instantiation against the struct's params
+    /// to substitute the field TypeExprs — so `Box[f64]` lays its field out as
+    /// `double`, not the default `i64` (B-2026-07-03-23).
+    pub(crate) struct_generic_params: HashMap<String, Vec<String>>,
     /// Names of all `shared` / `par` struct AND enum types, recorded by
     /// `register_struct_metadata` — i.e. BEFORE the `shared_types` heap-layout
     /// map is populated (that fills in during `declare_enums` / struct LLVM
@@ -5268,6 +5275,7 @@ impl<'ctx> Codegen<'ctx> {
             struct_field_names: HashMap::new(),
             struct_field_type_names: HashMap::new(),
             struct_field_type_exprs: HashMap::new(),
+            struct_generic_params: HashMap::new(),
             shared_type_decl_names: std::collections::HashSet::new(),
             union_types: HashMap::new(),
             union_field_types: HashMap::new(),
