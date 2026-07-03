@@ -5327,6 +5327,42 @@ fn main() {
         }
     }
 
+    /// IEEE-754 bit reinterpretation in codegen: `f64.to_bits()` / `.to_bits32()`
+    /// and the inverse `i64.bits_as_f64()` / `.bits_as_f32()`. These had an
+    /// interpreter + typechecker implementation but no codegen arm, so a program
+    /// that round-tripped an f64 through its bits ran under `karac run` but failed
+    /// `karac build` with "no handler for method 'to_bits'" — a run/build
+    /// divergence surfaced by the LeetCode #50 Pow(x, n) benchmark's XOR-fold
+    /// sink (ledger B-2026-07-03-1). Now lowered to pure LLVM bitcasts. Covers
+    /// `to_bits` (positive, +0.0, and the sign-bit-only -0.0 pattern), a
+    /// `bits_as_f64` round-trip, `to_bits32` + `bits_as_f32` round-trip, and the
+    /// XOR-fold an integer sink for a float kernel relies on — every value
+    /// byte-identical to the interpreter oracle.
+    #[test]
+    fn e2e_float_to_bits_codegen() {
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 println((2.1_f64).to_bits());\n\
+                 println((0.0_f64).to_bits());\n\
+                 println((-0.0_f64).to_bits());\n\
+                 let b: i64 = (2.1_f64).to_bits();\n\
+                 println(b.bits_as_f64());\n\
+                 println((1.5_f64).to_bits32());\n\
+                 let b32: i64 = (1.5_f64).to_bits32();\n\
+                 println(b32.bits_as_f32());\n\
+                 let mut acc: i64 = 0i64;\n\
+                 acc = acc ^ (2.0_f64).to_bits();\n\
+                 acc = acc ^ (3.0_f64).to_bits();\n\
+                 println(acc);\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "4611911198408756429\n0\n-9223372036854775808\n2.1\n1069547520\n1.5\n2251799813685248\n"
+            );
+        }
+    }
+
     /// `String.cmp(other) -> Ordering` — the method form of `<`/`>`, lowered
     /// through `karac_string_cmp` (byte-lexicographic, the same order
     /// `Vec[String].sort`/`binary_search` use) into an `Ordering` tag. Exercises

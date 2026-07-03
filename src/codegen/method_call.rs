@@ -1530,6 +1530,81 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // IEEE-754 bit reinterpretation (typed in expr_method_call.rs; mirrors
+        // the interpreter arm in `interpreter/method_call.rs`). Pure bitcasts —
+        // no runtime helper, no allocation, no new C symbol. Until now these had
+        // an interpreter + typechecker implementation but no codegen arm, so a
+        // program that round-tripped an f64 through its bits ran under
+        // `karac run` but failed `karac build` with "no handler for method
+        // 'to_bits'" — a run/build divergence (surfaced by the LeetCode #50
+        // Pow(x, n) benchmark's XOR-fold sink; ledger B-2026-07-03-1).
+        //   `to_bits`     f64 → u64  : bitcast f64→i64
+        //   `to_bits32`   f{32,64} → u32 : round to f32, bitcast→i32, zext→i64
+        //   `bits_as_f64` int → f64  : width-normalize to i64, bitcast→f64
+        //   `bits_as_f32` int → f32  : width-normalize to i32, bitcast→f32
+        // Float-only for `to_bits*`, int-only for `bits_as_*`; other receivers
+        // fall through to normal dispatch.
+        if args.is_empty() && matches!(method, "to_bits" | "to_bits32") {
+            let v = self.compile_expr(object)?;
+            if let BasicValueEnum::FloatValue(fv) = v {
+                let i64_t = self.context.i64_type();
+                if method == "to_bits" {
+                    let bits = self
+                        .builder
+                        .build_bit_cast(fv, i64_t, "to_bits")
+                        .unwrap()
+                        .into_int_value();
+                    return Ok(bits.into());
+                }
+                // to_bits32: round the value to f32 first (identity if it already
+                // is one), then take its 32-bit pattern, zero-extended into the
+                // i64-backed integer representation.
+                let f32_t = self.context.f32_type();
+                let f32v = if fv.get_type() == f32_t {
+                    fv
+                } else {
+                    self.builder.build_float_trunc(fv, f32_t, "to_f32").unwrap()
+                };
+                let bits32 = self
+                    .builder
+                    .build_bit_cast(f32v, self.context.i32_type(), "to_bits32")
+                    .unwrap()
+                    .into_int_value();
+                let bits = self
+                    .builder
+                    .build_int_z_extend(bits32, i64_t, "to_bits32.zext")
+                    .unwrap();
+                return Ok(bits.into());
+            }
+        }
+        if args.is_empty() && matches!(method, "bits_as_f64" | "bits_as_f32") {
+            let v = self.compile_expr(object)?;
+            if let BasicValueEnum::IntValue(iv) = v {
+                // bits_as_f64 reads the low 64 bits, bits_as_f32 the low 32 —
+                // width-normalize the receiver to exactly that many bits
+                // (zero-extend if narrower, truncate if wider) before the cast.
+                let (int_t, float_t, name) = if method == "bits_as_f64" {
+                    (self.context.i64_type(), self.context.f64_type(), 64u32)
+                } else {
+                    (self.context.i32_type(), self.context.f32_type(), 32u32)
+                };
+                let w = iv.get_type().get_bit_width();
+                let norm = if w == name {
+                    iv
+                } else if w < name {
+                    self.builder
+                        .build_int_z_extend(iv, int_t, "bits.zext")
+                        .unwrap()
+                } else {
+                    self.builder
+                        .build_int_truncate(iv, int_t, "bits.trunc")
+                        .unwrap()
+                };
+                let f = self.builder.build_bit_cast(norm, float_t, method).unwrap();
+                return Ok(f);
+            }
+        }
+
         // Built-in scalar transcendental + rounding math on float primitives
         // (typed in expr_method_call.rs; surface in `crate::float_math`): unary
         // `sin`/`cos`/`tan`/`exp`/`ln`/`log2`/`floor`/`ceil`/`round` and binary
