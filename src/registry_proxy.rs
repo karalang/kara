@@ -1,12 +1,15 @@
 //! Registry proxy client — typed surface for fetching package metadata and
 //! tarballs through `proxy.kara-lang.org` (or a configured mirror).
 //!
-//! Slice 1 of the registry-proxy entry (phase-5 tracker line 851). The
-//! proxy itself is separate infrastructure (not part of `karac`); this
-//! module is the client side. v1.1 ships the typed protocol, URL
-//! discovery, and an in-memory `MemProxyClient` for tests. The live
-//! HTTP fetch lands in a v1.1.x slice once the proxy is deployed
-//! (carve-outs at the tracker entry).
+//! The registry-proxy *server* is separate infrastructure (not part of
+//! `karac`); this module is the client side. It ships the typed protocol,
+//! URL discovery, an in-memory `MemProxyClient` for tests, and — on native
+//! targets — a live `ureq`-backed `HttpProxyClient` that performs the real
+//! HTTP fetch (tracker line 930). The wire contract it speaks is ratified
+//! in `docs/registry-proxy-protocol.md`; the reference server that
+//! implements it lives in `registry-proxy/`. On `wasm32` the browser
+//! playground has no outbound HTTP surface, so `HttpProxyClient` there
+//! returns `NotImplemented` (the proxy is native-only by design).
 
 use std::collections::BTreeMap;
 
@@ -120,9 +123,9 @@ pub enum ProxyClientError {
     /// The proxy responded but the payload did not match the expected
     /// catalog / tarball-envelope shape.
     MalformedResponse { url: String, message: String },
-    /// Live HTTP fetch is not yet implemented (v1.1.x carve-out). The
-    /// typed surface is ready; the wire-level fetch lands once the
-    /// proxy infra is deployed.
+    /// Live HTTP fetch is unavailable on this target. Native builds
+    /// perform the real fetch; this arm is produced only by the `wasm32`
+    /// stub, where the playground has no outbound HTTP surface.
     NotImplemented { feature: &'static str },
 }
 
@@ -163,8 +166,8 @@ impl std::fmt::Display for ProxyClientError {
             }
             Self::NotImplemented { feature } => write!(
                 f,
-                "{feature} is not yet implemented (registry-proxy fetch ships in v1.1.x once \
-                 the proxy infrastructure is deployed)"
+                "{feature} is unavailable on this target (registry-proxy fetch is native-only; \
+                 the wasm playground has no outbound HTTP surface)"
             ),
         }
     }
@@ -172,11 +175,11 @@ impl std::fmt::Display for ProxyClientError {
 
 impl std::error::Error for ProxyClientError {}
 
-/// Abstract proxy-fetch surface. Production callers will use a
-/// `ureq`-backed `HttpProxyClient` once the proxy is deployed; tests
-/// use `MemProxyClient` with canned data. The trait is small on
-/// purpose — `fetch_catalog` returns version metadata, `fetch_package`
-/// returns one concrete tarball.
+/// Abstract proxy-fetch surface. Production callers use the `ureq`-backed
+/// `HttpProxyClient` (native); tests use `MemProxyClient` with canned data
+/// or drive `HttpProxyClient` against the reference server in
+/// `registry-proxy/`. The trait is small on purpose — `fetch_catalog`
+/// returns version metadata, `fetch_package` returns one concrete tarball.
 pub trait ProxyClient {
     fn fetch_catalog(&self, package: &str) -> Result<FetchedManifest, ProxyClientError>;
     fn fetch_package(
@@ -282,14 +285,19 @@ pub fn make_client(config: &ProxyConfig) -> Box<dyn ProxyClient> {
     }
 }
 
-/// `ureq`-backed proxy client. v1.1 ships only the constructor + the
-/// `NotImplemented` failure surface for each fetch method, since the
-/// proxy infrastructure is a separate deployment that hasn't shipped
-/// yet. Once it's live, the fetch methods get the actual HTTP wire
-/// implementation without changing the trait signature.
+/// `ureq`-backed proxy client. Performs real HTTPS GETs against the two
+/// registry-proxy endpoints (see `docs/registry-proxy-protocol.md`):
+///
+/// - `GET <url>/catalog/<name>` → `{ "upstream": "...", "versions": [...] }`
+/// - `GET <url>/pkg/<name>/<version>.tar.gz` → the tarball, with a
+///   `Karac-Content-Hash: blake3:<hex>` header the client verifies against
+///   the body it received.
+///
+/// Transport failures map to [`ProxyClientError::Unreachable`], `404`s to
+/// `PackageNotFound` / `VersionNotFound`, and any other non-2xx status or
+/// malformed payload to `MalformedResponse`.
 #[cfg(not(target_arch = "wasm32"))]
 pub struct HttpProxyClient {
-    #[allow(dead_code)]
     pub url: String,
 }
 
@@ -298,23 +306,157 @@ impl HttpProxyClient {
     pub fn new(url: String) -> Self {
         Self { url }
     }
+
+    /// The configured base URL with any trailing slash removed, so the
+    /// endpoint paths join cleanly.
+    fn base(&self) -> &str {
+        self.url.trim_end_matches('/')
+    }
+}
+
+/// Parse the catalog JSON envelope into a [`FetchedManifest`]. Any missing
+/// field, wrong type, or unparseable version string surfaces as
+/// [`ProxyClientError::MalformedResponse`].
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_catalog(
+    url: &str,
+    package: &str,
+    body: &str,
+) -> Result<FetchedManifest, ProxyClientError> {
+    let malformed = |message: String| ProxyClientError::MalformedResponse {
+        url: url.to_string(),
+        message,
+    };
+
+    let json: serde_json::Value =
+        serde_json::from_str(body).map_err(|e| malformed(format!("invalid JSON: {e}")))?;
+    let upstream = json
+        .get("upstream")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| malformed("missing string field \"upstream\"".to_string()))?;
+    let versions_json = json
+        .get("versions")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| malformed("missing array field \"versions\"".to_string()))?;
+
+    let mut versions = Vec::with_capacity(versions_json.len());
+    for entry in versions_json {
+        let s = entry
+            .as_str()
+            .ok_or_else(|| malformed("\"versions\" entries must be strings".to_string()))?;
+        let parsed = semver::Version::parse(s)
+            .map_err(|e| malformed(format!("invalid semver version {s:?}: {e}")))?;
+        versions.push(parsed);
+    }
+
+    Ok(FetchedManifest {
+        package: package.to_string(),
+        upstream_url: upstream.to_string(),
+        versions,
+    })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl ProxyClient for HttpProxyClient {
-    fn fetch_catalog(&self, _package: &str) -> Result<FetchedManifest, ProxyClientError> {
-        Err(ProxyClientError::NotImplemented {
-            feature: "registry proxy catalog fetch",
-        })
+    fn fetch_catalog(&self, package: &str) -> Result<FetchedManifest, ProxyClientError> {
+        let url = format!("{}/catalog/{}", self.base(), package);
+        let response = match ureq::get(&url).call() {
+            Ok(r) => r,
+            Err(ureq::Error::Status(404, _)) => {
+                return Err(ProxyClientError::PackageNotFound {
+                    name: package.to_string(),
+                })
+            }
+            Err(ureq::Error::Status(code, _)) => {
+                return Err(ProxyClientError::MalformedResponse {
+                    url,
+                    message: format!("proxy returned unexpected status {code}"),
+                })
+            }
+            Err(ureq::Error::Transport(t)) => {
+                return Err(ProxyClientError::Unreachable {
+                    url,
+                    message: t.to_string(),
+                })
+            }
+        };
+        let body = response
+            .into_string()
+            .map_err(|e| ProxyClientError::MalformedResponse {
+                url: url.clone(),
+                message: format!("could not read response body: {e}"),
+            })?;
+        parse_catalog(&url, package, &body)
     }
 
     fn fetch_package(
         &self,
-        _package: &str,
-        _version: &semver::Version,
+        package: &str,
+        version: &semver::Version,
     ) -> Result<FetchedPackage, ProxyClientError> {
-        Err(ProxyClientError::NotImplemented {
-            feature: "registry proxy package fetch",
+        use std::io::Read;
+
+        let url = format!("{}/pkg/{}/{}.tar.gz", self.base(), package, version);
+        let response = match ureq::get(&url).call() {
+            Ok(r) => r,
+            Err(ureq::Error::Status(404, _)) => {
+                return Err(ProxyClientError::VersionNotFound {
+                    name: package.to_string(),
+                    version: version.clone(),
+                })
+            }
+            Err(ureq::Error::Status(code, _)) => {
+                return Err(ProxyClientError::MalformedResponse {
+                    url,
+                    message: format!("proxy returned unexpected status {code}"),
+                })
+            }
+            Err(ureq::Error::Transport(t)) => {
+                return Err(ProxyClientError::Unreachable {
+                    url,
+                    message: t.to_string(),
+                })
+            }
+        };
+
+        let advertised_hash = response.header("Karac-Content-Hash").map(str::to_string);
+
+        let mut tarball_bytes = Vec::new();
+        response
+            .into_reader()
+            .read_to_end(&mut tarball_bytes)
+            .map_err(|e| ProxyClientError::MalformedResponse {
+                url: url.clone(),
+                message: format!("could not read tarball body: {e}"),
+            })?;
+
+        // Integrity check: the body we received must match the digest the
+        // proxy advertised. A mismatch means a corrupted or tampered
+        // transfer, so refuse it rather than cache a bad tarball.
+        let computed_hash = format!("blake3:{}", blake3::hash(&tarball_bytes).to_hex());
+        if let Some(advertised) = &advertised_hash {
+            if advertised != &computed_hash {
+                return Err(ProxyClientError::MalformedResponse {
+                    url,
+                    message: format!(
+                        "content-hash mismatch: proxy advertised {advertised}, \
+                         computed {computed_hash}"
+                    ),
+                });
+            }
+        }
+
+        Ok(FetchedPackage {
+            package: package.to_string(),
+            version: version.clone(),
+            // The tarball endpoint does not carry the upstream source URL;
+            // it is a package-level attribute delivered by `fetch_catalog`
+            // (`FetchedManifest.upstream_url`). The resolver stitches it
+            // into `kara.lock` from the manifest.
+            upstream_url: String::new(),
+            mirror_url: url,
+            tarball_bytes,
+            content_hash: advertised_hash.unwrap_or(computed_hash),
         })
     }
 }
@@ -485,15 +627,20 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn make_client_selects_http_when_mode_default() {
-        let client = make_client(&ProxyConfig::default_enabled());
-        // v1.1 surface: HTTP client surfaces NotImplemented uniformly
-        // until the proxy infrastructure ships. The mode-routing test
-        // pins that we're getting the HTTP client (not the Disabled
-        // one) by checking for E_PROXY_NOT_IMPLEMENTED rather than
-        // E_PROXY_DISABLED.
+        // Mode `Default` must route to the live `HttpProxyClient`, not the
+        // `Disabled` one. Point it at a guaranteed-dead local address so
+        // the real fetch fails fast with a transport error rather than
+        // touching the network: `E_PROXY_UNREACHABLE` (not
+        // `E_PROXY_DISABLED`) proves we got the HTTP client.
+        let config = ProxyConfig {
+            url: "http://127.0.0.1:1".to_string(),
+            mode: ProxyMode::Default,
+        };
+        let client = make_client(&config);
         let err = client.fetch_catalog("anything").unwrap_err();
-        assert_eq!(err.code(), "E_PROXY_NOT_IMPLEMENTED");
+        assert_eq!(err.code(), "E_PROXY_UNREACHABLE");
     }
 
     #[test]

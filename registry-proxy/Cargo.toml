@@ -1,0 +1,30 @@
+[package]
+name = "kara-registry-proxy"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT OR Apache-2.0"
+
+# Minimal **reference / dev** registry proxy for the Kāra package manager
+# (docs/implementation_checklist/phase-5-diagnostics.md — the registry-proxy
+# block + line 930). Separate workspace member (mirrors `kernel/` /
+# `playground/`) so its tiny server surface never pollutes the compiler
+# crate. It is NOT the production mirror: it serves catalogs + tarballs
+# straight off a local directory with no upstream mirroring, caching,
+# auth, signatures, or HA (follow-ups c/d/e/f). Its job is to (1) pin the
+# wire protocol executably and (2) be the integration-test fixture the
+# `HttpProxyClient` talks to over a real socket. See src/lib.rs.
+
+[[bin]]
+name = "kara-registry-proxy"
+path = "src/main.rs"
+
+[lib]
+name = "kara_registry_proxy"
+path = "src/lib.rs"
+
+[dependencies]
+# Match karac's spec exactly (default-features = false) so workspace
+# feature unification does not widen blake3's feature set for the
+# compiler crate. `blake3::hash` / `Hash::to_hex` are available no_std.
+blake3 = { version = "1", default-features = false }

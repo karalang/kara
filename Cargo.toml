@@ -10,6 +10,7 @@ members = [
     "runtime",
     "playground",
     "kernel",
+    "registry-proxy",
     "runtime/tls-cross-probe/std",
     "runtime/tls-cross-probe/embedded",
 ]
@@ -195,6 +196,13 @@ hyper = { version = "1", features = ["client", "http2"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 bytes = "1"
+
+# Registry-proxy line 930 (`HttpProxyClient` live HTTP fetch): the
+# `tests/registry_proxy_wire.rs` integration test drives the real `ureq`
+# client against the reference proxy server over a loopback socket, so it
+# needs the reference server's library. Dev-only — the reference server is
+# never linked into the compiler's production build.
+kara-registry-proxy = { path = "registry-proxy" }
 
 # Binary-size phase 1: drop `__eh_frame` + `__unwind_info` from emitted
 # binaries by removing unwind tables from the runtime's release build.

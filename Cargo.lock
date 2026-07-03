@@ -1063,6 +1063,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "kara-registry-proxy"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+]
+
+[[package]]
 name = "karac"
 version = "0.1.0"
 dependencies = [
@@ -1072,6 +1079,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "inkwell",
+ "kara-registry-proxy",
  "karac-runtime",
  "libc",
  "llvm-sys",
