@@ -885,6 +885,18 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `var_type_names` writes route through here so a refinement-typed
     /// binding dispatches as its base everywhere downstream.
     pub(super) fn record_var_type_name(&mut self, var: String, ty_name: String) {
+        // B-2026-07-03-11: inside a monomorph the typechecker's recorded binding
+        // type is the abstract generic param (`let b = w.bump()` where
+        // `bump -> Self` on a `w: W` receiver records `b: W`). Resolve it to the
+        // concrete type this mono bound `W` to (`Ctr`) via the name-level
+        // subst, so downstream field access / method dispatch on `b` finds the
+        // real shape. No-op outside a mono (the map is empty) and for a
+        // concrete name (not a bound generic param).
+        let ty_name = self
+            .type_subst_names
+            .get(&ty_name)
+            .cloned()
+            .unwrap_or(ty_name);
         let normalized = self.refinement_base_name(&ty_name);
         // DataFrame is non-generic, so its bindings don't flow through a
         // typed-exprs side-table the way Column/Tensor do — record

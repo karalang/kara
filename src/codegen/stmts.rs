@@ -2732,6 +2732,21 @@ impl<'ctx> super::Codegen<'ctx> {
                                     }
                                     None
                                 }),
+                            // A method-call RHS returning a struct (`let b =
+                            // w.bump()` where `bump -> Self`): resolve the
+                            // concrete return-type name via `type_name_of_expr`
+                            // (which reads the receiver's registered type +
+                            // `fn_return_type_names`), guarded by an LLVM-shape
+                            // match so a stale name can't mislabel. Without this
+                            // the binding fell to the reverse-lookup below, which
+                            // picks the FIRST same-shape struct in HashMap order
+                            // (e.g. a `{i64}` `Ctr` aliased to `TcpStream`) —
+                            // the binding then dispatched `b.method()` against
+                            // the wrong type. Surfaced by a `-> Self` method
+                            // called through a generic bound (B-2026-07-03-11).
+                            ExprKind::MethodCall { .. } => self
+                                .type_name_of_expr(value)
+                                .filter(|n| matches!(self.struct_types.get(n.as_str()), Some(t) if *t == st)),
                             _ => None,
                         };
                         if let Some(name) = ast_hint {

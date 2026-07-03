@@ -1012,6 +1012,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     &callee_fn,
                     &HashMap::new(),
                     &HashMap::new(),
+                    &HashMap::new(),
                     &layout_subst,
                     &return_layout,
                 );

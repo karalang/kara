@@ -1384,6 +1384,19 @@ pub(super) struct Codegen<'ctx> {
     /// extends the save/restore around `compile_mono_function` so the
     /// body lowering sees the same bindings.
     pub(crate) const_subst: HashMap<String, crate::prelude::ConstValue>,
+    /// Active type-parameter substitution during a monomorphization pass,
+    /// as concrete type *names* (e.g. `"T"` → `"C"`) — the name-level twin of
+    /// `type_subst` (which holds LLVM types). Populated in `compile_generic_call`
+    /// from the typechecker's per-call `call_type_subs` frame (resolved through
+    /// the caller's active name-subst so a nested generic call flattens the
+    /// outer param), saved/restored around `compile_mono_function` exactly like
+    /// `type_subst`. Consulted by the mono param prologue so a bare-type-param
+    /// param (`x: X`) registers its receiver type as the concrete impl target
+    /// (`var_type_names["x"] = "C"`), which is what `inferred_receiver_type`
+    /// needs to dispatch a trait method called through the generic bound
+    /// (`x.tag()` → `C.tag`; B-2026-07-03-11). LLVM types can't be reverse-mapped
+    /// to a name safely — same-shape structs collide — so this is a distinct map.
+    pub(crate) type_subst_names: HashMap<String, String>,
     /// Per-layout-monomorphization axis: callee param NAME → the `LayoutId`
     /// of the caller's argument at the active call site
     /// (`docs/spikes/per-layout-monomorphization.md`). Saved/restored around
@@ -5267,6 +5280,7 @@ impl<'ctx> Codegen<'ctx> {
             fn_asts: HashMap::new(),
             generated_monos: HashSet::new(),
             type_subst: HashMap::new(),
+            type_subst_names: HashMap::new(),
             const_subst: HashMap::new(),
             layout_subst: HashMap::new(),
             return_layout: LayoutId::Aos,
@@ -6434,6 +6448,26 @@ impl<'ctx> Codegen<'ctx> {
             if let Item::Function(f) = item {
                 if f.generic_params.is_some() {
                     self.generic_fns.insert(f.name.clone(), f.clone());
+                    // Register the CONCRETE return-type name (if any) so code
+                    // that consults `fn_return_type_names` — the print
+                    // signedness check (`expr_is_unsigned_int`), call-result var
+                    // typing — works for a generic fn with a non-generic return
+                    // (`gwrap[T](x: T) -> u8` printed `255u8` as `-1` because the
+                    // Call arm found no entry and defaulted to signed). A generic
+                    // return (`-> T`, where `T` is one of the fn's own params) has
+                    // no static name — skip it. B-2026-07-03-N.
+                    if let Some(TypeKind::Path(path)) = f.return_type.as_ref().map(|t| &t.kind) {
+                        if let Some(seg) = path.segments.first() {
+                            let is_generic_param = f
+                                .generic_params
+                                .as_ref()
+                                .is_some_and(|gp| gp.params.iter().any(|p| &p.name == seg));
+                            if !is_generic_param {
+                                self.fn_return_type_names
+                                    .insert(f.name.clone(), seg.clone());
+                            }
+                        }
+                    }
                 } else {
                     self.declare_function(f)?;
                     // Retain the AST for on-demand per-layout monomorphization

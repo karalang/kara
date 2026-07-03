@@ -331,14 +331,32 @@ impl<'ctx> super::Codegen<'ctx> {
         // `infer_type_args` couldn't bind — the explicit-generic-args pass
         // below still overrides. Also feeds the mangle (via `subst`), so
         // the two instantiations become distinct symbols.
+        // Name-level twin of `subst` (B-2026-07-03-11): the concrete type
+        // *name* each generic param resolves to, so the mono param prologue can
+        // register a bare-type-param receiver (`x: X`) under its concrete type
+        // (`var_type_names["x"] = "C"`) and dispatch a trait method called
+        // through the bound (`x.tag()` → `C.tag`). Built from the same
+        // `call_type_subs` frame, resolving each recorded name through the
+        // caller's active `type_subst_names` so a nested generic call flattens
+        // an outer param (mirrors the LLVM `type_subst` resolution just below).
+        let mut subst_names: HashMap<String, String> = HashMap::new();
         if let Some(frame) = self
             .call_type_subs
             .get(&(call_span.offset, call_span.length))
             .cloned()
         {
             for (param_name, concrete_name) in frame {
+                // Flatten through the caller's active name-subst: a recorded
+                // name that is itself an outer generic param resolves to the
+                // outer param's concrete binding.
+                let resolved = self
+                    .type_subst_names
+                    .get(&concrete_name)
+                    .cloned()
+                    .unwrap_or(concrete_name);
+                subst_names.insert(param_name.clone(), resolved.clone());
                 if let std::collections::hash_map::Entry::Vacant(e) = subst.entry(param_name) {
-                    let llvm = self.llvm_type_for_name(&concrete_name);
+                    let llvm = self.llvm_type_for_name(&resolved);
                     e.insert(llvm);
                 }
             }
@@ -372,6 +390,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     GenericArg::Type(t) => {
                         let llvm_ty = self.llvm_type_for_type_expr(t);
                         subst.insert(param.name.clone(), llvm_ty);
+                        // Keep the name-subst twin in step (B-2026-07-03-11) so an
+                        // explicit `f[C](x)` also registers the receiver's concrete
+                        // type name for bound-trait-method dispatch.
+                        if let TypeKind::Path(path) = &t.kind {
+                            if let Some(seg) = path.segments.first() {
+                                let resolved = self
+                                    .type_subst_names
+                                    .get(seg)
+                                    .cloned()
+                                    .unwrap_or_else(|| seg.clone());
+                                subst_names.insert(param.name.clone(), resolved);
+                            }
+                        }
                     }
                     GenericArg::Const(e) => {
                         if let Some(cv) = const_value_from_literal_expr(e) {
@@ -426,6 +457,7 @@ impl<'ctx> super::Codegen<'ctx> {
             name,
             &generic_fn,
             &subst,
+            &subst_names,
             &const_subst,
             &layout_subst,
             &LayoutId::Aos,
@@ -507,6 +539,11 @@ impl<'ctx> super::Codegen<'ctx> {
             let saved_cancel_ptr = self.branch_cancel_ptr.take();
             let saved_loop_stack = std::mem::take(&mut self.loop_stack);
             let saved_subst = std::mem::replace(&mut self.type_subst, subst.clone());
+            // Name-level twin of `type_subst` (B-2026-07-03-11): thread the
+            // concrete-type-name subst so the mono param prologue can register a
+            // bound-generic receiver under its concrete type for trait dispatch.
+            let saved_subst_names =
+                std::mem::replace(&mut self.type_subst_names, subst_names.clone());
             // Const generics slice 4: thread the const-arg substitution
             // into the body-lowering pass so `compile_expr Identifier`
             // can resolve const-param refs against it. Parallel to
@@ -561,6 +598,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.layout_subst = saved_layout_subst;
             self.const_subst = saved_const_subst;
             self.type_subst = saved_subst;
+            self.type_subst_names = saved_subst_names;
             self.loop_stack = saved_loop_stack;
             self.branch_cancel_ptr = saved_cancel_ptr;
             self.scope_cleanup_actions = saved_cleanup;
@@ -1009,6 +1047,9 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_cancel_ptr = self.branch_cancel_ptr.take();
         let saved_loop_stack = std::mem::take(&mut self.loop_stack);
         let saved_subst = std::mem::take(&mut self.type_subst);
+        // Name-subst twin (B-2026-07-03-11): isolate the layout-mono body from a
+        // stale outer name-subst, mirroring `type_subst`.
+        let saved_subst_names = std::mem::take(&mut self.type_subst_names);
         let saved_const_subst = std::mem::take(&mut self.const_subst);
         let saved_layout_subst = std::mem::replace(&mut self.layout_subst, layout_subst);
         let saved_return_layout = std::mem::replace(&mut self.return_layout, return_layout);
@@ -1044,6 +1085,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.layout_subst = saved_layout_subst;
         self.const_subst = saved_const_subst;
         self.type_subst = saved_subst;
+        self.type_subst_names = saved_subst_names;
         self.loop_stack = saved_loop_stack;
         self.branch_cancel_ptr = saved_cancel_ptr;
         self.scope_cleanup_actions = saved_cleanup;
@@ -1228,10 +1270,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.ref_params.insert(param_name.clone(), inner_ty);
             }
             // Track declared type name for struct/enum field resolution.
+            // B-2026-07-03-11: if the declared type is a generic type parameter
+            // bound in this monomorph (`x: X`), register the CONCRETE type name
+            // (`C`) — resolved through the name-level `type_subst_names` — so a
+            // trait method called through the bound (`x.tag()`) dispatches to
+            // `C.tag` via `inferred_receiver_type`. Non-generic Path params
+            // (`x: C`) fall through to the declared segment unchanged.
             if let TypeKind::Path(path) = &param.ty.kind {
                 if let Some(type_name) = path.segments.first() {
-                    self.var_type_names
-                        .insert(param_name.clone(), type_name.clone());
+                    let concrete = self
+                        .type_subst_names
+                        .get(type_name)
+                        .cloned()
+                        .unwrap_or_else(|| type_name.clone());
+                    self.var_type_names.insert(param_name.clone(), concrete);
                 }
             }
             // B-2026-07-02-11: register the collection / String / struct
@@ -1356,6 +1408,15 @@ impl<'ctx> super::Codegen<'ctx> {
             self.suppress_cleanup_for_tail_return(&func.body);
             self.emit_scope_cleanup();
             if let Some(val) = result {
+                // Scalar width coercion at the tail-ret boundary, mirroring the
+                // non-generic path (`compile_function`, functions.rs). A mono
+                // declared `-> u8` whose body tail is the i64 literal `255`
+                // would otherwise emit `ret i64 255` into an `i8`-returning fn
+                // and fail module verification; `coerce_to_current_ret_type`
+                // truncates to the declared narrow return width (no-op for
+                // matching / non-scalar returns). Narrow-width return from a
+                // generic mono (B-2026-07-03-N).
+                let val = self.coerce_to_current_ret_type(val);
                 self.builder.build_return(Some(&val)).unwrap();
             } else {
                 self.builder.build_return(None).unwrap();
@@ -1544,11 +1605,16 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `return_layout` adds the backward-inference axis (slice 3): a non-`Aos`
     /// *return* layout appends a `$ret_soa_<name>` suffix, so a helper called
     /// to return one layout vs. another (or vs. plain AoS) is a distinct symbol.
+    // Each argument is a distinct monomorphization axis (type / name / const /
+    // layout / return-layout); collapsing them into a struct would only move the
+    // arity into a builder with no readability gain.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn mangle_mono_name(
         &self,
         base: &str,
         func: &Function,
         subst: &HashMap<String, BasicTypeEnum<'ctx>>,
+        subst_names: &HashMap<String, String>,
         const_subst: &HashMap<String, crate::prelude::ConstValue>,
         layout_subst: &HashMap<String, LayoutId>,
         return_layout: &LayoutId,
@@ -1569,7 +1635,29 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 } else if let Some(ty) = subst.get(&param.name) {
                     mangled.push('$');
-                    mangled.push_str(&self.llvm_type_to_mangle_str(*ty));
+                    let token = self.llvm_type_to_mangle_str(*ty);
+                    // Every user struct/enum lowers to the opaque `"struct"`
+                    // token, so two same-shape-but-distinct instantiations
+                    // (`use_it$A` vs `use_it$B`, both `{i64}`) would collide and
+                    // the second silently reuse the first's body — miscompiling
+                    // any name-dependent behavior (field access, bound-trait
+                    // method dispatch, B-2026-07-03-11). Disambiguate by the
+                    // concrete type NAME, but ONLY for a USER struct/enum — a
+                    // builtin whose layout is `"struct"` (String, Vec, Map, …)
+                    // keeps the `$struct` token so its existing per-mono symbols
+                    // are unchanged (its method dispatch never keys on
+                    // `var_type_names`, so the opaque token is still sound).
+                    if token == "struct" {
+                        if let Some(name) = subst_names.get(&param.name) {
+                            if self.struct_types.contains_key(name)
+                                || self.enum_layouts.contains_key(name)
+                            {
+                                mangled.push_str(name);
+                                continue;
+                            }
+                        }
+                    }
+                    mangled.push_str(&token);
                 }
             }
         }

@@ -3601,6 +3601,111 @@ fn main() {
         }
     }
 
+    /// B-2026-07-03-11: dispatch a trait method called through a GENERIC
+    /// TYPE-PARAMETER BOUND under `karac build`. `fn use_it[X: Tagged](x: X)`
+    /// calling `x.tag()` used to die with "no handler for method tag on
+    /// variable x (method dispatch fell through)" — codegen had no arm for a
+    /// receiver whose type is a bound generic param. The mono param prologue
+    /// now registers `x` under the CONCRETE impl type (via the name-level
+    /// `type_subst_names`), so `inferred_receiver_type` resolves `X.tag` to
+    /// `A.tag` / `B.tag`. Also guards the mangle-collision half: `A` and `B`
+    /// both lower to `{i64}`, so `use_it$A` / `use_it$B` would share one
+    /// symbol (the second reusing the first's body) without the per-mono
+    /// concrete-name mangle axis — `use_it(b)` would print A's `18`-shaped
+    /// result. Covers method args and a nested bound-param pass-through.
+    #[test]
+    fn e2e_generic_bound_trait_method_dispatch() {
+        if let Some(out) = run_program(
+            "trait Tagged {\n\
+             \x20   fn tag(self) -> i64;\n\
+             \x20   fn combine(self, other: i64) -> i64;\n\
+             }\n\
+             struct A { v: i64 }\n\
+             struct B { v: i64 }\n\
+             impl Tagged for A {\n\
+             \x20   fn tag(self) -> i64 { 10 }\n\
+             \x20   fn combine(self, other: i64) -> i64 { self.v + other }\n\
+             }\n\
+             impl Tagged for B {\n\
+             \x20   fn tag(self) -> i64 { 20 }\n\
+             \x20   fn combine(self, other: i64) -> i64 { self.v * other }\n\
+             }\n\
+             fn use_it[X: Tagged](x: X) -> i64 { x.tag() + x.combine(3) }\n\
+             fn forward[Y: Tagged](y: Y) -> i64 { use_it(y) }\n\
+             fn main() {\n\
+             \x20   println(f\"{use_it(A { v: 5 })}\");\n\
+             \x20   println(f\"{use_it(B { v: 7 })}\");\n\
+             \x20   println(f\"{forward(A { v: 2 })}\");\n\
+             }",
+        ) {
+            // A: 10 + (5+3) = 18; B: 20 + (7*3) = 41; forward(A): 10 + (2+3) = 15
+            assert_eq!(out, "18\n41\n15\n");
+        }
+    }
+
+    /// B-2026-07-03-11 (heap + default-method + `-> Self` facets): a default
+    /// trait method calling another trait method dispatches through the bound
+    /// on a String-carrying receiver; and a `-> Self`-returning method bound
+    /// through the same bound (`let b = w.bump()`) registers `b` under the
+    /// concrete impl type. The `let b` half exercises the reverse-lookup fix
+    /// in `stmts.rs` — `w.bump()`'s struct result used to fall to the
+    /// HashMap-order LLVM-shape reverse-lookup (a `{i64}` `Ctr` aliased to
+    /// the first same-shape struct, e.g. `TcpStream`), so `b.val()` dispatched
+    /// against the wrong type.
+    #[test]
+    fn e2e_generic_bound_default_and_self_return() {
+        if let Some(out) = run_program(
+            "trait Greeter {\n\
+             \x20   fn name(self) -> String;\n\
+             \x20   fn greeting(self) -> String { \"hi \" + self.name() }\n\
+             }\n\
+             struct Person { id: i64 }\n\
+             impl Greeter for Person {\n\
+             \x20   fn name(self) -> String { \"person-with-a-long-enough-name\" }\n\
+             }\n\
+             fn describe[G: Greeter](g: G) -> String { g.greeting() }\n\
+             trait Bumpable {\n\
+             \x20   fn bump(self) -> Self;\n\
+             \x20   fn val(self) -> i64;\n\
+             }\n\
+             struct Ctr { n: i64 }\n\
+             impl Bumpable for Ctr {\n\
+             \x20   fn bump(self) -> Self { Ctr { n: self.n + 1 } }\n\
+             \x20   fn val(self) -> i64 { self.n }\n\
+             }\n\
+             fn run_it[W: Bumpable](w: W) -> i64 { let b = w.bump(); b.val() }\n\
+             fn main() {\n\
+             \x20   println(f\"{describe(Person { id: 1 })}\");\n\
+             \x20   println(f\"{run_it(Ctr { n: 41 })}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "hi person-with-a-long-enough-name\n42\n");
+        }
+    }
+
+    /// B-2026-07-03-11 (narrow-width facet): a generic function with a
+    /// non-generic NARROW return type. `fn narrow[T](x: T) -> u8 { 255 }`
+    /// used to (a) fail module verification — the mono tail-return emitted
+    /// `ret i64 255` into an `i8`-returning fn (no `coerce_to_current_ret_type`
+    /// on the mono path) — and (b) once that's fixed, print `255u8` as `-1`,
+    /// because the print signedness check found no `fn_return_type_names` entry
+    /// for the un-declared generic fn and defaulted to signed. Both are closed:
+    /// the mono return coerces to the declared width, and generic fns now
+    /// register their concrete return-type name.
+    #[test]
+    fn e2e_generic_fn_narrow_width_return() {
+        if let Some(out) = run_program(
+            "fn narrow[T](x: T) -> u8 { 255 }\n\
+             fn passthru[T](x: T) -> u8 { narrow(x) }\n\
+             fn main() {\n\
+             \x20   println(f\"{narrow(7)}\");\n\
+             \x20   println(f\"{passthru(9)}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "255\n255\n");
+        }
+    }
+
     /// Regression: `TaskHandle[T].join()` for a NON-scalar `T` (`Vec[i64]`)
     /// returns the spawned task's heap value intact. `recover_task_handle_
     /// join_return_ty` used to return `i64` unconditionally, so a `Vec`/

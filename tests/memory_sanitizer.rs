@@ -18694,4 +18694,39 @@ fn main() {
             "chained_call_struct_heap_field_no_leak",
         );
     }
+
+    #[test]
+    fn asan_generic_bound_default_method_string_no_leak() {
+        // B-2026-07-03-11: a trait DEFAULT method (`greeting`) dispatched
+        // through a generic BOUND (`describe[G: Greeter]`) on a String-carrying
+        // implementor. `greeting()` concatenates a fresh heap String
+        // (`"hi " + self.name()`) which flows out through the mono return. Loop
+        // it with a >=36-byte payload so any leak of the returned String buffer
+        // (or the intermediate `name()` result) trips Linux LSan / macOS ASan.
+        assert_clean_asan_run(
+            r#"
+trait Greeter {
+    fn name(self) -> String;
+    fn greeting(self) -> String { "hi " + self.name() }
+}
+struct Person { id: i64 }
+impl Greeter for Person {
+    fn name(self) -> String { "a sufficiently long greeter name payload" }
+}
+fn describe[G: Greeter](g: G) -> String { g.greeting() }
+fn main() {
+    let mut i = 0i64;
+    let mut acc = 0i64;
+    while i < 50i64 {
+        let g = describe(Person { id: i });
+        acc = acc + g.len();
+        i = i + 1i64;
+    }
+    println(f"{acc}");
+}
+"#,
+            &["2150"],
+            "generic_bound_default_method_string_no_leak",
+        );
+    }
 }
