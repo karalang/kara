@@ -309,6 +309,37 @@ impl<'a> super::Interpreter<'a> {
                 }
                 Some(self.eval_binary(&BinOp::Sub, mx, mn, span))
             }
+            // General left-fold over the valid slots (nulls skipped, in
+            // order): thread `init` through `f(acc, elem)`. An empty /
+            // all-null column returns `init` unchanged — the fold identity,
+            // with no empty trap (unlike `sum`/`min`/`max`). Typed by the
+            // `fold` intercept in `src/typechecker/expr_method_call.rs`.
+            "fold" => {
+                if args.len() != 2 {
+                    return Some(self.record_runtime_error(
+                        format!(
+                            "Column.fold expects 2 arguments (init, closure), got {}",
+                            args.len()
+                        ),
+                        span,
+                    ));
+                }
+                let mut acc = self.eval_expr_inner(&args[0].value);
+                let f = self.eval_expr_inner(&args[1].value);
+                if !matches!(f, Value::Function { .. }) {
+                    return Some(self.record_runtime_error(
+                        format!("Column.fold expects a closure as its second argument; got {f}"),
+                        span,
+                    ));
+                }
+                for x in collect_valid(data, valid) {
+                    acc = self.invoke_function_value(f.clone(), vec![acc, x]);
+                    if self.pending_cf.is_some() {
+                        return Some(Value::Unit);
+                    }
+                }
+                Some(acc)
+            }
             "corr" => Some(self.eval_column_corr(data, valid, args, span)),
             _ => None,
         }

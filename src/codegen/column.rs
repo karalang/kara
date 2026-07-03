@@ -46,9 +46,9 @@ use inkwell::values::{BasicValueEnum, FloatValue, IntValue, PointerValue, Struct
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 
 use super::kernel::{ContainerAccess, MapDest, MapKernelOp, MapOther, SortKey};
-use super::state::ColumnVarInfo;
+use super::state::{ColumnVarInfo, VarSlot};
 use super::tensor::type_expr_is_unsigned_int;
-use crate::ast::{BinOp, CallArg, Expr, ExprKind, GenericArg, TypeExpr, TypeKind};
+use crate::ast::{BinOp, CallArg, Expr, ExprKind, GenericArg, PatternKind, TypeExpr, TypeKind};
 use crate::reduce_kernel::ReduceOp;
 use crate::token::Span;
 
@@ -1225,6 +1225,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 | "min"
                 | "max"
                 | "range"
+                | "fold"
                 | "var"
                 | "std"
                 | "corr"
@@ -1359,6 +1360,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     info.elem_unsigned,
                 )?))
             }
+            // `fold[A](init, |acc, x| ...)` — the general left-fold primitive.
+            // Inlines the closure body over the valid slots (see
+            // `compile_column_fold`).
+            "fold" => Ok(Some(self.compile_column_fold(
+                control,
+                info.elem,
+                info.elem_unsigned,
+                args,
+            )?)),
             "mean" => Ok(Some(self.compile_column_mean(
                 control,
                 info.elem,
@@ -2290,6 +2300,225 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let seed = self.column_one_elem(elem);
         self.emit_reduce_fold(&access, ReduceOp::Prod, seed)
+    }
+
+    /// `fold[A](init, |acc, elem| body) -> A` — the general left-fold
+    /// primitive. Emits an in-place reduction loop over the valid slots (nulls
+    /// skipped, in order), threading an `A`-typed accumulator through the
+    /// closure body, which is **inlined** (compiled in the current function
+    /// with `acc` / `elem` bound as locals) — sidestepping the closure-value
+    /// ABI and letting any captures resolve through the enclosing scope. An
+    /// empty / all-null column returns `init` unchanged (no empty trap — the
+    /// fold identity, unlike `sum` / `min` / `max`).
+    ///
+    /// First cut: the closure must be an inline literal, and both the element
+    /// `T` and the accumulator `A` must be POD (scalar). A closure-valued local
+    /// / named fn, a heap element (`Column[String]`), or a heap / aggregate
+    /// accumulator is rejected **loudly** here — `karac run` handles those
+    /// shapes; their native (`karac build`) paths land in a follow-on slice.
+    fn compile_column_fold(
+        &mut self,
+        control: PointerValue<'ctx>,
+        elem: BasicTypeEnum<'ctx>,
+        _unsigned: bool,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if args.len() != 2 {
+            return Err(format!(
+                "Column.fold expects 2 arguments (init, closure), got {}",
+                args.len()
+            ));
+        }
+        // The inline-body strategy needs the closure literal at the call site.
+        let ExprKind::Closure { params, body, .. } = &args[1].value.kind else {
+            return Err(
+                "Column.fold expects an inline closure literal as its second \
+                        argument under `karac build`; a closure-valued local / named \
+                        fn is not yet supported by the native backend (it works under \
+                        `karac run`)."
+                    .to_string(),
+            );
+        };
+        if params.len() != 2 {
+            return Err(format!(
+                "Column.fold closure must take exactly 2 parameters (acc, elem), got {}",
+                params.len()
+            ));
+        }
+        // Heap element (`Column[String]`) — the per-slot load would need
+        // clone plumbing; POD-only for this cut.
+        if self.column_elem_is_string(elem) {
+            return Err("Column[String].fold is not yet supported by the native \
+                        backend (`karac build`); it works under `karac run`."
+                .to_string());
+        }
+
+        // 1. Seed the accumulator; its LLVM type IS `A`.
+        let init_val = self.compile_expr(&args[0].value)?;
+        let acc_ty = init_val.get_type();
+        // A heap / aggregate accumulator (String / Vec `{ptr,len,cap}` struct,
+        // or a pointer) would leak / double-free on each per-iteration
+        // replacement without drop plumbing — reject loudly (POD `A` only).
+        if acc_ty.is_struct_type() || acc_ty.is_pointer_type() || acc_ty.is_array_type() {
+            return Err(
+                "Column.fold with a heap / aggregate accumulator is not yet \
+                        supported by the native backend (`karac build`); use a scalar \
+                        accumulator, or run it under `karac run`."
+                    .to_string(),
+            );
+        }
+
+        let fn_val = self.current_fn.unwrap();
+        let i64_t = self.context.i64_type();
+
+        let acc_slot = self.create_entry_alloca(fn_val, "col.fold.acc", acc_ty);
+        self.builder.build_store(acc_slot, init_val).unwrap();
+
+        // 2. Column control fields.
+        let len = self
+            .column_load_field(control, 2, "col.fold.len")
+            .into_int_value();
+        let data = self
+            .column_load_field(control, 0, "col.fold.data")
+            .into_pointer_value();
+        let bitmap = self
+            .column_load_field(control, 1, "col.fold.bm")
+            .into_pointer_value();
+
+        // 3. Loop scaffold:
+        //     head  → i < len ? body : exit
+        //     body  → valid[i] ? apply : next   (nulls skipped)
+        //     apply → elem = data[i]; bind (acc, elem); acc = <closure>; → next
+        //     next  → i++ ; → head
+        //     exit  → ret acc
+        let head = self.context.append_basic_block(fn_val, "col.fold.head");
+        let body_bb = self.context.append_basic_block(fn_val, "col.fold.body");
+        let apply_bb = self.context.append_basic_block(fn_val, "col.fold.apply");
+        let next_bb = self.context.append_basic_block(fn_val, "col.fold.next");
+        let exit_bb = self.context.append_basic_block(fn_val, "col.fold.exit");
+
+        let i_slot = self.create_entry_alloca(fn_val, "col.fold.i", i64_t.into());
+        self.builder
+            .build_store(i_slot, i64_t.const_zero())
+            .unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        // head: i < len ?
+        self.builder.position_at_end(head);
+        let i = self
+            .builder
+            .build_load(i64_t, i_slot, "col.fold.i.load")
+            .unwrap()
+            .into_int_value();
+        let in_range = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, len, "col.fold.ir")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(in_range, body_bb, exit_bb)
+            .unwrap();
+
+        // body: skip null slots.
+        self.builder.position_at_end(body_bb);
+        let valid = self.column_load_valid_bit(bitmap, i);
+        self.builder
+            .build_conditional_branch(valid, apply_bb, next_bb)
+            .unwrap();
+
+        // apply: elem = data[i]; bind closure params; compile body; store acc.
+        self.builder.position_at_end(apply_bb);
+        let elem_addr = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem, data, &[i], "col.fold.ep")
+                .unwrap()
+        };
+        let elem_val = self
+            .builder
+            .build_load(elem, elem_addr, "col.fold.ev")
+            .unwrap();
+        let acc_cur = self
+            .builder
+            .build_load(acc_ty, acc_slot, "col.fold.acc.cur")
+            .unwrap();
+
+        // Bind the two closure params (`acc`, then `elem`) as locals, saving
+        // any shadowed outer binding so captures still resolve — and restoring
+        // it after the body so the loop's own scope stays contained.
+        let pname = |i: usize| match &params[i].pattern.kind {
+            PatternKind::Binding(n) => n.clone(),
+            _ => format!("_col_fold_p{i}"),
+        };
+        let acc_name = pname(0);
+        let elem_name = pname(1);
+        let saved_acc = self.variables.get(&acc_name).copied();
+        let saved_elem = self.variables.get(&elem_name).copied();
+
+        let acc_param = self.create_entry_alloca(fn_val, &acc_name, acc_ty);
+        self.builder.build_store(acc_param, acc_cur).unwrap();
+        self.variables.insert(
+            acc_name.clone(),
+            VarSlot {
+                ptr: acc_param,
+                ty: acc_ty,
+            },
+        );
+        let elem_param = self.create_entry_alloca(fn_val, &elem_name, elem);
+        self.builder.build_store(elem_param, elem_val).unwrap();
+        self.variables.insert(
+            elem_name.clone(),
+            VarSlot {
+                ptr: elem_param,
+                ty: elem,
+            },
+        );
+
+        let new_acc = self.compile_expr(body)?;
+        // Defensive width/int-float reconciliation — the typechecker already
+        // pinned the closure result to `A`, but a mixed-width body could leave
+        // a narrower/other-kind SSA value; coerce to the accumulator's type.
+        let new_acc = self.coerce_scalar_to_type(new_acc, acc_ty);
+
+        // Restore the outer bindings the params shadowed.
+        match saved_elem {
+            Some(s) => {
+                self.variables.insert(elem_name.clone(), s);
+            }
+            None => {
+                self.variables.remove(&elem_name);
+            }
+        }
+        match saved_acc {
+            Some(s) => {
+                self.variables.insert(acc_name.clone(), s);
+            }
+            None => {
+                self.variables.remove(&acc_name);
+            }
+        }
+
+        self.builder.build_store(acc_slot, new_acc).unwrap();
+        self.builder.build_unconditional_branch(next_bb).unwrap();
+
+        // next: i++ ; loop.
+        self.builder.position_at_end(next_bb);
+        let i2 = self
+            .builder
+            .build_load(i64_t, i_slot, "col.fold.i.load2")
+            .unwrap()
+            .into_int_value();
+        let inc = self
+            .builder
+            .build_int_add(i2, i64_t.const_int(1, false), "col.fold.i.inc")
+            .unwrap();
+        self.builder.build_store(i_slot, inc).unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        // exit: the threaded accumulator.
+        self.builder.position_at_end(exit_bb);
+        Ok(self
+            .builder
+            .build_load(acc_ty, acc_slot, "col.fold.result")
+            .unwrap())
     }
 
     /// `min() -> T` / `max() -> T` — the smallest / largest valid slot,

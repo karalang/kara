@@ -19173,6 +19173,42 @@ fn main() {
 }
 
 #[test]
+fn column_fold_reduction() {
+    // `Column.fold[A](init, |acc, x| ...)` — the general left-fold primitive,
+    // threading `init` through the closure over the valid slots (nulls skipped,
+    // in order). The interpreter handles ANY `A`/`T` (unlike the POD-only
+    // native first cut): here a numeric fold, a String accumulator (run-only),
+    // a nulls-skipping fold, and an empty column (returns `init`, no trap).
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let c: Column[i64] = Column.from_vec([1, 2, 3, 4, 5]);
+    println(f"{c.fold(0, |a, x| a + x)}");
+    println(f"{c.fold(1, |a, x| a * x)}");
+    println(f"{c.fold(0, |a, x| if x > 2 { a + 1 } else { a })}");
+
+    // String accumulator — the interpreter is not restricted to POD `A`.
+    let words: Column[i64] = Column.from_vec([1, 2, 3]);
+    let joined = words.fold("", |acc, x| acc + "!");
+    println(f"{joined}");
+
+    // Nulls are skipped (SQL/pandas posture).
+    let mut n: Column[i64] = Column.new();
+    n.push(10);
+    n.push_null();
+    n.push(20);
+    println(f"{n.fold(0, |a, x| a + x)}");
+
+    // Empty column returns `init` unchanged (the fold identity — no trap).
+    let e: Column[i64] = Column.from_vec([]);
+    println(f"{e.fold(99, |a, x| a + x)}");
+}
+"#,
+    );
+    assert_eq!(out, "15\n120\n3\n!!!\n30\n99\n");
+}
+
+#[test]
 fn primitive_trait_impl_direct_dispatch_by_declared_width() {
     // B-2026-07-03-5: a user trait impl on a PRIMITIVE target dispatched for a
     // direct value-receiver call under `karac run`. The interpreter's runtime

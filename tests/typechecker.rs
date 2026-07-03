@@ -27300,6 +27300,51 @@ fn test_column_sum_is_int_mean_is_float() {
 }
 
 #[test]
+fn test_column_fold_result_type_is_accumulator() {
+    // `Column.fold[A](init, f)` returns `A`, inferred from `init`. An i64
+    // accumulator makes the result usable as an array index; an f64
+    // accumulator does not (the pin-via-index context distinguishes them —
+    // numeric coercion is permissive at let-bindings).
+    typecheck_ok(
+        "fn main() {\n\
+             let c: Column[i64] = Column.from_vec([1i64, 2i64]);\n\
+             let v: Vec[i64] = [10i64, 20i64];\n\
+             let _ = v[c.fold(0i64, |a, x| a + x)];\n\
+         }",
+    );
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let c: Column[i64] = Column.from_vec([1i64, 2i64]);\n\
+             let v: Vec[i64] = [10i64, 20i64];\n\
+             let _ = v[c.fold(0.0, |a, x| a + 1.0)];\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("index must be an integer")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_column_fold_wrong_arity_rejected() {
+    // `fold` requires exactly two arguments (init, closure).
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let c: Column[i64] = Column.from_vec([1i64, 2i64]);\n\
+             let _ = c.fold(0i64);\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("Column.fold expects 2 arguments")),
+        "{errors:?}",
+    );
+}
+
+#[test]
 fn test_column_mean_on_non_numeric_rejected() {
     let errors = typecheck_errors(
         "fn main() {\n\

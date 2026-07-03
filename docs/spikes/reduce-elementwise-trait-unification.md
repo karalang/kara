@@ -411,6 +411,36 @@ B-2026-07-02-10..13, see the ledger.
     a generic struct, and ref-self / by-value-self / bounded-impl methods.
     Tests: codegen e2e `test_e2e_generic_struct_field_monomorphizes_by_element`
     + `test_e2e_generic_struct_method_monomorphizes_by_receiver`.
+  - **S6c-1 (`Column.fold`)** ✅ **(landed 2026-07-03)** — the general
+    left-fold primitive on `Column[T]` that the fixed reductions
+    (`sum`/`prod`/`min`/`max`) specialize: `col.fold(0, |a, x| a + x)` is
+    `sum`, `col.fold(0, |a, x| if x > 2 { a + 1 } else { a })` counts, etc.
+    Threads `init: A` through `f(acc, elem)` over the valid slots (nulls
+    skipped, in order); an empty / all-null column returns `init` unchanged
+    (the fold identity — NO empty trap, unlike `sum`/`min`/`max`). Declared
+    `#[compiler_builtin] fn fold[A](ref self, init: A, f: Fn(A, T) -> A) -> A`
+    in the inherent `impl[T] Column[T]`; typed by a `fold` intercept
+    (`expr_method_call.rs`) that binds `A` from `init` and the element `T`
+    from the receiver, then `check_expr`s the closure against `Fn(A, T) -> A`
+    (closure-param pushdown, mirroring `Iterator.fold`) — baked generic
+    dispatch can't bind `A` from an argument. Interp threads the accumulator
+    through `invoke_function_value` (any `A`/`T`); codegen
+    (`compile_column_fold`) **inlines** the closure body into an in-place
+    reduction loop (compiled in the current fn with `acc`/`elem` bound as
+    locals, shadowed outer bindings saved/restored) — sidestepping the
+    closure-value ABI, captures resolving through the enclosing scope. First
+    native (`karac build`) cut is POD-only and inline-literal-only: a
+    closure-valued local / named fn, a heap element (`Column[String]`), or a
+    heap / aggregate accumulator (`String`/`Vec`) is rejected **loudly**
+    (each works under `karac run`) — never a silent miscompile. A/B verified
+    run == KARAC_AUTO_PAR=0 == build. Tests: codegen e2e `test_e2e_column_fold`
+    {`,_with_nulls_skips_them`,`_rejects_noninline_and_heap_accumulator`};
+    interpreter `column_fold_reduction`; typechecker
+    `test_column_fold_result_type_is_accumulator` +
+    `test_column_fold_wrong_arity_rejected`. **Residuals (follow-ons):**
+    `Tensor.fold` parity; the non-inline-closure + heap-`A`/heap-`T` native
+    paths; and `fold` on the `Reduce` *trait* (bound-generic dispatch — needs
+    the primitive declared trait-side + a matching `Tensor` impl).
 - **S6c** — `ElementwiseMap` / `ElementwiseOrd` builtin method surfaces +
   user impls; blanket `Vec[T]` impls; user trait-impl methods over builtin
   containers (probed: interp "type 'unknown'", codegen loud fall-through).

@@ -186,6 +186,22 @@ impl[T] Column[T] {
         loop {}
     }
 
+    // General left-fold over the valid slots (nulls skipped, in order):
+    // threads `init: A` through `f(acc, elem)`, returning the final
+    // accumulator. The reduction primitive the fixed kernels (`sum`/`prod`/
+    // `min`/`max`) specialize — `col.fold(0, |a, x| a + x)` is `sum`,
+    // `col.fold(0, |a, x| if x > 0 { a + 1 } else { a })` counts positives,
+    // etc. Unlike `sum`/`min`/`max`, an empty / all-null column does NOT
+    // trap — it returns `init` (the fold identity). Typed by an intercept in
+    // `src/typechecker/expr_method_call.rs` (binds `A` from `init` and the
+    // element `T` from the receiver); `karac run` handles any `A`/`T`, and
+    // `karac build` inlines the closure body over a POD element/accumulator
+    // (heap `A`/`T` is a follow-on codegen slice — see `compile_column_fold`).
+    #[compiler_builtin]
+    fn fold[A](ref self, init: A, f: Fn(A, T) -> A) -> A {
+        loop {}
+    }
+
     // **Sample** variance of the valid slots (Bessel `n-1`; the
     // pandas-Series / SQL-`stddev` default). Requires ≥ 2 valid values.
     #[compiler_builtin]

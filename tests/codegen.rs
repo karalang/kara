@@ -46947,6 +46947,88 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_column_fold() {
+        // `Column.fold[A](init, |acc, x| ...)` — the general left-fold
+        // primitive the fixed reductions specialize. The closure body is
+        // INLINED into an in-place reduction loop over the valid slots (nulls
+        // skipped, in order); `A` is the accumulator's type. Covers: a sum
+        // (`+`), a product (`*`, seed 1), a predicate count, a sum-of-squares,
+        // an f64 accumulator, an outer-variable capture, an empty column
+        // (returns `init` — the fold identity, NO trap), and param shadowing
+        // (an outer `a` is restored after the fold). `run` == `build` ==
+        // default auto-par.
+        let src = r#"
+fn main() {
+    let c: Column[i64] = Column.from_vec([1, 2, 3, 4, 5]);
+    println(f"{c.fold(0, |a, x| a + x)}");
+    println(f"{c.fold(1, |a, x| a * x)}");
+    println(f"{c.fold(0, |a, x| if x > 2 { a + 1 } else { a })}");
+    println(f"{c.fold(0, |a, x| a + x * x)}");
+    let cf: Column[f64] = Column.from_vec([1.5, 2.5, 4.0]);
+    println(f"{cf.fold(0.0, |a, x| a + x)}");
+    let k: i64 = 10;
+    println(f"{c.fold(0, |a, x| a + x + k)}");
+    let e: Column[i64] = Column.from_vec([]);
+    println(f"{e.fold(99, |a, x| a + x)}");
+    let a: i64 = 7;
+    let s = c.fold(0, |a, x| a + x);
+    println(f"{s} {a}");
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        assert_eq!(out, "15\n120\n3\n55\n8\n65\n99\n15 7\n");
+    }
+
+    #[test]
+    fn test_e2e_column_fold_with_nulls_skips_them() {
+        // `fold` skips null slots (the SQL/pandas aggregate posture shared with
+        // `sum`/`min`/`max`) — the validity bitmap gates the per-slot apply.
+        let src = r#"
+fn main() {
+    let mut c: Column[i64] = Column.new();
+    c.push(10);
+    c.push_null();
+    c.push(20);
+    c.push_null();
+    c.push(30);
+    println(f"{c.fold(0, |a, x| a + x)}");
+    println(f"{c.fold(0, |a, x| a + 1)}");
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        // 10+20+30 = 60; 3 valid slots.
+        assert_eq!(out, "60\n3\n");
+    }
+
+    #[test]
+    fn test_e2e_column_fold_rejects_noninline_and_heap_accumulator() {
+        // First-cut boundaries the native backend rejects LOUDLY (each works
+        // under `karac run`): a closure-valued local (the inline-body strategy
+        // needs the literal at the call site) and a heap / aggregate
+        // accumulator (`String`, whose per-iteration replacement would need
+        // drop plumbing). Loud rejection, never a silent miscompile.
+        let non_inline = r#"
+fn main() {
+    let c: Column[i64] = Column.from_vec([1, 2, 3]);
+    let g = |a: i64, x: i64| a + x;
+    println(f"{c.fold(0, g)}");
+}
+"#;
+        let err = ir_result(non_inline).expect_err("a non-inline closure must be rejected");
+        assert!(err.contains("inline closure literal"), "got: {err}");
+
+        let heap_acc = r#"
+fn main() {
+    let c: Column[i64] = Column.from_vec([1, 2, 3]);
+    let s = c.fold("", |acc, x| acc + "!");
+    println(f"{s}");
+}
+"#;
+        let err = ir_result(heap_acc).expect_err("a heap accumulator must be rejected");
+        assert!(err.contains("heap / aggregate accumulator"), "got: {err}");
+    }
+
+    #[test]
     fn test_e2e_stdlib_reduce_default_method_inherited_by_user_impl() {
         // S6b-4 (B-2026-07-03-19): a user `impl Reduce[T] for MyType` inherits
         // the BAKED stdlib trait's DEFAULT method `range` (`max - min`) without

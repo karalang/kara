@@ -1972,6 +1972,51 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // Column[T].fold[A](init: A, f: fn(A, T) -> A) -> A — the general
+        // left-fold primitive. `A` is inferred from `init` (concrete after
+        // `infer_expr`), so the closure params `(A, T)` and its return `A` are
+        // all concrete and `check_expr` drives closure-param pushdown (same
+        // shape as `Iterator.fold`). `T` is the receiver's element. Typed here
+        // because baked generic dispatch can't bind `A` from an argument nor
+        // thread the receiver's `T` into the closure signature.
+        if method == "fold" {
+            let column_elem = match &obj_ty {
+                Type::Named { name, args } if name == "Column" && args.len() == 1 => {
+                    Some(args[0].clone())
+                }
+                Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                    Type::Named { name, args } if name == "Column" && args.len() == 1 => {
+                        Some(args[0].clone())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(elem) = column_elem {
+                if args.len() != 2 {
+                    self.type_error(
+                        format!(
+                            "Column.fold expects 2 arguments (init, closure), got {}",
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Error;
+                }
+                let acc_ty = self.infer_expr(&args[0].value);
+                let f_ty = Type::Function {
+                    params: vec![acc_ty.clone(), elem],
+                    return_type: Box::new(acc_ty.clone()),
+                };
+                self.check_expr(&args[1].value, &f_ty);
+                return acc_ty;
+            }
+        }
+
         // Column[T] statistical reductions (phase-11 stats). All operate on
         // the valid (non-null) slots — SQL/pandas aggregate semantics.
         // `sum`/`min`/`max` -> T; `mean`/`var`/`std`/`median`/`quantile` ->
