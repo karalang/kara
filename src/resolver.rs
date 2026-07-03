@@ -284,6 +284,14 @@ impl SymbolTable {
         // it is a permanent magic module the resolver makes visible.
         push(self, "process", SymbolKind::Module);
 
+        // `gpu` is the magic dispatch module (design.md § GPU Subset
+        // Constraints): `gpu.dispatch(kernel, buffer)` runs a `#[gpu]` kernel
+        // on the GPU. Registered so the lowercase receiver resolves like
+        // `process` / `ast`; the typechecker + codegen + interpreter intercept
+        // `gpu.dispatch` before it is treated as a value method (spike
+        // slice-0c, `docs/spikes/gpu-wgsl-slice0.md`).
+        push(self, "gpu", SymbolKind::Module);
+
         // Lowercase stdlib module aliases per design.md § I/O: users write
         // `env.args()`, `clock.now()`, `stdout.println(s)` — lowercase module,
         // capitalized resource name dispatches at interpreter/codegen layer.

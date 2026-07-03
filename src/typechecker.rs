@@ -1121,6 +1121,15 @@ pub struct TypeCheckResult {
     /// defaults to `f64`. The interpreter reads the ARG expression's type
     /// from `expr_types` instead, so this table is codegen-only.
     pub stats_elem_types: HashMap<SpanKey, TypeExpr>,
+    /// `gpu.dispatch(kernel, buffer)` kernel-argument span → the WGSL
+    /// compute shader `gpu_wgsl::emit_kernel` generated from the `#[gpu]`
+    /// kernel (spike slice-0c). The typechecker validates the kernel + buffer
+    /// and bakes the shader text here; codegen reads it as a plain-data hint
+    /// (preserving the codegen-containment invariant — `gpu_wgsl` imports
+    /// `ast`, so the emit happens outside `codegen.rs`). The interpreter needs
+    /// no entry — it runs the kernel element-wise on the CPU. Keyed on the
+    /// kernel argument's span (a leaf, never aliased by the outer call span).
+    pub gpu_dispatch_wgsl: HashMap<SpanKey, String>,
     /// Bare-call dispatch resolutions: span of a `Call(Identifier(name))` →
     /// resolved target type name (e.g. `"Wrapper"`). Populated when expected-
     /// type inference resolves a bare associated-function call to a concrete
@@ -1392,6 +1401,9 @@ pub struct TypeChecker<'a> {
     /// `Stats.<fn>` Call span → slice element `TypeExpr` (S5). See the
     /// public copy on `TypeCheckResult`.
     pub(super) stats_elem_types: HashMap<SpanKey, TypeExpr>,
+    /// `gpu.dispatch` kernel-arg span → generated WGSL (slice-0c). See the
+    /// public copy on `TypeCheckResult`.
+    pub(super) gpu_dispatch_wgsl: HashMap<SpanKey, String>,
     /// `TaskHandle[T].join()` MethodCall span → result type `T`. See the
     /// public copy on `TypeCheckResult` for the full rationale.
     pub(super) task_join_return_types: HashMap<SpanKey, TypeExpr>,
@@ -1607,6 +1619,7 @@ impl<'a> TypeChecker<'a> {
             temp_recv_mapset_types: HashMap::new(),
             channel_elem_types: HashMap::new(),
             stats_elem_types: HashMap::new(),
+            gpu_dispatch_wgsl: HashMap::new(),
             task_join_return_types: HashMap::new(),
             user_effect_resources: HashMap::new(),
             user_resource_override_types: HashMap::new(),
@@ -1789,6 +1802,7 @@ impl<'a> TypeChecker<'a> {
             temp_recv_mapset_types: self.temp_recv_mapset_types,
             channel_elem_types: self.channel_elem_types,
             stats_elem_types: self.stats_elem_types,
+            gpu_dispatch_wgsl: self.gpu_dispatch_wgsl,
             task_join_return_types: self.task_join_return_types,
             bare_assoc_fn_targets: self.bare_assoc_fn_targets,
             path_call_method_dispatch: self.path_call_method_dispatch,

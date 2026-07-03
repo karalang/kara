@@ -288,6 +288,15 @@ pub type ChannelElemTypesTable = std::collections::HashMap<(usize, usize), TypeE
 /// reduction's element LLVM type; a missing entry defaults to `f64`.
 pub type StatsElemTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
 
+/// Set by the lowering pass from `TypeCheckResult.gpu_dispatch_wgsl`. Maps a
+/// `gpu.dispatch(kernel, buffer)` kernel-argument span to the WGSL compute
+/// shader the typechecker generated from the `#[gpu]` kernel (spike slice-0c).
+/// Codegen reads it to bake the shader constant and call the runtime GPU
+/// dispatch symbol; the `ast`-importing `gpu_wgsl` emitter runs in the
+/// typechecker so `codegen.rs` stays free of AST-shape lowering (the
+/// codegen-containment invariant).
+pub type GpuDispatchWgslTable = std::collections::HashMap<(usize, usize), String>;
+
 /// `TaskHandle[T].join()` MethodCall span → the result type `T`. Lets codegen
 /// size the join out-slot and the cross-task result memcpy for a non-scalar
 /// `T` (a `Vec`/`String`/struct return from `spawn`); without it the join
@@ -589,6 +598,10 @@ pub struct Program {
     /// empty otherwise. `Stats.<fn>` call-span → slice element `TypeExpr`
     /// (S5). See [`StatsElemTypesTable`].
     pub stats_elem_types: StatsElemTypesTable,
+    /// Set by the lowering pass from `TypeCheckResult.gpu_dispatch_wgsl`;
+    /// empty otherwise. `gpu.dispatch` kernel-arg span → generated WGSL shader
+    /// text (spike slice-0c). See [`GpuDispatchWgslTable`].
+    pub gpu_dispatch_wgsl: GpuDispatchWgslTable,
     /// Set by the lowering pass from `TypeCheckResult.task_join_return_types`;
     /// empty otherwise. `TaskHandle[T].join()` result types for codegen's
     /// cross-task result-transfer sizing (non-scalar spawn returns).

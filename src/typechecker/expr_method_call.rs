@@ -707,6 +707,19 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // GPU dispatch (spike slice-0c): `gpu.dispatch(kernel, buffer)` parses
+        // as a method call on the lowercase magic module `gpu` (registered by
+        // the resolver alongside `ast` / `process`). Type it as the element-wise
+        // map it is — validate the `#[gpu]` kernel + `Vec[f32]` buffer, bake the
+        // WGSL for codegen — before the receiver is typed as a value. `gpu` is a
+        // resolver-reserved module name (like `ast` / `process`), so this never
+        // shadows a user binding.
+        if let ExprKind::Identifier(module) = &object.kind {
+            if module == "gpu" && method == "dispatch" {
+                return self.infer_gpu_dispatch(args, span);
+            }
+        }
+
         // Fallible-allocation companions (phase-8-stdlib-floor item 2). A
         // `try_<base>` instance method on a builtin collection types
         // identically to its panicking `<base>` counterpart but returns
@@ -5158,6 +5171,111 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         coll_name(&self.infer_expr(object))
+    }
+
+    /// Type `gpu.dispatch(kernel, buffer)` (GPU spike slice-0c) as the
+    /// element-wise map it is: `kernel` must be a bare identifier naming a
+    /// `#[gpu] fn(f32) -> f32`, `buffer` must be `Vec[f32]`, and the result is
+    /// a fresh `Vec[f32]` of the same length. On the happy path the WGSL shader
+    /// `gpu_wgsl::emit_kernel` produces is stashed in `gpu_dispatch_wgsl` keyed
+    /// on the kernel argument's span so codegen can bake it without re-walking
+    /// the AST (codegen-containment: the `ast`-importing emit stays out of
+    /// `codegen.rs`). Every rejection is a focused `E_GPU_DISPATCH_*`
+    /// diagnostic; the return type stays `Vec[f32]` so downstream inference has
+    /// something concrete to work with even on error.
+    fn infer_gpu_dispatch(&mut self, args: &[CallArg], span: &Span) -> Type {
+        let f32_vec = Type::Named {
+            name: "Vec".to_string(),
+            args: vec![Type::Float(FloatSize::F32)],
+        };
+
+        if args.len() != 2 {
+            self.type_error(
+                format!(
+                    "error[E_GPU_DISPATCH_ARITY]: `gpu.dispatch` takes a kernel and a buffer \
+                     — `gpu.dispatch(kernel, buffer)` (found {} argument(s))",
+                    args.len()
+                ),
+                span.clone(),
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            return f32_vec;
+        }
+
+        // Buffer (arg 1): must be `Vec[f32]`. Infer it so its type is recorded
+        // for codegen's element-typed read.
+        let buf_ty = self.infer_expr(&args[1].value);
+        let buf_ok = matches!(
+            &buf_ty,
+            Type::Named { name, args: ta }
+                if name == "Vec" && ta.len() == 1 && matches!(ta[0], Type::Float(FloatSize::F32))
+        );
+        if !buf_ok && buf_ty != Type::Error {
+            self.type_error(
+                format!(
+                    "error[E_GPU_DISPATCH_BUFFER]: `gpu.dispatch` buffer must be `Vec[f32]` \
+                     in slice-0, found `{}`",
+                    type_display(&buf_ty)
+                ),
+                args[1].value.span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+        }
+
+        // Kernel (arg 0): a bare identifier naming a `#[gpu] fn(f32) -> f32`.
+        let ExprKind::Identifier(kernel_name) = &args[0].value.kind else {
+            self.type_error(
+                "error[E_GPU_DISPATCH_KERNEL]: the `gpu.dispatch` kernel must be a bare \
+                 `#[gpu]` function name in slice-0"
+                    .to_string(),
+                args[0].value.span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+            return f32_vec;
+        };
+
+        // `self.program` is `&'a Program` (not borrowed from `&self`), so
+        // copying the reference lets the kernel lookup + WGSL emit run without
+        // conflicting with the `&mut self` diagnostic/table writes below.
+        let program = self.program;
+        let kernel = program.items.iter().find_map(|item| match item {
+            Item::Function(f) if f.name == *kernel_name && f.is_gpu => Some(f),
+            _ => None,
+        });
+        let Some(kernel) = kernel else {
+            self.type_error(
+                format!(
+                    "error[E_GPU_DISPATCH_KERNEL]: no `#[gpu]` function named `{kernel_name}` \
+                     is in scope for `gpu.dispatch`"
+                ),
+                args[0].value.span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+            return f32_vec;
+        };
+
+        match crate::gpu_wgsl::emit_kernel(kernel) {
+            Ok(wgsl) => {
+                self.gpu_dispatch_wgsl.insert(
+                    SpanKey(args[0].value.span.offset, args[0].value.span.length),
+                    wgsl,
+                );
+            }
+            Err(e) => {
+                self.type_error(
+                    format!(
+                        "error[E_GPU_DISPATCH_KERNEL]: cannot lower `{kernel_name}` to a GPU \
+                         shader — {}",
+                        e.reason()
+                    ),
+                    args[0].value.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+        }
+
+        self.record_expr_type(span, &f32_vec);
+        f32_vec
     }
 
     // ── Field Access ────────────────────────────────────────────

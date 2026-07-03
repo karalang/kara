@@ -123,6 +123,14 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
         .iter()
         .map(|(k, v)| ((k.0, k.1), v.clone()))
         .collect();
+    // `gpu.dispatch` kernel-arg span -> generated WGSL shader text, so codegen
+    // can bake the constant and call the runtime GPU dispatch symbol without
+    // re-walking the AST (spike slice-0c).
+    program.gpu_dispatch_wgsl = tc
+        .gpu_dispatch_wgsl
+        .iter()
+        .map(|(k, v)| ((k.0, k.1), v.clone()))
+        .collect();
     // Forward the `TaskHandle[T].join()` result-type table so codegen sizes
     // the cross-task result transfer for a non-scalar `T` (a `Vec`/`String`/
     // struct spawn return). Sibling to `channel_elem_types`; same keying.

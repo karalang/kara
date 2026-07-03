@@ -5,6 +5,7 @@
 
 use crate::ast::*;
 use crate::token::Span;
+use std::sync::{Arc, RwLock};
 
 use super::eval_expr::cast_value;
 use super::exec::ControlFlow;
@@ -446,6 +447,45 @@ impl<'a> super::Interpreter<'a> {
         None
     }
 
+    /// `gpu.dispatch(kernel, buffer)` under `karac run` (spike slice-0c).
+    ///
+    /// The interpreter has no GPU, so it computes the element-wise map on the
+    /// CPU — applying the named `#[gpu]` kernel to each buffer element. That is
+    /// exactly what the compiled GPU path computes, so `karac run` and `karac
+    /// build` agree on the result (the run == build parity the kata/book A/B
+    /// checks rely on). Runs past typecheck errors, so every malformed shape is
+    /// a recorded runtime error rather than a panic.
+    fn eval_gpu_dispatch(&mut self, args: &[CallArg], span: &Span) -> Value {
+        if args.len() != 2 {
+            return self.record_runtime_error(
+                format!(
+                    "gpu.dispatch expects a kernel and a buffer (found {} argument(s))",
+                    args.len()
+                ),
+                span,
+            );
+        }
+        let ExprKind::Identifier(kernel_name) = &args[0].value.kind else {
+            return self.record_runtime_error(
+                "gpu.dispatch kernel must be a `#[gpu]` function name".to_string(),
+                span,
+            );
+        };
+        let kernel_name = kernel_name.clone();
+
+        let Value::Array(rc) = self.eval_expr_inner(&args[1].value) else {
+            return self
+                .record_runtime_error("gpu.dispatch buffer must be a Vec[f32]".to_string(), span);
+        };
+        let elems = rc.read().unwrap().clone();
+
+        let mut out = Vec::with_capacity(elems.len());
+        for elem in elems {
+            out.push(self.call_function(&kernel_name, &[elem]));
+        }
+        Value::Array(Arc::new(RwLock::new(out)))
+    }
+
     pub(crate) fn eval_method_call(
         &mut self,
         object: &Expr,
@@ -470,6 +510,7 @@ impl<'a> super::Interpreter<'a> {
                 ("ast", "expr") => return self.eval_ast_expr_builder(args, span),
                 ("ast", "item") => return self.eval_ast_item_builder(args, span),
                 ("compiler", "error") => return self.eval_compiler_error(args, span),
+                ("gpu", "dispatch") => return self.eval_gpu_dispatch(args, span),
                 _ => {}
             }
         }
