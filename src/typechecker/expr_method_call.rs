@@ -1415,6 +1415,17 @@ impl<'a> super::TypeChecker<'a> {
                 );
             }
         }
+        // Type-param receiver (`x.m()` where `x: T` inside a generic body):
+        // `method_callee_type_name(TypeParam)` is None, so no concrete callee is
+        // recorded above. Record the type-param NAME separately so the
+        // interpreter can resolve it through its runtime type-subs stack and
+        // dispatch a bound-trait method on the concrete instantiation — the
+        // width-erased `Value::Int`/`Value::Float` cannot recover the declared
+        // primitive width on its own (B-2026-07-03-24).
+        if let Type::TypeParam(pname) = &obj_ty {
+            self.method_typeparam_receiver
+                .insert(SpanKey::from_span(span), pname.clone());
+        }
 
         // General owned-temp tracking, slice 3b — element-type-aware read
         // methods (`get`/`first`/`last`/`get_unchecked`/`contains`) on a
@@ -3536,19 +3547,25 @@ impl<'a> super::TypeChecker<'a> {
                 // dbl(self) -> Self { ... } }`) dispatches through the same
                 // impl-table path a `Named` receiver uses: register it as
                 // `(prim, [])` and fall through to the resolution below. The
-                // builtin ops (add/sub/cmp/eq/…) are NOT in the impl table —
-                // they have dedicated backend arms — so route ONLY when a real
-                // impl candidate exists; otherwise keep the historical
-                // poison-with-diagnostic behavior. B-2026-07-03-5.
+                // builtin comparison / cast ops have dedicated backend arms and
+                // their baked stdlib impls (`Ord`/`Eq`/… on primitives) carry a
+                // `(self, other)`-shaped signature that the impl-table dispatch
+                // mis-counts (`a.cmp(b)` → "expects 2 args, found 1"); keep them
+                // on the historical poison-with-diagnostic path. So route ONLY a
+                // NON-builtin method that has a real impl candidate; everything
+                // else falls through to the poison branch. B-2026-07-03-5.
+                const PRIMITIVE_VALUE_METHODS: &[&str] =
+                    &["cmp", "eq", "ne", "lt", "le", "gt", "ge", "cast"];
                 if matches!(
                     &receiver_for_lookup,
                     Type::Int(_) | Type::UInt(_) | Type::Float(_)
                 ) {
                     if let Some(prim) = method_callee_type_name(&receiver_for_lookup) {
-                        if !self
-                            .env
-                            .find_methods_with_args(&prim, &[], method)
-                            .is_empty()
+                        if !PRIMITIVE_VALUE_METHODS.contains(&method)
+                            && !self
+                                .env
+                                .find_methods_with_args(&prim, &[], method)
+                                .is_empty()
                         {
                             // Route to impl-table dispatch (arg inference /
                             // label validation / Self resolution happen there).
@@ -3569,8 +3586,6 @@ impl<'a> super::TypeChecker<'a> {
                             for arg in args {
                                 self.infer_expr(&arg.value);
                             }
-                            const PRIMITIVE_VALUE_METHODS: &[&str] =
-                                &["cmp", "eq", "ne", "lt", "le", "gt", "ge", "cast"];
                             if !PRIMITIVE_VALUE_METHODS.contains(&method) {
                                 self.type_error(
                                     format!("no method '{}' on type '{}'", method, prim),

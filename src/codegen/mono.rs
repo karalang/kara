@@ -1714,6 +1714,31 @@ impl<'ctx> super::Codegen<'ctx> {
             || self.enum_layouts.contains_key(name)
     }
 
+    /// A scalar-primitive type name whose mangle token would be lossy: narrow
+    /// ints widen to `i64` (losing width AND signedness), so the concrete name
+    /// must be threaded into the mono mangle to keep per-width instantiations
+    /// distinct (B-2026-07-03-24). `i64`/`f32`/`f64`/`bool`/`char` are included
+    /// too — appending them is a no-op vs their existing token, so the symbol is
+    /// unchanged for those.
+    fn is_scalar_primitive_mangle_name(name: &str) -> bool {
+        matches!(
+            name,
+            "i8" | "i16"
+                | "i32"
+                | "i64"
+                | "u8"
+                | "u16"
+                | "u32"
+                | "u64"
+                | "usize"
+                | "isize"
+                | "f32"
+                | "f64"
+                | "bool"
+                | "char"
+        )
+    }
+
     /// Build a mangled name for a specialization, e.g. `max$i64` or `zip$i64$f64`.
     ///
     /// `layout_subst` adds the per-layout-monomorphization axis: a layout
@@ -1755,6 +1780,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 } else if let Some(ty) = subst.get(&param.name) {
                     mangled.push('$');
                     let token = self.llvm_type_to_mangle_str(*ty);
+                    // Prefer the concrete NAME from `subst_names` when it names a
+                    // scalar primitive: narrow ints (i8/i16/i32/u8/u16/u32) are
+                    // WIDENED to i64 before the call, so `token` is "i64" for
+                    // every narrow width — two distinct instantiations
+                    // (`tag_it$i64` for both an i8 and an i32 call) would collide
+                    // and the second reuse the first's body, dispatching a
+                    // bound-trait method (`x.tag()`) to the wrong width's impl,
+                    // or losing u8-vs-i8 comparison signedness. The `token` also
+                    // erases every unsigned width to its signed spelling. Append
+                    // the exact declared name instead (same spelling for a
+                    // non-widened `i64`/`f64`, so those symbols are unchanged).
+                    // This is the primitive analog of the struct/enum name-append
+                    // just below (B-2026-07-03-11); B-2026-07-03-24.
+                    if let Some(name) = subst_names.get(&param.name) {
+                        if Self::is_scalar_primitive_mangle_name(name) {
+                            mangled.push_str(name);
+                            continue;
+                        }
+                    }
                     // Every user struct/enum lowers to the opaque `"struct"`
                     // token, so two same-shape-but-distinct instantiations
                     // (`use_it$A` vs `use_it$B`, both `{i64}`) would collide and

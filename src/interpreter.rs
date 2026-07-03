@@ -1628,7 +1628,7 @@ impl<'a> Interpreter<'a> {
     /// Look up `name` through the runtime type-substitution stack from top
     /// to bottom and return the resolved concrete type name when found.
     /// Returns `None` if `name` is not bound in any visible frame.
-    fn resolve_type_param(&self, name: &str) -> Option<String> {
+    pub(crate) fn resolve_type_param(&self, name: &str) -> Option<String> {
         for frame in self.type_subs_stack.iter().rev() {
             if let Some(v) = frame.get(name) {
                 return Some(v.clone());

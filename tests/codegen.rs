@@ -3838,6 +3838,67 @@ fn main() {
         }
     }
 
+    /// B-2026-07-03-24: a generic BOUND over a primitive trait impl
+    /// (`fn tag_it[T: Tag](x: T) -> i64 { x.tag() }`) dispatches to the CORRECT
+    /// per-width impl under codegen. Narrow ints are widened to i64 before the
+    /// call, so `infer_type_args` bound `T` to i64 for every narrow width and
+    /// all instantiations mangled to `tag_it$i64` — the second reused the
+    /// first's body, dispatching every width's `x.tag()` to whichever impl
+    /// compiled first (`8 8 8` for i8/i16/i32). The mangle now appends the
+    /// concrete primitive NAME from `subst_names`, so each width is a distinct
+    /// mono that dispatches correctly. Distinguishing per-width impls across
+    /// all eight scalar widths (incl. the f32-vs-f64 case the LLVM token would
+    /// also erase for unsigned/narrow spellings).
+    #[test]
+    fn e2e_generic_bound_primitive_dispatch() {
+        if let Some(out) = run_program(
+            "trait Tag { fn tag(self) -> i64; }\n\
+             impl Tag for i8  { fn tag(self) -> i64 { -8 } }\n\
+             impl Tag for i16 { fn tag(self) -> i64 { -16 } }\n\
+             impl Tag for i32 { fn tag(self) -> i64 { -32 } }\n\
+             impl Tag for u8  { fn tag(self) -> i64 { 8 } }\n\
+             impl Tag for u16 { fn tag(self) -> i64 { 16 } }\n\
+             impl Tag for u32 { fn tag(self) -> i64 { 32 } }\n\
+             impl Tag for f32 { fn tag(self) -> i64 { 320 } }\n\
+             impl Tag for f64 { fn tag(self) -> i64 { 640 } }\n\
+             fn tag_it[T: Tag](x: T) -> i64 { x.tag() }\n\
+             fn main() {\n\
+             \x20   let a: i8 = 1; let b: i16 = 1; let c: i32 = 1;\n\
+             \x20   let d: u8 = 1; let e: u16 = 1; let f: u32 = 1;\n\
+             \x20   let g: f32 = 1.0; let h: f64 = 1.0;\n\
+             \x20   println(tag_it(a)); println(tag_it(b)); println(tag_it(c));\n\
+             \x20   println(tag_it(d)); println(tag_it(e)); println(tag_it(f));\n\
+             \x20   println(tag_it(g)); println(tag_it(h));\n\
+             }",
+        ) {
+            assert_eq!(out, "-8\n-16\n-32\n8\n16\n32\n320\n640\n");
+        }
+    }
+
+    /// B-2026-07-03-24, `-> Self` + arithmetic: a generic bound whose method
+    /// returns `Self` and does width-sensitive arithmetic must run each width's
+    /// impl (pre-fix `dbl_it(i32=70000)` reused the i8 mono → overflow panic).
+    #[test]
+    fn e2e_generic_bound_primitive_self_return() {
+        if let Some(out) = run_program(
+            "trait Dbl { fn dbl(self) -> Self; }\n\
+             impl Dbl for i8  { fn dbl(self) -> Self { self + self } }\n\
+             impl Dbl for i32 { fn dbl(self) -> Self { self + self } }\n\
+             impl Dbl for f64 { fn dbl(self) -> Self { self + self } }\n\
+             fn dbl_it[T: Dbl](x: T) -> T { x.dbl() }\n\
+             fn main() {\n\
+             \x20   let a: i8 = 5;\n\
+             \x20   let c: i32 = 70000;\n\
+             \x20   let d: f64 = 1.5;\n\
+             \x20   println(dbl_it(a));\n\
+             \x20   println(dbl_it(c));\n\
+             \x20   println(dbl_it(d));\n\
+             }",
+        ) {
+            assert_eq!(out, "10\n140000\n3\n");
+        }
+    }
+
     /// S6b-4a (B-2026-07-03-18): an arithmetic operator on a type parameter
     /// bounded by that operator's stdlib trait (`+`→Add, `-`→Sub, `*`→Mul,
     /// `/`→Div, `%`→Rem, unary `-`→Neg) monomorphizes and runs. Before the fix

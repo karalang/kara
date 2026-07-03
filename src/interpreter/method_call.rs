@@ -198,17 +198,59 @@ impl<'a> super::Interpreter<'a> {
         // in `a.dbl().other()` the outer call clobbers the key) — if it names a
         // different method, fall back to the erased key. B-2026-07-03-5.
         if matches!(obj, Value::Int(_) | Value::Float(_)) {
-            let recorded = self
+            let span_key = crate::resolver::SpanKey::from_span(span);
+            // Type-param receiver inside a generic body (`x.tag()` where
+            // `x: T`): the typechecker records the receiver's type-param NAME
+            // in `method_typeparam_receiver` (keyed by the method-call span —
+            // `expr_types[receiver.span]` can't be used, it is clobbered by the
+            // method's own result type via `MethodCall.span == receiver.span`).
+            // Resolve that param name through the runtime type-subs stack
+            // (pushed per generic call from `call_type_subs`) to the concrete
+            // instantiation. Checked FIRST and preferred whenever it resolves:
+            // the width-erased key can otherwise coincidentally hit a
+            // same-erased-width impl (`Value::Float` reports "f64", so an `f32`
+            // receiver would wrongly dispatch to an existing `f64` impl — and
+            // an `i64` impl likewise shadows a narrow int receiver).
+            // B-2026-07-03-24 (generic-bound analog of the direct-call
+            // recovery below).
+            let mut resolved = false;
+            if let Some(pname) = self
                 .typecheck_result
-                .method_callee_types
-                .get(&crate::resolver::SpanKey::from_span(span))
-                .cloned();
-            if let Some(recorded) = recorded {
-                if recorded.ends_with(&format!(".{method}")) && self.env.get(&recorded).is_some() {
-                    if let Some((tn, _)) = recorded.rsplit_once('.') {
-                        type_name = tn.to_string();
+                .method_typeparam_receiver
+                .get(&span_key)
+                .cloned()
+            {
+                if let Some(concrete) = self.resolve_type_param(&pname) {
+                    let candidate = format!("{concrete}.{method}");
+                    if self.env.get(&candidate).is_some() {
+                        type_name = concrete;
+                        method_key = candidate;
+                        resolved = true;
                     }
-                    method_key = recorded;
+                }
+            }
+            // Direct value-receiver call (concrete receiver): prefer the
+            // DECLARED receiver type the typechecker recorded for this exact
+            // call site (`method_callee_types`, e.g. "u8.dbl") over the
+            // width-erased "i64"/"f64" key. The `.{method}` suffix guard
+            // rejects a stale recording from the chained-call span collision
+            // (`a.dbl().other()`, where the outer call clobbers the key).
+            // B-2026-07-03-5.
+            if !resolved {
+                if let Some(recorded) = self
+                    .typecheck_result
+                    .method_callee_types
+                    .get(&span_key)
+                    .cloned()
+                {
+                    if recorded.ends_with(&format!(".{method}"))
+                        && self.env.get(&recorded).is_some()
+                    {
+                        if let Some((tn, _)) = recorded.rsplit_once('.') {
+                            type_name = tn.to_string();
+                        }
+                        method_key = recorded;
+                    }
                 }
             }
         }

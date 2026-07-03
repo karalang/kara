@@ -19112,3 +19112,54 @@ fn primitive_trait_impl_self_return() {
         }";
     assert_eq!(run_no_errors(src), "200\n42\n");
 }
+
+#[test]
+fn generic_bound_primitive_dispatch_by_instantiation() {
+    // B-2026-07-03-24: a generic bound over a primitive trait impl
+    // (`fn tag_it[T: Tag](x: T) { x.tag() }`) dispatches to the correct
+    // per-width impl under `karac run`. The receiver `x: T` is a type param —
+    // `Value::Int`/`Value::Float` are width-erased and the typechecker checks
+    // the body once with T abstract, so the concrete width can only come from
+    // the per-call type-subs stack. The fix records the receiver's type-param
+    // name (`method_typeparam_receiver`) and resolves it through that stack.
+    // Distinguishing per-width impls incl. the f32-vs-f64 case (both erase to
+    // "f64" at runtime), which must NOT collapse.
+    let src = "trait Tag { fn tag(self) -> i64; }
+        impl Tag for i8  { fn tag(self) -> i64 { -8 } }
+        impl Tag for i16 { fn tag(self) -> i64 { -16 } }
+        impl Tag for i32 { fn tag(self) -> i64 { -32 } }
+        impl Tag for u8  { fn tag(self) -> i64 { 8 } }
+        impl Tag for u16 { fn tag(self) -> i64 { 16 } }
+        impl Tag for u32 { fn tag(self) -> i64 { 32 } }
+        impl Tag for f32 { fn tag(self) -> i64 { 320 } }
+        impl Tag for f64 { fn tag(self) -> i64 { 640 } }
+        fn tag_it[T: Tag](x: T) -> i64 { x.tag() }
+        fn main() {
+            let a: i8 = 1; let b: i16 = 1; let c: i32 = 1;
+            let d: u8 = 1; let e: u16 = 1; let f: u32 = 1;
+            let g: f32 = 1.0; let h: f64 = 1.0;
+            println(tag_it(a)); println(tag_it(b)); println(tag_it(c));
+            println(tag_it(d)); println(tag_it(e)); println(tag_it(f));
+            println(tag_it(g)); println(tag_it(h));
+        }";
+    assert_eq!(run_no_errors(src), "-8\n-16\n-32\n8\n16\n32\n320\n640\n");
+}
+
+#[test]
+fn generic_bound_user_type_dispatch_unregressed() {
+    // Guard: the generic-bound dispatch for USER types (name-carrying Values)
+    // must keep working alongside the B-2026-07-03-24 primitive path.
+    let src = "trait Greet { fn greet(self) -> i64; }
+        struct Person { id: i64 }
+        struct Robot { serial: i64 }
+        impl Greet for Person { fn greet(self) -> i64 { 100 } }
+        impl Greet for Robot { fn greet(self) -> i64 { 200 } }
+        fn do_greet[T: Greet](x: T) -> i64 { x.greet() }
+        fn main() {
+            let p = Person { id: 1 };
+            let r = Robot { serial: 2 };
+            println(do_greet(p));
+            println(do_greet(r));
+        }";
+    assert_eq!(run_no_errors(src), "100\n200\n");
+}

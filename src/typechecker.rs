@@ -1033,6 +1033,18 @@ pub struct TypeCheckResult {
     /// `expr_types` for this purpose — a separate map avoids the
     /// return-type-overwrites-receiver-type race).
     pub method_callee_types: HashMap<SpanKey, String>,
+    /// MethodCall span → the receiver's type-PARAMETER name, recorded when the
+    /// receiver types as a bare `Type::TypeParam` (`x.m()` where `x: T` inside
+    /// a generic body). Distinct from `method_callee_types` (which records a
+    /// CONCRETE `Type.method` key and skips type-param receivers). The
+    /// interpreter resolves the recorded param name through its runtime
+    /// type-subs stack to dispatch a bound-trait method on the concrete
+    /// instantiation — needed because `Value::Int`/`Value::Float` are
+    /// width-erased and cannot recover the declared width, and
+    /// `expr_types[receiver.span]` is clobbered by the method's result type
+    /// (the same `MethodCall.span == receiver.span` collision noted above).
+    /// B-2026-07-03-24.
+    pub method_typeparam_receiver: HashMap<SpanKey, String>,
     /// Call-expression span → the callee's `Fn(..)` `TypeExpr`, for every
     /// `Call` whose callee is a closure VALUE produced by a non-identifier
     /// place expression (a struct field `(h.f)(x)`, a Vec/array index
@@ -1352,6 +1364,9 @@ pub struct TypeChecker<'a> {
     /// MethodCall span → `Type.method` canonical callee key. See the
     /// matching field on `TypeCheckResult` for the full rationale.
     pub(super) method_callee_types: HashMap<SpanKey, String>,
+    /// MethodCall span → receiver type-parameter name. See the matching field
+    /// on `TypeCheckResult` for the full rationale (B-2026-07-03-24).
+    pub(super) method_typeparam_receiver: HashMap<SpanKey, String>,
     /// Call span → callee `Fn(..)` `TypeExpr` for a closure-VALUE call through
     /// a non-identifier callee. See the public copy on `TypeCheckResult` for
     /// the full rationale.
@@ -1584,6 +1599,7 @@ impl<'a> TypeChecker<'a> {
             try_into_conversions: HashMap::new(),
             display_snake_case_enums: HashSet::new(),
             method_callee_types: HashMap::new(),
+            method_typeparam_receiver: HashMap::new(),
             fn_value_callee_types: HashMap::new(),
             impl_trait_captures: HashMap::new(),
             method_unwrap_inner_types: HashMap::new(),
@@ -1765,6 +1781,7 @@ impl<'a> TypeChecker<'a> {
             try_into_conversions: self.try_into_conversions,
             display_snake_case_enums: self.display_snake_case_enums,
             method_callee_types: self.method_callee_types,
+            method_typeparam_receiver: self.method_typeparam_receiver,
             fn_value_callee_types: self.fn_value_callee_types,
             impl_trait_captures: self.impl_trait_captures,
             method_unwrap_inner_types: self.method_unwrap_inner_types,
