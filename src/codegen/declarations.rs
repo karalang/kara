@@ -3175,6 +3175,45 @@ impl<'ctx> super::Codegen<'ctx> {
         self.context.struct_type(&group_field_types, false)
     }
 
+    /// Record which user struct/enum types opt into ordering — via
+    /// `#[derive(Ord)]` / `#[derive(PartialOrd)]` or a user `impl Ord` /
+    /// `impl PartialOrd` — into `ord_orderable_types`. The `karac_cmp_<T>`
+    /// comparator family (`Vec[T].sort()` and the `<`/`>` operator lowering)
+    /// is emitted only for these; a struct/enum that declares no order stays
+    /// rejected at the sort site, matching the typechecker's Ord gate
+    /// (B-2026-07-03-7).
+    pub(super) fn register_ord_orderable_types(&mut self, program: &Program) {
+        for item in &program.items {
+            match item {
+                crate::ast::Item::StructDef(s) => {
+                    let d = crate::typechecker::extract_derived_traits(&s.attributes);
+                    if d.contains("Ord") || d.contains("PartialOrd") {
+                        self.ord_orderable_types.insert(s.name.clone());
+                    }
+                }
+                crate::ast::Item::EnumDef(e) => {
+                    let d = crate::typechecker::extract_derived_traits(&e.attributes);
+                    if d.contains("Ord") || d.contains("PartialOrd") {
+                        self.ord_orderable_types.insert(e.name.clone());
+                    }
+                }
+                crate::ast::Item::ImplBlock(imp) => {
+                    if let Some(tn) = &imp.trait_name {
+                        let t = tn.segments.last().map(String::as_str).unwrap_or("");
+                        if (t == "Ord" || t == "PartialOrd") && imp.generic_params.is_none() {
+                            if let TypeKind::Path(p) = &imp.target_type.kind {
+                                if let Some(name) = p.segments.last() {
+                                    self.ord_orderable_types.insert(name.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     pub(super) fn declare_enums(&mut self, program: &Program) {
         // Phase 1: register names. Sub-step (b) typeof-recursion in
         // `payload_word_count_for_type_expr` looks up nested user types,

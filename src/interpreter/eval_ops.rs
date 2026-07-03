@@ -134,6 +134,45 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// Whether a struct / enum value opts into the ordered `<` `<=` `>` `>=`
+    /// operators: a NON-GENERIC, NON-stdlib user type that derives `Ord` /
+    /// `PartialOrd`. This mirrors codegen's `ord_orderable_types` gate (built
+    /// from the user program's items) exactly (B-2026-07-03-7) so `karac run`
+    /// and `karac build` agree on which aggregate comparisons lower. In
+    /// particular BOTH reject the generic prelude enums (`Option`/`Result`,
+    /// whose `TypeParam` payload the `karac_cmp` family can't order without the
+    /// instantiation) and the non-generic baked prelude enums (`Ordering`,
+    /// `MemoryOrdering` — never in the user's `program.items`), keeping parity.
+    fn aggregate_is_orderable(&self, v: &Value) -> bool {
+        let name = match v {
+            Value::Struct { name, .. } => name,
+            Value::EnumVariant { enum_name, .. } => enum_name,
+            _ => return false,
+        };
+        let orderable = |generic_params: &[String],
+                         derived: &std::collections::HashSet<String>,
+                         stdlib: bool| {
+            !stdlib
+                && generic_params.is_empty()
+                && (derived.contains("Ord") || derived.contains("PartialOrd"))
+        };
+        if let Some(info) = self.typecheck_result.struct_info.get(name) {
+            return orderable(
+                &info.generic_params,
+                &info.derived_traits,
+                info.defining_stdlib_origin,
+            );
+        }
+        if let Some(info) = self.typecheck_result.enum_info.get(name) {
+            return orderable(
+                &info.generic_params,
+                &info.derived_traits,
+                info.defining_stdlib_origin,
+            );
+        }
+        false
+    }
+
     pub(crate) fn eval_binary(
         &mut self,
         op: &BinOp,
@@ -367,7 +406,7 @@ impl<'a> super::Interpreter<'a> {
                 BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq,
                 l @ (Value::Struct { .. } | Value::EnumVariant { .. }),
                 r @ (Value::Struct { .. } | Value::EnumVariant { .. }),
-            ) => {
+            ) if self.aggregate_is_orderable(&l) && self.aggregate_is_orderable(&r) => {
                 let ord = super::helpers::value_compare(&l, &r);
                 let b = match op {
                     BinOp::Lt => ord.is_lt(),

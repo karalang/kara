@@ -1305,6 +1305,14 @@ pub(super) struct Codegen<'ctx> {
     /// call site errors loudly) instead of infinitely recursing at compile
     /// time. See `emit_cmp_fn_for_struct` / `emit_cmp_fn_for_enum`.
     pub(crate) cmp_fn_in_progress: std::collections::HashSet<String>,
+    /// User struct/enum type names that opt into ordering — `#[derive(Ord)]` /
+    /// `#[derive(PartialOrd)]` or a user `impl Ord`/`impl PartialOrd`. The
+    /// `karac_cmp_<T>` family (and thus `Vec[T].sort()` + the `<`/`>` operator
+    /// lowering) is emitted ONLY for these; a struct/enum that declares no order
+    /// still errors loudly at the sort site (matching the typechecker's Ord
+    /// gate). Populated in `declare_structs` / enum registration from the def's
+    /// attributes + impl scan.
+    pub(crate) ord_orderable_types: std::collections::HashSet<String>,
     /// Declared generic-param names of each OWNED (non-shared) struct, recorded
     /// by `register_struct_metadata`. Empty vec for a non-generic struct. Lets
     /// the generic-struct monomorphization path (`mono_struct_type`) zip a
@@ -5283,6 +5291,7 @@ impl<'ctx> Codegen<'ctx> {
             struct_field_type_names: HashMap::new(),
             struct_field_type_exprs: HashMap::new(),
             cmp_fn_in_progress: std::collections::HashSet::new(),
+            ord_orderable_types: std::collections::HashSet::new(),
             struct_generic_params: HashMap::new(),
             shared_type_decl_names: std::collections::HashSet::new(),
             union_types: HashMap::new(),
@@ -6126,6 +6135,7 @@ impl<'ctx> Codegen<'ctx> {
         // that `enum_layouts` is populated. See
         // `declarations.rs::register_struct_metadata` for the cycle rationale.
         self.register_struct_metadata(program);
+        self.register_ord_orderable_types(program);
         self.declare_enums(program);
         self.build_struct_types(program);
         // Phase 5 line 569 slice 4: lower `#[repr(C)] union Foo { ... }`

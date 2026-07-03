@@ -5450,6 +5450,11 @@ impl<'ctx> super::Codegen<'ctx> {
         struct_name: &str,
         mangled: &str,
     ) -> Option<FunctionValue<'ctx>> {
+        // Only types that opt into ordering (`#[derive(Ord/PartialOrd)]` or a
+        // user impl) are orderable; others stay rejected at the sort site.
+        if !self.ord_orderable_types.contains(struct_name) {
+            return None;
+        }
         // A field that recurses back into this same type (`S { next: Vec[S] }`)
         // → unorderable, rather than infinite compile-time recursion.
         if self.cmp_fn_in_progress.contains(struct_name) {
@@ -5542,6 +5547,11 @@ impl<'ctx> super::Codegen<'ctx> {
         enum_name: &str,
         mangled: &str,
     ) -> Option<FunctionValue<'ctx>> {
+        // Only types that opt into ordering (`#[derive(Ord/PartialOrd)]` or a
+        // user impl) are orderable; others stay rejected at the sort site.
+        if !self.ord_orderable_types.contains(enum_name) {
+            return None;
+        }
         if self.cmp_fn_in_progress.contains(enum_name) {
             return None;
         }
