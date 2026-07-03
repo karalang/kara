@@ -169,6 +169,13 @@ pub struct FetchedManifest {
     pub package: String,
     pub upstream_url: String,
     pub versions: Vec<semver::Version>,
+    /// Versions the publisher has *withdrawn* (registry-proxy follow-up
+    /// (l), `karac yank`). A yanked version is still published — its
+    /// tarball resolves — but it is excluded from *fresh* version
+    /// selection so a new resolve never picks it. Absent from the catalog
+    /// JSON (the common case) → empty. Entries need not appear in
+    /// `versions`; a yanked-but-delisted version is tolerated.
+    pub yanked: Vec<semver::Version>,
 }
 
 /// One concrete fetched package: the tarball bytes plus the URLs and
@@ -296,12 +303,26 @@ impl MemProxyClient {
         Self::default()
     }
 
-    /// Convenience: insert a catalog entry with one or more versions.
+    /// Convenience: insert a catalog entry with one or more versions and no
+    /// yanked versions (the common case).
     pub fn insert_catalog(
         &mut self,
         package: &str,
         upstream_url: &str,
         versions: Vec<semver::Version>,
+    ) {
+        self.insert_catalog_with_yanked(package, upstream_url, versions, Vec::new());
+    }
+
+    /// Convenience: insert a catalog entry carrying an explicit set of yanked
+    /// versions (registry-proxy follow-up (l)). Used by the yank-selection
+    /// tests.
+    pub fn insert_catalog_with_yanked(
+        &mut self,
+        package: &str,
+        upstream_url: &str,
+        versions: Vec<semver::Version>,
+        yanked: Vec<semver::Version>,
     ) {
         self.catalogs.insert(
             package.to_string(),
@@ -309,6 +330,7 @@ impl MemProxyClient {
                 package: package.to_string(),
                 upstream_url: upstream_url.to_string(),
                 versions,
+                yanked,
             },
         );
     }
@@ -601,6 +623,16 @@ pub enum RegistryFetchError {
         req: semver::VersionReq,
         available: Vec<semver::Version>,
     },
+    /// Every version satisfying the constraint has been *yanked*
+    /// (registry-proxy follow-up (l)). Distinguished from
+    /// `NoMatchingVersion` so the operator hears "the match exists but was
+    /// withdrawn" rather than "no such version". `matched` lists the yanked
+    /// versions that would otherwise have satisfied `req`.
+    OnlyYankedMatches {
+        name: String,
+        req: semver::VersionReq,
+        matched: Vec<semver::Version>,
+    },
 }
 
 impl RegistryFetchError {
@@ -608,6 +640,7 @@ impl RegistryFetchError {
         match self {
             Self::Proxy(e) => e.code(),
             Self::NoMatchingVersion { .. } => "E_REGISTRY_NO_MATCHING_VERSION",
+            Self::OnlyYankedMatches { .. } => "E_REGISTRY_ONLY_YANKED",
         }
     }
 }
@@ -636,6 +669,19 @@ impl std::fmt::Display for RegistryFetchError {
                     },
                 )
             }
+            Self::OnlyYankedMatches { name, req, matched } => {
+                let versions = matched
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(
+                    f,
+                    "every version of `{name}` matching `{req}` has been yanked \
+                     (yanked: {versions}); pick a different version, or ask the \
+                     publisher to republish a fixed release",
+                )
+            }
         }
     }
 }
@@ -662,6 +708,12 @@ pub fn select_version(
 /// The tarball endpoint does not carry the upstream source URL, so this
 /// stitches it in from the catalog manifest — closing the gap where a
 /// bare `fetch_package` leaves `FetchedPackage.upstream_url` empty.
+///
+/// Yanked versions (registry-proxy follow-up (l)) are excluded from
+/// selection: a fresh resolve never picks a withdrawn version. If the
+/// *only* versions satisfying `req` are yanked, this returns
+/// [`RegistryFetchError::OnlyYankedMatches`] so the operator hears that the
+/// match was withdrawn rather than a misleading "no matching version".
 pub fn fetch_registry_package(
     client: &dyn ProxyClient,
     name: &str,
@@ -670,13 +722,38 @@ pub fn fetch_registry_package(
     let manifest = client
         .fetch_catalog(name)
         .map_err(RegistryFetchError::Proxy)?;
-    let version = select_version(req, &manifest.versions).ok_or_else(|| {
-        RegistryFetchError::NoMatchingVersion {
-            name: name.to_string(),
-            req: req.clone(),
-            available: manifest.versions.clone(),
+    // Consider only non-yanked versions for fresh selection.
+    let selectable: Vec<semver::Version> = manifest
+        .versions
+        .iter()
+        .filter(|v| !manifest.yanked.contains(v))
+        .cloned()
+        .collect();
+    let version = match select_version(req, &selectable) {
+        Some(v) => v,
+        None => {
+            // Nothing selectable matched. Distinguish "all matches yanked"
+            // from "genuinely no match" for a clearer diagnostic.
+            let yanked_matches: Vec<semver::Version> = manifest
+                .yanked
+                .iter()
+                .filter(|v| req.matches(v))
+                .cloned()
+                .collect();
+            if !yanked_matches.is_empty() {
+                return Err(RegistryFetchError::OnlyYankedMatches {
+                    name: name.to_string(),
+                    req: req.clone(),
+                    matched: yanked_matches,
+                });
+            }
+            return Err(RegistryFetchError::NoMatchingVersion {
+                name: name.to_string(),
+                req: req.clone(),
+                available: manifest.versions.clone(),
+            });
         }
-    })?;
+    };
     let mut pkg = client
         .fetch_package(name, &version)
         .map_err(RegistryFetchError::Proxy)?;
@@ -762,22 +839,47 @@ fn parse_catalog(
         .get("versions")
         .and_then(|v| v.as_array())
         .ok_or_else(|| malformed("missing array field \"versions\"".to_string()))?;
+    let versions = parse_version_array("versions", versions_json, &malformed)?;
 
-    let mut versions = Vec::with_capacity(versions_json.len());
-    for entry in versions_json {
-        let s = entry
-            .as_str()
-            .ok_or_else(|| malformed("\"versions\" entries must be strings".to_string()))?;
-        let parsed = semver::Version::parse(s)
-            .map_err(|e| malformed(format!("invalid semver version {s:?}: {e}")))?;
-        versions.push(parsed);
-    }
+    // `yanked` is optional (registry-proxy follow-up (l)). Absent → no
+    // yanked versions. Present-but-not-an-array is a malformed catalog; a
+    // present array parses with the same semver validation as `versions`.
+    let yanked = match json.get("yanked") {
+        None => Vec::new(),
+        Some(v) => {
+            let arr = v
+                .as_array()
+                .ok_or_else(|| malformed("field \"yanked\" must be an array".to_string()))?;
+            parse_version_array("yanked", arr, &malformed)?
+        }
+    };
 
     Ok(FetchedManifest {
         package: package.to_string(),
         upstream_url: upstream.to_string(),
         versions,
+        yanked,
     })
+}
+
+/// Parse a JSON array of semver-string entries (shared by `versions` and
+/// `yanked`). `field` names the array for the error message.
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_version_array(
+    field: &str,
+    entries: &[serde_json::Value],
+    malformed: &impl Fn(String) -> ProxyClientError,
+) -> Result<Vec<semver::Version>, ProxyClientError> {
+    let mut out = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let s = entry
+            .as_str()
+            .ok_or_else(|| malformed(format!("\"{field}\" entries must be strings")))?;
+        let parsed = semver::Version::parse(s)
+            .map_err(|e| malformed(format!("invalid semver version {s:?}: {e}")))?;
+        out.push(parsed);
+    }
+    Ok(out)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1377,6 +1479,7 @@ mod tests {
                 package: package.to_string(),
                 upstream_url: "u".to_string(),
                 versions: vec![v("1.0.0")],
+                yanked: Vec::new(),
             })
         }
         fn fetch_package(
@@ -1556,5 +1659,110 @@ mod tests {
         let mem = MemProxyClient::new();
         let err = fetch_registry_package(&mem, "ghost", &req("^1")).unwrap_err();
         assert_eq!(err.code(), "E_PROXY_PACKAGE_NOT_FOUND");
+    }
+
+    // ── yank-aware selection (registry-proxy follow-up (l)) ──────
+
+    #[test]
+    fn fetch_registry_package_skips_yanked_prefers_lower_non_yanked() {
+        // 1.9.0 is the highest match but yanked → the fresh resolve must fall
+        // back to the highest *non-yanked* match (1.2.0), not pick 1.9.0.
+        let mut mem = MemProxyClient::new();
+        mem.insert_catalog_with_yanked(
+            "http",
+            "u",
+            vec![v("1.0.0"), v("1.2.0"), v("1.9.0"), v("2.0.0")],
+            vec![v("1.9.0")],
+        );
+        mem.insert_package(pkg_with_empty_upstream("1.2.0", b"tarball-1.2.0"));
+
+        let pkg = fetch_registry_package(&mem, "http", &req("^1.0")).expect("fetch");
+        assert_eq!(pkg.version, v("1.2.0"), "yanked 1.9.0 must be skipped");
+    }
+
+    #[test]
+    fn fetch_registry_package_only_yanked_match_is_distinct_error() {
+        // The single version satisfying `^1.0` is yanked → a distinct,
+        // clearly-worded error rather than a misleading "no matching version".
+        let mut mem = MemProxyClient::new();
+        mem.insert_catalog_with_yanked("http", "u", vec![v("1.0.0"), v("2.0.0")], vec![v("1.0.0")]);
+        let err = fetch_registry_package(&mem, "http", &req("^1.0")).unwrap_err();
+        assert_eq!(err.code(), "E_REGISTRY_ONLY_YANKED");
+        match &err {
+            RegistryFetchError::OnlyYankedMatches { matched, .. } => {
+                assert_eq!(matched, &vec![v("1.0.0")]);
+            }
+            other => panic!("expected OnlyYankedMatches, got {other:?}"),
+        }
+        let msg = err.to_string();
+        assert!(
+            msg.contains("yanked") && msg.contains("1.0.0"),
+            "message: {msg}"
+        );
+    }
+
+    #[test]
+    fn fetch_registry_package_yanked_out_of_range_is_ignored() {
+        // A yanked version outside the constraint doesn't perturb a normal
+        // in-range selection.
+        let mut mem = MemProxyClient::new();
+        mem.insert_catalog_with_yanked(
+            "http",
+            "u",
+            vec![v("1.0.0"), v("1.2.0"), v("2.0.0")],
+            vec![v("2.0.0")],
+        );
+        mem.insert_package(pkg_with_empty_upstream("1.2.0", b"tarball-1.2.0"));
+        let pkg = fetch_registry_package(&mem, "http", &req("^1.0")).expect("fetch");
+        assert_eq!(pkg.version, v("1.2.0"));
+    }
+
+    #[test]
+    fn fetch_registry_package_no_match_beats_only_yanked_classification() {
+        // Nothing (yanked or not) satisfies `^3` → plain NoMatchingVersion,
+        // never the yanked-specific error.
+        let mut mem = MemProxyClient::new();
+        mem.insert_catalog_with_yanked("http", "u", vec![v("1.0.0")], vec![v("1.0.0")]);
+        let err = fetch_registry_package(&mem, "http", &req("^3")).unwrap_err();
+        assert_eq!(err.code(), "E_REGISTRY_NO_MATCHING_VERSION");
+    }
+
+    // ── catalog `yanked` parsing (registry-proxy follow-up (l)) ──
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn parse_catalog_reads_optional_yanked_array() {
+        let body = r#"{ "upstream": "https://example/http",
+                        "versions": ["1.0.0", "1.1.0"],
+                        "yanked": ["1.1.0"] }"#;
+        let m = parse_catalog("u", "http", body).expect("parse");
+        assert_eq!(m.versions, vec![v("1.0.0"), v("1.1.0")]);
+        assert_eq!(m.yanked, vec![v("1.1.0")]);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn parse_catalog_absent_yanked_is_empty_backward_compat() {
+        // A pre-yank catalog (no `yanked` key) must still parse, with an
+        // empty yanked set.
+        let body = r#"{ "upstream": "u", "versions": ["1.0.0"] }"#;
+        let m = parse_catalog("u", "http", body).expect("parse");
+        assert!(m.yanked.is_empty());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn parse_catalog_rejects_non_array_yanked() {
+        let body = r#"{ "upstream": "u", "versions": ["1.0.0"], "yanked": "1.0.0" }"#;
+        let err = parse_catalog("u", "http", body).unwrap_err();
+        assert_eq!(err.code(), "E_PROXY_MALFORMED_RESPONSE");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn parse_catalog_rejects_malformed_yanked_entry() {
+        let body = r#"{ "upstream": "u", "versions": ["1.0.0"], "yanked": ["not-semver"] }"#;
+        let err = parse_catalog("u", "http", body).unwrap_err();
+        assert_eq!(err.code(), "E_PROXY_MALFORMED_RESPONSE");
     }
 }

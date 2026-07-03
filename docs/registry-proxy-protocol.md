@@ -47,7 +47,8 @@ Returns the version catalog for package `<name>` as JSON:
 ```json
 {
   "upstream": "https://github.com/serde-rs/serde",
-  "versions": ["1.0.0", "1.2.3", "1.3.0"]
+  "versions": ["1.0.0", "1.2.3", "1.3.0"],
+  "yanked": ["1.2.3"]
 }
 ```
 
@@ -55,8 +56,18 @@ Returns the version catalog for package `<name>` as JSON:
 |------------|------------|----------------------------------------------------------------|
 | `upstream` | string     | The package's original source URL (git/registry). Package-level. |
 | `versions` | string[]   | Every published version, each a valid [SemVer](https://semver.org) string. |
+| `yanked`   | string[]   | *Optional.* Versions the publisher has withdrawn (see below). Absent → none. |
 
-Client mapping → `FetchedManifest { package, upstream_url, versions }`.
+Client mapping → `FetchedManifest { package, upstream_url, versions, yanked }`.
+
+**Yanked versions.** A yanked version is still published — its tarball still
+resolves, so a `kara.lock` that already pins it keeps building — but it is
+**excluded from fresh version selection**: a new resolve never picks a yanked
+version. If the *only* versions satisfying a dependency's requirement are
+yanked, the client fails with `E_REGISTRY_ONLY_YANKED` (a distinct, clearly
+worded diagnostic) rather than a misleading "no matching version". Each `yanked`
+entry is a SemVer string validated exactly like a `versions` entry; an entry
+need not also appear in `versions` (a yanked-and-delisted version is tolerated).
 
 **Status codes**
 
@@ -68,8 +79,9 @@ Client mapping → `FetchedManifest { package, upstream_url, versions }`.
 | other   | `MalformedResponse` (unexpected status).          |
 
 A `200` whose body is not valid JSON, is missing `upstream` (string) or
-`versions` (array), or contains a non-string / unparseable-SemVer version entry,
-surfaces as `MalformedResponse`.
+`versions` (array), has a `yanked` value that is not an array, or contains a
+non-string / unparseable-SemVer entry in either `versions` or `yanked`, surfaces
+as `MalformedResponse`.
 
 ## Endpoint: package tarball
 
@@ -141,5 +153,10 @@ not change the contract above when they land:
 - Multi-mirror / high-availability (d) and signature verification (f) — a
   signature would be a sibling field to `content_hash`. (Authentication (e) is
   now specified above under **Authentication**.)
-- Per-package proxy override (i), `--no-proxy` direct-from-source fetch (j/k),
-  and `karac yank` status surfacing (l).
+- Per-package proxy override (i) and `--no-proxy` direct-from-source fetch (j/k).
+- Publisher-side yanking — the `karac yank` *command* that marks a version
+  withdrawn (l). The catalog's `yanked` array and the client's honoring of it
+  are specified above under **Endpoint: catalog**; what remains deferred is the
+  publish-side tooling that writes that array, and honoring a `kara.lock` pin of
+  an already-yanked version with a warning (needs lockfile-pin-over-catalog
+  precedence, not yet implemented — today a fresh resolve simply refuses).

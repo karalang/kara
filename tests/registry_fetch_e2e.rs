@@ -93,6 +93,24 @@ fn build_store_catalog_only(name: &str, version: &str) -> PathBuf {
     root
 }
 
+/// Lay out a registry store whose catalog lists `version` and marks it
+/// `yanked`. No tarball is needed — a fresh resolve refuses the yanked
+/// version at *selection* time (registry-proxy follow-up (l)), before any
+/// tarball GET. Proves the reference server serves the `yanked` array
+/// verbatim and the client honors it end-to-end.
+fn build_store_yanked_catalog(name: &str, version: &str) -> PathBuf {
+    let root = unique("store-yanked");
+    std::fs::create_dir_all(root.join("catalog")).unwrap();
+    write(
+        &root.join("catalog").join(format!("{name}.json")),
+        format!(
+            r#"{{ "upstream": "https://example.test/{name}", "versions": ["{version}"], "yanked": ["{version}"] }}"#
+        )
+        .as_bytes(),
+    );
+    root
+}
+
 /// Start the reference server on an ephemeral loopback port; return the base
 /// URL. The thread is detached (dies with the test process).
 fn start_server(root: PathBuf) -> String {
@@ -295,6 +313,54 @@ fn build_output_json_pins_proxy_fetch_error_shape() {
     assert!(
         !proj.join("kara.lock").exists(),
         "a failed fetch must not persist a lockfile"
+    );
+
+    let _ = std::fs::remove_dir_all(&proj);
+    let _ = std::fs::remove_dir_all(&cache);
+}
+
+/// A registry dep whose only matching version has been *yanked* must be
+/// refused at resolve time (registry-proxy follow-up (l)) — a fresh resolve
+/// never selects a withdrawn version. The reference server serves the
+/// catalog's `yanked` array verbatim (no server change), and `karac build`
+/// surfaces the distinct "yanked" diagnostic (wrapped in
+/// `E_REGISTRY_FETCH_FAILED`) rather than fetching a tarball or emitting a
+/// misleading "no matching version".
+#[test]
+fn build_refuses_only_yanked_registry_dep() {
+    let store = build_store_yanked_catalog("stale_dep", "1.0.0");
+    let base = start_server(store);
+    let cache = unique("cache-yanked");
+
+    let proj = unique("proj-yanked");
+    write(
+        &proj.join("kara.toml"),
+        b"[package]\nname = \"app\"\n\n[dependencies]\nstale_dep = \"1.0\"\n",
+    );
+    write(&proj.join("src/main.kara"), b"fn main() {}\n");
+
+    let out = karac()
+        .arg("build")
+        .env("KARAC_REGISTRY_PROXY", &base)
+        .env("KARAC_REGISTRY_CACHE_ROOT", &cache)
+        .current_dir(&proj)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    // The build failed on the fetch, surfacing the yank-specific wording.
+    assert!(
+        stderr.contains("E_REGISTRY_FETCH_FAILED"),
+        "a yanked-only dep must fail the fetch;\nstderr={stderr}",
+    );
+    assert!(
+        stderr.contains("yanked"),
+        "the diagnostic must explain the version was yanked, not just 'no match';\nstderr={stderr}",
+    );
+    // It was refused at *selection* — never misreported as a missing version.
+    assert!(
+        !stderr.contains("E_REGISTRY_NO_MATCHING_VERSION"),
+        "a yanked match must not be reported as no-matching-version;\nstderr={stderr}",
     );
 
     let _ = std::fs::remove_dir_all(&proj);
