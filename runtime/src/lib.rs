@@ -1792,6 +1792,78 @@ unsafe impl Sync for KaracReduceDescriptor {}
 #[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
 const DISPATCH_OVERHEAD_PER_CALL_UNITS_RT: u64 = 10_000;
 
+// ── Reduction fork-depth cap ───────────────────────────────────────────────
+//
+// A recursive reduction — one whose per-iteration delta calls back into a
+// function that itself parallelizes a reduction (e.g. a backtracking counter
+// `if legal { total = total + count(...deeper...) }`) — would, if every level
+// fanned out, open a nested parallel region at each recursion depth. Nesting is
+// bounded only by stack depth (see the "Nested par + work-helping" note in the
+// pool section), so a deep recursion exhausts the stack and crashes
+// (B-2026-07-03-14). But such a search IS worth parallelizing at the OUTERMOST
+// level — the top loop's branches are independent subtrees.
+//
+// The cap resolves both: a thread-local depth counter, incremented only while a
+// pool worker is running a reduction `worker_fn` (i.e. below an actual fan-out).
+// `karac_par_reduce` fans out only when the current thread's depth is below
+// `KARAC_PAR_MAX_FORK_DEPTH` (default 1); at or above the cap it runs the
+// reduction sequentially inline (the existing single-worker fast path). So along
+// any root-to-leaf thread chain at most `cap` fan-outs occur — the top level
+// parallelizes, everything deeper runs inline, and dispatch recursion (hence
+// stack growth) is bounded by a constant. The op is associative + commutative,
+// so a coarser (partly-sequential) partition yields the identical fold.
+//
+// Thread-local for the same reason as `CONTRACT_PREDICATE_DEPTH`: reduction
+// workers run on multiple pool threads, each tracking its own nesting.
+#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
+thread_local! {
+    static PAR_REDUCE_DEPTH: Cell<u32> = const { Cell::new(0) };
+}
+
+/// Max reduction fan-out levels per thread chain. `KARAC_PAR_MAX_FORK_DEPTH`
+/// overrides (clamped ≥ 1); default 1 — the top level parallelizes and every
+/// nested reduction runs sequentially, which already saturates the pool when the
+/// outer fan-out is ≥ the worker count.
+///
+/// **Cached** in a `OnceLock` (env is process-constant): a recursive reduction
+/// enters `karac_par_reduce` at every recursion node, so the depth-cap check on
+/// that hot path must not pay a per-call `std::env::var` (a lock + alloc) — that
+/// turned a fine-grained backtracking search into a syscall storm before caching.
+#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
+fn resolve_max_fork_depth() -> u32 {
+    static CAP: OnceLock<u32> = OnceLock::new();
+    *CAP.get_or_init(|| {
+        std::env::var("KARAC_PAR_MAX_FORK_DEPTH")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .map(|n| n.max(1))
+            .unwrap_or(1)
+    })
+}
+
+/// RAII bump of `PAR_REDUCE_DEPTH` for the duration a worker runs a reduction
+/// body, restoring the previous depth on drop (mirrors `OutputRedirectGuard`) so
+/// the pool worker's next task starts at the right depth even if the body
+/// aborts. While installed, any nested `karac_par_reduce` on this thread sees the
+/// raised depth and runs inline once the cap is hit.
+#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
+struct ParReduceDepthGuard;
+
+#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
+impl ParReduceDepthGuard {
+    fn enter() -> Self {
+        PAR_REDUCE_DEPTH.with(|d| d.set(d.get().saturating_add(1)));
+        ParReduceDepthGuard
+    }
+}
+
+#[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
+impl Drop for ParReduceDepthGuard {
+    fn drop(&mut self) {
+        PAR_REDUCE_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+    }
+}
+
 /// Split a loop's iteration space across N workers; each accumulates a
 /// partial into a private slot; the runtime combines the partials into
 /// `out_slot` and returns. Sibling to `karac_par_run` — see the
@@ -1852,7 +1924,23 @@ pub unsafe extern "C" fn karac_par_reduce(
     }
 
     #[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
-    karac_par_reduce_pooled(desc, out_slot, _spawn_site_id);
+    {
+        // Fork-depth cap (B-2026-07-03-14 follow-on). Checked FIRST, before the
+        // pooled path's pool query / cost math, so a nested reduction — this
+        // thread is already running a reduction worker at or above the cap —
+        // takes the cheapest possible path: one `worker_fn` call over the full
+        // range, no fan-out. A recursive reduction (backtracking counter) enters
+        // here at every recursion node; keeping the capped path this thin is
+        // what makes lowering it viable rather than a per-node overhead storm.
+        // Depth is 0 on any thread not currently inside a reduction worker, so
+        // the outermost call always falls through to the pooled fan-out.
+        if PAR_REDUCE_DEPTH.with(|d| d.get()) >= resolve_max_fork_depth() {
+            let dummy = AtomicBool::new(false);
+            (desc.worker_fn)(out_slot, 0, desc.iter_total, desc.ctx, &dummy);
+            return;
+        }
+        karac_par_reduce_pooled(desc, out_slot, _spawn_site_id);
+    }
 }
 
 /// Native `karac_par_reduce` body — worker fan-out across the pool plus
@@ -1899,8 +1987,17 @@ unsafe fn karac_par_reduce_pooled(
     // would be a no-op anyway (one slot folded into itself) so skipping
     // it preserves observable behavior. Also taken when the runtime
     // cost gate fires (slice 3b.8) — same shape (init_slot is already
-    // seeded above; one worker_fn call covers the full range).
+    // seeded above; one worker_fn call covers the full range). The
+    // fork-depth cap is handled earlier in `karac_par_reduce` (nested
+    // reductions never reach this pooled path).
+    //
+    // Still raise the depth for this inline body: it IS a reduction worker,
+    // so a nested reduction it reaches must see depth ≥ 1 and take the cheap
+    // early-cap inline path rather than re-querying the pool. Without this, a
+    // 1-worker pool (or a top loop with a single iteration) would leave depth
+    // at 0 and route every recursion node back through the pooled entry.
     if n_workers == 1 || gate_skip {
+        let _depth = ParReduceDepthGuard::enter();
         let dummy = AtomicBool::new(false);
         (desc.worker_fn)(out_slot, 0, desc.iter_total, desc.ctx, &dummy);
         return;
@@ -1965,6 +2062,13 @@ unsafe fn karac_par_reduce_pooled(
                 call: Arc::clone(&call),
                 branch_idx: w as u32,
                 run: Box::new(move |cancel: &AtomicBool| unsafe {
+                    // Raise the reduction depth for the duration of this
+                    // worker's body: any nested `karac_par_reduce` reached from
+                    // `worker_fn` (a recursive delta) sees the higher depth and,
+                    // once the cap is hit, runs inline instead of fanning out
+                    // again. Runs on whichever thread executes the task — a pool
+                    // worker, or the caller when it work-helps.
+                    let _depth = ParReduceDepthGuard::enter();
                     worker_fn(
                         slot_addr as *mut u8,
                         start,
@@ -8412,6 +8516,101 @@ mod tests {
         let total = run_reduce(n as u64, init_i64_zero, worker_sum_range, combine_i64_add);
         let expected: i64 = (0..n as i64).sum();
         assert_eq!(total, expected);
+    }
+
+    // ── Fork-depth cap (B-2026-07-03-14 follow-on) ────────────────────
+    //
+    // A reduction whose worker recurses into `karac_par_reduce` must not
+    // fan out at every recursion level (that nests parallel regions per
+    // depth and exhausts the stack). The runtime caps fan-out depth: only
+    // the outermost level parallelizes, deeper levels run inline. The
+    // worker below reads the thread-local depth it runs at and records the
+    // max; with the cap, no worker ever exceeds it.
+
+    #[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
+    struct RecCtx {
+        max_depth: *const AtomicUsize,
+        levels: u32,
+    }
+
+    /// Recursive reduction worker: records its run-depth, then (while
+    /// `levels` remain) nests another multi-worker `karac_par_reduce`. The
+    /// nested `iter_total = 8` would fan out again absent the cap, pushing
+    /// observed depth past 1; with the cap it runs inline and depth holds.
+    #[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
+    unsafe extern "C" fn worker_recursive_reduce(
+        slot: *mut u8,
+        start: u64,
+        end: u64,
+        ctx: *mut c_void,
+        _cancel: *const AtomicBool,
+    ) {
+        let rc = &*(ctx as *const RecCtx);
+        let depth = super::PAR_REDUCE_DEPTH.with(|d| d.get()) as usize;
+        (*rc.max_depth).fetch_max(depth, std::sync::atomic::Ordering::SeqCst);
+        let mut acc: i64 = *(slot as *const i64);
+        for _ in start..end {
+            acc += 1;
+        }
+        if rc.levels > 0 {
+            let nested = RecCtx {
+                max_depth: rc.max_depth,
+                levels: rc.levels - 1,
+            };
+            let desc = KaracReduceDescriptor {
+                iter_total: 8,
+                slot_size: std::mem::size_of::<i64>() as u64,
+                slot_align: std::mem::align_of::<i64>() as u64,
+                init_slot: init_i64_zero,
+                worker_fn: worker_recursive_reduce,
+                combine_fn: combine_i64_add,
+                ctx: &nested as *const RecCtx as *mut c_void,
+                per_iter_cost_units: 0,
+            };
+            let mut nested_out: i64 = 0;
+            karac_par_reduce(&desc, &mut nested_out as *mut i64 as *mut u8, 0);
+            acc += nested_out;
+        }
+        *(slot as *mut i64) = acc;
+    }
+
+    /// The depth cap bounds recursive-reduction nesting: no worker runs
+    /// above `KARAC_PAR_MAX_FORK_DEPTH` (default 1), so the runaway nesting
+    /// that crashed B-2026-07-03-14 is structurally impossible while the
+    /// outermost level still parallelizes. Without the cap the four
+    /// recursion levels would each fan out, driving observed depth to 4+.
+    #[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
+    #[test]
+    fn test_par_reduce_fork_depth_cap_bounds_recursive_nesting() {
+        let max_depth = AtomicUsize::new(0);
+        let top = RecCtx {
+            max_depth: &max_depth as *const AtomicUsize,
+            levels: 4,
+        };
+        let desc = KaracReduceDescriptor {
+            iter_total: 8,
+            slot_size: std::mem::size_of::<i64>() as u64,
+            slot_align: std::mem::align_of::<i64>() as u64,
+            init_slot: init_i64_zero,
+            worker_fn: worker_recursive_reduce,
+            combine_fn: combine_i64_add,
+            ctx: &top as *const RecCtx as *mut c_void,
+            per_iter_cost_units: 0,
+        };
+        let mut out: i64 = 0;
+        unsafe {
+            karac_par_reduce(&desc, &mut out as *mut i64 as *mut u8, 0);
+        }
+        let cap = super::resolve_max_fork_depth() as usize;
+        let seen = max_depth.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            seen <= cap,
+            "reduction worker ran at depth {seen}, above fork cap {cap} — nesting not bounded"
+        );
+        assert!(
+            out > 0,
+            "recursive fold should complete with a nonzero result"
+        );
     }
 
     // ── karac_par_reduce slice 3b.8: runtime-side cost gate ───────────

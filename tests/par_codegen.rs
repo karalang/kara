@@ -2473,6 +2473,38 @@ fn main() {
         assert_eq!(out.trim(), "4999950000");
     }
 
+    #[test]
+    fn test_e2e_recursive_reduction_nqueens_count_bounded_by_fork_depth_cap() {
+        // A backtracking counter whose `+` reduction delta RECURSES into its
+        // own function (`total = total + count(...deeper...)`). Before the
+        // runtime fork-depth cap this SIGBUS'd under auto-par — each recursion
+        // level fanned out a nested parallel region and the nesting exhausted
+        // the stack (B-2026-07-03-14). The cap makes only the outermost level
+        // parallelize; deeper levels run inline, so it completes correctly.
+        // n = 9 N-Queens has 352 solutions. Regression for the shallow-depth
+        // parallel-reduction slice.
+        let src = r#"
+fn count(n: i64, row: i64, cols: i64, diag1: i64, diag2: i64) -> i64 {
+    if row == n { return 1i64; }
+    let mut total = 0i64;
+    let mut c = 0i64;
+    while c < n {
+        let bit_c = 1i64 << c;
+        let bit_d1 = 1i64 << (row + c);
+        let bit_d2 = 1i64 << (row - c + (n - 1i64));
+        if (cols & bit_c) == 0i64 and (diag1 & bit_d1) == 0i64 and (diag2 & bit_d2) == 0i64 {
+            total = total + count(n, row + 1i64, cols | bit_c, diag1 | bit_d1, diag2 | bit_d2);
+        }
+        c = c + 1i64;
+    }
+    total
+}
+fn main() { println(count(9i64, 0i64, 0i64, 0i64, 0i64)); }
+"#;
+        let Some(out) = run_program(src) else { return };
+        assert_eq!(out.trim(), "352");
+    }
+
     // ── Slice 3b.4: while-shape support ──────────────────────────────
     //
     // The kata-7 bench (and many real workloads) write the K-iter loop

@@ -2449,14 +2449,15 @@ fn test_reduction_rejects_conditional_acc_update_when_cond_reads_acc() {
 }
 
 #[test]
-fn test_reduction_rejects_recursive_self_call_in_body() {
+fn test_reduction_recognized_for_recursive_self_call_in_body() {
     // A backtracking counter: `if legal { total = total + count(...deeper...) }`
-    // is a valid `+` reduction in isolation, but the delta recurses into the
-    // enclosing function. Parallelizing it opens a fresh nested parallel region
-    // at every recursion level; the fan-out compounds into runaway task nesting
-    // that exhausts the stack (a SIGBUS at depth — correct output survives only
-    // for tiny inputs). The recognizer must decline it so the loop stays
-    // sequential. Regression for B-2026-07-03-14 (LeetCode #52 N-Queens II).
+    // is a valid `+` reduction whose delta recurses into the enclosing function.
+    // It IS recognized and lowered — the runtime bounds fan-out depth
+    // (`KARAC_PAR_MAX_FORK_DEPTH`, default 1), so only the outermost level
+    // parallelizes and deeper levels run sequentially, which is safe (no runaway
+    // nesting) AND useful (the search parallelizes at its top-level branches).
+    // This previously declined under B-2026-07-03-14's conservative guard; the
+    // runtime fork-depth cap replaced it (shallow-depth-parallel-reduction).
     let analysis = analyze(
         r#"
         fn count(n: i64, row: i64) -> i64 {
@@ -2473,19 +2474,21 @@ fn test_reduction_rejects_recursive_self_call_in_body() {
         "#,
     );
     let count_fc = get_function(&analysis, "count");
-    assert!(
-        count_fc.loop_reductions.is_empty(),
-        "a reduction whose delta recurses into the enclosing fn must not be \
-         recognized (runaway nested parallelism), got {:?}",
+    assert_eq!(
+        count_fc.loop_reductions.len(),
+        1,
+        "a recursive-delta reduction should be recognized (runtime caps fan-out \
+         depth), got {:?}",
         count_fc.loop_reductions
     );
+    assert_eq!(count_fc.loop_reductions[0].accumulator, "total");
+    assert_eq!(count_fc.loop_reductions[0].op, ReductionOp::Add);
 }
 
 #[test]
 fn test_reduction_still_recognized_with_nonrecursive_call_in_body() {
-    // Guard scope check: a reduction whose delta calls a DIFFERENT function
-    // (not the enclosing one) is still a legitimate parallel reduction — the
-    // recursion guard keys on the enclosing fn's own name only.
+    // A reduction whose delta calls a plain non-recursive function is a
+    // legitimate parallel reduction — recognized and lowered as normal.
     let analysis = analyze(
         r#"
         fn work(x: i64) -> i64 { x * 2i64 }
