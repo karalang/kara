@@ -19,6 +19,23 @@ This closes the registry-proxy follow-up (b) ("Wire protocol definition") in
 - The client joins endpoint paths onto the configured base URL after stripping a
   trailing `/`.
 
+## Authentication
+
+The public `proxy.kara-lang.org` is unauthenticated. A **private** mirror may
+require a bearer token: when `KARAC_REGISTRY_TOKEN` is set (non-empty), the
+client sends it on **every** request as:
+
+```
+Authorization: Bearer <token>
+```
+
+The token is per-user and **never** read from `kara.toml` (only from the
+environment), so a credential is never committed. An empty / whitespace-only
+`KARAC_REGISTRY_TOKEN` is treated as unset (no header sent). A proxy that
+rejects the request with `401 Unauthorized` or `403 Forbidden` surfaces as
+`Unauthorized { url, status }` (`E_PROXY_UNAUTHORIZED`) — applies to both
+endpoints below.
+
 ## Endpoint: catalog
 
 ```
@@ -46,6 +63,7 @@ Client mapping → `FetchedManifest { package, upstream_url, versions }`.
 | Status  | Client result                                    |
 |---------|--------------------------------------------------|
 | `200`   | Parsed as above.                                 |
+| `401` / `403` | `Unauthorized { url, status }` (missing/invalid `KARAC_REGISTRY_TOKEN`). |
 | `404`   | `PackageNotFound { name }`                        |
 | other   | `MalformedResponse` (unexpected status).          |
 
@@ -87,6 +105,7 @@ never cached.
 | Status  | Client result                                    |
 |---------|--------------------------------------------------|
 | `200`   | Tarball, hash-verified as above.                  |
+| `401` / `403` | `Unauthorized { url, status }` (missing/invalid `KARAC_REGISTRY_TOKEN`). |
 | `404`   | `VersionNotFound { name, version }`               |
 | other   | `MalformedResponse` (unexpected status).          |
 
@@ -119,7 +138,8 @@ These are tracked as registry-proxy follow-ups in the phase-5 checklist and do
 not change the contract above when they land:
 
 - Upstream mirroring / the server actually fetching from the origin (server-side).
-- Multi-mirror / high-availability (d), authentication (e), signature
-  verification (f) — a signature would be a sibling field to `content_hash`.
+- Multi-mirror / high-availability (d) and signature verification (f) — a
+  signature would be a sibling field to `content_hash`. (Authentication (e) is
+  now specified above under **Authentication**.)
 - Per-package proxy override (i), `--no-proxy` direct-from-source fetch (j/k),
   and `karac yank` status surfacing (l).

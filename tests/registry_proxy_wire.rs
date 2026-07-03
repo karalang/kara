@@ -212,3 +212,82 @@ fn content_hash_mismatch_is_malformed() {
         other => panic!("expected MalformedResponse (hash mismatch), got {other:?}"),
     }
 }
+
+// ── Authentication: Authorization: Bearer <token> (follow-up (e)) ──
+
+/// Spawn a one-shot responder that requires `Authorization: Bearer
+/// <expected>`. A matching request gets a valid catalog (200); anything
+/// else — missing or wrong token — gets a bare `401 Unauthorized`. Returns
+/// the base URL.
+fn spawn_auth_responder(expected: &'static str) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut buf = [0u8; 4096];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            let request = String::from_utf8_lossy(&buf[..n]);
+            let authorized = request
+                .lines()
+                .any(|line| line.trim() == format!("Authorization: Bearer {expected}"));
+            if authorized {
+                let body = r#"{ "upstream": "u", "versions": ["1.0.0"] }"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body,
+                );
+                let _ = stream.write_all(response.as_bytes());
+            } else {
+                let _ = stream.write_all(
+                    b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+            }
+            let _ = stream.flush();
+        }
+    });
+    format!("http://{addr}")
+}
+
+#[test]
+fn matching_bearer_token_is_authorized() {
+    let base = spawn_auth_responder("s3cr3t");
+    let client = HttpProxyClient::with_token(base, Some("s3cr3t".to_string()));
+    let manifest = client
+        .fetch_catalog("private")
+        .expect("authorized catalog fetch");
+    assert_eq!(manifest.versions, vec![ver("1.0.0")]);
+}
+
+#[test]
+fn missing_token_against_private_proxy_is_unauthorized() {
+    let base = spawn_auth_responder("s3cr3t");
+    // No token supplied — the private proxy rejects with 401.
+    let client = HttpProxyClient::new(base.clone());
+    match client.fetch_catalog("private") {
+        Err(ProxyClientError::Unauthorized { url, status }) => {
+            assert_eq!(status, 401);
+            assert!(url.contains("/catalog/private"), "unexpected url: {url}");
+        }
+        other => panic!("expected Unauthorized, got {other:?}"),
+    }
+}
+
+#[test]
+fn wrong_token_is_unauthorized() {
+    let base = spawn_auth_responder("s3cr3t");
+    let client = HttpProxyClient::with_token(base, Some("wrong-token".to_string()));
+    match client.fetch_catalog("private") {
+        Err(ProxyClientError::Unauthorized { status, .. }) => assert_eq!(status, 401),
+        other => panic!("expected Unauthorized, got {other:?}"),
+    }
+    assert_eq!(
+        ProxyClientError::Unauthorized {
+            url: "x".to_string(),
+            status: 401,
+        }
+        .code(),
+        "E_PROXY_UNAUTHORIZED",
+    );
+}

@@ -25,6 +25,14 @@ pub const DEFAULT_PROXY_URL: &str = "https://proxy.kara-lang.org";
 /// build.
 pub const PROXY_URL_ENV_VAR: &str = "KARAC_REGISTRY_PROXY";
 
+/// Environment variable carrying the bearer token for an authenticated
+/// proxy (registry-proxy follow-up (e)). Per-user and never committed —
+/// sourced only from the environment, never from `kara.toml`. A non-empty
+/// value is sent as `Authorization: Bearer <token>` on every catalog /
+/// package request; an empty / whitespace value is treated as absent so a
+/// stray export doesn't send a bogus empty credential.
+pub const REGISTRY_TOKEN_ENV_VAR: &str = "KARAC_REGISTRY_TOKEN";
+
 /// Environment variable overriding the on-disk registry tarball cache
 /// root (consulted by [`default_registry_cache_root`]). Non-empty wins;
 /// otherwise the cache lives under `~/.kara/cache/registry/`.
@@ -47,14 +55,21 @@ pub enum ProxyMode {
 pub struct ProxyConfig {
     pub url: String,
     pub mode: ProxyMode,
+    /// Bearer token for an authenticated proxy, from `KARAC_REGISTRY_TOKEN`
+    /// (per-user, never committed). `None` queries the proxy unauthenticated
+    /// (the public `proxy.kara-lang.org` case). Populated by [`Self::resolve`]
+    /// / [`Self::from_env`]; the explicit `default_enabled` / `disabled`
+    /// constructors leave it `None`.
+    pub token: Option<String>,
 }
 
 impl ProxyConfig {
-    /// Proxy enabled, default URL.
+    /// Proxy enabled, default URL, no token.
     pub fn default_enabled() -> Self {
         Self {
             url: DEFAULT_PROXY_URL.to_string(),
             mode: ProxyMode::Default,
+            token: None,
         }
     }
 
@@ -64,6 +79,7 @@ impl ProxyConfig {
         Self {
             url: DEFAULT_PROXY_URL.to_string(),
             mode: ProxyMode::Disabled,
+            token: None,
         }
     }
 
@@ -100,12 +116,27 @@ impl ProxyConfig {
                     .map(str::to_string)
             })
             .unwrap_or_else(|| DEFAULT_PROXY_URL.to_string());
-        Self { url, mode }
+        Self {
+            url,
+            mode,
+            token: registry_token_from_env(),
+        }
     }
 
     pub fn is_enabled(&self) -> bool {
         matches!(self.mode, ProxyMode::Default)
     }
+}
+
+/// Resolve the proxy auth token from [`REGISTRY_TOKEN_ENV_VAR`]. Trimmed;
+/// whitespace-only is treated as absent so a stray `export
+/// KARAC_REGISTRY_TOKEN=` doesn't send an empty bearer credential. `None`
+/// means the proxy is queried unauthenticated.
+pub fn registry_token_from_env() -> Option<String> {
+    std::env::var(REGISTRY_TOKEN_ENV_VAR)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// Whether an *explicit* proxy URL is configured — the `KARAC_REGISTRY_PROXY`
@@ -164,6 +195,10 @@ pub enum ProxyClientError {
     Disabled,
     /// Network / transport failure reaching the proxy URL.
     Unreachable { url: String, message: String },
+    /// The proxy rejected the request as unauthenticated / unauthorized
+    /// (HTTP 401 / 403). Either no `KARAC_REGISTRY_TOKEN` was supplied for a
+    /// private proxy, or the supplied token was rejected.
+    Unauthorized { url: String, status: u16 },
     /// The proxy responded but did not know about this package.
     PackageNotFound { name: String },
     /// The proxy responded but did not have the requested version.
@@ -185,6 +220,7 @@ impl ProxyClientError {
         match self {
             Self::Disabled => "E_PROXY_DISABLED",
             Self::Unreachable { .. } => "E_PROXY_UNREACHABLE",
+            Self::Unauthorized { .. } => "E_PROXY_UNAUTHORIZED",
             Self::PackageNotFound { .. } => "E_PROXY_PACKAGE_NOT_FOUND",
             Self::VersionNotFound { .. } => "E_PROXY_VERSION_NOT_FOUND",
             Self::MalformedResponse { .. } => "E_PROXY_MALFORMED_RESPONSE",
@@ -202,6 +238,11 @@ impl std::fmt::Display for ProxyClientError {
             Self::Unreachable { url, message } => {
                 write!(f, "could not reach registry proxy at {url}: {message}")
             }
+            Self::Unauthorized { url, status } => write!(
+                f,
+                "registry proxy at {url} rejected the request (HTTP {status}); \
+                 set KARAC_REGISTRY_TOKEN to a valid credential for this proxy"
+            ),
             Self::PackageNotFound { name } => {
                 write!(f, "registry proxy: package {name:?} not found")
             }
@@ -331,7 +372,10 @@ impl ProxyClient for DisabledProxyClient {
 pub fn make_client(config: &ProxyConfig) -> Box<dyn ProxyClient> {
     match config.mode {
         ProxyMode::Disabled => Box::new(DisabledProxyClient),
-        ProxyMode::Default => Box::new(HttpProxyClient::new(config.url.clone())),
+        ProxyMode::Default => Box::new(HttpProxyClient::with_token(
+            config.url.clone(),
+            config.token.clone(),
+        )),
     }
 }
 
@@ -656,18 +700,41 @@ pub fn fetch_registry_package(
 #[cfg(not(target_arch = "wasm32"))]
 pub struct HttpProxyClient {
     pub url: String,
+    /// Bearer token sent as `Authorization: Bearer <token>` on every
+    /// request when present (registry-proxy follow-up (e)). `None` queries
+    /// the proxy unauthenticated.
+    pub token: Option<String>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl HttpProxyClient {
+    /// Construct an unauthenticated client for `url`.
     pub fn new(url: String) -> Self {
-        Self { url }
+        Self { url, token: None }
+    }
+
+    /// Construct a client that authenticates each request with `token`
+    /// (when `Some`). This is the constructor `make_client` uses so a
+    /// `KARAC_REGISTRY_TOKEN`-configured proxy is reached authenticated.
+    pub fn with_token(url: String, token: Option<String>) -> Self {
+        Self { url, token }
     }
 
     /// The configured base URL with any trailing slash removed, so the
     /// endpoint paths join cleanly.
     fn base(&self) -> &str {
         self.url.trim_end_matches('/')
+    }
+
+    /// Build a GET request for `url`, attaching the bearer token when one is
+    /// configured. Centralizes header injection so both endpoints stay in
+    /// sync.
+    fn authed_get(&self, url: &str) -> ureq::Request {
+        let req = ureq::get(url);
+        match &self.token {
+            Some(token) => req.set("Authorization", &format!("Bearer {token}")),
+            None => req,
+        }
     }
 }
 
@@ -717,12 +784,15 @@ fn parse_catalog(
 impl ProxyClient for HttpProxyClient {
     fn fetch_catalog(&self, package: &str) -> Result<FetchedManifest, ProxyClientError> {
         let url = format!("{}/catalog/{}", self.base(), package);
-        let response = match ureq::get(&url).call() {
+        let response = match self.authed_get(&url).call() {
             Ok(r) => r,
             Err(ureq::Error::Status(404, _)) => {
                 return Err(ProxyClientError::PackageNotFound {
                     name: package.to_string(),
                 })
+            }
+            Err(ureq::Error::Status(status @ (401 | 403), _)) => {
+                return Err(ProxyClientError::Unauthorized { url, status })
             }
             Err(ureq::Error::Status(code, _)) => {
                 return Err(ProxyClientError::MalformedResponse {
@@ -754,13 +824,16 @@ impl ProxyClient for HttpProxyClient {
         use std::io::Read;
 
         let url = format!("{}/pkg/{}/{}.tar.gz", self.base(), package, version);
-        let response = match ureq::get(&url).call() {
+        let response = match self.authed_get(&url).call() {
             Ok(r) => r,
             Err(ureq::Error::Status(404, _)) => {
                 return Err(ProxyClientError::VersionNotFound {
                     name: package.to_string(),
                     version: version.clone(),
                 })
+            }
+            Err(ureq::Error::Status(status @ (401 | 403), _)) => {
+                return Err(ProxyClientError::Unauthorized { url, status })
             }
             Err(ureq::Error::Status(code, _)) => {
                 return Err(ProxyClientError::MalformedResponse {
@@ -830,6 +903,13 @@ pub struct HttpProxyClient {
 #[cfg(target_arch = "wasm32")]
 impl HttpProxyClient {
     pub fn new(url: String) -> Self {
+        Self { url }
+    }
+
+    /// Token-aware constructor mirroring the native client's signature so
+    /// `make_client` is cfg-agnostic. The wasm stub performs no HTTP, so the
+    /// token is discarded.
+    pub fn with_token(url: String, _token: Option<String>) -> Self {
         Self { url }
     }
 }
@@ -912,6 +992,45 @@ mod tests {
         let c = ProxyConfig::from_env(ProxyMode::Default);
         assert_eq!(c.url, DEFAULT_PROXY_URL);
         std::env::remove_var(PROXY_URL_ENV_VAR);
+    }
+
+    #[test]
+    fn resolve_reads_token_from_env() {
+        let _g = PROXY_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var(REGISTRY_TOKEN_ENV_VAR, "  tok-123  ");
+        let c = ProxyConfig::resolve(ProxyMode::Default, None);
+        // Trimmed, non-empty → carried on the config.
+        assert_eq!(c.token.as_deref(), Some("tok-123"));
+        std::env::remove_var(REGISTRY_TOKEN_ENV_VAR);
+    }
+
+    #[test]
+    fn resolve_token_absent_when_env_unset() {
+        let _g = PROXY_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var(REGISTRY_TOKEN_ENV_VAR);
+        let c = ProxyConfig::resolve(ProxyMode::Default, None);
+        assert_eq!(c.token, None);
+    }
+
+    #[test]
+    fn resolve_ignores_whitespace_only_token() {
+        let _g = PROXY_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var(REGISTRY_TOKEN_ENV_VAR, "   ");
+        let c = ProxyConfig::resolve(ProxyMode::Default, None);
+        assert_eq!(
+            c.token, None,
+            "whitespace-only token must be treated as absent"
+        );
+        std::env::remove_var(REGISTRY_TOKEN_ENV_VAR);
+    }
+
+    #[test]
+    fn http_client_constructors_thread_token() {
+        assert_eq!(HttpProxyClient::new("http://x".to_string()).token, None);
+        assert_eq!(
+            HttpProxyClient::with_token("http://x".to_string(), Some("t".to_string())).token,
+            Some("t".to_string()),
+        );
     }
 
     #[test]
@@ -1039,6 +1158,7 @@ mod tests {
         let config = ProxyConfig {
             url: "http://127.0.0.1:1".to_string(),
             mode: ProxyMode::Default,
+            token: None,
         };
         let client = make_client(&config);
         let err = client.fetch_catalog("anything").unwrap_err();
