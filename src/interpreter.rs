@@ -42,6 +42,7 @@ mod method_call_tensor;
 mod pattern_match;
 mod reflection;
 mod resource_method;
+mod type_order;
 mod value;
 
 use exec::{deep_clone_value, option_value_from, ControlFlow, Env};
@@ -542,6 +543,12 @@ fn seed_rand_state() -> u64 {
 
 impl<'a> Interpreter<'a> {
     pub fn new(program: &'a Program, typecheck_result: &'a TypeCheckResult) -> Self {
+        // Install this thread's derived-Ord declaration-order registry so the
+        // free `value_compare` / `OrdValue::cmp` can order structs/enums by
+        // source order, not alphabetically (B-2026-07-03-12). Every eval path
+        // — including each par-branch interpreter constructed on its own thread
+        // — funnels through `new`, so this is the universal chokepoint.
+        type_order::install(typecheck_result);
         Interpreter {
             program,
             typecheck_result,

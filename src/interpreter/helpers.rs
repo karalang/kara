@@ -143,19 +143,18 @@ pub(super) fn value_compare(a: &Value, b: &Value) -> std::cmp::Ordering {
                 }
             })
             .unwrap_or_else(|| a.len().cmp(&b.len())),
-        // Two Structs: order by type name, then by fields in a deterministic
-        // (sorted field-name) sequence (B-2026-07-03-6). Without this arm both
-        // structs fell to the `_ => discriminant` fallback where every struct
-        // maps to the same catch-all discriminant → always `Equal` → a
-        // `SortedSet[Struct]` / `SortedMap[Struct, _]` collapsed distinct keys
-        // to one (silent DATA LOSS) and `Vec[Struct].sort()` was a NO-OP. The
-        // order is consistent with `Value::eq` (equal iff every field is equal,
-        // so distinct structs never compare `Equal`) and is a proper total
-        // order — sound for the `OrdValue`-keyed BTreeMap backing the sorted
-        // containers. It is NOT the derived-`Ord` DECLARATION order (fields are
-        // compared alphabetically, not in source order); matching declaration
-        // order needs field-order info `value_compare` cannot reach and is
-        // tracked as a follow-on (B-2026-07-03-12).
+        // Two Structs: order by type name, then by fields in derived-`Ord`
+        // DECLARATION order (B-2026-07-03-12), recovered from the per-thread
+        // `type_order` registry; when the registry is absent (or the type is
+        // unknown) fall back to the alphabetical field-name order introduced in
+        // B-2026-07-03-6. Either way the order is consistent with `Value::eq`
+        // (equal iff every field is equal, so distinct structs never compare
+        // `Equal`) and is a proper total order — sound for the `OrdValue`-keyed
+        // BTreeMap backing `SortedSet` / `SortedMap` and for `Vec[Struct].sort()`.
+        // Without an arm here both structs fell to the `_ => discriminant`
+        // fallback where every struct maps to the same catch-all discriminant →
+        // always `Equal` → distinct keys collapsed (silent DATA LOSS) and
+        // `sort()` was a NO-OP.
         (
             Value::Struct {
                 name: an,
@@ -165,12 +164,13 @@ pub(super) fn value_compare(a: &Value, b: &Value) -> std::cmp::Ordering {
                 name: bn,
                 fields: bf,
             },
-        ) => an.cmp(bn).then_with(|| compare_field_maps(af, bf)),
-        // Two enum variants: order by enum name, then variant name, then
-        // payload. Same silent-data-loss / no-op class as structs above (the
-        // discriminant fallback made all enum values compare `Equal`). Variant
-        // ordering is by NAME (alphabetical), not the derived-`Ord`
-        // declaration index — the same B-2026-07-03-12 follow-on.
+        ) => an.cmp(bn).then_with(|| compare_struct_fields(an, af, bf)),
+        // Two enum variants: order by enum name, then variant DECLARATION index
+        // (B-2026-07-03-12 — so `Priority { Low, Med, High }` sorts
+        // `Low < Med < High`, not alphabetically `High < Low < Med`), then
+        // payload. Falls back to variant-name order when the registry is
+        // absent. Same silent-data-loss / no-op class as structs above without
+        // the arm.
         (
             Value::EnumVariant {
                 enum_name: an,
@@ -184,11 +184,73 @@ pub(super) fn value_compare(a: &Value, b: &Value) -> std::cmp::Ordering {
             },
         ) => an
             .cmp(bn)
-            .then_with(|| av.cmp(bv))
-            .then_with(|| compare_enum_data(ad, bd)),
+            .then_with(|| compare_variant_order(an, av, bv))
+            .then_with(|| compare_enum_data(an, av, ad, bd)),
         // Cross-variant ordering by discriminant index
         _ => value_discriminant(a).cmp(&value_discriminant(b)),
     }
+}
+
+/// Compare two struct field maps for a struct named `type_name`, in
+/// derived-`Ord` DECLARATION order when the per-thread `type_order` registry
+/// knows the type, else in the alphabetical fallback order. Both are proper
+/// total orders consistent with `Value::eq`.
+fn compare_struct_fields(
+    type_name: &str,
+    a: &HashMap<String, Value>,
+    b: &HashMap<String, Value>,
+) -> std::cmp::Ordering {
+    if let Some(reg) = crate::interpreter::type_order::current() {
+        if let Some(order) = reg.struct_field_order(type_name) {
+            return compare_field_maps_ordered(a, b, order);
+        }
+    }
+    compare_field_maps(a, b)
+}
+
+/// Compare two variant names of enum `enum_name` by DECLARATION index (registry
+/// present), else alphabetically by name (fallback).
+fn compare_variant_order(enum_name: &str, av: &str, bv: &str) -> std::cmp::Ordering {
+    if let Some(reg) = crate::interpreter::type_order::current() {
+        if let Some(order) = reg.enum_variant_order(enum_name) {
+            if let (Some(x), Some(y)) = (order.get(av), order.get(bv)) {
+                return x.cmp(y);
+            }
+        }
+    }
+    av.cmp(bv)
+}
+
+/// Compare two struct field maps in the declaration order given by `order`
+/// (field name → declaration index). Any field absent from `order` (should not
+/// happen for a well-formed type) sorts after all known fields, then
+/// alphabetically, purely for determinism.
+fn compare_field_maps_ordered(
+    a: &HashMap<String, Value>,
+    b: &HashMap<String, Value>,
+    order: &HashMap<String, u32>,
+) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let mut keys: Vec<&String> = a.keys().chain(b.keys()).collect();
+    keys.sort();
+    keys.dedup();
+    keys.sort_by(|x, y| {
+        let ix = order.get(*x).copied().unwrap_or(u32::MAX);
+        let iy = order.get(*y).copied().unwrap_or(u32::MAX);
+        ix.cmp(&iy).then_with(|| x.cmp(y))
+    });
+    for k in keys {
+        let ord = match (a.get(k), b.get(k)) {
+            (Some(x), Some(y)) => value_compare(x, y),
+            (Some(_), None) => Ordering::Greater,
+            (None, Some(_)) => Ordering::Less,
+            (None, None) => Ordering::Equal,
+        };
+        if ord != Ordering::Equal {
+            return ord;
+        }
+    }
+    Ordering::Equal
 }
 
 /// Deterministic total order over two struct field maps: compare each field
@@ -196,7 +258,8 @@ pub(super) fn value_compare(a: &Value, b: &Value) -> std::cmp::Ordering {
 /// `Value::eq` uses (returns `Equal` iff every shared field is equal and the
 /// key sets match), so it never conflates two distinct structs. A field
 /// present in only one side orders that side greater (defensive — same-type
-/// structs always share a key set).
+/// structs always share a key set). The alphabetical fallback used when the
+/// `type_order` registry can't supply declaration order.
 fn compare_field_maps(
     a: &HashMap<String, Value>,
     b: &HashMap<String, Value>,
@@ -219,10 +282,19 @@ fn compare_field_maps(
     Ordering::Equal
 }
 
-/// Total order over two enum payloads. Reached only after the enclosing
-/// variant names matched, so both payloads share a shape in well-typed code;
-/// the cross-shape arm orders by a stable shape rank purely for totality.
-fn compare_enum_data(a: &EnumData, b: &EnumData) -> std::cmp::Ordering {
+/// Total order over two enum payloads for variant `variant` of enum
+/// `enum_name`. Reached only after the enclosing variant names matched, so both
+/// payloads share a shape in well-typed code; the cross-shape arm orders by a
+/// stable shape rank purely for totality. Tuple payloads compare positionally
+/// (inherent order); struct payloads compare in derived-`Ord` DECLARATION order
+/// via the `type_order` registry (B-2026-07-03-12), falling back to
+/// alphabetical field order when absent.
+fn compare_enum_data(
+    enum_name: &str,
+    variant: &str,
+    a: &EnumData,
+    b: &EnumData,
+) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     match (a, b) {
         (EnumData::Unit, EnumData::Unit) => Ordering::Equal,
@@ -234,7 +306,14 @@ fn compare_enum_data(a: &EnumData, b: &EnumData) -> std::cmp::Ordering {
                 (o != Ordering::Equal).then_some(o)
             })
             .unwrap_or_else(|| x.len().cmp(&y.len())),
-        (EnumData::Struct(x), EnumData::Struct(y)) => compare_field_maps(x, y),
+        (EnumData::Struct(x), EnumData::Struct(y)) => {
+            if let Some(reg) = crate::interpreter::type_order::current() {
+                if let Some(order) = reg.variant_field_order(enum_name, variant) {
+                    return compare_field_maps_ordered(x, y, order);
+                }
+            }
+            compare_field_maps(x, y)
+        }
         _ => enum_data_rank(a).cmp(&enum_data_rank(b)),
     }
 }

@@ -2749,6 +2749,47 @@ fn test_struct_and_enum_ordering_no_dataloss_and_sorts() {
     assert_eq!(output, "3\ntrue\nfalse\n3\n3\n1,2\n1,9\n2,0\n");
 }
 
+// ── B-2026-07-03-12: derived-Ord DECLARATION order, not alphabetical ──
+
+#[test]
+fn test_struct_enum_ordering_is_declaration_order_not_alphabetical() {
+    // B-2026-07-03-6 fixed the data loss but ordered struct fields / enum
+    // variants ALPHABETICALLY. This locks the derived-`Ord` DECLARATION order
+    // recovered from the per-thread `type_order` registry:
+    //   - struct `Rect { width, height }` sorts by `width` FIRST — alphabetical
+    //     would compare `height` first and flip the two rows.
+    //   - enum `Priority { Low, Med, High }` sorts `Low < Med < High` — the
+    //     "more visible" case: alphabetical would give `High < Low < Med`.
+    // Both the `Vec.sort()` path (value_compare direct) and the SortedSet
+    // path (OrdValue::cmp deep inside BTreeMap, no interpreter handle) must
+    // agree, so the test exercises both.
+    let output = run_no_errors(
+        "#[derive(Eq, Ord)]\n\
+         struct Rect { width: i64, height: i64 }\n\
+         #[derive(Eq, Ord)]\n\
+         enum Priority { Low, Med, High }\n\
+         fn rank(p: Priority) -> i64 {\n\
+             match p { Priority.Low => 0, Priority.Med => 1, Priority.High => 2 }\n\
+         }\n\
+         fn main() {\n\
+             let mut v: Vec[Rect] = Vec.new();\n\
+             v.push(Rect { width: 2, height: 1 });\n\
+             v.push(Rect { width: 1, height: 9 });\n\
+             v.sort();\n\
+             let mut i = 0;\n\
+             while i < v.len() { let r = v[i]; println(f\"{r.width},{r.height}\"); i = i + 1; };\n\
+             let mut ss: SortedSet[Priority] = SortedSet.new();\n\
+             ss.insert(Priority.High);\n\
+             ss.insert(Priority.Low);\n\
+             ss.insert(Priority.Med);\n\
+             for p in ss { println(f\"{rank(p)}\"); };\n\
+         }",
+    );
+    // Struct sorted by width (declaration order): (1,9) then (2,1).
+    // Enum SortedSet iterates in declaration order: Low(0) Med(1) High(2).
+    assert_eq!(output, "1,9\n2,1\n0\n1\n2\n");
+}
+
 // ── B-2026-07-01-7 fn-returned Drop temps + passthrough guard ──
 
 #[test]
