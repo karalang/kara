@@ -1124,6 +1124,44 @@ fn main() {
         }
     }
 
+    /// B-2026-07-03-9 on the auto-par surface: a by-value generic `Slice[T]`
+    /// param called with a Vec argument returns the correct value under
+    /// auto-par too (this harness compiles WITH `concurrency_analyze`). The
+    /// arg-coercion fix in `compile_generic_call` is on the shared direct-call
+    /// path, so it holds regardless of whether the call's binding lands in a
+    /// par group. Uses i64 and String elements — the NARROW (u8) element's
+    /// print-signedness under a par group is a separate open bug
+    /// (B-2026-07-03-21), so it is deliberately not exercised here.
+    #[test]
+    fn test_e2e_auto_par_generic_by_value_slice_param() {
+        let out = run_program(
+            r#"
+fn gsum[T](s: Slice[T]) -> T { s[0] }
+fn glen[T](s: Slice[T]) -> i64 { s.len() }
+fn geti() -> i64 { 1 }
+fn main() {
+    let vi: Vec[i64] = [10, 20, 30];
+    let vi2: Vec[i64] = [5, 6];
+    let a = geti();
+    let b = geti();
+    println(a + b);
+    println(gsum(vi));
+    println(glen(vi2));
+}
+"#,
+        );
+        if let Some(out) = out {
+            // i64 elements only: the narrow (u8) print-signedness in a par group
+            // (B-2026-07-03-21) and generic `-> T` container-element String-return
+            // formatting (B-2026-07-03-22) are separate bugs, so this asserts the
+            // arg-coercion value path.
+            assert_eq!(
+                out, "2\n10\n2\n",
+                "generic by-value Slice[T] param under auto-par; got {out:?}"
+            );
+        }
+    }
+
     #[test]
     fn test_e2e_auto_par_map_histogram_then_keys_no_race() {
         // `for w in words { *m.entry(w).or_insert(0) += 1 }` WRITES the map,

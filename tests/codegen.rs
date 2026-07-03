@@ -3706,6 +3706,45 @@ fn main() {
         }
     }
 
+    /// B-2026-07-03-9: a by-value generic `Slice[T]` param called with a Vec /
+    /// Array argument. `fn gfirst[T](s: Slice[T]) -> T { s[0] }; gfirst(vec)`
+    /// failed codegen module verification — the mono call passed the raw
+    /// `{ptr,i64,i64}` Vec value against the mono's `{ptr,i64}` Slice-typed
+    /// param, because `compile_generic_call`'s direct-call arg loop never ran
+    /// the `coerce_to_slice` header synthesis the non-generic path
+    /// (call_dispatch.rs) and the `mut Slice[T]` state-machine path already
+    /// used. `karac check` was clean and the interpreter correct. Covers a
+    /// narrow (u8) and heap (String) element, an Array argument (its own
+    /// coercion), and two distinct element instantiations of the same generic
+    /// (`gsum$i64` / `gsum$String` must stay separate monos — the S6b-1
+    /// element-collision guard, B-2026-07-02-41).
+    #[test]
+    fn e2e_generic_by_value_slice_param_coercion() {
+        if let Some(out) = run_program(
+            "fn gsum[T](s: Slice[T]) -> T { s[0] }\n\
+             fn glen[T](s: Slice[T]) -> i64 { s.len() }\n\
+             fn main() {\n\
+             \x20   let vi: Vec[i64] = [10, 20, 30];\n\
+             \x20   let vu: Vec[u8] = [255u8, 1u8];\n\
+             \x20   let vs: Vec[String] = [\"alpha-long-enough-payload-string\", \"beta\"];\n\
+             \x20   let arr: Array[i64, 3] = [7, 8, 9];\n\
+             \x20   println(f\"{gsum(vi)}\");\n\
+             \x20   let u: u8 = gsum(vu);\n\
+             \x20   println(f\"{u}\");\n\
+             \x20   println(f\"{glen(vs)}\");\n\
+             \x20   println(f\"{gsum(arr)}\");\n\
+             }",
+        ) {
+            // gsum(vi)=10 (i64 elem); u8 gsum(vu)=255 (narrow elem, typed
+            // binding); glen(vs)=2 (String slice header ptr+len synthesized
+            // correctly from the Vec); gsum(arr)=7 (Array-arg coercion). This
+            // harness compiles sequentially (analysis=None); the narrow-elem
+            // print-signedness under an auto-par par group is a separate open
+            // bug (B-2026-07-03-21).
+            assert_eq!(out, "10\n255\n2\n7\n");
+        }
+    }
+
     /// S6b-4a (B-2026-07-03-18): an arithmetic operator on a type parameter
     /// bounded by that operator's stdlib trait (`+`→Add, `-`→Sub, `*`→Mul,
     /// `/`→Div, `%`→Rem, unary `-`→Neg) monomorphizes and runs. Before the fix

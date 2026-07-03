@@ -865,6 +865,22 @@ impl<'ctx> super::Codegen<'ctx> {
         // registration made such bodies compile; before it they errored at
         // the first collection-method touch).
         let ref_flags = self.fn_param_ref.get(&mangled).cloned().unwrap_or_default();
+        // By-value `Slice[T]` params: the caller must synthesize the `{ptr,i64}`
+        // slice header from a Vec / Array / slice argument, exactly as the
+        // non-generic direct-call path does (call_dispatch.rs). Without this the
+        // raw arg value (`{ptr,i64,i64}` for a Vec) was passed against the mono's
+        // `{ptr,i64}` Slice-typed param and module verification rejected the
+        // mismatch (B-2026-07-03-9). `declare_mono_function` populated
+        // `fn_param_slice_elem[mangled]` via `extract_slice_elem_type` (which
+        // resolves the element `T` through the active `type_subst`), so the
+        // element type is already the concrete per-mono width. `mut Slice[T]`
+        // was already handled on the state-machine path; this closes the
+        // by-value form on the common direct-call path.
+        let slice_elems = self
+            .fn_param_slice_elem
+            .get(&mangled)
+            .cloned()
+            .unwrap_or_default();
         let compiled_args: Vec<BasicMetadataValueEnum<'ctx>> = arg_vals
             .iter()
             .enumerate()
@@ -884,6 +900,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.materialize_rvalue_for_ref_arg(*v, i)
                     };
                     Ok(BasicMetadataValueEnum::from(ptr))
+                } else if let Some(Some(elem_ty)) = slice_elems.get(i).cloned() {
+                    match self.coerce_to_slice(&args[i].value, elem_ty)? {
+                        Some(slice_val) => Ok(BasicMetadataValueEnum::from(slice_val)),
+                        None => Ok(BasicMetadataValueEnum::from(*v)),
+                    }
                 } else {
                     Ok(BasicMetadataValueEnum::from(*v))
                 }
