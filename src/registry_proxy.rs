@@ -522,6 +522,106 @@ impl ProxyClient for RetryingProxyClient {
     }
 }
 
+// ── Registry fetch orchestration ────────────────────────────────
+
+/// Failure resolving a registry dependency to concrete bytes.
+#[derive(Debug)]
+pub enum RegistryFetchError {
+    /// A catalog or tarball fetch failed at the proxy layer.
+    Proxy(ProxyClientError),
+    /// The catalog was fetched but no published version satisfies the
+    /// requested constraint. `available` is the catalog's version list, for
+    /// a "found X.Y.Z, none match `req`" diagnostic.
+    NoMatchingVersion {
+        name: String,
+        req: semver::VersionReq,
+        available: Vec<semver::Version>,
+    },
+}
+
+impl RegistryFetchError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Proxy(e) => e.code(),
+            Self::NoMatchingVersion { .. } => "E_REGISTRY_NO_MATCHING_VERSION",
+        }
+    }
+}
+
+impl std::fmt::Display for RegistryFetchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Proxy(e) => write!(f, "{e}"),
+            Self::NoMatchingVersion {
+                name,
+                req,
+                available,
+            } => {
+                let versions = available
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(
+                    f,
+                    "no version of `{name}` matches `{req}` (available: {})",
+                    if versions.is_empty() {
+                        "none".to_string()
+                    } else {
+                        versions
+                    },
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for RegistryFetchError {}
+
+/// Pick the **highest** available version satisfying `req`. Uses the semver
+/// crate's Cargo-compatible matching, so pre-releases are excluded unless
+/// `req` explicitly opts into the same base version. `None` when nothing
+/// matches.
+pub fn select_version(
+    req: &semver::VersionReq,
+    available: &[semver::Version],
+) -> Option<semver::Version> {
+    available.iter().filter(|v| req.matches(v)).max().cloned()
+}
+
+/// Resolve one registry dependency to a concrete [`FetchedPackage`]: fetch
+/// the catalog, pick the highest version satisfying `req`, then fetch that
+/// version's tarball. This is the atomic "registry dep → bytes" step the
+/// resolver's fetch path builds on; it composes over any [`ProxyClient`]
+/// (typically a `CachingProxyClient` wrapping a `RetryingProxyClient`).
+///
+/// The tarball endpoint does not carry the upstream source URL, so this
+/// stitches it in from the catalog manifest — closing the gap where a
+/// bare `fetch_package` leaves `FetchedPackage.upstream_url` empty.
+pub fn fetch_registry_package(
+    client: &dyn ProxyClient,
+    name: &str,
+    req: &semver::VersionReq,
+) -> Result<FetchedPackage, RegistryFetchError> {
+    let manifest = client
+        .fetch_catalog(name)
+        .map_err(RegistryFetchError::Proxy)?;
+    let version = select_version(req, &manifest.versions).ok_or_else(|| {
+        RegistryFetchError::NoMatchingVersion {
+            name: name.to_string(),
+            req: req.clone(),
+            available: manifest.versions.clone(),
+        }
+    })?;
+    let mut pkg = client
+        .fetch_package(name, &version)
+        .map_err(RegistryFetchError::Proxy)?;
+    if pkg.upstream_url.is_empty() {
+        pkg.upstream_url = manifest.upstream_url;
+    }
+    Ok(pkg)
+}
+
 /// `ureq`-backed proxy client. Performs real HTTPS GETs against the two
 /// registry-proxy endpoints (see `docs/registry-proxy-protocol.md`):
 ///
@@ -1238,5 +1338,83 @@ mod tests {
         let p = RetryPolicy::default();
         assert_eq!(p.max_retries, 3);
         assert_eq!(p.base_delay, Duration::from_millis(200));
+    }
+
+    // ── select_version / fetch_registry_package ─────────────────
+
+    fn req(s: &str) -> semver::VersionReq {
+        semver::VersionReq::parse(s).unwrap()
+    }
+
+    #[test]
+    fn select_version_picks_highest_match() {
+        let avail = vec![v("1.0.0"), v("1.2.0"), v("1.9.0"), v("2.0.0")];
+        // Caret excludes the 2.x major, so the highest 1.x wins.
+        assert_eq!(select_version(&req("^1.0"), &avail), Some(v("1.9.0")));
+        assert_eq!(select_version(&req("=1.2.0"), &avail), Some(v("1.2.0")));
+        assert_eq!(select_version(&req(">=2.0"), &avail), Some(v("2.0.0")));
+    }
+
+    #[test]
+    fn select_version_returns_none_when_nothing_matches() {
+        let avail = vec![v("1.0.0"), v("1.2.0")];
+        assert_eq!(select_version(&req("^3"), &avail), None);
+    }
+
+    #[test]
+    fn select_version_excludes_prerelease_unless_opted_in() {
+        let avail = vec![v("1.0.0-rc.1")];
+        // A plain caret must not select a pre-release (Cargo semantics).
+        assert_eq!(select_version(&req("^1.0"), &avail), None);
+        // An explicit pre-release comparator on the same base does match.
+        assert_eq!(
+            select_version(&req(">=1.0.0-rc.1"), &avail),
+            Some(v("1.0.0-rc.1"))
+        );
+    }
+
+    fn pkg_with_empty_upstream(version: &str, bytes: &[u8]) -> FetchedPackage {
+        FetchedPackage {
+            package: "http".to_string(),
+            version: v(version),
+            upstream_url: String::new(),
+            mirror_url: format!("https://proxy.example/pkg/http/{version}.tar.gz"),
+            tarball_bytes: bytes.to_vec(),
+            content_hash: format!("blake3:{}", blake3::hash(bytes).to_hex()),
+        }
+    }
+
+    #[test]
+    fn fetch_registry_package_selects_and_stitches_upstream() {
+        let mut mem = MemProxyClient::new();
+        mem.insert_catalog(
+            "http",
+            "https://github.com/kara/http",
+            vec![v("1.0.0"), v("1.2.0"), v("1.9.0"), v("2.0.0")],
+        );
+        // Provide the tarball for the version `^1.0` will select (1.9.0).
+        mem.insert_package(pkg_with_empty_upstream("1.9.0", b"tarball-1.9.0"));
+
+        let pkg = fetch_registry_package(&mem, "http", &req("^1.0")).expect("fetch");
+        assert_eq!(pkg.version, v("1.9.0"));
+        assert_eq!(pkg.tarball_bytes, b"tarball-1.9.0");
+        // Upstream URL was empty on the tarball and stitched from the catalog.
+        assert_eq!(pkg.upstream_url, "https://github.com/kara/http");
+    }
+
+    #[test]
+    fn fetch_registry_package_no_matching_version() {
+        let mut mem = MemProxyClient::new();
+        mem.insert_catalog("http", "u", vec![v("1.0.0"), v("1.2.0")]);
+        let err = fetch_registry_package(&mem, "http", &req("^3")).unwrap_err();
+        assert_eq!(err.code(), "E_REGISTRY_NO_MATCHING_VERSION");
+        assert!(matches!(err, RegistryFetchError::NoMatchingVersion { .. }));
+    }
+
+    #[test]
+    fn fetch_registry_package_unknown_package_is_proxy_error() {
+        let mem = MemProxyClient::new();
+        let err = fetch_registry_package(&mem, "ghost", &req("^1")).unwrap_err();
+        assert_eq!(err.code(), "E_PROXY_PACKAGE_NOT_FOUND");
     }
 }
