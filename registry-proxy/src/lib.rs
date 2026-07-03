@@ -218,6 +218,144 @@ pub fn looks_like_store_root(root: &Path) -> bool {
     root.join("catalog").is_dir() || root.join("pkg").is_dir()
 }
 
+// ── Store builder ───────────────────────────────────────────────
+
+/// What `build_store` produced: one entry per package, with its resolved
+/// version count. Returned so the CLI can print a summary.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct BuildReport {
+    /// `(package name, number of versions)`, sorted by name.
+    pub packages: Vec<(String, usize)>,
+}
+
+/// JSON-escape a string for embedding in a double-quoted JSON value. Small
+/// hand-rolled escaper so the crate needs no `serde_json` — the only
+/// user-controlled string in a catalog is the upstream URL.
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Build a servable proxy store at `out` from a directory of packages at
+/// `from`.
+///
+/// **Input layout** (`from`): one subdirectory per package; inside it, a
+/// `<version>.tar.gz` file per release, plus an optional `upstream` (or
+/// `upstream.txt`) one-line file naming the package's source URL.
+///
+/// ```text
+/// <from>/mylib/1.0.0.tar.gz
+/// <from>/mylib/1.2.3.tar.gz
+/// <from>/mylib/upstream          (optional: "https://github.com/me/mylib")
+/// ```
+///
+/// **Output layout** (`out`) is a store root ready for
+/// [`serve`] / [`FsStore`]: a generated `catalog/<name>.json`
+/// (`{ "upstream", "versions" }`, versions sorted ascending SemVer) plus
+/// the tarballs copied to `pkg/<name>/<version>.tar.gz`.
+///
+/// Versions must be valid SemVer; a mis-named tarball is a hard error so
+/// the mistake surfaces rather than silently dropping a release.
+pub fn build_store(from: &Path, out: &Path) -> Result<BuildReport, String> {
+    let catalog_dir = out.join("catalog");
+    let pkg_dir = out.join("pkg");
+    std::fs::create_dir_all(&catalog_dir)
+        .map_err(|e| format!("could not create {}: {e}", catalog_dir.display()))?;
+    std::fs::create_dir_all(&pkg_dir)
+        .map_err(|e| format!("could not create {}: {e}", pkg_dir.display()))?;
+
+    // Deterministic package order: sort the source subdirectories by name.
+    let mut package_dirs: Vec<(String, PathBuf)> = Vec::new();
+    let entries = std::fs::read_dir(from)
+        .map_err(|e| format!("could not read source dir {}: {e}", from.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("could not read a source entry: {e}"))?;
+        if !entry.path().is_dir() {
+            continue; // top-level files (READMEs etc.) are ignored
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !safe_segment(&name) {
+            return Err(format!("invalid package directory name {name:?}"));
+        }
+        package_dirs.push((name, entry.path()));
+    }
+    package_dirs.sort();
+
+    let mut report = BuildReport::default();
+    for (name, dir) in package_dirs {
+        // Collect (version, tarball path) for every <version>.tar.gz.
+        let mut versions: Vec<(semver::Version, PathBuf)> = Vec::new();
+        let mut upstream = String::new();
+        let pkg_entries = std::fs::read_dir(&dir)
+            .map_err(|e| format!("could not read {}: {e}", dir.display()))?;
+        for entry in pkg_entries {
+            let entry = entry.map_err(|e| format!("could not read an entry in {name}: {e}"))?;
+            let fname = entry.file_name().to_string_lossy().into_owned();
+            if fname == "upstream" || fname == "upstream.txt" {
+                upstream = std::fs::read_to_string(entry.path())
+                    .map_err(|e| format!("could not read upstream file for {name}: {e}"))?
+                    .trim()
+                    .to_string();
+                continue;
+            }
+            let Some(version_str) = fname.strip_suffix(".tar.gz") else {
+                continue; // ignore non-tarball files
+            };
+            let version = semver::Version::parse(version_str).map_err(|e| {
+                format!("package {name}: tarball {fname:?} is not a valid <semver>.tar.gz ({e})")
+            })?;
+            versions.push((version, entry.path()));
+        }
+
+        if versions.is_empty() {
+            eprintln!("warning: package {name:?} has no <version>.tar.gz files — skipping");
+            continue;
+        }
+
+        versions.sort_by(|a, b| a.0.cmp(&b.0));
+
+        // Copy tarballs into pkg/<name>/<version>.tar.gz.
+        let dest_pkg = pkg_dir.join(&name);
+        std::fs::create_dir_all(&dest_pkg)
+            .map_err(|e| format!("could not create {}: {e}", dest_pkg.display()))?;
+        for (version, src) in &versions {
+            let dest = dest_pkg.join(format!("{version}.tar.gz"));
+            std::fs::copy(src, &dest).map_err(|e| {
+                format!("could not copy {} → {}: {e}", src.display(), dest.display())
+            })?;
+        }
+
+        // Generate catalog/<name>.json.
+        let versions_json = versions
+            .iter()
+            .map(|(v, _)| format!("\"{v}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let json = format!(
+            "{{\n  \"upstream\": \"{}\",\n  \"versions\": [{}]\n}}\n",
+            json_escape(&upstream),
+            versions_json,
+        );
+        std::fs::write(catalog_dir.join(format!("{name}.json")), json)
+            .map_err(|e| format!("could not write catalog for {name}: {e}"))?;
+
+        report.packages.push((name, versions.len()));
+    }
+
+    Ok(report)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,5 +462,95 @@ mod tests {
         assert!(raw.contains("Content-Length: 2\r\n"));
         assert!(raw.contains("Karac-Content-Hash: blake3:ab\r\n"));
         assert!(raw.ends_with("\r\n\r\nxy"));
+    }
+
+    // ── build_store ─────────────────────────────────────────────
+
+    /// A fresh, empty temp directory (no catalog/pkg pre-created) — used
+    /// as a `build_store` source or output root.
+    fn temp_dir() -> PathBuf {
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("kara-regproxy-src-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn build_store_generates_catalog_and_copies_tarballs() {
+        let from = temp_dir();
+        let pkg = from.join("mylib");
+        std::fs::create_dir_all(&pkg).unwrap();
+        // Deliberately out of order + a two-digit minor to prove SemVer sort.
+        std::fs::write(pkg.join("1.9.0.tar.gz"), b"v190").unwrap();
+        std::fs::write(pkg.join("1.10.0.tar.gz"), b"v1100").unwrap();
+        std::fs::write(pkg.join("1.2.3.tar.gz"), b"v123").unwrap();
+        std::fs::write(pkg.join("upstream"), "https://github.com/me/mylib\n").unwrap();
+
+        let out = temp_dir();
+        let report = build_store(&from, &out).expect("build");
+        assert_eq!(report.packages, vec![("mylib".to_string(), 3)]);
+
+        // Catalog: upstream carried through, versions ascending SemVer
+        // (1.2.3 < 1.9.0 < 1.10.0 — lexical order would wrongly put 1.10.0
+        // before 1.9.0).
+        let catalog = std::fs::read_to_string(out.join("catalog/mylib.json")).unwrap();
+        assert!(catalog.contains(r#""upstream": "https://github.com/me/mylib""#));
+        assert!(catalog.contains(r#""versions": ["1.2.3", "1.9.0", "1.10.0"]"#));
+
+        // Tarballs copied verbatim under pkg/<name>/<version>.tar.gz.
+        assert_eq!(
+            std::fs::read(out.join("pkg/mylib/1.10.0.tar.gz")).unwrap(),
+            b"v1100"
+        );
+
+        // Round-trip: the generated store serves cleanly.
+        let store = FsStore::new(&out);
+        assert_eq!(store.handle("GET", "/catalog/mylib").status, 200);
+        let pkg_resp = store.handle("GET", "/pkg/mylib/1.2.3.tar.gz");
+        assert_eq!(pkg_resp.status, 200);
+        assert_eq!(pkg_resp.body, b"v123");
+    }
+
+    #[test]
+    fn build_store_defaults_missing_upstream_to_empty() {
+        let from = temp_dir();
+        let pkg = from.join("nolink");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(pkg.join("0.1.0.tar.gz"), b"x").unwrap();
+
+        let out = temp_dir();
+        build_store(&from, &out).expect("build");
+        let catalog = std::fs::read_to_string(out.join("catalog/nolink.json")).unwrap();
+        assert!(catalog.contains(r#""upstream": """#));
+        assert!(catalog.contains(r#""versions": ["0.1.0"]"#));
+    }
+
+    #[test]
+    fn build_store_rejects_non_semver_tarball() {
+        let from = temp_dir();
+        let pkg = from.join("bad");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(pkg.join("not-a-version.tar.gz"), b"x").unwrap();
+
+        let out = temp_dir();
+        let err = build_store(&from, &out).unwrap_err();
+        assert!(err.contains("not a valid"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn build_store_skips_package_dir_with_no_tarballs() {
+        let from = temp_dir();
+        std::fs::create_dir_all(from.join("empty")).unwrap();
+        let out = temp_dir();
+        let report = build_store(&from, &out).expect("build");
+        assert!(report.packages.is_empty());
+        assert!(!out.join("catalog/empty.json").exists());
+    }
+
+    #[test]
+    fn json_escape_handles_special_characters() {
+        assert_eq!(json_escape(r#"a"b\c"#), r#"a\"b\\c"#);
+        assert_eq!(json_escape("line\nbreak"), "line\\nbreak");
     }
 }

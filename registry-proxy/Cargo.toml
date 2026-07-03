@@ -28,3 +28,6 @@ path = "src/lib.rs"
 # feature unification does not widen blake3's feature set for the
 # compiler crate. `blake3::hash` / `Hash::to_hex` are available no_std.
 blake3 = { version = "1", default-features = false }
+# `build_store` sorts and validates catalog versions as real SemVer (so
+# 1.10.0 orders after 1.9.0). Same major version karac pins.
+semver = "1"
