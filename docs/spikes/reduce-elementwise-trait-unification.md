@@ -323,7 +323,7 @@ B-2026-07-02-10..13, see the ledger.
     miscompile (B-2026-07-03-16, fixed on main by `839beaea` as a dup of
     B-2026-07-03-3).
   - **S6b-4a** ✅ **(landed 2026-07-03)** — operator-on-bounded-`T`
-    (B-2026-07-03-17). `a OP b` on a type parameter bounded by the stdlib
+    (B-2026-07-03-18). `a OP b` on a type parameter bounded by the stdlib
     operator trait for that operator (`+`→`Add`, `-`→`Sub`, `*`→`Mul`,
     `/`→`Div`, `%`→`Rem`, unary `-`→`Neg`) is now admitted with result type
     `T`, mirroring the existing `T: Numeric` arm (`infer_binary` /

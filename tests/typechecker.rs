@@ -17795,7 +17795,7 @@ fn generic_trait_default_method_inherited_with_subst() {
 
 #[test]
 fn operator_on_operator_trait_bounded_type_param_admitted() {
-    // S6b-4a (B-2026-07-03-17): `a OP b` on a type parameter bounded by the
+    // S6b-4a (B-2026-07-03-18): `a OP b` on a type parameter bounded by the
     // operator trait for OP (`+`→Add, `-`→Sub, `*`→Mul, `/`→Div, `%`→Rem, and
     // unary `-`→Neg) is admitted with result type `T`, mirroring the existing
     // `T: Numeric` arm. Before the fix this hard-errored under `karac build`

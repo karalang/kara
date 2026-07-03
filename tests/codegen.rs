@@ -3706,7 +3706,7 @@ fn main() {
         }
     }
 
-    /// S6b-4a (B-2026-07-03-17): an arithmetic operator on a type parameter
+    /// S6b-4a (B-2026-07-03-18): an arithmetic operator on a type parameter
     /// bounded by that operator's stdlib trait (`+`→Add, `-`→Sub, `*`→Mul,
     /// `/`→Div, `%`→Rem, unary `-`→Neg) monomorphizes and runs. Before the fix
     /// the typechecker hard-errored under `build` ("arithmetic operator
