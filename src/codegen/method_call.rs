@@ -2029,19 +2029,168 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
-        // `char.to_digit(radix) -> Option[u32]` (typed in expr_method_call.rs):
-        // interpreter-complete (`karac run`), but the `Option[u32]` construction
-        // lowering (shared with the `checked_to_*` float→int follow-on) is not
-        // yet wired in codegen. Emit a clear, actionable error rather than
-        // falling through to "no handler" / a miscompile. Gated on a `char`
-        // receiver so a user `to_digit` on another type is unaffected.
+        // `char.to_digit(radix) -> Option[u32]` (typed in expr_method_call.rs),
+        // mirroring Rust's `char::to_digit` and the interpreter (method_call.rs):
+        // an out-of-range radix (< 2 or > 36) traps (`panics`); otherwise the
+        // codepoint's digit value in that radix wraps as `Some(v)` / `None` via
+        // the shared `build_checked_to_int_option` Option constructor. Gated on
+        // a `char` receiver so a user `to_digit` on another type is unaffected.
         if method == "to_digit" && args.len() == 1 && self.expr_is_char(object) {
-            return Err(
-                "`char.to_digit(radix)` is not yet supported under `karac build` (codegen); \
-                 it works under `karac run`. The `Option[u32]` construction lowering is a \
-                 tracked follow-on."
-                    .to_string(),
-            );
+            let i32_t = self.context.i32_type();
+            // Codepoint as i32 (char lowers to i32; narrow receivers z-extend).
+            let cp_raw = self.compile_expr(object)?.into_int_value();
+            let cp = match cp_raw.get_type().get_bit_width() {
+                32 => cp_raw,
+                w if w < 32 => self
+                    .builder
+                    .build_int_z_extend(cp_raw, i32_t, "td.cp.z")
+                    .unwrap(),
+                _ => self
+                    .builder
+                    .build_int_truncate(cp_raw, i32_t, "td.cp.t")
+                    .unwrap(),
+            };
+            // Radix as i32 (u32 source — compare unsigned).
+            let radix_raw = self.compile_expr(&args[0].value)?.into_int_value();
+            let radix = match radix_raw.get_type().get_bit_width() {
+                32 => radix_raw,
+                w if w < 32 => self
+                    .builder
+                    .build_int_z_extend(radix_raw, i32_t, "td.rx.z")
+                    .unwrap(),
+                _ => self
+                    .builder
+                    .build_int_truncate(radix_raw, i32_t, "td.rx.t")
+                    .unwrap(),
+            };
+
+            // Trap on radix ∉ 2..=36, matching Rust's panic / the interpreter's
+            // runtime error. `ULT 2` also catches 0/1; `UGT 36` the high end.
+            let fn_val = self.current_fn.unwrap();
+            let lo_bad = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::ULT,
+                    radix,
+                    i32_t.const_int(2, false),
+                    "td.rx.lo",
+                )
+                .unwrap();
+            let hi_bad = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::UGT,
+                    radix,
+                    i32_t.const_int(36, false),
+                    "td.rx.hi",
+                )
+                .unwrap();
+            let bad = self.builder.build_or(lo_bad, hi_bad, "td.rx.bad").unwrap();
+            let trap_bb = self.context.append_basic_block(fn_val, "td.rx.trap");
+            let ok_bb = self.context.append_basic_block(fn_val, "td.rx.ok");
+            self.builder
+                .build_conditional_branch(bad, trap_bb, ok_bb)
+                .unwrap();
+            self.builder.position_at_end(trap_bb);
+            self.emit_panic("to_digit: radix must be in 2..=36");
+            self.builder.build_unreachable().unwrap();
+            self.builder.position_at_end(ok_bb);
+
+            // Digit value by ASCII class (matching char::to_digit): '0'..='9' →
+            // c-'0'; 'a'..='z' → c-'a'+10; 'A'..='Z' → c-'A'+10; else no digit.
+            let in_class = |c: char| i32_t.const_int(c as u64, false);
+            // Decimal '0'..='9'.
+            let is_dec_lo = self
+                .builder
+                .build_int_compare(IntPredicate::UGE, cp, in_class('0'), "td.dec.ge")
+                .unwrap();
+            let is_dec_hi = self
+                .builder
+                .build_int_compare(IntPredicate::ULE, cp, in_class('9'), "td.dec.le")
+                .unwrap();
+            let is_dec = self
+                .builder
+                .build_and(is_dec_lo, is_dec_hi, "td.dec")
+                .unwrap();
+            let dec_val = self
+                .builder
+                .build_int_sub(cp, in_class('0'), "td.dec.v")
+                .unwrap();
+            // Lowercase 'a'..='z' → 10 + (c - 'a').
+            let is_low_lo = self
+                .builder
+                .build_int_compare(IntPredicate::UGE, cp, in_class('a'), "td.low.ge")
+                .unwrap();
+            let is_low_hi = self
+                .builder
+                .build_int_compare(IntPredicate::ULE, cp, in_class('z'), "td.low.le")
+                .unwrap();
+            let is_low = self
+                .builder
+                .build_and(is_low_lo, is_low_hi, "td.low")
+                .unwrap();
+            let low_off = self
+                .builder
+                .build_int_sub(cp, in_class('a'), "td.low.off")
+                .unwrap();
+            let low_val = self
+                .builder
+                .build_int_add(low_off, i32_t.const_int(10, false), "td.low.v")
+                .unwrap();
+            // Uppercase 'A'..='Z' → 10 + (c - 'A').
+            let is_up_lo = self
+                .builder
+                .build_int_compare(IntPredicate::UGE, cp, in_class('A'), "td.up.ge")
+                .unwrap();
+            let is_up_hi = self
+                .builder
+                .build_int_compare(IntPredicate::ULE, cp, in_class('Z'), "td.up.le")
+                .unwrap();
+            let is_up = self.builder.build_and(is_up_lo, is_up_hi, "td.up").unwrap();
+            let up_off = self
+                .builder
+                .build_int_sub(cp, in_class('A'), "td.up.off")
+                .unwrap();
+            let up_val = self
+                .builder
+                .build_int_add(up_off, i32_t.const_int(10, false), "td.up.v")
+                .unwrap();
+
+            // Select the class value; default 0 when no class matches.
+            let has_digit = self
+                .builder
+                .build_or(
+                    is_dec,
+                    self.builder.build_or(is_low, is_up, "td.low_up").unwrap(),
+                    "td.any",
+                )
+                .unwrap();
+            let v_up_or_zero = self
+                .builder
+                .build_select(is_up, up_val, i32_t.const_zero(), "td.v.up")
+                .unwrap()
+                .into_int_value();
+            let v_low = self
+                .builder
+                .build_select(is_low, low_val, v_up_or_zero, "td.v.low")
+                .unwrap()
+                .into_int_value();
+            let val = self
+                .builder
+                .build_select(is_dec, dec_val, v_low, "td.v")
+                .unwrap()
+                .into_int_value();
+
+            // Valid iff a digit class matched AND value < radix (unsigned).
+            let lt_radix = self
+                .builder
+                .build_int_compare(IntPredicate::ULT, val, radix, "td.lt")
+                .unwrap();
+            let in_range = self
+                .builder
+                .build_and(has_digit, lt_radix, "td.valid")
+                .unwrap();
+            return self.build_checked_to_int_option(in_range, val);
         }
 
         // Unicode `char` classification predicates (phase-12 #13): `is_alphabetic`

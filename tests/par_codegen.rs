@@ -1306,6 +1306,35 @@ fn main() {
         }
     }
 
+    /// B-2026-06-19-13 codegen follow-on, auto-par surface: `char.to_digit`
+    /// lowers to a pure branch-select + Option constructor regardless of
+    /// parallelization (it's effect-free), so DEFAULT auto-par agrees.
+    #[test]
+    fn test_e2e_auto_par_char_to_digit() {
+        let out = run_program(
+            r#"
+fn show(c: char, r: u32) {
+    match c.to_digit(r) {
+        Some(v) => println(f"{v}"),
+        None => println("none"),
+    }
+}
+fn main() {
+    show('7', 10);
+    show('a', 16);
+    show('z', 36);
+    show('9', 2);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "7\n10\n35\nnone\n",
+                "char.to_digit under auto-par; got {out:?}"
+            );
+        }
+    }
+
     #[test]
     fn test_e2e_auto_par_map_histogram_then_keys_no_race() {
         // `for w in words { *m.entry(w).or_insert(0) += 1 }` WRITES the map,

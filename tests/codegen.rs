@@ -4235,28 +4235,33 @@ fn main() {
         }
     }
 
-    /// `char.to_digit(radix)` is interpreter-complete but codegen emits an honest
-    /// "not yet supported under `karac build`" error (the Option[u32] construction
-    /// lowering is a tracked follow-on) rather than a miscompile / no-handler.
+    /// B-2026-06-19-13 codegen follow-on: `char.to_digit(radix) -> Option[u32]`
+    /// now LOWERS under `karac build` (was an honest "not yet supported"
+    /// diagnostic). Covers a decimal digit, lowercase + uppercase hex-ish digits
+    /// (`a`→10, `F`→15), the top of base-36 (`z`→35), a digit too large for its
+    /// radix (`9` in base 2 → `None`), and a non-digit char → `None`. Output
+    /// must match the interpreter (`karac run`).
     #[test]
-    fn char_to_digit_codegen_emits_honest_error() {
-        let mut parsed = karac::parse(
-            "fn main() { match '7'.to_digit(10) { Some(d) => println(d), None => println(0u32) } }",
-        );
-        assert!(
-            parsed.errors.is_empty(),
-            "parse errors: {:?}",
-            parsed.errors
-        );
-        let resolved = karac::resolve(&parsed.program);
-        let typed = karac::typecheck(&parsed.program, &resolved);
-        karac::lower(&mut parsed.program, &typed);
-        let err = compile_to_ir(&parsed.program, None, None)
-            .expect_err("char.to_digit should not yet lower under codegen");
-        assert!(
-            err.contains("to_digit") && err.contains("karac build"),
-            "expected an honest to_digit codegen diagnostic, got: {err}"
-        );
+    fn e2e_char_to_digit_codegen() {
+        if let Some(out) = run_program(
+            "fn show(c: char, r: u32) {\n\
+             \x20   match c.to_digit(r) {\n\
+             \x20       Some(v) => println(f\"{v}\"),\n\
+             \x20       None => println(\"none\"),\n\
+             \x20   }\n\
+             }\n\
+             fn main() {\n\
+             \x20   show('7', 10);\n\
+             \x20   show('a', 16);\n\
+             \x20   show('F', 16);\n\
+             \x20   show('z', 36);\n\
+             \x20   show('9', 2);\n\
+             \x20   show('x', 10);\n\
+             \x20   show('0', 2);\n\
+             }",
+        ) {
+            assert_eq!(out, "7\n10\n15\n35\nnone\nnone\n0\n");
+        }
     }
 
     /// Regression (B-2026-06-14-13): a `for <name> in xs` loop binding that

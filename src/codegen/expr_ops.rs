@@ -2475,7 +2475,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `Option` aggregate). The payload coerces to one i64 word — exact for
     /// targets ≤ 64 bits; `i128`/`u128` payloads beyond i64 truncate (the same
     /// wide-int limitation the interpreter has).
-    fn build_checked_to_int_option(
+    pub(super) fn build_checked_to_int_option(
         &self,
         in_range: inkwell::values::IntValue<'ctx>,
         narrowed: inkwell::values::IntValue<'ctx>,
