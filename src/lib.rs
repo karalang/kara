@@ -44,6 +44,8 @@ pub mod float_math;
 pub mod fork_threshold_queries;
 pub mod formatter;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod git_fetch;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod install_spec;
 pub mod interpreter;
 #[cfg(not(target_arch = "wasm32"))]
