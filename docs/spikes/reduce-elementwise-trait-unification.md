@@ -1,9 +1,12 @@
 # Design spike — trait-dispatched Reduce / ElementwiseMap / ElementwiseOrd unification
 
-**Status:** 🟡 **S0–S5 + S6-pre COMPLETE (S0–S1 2026-06-30 `bcaff37d`, `73af27b0`,
-`7adcc380`, `29b55062`; S2–S5 2026-07-01, S3 `b0a40963`+`eb21e300`, S4 `2ff34611`;
-S6-pre probe matrix 2026-07-02 — see §3.3, which also surfaced + fixed
-B-2026-07-02-10..13); S6a–S6c open.** Unifies the three copy-pasted
+**Status:** 🟡 **S0–S5 + S6-pre + S6a COMPLETE (S0–S1 2026-06-30 `bcaff37d`,
+`73af27b0`, `7adcc380`, `29b55062`; S2–S5 2026-07-01, S3 `b0a40963`+`eb21e300`,
+S4 `2ff34611`; S6-pre probe matrix 2026-07-02 — see §3.3, which also surfaced +
+fixed B-2026-07-02-10..13; S6a 2026-07-02 — see §3.4, which surfaced + fixed
+the ref-handle-param deref bug B-2026-07-02-27, the mono side-table leak /
+handle-instantiation collision, and the bound trait-arg substitution gap);
+S6b–S6c open.** Unifies the three copy-pasted
 reduce/element-wise/ordering implementations (Tensor, Column, `Stats.*`) behind
 one internal kernel, then layers **user-extensible** surface traits on top. **S0
 (interpreter twin + shared vocabulary):**
@@ -223,12 +226,49 @@ B-2026-07-02-10..13, see the ledger.
 
 ### 3.4 S6 slices (after S6-pre)
 
-- **S6a** — declare the three traits in stdlib; Tensor/Column/Slice
-  `#[compiler_builtin]`-impl them (routing to kernels). Compiler-internal
-  dispatch end-to-end first.
+- **S6a** ✅ **(landed 2026-07-02)** — the three traits are declared in the
+  baked stdlib (`runtime/stdlib/reduce.kara` / `elementwise_map.kara` /
+  `elementwise_ord.kara`, prelude-visible) and `Reduce[T]` is
+  `#[compiler_builtin]`-implemented by `Column[T]` and `Tensor[T, ...S]` —
+  bound-generic dispatch (`fn spread[C: Reduce[i64]](c: ref C)`) works
+  end-to-end on `run` **and** `build` for both implementors, routing to the
+  S0–S5 kernels; concrete-receiver dispatch is byte-unchanged (the impl
+  bodies never run). **Shape divergences from the §3.1 sketch, on purpose:**
+  `min`/`max` return `T` and trap on empty (the established Column/Tensor
+  policy — invariant #1); `fold`/`product`/Option-forms wait for S6b
+  (default bodies + generic trait methods). `ElementwiseMap`/`ElementwiseOrd`
+  are **declaration-only**: no builtin has closure-taking `map`/`zip_with`
+  or method-form `argmin`/`argsort` yet, and `Slice` is not a nominal impl
+  target (the Vec 4b wall) — both are S6c. **Compiler work S6a forced:**
+  (i) `ref Column/Tensor/DataFrame` params read their control pointer one
+  deref short — B-2026-07-02-27, fixed via `get_data_ptr` in the three
+  `*_ptr_for_var` helpers; (ii) generic monos leaked every non-tensor
+  name-keyed var side-table across nested compiles (B-2026-07-02-11
+  fallout; `SavedVarSideTables` now swaps all 17) and same-LLVM-shape
+  handle instantiations (`Column[i64]` vs `Tensor[i64,[4]]`, both `ptr`)
+  shared one mangled mono — `mono_handle_param_infos` +
+  `collect_mono_handle_params` thread the arg spans'
+  `column_typed_exprs`/`tensor_typed_exprs` records into a mangle axis
+  (`$c_col_i64` / `$c_ten_i64_4`) and the mono prologue's registration;
+  (iii) the typechecker never substituted a bound's trait args
+  (`C: Reduce[i64]` typed `c.sum()` as raw `T`) —
+  `trait_bound_arg_subs` + `dispatch_trait_assoc_fn`'s `trait_subs`
+  param fix it. **Known residuals (deliberate):** `Vec[T]`-param monos
+  still never bind `T` (two elem-type instantiations SHARE one mono —
+  silent wrong values under `build`, probed `p8`; open-ledgered, S6b
+  prerequisite since trait-method monomorphization needs TypeExpr-level
+  substitution anyway); bound-arg satisfaction never compares trait args —
+  `Column[f64]` where `C: Reduce[i64]` PASSES `karac check`, runs with
+  silently wrong types, and only dies at codegen module verification
+  (probed `p10`; open-ledgered, fix belongs with S6b's impl-matching);
+  DataFrame values through bare-generic bounds don't register (no
+  `dataframe_typed_exprs` table; loud fall-through).
 - **S6b** — default method bodies + generic `fold` + `where`; enable a *user*
-  `impl Reduce[T] for MyType` to monomorphize.
-- **S6c** — `ElementwiseMap` / `ElementwiseOrd` user impls; blanket `Vec[T]` impls.
+  `impl Reduce[T] for MyType` to monomorphize. Prereq: TypeExpr-level mono
+  type args (fixes the `Vec[T]` elem-collision above).
+- **S6c** — `ElementwiseMap` / `ElementwiseOrd` builtin method surfaces +
+  user impls; blanket `Vec[T]` impls; user trait-impl methods over builtin
+  containers (probed: interp "type 'unknown'", codegen loud fall-through).
 
 ---
 
