@@ -119,7 +119,6 @@ These are tracked as registry-proxy follow-ups in the phase-5 checklist and do
 not change the contract above when they land:
 
 - Upstream mirroring / the server actually fetching from the origin (server-side).
-- Tarball caching on the client (follow-up c).
 - Multi-mirror / high-availability (d), authentication (e), signature
   verification (f) — a signature would be a sibling field to `content_hash`.
 - Retry/backoff (h), per-package proxy override (i), `--no-proxy`
