@@ -264,8 +264,22 @@ B-2026-07-02-10..13, see the ledger.
   DataFrame values through bare-generic bounds don't register (no
   `dataframe_typed_exprs` table; loud fall-through).
 - **S6b** — default method bodies + generic `fold` + `where`; enable a *user*
-  `impl Reduce[T] for MyType` to monomorphize. Prereq: TypeExpr-level mono
-  type args (fixes the `Vec[T]` elem-collision above).
+  `impl Reduce[T] for MyType` to monomorphize.
+  - **S6b-1** ✅ **(landed 2026-07-03)** — the TypeExpr-level mono type-args
+    prereq (the `Vec[T]` elem-collision, B-2026-07-02-41). `unify_types`
+    gained an owned-to-`ref` coercion arm so a `ref Vec[T]` slot solves its
+    element param from an owned `Vec[i64]` arg; the resolved per-call subst
+    threads to codegen via `Program.call_type_subs` (resolved through the
+    active `type_subst`, so nested calls flatten), plus a codegen-local
+    container-element fallback (`vec_/slice_/set_/map_*` element tables) for
+    the nested `T -> T` case the typechecker drops. Two element-type
+    instantiations of `f[T](v: ref Vec[T])` are now distinct monos on both
+    surfaces. Probing found one new open gap: a generic **by-value**
+    `Slice[T]` param + Vec arg misses the Vec→Slice header coercion
+    (ledgered; the non-generic and `mut Slice[T]` forms already coerce).
+  - **S6b-2..4** (open) — default-body fallback dispatch, generic trait
+    method (`fold[A]`) codegen monomorphization, and the user
+    `impl Reduce[T] for MyType` end-to-end.
 - **S6c** — `ElementwiseMap` / `ElementwiseOrd` builtin method surfaces +
   user impls; blanket `Vec[T]` impls; user trait-impl methods over builtin
   containers (probed: interp "type 'unknown'", codegen loud fall-through).
