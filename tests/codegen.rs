@@ -3520,6 +3520,50 @@ fn main() {
         }
     }
 
+    /// Regression (B-2026-07-03-16, duplicate of B-2026-07-03-3): immediate
+    /// field access on a struct-returning call — `f().field` — read `0` under
+    /// `karac build` while `karac run` was correct, because `type_name_of_expr`
+    /// had no `Call`/`MethodCall` arm so `field_index_for` returned `None` and
+    /// `compile_field_access`'s generic tail emitted the `i64 0` placeholder
+    /// instead of an `extractvalue`. Fixed by 839beaea's Call/MethodCall arms.
+    /// This locks in the shapes B-16 characterized that the sibling test
+    /// (`e2e_chained_call_struct_field_access`) does NOT cover: a static
+    /// associated fn (`Cnt.zero()` — the two-segment `Call/Path` arm), a
+    /// `ref self` method (`g.goref()`), the multi-field offset-independence
+    /// (`makeP().a`/`.b`), and the plain non-f-string `print(make().n)` path
+    /// (B-16 confirmed the bug was not f-string specific).
+    #[test]
+    fn e2e_call_result_field_access_assoc_and_ref_self() {
+        if let Some(out) = run_program(
+            "struct Cnt { n: i64 }\n\
+             struct P { a: i64, b: i64 }\n\
+             fn make() -> Cnt { Cnt { n: 7 } }\n\
+             fn make_p() -> P { P { a: 3, b: 9 } }\n\
+             struct Gen { seed: i64 }\n\
+             impl Gen {\n\
+             \x20   fn goref(ref self) -> Cnt { Cnt { n: self.seed + 2 } }\n\
+             }\n\
+             impl Cnt {\n\
+             \x20   fn zero() -> Cnt { Cnt { n: 0 } }\n\
+             \x20   fn forty() -> Cnt { Cnt { n: 40 } }\n\
+             }\n\
+             fn main() {\n\
+             \x20   print(make().n);\n\
+             \x20   println(f\"{make().n + 100}\");\n\
+             \x20   println(f\"{make_p().a}\");\n\
+             \x20   println(f\"{make_p().b}\");\n\
+             \x20   println(f\"{Cnt.zero().n}\");\n\
+             \x20   println(f\"{Cnt.forty().n}\");\n\
+             \x20   let g = Gen { seed: 5 };\n\
+             \x20   println(f\"{g.goref().n}\");\n\
+             }",
+        ) {
+            // print(make().n)=7 (no newline) then make().n+100=107 → "7107\n";
+            // make_p().a=3, .b=9; Cnt.zero().n=0, Cnt.forty().n=40; g.goref().n=7
+            assert_eq!(out, "7107\n3\n9\n0\n40\n7\n");
+        }
+    }
+
     /// Regression: `TaskHandle[T].join()` for a NON-scalar `T` (`Vec[i64]`)
     /// returns the spawned task's heap value intact. `recover_task_handle_
     /// join_return_ty` used to return `i64` unconditionally, so a `Vec`/
