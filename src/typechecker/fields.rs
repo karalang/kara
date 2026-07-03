@@ -9,11 +9,12 @@
 
 use crate::ast::*;
 use crate::token::Span;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::const_eval::primitive_const_type;
 use super::env::StructInfo;
-use super::types::Type;
+use super::inference::{resolve_type_vars, substitute_type_params, unify_types};
+use super::types::{SubstValue, Type, TypeVarId};
 use super::{
     extract_derived_traits, extract_must_use_message, find_struct_def,
     shared_struct_mut_field_names, TypeErrorKind,
@@ -220,7 +221,12 @@ impl<'a> super::TypeChecker<'a> {
                             TypeErrorKind::SharedFieldNotMut,
                         );
                     }
-                    return ftype.clone();
+                    // Substitute the receiver's concrete generic args into the
+                    // field's declared type so `b.v` on `b: Box[f64]` resolves
+                    // to `f64`, not the struct's bare param `T` (which then
+                    // reads as `T` in arithmetic and lays out as the default
+                    // i64 in codegen — B-2026-07-03-23).
+                    return self.field_type_with_receiver_args(&obj_ty, &struct_info, ftype);
                 }
             }
             let available: Vec<&str> = struct_info
@@ -245,6 +251,41 @@ impl<'a> super::TypeChecker<'a> {
             // be validated for CR-18.
             self.infer_imported_field_access(&type_name, field, span)
         }
+    }
+
+    /// Substitute the receiver's concrete generic args into a struct field's
+    /// declared type: `Box[f64]`'s field `v: T` resolves to `f64`. The receiver
+    /// may be the bare value type or a `ref`/`mut ref` borrow of it; shared/`par`
+    /// structs are non-generic (empty `generic_params`) so pass through. When the
+    /// arg count doesn't line up (an under-inferred receiver), fall back to the
+    /// raw declared type — no worse than the prior always-bare behavior.
+    fn field_type_with_receiver_args(
+        &self,
+        obj_ty: &Type,
+        struct_info: &StructInfo,
+        field_ty: &Type,
+    ) -> Type {
+        if struct_info.generic_params.is_empty() {
+            return field_ty.clone();
+        }
+        let args: &[Type] = match obj_ty {
+            Type::Named { args, .. } => args,
+            Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                Type::Named { args, .. } => args,
+                _ => return field_ty.clone(),
+            },
+            _ => return field_ty.clone(),
+        };
+        if args.len() != struct_info.generic_params.len() {
+            return field_ty.clone();
+        }
+        let subs: HashMap<String, SubstValue> = struct_info
+            .generic_params
+            .iter()
+            .cloned()
+            .zip(args.iter().map(|a| SubstValue::Type(a.clone())))
+            .collect();
+        substitute_type_params(field_ty, &subs)
     }
 
     /// Emit `E0221 PrivateTypeInPublicSignature` when a non-`pub` field is
@@ -613,17 +654,58 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
-        // Type-check field values. Use `check_expr` against the field's
-        // declared type when known so check-mode coercions (empty
-        // `Vec[]` / `Set[]` / `Array[]`, `Into` / `TryInto`, closure
-        // pushdown, etc.) fire at struct-field initializer positions.
-        // Fall back to synthesis when the field is not declared on the
-        // struct (already diagnosed above as an extra field).
+        // Solve the struct's generic args from the field values so a literal of
+        // a GENERIC struct types as `Box[f64]`, not the bare `Box`. Codegen
+        // otherwise lays a bare `Box` out with a default i64 element and
+        // silently mis-reads a non-i64 field under `build` (a `Box{v:2.5}`
+        // prints garbage — B-2026-07-03-23). Each struct type param becomes a
+        // fresh metavar; checking a field value against its param-substituted
+        // declared type binds the metavar (the same instantiate → check →
+        // resolve idiom generic calls use in `exprs.rs`). Non-generic structs
+        // build an empty `param_subs` and behave exactly as before.
+        let mut param_subs: HashMap<String, SubstValue> = HashMap::new();
+        let mut id_to_name: HashMap<TypeVarId, String> = HashMap::new();
+        for p in &struct_info.generic_params {
+            let var = self.env.fresh_type_var();
+            if let Type::TypeVar(id) = var {
+                id_to_name.insert(id, p.clone());
+                param_subs.insert(p.clone(), SubstValue::Type(var));
+            }
+        }
+
+        // Type-check field values. `check_expr` against the field's declared
+        // type keeps check-mode coercions firing (empty `Vec[]` / `Set[]` /
+        // `Array[]`, `Into` / `TryInto`, closure pushdown, etc.). For a generic
+        // struct, its returned actual type is then unified against the field's
+        // param-substituted (fresh-metavar) slot to BIND the struct's type
+        // params — the call-inference idiom: unify the actual value type into
+        // the slot, don't `check_expr` against a raw metavar (which reports a
+        // mismatch rather than binding). Fall back to synthesis for an unknown
+        // field (already diagnosed above as an extra field).
         for f in fields {
             if let Some((_, expected_ty, _)) =
                 struct_info.fields.iter().find(|(n, _, _)| n == &f.name)
             {
+                // `check_expr` returns the (compatible) EXPECTED type — for a
+                // generic field that is the bare `TypeParam`, not the value's
+                // concrete type — so read the value's recorded synthesized type
+                // back for the param-binding unify.
                 self.check_expr(&f.value, &expected_ty.clone());
+                if !param_subs.is_empty() {
+                    if let Some(actual) = self
+                        .expr_types
+                        .get(&crate::resolver::SpanKey::from_span(&f.value.span))
+                        .cloned()
+                    {
+                        let slot = substitute_type_params(expected_ty, &param_subs);
+                        unify_types(
+                            &slot,
+                            &actual,
+                            &mut self.env.substitutions,
+                            &mut self.env.const_substitutions,
+                        );
+                    }
+                }
             } else {
                 self.infer_expr(&f.value);
             }
@@ -644,11 +726,36 @@ impl<'a> super::TypeChecker<'a> {
         // to functions"). The cross-task-safe pass keys off `Type::Shared` to
         // reject; Slice B teaches it to exempt `is_par` types.
         if struct_info.is_shared || struct_info.is_par {
+            // Shared / `par` structs are non-generic at v1 (design.md § Part 5).
             Type::Shared(struct_name)
-        } else {
+        } else if struct_info.generic_params.is_empty() {
             Type::Named {
                 name: struct_name,
                 args: Vec::new(),
+            }
+        } else {
+            // Resolve each type param's metavar to the concrete type bound from
+            // the field values. An unsolved param resolves back to its
+            // originating `TypeParam(name)` — the prior bare-arg behavior for
+            // that position, so a partially-inferable literal is no worse off.
+            let empty_const_names = HashMap::new();
+            let args: Vec<Type> = struct_info
+                .generic_params
+                .iter()
+                .map(|p| match param_subs.get(p).and_then(SubstValue::as_type) {
+                    Some(var) => resolve_type_vars(
+                        var,
+                        &self.env.substitutions,
+                        &id_to_name,
+                        &self.env.const_substitutions,
+                        &empty_const_names,
+                    ),
+                    None => Type::TypeParam(p.clone()),
+                })
+                .collect();
+            Type::Named {
+                name: struct_name,
+                args,
             }
         }
     }
