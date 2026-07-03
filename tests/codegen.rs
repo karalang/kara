@@ -46602,6 +46602,56 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_stdlib_reduce_default_method_inherited_by_user_impl() {
+        // S6b-4 (B-2026-07-03-19): a user `impl Reduce[T] for MyType` inherits
+        // the BAKED stdlib trait's DEFAULT method `range` (`max - min`) without
+        // writing a body. `synthesize_trait_default_methods` now also collects
+        // default-bodied methods from `STDLIB_PROGRAMS` (not just user-declared
+        // traits), substitutes the impl's concrete `T`, and splices the body
+        // into the impl — so `self.max() - self.min()` lowers as ordinary
+        // `T - T` arithmetic. Covers an i64 and an f64 implementor; both `run`
+        // and `build` (and default auto-par) agree. Generic user impls
+        // (`impl[T: Sub] Reduce[T] for Pair[T]`) are blocked on a pre-existing
+        // bounded-generic-impl method-resolution gap (B-2026-07-03-20), not this
+        // slice.
+        let src = r#"
+struct Trio { a: i64, b: i64, c: i64 }
+impl Reduce[i64] for Trio {
+    fn sum(ref self) -> i64 { self.a + self.b + self.c }
+    fn min(ref self) -> i64 {
+        let mut m = self.a;
+        if self.b < m { m = self.b; }
+        if self.c < m { m = self.c; }
+        m
+    }
+    fn max(ref self) -> i64 {
+        let mut m = self.a;
+        if self.b > m { m = self.b; }
+        if self.c > m { m = self.c; }
+        m
+    }
+    fn mean(ref self) -> f64 { (self.sum() as f64) / 3.0 }
+}
+struct FDuo { x: f64, y: f64 }
+impl Reduce[f64] for FDuo {
+    fn sum(ref self) -> f64 { self.x + self.y }
+    fn min(ref self) -> f64 { if self.x < self.y { self.x } else { self.y } }
+    fn max(ref self) -> f64 { if self.x > self.y { self.x } else { self.y } }
+    fn mean(ref self) -> f64 { self.sum() / 2.0 }
+}
+fn main() {
+    let t = Trio { a: 5, b: 2, c: 8 };
+    println(f"{t.range()}");
+    let d = FDuo { x: 1.5, y: 9.0 };
+    println(f"{d.range()}");
+}
+"#;
+        // Trio range = 8 - 2 = 6; FDuo range = 9.0 - 1.5 = 7.5.
+        let out = run_program(src).expect("program should compile and run");
+        assert_eq!(out, "6\n7.5\n");
+    }
+
+    #[test]
     fn test_e2e_vec_elem_generic_mono_distinct_per_element_type() {
         // B-2026-07-02-41 (S6b-1): two element-type instantiations of a
         // `ref Vec[T]` generic fn must be DISTINCT monomorphs. The

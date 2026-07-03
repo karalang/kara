@@ -345,11 +345,32 @@ B-2026-07-02-10..13, see the ledger.
     param` + `operator_on_wrong_or_missing_trait_bound_rejected`, codegen e2e
     `e2e_operator_on_operator_trait_bounded_type_param` (i64/f64 distinct
     monos, `String` concat, unary `Neg`, generic-trait default `+`/`*`).
-  - **S6b-4** (open) — the user `impl Reduce[T] for MyType` end-to-end:
-    wire the baked stdlib `Reduce` fold-based defaults (needs the stdlib
-    trait's defaults reachable by the splice pass — today only user-declared
-    traits are). S6b-3's blockers (generic-method mono, `f().field`) and
-    S6b-4a (operator-on-bounded-`T`) are now all landed.
+  - **S6b-4b** ✅ **(landed 2026-07-03)** — baked stdlib trait defaults
+    reachable by the splice pass (B-2026-07-03-19). `synthesize_trait_default_
+    methods` (`src/desugar.rs`) now collects default-bodied methods from
+    `crate::prelude::STDLIB_PROGRAMS` as well as the user program (via the
+    extracted `collect_trait_defaults_from_items`, user-first so a same-named
+    user trait shadows), and clears `stdlib_origin` on each spliced copy so it
+    is compiled as ordinary user code (the never-checked baked impl bodies are
+    otherwise skipped). `Reduce[T]` gains its first DEFAULT method — `fn
+    range(ref self) -> T { self.max() - self.min() }` — so a **concrete** user
+    `impl Reduce[i64]/[f64] for MyType` inherits `.range()` without a body; the
+    concrete `T` substitutes in, lowering `self.max() - self.min()` as native
+    `T - T` (A/B-verified run == KARAC_AUTO_PAR=0 == build, i64→6 / f64→7.5).
+    Only `Reduce.range` has a stdlib default body, so the change touches only
+    user `Reduce` impls. Test: codegen e2e `test_e2e_stdlib_reduce_default_
+    method_inherited_by_user_impl`. **Residual (out of scope, ledgered):**
+    (i) GENERIC user impls (`impl[T: Sub] Reduce[T] for Pair[T]`) hit a
+    **pre-existing** bounded-generic-impl method-resolution gap
+    (B-2026-07-03-20) — a bound on an impl's own generic param makes `self.m()`
+    (and even external `p.m()`) unresolvable under `build`; reproduces with a
+    plain inherent `impl[T: Sub] Pair[T]`, no traits/defaults involved.
+    (ii) the builtin containers (`Column`/`Tensor`) do NOT inherit `range` (the
+    splice only rewrites user-program impls; their `#[compiler_builtin]` impls
+    live in `STDLIB_PROGRAMS`) — a builtin-container-inherits-default axis for a
+    later slice. `fold`/`product`/`Option`-forms still need a `fold[A]`
+    primitive on the trait (would change the required-method set the builtin
+    impls satisfy) — a further slice.
 - **S6c** — `ElementwiseMap` / `ElementwiseOrd` builtin method surfaces +
   user impls; blanket `Vec[T]` impls; user trait-impl methods over builtin
   containers (probed: interp "type 'unknown'", codegen loud fall-through).

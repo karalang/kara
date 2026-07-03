@@ -57,31 +57,54 @@ pub fn desugar_program(program: &mut Program) {
 /// generic params (`fold[A]`) shadow any same-named trait param and are left
 /// untouched. Non-generic traits pass through with an empty substitution —
 /// byte-identical to the pre-generic behavior (B-2026-07-03-8 / -10).
+/// Collect every trait's default-bodied methods (converted to the `Function`
+/// shape an impl method carries) from `items`, keyed by trait name, into `out`.
+/// Uses `entry().or_insert` so an earlier-collected trait of the same name wins
+/// — user-declared traits are passed before the baked stdlib ones so a user
+/// trait shadows a same-named stdlib trait.
+fn collect_trait_defaults_from_items(
+    items: &[Item],
+    out: &mut std::collections::HashMap<String, (Vec<String>, Vec<Function>)>,
+) {
+    for item in items {
+        let Item::TraitDef(t) = item else { continue };
+        let mut defaults = Vec::new();
+        for ti in &t.items {
+            if let TraitItem::Method(m) = ti {
+                if m.body.is_some() {
+                    defaults.push(trait_method_to_function(m, t.stdlib_origin));
+                }
+            }
+        }
+        if defaults.is_empty() {
+            continue;
+        }
+        let param_names = t
+            .generic_params
+            .as_ref()
+            .map(|g| g.params.iter().map(|p| p.name.clone()).collect())
+            .unwrap_or_default();
+        out.entry(t.name.clone()).or_insert((param_names, defaults));
+    }
+}
+
 fn synthesize_trait_default_methods(program: &mut Program) {
     use std::collections::{HashMap, HashSet};
 
     // trait name -> (declared generic-param names, default-bodied methods
     // already converted to the `Function` shape an `ImplItem::Method` carries).
+    // User-declared traits are collected FIRST so a user trait shadows a
+    // same-named baked stdlib trait (`.entry().or_insert`).
     let mut trait_defaults: HashMap<String, (Vec<String>, Vec<Function>)> = HashMap::new();
-    for item in &program.items {
-        if let Item::TraitDef(t) = item {
-            let mut defaults = Vec::new();
-            for ti in &t.items {
-                if let TraitItem::Method(m) = ti {
-                    if m.body.is_some() {
-                        defaults.push(trait_method_to_function(m, t.stdlib_origin));
-                    }
-                }
-            }
-            if !defaults.is_empty() {
-                let param_names = t
-                    .generic_params
-                    .as_ref()
-                    .map(|g| g.params.iter().map(|p| p.name.clone()).collect())
-                    .unwrap_or_default();
-                trait_defaults.insert(t.name.clone(), (param_names, defaults));
-            }
-        }
+    collect_trait_defaults_from_items(&program.items, &mut trait_defaults);
+    // Baked stdlib traits (`Reduce[T]` etc.) live in `STDLIB_PROGRAMS`, not the
+    // user program, so a user `impl Reduce[T] for MyType` can only inherit their
+    // default methods if we pull them in here explicitly (S6b-4). The spliced
+    // copy is compiled as ordinary user code in the user program (its
+    // `stdlib_origin` is cleared below), unlike the never-checked stdlib impl
+    // bodies.
+    for (_, sp) in crate::prelude::STDLIB_PROGRAMS.iter() {
+        collect_trait_defaults_from_items(&sp.items, &mut trait_defaults);
     }
     if trait_defaults.is_empty() {
         return;
@@ -125,6 +148,12 @@ fn synthesize_trait_default_methods(program: &mut Program) {
                 continue;
             }
             let mut copy = def_fn.clone();
+            // The spliced method is real code in the user program — resolve,
+            // typecheck, ownership-check, and codegen must all process it (a
+            // stdlib-origin default body would otherwise be skipped like the
+            // never-checked baked impl bodies). Clear the flag; it is already
+            // false for user-declared traits, so this is a no-op there.
+            copy.stdlib_origin = false;
             if !subst.is_empty() {
                 substitute_trait_params_in_function(&mut copy, &subst);
             }

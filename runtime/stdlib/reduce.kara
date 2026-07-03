@@ -37,4 +37,15 @@ trait Reduce[T] {
 
     // Arithmetic mean as `f64` (integer elements widen exactly).
     fn mean(ref self) -> f64;
+
+    // Spread between the largest and smallest element (`max - min`). The first
+    // DEFAULT method on `Reduce` (S6b-4): any implementor that provides
+    // `min`/`max` inherits it without writing a body — the desugar splice pass
+    // (`synthesize_trait_default_methods`) copies this body into every `impl
+    // Reduce[T] for MyType`, substituting `T` to the concrete element type, so
+    // `self.max() - self.min()` lowers as ordinary `T - T` arithmetic. Traps on
+    // an empty input via `min`/`max`.
+    fn range(ref self) -> T {
+        self.max() - self.min()
+    }
 }
