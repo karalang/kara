@@ -5580,4 +5580,181 @@ fn main() {
             assert_eq!(out, "31\n");
         }
     }
+
+    // ── B-2026-07-02-31: explicit-par join loses branch bindings when a
+    //    branch body is more than a bare call chain ──────────────────────
+    //
+    // Pre-fix, `infer_let_binding_llvm_type` could not size the return
+    // slot for a branch whose `let` RHS lowered to something other than a
+    // bare free-function call / identifier alias / literal — notably the
+    // operator dispatch (`a + b` → `i64.add(a, b)` after `lower`) and a
+    // block-expr RHS (`let y = { ...; tail }`). The slot was dropped, and
+    // the join expression's read of that name failed codegen with
+    // "Undefined variable". `karac run` (interpreter) was unaffected.
+    // These E2E tests build + run each shape and assert the value, so a
+    // regression re-introducing the slot-drop fails the build (panics in
+    // `run_program`'s `compile_to_object`), not just the assertion.
+
+    /// Repro (a): a branch reads an OUTER (pre-par) binding in an
+    /// arithmetic RHS. `base + 1` / `base + 2` lower to `i64.add`
+    /// calls; both `x` and `y` slots must be sized so the join `x + y`
+    /// resolves. Expected 203.
+    #[test]
+    fn test_e2e_par_join_branch_reads_outer_binding_arith() {
+        let out = run_program(
+            r#"
+fn main() {
+    let base = 100;
+    let total = par {
+        let x = base + 1;
+        let y = base + 2;
+        x + y
+    };
+    println(total);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "203", "got {out:?}");
+        }
+    }
+
+    /// Repro (b): a branch's `let` RHS is a nested block expression.
+    /// `let y = { let z = 10; z + 1 }` — the block tail `z + 1` must be
+    /// walked (with the block-local `z` in scope) to size the `y` slot.
+    /// Expected 12.
+    #[test]
+    fn test_e2e_par_join_branch_rhs_nested_block() {
+        let out = run_program(
+            r#"
+fn main() {
+    let t = par {
+        let x = 1;
+        let y = { let z = 10; z + 1 };
+        x + y
+    };
+    println(t);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "12", "got {out:?}");
+        }
+    }
+
+    /// Variant: a branch reads TWO outer bindings across arithmetic.
+    /// `a + b` and `a * b` both lower to operator calls whose operands
+    /// are captures. Expected (10+20)+(10*20) = 230.
+    #[test]
+    fn test_e2e_par_join_branch_reads_two_outer_bindings() {
+        let out = run_program(
+            r#"
+fn main() {
+    let a = 10;
+    let b = 20;
+    let total = par {
+        let x = a + b;
+        let y = a * b;
+        x + y
+    };
+    println(total);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "230", "got {out:?}");
+        }
+    }
+
+    /// Variant: BOTH branches' RHS are nested blocks. Exercises the
+    /// block-tail inference on two distinct slots. Expected (3+4)+(5+6) = 18.
+    #[test]
+    fn test_e2e_par_join_two_nested_block_branches() {
+        let out = run_program(
+            r#"
+fn main() {
+    let t = par {
+        let x = { let p = 3; p + 4 };
+        let y = { let q = 5; q + 6 };
+        x + y
+    };
+    println(t);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "18", "got {out:?}");
+        }
+    }
+
+    /// Variant: a comparison branch produces a BOOL slot (`base > 3` →
+    /// `i64.gt`, result bool). The join consumes it in an `if`. Confirms
+    /// the operator-dispatch inference maps comparison ops to `bool`, not
+    /// the operand type. Expected 6 (base+1 with base=5).
+    #[test]
+    fn test_e2e_par_join_branch_comparison_bool_slot() {
+        let out = run_program(
+            r#"
+fn main() {
+    let base = 5;
+    let r = par {
+        let x = base + 1;
+        let y = base > 3;
+        if y { x } else { 0 }
+    };
+    println(r);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "6", "got {out:?}");
+        }
+    }
+
+    /// Variant: float arithmetic branches — the operator-dispatch
+    /// inference must map `f64.add` / `f64.mul` to the f64 slot type, not
+    /// the i64 default. Expected (2.5+1.0)+(2.5*2.0) = 8.5.
+    #[test]
+    fn test_e2e_par_join_branch_float_arith() {
+        let out = run_program(
+            r#"
+fn main() {
+    let base = 2.5;
+    let total = par {
+        let x = base + 1.0;
+        let y = base * 2.0;
+        x + y
+    };
+    println(total);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "8.5", "got {out:?}");
+        }
+    }
+
+    /// Guard: the PLAIN shape (tuple join of bare-call branches) that
+    /// already worked must keep working after the branch-shape coverage
+    /// widened. Expected 33.
+    #[test]
+    fn test_e2e_par_join_plain_tuple_of_bare_calls_still_works() {
+        let out = run_program(
+            r#"
+fn f1() -> i64 { 11 }
+fn f2() -> i64 { 22 }
+fn main() {
+    let (p, q) = par {
+        let p = f1();
+        let q = f2();
+        (p, q)
+    };
+    println(p + q);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "33", "got {out:?}");
+        }
+    }
 }

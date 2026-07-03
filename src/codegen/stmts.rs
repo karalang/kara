@@ -1006,52 +1006,195 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(te) = ty_ann {
             return Some(self.llvm_type_for_type_expr(te));
         }
-        // Fallback: free-function call — read the declared return type
-        // from the LLVM function declaration the parser/declare-pass
-        // already minted.
-        if let ExprKind::Call { callee, .. } = &value.kind {
-            if let ExprKind::Identifier(name) = &callee.kind {
-                // Niche-ABI callee: the DECLARED LLVM return type is a
-                // nullable ptr, but the in-body value shape the branch
-                // fn stores into the slot is the conventional 4-i64
-                // Option struct (`compile_call` unpacks at the call
-                // boundary). Size the slot for the unpacked shape — a
-                // ptr-sized slot would silently truncate the 32-byte
-                // store.
-                if self.fn_niche_abi.get(name).is_some_and(|abi| abi.ret) {
-                    return Some(self.enum_layouts["Option"].llvm_type.into());
-                }
-                if let Some(fn_val) = self.module.get_function(name) {
-                    if let Some(ret) = fn_val.get_type().get_return_type() {
-                        return Some(ret);
-                    }
-                }
-            }
-        }
-        // Fallback: alias of an in-scope variable — `let n = p` where `p`
-        // is a param or earlier local. Read the type directly from the
-        // variables table. Without this, auto-parallelization treats `n`
-        // as un-typeable, drops it from the return-slot list, and the
-        // tail-expression reference fails with "Undefined variable 'n'"
-        // because the par-branch's local alloca never propagates to the
-        // parent scope.
-        if let ExprKind::Identifier(name) = &value.kind {
-            if let Some(slot) = self.variables.get(name) {
-                return Some(slot.ty);
-            }
-        }
-        // Integer / bool literals carry their type directly. Sized
-        // integer suffixes (`0i32`, `5u8`, …) map through
-        // `const_int_for_suffix`'s sizing rules; the unsuffixed default
-        // is `i64`, matching `const_int_for_suffix`. Same for floats.
-        match &value.kind {
+        // No annotation: statically infer the LLVM type of the RHS
+        // expression. `infer_expr_llvm_type` covers calls, in-scope
+        // aliases, literals, and — the shapes B-2026-07-02-31 exposed —
+        // arithmetic/comparison binaries, unary ops, and block-expr
+        // RHS (`let y = { ...; tail }`). An empty local-binding scope is
+        // passed at the top level; block-expr recursion extends it with
+        // the block's own `let` bindings so the tail expression's
+        // identifier reads resolve.
+        self.infer_expr_llvm_type(value, &HashMap::new())
+    }
+
+    /// Statically infer the LLVM type an expression will evaluate to,
+    /// WITHOUT compiling it. Used by `infer_let_binding_llvm_type` to
+    /// size par-block / auto-par return slots before the branch bodies
+    /// are emitted (the return-struct layout must be known up front).
+    ///
+    /// `locals` carries the types of block-local `let` bindings visible
+    /// at `expr` (for the block-expr RHS case) — it augments
+    /// `self.variables` so a tail expression like `z + 1` (where `z` is
+    /// a binding introduced earlier in the same block) resolves. It is
+    /// empty at the top-level call.
+    ///
+    /// Conservative by design: any shape it cannot classify returns
+    /// `None`, and the caller drops the slot (the branch still runs; a
+    /// join-expression read of a dropped name surfaces the standard
+    /// "Undefined variable" diagnostic, matching the pre-existing
+    /// fallback contract). It never guesses a wrong type.
+    pub(super) fn infer_expr_llvm_type(
+        &self,
+        expr: &Expr,
+        locals: &HashMap<String, BasicTypeEnum<'ctx>>,
+    ) -> Option<BasicTypeEnum<'ctx>> {
+        match &expr.kind {
+            // Integer / bool literals carry their type directly. Sized
+            // integer suffixes (`0i32`, `5u8`, …) map through
+            // `const_int_for_suffix`'s sizing rules; the unsuffixed
+            // default is `i64`. Same for floats.
             ExprKind::Integer(_, sfx) => Some(self.const_int_for_suffix(0, *sfx).get_type().into()),
             ExprKind::Float(_, sfx) => {
                 Some(self.const_float_for_suffix(0.0, *sfx).get_type().into())
             }
             ExprKind::Bool(_) => Some(self.context.bool_type().into()),
+
+            // Identifier: a block-local binding introduced earlier in
+            // the same block-expr wins over an outer local of the same
+            // name (lexical shadowing); otherwise an in-scope variable
+            // (param or earlier outer local) — `let n = p`.
+            ExprKind::Identifier(name) => locals
+                .get(name)
+                .copied()
+                .or_else(|| self.variables.get(name).map(|slot| slot.ty)),
+
+            // Free-function call — read the declared return type from the
+            // LLVM function declaration the declare-pass already minted.
+            ExprKind::Call { callee, .. } => {
+                if let ExprKind::Identifier(name) = &callee.kind {
+                    // Niche-ABI callee: the DECLARED LLVM return type is a
+                    // nullable ptr, but the in-body value shape the branch
+                    // fn stores into the slot is the conventional 4-i64
+                    // Option struct (`compile_call` unpacks at the call
+                    // boundary). Size the slot for the unpacked shape — a
+                    // ptr-sized slot would silently truncate the 32-byte
+                    // store.
+                    if self.fn_niche_abi.get(name).is_some_and(|abi| abi.ret) {
+                        return Some(self.enum_layouts["Option"].llvm_type.into());
+                    }
+                    if let Some(fn_val) = self.module.get_function(name) {
+                        if let Some(ret) = fn_val.get_type().get_return_type() {
+                            return Some(ret);
+                        }
+                    }
+                }
+                // Lowered operator dispatch: the `lower` pass rewrites
+                // `a + b` / `a == b` / `-a` into `Call { callee:
+                // Path([target_type, op_method]), args }` (see
+                // `lowering.rs::rewrite_binary` / `rewrite_unary`). These
+                // are the exact shapes B-2026-07-02-31 exposed — a par
+                // branch `let x = base + 1` reaches codegen as
+                // `i64.add(base, 1)`, not an `ExprKind::Binary`. Infer the
+                // result type from the operator's fixed semantics:
+                //   - comparison ops → bool
+                //   - arithmetic / bitwise / shift / neg / not → the
+                //     target type (segments[0]), mapped via
+                //     `llvm_type_for_name`
+                if let ExprKind::Path { segments, .. } = &callee.kind {
+                    if segments.len() == 2 {
+                        let (target, method) = (segments[0].as_str(), segments[1].as_str());
+                        match method {
+                            "eq" | "ne" | "lt" | "le" | "gt" | "ge" => {
+                                return Some(self.context.bool_type().into());
+                            }
+                            "add" | "sub" | "mul" | "div" | "rem" | "bitand" | "bitor"
+                            | "bitxor" | "shl" | "shr" | "neg" | "not" => {
+                                return Some(self.llvm_type_for_name(target));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                None
+            }
+
+            // Binary: arithmetic / bitwise / shift yield the operand
+            // type (infer from either operand — prefer the left, fall
+            // back to the right when the left is un-inferrable, e.g.
+            // `1 + f()` vs `f() + 1`); comparison / logical yield bool.
+            // Range is not a slot-eligible scalar — leave it None.
+            ExprKind::Binary { op, left, right } => match op {
+                BinOp::Eq
+                | BinOp::NotEq
+                | BinOp::Lt
+                | BinOp::LtEq
+                | BinOp::Gt
+                | BinOp::GtEq
+                | BinOp::And
+                | BinOp::Or => Some(self.context.bool_type().into()),
+                BinOp::Range | BinOp::RangeInclusive => None,
+                _ => self
+                    .infer_expr_llvm_type(left, locals)
+                    .or_else(|| self.infer_expr_llvm_type(right, locals)),
+            },
+
+            // Unary: `-x` / `~x` keep the operand type; `not x` is bool.
+            // `*x` (Deref) is conservatively un-inferrable here.
+            ExprKind::Unary { op, operand } => match op {
+                UnaryOp::Not => Some(self.context.bool_type().into()),
+                UnaryOp::Neg | UnaryOp::BitNot => self.infer_expr_llvm_type(operand, locals),
+                UnaryOp::Deref => None,
+            },
+
+            // Block expression: its value is the tail expression's value.
+            // Walk the block's own `let` bindings first, extending a
+            // fresh local scope, then infer the tail against it. Nested
+            // shadowing is handled because inner `let`s overwrite the
+            // name in `inner`.
+            ExprKind::Block(block) => self.infer_block_tail_llvm_type(block, locals),
+
+            // `if cond { a } else { b }` as an expression: both arms have
+            // the same type, so infer from whichever arm is inferrable.
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => self
+                .infer_block_tail_llvm_type(then_block, locals)
+                .or_else(|| {
+                    else_branch
+                        .as_ref()
+                        .and_then(|e| self.infer_expr_llvm_type(e, locals))
+                }),
+
+            // Anything else (method calls, field access, index, match,
+            // closures, struct literals, etc.): conservatively
+            // un-inferrable here. The slot is dropped; the pre-existing
+            // "un-inferrable RHS → branch-local" contract applies.
             _ => None,
         }
+    }
+
+    /// Infer the LLVM type of a block's tail (`final_expr`), threading
+    /// the block's own `let` bindings into a fresh local scope layered
+    /// over `outer`. A block with no tail expression evaluates to unit
+    /// and is not slot-eligible → `None`.
+    fn infer_block_tail_llvm_type(
+        &self,
+        block: &Block,
+        outer: &HashMap<String, BasicTypeEnum<'ctx>>,
+    ) -> Option<BasicTypeEnum<'ctx>> {
+        let mut inner = outer.clone();
+        for stmt in &block.stmts {
+            if let StmtKind::Let { pattern, value, .. } | StmtKind::LetElse { pattern, value, .. } =
+                &stmt.kind
+            {
+                if let PatternKind::Binding(name) = &pattern.kind {
+                    if let Some(t) = self.infer_expr_llvm_type(value, &inner) {
+                        inner.insert(name.clone(), t);
+                    } else {
+                        // Un-inferrable inner binding: remove any stale
+                        // outer entry so a later reference doesn't
+                        // resolve to the wrong (shadowed) type.
+                        inner.remove(name);
+                    }
+                }
+            }
+        }
+        block
+            .final_expr
+            .as_ref()
+            .and_then(|e| self.infer_expr_llvm_type(e, &inner))
     }
 
     /// Phase-B2 link-store fast path (see the `StmtKind::Assign` arm):
