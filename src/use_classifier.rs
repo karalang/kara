@@ -429,8 +429,17 @@ impl<'a> UseClassifier<'a> {
                     self.walk_expr(callee, Mode::Reading);
                 }
                 let modes = self.callee_modes_for_call(callee).cloned();
+                // B-2026-07-02-23: a comparison operator (`==` `!=` `<` `<=`
+                // `>` `>=`) lowers to `Call(Path([Type, "eq"/…]), [lhs, rhs])`
+                // — a free-call to an *instance* trait method, so it never
+                // gets a `callee_param_modes` entry (that table is static-
+                // methods-only) and both args fell to the consume default.
+                // Comparisons borrow both operands (`ref self, other: ref
+                // Self`), so classify every arg as a read.
+                let is_relational = crate::lowering::callee_is_relational_operator(callee);
                 for (i, arg) in args.iter().enumerate() {
                     let is_borrow = arg.mut_marker
+                        || is_relational
                         || modes.as_ref().and_then(|m| m.get(i)).is_some_and(|m| {
                             matches!(m, OwnershipMode::Ref | OwnershipMode::MutRef)
                         });

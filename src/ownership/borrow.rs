@@ -49,7 +49,20 @@ impl<'a> super::OwnershipChecker<'a> {
     /// (param declared `ref T` / `mut ref T` / `mut Slice[T]`). Args at
     /// borrow positions are *read*, not consumed, regardless of the
     /// `mut_marker` flag (which is itself only legal on `MutRef` slots).
+    ///
+    /// B-2026-07-02-23: a desugared comparison operator (`Type.eq(a, b)` &
+    /// friends — see `lowering::callee_is_relational_operator`) borrows both
+    /// operands by the relational-trait contract, but its callee is an
+    /// *instance* method whose modes never reach `callee_param_modes`
+    /// (static-methods-only), so we recognise the shape directly and report
+    /// every arg as a borrow. Mirrors the same gate in `use_classifier` (the
+    /// predicate pipeline that actually emits the UAM diagnostic) so the
+    /// legacy state machine's `states` don't diverge and mis-drive closure
+    /// classification.
     pub(crate) fn arg_is_borrow_position(&self, callee: &Expr, arg_index: usize) -> bool {
+        if crate::lowering::callee_is_relational_operator(callee) {
+            return true;
+        }
         self.callee_modes_for_call(callee)
             .and_then(|modes| modes.get(arg_index))
             .is_some_and(|m| matches!(m, OwnershipMode::Ref | OwnershipMode::MutRef))

@@ -21,6 +21,38 @@ use crate::typechecker::{
     ConstArg, DimArg, FloatSize, IntSize, Type, TypeCheckResult, TypeChecker, UIntSize,
 };
 
+/// The set of method names this pass desugars comparison operators into.
+/// Each is a relational-trait method (`PartialEq::eq`/`ne`, `Ord`/`PartialOrd`
+/// `lt`/`le`/`gt`/`ge`/`cmp`/`partial_cmp`) whose canonical signature borrows
+/// both operands (`ref self, other: ref Self` — see `partial_eq.kara` and
+/// design.md § comparisons borrow). Ownership/RC classification uses this to
+/// treat the desugared `Type.eq(a, b)` call's args as reads, not consumes:
+/// the lowered call is a free-function `Call(Path([Type, method]), [recv,
+/// arg])` targeting an *instance* method, so it never picks up a param-mode
+/// entry from `collect_callee_param_modes` (static-methods-only) and its args
+/// otherwise fall to the consume-everything default (B-2026-07-02-23).
+pub fn is_relational_operator_method(name: &str) -> bool {
+    matches!(
+        name,
+        "eq" | "ne" | "lt" | "le" | "gt" | "ge" | "cmp" | "partial_cmp"
+    )
+}
+
+/// Whether `callee` is the `Path([Type, method])` produced by lowering a
+/// comparison operator — i.e. a two-segment path whose final segment is a
+/// relational-trait method (see [`is_relational_operator_method`]). The
+/// desugared shape is always binary (`Type.eq(a, b)`), so both argument
+/// positions are borrows. `false` for any other callee, including bare
+/// identifiers and non-relational associated calls.
+pub fn callee_is_relational_operator(callee: &Expr) -> bool {
+    match &callee.kind {
+        ExprKind::Path { segments, .. } => {
+            segments.len() == 2 && is_relational_operator_method(&segments[1])
+        }
+        _ => false,
+    }
+}
+
 /// Rewrite operator expressions across the entire program in place.
 pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
     let mut lowerer = Lowerer { tc };
