@@ -153,22 +153,13 @@ pub const OWNERSHIP_GATE_GRANDFATHERED: &[&str] = &[
     // tests now pass the strict gate; regression coverage lives in
     // tests/ownership.rs (`b23_*` / `b24_*` / `b25_*` / `b26_*`).
     //
-    // EXCEPTION — these two shared-enum-drop corpus programs ALSO carry a
-    // SEPARATE, still-open false-positive distinct from B-25's field-path
-    // class: a read-only owned bare-`T` param reused across call sites
-    // (`fn peek(s: Span) -> i64 { s.off }` then `let x = peek(r); let y =
-    // peek(r);`). Per design the bare-`T` param is OWNED (the caller loses
-    // ownership) so `karac check` flags the reuse — but runtime uses the
-    // caller-retains optimization for read-only owned params (why the test
-    // is `_no_double_free`), so it is a check-surface FP. Fixing it needs
-    // whole-program INFERRED-mode call-arg classification (bare-`T` params
-    // whose body only reads infer `ref`), which is out of scope for the
-    // B-25 partial-move fix. The B-25 partial-move / match-scrutinee
-    // errors in these programs ARE now clean; only the peek-reuse line
-    // remains. Kept grandfathered until the read-only-owned-param class is
-    // addressed.
-    "asan_struct_nested_enum_leaf_no_leak_no_double_free",
-    "asan_struct_with_direct_enum_field_no_leak_no_double_free",
+    // B-2026-07-02-35 (RESOLVED — checker correct-by-design): the two
+    // shared-enum-drop corpus programs above previously carried a read-only
+    // owned bare-`T` param reused across call sites (`peek(r); peek(r)`),
+    // which `karac check` correctly flags as move-after-move (design.md:
+    // bare-`T` is OWNED; ownership modes are declared, not inferred). The
+    // programs — not the checker — were the defect: their `peek` helper now
+    // takes `ref` (it only reads a field), so both un-grandfather cleanly.
 ];
 
 /// Fail loudly when an E2E test program flunks the ownership checker.

@@ -6140,7 +6140,7 @@ enum Tok { Id(String), Int(i64) }
 struct Span { tok: Tok, off: i64 }
 fn wrap(s: Span) -> Span { s }
 fn make_spanned(t: Tok, o: i64) -> Span { Span { tok: t, off: o } }
-fn peek(s: Span) -> i64 { s.off }
+fn peek(s: ref Span) -> i64 { s.off }
 fn sink(s: String) -> i64 { s.len() }
 fn drop_only(s: Span) { if s.off > 99999 { println(s.off.to_string()); } }
 fn main() {
@@ -6226,7 +6226,7 @@ struct Deep { w: Wrap, tag: i64 }
 fn sink(s: String) -> i64 { s.len() }
 fn mk_wrap(n: i64) -> Wrap { Wrap { sp: Span { tok: Tok.Id(f"w-{n}"), off: n }, hi: n + 1 } }
 fn fwd(w: Wrap) -> Wrap { w }
-fn peek(w: Wrap) -> i64 { w.hi }
+fn peek(w: ref Wrap) -> i64 { w.hi }
 fn main() {
     let mut i: i64 = 0;
     let mut acc: i64 = 0;
