@@ -143,8 +143,107 @@ pub(super) fn value_compare(a: &Value, b: &Value) -> std::cmp::Ordering {
                 }
             })
             .unwrap_or_else(|| a.len().cmp(&b.len())),
+        // Two Structs: order by type name, then by fields in a deterministic
+        // (sorted field-name) sequence (B-2026-07-03-6). Without this arm both
+        // structs fell to the `_ => discriminant` fallback where every struct
+        // maps to the same catch-all discriminant → always `Equal` → a
+        // `SortedSet[Struct]` / `SortedMap[Struct, _]` collapsed distinct keys
+        // to one (silent DATA LOSS) and `Vec[Struct].sort()` was a NO-OP. The
+        // order is consistent with `Value::eq` (equal iff every field is equal,
+        // so distinct structs never compare `Equal`) and is a proper total
+        // order — sound for the `OrdValue`-keyed BTreeMap backing the sorted
+        // containers. It is NOT the derived-`Ord` DECLARATION order (fields are
+        // compared alphabetically, not in source order); matching declaration
+        // order needs field-order info `value_compare` cannot reach and is
+        // tracked as a follow-on (B-2026-07-03-12).
+        (
+            Value::Struct {
+                name: an,
+                fields: af,
+            },
+            Value::Struct {
+                name: bn,
+                fields: bf,
+            },
+        ) => an.cmp(bn).then_with(|| compare_field_maps(af, bf)),
+        // Two enum variants: order by enum name, then variant name, then
+        // payload. Same silent-data-loss / no-op class as structs above (the
+        // discriminant fallback made all enum values compare `Equal`). Variant
+        // ordering is by NAME (alphabetical), not the derived-`Ord`
+        // declaration index — the same B-2026-07-03-12 follow-on.
+        (
+            Value::EnumVariant {
+                enum_name: an,
+                variant: av,
+                data: ad,
+            },
+            Value::EnumVariant {
+                enum_name: bn,
+                variant: bv,
+                data: bd,
+            },
+        ) => an
+            .cmp(bn)
+            .then_with(|| av.cmp(bv))
+            .then_with(|| compare_enum_data(ad, bd)),
         // Cross-variant ordering by discriminant index
         _ => value_discriminant(a).cmp(&value_discriminant(b)),
+    }
+}
+
+/// Deterministic total order over two struct field maps: compare each field
+/// in sorted-field-name order. Consistent with the field-map content equality
+/// `Value::eq` uses (returns `Equal` iff every shared field is equal and the
+/// key sets match), so it never conflates two distinct structs. A field
+/// present in only one side orders that side greater (defensive — same-type
+/// structs always share a key set).
+fn compare_field_maps(
+    a: &HashMap<String, Value>,
+    b: &HashMap<String, Value>,
+) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let mut keys: Vec<&String> = a.keys().chain(b.keys()).collect();
+    keys.sort();
+    keys.dedup();
+    for k in keys {
+        let ord = match (a.get(k), b.get(k)) {
+            (Some(x), Some(y)) => value_compare(x, y),
+            (Some(_), None) => Ordering::Greater,
+            (None, Some(_)) => Ordering::Less,
+            (None, None) => Ordering::Equal,
+        };
+        if ord != Ordering::Equal {
+            return ord;
+        }
+    }
+    Ordering::Equal
+}
+
+/// Total order over two enum payloads. Reached only after the enclosing
+/// variant names matched, so both payloads share a shape in well-typed code;
+/// the cross-shape arm orders by a stable shape rank purely for totality.
+fn compare_enum_data(a: &EnumData, b: &EnumData) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (a, b) {
+        (EnumData::Unit, EnumData::Unit) => Ordering::Equal,
+        (EnumData::Tuple(x), EnumData::Tuple(y)) => x
+            .iter()
+            .zip(y.iter())
+            .find_map(|(p, q)| {
+                let o = value_compare(p, q);
+                (o != Ordering::Equal).then_some(o)
+            })
+            .unwrap_or_else(|| x.len().cmp(&y.len())),
+        (EnumData::Struct(x), EnumData::Struct(y)) => compare_field_maps(x, y),
+        _ => enum_data_rank(a).cmp(&enum_data_rank(b)),
+    }
+}
+
+fn enum_data_rank(d: &EnumData) -> u8 {
+    match d {
+        EnumData::Unit => 0,
+        EnumData::Tuple(_) => 1,
+        EnumData::Struct(_) => 2,
     }
 }
 

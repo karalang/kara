@@ -2663,6 +2663,50 @@ fn test_nested_vec_sort_orders_lexicographically() {
     );
 }
 
+// ── B-2026-07-03-6 value_compare Struct / EnumVariant arms ──
+
+#[test]
+fn test_struct_and_enum_ordering_no_dataloss_and_sorts() {
+    // Pre-fix, two `Value::Struct` (or two `Value::EnumVariant`) fell to
+    // value_compare's discriminant fallback (always Equal), so
+    // `SortedSet[Struct]` / `SortedMap[Struct, _]` COLLAPSED distinct keys to
+    // one (silent data loss) and `Vec[Struct].sort()` was a NO-OP. Verify the
+    // count is preserved (no collapse) and the sort orders by fields.
+    let output = run("#[derive(Eq, Ord)]\n\
+         struct P { a: i64, b: i64 }\n\
+         #[derive(Eq, Ord)]\n\
+         enum E { Lo, Mid, Hi }\n\
+         fn main() {\n\
+             let mut ss: SortedSet[P] = SortedSet.new();\n\
+             ss.insert(P { a: 2, b: 1 });\n\
+             ss.insert(P { a: 1, b: 9 });\n\
+             ss.insert(P { a: 1, b: 2 });\n\
+             println(f\"{ss.len()}\");\n\
+             println(f\"{ss.contains(P { a: 1, b: 9 })}\");\n\
+             println(f\"{ss.contains(P { a: 5, b: 5 })}\");\n\
+             let mut sm: SortedMap[P, i64] = SortedMap.new();\n\
+             let _ = sm.insert(P { a: 1, b: 1 }, 10);\n\
+             let _ = sm.insert(P { a: 2, b: 2 }, 20);\n\
+             let _ = sm.insert(P { a: 3, b: 3 }, 30);\n\
+             println(f\"{sm.len()}\");\n\
+             let mut es: SortedSet[E] = SortedSet.new();\n\
+             es.insert(E.Hi);\n\
+             es.insert(E.Lo);\n\
+             es.insert(E.Mid);\n\
+             println(f\"{es.len()}\");\n\
+             let mut v: Vec[P] = Vec.new();\n\
+             v.push(P { a: 2, b: 0 });\n\
+             v.push(P { a: 1, b: 9 });\n\
+             v.push(P { a: 1, b: 2 });\n\
+             v.sort();\n\
+             let mut i = 0;\n\
+             while i < v.len() { let p = v[i]; println(f\"{p.a},{p.b}\"); i = i + 1; };\n\
+         }");
+    // SortedSet len 3 (no collapse), membership correct; SortedMap len 3;
+    // enum SortedSet len 3; Vec sorted by (a, b): (1,2) (1,9) (2,0).
+    assert_eq!(output, "3\ntrue\nfalse\n3\n3\n1,2\n1,9\n2,0\n");
+}
+
 // ── B-2026-07-01-7 fn-returned Drop temps + passthrough guard ──
 
 #[test]
