@@ -616,11 +616,26 @@ impl TypeEnv {
                 continue;
             }
             let Some(&subst_ty) = subs.get(param.name.as_str()) else {
-                // Receiver had fewer type args than the impl declares — can't
-                // substitute the param to discharge its bounds. Conservative:
-                // drop the candidate.
-                return false;
+                // Receiver had fewer type args than the impl declares — e.g.
+                // resolving a method on `self` inside the impl (whose type is
+                // the bare target name, no args) or a receiver whose generic
+                // args weren't inferred. We can't PROVE the bound, but we also
+                // can't DISPROVE it; the concrete instantiation checks it. Be
+                // permissive so method resolution still finds the method — a
+                // conservative drop here made a bounded generic impl's own
+                // methods (`impl[T: Sub] Pair[T] { fn g(ref self){ self.h() } }`)
+                // and external calls on such a type unresolvable under `build`
+                // (B-2026-07-03-20).
+                continue;
             };
+            // An unresolved type VARIABLE as the substituted arg (the impl's own
+            // param when resolving `self: Type[T]`, or an outer generic param at
+            // a generic call site `fn f[T: Sub](p: ref Pair[T]) { p.g() }`) is
+            // equally undecidable — the enclosing scope's bound, or the eventual
+            // monomorphization, discharges it. Same permissive treatment.
+            if matches!(subst_ty, Type::TypeParam(_)) {
+                continue;
+            }
             for bound in &param.bounds {
                 if !self.bound_satisfied(subst_ty, bound) {
                     return false;
@@ -656,6 +671,11 @@ impl TypeEnv {
                     };
                     &owned
                 };
+                // Undecidable against an unresolved type variable — be permissive
+                // (see the inline-bounds arm above; B-2026-07-03-20).
+                if matches!(target_ty, Type::TypeParam(_)) {
+                    continue;
+                }
                 for bound in bounds {
                     if !self.bound_satisfied(target_ty, bound) {
                         return false;

@@ -360,17 +360,32 @@ B-2026-07-02-10..13, see the ledger.
     Only `Reduce.range` has a stdlib default body, so the change touches only
     user `Reduce` impls. Test: codegen e2e `test_e2e_stdlib_reduce_default_
     method_inherited_by_user_impl`. **Residual (out of scope, ledgered):**
-    (i) GENERIC user impls (`impl[T: Sub] Reduce[T] for Pair[T]`) hit a
-    **pre-existing** bounded-generic-impl method-resolution gap
-    (B-2026-07-03-20) — a bound on an impl's own generic param makes `self.m()`
-    (and even external `p.m()`) unresolvable under `build`; reproduces with a
-    plain inherent `impl[T: Sub] Pair[T]`, no traits/defaults involved.
     (ii) the builtin containers (`Column`/`Tensor`) do NOT inherit `range` (the
     splice only rewrites user-program impls; their `#[compiler_builtin]` impls
     live in `STDLIB_PROGRAMS`) — a builtin-container-inherits-default axis for a
     later slice. `fold`/`product`/`Option`-forms still need a `fold[A]`
     primitive on the trait (would change the required-method set the builtin
     impls satisfy) — a further slice.
+  - **S6b-4c** ✅ **(landed 2026-07-03)** — bounded-generic-impl method
+    resolution (B-2026-07-03-20). A bound on a generic impl's OWN type param
+    (`impl[T: Sub] Pair[T]`) made `self.m()` inside the impl — and an external
+    `p.m()` — unresolvable under `build` ("no method 'm' on type 'Pair'"; ran
+    fine). `impl_bounds_discharge` (`src/typechecker/env.rs`) dropped the
+    candidate whenever it couldn't PROVE the impl's bound: `self`'s type is the
+    bare target name (no args, so the bound had no arg to substitute), and a
+    receiver typed `Pair[T]` substitutes to a `Type::TypeParam` (not in the
+    impl table). Both are UNDECIDABLE, not FALSE — the fix makes discharge
+    permissive for a missing/type-variable substitution (the concrete
+    instantiation checks the bound), for both the inline-bound and where-clause
+    arms. This DIRECTLY unblocks **generic** user impls of `Reduce`
+    (`impl[T: Sub] Reduce[T] for Pair[T]` now inherits + resolves the spliced
+    `range` default, i64→7 on run == build). **Residual:** a NON-i64 (f64)
+    element still miscompiles — a **separate, pre-existing, general** bug
+    (B-2026-07-03-21): a generic struct literal (`Box { v: 2.5 }`, even
+    unbounded / no impl) loses its `[f64]` arg, so codegen defaults the element
+    to i64 and reads the f64 bits as i64 (silent garbage under `build`, correct
+    under `run`). Tests: typechecker `bounded_generic_impl_methods_resolve`,
+    codegen e2e `test_e2e_bounded_generic_impl_method_call` (i64).
 - **S6c** — `ElementwiseMap` / `ElementwiseOrd` builtin method surfaces +
   user impls; blanket `Vec[T]` impls; user trait-impl methods over builtin
   containers (probed: interp "type 'unknown'", codegen loud fall-through).

@@ -17870,6 +17870,33 @@ fn operator_on_wrong_or_missing_trait_bound_rejected() {
 }
 
 #[test]
+fn bounded_generic_impl_methods_resolve() {
+    // B-2026-07-03-20: a BOUND on a generic impl's own type param
+    // (`impl[T: Sub] Pair[T]`) used to make method resolution fail under `karac
+    // build` — `self.hi()` inside the impl and an external `p.gap()` both
+    // reported "no method 'hi' on type 'Pair'". `impl_bounds_discharge`
+    // (src/typechecker/env.rs) dropped the candidate whenever it could not
+    // PROVE the impl's bound: `self`'s type is the bare target name (no args),
+    // so the `T: Sub` bound had no arg to substitute; and a receiver typed
+    // `Pair[T]` (an outer generic param) substitutes to a `Type::TypeParam`,
+    // which is not in the impl table. Both are UNDECIDABLE, not FALSE — the fix
+    // makes discharge permissive for a missing / type-variable substitution
+    // (the concrete instantiation checks the bound). Unbounded `impl[T] Pair[T]`
+    // always worked; the bound was the sole trigger. Covers the self-call (in
+    // `gap`) and the external bounded-generic-param call (in `use_pair`).
+    typecheck_desugared_ok(
+        "struct Pair[T] { a: T, b: T }\n\
+         impl[T: Sub] Pair[T] {\n\
+         \x20   fn lo(ref self) -> T { self.a }\n\
+         \x20   fn hi(ref self) -> T { self.b }\n\
+         \x20   fn gap(ref self) -> T { self.hi() - self.lo() }\n\
+         }\n\
+         fn use_pair[T: Sub](p: ref Pair[T]) -> T { p.gap() }\n\
+         fn main() {}",
+    );
+}
+
+#[test]
 fn method_self_return_type_resolves_to_impl_target() {
     // A method declared `-> Self` returns a value of the concrete impl
     // target (`W`), so the body's tail expression must check against the

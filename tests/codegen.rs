@@ -46691,6 +46691,39 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_bounded_generic_impl_method_call() {
+        // B-2026-07-03-20: a method on a bounded generic impl (`impl[T: Sub]
+        // Pair[T]`) resolves and runs end-to-end. Before the fix
+        // `impl_bounds_discharge` dropped the impl whenever it could not prove
+        // `T: Sub` — which is exactly the case for the impl's own `self` (bare
+        // target type, no args) — so `gap`'s `self.hi() - self.lo()` failed
+        // "no method 'hi' on type 'Pair'" under `build` (ran fine, as `karac
+        // run` executes past the warning). The fix makes discharge permissive
+        // for an undecidable (missing / type-variable) substitution. `gap` =
+        // `b - a`. Two i64 instantiations exercise the shared-layout mono; a
+        // NON-i64 (f64) element is still blocked on the separate generic
+        // struct-literal arg-inference miscompile (B-2026-07-03-21), so this
+        // stays on i64.
+        let src = r#"
+struct Pair[T] { a: T, b: T }
+impl[T: Sub] Pair[T] {
+    fn lo(ref self) -> T { self.a }
+    fn hi(ref self) -> T { self.b }
+    fn gap(ref self) -> T { self.hi() - self.lo() }
+}
+fn main() {
+    let p = Pair { a: 3, b: 10 };
+    println(f"{p.gap()}");
+    let q = Pair { a: 100, b: 7 };
+    println(f"{q.gap()}");
+}
+"#;
+        // gap = b - a: p → 10 - 3 = 7; q → 7 - 100 = -93.
+        let out = run_program(src).expect("program should compile and run");
+        assert_eq!(out, "7\n-93\n");
+    }
+
+    #[test]
     fn test_e2e_vec_elem_generic_mono_distinct_per_element_type() {
         // B-2026-07-02-41 (S6b-1): two element-type instantiations of a
         // `ref Vec[T]` generic fn must be DISTINCT monomorphs. The
