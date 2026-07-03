@@ -18663,4 +18663,35 @@ fn main() {
             "parvec_deep_nested_slot",
         );
     }
+
+    #[test]
+    fn asan_chained_call_struct_heap_field_no_leak() {
+        // B-2026-07-03-3: a chained `n.relabel().name` reads a HEAP (String)
+        // field off a method-call temporary that was never exercised before
+        // the fix (it returned 0). Loop it with a >=36-byte payload so any
+        // leak of the temp struct's String buffer (or a double-free of the
+        // extracted field) trips Linux LSan / macOS ASan.
+        assert_clean_asan_run(
+            r#"
+struct N { name: String, id: i64 }
+impl N {
+    fn relabel(self) -> N {
+        N { name: "a sufficiently long heap payload for lsan", id: self.id + 1 }
+    }
+}
+fn main() {
+    let mut i = 0i64;
+    let mut acc = 0i64;
+    while i < 50i64 {
+        let n = N { name: "seed string that is also quite long", id: i };
+        acc = acc + n.relabel().name.len() + n.relabel().id;
+        i = i + 1i64;
+    }
+    println(f"{acc}");
+}
+"#,
+            &["3325"],
+            "chained_call_struct_heap_field_no_leak",
+        );
+    }
 }

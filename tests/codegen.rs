@@ -3483,6 +3483,43 @@ fn main() {
         }
     }
 
+    /// Regression (B-2026-07-03-3): a chained `expr.method().field` where the
+    /// method returns a plain struct reads the correct field under `karac
+    /// build`. Before the fix `type_name_of_expr` had no `MethodCall`/`Call`
+    /// arm, so `field_index_for` returned `None` and the generic tail of
+    /// `compile_field_access` emitted the `i64 0` placeholder — a silent
+    /// miscompile (the bound form `let b = e.m(); b.field` always worked).
+    /// Covers a scalar field, a heap (String) field, a later multi-struct
+    /// field, a double method chain, and a free-function call chain.
+    #[test]
+    fn e2e_chained_call_struct_field_access() {
+        if let Some(out) = run_program(
+            "struct P { x: i64, y: i64 }\n\
+             struct N { name: String, id: i64 }\n\
+             impl P {\n\
+             \x20   fn shift(self) -> P { P { x: self.x + 1, y: self.y + 10 } }\n\
+             }\n\
+             impl N {\n\
+             \x20   fn relabel(self) -> N { N { name: \"chained heap field ok\", id: self.id + 1 } }\n\
+             }\n\
+             fn mk(n: i64) -> P { P { x: n, y: n * 2 } }\n\
+             fn main() {\n\
+             \x20   let p = P { x: 1, y: 2 };\n\
+             \x20   println(f\"{p.shift().x}\");\n\
+             \x20   println(f\"{p.shift().y}\");\n\
+             \x20   println(f\"{p.shift().shift().x}\");\n\
+             \x20   println(f\"{mk(7).y}\");\n\
+             \x20   let n = N { name: \"start\", id: 5 };\n\
+             \x20   println(f\"{n.relabel().name}\");\n\
+             \x20   println(f\"{n.relabel().id}\");\n\
+             }",
+        ) {
+            // p.shift().x=2, .y=12, .shift().x=3; mk(7).y=14;
+            // n.relabel().name/.id
+            assert_eq!(out, "2\n12\n3\n14\nchained heap field ok\n6\n");
+        }
+    }
+
     /// Regression: `TaskHandle[T].join()` for a NON-scalar `T` (`Vec[i64]`)
     /// returns the spawned task's heap value intact. `recover_task_handle_
     /// join_return_ty` used to return `i64` unconditionally, so a `Vec`/

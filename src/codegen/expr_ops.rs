@@ -1904,6 +1904,31 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 _ => None,
             },
+            // Call-chain field access: `expr.method().field` / `func().field`
+            // where the call returns a plain (non-shared) struct. Resolve the
+            // call's static return-type name so `field_index_for` finds the
+            // field layout — without this the generic tail of
+            // `compile_field_access` returns the `i64 0` placeholder, a silent
+            // miscompile of a chained struct-returning call (B-2026-07-03-3).
+            // `declare_function` registers impl methods in
+            // `fn_return_type_names` under their qualified `Type.method` name;
+            // free / 2-segment-Path calls key on the bare / dotted callee. The
+            // receiver resolves recursively, so deeper chains (`a.m().n`,
+            // `obj.f.m()`) also work. Plain-struct sibling of
+            // `shared_type_for_call_like`.
+            ExprKind::MethodCall { object, method, .. } => {
+                let recv_ty = self.type_name_of_expr(object)?;
+                let fn_name = format!("{recv_ty}.{method}");
+                self.fn_return_type_names.get(&fn_name).cloned()
+            }
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Identifier(n) => self.fn_return_type_names.get(n.as_str()).cloned(),
+                ExprKind::Path { segments, .. } if segments.len() == 2 => self
+                    .fn_return_type_names
+                    .get(&format!("{}.{}", segments[0], segments[1]))
+                    .cloned(),
+                _ => None,
+            },
             _ => None,
         }
     }
