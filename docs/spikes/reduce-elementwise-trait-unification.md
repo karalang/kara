@@ -319,12 +319,37 @@ B-2026-07-02-10..13, see the ledger.
     `self`/non-identifier receiver passes a copy (read-only self is correct —
     the Reduce case). The
     *real* stdlib `Reduce` fold-based defaults remain additionally gated on
-    operator-on-bounded-`T` (`a + x` where `T: Add` warns under run,
-    hard-errors under build) and the `f().field` miscompile (B-2026-07-03-16).
+    operator-on-bounded-`T` (closed by S6b-4a below) and the `f().field`
+    miscompile (B-2026-07-03-16, fixed on main by `839beaea` as a dup of
+    B-2026-07-03-3).
+  - **S6b-4a** ✅ **(landed 2026-07-03)** — operator-on-bounded-`T`
+    (B-2026-07-03-17). `a OP b` on a type parameter bounded by the stdlib
+    operator trait for that operator (`+`→`Add`, `-`→`Sub`, `*`→`Mul`,
+    `/`→`Div`, `%`→`Rem`, unary `-`→`Neg`) is now admitted with result type
+    `T`, mirroring the existing `T: Numeric` arm (`infer_binary` /
+    `check_unary` in `src/typechecker/expr_ops.rs`). Before the fix it
+    hard-errored under `karac build` ("arithmetic operator requires numeric
+    type, found 'T'") and only warned-then-ran under `karac run` — the
+    run/build divergence blocking the fold defaults. Pure **typecheck
+    admission**: user operator-trait impls are forbidden (resolver:
+    stdlib-only), so every instantiation of such a `T` is a primitive numeric
+    / `String` (`Add`) / distinct-numeric that codegen already lowers
+    post-monomorphization (verified: the `T: Numeric` arm already built+ran).
+    Two spellings handled — the operand is `Type::TypeParam` when a param
+    (free-fn bound) but a bare `Type::Named { "T" }` when a `-> T` method
+    result or `let x: T` local inside a **generic-trait default body** (the
+    Named-vs-TypeParam trap); `type_param_has_trait_bound` consults
+    `enclosing_bounds` (the authoritative in-scope type-param set) to accept
+    both. The wrong-trait (`-` under `T: Add`) and unbounded-`T` cases stay
+    rejected. Tests: typechecker `operator_on_operator_trait_bounded_type_
+    param` + `operator_on_wrong_or_missing_trait_bound_rejected`, codegen e2e
+    `e2e_operator_on_operator_trait_bounded_type_param` (i64/f64 distinct
+    monos, `String` concat, unary `Neg`, generic-trait default `+`/`*`).
   - **S6b-4** (open) — the user `impl Reduce[T] for MyType` end-to-end:
     wire the baked stdlib `Reduce` fold-based defaults (needs the stdlib
     trait's defaults reachable by the splice pass — today only user-declared
-    traits are) once S6b-3's blockers land.
+    traits are). S6b-3's blockers (generic-method mono, `f().field`) and
+    S6b-4a (operator-on-bounded-`T`) are now all landed.
 - **S6c** — `ElementwiseMap` / `ElementwiseOrd` builtin method surfaces +
   user impls; blanket `Vec[T]` impls; user trait-impl methods over builtin
   containers (probed: interp "type 'unknown'", codegen loud fall-through).

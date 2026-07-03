@@ -1255,19 +1255,60 @@ impl<'a> super::TypeChecker<'a> {
         false
     }
 
+    /// True iff `ty` is a generic type parameter whose bounds (in the enclosing
+    /// scope) name `trait_name` by its last path segment.
+    ///
+    /// An in-scope type parameter surfaces as `Type::TypeParam` when lowered in
+    /// the param context, but as a bare `Type::Named { name, args: [] }` when it
+    /// slips through a different lowering path — e.g. a `let x: T` annotation or
+    /// a trait method's `-> T` return checked inside a default body (the
+    /// Named-vs-TypeParam trap; cf. `Self` lowering). `enclosing_bounds` doubles
+    /// as the authoritative in-scope type-param set (`collect_param_bounds`
+    /// pre-populates every param name), so a `Named` whose name is a key there
+    /// IS that parameter — accept both spellings.
+    pub(super) fn type_param_has_trait_bound(&self, ty: &Type, trait_name: &str) -> bool {
+        let name = match ty {
+            Type::TypeParam(name) => name,
+            Type::Named { name, args }
+                if args.is_empty() && self.enclosing_bounds.contains_key(name) =>
+            {
+                name
+            }
+            _ => return false,
+        };
+        self.enclosing_bounds.get(name).is_some_and(|bounds| {
+            bounds
+                .iter()
+                .any(|b| b.path.last().is_some_and(|t| t == trait_name))
+        })
+    }
+
     /// True iff `ty` is a generic type parameter carrying a `Numeric` bound in
     /// the enclosing scope. Lets the operator checks treat `a + b` / `-a` on a
     /// `T: Numeric` parameter as valid numeric arithmetic — the bound
     /// guarantees `T` instantiates to a primitive numeric type.
     pub(super) fn type_param_has_numeric_bound(&self, ty: &Type) -> bool {
-        let Type::TypeParam(name) = ty else {
-            return false;
-        };
-        self.enclosing_bounds.get(name).is_some_and(|bounds| {
-            bounds
-                .iter()
-                .any(|b| b.path.last().is_some_and(|t| t == "Numeric"))
-        })
+        self.type_param_has_trait_bound(ty, "Numeric")
+    }
+
+    /// The stdlib operator trait a binary arithmetic op dispatches through
+    /// (`+`→`Add`, `-`→`Sub`, `*`→`Mul`, `/`→`Div`, `%`→`Rem`), if any. Used to
+    /// admit `a OP b` on a type parameter carrying that operator-trait bound
+    /// (`fn f[T: Add](a: T, b: T) -> T { a + b }`): user operator-trait impls
+    /// are forbidden (resolver: "operator traits are stdlib-only"), so every
+    /// concrete instantiation of such a `T` is a primitive numeric / `String`
+    /// (for `Add`) / distinct-numeric — all of which codegen already lowers for
+    /// this operator once the generic body is monomorphized. Result type is
+    /// `T`, mirroring the `Numeric`-bound arm.
+    pub(super) fn arithmetic_operator_trait(op: &BinOp) -> Option<&'static str> {
+        match op {
+            BinOp::Add => Some("Add"),
+            BinOp::Sub => Some("Sub"),
+            BinOp::Mul => Some("Mul"),
+            BinOp::Div => Some("Div"),
+            BinOp::Mod => Some("Rem"),
+            _ => None,
+        }
     }
 
     pub(super) fn infer_binary(
@@ -1493,6 +1534,30 @@ impl<'a> super::TypeChecker<'a> {
                         );
                     }
                     left_ty
+                } else if Self::arithmetic_operator_trait(op)
+                    .is_some_and(|tr| self.type_param_has_trait_bound(&left_ty, tr))
+                {
+                    // Arithmetic on a `T: Add`/`Sub`/`Mul`/`Div`/`Rem` generic
+                    // parameter — the bound names the stdlib operator trait for
+                    // THIS operator. User operator-trait impls are forbidden, so
+                    // every instantiation is a primitive numeric / `String` /
+                    // distinct-numeric that codegen lowers post-monomorphization
+                    // (verified: `T: Numeric` arithmetic already builds+runs).
+                    // Result is `T`; both operands must be the same parameter.
+                    if left_ty != right_ty {
+                        self.type_error(
+                            format!(
+                                "arithmetic on a '{}'-bounded type parameter requires both \
+                                 operands to have the same type, found '{}' and '{}'",
+                                Self::arithmetic_operator_trait(op).unwrap_or(""),
+                                type_display(&left_ty),
+                                type_display(&right_ty)
+                            ),
+                            right.span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    }
+                    left_ty
                 } else {
                     self.type_error(
                         format!(
@@ -1689,6 +1754,7 @@ impl<'a> super::TypeChecker<'a> {
                 if !is_numeric(&ty)
                     && !self.distinct_type_has_arithmetic(&ty)
                     && !self.type_param_has_numeric_bound(&ty)
+                    && !self.type_param_has_trait_bound(&ty, "Neg")
                 {
                     self.type_error(
                         format!(

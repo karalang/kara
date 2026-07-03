@@ -3706,6 +3706,67 @@ fn main() {
         }
     }
 
+    /// S6b-4a (B-2026-07-03-17): an arithmetic operator on a type parameter
+    /// bounded by that operator's stdlib trait (`+`→Add, `-`→Sub, `*`→Mul,
+    /// `/`→Div, `%`→Rem, unary `-`→Neg) monomorphizes and runs. Before the fix
+    /// the typechecker hard-errored under `build` ("arithmetic operator
+    /// requires numeric type, found 'T'"), so codegen never ran — the run/build
+    /// divergence that blocked the stdlib `Reduce` fold-based defaults. Since
+    /// user operator-trait impls are forbidden (stdlib-only), each concrete
+    /// instantiation is a primitive numeric / String (Add) that codegen already
+    /// lowers post-mono; the fix is a pure typecheck admission (verified the
+    /// existing `T: Numeric` arm already built+ran). Covers a FREE FUNCTION
+    /// bound (i64 + f64 distinct monos, String concat via `Add`, unary `Neg`)
+    /// and a GENERIC-TRAIT default body using `+`/`*` on `-> T` method results /
+    /// a `let x: T` local — the `Named { "T" }`-spelled operand path.
+    #[test]
+    fn e2e_operator_on_operator_trait_bounded_type_param() {
+        if let Some(out) = run_program(
+            "fn add_gen[T: Add](a: T, b: T) -> T { a + b }\n\
+             fn neg_gen[T: Neg](a: T) -> T { -a }\n\
+             trait Foldy[T: Add + Mul] {\n\
+             \x20   fn a(ref self) -> T;\n\
+             \x20   fn b(ref self) -> T;\n\
+             \x20   fn sum2(ref self) -> T { self.a() + self.b() }\n\
+             \x20   fn prod2(ref self) -> T {\n\
+             \x20       let x: T = self.a();\n\
+             \x20       x * self.b()\n\
+             \x20   }\n\
+             }\n\
+             struct IPair { x: i64, y: i64 }\n\
+             impl Foldy[i64] for IPair {\n\
+             \x20   fn a(ref self) -> i64 { self.x }\n\
+             \x20   fn b(ref self) -> i64 { self.y }\n\
+             }\n\
+             struct FPair { x: f64, y: f64 }\n\
+             impl Foldy[f64] for FPair {\n\
+             \x20   fn a(ref self) -> f64 { self.x }\n\
+             \x20   fn b(ref self) -> f64 { self.y }\n\
+             }\n\
+             fn main() {\n\
+             \x20   println(f\"{add_gen(10, 20)}\");\n\
+             \x20   println(f\"{add_gen(1.5, 2.0)}\");\n\
+             \x20   println(f\"{neg_gen(5)}\");\n\
+             \x20   let s = add_gen(\"op_bound_prefix_aaaa\", \"_op_bound_suffix_bbbb\");\n\
+             \x20   println(f\"{s}\");\n\
+             \x20   let p = IPair { x: 6, y: 7 };\n\
+             \x20   println(f\"{p.sum2()}\");\n\
+             \x20   println(f\"{p.prod2()}\");\n\
+             \x20   let q = FPair { x: 1.5, y: 4.0 };\n\
+             \x20   println(f\"{q.sum2()}\");\n\
+             \x20   println(f\"{q.prod2()}\");\n\
+             }",
+        ) {
+            // add_gen$i64=30, add_gen$f64=3.5, neg_gen$i64=-5, add_gen$String
+            // concat, IPair sum2=6+7=13 / prod2=6*7=42, FPair sum2=1.5+4=5.5 /
+            // prod2=1.5*4=6.
+            assert_eq!(
+                out,
+                "30\n3.5\n-5\nop_bound_prefix_aaaa_op_bound_suffix_bbbb\n13\n42\n5.5\n6\n"
+            );
+        }
+    }
+
     /// Regression: `TaskHandle[T].join()` for a NON-scalar `T` (`Vec[i64]`)
     /// returns the spawned task's heap value intact. `recover_task_handle_
     /// join_return_ty` used to return `i64` unconditionally, so a `Vec`/

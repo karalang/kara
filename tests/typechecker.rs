@@ -17794,6 +17794,82 @@ fn generic_trait_default_method_inherited_with_subst() {
 }
 
 #[test]
+fn operator_on_operator_trait_bounded_type_param_admitted() {
+    // S6b-4a (B-2026-07-03-17): `a OP b` on a type parameter bounded by the
+    // operator trait for OP (`+`→Add, `-`→Sub, `*`→Mul, `/`→Div, `%`→Rem, and
+    // unary `-`→Neg) is admitted with result type `T`, mirroring the existing
+    // `T: Numeric` arm. Before the fix this hard-errored under `karac build`
+    // ("arithmetic operator requires numeric type, found 'T'") and only warned
+    // (then ran) under `karac run` — the run/build divergence that blocked the
+    // stdlib `Reduce` fold-based defaults. User operator-trait impls are
+    // forbidden (resolver: stdlib-only), so every instantiation is a primitive
+    // numeric / String (Add) / distinct-numeric that codegen already lowers
+    // post-monomorphization. Covers:
+    //   - the bound on a FREE FUNCTION (operand is a `T` param → TypeParam),
+    //   - the bound on the enclosing GENERIC TRAIT, used inside a default body
+    //     where the operand is a `-> T` method result / `let x: T` local that
+    //     lowers to the bare `Named { "T" }` spelling (the Named-vs-TypeParam
+    //     trap the fix handles by consulting `enclosing_bounds`),
+    //   - two operator traits at once (`Add + Mul`) and unary `Neg`.
+    typecheck_desugared_ok(
+        "fn add_gen[T: Add](a: T, b: T) -> T { a + b }\n\
+         fn neg_gen[T: Neg](a: T) -> T { -a }\n\
+         trait Foldy[T: Add + Mul] {\n\
+         \x20   fn a(ref self) -> T;\n\
+         \x20   fn b(ref self) -> T;\n\
+         \x20   fn sum2(ref self) -> T { self.a() + self.b() }\n\
+         \x20   fn prod2(ref self) -> T {\n\
+         \x20       let x: T = self.a();\n\
+         \x20       x * self.b()\n\
+         \x20   }\n\
+         }\n\
+         struct IPair { x: i64, y: i64 }\n\
+         impl Foldy[i64] for IPair {\n\
+         \x20   fn a(ref self) -> i64 { self.x }\n\
+         \x20   fn b(ref self) -> i64 { self.y }\n\
+         }\n\
+         fn main() {\n\
+         \x20   let _ = add_gen(10, 20);\n\
+         \x20   let _ = neg_gen(5);\n\
+         \x20   let p = IPair { x: 6, y: 7 };\n\
+         \x20   let _ = p.sum2() + p.prod2();\n\
+         }",
+    );
+}
+
+#[test]
+fn operator_on_wrong_or_missing_trait_bound_rejected() {
+    // The dual of the admission test: the bound must name the operator trait
+    // for THAT operator, and an UNBOUNDED `T` stays rejected. `fn bad[T:
+    // Add](a: T, b: T) { a - b }` uses `-` (needs `Sub`, has only `Add`) and a
+    // trait default `self.v() - self.v()` on an unbounded `Foldy[T]` param —
+    // both must error, so a broad "any bound admits any arithmetic" shortcut
+    // can't sneak in.
+    let errs = typecheck_desugared_errors(
+        "fn bad[T: Add](a: T, b: T) -> T { a - b }\n\
+         trait Foldy[T] {\n\
+         \x20   fn v(ref self) -> T;\n\
+         \x20   fn diff(ref self) -> T { self.v() - self.v() }\n\
+         }\n\
+         fn main() {}",
+    );
+    assert!(
+        errs.iter()
+            .filter(|e| e
+                .message
+                .contains("arithmetic operator requires numeric type"))
+            .count()
+            >= 2,
+        "expected both the wrong-trait (`-` under `T: Add`) and unbounded-`T` \
+         arithmetic to be rejected, got: {}",
+        errs.iter()
+            .map(|e| e.message.clone())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
 fn method_self_return_type_resolves_to_impl_target() {
     // A method declared `-> Self` returns a value of the concrete impl
     // target (`W`), so the body's tail expression must check against the
