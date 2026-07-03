@@ -1157,10 +1157,20 @@ impl<'ctx> super::Codegen<'ctx> {
                         .and_then(|e| self.infer_expr_llvm_type(e, locals))
                 }),
 
-            // Anything else (method calls, field access, index, match,
-            // closures, struct literals, etc.): conservatively
-            // un-inferrable here. The slot is dropped; the pre-existing
-            // "un-inferrable RHS → branch-local" contract applies.
+            // `match s { ... }` as an expression: all arms unify to the
+            // same type, so infer from the first arm whose body is
+            // inferrable. Arm bodies that reference pattern-introduced
+            // bindings are conservatively skipped (their names aren't in
+            // `locals`); a later arm with a literal/arithmetic body still
+            // pins the slot type.
+            ExprKind::Match { arms, .. } => arms
+                .iter()
+                .find_map(|arm| self.infer_expr_llvm_type(&arm.body, locals)),
+
+            // Anything else (method calls, field access, index, closures,
+            // struct literals, etc.): conservatively un-inferrable here.
+            // The slot is dropped; the pre-existing "un-inferrable RHS →
+            // branch-local" contract applies.
             _ => None,
         }
     }

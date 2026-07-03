@@ -5734,6 +5734,29 @@ fn main() {
         }
     }
 
+    /// Variant: a branch's `let` RHS is a `match` expression. The
+    /// slot type is inferred from a match arm's body. Expected
+    /// (match 2 => 20) + (2+5) = 27.
+    #[test]
+    fn test_e2e_par_join_branch_rhs_match_expr() {
+        let out = run_program(
+            r#"
+fn main() {
+    let base = 2;
+    let total = par {
+        let x = match base { 1 => 10, 2 => 20, _ => 30 };
+        let y = base + 5;
+        x + y
+    };
+    println(total);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "27", "got {out:?}");
+        }
+    }
+
     /// Guard: the PLAIN shape (tuple join of bare-call branches) that
     /// already worked must keep working after the branch-shape coverage
     /// widened. Expected 33.
