@@ -46817,6 +46817,47 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_generic_struct_field_monomorphizes_by_element() {
+        // B-2026-07-03-23: a generic struct with an inline type-param field
+        // (`Box[T] { v: T }`) is now laid out / accessed per its concrete
+        // instantiation. Before the fix `let b = Box { v: 2.5 }` typed as the
+        // bare `Box` (args discarded) and codegen defaulted the field to i64,
+        // so `b.v` read 2.5's f64 bits as an integer (silent garbage under
+        // `build`, correct under `run`). Fixed in three layers: the typechecker
+        // infers the literal's args (`Box[f64]`) and substitutes them into field
+        // access, and codegen builds a per-instantiation LLVM struct type
+        // (`Box[f64]` -> `{double}`) at construction / field access / store / the
+        // function ABI. Covers f64 + i64 + String elements, a field STORE, a
+        // two-field struct's arithmetic, and passing `Box[f64]` across a function
+        // boundary. (A METHOD reading a generic-struct-instance's non-i64 field
+        // is a separate layer — B-2026-07-03-24.)
+        let src = r#"
+struct Box[T] { v: T }
+struct Pair[T] { a: T, b: T }
+fn getv(b: ref Box[f64]) -> f64 { b.v }
+fn main() {
+    let bf = Box { v: 2.5 };
+    println(f"{bf.v}");
+    let bi = Box { v: 42 };
+    println(f"{bi.v}");
+    let bs = Box { v: "gen_struct_string_payload_abcdef" };
+    println(f"{bs.v}");
+    let mut m = Box { v: 1.0 };
+    m.v = 9.5;
+    println(f"{m.v}");
+    let p = Pair { a: 1.5, b: 4.0 };
+    println(f"{p.a - p.b}");
+    println(f"{getv(bf)}");
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        assert_eq!(
+            out,
+            "2.5\n42\ngen_struct_string_payload_abcdef\n9.5\n-2.5\n2.5\n"
+        );
+    }
+
+    #[test]
     fn test_e2e_vec_elem_generic_mono_distinct_per_element_type() {
         // B-2026-07-02-41 (S6b-1): two element-type instantiations of a
         // `ref Vec[T]` generic fn must be DISTINCT monomorphs. The
