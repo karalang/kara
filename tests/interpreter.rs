@@ -18779,3 +18779,172 @@ fn struct_method_named_like_seq_builtin_dispatches_to_impl() {
     );
     assert_eq!(out, "7\n8\n70\n8\n");
 }
+
+// ── offset_of[T](field.path) — interpreter parity with codegen ──
+//
+// The tree-walk interpreter had no `ExprKind::OffsetOf` arm at all
+// (`karac run` panicked "unhandled expr" on any offset_of while
+// `karac build` printed the offset). These mirror
+// tests/codegen.rs::test_e2e_offset_of_* so run/build stay A/B-equal
+// on the layout model (natural alignment, LLVM lowering shapes).
+
+#[test]
+fn offset_of_first_field_is_0() {
+    let out = run_no_errors(
+        "struct Point { x: i64, y: i64 }\n\
+         fn main() { println(offset_of[Point](x)); }",
+    );
+    assert_eq!(out, "0\n");
+}
+
+#[test]
+fn offset_of_second_field() {
+    // `y` follows `x: i64` → offset 8.
+    let out = run_no_errors(
+        "struct Point { x: i64, y: i64 }\n\
+         fn main() { println(offset_of[Point](y)); }",
+    );
+    assert_eq!(out, "8\n");
+}
+
+#[test]
+fn offset_of_nested_path() {
+    // offset(inner in Outer) + offset(y in Inner) = 4 + 4 = 8.
+    let out = run_no_errors(
+        "struct Inner { x: i32, y: i32 }\n\
+         struct Outer { a: i32, inner: Inner, c: i32 }\n\
+         fn main() { println(offset_of[Outer](inner.y)); }",
+    );
+    assert_eq!(out, "8\n");
+}
+
+#[test]
+fn offset_of_mixed_alignment_padding() {
+    // {bool, i32, i8, i64, i16} → 0, 4, 8, 16, 24 under natural
+    // alignment (verified byte-identical against karac build).
+    let out = run_no_errors(
+        "struct Mixed { a: bool, b: i32, c: i8, d: i64, e: i16 }\n\
+         fn main() {\n\
+         \x20   println(offset_of[Mixed](a));\n\
+         \x20   println(offset_of[Mixed](b));\n\
+         \x20   println(offset_of[Mixed](c));\n\
+         \x20   println(offset_of[Mixed](d));\n\
+         \x20   println(offset_of[Mixed](e));\n\
+         }",
+    );
+    assert_eq!(out, "0\n4\n8\n16\n24\n");
+}
+
+#[test]
+fn offset_of_heap_fields_use_abi_shapes() {
+    // String/Vec are 24-byte {ptr,len,cap} aggregates in the compiled
+    // ABI; the interpreter's layout model must agree even though its
+    // runtime values are boxed differently. tag:i8 pads to 8, name
+    // spans 8..32, items 32..56, tail lands at 56 (build-verified).
+    let out = run_no_errors(
+        "struct Heapy { tag: i8, name: String, items: Vec[i64], tail: bool }\n\
+         fn main() {\n\
+         \x20   println(offset_of[Heapy](name));\n\
+         \x20   println(offset_of[Heapy](items));\n\
+         \x20   println(offset_of[Heapy](tail));\n\
+         }",
+    );
+    assert_eq!(out, "8\n32\n56\n");
+}
+
+#[test]
+fn offset_of_enum_field_tagged_word_layout() {
+    // Shape = {i64 tag, i64 × 3 payload words} (Label(String) is the
+    // widest variant at 3 words) = 32 bytes, 8-aligned → sh at 8,
+    // post at 40 (build-verified).
+    let out = run_no_errors(
+        "enum Shape { Dot, Line(i64, i64), Label(String) }\n\
+         struct HasEnum { pre: i8, sh: Shape, post: i32 }\n\
+         fn main() {\n\
+         \x20   println(offset_of[HasEnum](sh));\n\
+         \x20   println(offset_of[HasEnum](post));\n\
+         }",
+    );
+    assert_eq!(out, "8\n40\n");
+}
+
+#[test]
+fn offset_of_three_level_nested_path() {
+    // Outer is all-i32 → align 4, size 16; `o` lands at 4 (past
+    // pad:i8), inner at o+4, x at +0 → 8. `z` follows o's end (20)
+    // aligned up to 8 → 24. Both build-verified.
+    let out = run_no_errors(
+        "struct Inner { x: i32, y: i32 }\n\
+         struct Outer { a: i32, inner: Inner, c: i32 }\n\
+         struct Nest2 { pad: i8, o: Outer, z: i64 }\n\
+         fn main() {\n\
+         \x20   println(offset_of[Nest2](o.inner.x));\n\
+         \x20   println(offset_of[Nest2](z));\n\
+         }",
+    );
+    assert_eq!(out, "8\n24\n");
+}
+
+// ── size_of[T]() / align_of[T]() — interpreter parity with codegen ──
+//
+// Same gap family as offset_of above: the interpreter had no intercept
+// for the layout-query call shapes, so `karac run` panicked ("variable
+// 'size_of' not found") on programs `karac build` compiled fine. All
+// expected values below are build-verified (alloc size / ABI align of
+// the lowered LLVM type).
+
+#[test]
+fn size_of_and_align_of_struct() {
+    let out = run_no_errors(
+        "struct Point { x: i64, y: i64 }\n\
+         fn main() { println(size_of[Point]()); println(align_of[Point]()); }",
+    );
+    assert_eq!(out, "16\n8\n");
+}
+
+#[test]
+fn size_of_padded_struct_and_primitives() {
+    // Mixed pads to 32 (see offset_of_mixed_alignment_padding); i32 is
+    // 4/4; bool is the 1-byte i1 slot; char is a 4-byte scalar; String
+    // is the 24-byte {ptr,len,cap} ABI aggregate.
+    let out = run_no_errors(
+        "struct Mixed { a: bool, b: i32, c: i8, d: i64, e: i16 }\n\
+         fn main() {\n\
+         \x20   println(size_of[Mixed]());\n\
+         \x20   println(align_of[Mixed]());\n\
+         \x20   println(size_of[i32]());\n\
+         \x20   println(align_of[i32]());\n\
+         \x20   println(size_of[bool]());\n\
+         \x20   println(size_of[char]());\n\
+         \x20   println(size_of[String]());\n\
+         }",
+    );
+    assert_eq!(out, "32\n8\n4\n4\n1\n4\n24\n");
+}
+
+#[test]
+fn size_of_enum_tagged_word_layout() {
+    // Shape = {i64 tag, 3 × i64 payload} = 32 bytes (Label(String) is
+    // the widest variant), 8-aligned.
+    let out = run_no_errors(
+        "enum Shape { Dot, Line(i64, i64), Label(String) }\n\
+         fn main() { println(size_of[Shape]()); println(align_of[Shape]()); }",
+    );
+    assert_eq!(out, "32\n8\n");
+}
+
+#[test]
+fn size_of_unsupported_type_arg_shape_is_runtime_error_not_panic() {
+    // `size_of[Vec[i64]]()` is rejected at typecheck
+    // (E_LAYOUT_QUERY_TYPE_ARG_REQUIRED — the nested-generic bracket
+    // operand parses as indexing, not a type). `karac run` tolerates
+    // typecheck errors, so evaluation must degrade to a runtime error
+    // rather than fall through to variable lookup and panic.
+    let errors = runtime_errors("fn main() { println(size_of[Vec[i64]]()); }");
+    assert_eq!(errors.len(), 1);
+    assert!(
+        errors[0].message.contains("size_of requires a plain type argument"),
+        "unexpected message: {}",
+        errors[0].message
+    );
+}

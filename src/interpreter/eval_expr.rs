@@ -1347,10 +1347,9 @@ impl<'a> super::Interpreter<'a> {
 
             ExprKind::SelfType | ExprKind::PipePlaceholder | ExprKind::Error => Value::Unit,
 
-            _ => todo!(
-                "Interpreter: unhandled expr {:?}",
-                std::mem::discriminant(&expr.kind)
-            ),
+            ExprKind::OffsetOf { ty, field_path } => {
+                self.eval_offset_of(ty, field_path, &expr.span)
+            }
         }
     }
 }

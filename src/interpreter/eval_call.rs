@@ -79,6 +79,29 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // Layout-query intrinsics `size_of[T]()` / `align_of[T]()`
+        // (design.md § Field Offsets family). Intercepted before normal
+        // dispatch — like codegen's `compile_call` twin — so the `{ 0 }`
+        // placeholder body in `runtime/stdlib/intrinsics.kara` is never
+        // consulted and the `Call(Index(Ident, T))` parse shape doesn't
+        // fall through to variable lookup (which panicked "variable
+        // 'size_of' not found"). `offset_of` is a parser special form
+        // (`ExprKind::OffsetOf`), handled in `eval_expr` instead.
+        if args.is_empty() {
+            if let Some((name, ty)) = Self::match_layout_query(callee) {
+                let Some(ty) = ty else {
+                    return self.record_runtime_error(
+                        format!(
+                            "{name} requires a plain type argument — call shape \
+                             is `{name}[T]()`"
+                        ),
+                        span,
+                    );
+                };
+                return self.eval_layout_query(&name, &ty, span);
+            }
+        }
+
         // `with_provider[R](provider, closure)` — surface for scoped provider
         // injection (design.md § Provider-Rooted Resources). Parses today as
         // `Call(Index(Ident("with_provider"), <R>), [provider, closure])`

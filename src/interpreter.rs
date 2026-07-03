@@ -15,6 +15,7 @@ mod eval_stmt;
 mod exec;
 mod helpers;
 mod iter_eval;
+mod layout_query;
 mod method_call;
 mod method_call_arena;
 mod method_call_bounded_channel;
