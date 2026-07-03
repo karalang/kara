@@ -46795,6 +46795,29 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_builtin_column_tensor_range() {
+        // The BAKED `Reduce[T]::range` DEFAULT method (`max - min`) on the
+        // BUILTIN implementors `Column[T]` / `Tensor[T, S]`. These don't inherit
+        // it via the user-impl splice (their reductions dispatch through the
+        // dedicated value-shape intercepts), so a `range` arm was added at each
+        // Column/Tensor reduce dispatch site (interp + codegen). Covers i64
+        // (integer sub) and f64 (fsub) for both containers; `run` and `build`
+        // (and default auto-par) must agree, matching `min`/`max`.
+        let src = r#"
+fn main() {
+    let ci: Column[i64] = Column.from_vec([3, 9, 1, 7]);
+    let cf: Column[f64] = Column.from_vec([1.5, 9.0, 4.0]);
+    let ti: Tensor[i64, [4]] = Tensor.from([2, 4, 6, 8]);
+    let tf: Tensor[f64, [3]] = Tensor.from([1.5, 9.0, 4.0]);
+    println(f"{ci.range()} {ti.range()}");
+    println(f"{cf.range()} {tf.range()}");
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        assert_eq!(out, "8 6\n7.5 7.5\n");
+    }
+
+    #[test]
     fn test_e2e_stdlib_reduce_default_method_inherited_by_user_impl() {
         // S6b-4 (B-2026-07-03-19): a user `impl Reduce[T] for MyType` inherits
         // the BAKED stdlib trait's DEFAULT method `range` (`max - min`) without

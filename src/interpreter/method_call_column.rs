@@ -294,6 +294,21 @@ impl<'a> super::Interpreter<'a> {
             "sum" | "mean" | "min" | "max" | "var" | "std" | "median" | "quantile" => {
                 Some(self.eval_column_reduce(method, data, valid, args, span))
             }
+            // `Reduce[T]::range` default (`max - min`) — the trait method the
+            // builtin `Column[T]` implementor doesn't get via the impl-splice, so
+            // route it through the same `eval_column_reduce` min/max path (which
+            // traps on an empty/all-null column just like `min`/`max`).
+            "range" => {
+                let mx = self.eval_column_reduce("max", data, valid, args, span);
+                if self.pending_cf.is_some() {
+                    return Some(Value::Unit);
+                }
+                let mn = self.eval_column_reduce("min", data, valid, args, span);
+                if self.pending_cf.is_some() {
+                    return Some(Value::Unit);
+                }
+                Some(self.eval_binary(&BinOp::Sub, mx, mn, span))
+            }
             "corr" => Some(self.eval_column_corr(data, valid, args, span)),
             _ => None,
         }

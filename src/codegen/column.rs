@@ -1223,6 +1223,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 | "mean"
                 | "min"
                 | "max"
+                | "range"
                 | "var"
                 | "std"
                 | "corr"
@@ -1336,6 +1337,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 info.elem_unsigned,
                 false,
             )?)),
+            // `Reduce[T]::range` default (`max - min`) — the builtin `Column`
+            // implementor doesn't inherit it via the impl-splice, so emit the
+            // same min/max reductions (each traps on an empty/all-null column,
+            // matching `min`/`max`) and subtract on the element type.
+            "range" => {
+                let mx =
+                    self.compile_column_minmax(control, info.elem, info.elem_unsigned, false)?;
+                let mn =
+                    self.compile_column_minmax(control, info.elem, info.elem_unsigned, true)?;
+                Ok(Some(self.compile_binop_typed(
+                    &BinOp::Sub,
+                    mx,
+                    mn,
+                    info.elem_unsigned,
+                )?))
+            }
             "mean" => Ok(Some(self.compile_column_mean(
                 control,
                 info.elem,

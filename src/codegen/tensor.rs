@@ -2743,7 +2743,7 @@ impl<'ctx> super::Codegen<'ctx> {
         args: &[CallArg],
         _call_span: &Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-        let is_full = matches!(method, "sum" | "mean" | "prod" | "min" | "max");
+        let is_full = matches!(method, "sum" | "mean" | "prod" | "min" | "max" | "range");
         let is_axis = matches!(method, "sum_axis" | "mean_axis");
         if !is_full && !is_axis {
             return Ok(None);
@@ -2821,8 +2821,8 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             return self.emit_reduce_fold(&access, op, seed);
         }
-        // `min` / `max` — the empty tensor already trapped above, so the
-        // shared seed-from-element-0 compare-select loop is safe.
+        // `min` / `max` / `range` — the empty tensor already trapped above, so
+        // the shared seed-from-element-0 compare-select loop is safe.
         let access = ContainerAccess {
             data,
             len: count,
@@ -2830,6 +2830,15 @@ impl<'ctx> super::Codegen<'ctx> {
             unsigned: is_unsigned,
             bitmap: None,
         };
+        // `Reduce[T]::range` default (`max - min`) — the builtin `Tensor`
+        // implementor doesn't inherit it via the impl-splice, so emit both
+        // min/max reductions off the same access and subtract on the element
+        // type (int-checked / fsub via `compile_binop_typed`).
+        if method == "range" {
+            let mx = self.emit_reduce_minmax(&access, true)?;
+            let mn = self.emit_reduce_minmax(&access, false)?;
+            return self.compile_binop_typed(&BinOp::Sub, mx, mn, is_unsigned);
+        }
         self.emit_reduce_minmax(&access, method == "max")
     }
 

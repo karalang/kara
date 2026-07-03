@@ -347,7 +347,7 @@ impl<'a> super::Interpreter<'a> {
             "permute" => Some(self.eval_tensor_permute(dims, data, args, span)),
             "slice" => Some(self.eval_tensor_slice(dims, data, args, span)),
             "squeeze" => Some(self.eval_tensor_squeeze(dims, data, args, span)),
-            "sum" | "mean" | "prod" | "min" | "max" => {
+            "sum" | "mean" | "prod" | "min" | "max" | "range" => {
                 Some(self.eval_tensor_reduce(method, data, span))
             }
             "sum_axis" | "mean_axis" => {
@@ -504,6 +504,15 @@ impl<'a> super::Interpreter<'a> {
             "prod" => self.tensor_fold_reduce(&BinOp::Mul, elems, span),
             "min" => minmax_value_reduce(true, elems),
             "max" => minmax_value_reduce(false, elems),
+            // `Reduce[T]::range` default (`max - min`) — the builtin `Tensor`
+            // implementor doesn't inherit it via the impl-splice, so compute it
+            // from the same min/max reduction path (the empty-tensor guard above
+            // already traps, matching `min`/`max`).
+            "range" => {
+                let mx = minmax_value_reduce(false, elems.clone());
+                let mn = minmax_value_reduce(true, elems);
+                self.eval_binary(&BinOp::Sub, mx, mn, span)
+            }
             "mean" => {
                 let s = self.tensor_fold_reduce(&BinOp::Add, elems, span);
                 if self.pending_cf.is_some() {

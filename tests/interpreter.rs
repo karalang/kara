@@ -19066,6 +19066,28 @@ fn main() {
 }
 
 #[test]
+fn builtin_column_tensor_range_default_method() {
+    // The BAKED `Reduce[T]::range` DEFAULT (`max - min`) on the BUILTIN
+    // `Column[T]` / `Tensor[T, S]` implementors. They don't inherit it via the
+    // user-impl splice, so a dedicated `range` arm routes through the same
+    // min/max reduction path (which traps on an empty/all-null input, like
+    // `min`/`max`). Covers i64 + f64 for both containers.
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let ci: Column[i64] = Column.from_vec([3, 9, 1, 7]);
+    let cf: Column[f64] = Column.from_vec([1.5, 9.0, 4.0]);
+    let ti: Tensor[i64, [4]] = Tensor.from([2, 4, 6, 8]);
+    let tf: Tensor[f64, [3]] = Tensor.from([1.5, 9.0, 4.0]);
+    println(f"{ci.range()} {ti.range()}");
+    println(f"{cf.range()} {tf.range()}");
+}
+"#,
+    );
+    assert_eq!(out, "8 6\n7.5 7.5\n");
+}
+
+#[test]
 fn primitive_trait_impl_direct_dispatch_by_declared_width() {
     // B-2026-07-03-5: a user trait impl on a PRIMITIVE target dispatched for a
     // direct value-receiver call under `karac run`. The interpreter's runtime
