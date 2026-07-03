@@ -12,9 +12,14 @@
 //!
 //! 2. **Path-dep walking** — recursively load every reachable path-dep
 //!    `kara.toml`. Cycle detection rejects loops like `a → b → a` with
-//!    `E_DEPENDENCY_CYCLE` naming the chain. Registry and git deps stop the
-//!    walk at the leaf (the resolver will reach them via the registry-proxy
-//!    fetch surface, line 819).
+//!    `E_DEPENDENCY_CYCLE` naming the chain.
+//!
+//! 3. **Registry-dep walking** (registry fetch epic slice 3) — when a
+//!    [`RegistryProvider`] is supplied, each `DependencySpec::Registry` is
+//!    fetched + extracted to disk and recursed into like a path-dep, its
+//!    concrete resolution recorded in `registry_resolutions`. Without a
+//!    provider, registry deps stop at the leaf and the resolver reports
+//!    them as unsupported. Git deps always stop at the leaf.
 //!
 //! Output: `DepGraph { root_dir, manifests, derived_deps }` — `manifests`
 //! is the cache slice 4 (`DependencyProvider::get_dependencies`) will read
@@ -37,6 +42,48 @@ pub struct DepGraph {
     pub root_dir: PathBuf,
     pub manifests: BTreeMap<PathBuf, Manifest>,
     pub derived_deps: BTreeMap<PathBuf, BTreeMap<String, DependencySpec>>,
+    /// For every `DependencySpec::Registry` the walk actually fetched (only
+    /// when a [`RegistryProvider`] was supplied), the concrete resolution:
+    /// keyed by `(declaring manifest dir, dep name)`, valued with the
+    /// extracted source dir, the selected version, and the upstream URL.
+    /// The extracted dir is also a key into `manifests`. Empty when no
+    /// provider is configured — the resolver then reports registry deps as
+    /// unsupported, preserving the pre-fetch behavior.
+    pub registry_resolutions: BTreeMap<(PathBuf, String), RegistryResolution>,
+}
+
+/// One fetched-and-extracted registry dependency (see
+/// [`DepGraph::registry_resolutions`]).
+#[derive(Debug, Clone)]
+pub struct RegistryResolution {
+    /// Extracted source directory — where the package's `kara.toml` lives.
+    pub dir: PathBuf,
+    /// Concrete version the provider selected for the requested constraint.
+    pub version: semver::Version,
+    /// Original upstream source URL (from the catalog), for the lockfile.
+    pub upstream_url: String,
+}
+
+/// One materialized registry dependency: an extracted on-disk source tree
+/// plus the concrete version + upstream URL the fetch resolved to. Produced
+/// by a [`RegistryProvider`].
+#[derive(Debug, Clone)]
+pub struct MaterializedDep {
+    pub root_dir: PathBuf,
+    pub version: semver::Version,
+    pub upstream_url: String,
+}
+
+/// Abstracts fetching + materializing a registry dependency to disk, so the
+/// graph walk can recurse into registry deps the same way it recurses into
+/// path deps. The production impl (`registry_extract::ProxyRegistryProvider`)
+/// composes the proxy client + tarball extraction + on-disk cache; tests use
+/// an in-memory stand-in. Mirrors the [`ManifestLoader`] abstraction.
+pub trait RegistryProvider {
+    /// Fetch the highest version of `name` satisfying `req`, materialize its
+    /// source tree on disk, and return where it landed. The `Err` string is
+    /// wrapped into a [`DepGraphError::RegistryFetchFailed`] diagnostic.
+    fn fetch(&self, name: &str, req: &semver::VersionReq) -> Result<MaterializedDep, String>;
 }
 
 #[derive(Debug)]
@@ -86,6 +133,16 @@ pub enum DepGraphError {
         dep_name: String,
         source: Box<manifest::ManifestError>,
     },
+    /// Fetching / materializing a registry dependency failed (catalog or
+    /// tarball fetch, no matching version, or extraction). Maps to
+    /// `E_REGISTRY_FETCH_FAILED`. Only produced when a `RegistryProvider`
+    /// is configured; without one, registry deps surface later as
+    /// `E_REGISTRY_DEP_UNSUPPORTED` from the resolver instead.
+    RegistryFetchFailed {
+        from_dir: PathBuf,
+        dep_name: String,
+        message: String,
+    },
 }
 
 impl DepGraphError {
@@ -100,6 +157,7 @@ impl DepGraphError {
             Self::PathDepNotFound { .. } => "E_PATH_DEP_NOT_FOUND",
             Self::OfflineVendorEntryMissing { .. } => "E_OFFLINE_VENDOR_ENTRY_MISSING",
             Self::PathDepManifestInvalid { .. } => "E_PATH_DEP_MANIFEST_INVALID",
+            Self::RegistryFetchFailed { .. } => "E_REGISTRY_FETCH_FAILED",
         }
     }
 }
@@ -169,6 +227,17 @@ impl std::fmt::Display for DepGraphError {
                 dep_name,
                 source,
             ),
+            Self::RegistryFetchFailed {
+                from_dir,
+                dep_name,
+                message,
+            } => write!(
+                f,
+                "`{}/kara.toml`: could not fetch registry dependency `{}`: {}",
+                from_dir.display(),
+                dep_name,
+                message,
+            ),
         }
     }
 }
@@ -225,6 +294,7 @@ pub fn build_dep_graph_with_offline(
         DepGraphOptions {
             offline_root,
             include_dev_deps: false,
+            registry_provider: None,
         },
     )
 }
@@ -242,10 +312,15 @@ pub fn build_dep_graph_with_offline(
 ///   walked — Cargo's dev-deps-don't-propagate rule applies. Drives
 ///   the line-884 build-vs-test split: build mode passes `false`,
 ///   test mode passes `true`.
-#[derive(Debug, Clone, Copy, Default)]
+/// - `registry_provider`: when `Some`, the walk fetches + recurses into
+///   `DependencySpec::Registry` deps through it (registry fetch epic slice
+///   3). When `None`, registry deps are recorded but not walked, and the
+///   resolver reports them as unsupported — the pre-fetch behavior.
+#[derive(Clone, Copy, Default)]
 pub struct DepGraphOptions<'a> {
     pub offline_root: Option<&'a Path>,
     pub include_dev_deps: bool,
+    pub registry_provider: Option<&'a dyn RegistryProvider>,
 }
 
 /// Options-driven entry point. The two thin wrappers above
@@ -259,6 +334,7 @@ pub fn build_dep_graph_with_options(
     let root_canonical = canonicalize_or_self(root_dir);
     let mut manifests = BTreeMap::new();
     let mut derived_deps = BTreeMap::new();
+    let mut registry_resolutions = BTreeMap::new();
 
     let mut visiting_stack: Vec<PathBuf> = Vec::new();
     let mut visiting_set: HashSet<PathBuf> = HashSet::new();
@@ -273,9 +349,11 @@ pub fn build_dep_graph_with_options(
         &workspace_deps,
         options.offline_root,
         options.include_dev_deps,
+        options.registry_provider,
         true,
         &mut manifests,
         &mut derived_deps,
+        &mut registry_resolutions,
         &mut visiting_stack,
         &mut visiting_set,
         &mut visited,
@@ -285,6 +363,7 @@ pub fn build_dep_graph_with_options(
         root_dir: root_canonical,
         manifests,
         derived_deps,
+        registry_resolutions,
     })
 }
 
@@ -296,9 +375,11 @@ fn visit(
     workspace_deps: &BTreeMap<String, DependencySpec>,
     offline_root: Option<&Path>,
     include_dev_deps: bool,
+    registry_provider: Option<&dyn RegistryProvider>,
     is_root: bool,
     manifests: &mut BTreeMap<PathBuf, Manifest>,
     derived_deps: &mut BTreeMap<PathBuf, BTreeMap<String, DependencySpec>>,
+    registry_resolutions: &mut BTreeMap<(PathBuf, String), RegistryResolution>,
     visiting_stack: &mut Vec<PathBuf>,
     visiting_set: &mut HashSet<PathBuf>,
     visited: &mut HashSet<PathBuf>,
@@ -393,15 +474,84 @@ fn visit(
             workspace_deps,
             offline_root,
             include_dev_deps,
+            registry_provider,
             // Transitive children are never the root — dev-deps stop
             // propagating here even if the root opted them in.
             false,
             manifests,
             derived_deps,
+            registry_resolutions,
             visiting_stack,
             visiting_set,
             visited,
         )?;
+    }
+
+    // Recurse into each registry dep — but only when a provider is
+    // configured. Without one, registry deps stay recorded-only and the
+    // resolver reports `E_REGISTRY_DEP_UNSUPPORTED`, preserving the
+    // pre-fetch behavior. Offline mode never fetches (a registry dep must
+    // be vendored as a path-dep to build offline), so it is skipped too.
+    if let (Some(provider), None) = (registry_provider, offline_root) {
+        for (dep_name, spec) in &derived_owned {
+            let DependencySpec::Registry { version: req } = spec else {
+                continue;
+            };
+            let materialized = provider.fetch(dep_name, req).map_err(|message| {
+                DepGraphError::RegistryFetchFailed {
+                    from_dir: dir.to_path_buf(),
+                    dep_name: dep_name.clone(),
+                    message,
+                }
+            })?;
+            let canonical_target = canonicalize_or_self(&materialized.root_dir);
+            registry_resolutions.insert(
+                (dir.to_path_buf(), dep_name.clone()),
+                RegistryResolution {
+                    dir: canonical_target.clone(),
+                    version: materialized.version.clone(),
+                    upstream_url: materialized.upstream_url.clone(),
+                },
+            );
+
+            // Same cycle / dedup discipline as path-deps, keyed by the
+            // extracted source dir.
+            if visiting_set.contains(&canonical_target) {
+                let cycle_start = visiting_stack
+                    .iter()
+                    .position(|p| p == &canonical_target)
+                    .unwrap_or(0);
+                let mut chain: Vec<PathBuf> = visiting_stack[cycle_start..].to_vec();
+                chain.push(canonical_target);
+                return Err(DepGraphError::DependencyCycle { chain });
+            }
+            if visited.contains(&canonical_target) {
+                continue;
+            }
+            let child_manifest = loader.load(&canonical_target).map_err(|e| {
+                DepGraphError::PathDepManifestInvalid {
+                    from_dir: dir.to_path_buf(),
+                    dep_name: dep_name.clone(),
+                    source: Box::new(e),
+                }
+            })?;
+            visit(
+                &canonical_target,
+                child_manifest,
+                loader,
+                workspace_deps,
+                offline_root,
+                include_dev_deps,
+                registry_provider,
+                false,
+                manifests,
+                derived_deps,
+                registry_resolutions,
+                visiting_stack,
+                visiting_set,
+                visited,
+            )?;
+        }
     }
 
     visiting_set.remove(dir);
@@ -492,6 +642,7 @@ mod tests {
             DepGraphOptions {
                 offline_root: None,
                 include_dev_deps: true,
+                registry_provider: None,
             },
         )
     }
@@ -538,6 +689,134 @@ mod tests {
             path: PathBuf::from(target),
             version: None,
         }
+    }
+
+    fn v(s: &str) -> semver::Version {
+        semver::Version::parse(s).unwrap()
+    }
+
+    /// In-memory `RegistryProvider`: maps a package name to a canned
+    /// extracted dir + version + upstream URL. The dirs also key `MemLoader`.
+    struct MockRegistryProvider {
+        fetches: BTreeMap<String, (PathBuf, semver::Version, String)>,
+    }
+
+    impl RegistryProvider for MockRegistryProvider {
+        fn fetch(&self, name: &str, _req: &VersionReq) -> Result<MaterializedDep, String> {
+            self.fetches
+                .get(name)
+                .map(|(dir, ver, up)| MaterializedDep {
+                    root_dir: dir.clone(),
+                    version: ver.clone(),
+                    upstream_url: up.clone(),
+                })
+                .ok_or_else(|| format!("no such package {name}"))
+        }
+    }
+
+    #[test]
+    fn registry_dep_fetched_and_recursed_with_provider() {
+        let mut root = empty_manifest("app");
+        root.dependencies.insert("http".into(), registry("^1.0"));
+        // The fetched `http` package declares its own registry dep on `log`.
+        let mut http_mf = empty_manifest("http");
+        http_mf.dependencies.insert("log".into(), registry("^0.4"));
+        let log_mf = empty_manifest("log");
+
+        let loader = MemLoader {
+            manifests: BTreeMap::from([
+                (PathBuf::from("/reg/http"), http_mf),
+                (PathBuf::from("/reg/log"), log_mf),
+            ]),
+        };
+        let provider = MockRegistryProvider {
+            fetches: BTreeMap::from([
+                (
+                    "http".to_string(),
+                    (
+                        PathBuf::from("/reg/http"),
+                        v("1.2.0"),
+                        "https://up/http".to_string(),
+                    ),
+                ),
+                (
+                    "log".to_string(),
+                    (
+                        PathBuf::from("/reg/log"),
+                        v("0.4.1"),
+                        "https://up/log".to_string(),
+                    ),
+                ),
+            ]),
+        };
+        let graph = build_dep_graph_with_options(
+            &PathBuf::from("/app"),
+            root,
+            &loader,
+            DepGraphOptions {
+                offline_root: None,
+                include_dev_deps: false,
+                registry_provider: Some(&provider),
+            },
+        )
+        .expect("build");
+
+        // Both fetched packages — including the transitive `log` — are in the
+        // graph's manifests.
+        assert!(graph.manifests.contains_key(&PathBuf::from("/reg/http")));
+        assert!(graph.manifests.contains_key(&PathBuf::from("/reg/log")));
+
+        let http_res = graph
+            .registry_resolutions
+            .get(&(PathBuf::from("/app"), "http".to_string()))
+            .expect("http resolution");
+        assert_eq!(http_res.version, v("1.2.0"));
+        assert_eq!(http_res.upstream_url, "https://up/http");
+
+        // Transitive: `http`'s manifest dir declared `log`.
+        let log_res = graph
+            .registry_resolutions
+            .get(&(PathBuf::from("/reg/http"), "log".to_string()))
+            .expect("log resolution");
+        assert_eq!(log_res.version, v("0.4.1"));
+    }
+
+    #[test]
+    fn registry_dep_without_provider_is_recorded_not_fetched() {
+        let mut root = empty_manifest("app");
+        root.dependencies.insert("http".into(), registry("^1.0"));
+        let loader = MemLoader {
+            manifests: BTreeMap::new(),
+        };
+        let graph = build_dep_graph(&PathBuf::from("/app"), root, &loader).expect("build");
+        // The dep is recorded but never fetched — no provider was given.
+        assert!(graph.derived_deps[&PathBuf::from("/app")].contains_key("http"));
+        assert!(graph.registry_resolutions.is_empty());
+    }
+
+    #[test]
+    fn registry_fetch_failure_surfaces_diagnostic() {
+        let mut root = empty_manifest("app");
+        root.dependencies.insert("ghost".into(), registry("^1.0"));
+        let loader = MemLoader {
+            manifests: BTreeMap::new(),
+        };
+        // Provider knows nothing about `ghost`.
+        let provider = MockRegistryProvider {
+            fetches: BTreeMap::new(),
+        };
+        let err = build_dep_graph_with_options(
+            &PathBuf::from("/app"),
+            root,
+            &loader,
+            DepGraphOptions {
+                offline_root: None,
+                include_dev_deps: false,
+                registry_provider: Some(&provider),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), "E_REGISTRY_FETCH_FAILED");
     }
 
     #[test]

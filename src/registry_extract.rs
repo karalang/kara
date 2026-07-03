@@ -13,7 +13,9 @@
 //! escaping symlinks) are refused rather than written outside — the
 //! zip-slip guard a package manager must have.
 
-use std::path::Path;
+use crate::dep_graph::{MaterializedDep, RegistryProvider};
+use crate::registry_proxy::{fetch_registry_package, ProxyClient};
+use std::path::{Path, PathBuf};
 
 /// Failure extracting a fetched tarball.
 #[derive(Debug)]
@@ -63,6 +65,79 @@ pub fn extract_tarball(gz_bytes: &[u8], dest: &Path) -> Result<(), ExtractError>
         .unpack(dest)
         .map_err(|e| ExtractError::new(format!("could not extract tarball: {e}")))?;
     Ok(())
+}
+
+/// Find the directory holding `kara.toml` within a freshly-extracted
+/// tarball: either the extraction root itself, or a single top-level
+/// subdirectory (the `<name>-<version>/` wrapper some archives use).
+fn find_manifest_root(extract_dir: &Path) -> Option<PathBuf> {
+    if extract_dir.join("kara.toml").is_file() {
+        return Some(extract_dir.to_path_buf());
+    }
+    let subdirs: Vec<PathBuf> = std::fs::read_dir(extract_dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    if let [only] = subdirs.as_slice() {
+        if only.join("kara.toml").is_file() {
+            return Some(only.clone());
+        }
+    }
+    None
+}
+
+/// Production [`RegistryProvider`]: resolves a registry dep to bytes via a
+/// [`ProxyClient`] ([`fetch_registry_package`]), extracts the tarball into
+/// a cache directory, and returns the extracted source root.
+///
+/// Extraction is idempotent — if the cache dir already holds an extracted
+/// tree with a `kara.toml`, it is reused rather than re-extracted. Wrap the
+/// `ProxyClient` in a `CachingProxyClient` / `RetryingProxyClient` for
+/// tarball caching + transient-failure resilience.
+pub struct ProxyRegistryProvider<'a> {
+    client: &'a dyn ProxyClient,
+    cache_root: PathBuf,
+}
+
+impl<'a> ProxyRegistryProvider<'a> {
+    pub fn new(client: &'a dyn ProxyClient, cache_root: impl Into<PathBuf>) -> Self {
+        Self {
+            client,
+            cache_root: cache_root.into(),
+        }
+    }
+}
+
+impl RegistryProvider for ProxyRegistryProvider<'_> {
+    fn fetch(&self, name: &str, req: &semver::VersionReq) -> Result<MaterializedDep, String> {
+        let pkg = fetch_registry_package(self.client, name, req).map_err(|e| e.to_string())?;
+        // Extract under <cache_root>/<name>/<version>/src, mirroring the
+        // tarball's own layout.
+        let extract_dir = self
+            .cache_root
+            .join(name)
+            .join(pkg.version.to_string())
+            .join("src");
+        let root = match find_manifest_root(&extract_dir) {
+            Some(root) => root, // already extracted — reuse
+            None => {
+                extract_tarball(&pkg.tarball_bytes, &extract_dir).map_err(|e| e.to_string())?;
+                find_manifest_root(&extract_dir).ok_or_else(|| {
+                    format!(
+                        "extracted tarball for `{name}` {} contains no kara.toml",
+                        pkg.version
+                    )
+                })?
+            }
+        };
+        Ok(MaterializedDep {
+            root_dir: root,
+            version: pkg.version,
+            upstream_url: pkg.upstream_url,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -163,5 +238,81 @@ mod tests {
             !parent.join("escape.txt").exists(),
             "traversal entry escaped the destination directory"
         );
+    }
+
+    // ── ProxyRegistryProvider ───────────────────────────────────
+
+    use crate::registry_proxy::{FetchedPackage, MemProxyClient};
+
+    fn ver(s: &str) -> semver::Version {
+        semver::Version::parse(s).unwrap()
+    }
+
+    fn make_mem_client(package: &str, version: &str, entries: &[(&str, &[u8])]) -> MemProxyClient {
+        let targz = make_targz(entries);
+        let content_hash = format!("blake3:{}", blake3::hash(&targz).to_hex());
+        let mut mem = MemProxyClient::new();
+        mem.insert_catalog(package, "https://up/pkg", vec![ver(version)]);
+        mem.insert_package(FetchedPackage {
+            package: package.to_string(),
+            version: ver(version),
+            upstream_url: String::new(),
+            mirror_url: "m".to_string(),
+            tarball_bytes: targz,
+            content_hash,
+        });
+        mem
+    }
+
+    #[test]
+    fn proxy_provider_fetches_extracts_and_locates_manifest() {
+        let mem = make_mem_client(
+            "http",
+            "1.2.3",
+            &[
+                ("kara.toml", b"[package]\nname = \"http\"\n"),
+                ("src/lib.kara", b"pub fn hi() -> i64 { 1 }\n"),
+            ],
+        );
+        let cache = temp_dir();
+        let provider = ProxyRegistryProvider::new(&mem, &cache);
+
+        let dep = provider
+            .fetch("http", &semver::VersionReq::parse("^1.0").unwrap())
+            .expect("fetch");
+        assert_eq!(dep.version, ver("1.2.3"));
+        // upstream_url stitched from the catalog by fetch_registry_package.
+        assert_eq!(dep.upstream_url, "https://up/pkg");
+        assert!(dep.root_dir.join("kara.toml").is_file());
+        assert!(dep.root_dir.join("src/lib.kara").is_file());
+    }
+
+    #[test]
+    fn proxy_provider_finds_manifest_in_wrapper_subdir() {
+        // Some archives wrap everything under a `<name>-<version>/` dir.
+        let mem = make_mem_client(
+            "http",
+            "2.0.0",
+            &[("http-2.0.0/kara.toml", b"[package]\nname = \"http\"\n")],
+        );
+        let cache = temp_dir();
+        let provider = ProxyRegistryProvider::new(&mem, &cache);
+
+        let dep = provider
+            .fetch("http", &semver::VersionReq::parse("^2").unwrap())
+            .expect("fetch");
+        assert!(dep.root_dir.join("kara.toml").is_file());
+        assert!(dep.root_dir.ends_with("http-2.0.0"));
+    }
+
+    #[test]
+    fn proxy_provider_no_matching_version_errors() {
+        let mem = make_mem_client("http", "1.0.0", &[("kara.toml", b"x")]);
+        let cache = temp_dir();
+        let provider = ProxyRegistryProvider::new(&mem, &cache);
+        let err = provider
+            .fetch("http", &semver::VersionReq::parse("^2.0").unwrap())
+            .unwrap_err();
+        assert!(err.contains("no version"), "unexpected error: {err}");
     }
 }

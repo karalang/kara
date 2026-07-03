@@ -4005,6 +4005,10 @@ fn quiet_dep_package_walks(root: &std::path::Path) -> Vec<module::DepPackageWalk
     let options = crate::dep_graph::DepGraphOptions {
         offline_root: None,
         include_dev_deps: false,
+        // Registry fetch is not activated in the CLI yet (slice 4) — the
+        // graph stays path-dep-only here, so registry deps still surface
+        // as E_REGISTRY_DEP_UNSUPPORTED from the resolver.
+        registry_provider: None,
     };
     let Ok(graph) = crate::dep_graph::build_dep_graph_with_options(root, mf, &loader, options)
     else {
@@ -8129,6 +8133,8 @@ fn run_dep_resolution(
     let options = crate::dep_graph::DepGraphOptions {
         offline_root,
         include_dev_deps,
+        // Registry fetch not activated in the CLI yet (slice 4).
+        registry_provider: None,
     };
     let graph = match crate::dep_graph::build_dep_graph_with_options(root, mf, &loader, options) {
         Ok(g) => g,

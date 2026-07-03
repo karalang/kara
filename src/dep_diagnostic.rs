@@ -281,6 +281,22 @@ pub fn render_dep_graph_error(err: &DepGraphError) -> Diagnostic {
                     .to_string(),
             ),
         },
+        DepGraphError::RegistryFetchFailed {
+            from_dir,
+            dep_name,
+            message,
+        } => Diagnostic {
+            code: err.code(),
+            primary: format!("could not fetch registry dependency `{}`", dep_name),
+            notes: vec![
+                format!("declared in `{}/kara.toml`", from_dir.display()),
+                format!("underlying error: {}", message),
+            ],
+            help: Some(
+                "check the registry proxy URL and your network connection, or pin a version that the proxy publishes"
+                    .to_string(),
+            ),
+        },
     }
 }
 

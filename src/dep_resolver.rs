@@ -341,11 +341,41 @@ pub fn resolve_with_offline(
                         },
                     )?;
                 }
-                DependencySpec::Registry { .. } => {
-                    return Err(Box::new(ResolverError::RegistryDepUnsupported {
-                        package: dep_name.clone(),
-                        declared_in: manifest_dir.clone(),
-                    }));
+                DependencySpec::Registry { version: req } => {
+                    // A registry dep resolves only if the graph walk actually
+                    // fetched it (a `RegistryProvider` was configured). If not,
+                    // it stays unsupported — the pre-fetch behavior.
+                    match graph
+                        .registry_resolutions
+                        .get(&(manifest_dir.clone(), dep_name.clone()))
+                    {
+                        Some(res) => {
+                            let child_manifest =
+                                graph.manifests.get(&res.dir).ok_or_else(|| {
+                                    Box::new(ResolverError::RegistryDepUnsupported {
+                                        package: dep_name.clone(),
+                                        declared_in: manifest_dir.clone(),
+                                    })
+                                })?;
+                            let resolved_name = child_manifest.name.clone();
+                            upsert_registry(
+                                &mut packages,
+                                resolved_name,
+                                res.version.clone(),
+                                res.upstream_url.clone(),
+                                DeclarationEdge {
+                                    parent: parent_name.clone(),
+                                    req: Some(req.clone()),
+                                },
+                            )?;
+                        }
+                        None => {
+                            return Err(Box::new(ResolverError::RegistryDepUnsupported {
+                                package: dep_name.clone(),
+                                declared_in: manifest_dir.clone(),
+                            }));
+                        }
+                    }
                 }
                 DependencySpec::Git { .. } => {
                     return Err(Box::new(ResolverError::GitDepUnsupported {
@@ -436,6 +466,45 @@ fn upsert_path(
                 name,
                 version,
                 source: ResolvedSource::Path(dir),
+                declared_by: vec![edge],
+            },
+        );
+        Ok(())
+    }
+}
+
+/// Insert or merge a resolved *registry* package. The first fetch of a
+/// given package name pins the version; later declarers append their
+/// constraint edge (the post-walk constraint-validation pass flags any
+/// edge whose requirement the pinned version doesn't satisfy). A name
+/// already resolved from a different source kind (root / path) is a
+/// `SourceConflict`.
+fn upsert_registry(
+    packages: &mut BTreeMap<String, ResolvedPackage>,
+    name: String,
+    version: semver::Version,
+    url: String,
+    edge: DeclarationEdge,
+) -> Result<(), Box<ResolverError>> {
+    if let Some(existing) = packages.get_mut(&name) {
+        match &existing.source {
+            ResolvedSource::Registry { .. } => {
+                existing.declared_by.push(edge);
+                Ok(())
+            }
+            other => Err(Box::new(ResolverError::SourceConflict {
+                package: name.clone(),
+                first_source: other.clone(),
+                second_source: ResolvedSource::Registry { url },
+            })),
+        }
+    } else {
+        packages.insert(
+            name.clone(),
+            ResolvedPackage {
+                name,
+                version,
+                source: ResolvedSource::Registry { url },
                 declared_by: vec![edge],
             },
         );
@@ -578,6 +647,125 @@ mod tests {
             }
             other => panic!("expected RegistryDepUnsupported, got {other:?}"),
         }
+    }
+
+    /// In-memory `RegistryProvider` for resolver tests — maps a name to a
+    /// canned extracted dir + version + upstream URL.
+    struct MockRegistryProvider {
+        fetches: BTreeMap<String, (PathBuf, semver::Version, String)>,
+    }
+
+    impl crate::dep_graph::RegistryProvider for MockRegistryProvider {
+        fn fetch(
+            &self,
+            name: &str,
+            _req: &VersionReq,
+        ) -> Result<crate::dep_graph::MaterializedDep, String> {
+            self.fetches
+                .get(name)
+                .map(|(dir, ver, up)| crate::dep_graph::MaterializedDep {
+                    root_dir: dir.clone(),
+                    version: ver.clone(),
+                    upstream_url: up.clone(),
+                })
+                .ok_or_else(|| format!("no such package {name}"))
+        }
+    }
+
+    #[test]
+    fn fetched_registry_dep_resolves_to_registry_source() {
+        let mut root = empty_manifest("app");
+        root.dependencies.insert("http".into(), registry("^1.0"));
+        let http_mf = empty_manifest("http");
+
+        let loader = MemLoader {
+            manifests: BTreeMap::from([(PathBuf::from("/reg/http"), http_mf)]),
+        };
+        let provider = MockRegistryProvider {
+            fetches: BTreeMap::from([(
+                "http".to_string(),
+                (
+                    PathBuf::from("/reg/http"),
+                    semver::Version::parse("1.4.2").unwrap(),
+                    "https://up/http".to_string(),
+                ),
+            )]),
+        };
+        let graph = crate::dep_graph::build_dep_graph_with_options(
+            &PathBuf::from("/app"),
+            root,
+            &loader,
+            crate::dep_graph::DepGraphOptions {
+                offline_root: None,
+                include_dev_deps: false,
+                registry_provider: Some(&provider),
+            },
+        )
+        .expect("graph");
+
+        let resolution = resolve(&graph, &test_version()).expect("resolve");
+        let http = resolution.packages.get("http").expect("http resolved");
+        assert_eq!(http.version, semver::Version::parse("1.4.2").unwrap());
+        assert_eq!(
+            http.source,
+            ResolvedSource::Registry {
+                url: "https://up/http".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn fetched_registry_dep_version_conflict_is_reported() {
+        // Root declares http `^1.0`; a transitive registry dep `mid`
+        // re-declares http at `^2.0`. The provider pins http to 1.4.2, which
+        // can't satisfy `^2.0`, so the validation pass flags the conflict.
+        let mut root = empty_manifest("app");
+        root.dependencies.insert("http".into(), registry("^1.0"));
+        root.dependencies.insert("mid".into(), registry("^1.0"));
+        let mut mid = empty_manifest("mid");
+        mid.dependencies.insert("http".into(), registry("^2.0"));
+
+        let loader = MemLoader {
+            manifests: BTreeMap::from([
+                (PathBuf::from("/reg/mid"), mid),
+                (PathBuf::from("/reg/http"), empty_manifest("http")),
+            ]),
+        };
+        // Provider returns http@1.4.2 for any req (a single cached catalog);
+        // the `^2.0` declarer's constraint won't match.
+        let provider = MockRegistryProvider {
+            fetches: BTreeMap::from([
+                (
+                    "http".to_string(),
+                    (
+                        PathBuf::from("/reg/http"),
+                        semver::Version::parse("1.4.2").unwrap(),
+                        "u".to_string(),
+                    ),
+                ),
+                (
+                    "mid".to_string(),
+                    (
+                        PathBuf::from("/reg/mid"),
+                        semver::Version::parse("1.0.0").unwrap(),
+                        "u".to_string(),
+                    ),
+                ),
+            ]),
+        };
+        let graph = crate::dep_graph::build_dep_graph_with_options(
+            &PathBuf::from("/app"),
+            root,
+            &loader,
+            crate::dep_graph::DepGraphOptions {
+                offline_root: None,
+                include_dev_deps: false,
+                registry_provider: Some(&provider),
+            },
+        )
+        .expect("graph");
+        let err = resolve(&graph, &test_version()).unwrap_err();
+        assert_eq!(err.code(), "E_DEPENDENCY_VERSION_CONFLICT");
     }
 
     #[test]
