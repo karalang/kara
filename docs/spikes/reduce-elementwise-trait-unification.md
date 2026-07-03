@@ -381,7 +381,7 @@ B-2026-07-02-10..13, see the ledger.
     (`impl[T: Sub] Reduce[T] for Pair[T]` now inherits + resolves the spliced
     `range` default, i64→7 on run == build). **Residual:** a NON-i64 (f64)
     element still miscompiles — a **separate, pre-existing, general** bug
-    (B-2026-07-03-21): a generic struct literal (`Box { v: 2.5 }`, even
+    (B-2026-07-03-23): a generic struct literal (`Box { v: 2.5 }`, even
     unbounded / no impl) loses its `[f64]` arg, so codegen defaults the element
     to i64 and reads the f64 bits as i64 (silent garbage under `build`, correct
     under `run`). Tests: typechecker `bounded_generic_impl_methods_resolve`,

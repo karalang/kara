@@ -46702,7 +46702,7 @@ fn main() {
         // for an undecidable (missing / type-variable) substitution. `gap` =
         // `b - a`. Two i64 instantiations exercise the shared-layout mono; a
         // NON-i64 (f64) element is still blocked on the separate generic
-        // struct-literal arg-inference miscompile (B-2026-07-03-21), so this
+        // struct-literal arg-inference miscompile (B-2026-07-03-23), so this
         // stays on i64.
         let src = r#"
 struct Pair[T] { a: T, b: T }
