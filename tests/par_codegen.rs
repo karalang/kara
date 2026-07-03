@@ -5901,6 +5901,32 @@ fn main() {
         }
     }
 
+    /// Variant: a NARROW-int scalar-method receiver. `base: i32` with
+    /// `base.abs()` — the slot is sized from the receiver's INFERRED LLVM
+    /// type, which is i64 (codegen widens every integer local to i64 in
+    /// storage and value flow), so the `i64/float` guard resolves it and the
+    /// source-level `i32` annotation doesn't leave the slot un-sized.
+    /// Expected `7 + 93 = 100`.
+    #[test]
+    fn test_e2e_par_join_branch_narrow_int_method() {
+        let out = run_program(
+            r#"
+fn main() {
+    let base: i32 = -7;
+    let total = par {
+        let x = base.abs();
+        let y = base + 100;
+        x + y
+    };
+    println(total);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "100", "got {out:?}");
+        }
+    }
+
     /// Variant: a FLOAT scalar-method branch. `base.sqrt()` types as `-> Self`
     /// (f64), so the `a` slot must be sized f64, not the i64 default.
     /// Expected `3.0 + 10.0 = 13`.

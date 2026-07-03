@@ -1217,12 +1217,16 @@ impl<'ctx> super::Codegen<'ctx> {
             //      `pow` / the `float_math` transcendentals): the typechecker
             //      types these as `x.m(..) -> Self` (see
             //      `expr_method_call.rs`), so the result is the receiver's own
-            //      numeric type. Gated on an i64-or-float receiver: narrow
-            //      integers flow widened to i64 in codegen (the receiver-width
-            //      recovery path re-extends `i32.pow` etc.), so sizing a
-            //      narrow slot to its declared width would mismatch the stored
-            //      i64 value — leave those un-inferrable (safe: a loud build
-            //      failure, never a miscompile) rather than mis-size.
+            //      numeric type — which is exactly the receiver's INFERRED
+            //      LLVM type, because codegen widens every integer local to
+            //      i64 in both storage and value flow and keeps floats at
+            //      their own width. That i64-backing is why a source-level
+            //      narrow annotation (`let n: i32`) still resolves here: its
+            //      slot IS i64. The i64/float guard is therefore not a
+            //      narrowing exclusion but a receiver-shape filter — it
+            //      rejects a non-numeric receiver (a struct, `bool` (i1),
+            //      `char` (i32), …) whose `-> Self` claim these methods don't
+            //      make, so the slot stays un-inferrable rather than mis-sized.
             ExprKind::MethodCall { object, method, .. } => {
                 if let Some(ty_name) = self.inferred_receiver_type(object) {
                     if let Some(fn_val) = self.module.get_function(&format!("{ty_name}.{method}")) {
