@@ -79,6 +79,7 @@ pub mod raii_check;
 pub mod rc_fallback_queries;
 pub mod rc_predicate;
 pub mod reduce_kernel;
+pub mod registry_extract;
 pub mod registry_proxy;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod repl;

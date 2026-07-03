@@ -118,6 +118,14 @@ regex = "1"
 # so the resolver can intersect them. `Version` is what each candidate
 # package's catalog entry exposes.
 semver = "1"
+# Registry fetch epic slice 2 (phase-5 resolver follow-up (b)): extract a
+# proxy-fetched `<name>-<version>.tar.gz` into a source directory the
+# compiler can read. `flate2` (pure-Rust miniz_oxide) decompresses gzip;
+# `tar` reads the archive with built-in path-traversal / zip-slip
+# protection on unpack. Compiler-side (package-manager) deps in the same
+# class as `ureq` / `toml` — never linked into emitted binaries.
+flate2 = "1"
+tar = "0.4"
 # Slice 2 of the lockfile entry (phase-5 line 831): BLAKE3 hashing of
 # manifest TOML content for path-deps. Single hash per locked package so
 # `kara.lock` records what the resolver consumed. Default features only
