@@ -339,6 +339,67 @@ fn let_persistence_rebinding_shadows_earlier_value() {
 }
 
 #[test]
+fn let_rebinding_after_move_keeps_referencing_bindings_alive() {
+    // B-2026-07-02-33: the old shadow-prune DROPPED a re-bound name's
+    // earlier `let` slice from the replay buffer, orphaning any later
+    // persistent let whose RHS referenced it (`let y = x;`) — from the
+    // re-binding cell onward every cell failed with `resolve error:
+    // undefined name 'x'`. Replay the exact reported 8-cell sequence
+    // (heap String payload, move into `y`, i64 re-bind) end to end.
+    let mut s = pinned_session();
+    let payload = "a longer heap string payload over 36 bytes!";
+
+    let r = s.evaluate_cell_captured("let x = 1;");
+    assert!(r.errors.is_empty(), "cell 1: {:?}", r.errors);
+    let r = s.evaluate_cell_captured("println(x);");
+    assert!(r.errors.is_empty(), "cell 2: {:?}", r.errors);
+    assert_eq!(r.stdout.trim(), "1");
+    let r = s.evaluate_cell_captured(&format!("let x = \"{payload}\";"));
+    assert!(r.errors.is_empty(), "cell 3: {:?}", r.errors);
+    let r = s.evaluate_cell_captured("println(x);");
+    assert!(r.errors.is_empty(), "cell 4: {:?}", r.errors);
+    assert_eq!(r.stdout.trim(), payload);
+    let r = s.evaluate_cell_captured("let y = x;");
+    assert!(r.errors.is_empty(), "cell 5: {:?}", r.errors);
+    let r = s.evaluate_cell_captured("let x = 99;");
+    assert!(r.errors.is_empty(), "cell 6: {:?}", r.errors);
+    let r = s.evaluate_cell_captured("println(x);");
+    assert!(r.errors.is_empty(), "cell 7: {:?}", r.errors);
+    assert_eq!(r.stdout.trim(), "99");
+    let r = s.evaluate_cell_captured("println(y);");
+    assert!(r.errors.is_empty(), "cell 8: {:?}", r.errors);
+    assert_eq!(r.stdout.trim(), payload);
+
+    // All three binders of `x` (plus `y`) stay in the replay buffer —
+    // shadowing keeps submission order, exactly like the `:save` export.
+    assert_eq!(
+        s.persistent_lets().len(),
+        4,
+        "expected all binders kept: {:?}",
+        s.persistent_lets()
+    );
+}
+
+#[test]
+fn let_rebinding_rhs_may_reference_shadowed_binding() {
+    // `let x = x + 1;` — the RHS reads the binding being shadowed. The
+    // old prune dropped `let x = 1;` before the cell compiled, so the
+    // RHS failed to resolve. Same root cause as B-2026-07-02-33.
+    let mut s = pinned_session();
+    let r = s.evaluate_cell_captured("let x = 1;");
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    let r = s.evaluate_cell_captured("let x = x + 1;");
+    assert!(
+        r.errors.is_empty(),
+        "self-referencing shadow: {:?}",
+        r.errors
+    );
+    let r = s.evaluate_cell_captured("println(x);");
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert_eq!(r.stdout.trim(), "2");
+}
+
+#[test]
 fn let_persistence_carries_type_annotation() {
     // `let x: i64 = 5;` — the annotation is part of the captured slice.
     let mut s = pinned_session();

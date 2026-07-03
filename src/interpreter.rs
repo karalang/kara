@@ -312,18 +312,23 @@ pub struct Interpreter<'a> {
     /// Monotonic counter for `BoundedChannel.handle_id`, starting at 1.
     pub(crate) bounded_channel_handle_counter: i64,
     /// REPL value-snapshot replay. When a `StmtKind::Let { pattern:
-    /// PatternKind::Binding(name), .. }` evaluates and `name` is a key
-    /// here, the RHS is **not** evaluated — the binding is created from
-    /// the pre-loaded value instead. Empty for ordinary single-file
-    /// runs; populated by the REPL between cells so a `let x =
-    /// expensive()` from cell N does not re-run `expensive()` when
-    /// cell N+1's synthetic source-replay includes the same `let`.
-    /// Pattern lets (tuple / struct destructuring / `let-else`) and
-    /// `let mut` rebindings fall through the normal RHS-eval path
-    /// because keying on a single name does not cover them
-    /// faithfully; the source-replay model retains its semantics for
-    /// those forms (RHS re-runs each cell, mutation does not survive).
-    pub let_value_overrides: HashMap<String, Value>,
+    /// PatternKind::Binding(..), .. }` evaluates and the *binder
+    /// pattern's span* is a key here, the RHS is **not** evaluated —
+    /// the binding is created from the pre-loaded value instead. Empty
+    /// for ordinary single-file runs; populated by the REPL between
+    /// cells so a `let x = expensive()` from cell N does not re-run
+    /// `expensive()` when cell N+1's synthetic source-replay includes
+    /// the same `let`. Keyed by span (not name) so that when a name
+    /// has been shadowed across cells (`let x = 1; … let x = 99;` —
+    /// legal, and both slices replay) only the LAST binder
+    /// short-circuits to the snapshot; earlier binders re-run their
+    /// true RHS in order, keeping every intermediate reader
+    /// historically correct (B-2026-07-02-33). Pattern lets (tuple /
+    /// struct destructuring / `let-else`) fall through the normal
+    /// RHS-eval path; the source-replay model retains its semantics
+    /// for those forms (RHS re-runs each cell, mutation does not
+    /// survive).
+    pub let_value_overrides: HashMap<crate::resolver::SpanKey, Value>,
     /// REPL value-snapshot capture set. The bound value of any
     /// `StmtKind::Let { pattern: PatternKind::Binding(name), .. }` whose
     /// `name` is in this set is recorded into `captured_let_values`

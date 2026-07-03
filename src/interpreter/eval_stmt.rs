@@ -742,14 +742,21 @@ impl<'a> super::Interpreter<'a> {
                     .as_ref()
                     .and_then(super::method_call_tensor::tensor_elem_fill);
                 // REPL value-snapshot replay: when the binding pattern is
-                // a single `Binding(name)` and `name` is in
-                // `let_value_overrides`, skip RHS evaluation entirely and
-                // use the pre-loaded value. This is what makes `let x =
-                // read_file("…");` from cell N stop re-reading the file
+                // a single `Binding(..)` and the binder pattern's span is
+                // in `let_value_overrides`, skip RHS evaluation entirely
+                // and use the pre-loaded value. This is what makes `let x
+                // = read_file("…");` from cell N stop re-reading the file
                 // when cell N+1's source-replay reintroduces the same
-                // `let`. Pattern lets fall through the normal path.
-                let val = if let crate::ast::PatternKind::Binding(name) = &pattern.kind {
-                    if let Some(snapshot) = self.let_value_overrides.get(name) {
+                // `let`. Span keying restricts the short-circuit to the
+                // binder the REPL selected (the LAST binder of each name
+                // — earlier shadows re-run their true RHS in order; see
+                // `Session::install_let_snapshot_overrides`). Pattern
+                // lets fall through the normal path.
+                let val = if let crate::ast::PatternKind::Binding(_) = &pattern.kind {
+                    if let Some(snapshot) = self
+                        .let_value_overrides
+                        .get(&crate::resolver::SpanKey::from_span(&pattern.span))
+                    {
                         snapshot.clone()
                     } else {
                         let v = self.eval_expr_inner(value);

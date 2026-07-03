@@ -482,12 +482,15 @@ pub struct Session {
     /// value instead of re-running `expensive()`. The source-replay
     /// form is what the parser / resolver / typechecker see (so `x`
     /// resolves and has a recorded type); only the interpreter's
-    /// runtime evaluation of the RHS is short-circuited. Pattern lets
-    /// (`let (a, b) = …`, `let-else`) and `let mut` rebindings stay on
-    /// the source-replay path because keying the override on a single
-    /// name does not cover them; this map only holds entries for
-    /// simple `PatternKind::Binding` lets, matching the interpreter
-    /// hook's classification.
+    /// runtime evaluation of the RHS is short-circuited. The override
+    /// is installed at the *last* top-level binder of each name (span
+    /// keyed — `install_let_snapshot_overrides`), so when a name has
+    /// been shadowed across cells the earlier binders re-run their
+    /// recorded RHS in order and only the final binding
+    /// short-circuits. Pattern lets (`let (a, b) = …`, `let-else`)
+    /// stay on the source-replay path; this map only holds entries
+    /// for simple `PatternKind::Binding` lets, matching the
+    /// interpreter hook's classification.
     let_snapshots: HashMap<String, Value>,
     /// In-memory `[dependencies]` table built up via the `:dep` meta-command.
     /// Each entry is `name → normalized TOML value` (e.g. `"\"1.2\""` for a
@@ -1012,14 +1015,9 @@ impl Session {
         // statement-cell pipeline does. The synthetic main here was
         // built from the same `persistent_lets` strings, so the parser
         // sees the bindings and the interpreter consults the override
-        // map at the matching `let` arm.
-        for prior_let in &self.persistent_lets {
-            for name in parse_let_binding_names(prior_let) {
-                if let Some(v) = self.let_snapshots.get(&name) {
-                    interp.let_value_overrides.insert(name, v.clone());
-                }
-            }
-        }
+        // map at the matching `let` binder span (`__k_show` has no
+        // snapshot, so the appended binding always evaluates fresh).
+        self.install_let_snapshot_overrides(&parsed.program, &mut interp);
         // Watch our synthetic `__k_show` binding so the interpreter
         // captures its post-eval Value into `captured_let_values`. We
         // do NOT watch the persistent-let names — we don't intend to
@@ -1602,13 +1600,12 @@ impl Session {
         cell_src: &str,
         capture: bool,
     ) -> Result<WrapperOutcome, WrapperOutcome> {
-        // Shadow-prune: drop any prior persistent let whose name(s) the new
-        // cell re-binds. Kāra rejects same-scope re-declaration, so without
-        // this prune `cell 1: let x = 1;` followed by `cell 2: let x = 99;`
-        // would fail at the resolver inside cell 2's synthetic main. Per
-        // design.md § Cell Scope, the later cell shadows the earlier
-        // binding — source-replay approximates that by pruning.
-        self.prune_shadowed_lets(cell_src);
+        // Shadow handling: same-scope re-`let` is legal Kāra shadowing, so
+        // a re-bound name's earlier replay slices stay in `persistent_lets`
+        // (dropping them orphaned later slices that reference the earlier
+        // binding — B-2026-07-02-33). Only the stale value snapshot is
+        // cleared, so the current cell's own `let` evaluates fresh.
+        self.clear_rebound_let_snapshots(cell_src);
 
         // Auto-clone iteration loop: when `auto_clone` is on, cross-cell
         // UAM errors found by the ownership pass drive a source rewrite of
@@ -1711,21 +1708,15 @@ impl Session {
             }
             // Value-snapshot replay: install pre-loaded values for every
             // persistent-let binding that has a cached value in the
-            // session snapshot. The interpreter's Let arm consults
-            // `let_value_overrides` keyed on the binding name and skips
-            // the RHS when a hit occurs — that's what makes a prior
-            // `let log = read_file(…);` stop re-reading the file on
-            // subsequent cells. Names from the current cell are NOT
-            // overridden (their RHS runs normally and seeds the
-            // snapshot for the *next* cell).
-            for prior_let in &self.persistent_lets {
-                let names = parse_let_binding_names(prior_let);
-                for name in names {
-                    if let Some(v) = self.let_snapshots.get(&name) {
-                        interp.let_value_overrides.insert(name, v.clone());
-                    }
-                }
-            }
+            // session snapshot, keyed by the binder pattern's span (the
+            // LAST top-level binder of each name — earlier shadows
+            // re-run their recorded RHS in order). That's what makes a
+            // prior `let log = read_file(…);` stop re-reading the file
+            // on subsequent cells. Names from the current cell are NOT
+            // overridden (their snapshots were cleared in
+            // `clear_rebound_let_snapshots`, so their RHS runs normally
+            // and seeds the snapshot for the *next* cell).
+            self.install_let_snapshot_overrides(&parsed.program, &mut interp);
             // Watch every top-level `let` binding in the just-built
             // synthetic source (both replayed persistent_lets and the
             // current cell's body). For overridden names the captured
@@ -2204,7 +2195,25 @@ impl Session {
         }) else {
             return (replay, capture);
         };
-        for stmt in &main_fn.body.stmts {
+        // Same-scope shadowing is legal, and a re-bound name's earlier
+        // binders stay in the replay (B-2026-07-02-33) — so a name can
+        // have SEVERAL top-level binders here. Only the LAST one may
+        // take the replay or capture path: routing an earlier binder
+        // through the snapshot global would load the final value (or a
+        // differently-typed one — `let x = "s";` replaying an i64
+        // global) at the wrong point in the sequence. Earlier binders
+        // pass through and re-run their RHS in order, mirroring the
+        // interpreter path's last-binder-only override placement.
+        let mut last_binder_idx: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
+        for (idx, stmt) in main_fn.body.stmts.iter().enumerate() {
+            if let StmtKind::Let { pattern, .. } = &stmt.kind {
+                if let PatternKind::Binding(name) = &pattern.kind {
+                    last_binder_idx.insert(name.as_str(), idx);
+                }
+            }
+        }
+        for (idx, stmt) in main_fn.body.stmts.iter().enumerate() {
             let StmtKind::Let {
                 is_mut,
                 pattern,
@@ -2217,13 +2226,17 @@ impl Session {
             let PatternKind::Binding(name) = &pattern.kind else {
                 continue;
             };
+            if last_binder_idx.get(name.as_str()) != Some(&idx) {
+                continue;
+            }
             // Replay path wins: if this binding already has a global
             // installed in the runner, we ALWAYS route through the
             // load-from-global codepath rather than re-emit the RHS
-            // and reinstall the global. (The same-cell collision
-            // case — a let with a name that matches a prior snapshot
-            // — is structurally impossible: Kāra's resolver rejects
-            // same-scope re-declaration before codegen runs.)
+            // and reinstall the global. (A CURRENT-cell `let` that
+            // re-binds a snapshotted name cannot land here: the
+            // shadow clear in `clear_rebound_let_snapshots` dropped
+            // the name from `jit_snapshotted_lets` before this cell
+            // compiled.)
             if let Some(kind) = self.jit_snapshotted_lets.get(name) {
                 replay.insert(name.clone(), *kind);
                 continue;
@@ -2468,6 +2481,53 @@ impl Session {
     /// the cell index that originally introduced it (from
     /// `persistent_let_origin`); the trailing `cell_src` block is tagged
     /// with the *current* cell's 1-based index (the one being submitted).
+    /// Install value-snapshot overrides into `interp`, keyed by the
+    /// binder pattern span of the **last** top-level `let` of each
+    /// snapshotted name in `program`'s `fn main` body.
+    ///
+    /// Span keying (vs the former name keying) is what makes legal
+    /// same-scope shadowing replay correctly (B-2026-07-02-33): when a
+    /// name has several replayed binders (`let x = 1; … let x = 99;`),
+    /// only the final binder short-circuits to the cached value;
+    /// earlier binders re-run their recorded RHS in submission order,
+    /// so anything replayed between two binders (a pattern let, a
+    /// `let-else` — forms that have no snapshot of their own) reads
+    /// the historically-correct intermediate value instead of the
+    /// latest one. Two structural guarantees keep the current cell's
+    /// own `let`s live: `clear_rebound_let_snapshots` makes
+    /// snapshot-bearing names disjoint from the cell's top-level
+    /// binder names (so the last snapshotted binder is always a
+    /// replayed slot), and a *nested* `let` of a snapshotted name
+    /// inside the cell body never matches a top-level binder span.
+    fn install_let_snapshot_overrides(
+        &self,
+        program: &crate::ast::Program,
+        interp: &mut crate::interpreter::Interpreter,
+    ) {
+        use crate::ast::{Item, PatternKind, StmtKind};
+        let Some(main_fn) = program.items.iter().find_map(|item| match item {
+            Item::Function(f) if f.name == "main" => Some(f),
+            _ => None,
+        }) else {
+            return;
+        };
+        let mut last_binder: HashMap<&str, &crate::token::Span> = HashMap::new();
+        for stmt in &main_fn.body.stmts {
+            if let StmtKind::Let { pattern, .. } = &stmt.kind {
+                if let PatternKind::Binding(name) = &pattern.kind {
+                    last_binder.insert(name.as_str(), &pattern.span);
+                }
+            }
+        }
+        for (name, span) in last_binder {
+            if let Some(v) = self.let_snapshots.get(name) {
+                interp
+                    .let_value_overrides
+                    .insert(crate::resolver::SpanKey::from_span(span), v.clone());
+            }
+        }
+    }
+
     fn build_synthetic_cell(&mut self, cell_src: &str) -> String {
         let mut s = String::new();
         s.push_str(&strip_main(&self.items_source));
@@ -2528,9 +2588,10 @@ impl Session {
     /// Extract every top-level `let` / `let mut` / `let ... else` statement
     /// from the cell body and append its raw source to `persistent_lets`.
     /// Called only after the cell evaluated cleanly so failed cells never
-    /// leak partial bindings forward. Shadow-pruning happened earlier in
-    /// `prune_shadowed_lets` so the synthetic main could parse cleanly;
-    /// at this point the new entries can simply append.
+    /// leak partial bindings forward. A re-bound name's earlier binders
+    /// stay in the buffer (same-scope shadowing is legal — the appended
+    /// entry shadows them in replay order, exactly as in the `:save`
+    /// export), so new entries simply append.
     ///
     /// Each new entry is tagged with the 1-based index of the current cell
     /// in `persistent_let_origin` so the diagnostic-rendering layer can map
@@ -2562,17 +2623,18 @@ impl Session {
         }
     }
 
-    /// Drop every persistent `let` whose pattern binds a name the new cell
-    /// is about to re-bind. Runs before the synthetic main is constructed
-    /// so the pre-shadow binding is gone by the time the resolver sees the
-    /// concatenated body. If the cell fails to evaluate, the prune is left
-    /// applied — the older binding is conceptually superseded the moment
-    /// the user typed the new `let` even if the cell itself errored. This
-    /// matches the design.md "later cell shadows" wording at the cost of
-    /// an edge case: a typo'd cell that fails type-check still drops the
-    /// prior entry. Acceptable for the v1 source-replay model; users can
-    /// re-bind explicitly in the next cell.
-    fn prune_shadowed_lets(&mut self, cell_src: &str) {
+    /// Clear stale per-name snapshot state for every name the new cell's
+    /// top-level `let`s re-bind. Same-scope shadowing is legal Kāra
+    /// (`let x = 1; let x = "s";` — the later binding shadows to end of
+    /// scope), so the source-replay slices themselves are KEPT: this
+    /// method's predecessor (`prune_shadowed_lets`) dropped the earlier
+    /// binder's slice from `persistent_lets`, which orphaned any later
+    /// slice — or the current cell itself (`let x = x + 1;`) — whose RHS
+    /// still referenced the earlier binding, failing every subsequent
+    /// cell with `resolve error: undefined name` (B-2026-07-02-33).
+    /// Keeping every binder and replaying them in submission order is
+    /// exactly the program `:save` exports, so the two surfaces agree.
+    fn clear_rebound_let_snapshots(&mut self, cell_src: &str) {
         let mut new_names = std::collections::HashSet::new();
         for entry in scan_top_level_lets(cell_src) {
             new_names.extend(entry.names);
@@ -2582,13 +2644,16 @@ impl Session {
         }
         // Drop snapshot entries for any name the new cell is about to
         // re-bind. Without this, a `let x = 5;` (i64) followed by `let
-        // x = "hello";` (String) would re-use the stale i64 snapshot
-        // when cell 2's source-replay form runs in cell 3+. Clearing
-        // here forces the new RHS to evaluate the first time it
-        // appears (it's the *current* cell's let, not a replay, so the
-        // override is empty anyway — but if the user submits the same
-        // cell again later, the override would otherwise kick in with
-        // the stale type).
+        // x = "hello";` (String) would re-use the stale i64 snapshot.
+        // Clearing keeps the snapshot-bearing names DISJOINT from the
+        // current cell's binder names during this cell's run, which is
+        // what lets `install_let_snapshot_overrides` place each
+        // override at the last top-level binder of its name without
+        // ever short-circuiting the current cell's own `let`. The
+        // earlier binders of the re-bound name simply re-run their
+        // recorded RHS during this cell (in submission order, before
+        // the new binding shadows them) and the post-run capture
+        // re-seeds the snapshot from the new binding's value.
         for name in &new_names {
             self.let_snapshots.remove(name);
         }
@@ -2614,29 +2679,6 @@ impl Session {
             self.jit_snapshotted_lets.clear();
             self.jit_client = None;
         }
-        // Walk persistent_lets, persistent_let_origin, and
-        // persistent_let_provider_scope in lockstep so the parallel
-        // metadata stays aligned with the slices.
-        let mut kept_lets: Vec<String> = Vec::with_capacity(self.persistent_lets.len());
-        let mut kept_origin: Vec<usize> = Vec::with_capacity(self.persistent_let_origin.len());
-        let mut kept_scope: Vec<Vec<String>> =
-            Vec::with_capacity(self.persistent_let_provider_scope.len());
-        for (i, prior) in self.persistent_lets.iter().enumerate() {
-            let prior_names = parse_let_binding_names(prior);
-            if !prior_names.iter().any(|n| new_names.contains(n)) {
-                kept_lets.push(prior.clone());
-                kept_origin.push(*self.persistent_let_origin.get(i).unwrap_or(&0));
-                kept_scope.push(
-                    self.persistent_let_provider_scope
-                        .get(i)
-                        .cloned()
-                        .unwrap_or_default(),
-                );
-            }
-        }
-        self.persistent_lets = kept_lets;
-        self.persistent_let_origin = kept_origin;
-        self.persistent_let_provider_scope = kept_scope;
     }
 
     /// Drop every persistent `let` binding accumulated so far. Items
