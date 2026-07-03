@@ -24,8 +24,8 @@ use super::inference::{
 };
 use super::types::{
     contains_type_param, impl_args_match, impl_table_key, is_integer, lub_block_type, type_display,
-    type_to_concrete_or_param_name, ConstArg, DimArg, IntSize, ScrutineeMode, SubstValue, Type,
-    UIntSize,
+    type_is_fully_concrete, type_to_concrete_or_param_name, ConstArg, DimArg, IntSize,
+    ScrutineeMode, SubstValue, Type, UIntSize,
 };
 use super::TypeErrorKind;
 
@@ -1191,7 +1191,8 @@ impl<'a> super::TypeChecker<'a> {
             // where-clause at FunctionSig construction
             // (`normalize_bounds_into_where_clause`) so this single
             // discharge call covers both inline and where-clause surfaces.
-            self.discharge_type_bounds(wc, &solutions, discharge_span);
+            let all_param_names: Vec<String> = name_to_id.keys().cloned().collect();
+            self.discharge_type_bounds(wc, &solutions, &all_param_names, discharge_span);
         }
 
         // GAT slice 8c — implicit-trigger walker for
@@ -1279,8 +1280,16 @@ impl<'a> super::TypeChecker<'a> {
         &mut self,
         where_clause: &WhereClause,
         solutions: &HashMap<String, Type>,
+        all_param_names: &[String],
         discharge_span: &Span,
     ) {
+        // Solved fn type-params as a substitution map, for resolving a
+        // parameterized bound's own args (`C: Reduce[T]` where `T` is another
+        // solved param) before comparing them (B-2026-07-02-42).
+        let solutions_subs: HashMap<String, SubstValue> = solutions
+            .iter()
+            .map(|(k, v)| (k.clone(), SubstValue::Type(v.clone())))
+            .collect();
         for constraint in &where_clause.constraints {
             let WhereConstraint::TypeBound {
                 type_name, bounds, ..
@@ -1305,16 +1314,75 @@ impl<'a> super::TypeChecker<'a> {
                 let Some(trait_name) = bound.path.last() else {
                     continue;
                 };
-                if self.type_satisfies_bound(concrete_ty, trait_name) {
+                if !self.type_satisfies_bound(concrete_ty, trait_name) {
+                    let message = self.render_unsatisfied_bound_message(
+                        type_name,
+                        trait_name,
+                        concrete_ty,
+                        bound,
+                    );
+                    self.type_error(message, discharge_span.clone(), TypeErrorKind::TypeMismatch);
                     continue;
                 }
-                let message = self.render_unsatisfied_bound_message(
-                    type_name,
-                    trait_name,
-                    concrete_ty,
-                    bound,
-                );
-                self.type_error(message, discharge_span.clone(), TypeErrorKind::TypeMismatch);
+                // B-2026-07-02-42: a PARAMETERIZED bound (`C: Reduce[i64]`) must
+                // match the impl's trait ARGS. The name check above only proves
+                // `Column` implements `Reduce`; `Column[f64]` implements
+                // `Reduce[f64]`, NOT `Reduce[i64]`, so the mismatched arg must be
+                // rejected (else `run` silently mis-types and `build` dies at LLVM
+                // verification). Only fires when BOTH the impl's args and the
+                // bound's requested args are fully concrete — an unsolved / still-
+                // parametric arg on either side is left to the normal resolution.
+                if let Some(bound_arg_asts) = &bound.generic_args {
+                    if let Some(impl_args) =
+                        self.env.impl_concrete_trait_args(concrete_ty, trait_name)
+                    {
+                        // Lower each requested arg with ALL the fn's type params
+                        // in scope so a param-valued arg (`Reduce[T]`) becomes a
+                        // `TypeParam` (not the bare `Named{"T"}` trap), then
+                        // substitute the solved params. An arg that stays a
+                        // `TypeParam` afterwards is an UNSOLVED param (e.g. `T`
+                        // couldn't be pinned from a type-erased `Column`
+                        // receiver) — skip the comparison so it isn't
+                        // false-rejected.
+                        let want: Vec<Type> = bound_arg_asts
+                            .iter()
+                            .filter_map(|a| match a {
+                                crate::ast::GenericArg::Type(te) => {
+                                    let t = self.lower_type_expr(te, all_param_names);
+                                    Some(substitute_type_params(&t, &solutions_subs))
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                        let decidable = impl_args.len() == want.len()
+                            && !impl_args.iter().chain(want.iter()).any(contains_type_param)
+                            && impl_args
+                                .iter()
+                                .chain(want.iter())
+                                .all(type_is_fully_concrete);
+                        if decidable && impl_args != want {
+                            let render = |v: &[Type]| {
+                                v.iter().map(type_display).collect::<Vec<_>>().join(", ")
+                            };
+                            self.type_error(
+                                format!(
+                                    "trait bound `{}: {}[{}]` is not satisfied; `{}` implements \
+                                     `{}[{}]`, not `{}[{}]`",
+                                    type_name,
+                                    trait_name,
+                                    render(&want),
+                                    type_display(concrete_ty),
+                                    trait_name,
+                                    render(&impl_args),
+                                    trait_name,
+                                    render(&want),
+                                ),
+                                discharge_span.clone(),
+                                TypeErrorKind::TypeMismatch,
+                            );
+                        }
+                    }
+                }
             }
         }
         self.discharge_projection_bounds(where_clause, solutions, discharge_span);

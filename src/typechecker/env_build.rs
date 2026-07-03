@@ -1846,6 +1846,13 @@ impl<'a> super::TypeChecker<'a> {
         // "Option" + target_args [Ordering] before insertion). Theme-4
         // slice — see `phase-4-interpreter.md` § `impl Option[Ordering]`.
         let lowered_target = self.lower_type_expr(&imp.target_type, &impl_gp_names);
+        // Raw target args (with the impl's params, e.g. `Column[T]` →
+        // `[TypeParam("T")]`) — kept for the parameterized-bound arg check even
+        // though `target_args` below collapses to empty for a generic impl.
+        let target_generic_args: Vec<Type> = match &lowered_target {
+            Type::Named { args, .. } => args.clone(),
+            _ => Vec::new(),
+        };
         let (type_name, target_args) = match &lowered_target {
             Type::Named { name, args } => {
                 // Specialized impls store the concrete arg vector;
@@ -1896,6 +1903,22 @@ impl<'a> super::TypeChecker<'a> {
             .trait_name
             .as_ref()
             .and_then(|p| p.segments.last().cloned());
+        // The trait's own generic args (`impl[T] Reduce[T] for Column[T]` →
+        // `[TypeParam("T")]`), lowered with the impl's generic params in scope.
+        // Checked against a parameterized bound's args (B-2026-07-02-42).
+        let trait_args: Vec<Type> = imp
+            .trait_name
+            .as_ref()
+            .and_then(|p| p.generic_args.as_ref())
+            .map(|args| {
+                args.iter()
+                    .filter_map(|a| match a {
+                        GenericArg::Type(te) => Some(self.lower_type_expr(te, &impl_gp_names)),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
         // Phase-5 FFI unions slice 3a: reject `impl Drop for U` when `U`
         // names a registered union. Per design.md § FFI Unions: every
@@ -2118,6 +2141,8 @@ impl<'a> super::TypeChecker<'a> {
             do_not_recommend: imp.do_not_recommend,
             target_args,
             trait_name,
+            trait_args,
+            target_generic_args,
             methods,
             generic_params: imp.generic_params.clone(),
             where_clause: imp.where_clause.clone(),
@@ -2176,6 +2201,8 @@ impl<'a> super::TypeChecker<'a> {
             do_not_recommend: false,
             target_args: Vec::new(),
             trait_name: Some(trait_name.to_string()),
+            trait_args: Vec::new(),
+            target_generic_args: Vec::new(),
             methods,
             // Compiler-internal stdlib impls are unconditional —
             // primitive operator dispatch isn't generic over a bound.
@@ -2330,6 +2357,8 @@ impl<'a> super::TypeChecker<'a> {
                         do_not_recommend: false,
                         target_args: Vec::new(),
                         trait_name: Some("TryFrom".to_string()),
+                        trait_args: Vec::new(),
+                        target_generic_args: Vec::new(),
                         methods,
                         generic_params: None,
                         where_clause: None,
@@ -2413,6 +2442,8 @@ impl<'a> super::TypeChecker<'a> {
                         do_not_recommend: false,
                         target_args: Vec::new(),
                         trait_name: Some("TryFrom".to_string()),
+                        trait_args: Vec::new(),
+                        target_generic_args: Vec::new(),
                         methods,
                         generic_params: None,
                         where_clause: None,

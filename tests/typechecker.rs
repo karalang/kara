@@ -17897,6 +17897,54 @@ fn bounded_generic_impl_methods_resolve() {
 }
 
 #[test]
+fn parameterized_trait_bound_args_checked_against_impl() {
+    // B-2026-07-02-42: a PARAMETERIZED bound's trait args must match the matched
+    // impl's, not just the trait name. `fn spread[C: Reduce[i64]](c: ref C)`
+    // called with a `Column[f64]` (which implements `Reduce[f64]`, NOT
+    // `Reduce[i64]`) used to PASS `check` (name-level impl match), run with
+    // silently-wrong types, and only die at LLVM verification under `build`.
+    // `discharge_type_bounds` now compares the bound's concrete args against the
+    // impl's trait args under the target substitution
+    // (`impl_concrete_trait_args`).
+    let errs = typecheck_errors(
+        "fn spread[C: Reduce[i64]](c: ref C) -> i64 { c.max() - c.min() }\n\
+         fn main() {\n\
+         \x20   let col: Column[f64] = Column.from_vec([1.5, 9.0, 4.0]);\n\
+         \x20   let _ = spread(col);\n\
+         }",
+    );
+    assert!(
+        errs.iter().any(|e| e.message.contains("Reduce[i64]")
+            && e.message.contains("Reduce[f64]")
+            && e.message.contains("not satisfied")),
+        "expected a Reduce[i64]-vs-Reduce[f64] mismatch rejection, got: {}",
+        errs.iter()
+            .map(|e| e.message.clone())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
+fn parameterized_trait_bound_matching_accepted() {
+    // The dual of the rejection test: a MATCHING parameterized bound
+    // (`Column[i64]` against `Reduce[i64]`) must still be accepted — the arg
+    // check only rejects a concrete-vs-concrete mismatch, so it never
+    // false-rejects a genuine match. (A `C: Reduce[T]` bound whose `T` stays
+    // UNSOLVED — e.g. element-erased from a `Column` receiver — is likewise not
+    // rejected by the arg check: it's skipped when either side is still
+    // parametric; that path can't be exercised through `typecheck_ok` because
+    // the unsolved `T` trips the separate `cannot infer 'T'` diagnostic first.)
+    typecheck_ok(
+        "fn spread[C: Reduce[i64]](c: ref C) -> i64 { c.max() - c.min() }\n\
+         fn main() {\n\
+         \x20   let ci: Column[i64] = Column.from_vec([3, 9, 1]);\n\
+         \x20   let _ = spread(ci);\n\
+         }",
+    );
+}
+
+#[test]
 fn method_self_return_type_resolves_to_impl_target() {
     // A method declared `-> Self` returns a value of the concrete impl
     // target (`W`), so the body's tail expression must check against the

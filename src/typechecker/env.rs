@@ -135,6 +135,21 @@ pub struct ImplInfo {
     /// `target_args.is_empty()`.
     pub target_args: Vec<Type>,
     pub trait_name: Option<String>,
+    /// The trait's own generic arguments as written on the impl (`impl[T]
+    /// Reduce[T] for Column[T]` → `[TypeParam("T")]`), lowered with the impl's
+    /// generic params in scope. Used to check a PARAMETERIZED bound's args
+    /// (`C: Reduce[i64]`) against the matched impl under the target
+    /// substitution — `Column[f64]` impls `Reduce[f64]`, not `Reduce[i64]`, so
+    /// the bound must be rejected (B-2026-07-02-42). Empty for a non-generic
+    /// trait (`Ord`, `Add`) or a builtin impl.
+    pub trait_args: Vec<Type>,
+    /// The impl target's generic args AS WRITTEN, including the impl's own
+    /// params (`impl[T] Reduce[T] for Column[T]` → `[TypeParam("T")]`). Unlike
+    /// `target_args` (empty for a generic-on-name impl), this keeps the param
+    /// shape so a concrete receiver (`Column[f64]`) is structurally matched
+    /// against it to bind the impl's params (`T = f64`) and substitute them
+    /// through `trait_args` (B-2026-07-02-42). Empty for a non-generic impl.
+    pub target_generic_args: Vec<Type>,
     pub methods: HashMap<String, FunctionSig>,
     /// Impl-level type-parameter declarations including their inline
     /// bounds (`impl[T: Ord] Foo for Bar[T]`). Populated by
@@ -149,6 +164,38 @@ pub struct ImplInfo {
     /// two compose additively (every predicate must discharge for the
     /// impl to apply).
     pub where_clause: Option<WhereClause>,
+}
+
+/// Structurally bind an impl's type params by matching its target args (`decl`,
+/// e.g. `Column[T]` → `[TypeParam("T")]`) against a concrete receiver's args
+/// (`actual`, e.g. `[f64]`), recursing through compound forms. First binding
+/// wins. Only the parameterized-bound arg check uses this (B-2026-07-02-42).
+fn bind_impl_params(decl: &[Type], actual: &[Type], out: &mut HashMap<String, Type>) {
+    for (d, a) in decl.iter().zip(actual.iter()) {
+        bind_impl_param_one(d, a, out);
+    }
+}
+
+fn bind_impl_param_one(d: &Type, a: &Type, out: &mut HashMap<String, Type>) {
+    match (d, a) {
+        (Type::TypeParam(p), _) => {
+            out.entry(p.clone()).or_insert_with(|| a.clone());
+        }
+        (Type::Named { name: dn, args: da }, Type::Named { name: an, args: aa })
+            if dn == an && da.len() == aa.len() =>
+        {
+            bind_impl_params(da, aa, out);
+        }
+        (Type::Ref(x), Type::Ref(y))
+        | (Type::MutRef(x), Type::MutRef(y))
+        | (Type::Weak(x), Type::Weak(y)) => bind_impl_param_one(x, y, out),
+        (Type::Slice { element: x, .. }, Type::Slice { element: y, .. })
+        | (Type::Array { element: x, .. }, Type::Array { element: y, .. }) => {
+            bind_impl_param_one(x, y, out)
+        }
+        (Type::Tuple(xs), Type::Tuple(ys)) if xs.len() == ys.len() => bind_impl_params(xs, ys, out),
+        _ => {}
+    }
 }
 
 /// Associated type names declared by a trait.
@@ -729,6 +776,46 @@ impl TypeEnv {
             }
         }
         false
+    }
+
+    /// For a CONCRETE `concrete_ty` (`Column[f64]`) that implements a GENERIC
+    /// `trait_name` (`Reduce`), return the trait's concrete generic args
+    /// (`[f64]`) — the impl's params bound by structurally matching its target
+    /// against `concrete_ty`, then substituted through the impl's `trait_args`.
+    /// `None` when there's no matching impl, the trait carries no args on the
+    /// impl (`Ord`, `Add`), or the receiver isn't nominal — the caller then
+    /// skips the parameterized-bound arg check (conservative, no false
+    /// rejection). B-2026-07-02-42.
+    pub(super) fn impl_concrete_trait_args(
+        &self,
+        concrete_ty: &Type,
+        trait_name: &str,
+    ) -> Option<Vec<Type>> {
+        let (ty_name, ty_args) = impl_table_key(concrete_ty)?;
+        for imp in &self.impls {
+            if imp.target_type != ty_name || imp.trait_name.as_deref() != Some(trait_name) {
+                continue;
+            }
+            if !impl_args_match(&imp.target_args, &ty_args) {
+                continue;
+            }
+            if imp.trait_args.is_empty() {
+                return None;
+            }
+            let mut subst: HashMap<String, Type> = HashMap::new();
+            bind_impl_params(&imp.target_generic_args, &ty_args, &mut subst);
+            let subs: HashMap<String, super::types::SubstValue> = subst
+                .into_iter()
+                .map(|(k, v)| (k, super::types::SubstValue::Type(v)))
+                .collect();
+            return Some(
+                imp.trait_args
+                    .iter()
+                    .map(|t| super::inference::substitute_type_params(t, &subs))
+                    .collect(),
+            );
+        }
+        None
     }
 
     /// BFS over the supertrait graph. `true` iff `target_trait` is reachable
