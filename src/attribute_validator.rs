@@ -131,6 +131,13 @@ const RECOGNIZED_BARE_ATTRIBUTES: &[&str] = &[
     // name-set validation is parse-level (`parser/attributes.rs`);
     // absence semantics live in `target::filter_inactive_items`.
     "target",
+    // Profile compatibility — `#[profile(P1, P2, ...)]` on a function
+    // asserts its effect set satisfies the intersection of the listed
+    // profiles' constraints (phase-5-diagnostics.md line 510). Parsed by
+    // `parser/items.rs::scan_profile_attr` into `Function.profile_compat`;
+    // placement/name validation in `resolver/collect.rs`; enforcement in
+    // `effectchecker/profile_compat.rs`.
+    "profile",
     // Portable SIMD — `#[require_simd]` on a function makes scalar
     // fallback for any `Vector[T, N]` op in its body a hard build error
     // (phase-7-codegen.md line 308). Read by `simd_report::require_simd_errors`;

@@ -147,6 +147,17 @@ On a `struct` or as a wrapper type: require at least `N`-byte alignment.
 
 ## Functions
 
+### `#[profile(P1, P2, ...)]`
+
+On a function: asserts that its transitive effect set is compatible with the *intersection* of the listed profiles' constraints — the function must satisfy the strictest constraint from any listed profile. The v1 profile names are `default` (forbids nothing), `embedded` (forbids `allocates(Heap)`), and `kernel` (forbids `allocates(*)`, `panics`, `blocks`, `suspends`). A forbidden effect in the function's declared or inferred set is `error[E_PROFILE_INCOMPATIBLE_EFFECT]`; an unknown profile name is `error[E_UNKNOWN_PROFILE]`.
+
+```kara
+#[profile(embedded, kernel)]
+fn scale(x: i64, factor: i64) -> i64 {
+    x * factor
+}
+```
+
 ### `#[must_use]`  /  `#[must_use = "reason"]`
 
 On a **type**: every binding site where a value of this type would be silently dropped produces a warning. Use for types that must be explicitly handled (e.g., a connection that must be closed).

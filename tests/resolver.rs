@@ -3913,6 +3913,18 @@ fn attr_slice2_recognised_bare_attributes_accepted() {
 }
 
 #[test]
+fn attr_slice2_profile_attribute_recognised() {
+    // `#[profile(...)]` is a fully-wired attribute (parser scan →
+    // `Function.profile_compat` → effect-checker enforcement in
+    // `effectchecker/profile_compat.rs`) but was missing from
+    // `RECOGNIZED_BARE_ATTRIBUTES`, so every use also emitted a bogus
+    // E_UNKNOWN_ATTRIBUTE alongside the real profile diagnostics.
+    // B-2026-07-02-32.
+    assert_no_unknown_attribute("#[profile(embedded)]\nfn f() { }");
+    assert_no_unknown_attribute("#[profile(embedded, kernel)]\nfn g() { }");
+}
+
+#[test]
 fn attr_slice2_diagnostic_namespaced_unknown_member_accepted_silently() {
     // The headline rule of the compiler-reserved namespace — even a
     // member the compiler has never heard of is silently accepted
