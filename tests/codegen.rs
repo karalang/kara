@@ -46054,6 +46054,93 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_user_trait_bound_dispatch_column_and_tensor_monos() {
+        // S6a probe p7: one bound-generic fn instantiated at BOTH
+        // handle-backed builtins. Guards three fixes at once:
+        // (1) the mono var-side-table leak (mono #1's `c → Column` entry
+        //     leaked into mono #2, compiling the Tensor as a Column —
+        //     SIGSEGV; `SavedVarSideTables`),
+        // (2) the same-LLVM-shape mono collision (both args are `ptr`, so
+        //     both instantiations mangled identically and shared one
+        //     body; `mono_handle_param_infos` adds the
+        //     `$c_col_i64`/`$c_ten_i64_4` axis),
+        // (3) the typechecker's bound trait-arg substitution
+        //     (`C: MyReduce[i64]` typed `c.sum()` as raw `T`).
+        let src = r#"
+trait MyReduce[T] {
+    fn sum(ref self) -> T;
+    fn min(ref self) -> T;
+    fn max(ref self) -> T;
+    fn mean(ref self) -> f64;
+}
+impl[T] MyReduce[T] for Column[T] {
+    fn sum(ref self) -> T {
+        self.sum()
+    }
+    fn min(ref self) -> T {
+        self.min()
+    }
+    fn max(ref self) -> T {
+        self.max()
+    }
+    fn mean(ref self) -> f64 {
+        self.mean()
+    }
+}
+impl[T, ...S] MyReduce[T] for Tensor[T, S] {
+    fn sum(ref self) -> T {
+        self.sum()
+    }
+    fn min(ref self) -> T {
+        self.min()
+    }
+    fn max(ref self) -> T {
+        self.max()
+    }
+    fn mean(ref self) -> f64 {
+        self.mean()
+    }
+}
+fn report[C: MyReduce[i64]](c: ref C) -> i64 {
+    println(f"{c.sum()} {c.min()} {c.max()} {c.mean()}");
+    c.sum()
+}
+fn main() {
+    let c: Column[i64] = Column.from_vec([10, 20, 30]);
+    let t: Tensor[i64, [4]] = Tensor.from([2, 4, 6, 8]);
+    println(f"{report(c) + report(t)}");
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        assert_eq!(out, "60 10 30 20\n20 2 8 5\n80\n");
+    }
+
+    #[test]
+    fn test_e2e_stdlib_reduce_trait_bound_dispatch() {
+        // S6a acceptance: the BAKED `Reduce[T]` trait + the
+        // `#[compiler_builtin]` Column/Tensor impls. Bound-generic
+        // dispatch routes to the reduction kernels on both
+        // instantiations; concrete-receiver calls are unchanged.
+        let src = r#"
+fn spread[C: Reduce[i64]](c: ref C) -> i64 {
+    c.max() - c.min()
+}
+fn avg[C: Reduce[i64]](c: ref C) -> f64 {
+    c.mean()
+}
+fn main() {
+    let c: Column[i64] = Column.from_vec([10, 20, 30]);
+    let t: Tensor[i64, [4]] = Tensor.from([2, 4, 6, 8]);
+    println(f"{spread(c)} {spread(t)}");
+    println(f"{avg(c)} {avg(t)}");
+    println(f"{c.sum()} {t.sum()}");
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        assert_eq!(out, "20 6\n20 5\n60 20\n");
+    }
+
+    #[test]
     fn test_e2e_narrow_literal_all_sinks_pack_contextual_width() {
         // B-2026-07-02-6 general fix: the typechecker re-records a collection
         // literal admitted against a scalar-element Vec/Slice/ref-Vec context

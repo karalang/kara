@@ -1,0 +1,24 @@
+// runtime/stdlib/elementwise_map.kara
+//
+// `ElementwiseMap[T]` — the surface trait over the shared elementwise
+// kernel (`emit_elementwise_map`, spike
+// `docs/spikes/reduce-elementwise-trait-unification.md` § 3, S6a).
+// DECLARATION-ONLY in S6a: no builtin implements it yet — the Column /
+// Tensor elementwise surface is operator-driven (`a + b`, unary `-`)
+// and none of the builtins has a closure-taking `map`/`zip_with`
+// method. Builtin impls (closure-kernel loops) and user impls land
+// with S6c.
+//
+// v1 restriction (spike § 3.3 item 5): `map` preserves the element
+// type (`Fn(T) -> T`) — element-type-CHANGING map needs associated-
+// type constructors and is deferred.
+
+trait ElementwiseMap[T] {
+    // Apply `f` to every element, yielding a same-shaped container.
+    // Implementors with validity semantics (null slots) propagate
+    // nulls: `f` runs on valid slots only.
+    fn map(ref self, f: Fn(T) -> T) -> Self;
+
+    // Combine two same-shaped containers elementwise.
+    fn zip_with(ref self, other: ref Self, f: Fn(T, T) -> T) -> Self;
+}

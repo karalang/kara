@@ -1,0 +1,40 @@
+// runtime/stdlib/reduce.kara
+//
+// `Reduce[T]` — the surface trait over the shared reduction kernel
+// (`src/codegen/kernel.rs` + `src/reduce_kernel.rs`; spike
+// `docs/spikes/reduce-elementwise-trait-unification.md` § 3, S6a).
+// Implemented by the handle-backed numeric containers (`Column[T]`,
+// `Tensor[T, S]`) with `#[compiler_builtin]` methods: dispatch on a
+// concrete receiver never reaches the impl bodies — the typechecker /
+// interpreter / codegen intercepts route to the kernels exactly as the
+// inherent methods do. What the trait ADDS is bound-generic dispatch:
+//
+//     fn spread[C: Reduce[i64]](c: ref C) -> i64 { c.max() - c.min() }
+//
+// accepts a `Column[i64]` and a `Tensor[i64, [n]]` alike, on both
+// `karac run` and `karac build` (per-instantiation monomorphization —
+// no vtables; the S6a mono plumbing threads the concrete receiver type
+// through `mono_handle_param_infos`).
+//
+// v1 shape notes (deliberate divergences from the spike sketch):
+// - `min`/`max` return `T` and TRAP on an empty/all-null input — the
+//   established Column/Tensor policy (empty policies stay op-level,
+//   spike invariant #1). The `Option[T]`-returning forms and `fold`/
+//   `product` (which need default method bodies + generic trait
+//   methods) land with S6b.
+// - `mean` always yields `f64`, integer elements included — matching
+//   the inherent methods on both implementors.
+
+trait Reduce[T] {
+    // Sum of the (valid) elements; overflow traps as for scalar `+`.
+    fn sum(ref self) -> T;
+
+    // Smallest element. Traps on an empty (or all-null) input.
+    fn min(ref self) -> T;
+
+    // Largest element. Traps on an empty (or all-null) input.
+    fn max(ref self) -> T;
+
+    // Arithmetic mean as `f64` (integer elements widen exactly).
+    fn mean(ref self) -> f64;
+}

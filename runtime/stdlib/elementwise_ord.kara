@@ -1,0 +1,28 @@
+// runtime/stdlib/elementwise_ord.kara
+//
+// `ElementwiseOrd[T]` — the surface trait over the shared order-
+// statistics kernel (`emit_sort_scratch` / `emit_reduce_argminmax`,
+// spike `docs/spikes/reduce-elementwise-trait-unification.md` § 3,
+// S6a). DECLARATION-ONLY in S6a: the kernel currently backs the
+// `Stats.*` free functions over `Slice`; none of the handle-backed
+// builtins exposes these as METHODS yet, and `Slice` is not a nominal
+// type an impl can target (the same wall as `impl … for Vec[T]`,
+// S6-pre finding 4b). Builtin + user impls land with S6c.
+//
+// v1 shape note: the spike sketch bounds the trait param (`[T: Ord]`);
+// v1 leaves it unbounded — implementors' element sets are numeric and
+// the kernel's comparators are total (NaN-last for floats). Revisit
+// with S6c's user impls.
+
+trait ElementwiseOrd[T] {
+    // Index of the first minimum / maximum, `None` for an empty input
+    // (mirroring `Stats.argmin` / `Stats.argmax`).
+    fn argmin(ref self) -> Option[i64];
+    fn argmax(ref self) -> Option[i64];
+
+    // Fresh ascending copy of the elements; the receiver is unchanged.
+    fn sorted(ref self) -> Vec[T];
+
+    // Indices that sort the input ascending (stable).
+    fn argsort(ref self) -> Vec[i64];
+}

@@ -18950,3 +18950,31 @@ fn size_of_unsupported_type_arg_shape_is_runtime_error_not_panic() {
         errors[0].message
     );
 }
+
+// ── S6a: baked Reduce trait, bound-generic dispatch ────────────────
+
+#[test]
+fn stdlib_reduce_trait_bound_dispatch_column_and_tensor() {
+    // S6a: `fn spread[C: Reduce[i64]](c: ref C)` accepts both builtin
+    // implementors; the receiver dispatches through the value-shape
+    // intercepts to the shared reduction kernel (the baked
+    // `#[compiler_builtin]` impl bodies never run).
+    let out = run_no_errors(
+        r#"
+fn spread[C: Reduce[i64]](c: ref C) -> i64 {
+    c.max() - c.min()
+}
+fn avg[C: Reduce[i64]](c: ref C) -> f64 {
+    c.mean()
+}
+fn main() {
+    let c: Column[i64] = Column.from_vec([10, 20, 30]);
+    let t: Tensor[i64, [4]] = Tensor.from([2, 4, 6, 8]);
+    println(f"{spread(c)} {spread(t)}");
+    println(f"{avg(c)} {avg(t)}");
+    println(f"{c.sum()} {t.sum()}");
+}
+"#,
+    );
+    assert_eq!(out, "20 6\n20 5\n60 20\n");
+}

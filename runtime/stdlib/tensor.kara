@@ -268,3 +268,30 @@ impl[T, ...S] Tensor[T, S] {
 //
 // The element type must be numeric. Per-element ops inherit the scalar
 // semantics exactly — integer overflow and divide-by-zero trap.
+
+// `Reduce[T]` surface-trait impl (S6a) — see the matching block in
+// column.kara: pure formalization of the inherent reduction methods so
+// `Tensor[T, S]` satisfies `Reduce[T]` bounds; concrete-receiver AND
+// bound-generic dispatch both route through the existing intercepts to
+// the shared reduction kernels (the bodies below never run).
+impl[T, ...S] Reduce[T] for Tensor[T, S] {
+    #[compiler_builtin]
+    fn sum(ref self) -> T {
+        loop {}
+    }
+
+    #[compiler_builtin]
+    fn min(ref self) -> T {
+        loop {}
+    }
+
+    #[compiler_builtin]
+    fn max(ref self) -> T {
+        loop {}
+    }
+
+    #[compiler_builtin]
+    fn mean(ref self) -> f64 {
+        0.0
+    }
+}

@@ -381,6 +381,15 @@ pub const PRELUDE_TRAITS: &[&str] = &[
     // `runtime/stdlib/task_group.kara`); future scope-bound handles
     // (RAII guards, scope-bound iterators) implement it the same way.
     "ScopeLocal",
+    // Reduce/elementwise surface traits (S6a, reduce-elementwise-trait-
+    // unification spike): prelude-visible so user code can write
+    // `fn f[C: Reduce[i64]](c: ref C)` bounds (and, from S6b on, its
+    // own impls) without an import. Declarations in
+    // `runtime/stdlib/reduce.kara` / `elementwise_map.kara` /
+    // `elementwise_ord.kara`.
+    "Reduce",
+    "ElementwiseMap",
+    "ElementwiseOrd",
 ];
 
 /// Enum variant names from prelude enums (`Option`, `Result`, `Ordering`,
@@ -854,6 +863,20 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     (
         "intrinsics.kara",
         include_str!("../runtime/stdlib/intrinsics.kara"),
+    ),
+    // The reduce/elementwise surface traits (S6a of the
+    // reduce-elementwise-trait-unification spike). Registered BEFORE
+    // tensor.kara / column.kara, whose impl blocks reference them.
+    // `Reduce[T]` is implemented by Column/Tensor; the two Elementwise
+    // traits are declaration-only until S6c.
+    ("reduce.kara", include_str!("../runtime/stdlib/reduce.kara")),
+    (
+        "elementwise_map.kara",
+        include_str!("../runtime/stdlib/elementwise_map.kara"),
+    ),
+    (
+        "elementwise_ord.kara",
+        include_str!("../runtime/stdlib/elementwise_ord.kara"),
     ),
     // `Tensor[T, Shape]` shape-typed N-D container (phase-11 numerical
     // stdlib). Interpreter MVP: zeros/ones/full + shape/rank + tuple
@@ -1783,6 +1806,28 @@ mod tests {
         let names: Vec<&str> = STDLIB_SOURCES.iter().map(|(n, _)| *n).collect();
         assert!(names.contains(&"display.kara"));
         assert!(names.contains(&"debug.kara"));
+    }
+
+    #[test]
+    fn stdlib_sources_contains_reduce_elementwise_traits() {
+        // S6a (reduce-elementwise-trait-unification spike): the three
+        // surface traits join the baked surface, BEFORE tensor.kara /
+        // column.kara (whose impl blocks reference Reduce).
+        let names: Vec<&str> = STDLIB_SOURCES.iter().map(|(n, _)| *n).collect();
+        for f in [
+            "reduce.kara",
+            "elementwise_map.kara",
+            "elementwise_ord.kara",
+        ] {
+            assert!(
+                names.contains(&f),
+                "STDLIB_SOURCES should contain {f}, got: {names:?}"
+            );
+        }
+        let reduce_pos = names.iter().position(|n| *n == "reduce.kara").unwrap();
+        let tensor_pos = names.iter().position(|n| *n == "tensor.kara").unwrap();
+        let column_pos = names.iter().position(|n| *n == "column.kara").unwrap();
+        assert!(reduce_pos < tensor_pos && reduce_pos < column_pos);
     }
 
     #[test]

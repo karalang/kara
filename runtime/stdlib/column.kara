@@ -213,3 +213,33 @@ impl[T] Column[T] {
         0.0
     }
 }
+
+// `Reduce[T]` surface-trait impl (S6a, reduce-elementwise-trait-
+// unification spike). Pure formalization: the method set/signatures
+// mirror the inherent `#[compiler_builtin]` methods above, and a call
+// on a concrete `Column` receiver dispatches through the SAME
+// typechecker/interpreter/codegen intercepts (the impl bodies below
+// never run). What this block adds is bound-satisfaction — a
+// `fn f[C: Reduce[i64]](c: ref C)` accepts a `Column[i64]`, and the
+// mono's receiver still routes to the reduction kernels.
+impl[T] Reduce[T] for Column[T] {
+    #[compiler_builtin]
+    fn sum(ref self) -> T {
+        loop {}
+    }
+
+    #[compiler_builtin]
+    fn min(ref self) -> T {
+        loop {}
+    }
+
+    #[compiler_builtin]
+    fn max(ref self) -> T {
+        loop {}
+    }
+
+    #[compiler_builtin]
+    fn mean(ref self) -> f64 {
+        0.0
+    }
+}
