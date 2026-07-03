@@ -314,6 +314,22 @@ pub type RefReturnInnerTypesTable = std::collections::HashMap<(usize, usize), Ty
 /// be registered in `closure_fn_types` for indirect calls (B-2026-06-21-3).
 pub type FnValueTypedExprsTable = std::collections::HashMap<(usize, usize), TypeExpr>;
 
+/// Side-table populated by the lowering pass from
+/// `TypeCheckResult.call_type_subs`: for every generic call site, maps the
+/// call expression's span `(offset, length)` to the resolved
+/// `{ formal-generic-param-name -> concrete-type-name }` substitution the
+/// typechecker inferred (e.g. `head(a)` where `a: Vec[i64]` records
+/// `{ "T" -> "i64" }`). Codegen's `compile_generic_call` consumes this to
+/// bind type params the LLVM-type-based `infer_type_args` can't recover —
+/// notably a container element type (`ref Vec[T]`), whose `{ptr,len,cap}`
+/// LLVM shape is element-erased, so two element-type instantiations would
+/// otherwise collide into one monomorph (B-2026-07-02-41). The concrete
+/// name is resolved through the active `type_subst` at the call site, so a
+/// nested generic call inside a monomorph (`"T"`) flattens to the outer
+/// binding.
+pub type CallTypeSubsTable =
+    std::collections::HashMap<(usize, usize), std::collections::HashMap<String, String>>;
+
 /// Side-table populated by the lowering pass from the typechecker's
 /// `pattern_binding_types` map. Maps each pattern-binding's span (offset,
 /// length) to the canonical surface type name (e.g. `"MyError"`). Used by
@@ -598,6 +614,12 @@ pub struct Program {
     /// `closure_fn_types` so a later `g(x)` lowers to an indirect call
     /// (B-2026-06-21-3). See [`FnValueTypedExprsTable`].
     pub fn_value_typed_exprs: FnValueTypedExprsTable,
+    /// Set by the lowering pass from `TypeCheckResult.call_type_subs`: the
+    /// resolved generic-call type-arg substitution per call span. Codegen's
+    /// `compile_generic_call` consumes it to bind container element type
+    /// params the LLVM-type-based inference can't (B-2026-07-02-41). See
+    /// [`CallTypeSubsTable`].
+    pub call_type_subs: CallTypeSubsTable,
     /// Set by the lowering pass from `TypeCheckResult.expr_types`: for
     /// every `Tensor[T, Shape]`-typed expression with statically-known
     /// rank, its element type + static dims. See [`TensorTypedExprsTable`].

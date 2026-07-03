@@ -220,6 +220,17 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             .fn_value_typed_exprs
             .insert((k.0, k.1), fn_ty_expr.clone());
     }
+    // Forward the per-call-site generic type-arg substitution so codegen's
+    // `compile_generic_call` can bind type params the LLVM-type-based
+    // inference can't recover — a container element type (`ref Vec[T]`)
+    // whose `{ptr,len,cap}` shape is element-erased (B-2026-07-02-41). The
+    // interpreter reads `tc.call_type_subs` directly; codegen takes only
+    // `Program`, so mirror the map here.
+    program.call_type_subs = tc
+        .call_type_subs
+        .iter()
+        .map(|(k, v)| ((k.0, k.1), v.clone()))
+        .collect();
     // Sibling to `string_typed_exprs`: for every `Tensor[T, Shape]`-typed
     // expression whose rank is statically known (concrete `Type::Shape`,
     // no `...` splice), record the element type (as a TypeExpr, lowered

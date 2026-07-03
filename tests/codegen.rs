@@ -39527,10 +39527,13 @@ fn main() {
                  driver(v);
              }",
         );
-        // State-struct field is ptr-shaped.
+        // State-struct field is ptr-shaped. The mono is `driver$struct`
+        // (T = Vec[i64] now binds via the call-site type-arg record —
+        // B-2026-07-02-41; the `$` forces LLVM to quote the type name),
+        // so match by substring rather than an exact `driver` prefix.
         let state_line = ir
             .lines()
-            .find(|l| l.starts_with("%kara.state.driver = type {"))
+            .find(|l| l.contains("kara.state.driver") && l.contains("= type {"))
             .unwrap_or_else(|| panic!("no state struct in IR:\n{ir}"));
         assert!(
             state_line.contains("{ i32, ptr }"),
@@ -39717,10 +39720,13 @@ fn main() {
                  driver(mut n);
              }",
         );
-        // State-struct field is ptr-shaped.
+        // State-struct field is ptr-shaped. The mono is `driver$i64`
+        // (T = i64 now binds via the call-site type-arg record —
+        // B-2026-07-02-41; the `$` forces LLVM to quote the type name),
+        // so match by substring rather than an exact `driver` prefix.
         let state_line = ir
             .lines()
-            .find(|l| l.starts_with("%kara.state.driver"))
+            .find(|l| l.contains("kara.state.driver") && l.contains("= type {"))
             .unwrap_or_else(|| panic!("no state struct in IR:\n{ir}"));
         assert!(
             state_line.contains("ptr"),
@@ -46211,6 +46217,39 @@ fn main() {
 "#;
         let out = run_program(src).expect("program should compile and run");
         assert_eq!(out, "20 6\n20 5\n60 20\n");
+    }
+
+    #[test]
+    fn test_e2e_vec_elem_generic_mono_distinct_per_element_type() {
+        // B-2026-07-02-41 (S6b-1): two element-type instantiations of a
+        // `ref Vec[T]` generic fn must be DISTINCT monomorphs. The
+        // LLVM-value-based `infer_type_args` sees only the element-erased
+        // `{ptr,len,cap}` shape, so `T` stayed unbound and both calls
+        // shared one mono — the f64 call read the i64 element width and
+        // printed `2.5`'s bit pattern as an integer. Fixed by (a) a
+        // typechecker `unify_types` owned-to-`ref` coercion arm so `T`
+        // solves from the `Vec[i64]` arg, plumbed to codegen via
+        // `call_type_subs`; and (b) a codegen container-element fallback
+        // for the nested call `first(v)` inside `wrap[T]`, which the
+        // typechecker records as a dropped self-referential `T -> T`.
+        let src = r#"
+fn first[T](v: ref Vec[T]) -> T {
+    v[0]
+}
+fn wrap[T](v: ref Vec[T]) -> T {
+    first(v)
+}
+fn main() {
+    let a: Vec[i64] = vec![7, 8, 9];
+    let b: Vec[f64] = vec![2.5, 3.5];
+    println(f"{first(a)}");
+    println(f"{first(b)}");
+    println(f"{wrap(a)}");
+    println(f"{wrap(b)}");
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        assert_eq!(out, "7\n2.5\n7\n2.5\n");
     }
 
     #[test]

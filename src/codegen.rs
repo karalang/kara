@@ -2117,6 +2117,18 @@ pub(super) struct Codegen<'ctx> {
     /// an un-annotated fn-value binding (`let g = h.f;`) in `closure_fn_types`
     /// so `g(x)` lowers to an indirect call (B-2026-06-21-3).
     pub(crate) fn_value_typed_exprs: HashMap<(usize, usize), TypeExpr>,
+    /// Per-generic-call-site resolved type-arg substitution
+    /// (`{ formal-param-name -> concrete-type-name }`), keyed by the call
+    /// expression's `(span.offset, span.length)`. From
+    /// `Program.call_type_subs` (lowering pass, from
+    /// `TypeCheckResult.call_type_subs`). `compile_generic_call` consults it
+    /// to bind type params the LLVM-type-based `infer_type_args` can't — a
+    /// container element type (`ref Vec[T]`) is element-erased in its
+    /// `{ptr,len,cap}` LLVM shape, so two element instantiations would share
+    /// one monomorph without this (B-2026-07-02-41). Concrete names resolve
+    /// through the active `type_subst` (via `llvm_type_for_name`), so a
+    /// nested generic call inside a mono flattens transitively.
+    pub(crate) call_type_subs: HashMap<(usize, usize), HashMap<String, String>>,
     /// Per-expression Tensor type info (element TypeExpr + static dims),
     /// keyed by `(span.offset, span.length)`. Populated from
     /// `Program.tensor_typed_exprs` (lowering pass, from
@@ -5344,6 +5356,7 @@ impl<'ctx> Codegen<'ctx> {
             user_ref_method_names: std::collections::HashSet::new(),
             string_typed_exprs: HashSet::new(),
             fn_value_typed_exprs: HashMap::new(),
+            call_type_subs: HashMap::new(),
             tensor_typed_exprs: HashMap::new(),
             tensor_var_infos: HashMap::new(),
             pending_let_tensor_info: None,
@@ -6236,6 +6249,10 @@ impl<'ctx> Codegen<'ctx> {
         // 3-word types, so the value alone can't distinguish them.
         self.string_typed_exprs = program.string_typed_exprs.clone();
         self.fn_value_typed_exprs = program.fn_value_typed_exprs.clone();
+        // Per-generic-call-site resolved type-arg substitution — lets
+        // `compile_generic_call` bind container element type params the
+        // LLVM-type inference can't (B-2026-07-02-41).
+        self.call_type_subs = program.call_type_subs.clone();
         // Sibling: per-span Tensor element-type + static-dims info for
         // construction / let-registration / indexing dispatch (see
         // `src/codegen/tensor.rs`).

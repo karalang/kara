@@ -108,6 +108,98 @@ impl<'ctx> super::Codegen<'ctx> {
         out
     }
 
+    /// Bind container-element type params from an identifier arg's
+    /// registered element type (`vec_elem_types` / `slice_elem_types` /
+    /// `set_elem_types` / `map_key_types` / `map_val_types`). Complements
+    /// `call_type_subs` for the nested-call case the typechecker drops as a
+    /// self-referential `T -> T` binding. Only fills gaps `infer_type_args`
+    /// / the `call_type_subs` augmentation left, and only when the param's
+    /// (ref-peeled) declared element is a bare type param of `func` — so a
+    /// concrete `Vec[i64]` param binds nothing. No-op unless the arg is a
+    /// plain identifier with a registered element type.
+    fn augment_subst_from_arg_elem_types(
+        &self,
+        func: &Function,
+        args: &[CallArg],
+        subst: &mut HashMap<String, BasicTypeEnum<'ctx>>,
+    ) {
+        let Some(gp) = &func.generic_params else {
+            return;
+        };
+        let is_param = |n: &str| gp.params.iter().any(|p| !p.is_const && p.name == n);
+        for (param, arg) in func.params.iter().zip(args.iter()) {
+            let ExprKind::Identifier(arg_name) = &arg.value.kind else {
+                continue;
+            };
+            let peeled = match &param.ty.kind {
+                TypeKind::Ref(inner) | TypeKind::MutRef(inner) => inner.as_ref(),
+                _ => &param.ty,
+            };
+            let TypeKind::Path(path) = &peeled.kind else {
+                continue;
+            };
+            let head = path.segments.last().map(|s| s.as_str()).unwrap_or("");
+            let gargs = match &path.generic_args {
+                Some(g) => g,
+                None => continue,
+            };
+            // Name of the element/key/value type param at a given generic-arg
+            // position, if it is a bare type param of `func`.
+            let param_at = |idx: usize| -> Option<String> {
+                match gargs.get(idx)? {
+                    GenericArg::Type(te) => {
+                        if let TypeKind::Path(p) = &te.kind {
+                            if p.segments.len() == 1 && p.generic_args.is_none() {
+                                let n = p.segments[0].clone();
+                                if is_param(&n) {
+                                    return Some(n);
+                                }
+                            }
+                        }
+                        None
+                    }
+                    _ => None,
+                }
+            };
+            match head {
+                "Vec" | "VecDeque" => {
+                    if let (Some(pn), Some(&elem)) =
+                        (param_at(0), self.vec_elem_types.get(arg_name.as_str()))
+                    {
+                        subst.entry(pn).or_insert(elem);
+                    }
+                }
+                "Slice" => {
+                    if let (Some(pn), Some(&elem)) =
+                        (param_at(0), self.slice_elem_types.get(arg_name.as_str()))
+                    {
+                        subst.entry(pn).or_insert(elem);
+                    }
+                }
+                "Set" => {
+                    if let (Some(pn), Some(&elem)) =
+                        (param_at(0), self.set_elem_types.get(arg_name.as_str()))
+                    {
+                        subst.entry(pn).or_insert(elem);
+                    }
+                }
+                "Map" => {
+                    if let (Some(kn), Some(&kty)) =
+                        (param_at(0), self.map_key_types.get(arg_name.as_str()))
+                    {
+                        subst.entry(kn).or_insert(kty);
+                    }
+                    if let (Some(vn), Some(&vty)) =
+                        (param_at(1), self.map_val_types.get(arg_name.as_str()))
+                    {
+                        subst.entry(vn).or_insert(vty);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Append the handle-arg axis to a mangled mono name:
     /// `$<param>_col_<elem>` / `$<param>_ten_<elem>_<d0>_...` (dynamic
     /// dims mangle as `x`). Without this, `report[C](c: ref C)` called
@@ -225,6 +317,44 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Infer type arguments from the argument value types.
         let mut subst = self.infer_type_args(&generic_fn, &arg_vals);
+
+        // B-2026-07-02-41: augment the LLVM-type-based subst with the
+        // typechecker's recorded per-call type args. `infer_type_args`
+        // binds only bare-`T` params — a container's `{ptr,len,cap}` LLVM
+        // shape is element-erased, so a `ref Vec[T]` / `Column[T]` param
+        // leaves `T` unbound, and two element-type instantiations then
+        // mangle identically and share one (wrong) monomorph (the second
+        // call reads the first's element width). The recorded frame names
+        // the concrete element type; resolve it through the active
+        // `type_subst` (so a nested generic call inside a mono flattens the
+        // outer `T`) via `llvm_type_for_name`, filling only the gaps
+        // `infer_type_args` couldn't bind — the explicit-generic-args pass
+        // below still overrides. Also feeds the mangle (via `subst`), so
+        // the two instantiations become distinct symbols.
+        if let Some(frame) = self
+            .call_type_subs
+            .get(&(call_span.offset, call_span.length))
+            .cloned()
+        {
+            for (param_name, concrete_name) in frame {
+                if let std::collections::hash_map::Entry::Vacant(e) = subst.entry(param_name) {
+                    let llvm = self.llvm_type_for_name(&concrete_name);
+                    e.insert(llvm);
+                }
+            }
+        }
+        // Container-element fallback for the nested-call case the
+        // typechecker can't record: inside a mono `wrap[T](v: ref Vec[T])`
+        // the inner call `first(v)` resolves first's `T` to the OUTER `T`,
+        // which `record_call_type_subs` deliberately drops as a
+        // self-referential binding — so `call_type_subs` is empty there.
+        // But codegen already knows `v`'s concrete element type from the
+        // enclosing mono's param registration (`vec_elem_types` etc.), so
+        // bind any container-element type param straight from the arg's
+        // registered element. Also covers the top-level case (a let-bound
+        // `a: Vec[i64]` is registered the same way), making the two
+        // element instantiations distinct monos regardless of nesting.
+        self.augment_subst_from_arg_elem_types(&generic_fn, args, &mut subst);
 
         // Const generics slice 1b: process explicit generic args. For
         // each formal param the user supplied an explicit arg for,
