@@ -78,10 +78,16 @@ pub enum ResolvedSource {
         /// only in the reserved/pre-fetch forward-compat shape.
         dir: PathBuf,
     },
-    /// Reserved for slice-7 wiring (see `Registry` carve-out).
+    /// A resolved git dep: the clone URL + requested ref plus the on-disk
+    /// directory the repo was checked out to. The URL + ref feed the
+    /// lockfile (reproducibility); `dir` is where the CLI module loader
+    /// (`dep_package_walks`) reads the package's source to compile it —
+    /// machine-local and transient, so intentionally *not* recorded in
+    /// `kara.lock` (mirrors `Registry`'s `dir`).
     Git {
         url: String,
         reference: Option<GitRef>,
+        dir: PathBuf,
     },
 }
 
@@ -383,11 +389,43 @@ pub fn resolve_with_offline(
                         }
                     }
                 }
-                DependencySpec::Git { .. } => {
-                    return Err(Box::new(ResolverError::GitDepUnsupported {
-                        package: dep_name.clone(),
-                        declared_in: manifest_dir.clone(),
-                    }));
+                DependencySpec::Git { version, .. } => {
+                    // A git dep resolves only if the graph walk actually
+                    // cloned it (a `GitProvider` was configured). If not, it
+                    // stays unsupported — the pre-fetch behavior.
+                    match graph
+                        .git_resolutions
+                        .get(&(manifest_dir.clone(), dep_name.clone()))
+                    {
+                        Some(res) => {
+                            let child_manifest =
+                                graph.manifests.get(&res.dir).ok_or_else(|| {
+                                    Box::new(ResolverError::GitDepUnsupported {
+                                        package: dep_name.clone(),
+                                        declared_in: manifest_dir.clone(),
+                                    })
+                                })?;
+                            let resolved_name = child_manifest.name.clone();
+                            upsert_git(
+                                &mut packages,
+                                resolved_name,
+                                res.url.clone(),
+                                res.reference.clone(),
+                                res.dir.clone(),
+                                sentinel.clone(),
+                                DeclarationEdge {
+                                    parent: parent_name.clone(),
+                                    req: version.clone(),
+                                },
+                            )?;
+                        }
+                        None => {
+                            return Err(Box::new(ResolverError::GitDepUnsupported {
+                                package: dep_name.clone(),
+                                declared_in: manifest_dir.clone(),
+                            }));
+                        }
+                    }
                 }
                 DependencySpec::Workspace => {
                     // Slice 3 derefs every Workspace variant before
@@ -512,6 +550,54 @@ fn upsert_registry(
                 name,
                 version,
                 source: ResolvedSource::Registry { url, dir },
+                declared_by: vec![edge],
+            },
+        );
+        Ok(())
+    }
+}
+
+/// Insert or merge a resolved *git* package. Like a path dep, a git dep is
+/// source-pinned (by ref, not semver), so it takes the same sentinel
+/// `version`; later declarers of the same name append their constraint edge.
+/// A name already resolved from a different source kind is a `SourceConflict`.
+#[allow(clippy::too_many_arguments)]
+fn upsert_git(
+    packages: &mut BTreeMap<String, ResolvedPackage>,
+    name: String,
+    url: String,
+    reference: Option<GitRef>,
+    dir: PathBuf,
+    version: semver::Version,
+    edge: DeclarationEdge,
+) -> Result<(), Box<ResolverError>> {
+    if let Some(existing) = packages.get_mut(&name) {
+        match &existing.source {
+            ResolvedSource::Git { .. } => {
+                existing.declared_by.push(edge);
+                Ok(())
+            }
+            other => Err(Box::new(ResolverError::SourceConflict {
+                package: name.clone(),
+                first_source: other.clone(),
+                second_source: ResolvedSource::Git {
+                    url,
+                    reference,
+                    dir,
+                },
+            })),
+        }
+    } else {
+        packages.insert(
+            name.clone(),
+            ResolvedPackage {
+                name,
+                version,
+                source: ResolvedSource::Git {
+                    url,
+                    reference,
+                    dir,
+                },
                 declared_by: vec![edge],
             },
         );
@@ -679,6 +765,32 @@ mod tests {
         }
     }
 
+    /// In-memory git provider keyed by clone URL → (checkout dir, resolved
+    /// rev). Lets the graph + resolver wiring be tested without a real `git`.
+    struct MockGitProvider {
+        clones: BTreeMap<String, (PathBuf, String)>,
+    }
+
+    impl crate::git_fetch::GitProvider for MockGitProvider {
+        fn fetch(
+            &self,
+            url: &str,
+            _reference: Option<&GitRef>,
+        ) -> Result<crate::git_fetch::MaterializedGitDep, crate::git_fetch::GitFetchError> {
+            self.clones
+                .get(url)
+                .map(|(dir, rev)| crate::git_fetch::MaterializedGitDep {
+                    root_dir: dir.clone(),
+                    resolved_rev: rev.clone(),
+                })
+                .ok_or_else(|| crate::git_fetch::GitFetchError::CommandFailed {
+                    step: "clone",
+                    url: url.to_string(),
+                    message: "no such repo".to_string(),
+                })
+        }
+    }
+
     #[test]
     fn fetched_registry_dep_resolves_to_registry_source() {
         let mut root = empty_manifest("app");
@@ -706,6 +818,7 @@ mod tests {
                 offline_root: None,
                 include_dev_deps: false,
                 registry_provider: Some(&provider),
+                git_provider: None,
             },
         )
         .expect("graph");
@@ -769,11 +882,68 @@ mod tests {
                 offline_root: None,
                 include_dev_deps: false,
                 registry_provider: Some(&provider),
+                git_provider: None,
             },
         )
         .expect("graph");
         let err = resolve(&graph, &test_version()).unwrap_err();
         assert_eq!(err.code(), "E_DEPENDENCY_VERSION_CONFLICT");
+    }
+
+    #[test]
+    fn fetched_git_dep_resolves_to_git_source() {
+        let mut root = empty_manifest("app");
+        root.dependencies.insert(
+            "lib".into(),
+            DependencySpec::Git {
+                url: "https://git/lib".into(),
+                reference: Some(GitRef::Tag("v1.0".into())),
+                version: None,
+            },
+        );
+        let lib_mf = empty_manifest("lib");
+        let loader = MemLoader {
+            manifests: BTreeMap::from([(PathBuf::from("/git/lib"), lib_mf)]),
+        };
+        let provider = MockGitProvider {
+            clones: BTreeMap::from([(
+                "https://git/lib".to_string(),
+                (PathBuf::from("/git/lib"), "abc123def".to_string()),
+            )]),
+        };
+        let graph = crate::dep_graph::build_dep_graph_with_options(
+            &PathBuf::from("/app"),
+            root,
+            &loader,
+            crate::dep_graph::DepGraphOptions {
+                offline_root: None,
+                include_dev_deps: false,
+                registry_provider: None,
+                git_provider: Some(&provider),
+            },
+        )
+        .expect("graph");
+
+        // The graph recorded the concrete resolution (dir + url + rev) so a
+        // future lockfile rev-pin has what it needs.
+        let res = graph
+            .git_resolutions
+            .values()
+            .next()
+            .expect("a git resolution");
+        assert_eq!(res.resolved_rev, "abc123def");
+        assert_eq!(res.url, "https://git/lib");
+
+        let resolution = resolve(&graph, &test_version()).expect("resolve");
+        let lib = resolution.packages.get("lib").expect("lib resolved");
+        assert_eq!(
+            lib.source,
+            ResolvedSource::Git {
+                url: "https://git/lib".to_string(),
+                reference: Some(GitRef::Tag("v1.0".to_string())),
+                dir: PathBuf::from("/git/lib"),
+            }
+        );
     }
 
     #[test]

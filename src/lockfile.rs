@@ -486,7 +486,9 @@ fn convert_source(src: &ResolvedSource, root_dir: &Path) -> LockSource {
             // exists; the lockfile records only the upstream URL.
             mirror: None,
         },
-        ResolvedSource::Git { url, reference } => LockSource::Git {
+        // `dir` is machine-local (the checkout path) and intentionally not
+        // persisted — the lock keys reproducibility on url + ref.
+        ResolvedSource::Git { url, reference, .. } => LockSource::Git {
             url: url.clone(),
             reference: reference.clone(),
             mirror: None,
@@ -1044,6 +1046,7 @@ dependencies = []
         let git = ResolvedSource::Git {
             url: "https://github.com/foo/bar".to_string(),
             reference: Some(GitRef::Tag("v1.0".to_string())),
+            dir: PathBuf::from("/cache/git/bar"),
         };
         let lock_src = convert_source(&git, Path::new("/proj"));
         match lock_src {
@@ -1487,6 +1490,7 @@ dependencies = []
                     source: ResolvedSource::Git {
                         url: "https://github.com/foo/bar".to_string(),
                         reference: Some(GitRef::Branch("main".to_string())),
+                        dir: PathBuf::from("/cache/git/bar"),
                     },
                     declared_by: vec![],
                 },

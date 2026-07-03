@@ -22,6 +22,27 @@ use crate::manifest::GitRef;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Env override for the git-clone cache root. When set non-empty it wins
+/// over the default; otherwise clones live under `~/.kara/cache/git/`
+/// (sibling to the registry tarball cache). Mirrors
+/// `registry_proxy::REGISTRY_CACHE_ROOT_ENV_VAR`.
+pub const GIT_CACHE_ROOT_ENV_VAR: &str = "KARAC_GIT_CACHE_ROOT";
+
+/// Resolve the git-clone cache root: [`GIT_CACHE_ROOT_ENV_VAR`] when set
+/// non-empty, else `~/.kara/cache/git/`. `None` only when neither the env
+/// override nor a home directory can be determined.
+pub fn default_git_cache_root() -> Option<PathBuf> {
+    if let Ok(over) = std::env::var(GIT_CACHE_ROOT_ENV_VAR) {
+        if !over.trim().is_empty() {
+            return Some(PathBuf::from(over.trim()));
+        }
+    }
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()?;
+    Some(PathBuf::from(home).join(".kara").join("cache").join("git"))
+}
+
 /// A git dependency materialized on disk: the manifest root plus the exact
 /// commit the ref resolved to (recorded in `kara.lock` for reproducibility).
 #[derive(Debug, Clone, PartialEq, Eq)]

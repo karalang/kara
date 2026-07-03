@@ -19,7 +19,12 @@
 //!    fetched + extracted to disk and recursed into like a path-dep, its
 //!    concrete resolution recorded in `registry_resolutions`. Without a
 //!    provider, registry deps stop at the leaf and the resolver reports
-//!    them as unsupported. Git deps always stop at the leaf.
+//!    them as unsupported.
+//!
+//! 4. **Git-dep walking** (git fetch slice 2) — the same shape, gated on a
+//!    [`crate::git_fetch::GitProvider`]: each `DependencySpec::Git` is cloned
+//!    + checked out and recursed into, its resolution recorded in
+//!    `git_resolutions`. Without a provider, git deps stop at the leaf.
 //!
 //! Output: `DepGraph { root_dir, manifests, derived_deps }` — `manifests`
 //! is the cache slice 4 (`DependencyProvider::get_dependencies`) will read
@@ -50,6 +55,13 @@ pub struct DepGraph {
     /// provider is configured — the resolver then reports registry deps as
     /// unsupported, preserving the pre-fetch behavior.
     pub registry_resolutions: BTreeMap<(PathBuf, String), RegistryResolution>,
+    /// For every `DependencySpec::Git` the walk actually cloned (only when a
+    /// [`crate::git_fetch::GitProvider`] was supplied), the concrete
+    /// resolution: keyed by `(declaring manifest dir, dep name)`, valued with
+    /// the checked-out source dir, the git URL + ref, and the resolved commit
+    /// SHA. Empty when no provider is configured — the resolver then reports
+    /// git deps as unsupported, preserving the pre-fetch behavior.
+    pub git_resolutions: BTreeMap<(PathBuf, String), GitResolution>,
 }
 
 /// One fetched-and-extracted registry dependency (see
@@ -62,6 +74,22 @@ pub struct RegistryResolution {
     pub version: semver::Version,
     /// Original upstream source URL (from the catalog), for the lockfile.
     pub upstream_url: String,
+}
+
+/// One cloned-and-checked-out git dependency (see
+/// [`DepGraph::git_resolutions`]).
+#[derive(Debug, Clone)]
+pub struct GitResolution {
+    /// Checked-out source directory — where the package's `kara.toml` lives.
+    pub dir: PathBuf,
+    /// The git URL the dep was cloned from (verbatim, for the lockfile).
+    pub url: String,
+    /// The requested ref (branch / tag / rev), or `None` for the default
+    /// branch.
+    pub reference: Option<crate::manifest::GitRef>,
+    /// The commit SHA `HEAD` resolved to after checkout — the reproducibility
+    /// hook for a future `LockSource::Git` rev-pin.
+    pub resolved_rev: String,
 }
 
 /// One materialized registry dependency: an extracted on-disk source tree
@@ -143,6 +171,15 @@ pub enum DepGraphError {
         dep_name: String,
         message: String,
     },
+    /// Cloning / checking out a git dependency failed (clone, checkout, or a
+    /// missing `kara.toml`). Maps to `E_GIT_FETCH_FAILED`. Only produced when
+    /// a [`crate::git_fetch::GitProvider`] is configured; without one, git
+    /// deps surface later as `E_GIT_DEP_UNSUPPORTED` from the resolver.
+    GitFetchFailed {
+        from_dir: PathBuf,
+        dep_name: String,
+        message: String,
+    },
 }
 
 impl DepGraphError {
@@ -158,6 +195,7 @@ impl DepGraphError {
             Self::OfflineVendorEntryMissing { .. } => "E_OFFLINE_VENDOR_ENTRY_MISSING",
             Self::PathDepManifestInvalid { .. } => "E_PATH_DEP_MANIFEST_INVALID",
             Self::RegistryFetchFailed { .. } => "E_REGISTRY_FETCH_FAILED",
+            Self::GitFetchFailed { .. } => "E_GIT_FETCH_FAILED",
         }
     }
 }
@@ -238,6 +276,17 @@ impl std::fmt::Display for DepGraphError {
                 dep_name,
                 message,
             ),
+            Self::GitFetchFailed {
+                from_dir,
+                dep_name,
+                message,
+            } => write!(
+                f,
+                "`{}/kara.toml`: could not fetch git dependency `{}`: {}",
+                from_dir.display(),
+                dep_name,
+                message,
+            ),
         }
     }
 }
@@ -295,6 +344,7 @@ pub fn build_dep_graph_with_offline(
             offline_root,
             include_dev_deps: false,
             registry_provider: None,
+            git_provider: None,
         },
     )
 }
@@ -321,6 +371,12 @@ pub struct DepGraphOptions<'a> {
     pub offline_root: Option<&'a Path>,
     pub include_dev_deps: bool,
     pub registry_provider: Option<&'a dyn RegistryProvider>,
+    /// When `Some`, the walk clones + recurses into `DependencySpec::Git`
+    /// deps through it (git-fetch slice 2). When `None`, git deps are
+    /// recorded but not walked, and the resolver reports them as unsupported
+    /// — the pre-fetch behavior. Independent of `registry_provider`: a git
+    /// dep is direct-from-source, so it needs no proxy.
+    pub git_provider: Option<&'a dyn crate::git_fetch::GitProvider>,
 }
 
 /// Options-driven entry point. The two thin wrappers above
@@ -335,6 +391,7 @@ pub fn build_dep_graph_with_options(
     let mut manifests = BTreeMap::new();
     let mut derived_deps = BTreeMap::new();
     let mut registry_resolutions = BTreeMap::new();
+    let mut git_resolutions = BTreeMap::new();
 
     let mut visiting_stack: Vec<PathBuf> = Vec::new();
     let mut visiting_set: HashSet<PathBuf> = HashSet::new();
@@ -350,10 +407,12 @@ pub fn build_dep_graph_with_options(
         options.offline_root,
         options.include_dev_deps,
         options.registry_provider,
+        options.git_provider,
         true,
         &mut manifests,
         &mut derived_deps,
         &mut registry_resolutions,
+        &mut git_resolutions,
         &mut visiting_stack,
         &mut visiting_set,
         &mut visited,
@@ -364,6 +423,7 @@ pub fn build_dep_graph_with_options(
         manifests,
         derived_deps,
         registry_resolutions,
+        git_resolutions,
     })
 }
 
@@ -376,10 +436,12 @@ fn visit(
     offline_root: Option<&Path>,
     include_dev_deps: bool,
     registry_provider: Option<&dyn RegistryProvider>,
+    git_provider: Option<&dyn crate::git_fetch::GitProvider>,
     is_root: bool,
     manifests: &mut BTreeMap<PathBuf, Manifest>,
     derived_deps: &mut BTreeMap<PathBuf, BTreeMap<String, DependencySpec>>,
     registry_resolutions: &mut BTreeMap<(PathBuf, String), RegistryResolution>,
+    git_resolutions: &mut BTreeMap<(PathBuf, String), GitResolution>,
     visiting_stack: &mut Vec<PathBuf>,
     visiting_set: &mut HashSet<PathBuf>,
     visited: &mut HashSet<PathBuf>,
@@ -475,12 +537,14 @@ fn visit(
             offline_root,
             include_dev_deps,
             registry_provider,
+            git_provider,
             // Transitive children are never the root — dev-deps stop
             // propagating here even if the root opted them in.
             false,
             manifests,
             derived_deps,
             registry_resolutions,
+            git_resolutions,
             visiting_stack,
             visiting_set,
             visited,
@@ -543,10 +607,79 @@ fn visit(
                 offline_root,
                 include_dev_deps,
                 registry_provider,
+                git_provider,
                 false,
                 manifests,
                 derived_deps,
                 registry_resolutions,
+                git_resolutions,
+                visiting_stack,
+                visiting_set,
+                visited,
+            )?;
+        }
+    }
+
+    // Recurse into each git dep — same provider-gated, offline-skipped
+    // discipline as registry deps, but keyed on the cloned checkout dir.
+    // A git dep is direct-from-source, so it is orthogonal to the proxy;
+    // the provider is active whenever the caller isn't offline.
+    if let (Some(provider), None) = (git_provider, offline_root) {
+        for (dep_name, spec) in &derived_owned {
+            let DependencySpec::Git { url, reference, .. } = spec else {
+                continue;
+            };
+            let materialized = provider.fetch(url, reference.as_ref()).map_err(|e| {
+                DepGraphError::GitFetchFailed {
+                    from_dir: dir.to_path_buf(),
+                    dep_name: dep_name.clone(),
+                    message: e.to_string(),
+                }
+            })?;
+            let canonical_target = canonicalize_or_self(&materialized.root_dir);
+            git_resolutions.insert(
+                (dir.to_path_buf(), dep_name.clone()),
+                GitResolution {
+                    dir: canonical_target.clone(),
+                    url: url.clone(),
+                    reference: reference.clone(),
+                    resolved_rev: materialized.resolved_rev.clone(),
+                },
+            );
+
+            if visiting_set.contains(&canonical_target) {
+                let cycle_start = visiting_stack
+                    .iter()
+                    .position(|p| p == &canonical_target)
+                    .unwrap_or(0);
+                let mut chain: Vec<PathBuf> = visiting_stack[cycle_start..].to_vec();
+                chain.push(canonical_target);
+                return Err(DepGraphError::DependencyCycle { chain });
+            }
+            if visited.contains(&canonical_target) {
+                continue;
+            }
+            let child_manifest = loader.load(&canonical_target).map_err(|e| {
+                DepGraphError::PathDepManifestInvalid {
+                    from_dir: dir.to_path_buf(),
+                    dep_name: dep_name.clone(),
+                    source: Box::new(e),
+                }
+            })?;
+            visit(
+                &canonical_target,
+                child_manifest,
+                loader,
+                workspace_deps,
+                offline_root,
+                include_dev_deps,
+                registry_provider,
+                git_provider,
+                false,
+                manifests,
+                derived_deps,
+                registry_resolutions,
+                git_resolutions,
                 visiting_stack,
                 visiting_set,
                 visited,
@@ -643,6 +776,7 @@ mod tests {
                 offline_root: None,
                 include_dev_deps: true,
                 registry_provider: None,
+                git_provider: None,
             },
         )
     }
@@ -757,6 +891,7 @@ mod tests {
                 offline_root: None,
                 include_dev_deps: false,
                 registry_provider: Some(&provider),
+                git_provider: None,
             },
         )
         .expect("build");
@@ -813,6 +948,7 @@ mod tests {
                 offline_root: None,
                 include_dev_deps: false,
                 registry_provider: Some(&provider),
+                git_provider: None,
             },
         )
         .unwrap_err();

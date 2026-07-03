@@ -297,6 +297,22 @@ pub fn render_dep_graph_error(err: &DepGraphError) -> Diagnostic {
                     .to_string(),
             ),
         },
+        DepGraphError::GitFetchFailed {
+            from_dir,
+            dep_name,
+            message,
+        } => Diagnostic {
+            code: err.code(),
+            primary: format!("could not fetch git dependency `{}`", dep_name),
+            notes: vec![
+                format!("declared in `{}/kara.toml`", from_dir.display()),
+                format!("underlying error: {}", message),
+            ],
+            help: Some(
+                "check the git URL and that the requested branch / tag / rev exists, and that `git` is installed and can reach the remote"
+                    .to_string(),
+            ),
+        },
     }
 }
 
@@ -305,7 +321,7 @@ fn describe_source(source: &ResolvedSource) -> String {
         ResolvedSource::Root => "the entry-point project (`Root`)".to_string(),
         ResolvedSource::Path(dir) => format!("path `{}`", dir.display()),
         ResolvedSource::Registry { url, .. } => format!("registry `{url}`"),
-        ResolvedSource::Git { url, reference } => match reference {
+        ResolvedSource::Git { url, reference, .. } => match reference {
             Some(r) => format!("git `{url}` (ref `{r:?}`)"),
             None => format!("git `{url}`"),
         },

@@ -4007,11 +4007,12 @@ fn quiet_dep_package_walks(root: &std::path::Path) -> Vec<module::DepPackageWalk
         include_dev_deps: false,
         // The lenient `karac run` walk stays path-dep-only by design: it is
         // best-effort (empty on any failure) and must not perform network I/O.
-        // Registry fetch is activated on the strict `karac build` / `karac
-        // test` path (`run_dep_resolution`, slice 4); a registry dep here
-        // still surfaces E_REGISTRY_DEP_UNSUPPORTED from the resolver, which
+        // Registry and git fetch are activated on the strict `karac build` /
+        // `karac test` path (`run_dep_resolution`); a registry or git dep here
+        // still surfaces its unsupported diagnostic from the resolver, which
         // this quiet walk swallows.
         registry_provider: None,
+        git_provider: None,
     };
     let Ok(graph) = crate::dep_graph::build_dep_graph_with_options(root, mf, &loader, options)
     else {
@@ -8183,12 +8184,25 @@ fn run_dep_resolution(
         )
     });
 
+    // Git deps are direct-from-source (no proxy in the loop), so git fetch is
+    // gated only on `--offline` — not on `--no-proxy` or an explicitly
+    // configured proxy. A git URL is real (unlike the placeholder default
+    // proxy), so cloning whenever a git dep is declared is always correct.
+    let git_provider = if offline_root.is_none() {
+        crate::git_fetch::default_git_cache_root().map(crate::git_fetch::GitCliProvider::new)
+    } else {
+        None
+    };
+
     let options = crate::dep_graph::DepGraphOptions {
         offline_root,
         include_dev_deps,
         registry_provider: provider
             .as_ref()
             .map(|p| p as &dyn crate::dep_graph::RegistryProvider),
+        git_provider: git_provider
+            .as_ref()
+            .map(|p| p as &dyn crate::git_fetch::GitProvider),
     };
     let graph = match crate::dep_graph::build_dep_graph_with_options(root, mf, &loader, options) {
         Ok(g) => g,
@@ -8251,13 +8265,14 @@ fn dep_package_walks(
     };
     let mut out = Vec::new();
     for pkg in resolution.packages.values() {
-        // Both path-deps and fetched registry deps carry an on-disk source
-        // root the module loader compiles (slice 4 threaded the extracted
-        // directory into `ResolvedSource::Registry`). `Root` is the project
-        // itself; git never resolves today.
+        // Path-deps, fetched registry deps, and cloned git deps all carry an
+        // on-disk source root the module loader compiles (each threaded its
+        // materialized directory into its `ResolvedSource` variant). `Root`
+        // is the project itself.
         let dep_root: &std::path::Path = match &pkg.source {
             crate::dep_resolver::ResolvedSource::Path(dir) => dir,
             crate::dep_resolver::ResolvedSource::Registry { dir, .. } => dir,
+            crate::dep_resolver::ResolvedSource::Git { dir, .. } => dir,
             _ => continue,
         };
         let walk_opts = WalkerOpts {
