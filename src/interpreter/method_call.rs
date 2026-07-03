@@ -183,8 +183,35 @@ impl<'a> super::Interpreter<'a> {
         span: &Span,
         obj: &Value,
     ) -> Option<Value> {
-        let type_name = self.value_type_name(obj);
-        let method_key = format!("{}.{}", type_name, method);
+        let mut type_name = self.value_type_name(obj);
+        let mut method_key = format!("{}.{}", type_name, method);
+        // Width-erased primitive receiver: `Value::Int` reports "i64" and
+        // `Value::Float` reports "f64" regardless of the declared width, so a
+        // user `impl Dbl for u8` (registered under "u8.dbl") is NOT reachable
+        // via the erased key. Worse, when an `impl Dbl for i64` also exists the
+        // erased "i64.dbl" key resolves and would wrongly shadow the narrow
+        // receiver's own impl. So for a numeric primitive receiver ALWAYS
+        // prefer the DECLARED receiver type the typechecker recorded for this
+        // exact call site (`method_callee_types`, e.g. "u8.dbl"). The
+        // `.{method}` suffix guard rejects a stale recording from the
+        // chained-call span collision (`MethodCall.span == receiver.span`, so
+        // in `a.dbl().other()` the outer call clobbers the key) — if it names a
+        // different method, fall back to the erased key. B-2026-07-03-5.
+        if matches!(obj, Value::Int(_) | Value::Float(_)) {
+            let recorded = self
+                .typecheck_result
+                .method_callee_types
+                .get(&crate::resolver::SpanKey::from_span(span))
+                .cloned();
+            if let Some(recorded) = recorded {
+                if recorded.ends_with(&format!(".{method}")) && self.env.get(&recorded).is_some() {
+                    if let Some((tn, _)) = recorded.rsplit_once('.') {
+                        type_name = tn.to_string();
+                    }
+                    method_key = recorded;
+                }
+            }
+        }
         if let Some(func) = self.env.get(&method_key) {
             let mut arg_vals: Vec<Value> = vec![clone_receiver(obj)];
             arg_vals.extend(args.iter().map(|a| self.eval_expr_inner(&a.value)));

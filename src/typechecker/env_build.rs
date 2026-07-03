@@ -18,7 +18,8 @@ use super::env::{
     UnionInfo,
 };
 use super::types::{
-    type_display, type_is_fully_concrete, FloatSize, IntSize, Type, UIntSize, VariantTypeInfo,
+    method_callee_type_name, type_display, type_is_fully_concrete, FloatSize, IntSize, Type,
+    UIntSize, VariantTypeInfo,
 };
 use super::{
     extract_derived_traits, extract_must_use_message, find_item_visibility, has_display_snake_case,
@@ -1868,6 +1869,23 @@ impl<'a> super::TypeChecker<'a> {
             // and take precedence over the base type's during method
             // resolution (phase-9 step 2, §1C). Non-generic at v1.
             Type::Refinement { name, .. } => (name.clone(), Vec::new()),
+            // Trait impls on a PRIMITIVE scalar target (`impl Dbl for u8`,
+            // `impl From[i32] for i64`, …). The lowered target is
+            // `Type::UInt(U8)` / `Type::Int(I64)` / `Type::Float(_)` /
+            // `Bool` / `Char`; register under its canonical name (`"u8"`,
+            // `"i64"`, …, matching `method_callee_type_name` at the value-
+            // receiver call site) so `find_methods_with_args` resolves
+            // `x.m()` and a generic bound `T: Dbl` sees the primitive as
+            // satisfying it. Without this the impl fell through the
+            // `_ => return` below and never registered — the call site then
+            // errored "no method 'm' on type 'u8'". Non-generic (no
+            // target_args). B-2026-07-03-5.
+            Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char => {
+                match method_callee_type_name(&lowered_target) {
+                    Some(name) => (name, Vec::new()),
+                    None => return,
+                }
+            }
             // Non-path target types (`impl Foo for (i32, i32)` etc.) are
             // unsupported in v1; bail without registering. Matches the
             // pre-Theme-4 behavior of the path-only short-circuit.

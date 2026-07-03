@@ -19064,3 +19064,51 @@ fn main() {
     );
     assert_eq!(out, "20 6\n20 5\n60 20\n");
 }
+
+#[test]
+fn primitive_trait_impl_direct_dispatch_by_declared_width() {
+    // B-2026-07-03-5: a user trait impl on a PRIMITIVE target dispatched for a
+    // direct value-receiver call under `karac run`. The interpreter's runtime
+    // value is width-erased (`Value::Int` → "i64", `Value::Float` → "f64"), so
+    // a `u8`/`u16`/… receiver would miss its own impl and — worse, when an
+    // `i64`/`f64` impl also exists — wrongly dispatch to that erased-key impl.
+    // The fix recovers the DECLARED receiver type the typechecker recorded for
+    // the call site (`method_callee_types`). Each width has a distinguishing
+    // impl so this asserts the CORRECT per-width impl is selected.
+    let src = "trait Tag { fn tag(self) -> i64; }
+        impl Tag for i8  { fn tag(self) -> i64 { -8 } }
+        impl Tag for i16 { fn tag(self) -> i64 { -16 } }
+        impl Tag for i32 { fn tag(self) -> i64 { -32 } }
+        impl Tag for u8  { fn tag(self) -> i64 { 8 } }
+        impl Tag for u16 { fn tag(self) -> i64 { 16 } }
+        impl Tag for u32 { fn tag(self) -> i64 { 32 } }
+        impl Tag for f32 { fn tag(self) -> i64 { 320 } }
+        impl Tag for f64 { fn tag(self) -> i64 { 640 } }
+        fn main() {
+            let a: i8 = 1; let b: i16 = 1; let c: i32 = 1;
+            let d: u8 = 1; let e: u16 = 1; let f: u32 = 1;
+            let g: f32 = 1.0; let h: f64 = 1.0;
+            println(a.tag()); println(b.tag()); println(c.tag());
+            println(d.tag()); println(e.tag()); println(f.tag());
+            println(g.tag()); println(h.tag());
+        }";
+    assert_eq!(run_no_errors(src), "-8\n-16\n-32\n8\n16\n32\n320\n640\n");
+}
+
+#[test]
+fn primitive_trait_impl_self_return() {
+    // B-2026-07-03-5, `-> Self` shape: `self + self` in the body must see a
+    // numeric `self` (pre-fix the hand-built `Named { "u8" }` self type errored
+    // "arithmetic operator requires numeric type, found 'u8'"), and the
+    // width-keyed dispatch selects the u8 impl for the u8 receiver.
+    let src = "trait Dbl { fn dbl(self) -> Self; }
+        impl Dbl for u8  { fn dbl(self) -> Self { self + self } }
+        impl Dbl for i64 { fn dbl(self) -> Self { self + self } }
+        fn main() {
+            let a: u8 = 100;
+            let b: i64 = 21;
+            println(a.dbl());
+            println(b.dbl());
+        }";
+    assert_eq!(run_no_errors(src), "200\n42\n");
+}

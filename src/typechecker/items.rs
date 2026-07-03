@@ -1864,13 +1864,34 @@ impl<'a> super::TypeChecker<'a> {
         if self.env.opaque_foreign_types.contains(&type_name) {
             return;
         }
-        let self_type = Type::Named {
-            name: type_name.clone(),
-            args: Vec::new(),
-        };
-
         // Validate inline bounds and where clause on the impl block itself
         let gp = Self::generic_param_names(&imp.generic_params);
+
+        // `impl Tr for u8 { fn m(self) -> Self { self + self } }` — a trait
+        // impl on a PRIMITIVE target. Hand-building `Named { name: "u8" }`
+        // leaves `self` non-numeric inside the body, so `self + self` errors
+        // "arithmetic operator requires numeric type, found 'u8'". Lower the
+        // target type instead: for a scalar primitive that yields
+        // `Type::UInt(U8)` / `Type::Int(I64)` / `Type::Float(_)` / … so the
+        // body's `self` is recognized as numeric. Struct / enum / generic
+        // targets keep the by-name `Named { type_name }` shape they relied on
+        // (lowering a generic target would fold in `target_args` and shift
+        // existing behavior). B-2026-07-03-5.
+        let self_type = {
+            let lowered = self.lower_type_expr(&imp.target_type, &gp);
+            if matches!(
+                lowered,
+                Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char
+            ) {
+                lowered
+            } else {
+                Type::Named {
+                    name: type_name.clone(),
+                    args: Vec::new(),
+                }
+            }
+        };
+
         self.validate_all_bounds(&imp.generic_params, &imp.where_clause, &gp);
 
         // Check that trait impls provide all required associated types,

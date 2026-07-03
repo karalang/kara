@@ -3779,6 +3779,65 @@ fn main() {
         }
     }
 
+    /// B-2026-07-03-5: a user-defined trait impl on a PRIMITIVE integer/float
+    /// target (`impl Tag for u8 { ... }`) is dispatched end-to-end for a
+    /// DIRECT value-receiver call (`x.tag()`). Pre-fix the impl never
+    /// registered (the lowered primitive target fell through env_add_impl's
+    /// `_ => return`), so the call errored "no method 'tag' on type 'u8'" at
+    /// typecheck under `build`. Each width has a DISTINCT impl returning a
+    /// distinguishing value, so this asserts the CORRECT per-width impl is
+    /// selected (not the `i64`-keyed one shadowing every narrow width — the
+    /// bug that the multi-impl case would otherwise hit). Covers all eight
+    /// scalar widths i8/i16/i32/u8/u16/u32/f32/f64. The generic-BOUND form
+    /// (`fn f[T: Tag](x: T) { x.tag() }`) is a deeper separate surface tracked
+    /// as its own ledger entry — this covers the direct-call scope B-5 fixes.
+    #[test]
+    fn e2e_primitive_trait_impl_direct_dispatch() {
+        if let Some(out) = run_program(
+            "trait Tag { fn tag(self) -> i64; }\n\
+             impl Tag for i8  { fn tag(self) -> i64 { -8 } }\n\
+             impl Tag for i16 { fn tag(self) -> i64 { -16 } }\n\
+             impl Tag for i32 { fn tag(self) -> i64 { -32 } }\n\
+             impl Tag for u8  { fn tag(self) -> i64 { 8 } }\n\
+             impl Tag for u16 { fn tag(self) -> i64 { 16 } }\n\
+             impl Tag for u32 { fn tag(self) -> i64 { 32 } }\n\
+             impl Tag for f32 { fn tag(self) -> i64 { 320 } }\n\
+             impl Tag for f64 { fn tag(self) -> i64 { 640 } }\n\
+             fn main() {\n\
+             \x20   let a: i8 = 1; let b: i16 = 1; let c: i32 = 1;\n\
+             \x20   let d: u8 = 1; let e: u16 = 1; let f: u32 = 1;\n\
+             \x20   let g: f32 = 1.0; let h: f64 = 1.0;\n\
+             \x20   println(a.tag()); println(b.tag()); println(c.tag());\n\
+             \x20   println(d.tag()); println(e.tag()); println(f.tag());\n\
+             \x20   println(g.tag()); println(h.tag());\n\
+             }",
+        ) {
+            assert_eq!(out, "-8\n-16\n-32\n8\n16\n32\n320\n640\n");
+        }
+    }
+
+    /// B-2026-07-03-5, `-> Self` shape: a primitive trait impl whose method
+    /// returns `Self` (`impl Dbl for u8 { fn dbl(self) -> Self { self + self } }`)
+    /// — the body's `self` must be recognized as numeric (pre-fix the hand-built
+    /// `Named { "u8" }` self type errored "arithmetic operator requires numeric
+    /// type, found 'u8'"), and the `-> Self` result resolves to the primitive.
+    #[test]
+    fn e2e_primitive_trait_impl_self_return() {
+        if let Some(out) = run_program(
+            "trait Dbl { fn dbl(self) -> Self; }\n\
+             impl Dbl for u8  { fn dbl(self) -> Self { self + self } }\n\
+             impl Dbl for i64 { fn dbl(self) -> Self { self + self } }\n\
+             fn main() {\n\
+             \x20   let a: u8 = 100;\n\
+             \x20   let b: i64 = 21;\n\
+             \x20   println(a.dbl());\n\
+             \x20   println(b.dbl());\n\
+             }",
+        ) {
+            assert_eq!(out, "200\n42\n");
+        }
+    }
+
     /// S6b-4a (B-2026-07-03-18): an arithmetic operator on a type parameter
     /// bounded by that operator's stdlib trait (`+`→Add, `-`→Sub, `*`→Mul,
     /// `/`→Div, `%`→Rem, unary `-`→Neg) monomorphizes and runs. Before the fix

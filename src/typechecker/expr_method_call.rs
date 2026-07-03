@@ -3531,53 +3531,71 @@ impl<'a> super::TypeChecker<'a> {
                 );
             }
             _ => {
-                // For non-named types, just type-check args and return Error
-                for arg in args {
-                    self.infer_expr(&arg.value);
-                }
-                // Close the primitive silent-poison hole for *numeric* receivers
-                // (`i64`, `u32`, `f64`, …). Numeric primitives have a closed
-                // method surface — the registered builtin ops (add/sub/cmp/eq/…)
-                // plus a small value-receiver special set — so an unknown method
-                // here is a genuine typo, not a partially-implicit prelude
-                // surface. Without this it returns `Type::Error` (poison, which
-                // is universally assignable, so `let s: String = x.bogus()`
-                // typechecked clean) and then exploded in the backend: codegen's
-                // "no handler" error, or the interpreter's `unreachable!` ICE.
-                // Fire `NoMethodFound` instead. `String`/`bool`/`char` are left
-                // on the historical silent fall-through (String has a large
-                // partially-implicit method surface not modelled in the impl
-                // table). Type-arg-bearing calls (`x.cast[T]()`) resolve through
-                // their own path and don't reach here.
+                // A NUMERIC PRIMITIVE receiver (`i64`, `u32`, `f64`, …) with a
+                // USER trait/inherent impl method (`impl Dbl for u8 { fn
+                // dbl(self) -> Self { ... } }`) dispatches through the same
+                // impl-table path a `Named` receiver uses: register it as
+                // `(prim, [])` and fall through to the resolution below. The
+                // builtin ops (add/sub/cmp/eq/…) are NOT in the impl table —
+                // they have dedicated backend arms — so route ONLY when a real
+                // impl candidate exists; otherwise keep the historical
+                // poison-with-diagnostic behavior. B-2026-07-03-5.
                 if matches!(
                     &receiver_for_lookup,
                     Type::Int(_) | Type::UInt(_) | Type::Float(_)
                 ) {
                     if let Some(prim) = method_callee_type_name(&receiver_for_lookup) {
-                        // Value-receiver methods that work today via dedicated
-                        // backend arms rather than the impl table — keep
-                        // poisoning so those paths still handle them. (`abs`,
-                        // `clone`, and `to_string` are handled in the early
-                        // intercept above for these numeric types and so never
-                        // reach here; for `u*`, `abs` is correctly absent and
-                        // falls through to the error.)
-                        const PRIMITIVE_VALUE_METHODS: &[&str] =
-                            &["cmp", "eq", "ne", "lt", "le", "gt", "ge", "cast"];
-                        let known = PRIMITIVE_VALUE_METHODS.contains(&method)
-                            || !self
-                                .env
-                                .find_methods_with_args(&prim, &[], method)
-                                .is_empty();
-                        if !known {
-                            self.type_error(
-                                format!("no method '{}' on type '{}'", method, prim),
-                                span.clone(),
-                                TypeErrorKind::NoMethodFound,
-                            );
+                        if !self
+                            .env
+                            .find_methods_with_args(&prim, &[], method)
+                            .is_empty()
+                        {
+                            // Route to impl-table dispatch (arg inference /
+                            // label validation / Self resolution happen there).
+                            (prim, Vec::new())
+                        } else {
+                            // For non-impl methods, just type-check args and
+                            // return Error. Close the silent-poison hole for
+                            // numeric receivers: their method surface is closed
+                            // (registered builtin ops + a small value-receiver
+                            // special set), so an unknown method here is a
+                            // genuine typo, not a partially-implicit prelude
+                            // surface. Without the error it returned
+                            // `Type::Error` (poison, universally assignable, so
+                            // `let s: String = x.bogus()` typechecked clean) and
+                            // then exploded in the backend. `abs`/`clone`/
+                            // `to_string` are handled in the early intercept
+                            // above and never reach here.
+                            for arg in args {
+                                self.infer_expr(&arg.value);
+                            }
+                            const PRIMITIVE_VALUE_METHODS: &[&str] =
+                                &["cmp", "eq", "ne", "lt", "le", "gt", "ge", "cast"];
+                            if !PRIMITIVE_VALUE_METHODS.contains(&method) {
+                                self.type_error(
+                                    format!("no method '{}' on type '{}'", method, prim),
+                                    span.clone(),
+                                    TypeErrorKind::NoMethodFound,
+                                );
+                            }
+                            return Type::Error;
                         }
+                    } else {
+                        for arg in args {
+                            self.infer_expr(&arg.value);
+                        }
+                        return Type::Error;
                     }
+                } else {
+                    // For other non-named types (`String`/`bool`/`char` left on
+                    // the historical silent fall-through — String has a large
+                    // partially-implicit method surface not modelled in the
+                    // impl table), just type-check args and return Error.
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Error;
                 }
-                return Type::Error;
             }
         };
 
