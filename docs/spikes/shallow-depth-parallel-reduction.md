@@ -127,9 +127,9 @@ env knob exists for measurement, not because a higher default is expected to win
    folds the recursive call in as `CALL_COST_UNITS` (opaque), so total work will
    read high and pass the threshold — desired (we want the top level to
    parallelize). No change needed, but worth a test at small `n`.
-3. **`karac_par_run` (par branches)** has the same unbounded-nesting property.
-   Out of scope here; the same thread-local guard generalizes if we later see a
-   branch-parallel recursion crash.
+3. **`karac_par_run` (par branches)** has the same unbounded-nesting property, but a
+   depth cap is the wrong fix for it — see § Outcome "Not done". (Short version:
+   `par` fan-out is narrow, so capping would regress balanced divide-and-conquer.)
 4. **Transitive/mutual recursion** (`count` → helper → `count`): the *compiler*
    B-14 guard only caught direct self-recursion, but the *runtime* depth cap is
    agnostic to how the nested `karac_par_reduce` was reached — so it covers
@@ -185,7 +185,29 @@ runtime `test_par_reduce_fork_depth_cap_bounds_recursive_nesting`, concurrency
 `test_reduction_recognized_for_recursive_self_call_in_body`, par_codegen
 `test_e2e_recursive_reduction_nqueens_count_bounded_by_fork_depth_cap`.
 
-**Not done (as scoped):** `karac_par_run` (the `par {}` branch path) keeps its own
-unbounded-nesting property; the same thread-local guard generalizes to it in a
-fast-follow if a branch-parallel recursion ever surfaces it. `FORK_DEPTH_CAP`
-stayed at default 1 with the `KARAC_PAR_MAX_FORK_DEPTH` knob.
+**Not done — and deliberately so:** `karac_par_run` (the `par {}` branch path) keeps
+its own unbounded-nesting property, but the fork-depth cap is the WRONG fix for it.
+Investigated (2026-07-03) and rejected:
+
+- **The crash is real but marginal.** Deep *linear* recursion with an explicit `par`
+  at each level SIGBUSes, deterministically, at ~5000 levels (`deep(4000)` fine,
+  `deep(5000)`/`deep(8000)` crash; plain non-`par` recursion survives 5000). It needs
+  hand-written `par {}` inside a deep linear recursion — a pure anti-pattern
+  (unbalanced branches, `par` buys nothing). Contrast the reduction crash, which hit
+  at n = 9 on *innocent* backtracking code auto-par silently parallelized.
+- **A depth cap would regress the legitimate case.** Reduction fan-out is WIDE — one
+  N-way level saturates the pool, so capping to depth 1 loses nothing. `par` fan-out
+  is NARROW (2-way per block), so balanced divide-and-conquer (parallel quicksort /
+  mergesort / tree-sum) needs `log₂(W)` *nested* levels to fill W cores. A depth-1 cap
+  would serialize everything below the top `par` → ~2× instead of W×. Measured: a
+  balanced divide-and-conquer `par` runs 2.54× over 1-worker with all levels parallel
+  (User-CPU spread across cores confirms multi-level engagement); a cap would knock
+  that toward 2× and widen the gap with core count.
+- **It wouldn't even fix the crash.** Capped, the deep recursion runs sequentially on
+  a *pool-worker* thread, whose stack (~2 MB) is smaller than main's (8 MB, which
+  handled plain `deep(5000)`), so `deep(5000)`-`par` could still overflow — just
+  sequentially. The correct fix for that crash, if it ever mattered, is larger worker
+  stack sizes, not a fan-out cap.
+
+Same mechanism, opposite verdict, because fan-out width differs. `FORK_DEPTH_CAP`
+stayed at default 1 with the `KARAC_PAR_MAX_FORK_DEPTH` knob (reduction path only).
