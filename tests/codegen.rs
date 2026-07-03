@@ -46830,7 +46830,8 @@ fn main() {
         // function ABI. Covers f64 + i64 + String elements, a field STORE, a
         // two-field struct's arithmetic, and passing `Box[f64]` across a function
         // boundary. (A METHOD reading a generic-struct-instance's non-i64 field
-        // is a separate layer — B-2026-07-03-24.)
+        // is layer 4, covered by
+        // `test_e2e_generic_struct_method_monomorphizes_by_receiver`.)
         let src = r#"
 struct Box[T] { v: T }
 struct Pair[T] { a: T, b: T }
@@ -46855,6 +46856,50 @@ fn main() {
             out,
             "2.5\n42\ngen_struct_string_payload_abcdef\n9.5\n-2.5\n2.5\n"
         );
+    }
+
+    #[test]
+    fn test_e2e_generic_struct_method_monomorphizes_by_receiver() {
+        // B-2026-07-03-23 layer 4: a METHOD on a generic struct is compiled per
+        // the RECEIVER's instantiation, so `Box.get` on a `Box[f64]` uses a
+        // `{double}` self and returns `double`. Before the fix a `ref self`
+        // method read the field as i64 (silent garbage) and a by-value `self`
+        // method HARD-crashed the build (`{double}` value vs `{i64}` self param)
+        // — both because the method's self was lowered as the bare all-i64
+        // `Box`. The generic-struct-impl methods now register into `generic_fns`
+        // and dispatch through `compile_generic_call`, binding the impl's `T`
+        // explicitly from the receiver's recorded instantiation. Covers ref-self
+        // + by-value self (`Box.get_ref`/`get_val`), i64 (regression), and a
+        // BOUNDED impl whose method calls other self methods (`Pair[T: Sub].gap`
+        // = `hi - lo`), for f64 and i64.
+        let src = r#"
+struct Box[T] { v: T }
+impl[T] Box[T] {
+    fn get_ref(ref self) -> T { self.v }
+    fn get_val(self) -> T { self.v }
+}
+struct Pair[T] { a: T, b: T }
+impl[T: Sub] Pair[T] {
+    fn lo(ref self) -> T { self.a }
+    fn hi(ref self) -> T { self.b }
+    fn gap(ref self) -> T { self.hi() - self.lo() }
+}
+fn main() {
+    let bf = Box { v: 2.5 };
+    println(f"{bf.get_ref()}");
+    println(f"{bf.get_val()}");
+    let bi = Box { v: 42 };
+    println(f"{bi.get_ref()}");
+    let pf = Pair { a: 1.5, b: 9.0 };
+    println(f"{pf.gap()}");
+    let pi = Pair { a: 100, b: 7 };
+    println(f"{pi.gap()}");
+}
+"#;
+        // bf f64 (ref + by-value) = 2.5; bi i64 = 42; pf gap = 9-1.5 = 7.5;
+        // pi gap = 7-100 = -93.
+        let out = run_program(src).expect("program should compile and run");
+        assert_eq!(out, "2.5\n2.5\n42\n7.5\n-93\n");
     }
 
     #[test]
