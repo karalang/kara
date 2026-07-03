@@ -93,7 +93,8 @@ pub use driver::{
     validate_target_features,
 };
 use helpers::{
-    impl_target_name, make_impl_method_function, method_is_compiler_builtin, method_self_is_value,
+    impl_target_name, make_generic_impl_method_function, make_impl_method_function,
+    method_is_compiler_builtin, method_self_is_value,
 };
 use state::{
     AssertedIndexBound, CleanupAction, EnumLayout, LayoutId, LoopFrame, MapMonoMethods,
@@ -6513,27 +6514,50 @@ impl<'ctx> Codegen<'ctx> {
             for item in &program.items {
                 if let Item::ImplBlock(imp) = item {
                     if let Some(type_name) = impl_target_name(&imp.target_type) {
+                        // A method is monomorphized on demand (registered in
+                        // `generic_fns`, NOT eagerly `declare_function`'d) when
+                        // it is generic via its OWN params (B-2026-07-03-15) OR
+                        // via the IMPL's params (`impl[T] Box[T]`,
+                        // B-2026-07-03-23 layer 4). The impl-generic case must
+                        // route through the mono pipeline so the method is
+                        // compiled with `self` typed at the RECEIVER's struct
+                        // instantiation (`Box[f64]` → `{double}`); declaring the
+                        // bare `Box.method` here would give it the all-`i64`
+                        // default and the non-generic dispatch arm would find
+                        // that wrong version first.
+                        let impl_is_generic = imp.generic_params.is_some();
                         for impl_item in &imp.items {
                             if let ImplItem::Method(method) = impl_item {
-                                if method.generic_params.is_some() {
+                                if method.generic_params.is_some() || impl_is_generic {
                                     // Register generic impl/trait methods for
                                     // on-demand monomorphization at the call
                                     // site — mirrors the free-fn `generic_fns`
                                     // registration above. Keyed by the same
-                                    // `Type.method` name a call site forms;
-                                    // `make_impl_method_function` prepends
-                                    // `self` (ref/owned) as param 0 so the mono
-                                    // pipeline (`compile_generic_call`) treats
-                                    // it exactly like a generic free fn. Before
-                                    // this the method was skipped entirely, so a
-                                    // call `o.wrap[A](..)` fell through to the
-                                    // "no handler for method" codegen error even
+                                    // `Type.method` name a call site forms; the
+                                    // synth prepends `self` (ref/owned) as param
+                                    // 0 so the mono pipeline
+                                    // (`compile_generic_call`) treats it exactly
+                                    // like a generic free fn. Before this the
+                                    // method was skipped entirely, so a call
+                                    // `o.wrap[A](..)` fell through to the "no
+                                    // handler for method" codegen error even
                                     // though `karac run` executed it correctly
-                                    // (B-2026-07-03-15). `.or_insert_with` dedups
-                                    // across the value-self / ref-self two-pass.
+                                    // (B-2026-07-03-15). For a method on a
+                                    // GENERIC impl, `make_generic_impl_method_function`
+                                    // types `self` as the impl's target expr
+                                    // (`Box[T]`) and adds the impl's params to
+                                    // the method's generic-param axis so the
+                                    // receiver's instantiation binds `T`
+                                    // (B-2026-07-03-23 layer 4). `.or_insert_with`
+                                    // dedups across the value-self / ref-self
+                                    // two-pass.
                                     let qualified = format!("{}.{}", type_name, method.name);
                                     self.generic_fns.entry(qualified).or_insert_with(|| {
-                                        make_impl_method_function(&type_name, method)
+                                        if impl_is_generic {
+                                            make_generic_impl_method_function(imp, method)
+                                        } else {
+                                            make_impl_method_function(&type_name, method)
+                                        }
                                     });
                                     continue;
                                 }
@@ -6688,9 +6712,16 @@ impl<'ctx> Codegen<'ctx> {
             for item in &program.items {
                 if let Item::ImplBlock(imp) = item {
                     if let Some(type_name) = impl_target_name(&imp.target_type) {
+                        // A method that is generic via its own params OR via the
+                        // impl's params is compiled on demand by the mono
+                        // pipeline (`compile_generic_call`), not eagerly here —
+                        // the declaration pass registered it in `generic_fns`
+                        // rather than `declare_function`'ing a bare version
+                        // (B-2026-07-03-23 layer 4). Skip both.
+                        let impl_is_generic = imp.generic_params.is_some();
                         for impl_item in &imp.items {
                             if let ImplItem::Method(method) = impl_item {
-                                if method.generic_params.is_some() {
+                                if method.generic_params.is_some() || impl_is_generic {
                                     continue;
                                 }
                                 if method_self_is_value(method) != value_self_pass {

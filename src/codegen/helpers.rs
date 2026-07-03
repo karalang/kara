@@ -513,3 +513,100 @@ pub(super) fn make_impl_method_function(type_name: &str, method: &Function) -> F
     f.self_param = None;
     f
 }
+
+/// Build a synthetic `Function` for a method on a GENERIC-struct impl
+/// (`impl[T (: Bound)] Box[T] { fn get(ref self) -> T { self.v } }`) so it
+/// routes through the generic-mono pipeline (`compile_generic_call`) keyed
+/// on the RECEIVER's struct instantiation (B-2026-07-03-23 layer 4).
+///
+/// Differs from [`make_impl_method_function`] in two load-bearing ways:
+///
+///  1. The prepended `self` param is typed as the impl's TARGET type expr
+///     (`Box[T]`, i.e. `imp.target_type`, wrapped in Ref/MutRef per the
+///     source self mode) rather than the bare concrete `Type`. Because the
+///     target carries the impl's `[T]` generic arg, the mono pipeline's
+///     explicit-generic-args pass can bind `T` to the receiver's
+///     instantiation element (`Box[f64]` → `T = f64`), so the whole body
+///     — the `self` alloca, `self.v` field read, the `-> T` return — lowers
+///     at the concrete element width instead of the pre-built all-`i64`
+///     default. (For the concrete-receiver methods that have their own
+///     generic params, `make_impl_method_function` types `self` as the bare
+///     `Type` and inference runs off the OTHER args; that path is untouched.)
+///
+///  2. `generic_params` is the impl's params merged with the method's own
+///     (impl params FIRST), so `compile_generic_call` sees `T` (and any
+///     method-own params) as formal generic params to bind and to mangle
+///     per instantiation. The impl-param bounds ride along verbatim so
+///     `verify_bounds_at_codegen` still keys on them.
+///
+/// The `Type.method` rename, the `-> Self` return-type rewrite, and
+/// `self_param = None` mirror `make_impl_method_function` exactly.
+pub(super) fn make_generic_impl_method_function(imp: &ImplBlock, method: &Function) -> Function {
+    let type_name = impl_target_name(&imp.target_type).unwrap_or_default();
+    let mut f = method.clone();
+    f.name = format!("{}.{}", type_name, method.name);
+    // Resolve `Self` in the return type to the concrete target NAME so the
+    // prototype's LLVM return type matches the body's actual return value
+    // (same as the non-generic path). A `-> T` return is left as the bare
+    // type param, which the mono pipeline resolves through `type_subst`.
+    if let Some(rt) = f.return_type.as_ref() {
+        f.return_type = Some(rewrite_self_in_type_expr(rt, &type_name));
+    }
+    if let Some(self_kind) = method.self_param.as_ref() {
+        let span = method.span.clone();
+        // The impl's target type expr carries the generic args (`Box[T]`),
+        // so unification against the receiver's concrete instantiation binds
+        // the impl's type params.
+        let base = imp.target_type.clone();
+        let ty = match self_kind {
+            SelfParam::Owned => base,
+            SelfParam::Ref => TypeExpr {
+                kind: TypeKind::Ref(Box::new(base)),
+                span: span.clone(),
+            },
+            SelfParam::MutRef => TypeExpr {
+                kind: TypeKind::MutRef(Box::new(base)),
+                span: span.clone(),
+            },
+        };
+        let self_param = Param {
+            span: span.clone(),
+            pattern: Pattern {
+                kind: PatternKind::Binding("self".to_string()),
+                span,
+            },
+            ty,
+            default_value: None,
+            doc_comment: None,
+            is_comptime: false,
+        };
+        f.params.insert(0, self_param);
+    }
+    f.self_param = None;
+    // Merge the impl's generic params (first) with the method's own so the
+    // mono pipeline binds and mangles every axis. An impl-generic-only
+    // method (`fn get`) ends up with `generic_params = impl.params`; a method
+    // that ALSO declares its own params (`fn map[U]`) gets `impl.params ++
+    // method.params` — that combined-axes case is exercised less and left
+    // to whatever the mono inference can bind (documented follow-on).
+    let impl_gp = imp.generic_params.as_ref();
+    let method_gp = method.generic_params.as_ref();
+    let merged = match (impl_gp, method_gp) {
+        (None, None) => None,
+        (Some(ig), None) => Some(ig.clone()),
+        (None, Some(mg)) => Some(mg.clone()),
+        (Some(ig), Some(mg)) => {
+            let mut params = ig.params.clone();
+            params.extend(mg.params.iter().cloned());
+            let mut effect_params = ig.effect_params.clone();
+            effect_params.extend(mg.effect_params.iter().cloned());
+            Some(GenericParams {
+                params,
+                effect_params,
+                span: ig.span.clone(),
+            })
+        }
+    };
+    f.generic_params = merged;
+    f
+}

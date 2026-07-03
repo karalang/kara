@@ -3359,7 +3359,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // fns are keyed by bare name).
         if let Some(receiver_type) = self.inferred_receiver_type(object) {
             let qualified = format!("{}.{}", receiver_type, method);
-            if self.generic_fns.contains_key(&qualified) {
+            if let Some(generic_fn) = self.generic_fns.get(&qualified) {
                 let mut all_args: Vec<CallArg> = Vec::with_capacity(args.len() + 1);
                 all_args.push(CallArg {
                     label: None,
@@ -3368,7 +3368,67 @@ impl<'ctx> super::Codegen<'ctx> {
                     span: object.span.clone(),
                 });
                 all_args.extend(args.iter().cloned());
-                return self.compile_generic_call(&qualified, &all_args, None, call_span);
+
+                // Method on a GENERIC struct impl (`impl[T] Box[T]`,
+                // B-2026-07-03-23 layer 4): the impl's type params (`T`) are
+                // the leading generic axis, but they only appear inside the
+                // `self` param's `Box[T]` shape — which `infer_type_args` /
+                // `unify_type_expr` do NOT recurse into (they bind bare-`T`
+                // params only). So bind them explicitly from the RECEIVER's
+                // recorded struct instantiation (`Box[f64]` → `[f64]`).
+                //
+                // `make_generic_impl_method_function` puts the impl's params
+                // FIRST in the merged `generic_params`, and the receiver's args
+                // correspond to them positionally, so the receiver's args are a
+                // PREFIX of the formal params. `compile_generic_call` zips
+                // formals with the explicit list (stopping at the shorter), so
+                // passing the receiver's args as a prefix binds the impl-`T`
+                // axis and leaves any method-OWN params (`fn pair[U]`) to be
+                // inferred from the other args. Gate on
+                // `receiver_args <= formal_params` so a spurious over-long list
+                // never mis-zips; the impl-`T`-only case (the headline shape)
+                // is the equality sub-case.
+                //
+                // A method with its own generic params on a CONCRETE
+                // (non-generic) receiver has no recorded receiver instantiation
+                // (`enum_inst_type_of_expr` returns `None` — no generic args),
+                // so this yields `None` there and inference runs exactly as
+                // before (B-2026-07-03-15).
+                let explicit: Option<Vec<GenericArg>> = generic_fn
+                    .generic_params
+                    .as_ref()
+                    .map(|gp| gp.params.len())
+                    .and_then(|n_params| {
+                        // Recover the receiver's concrete struct instantiation
+                        // (`Box[f64]`). Identifier receivers (`b.get()`) and
+                        // `self` receivers (a nested `self.hi()` inside another
+                        // generic-impl method) resolve through the name-keyed
+                        // `enum_inst_var_types` (seeded at the `let` site / the
+                        // mono param prologue); struct-literal / fresh-temp
+                        // receivers fall back to the span-keyed record.
+                        // `enum_inst_type_of_expr` only consults the name table
+                        // for `Identifier`, so handle the `self` binding name
+                        // explicitly here.
+                        let te = match &object.kind {
+                            ExprKind::SelfValue => self
+                                .enum_inst_var_types
+                                .get("self")
+                                .cloned()
+                                .or_else(|| self.enum_inst_type_from_span(object)),
+                            _ => self.enum_inst_type_of_expr(object),
+                        }?;
+                        let TypeKind::Path(p) = &te.kind else {
+                            return None;
+                        };
+                        let args = p.generic_args.as_ref()?;
+                        (args.len() <= n_params && !args.is_empty()).then(|| args.clone())
+                    });
+                return self.compile_generic_call(
+                    &qualified,
+                    &all_args,
+                    explicit.as_deref(),
+                    call_span,
+                );
             }
         }
 

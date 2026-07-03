@@ -1319,6 +1319,28 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.var_type_names.insert(param_name.clone(), concrete);
                 }
             }
+            // B-2026-07-03-23 layer 4: record the CONCRETE generic instantiation
+            // of a generic-struct param (`self: (ref) Box[T]` with
+            // `type_subst_names["T"] = "f64"` → `Box[f64]`) into the name-keyed
+            // `enum_inst_var_types`, so a nested method call ON that param
+            // (`self.hi()` inside `gap`) can recover the receiver's args and
+            // route the inner call through the mono pipeline at the same
+            // instantiation. Without this, `enum_inst_type_of_expr(self)` is
+            // empty inside the mono body, the inner call binds no `T`, and the
+            // inner mono/return mis-resolves (a `double` subtraction returned
+            // through an `i64`-typed `gap` → module-verifier reject). Only
+            // records when at least one generic arg is a bound type param — a
+            // fully-concrete param instantiation is already covered by the
+            // struct-literal span record.
+            {
+                let peeled = match &param.ty.kind {
+                    TypeKind::Ref(inner) | TypeKind::MutRef(inner) => inner.as_ref(),
+                    _ => &param.ty,
+                };
+                if let Some(inst) = self.concrete_generic_struct_inst(peeled) {
+                    self.enum_inst_var_types.insert(param_name.clone(), inst);
+                }
+            }
             // B-2026-07-02-11: register the collection / String / struct
             // side-tables for the parameter via the same registrar
             // `compile_function` uses. This subsumes the older tensor-only
@@ -1583,6 +1605,70 @@ impl<'ctx> super::Codegen<'ctx> {
             self.unify_type_expr(&param.ty, val.get_type(), &mut subst);
         }
         subst
+    }
+
+    /// If `te` is a generic user-struct instantiation (`Box[T]`, `Pair[T]`)
+    /// carrying at least one generic arg that is a bare type param bound in the
+    /// active monomorph (`type_subst_names`), return the CONCRETE instantiation
+    /// with those params substituted (`Box[f64]`). `None` for a non-struct, a
+    /// non-generic struct, a struct whose args resolve to nothing bound, or any
+    /// shape without a recorded struct-generic-param list. Used to seed
+    /// `enum_inst_var_types` for a generic-struct method param so nested
+    /// self-method calls re-enter the mono pipeline at the same instantiation
+    /// (B-2026-07-03-23 layer 4).
+    pub(super) fn concrete_generic_struct_inst(&self, te: &TypeExpr) -> Option<TypeExpr> {
+        let TypeKind::Path(path) = &te.kind else {
+            return None;
+        };
+        let name = path.segments.last()?;
+        // Must be a struct with declared generic params (Box, Pair, …).
+        if self
+            .struct_generic_params
+            .get(name)
+            .is_none_or(|p| p.is_empty())
+        {
+            return None;
+        }
+        let args = path.generic_args.as_ref()?;
+        let mut any_bound = false;
+        let new_args: Vec<GenericArg> = args
+            .iter()
+            .map(|a| match a {
+                GenericArg::Type(t) => {
+                    // A bare-type-param arg resolves through the active
+                    // name-subst to its concrete type name; wrap it back into a
+                    // Path TypeExpr. Already-concrete args pass through.
+                    if let TypeKind::Path(p) = &t.kind {
+                        if p.segments.len() == 1 && p.generic_args.is_none() {
+                            if let Some(concrete) = self.type_subst_names.get(&p.segments[0]) {
+                                any_bound = true;
+                                return GenericArg::Type(TypeExpr {
+                                    kind: TypeKind::Path(PathExpr {
+                                        segments: vec![concrete.clone()],
+                                        generic_args: None,
+                                        span: t.span.clone(),
+                                    }),
+                                    span: t.span.clone(),
+                                });
+                            }
+                        }
+                    }
+                    GenericArg::Type(t.clone())
+                }
+                other => other.clone(),
+            })
+            .collect();
+        if !any_bound {
+            return None;
+        }
+        Some(TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec![name.clone()],
+                generic_args: Some(new_args),
+                span: te.span.clone(),
+            }),
+            span: te.span.clone(),
+        })
     }
 
     /// Recursively match a declared type expression against a concrete LLVM type,
