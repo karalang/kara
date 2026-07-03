@@ -518,6 +518,20 @@ impl<'a> super::OwnershipChecker<'a> {
         out: &mut Vec<SpanKey>,
     ) {
         Self::walk_block_for_calls(block, &mut |callee, args| {
+            // `with_provider[R](provider, || ..)` (B-2026-07-02-26): its
+            // closure arg lands in the intrinsic `Own` slot, but the
+            // provider machinery invokes the closure SYNCHRONOUSLY and pops
+            // it before the call returns — it never stores the closure past
+            // the call, so the conservative fn-arg-pass escape rule (round
+            // 12.39) must not fire on it. Skip the whole call. Without this,
+            // routing the generic `with_provider[R]` callee through
+            // `callee_modes_for_call` (the B-26 fix) newly exposed the
+            // closure to the Own-slot escape scan, producing a spurious
+            // E0508 on a ref-captured outer binding (the REPL provider-scope
+            // wrapper is the natural trigger).
+            if super::callee_param_modes_key(callee).as_deref() == Some("with_provider") {
+                return;
+            }
             let modes = match self.callee_modes_for_call(callee) {
                 Some(m) => m,
                 None => return,

@@ -8291,3 +8291,27 @@ fn b26_with_provider_value_slot_is_borrow_not_consume() {
          }",
     );
 }
+
+#[test]
+fn b26_with_provider_closure_ref_capture_no_escape_error() {
+    // Regression for the REPL provider-scope wrapper shape (the shape
+    // `render_export_nodes` builds): an outer binding captured by the
+    // `with_provider` closure must NOT trip the fn-arg-pass ref-capture-
+    // escape rule — the provider machinery invokes the closure
+    // synchronously and never stores it past the call. (Surfaced when
+    // B-26 routed the generic `with_provider[R]` callee through
+    // `callee_modes_for_call`, newly exposing its Own-mode closure slot to
+    // the escape scan and breaking repl::nested_close_prunes_only_...)
+    ownership_lowered_ok(
+        "pub trait Recorder { fn record(mut ref self, value: i64); }\n\
+         pub struct Counter { n: i64 }\n\
+         impl Recorder for Counter { fn record(mut ref self, value: i64) { self.n = value; } }\n\
+         pub effect resource Metric: Recorder;\n\
+         fn main() {\n\
+             let outer = 7;\n\
+             let mut p = Counter { n: 0 };\n\
+             with_provider[Metric](p, || { Metric.record(outer); });\n\
+             println(p.n);\n\
+         }",
+    );
+}
