@@ -3854,6 +3854,33 @@ fn main() {
         }
     }
 
+    /// B-2026-07-03-7 (codegen side): `<`, `<=`, `>`, `>=` on a
+    /// `#[derive(Ord)]` struct / enum lower through the `karac_cmp_<T>`
+    /// declaration-order comparator (result compared against zero). Pre-fix
+    /// codegen errored "Unsupported struct binary op: Lt". A non-Ord operand is
+    /// a clean type error (not covered here — it never reaches codegen).
+    #[test]
+    fn e2e_ordered_operators_on_derived_ord_struct_and_enum() {
+        if let Some(out) = run_program(
+            "#[derive(Eq, Ord)]\n\
+             struct P { a: i64, b: i64 }\n\
+             #[derive(Eq, Ord)]\n\
+             enum Pri { Low, Med, High }\n\
+             fn main() {\n\
+             \x20   let x = P { a: 1, b: 2 };\n\
+             \x20   let y = P { a: 1, b: 3 };\n\
+             \x20   println(f\"{x < y}\");\n\
+             \x20   println(f\"{y > x}\");\n\
+             \x20   println(f\"{x <= x}\");\n\
+             \x20   println(f\"{y < x}\");\n\
+             \x20   println(f\"{Pri.Low < Pri.High}\");\n\
+             \x20   println(f\"{Pri.High < Pri.Low}\");\n\
+             }",
+        ) {
+            assert_eq!(out, "true\ntrue\ntrue\nfalse\ntrue\nfalse\n");
+        }
+    }
+
     /// B-2026-07-03-5: a user-defined trait impl on a PRIMITIVE integer/float
     /// target (`impl Tag for u8 { ... }`) is dispatched end-to-end for a
     /// DIRECT value-receiver call (`x.tag()`). Pre-fix the impl never

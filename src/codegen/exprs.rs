@@ -489,6 +489,42 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                     }
+                    // Ordered comparison (`<`, `<=`, `>`, `>=`) on a
+                    // `#[derive(Ord)]` user struct or enum (B-2026-07-03-7):
+                    // route to the recursive `karac_cmp_<T>` family — the same
+                    // declaration-order comparator `Vec.sort()` uses — and
+                    // compare its result against zero. The typechecker admits
+                    // these operators only for PartialOrd/Ord operands
+                    // (`infer_binary`), so an unorderable type never reaches
+                    // here; if the comparator itself can't be emitted
+                    // (shared / SoA / self-recursive), fall through to
+                    // `compile_binop`'s honest error.
+                    if matches!(op, BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq)
+                        && lhs.is_struct_value()
+                        && rhs.is_struct_value()
+                    {
+                        // Resolve the operand type name. `type_name_of_expr`
+                        // covers identifiers / struct literals / field access;
+                        // `enum_name_of_expr` additionally resolves bare enum
+                        // variant expressions (`Pri.Low`, `Some(x)`).
+                        if let Some(name) = self
+                            .type_name_of_expr(left)
+                            .or_else(|| self.type_name_of_expr(right))
+                            .or_else(|| self.enum_name_of_expr(left))
+                            .or_else(|| self.enum_name_of_expr(right))
+                        {
+                            if (self.struct_field_type_exprs.contains_key(&name)
+                                && !self.shared_types.contains_key(&name))
+                                || self.enum_layouts.contains_key(&name)
+                            {
+                                if let Some(r) =
+                                    self.compile_ordered_user_cmp(op, &name, lhs, rhs)?
+                                {
+                                    return Ok(r);
+                                }
+                            }
+                        }
+                    }
                     self.compile_binop(op, lhs, rhs)
                 }
             },

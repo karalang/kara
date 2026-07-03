@@ -2790,6 +2790,33 @@ fn test_struct_enum_ordering_is_declaration_order_not_alphabetical() {
     assert_eq!(output, "1,9\n2,1\n0\n1\n2\n");
 }
 
+// ── B-2026-07-03-7: `<` `<=` `>` `>=` on derived-Ord struct/enum ──
+
+#[test]
+fn test_ordered_operators_on_derived_ord_struct_and_enum() {
+    // Pre-fix these operators were a hard type error on struct/enum operands
+    // (no interp/codegen lowering). Now they lower through `value_compare`
+    // (declaration order), so `karac run` and `karac build` agree.
+    let output = run_no_errors(
+        "#[derive(Eq, Ord)]\n\
+         struct P { a: i64, b: i64 }\n\
+         #[derive(Eq, Ord)]\n\
+         enum Pri { Low, Med, High }\n\
+         fn main() {\n\
+             let x = P { a: 1, b: 2 };\n\
+             let y = P { a: 1, b: 3 };\n\
+             println(f\"{x < y}\");\n\
+             println(f\"{y > x}\");\n\
+             println(f\"{x <= x}\");\n\
+             println(f\"{y < x}\");\n\
+             println(f\"{Pri.Low < Pri.High}\");\n\
+             println(f\"{Pri.High < Pri.Low}\");\n\
+         }",
+    );
+    // a==a so P compares by b: 2<3; Low(0)<High(2).
+    assert_eq!(output, "true\ntrue\ntrue\nfalse\ntrue\nfalse\n");
+}
+
 // ── B-2026-07-01-7 fn-returned Drop temps + passthrough guard ──
 
 #[test]

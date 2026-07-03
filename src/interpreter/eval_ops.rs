@@ -356,6 +356,27 @@ impl<'a> super::Interpreter<'a> {
             (BinOp::NotEq, l @ Value::Struct { .. }, r @ Value::Struct { .. }) => {
                 Value::Bool(l != r)
             }
+            // Ordered comparison (`<`, `<=`, `>`, `>=`) on aggregates — struct /
+            // enum, by derived-`Ord` DECLARATION order via `value_compare`
+            // (B-2026-07-03-7). `value_compare` consults the per-thread
+            // `type_order` registry, so the result matches codegen's
+            // `karac_cmp_<T>` family and `Vec[Struct].sort()`. The typechecker
+            // gates these on the operand deriving `PartialOrd`/`Ord`; reaching
+            // here means two same-shape aggregates.
+            (
+                BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq,
+                l @ (Value::Struct { .. } | Value::EnumVariant { .. }),
+                r @ (Value::Struct { .. } | Value::EnumVariant { .. }),
+            ) => {
+                let ord = super::helpers::value_compare(&l, &r);
+                let b = match op {
+                    BinOp::Lt => ord.is_lt(),
+                    BinOp::LtEq => ord.is_le(),
+                    BinOp::Gt => ord.is_gt(),
+                    _ => ord.is_ge(),
+                };
+                Value::Bool(b)
+            }
             // `shared struct` equality is structural (design.md § Equality
             // Semantics): `Value`'s `PartialEq` recurses through the inner
             // fields (`Arc::ptr_eq` fast path for identical allocations). The

@@ -1276,6 +1276,36 @@ fn main() {
         }
     }
 
+    /// B-2026-07-03-7 (codegen side), auto-par surface: `<`/`<=`/`>`/`>=` on a
+    /// `#[derive(Ord)]` struct/enum lower through the effect-free
+    /// `karac_cmp_<T>` comparator identically under DEFAULT auto-par.
+    #[test]
+    fn test_e2e_auto_par_ordered_operators_struct_enum() {
+        let out = run_program(
+            r#"
+#[derive(Eq, Ord)]
+struct P { a: i64, b: i64 }
+#[derive(Eq, Ord)]
+enum Pri { Low, Med, High }
+fn main() {
+    let x = P { a: 1, b: 2 };
+    let y = P { a: 1, b: 3 };
+    println(f"{x < y}");
+    println(f"{y > x}");
+    println(f"{y < x}");
+    println(f"{Pri.Low < Pri.High}");
+    println(f"{Pri.High < Pri.Low}");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "true\ntrue\nfalse\ntrue\nfalse\n",
+                "ordered operators on struct/enum under auto-par; got {out:?}"
+            );
+        }
+    }
+
     #[test]
     fn test_e2e_auto_par_map_histogram_then_keys_no_race() {
         // `for w in words { *m.entry(w).or_insert(0) += 1 }` WRITES the map,

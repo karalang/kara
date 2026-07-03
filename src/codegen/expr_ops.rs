@@ -2868,6 +2868,62 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
     }
 
+    /// Lower an ordered comparison (`<`, `<=`, `>`, `>=`) on a `#[derive(Ord)]`
+    /// user struct / enum named `type_name` to a call into the recursive
+    /// `karac_cmp_<T>` family (declaration-order lexicographic comparator, the
+    /// same one `Vec.sort()` uses) followed by a signed compare of the `i64`
+    /// result against zero. Returns `Ok(None)` when the comparator can't be
+    /// emitted (shared / SoA / self-recursive type) so the caller falls back to
+    /// `compile_binop`'s honest error.
+    pub(super) fn compile_ordered_user_cmp(
+        &mut self,
+        op: &BinOp,
+        type_name: &str,
+        lhs: BasicValueEnum<'ctx>,
+        rhs: BasicValueEnum<'ctx>,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let te = TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec![type_name.to_string()],
+                generic_args: None,
+                span: crate::token::Span::default(),
+            }),
+            span: crate::token::Span::default(),
+        };
+        let Some(cmp_fn) = self.emit_cmp_fn_for_type_expr(&te) else {
+            return Ok(None);
+        };
+        let Some(cur_fn) = self.current_fn else {
+            return Ok(None);
+        };
+        let ls = lhs.into_struct_value();
+        let rs = rhs.into_struct_value();
+        let a_slot = self.create_entry_alloca(cur_fn, "ord.a", ls.get_type().into());
+        let b_slot = self.create_entry_alloca(cur_fn, "ord.b", rs.get_type().into());
+        self.builder.build_store(a_slot, ls).unwrap();
+        self.builder.build_store(b_slot, rs).unwrap();
+        let ord = self
+            .builder
+            .build_call(cmp_fn, &[a_slot.into(), b_slot.into()], "ord.cmp")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let zero = self.context.i64_type().const_zero();
+        let pred = match op {
+            BinOp::Lt => inkwell::IntPredicate::SLT,
+            BinOp::LtEq => inkwell::IntPredicate::SLE,
+            BinOp::Gt => inkwell::IntPredicate::SGT,
+            BinOp::GtEq => inkwell::IntPredicate::SGE,
+            _ => return Ok(None),
+        };
+        let r = self
+            .builder
+            .build_int_compare(pred, ord, zero, "ord.res")
+            .unwrap();
+        Ok(Some(r.into()))
+    }
+
     pub(super) fn compile_binop_typed(
         &mut self,
         op: &BinOp,

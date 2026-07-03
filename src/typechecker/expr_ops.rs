@@ -1628,6 +1628,28 @@ impl<'a> super::TypeChecker<'a> {
                         span.clone(),
                         TypeErrorKind::InvalidBinaryOp,
                     );
+                } else if matches!(cmp_left, Type::Named { name, .. }
+                        if self.env.structs.contains_key(name) || self.env.enums.contains_key(name))
+                    && !self.type_supports_partial_ord(cmp_left)
+                {
+                    // A user struct / enum orders with `<`, `<=`, `>`, `>=` only
+                    // when it opts in via `#[derive(Ord)]` / `#[derive(PartialOrd)]`
+                    // (or a user `impl`). Pre-fix these operators were silently
+                    // admitted on ANY struct/enum (returning `Type::Bool`), then
+                    // the interpreter / codegen had no lowering, so the program
+                    // errored at run/build with a misleading "not defined"
+                    // message. Now the derive requirement is a clean type error
+                    // and derived types lower through the `karac_cmp`/`value_compare`
+                    // declaration-order comparator (B-2026-07-03-7).
+                    self.type_error(
+                        format!(
+                            "type '{}' does not implement Ord; add #[derive(Ord)] to use \
+                             <, <=, >, or >=",
+                            type_display(cmp_left)
+                        ),
+                        span.clone(),
+                        TypeErrorKind::InvalidBinaryOp,
+                    );
                 }
                 Type::Bool
             }
