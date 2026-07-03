@@ -5780,4 +5780,147 @@ fn main() {
             assert_eq!(out.trim(), "33", "got {out:?}");
         }
     }
+
+    // ── B-2026-07-02-38: residual of B-2026-07-02-31 — a par branch whose
+    //    `let` RHS is a METHOD CALL, an INDEX, or a FIELD ACCESS ───────────
+    //
+    // B-31 (24b1c9f4/ec5c9f20) taught `infer_expr_llvm_type` to size the
+    // return slot for operator-dispatch / block / if / match RHS, but it
+    // still returned `None` for `ExprKind::{MethodCall, Index, FieldAccess}`,
+    // so a branch `let x = base.abs()` / `let x = v[0]` / `let x = p.field`
+    // dropped its slot and the join's read of that name failed the *build*
+    // with "Undefined variable" while `karac run` executed correctly. Each
+    // test below builds + runs the shape and asserts the value, so a
+    // regression re-dropping the slot panics in `run_program`'s
+    // `compile_to_object`, not just the assertion. All were manually A/B'd
+    // under DEFAULT auto-par and `KARAC_AUTO_PAR=0`.
+
+    /// Repro (a): a branch's `let` RHS is a scalar builtin METHOD CALL on an
+    /// outer binding. `base.abs()` types as `-> Self` (i64), so the `x` slot
+    /// must be sized i64 for the join `x + y`. Expected `7 + 93 = 100`.
+    #[test]
+    fn test_e2e_par_join_branch_method_call_abs() {
+        let out = run_program(
+            r#"
+fn main() {
+    let base = -7;
+    let total = par {
+        let x = base.abs();
+        let y = base + 100;
+        x + y
+    };
+    println(total);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "100", "got {out:?}");
+        }
+    }
+
+    /// Repro (b): a branch's `let` RHS is an INDEX read of an outer `Vec[i64]`.
+    /// `v[0]` sizes its slot to the Vec's element type (i64, via
+    /// `vec_elem_types`). Only the `x` branch touches `v` (the sibling reads a
+    /// Copy scalar) so the program is ownership-clean — a plain `Vec` read
+    /// from two concurrent branches is a legitimate `ConcurrentPlain*`
+    /// diagnostic, orthogonal to the slot-sizing under test. Expected
+    /// `5 + 100 = 105`.
+    #[test]
+    fn test_e2e_par_join_branch_index_read() {
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(5);
+    v.push(6);
+    v.push(7);
+    let total = par {
+        let x = v[0];
+        let y = 100;
+        x + y
+    };
+    println(total);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "105", "got {out:?}");
+        }
+    }
+
+    /// Variant: a branch's `let` RHS is a USER IMPL METHOD returning i64. The
+    /// `a` slot is sized from the `Point.magsq` LLVM function's declared
+    /// return type. Only the `a` branch touches `p` (ownership-clean, per the
+    /// index test's note). Expected `(3*3 + 4*4) + 100 = 25 + 100 = 125`.
+    #[test]
+    fn test_e2e_par_join_branch_user_impl_method() {
+        let out = run_program(
+            r#"
+struct Point { x: i64, y: i64 }
+impl Point {
+    fn magsq(self) -> i64 { self.x * self.x + self.y * self.y }
+}
+fn main() {
+    let p = Point { x: 3, y: 4 };
+    let total = par {
+        let a = p.magsq();
+        let b = 100;
+        a + b
+    };
+    println(total);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "125", "got {out:?}");
+        }
+    }
+
+    /// Variant: a branch's `let` RHS is a struct FIELD ACCESS. The `a` slot is
+    /// sized from `Point`'s field `TypeExpr` (i64). Only the `a` branch
+    /// touches `p` (ownership-clean, per the index test's note). Expected
+    /// `10 + 5 = 15`.
+    #[test]
+    fn test_e2e_par_join_branch_field_access() {
+        let out = run_program(
+            r#"
+struct Point { x: i64, y: i64 }
+fn main() {
+    let p = Point { x: 10, y: 20 };
+    let total = par {
+        let a = p.x;
+        let b = 5;
+        a + b
+    };
+    println(total);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "15", "got {out:?}");
+        }
+    }
+
+    /// Variant: a FLOAT scalar-method branch. `base.sqrt()` types as `-> Self`
+    /// (f64), so the `a` slot must be sized f64, not the i64 default.
+    /// Expected `3.0 + 10.0 = 13`.
+    #[test]
+    fn test_e2e_par_join_branch_float_method() {
+        let out = run_program(
+            r#"
+fn main() {
+    let base = 9.0;
+    let total = par {
+        let a = base.sqrt();
+        let b = base + 1.0;
+        a + b
+    };
+    println(total);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "13", "got {out:?}");
+        }
+    }
 }

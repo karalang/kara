@@ -1167,10 +1167,88 @@ impl<'ctx> super::Codegen<'ctx> {
                 .iter()
                 .find_map(|arm| self.infer_expr_llvm_type(&arm.body, locals)),
 
-            // Anything else (method calls, field access, index, closures,
-            // struct literals, etc.): conservatively un-inferrable here.
-            // The slot is dropped; the pre-existing "un-inferrable RHS →
-            // branch-local" contract applies.
+            // `v[i]` — Vec / Slice element read. B-2026-07-02-38 (residual
+            // of B-2026-07-02-31): a par branch `let x = v[0]` reads one
+            // element of an OUTER collection, and its slot must be sized to
+            // that element's LLVM type — exactly the value shape
+            // `compile_index` produces. Codegen already tracks the element
+            // type of every compiled Vec / Slice local (`vec_elem_types` /
+            // `slice_elem_types`); an OUTER collection was compiled before
+            // this `par` block, so the lookup resolves. A block-local
+            // collection isn't registered yet at slot-sizing time and falls
+            // through to `None` (the pre-existing branch-local contract).
+            ExprKind::Index { object, .. } => {
+                if let ExprKind::Identifier(base) = &object.kind {
+                    if let Some(&elem) = self.vec_elem_types.get(base.as_str()) {
+                        return Some(elem);
+                    }
+                    if let Some(&elem) = self.slice_elem_types.get(base.as_str()) {
+                        return Some(elem);
+                    }
+                }
+                None
+            }
+
+            // `o.field` — struct field read. B-2026-07-02-38: resolve the
+            // receiver's declared type via `var_type_names` (struct-kind
+            // locals / the synthesized `self` param), find the field's
+            // declaration index, and map its `TypeExpr` to an LLVM type.
+            // Only OUTER struct locals carry a `var_type_names` entry at
+            // slot-sizing time; anything else stays un-inferrable.
+            ExprKind::FieldAccess { object, field } => {
+                let ty_name = self.inferred_receiver_type(object)?;
+                let idx = self
+                    .struct_field_names
+                    .get(&ty_name)?
+                    .iter()
+                    .position(|f| f == field)?;
+                let te = self.struct_field_type_exprs.get(&ty_name)?.get(idx)?;
+                Some(self.llvm_type_for_type_expr(te))
+            }
+
+            // `r.method(args)` — method-call read. B-2026-07-02-38, two
+            // resolvable shapes:
+            //   1. User impl method: the impl pass emits `Type.method` as an
+            //      LLVM function whose declared return type is authoritative
+            //      (the declare-pass runs before body lowering, so the fn
+            //      exists by the time slots are sized). Mirrors the
+            //      `ExprKind::Call` free-function arm.
+            //   2. Value-preserving numeric scalar builtin (`abs` / `sqrt` /
+            //      `pow` / the `float_math` transcendentals): the typechecker
+            //      types these as `x.m(..) -> Self` (see
+            //      `expr_method_call.rs`), so the result is the receiver's own
+            //      numeric type. Gated on an i64-or-float receiver: narrow
+            //      integers flow widened to i64 in codegen (the receiver-width
+            //      recovery path re-extends `i32.pow` etc.), so sizing a
+            //      narrow slot to its declared width would mismatch the stored
+            //      i64 value — leave those un-inferrable (safe: a loud build
+            //      failure, never a miscompile) rather than mis-size.
+            ExprKind::MethodCall { object, method, .. } => {
+                if let Some(ty_name) = self.inferred_receiver_type(object) {
+                    if let Some(fn_val) = self.module.get_function(&format!("{ty_name}.{method}")) {
+                        if let Some(ret) = fn_val.get_type().get_return_type() {
+                            return Some(ret);
+                        }
+                    }
+                }
+                let returns_receiver_numeric = matches!(method.as_str(), "abs" | "sqrt")
+                    || crate::float_math::classify(method).is_some();
+                if returns_receiver_numeric {
+                    match self.infer_expr_llvm_type(object, locals) {
+                        Some(BasicTypeEnum::IntType(t)) if t.get_bit_width() == 64 => {
+                            return Some(t.into());
+                        }
+                        Some(recv @ BasicTypeEnum::FloatType(_)) => return Some(recv),
+                        _ => {}
+                    }
+                }
+                None
+            }
+
+            // Anything else (closures, struct literals, tuple index, etc.):
+            // conservatively un-inferrable here. The slot is dropped; the
+            // pre-existing "un-inferrable RHS → branch-local" contract
+            // applies.
             _ => None,
         }
     }
