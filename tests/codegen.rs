@@ -3779,6 +3779,81 @@ fn main() {
         }
     }
 
+    /// B-2026-07-03-7 (codegen side): `Vec[Struct].sort()` and
+    /// `Vec[Enum].sort()` for a `#[derive(Ord)]` user type. Pre-fix codegen
+    /// errored "Vec.sort() in codegen supports integer, String, float, tuple,
+    /// and nested-Vec element types; use sort_by(...)". Now the recursive
+    /// `karac_cmp_<T>` family orders struct fields / enum variants + payloads
+    /// in DECLARATION order (B-2026-07-03-12 semantics), so `karac build`
+    /// agrees with `karac run`:
+    ///   - struct `Rect { width, height }` sorts by `width` FIRST (declaration
+    ///     order) — not alphabetically by `height`.
+    ///   - enum `Shape { Circle(i64), Rect(i64,i64), Unit }` orders by variant
+    ///     DISCRIMINANT (declaration order), then payload fields in order — the
+    ///     scalar-in-payload-word load path.
+    ///   - struct `Named { name: String, age }` exercises a heap (String)
+    ///     leading field.
+    #[test]
+    fn e2e_struct_sort_declaration_order() {
+        if let Some(out) = run_program(
+            "#[derive(Eq, Ord)]\n\
+             struct Rect { width: i64, height: i64 }\n\
+             #[derive(Eq, Ord)]\n\
+             struct Named { name: String, age: i64 }\n\
+             fn main() {\n\
+             \x20   let mut v: Vec[Rect] = Vec.new();\n\
+             \x20   v.push(Rect { width: 2, height: 1 });\n\
+             \x20   v.push(Rect { width: 1, height: 9 });\n\
+             \x20   v.sort();\n\
+             \x20   let mut i = 0;\n\
+             \x20   while i < v.len() { let r = v[i]; println(f\"{r.width},{r.height}\"); i = i + 1; };\n\
+             \x20   let mut n: Vec[Named] = Vec.new();\n\
+             \x20   n.push(Named { name: \"bob-long-payload-string-here\", age: 30 });\n\
+             \x20   n.push(Named { name: \"amy-long-payload-string-here\", age: 99 });\n\
+             \x20   n.push(Named { name: \"amy-long-payload-string-here\", age: 20 });\n\
+             \x20   n.sort();\n\
+             \x20   let mut j = 0;\n\
+             \x20   while j < n.len() { let p = n[j]; println(f\"{p.age}\"); j = j + 1; };\n\
+             }",
+        ) {
+            // Rect sorted by width: (1,9) (2,1). Named sorted by name then age:
+            // amy/20, amy/99, bob/30 → ages 20 99 30.
+            assert_eq!(out, "1,9\n2,1\n20\n99\n30\n");
+        }
+    }
+
+    /// B-2026-07-03-7 (codegen side): `Vec[Enum].sort()` — variant discriminant
+    /// (declaration order) then payload, including tuple, struct-shaped, and
+    /// unit variants. See `e2e_struct_sort_declaration_order` for the class.
+    #[test]
+    fn e2e_enum_sort_declaration_order() {
+        if let Some(out) = run_program(
+            "#[derive(Eq, Ord)]\n\
+             enum Shape { Circle(i64), Rect(i64, i64), Unit }\n\
+             fn stag(s: Shape) -> i64 {\n\
+             \x20   match s {\n\
+             \x20       Shape.Circle(r) => 100 + r,\n\
+             \x20       Shape.Rect(w, h) => 200 + w * 10 + h,\n\
+             \x20       Shape.Unit => 300,\n\
+             \x20   }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let mut v: Vec[Shape] = Vec.new();\n\
+             \x20   v.push(Shape.Rect(2, 1));\n\
+             \x20   v.push(Shape.Circle(9));\n\
+             \x20   v.push(Shape.Unit);\n\
+             \x20   v.push(Shape.Rect(1, 5));\n\
+             \x20   v.push(Shape.Circle(3));\n\
+             \x20   v.sort();\n\
+             \x20   let mut i = 0;\n\
+             \x20   while i < v.len() { let s = v[i]; println(f\"{stag(s)}\"); i = i + 1; };\n\
+             }",
+        ) {
+            // Circle(0) < Rect(1) < Unit(2); within: Circle 3<9, Rect (1,5)<(2,1).
+            assert_eq!(out, "103\n109\n215\n221\n300\n");
+        }
+    }
+
     /// B-2026-07-03-5: a user-defined trait impl on a PRIMITIVE integer/float
     /// target (`impl Tag for u8 { ... }`) is dispatched end-to-end for a
     /// DIRECT value-receiver call (`x.tag()`). Pre-fix the impl never

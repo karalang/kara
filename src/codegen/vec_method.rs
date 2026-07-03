@@ -10,6 +10,7 @@
 
 use crate::ast::*;
 
+use inkwell::basic_block::BasicBlock;
 use inkwell::module::Linkage;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType};
 use inkwell::values::{
@@ -5077,6 +5078,25 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Some(f) = self.module.get_function(&mangled) {
             return Some(f);
         }
+        // Named user struct / enum: derived-`Ord` ordering by field / variant
+        // DECLARATION order (B-2026-07-03-7), mirroring the interpreter's
+        // `value_compare` (B-2026-07-03-12). Handled in dedicated helpers that
+        // pre-guard against self-recursion; both fall through to the scalar /
+        // container logic below for every other shape.
+        if let TypeKind::Path(p) = &te.kind {
+            if p.generic_args.is_none() {
+                if let Some(head) = p.segments.first() {
+                    if self.struct_field_type_exprs.contains_key(head)
+                        && !self.shared_types.contains_key(head)
+                    {
+                        return self.emit_cmp_fn_for_struct(head, &mangled);
+                    }
+                    if self.enum_layouts.contains_key(head) {
+                        return self.emit_cmp_fn_for_enum(head, &mangled);
+                    }
+                }
+            }
+        }
         enum Body<'c> {
             IntScalar {
                 signed: bool,
@@ -5409,6 +5429,303 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.build_return(Some(&zero)).unwrap();
             }
         }
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Some(cmp_fn)
+    }
+
+    /// `karac_cmp_<Struct>` for a `#[derive(Ord)]` user struct: compare fields
+    /// in DECLARATION order via the recursive `karac_cmp_<T>` family, returning
+    /// the first non-`Equal` field's result (the tuple template, keyed on the
+    /// struct's LLVM layout). Mirrors the interpreter's declaration-order
+    /// comparison (B-2026-07-03-12). `None` — caller keeps its loud "use
+    /// sort_by" error — for a shared struct, an unknown struct, a layout-block /
+    /// SoA struct whose physical field count diverges from its logical field
+    /// list, a self-recursive struct, or any field whose own type is
+    /// unorderable.
+    fn emit_cmp_fn_for_struct(
+        &mut self,
+        struct_name: &str,
+        mangled: &str,
+    ) -> Option<FunctionValue<'ctx>> {
+        // A field that recurses back into this same type (`S { next: Vec[S] }`)
+        // → unorderable, rather than infinite compile-time recursion.
+        if self.cmp_fn_in_progress.contains(struct_name) {
+            return None;
+        }
+        let struct_ty = *self.struct_types.get(struct_name)?;
+        let field_tes = self.struct_field_type_exprs.get(struct_name)?.clone();
+        // Plain field-ordered struct only (mirrors emit_struct_clone_fn's guard).
+        if struct_ty.count_fields() as usize != field_tes.len() {
+            return None;
+        }
+
+        self.cmp_fn_in_progress.insert(struct_name.to_string());
+        let children: Option<Vec<FunctionValue<'ctx>>> = field_tes
+            .iter()
+            .map(|te| self.emit_cmp_fn_for_type_expr(te))
+            .collect();
+        self.cmp_fn_in_progress.remove(struct_name);
+        let children = children?;
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let zero = i64_t.const_zero();
+        let fn_ty = i64_t.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let cmp_fn = self
+            .module
+            .add_function(mangled, fn_ty, Some(Linkage::Internal));
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        self.current_fn = Some(cmp_fn);
+        let entry = self.context.append_basic_block(cmp_fn, "entry");
+        self.builder.position_at_end(entry);
+        let a_ptr = cmp_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let b_ptr = cmp_fn.get_nth_param(1).unwrap().into_pointer_value();
+
+        let mut next_bb = self.context.append_basic_block(cmp_fn, "s.f0");
+        self.builder.build_unconditional_branch(next_bb).unwrap();
+        for (i, child) in children.iter().enumerate() {
+            self.builder.position_at_end(next_bb);
+            let a_f = self
+                .builder
+                .build_struct_gep(struct_ty, a_ptr, i as u32, "a.f")
+                .unwrap();
+            let b_f = self
+                .builder
+                .build_struct_gep(struct_ty, b_ptr, i as u32, "b.f")
+                .unwrap();
+            let r = self
+                .builder
+                .build_call(*child, &[a_f.into(), b_f.into()], "fcmp")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value();
+            let nz = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::NE, r, zero, "nz")
+                .unwrap();
+            let ret_bb = self.context.append_basic_block(cmp_fn, "s.ret");
+            let cont_bb = self
+                .context
+                .append_basic_block(cmp_fn, &format!("s.f{}", i + 1));
+            self.builder
+                .build_conditional_branch(nz, ret_bb, cont_bb)
+                .unwrap();
+            self.builder.position_at_end(ret_bb);
+            self.builder.build_return(Some(&r)).unwrap();
+            next_bb = cont_bb;
+        }
+        self.builder.position_at_end(next_bb);
+        self.builder.build_return(Some(&zero)).unwrap();
+
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Some(cmp_fn)
+    }
+
+    /// `karac_cmp_<Enum>` for a `#[derive(Ord)]` user enum: order by variant
+    /// DISCRIMINANT first (the tag at field 0 — assigned in DECLARATION order,
+    /// so `Priority { Low, Med, High }` yields `Low < Med < High`), then, for
+    /// two values of the same variant, by payload fields in declaration order
+    /// via the `karac_cmp_<T>` family. Matches the interpreter's declaration-
+    /// order enum comparison (B-2026-07-03-12). `None` — caller keeps its loud
+    /// error — for a shared enum, a self-recursive enum, or any payload field
+    /// whose type is unorderable.
+    fn emit_cmp_fn_for_enum(
+        &mut self,
+        enum_name: &str,
+        mangled: &str,
+    ) -> Option<FunctionValue<'ctx>> {
+        if self.cmp_fn_in_progress.contains(enum_name) {
+            return None;
+        }
+        let layout = self.enum_layouts.get(enum_name)?.clone();
+        if layout.is_shared {
+            return None;
+        }
+
+        // Per-variant payload field TypeExprs (declaration order).
+        let variant_field_tes: Vec<(String, Vec<TypeExpr>)> = self
+            .enum_variant_field_type_exprs(enum_name)
+            .into_iter()
+            .map(|(_tag, name, tes)| (name, tes))
+            .collect();
+
+        // Pre-emit a child cmp fn per payload field, keyed by (variant, llvm
+        // field index = start_word + 1). Guard self-recursion; any unorderable
+        // field aborts before this enum's fn is declared (no undefined IR).
+        self.cmp_fn_in_progress.insert(enum_name.to_string());
+        let mut field_cmps: Vec<(String, u32, FunctionValue<'ctx>)> = Vec::new();
+        let mut unorderable = false;
+        'variants: for (variant_name, field_tes) in &variant_field_tes {
+            let Some(offsets) = layout.field_word_offsets.get(variant_name) else {
+                continue;
+            };
+            for (fi, (start_word, _num_words)) in offsets.iter().enumerate() {
+                let Some(field_te) = field_tes.get(fi) else {
+                    continue;
+                };
+                match self.emit_cmp_fn_for_type_expr(field_te) {
+                    Some(cf) => {
+                        field_cmps.push((variant_name.clone(), (*start_word + 1) as u32, cf))
+                    }
+                    None => {
+                        unorderable = true;
+                        break 'variants;
+                    }
+                }
+            }
+        }
+        self.cmp_fn_in_progress.remove(enum_name);
+        if unorderable {
+            return None;
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let zero = i64_t.const_zero();
+        let neg_one = i64_t.const_int((-1i64) as u64, true);
+        let pos_one = i64_t.const_int(1, false);
+        let fn_ty = i64_t.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let cmp_fn = self
+            .module
+            .add_function(mangled, fn_ty, Some(Linkage::Internal));
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        self.current_fn = Some(cmp_fn);
+        let enum_llvm = layout.llvm_type;
+
+        let entry = self.context.append_basic_block(cmp_fn, "entry");
+        self.builder.position_at_end(entry);
+        let a_ptr = cmp_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let b_ptr = cmp_fn.get_nth_param(1).unwrap().into_pointer_value();
+        let a_tag_ptr = self
+            .builder
+            .build_struct_gep(enum_llvm, a_ptr, 0, "a.tag.p")
+            .unwrap();
+        let b_tag_ptr = self
+            .builder
+            .build_struct_gep(enum_llvm, b_ptr, 0, "b.tag.p")
+            .unwrap();
+        let a_tag = self
+            .builder
+            .build_load(i64_t, a_tag_ptr, "a.tag")
+            .unwrap()
+            .into_int_value();
+        let b_tag = self
+            .builder
+            .build_load(i64_t, b_tag_ptr, "b.tag")
+            .unwrap()
+            .into_int_value();
+        let tags_eq = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::EQ, a_tag, b_tag, "tags.eq")
+            .unwrap();
+        let tagdiff_bb = self.context.append_basic_block(cmp_fn, "tag.diff");
+        let payload_bb = self.context.append_basic_block(cmp_fn, "payload");
+        let equal_bb = self.context.append_basic_block(cmp_fn, "eq");
+        self.builder
+            .build_conditional_branch(tags_eq, payload_bb, tagdiff_bb)
+            .unwrap();
+
+        // Tags differ → order by discriminant (declaration order). Unsigned:
+        // tags are small non-negative discriminants.
+        self.builder.position_at_end(tagdiff_bb);
+        let tag_lt = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::ULT, a_tag, b_tag, "tag.lt")
+            .unwrap();
+        let tag_gt = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::UGT, a_tag, b_tag, "tag.gt")
+            .unwrap();
+        let gt_sel = self
+            .builder
+            .build_select(tag_gt, pos_one, zero, "tag.gtsel")
+            .unwrap();
+        let tr = self
+            .builder
+            .build_select(tag_lt, neg_one.into(), gt_sel, "tag.cmp")
+            .unwrap();
+        self.builder.build_return(Some(&tr)).unwrap();
+
+        // Equal tags → compare the active variant's payload fields.
+        self.builder.position_at_end(equal_bb);
+        self.builder.build_return(Some(&zero)).unwrap();
+
+        self.builder.position_at_end(payload_bb);
+        // One case BB per variant that has payload comparisons; the rest
+        // (unit variants) fall to the default `equal_bb`.
+        let mut variants_with_fields: Vec<String> = Vec::new();
+        for (vn, _, _) in &field_cmps {
+            if !variants_with_fields.contains(vn) {
+                variants_with_fields.push(vn.clone());
+            }
+        }
+        let mut switch_cases: Vec<(IntValue<'ctx>, BasicBlock<'ctx>)> = Vec::new();
+        let case_bbs: Vec<(String, BasicBlock<'ctx>)> = variants_with_fields
+            .iter()
+            .filter_map(|vn| {
+                let tag = *layout.tags.get(vn)?;
+                let bb = self.context.append_basic_block(cmp_fn, &format!("v.{vn}"));
+                switch_cases.push((i64_t.const_int(tag, false), bb));
+                Some((vn.clone(), bb))
+            })
+            .collect();
+        self.builder
+            .build_switch(a_tag, equal_bb, &switch_cases)
+            .unwrap();
+
+        for (variant_name, bb) in &case_bbs {
+            self.builder.position_at_end(*bb);
+            let fields: Vec<(u32, FunctionValue<'ctx>)> = field_cmps
+                .iter()
+                .filter(|(vn, _, _)| vn == variant_name)
+                .map(|(_, idx, f)| (*idx, *f))
+                .collect();
+            let mut next_bb = *bb;
+            for (i, (field_idx, child)) in fields.iter().enumerate() {
+                self.builder.position_at_end(next_bb);
+                let a_f = self
+                    .builder
+                    .build_struct_gep(enum_llvm, a_ptr, *field_idx, "a.pf")
+                    .unwrap();
+                let b_f = self
+                    .builder
+                    .build_struct_gep(enum_llvm, b_ptr, *field_idx, "b.pf")
+                    .unwrap();
+                let r = self
+                    .builder
+                    .build_call(*child, &[a_f.into(), b_f.into()], "pfcmp")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let nz = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::NE, r, zero, "nz")
+                    .unwrap();
+                let ret_bb = self.context.append_basic_block(cmp_fn, "v.ret");
+                let cont_bb = self
+                    .context
+                    .append_basic_block(cmp_fn, &format!("v.{variant_name}.{}", i + 1));
+                self.builder
+                    .build_conditional_branch(nz, ret_bb, cont_bb)
+                    .unwrap();
+                self.builder.position_at_end(ret_bb);
+                self.builder.build_return(Some(&r)).unwrap();
+                next_bb = cont_bb;
+            }
+            self.builder.position_at_end(next_bb);
+            self.builder.build_unconditional_branch(equal_bb).unwrap();
+        }
+
         self.current_fn = saved_fn;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);

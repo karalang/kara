@@ -1299,6 +1299,12 @@ pub(super) struct Codegen<'ctx> {
     /// `register_var_from_type_expr`. Populated alongside
     /// `struct_field_type_names` in `declare_structs`.
     pub(crate) struct_field_type_exprs: HashMap<String, Vec<crate::ast::TypeExpr>>,
+    /// Names of user struct/enum types whose `karac_cmp_<T>` ordering fn is
+    /// mid-emission, so a self-referential field (`S { next: Vec[S] }`) that
+    /// recurses back into the same type returns `None` (unorderable — the sort
+    /// call site errors loudly) instead of infinitely recursing at compile
+    /// time. See `emit_cmp_fn_for_struct` / `emit_cmp_fn_for_enum`.
+    pub(crate) cmp_fn_in_progress: std::collections::HashSet<String>,
     /// Declared generic-param names of each OWNED (non-shared) struct, recorded
     /// by `register_struct_metadata`. Empty vec for a non-generic struct. Lets
     /// the generic-struct monomorphization path (`mono_struct_type`) zip a
@@ -5276,6 +5282,7 @@ impl<'ctx> Codegen<'ctx> {
             struct_field_names: HashMap::new(),
             struct_field_type_names: HashMap::new(),
             struct_field_type_exprs: HashMap::new(),
+            cmp_fn_in_progress: std::collections::HashSet::new(),
             struct_generic_params: HashMap::new(),
             shared_type_decl_names: std::collections::HashSet::new(),
             union_types: HashMap::new(),

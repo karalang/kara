@@ -1234,6 +1234,48 @@ fn main() {
         }
     }
 
+    /// B-2026-07-03-7 (codegen side), auto-par surface: `Vec[Struct].sort()`
+    /// and `Vec[Enum].sort()` for a `#[derive(Ord)]` user type resolve the
+    /// `karac_cmp_<T>` declaration-order comparator identically under DEFAULT
+    /// auto-par (the cmp-fn family is effect-free, so the sort is unaffected by
+    /// parallelization) — third A/B surface for the ordering fix.
+    #[test]
+    fn test_e2e_auto_par_struct_enum_sort_declaration_order() {
+        let out = run_program(
+            r#"
+#[derive(Eq, Ord)]
+struct Rect { width: i64, height: i64 }
+#[derive(Eq, Ord)]
+enum Shape { Circle(i64), Rect(i64, i64), Unit }
+fn stag(s: Shape) -> i64 {
+    match s { Shape.Circle(r) => 100 + r, Shape.Rect(w, h) => 200 + w * 10 + h, Shape.Unit => 300 }
+}
+fn main() {
+    let mut v: Vec[Rect] = Vec.new();
+    v.push(Rect { width: 2, height: 1 });
+    v.push(Rect { width: 1, height: 9 });
+    v.sort();
+    let mut i = 0;
+    while i < v.len() { let r = v[i]; println(f"{r.width},{r.height}"); i = i + 1; }
+    let mut s: Vec[Shape] = Vec.new();
+    s.push(Shape.Rect(2, 1));
+    s.push(Shape.Circle(9));
+    s.push(Shape.Unit);
+    s.push(Shape.Circle(3));
+    s.sort();
+    let mut j = 0;
+    while j < s.len() { let sh = s[j]; println(f"{stag(sh)}"); j = j + 1; }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "1,9\n2,1\n103\n109\n221\n300\n",
+                "struct/enum sort declaration order under auto-par; got {out:?}"
+            );
+        }
+    }
+
     #[test]
     fn test_e2e_auto_par_map_histogram_then_keys_no_race() {
         // `for w in words { *m.entry(w).or_insert(0) += 1 }` WRITES the map,
