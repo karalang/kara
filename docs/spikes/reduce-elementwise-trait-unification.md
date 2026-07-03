@@ -379,13 +379,31 @@ B-2026-07-02-10..13, see the ledger.
     instantiation checks the bound), for both the inline-bound and where-clause
     arms. This DIRECTLY unblocks **generic** user impls of `Reduce`
     (`impl[T: Sub] Reduce[T] for Pair[T]` now inherits + resolves the spliced
-    `range` default, i64→7 on run == build). **Residual:** a NON-i64 (f64)
-    element still miscompiles — a **separate, pre-existing, general** bug
-    (B-2026-07-03-23): a generic struct literal (`Box { v: 2.5 }`, even
-    unbounded / no impl) loses its `[f64]` arg, so codegen defaults the element
-    to i64 and reads the f64 bits as i64 (silent garbage under `build`, correct
-    under `run`). Tests: typechecker `bounded_generic_impl_methods_resolve`,
-    codegen e2e `test_e2e_bounded_generic_impl_method_call` (i64).
+    `range` default — i64 **and now f64** on run == build). The NON-i64 arm
+    was a **separate, pre-existing, general** miscompile (B-2026-07-03-23) —
+    fixed in the same session (below). Tests: typechecker
+    `bounded_generic_impl_methods_resolve`, codegen e2e
+    `test_e2e_bounded_generic_impl_method_call` (i64).
+  - **B-2026-07-03-23** ✅ **(landed 2026-07-03)** — generic-struct element
+    monomorphization. A generic struct with an inline type-param field
+    (`Box[T] { v: T }`, even unbounded / no impl) lost its `[f64]` arg, so
+    codegen defaulted the element to i64 and read non-i64 fields as i64
+    (silent garbage under `build`, correct under `run`; a by-value method
+    hard-crashed the build). Fixed in four layers: (1) the typechecker infers
+    a struct literal's generic args (`Box{v:2.5}` → `Box[f64]`,
+    `infer_struct_literal`); (2) field access substitutes the receiver's args
+    into the field type (`infer_field_access`); (3) codegen builds a
+    per-instantiation LLVM struct type (`Box[f64]` → `{double}`) at
+    construction / field access / store / the function ABI (`mono_struct_type`
+    wired into `llvm_type_for_type_expr`); (4) methods on a generic struct
+    monomorphize by the receiver's instantiation (register into `generic_fns`,
+    dispatch through `compile_generic_call` binding the impl's `T` from the
+    receiver's recorded instantiation). This is what makes the **f64** arm of
+    generic `Reduce` impls (`Pair[f64].range()`) work. Covers f64 / i64 /
+    String elements, field store, two-field arithmetic, function ABI, `Vec` of
+    a generic struct, and ref-self / by-value-self / bounded-impl methods.
+    Tests: codegen e2e `test_e2e_generic_struct_field_monomorphizes_by_element`
+    + `test_e2e_generic_struct_method_monomorphizes_by_receiver`.
 - **S6c** — `ElementwiseMap` / `ElementwiseOrd` builtin method surfaces +
   user impls; blanket `Vec[T]` impls; user trait-impl methods over builtin
   containers (probed: interp "type 'unknown'", codegen loud fall-through).
