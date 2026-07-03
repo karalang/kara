@@ -359,13 +359,20 @@ B-2026-07-02-10..13, see the ledger.
     `T - T` (A/B-verified run == KARAC_AUTO_PAR=0 == build, i64→6 / f64→7.5).
     Only `Reduce.range` has a stdlib default body, so the change touches only
     user `Reduce` impls. Test: codegen e2e `test_e2e_stdlib_reduce_default_
-    method_inherited_by_user_impl`. **Residual (out of scope, ledgered):**
-    (ii) the builtin containers (`Column`/`Tensor`) do NOT inherit `range` (the
-    splice only rewrites user-program impls; their `#[compiler_builtin]` impls
-    live in `STDLIB_PROGRAMS`) — a builtin-container-inherits-default axis for a
-    later slice. `fold`/`product`/`Option`-forms still need a `fold[A]`
-    primitive on the trait (would change the required-method set the builtin
-    impls satisfy) — a further slice.
+    method_inherited_by_user_impl`. **Residual:** `fold`/`product`/`Option`-forms
+    still need a `fold[A]` primitive on the trait (would change the
+    required-method set the builtin impls satisfy) — a further slice.
+  - **S6b-4d** ✅ **(landed 2026-07-03)** — builtin `Column`/`Tensor` inherit
+    the `Reduce.range` default. The splice only rewrites user-program impls
+    (their `#[compiler_builtin]` impls live in `STDLIB_PROGRAMS`, and the
+    receiver is type-erased so a generic default-dispatch would hit the "type
+    'unknown'" wall — that GENERAL mechanism stays S6c), so `range` is added
+    directly to the Column/Tensor reduction dispatch (interp + codegen, all 4
+    sites) as `max - min` reusing the existing min/max kernels — trapping on an
+    empty / all-null input exactly as `min`/`max` do. `c.range()` / `t.range()`
+    now work on run == build for i64 and f64. Test: codegen e2e
+    `test_e2e_builtin_column_tensor_range`, interpreter
+    `builtin_column_tensor_range_default_method`.
   - **S6b-4c** ✅ **(landed 2026-07-03)** — bounded-generic-impl method
     resolution (B-2026-07-03-20). A bound on a generic impl's OWN type param
     (`impl[T: Sub] Pair[T]`) made `self.m()` inside the impl — and an external
