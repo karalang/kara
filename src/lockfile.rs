@@ -479,7 +479,7 @@ fn convert_source(src: &ResolvedSource, root_dir: &Path) -> LockSource {
             }
             Err(_) => LockSource::Path(abs.clone()),
         },
-        ResolvedSource::Registry { url } => LockSource::Registry {
+        ResolvedSource::Registry { url, .. } => LockSource::Registry {
             url: url.clone(),
             // Mirror is populated by the registry-proxy fetch path
             // (line-851 v1.1.x slice). Until then no real mirror URL
@@ -1030,6 +1030,7 @@ dependencies = []
         // URL is invented before the proxy fetch surface ships.
         let registry = ResolvedSource::Registry {
             url: "https://crates.io".to_string(),
+            dir: PathBuf::from("/cache/http"),
         };
         let lock_src = convert_source(&registry, Path::new("/proj"));
         match lock_src {
@@ -1473,6 +1474,7 @@ dependencies = []
                     version: ver("1.2.3"),
                     source: ResolvedSource::Registry {
                         url: "https://crates.io".to_string(),
+                        dir: PathBuf::from("/cache/reg"),
                     },
                     declared_by: vec![],
                 },

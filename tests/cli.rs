@@ -7173,7 +7173,16 @@ http = "1.2"
     std::fs::create_dir_all(tmp.join("src")).unwrap();
     std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
 
-    let out = karac_bin().arg("build").current_dir(&tmp).output().unwrap();
+    // Slice 4 activates registry fetch only when an explicit proxy is
+    // configured. Scrub `KARAC_REGISTRY_PROXY` so a developer's shell env
+    // can't flip this project onto the fetch path — with no explicit proxy
+    // the registry dep must still warn-and-continue (the pre-fetch contract).
+    let out = karac_bin()
+        .arg("build")
+        .env_remove("KARAC_REGISTRY_PROXY")
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     let _ = std::fs::remove_dir_all(&tmp);
 

@@ -4005,9 +4005,12 @@ fn quiet_dep_package_walks(root: &std::path::Path) -> Vec<module::DepPackageWalk
     let options = crate::dep_graph::DepGraphOptions {
         offline_root: None,
         include_dev_deps: false,
-        // Registry fetch is not activated in the CLI yet (slice 4) — the
-        // graph stays path-dep-only here, so registry deps still surface
-        // as E_REGISTRY_DEP_UNSUPPORTED from the resolver.
+        // The lenient `karac run` walk stays path-dep-only by design: it is
+        // best-effort (empty on any failure) and must not perform network I/O.
+        // Registry fetch is activated on the strict `karac build` / `karac
+        // test` path (`run_dep_resolution`, slice 4); a registry dep here
+        // still surfaces E_REGISTRY_DEP_UNSUPPORTED from the resolver, which
+        // this quiet walk swallows.
         registry_provider: None,
     };
     let Ok(graph) = crate::dep_graph::build_dep_graph_with_options(root, mf, &loader, options)
@@ -6432,7 +6435,6 @@ fn cmd_build_project(
     if !offline {
         emit_no_proxy_note(no_proxy);
     }
-    let _ = no_proxy;
     let cwd = match std::env::current_dir() {
         Ok(d) => d,
         Err(e) => {
@@ -6591,7 +6593,7 @@ fn cmd_build_project(
     // `include_dev_deps=true` so `[dev-dependencies]` surface only
     // when actually compiling tests.
     let dep_resolution: Option<crate::dep_resolver::Resolution> = if has_deps {
-        match run_dep_resolution(&root, mf.clone(), output, offline_root, false) {
+        match run_dep_resolution(&root, mf.clone(), output, offline_root, false, no_proxy) {
             Ok(r) => r,
             Err(()) => process::exit(1),
         }
@@ -8128,13 +8130,65 @@ fn run_dep_resolution(
     output: OutputMode,
     offline_root: Option<&std::path::Path>,
     include_dev_deps: bool,
+    no_proxy: bool,
 ) -> Result<Option<crate::dep_resolver::Resolution>, ()> {
     let loader = crate::dep_graph::FsLoader;
+
+    // Slice 4: activate the registry-proxy fetch path. A `ProxyRegistryProvider`
+    // — the cache → retry → live-HTTP decorator stack — is threaded into the
+    // graph walk so a `[dependencies]` registry entry is fetched, extracted,
+    // and recursed into exactly like a path-dep. Fetch is deliberately gated:
+    //   * `--offline`: never touch the network — the `vendor/` walk owns
+    //     resolution, so leave the provider off.
+    //   * `--no-proxy`: the operator opted out; keep the pre-fetch
+    //     warn-and-continue contract (`E_REGISTRY_DEP_UNSUPPORTED` warning).
+    //   * no explicit proxy configured: the built-in `DEFAULT_PROXY_URL` is a
+    //     not-yet-live placeholder, so fetching against it would only ever
+    //     fail — stay on the warn-and-continue path until an operator points
+    //     `KARAC_REGISTRY_PROXY` (or `[build].registry-proxy`) at a real
+    //     proxy (`explicit_proxy_configured`).
+    // The client stack and provider live in locals whose borrows outlive the
+    // `build_dep_graph_with_options` call below (it returns an owned graph
+    // with every registry resolution already materialized to disk).
+    let cache_root = crate::registry_proxy::default_registry_cache_root();
+    let activate_fetch = !no_proxy
+        && offline_root.is_none()
+        && cache_root.is_some()
+        && crate::registry_proxy::explicit_proxy_configured(mf.build_registry_proxy.as_deref());
+    let client_stack: Option<Box<dyn crate::registry_proxy::ProxyClient>> = if activate_fetch {
+        let config = crate::registry_proxy::ProxyConfig::resolve(
+            crate::registry_proxy::ProxyMode::Default,
+            mf.build_registry_proxy.as_deref(),
+        );
+        let http = crate::registry_proxy::make_client(&config);
+        let retrying = crate::registry_proxy::RetryingProxyClient::new(
+            http,
+            crate::registry_proxy::RetryPolicy::default(),
+        );
+        // Tarball cache under <root>/<name>/<version>/package.tar.gz; the
+        // provider extracts to the sibling <root>/<name>/<version>/src, so the
+        // two share one root without colliding.
+        let caching = crate::registry_proxy::CachingProxyClient::new(
+            Box::new(retrying),
+            cache_root.clone().unwrap_or_default(),
+        );
+        Some(Box::new(caching))
+    } else {
+        None
+    };
+    let provider = client_stack.as_ref().map(|c| {
+        crate::registry_extract::ProxyRegistryProvider::new(
+            c.as_ref(),
+            cache_root.clone().unwrap_or_default(),
+        )
+    });
+
     let options = crate::dep_graph::DepGraphOptions {
         offline_root,
         include_dev_deps,
-        // Registry fetch not activated in the CLI yet (slice 4).
-        registry_provider: None,
+        registry_provider: provider
+            .as_ref()
+            .map(|p| p as &dyn crate::dep_graph::RegistryProvider),
     };
     let graph = match crate::dep_graph::build_dep_graph_with_options(root, mf, &loader, options) {
         Ok(g) => g,
@@ -8197,8 +8251,14 @@ fn dep_package_walks(
     };
     let mut out = Vec::new();
     for pkg in resolution.packages.values() {
-        let crate::dep_resolver::ResolvedSource::Path(dep_root) = &pkg.source else {
-            continue; // Root is the project itself; registry/git never resolve today
+        // Both path-deps and fetched registry deps carry an on-disk source
+        // root the module loader compiles (slice 4 threaded the extracted
+        // directory into `ResolvedSource::Registry`). `Root` is the project
+        // itself; git never resolves today.
+        let dep_root: &std::path::Path = match &pkg.source {
+            crate::dep_resolver::ResolvedSource::Path(dir) => dir,
+            crate::dep_resolver::ResolvedSource::Registry { dir, .. } => dir,
+            _ => continue,
         };
         let walk_opts = WalkerOpts {
             target,
@@ -10512,7 +10572,10 @@ fn cmd_test(filter: Option<String>, all: bool) {
     let has_resolvable_deps =
         !mf.dependencies.is_empty() || !mf.dev_dependencies.is_empty() || mf.kara_version.is_some();
     let dep_resolution: Option<crate::dep_resolver::Resolution> = if has_resolvable_deps {
-        match run_dep_resolution(&root, mf.clone(), OutputMode::Jsonl, None, true) {
+        // `karac test` has no `--no-proxy` flag; the fetch path self-gates on
+        // an explicitly-configured proxy (see `run_dep_resolution`), so a
+        // registry dep is fetched only when the operator points at a real one.
+        match run_dep_resolution(&root, mf.clone(), OutputMode::Jsonl, None, true, false) {
             Ok(r) => r,
             Err(()) => process::exit(1),
         }

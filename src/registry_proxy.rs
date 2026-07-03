@@ -108,6 +108,26 @@ impl ProxyConfig {
     }
 }
 
+/// Whether an *explicit* proxy URL is configured — the `KARAC_REGISTRY_PROXY`
+/// env override or a project's `[build].registry-proxy` pin — as opposed to
+/// falling back to the built-in [`DEFAULT_PROXY_URL`] placeholder.
+///
+/// The CLI activates real registry fetch only when this is `true`. The
+/// default URL is a not-yet-live placeholder, so a project that declares
+/// registry deps but points at no configured proxy keeps the pre-fetch
+/// warn-and-continue contract (`E_REGISTRY_DEP_UNSUPPORTED` downgraded to a
+/// warning) instead of hard-failing against an address that answers nothing.
+/// Mirrors the precedence tiers of [`ProxyConfig::resolve`], minus the
+/// default fallback.
+pub fn explicit_proxy_configured(manifest_pin: Option<&str>) -> bool {
+    let env_set = std::env::var(PROXY_URL_ENV_VAR)
+        .ok()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    let pin_set = manifest_pin.map(|s| !s.trim().is_empty()).unwrap_or(false);
+    env_set || pin_set
+}
+
 /// Catalog metadata for a package: every published version (ascending
 /// semver order) plus the upstream source URL the proxy is mirroring.
 /// The proxy itself preserves the original source URL so the lockfile

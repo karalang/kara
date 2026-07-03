@@ -304,7 +304,7 @@ fn describe_source(source: &ResolvedSource) -> String {
     match source {
         ResolvedSource::Root => "the entry-point project (`Root`)".to_string(),
         ResolvedSource::Path(dir) => format!("path `{}`", dir.display()),
-        ResolvedSource::Registry { url } => format!("registry `{url}`"),
+        ResolvedSource::Registry { url, .. } => format!("registry `{url}`"),
         ResolvedSource::Git { url, reference } => match reference {
             Some(r) => format!("git `{url}` (ref `{r:?}`)"),
             None => format!("git `{url}`"),
@@ -402,6 +402,7 @@ mod tests {
             first_source: ResolvedSource::Path(PathBuf::from("/local/a")),
             second_source: ResolvedSource::Registry {
                 url: "https://registry/x".into(),
+                dir: PathBuf::from("/cache/x"),
             },
         };
         let diag = render_resolver_error(&err);

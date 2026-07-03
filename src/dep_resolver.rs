@@ -66,12 +66,17 @@ pub struct ResolvedPackage {
 pub enum ResolvedSource {
     Root,
     Path(PathBuf),
-    /// Reserved for slice-7 wiring: a resolved registry dep would carry
-    /// the URL of the catalog entry, but registry fetch is line 819
-    /// territory and slice 4 errors before constructing this variant.
-    /// Listed here so the `Resolution` shape is forward-compatible.
+    /// A resolved registry dep: the upstream catalog URL plus the on-disk
+    /// directory the fetched tarball was extracted to. The URL feeds the
+    /// lockfile (reproducibility); `dir` is where the CLI module loader
+    /// (`dep_package_walks`) reads the package's source to compile it.
     Registry {
         url: String,
+        /// Source root of the extracted tarball. Machine-local and
+        /// transient, so it is intentionally *not* recorded in `kara.lock`
+        /// (the lock keys reproducibility on `url` + content hash). Empty
+        /// only in the reserved/pre-fetch forward-compat shape.
+        dir: PathBuf,
     },
     /// Reserved for slice-7 wiring (see `Registry` carve-out).
     Git {
@@ -363,6 +368,7 @@ pub fn resolve_with_offline(
                                 resolved_name,
                                 res.version.clone(),
                                 res.upstream_url.clone(),
+                                res.dir.clone(),
                                 DeclarationEdge {
                                     parent: parent_name.clone(),
                                     req: Some(req.clone()),
@@ -484,6 +490,7 @@ fn upsert_registry(
     name: String,
     version: semver::Version,
     url: String,
+    dir: PathBuf,
     edge: DeclarationEdge,
 ) -> Result<(), Box<ResolverError>> {
     if let Some(existing) = packages.get_mut(&name) {
@@ -495,7 +502,7 @@ fn upsert_registry(
             other => Err(Box::new(ResolverError::SourceConflict {
                 package: name.clone(),
                 first_source: other.clone(),
-                second_source: ResolvedSource::Registry { url },
+                second_source: ResolvedSource::Registry { url, dir },
             })),
         }
     } else {
@@ -504,7 +511,7 @@ fn upsert_registry(
             ResolvedPackage {
                 name,
                 version,
-                source: ResolvedSource::Registry { url },
+                source: ResolvedSource::Registry { url, dir },
                 declared_by: vec![edge],
             },
         );
@@ -709,7 +716,8 @@ mod tests {
         assert_eq!(
             http.source,
             ResolvedSource::Registry {
-                url: "https://up/http".to_string()
+                url: "https://up/http".to_string(),
+                dir: PathBuf::from("/reg/http"),
             }
         );
     }
