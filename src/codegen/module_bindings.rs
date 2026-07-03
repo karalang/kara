@@ -243,6 +243,19 @@ impl<'ctx> super::Codegen<'ctx> {
             .collect();
         for (name, te) in pairs {
             self.register_var_from_type_expr(&name, &te);
+            // `Fn(...)`-typed bindings live in `closure_fn_types`, which
+            // `register_var_from_type_expr` doesn't cover (fn prologues
+            // register params into it directly). Monos swap that table
+            // out wholesale (`take_var_side_tables`), so reseed it here.
+            if let crate::ast::TypeKind::FnType {
+                params,
+                return_type,
+                ..
+            } = &te.kind
+            {
+                let fn_type = self.closure_abi_fn_type(params, return_type.as_deref());
+                self.closure_fn_types.insert(name.clone(), fn_type);
+            }
         }
     }
 

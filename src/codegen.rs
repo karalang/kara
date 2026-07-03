@@ -2164,6 +2164,15 @@ pub(super) struct Codegen<'ctx> {
     /// `register_var_from_type_expr`'s DataFrame arm; gates
     /// `try_compile_dataframe_method` and the `FreeDataFrame` tracker.
     pub(crate) dataframe_var_infos: std::collections::HashSet<String>,
+    /// Handle-backed builtin (Column/Tensor) bindings for bare
+    /// type-param params of generic monos, keyed by MANGLED mono name →
+    /// `[(param_name, info)]`. Written by `compile_generic_call` (from
+    /// the arg spans' `column_typed_exprs` / `tensor_typed_exprs`
+    /// records), read by `compile_mono_function`'s prologue to register
+    /// `column_var_infos` / `tensor_var_infos` for the param — see
+    /// `state::MonoHandleArgInfo`. Module-lifetime (mangled keys are
+    /// globally unique), so no per-mono save/restore.
+    pub(crate) mono_handle_param_infos: HashMap<String, Vec<(String, state::MonoHandleArgInfo)>>,
     /// Set of `(span.offset, span.length)` keys for every expression whose
     /// Kāra type is a `Vector[T, N]` with an unsigned-integer element.
     /// Populated from `Program.unsigned_vector_exprs`. The LLVM `<N x iX>`
@@ -5342,6 +5351,7 @@ impl<'ctx> Codegen<'ctx> {
             column_var_infos: HashMap::new(),
             pending_let_column_info: None,
             dataframe_var_infos: std::collections::HashSet::new(),
+            mono_handle_param_infos: HashMap::new(),
             unsigned_vector_exprs: HashSet::new(),
             expr_struct_type_names: HashMap::new(),
             user_ord_typed_exprs: HashMap::new(),

@@ -27,6 +27,26 @@ pub(crate) struct VarSlot<'ctx> {
     pub(crate) ty: BasicTypeEnum<'ctx>,
 }
 
+/// The concrete handle-backed builtin a generic call site binds to a
+/// bare type-param param (`fn report[C: Reduce[i64]](c: ref C)` called
+/// with a `Column[i64]` / `Tensor[i64, [4]]` argument). Plain AST data
+/// (lowering side-table records), NOT LLVM types — the codegen
+/// containment invariant holds. Collected per call site in
+/// `compile_generic_call` from `column_typed_exprs` /
+/// `tensor_typed_exprs` (span-keyed, borrow-unwrapped), keyed by the
+/// mangled mono name in `mono_handle_param_infos`, and consumed by
+/// `compile_mono_function`'s prologue to (re)register the param in
+/// `column_var_infos` / `tensor_var_infos` — the LLVM value type of
+/// such an argument is an opaque `ptr`, so `infer_type_args` alone can
+/// neither distinguish Column from Tensor nor recover the element type
+/// (S6a: two same-shaped instantiations previously shared one mono and
+/// the second one miscompiled).
+#[derive(Clone)]
+pub(crate) enum MonoHandleArgInfo {
+    Column(crate::ast::ColumnTypeInfo),
+    Tensor(crate::ast::TensorTypeInfo),
+}
+
 /// Codegen-side view of a `Tensor[T, Shape]` binding (phase-11
 /// numerical stdlib). The runtime value is a single pointer to one
 /// malloc'd block laid out `[i64 rank][rank × i64 dims][C-order data]`

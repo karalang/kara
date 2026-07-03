@@ -589,6 +589,14 @@ impl<'ctx> super::Codegen<'ctx> {
         self.set_elem_type_names.clear();
         self.set_elem_type_exprs.clear();
         self.atomic_var_inner_is_bool.clear();
+        // The handle-backed builtins were missing from this list (same
+        // per-function-reset rationale — every entry is keyed by bare var
+        // name): a `c: Column[i64]` in one function must not make the
+        // Column intercept fire on a same-named non-column binding in the
+        // next. Found alongside the mono-side leak (S6a / `SavedVarSideTables`).
+        self.column_var_infos.clear();
+        self.tensor_var_infos.clear();
+        self.dataframe_var_infos.clear();
         self.scope_cleanup_actions.clear();
         self.scope_cleanup_actions.push(Vec::new());
         // Slice 10: reseed module-binding side-tables after the per-fn

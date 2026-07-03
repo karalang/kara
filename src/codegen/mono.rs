@@ -23,7 +23,184 @@ use inkwell::IntPredicate;
 use super::helpers::{const_value_from_literal_expr, const_value_to_mangle_str};
 use super::state::{LayoutId, MapMonoMethods, VarSlot};
 
+/// Snapshot of every name-keyed per-function variable side-table that
+/// `register_var_from_type_expr` (plus the mono prologue's `Fn`-param /
+/// owned-header registrations) can write. A mono body compiles INLINE,
+/// mid-caller, so these must be swapped to a clean slate for the body and
+/// restored after — the same isolation `variables` / `var_type_names` /
+/// `tensor_var_infos` already had. Before this existed, only
+/// `tensor_var_infos` was saved: mono #1's `c → Column[i64]` entry leaked
+/// into mono #2 where `c` was a Tensor param, so the Column intercept
+/// compiled a column reduce over a tensor handle (SIGSEGV; found by S6a's
+/// two-instantiation `report[C: Reduce[i64]]` probe — the fallout of
+/// B-2026-07-02-11's full-registration prologue). Module-binding entries
+/// survive the swap via `reseed_module_binding_side_tables` in
+/// `compile_mono_function`.
+pub(super) struct SavedVarSideTables<'ctx> {
+    column_var_infos: HashMap<String, super::state::ColumnVarInfo<'ctx>>,
+    dataframe_var_infos: std::collections::HashSet<String>,
+    vec_elem_types: HashMap<String, BasicTypeEnum<'ctx>>,
+    var_elem_type_exprs: HashMap<String, TypeExpr>,
+    enum_inst_var_types: HashMap<String, TypeExpr>,
+    string_vars: std::collections::HashSet<String>,
+    slice_elem_types: HashMap<String, BasicTypeEnum<'ctx>>,
+    map_key_types: HashMap<String, BasicTypeEnum<'ctx>>,
+    map_val_types: HashMap<String, BasicTypeEnum<'ctx>>,
+    map_key_type_names: HashMap<String, String>,
+    map_key_type_exprs: HashMap<String, TypeExpr>,
+    set_elem_types: HashMap<String, BasicTypeEnum<'ctx>>,
+    set_elem_type_names: HashMap<String, String>,
+    set_elem_type_exprs: HashMap<String, TypeExpr>,
+    atomic_var_inner_is_bool: std::collections::HashSet<String>,
+    owned_vecstr_params: std::collections::HashSet<String>,
+    closure_fn_types: HashMap<String, inkwell::types::FunctionType<'ctx>>,
+}
+
 impl<'ctx> super::Codegen<'ctx> {
+    /// For each param of a generic fn whose declared type (ref-peeled) is
+    /// a BARE type param of that fn, look up the matching call arg's span
+    /// in the Column/Tensor typed-expr side-tables. Such an argument's
+    /// LLVM value type is an opaque `ptr` — `infer_type_args` can neither
+    /// tell Column from Tensor nor recover the element type — so this is
+    /// the only channel that lets the mono register the param for the
+    /// builtin method intercepts (and lets the mangle distinguish the
+    /// instantiations). See `state::MonoHandleArgInfo`.
+    fn collect_mono_handle_params(
+        &self,
+        func: &Function,
+        args: &[CallArg],
+    ) -> Vec<(String, super::state::MonoHandleArgInfo)> {
+        let Some(gp) = &func.generic_params else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for (param, arg) in func.params.iter().zip(args.iter()) {
+            let peeled = match &param.ty.kind {
+                TypeKind::Ref(inner) | TypeKind::MutRef(inner) => inner.as_ref(),
+                _ => &param.ty,
+            };
+            let TypeKind::Path(path) = &peeled.kind else {
+                continue;
+            };
+            if path.segments.len() != 1 || path.generic_args.is_some() {
+                continue;
+            }
+            let name = &path.segments[0];
+            if !gp.params.iter().any(|p| !p.is_const && &p.name == name) {
+                continue;
+            }
+            let Some(param_name) = param.name() else {
+                continue;
+            };
+            let key = (arg.value.span.offset, arg.value.span.length);
+            if let Some(ci) = self.column_typed_exprs.get(&key) {
+                out.push((
+                    param_name.to_string(),
+                    super::state::MonoHandleArgInfo::Column(ci.clone()),
+                ));
+            } else if let Some(ti) = self.tensor_typed_exprs.get(&key) {
+                out.push((
+                    param_name.to_string(),
+                    super::state::MonoHandleArgInfo::Tensor(ti.clone()),
+                ));
+            }
+        }
+        out
+    }
+
+    /// Append the handle-arg axis to a mangled mono name:
+    /// `$<param>_col_<elem>` / `$<param>_ten_<elem>_<d0>_...` (dynamic
+    /// dims mangle as `x`). Without this, `report[C](c: ref C)` called
+    /// with a `Column[i64]` and then a `Tensor[i64, [4]]` mangles both
+    /// instantiations to the same symbol (both args are `ptr`), so the
+    /// second call reuses the first body and miscompiles.
+    fn append_handle_mangle(
+        &self,
+        mut mangled: String,
+        handle_params: &[(String, super::state::MonoHandleArgInfo)],
+    ) -> String {
+        use std::fmt::Write as _;
+        for (pname, info) in handle_params {
+            match info {
+                super::state::MonoHandleArgInfo::Column(ci) => {
+                    let elem = Self::type_expr_mangle_seg(&ci.elem);
+                    let _ = write!(mangled, "${pname}_col_{elem}");
+                }
+                super::state::MonoHandleArgInfo::Tensor(ti) => {
+                    let elem = Self::type_expr_mangle_seg(&ti.elem);
+                    let _ = write!(mangled, "${pname}_ten_{elem}");
+                    for d in &ti.dims {
+                        match d {
+                            Some(n) => {
+                                let _ = write!(mangled, "_{n}");
+                            }
+                            None => mangled.push_str("_x"),
+                        }
+                    }
+                }
+            }
+        }
+        mangled
+    }
+
+    /// Last path segment of a (concrete, primitive-element) TypeExpr for
+    /// mangling — `i64`, `f64`, `bool`, `u32`, ….
+    fn type_expr_mangle_seg(te: &TypeExpr) -> String {
+        match &te.kind {
+            TypeKind::Path(p) => p
+                .segments
+                .last()
+                .cloned()
+                .unwrap_or_else(|| "e".to_string()),
+            _ => "e".to_string(),
+        }
+    }
+
+    /// Swap out the name-keyed variable side-tables for a nested mono
+    /// compile. Pair with [`Self::restore_var_side_tables`].
+    pub(super) fn take_var_side_tables(&mut self) -> SavedVarSideTables<'ctx> {
+        SavedVarSideTables {
+            column_var_infos: std::mem::take(&mut self.column_var_infos),
+            dataframe_var_infos: std::mem::take(&mut self.dataframe_var_infos),
+            vec_elem_types: std::mem::take(&mut self.vec_elem_types),
+            var_elem_type_exprs: std::mem::take(&mut self.var_elem_type_exprs),
+            enum_inst_var_types: std::mem::take(&mut self.enum_inst_var_types),
+            string_vars: std::mem::take(&mut self.string_vars),
+            slice_elem_types: std::mem::take(&mut self.slice_elem_types),
+            map_key_types: std::mem::take(&mut self.map_key_types),
+            map_val_types: std::mem::take(&mut self.map_val_types),
+            map_key_type_names: std::mem::take(&mut self.map_key_type_names),
+            map_key_type_exprs: std::mem::take(&mut self.map_key_type_exprs),
+            set_elem_types: std::mem::take(&mut self.set_elem_types),
+            set_elem_type_names: std::mem::take(&mut self.set_elem_type_names),
+            set_elem_type_exprs: std::mem::take(&mut self.set_elem_type_exprs),
+            atomic_var_inner_is_bool: std::mem::take(&mut self.atomic_var_inner_is_bool),
+            owned_vecstr_params: std::mem::take(&mut self.owned_vecstr_params),
+            closure_fn_types: std::mem::take(&mut self.closure_fn_types),
+        }
+    }
+
+    /// Restore the caller's side-tables after a nested mono compile.
+    pub(super) fn restore_var_side_tables(&mut self, saved: SavedVarSideTables<'ctx>) {
+        self.column_var_infos = saved.column_var_infos;
+        self.dataframe_var_infos = saved.dataframe_var_infos;
+        self.vec_elem_types = saved.vec_elem_types;
+        self.var_elem_type_exprs = saved.var_elem_type_exprs;
+        self.enum_inst_var_types = saved.enum_inst_var_types;
+        self.string_vars = saved.string_vars;
+        self.slice_elem_types = saved.slice_elem_types;
+        self.map_key_types = saved.map_key_types;
+        self.map_val_types = saved.map_val_types;
+        self.map_key_type_names = saved.map_key_type_names;
+        self.map_key_type_exprs = saved.map_key_type_exprs;
+        self.set_elem_types = saved.set_elem_types;
+        self.set_elem_type_names = saved.set_elem_type_names;
+        self.set_elem_type_exprs = saved.set_elem_type_exprs;
+        self.atomic_var_inner_is_bool = saved.atomic_var_inner_is_bool;
+        self.owned_vecstr_params = saved.owned_vecstr_params;
+        self.closure_fn_types = saved.closure_fn_types;
+    }
+
     pub(super) fn compile_generic_call(
         &mut self,
         name: &str,
@@ -123,6 +300,15 @@ impl<'ctx> super::Codegen<'ctx> {
             &layout_subst,
             &LayoutId::Aos,
         );
+        // Handle-backed builtin (Column/Tensor) args bound to bare type
+        // params: a distinct mangle axis + a prologue-registration record
+        // — the LLVM-shape subst above sees only `ptr` for these (S6a).
+        let handle_params = self.collect_mono_handle_params(&generic_fn, args);
+        let mangled = self.append_handle_mangle(mangled, &handle_params);
+        if !handle_params.is_empty() {
+            self.mono_handle_param_infos
+                .insert(mangled.clone(), handle_params);
+        }
 
         // Slice 8y: per-call-site decision on whether the caller
         // takes the state-machine intercept path or falls through to
@@ -163,6 +349,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // re-seeded inside `compile_mono_function`) and restore below —
             // parallel to `variables` / `var_type_names`.
             let saved_tensor_infos = std::mem::take(&mut self.tensor_var_infos);
+            // Same isolation for every other name-keyed var side-table the
+            // full-registration prologue (B-2026-07-02-11) can now write —
+            // see `SavedVarSideTables` for the leak this fixes.
+            let saved_side_tables = self.take_var_side_tables();
             // The mono body manages its OWN scope-cleanup frame stack
             // (pushed/drained in `compile_mono_function`, mirroring
             // `compile_function`). Because the body compiles inline,
@@ -244,6 +434,7 @@ impl<'ctx> super::Codegen<'ctx> {
             self.loop_stack = saved_loop_stack;
             self.branch_cancel_ptr = saved_cancel_ptr;
             self.scope_cleanup_actions = saved_cleanup;
+            self.restore_var_side_tables(saved_side_tables);
             self.tensor_var_infos = saved_tensor_infos;
             self.var_type_names = saved_var_types;
             self.variables = saved_vars;
@@ -682,6 +873,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let saved_vars = std::mem::take(&mut self.variables);
         let saved_var_types = std::mem::take(&mut self.var_type_names);
         let saved_tensor_infos = std::mem::take(&mut self.tensor_var_infos);
+        // Full var-side-table isolation — see `SavedVarSideTables`.
+        let saved_side_tables = self.take_var_side_tables();
         let saved_cleanup = std::mem::take(&mut self.scope_cleanup_actions);
         let saved_cancel_ptr = self.branch_cancel_ptr.take();
         let saved_loop_stack = std::mem::take(&mut self.loop_stack);
@@ -724,6 +917,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.loop_stack = saved_loop_stack;
         self.branch_cancel_ptr = saved_cancel_ptr;
         self.scope_cleanup_actions = saved_cleanup;
+        self.restore_var_side_tables(saved_side_tables);
         self.tensor_var_infos = saved_tensor_infos;
         self.var_type_names = saved_var_types;
         self.variables = saved_vars;
@@ -932,6 +1126,27 @@ impl<'ctx> super::Codegen<'ctx> {
                     _ => &param.ty,
                 };
                 self.register_var_from_type_expr(&param_name, registration_te);
+                // A bare-type-param param bound to a handle-backed builtin
+                // (Column/Tensor) registers from the call site's recorded
+                // arg type — the declared te is just `C`, which the
+                // registrar above can't act on (S6a; see
+                // `mono_handle_param_infos`).
+                let handle_info = self
+                    .mono_handle_param_infos
+                    .get(mangled)
+                    .and_then(|entries| entries.iter().find(|(n, _)| n == &param_name))
+                    .map(|(_, info)| info.clone());
+                match handle_info {
+                    Some(super::state::MonoHandleArgInfo::Column(ci)) => {
+                        let info = self.column_var_info_from_table(&ci);
+                        self.column_var_infos.insert(param_name.clone(), info);
+                    }
+                    Some(super::state::MonoHandleArgInfo::Tensor(ti)) => {
+                        let info = self.tensor_var_info_from_table(&ti);
+                        self.tensor_var_infos.insert(param_name.clone(), info);
+                    }
+                    None => {}
+                }
                 // Owned (bare, non-ref) String/Vec params: retaining consume
                 // sites must deep-copy — the same owned-header set
                 // `compile_function` records (see `owned_vecstr_params`).
