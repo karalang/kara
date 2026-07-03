@@ -17747,6 +17747,53 @@ fn trait_default_method_callable_on_implementor() {
 }
 
 #[test]
+fn generic_trait_default_method_inherited_with_subst() {
+    // B-2026-07-03-10: a GENERIC trait's default method is inherited onto an
+    // implementor with the impl's trait-args substituted through the copied
+    // signature AND body. `synthesize_trait_default_methods` zips the trait's
+    // declared params against `impl Tr[Args]`'s type-args and rewrites every
+    // `T` in the copy. Before the fix the pass guarded out generic traits
+    // entirely, so each `.choose()` / `.seed()` was `NoMethodFound`. Covers:
+    //   - a return-type `-> T` + a param `alt: T` + a `let picked: T`
+    //     annotation + default-calls-required (`choose`),
+    //   - TWO distinct concrete args (i64 / f64) of the SAME generic trait,
+    //   - a `T.zero()` associated-fn path in a default body (substituted to
+    //     `Cnt.zero()` via the `T: Zeroish` bound),
+    //   - an overriding impl method taking precedence over the default (tag).
+    typecheck_desugared_ok(
+        "trait Chooser[T] {\n\
+         \x20   fn base(ref self) -> T;\n\
+         \x20   fn choose(ref self, alt: T, use_alt: bool) -> T {\n\
+         \x20       let picked: T = if use_alt { alt } else { self.base() };\n\
+         \x20       picked\n\
+         \x20   }\n\
+         }\n\
+         struct IBox { v: i64 }\n\
+         struct FBox { v: f64 }\n\
+         impl Chooser[i64] for IBox { fn base(ref self) -> i64 { self.v } }\n\
+         impl Chooser[f64] for FBox { fn base(ref self) -> f64 { self.v } }\n\
+         trait Zeroish { fn zero() -> Self; }\n\
+         struct Cnt { n: i64 }\n\
+         impl Zeroish for Cnt { fn zero() -> Cnt { Cnt { n: 0 } } }\n\
+         trait Maker[T: Zeroish] {\n\
+         \x20   fn seed(ref self) -> T { T.zero() }\n\
+         \x20   fn tag(ref self) -> i64 { 0 }\n\
+         }\n\
+         struct Gen {}\n\
+         impl Maker[Cnt] for Gen { fn tag(ref self) -> i64 { 9 } }\n\
+         fn main() {\n\
+         \x20   let a = IBox { v: 7 };\n\
+         \x20   let b = FBox { v: 2.5 };\n\
+         \x20   let _ = a.choose(99, false);\n\
+         \x20   let _ = b.choose(1.5, true);\n\
+         \x20   let g = Gen {};\n\
+         \x20   let s = g.seed();\n\
+         \x20   let _ = s.n + g.tag();\n\
+         }",
+    );
+}
+
+#[test]
 fn method_self_return_type_resolves_to_impl_target() {
     // A method declared `-> Self` returns a value of the concrete impl
     // target (`W`), so the body's tail expression must check against the

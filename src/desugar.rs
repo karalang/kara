@@ -45,34 +45,41 @@ pub fn desugar_program(program: &mut Program) {
 /// machinery), and only methods with a body are candidates. Overriding impls
 /// keep their own method (the `provided` guard). Runs pre-resolve so the
 /// synthesized methods are visible to name resolution and every later phase.
+///
+/// **Generic traits** (`trait Box[T] { fn twice(self) -> T { .. } }`): the
+/// copied default's `T` is out of scope in a concrete `impl Box[i64] for W`,
+/// so the impl's trait-args are substituted through the copy first
+/// (`substitute_trait_params_in_function`) — the trait's declared params zip
+/// positionally against `impl Tr[Args]`'s type-args, and every mention of a
+/// trait param in the copied method's param/return types, `where` clause, own
+/// generic-param bounds, and body type-expressions (`T`-typed locals, casts,
+/// `T::assoc()` paths) is rewritten to the concrete arg. A method's own
+/// generic params (`fold[A]`) shadow any same-named trait param and are left
+/// untouched. Non-generic traits pass through with an empty substitution —
+/// byte-identical to the pre-generic behavior (B-2026-07-03-8 / -10).
 fn synthesize_trait_default_methods(program: &mut Program) {
     use std::collections::{HashMap, HashSet};
 
-    // trait name -> its default-bodied methods, already converted to the
-    // `Function` shape an `ImplItem::Method` carries.
-    let mut trait_defaults: HashMap<String, Vec<Function>> = HashMap::new();
+    // trait name -> (declared generic-param names, default-bodied methods
+    // already converted to the `Function` shape an `ImplItem::Method` carries).
+    let mut trait_defaults: HashMap<String, (Vec<String>, Vec<Function>)> = HashMap::new();
     for item in &program.items {
         if let Item::TraitDef(t) = item {
-            // Skip GENERIC traits: a default body that mentions the trait's
-            // own type params (`trait Box[T] { fn twice(self) -> T { .. } }`)
-            // would be copied into `impl Box[i64] for W` verbatim, where `T`
-            // is out of scope — the copy needs the impl's trait-args
-            // substituted through the body, which this pass does not yet do.
-            // Synthesizing anyway would trade the pre-fix "no method" error
-            // for a confusing "undefined type 'T'". Generic-trait defaults are
-            // a tracked follow-on (B-2026-07-03-10).
-            if t.generic_params.is_some() {
-                continue;
-            }
+            let mut defaults = Vec::new();
             for ti in &t.items {
                 if let TraitItem::Method(m) = ti {
                     if m.body.is_some() {
-                        trait_defaults
-                            .entry(t.name.clone())
-                            .or_default()
-                            .push(trait_method_to_function(m, t.stdlib_origin));
+                        defaults.push(trait_method_to_function(m, t.stdlib_origin));
                     }
                 }
+            }
+            if !defaults.is_empty() {
+                let param_names = t
+                    .generic_params
+                    .as_ref()
+                    .map(|g| g.params.iter().map(|p| p.name.clone()).collect())
+                    .unwrap_or_default();
+                trait_defaults.insert(t.name.clone(), (param_names, defaults));
             }
         }
     }
@@ -82,16 +89,29 @@ fn synthesize_trait_default_methods(program: &mut Program) {
 
     for item in &mut program.items {
         let Item::ImplBlock(imp) = item else { continue };
-        let Some(trait_path) = &imp.trait_name else {
-            continue;
-        };
-        let trait_name = match trait_path.segments.last() {
-            Some(n) => n.clone(),
+        // Snapshot the trait's name + type-args, releasing the borrow on
+        // `imp.trait_name` before the mutable `imp.items` push below.
+        let (trait_name, trait_args) = match &imp.trait_name {
+            Some(p) => match p.segments.last() {
+                Some(n) => (n.clone(), p.generic_args.clone()),
+                None => continue,
+            },
             None => continue,
         };
-        let Some(defaults) = trait_defaults.get(&trait_name) else {
+        let Some((param_names, defaults)) = trait_defaults.get(&trait_name) else {
             continue;
         };
+        // Positional trait-arg substitution: `impl Tr[i64] for W` binds the
+        // trait's declared param -> `i64`. Only `Type` args participate
+        // (const/shape trait params carry no type-expr to substitute).
+        let mut subst: HashMap<String, TypeExpr> = HashMap::new();
+        if let Some(args) = &trait_args {
+            for (name, arg) in param_names.iter().zip(args.iter()) {
+                if let GenericArg::Type(te) = arg {
+                    subst.insert(name.clone(), te.clone());
+                }
+            }
+        }
         let provided: HashSet<String> = imp
             .items
             .iter()
@@ -101,9 +121,494 @@ fn synthesize_trait_default_methods(program: &mut Program) {
             })
             .collect();
         for def_fn in defaults {
-            if !provided.contains(&def_fn.name) {
-                imp.items.push(ImplItem::Method(Box::new(def_fn.clone())));
+            if provided.contains(&def_fn.name) {
+                continue;
             }
+            let mut copy = def_fn.clone();
+            if !subst.is_empty() {
+                substitute_trait_params_in_function(&mut copy, &subst);
+            }
+            imp.items.push(ImplItem::Method(Box::new(copy)));
+        }
+    }
+}
+
+/// Substitute trait type-params (`subst`: trait-param-name -> concrete
+/// `TypeExpr`) throughout a copied default method — its param types, return
+/// type, `where` clause, own generic-param bounds, and body — so a generic
+/// trait's default body is a well-formed *concrete* impl method once spliced
+/// into `impl Tr[ConcreteArgs] for T`. A method's OWN generic params (e.g.
+/// `fold[A]`) shadow any same-named trait param and are excluded while walking
+/// that method (B-2026-07-03-10).
+fn substitute_trait_params_in_function(
+    f: &mut Function,
+    subst: &std::collections::HashMap<String, TypeExpr>,
+) {
+    use std::collections::HashMap;
+
+    // Drop entries shadowed by the method's own generic params.
+    let effective: HashMap<String, TypeExpr> = match &f.generic_params {
+        Some(g) => {
+            let owned: std::collections::HashSet<&str> =
+                g.params.iter().map(|p| p.name.as_str()).collect();
+            subst
+                .iter()
+                .filter(|(k, _)| !owned.contains(k.as_str()))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect()
+        }
+        None => subst.clone(),
+    };
+    if effective.is_empty() {
+        return;
+    }
+
+    for p in &mut f.params {
+        p.ty = subst_type_expr(&p.ty, &effective);
+    }
+    if let Some(rt) = f.return_type.take() {
+        f.return_type = Some(subst_type_expr(&rt, &effective));
+    }
+    // A method's own generic-param bounds may reference a trait param in their
+    // generic-args (`fold[A: From[T]]`); substitute those, leaving the param
+    // names themselves alone.
+    if let Some(g) = f.generic_params.as_mut() {
+        for gp in &mut g.params {
+            for b in &mut gp.bounds {
+                subst_trait_bound(b, &effective);
+            }
+        }
+    }
+    // `where` constraints subjected on a substituted trait param become
+    // concrete after substitution and are redundant on a concrete method —
+    // drop them; substitute inside the ones kept (keyed on the method's own
+    // params).
+    if let Some(w) = f.where_clause.as_mut() {
+        w.constraints
+            .retain(|c| !where_constraint_subject_is_substituted(c, &effective));
+        for c in &mut w.constraints {
+            subst_where_constraint(c, &effective);
+        }
+    }
+    subst_block(&mut f.body, &effective);
+}
+
+/// Map-keyed twin of `codegen::helpers::rewrite_self_in_type_expr`: replace a
+/// bare single-segment type-param reference with its concrete `TypeExpr`,
+/// recursing through every compound type form and generic-argument position.
+fn subst_type_expr(te: &TypeExpr, subst: &std::collections::HashMap<String, TypeExpr>) -> TypeExpr {
+    let kind = match &te.kind {
+        TypeKind::Path(p) => {
+            if p.segments.len() == 1 && p.generic_args.is_none() {
+                if let Some(replacement) = subst.get(&p.segments[0]) {
+                    // Substitute the whole node, keeping the reference's span.
+                    return TypeExpr {
+                        kind: replacement.kind.clone(),
+                        span: te.span.clone(),
+                    };
+                }
+            }
+            TypeKind::Path(PathExpr {
+                segments: p.segments.clone(),
+                generic_args: p.generic_args.as_ref().map(|args| {
+                    args.iter()
+                        .map(|a| match a {
+                            GenericArg::Type(t) => GenericArg::Type(subst_type_expr(t, subst)),
+                            other => other.clone(),
+                        })
+                        .collect()
+                }),
+                span: p.span.clone(),
+            })
+        }
+        TypeKind::Tuple(elems) => {
+            TypeKind::Tuple(elems.iter().map(|e| subst_type_expr(e, subst)).collect())
+        }
+        TypeKind::Array { element, size } => TypeKind::Array {
+            element: Box::new(subst_type_expr(element, subst)),
+            size: size.clone(),
+        },
+        TypeKind::Pointer { is_mut, inner } => TypeKind::Pointer {
+            is_mut: *is_mut,
+            inner: Box::new(subst_type_expr(inner, subst)),
+        },
+        TypeKind::Ref(inner) => TypeKind::Ref(Box::new(subst_type_expr(inner, subst))),
+        TypeKind::MutRef(inner) => TypeKind::MutRef(Box::new(subst_type_expr(inner, subst))),
+        TypeKind::MutSlice(inner) => TypeKind::MutSlice(Box::new(subst_type_expr(inner, subst))),
+        TypeKind::Weak(inner) => TypeKind::Weak(Box::new(subst_type_expr(inner, subst))),
+        TypeKind::FnType {
+            params,
+            return_type,
+            effect_spec,
+            is_once,
+        } => TypeKind::FnType {
+            params: params.iter().map(|p| subst_type_expr(p, subst)).collect(),
+            return_type: return_type
+                .as_ref()
+                .map(|r| Box::new(subst_type_expr(r, subst))),
+            effect_spec: effect_spec.clone(),
+            is_once: *is_once,
+        },
+        _ => te.kind.clone(),
+    };
+    TypeExpr {
+        kind,
+        span: te.span.clone(),
+    }
+}
+
+/// Substitute trait params inside a `TraitBound`'s generic-args (the bound's
+/// path/name is a trait name, never a type param, so it is left alone).
+fn subst_trait_bound(b: &mut TraitBound, subst: &std::collections::HashMap<String, TypeExpr>) {
+    if let Some(args) = b.generic_args.as_mut() {
+        for a in args.iter_mut() {
+            if let GenericArg::Type(t) = a {
+                *t = subst_type_expr(t, subst);
+            }
+        }
+    }
+}
+
+/// Does a `where` constraint's subject name a substituted trait param? Such a
+/// constraint (`where T: Add` with `T -> i64`) is redundant on the concrete
+/// synthesized method and is dropped rather than rewritten to `i64: Add`.
+fn where_constraint_subject_is_substituted(
+    c: &WhereConstraint,
+    subst: &std::collections::HashMap<String, TypeExpr>,
+) -> bool {
+    match c {
+        WhereConstraint::TypeBound { type_name, .. }
+        | WhereConstraint::AssocTypeEq { type_name, .. } => subst.contains_key(type_name),
+        _ => false,
+    }
+}
+
+/// Substitute trait params inside the `where` constraints kept after the
+/// subject-dropped filter (those keyed on the method's own generic params).
+fn subst_where_constraint(
+    c: &mut WhereConstraint,
+    subst: &std::collections::HashMap<String, TypeExpr>,
+) {
+    match c {
+        WhereConstraint::TypeBound { bounds, .. } => {
+            for b in bounds.iter_mut() {
+                subst_trait_bound(b, subst);
+            }
+        }
+        WhereConstraint::AssocTypeEq { ty, .. } => {
+            *ty = subst_type_expr(ty, subst);
+        }
+        WhereConstraint::ProjectionBound {
+            projection, bounds, ..
+        } => {
+            *projection = subst_type_expr(projection, subst);
+            for b in bounds.iter_mut() {
+                subst_trait_bound(b, subst);
+            }
+        }
+        WhereConstraint::ConstPredicate { .. } => {}
+    }
+}
+
+/// Rewrite a leading path segment that names a substituted trait param to the
+/// concrete type's leaf name — `T::zero` -> `Cnt::zero`, `T { .. }` -> `Cnt
+/// { .. }`. Only fires when the concrete arg is itself a bare single-segment
+/// type name (a primitive or plain nominal); a container arg like `Vec[i64]`
+/// has no single leaf to graft into a `::`-path, so the segment is left as-is
+/// (its generic-args are still substituted by the caller). `qualified_only`
+/// skips bare single-segment value paths (an ordinary identifier is never a
+/// type param) — set false for type-constructor positions (struct literals).
+fn subst_leading_type_name(
+    segments: &mut [String],
+    subst: &std::collections::HashMap<String, TypeExpr>,
+    qualified_only: bool,
+) {
+    if qualified_only && segments.len() < 2 {
+        return;
+    }
+    let Some(first) = segments.first() else {
+        return;
+    };
+    let Some(replacement) = subst.get(first) else {
+        return;
+    };
+    let TypeKind::Path(p) = &replacement.kind else {
+        return;
+    };
+    if p.segments.len() == 1 && p.generic_args.is_none() {
+        segments[0] = p.segments[0].clone();
+    }
+}
+
+fn subst_block(block: &mut Block, subst: &std::collections::HashMap<String, TypeExpr>) {
+    for stmt in &mut block.stmts {
+        subst_stmt(stmt, subst);
+    }
+    if let Some(e) = &mut block.final_expr {
+        subst_expr(e, subst);
+    }
+}
+
+fn subst_stmt(stmt: &mut Stmt, subst: &std::collections::HashMap<String, TypeExpr>) {
+    match &mut stmt.kind {
+        StmtKind::Let { ty, value, .. } => {
+            if let Some(t) = ty.as_mut() {
+                *t = subst_type_expr(t, subst);
+            }
+            subst_expr(value, subst);
+        }
+        StmtKind::LetUninit { ty, .. } => {
+            *ty = subst_type_expr(ty, subst);
+        }
+        StmtKind::LetElse {
+            ty,
+            value,
+            else_block,
+            ..
+        } => {
+            if let Some(t) = ty.as_mut() {
+                *t = subst_type_expr(t, subst);
+            }
+            subst_expr(value, subst);
+            subst_block(else_block, subst);
+        }
+        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => subst_block(body, subst),
+        StmtKind::Assign { target, value } => {
+            subst_expr(target, subst);
+            subst_expr(value, subst);
+        }
+        StmtKind::CompoundAssign { target, value, .. } => {
+            subst_expr(target, subst);
+            subst_expr(value, subst);
+        }
+        StmtKind::MultiAssign { targets, values } => {
+            // Not yet desugared at this pass (multi-assign runs later); walk
+            // both sides so any `T`-typed cast/annotation inside is rewritten.
+            for t in targets.iter_mut() {
+                subst_expr(t, subst);
+            }
+            for v in values.iter_mut() {
+                subst_expr(v, subst);
+            }
+        }
+        StmtKind::Expr(e) => subst_expr(e, subst),
+    }
+}
+
+/// Substitute trait params through every type-expression and type-naming path
+/// segment reachable from `expr`, recursing into all sub-expressions. Mirrors
+/// `walk_expr`'s variant coverage; the type-bearing arms (`Path`, `Cast`,
+/// `OffsetOf`, `MethodCall` turbofish, `Closure` param annotations,
+/// `StructLiteral` path) additionally rewrite their type positions.
+fn subst_expr(expr: &mut Expr, subst: &std::collections::HashMap<String, TypeExpr>) {
+    match &mut expr.kind {
+        ExprKind::Integer(..)
+        | ExprKind::Float(..)
+        | ExprKind::CharLit(..)
+        | ExprKind::ByteLit(..)
+        | ExprKind::StringLit(..)
+        | ExprKind::MultiStringLit(..)
+        | ExprKind::CStringLit { .. }
+        | ExprKind::Bool(..)
+        | ExprKind::Identifier(..)
+        | ExprKind::SelfValue
+        | ExprKind::SelfType
+        | ExprKind::PipePlaceholder
+        | ExprKind::Continue { .. }
+        | ExprKind::Error => {}
+
+        ExprKind::Path {
+            segments,
+            generic_args,
+        } => {
+            subst_leading_type_name(segments, subst, /* qualified_only */ true);
+            if let Some(args) = generic_args.as_mut() {
+                for a in args.iter_mut() {
+                    if let GenericArg::Type(t) = a {
+                        *t = subst_type_expr(t, subst);
+                    }
+                }
+            }
+        }
+        ExprKind::OffsetOf { ty, .. } => {
+            *ty = subst_type_expr(ty, subst);
+        }
+        ExprKind::Cast { expr: e, ty } => {
+            subst_expr(e, subst);
+            *ty = subst_type_expr(ty, subst);
+        }
+        ExprKind::InterpolatedStringLit(parts) => {
+            for part in parts.iter_mut() {
+                if let ParsedInterpolationPart::Expr(e) = part {
+                    subst_expr(e, subst);
+                }
+            }
+        }
+        ExprKind::Binary { left, right, .. }
+        | ExprKind::NilCoalesce { left, right }
+        | ExprKind::Pipe { left, right } => {
+            subst_expr(left, subst);
+            subst_expr(right, subst);
+        }
+        ExprKind::Unary { operand, .. } => subst_expr(operand, subst),
+        ExprKind::Question(e) => subst_expr(e, subst),
+        ExprKind::OptionalChain { object, args, .. } => {
+            subst_expr(object, subst);
+            if let Some(args) = args {
+                for a in args.iter_mut() {
+                    subst_expr(&mut a.value, subst);
+                }
+            }
+        }
+        ExprKind::Call { callee, args } => {
+            subst_expr(callee, subst);
+            for a in args.iter_mut() {
+                subst_expr(&mut a.value, subst);
+            }
+        }
+        ExprKind::MethodCall {
+            object,
+            turbofish,
+            args,
+            ..
+        } => {
+            subst_expr(object, subst);
+            if let Some(tf) = turbofish.as_mut() {
+                for t in tf.iter_mut() {
+                    *t = subst_type_expr(t, subst);
+                }
+            }
+            for a in args.iter_mut() {
+                subst_expr(&mut a.value, subst);
+            }
+        }
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            subst_expr(object, subst)
+        }
+        ExprKind::Index { object, index } => {
+            subst_expr(object, subst);
+            subst_expr(index, subst);
+        }
+        ExprKind::Block(b) | ExprKind::Comptime(b) => subst_block(b, subst),
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            subst_expr(condition, subst);
+            subst_block(then_block, subst);
+            if let Some(e) = else_branch {
+                subst_expr(e, subst);
+            }
+        }
+        ExprKind::IfLet {
+            value,
+            then_block,
+            else_branch,
+            ..
+        } => {
+            subst_expr(value, subst);
+            subst_block(then_block, subst);
+            if let Some(e) = else_branch {
+                subst_expr(e, subst);
+            }
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            subst_expr(scrutinee, subst);
+            for arm in arms.iter_mut() {
+                if let Some(g) = &mut arm.guard {
+                    subst_expr(g, subst);
+                }
+                subst_expr(&mut arm.body, subst);
+            }
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            subst_expr(condition, subst);
+            subst_block(body, subst);
+        }
+        ExprKind::WhileLet { value, body, .. } => {
+            subst_expr(value, subst);
+            subst_block(body, subst);
+        }
+        ExprKind::For { iterable, body, .. } => {
+            subst_expr(iterable, subst);
+            subst_block(body, subst);
+        }
+        ExprKind::Loop { body, .. } => subst_block(body, subst),
+        ExprKind::LabeledBlock { body, .. } => subst_block(body, subst),
+        ExprKind::Closure { params, body, .. } => {
+            for p in params.iter_mut() {
+                if let Some(t) = p.ty.as_mut() {
+                    *t = subst_type_expr(t, subst);
+                }
+            }
+            subst_expr(body, subst);
+        }
+        ExprKind::Return(opt) => {
+            if let Some(e) = opt {
+                subst_expr(e, subst);
+            }
+        }
+        ExprKind::Break { value, .. } => {
+            if let Some(e) = value {
+                subst_expr(e, subst);
+            }
+        }
+        ExprKind::Tuple(items)
+        | ExprKind::ArrayLiteral(items)
+        | ExprKind::PrefixCollectionLiteral { items, .. } => {
+            for e in items.iter_mut() {
+                subst_expr(e, subst);
+            }
+        }
+        ExprKind::RepeatLiteral { value, count, .. } => {
+            subst_expr(value, subst);
+            subst_expr(count, subst);
+        }
+        ExprKind::MapLiteral(pairs) => {
+            for (k, v) in pairs.iter_mut() {
+                subst_expr(k, subst);
+                subst_expr(v, subst);
+            }
+        }
+        ExprKind::StructLiteral {
+            path,
+            fields,
+            spread,
+        } => {
+            // A struct-literal path is a type-constructor position, so a bare
+            // single-segment `T { .. }` is a type param too (qualified_only =
+            // false).
+            subst_leading_type_name(path, subst, /* qualified_only */ false);
+            for f in fields.iter_mut() {
+                subst_expr(&mut f.value, subst);
+            }
+            if let Some(s) = spread {
+                subst_expr(s, subst);
+            }
+        }
+        ExprKind::Range { start, end, .. } => {
+            if let Some(s) = start {
+                subst_expr(s, subst);
+            }
+            if let Some(e) = end {
+                subst_expr(e, subst);
+            }
+        }
+        ExprKind::Unsafe(b) | ExprKind::Try(b) | ExprKind::Seq(b) | ExprKind::Par(b) => {
+            subst_block(b, subst)
+        }
+        ExprKind::Lock { mutex, body, .. } => {
+            subst_expr(mutex, subst);
+            subst_block(body, subst);
+        }
+        ExprKind::Providers { bindings, body } => {
+            for bnd in bindings.iter_mut() {
+                subst_expr(&mut bnd.value, subst);
+            }
+            subst_block(body, subst);
         }
     }
 }

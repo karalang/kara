@@ -3424,6 +3424,65 @@ fn main() {
         }
     }
 
+    /// Regression (B-2026-07-03-10): a GENERIC trait's default method is
+    /// inherited onto an implementor end-to-end under `karac build`, with the
+    /// impl's trait-args substituted through the copied signature + body. The
+    /// desugar pass zips the trait's declared params against `impl Tr[Args]`
+    /// and rewrites every `T` in the copy, so codegen emits an ordinary
+    /// concrete `Type.method` fn. Covers TWO distinct concrete args (i64 vs
+    /// f64) of the same generic trait proving the substitution is per-impl —
+    /// before the fix the pass skipped generic traits entirely — plus a
+    /// `let picked: T` body annotation + default-calls-required (`choose`), a
+    /// `T.zero()` associated-fn path in a default body (`seed` -> `Cnt.zero`),
+    /// a default-calls-default chain (`make` -> `seed`), and an override
+    /// taking precedence (`tag`). Call results that return an aggregate are
+    /// bound to a temp before field access to sidestep the orthogonal
+    /// pre-existing `f().field` codegen miscompile (see the bug ledger).
+    #[test]
+    fn e2e_generic_trait_default_methods_dispatch_on_implementor() {
+        if let Some(out) = run_program(
+            "trait Chooser[T] {\n\
+             \x20   fn base(ref self) -> T;\n\
+             \x20   fn choose(ref self, alt: T, use_alt: bool) -> T {\n\
+             \x20       let picked: T = if use_alt { alt } else { self.base() };\n\
+             \x20       picked\n\
+             \x20   }\n\
+             }\n\
+             struct IBox { v: i64 }\n\
+             struct FBox { v: f64 }\n\
+             impl Chooser[i64] for IBox { fn base(ref self) -> i64 { self.v } }\n\
+             impl Chooser[f64] for FBox { fn base(ref self) -> f64 { self.v } }\n\
+             trait Zeroish { fn zero() -> Self; }\n\
+             struct Cnt { n: i64 }\n\
+             impl Zeroish for Cnt { fn zero() -> Cnt { Cnt { n: 7 } } }\n\
+             trait Maker[T: Zeroish] {\n\
+             \x20   fn seed(ref self) -> T { T.zero() }\n\
+             \x20   fn make(ref self) -> T { self.seed() }\n\
+             \x20   fn tag(ref self) -> i64 { 0 }\n\
+             }\n\
+             struct Gen {}\n\
+             impl Maker[Cnt] for Gen { fn tag(ref self) -> i64 { 9 } }\n\
+             fn main() {\n\
+             \x20   let a = IBox { v: 7 };\n\
+             \x20   let b = FBox { v: 2.5 };\n\
+             \x20   println(f\"{a.choose(99, false)}\");\n\
+             \x20   println(f\"{a.choose(99, true)}\");\n\
+             \x20   println(f\"{b.choose(1.5, false)}\");\n\
+             \x20   println(f\"{b.choose(1.5, true)}\");\n\
+             \x20   let g = Gen {};\n\
+             \x20   let m = g.make();\n\
+             \x20   println(f\"{m.n}\");\n\
+             \x20   let s = g.seed();\n\
+             \x20   println(f\"{s.n}\");\n\
+             \x20   println(f\"{g.tag()}\");\n\
+             }",
+        ) {
+            // i64 default: base=7 / alt=99; f64 default: base=2.5 / alt=1.5.
+            // make->seed->Cnt.zero()=7; seed=7; tag override=9.
+            assert_eq!(out, "7\n99\n2.5\n1.5\n7\n7\n9\n");
+        }
+    }
+
     /// Regression: `TaskHandle[T].join()` for a NON-scalar `T` (`Vec[i64]`)
     /// returns the spawned task's heap value intact. `recover_task_handle_
     /// join_return_ty` used to return `i64` unconditionally, so a `Vec`/

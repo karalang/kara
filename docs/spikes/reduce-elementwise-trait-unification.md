@@ -277,9 +277,37 @@ B-2026-07-02-10..13, see the ledger.
     surfaces. Probing found one new open gap: a generic **by-value**
     `Slice[T]` param + Vec arg misses the Vec→Slice header coercion
     (ledgered; the non-generic and `mut Slice[T]` forms already coerce).
-  - **S6b-2..4** (open) — default-body fallback dispatch, generic trait
-    method (`fold[A]`) codegen monomorphization, and the user
-    `impl Reduce[T] for MyType` end-to-end.
+  - **S6b-2** ✅ **(landed 2026-07-03)** — default-body **fallback dispatch**.
+    A pre-resolve desugar pass (`synthesize_trait_default_methods`,
+    `src/desugar.rs`) copies each non-overridden trait default body into
+    every `impl Tr for T` block, so all phases see it as an ordinary
+    hand-written impl method (the one form already end-to-end). Two legs:
+    **(a)** non-generic traits (B-2026-07-03-8, `6d488e58`); **(b)** generic
+    traits (B-2026-07-03-10, this slice) — the trait's declared params zip
+    positionally against `impl Tr[Args]`'s type-args and
+    `substitute_trait_params_in_function` rewrites every trait-param mention
+    in the copy's param/return types, `where` clause, own generic-param
+    bounds, and body type-expressions (`T`-typed locals, casts, `T.assoc()`
+    paths, `Fn(A, T)` closure types) to the concrete arg; a method's own
+    generic params (`fold[A]`) shadow same-named trait params and are left
+    untouched. Two distinct concrete args (`Chooser[i64]` / `Chooser[f64]`)
+    of one generic trait now inherit distinct concrete defaults on both
+    surfaces. Probing surfaced **two pre-existing, orthogonal** open gaps
+    (ledgered, not introduced here): a generic **impl-method** codegen
+    monomorphization gap — `o.apply[A](..)` on a concrete receiver runs but
+    `build`-fails "no handler for method" (= S6b-3 / S6-pre finding 2b), and
+    a broad `f().field` miscompile — immediate field access on any
+    aggregate-returning call result reads 0 under `build` (bind the result
+    first to work around).
+  - **S6b-3** (open) — generic trait/impl **method** (`fold[A]`) codegen
+    monomorphization (the gap p4 hits above). Also gated for the *real*
+    `Reduce` defaults: operator-on-bounded-`T` (`a + x` where `T: Add`) is
+    not yet accepted (warns under run, hard-errors under build) and the
+    `f().field` miscompile.
+  - **S6b-4** (open) — the user `impl Reduce[T] for MyType` end-to-end:
+    wire the baked stdlib `Reduce` fold-based defaults (needs the stdlib
+    trait's defaults reachable by the splice pass — today only user-declared
+    traits are) once S6b-3's blockers land.
 - **S6c** — `ElementwiseMap` / `ElementwiseOrd` builtin method surfaces +
   user impls; blanket `Vec[T]` impls; user trait-impl methods over builtin
   containers (probed: interp "type 'unknown'", codegen loud fall-through).
