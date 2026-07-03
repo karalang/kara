@@ -2456,7 +2456,7 @@ fn test_reduction_rejects_recursive_self_call_in_body() {
     // at every recursion level; the fan-out compounds into runaway task nesting
     // that exhausts the stack (a SIGBUS at depth — correct output survives only
     // for tiny inputs). The recognizer must decline it so the loop stays
-    // sequential. Regression for B-2026-07-03-13 (LeetCode #52 N-Queens II).
+    // sequential. Regression for B-2026-07-03-14 (LeetCode #52 N-Queens II).
     let analysis = analyze(
         r#"
         fn count(n: i64, row: i64) -> i64 {

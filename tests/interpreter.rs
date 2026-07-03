@@ -1606,7 +1606,7 @@ fn test_scalar_mut_ref_writeback_through_forwarded_call() {
     // write-back keys on the callee's `mut ref` param mode, not the call-site
     // `mut` marker — a forwarded in-scope borrow carries no marker (design.md
     // § Call-site mutation markers), so a marker-only gate would drop the
-    // chain and the accumulator would read 0. Regression for B-2026-07-03-12
+    // chain and the accumulator would read 0. Regression for B-2026-07-03-13
     // (LeetCode #52 N-Queens II marker-array counter, all-zeros under `run`).
     assert_eq!(
         run("fn inc(x: mut ref i64) { x = x + 1i64; }\n\

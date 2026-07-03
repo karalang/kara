@@ -1348,7 +1348,7 @@ impl<'a> ConcurrencyChecker<'a> {
                 // SIGBUS at depth — correct output only survives for tiny
                 // inputs). The sequential lowering is correct and safe, so
                 // fall back to it. Direct self-recursion is the demonstrated
-                // and common case (B-2026-07-03-13); transitive/mutual
+                // and common case (B-2026-07-03-14); transitive/mutual
                 // recursion through a helper is a known residual gap.
                 if crate::call_graph::block_calls_function(body, &func.name) {
                     continue;
