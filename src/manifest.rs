@@ -340,6 +340,15 @@ pub struct Manifest {
     /// `[build].target` (a rustc-style triple selecting the manifest
     /// overlay for `karac build`).
     pub build_targets: Vec<String>,
+    /// `[build].registry-proxy` — a per-project registry proxy URL, so a
+    /// package can pin its mirror in the manifest instead of relying on
+    /// each contributor exporting `KARAC_REGISTRY_PROXY`. Validated at
+    /// parse time to be a non-empty `http(s)://` string. It is the middle
+    /// tier of the proxy-URL precedence chain resolved by
+    /// [`crate::registry_proxy::ProxyConfig::resolve`]: the
+    /// `KARAC_REGISTRY_PROXY` env var (when non-empty) beats this, and this
+    /// beats the built-in default. `None` when the key is absent.
+    pub build_registry_proxy: Option<String>,
     /// `[lints]` table — project-wide lint posture, the global mirror of
     /// source-level `#[allow(...)]` / `#[deny(...)]`. Empty struct when
     /// the table is absent. The CLI lifts this into the typechecker's
@@ -870,6 +879,7 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
         parse_target_tables(path, &table, &mut warnings)?;
     let build_default_target = parse_build_default_target(path, &table)?;
     let build_targets = parse_build_targets(path, &table)?;
+    let build_registry_proxy = parse_build_registry_proxy(path, &table)?;
     let lints = parse_lints_table(path, &table, &mut warnings)?;
     let (release_target_cpu, release_target_features) =
         parse_release_table(path, &table, &mut warnings)?;
@@ -900,6 +910,7 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
         target_profile_overrides,
         build_default_target,
         build_targets,
+        build_registry_proxy,
         lints,
         release_target_cpu,
         release_target_features,
@@ -1595,6 +1606,55 @@ fn parse_build_targets(path: &Path, table: &toml::Table) -> Result<Vec<String>, 
         out.push(name.clone());
     }
     Ok(out)
+}
+
+/// Parse `[build].registry-proxy` — a per-project registry proxy URL
+/// (registry-proxy follow-up (g)). Lets a package pin its mirror in the
+/// manifest instead of relying on a per-shell `KARAC_REGISTRY_PROXY`
+/// export. Must be a non-empty `http://` / `https://` string; a wrong
+/// type, an empty value, or a non-HTTP scheme is a hard error rather than
+/// a silent drop, so a typo surfaces instead of quietly falling back to
+/// the default proxy. Absent is the common case. Resolution precedence
+/// against the env var + default lives in
+/// [`crate::registry_proxy::ProxyConfig::resolve`].
+fn parse_build_registry_proxy(
+    path: &Path,
+    table: &toml::Table,
+) -> Result<Option<String>, ManifestError> {
+    let Some(build_value) = table.get("build") else {
+        return Ok(None);
+    };
+    // A non-table `[build]` is already rejected by
+    // `parse_build_default_target`; stay total for call-order independence.
+    let Some(build_table) = build_value.as_table() else {
+        return Ok(None);
+    };
+    let Some(value) = build_table.get("registry-proxy") else {
+        return Ok(None);
+    };
+    let toml::Value::String(s) = value else {
+        return Err(ManifestError::InvalidFieldType {
+            path: path.to_path_buf(),
+            key: "build.registry-proxy".to_string(),
+            expected: "a proxy URL string (e.g. \"https://proxy.example/\")",
+        });
+    };
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Err(ManifestError::InvalidFieldType {
+            path: path.to_path_buf(),
+            key: "build.registry-proxy".to_string(),
+            expected: "a non-empty proxy URL string",
+        });
+    }
+    if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
+        return Err(ManifestError::InvalidFieldType {
+            path: path.to_path_buf(),
+            key: "build.registry-proxy".to_string(),
+            expected: "a URL starting with http:// or https://",
+        });
+    }
+    Ok(Some(trimmed.to_string()))
 }
 
 /// Merge `[target.<triple>]` overlays onto a manifest for the given
@@ -3144,6 +3204,78 @@ target = "x86_64-apple-darwin"
         assert_eq!(
             m.build_default_target.as_deref(),
             Some("x86_64-apple-darwin")
+        );
+    }
+
+    #[test]
+    fn build_registry_proxy_captured_and_trimmed() {
+        let src = r#"[package]
+name = "hello"
+
+[build]
+registry-proxy = "  https://proxy.example/  "
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(
+            m.build_registry_proxy.as_deref(),
+            Some("https://proxy.example/")
+        );
+    }
+
+    #[test]
+    fn build_registry_proxy_absent_is_none() {
+        let src = r#"[package]
+name = "hello"
+
+[build]
+target = "native"
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.build_registry_proxy, None);
+    }
+
+    #[test]
+    fn build_registry_proxy_wrong_type_is_hard_error() {
+        let src = r#"[package]
+name = "hello"
+
+[build]
+registry-proxy = 42
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidFieldType { key, .. } => {
+                assert_eq!(key, "build.registry-proxy")
+            }
+            other => panic!("expected InvalidFieldType on `build.registry-proxy`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_registry_proxy_empty_is_hard_error() {
+        let src = r#"[package]
+name = "hello"
+
+[build]
+registry-proxy = "   "
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        assert!(
+            matches!(err, ManifestError::InvalidFieldType { key, .. } if key == "build.registry-proxy")
+        );
+    }
+
+    #[test]
+    fn build_registry_proxy_non_http_scheme_is_hard_error() {
+        let src = r#"[package]
+name = "hello"
+
+[build]
+registry-proxy = "ftp://proxy.example/"
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        assert!(
+            matches!(err, ManifestError::InvalidFieldType { key, .. } if key == "build.registry-proxy")
         );
     }
 

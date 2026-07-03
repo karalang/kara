@@ -512,6 +512,7 @@ mod tests {
             target_profile_overrides: BTreeMap::new(),
             build_default_target: None,
             build_targets: Vec::new(),
+            build_registry_proxy: None,
             lints: manifest::ManifestLints::default(),
             release_target_cpu: None,
             release_target_features: None,

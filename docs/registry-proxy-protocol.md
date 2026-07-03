@@ -95,6 +95,24 @@ never cached.
 Any failure to reach the proxy (DNS, connection refused, TLS, timeout) surfaces
 as `Unreachable { url, message }` on either endpoint.
 
+## Configuring the proxy URL
+
+The effective proxy URL is resolved by `registry_proxy::ProxyConfig::resolve`,
+highest precedence first:
+
+1. the `KARAC_REGISTRY_PROXY` environment variable (when non-empty);
+2. the project's `[build].registry-proxy` pin in `kara.toml`;
+3. the built-in default (`https://proxy.kara-lang.org`).
+
+```toml
+# kara.toml — pin a mirror for the whole project (no per-shell export needed)
+[build]
+registry-proxy = "https://mirror.internal.example/kara"
+```
+
+The manifest value must be a non-empty `http://` / `https://` URL; a malformed
+value is a parse error rather than a silent fallback to the default.
+
 ## Not covered by v1
 
 These are tracked as registry-proxy follow-ups in the phase-5 checklist and do
@@ -104,6 +122,5 @@ not change the contract above when they land:
 - Tarball caching on the client (follow-up c).
 - Multi-mirror / high-availability (d), authentication (e), signature
   verification (f) — a signature would be a sibling field to `content_hash`.
-- `kara.toml`-sourced proxy URL (g), retry/backoff (h), per-package proxy
-  override (i), `--no-proxy` direct-from-source fetch (j/k), and `karac yank`
-  status surfacing (l).
+- Retry/backoff (h), per-package proxy override (i), `--no-proxy`
+  direct-from-source fetch (j/k), and `karac yank` status surfacing (l).

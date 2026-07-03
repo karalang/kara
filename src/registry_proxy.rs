@@ -63,11 +63,35 @@ impl ProxyConfig {
     /// Build a config from the environment. The URL is taken from
     /// `KARAC_REGISTRY_PROXY` when set non-empty; otherwise the default.
     /// The mode comes from explicit CLI input (the caller decides
-    /// whether `--no-proxy` was passed).
+    /// whether `--no-proxy` was passed). Equivalent to [`Self::resolve`]
+    /// with no manifest override.
     pub fn from_env(mode: ProxyMode) -> Self {
+        Self::resolve(mode, None)
+    }
+
+    /// Resolve the effective proxy URL across all three tiers, highest
+    /// precedence first:
+    ///
+    /// 1. the `KARAC_REGISTRY_PROXY` env var, when set non-empty (a
+    ///    per-shell override, so a contributor can redirect ad-hoc);
+    /// 2. `manifest_proxy_url` — the project's `[build].registry-proxy`
+    ///    pin (registry-proxy follow-up (g)), when present and non-empty;
+    /// 3. the built-in [`DEFAULT_PROXY_URL`].
+    ///
+    /// `mode` is decided by the caller (`--no-proxy` → `Disabled`). Keeping
+    /// the precedence here means the fetch path has a single place to ask
+    /// for the effective URL rather than re-deriving it at each call site.
+    pub fn resolve(mode: ProxyMode, manifest_proxy_url: Option<&str>) -> Self {
         let url = std::env::var(PROXY_URL_ENV_VAR)
             .ok()
-            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                manifest_proxy_url
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            })
             .unwrap_or_else(|| DEFAULT_PROXY_URL.to_string());
         Self { url, mode }
     }
@@ -555,6 +579,51 @@ mod tests {
         let c = ProxyConfig::from_env(ProxyMode::Default);
         assert_eq!(c.url, DEFAULT_PROXY_URL);
         std::env::remove_var(PROXY_URL_ENV_VAR);
+    }
+
+    #[test]
+    fn resolve_env_beats_manifest_and_default() {
+        let _g = PROXY_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var(PROXY_URL_ENV_VAR, "https://env.example");
+        let c = ProxyConfig::resolve(ProxyMode::Default, Some("https://manifest.example"));
+        assert_eq!(c.url, "https://env.example");
+        std::env::remove_var(PROXY_URL_ENV_VAR);
+    }
+
+    #[test]
+    fn resolve_manifest_beats_default_when_env_unset() {
+        let _g = PROXY_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var(PROXY_URL_ENV_VAR);
+        let c = ProxyConfig::resolve(ProxyMode::Default, Some("https://manifest.example"));
+        assert_eq!(c.url, "https://manifest.example");
+    }
+
+    #[test]
+    fn resolve_falls_back_to_default_when_env_and_manifest_absent() {
+        let _g = PROXY_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var(PROXY_URL_ENV_VAR);
+        let c = ProxyConfig::resolve(ProxyMode::Default, None);
+        assert_eq!(c.url, DEFAULT_PROXY_URL);
+    }
+
+    #[test]
+    fn resolve_ignores_whitespace_only_env_and_manifest() {
+        let _g = PROXY_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Whitespace env is ignored; a whitespace manifest value is too, so
+        // both fall through to the default.
+        std::env::set_var(PROXY_URL_ENV_VAR, "  ");
+        let c = ProxyConfig::resolve(ProxyMode::Default, Some("   "));
+        assert_eq!(c.url, DEFAULT_PROXY_URL);
+        std::env::remove_var(PROXY_URL_ENV_VAR);
+    }
+
+    #[test]
+    fn resolve_preserves_mode() {
+        let _g = PROXY_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var(PROXY_URL_ENV_VAR);
+        let c = ProxyConfig::resolve(ProxyMode::Disabled, Some("https://manifest.example"));
+        assert_eq!(c.mode, ProxyMode::Disabled);
+        assert_eq!(c.url, "https://manifest.example");
     }
 
     #[test]

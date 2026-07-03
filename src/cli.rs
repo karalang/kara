@@ -8532,8 +8532,17 @@ fn emit_no_proxy_note(no_proxy: bool) {
     if !no_proxy {
         return;
     }
-    let config =
-        crate::registry_proxy::ProxyConfig::from_env(crate::registry_proxy::ProxyMode::Disabled);
+    // Best-effort: if we're in a project, honor its `[build].registry-proxy`
+    // pin so the reported URL matches what a fetch would consult. Outside a
+    // project (or on a malformed manifest) fall through to env/default.
+    let manifest_proxy = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| manifest::load_from_cwd(&cwd).ok())
+        .and_then(|(_, mf)| mf.build_registry_proxy);
+    let config = crate::registry_proxy::ProxyConfig::resolve(
+        crate::registry_proxy::ProxyMode::Disabled,
+        manifest_proxy.as_deref(),
+    );
     eprintln!(
         "note: --no-proxy active; registry deps will not consult the proxy at {} (registry-proxy fetch ships in v1.1.x)",
         config.url
