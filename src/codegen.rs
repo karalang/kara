@@ -6474,6 +6474,25 @@ impl<'ctx> Codegen<'ctx> {
                         for impl_item in &imp.items {
                             if let ImplItem::Method(method) = impl_item {
                                 if method.generic_params.is_some() {
+                                    // Register generic impl/trait methods for
+                                    // on-demand monomorphization at the call
+                                    // site — mirrors the free-fn `generic_fns`
+                                    // registration above. Keyed by the same
+                                    // `Type.method` name a call site forms;
+                                    // `make_impl_method_function` prepends
+                                    // `self` (ref/owned) as param 0 so the mono
+                                    // pipeline (`compile_generic_call`) treats
+                                    // it exactly like a generic free fn. Before
+                                    // this the method was skipped entirely, so a
+                                    // call `o.wrap[A](..)` fell through to the
+                                    // "no handler for method" codegen error even
+                                    // though `karac run` executed it correctly
+                                    // (B-2026-07-03-15). `.or_insert_with` dedups
+                                    // across the value-self / ref-self two-pass.
+                                    let qualified = format!("{}.{}", type_name, method.name);
+                                    self.generic_fns.entry(qualified).or_insert_with(|| {
+                                        make_impl_method_function(&type_name, method)
+                                    });
                                     continue;
                                 }
                                 if method_self_is_value(method) != value_self_pass {

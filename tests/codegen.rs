@@ -3564,6 +3564,43 @@ fn main() {
         }
     }
 
+    /// Regression (B-2026-07-03-15): a GENERIC impl/trait method (`m[A](..)`
+    /// with its OWN generic param) on a CONCRETE receiver monomorphizes under
+    /// `karac build`. Before the fix the declaration pass skipped generic
+    /// methods entirely, so the call fell through to "no handler for method"
+    /// though `karac run` executed it correctly. The method is now registered
+    /// in `generic_fns` keyed `Type.method` (self prepended as param 0) and the
+    /// call routes through `compile_generic_call` with the receiver prepended.
+    /// Covers: an inherent scalar generic method at TWO distinct element types
+    /// (`wrap(7)` i64 vs `wrap(2.5)` f64 — distinct monos, no width collision),
+    /// a generic method taking a closure param (`apply` — the `fold[A]` shape),
+    /// and an explicitly-implemented trait generic method (`dup`).
+    #[test]
+    fn e2e_generic_impl_method_monomorphizes_on_concrete_receiver() {
+        if let Some(out) = run_program(
+            "struct One { v: i64 }\n\
+             impl One {\n\
+             \x20   fn wrap[A](ref self, x: A) -> A { x }\n\
+             \x20   fn apply[A](ref self, init: A, f: Fn(A, i64) -> A) -> A { f(init, self.v) }\n\
+             }\n\
+             trait Wrapper { fn dup[A](ref self, x: A) -> A; }\n\
+             struct C { v: i64 }\n\
+             impl Wrapper for C { fn dup[A](ref self, x: A) -> A { x } }\n\
+             fn main() {\n\
+             \x20   let o = One { v: 40 };\n\
+             \x20   println(f\"{o.wrap(7)}\");\n\
+             \x20   println(f\"{o.wrap(2.5)}\");\n\
+             \x20   println(f\"{o.apply(2, |a, x| a + x)}\");\n\
+             \x20   let c = C { v: 0 };\n\
+             \x20   println(f\"{c.dup(99)}\");\n\
+             }",
+        ) {
+            // wrap$i64=7, wrap$f64=2.5 (distinct monos), apply closure=2+40=42,
+            // trait-impl dup$i64=99.
+            assert_eq!(out, "7\n2.5\n42\n99\n");
+        }
+    }
+
     /// Regression: `TaskHandle[T].join()` for a NON-scalar `T` (`Vec[i64]`)
     /// returns the spawned task's heap value intact. `recover_task_handle_
     /// join_return_ty` used to return `i64` unconditionally, so a `Vec`/

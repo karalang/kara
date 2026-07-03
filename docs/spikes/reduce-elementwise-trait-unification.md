@@ -299,11 +299,28 @@ B-2026-07-02-10..13, see the ledger.
     a broad `f().field` miscompile — immediate field access on any
     aggregate-returning call result reads 0 under `build` (bind the result
     first to work around).
-  - **S6b-3** (open) — generic trait/impl **method** (`fold[A]`) codegen
-    monomorphization (the gap p4 hits above). Also gated for the *real*
-    `Reduce` defaults: operator-on-bounded-`T` (`a + x` where `T: Add`) is
-    not yet accepted (warns under run, hard-errors under build) and the
-    `f().field` miscompile.
+  - **S6b-3** ✅ **(landed 2026-07-03)** — generic trait/impl **method**
+    codegen monomorphization (B-2026-07-03-15). The declaration pass
+    (`src/codegen.rs`) now registers a generic impl method into `generic_fns`
+    keyed `Type.method` (via `make_impl_method_function`, which prepends
+    `self` as an ordinary ref/owned param 0) instead of skipping it, and
+    `compile_method_call` (`src/codegen/method_call.rs`) — after every
+    builtin + the non-generic-method arm decline — routes such a call through
+    `compile_generic_call` with the receiver prepended as arg 0, so the whole
+    free-fn mono pipeline (infer type-args from the arg value types, mangle a
+    per-instantiation symbol, declare+compile the mono, ref/owned arg ABI)
+    applies unchanged. `self`'s concrete type contributes no type-param; the
+    method's own params (`A`) bind from the by-value args. Covers scalar
+    (`wrap[A]`, distinct i64/f64 monos), closure-param (`apply[A]` — the
+    `fold` shape), explicit trait-impl (`dup[A]`), `self`-receiver, and
+    fresh-temp receiver (`make_x().wrap(1)` — the fresh-temp materialization
+    path's gate now also fires for generic methods, re-entering with the
+    now-Identifier synth local). Residual: a **mut-self** generic method on a
+    `self`/non-identifier receiver passes a copy (read-only self is correct —
+    the Reduce case). The
+    *real* stdlib `Reduce` fold-based defaults remain additionally gated on
+    operator-on-bounded-`T` (`a + x` where `T: Add` warns under run,
+    hard-errors under build) and the `f().field` miscompile (B-2026-07-03-16).
   - **S6b-4** (open) — the user `impl Reduce[T] for MyType` end-to-end:
     wire the baked stdlib `Reduce` fold-based defaults (needs the stdlib
     trait's defaults reachable by the splice pass — today only user-declared

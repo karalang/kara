@@ -3343,6 +3343,35 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(result);
         }
 
+        // Generic user impl/trait method on a concrete receiver: route through
+        // the same monomorphization pipeline as a generic free fn
+        // (B-2026-07-03-15). The declaration pass registered the method as
+        // `generic_fns["Type.method"]` with `self` prepended as an ordinary
+        // (ref/owned) param 0; prepend the receiver as the first call arg so
+        // `compile_generic_call` infers the method's OWN type-params from the
+        // arg value types and mangles a per-instantiation mono. `self`'s
+        // concrete receiver type contributes no type-param, and its ref/owned
+        // ABI is handled by the generic path's arg lowering exactly as for a
+        // `ref T` / by-value free-fn param. Runs after every builtin and the
+        // non-generic-method arm (`module.get_function("Type.method")` returned
+        // None for a generic method), so only genuine generic methods reach
+        // here — `generic_fns` holds a `Type.method` key for those alone (free
+        // fns are keyed by bare name).
+        if let Some(receiver_type) = self.inferred_receiver_type(object) {
+            let qualified = format!("{}.{}", receiver_type, method);
+            if self.generic_fns.contains_key(&qualified) {
+                let mut all_args: Vec<CallArg> = Vec::with_capacity(args.len() + 1);
+                all_args.push(CallArg {
+                    label: None,
+                    mut_marker: false,
+                    value: object.clone(),
+                    span: object.span.clone(),
+                });
+                all_args.extend(args.iter().cloned());
+                return self.compile_generic_call(&qualified, &all_args, None, call_span);
+            }
+        }
+
         let receiver_desc = match &object.kind {
             ExprKind::Identifier(name) => format!("variable '{}'", name),
             _ => "non-identifier receiver".to_string(),
@@ -3639,7 +3668,13 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(None);
         }
         let qualified = format!("{type_name}.{method}");
-        if self.module.get_function(&qualified).is_none() {
+        // Accept a concrete `Type.method` (declared) OR a GENERIC impl method
+        // registered in `generic_fns` (B-2026-07-03-15): materialize the
+        // fresh-temp receiver into a synth local and re-enter, which routes the
+        // now-Identifier receiver through the generic-method mono arm.
+        if self.module.get_function(&qualified).is_none()
+            && !self.generic_fns.contains_key(&qualified)
+        {
             return Ok(None);
         }
         let cur_fn = self
