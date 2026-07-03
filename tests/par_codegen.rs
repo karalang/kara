@@ -1151,11 +1151,12 @@ fn main() {
 "#,
         );
         if let Some(out) = out {
-            // i64 elements only: the narrow (u8) print-signedness in a par group
-            // (B-2026-07-03-21) is a separate open bug, so this asserts the
-            // arg-coercion value path. (The generic `-> T` container-element
-            // String-return formatting is fixed — see
-            // test_e2e_auto_par_generic_slice_elem_nonint_return below.)
+            // i64 elements only here; the narrow (u8) print-signedness in a par
+            // group is covered by test_e2e_auto_par_narrow_unsigned_slot_signedness
+            // (B-2026-07-03-21, fixed) and the generic `-> T` container-element
+            // String-return formatting by
+            // test_e2e_auto_par_generic_slice_elem_nonint_return (B-2026-07-03-22,
+            // fixed). This asserts the arg-coercion value path.
             assert_eq!(
                 out, "2\n10\n2\n",
                 "generic by-value Slice[T] param under auto-par; got {out:?}"
@@ -1183,6 +1184,52 @@ fn main() {
             assert_eq!(
                 out, "autopar-first-long-payload-here\n",
                 "generic Slice[T] non-int element return under auto-par; got {out:?}"
+            );
+        }
+    }
+
+    /// B-2026-07-03-21: a narrow *unsigned* (u8/u16/u32) local whose RHS is a
+    /// generic call, bound with an explicit annotation, must keep its
+    /// signedness when the binding lands in an auto-par PAR GROUP. The
+    /// post-join return-slot materialization registered `variables` /
+    /// `vec_elem_types` but never `var_type_names`, and the slot's `llvm_ty`
+    /// (`i8`/`i16`/`i32`) erases signedness — so `expr_is_unsigned_int` fell
+    /// back to signed and `255u8` printed as `-1` under the DEFAULT/auto-par
+    /// build (KARAC_AUTO_PAR=1), while sequential + interp printed `255`. The
+    /// fix threads the binding's annotation type name into `ReturnSlot` and
+    /// re-registers `var_type_names` post-join. Covers u8/u16/u32 (plain print
+    /// and f-string) plus a signed `i8` control that must STAY `-1` (no
+    /// over-correction). The two `geti()` lets create the independent-binding
+    /// dependency graph the analyzer needs to group the narrow-int let.
+    #[test]
+    fn test_e2e_auto_par_narrow_unsigned_slot_signedness() {
+        let out = run_program(
+            r#"
+fn vfirst[T](v: ref Vec[T]) -> T { v[0] }
+fn geti() -> i64 { 1 }
+fn main() {
+    let vu8: Vec[u8] = [255u8, 1u8];
+    let vu16: Vec[u16] = [65535u16, 1u16];
+    let vu32: Vec[u32] = [4294967295u32, 1u32];
+    let vi8: Vec[i8] = [255u8 as i8, 1u8 as i8];
+    let a = geti();
+    let b = geti();
+    let u8v: u8 = vfirst(vu8);
+    let u16v: u16 = vfirst(vu16);
+    let u32v: u32 = vfirst(vu32);
+    let i8v: i8 = vfirst(vi8);
+    println(a + b);
+    println(u8v);
+    println(f"{u16v}");
+    println(u32v);
+    println(i8v);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "2\n255\n65535\n4294967295\n-1\n",
+                "narrow-unsigned generic-call slot signedness under auto-par; got {out:?}"
             );
         }
     }

@@ -538,6 +538,15 @@ impl<'ctx> super::Codegen<'ctx> {
                                     ty: slot.llvm_ty,
                                 },
                             );
+                            // Re-register the binding's surface type name so a
+                            // narrow *unsigned* slot (`let u: u8 = ...`) keeps
+                            // its signedness across the par-group join — the
+                            // llvm_ty (`i8`) erases it, and without this
+                            // `expr_is_unsigned_int` falls back to signed and
+                            // prints `255u8` as `-1` (B-2026-07-03-21).
+                            if let Some(tn) = &slot.var_type_name {
+                                self.record_var_type_name(slot.binding_name.clone(), tn.clone());
+                            }
                             if slot.llvm_ty == vec_st {
                                 // Vec/String slot — register a placeholder
                                 // i64 element type (matches the
@@ -954,6 +963,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     binding_name: name,
                     branch_index: branch_idx,
                     llvm_ty,
+                    var_type_name: Self::let_binding_annotation_type_name(stmt),
                 });
             } else {
                 // RHS shape we can't recover the LLVM type from. Bail
@@ -966,6 +976,23 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         Some(slots)
+    }
+
+    /// Surface type NAME from a let-statement's explicit annotation (the
+    /// first path segment, e.g. `u8` / `i32` / `String`), if present. The
+    /// auto-par / `par`-block return-slot materialization re-registers this
+    /// into `var_type_names` so a narrow *unsigned* slot binding keeps its
+    /// signedness for `expr_is_unsigned_int` (B-2026-07-03-21). Returns
+    /// `None` for an un-annotated let or a non-`Path` annotation shape.
+    pub(super) fn let_binding_annotation_type_name(stmt: &Stmt) -> Option<String> {
+        let ty_ann = match &stmt.kind {
+            StmtKind::Let { ty, .. } | StmtKind::LetElse { ty, .. } => ty.as_ref()?,
+            _ => return None,
+        };
+        match &ty_ann.kind {
+            TypeKind::Path(p) => p.segments.first().cloned(),
+            _ => None,
+        }
     }
 
     /// Infer the LLVM type produced by a let-statement's RHS. Used by

@@ -188,6 +188,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     binding_name: name,
                     branch_index: branch_idx,
                     llvm_ty,
+                    var_type_name: Self::let_binding_annotation_type_name(stmt),
                 });
             }
             // Un-inferrable RHS: conservatively drop. Sibling to the
@@ -253,6 +254,12 @@ impl<'ctx> super::Codegen<'ctx> {
                             ty: slot.llvm_ty,
                         },
                     );
+                    // Preserve narrow-unsigned signedness across the join —
+                    // `i8` erases `u8` (B-2026-07-03-21); mirrors the auto-par
+                    // dispatch site.
+                    if let Some(tn) = &slot.var_type_name {
+                        self.record_var_type_name(slot.binding_name.clone(), tn.clone());
+                    }
                     // Vec/String slot: register a placeholder element
                     // type so subsequent `.len()` / `.is_empty()` etc.
                     // dispatch through `compile_vec_method`. The

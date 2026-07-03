@@ -1031,6 +1031,13 @@ pub(crate) struct ReturnSlot<'ctx> {
     /// the branch's `compile_stmt` produces for the let-binding's value
     /// (derived from explicit annotation or call-target return type).
     pub(crate) llvm_ty: BasicTypeEnum<'ctx>,
+    /// Surface type NAME of the binding (first path segment of an explicit
+    /// annotation, e.g. `"u8"`), when one is present. The LLVM type erases
+    /// signedness (`i8` covers both `i8` and `u8`), so the post-join
+    /// materialization re-registers this into `var_type_names` — otherwise
+    /// `expr_is_unsigned_int` falls back to signed and a `u8`/`u16`/`u32`
+    /// slot binding prints as its negative signed view (B-2026-07-03-21).
+    pub(crate) var_type_name: Option<String>,
 }
 
 /// Phase 7 — Par codegen: cancellation and error propagation (slice 1a,
