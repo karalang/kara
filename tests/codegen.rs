@@ -3385,6 +3385,45 @@ fn main() {
         }
     }
 
+    /// Regression (B-2026-07-03-8): a trait DEFAULT method is callable on an
+    /// implementor that does not re-implement it, and behaves end-to-end under
+    /// `karac build`. The desugar pass `synthesize_trait_default_methods`
+    /// copies each non-overridden default body into the impl, so codegen emits
+    /// it as an ordinary `Type.method` fn. Covers a pure default (empty impl),
+    /// a default that calls a required method, a default that calls another
+    /// default, and an override taking precedence over the default.
+    #[test]
+    fn e2e_trait_default_methods_dispatch_on_implementor() {
+        if let Some(out) = run_program(
+            "trait T {\n\
+             \x20   fn base(self) -> i64;\n\
+             \x20   fn plus_one(self) -> i64 { self.base() + 1 }\n\
+             \x20   fn plus_two(self) -> i64 { self.plus_one() + 1 }\n\
+             \x20   fn constant(self) -> i64 { 42 }\n\
+             }\n\
+             struct A { n: i64 }\n\
+             struct B { n: i64 }\n\
+             impl T for A { fn base(self) -> i64 { self.n } }\n\
+             impl T for B {\n\
+             \x20   fn base(self) -> i64 { self.n }\n\
+             \x20   fn constant(self) -> i64 { 100 }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let a = A { n: 10 };\n\
+             \x20   println(f\"{a.plus_one()}\");\n\
+             \x20   println(f\"{a.plus_two()}\");\n\
+             \x20   println(f\"{a.constant()}\");\n\
+             \x20   let b = B { n: 20 };\n\
+             \x20   println(f\"{b.plus_two()}\");\n\
+             \x20   println(f\"{b.constant()}\");\n\
+             }",
+        ) {
+            // a: plus_one=11, plus_two=12, constant(default)=42
+            // b: plus_two=22, constant(override)=100
+            assert_eq!(out, "11\n12\n42\n22\n100\n");
+        }
+    }
+
     /// Regression: `TaskHandle[T].join()` for a NON-scalar `T` (`Vec[i64]`)
     /// returns the spawned task's heap value intact. `recover_task_handle_
     /// join_return_ty` used to return `i64` unconditionally, so a `Vec`/

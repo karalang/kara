@@ -20,9 +20,130 @@ use crate::token::Span;
 /// parallel/destructuring-assignment desugar.
 pub fn desugar_program(program: &mut Program) {
     synthesize_default_impls(program);
+    synthesize_trait_default_methods(program);
     propagate_codegen_hints(program);
     desugar_impl_trait_args_in_program(program);
     desugar_multi_assign_in_program(program);
+}
+
+/// Materialize trait **default method bodies** into every impl that does not
+/// override them, so a default method is callable on an implementor without
+/// the impl re-implementing it (B-2026-07-03-8). For `impl Tr for T` where
+/// trait `Tr` declares `fn m(self) -> R { <default body> }` and the impl body
+/// provides no `m`, this copies `m` (converted from its `TraitMethod` node to
+/// the `Function` node an impl method carries) into the impl's items. All
+/// downstream phases then see the default exactly as if the user had written
+/// it in the impl — which is the one form that already worked end-to-end
+/// (typecheck method resolution, `eval_method_call` dispatch, and codegen's
+/// `make_impl_method_function` synthesis all key off the impl's item list).
+/// `Self` in the copied body/signature resolves to the impl target through the
+/// existing impl-method `Self` handling (`current_self_type` in the
+/// typechecker, `rewrite_self_in_type_expr` in codegen).
+///
+/// Scope: only traits declared in the user program are consulted (baked
+/// stdlib traits are spliced separately and carry their own default
+/// machinery), and only methods with a body are candidates. Overriding impls
+/// keep their own method (the `provided` guard). Runs pre-resolve so the
+/// synthesized methods are visible to name resolution and every later phase.
+fn synthesize_trait_default_methods(program: &mut Program) {
+    use std::collections::{HashMap, HashSet};
+
+    // trait name -> its default-bodied methods, already converted to the
+    // `Function` shape an `ImplItem::Method` carries.
+    let mut trait_defaults: HashMap<String, Vec<Function>> = HashMap::new();
+    for item in &program.items {
+        if let Item::TraitDef(t) = item {
+            // Skip GENERIC traits: a default body that mentions the trait's
+            // own type params (`trait Box[T] { fn twice(self) -> T { .. } }`)
+            // would be copied into `impl Box[i64] for W` verbatim, where `T`
+            // is out of scope — the copy needs the impl's trait-args
+            // substituted through the body, which this pass does not yet do.
+            // Synthesizing anyway would trade the pre-fix "no method" error
+            // for a confusing "undefined type 'T'". Generic-trait defaults are
+            // a tracked follow-on (B-2026-07-03-10).
+            if t.generic_params.is_some() {
+                continue;
+            }
+            for ti in &t.items {
+                if let TraitItem::Method(m) = ti {
+                    if m.body.is_some() {
+                        trait_defaults
+                            .entry(t.name.clone())
+                            .or_default()
+                            .push(trait_method_to_function(m, t.stdlib_origin));
+                    }
+                }
+            }
+        }
+    }
+    if trait_defaults.is_empty() {
+        return;
+    }
+
+    for item in &mut program.items {
+        let Item::ImplBlock(imp) = item else { continue };
+        let Some(trait_path) = &imp.trait_name else {
+            continue;
+        };
+        let trait_name = match trait_path.segments.last() {
+            Some(n) => n.clone(),
+            None => continue,
+        };
+        let Some(defaults) = trait_defaults.get(&trait_name) else {
+            continue;
+        };
+        let provided: HashSet<String> = imp
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                ImplItem::Method(m) => Some(m.name.clone()),
+                _ => None,
+            })
+            .collect();
+        for def_fn in defaults {
+            if !provided.contains(&def_fn.name) {
+                imp.items.push(ImplItem::Method(Box::new(def_fn.clone())));
+            }
+        }
+    }
+}
+
+/// Convert a default-bodied `TraitMethod` into the `Function` node an impl
+/// method carries. Mirrors the synthesis in `TypeChecker::check_trait_def`
+/// but preserves the codegen-relevant markers (`unsafe`, `#[track_caller]`,
+/// inline/cold/gpu hints, deprecation/unstable, attributes) so a synthesized
+/// default behaves like a hand-written impl method. Only called for methods
+/// whose `body` is `Some`.
+fn trait_method_to_function(m: &TraitMethod, stdlib_origin: bool) -> Function {
+    Function {
+        span: m.span.clone(),
+        attributes: m.attributes.clone(),
+        doc_comment: m.doc_comment.clone(),
+        is_pub: false,
+        is_private: false,
+        is_unsafe: m.is_unsafe,
+        is_comptime: false,
+        name: m.name.clone(),
+        generic_params: m.generic_params.clone(),
+        params: m.params.clone(),
+        self_param: m.self_param.clone(),
+        return_type: m.return_type.clone(),
+        effects: m.effects.clone(),
+        requires: m.requires.clone(),
+        ensures: m.ensures.clone(),
+        where_clause: m.where_clause.clone(),
+        body: m.body.clone().expect("caller guards on body.is_some()"),
+        stdlib_origin,
+        deprecation: m.deprecation.clone(),
+        unstable: m.unstable.clone(),
+        is_track_caller: m.is_track_caller,
+        inline_hint: m.inline_hint,
+        is_cold: m.is_cold,
+        is_gpu: m.is_gpu,
+        lint_overrides: Vec::new(),
+        profile_compat: Vec::new(),
+        abi: None,
+    }
 }
 
 // ── Codegen-hint trait → impl propagation ────────────────────────

@@ -17716,6 +17716,37 @@ fn typecheck_desugared_errors(source: &str) -> Vec<TypeError> {
 }
 
 #[test]
+fn trait_default_method_callable_on_implementor() {
+    // B-2026-07-03-8: a trait default method is callable on an implementor
+    // that does not re-implement it. The `synthesize_trait_default_methods`
+    // desugar pass copies each non-overridden default body into the impl, so
+    // method resolution finds it. Covers a pure default (empty impl), a
+    // default that calls a required method, and an override that takes
+    // precedence. Before the fix each `.plus_one()` / `.constant()` call on
+    // `A` was `NoMethodFound`.
+    typecheck_desugared_ok(
+        "trait T {\n\
+         \x20   fn base(self) -> i64;\n\
+         \x20   fn plus_one(self) -> i64 { self.base() + 1 }\n\
+         \x20   fn constant(self) -> i64 { 42 }\n\
+         }\n\
+         struct A { n: i64 }\n\
+         impl T for A { fn base(self) -> i64 { self.n } }\n\
+         struct B {}\n\
+         impl T for B {\n\
+         \x20   fn base(self) -> i64 { 0 }\n\
+         \x20   fn constant(self) -> i64 { 100 }\n\
+         }\n\
+         fn main() {\n\
+         \x20   let a = A { n: 1 };\n\
+         \x20   let _ = a.plus_one() + a.constant();\n\
+         \x20   let b = B {};\n\
+         \x20   let _ = b.constant();\n\
+         }",
+    );
+}
+
+#[test]
 fn method_self_return_type_resolves_to_impl_target() {
     // A method declared `-> Self` returns a value of the concrete impl
     // target (`W`), so the body's tail expression must check against the
