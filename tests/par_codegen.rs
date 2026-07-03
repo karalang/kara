@@ -1152,12 +1152,37 @@ fn main() {
         );
         if let Some(out) = out {
             // i64 elements only: the narrow (u8) print-signedness in a par group
-            // (B-2026-07-03-21) and generic `-> T` container-element String-return
-            // formatting (B-2026-07-03-22) are separate bugs, so this asserts the
-            // arg-coercion value path.
+            // (B-2026-07-03-21) is a separate open bug, so this asserts the
+            // arg-coercion value path. (The generic `-> T` container-element
+            // String-return formatting is fixed — see
+            // test_e2e_auto_par_generic_slice_elem_nonint_return below.)
             assert_eq!(
                 out, "2\n10\n2\n",
                 "generic by-value Slice[T] param under auto-par; got {out:?}"
+            );
+        }
+    }
+
+    /// B-2026-07-03-22 on the auto-par surface: a generic `-> T` whose `T` binds
+    /// from a `Slice[T]` param element must resolve to the concrete (non-`i64`)
+    /// element type so the returned String formats correctly. Compiled through
+    /// the auto-par analyzer (`Some(&analysis)`); the value path itself is
+    /// analyzer-independent, but this guards the fix on the DEFAULT build too.
+    #[test]
+    fn test_e2e_auto_par_generic_slice_elem_nonint_return() {
+        let out = run_program(
+            r#"
+fn gsum[T](s: Slice[T]) -> T { s[0] }
+fn main() {
+    let vs: Vec[String] = ["autopar-first-long-payload-here", "autopar-second-long-payload"];
+    println(f"{gsum(vs)}");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "autopar-first-long-payload-here\n",
+                "generic Slice[T] non-int element return under auto-par; got {out:?}"
             );
         }
     }

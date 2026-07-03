@@ -18729,4 +18729,34 @@ fn main() {
             "generic_bound_default_method_string_no_leak",
         );
     }
+
+    #[test]
+    fn asan_generic_slice_elem_string_return_no_leak() {
+        // B-2026-07-03-22: a generic `-> T` whose `T` binds from a `Slice[T]`
+        // param element (`gsum[T](s: Slice[T]) -> T { s[0] }`) called with a
+        // `Vec[String]` now resolves `T = String`, so `s[0]` returns a genuine
+        // String struct rather than reading the element's 8-byte heap pointer
+        // as an `i64`. `s[0]` must CLONE the element out (the Vec still owns its
+        // copy); loop it with a >=36-byte payload so any missing clone (alias →
+        // double-free with the Vec's drop) or leaked clone trips macOS ASan /
+        // Linux LSan.
+        assert_clean_asan_run(
+            r#"
+fn gsum[T](s: Slice[T]) -> T { s[0] }
+fn main() {
+    let mut i = 0i64;
+    let mut acc = 0i64;
+    while i < 50i64 {
+        let vs: Vec[String] = ["a sufficiently long slice element payload", "second sufficiently long element payload"];
+        let e = gsum(vs);
+        acc = acc + e.len();
+        i = i + 1i64;
+    }
+    println(f"{acc}");
+}
+"#,
+            &["2050"],
+            "generic_slice_elem_string_return_no_leak",
+        );
+    }
 }

@@ -170,8 +170,20 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
                 "Slice" => {
-                    if let (Some(pn), Some(&elem)) =
-                        (param_at(0), self.slice_elem_types.get(arg_name.as_str()))
+                    // A `Slice[T]` param accepts a `Vec` / `Array` / `Slice`
+                    // arg (the by-value coercion of B-2026-07-03-9), so the
+                    // element type may live in `vec_elem_types` (a `Vec` arg)
+                    // or the `variables` array slot (an `Array` arg), not just
+                    // `slice_elem_types`. `infer_elem_from_source` unifies all
+                    // three. Keying only on `slice_elem_types` left `T` unbound
+                    // for the common `gsum[T](s: Slice[T])` called with a
+                    // `Vec[String]` — `T` then defaulted to `i64`, so `s[0]`
+                    // read the String's 8-byte ptr field as an integer (the
+                    // returned value printed as a raw pointer). The i64/Array
+                    // cases masked it: an unbound `T` defaults to `i64`, which
+                    // matched those element types by luck (B-2026-07-03-22).
+                    if let (Some(pn), Some(elem)) =
+                        (param_at(0), self.infer_elem_from_source(&arg.value))
                     {
                         subst.entry(pn).or_insert(elem);
                     }

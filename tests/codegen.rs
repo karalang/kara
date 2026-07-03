@@ -3745,6 +3745,40 @@ fn main() {
         }
     }
 
+    /// B-2026-07-03-22: a generic `-> T` return whose `T` is bound from a
+    /// `Slice[T]` param's ELEMENT type (not a bare `x: T` param) must resolve
+    /// to the concrete element type, so the returned value is formatted/typed
+    /// correctly at the use site. Pre-fix, `subst` inference keyed the `Slice`
+    /// arm only on `slice_elem_types`, so a `Vec[String]` / `Array[String]`
+    /// arg left `T` UNBOUND — it defaulted to `i64`, and `gsum(vs)` returned
+    /// the String's 8-byte heap pointer (printed as a raw integer). The
+    /// i64-element cases in the sibling B-9 test masked this because an unbound
+    /// `T` defaults to `i64`, matching those elements by luck. This test uses a
+    /// non-`i64` element (String) whose return value is printed directly, plus
+    /// a non-first index and an `Array[String]` arg. Sequential harness
+    /// (analysis=None); the auto-par surface is covered in par_codegen.rs.
+    #[test]
+    fn e2e_generic_slice_elem_nonint_return() {
+        if let Some(out) = run_program(
+            "fn gsum[T](s: Slice[T]) -> T { s[0] }\n\
+             fn gat[T](s: Slice[T], i: i64) -> T { s[i] }\n\
+             fn main() {\n\
+             \x20   let vs: Vec[String] = [\"first-payload-long-enough-string\", \"second-payload-also-long-here\"];\n\
+             \x20   let arr: Array[String, 2] = [\"array-elem-zero-long-payload\", \"array-elem-one-long-payload\"];\n\
+             \x20   println(f\"{gsum(vs)}\");\n\
+             \x20   println(f\"{gat(vs, 1)}\");\n\
+             \x20   println(f\"{gsum(arr)}\");\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "first-payload-long-enough-string\n\
+                 second-payload-also-long-here\n\
+                 array-elem-zero-long-payload\n"
+            );
+        }
+    }
+
     /// S6b-4a (B-2026-07-03-18): an arithmetic operator on a type parameter
     /// bounded by that operator's stdlib trait (`+`→Add, `-`→Sub, `*`→Mul,
     /// `/`→Div, `%`→Rem, unary `-`→Neg) monomorphizes and runs. Before the fix
