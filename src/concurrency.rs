@@ -884,6 +884,29 @@ fn expr_is_call_free(expr: &Expr) -> bool {
     }
 }
 
+/// Sparse statement-conflict graph.
+///
+/// Replaces the former dense `Vec<Vec<bool>>` adjacency matrix (which was
+/// `O(n²)` memory — a 49K-statement function alone allocated ~2.4 GB of
+/// bools — and was filled by an all-pairs `O(n²)` scan). Two statements can
+/// only conflict if they share a *binding* (dataflow), a *resource*
+/// (effect), a *polymorphic-effect* linkage, or a `seq` ordering — see
+/// [`ConcurrencyChecker::statements_conflict`]. So an inverted index over
+/// those keys enumerates every real edge in ~`O(edges)` work, with no
+/// quadratic allocation or all-pairs conflict check. See
+/// phase-5-diagnostics.md.
+struct ConflictGraph {
+    /// `neighbors[i]` = the set of statements that conflict with statement `i`.
+    neighbors: Vec<HashSet<usize>>,
+}
+
+impl ConflictGraph {
+    /// Do statements `i` and `j` conflict (must serialize)? Symmetric.
+    fn conflicts(&self, i: usize, j: usize) -> bool {
+        self.neighbors[i].contains(&j)
+    }
+}
+
 // ── Checker ────────────────────────────────────────────────────
 
 pub struct ConcurrencyChecker<'a> {
@@ -987,29 +1010,16 @@ impl<'a> ConcurrencyChecker<'a> {
         // Step 1: Extract metadata for each statement
         let stmt_infos: Vec<StmtInfo> = stmts.iter().map(|s| self.analyze_stmt(s, false)).collect();
 
-        // Step 2: Build dependency graph (adjacency list of conflicts)
-        // dep_edges[i] contains all j where i depends on j (or they must serialize)
-        let mut has_edge = vec![vec![false; total_statements]; total_statements];
-        // The inverse of the parallel groups: for every conflicting pair,
-        // *why* they can't parallelize + which callee's effect is to blame.
-        let mut serialization_points: Vec<SerializationPoint> = Vec::new();
-
-        for i in 0..total_statements {
-            for j in 0..i {
-                if self.statements_conflict(&stmt_infos[j], &stmt_infos[i]) {
-                    has_edge[i][j] = true;
-                    has_edge[j][i] = true;
-                    if let Some(mut sp) = self.conflict_detail(&stmt_infos[j], &stmt_infos[i]) {
-                        sp.statement_indices = vec![j, i];
-                        serialization_points.push(sp);
-                    }
-                }
-            }
-        }
+        // Step 2: Build the conflict graph + the serialization-point list
+        // (the inverse of the parallel groups: for every conflicting pair,
+        // *why* they can't parallelize + which callee's effect is to blame).
+        // Uses a sparse inverted index rather than a dense O(n²) matrix — see
+        // `build_conflict_graph` / [`ConflictGraph`].
+        let (graph, serialization_points) = self.build_conflict_graph(&stmt_infos);
 
         // Step 3: Find maximal independent sets (greedy graph coloring approach)
         // We group statements that have no edges between them.
-        let parallel_groups = self.find_parallel_groups(&stmt_infos, &has_edge, total_statements);
+        let parallel_groups = self.find_parallel_groups(&stmt_infos, &graph, total_statements);
 
         // Step 4: Recognize reductions in top-level loops. Independent of
         // the parallel-group / dependency machinery — a reduction loop
@@ -1024,7 +1034,7 @@ impl<'a> ConcurrencyChecker<'a> {
         // reorder would. Advisory only; consumes the same dependency graph.
         let reorder_opportunities = self.find_reorder_opportunities(
             &stmt_infos,
-            &has_edge,
+            &graph,
             total_statements,
             &parallel_groups,
         );
@@ -1039,6 +1049,136 @@ impl<'a> ConcurrencyChecker<'a> {
             serialization_points,
             reorder_opportunities,
         }
+    }
+
+    /// Build the sparse [`ConflictGraph`] plus the ordered
+    /// serialization-point list for a function body.
+    ///
+    /// Instead of the former dense `O(n²)` all-pairs scan, this enumerates
+    /// only *candidate* pairs — pairs that share a binding, a resource, a
+    /// polymorphic-effect linkage, or a `seq` ordering — via inverted
+    /// indices, since [`Self::statements_conflict`] can only return `true`
+    /// for such pairs. Every candidate is then run through the exact same
+    /// `statements_conflict` / `conflict_detail` predicates, so the produced
+    /// edge set and serialization points are identical to the old dense
+    /// build (the serialization points are re-sorted into the old
+    /// outer-`i` / inner-`j` emission order for byte-stable diagnostics).
+    fn build_conflict_graph(&self, infos: &[StmtInfo]) -> (ConflictGraph, Vec<SerializationPoint>) {
+        let n = infos.len();
+
+        // Inverted indices. Only pairs colliding on one of these keys can
+        // ever conflict, so they bound the candidate set.
+        let mut var_definers: HashMap<&str, Vec<usize>> = HashMap::new();
+        let mut var_readers: HashMap<&str, Vec<usize>> = HashMap::new();
+        let mut resource_stmts: HashMap<&str, Vec<usize>> = HashMap::new();
+        let mut seq_stmts: Vec<usize> = Vec::new();
+        let mut poly_stmts: Vec<usize> = Vec::new();
+        let mut effectful_stmts: Vec<usize> = Vec::new();
+
+        for (i, info) in infos.iter().enumerate() {
+            if info.is_seq {
+                seq_stmts.push(i);
+            }
+            if info.calls_polymorphic {
+                poly_stmts.push(i);
+            }
+            if !info.effects.is_empty() {
+                effectful_stmts.push(i);
+            }
+            for v in &info.defines {
+                var_definers.entry(v.as_str()).or_default().push(i);
+            }
+            for v in &info.reads {
+                var_readers.entry(v.as_str()).or_default().push(i);
+            }
+            for e in &info.effects {
+                resource_stmts
+                    .entry(e.resource.as_str())
+                    .or_default()
+                    .push(i);
+            }
+        }
+
+        // Candidate unordered pairs, stored `(lo, hi)` with `lo < hi`.
+        let mut candidates: HashSet<(usize, usize)> = HashSet::new();
+        let mut add = |a: usize, b: usize| {
+            if a != b {
+                candidates.insert((a.min(b), a.max(b)));
+            }
+        };
+
+        // A `seq` statement force-serializes against *every* other statement.
+        for &s in &seq_stmts {
+            for other in 0..n {
+                add(s, other);
+            }
+        }
+
+        // Dataflow: a conflict via binding `v` requires at least one *definer*
+        // of `v` (two pure readers never conflict). So pair each definer with
+        // every other definer and every reader of the same binding.
+        for (v, definers) in &var_definers {
+            for a in 0..definers.len() {
+                for b in (a + 1)..definers.len() {
+                    add(definers[a], definers[b]);
+                }
+            }
+            if let Some(readers) = var_readers.get(v) {
+                for &d in definers {
+                    for &r in readers {
+                        add(d, r);
+                    }
+                }
+            }
+        }
+
+        // Polymorphic calls have unknown effects: each conflicts with any
+        // other polymorphic *or* effect-bearing statement.
+        for a in 0..poly_stmts.len() {
+            for b in (a + 1)..poly_stmts.len() {
+                add(poly_stmts[a], poly_stmts[b]);
+            }
+        }
+        for &p in &poly_stmts {
+            for &e in &effectful_stmts {
+                add(p, e);
+            }
+        }
+
+        // Effect conflicts only arise between statements touching the *same*
+        // resource (`two_effects_conflict` short-circuits on differing
+        // resources).
+        for stmts in resource_stmts.values() {
+            for a in 0..stmts.len() {
+                for b in (a + 1)..stmts.len() {
+                    add(stmts[a], stmts[b]);
+                }
+            }
+        }
+
+        // Confirm each candidate against the exact predicate and record edges.
+        let mut neighbors = vec![HashSet::new(); n];
+        let mut edges: Vec<(usize, usize)> = Vec::new();
+        for &(lo, hi) in &candidates {
+            if self.statements_conflict(&infos[lo], &infos[hi]) {
+                neighbors[lo].insert(hi);
+                neighbors[hi].insert(lo);
+                edges.push((lo, hi));
+            }
+        }
+
+        // Reproduce the old emission order (outer index ascending, inner index
+        // ascending) so serialization-point diagnostics stay byte-stable.
+        edges.sort_unstable_by_key(|&(lo, hi)| (hi, lo));
+        let mut serialization_points: Vec<SerializationPoint> = Vec::new();
+        for (lo, hi) in edges {
+            if let Some(mut sp) = self.conflict_detail(&infos[lo], &infos[hi]) {
+                sp.statement_indices = vec![lo, hi];
+                serialization_points.push(sp);
+            }
+        }
+
+        (ConflictGraph { neighbors }, serialization_points)
     }
 
     /// Explain a single conflicting statement pair: the cause, the
@@ -1856,7 +1996,7 @@ impl<'a> ConcurrencyChecker<'a> {
     fn find_parallel_groups(
         &self,
         infos: &[StmtInfo],
-        has_edge: &[Vec<bool>],
+        graph: &ConflictGraph,
         n: usize,
     ) -> Vec<ParallelGroup> {
         let mut groups: Vec<ParallelGroup> = Vec::new();
@@ -1969,7 +2109,9 @@ impl<'a> ConcurrencyChecker<'a> {
                 // seed-side note above and phase-6-runtime.md.
 
                 // Check if candidate is independent of ALL statements already in the group
-                let independent = group_indices.iter().all(|&g| !has_edge[candidate][g]);
+                let independent = group_indices
+                    .iter()
+                    .all(|&g| !graph.conflicts(candidate, g));
 
                 if independent {
                     group_indices.push(candidate);
@@ -2039,7 +2181,7 @@ impl<'a> ConcurrencyChecker<'a> {
     /// confirm. No transformation happens here.
     ///
     /// A pair `(i, j)`, `i < j`, is reported when:
-    /// - they are independent (`!has_edge[i][j]`) — they *could* run in
+    /// - they are independent (`!graph.conflicts(i, j)`) — they *could* run in
     ///   parallel;
     /// - they are non-adjacent (`j > i + 1`) — adjacency is what the grouper
     ///   already exploits, so only a gap represents missed parallelism;
@@ -2057,14 +2199,14 @@ impl<'a> ConcurrencyChecker<'a> {
     ///   ordering.
     ///
     /// Soundness scope: the slide is proven safe against data + resource-effect
-    /// dependencies (the `has_edge` graph). Observable console-output ordering
+    /// dependencies (the conflict graph). Observable console-output ordering
     /// is resourceless and only filtered syntactically (`has_console_output`);
     /// output emitted transitively inside a callee is not modeled — the
     /// agent's verification loop is the backstop, as for any source reorder.
     fn find_reorder_opportunities(
         &self,
         infos: &[StmtInfo],
-        has_edge: &[Vec<bool>],
+        graph: &ConflictGraph,
         n: usize,
         groups: &[ParallelGroup],
     ) -> Vec<ReorderOpportunity> {
@@ -2088,7 +2230,7 @@ impl<'a> ConcurrencyChecker<'a> {
                     continue;
                 }
                 // Must be independent to ever parallelize.
-                if has_edge[i][j] {
+                if graph.conflicts(i, j) {
                     continue;
                 }
                 // Both already parallel → reshuffling them adds nothing.
@@ -2099,8 +2241,8 @@ impl<'a> ConcurrencyChecker<'a> {
                 // (i, j) iff each intervening stmt is independent of `j`;
                 // symmetrically for `i` sliding right.
                 let between = (i + 1)..j;
-                let j_slides_left = between.clone().all(|k| !has_edge[j][k]);
-                let i_slides_right = between.clone().all(|k| !has_edge[i][k]);
+                let j_slides_left = between.clone().all(|k| !graph.conflicts(j, k));
+                let i_slides_right = between.clone().all(|k| !graph.conflicts(i, k));
                 let movable = if j_slides_left {
                     j
                 } else if i_slides_right {

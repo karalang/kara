@@ -3050,3 +3050,104 @@ fn test_mut_ref_forwarding_call_serializes() {
         helper_fc.parallel_groups
     );
 }
+
+// ── Sparse conflict-graph scale guards ─────────────────────────
+// The conflict graph is built from inverted indices, not a dense O(n²)
+// adjacency matrix (phase-5-diagnostics.md: a 49K-statement function used
+// to allocate ~2.4 GB of bools + an all-pairs scan). These two tests pin
+// the two extremes of that build at a size that would be pathological for
+// the old dense path: an all-independent body (zero edges — the sparse win)
+// and a resource-round-robin body (dense edges, exercised via the
+// resource inverted index). Both must analyze quickly AND stay correct.
+
+#[test]
+fn test_scale_all_independent_form_one_group() {
+    // 4000 statements, each writing its OWN distinct resource → no two
+    // conflict → the contiguous grouper folds them into a single parallel
+    // group. With the inverted index every resource list has length 1, so
+    // zero candidate pairs are generated (the sparse best case).
+    const N: usize = 4000;
+    let mut src = String::new();
+    for i in 0..N {
+        src.push_str(&format!("effect resource R{i};\n"));
+        src.push_str(&format!("fn touch{i}() writes(R{i}) {{}}\n"));
+    }
+    src.push_str("fn main() {\n");
+    for i in 0..N {
+        src.push_str(&format!("    touch{i}();\n"));
+    }
+    src.push_str("}\n");
+
+    let analysis = analyze(&src);
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(main_fc.total_statements, N);
+    assert!(
+        main_fc.serialization_points.is_empty(),
+        "all-independent body must have no serialization points, got {}",
+        main_fc.serialization_points.len()
+    );
+    assert_eq!(
+        main_fc.parallel_groups.len(),
+        1,
+        "all-independent statements must fold into one parallel group"
+    );
+    assert_eq!(main_fc.parallel_groups[0].statement_indices.len(), N);
+}
+
+#[test]
+fn test_scale_round_robin_resources_group_in_runs() {
+    // 2048 statements writing 8 resources round-robin. Statements 0..7 touch
+    // distinct resources (independent → one group), but statement 8 (R0)
+    // write-conflicts with statement 0 (R0), so the contiguous grouper breaks
+    // there: the body splits into runs of 8. Exercises real edges built via
+    // the resource inverted index at scale.
+    const GROUPS: usize = 256;
+    const N: usize = GROUPS * 8;
+    let mut src = String::new();
+    for r in 0..8 {
+        src.push_str(&format!("effect resource R{r};\n"));
+        src.push_str(&format!("fn touch{r}() writes(R{r}) {{}}\n"));
+    }
+    src.push_str("fn main() {\n");
+    for i in 0..N {
+        src.push_str(&format!("    touch{}();\n", i % 8));
+    }
+    src.push_str("}\n");
+
+    let analysis = analyze(&src);
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(main_fc.total_statements, N);
+    assert_eq!(
+        main_fc.parallel_groups.len(),
+        GROUPS,
+        "round-robin-over-8 must break into runs of 8"
+    );
+    for (g, group) in main_fc.parallel_groups.iter().enumerate() {
+        assert_eq!(
+            group.statement_indices,
+            (g * 8..g * 8 + 8).collect::<Vec<_>>(),
+            "group {g} should be the contiguous run [{}..{}]",
+            g * 8,
+            g * 8 + 8
+        );
+    }
+    // Every write-write pair on the same resource within reach of the grouper
+    // is a serialization point; at minimum the straddling conflicts exist and
+    // are emitted in ascending (later, earlier) order.
+    assert!(
+        !main_fc.serialization_points.is_empty(),
+        "round-robin body must report serialization points"
+    );
+    let idxs: Vec<&Vec<usize>> = main_fc
+        .serialization_points
+        .iter()
+        .map(|sp| &sp.statement_indices)
+        .collect();
+    for w in idxs.windows(2) {
+        assert!(
+            (w[0][1], w[0][0]) <= (w[1][1], w[1][0]),
+            "serialization points must stay in (later, earlier) ascending order"
+        );
+        assert!(w[0][0] < w[0][1], "each pair is stored low-index first");
+    }
+}
