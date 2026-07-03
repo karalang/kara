@@ -46920,6 +46920,28 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_column_prod() {
+        // `Column.prod()` — product of the valid slots, closing the reduction
+        // parity gap with `Tensor.prod` (Column had `sum` but no `prod`). A new
+        // `#[compiler_builtin]` inherent method folding `*` over the valid slots
+        // via the shared `emit_reduce_fold` kernel (`ReduceOp::Prod`, seeded with
+        // the multiplicative identity `1`), mirroring `sum`. Traps on an empty /
+        // all-null column exactly as `sum`/`min`/`max` do. i64 (checked mul) and
+        // f64 (fmul); `run` == `build`.
+        let src = r#"
+fn main() {
+    let ci: Column[i64] = Column.from_vec([2, 3, 4]);
+    let cf: Column[f64] = Column.from_vec([1.5, 2.0, 4.0]);
+    println(f"{ci.prod()}");
+    println(f"{cf.prod()}");
+}
+"#;
+        // 2*3*4 = 24; 1.5*2*4 = 12.
+        let out = run_program(src).expect("program should compile and run");
+        assert_eq!(out, "24\n12\n");
+    }
+
+    #[test]
     fn test_e2e_stdlib_reduce_default_method_inherited_by_user_impl() {
         // S6b-4 (B-2026-07-03-19): a user `impl Reduce[T] for MyType` inherits
         // the BAKED stdlib trait's DEFAULT method `range` (`max - min`) without

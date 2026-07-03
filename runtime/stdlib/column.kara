@@ -160,6 +160,14 @@ impl[T] Column[T] {
         loop {}
     }
 
+    // Product of the valid slots (overflow traps as for scalar `*`). Mirrors
+    // `Tensor.prod`; an empty / all-null column traps, keeping the Column
+    // reductions uniform with `sum`/`min`/`max`.
+    #[compiler_builtin]
+    fn prod(ref self) -> T {
+        loop {}
+    }
+
     // Arithmetic mean of the valid slots, always `f64`.
     #[compiler_builtin]
     fn mean(ref self) -> f64 {

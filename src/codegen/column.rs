@@ -1220,6 +1220,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 | "iter"
                 | "iter_valid"
                 | "sum"
+                | "prod"
                 | "mean"
                 | "min"
                 | "max"
@@ -1321,6 +1322,11 @@ impl<'ctx> super::Codegen<'ctx> {
             // (`median`/`quantile` are interpreter-only pending an in-IR
             // sort — a follow-on slice.)
             "sum" => Ok(Some(self.compile_column_sum(
+                control,
+                info.elem,
+                info.elem_unsigned,
+            )?)),
+            "prod" => Ok(Some(self.compile_column_prod(
                 control,
                 info.elem,
                 info.elem_unsigned,
@@ -2080,6 +2086,16 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// The multiplicative identity (`1`) of `elem` — the fold seed for
+    /// `prod` (seed-neutral: `1 * x0 * x1 * … = product`).
+    fn column_one_elem(&self, elem: BasicTypeEnum<'ctx>) -> BasicValueEnum<'ctx> {
+        match elem {
+            BasicTypeEnum::FloatType(ft) => ft.const_float(1.0).into(),
+            BasicTypeEnum::IntType(it) => it.const_int(1, false).into(),
+            other => other.const_zero(),
+        }
+    }
+
     /// `null_count()` (`valid == false`) / `valid_count()` (`valid ==
     /// true`) — one pass over `[0, len)` counting matching validity bits.
     pub(super) fn compile_column_count(
@@ -2244,6 +2260,36 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let seed = self.column_zero_elem(elem);
         self.emit_reduce_fold(&access, ReduceOp::Sum, seed)
+    }
+
+    /// `prod() -> T` — fold `*` over the valid slots (inherits the scalar
+    /// overflow trap via `compile_binop_typed`); an all-null / empty column
+    /// traps, exactly as `sum` does. Mirrors `compile_column_sum` with the
+    /// multiplicative op + identity seed.
+    fn compile_column_prod(
+        &mut self,
+        control: PointerValue<'ctx>,
+        elem: BasicTypeEnum<'ctx>,
+        unsigned: bool,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let len = self
+            .column_load_field(control, 2, "col.prod.len")
+            .into_int_value();
+        let data = self
+            .column_load_field(control, 0, "col.prod.data")
+            .into_pointer_value();
+        let bitmap = self
+            .column_load_field(control, 1, "col.prod.bm")
+            .into_pointer_value();
+        let access = ContainerAccess {
+            data,
+            len,
+            elem,
+            unsigned,
+            bitmap: Some(bitmap),
+        };
+        let seed = self.column_one_elem(elem);
+        self.emit_reduce_fold(&access, ReduceOp::Prod, seed)
     }
 
     /// `min() -> T` / `max() -> T` — the smallest / largest valid slot,

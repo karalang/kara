@@ -291,7 +291,7 @@ impl<'a> super::Interpreter<'a> {
             // yield `f64` (the numerical world promotes; `Value` can't
             // distinguish f32/f64 — the `Tensor.mean` rule). `corr` is the
             // Pearson correlation of two `Column[f64]`.
-            "sum" | "mean" | "min" | "max" | "var" | "std" | "median" | "quantile" => {
+            "sum" | "prod" | "mean" | "min" | "max" | "var" | "std" | "median" | "quantile" => {
                 Some(self.eval_column_reduce(method, data, valid, args, span))
             }
             // `Reduce[T]::range` default (`max - min`) — the trait method the
@@ -341,6 +341,16 @@ impl<'a> super::Interpreter<'a> {
                 let mut acc = vals[0].clone();
                 for x in vals.into_iter().skip(1) {
                     acc = self.eval_binary(&BinOp::Add, acc, x, span);
+                    if self.pending_cf.is_some() {
+                        return Value::Unit;
+                    }
+                }
+                acc
+            }
+            "prod" => {
+                let mut acc = vals[0].clone();
+                for x in vals.into_iter().skip(1) {
+                    acc = self.eval_binary(&BinOp::Mul, acc, x, span);
                     if self.pending_cf.is_some() {
                         return Value::Unit;
                     }

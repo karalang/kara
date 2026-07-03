@@ -19156,6 +19156,23 @@ fn main() {
 }
 
 #[test]
+fn column_prod_reduction() {
+    // `Column.prod()` — product of the valid slots (parity with `Tensor.prod`;
+    // Column had `sum` but no `prod`). Folds `*` over the valid slots, i64 + f64.
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let ci: Column[i64] = Column.from_vec([2, 3, 4]);
+    let cf: Column[f64] = Column.from_vec([1.5, 2.0, 4.0]);
+    println(f"{ci.prod()}");
+    println(f"{cf.prod()}");
+}
+"#,
+    );
+    assert_eq!(out, "24\n12\n");
+}
+
+#[test]
 fn primitive_trait_impl_direct_dispatch_by_declared_width() {
     // B-2026-07-03-5: a user trait impl on a PRIMITIVE target dispatched for a
     // direct value-receiver call under `karac run`. The interpreter's runtime
