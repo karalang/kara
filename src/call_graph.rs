@@ -177,6 +177,26 @@ fn render_target_type(ty: &TypeExpr) -> String {
 
 // ── Call collection (AST walk) ──────────────────────────────────
 
+/// True iff `block` contains a direct call — anywhere within it, including
+/// nested blocks, conditionals, and sub-expressions — to the free function
+/// named `name`. Reuses the comprehensive callee walker (passing a singleton
+/// `known` set) so it stays exhaustive over the AST as new expression forms
+/// land, rather than a hand-rolled traversal that could silently miss one.
+///
+/// Consumed by the auto-par reduction recognizer: a reduction loop whose
+/// per-iteration delta recurses into its own enclosing function must NOT be
+/// parallelized — each recursion level would open its own nested parallel
+/// region, and the fan-out compounds into runaway task nesting that exhausts
+/// the stack (crash). Declining keeps such a loop sequential and correct.
+pub fn block_calls_function(block: &Block, name: &str) -> bool {
+    let mut known: HashSet<String> = HashSet::new();
+    known.insert(name.to_string());
+    let methods: HashMap<String, BTreeSet<String>> = HashMap::new();
+    let mut out: BTreeSet<String> = BTreeSet::new();
+    collect_callees_in_block(block, &known, &methods, &mut out);
+    out.contains(name)
+}
+
 fn collect_callees_in_block(
     block: &Block,
     known: &HashSet<String>,

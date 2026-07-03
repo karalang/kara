@@ -673,6 +673,30 @@ impl<'a> Interpreter<'a> {
     /// `ensures` at the return point — faulting `contract violated` on a
     /// false predicate. v1 covers free functions; method contracts are a
     /// follow-on (they dispatch through a separate path).
+    /// Per-parameter "is a mutate-through-borrow mode" flags for the named
+    /// top-level function — `mut ref T` (`TypeKind::MutRef`) or `mut Slice[T]`
+    /// (`TypeKind::MutSlice`). Drives the CICO write-back in `eval_call`: a
+    /// `mut ref` param must propagate the callee's final value back to the
+    /// caller's variable, and — crucially — that must happen even when the arg
+    /// is an already-in-scope `mut ref` binding FORWARDED into a nested call.
+    /// Per design.md § Call-site mutation markers, such a forwarded borrow
+    /// carries no `mut` marker, so keying write-back on the marker alone drops
+    /// the chain (a recursive/forwarded `mut ref i64` accumulator silently
+    /// never updates). Keying on the callee's declared param mode restores it.
+    /// Returns `None` for a name with no matching AST function (e.g. closures),
+    /// leaving those on the marker-only path.
+    pub(crate) fn fn_param_mut_ref_flags(&self, name: &str) -> Option<Vec<bool>> {
+        self.program.items.iter().find_map(|item| match item {
+            Item::Function(f) if f.name == name => Some(
+                f.params
+                    .iter()
+                    .map(|p| matches!(p.ty.kind, TypeKind::MutRef(_) | TypeKind::MutSlice(_)))
+                    .collect(),
+            ),
+            _ => None,
+        })
+    }
+
     #[allow(clippy::type_complexity)]
     pub(crate) fn function_contract(
         &self,

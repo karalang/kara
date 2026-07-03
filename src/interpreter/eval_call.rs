@@ -1413,13 +1413,29 @@ impl<'a> super::Interpreter<'a> {
                     }
                 }
 
-                // CICO write-back: for each `mut`-marked call arg whose
-                // value is a simple identifier, copy the callee's final
-                // binding for the corresponding param back to the caller's
-                // variable before the scope is popped.
+                // CICO write-back: for each call arg whose value is a simple
+                // identifier and whose corresponding param is a mutate-through
+                // borrow, copy the callee's final binding for that param back
+                // to the caller's variable before the scope is popped.
+                //
+                // The trigger is EITHER the call-site `mut` marker (the fresh-
+                // owned-root case) OR the callee param being declared `mut ref`
+                // / `mut Slice`. The latter is essential for FORWARDED borrows:
+                // an already-in-scope `mut ref` arg forwards WITHOUT a marker
+                // (design.md § Call-site mutation markers), so a marker-only
+                // gate silently drops write-back through nested/recursive calls
+                // — e.g. a `mut ref i64` accumulator threaded down a recursion
+                // never accumulates. Keying on the param mode too restores the
+                // chain and matches codegen's full aliasing semantics.
+                let param_mut_ref = self.fn_param_mut_ref_flags(&fn_name);
                 let mut writebacks: Vec<(String, Value)> = Vec::new();
                 for (i, arg) in args.iter().enumerate() {
-                    if !arg.mut_marker {
+                    let param_is_mut_ref = param_mut_ref
+                        .as_ref()
+                        .and_then(|flags| flags.get(i))
+                        .copied()
+                        .unwrap_or(false);
+                    if !arg.mut_marker && !param_is_mut_ref {
                         continue;
                     }
                     let caller_var = match &arg.value.kind {

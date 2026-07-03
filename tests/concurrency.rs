@@ -2449,6 +2449,65 @@ fn test_reduction_rejects_conditional_acc_update_when_cond_reads_acc() {
 }
 
 #[test]
+fn test_reduction_rejects_recursive_self_call_in_body() {
+    // A backtracking counter: `if legal { total = total + count(...deeper...) }`
+    // is a valid `+` reduction in isolation, but the delta recurses into the
+    // enclosing function. Parallelizing it opens a fresh nested parallel region
+    // at every recursion level; the fan-out compounds into runaway task nesting
+    // that exhausts the stack (a SIGBUS at depth — correct output survives only
+    // for tiny inputs). The recognizer must decline it so the loop stays
+    // sequential. Regression for B-2026-07-03-13 (LeetCode #52 N-Queens II).
+    let analysis = analyze(
+        r#"
+        fn count(n: i64, row: i64) -> i64 {
+            if row == n { return 1i64; }
+            let mut total: i64 = 0i64;
+            let mut c: i64 = 0i64;
+            while c < n {
+                if c >= 0i64 { total = total + count(n, row + 1i64); }
+                c = c + 1i64;
+            }
+            total
+        }
+        fn main() { let x: i64 = count(4i64, 0i64); }
+        "#,
+    );
+    let count_fc = get_function(&analysis, "count");
+    assert!(
+        count_fc.loop_reductions.is_empty(),
+        "a reduction whose delta recurses into the enclosing fn must not be \
+         recognized (runaway nested parallelism), got {:?}",
+        count_fc.loop_reductions
+    );
+}
+
+#[test]
+fn test_reduction_still_recognized_with_nonrecursive_call_in_body() {
+    // Guard scope check: a reduction whose delta calls a DIFFERENT function
+    // (not the enclosing one) is still a legitimate parallel reduction — the
+    // recursion guard keys on the enclosing fn's own name only.
+    let analysis = analyze(
+        r#"
+        fn work(x: i64) -> i64 { x * 2i64 }
+        fn sum(n: i64) -> i64 {
+            let mut total: i64 = 0i64;
+            let mut c: i64 = 0i64;
+            while c < n {
+                total = total + work(c);
+                c = c + 1i64;
+            }
+            total
+        }
+        fn main() { let x: i64 = sum(10i64); }
+        "#,
+    );
+    let sum_fc = get_function(&analysis, "sum");
+    assert_eq!(sum_fc.loop_reductions.len(), 1);
+    assert_eq!(sum_fc.loop_reductions[0].accumulator, "total");
+    assert_eq!(sum_fc.loop_reductions[0].op, ReductionOp::Add);
+}
+
+#[test]
 fn test_reduction_recognized_for_two_arm_acc_update_same_op() {
     // 2026-05-20 slice extension: `if cond { acc = acc + a } else { acc
     // = acc + b }` is semantically equivalent to `acc = acc + (if cond

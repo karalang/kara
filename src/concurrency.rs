@@ -1339,6 +1339,20 @@ impl<'a> ConcurrencyChecker<'a> {
                 _ => continue,
             };
             if let Some((accumulator, op)) = self.classify_loop_body(body, attributes) {
+                // Decline a reduction whose per-iteration work recurses into
+                // the enclosing function (e.g. a backtracking counter
+                // `if legal { total = total + count(...deeper...) }`). The
+                // reduction itself is arithmetically valid, but parallelizing
+                // it opens a fresh nested parallel region at every recursion
+                // level; the fan-out compounds and exhausts the stack (a
+                // SIGBUS at depth — correct output only survives for tiny
+                // inputs). The sequential lowering is correct and safe, so
+                // fall back to it. Direct self-recursion is the demonstrated
+                // and common case (B-2026-07-03-13); transitive/mutual
+                // recursion through a helper is a known residual gap.
+                if crate::call_graph::block_calls_function(body, &func.name) {
+                    continue;
+                }
                 out.push(LoopReduction {
                     accumulator,
                     op,

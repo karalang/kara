@@ -1600,6 +1600,48 @@ fn test_vec_remove_through_mut_ref_param() {
 }
 
 #[test]
+fn test_scalar_mut_ref_writeback_through_forwarded_call() {
+    // A `mut ref i64` scalar accumulator FORWARDED into a nested call must
+    // still propagate the callee's mutation back to the caller. The CICO
+    // write-back keys on the callee's `mut ref` param mode, not the call-site
+    // `mut` marker — a forwarded in-scope borrow carries no marker (design.md
+    // § Call-site mutation markers), so a marker-only gate would drop the
+    // chain and the accumulator would read 0. Regression for B-2026-07-03-12
+    // (LeetCode #52 N-Queens II marker-array counter, all-zeros under `run`).
+    assert_eq!(
+        run("fn inc(x: mut ref i64) { x = x + 1i64; }\n\
+             fn wrap(x: mut ref i64) { inc(x); }\n\
+             fn main() {\n\
+                 let mut t: i64 = 0;\n\
+                 wrap(mut t);\n\
+                 println(t);\n\
+             }"),
+        "1\n"
+    );
+}
+
+#[test]
+fn test_scalar_mut_ref_accumulator_through_recursion() {
+    // The N-Queens-II shape: a `mut ref i64` total threaded down a recursion,
+    // bumped only at the leaves. Each recursive call forwards the borrow
+    // unmarked; every level must chain the write-back. bump(3) visits 2^3 = 8
+    // leaves, so `total` must read 8.
+    assert_eq!(
+        run("fn bump(d: i64, t: mut ref i64) {\n\
+                 if d == 0i64 { t = t + 1i64; return; }\n\
+                 bump(d - 1i64, t);\n\
+                 bump(d - 1i64, t);\n\
+             }\n\
+             fn main() {\n\
+                 let mut t: i64 = 0;\n\
+                 bump(3i64, mut t);\n\
+                 println(t);\n\
+             }"),
+        "8\n"
+    );
+}
+
+#[test]
 fn test_vec_remove_out_of_bounds_is_runtime_error() {
     // design.md pins OOB as UB, but the tree-walk interpreter surfaces a
     // clean runtime error at the call site rather than panicking deep in
