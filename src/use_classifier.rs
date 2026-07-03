@@ -1250,7 +1250,7 @@ mod tests {
                 _ => None,
             })
             .unwrap();
-        let cfg = build_cfg_with_classification(&main.body, &class);
+        let cfg = build_cfg_with_classification(&main.body, &class, &[]);
         let dom = crate::dominator::compute_dominators(&cfg);
         let candidates = crate::rc_predicate::rc_candidates(&cfg, &dom);
         assert!(
@@ -1284,7 +1284,7 @@ mod tests {
                 _ => None,
             })
             .unwrap();
-        let cfg = build_cfg_with_classification(&main.body, &class);
+        let cfg = build_cfg_with_classification(&main.body, &class, &[]);
         let dom = crate::dominator::compute_dominators(&cfg);
         let candidates = crate::rc_predicate::rc_candidates(&cfg, &dom);
         assert!(

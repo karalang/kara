@@ -220,6 +220,17 @@ pub fn run_predicate_for_function(
     run_predicate_for_function_with(&prelude, tc, f)
 }
 
+/// Collect the binding names of every parameter of `f` (patterns
+/// flattened). Seeds the CFG builder's shadow-detection visibility set
+/// so a body-level `let` re-binding a parameter gets a fresh binding
+/// identity (B-2026-07-02-32).
+fn param_binding_names(f: &Function) -> Vec<String> {
+    f.params
+        .iter()
+        .flat_map(|p| p.pattern.binding_names())
+        .collect()
+}
+
 /// As [`run_predicate_for_function`] but against a pre-built
 /// [`ClassifierPrelude`]. Whole-program drivers build the prelude once
 /// and call this per function so the classifier's whole-program tables
@@ -231,7 +242,8 @@ pub fn run_predicate_for_function_with(
 ) -> (Cfg, DominatorTree, HashMap<String, RcWitness>) {
     let param_types = param_types_for_function(f, tc);
     let classification = classify_function_body_with(prelude, tc, &f.body, param_types);
-    let cfg = build_cfg_with_classification(&f.body, &classification);
+    let param_names = param_binding_names(f);
+    let cfg = build_cfg_with_classification(&f.body, &classification, &param_names);
     let dom = compute_dominators(&cfg);
     let mut witnesses = rc_candidates(&cfg, &dom);
     let uam_keys: HashSet<String> = direct_uam_candidates(&cfg, &dom).into_keys().collect();
@@ -558,7 +570,8 @@ pub fn predicate_uam_candidates_for_program(
                 let param_types = param_types_for_function(f, tc);
                 let classification =
                     classify_function_body_with(&prelude, tc, &f.body, param_types);
-                let cfg = build_cfg_with_classification(&f.body, &classification);
+                let param_names = param_binding_names(f);
+                let cfg = build_cfg_with_classification(&f.body, &classification, &param_names);
                 let dom = compute_dominators(&cfg);
                 let witnesses = direct_uam_candidates(&cfg, &dom);
                 if !witnesses.is_empty() {
@@ -574,7 +587,12 @@ pub fn predicate_uam_candidates_for_program(
                         let param_types = param_types_for_function(method, tc);
                         let classification =
                             classify_function_body_with(&prelude, tc, &method.body, param_types);
-                        let cfg = build_cfg_with_classification(&method.body, &classification);
+                        let param_names = param_binding_names(method);
+                        let cfg = build_cfg_with_classification(
+                            &method.body,
+                            &classification,
+                            &param_names,
+                        );
                         let dom = compute_dominators(&cfg);
                         let witnesses = direct_uam_candidates(&cfg, &dom);
                         if !witnesses.is_empty() {

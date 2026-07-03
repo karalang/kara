@@ -240,7 +240,7 @@ impl Cfg {
 /// `UseKind::Read`; use `build_cfg_with_classification` to drive
 /// per-use-position consume tagging from a classifier.
 pub fn build_cfg(body: &Block) -> Cfg {
-    build_cfg_with_classification(body, &Classification::default())
+    build_cfg_with_classification(body, &Classification::default(), &[])
 }
 
 /// Build a CFG with a `Classification` driving (a) the `UseKind` of each
@@ -249,11 +249,18 @@ pub fn build_cfg(body: &Block) -> Cfg {
 /// default to `UseKind::Read`; spans absent from
 /// `classification.sink_arg_spans` are lowered inline. The classifier is
 /// produced by `crate::use_classifier::classify_function_body`.
+///
+/// `param_names` seeds the shadow-detection visibility set with the
+/// function's parameter binding names so a body-level `let x = …` that
+/// re-binds a parameter is recognized as a lexical shadow (fresh binding
+/// identity) rather than sharing the parameter's CFG identity.
 pub fn build_cfg_with_classification<'a>(
     body: &'a Block,
     classification: &'a Classification,
+    param_names: &[String],
 ) -> Cfg {
     let mut builder = CfgBuilder::new(classification);
+    builder.seen_names.extend(param_names.iter().cloned());
     let entry = builder.new_block();
     let exit = builder.new_block();
 
@@ -383,6 +390,18 @@ struct CfgBuilder<'a> {
     /// cleanup-rename frame. Each per-exit-site emission of a defer
     /// body draws a fresh id; the suffix is `@cuN`.
     next_cleanup_id: usize,
+    /// Every binding name introduced so far in this function's walk —
+    /// parameters (seeded by `build_cfg_with_classification`) plus every
+    /// `let` / `let`-uninit / `let-else` / match-arm / loop-var pattern
+    /// binding (recorded via `note_local_introduced`). A `let` whose name
+    /// is already in this set is a lexical *shadow* and gets its own
+    /// rename frame (`push_shadow_rename_frame`). Never drained: a name
+    /// whose scope has ended stays in the set, so a fresh sibling-scope
+    /// binding of the same name is over-approximated as a shadow — that
+    /// only splits binding identities the same way real shadowing does,
+    /// which is sound for every predicate consumer (see the shadow-frame
+    /// doc for the pairing argument).
+    seen_names: HashSet<String>,
 }
 
 impl<'a> CfgBuilder<'a> {
@@ -393,6 +412,7 @@ impl<'a> CfgBuilder<'a> {
             defer_stack: Vec::new(),
             cleanup_rename_stack: Vec::new(),
             next_cleanup_id: 0,
+            seen_names: HashSet::new(),
         }
     }
 
@@ -442,14 +462,42 @@ impl<'a> CfgBuilder<'a> {
         });
     }
 
+    /// Per-shadowing-`let` rename frame (`@shN`). Pushed when a `let` /
+    /// `let`-uninit / `let-else` re-binds a name that is already visible
+    /// (a parameter, an earlier `let`, an arm or loop binding — tracked
+    /// in `seen_names`) and popped when the *enclosing block's* lowering
+    /// completes (`lower_block` truncates the rename stack), matching
+    /// the lexical rule that a shadow persists to the end of its block.
+    /// Without it, the old and new bindings share one CFG identity, so a
+    /// Consume of the OLD value pairs with uses of the NEW one — the UAM
+    /// predicate flags legal rebind-after-move (`let y = x; let x = 99;
+    /// println(x);`) as use-after-move, and sibling-scope name reuse
+    /// pairs across blocks (B-2026-07-02-32). Because the frame pops at
+    /// block end, an inner-block shadow does NOT leak: uses of the outer
+    /// binding after the block keep the bare name and a genuine
+    /// use-after-move there still pairs and fires. The suffix is
+    /// stripped by `ownership.rs::demangle_binding` like every other
+    /// rename suffix.
+    fn push_shadow_rename_frame(&mut self) {
+        let id = self.next_cleanup_id;
+        self.next_cleanup_id += 1;
+        self.cleanup_rename_stack.push(CleanupRenameFrame {
+            suffix: format!("@sh{id}"),
+            bindings: HashSet::new(),
+        });
+    }
+
     fn pop_cleanup_rename_frame(&mut self) {
         self.cleanup_rename_stack.pop();
     }
 
     /// Register a binding as an inner-local introduction inside the
     /// active cleanup-rename frame (no-op when none is active — the
-    /// function body's own introductions are not renamed).
+    /// function body's own introductions are not renamed). Also feeds
+    /// `seen_names`, the visibility over-approximation that drives
+    /// shadow detection for later `let`s of the same name.
     fn note_local_introduced(&mut self, name: &str) {
+        self.seen_names.insert(name.to_string());
         if let Some(top) = self.cleanup_rename_stack.last_mut() {
             top.bindings.insert(name.to_string());
         }
@@ -559,6 +607,7 @@ impl<'a> CfgBuilder<'a> {
         loops: &[LoopFrame],
     ) -> BlockId {
         self.defer_stack.push(DeferFrame::default());
+        let rename_base = self.cleanup_rename_stack.len();
         let mut cur = cur;
         for stmt in &block.stmts {
             cur = self.lower_stmt(stmt, cur, exit, loops);
@@ -570,6 +619,12 @@ impl<'a> CfgBuilder<'a> {
         // (errdefer is skipped on success per design.md). Emit the
         // current scope's frame LIFO before popping.
         cur = self.emit_scope_cleanup(self.defer_stack.len() - 1, cur, exit, loops, false);
+        // Shadow rename frames pushed by this block's `let`s scope to the
+        // end of the block; drop them only now — after the fall-through
+        // defer emission above, whose bodies observe the binding live at
+        // scope exit (the innermost shadow), and after nested constructs
+        // restored their own balanced frames.
+        self.cleanup_rename_stack.truncate(rename_base);
         self.defer_stack.pop();
         cur
     }
@@ -671,9 +726,27 @@ impl<'a> CfgBuilder<'a> {
                 // Lower the RHS — it may consume / read bindings — then
                 // the let binding is just a definition (no use of itself).
                 let after = self.lower_expr(value, cur, exit, loops);
+                let names = pattern_bindings(pattern);
+                // A `let` that re-binds an already-visible name is a
+                // lexical shadow: from here to the end of the enclosing
+                // block, the name denotes a NEW binding, so it must not
+                // share a CFG identity with the old one (a Consume of the
+                // old value would pair with uses of the new binding and
+                // flag legal rebind-after-move as UAM — B-2026-07-02-32).
+                // The frame is pushed AFTER the RHS lowering so `let a =
+                // f(a)` records the old `a`'s consume under the old
+                // identity, and pops at the enclosing block's end
+                // (`lower_block`). Fresh names introduced by the same
+                // pattern ride in the frame too — their lexical extent is
+                // identical (to end of block), so the rename is
+                // behavior-neutral for them.
+                if names.iter().any(|n| self.seen_names.contains(n)) {
+                    self.push_shadow_rename_frame();
+                }
                 // Register the introduced bindings against the active
                 // cleanup-rename frame (if any). The function body's
-                // own introductions are no-ops; only defer/errdefer
+                // own introductions are no-ops unless this statement
+                // pushed a shadow frame; otherwise only defer/errdefer
                 // body lowerings push a cleanup frame.
                 //
                 // Record a `Define` marker (after the RHS uses, in the
@@ -683,7 +756,7 @@ impl<'a> CfgBuilder<'a> {
                 // safe) from a value defined OUTSIDE the loop and moved
                 // inside (the genuine next-iteration use-after-move the
                 // rule targets). B-2026-06-12-6 cluster 2.
-                for name in pattern_bindings(pattern) {
+                for name in names {
                     self.note_local_introduced(&name);
                     self.record_use(
                         after,
@@ -699,6 +772,11 @@ impl<'a> CfgBuilder<'a> {
                 after
             }
             StmtKind::LetUninit { name, .. } => {
+                // Same shadow rule as `Let` (a `let x;` re-declaring a
+                // visible `x` starts a fresh binding identity).
+                if self.seen_names.contains(name) {
+                    self.push_shadow_rename_frame();
+                }
                 self.note_local_introduced(name);
                 cur
             }
@@ -711,14 +789,29 @@ impl<'a> CfgBuilder<'a> {
                 // `let pat = expr else { diverge }` — the else branch
                 // diverges (returns / break) and never falls through.
                 let after = self.lower_expr(value, cur, exit, loops);
-                for name in pattern_bindings(pattern) {
-                    self.note_local_introduced(&name);
+                let names = pattern_bindings(pattern);
+                // Shadow detection must read `seen_names` before this
+                // statement registers its own names below.
+                let shadows = names.iter().any(|n| self.seen_names.contains(n));
+                for name in &names {
+                    self.note_local_introduced(name);
                 }
                 let else_entry = self.new_block();
                 self.add_edge(after, else_entry);
                 // The else block diverges — we still walk it for
-                // use-collection but don't merge it back.
+                // use-collection but don't merge it back. It runs only
+                // when the pattern FAILS, so the new bindings are not
+                // visible inside it — the shadow frame is pushed after.
                 self.lower_block(else_block, else_entry, exit, loops);
+                // Same shadow rule as `Let`: re-bound names start a
+                // fresh binding identity for the rest of the enclosing
+                // block (frame popped by `lower_block`).
+                if shadows {
+                    self.push_shadow_rename_frame();
+                    for name in &names {
+                        self.note_local_introduced(name);
+                    }
+                }
                 after
             }
             StmtKind::Defer { body } => {
@@ -1611,7 +1704,7 @@ mod tests {
             .kinds
             .insert(SpanKey::from_span(&w_arg_span), UseKind::Consume);
 
-        let cfg = build_cfg_with_classification(&main.body, &classification);
+        let cfg = build_cfg_with_classification(&main.body, &classification, &[]);
 
         // Find the block that records the Consume of `w` — that's the
         // sink block. Its successor list must NOT include any block

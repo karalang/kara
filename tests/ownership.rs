@@ -203,6 +203,84 @@ fn test_reassignment_resets_state() {
 }
 
 #[test]
+fn test_shadowing_rebind_resets_state() {
+    // B-2026-07-02-32: a same-scope shadowing `let` is a FRESH binding —
+    // uses after it refer to the new value, not the moved-out old one.
+    // The CFG predicate used to give both bindings one identity, so the
+    // move into `y` paired with the read of the NEW `x` and flagged
+    // legal rebind-after-move as UseAfterMove.
+    ownership_ok(
+        "fn main() {\n\
+             let x = \"a longer heap string payload over 36 bytes!\";\n\
+             let y = x;\n\
+             let x = 99;\n\
+             println(x);\n\
+             println(y);\n\
+         }",
+    );
+}
+
+#[test]
+fn test_shadowing_rebind_rhs_consumes_old_binding() {
+    // `let d = give(d);` — the RHS consumes the OLD binding, the shadow
+    // re-binds the name, and later uses read the NEW value. No UAM.
+    ownership_ok(
+        "struct Data { value: i64 }\n\
+         fn give(d: Data) -> Data { d }\n\
+         fn consume(d: Data) { }\n\
+         fn main() {\n\
+             let d = Data { value: 1 };\n\
+             let d = give(d);\n\
+             consume(d);\n\
+         }",
+    );
+}
+
+#[test]
+fn test_param_shadowing_let_is_fresh_binding() {
+    // A body-level `let` that re-binds a consumed PARAMETER is a fresh
+    // binding too (the CFG builder seeds shadow detection with the
+    // param names). B-2026-07-02-32.
+    ownership_ok(
+        "struct Data { value: i64 }\n\
+         fn consume(d: Data) { }\n\
+         fn f(d: Data) {\n\
+             consume(d);\n\
+             let d = Data { value: 2 };\n\
+             consume(d);\n\
+         }\n\
+         fn main() { f(Data { value: 1 }); }",
+    );
+}
+
+#[test]
+fn test_inner_block_shadow_does_not_mask_outer_uam() {
+    // The shadow rename frame scopes to the END OF ITS BLOCK: a shadow
+    // inside an `if` body must not kill the genuine use-after-move of
+    // the OUTER binding after the block closes.
+    let errors = ownership_errors(
+        "struct Data { value: i64 }\n\
+         fn consume(d: Data) { }\n\
+         fn main() {\n\
+             let d = Data { value: 1 };\n\
+             consume(d);\n\
+             if true {\n\
+                 let d = Data { value: 2 };\n\
+                 consume(d);\n\
+             }\n\
+             consume(d);\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == OwnershipErrorKind::UseAfterMove),
+        "outer use-after-move must survive an inner-block shadow: {:?}",
+        errors
+    );
+}
+
+#[test]
 fn test_multiple_reads_before_move() {
     // Reading a value multiple times before moving is fine
     ownership_ok(
