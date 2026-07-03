@@ -8216,6 +8216,24 @@ fn b25_disjoint_tuple_projection_match_scrutinees() {
 }
 
 #[test]
+fn b25_struct_field_iterable_then_sibling_field_ok() {
+    // `for a in c.args` (borrows the `args` sub-place) then a consume of a
+    // sibling field — disjoint sub-places, not a whole-`c` move. The
+    // natural tree-walking-eval shape; the iterable READ must carry its
+    // place so it doesn't overlap the sibling consume.
+    ownership_lowered_ok(
+        "struct CallExpr { callee: String, args: Vec[String] }\n\
+         fn take(s: String) -> i64 { s.len() as i64 }\n\
+         fn eval(c: CallExpr) -> i64 {\n\
+             let mut acc = 0;\n\
+             for a in c.args { acc = acc + take(a); }\n\
+             acc + take(c.callee)\n\
+         }\n\
+         fn main() { }",
+    );
+}
+
+#[test]
 fn b25_same_field_consumed_twice_still_uam() {
     // Positive control: consuming the SAME sub-place twice IS a UAM.
     let errors = ownership_lowered_errors(

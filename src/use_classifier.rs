@@ -510,17 +510,23 @@ impl<'a> UseClassifier<'a> {
             }
 
             // Field / tuple-index projection. In a consuming context on a
-            // non-Copy field, this is a partial move of the projection root
-            // — record the projection place on the root identifier so the
-            // predicate can tell `b.left` from `b.right` and not pair two
-            // disjoint partial moves as a use-after-move (B-2026-07-02-25).
-            // In a reading context, the root is just read.
-            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
-                if mode == Mode::Consuming && !self.expr_is_copy(expr) {
-                    self.walk_place_consuming(expr, &mut PlacePath::new());
+            // non-Copy field, this is a partial move of the projection root.
+            // We record the projection place on the root identifier — for
+            // BOTH the consume and the read case — so the predicate can tell
+            // `b.left` from `b.right` and not pair two disjoint partial
+            // accesses as a use-after-move (B-2026-07-02-25). Recording the
+            // place on a READ matters for `eval(c.callee); for a in c.args`:
+            // the `c.args` read must be disjoint from the `c.callee` consume,
+            // else the whole-`c` read (empty place) would overlap it. The
+            // leaf itself is still classified per `mode` (a read stays a
+            // read); the place only refines disjointness.
+            ExprKind::FieldAccess { object: _, .. } | ExprKind::TupleIndex { object: _, .. } => {
+                let leaf_mode = if mode == Mode::Consuming && !self.expr_is_copy(expr) {
+                    Mode::Consuming
                 } else {
-                    self.walk_expr(object, Mode::Reading);
-                }
+                    Mode::Reading
+                };
+                self.walk_place(expr, leaf_mode, &mut PlacePath::new());
             }
             ExprKind::Index { object, index } => {
                 self.walk_expr(object, Mode::Reading);
@@ -734,74 +740,69 @@ impl<'a> UseClassifier<'a> {
     /// a Read. Non-projection receivers (calls, blocks, etc.) fall
     /// back to a Reading walk; there's no rooted binding to consume.
     fn walk_method_receiver_consuming(&mut self, recv: &Expr) {
-        self.walk_place_consuming(recv, &mut PlacePath::new());
+        self.walk_place(recv, Mode::Consuming, &mut PlacePath::new());
     }
 
-    /// Walk a place expression in consuming context, accumulating the
-    /// projection chain from the OUTER (widest) projection inward toward
-    /// the root binding, then record the full path against the root
-    /// identifier's span (B-2026-07-02-25). `path` is built root-first:
-    /// each recursion into `object` prepends nothing — the callers pass
-    /// the outermost projection first, so we push as we DESCEND and the
-    /// vector ends up ordered from the root outward, matching
+    /// Walk a place expression, accumulating the projection chain from the
+    /// OUTER (widest) projection inward toward the root binding, then
+    /// record the full path against the root identifier's span
+    /// (B-2026-07-02-25). The leaf is classified per `leaf_mode` — a
+    /// consuming access records a Consume, a reading access a Read — but
+    /// EITHER way the place is recorded so the predicate can prove two
+    /// accesses under the same root touch disjoint sub-places.
+    ///
+    /// `path` is built by pushing as we DESCEND (outermost projection
+    /// first), then reversed at the root so it reads root→leaf (`[left]`
+    /// for `b.left`, `[a, b]` for `x.a.b`) — matching
     /// `place_paths_disjoint`'s prefix semantics.
     ///
-    /// Because a field access `b.left` nests as `FieldAccess { object: b,
-    /// field: "left" }`, the outermost node is the widest projection, and
-    /// the innermost is the root. We therefore collect on the way down and
-    /// reverse before recording so the path reads root→leaf (`[left]` for
-    /// `b.left`, `[a, b]` for `x.a.b`).
-    ///
-    /// Non-projection receivers (calls, blocks, etc.) fall back to a
-    /// Reading walk — there's no rooted binding to consume — and any
-    /// dynamic Index step makes the place non-disjointable, so we still
-    /// record the path (with `PlaceSeg::Index`) which conservatively
-    /// overlaps.
-    fn walk_place_consuming(&mut self, expr: &Expr, path: &mut PlacePath) {
+    /// Non-place leaves (calls, blocks, etc.) fall back to an ordinary
+    /// Reading walk — there's no rooted binding — and any dynamic Index
+    /// step records `PlaceSeg::Index`, which conservatively overlaps.
+    fn walk_place(&mut self, expr: &Expr, leaf_mode: Mode, path: &mut PlacePath) {
         match &expr.kind {
             ExprKind::Identifier(name) => {
-                // Reached the root. Record the projection place (reversed
-                // to root→leaf order) against the root's span, then tag it
-                // Consume via the standard identifier classification so the
-                // Copy / unit-variant gates still apply.
-                if !path.is_empty() {
-                    let mut rooted = path.clone();
-                    rooted.reverse();
-                    self.classification
-                        .consume_places
-                        .insert(SpanKey::from_span(&expr.span), rooted);
-                }
-                let kind = self.classify_identifier(name, &expr.span, Mode::Consuming);
+                self.record_place_at_root(&expr.span, path);
+                let kind = self.classify_identifier(name, &expr.span, leaf_mode);
                 self.record(&expr.span, kind);
                 self.record_closure_capture_consume(name, kind, &expr.span);
             }
             ExprKind::SelfValue => {
-                if !path.is_empty() {
-                    let mut rooted = path.clone();
-                    rooted.reverse();
-                    self.classification
-                        .consume_places
-                        .insert(SpanKey::from_span(&expr.span), rooted);
-                }
-                let kind = self.classify_identifier("self", &expr.span, Mode::Consuming);
+                self.record_place_at_root(&expr.span, path);
+                let kind = self.classify_identifier("self", &expr.span, leaf_mode);
                 self.record(&expr.span, kind);
                 self.record_closure_capture_consume("self", kind, &expr.span);
             }
             ExprKind::FieldAccess { object, field } => {
                 path.push(PlaceSeg::Field(field.clone()));
-                self.walk_place_consuming(object, path);
+                self.walk_place(object, leaf_mode, path);
             }
             ExprKind::TupleIndex { object, index } => {
                 path.push(PlaceSeg::TupleIndex(*index as usize));
-                self.walk_place_consuming(object, path);
+                self.walk_place(object, leaf_mode, path);
             }
             ExprKind::Index { object, index } => {
                 self.walk_expr(index, Mode::Reading);
                 path.push(PlaceSeg::Index);
-                self.walk_place_consuming(object, path);
+                self.walk_place(object, leaf_mode, path);
             }
             _ => self.walk_expr(expr, Mode::Reading),
         }
+    }
+
+    /// Record the root-relative place path (reversed to root→leaf order)
+    /// against the root identifier's span, if non-empty. Empty paths are
+    /// left absent from the map so whole-binding uses default to the empty
+    /// path (which overlaps everything) in the predicate.
+    fn record_place_at_root(&mut self, root_span: &crate::token::Span, path: &PlacePath) {
+        if path.is_empty() {
+            return;
+        }
+        let mut rooted = path.clone();
+        rooted.reverse();
+        self.classification
+            .consume_places
+            .insert(SpanKey::from_span(root_span), rooted);
     }
 
     /// Record the type of every binding introduced by `pattern`, decomposing
