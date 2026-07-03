@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use karac::ownership::*;
 use karac::resolver::SpanKey;
-use karac::{desugar_program, ownershipcheck, parse, resolve, typecheck};
+use karac::{desugar_program, lower, ownershipcheck, parse, resolve, typecheck};
 
 // ── Test Helpers ────────────────────────────────────────────────
 
@@ -8016,6 +8016,260 @@ fn stats_borrow_then_mutate_then_borrow_ok() {
              v.push(2.0);\n\
              let b = Stats.sum(v);\n\
              println(a + b);\n\
+         }",
+    );
+}
+
+// ── B-2026-07-02-23/24/25/26: ownership-checker false-positive fixes ──
+//
+// These run the FULL front-end pipeline (parse → desugar → resolve →
+// typecheck → lower → ownershipcheck). `lower` is what desugars
+// comparison operators into `Type.eq(...)` calls, so B-23 only
+// reproduces after it runs.
+
+fn ownership_lowered_errors(source: &str) -> Vec<OwnershipError> {
+    let mut parsed = parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {:?}",
+        parsed.errors
+    );
+    desugar_program(&mut parsed.program);
+    let resolved = resolve(&parsed.program);
+    assert!(
+        resolved.errors.is_empty(),
+        "Resolve errors: {:?}",
+        resolved.errors
+    );
+    let typed = typecheck(&parsed.program, &resolved);
+    lower(&mut parsed.program, &typed);
+    ownershipcheck(&parsed.program, &typed).errors
+}
+
+fn ownership_lowered_ok(source: &str) {
+    let errors = ownership_lowered_errors(source);
+    assert!(
+        errors.is_empty(),
+        "Ownership errors: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+}
+
+#[test]
+fn b23_comparison_operators_borrow_string_operands() {
+    // `a == b` then `a == c` on String: comparisons borrow both operands
+    // (partial_eq.kara: `fn eq(ref self, other: ref Self)`), so the second
+    // `a ==` is not a use-after-move.
+    ownership_lowered_ok(
+        "fn main() {\n\
+             let a = \"hello\";\n\
+             let b = \"hello\";\n\
+             let c = \"world\";\n\
+             if a == b { println(1); } else { println(0); }\n\
+             if a == c { println(1); } else { println(0); }\n\
+             if a != c { println(1); } else { println(0); }\n\
+         }",
+    );
+}
+
+#[test]
+fn b23_comparison_operators_borrow_string_ordering() {
+    ownership_lowered_ok(
+        "fn main() {\n\
+             let a = \"abc\";\n\
+             let b = \"abd\";\n\
+             if a < b { println(1); } else { println(0); }\n\
+             if b > a { println(1); } else { println(0); }\n\
+         }",
+    );
+}
+
+#[test]
+fn b23_comparison_borrows_in_header_iteration_loop() {
+    // The natural handler shape: `for (k, v) in hdrs { if k == ".." {..}
+    // if k == ".." {..} }` — the second `k ==` was a use-after-move.
+    ownership_lowered_ok(
+        "fn handle(hdrs: Vec[(String, String)]) -> i64 {\n\
+             let mut found_echo = 0;\n\
+             let mut found_host = 0;\n\
+             for (k, v) in hdrs {\n\
+                 if k == \"x-test-echo\" {\n\
+                     if v == \"greetings\" { found_echo = 1; }\n\
+                 }\n\
+                 if k == \"host\" { found_host = 1; }\n\
+             }\n\
+             found_echo + found_host\n\
+         }",
+    );
+}
+
+#[test]
+fn b23_user_impl_eq_ref_self_does_not_consume_operands() {
+    // `==` on a user type whose PartialEq/Eq impls declare `ref self,
+    // other: ref Self` must not consume the operands.
+    ownership_lowered_ok(
+        "struct Point { x: i64, y: i64 }\n\
+         impl PartialEq for Point {\n\
+             fn eq(ref self, other: ref Point) -> bool { self.x == other.x and self.y == other.y }\n\
+         }\n\
+         impl Eq for Point {\n\
+             fn eq(self, other: Point) -> bool { self.x == other.x and self.y == other.y }\n\
+         }\n\
+         fn main() {\n\
+             let a = Point { x: 1, y: 2 };\n\
+             let b = Point { x: 1, y: 2 };\n\
+             let c = Point { x: 9, y: 9 };\n\
+             println(a == b);\n\
+             println(a != c);\n\
+         }",
+    );
+}
+
+#[test]
+fn b24_named_fn_value_is_copy_reused_across_sites() {
+    // A bare fn item is a plain code pointer — freely duplicable.
+    ownership_lowered_ok(
+        "fn doubler(n: i64) -> i64 { n * 2i64 }\n\
+         fn apply(f: Fn(i64) -> i64, x: i64) -> i64 { f(x) }\n\
+         fn main() {\n\
+             let g = doubler;\n\
+             let h: Fn(i64) -> i64 = doubler;\n\
+             println(f\"{apply(g, 10i64)}\");\n\
+             println(f\"{h(11i64)}\");\n\
+         }",
+    );
+}
+
+#[test]
+fn b24_named_fn_value_two_call_arg_uses_ok() {
+    ownership_lowered_ok(
+        "fn doubler(n: i64) -> i64 { n * 2i64 }\n\
+         fn apply(f: Fn(i64) -> i64, x: i64) -> i64 { f(x) }\n\
+         fn main() {\n\
+             let a = apply(doubler, 10i64);\n\
+             let b = apply(doubler, 11i64);\n\
+             println(f\"{a + b}\");\n\
+         }",
+    );
+}
+
+#[test]
+fn b24_once_callable_closure_second_call_still_uam() {
+    // Positive control: a once-callable closure (captures an owned non-Copy
+    // value) is NOT freely duplicable — calling it twice is still UAM.
+    let errors = ownership_lowered_errors(
+        "struct Owned { x: i64 }\n\
+         fn main() {\n\
+             let o = Owned { x: 1 };\n\
+             let f = || { let _ = o; };\n\
+             f();\n\
+             f();\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == OwnershipErrorKind::UseAfterMove),
+        "once-callable closure reuse must still be UAM; got {errors:?}"
+    );
+}
+
+#[test]
+fn b25_disjoint_field_paths_are_partial_moves() {
+    // `use_it(b.left) + use_it(b.right)` — disjoint sub-places, not a
+    // whole-`b` double move.
+    ownership_lowered_ok(
+        "struct Bin { left: String, right: String }\n\
+         fn use_it(s: String) -> i64 { s.len() as i64 }\n\
+         fn main() {\n\
+             let b = Bin { left: \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", right: \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\" };\n\
+             let _ = use_it(b.left) + use_it(b.right);\n\
+         }",
+    );
+}
+
+#[test]
+fn b25_disjoint_tuple_projections_are_partial_moves() {
+    ownership_lowered_ok(
+        "fn use_it(s: String) -> i64 { s.len() as i64 }\n\
+         fn main() {\n\
+             let t: (String, String) = (\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\");\n\
+             let _ = use_it(t.0) + use_it(t.1);\n\
+         }",
+    );
+}
+
+#[test]
+fn b25_disjoint_tuple_projection_match_scrutinees() {
+    // `match t.0 {..}` then `match t.1 {..}` — disjoint tuple positions.
+    ownership_lowered_ok(
+        "fn main() {\n\
+             let t: (String, String) = (\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\");\n\
+             let _a = match t.0 { x => x.len() };\n\
+             let _b = match t.1 { y => y.len() };\n\
+         }",
+    );
+}
+
+#[test]
+fn b25_same_field_consumed_twice_still_uam() {
+    // Positive control: consuming the SAME sub-place twice IS a UAM.
+    let errors = ownership_lowered_errors(
+        "struct Bin { left: String, right: String }\n\
+         fn use_it(s: String) -> i64 { s.len() as i64 }\n\
+         fn main() {\n\
+             let b = Bin { left: \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", right: \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\" };\n\
+             let _ = use_it(b.left) + use_it(b.left);\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == OwnershipErrorKind::UseAfterMove),
+        "consuming b.left twice must still be UAM; got {errors:?}"
+    );
+}
+
+#[test]
+fn b25_partial_move_then_whole_use_still_uam() {
+    // Positive control: partial move then a whole-binding use IS a UAM
+    // (the empty whole-place overlaps every partial place).
+    let errors = ownership_lowered_errors(
+        "struct Bin { left: String, right: String }\n\
+         fn use_it(s: String) -> i64 { s.len() as i64 }\n\
+         fn take_whole(b: Bin) -> i64 { b.left.len() as i64 }\n\
+         fn main() {\n\
+             let b = Bin { left: \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", right: \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\" };\n\
+             let _ = use_it(b.left);\n\
+             let _ = take_whole(b);\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == OwnershipErrorKind::UseAfterMove),
+        "consuming b.left then whole b must still be UAM; got {errors:?}"
+    );
+}
+
+#[test]
+fn b26_with_provider_value_slot_is_borrow_not_consume() {
+    // `with_provider[Metric](p, || ..); println(p.n)` — the provider value
+    // is borrowed by the provider frame (mutation visible after pop), not
+    // consumed, so the post-pop use is fine.
+    ownership_lowered_ok(
+        "pub trait Recorder { fn record(mut ref self, value: i64); }\n\
+         pub struct Counter { n: i64 }\n\
+         impl Recorder for Counter { fn record(mut ref self, value: i64) { self.n = value; } }\n\
+         pub effect resource Metric: Recorder;\n\
+         fn main() {\n\
+             let mut p = Counter { n: 0 };\n\
+             with_provider[Metric](p, || { Metric.record(99); });\n\
+             println(p.n);\n\
          }",
     );
 }

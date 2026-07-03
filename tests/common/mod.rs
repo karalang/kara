@@ -147,54 +147,11 @@ pub const OWNERSHIP_GATE_GRANDFATHERED: &[&str] = &[
     "test_ir_par_branch_emits_method_check_for_effectful_callee",
     "test_ir_par_branch_skips_method_check_for_pure_callee",
     //
-    // ── B-2026-07-02-23: comparison operators consume their operands ─
-    // `a == b` / `a < b` on String — and on user types even when the
-    // resolved PartialEq/Eq impls declare `ref self, ref Self` —
-    // classify the operands as consumed (design.md: comparisons
-    // borrow). Hits natural handler code (`for (k, v) in hdrs { if
-    // k == ".." {..} if k == ".." {..} }`). Remove when fixed.
-    "test_e2e_string_equality",
-    "test_e2e_string_ordering",
-    "test_e2e_user_impl_eq_drives_equality",
-    "test_server_serve_handler_iterates_headers",
-    "test_server_serve_handler_reads_query_param",
-    //
-    // ── B-2026-07-02-24: named-fn values treated as affine ──────────
-    // `let g = doubler; let h = doubler;` flags `doubler` as moved —
-    // fn items have no captures and are freely duplicable per design.md
-    // § First-Class Functions. Remove when fixed.
-    "fn_value_let_bound_named_fn_passed_and_called",
-    "fn_value_named_fn_reused_across_call_sites",
-    //
-    // ── B-2026-07-02-25: field-path use kills the whole root ────────
-    // `eval(b.left) + eval(b.right)` flags `b` as moved-whole at the
-    // first field-path call arg, and `match t.0 {..} match t.1 {..}`
-    // does the same for tuple projections — no partial-move tracking
-    // for direct place paths, contradicting the disjoint-place
-    // philosophy. Remove when fixed.
-    "test_e2e_struct_wrapped_recursive_shared_enum_tree",
-    "test_e2e_vec_of_struct_with_shared_and_option_field",
-    "asan_collect_all_heterogeneous_tuple_no_uaf",
-    "asan_match_byvalue_shared_enum_bind_without_consume_no_leak",
-    "asan_match_byvalue_shared_enum_fully_consumed_arm_no_double_free",
-    "asan_match_byvalue_shared_enum_reconstruct_from_fresh_locals_no_leak",
-    "asan_shared_enum_recursive_struct_payload_string_freed_no_leak",
-    "asan_struct_nested_enum_leaf_no_leak_no_double_free",
-    "asan_struct_with_direct_enum_field_no_leak_no_double_free",
-    "asan_struct_wrapped_byvalue_transform_returns_new_tree_no_double_free",
-    "asan_struct_wrapped_deep_build_and_vec_children_no_leak",
-    "asan_struct_wrapped_enum_payload_rc_children_freed_no_leak",
-    "asan_struct_wrapped_move_out_and_rc_share_no_double_free",
-    "asan_struct_wrapped_recursive_cycle_accepted_and_freed",
-    "asan_struct_wrapped_recursive_tree_freed_once",
-    "asan_vec_of_shared_enum_elements_freed_no_leak",
-    //
-    // ── B-2026-07-02-26: with_provider value arg classified consume ─
-    // `with_provider[Metric](p, ..); println(p.n)` — the special
-    // form's value slot is non-consuming per its documented mutation-
-    // visible-after-pop semantics, but its classification doesn't
-    // route through callee_param_modes. Remove when fixed.
-    "test_with_provider_e2e_mut_ref_self_mutation_visible_after_pop",
+    // ── B-2026-07-02-23/24/25/26 removed: the four ownership-checker
+    // false-positives are FIXED (comparison-borrow, fn-item Copy,
+    // disjoint-place partial moves, with_provider borrow slot). Their
+    // tests now pass the strict gate; regression coverage lives in
+    // tests/ownership.rs (`b23_*` / `b24_*` / `b25_*` / `b26_*`).
 ];
 
 /// Fail loudly when an E2E test program flunks the ownership checker.
