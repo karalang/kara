@@ -77,6 +77,22 @@ fn build_store(name: &str, version: &str) -> PathBuf {
     root
 }
 
+/// Lay out a registry store whose catalog advertises `version` but whose
+/// tarball file is *absent*. The proxy serves the catalog fine, then 404s on
+/// the tarball GET — a deterministic, non-retryable fetch failure that drives
+/// the `E_REGISTRY_FETCH_FAILED` diagnostic (wrapping the underlying proxy
+/// `not found`). Used to pin the `--output=json` error envelope.
+fn build_store_catalog_only(name: &str, version: &str) -> PathBuf {
+    let root = unique("store-catonly");
+    std::fs::create_dir_all(root.join("catalog")).unwrap();
+    write(
+        &root.join("catalog").join(format!("{name}.json")),
+        format!(r#"{{ "upstream": "https://example.test/{name}", "versions": ["{version}"] }}"#)
+            .as_bytes(),
+    );
+    root
+}
+
 /// Start the reference server on an ephemeral loopback port; return the base
 /// URL. The thread is detached (dies with the test process).
 fn start_server(root: PathBuf) -> String {
@@ -184,4 +200,103 @@ fn build_without_configured_proxy_keeps_unsupported_warning() {
         !stderr.contains("error[E_REGISTRY"),
         "no registry error should surface without a configured proxy;\nstderr={stderr}",
     );
+}
+
+/// `--output=json` must emit a machine-readable error envelope when a registry
+/// dependency fails to fetch against a configured proxy. Pins the shape
+/// registry-proxy carve-out (m) promised (`docs/implementation_checklist/
+/// phase-5-diagnostics.md`): a single `{"status":"error", ...}` object whose
+/// one diagnostic carries `severity:"error"`, `phase:"dep_resolution"`, and
+/// the `E_REGISTRY_FETCH_FAILED` code, with the underlying proxy `not found`
+/// preserved in the notes. A downstream tool (LLM agent, IDE, CI gate)
+/// consumes exactly this — so it is frozen here as a golden shape.
+#[test]
+fn build_output_json_pins_proxy_fetch_error_shape() {
+    // Catalog advertises 1.0.0 but the tarball is missing → the proxy 404s the
+    // package GET → a non-retryable fetch failure (no backoff wait).
+    let store = build_store_catalog_only("ghost_dep", "1.0.0");
+    let base = start_server(store);
+    let cache = unique("cache-json");
+
+    let proj = unique("proj-json");
+    write(
+        &proj.join("kara.toml"),
+        b"[package]\nname = \"app\"\n\n[dependencies]\nghost_dep = \"1.0\"\n",
+    );
+    write(&proj.join("src/main.kara"), b"fn main() {}\n");
+
+    let out = karac()
+        .arg("build")
+        .arg("--output=json")
+        .env("KARAC_REGISTRY_PROXY", &base)
+        .env("KARAC_REGISTRY_CACHE_ROOT", &cache)
+        .current_dir(&proj)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    // The JSON envelope lands on stdout (diagnostics go to stderr only in text
+    // mode). Locate the one object line so any incidental stdout notice ahead
+    // of it can't break the parse.
+    let line = stdout
+        .lines()
+        .find(|l| l.trim_start().starts_with('{'))
+        .unwrap_or_else(|| {
+            panic!("expected a JSON envelope on stdout;\nstdout={stdout}\nstderr={stderr}")
+        });
+    let v: serde_json::Value = serde_json::from_str(line.trim())
+        .unwrap_or_else(|e| panic!("stdout line is not valid JSON ({e});\nline={line}"));
+
+    // Top-level envelope: a failed build.
+    assert_eq!(
+        v["status"], "error",
+        "fetch failure must set status=error;\nenvelope={v}"
+    );
+    let diags = v["diagnostics"]
+        .as_array()
+        .unwrap_or_else(|| panic!("diagnostics must be an array;\nenvelope={v}"));
+    assert!(
+        !diags.is_empty(),
+        "expected at least one diagnostic;\nenvelope={v}"
+    );
+
+    let d = &diags[0];
+    assert_eq!(
+        d["severity"], "error",
+        "a proxy fetch failure is an error;\ndiag={d}"
+    );
+    assert_eq!(
+        d["phase"], "dep_resolution",
+        "proxy/registry fetch diagnostics surface under the dep_resolution phase;\ndiag={d}"
+    );
+    assert_eq!(
+        d["code"], "E_REGISTRY_FETCH_FAILED",
+        "a proxy fetch failure surfaces the registry-fetch code;\ndiag={d}"
+    );
+    assert!(
+        d["message"].as_str().unwrap_or("").contains("ghost_dep"),
+        "the message must name the dependency that failed;\ndiag={d}"
+    );
+    // The underlying proxy error is preserved in the notes so an operator sees
+    // *why* the fetch failed (here: the proxy's 404 body).
+    let notes = d["notes"]
+        .as_array()
+        .unwrap_or_else(|| panic!("notes must be an array;\ndiag={d}"));
+    assert!(
+        notes.iter().any(|n| n
+            .as_str()
+            .map(|s| s.contains("underlying error"))
+            .unwrap_or(false)),
+        "notes must carry the underlying proxy error;\ndiag={d}"
+    );
+
+    // A failed fetch must not leave a lockfile pinning the unresolved dep.
+    assert!(
+        !proj.join("kara.lock").exists(),
+        "a failed fetch must not persist a lockfile"
+    );
+
+    let _ = std::fs::remove_dir_all(&proj);
+    let _ = std::fs::remove_dir_all(&cache);
 }
