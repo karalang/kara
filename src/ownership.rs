@@ -807,6 +807,17 @@ pub(crate) fn is_copy_type(ty: &Type, tc: &TypeCheckResult) -> bool {
         // `last`) freely re-readable. `mut ref T` is an EXCLUSIVE borrow
         // (aliasing-hazardous), so it stays non-Copy and falls through.
         Type::Ref(_) => true,
+        // A bare function item / fn-pointer value (`let g = doubler`) has no
+        // captures — it is a plain code pointer, freely duplicable per
+        // design.md § First-Class Functions ("`User.validate` is an unbound
+        // function value — no capture"). Copying it neither allocates nor
+        // aliases owned state, so a fn value used at several sites
+        // (`apply(doubler, 10); apply(doubler, 11)`) must not fire a
+        // use-after-move (B-2026-07-02-24). `Type::OnceFunction` — a closure
+        // that captured owned non-Copy values and is therefore once-callable
+        // — stays non-Copy (falls through to `_ => false`), so `f(); f();` on
+        // such a closure still reports the reuse.
+        Type::Function { .. } => true,
         Type::Named { name, args } => {
             if matches!(name.as_str(), "Option" | "Result") {
                 return args.iter().all(|a| is_copy_type(a, tc));
