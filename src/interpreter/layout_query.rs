@@ -164,9 +164,7 @@ impl<'a> super::Interpreter<'a> {
             ExprKind::Path {
                 segments,
                 generic_args: Some(ga),
-            } if segments.len() == 1
-                && (segments[0] == "size_of" || segments[0] == "align_of") =>
-            {
+            } if segments.len() == 1 && (segments[0] == "size_of" || segments[0] == "align_of") => {
                 match ga.as_slice() {
                     [GenericArg::Type(te)] => Some((segments[0].clone(), Some(te.clone()))),
                     _ => Some((segments[0].clone(), None)),
@@ -235,9 +233,7 @@ impl<'a> super::Interpreter<'a> {
     /// `llvm_type_for_type_expr`.
     fn field_layout(&self, ty: &TypeExpr, depth: u32) -> Result<SizeAlign, String> {
         if depth > MAX_LAYOUT_DEPTH {
-            return Err(
-                "offset_of: type nesting too deep (recursive value struct?)".to_string(),
-            );
+            return Err("offset_of: type nesting too deep (recursive value struct?)".to_string());
         }
         Ok(match &ty.kind {
             TypeKind::Path(path) => {
@@ -319,8 +315,10 @@ impl<'a> super::Interpreter<'a> {
             | "TlsStream" => WORD,
             // `{i64 fd, ptr config}`.
             "TlsListener" => SizeAlign { size: 16, align: 8 },
-            "Array" => match (first_type_arg(generic_args), generic_args.and_then(const_arg_len))
-            {
+            "Array" => match (
+                first_type_arg(generic_args),
+                generic_args.and_then(const_arg_len),
+            ) {
                 (Some(elem), Some(n)) => {
                     let el = self.field_layout(elem, depth + 1)?;
                     // LLVM array stride is the element's alloc size,
@@ -333,8 +331,10 @@ impl<'a> super::Interpreter<'a> {
                 // Unresolvable args → codegen's i64 default.
                 _ => WORD,
             },
-            "Vector" => match (first_type_arg(generic_args), generic_args.and_then(const_arg_len))
-            {
+            "Vector" => match (
+                first_type_arg(generic_args),
+                generic_args.and_then(const_arg_len),
+            ) {
                 (Some(elem), Some(n)) => {
                     let el = self.field_layout(elem, depth + 1)?;
                     // LLVM's default datalayout aligns a SIMD vector to

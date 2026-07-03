@@ -18943,7 +18943,9 @@ fn size_of_unsupported_type_arg_shape_is_runtime_error_not_panic() {
     let errors = runtime_errors("fn main() { println(size_of[Vec[i64]]()); }");
     assert_eq!(errors.len(), 1);
     assert!(
-        errors[0].message.contains("size_of requires a plain type argument"),
+        errors[0]
+            .message
+            .contains("size_of requires a plain type argument"),
         "unexpected message: {}",
         errors[0].message
     );
