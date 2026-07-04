@@ -79,23 +79,33 @@ pub fn emit_kernel(func: &Function) -> Result<String, WgslError> {
         )
     })?;
 
-    // Slice-0 floor: `f32 -> f32`. The runtime spine is f32-only.
-    require_f32(&param.ty, "parameter")?;
-    match &func.return_type {
-        Some(ty) => require_f32(ty, "return type")?,
+    // Slice-0 floor: a single scalar `T -> T` over the WGSL-native 4-byte
+    // scalars (`f32` / `i32` / `u32`). The runtime dispatch is byte-oriented,
+    // so any of the three works; the shader's `array<T>` bindings carry the
+    // element interpretation.
+    let param_scalar = wgsl_scalar(&param.ty, "parameter")?;
+    let return_scalar = match &func.return_type {
+        Some(ty) => wgsl_scalar(ty, "return type")?,
         None => {
             return Err(WgslError::UnsupportedSignature(
-                "a GPU kernel must return f32 (slice-0 element-wise map)".to_string(),
+                "a GPU kernel must return a scalar (f32 / i32 / u32) — slice-0 element-wise map"
+                    .to_string(),
             ));
         }
+    };
+    if param_scalar != return_scalar {
+        return Err(WgslError::UnsupportedSignature(format!(
+            "a slice-0 GPU kernel must map `T -> T` (found `{param_scalar} -> {return_scalar}`)"
+        )));
     }
+    let scalar = param_scalar;
 
     let body_expr = kernel_return_expr(func)?;
     let body_wgsl = lower_expr(body_expr, param_name)?;
 
     Ok(format!(
-        "@group(0) @binding(0) var<storage, read>       input:  array<f32>;\n\
-         @group(0) @binding(1) var<storage, read_write> output: array<f32>;\n\
+        "@group(0) @binding(0) var<storage, read>       input:  array<{scalar}>;\n\
+         @group(0) @binding(1) var<storage, read_write> output: array<{scalar}>;\n\
          \n\
          @compute @workgroup_size({WORKGROUP_SIZE})\n\
          fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
@@ -126,16 +136,18 @@ fn kernel_param(func: &Function) -> Result<&Param, WgslError> {
     }
 }
 
-/// Require a `TypeExpr` to be the scalar `f32`. Slice-0 is f32-only (the
-/// element type the proven runtime spine handles); the `wgsl_scalar` mapping
-/// generalizes later increments.
-fn require_f32(ty: &TypeExpr, position: &str) -> Result<(), WgslError> {
-    if scalar_name(ty).as_deref() == Some("f32") {
-        Ok(())
-    } else {
-        Err(WgslError::UnsupportedSignature(format!(
-            "the GPU kernel {position} must be f32 in slice-0"
-        )))
+/// Map a Kāra scalar `TypeExpr` to its WGSL scalar-type spelling, or reject it.
+/// Slice-0 supports the three WGSL-native 4-byte numeric scalars — `f32`,
+/// `i32`, `u32` (WGSL has no native `i64`/`f64`, and `f16` needs an extension,
+/// so those stay later increments). The Kāra and WGSL spellings coincide.
+fn wgsl_scalar(ty: &TypeExpr, position: &str) -> Result<&'static str, WgslError> {
+    match scalar_name(ty).as_deref() {
+        Some("f32") => Ok("f32"),
+        Some("i32") => Ok("i32"),
+        Some("u32") => Ok("u32"),
+        _ => Err(WgslError::UnsupportedSignature(format!(
+            "the GPU kernel {position} must be f32, i32, or u32 in slice-0"
+        ))),
     }
 }
 
@@ -353,10 +365,42 @@ mod tests {
     }
 
     #[test]
-    fn rejects_non_f32_parameter() {
+    fn lowers_i32_kernel_over_i32_array() {
+        // Integer scalars are WGSL-native (4-byte) — `array<i32>`, integer
+        // literal preserved.
         let func = parse_kernel("#[gpu]\nfn k(x: i32) -> i32 { x * 2 }\n");
+        let wgsl = emit_kernel(&func).unwrap();
+        assert!(wgsl.contains("input:  array<i32>;"), "{wgsl}");
+        assert!(wgsl.contains("output: array<i32>;"), "{wgsl}");
+        assert!(wgsl.contains("output[i] = (input[i] * 2);"), "{wgsl}");
+    }
+
+    #[test]
+    fn lowers_u32_kernel_over_u32_array() {
+        let func = parse_kernel("#[gpu]\nfn k(x: u32) -> u32 { x + 1 }\n");
+        let wgsl = emit_kernel(&func).unwrap();
+        assert!(wgsl.contains("input:  array<u32>;"), "{wgsl}");
+        assert!(wgsl.contains("output[i] = (input[i] + 1);"), "{wgsl}");
+    }
+
+    #[test]
+    fn rejects_mismatched_param_and_return_scalar() {
+        let func = parse_kernel("#[gpu]\nfn k(x: f32) -> i32 { 0 }\n");
         let err = emit_kernel(&func).unwrap_err();
         assert!(matches!(err, WgslError::UnsupportedSignature(_)), "{err:?}");
+    }
+
+    #[test]
+    fn rejects_non_wgsl_scalar_element() {
+        // WGSL has no native i64/f64 — those stay a later increment.
+        for ty in ["i64", "f64", "bool", "u8"] {
+            let func = parse_kernel(&format!("#[gpu]\nfn k(x: {ty}) -> {ty} {{ x }}\n"));
+            let err = emit_kernel(&func).unwrap_err();
+            assert!(
+                matches!(err, WgslError::UnsupportedSignature(_)),
+                "{ty}: {err:?}"
+            );
+        }
     }
 
     #[test]

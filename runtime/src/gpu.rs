@@ -6,11 +6,13 @@
 //! API (Metal on macOS, Vulkan/DX12 elsewhere) and read back. The internal
 //! [`dispatch_f32_map`] helper (slice-0a) is the spine; the WGSL it runs is
 //! produced by the compiler's `src/gpu_wgsl.rs` emitter (slice-0b). Slice-0c
-//! exposes it to compiled Kāra through the C symbol
-//! [`karac_runtime_gpu_f32_map`], which `gpu.dispatch(kernel, buffer)` lowers
-//! to. Behind the opt-in `gpu` feature; not compiled into any production or
-//! wasm archive — the compiler links the dedicated `libkarac_runtime_gpu.a`
-//! (built `--features gpu`) only when a program references this symbol.
+//! exposes it to compiled Kāra through the byte-oriented C symbol
+//! [`karac_runtime_gpu_map`], which `gpu.dispatch(kernel, buffer)` lowers to
+//! (type-agnostic — `f32`/`i32`/`u32` share one path, the WGSL declares the
+//! element type). Behind the opt-in `gpu` feature; not compiled into any
+//! production or wasm archive — the compiler links the dedicated
+//! `libkarac_runtime_gpu.a` (built `--features gpu`) only when a program
+//! references this symbol.
 
 use wgpu::util::DeviceExt;
 
@@ -22,73 +24,98 @@ use wgpu::util::DeviceExt;
 ///
 /// Returns `None` when no GPU adapter is available (headless CI, no driver,
 /// `KARAC_GPU_BACKEND` unset on a GPU-less box). The internal test treats that
-/// as a graceful skip; the `karac_runtime_gpu_f32_map` C entry point turns it
-/// into a fatal, diagnosed abort — a compiled `gpu.dispatch` has no CPU
-/// fallback (the kernel exists only as GPU-side WGSL), so a GPU-less host is a
-/// hard error, not a silent no-op.
+/// as a graceful skip; the `karac_runtime_gpu_map` C entry point turns it into
+/// a fatal, diagnosed abort — a compiled `gpu.dispatch` has no CPU fallback
+/// (the kernel exists only as GPU-side WGSL), so a GPU-less host is a hard
+/// error, not a silent no-op. Test-only: the compiled path goes through the
+/// byte-oriented [`karac_runtime_gpu_map`]; this typed `f32` wrapper only backs
+/// the slice-0a spine test.
+#[cfg(test)]
 pub fn dispatch_f32_map(wgsl: &str, input: &[f32]) -> Option<Vec<f32>> {
-    pollster::block_on(dispatch_f32_map_async(wgsl, input))
+    // `&[f32]` → `&[u8]` (little-endian) without pulling in `bytemuck`, run the
+    // byte-oriented core, then reinterpret the result bytes as `f32`.
+    let mut bytes = Vec::with_capacity(std::mem::size_of_val(input));
+    for &x in input {
+        bytes.extend_from_slice(&x.to_le_bytes());
+    }
+    let out = pollster::block_on(dispatch_bytes_async(wgsl, &bytes, 4))?;
+    Some(
+        out.chunks_exact(4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect(),
+    )
 }
 
 /// C entry point for `gpu.dispatch(kernel, buffer)` — slice-0c.
 ///
-/// Runs the compile-time-baked `wgsl` shader (pointer + byte length) over the
-/// `n`-element `f32` input buffer element-wise and returns a **freshly
-/// `malloc`'d** `n`-element output buffer. The compiler wraps the returned
-/// pointer into an owned `Vec[f32]` of length/capacity `n`; because the buffer
-/// comes from the same platform `malloc` the collection codegen uses
-/// ([`crate::alloc::karac_alloc_or_panic`]), the Kāra-side `Vec` drop frees it
-/// with the matching `free`. An empty input (`n == 0`) returns a unique
-/// non-null one-element allocation (never dereferenced) so the owned-`Vec`
-/// contract holds without a null special case.
+/// Runs the compile-time-baked `wgsl` shader over an `n`-element input buffer
+/// of `elem_size`-byte elements and returns a **freshly `malloc`'d**
+/// `n * elem_size`-byte output buffer. Type-agnostic: the GPU buffer is raw
+/// bytes and the WGSL shader declares the element type (`array<f32>` /
+/// `array<i32>` / `array<u32>` — all 4-byte in slice-0), so `f32` / `i32` /
+/// `u32` dispatch all share this one path. The compiler wraps the returned
+/// pointer into an owned `Vec[T]` of length/capacity `n`; the buffer comes from
+/// the same platform `malloc` the collection codegen uses
+/// ([`crate::alloc::karac_alloc_or_panic`]), so the Kāra-side `Vec` drop frees
+/// it with the matching `free`. An empty input (`n == 0`) skips the GPU and
+/// returns a unique non-null one-byte allocation (never dereferenced) so the
+/// owned-`Vec` contract holds without a null special case.
 ///
 /// # Safety
 ///
-/// `wgsl_ptr` must point to `wgsl_len` valid UTF-8 bytes and `in_ptr` to `n`
-/// valid `f32`s for the duration of the call (both are compile-time constants
-/// / a live buffer at the call site). The returned pointer transfers ownership
-/// to the caller.
+/// `wgsl_ptr` must point to `wgsl_len` valid UTF-8 bytes and `in_ptr` to
+/// `n * elem_size` valid bytes for the duration of the call (both are
+/// compile-time constants / a live buffer at the call site). The returned
+/// pointer transfers ownership to the caller.
 ///
 /// # Aborts
 ///
 /// On no available GPU adapter — the dispatch cannot fall back to the CPU, so
 /// this writes a diagnostic and aborts rather than returning null (which the
 /// caller would wrap into a length-`n` `Vec` over garbage).
-///
-/// # Panics
-///
-/// Never returns on GPU failure — it aborts the process (see above).
 #[no_mangle]
-pub unsafe extern "C" fn karac_runtime_gpu_f32_map(
+pub unsafe extern "C" fn karac_runtime_gpu_map(
     wgsl_ptr: *const u8,
     wgsl_len: usize,
-    in_ptr: *const f32,
+    in_ptr: *const u8,
     n: usize,
-) -> *mut f32 {
+    elem_size: usize,
+) -> *mut u8 {
+    let byte_len = n.saturating_mul(elem_size);
+
+    // Empty dispatch: a unique non-null allocation the caller never reads.
+    if byte_len == 0 {
+        return crate::alloc::karac_alloc_or_panic(1);
+    }
+
     let wgsl_bytes = std::slice::from_raw_parts(wgsl_ptr, wgsl_len);
     let Ok(wgsl) = std::str::from_utf8(wgsl_bytes) else {
         crate::fatal::write_stderr(b"panic: gpu.dispatch shader is not valid UTF-8\n");
         std::process::abort();
     };
-    let input = std::slice::from_raw_parts(in_ptr, n);
+    let input = std::slice::from_raw_parts(in_ptr, byte_len);
 
-    let Some(output) = dispatch_f32_map(wgsl, input) else {
+    let Some(output) = pollster::block_on(dispatch_bytes_async(wgsl, input, elem_size)) else {
         crate::fatal::write_stderr(
             b"panic: gpu.dispatch found no available GPU adapter (no CPU fallback)\n",
         );
         std::process::abort();
     };
-    debug_assert_eq!(output.len(), n, "element-wise map preserves length");
+    debug_assert_eq!(output.len(), byte_len, "element-wise map preserves length");
 
     // Hand the result back through the collection allocator so the owned
-    // `Vec[f32]` the compiler builds frees it with the matching `free`.
-    let byte_len = n.saturating_mul(std::mem::size_of::<f32>());
-    let out = crate::alloc::karac_alloc_or_panic(byte_len) as *mut f32;
-    std::ptr::copy_nonoverlapping(output.as_ptr(), out, n);
+    // `Vec[T]` the compiler builds frees it with the matching `free`.
+    let out = crate::alloc::karac_alloc_or_panic(byte_len);
+    std::ptr::copy_nonoverlapping(output.as_ptr(), out, byte_len);
     out
 }
 
-async fn dispatch_f32_map_async(wgsl: &str, input: &[f32]) -> Option<Vec<f32>> {
+/// Byte-oriented GPU element-wise map core. `input` is the raw element bytes
+/// (`n * elem_size`); the returned buffer is the same length. The WGSL shader
+/// supplies the element interpretation via its `array<T>` binding declarations,
+/// so this stays type-agnostic. `elem_size` sets the per-element stride used to
+/// derive the invocation count.
+async fn dispatch_bytes_async(wgsl: &str, input: &[u8], elem_size: usize) -> Option<Vec<u8>> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions::default())
@@ -99,18 +126,12 @@ async fn dispatch_f32_map_async(wgsl: &str, input: &[f32]) -> Option<Vec<f32>> {
         .await
         .ok()?;
 
-    let n = input.len();
-    let byte_len = std::mem::size_of_val(input) as u64;
-
-    // `&[f32]` → `&[u8]` (little-endian) without pulling in `bytemuck`.
-    let mut bytes: Vec<u8> = Vec::with_capacity(byte_len as usize);
-    for &x in input {
-        bytes.extend_from_slice(&x.to_le_bytes());
-    }
+    let byte_len = input.len() as u64;
+    let elem_count = input.len() / elem_size;
 
     let input_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("gpu-slice0a-input"),
-        contents: &bytes,
+        contents: input,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
     });
     let output_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -167,7 +188,7 @@ async fn dispatch_f32_map_async(wgsl: &str, input: &[f32]) -> Option<Vec<f32>> {
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         // One invocation per element; @workgroup_size(64) in the shader.
-        pass.dispatch_workgroups((n as u32).div_ceil(64), 1, 1);
+        pass.dispatch_workgroups((elem_count as u32).div_ceil(64), 1, 1);
     }
     encoder.copy_buffer_to_buffer(&output_buf, 0, &staging_buf, 0, byte_len);
     queue.submit(Some(encoder.finish()));
@@ -182,10 +203,7 @@ async fn dispatch_f32_map_async(wgsl: &str, input: &[f32]) -> Option<Vec<f32>> {
     rx.recv().ok()?.ok()?;
 
     let mapped = slice.get_mapped_range();
-    let out: Vec<f32> = mapped
-        .chunks_exact(4)
-        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-        .collect();
+    let out: Vec<u8> = mapped.to_vec();
     drop(mapped);
     staging_buf.unmap();
     Some(out)

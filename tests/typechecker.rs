@@ -30078,3 +30078,62 @@ fn gpu_dispatch_rejects_unsupported_kernel_body() {
         errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn gpu_dispatch_accepts_i32_and_u32_buffers() {
+    typecheck_ok(
+        "#[gpu]\n\
+         fn inc(x: i32) -> i32 { x + 1 }\n\
+         fn main() {\n\
+             let buf: Vec[i32] = [1, 2];\n\
+             let out = gpu.dispatch(inc, buf);\n\
+         }",
+    );
+    typecheck_ok(
+        "#[gpu]\n\
+         fn dbl(x: u32) -> u32 { x * 2 }\n\
+         fn main() {\n\
+             let buf: Vec[u32] = [1, 2];\n\
+             let out = gpu.dispatch(dbl, buf);\n\
+         }",
+    );
+}
+
+#[test]
+fn gpu_dispatch_rejects_kernel_element_mismatch() {
+    // An i32 kernel over a Vec[f32] buffer — element types must match.
+    let errs = typecheck_errors(
+        "#[gpu]\n\
+         fn dbl(x: i32) -> i32 { x * 2 }\n\
+         fn main() {\n\
+             let buf: Vec[f32] = [1.0, 2.0];\n\
+             let out = gpu.dispatch(dbl, buf);\n\
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("E_GPU_DISPATCH_KERNEL")
+                && e.to_string().contains("element types must match")),
+        "expected element-mismatch E_GPU_DISPATCH_KERNEL, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn gpu_dispatch_rejects_i64_buffer() {
+    // i64 has no WGSL-native element type in slice-0.
+    let errs = typecheck_errors(
+        "#[gpu]\n\
+         fn dbl(x: i64) -> i64 { x * 2 }\n\
+         fn main() {\n\
+             let buf: Vec[i64] = [1, 2];\n\
+             let out = gpu.dispatch(dbl, buf);\n\
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("E_GPU_DISPATCH_BUFFER")),
+        "expected E_GPU_DISPATCH_BUFFER, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}

@@ -5190,9 +5190,28 @@ impl<'a> super::TypeChecker<'a> {
     /// diagnostic; the return type stays `Vec[f32]` so downstream inference has
     /// something concrete to work with even on error.
     fn infer_gpu_dispatch(&mut self, args: &[CallArg], span: &Span) -> Type {
-        let f32_vec = Type::Named {
+        // The WGSL-native 4-byte scalar element types slice-0 supports, and
+        // their shared Kāra/WGSL spelling. `None` for any other type.
+        fn elem_spelling(t: &Type) -> Option<&'static str> {
+            match t {
+                Type::Float(FloatSize::F32) => Some("f32"),
+                Type::Int(IntSize::I32) => Some("i32"),
+                Type::UInt(UIntSize::U32) => Some("u32"),
+                _ => None,
+            }
+        }
+        // The single-segment scalar name of a kernel parameter's `TypeExpr`.
+        fn typeexpr_scalar(ty: &TypeExpr) -> Option<&str> {
+            match &ty.kind {
+                TypeKind::Path(p) if p.generic_args.is_none() && p.segments.len() == 1 => {
+                    Some(p.segments[0].as_str())
+                }
+                _ => None,
+            }
+        }
+        let vec_of = |elem: Type| Type::Named {
             name: "Vec".to_string(),
-            args: vec![Type::Float(FloatSize::F32)],
+            args: vec![elem],
         };
 
         if args.len() != 2 {
@@ -5205,30 +5224,40 @@ impl<'a> super::TypeChecker<'a> {
                 span.clone(),
                 TypeErrorKind::WrongNumberOfArgs,
             );
-            return f32_vec;
+            return vec_of(Type::Float(FloatSize::F32));
         }
 
-        // Buffer (arg 1): must be `Vec[f32]`. Infer it so its type is recorded
-        // for codegen's element-typed read.
+        // Buffer (arg 1): must be `Vec[f32|i32|u32]`. Infer it so its element
+        // type is recorded for codegen's element-typed read + the result type.
         let buf_ty = self.infer_expr(&args[1].value);
-        let buf_ok = matches!(
-            &buf_ty,
-            Type::Named { name, args: ta }
-                if name == "Vec" && ta.len() == 1 && matches!(ta[0], Type::Float(FloatSize::F32))
-        );
-        if !buf_ok && buf_ty != Type::Error {
-            self.type_error(
-                format!(
-                    "error[E_GPU_DISPATCH_BUFFER]: `gpu.dispatch` buffer must be `Vec[f32]` \
-                     in slice-0, found `{}`",
-                    type_display(&buf_ty)
-                ),
-                args[1].value.span.clone(),
-                TypeErrorKind::TypeMismatch,
-            );
-        }
+        let elem = match &buf_ty {
+            Type::Named { name, args: ta } if name == "Vec" && ta.len() == 1 => {
+                elem_spelling(&ta[0]).map(|s| (s, ta[0].clone()))
+            }
+            _ => None,
+        };
+        let (elem_spell, elem_ty) = match elem {
+            Some(e) => e,
+            None => {
+                if buf_ty != Type::Error {
+                    self.type_error(
+                        format!(
+                            "error[E_GPU_DISPATCH_BUFFER]: `gpu.dispatch` buffer must be \
+                             `Vec[f32]`, `Vec[i32]`, or `Vec[u32]` in slice-0, found `{}`",
+                            type_display(&buf_ty)
+                        ),
+                        args[1].value.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
+                // Element undetermined — default the result element to f32 so
+                // downstream inference still has a concrete type.
+                ("f32", Type::Float(FloatSize::F32))
+            }
+        };
+        let result_vec = vec_of(elem_ty);
 
-        // Kernel (arg 0): a bare identifier naming a `#[gpu] fn(f32) -> f32`.
+        // Kernel (arg 0): a bare identifier naming a `#[gpu] fn(T) -> T`.
         let ExprKind::Identifier(kernel_name) = &args[0].value.kind else {
             self.type_error(
                 "error[E_GPU_DISPATCH_KERNEL]: the `gpu.dispatch` kernel must be a bare \
@@ -5237,7 +5266,7 @@ impl<'a> super::TypeChecker<'a> {
                 args[0].value.span.clone(),
                 TypeErrorKind::TypeMismatch,
             );
-            return f32_vec;
+            return result_vec;
         };
 
         // `self.program` is `&'a Program` (not borrowed from `&self`), so
@@ -5257,8 +5286,25 @@ impl<'a> super::TypeChecker<'a> {
                 args[0].value.span.clone(),
                 TypeErrorKind::TypeMismatch,
             );
-            return f32_vec;
+            return result_vec;
         };
+
+        // The kernel element must match the buffer element — the byte-oriented
+        // dispatch reinterprets the buffer bytes as the shader's `array<T>`, so
+        // an `i32` kernel over a `Vec[f32]` buffer would silently miscompute.
+        if let Some(kernel_elem) = kernel.params.first().and_then(|p| typeexpr_scalar(&p.ty)) {
+            if kernel_elem != elem_spell {
+                self.type_error(
+                    format!(
+                        "error[E_GPU_DISPATCH_KERNEL]: kernel `{kernel_name}` maps `{kernel_elem}` \
+                         but the buffer is `Vec[{elem_spell}]` — the element types must match"
+                    ),
+                    args[0].value.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                return result_vec;
+            }
+        }
 
         match crate::gpu_wgsl::emit_kernel(kernel) {
             Ok(wgsl) => {
@@ -5280,8 +5326,8 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
-        self.record_expr_type(span, &f32_vec);
-        f32_vec
+        self.record_expr_type(span, &result_vec);
+        result_vec
     }
 
     // ── Field Access ────────────────────────────────────────────

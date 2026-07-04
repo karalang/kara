@@ -19362,3 +19362,16 @@ fn test_gpu_dispatch_arithmetic_kernel() {
                }";
     assert_eq!(run_no_errors(src), "1\n4\n7\n");
 }
+
+#[test]
+fn test_gpu_dispatch_i32_kernel_cpu() {
+    // Non-f32 element type (i32) — the CPU map runs the integer kernel.
+    let src = "#[gpu]\n\
+               fn triple(x: i32) -> i32 { x * 3 }\n\
+               fn main() {\n\
+                   let buf: Vec[i32] = [1, 2, 3];\n\
+                   let out = gpu.dispatch(triple, buf);\n\
+                   for v in out { println(f\"{v}\"); }\n\
+               }";
+    assert_eq!(run_no_errors(src), "3\n6\n9\n");
+}

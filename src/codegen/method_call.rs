@@ -6933,13 +6933,23 @@ impl<'ctx> super::Codegen<'ctx> {
             );
         }
 
-        // karac_runtime_gpu_f32_map(wgsl_ptr, wgsl_len, in_ptr, n) -> *f32.
-        let dispatch_fn = self.gpu_f32_map_fn();
+        // karac_runtime_gpu_map(wgsl_ptr, wgsl_len, in_ptr, n, elem_size) -> ptr.
+        // Slice-0 supports only the WGSL-native 4-byte scalars (f32/i32/u32),
+        // enforced by the typechecker + emitter, so `elem_size` is 4; the
+        // byte-oriented runtime handles f32/i32/u32 uniformly.
+        let elem_size = i64_t.const_int(4, false);
+        let dispatch_fn = self.gpu_map_fn();
         let out_ptr = self
             .builder
             .build_call(
                 dispatch_fn,
-                &[wgsl_ptr.into(), wgsl_len.into(), data.into(), n.into()],
+                &[
+                    wgsl_ptr.into(),
+                    wgsl_len.into(),
+                    data.into(),
+                    n.into(),
+                    elem_size.into(),
+                ],
                 "gpu.out",
             )
             .unwrap()
