@@ -8556,6 +8556,142 @@ fn test_update_pkg_matches_path_dep_emits_note_and_rewrites() {
     );
 }
 
+// ── karac resolve (read-only graph inspection, follow-up (j)) ────────
+
+#[test]
+fn test_resolve_lists_path_dep_graph_and_writes_no_lockfile() {
+    let tmp = make_path_dep_project("resolve-path");
+    let out = karac_bin()
+        .arg("resolve")
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let lockfile_exists = tmp.join("kara.lock").exists();
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        out.status.success(),
+        "karac resolve should succeed on a path-dep project; stderr={stderr}",
+    );
+    // Both the root and the path-dep appear in the graph.
+    assert!(
+        stderr.contains("root-pkg") && stderr.contains("child"),
+        "resolve should list both root and the path-dep;\nstderr={stderr}",
+    );
+    // The path-dep's source is rendered as a path.
+    assert!(
+        stderr.contains("(path "),
+        "resolve should render the dep's source kind;\nstderr={stderr}",
+    );
+    // The declared_by edge attributes the child to the root package.
+    assert!(
+        stderr.contains("<- root-pkg"),
+        "resolve should show which parent declared the dep;\nstderr={stderr}",
+    );
+    // Read-only: unlike `karac update`, resolve must not rewrite kara.lock.
+    assert!(
+        !lockfile_exists,
+        "karac resolve must not write kara.lock (it is read-only)",
+    );
+}
+
+#[test]
+fn test_resolve_output_json_shape() {
+    let tmp = make_path_dep_project("resolve-json");
+    let out = karac_bin()
+        .args(["resolve", "--output=json"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    let line = stdout
+        .lines()
+        .find(|l| l.trim_start().starts_with('{'))
+        .unwrap_or_else(|| panic!("expected a JSON envelope on stdout;\nstdout={stdout}"));
+    let v: serde_json::Value = serde_json::from_str(line.trim())
+        .unwrap_or_else(|e| panic!("stdout line is not valid JSON ({e});\nline={line}"));
+
+    assert_eq!(v["status"], "ok", "envelope status;\n{v}");
+    assert_eq!(v["command"], "resolve", "envelope command;\n{v}");
+    let pkgs = v["packages"]
+        .as_array()
+        .unwrap_or_else(|| panic!("packages must be an array;\n{v}"));
+    // root-pkg + child.
+    assert_eq!(pkgs.len(), 2, "expected two resolved packages;\n{v}");
+    // The child entry carries name/version/source and a declared_by edge back
+    // to the root.
+    let child = pkgs
+        .iter()
+        .find(|p| p["name"] == "child")
+        .unwrap_or_else(|| panic!("child package missing from envelope;\n{v}"));
+    assert_eq!(child["source"], "path", "child source kind;\n{child}");
+    assert!(
+        child["version"].is_string(),
+        "each package carries a pinned version;\n{child}"
+    );
+    let edges = child["declared_by"]
+        .as_array()
+        .unwrap_or_else(|| panic!("declared_by must be an array;\n{child}"));
+    assert!(
+        edges.iter().any(|e| e["parent"] == "root-pkg"),
+        "child must be declared_by root-pkg;\n{child}"
+    );
+}
+
+#[test]
+fn test_resolve_solo_project_lists_only_root() {
+    // A project with no dependencies resolves to just its own root package
+    // and exits cleanly — no deps, no lockfile.
+    let tmp = update_tempdir("resolve-solo");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::write(tmp.join("kara.toml"), "[package]\nname = \"solo\"\n").unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+
+    let out = karac_bin()
+        .arg("resolve")
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let lockfile_exists = tmp.join("kara.lock").exists();
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        out.status.success(),
+        "karac resolve should succeed on a solo project; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("solo"),
+        "resolve should list the root package;\nstderr={stderr}",
+    );
+    assert!(!lockfile_exists, "karac resolve must not write kara.lock",);
+}
+
+#[test]
+fn test_resolve_rejects_positional_argument() {
+    let tmp = update_tempdir("resolve-badarg");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::write(tmp.join("kara.toml"), "[package]\nname = \"solo\"\n").unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+
+    let out = karac_bin()
+        .args(["resolve", "somepkg"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(!out.status.success(), "a positional arg must be rejected");
+    assert!(
+        stderr.contains("no positional arguments"),
+        "expected the positional-argument rejection;\nstderr={stderr}",
+    );
+}
+
 #[test]
 fn test_update_pkg_unknown_errors_with_suggestion() {
     let tmp = make_path_dep_project("pkg-unknown");

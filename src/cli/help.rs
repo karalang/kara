@@ -101,6 +101,8 @@ COMMANDS:
     vendor            Copy resolved dependencies into ./vendor/.
                       Pairs with `karac build --offline`. (v1 surface
                       — resolver wiring pending.)
+    resolve           Print the resolved dependency graph (read-only;
+                      does not rewrite kara.lock).
     help              Show this help
     version           Show version
 
@@ -914,6 +916,26 @@ package by name (validation lands in a follow-up slice).
 v1.1 status: path-deps are manifest-pinned, so bumping isn't meaningful
 today — both forms re-derive the lockfile from the current manifest.
 Real version-bumping ships alongside the registry-proxy fetch surface."
+        }
+        "resolve" => {
+            "\
+karac resolve - Print the resolved dependency graph (read-only)
+
+USAGE:
+    karac resolve [options]
+
+Runs the same resolver + fetch path as `karac build` and prints each
+resolved package with its pinned version, source, and the parents that
+declared it — a debugging view of the dependency graph. Unlike
+`karac update`, it does NOT rewrite kara.lock.
+
+OPTIONS:
+    --output=json     Structured JSON output on stdout
+    --output=jsonl    Streaming JSONL output on stdout
+    --offline         Resolve against ./vendor/ only (no network)
+    --no-proxy        Bypass the registry proxy; fetch registry deps
+                      direct-from-source when an upstream is configured
+    -h, --help        Print this message"
         }
         _ => {
             print_help();

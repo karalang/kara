@@ -426,6 +426,20 @@ pub enum Command {
         /// `--no-proxy` — see `Build.no_proxy`.
         no_proxy: bool,
     },
+    /// Resolve the dependency graph and print it — a read-only debugging
+    /// view of what `karac build` would resolve, *without* driving a build
+    /// or rewriting `kara.lock` (unlike `karac update`). Runs the same
+    /// resolver + fetch path as `build` (registry / git deps are fetched
+    /// when configured), then renders each resolved package with its pinned
+    /// version, source, and the parents that declared it. Registry-proxy
+    /// follow-up (j) at `phase-5-diagnostics.md` line 896.
+    Resolve {
+        output: OutputMode,
+        /// `--offline` — resolve against `./vendor/` only (see `Build`).
+        offline: bool,
+        /// `--no-proxy` — see `Build.no_proxy`.
+        no_proxy: bool,
+    },
     /// Emit the project's public API surface as JSONL on stdout. One record
     /// per exported item (`fn`, `struct`, `enum`, `trait`, `const`,
     /// `type_alias`, `distinct_type`, `effect_resource`, `extern_fn`,
@@ -741,6 +755,11 @@ pub fn execute(cmd: Command) {
             output,
             no_proxy,
         } => cmd_update(package.as_deref(), output, no_proxy),
+        Command::Resolve {
+            output,
+            offline,
+            no_proxy,
+        } => cmd_resolve(output, offline, no_proxy),
         Command::Explain { target, format } => explain::render(&target, format),
         Command::Catalog { file } => cmd_catalog(&file),
         Command::Migrate {
@@ -6594,7 +6613,15 @@ fn cmd_build_project(
     // `include_dev_deps=true` so `[dev-dependencies]` surface only
     // when actually compiling tests.
     let dep_resolution: Option<crate::dep_resolver::Resolution> = if has_deps {
-        match run_dep_resolution(&root, mf.clone(), output, offline_root, false, no_proxy) {
+        match run_dep_resolution(
+            &root,
+            mf.clone(),
+            output,
+            offline_root,
+            false,
+            no_proxy,
+            true,
+        ) {
             Ok(r) => r,
             Err(()) => process::exit(1),
         }
@@ -8132,6 +8159,7 @@ fn run_dep_resolution(
     offline_root: Option<&std::path::Path>,
     include_dev_deps: bool,
     no_proxy: bool,
+    persist_lock: bool,
 ) -> Result<Option<crate::dep_resolver::Resolution>, ()> {
     let loader = crate::dep_graph::FsLoader;
 
@@ -8232,7 +8260,11 @@ fn run_dep_resolution(
     let active = crate::dep_resolver::active_toolchain_version();
     match crate::dep_resolver::resolve_with_offline(&graph, &active, offline_root) {
         Ok(resolution) => {
-            persist_lockfile(root, &resolution, output);
+            // `karac resolve` is read-only — it inspects the graph without
+            // rewriting `kara.lock`. Only build / test persist the pin.
+            if persist_lock {
+                persist_lockfile(root, &resolution, output);
+            }
             Ok(Some(resolution))
         }
         Err(boxed) => {
@@ -10621,7 +10653,15 @@ fn cmd_test(filter: Option<String>, all: bool) {
         // `karac test` has no `--no-proxy` flag; the fetch path self-gates on
         // an explicitly-configured proxy (see `run_dep_resolution`), so a
         // registry dep is fetched only when the operator points at a real one.
-        match run_dep_resolution(&root, mf.clone(), OutputMode::Jsonl, None, true, false) {
+        match run_dep_resolution(
+            &root,
+            mf.clone(),
+            OutputMode::Jsonl,
+            None,
+            true,
+            false,
+            true,
+        ) {
             Ok(r) => r,
             Err(()) => process::exit(1),
         }
@@ -12216,6 +12256,162 @@ fn describe_resolved_source(src: &crate::dep_resolver::ResolvedSource) -> &'stat
         crate::dep_resolver::ResolvedSource::Path(_) => "path",
         crate::dep_resolver::ResolvedSource::Registry { .. } => "registry",
         crate::dep_resolver::ResolvedSource::Git { .. } => "git",
+    }
+}
+
+/// Richer, human-facing rendering of a resolved source for `karac resolve`'s
+/// text view — the source kind plus its locating detail (path / URL / short
+/// commit). The machine views (`--output=json|jsonl`) use the bare kind from
+/// [`describe_resolved_source`] instead, keying the detail off dedicated
+/// fields.
+fn describe_resolved_source_detail(src: &crate::dep_resolver::ResolvedSource) -> String {
+    match src {
+        crate::dep_resolver::ResolvedSource::Root => "root".to_string(),
+        crate::dep_resolver::ResolvedSource::Path(dir) => format!("path {}", dir.display()),
+        crate::dep_resolver::ResolvedSource::Registry { url, .. } => format!("registry {url}"),
+        crate::dep_resolver::ResolvedSource::Git {
+            url, resolved_rev, ..
+        } => {
+            if resolved_rev.is_empty() {
+                format!("git {url}")
+            } else {
+                let short = &resolved_rev[..resolved_rev.len().min(12)];
+                format!("git {url}@{short}")
+            }
+        }
+    }
+}
+
+/// `karac resolve` — read-only dependency-graph inspection (registry-proxy
+/// follow-up (j) at `phase-5-diagnostics.md` line 896). Runs the same
+/// resolver + fetch path `karac build` would, then prints the resolved graph
+/// *without* rewriting `kara.lock` (unlike `karac update`).
+fn cmd_resolve(output: OutputMode, offline: bool, no_proxy: bool) {
+    emit_no_proxy_note(no_proxy);
+
+    let cwd = match std::env::current_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("error: cannot read current directory: {e}");
+            process::exit(1);
+        }
+    };
+    let (root, mf) = match manifest::load_from_cwd(&cwd) {
+        Ok(ok) => ok,
+        Err(e) => {
+            emit_manifest_error(&e, output);
+            process::exit(1);
+        }
+    };
+
+    // Mirror the build path's `--offline` handling: resolve against `./vendor/`,
+    // and a project that has deps but no vendor dir is a hard error rather than
+    // a silent empty resolution.
+    let has_deps =
+        !mf.dependencies.is_empty() || !mf.dev_dependencies.is_empty() || mf.kara_version.is_some();
+    let vendor_root_buf = root.join("vendor");
+    if offline && has_deps && !vendor_root_buf.is_dir() {
+        emit_offline_no_vendor_dir(&vendor_root_buf, output);
+        process::exit(1);
+    }
+    let offline_root: Option<&std::path::Path> = if offline {
+        Some(vendor_root_buf.as_path())
+    } else {
+        None
+    };
+
+    // `persist_lock = false` — this command inspects, it does not pin. Fetch
+    // still activates (registry / git deps resolve to real sources) so the
+    // printed graph is exactly what a build would see.
+    let resolution =
+        match run_dep_resolution(&root, mf, output, offline_root, false, no_proxy, false) {
+            Ok(Some(r)) => r,
+            // Warn-and-continue path (unsupported registry/git source with no
+            // fetch configured): the diagnostic already surfaced. Show an empty
+            // graph so the command still exits cleanly with a valid envelope.
+            Ok(None) => crate::dep_resolver::Resolution {
+                packages: std::collections::BTreeMap::new(),
+            },
+            Err(()) => process::exit(1),
+        };
+
+    emit_resolution_graph(&resolution, output);
+}
+
+/// Render a resolved dependency graph for `karac resolve` in the requested
+/// output mode. Each package carries its pinned version, source, and the
+/// `declared_by` edges (which parent required it, with what constraint).
+fn emit_resolution_graph(resolution: &crate::dep_resolver::Resolution, output: OutputMode) {
+    let count = resolution.packages.len();
+    match output {
+        OutputMode::Text => {
+            eprintln!(
+                "karac resolve: {count} package{}",
+                if count == 1 { "" } else { "s" }
+            );
+            for (name, pkg) in &resolution.packages {
+                eprintln!(
+                    "  {name} {} ({})",
+                    pkg.version,
+                    describe_resolved_source_detail(&pkg.source)
+                );
+                for edge in &pkg.declared_by {
+                    let req = edge
+                        .req
+                        .as_ref()
+                        .map(|r| r.to_string())
+                        .unwrap_or_else(|| "*".to_string());
+                    eprintln!("    <- {} ({req})", edge.parent);
+                }
+            }
+        }
+        OutputMode::Json => {
+            let entries: Vec<String> = resolution
+                .packages
+                .iter()
+                .map(|(name, pkg)| {
+                    let edges: Vec<String> = pkg
+                        .declared_by
+                        .iter()
+                        .map(|e| {
+                            format!(
+                                "{{\"parent\":{},\"req\":{}}}",
+                                json_string(&e.parent),
+                                match &e.req {
+                                    Some(r) => json_string(&r.to_string()),
+                                    None => "null".to_string(),
+                                }
+                            )
+                        })
+                        .collect();
+                    format!(
+                        "{{\"name\":{},\"version\":{},\"source\":{},\"declared_by\":[{}]}}",
+                        json_string(name),
+                        json_string(&pkg.version.to_string()),
+                        json_string(describe_resolved_source(&pkg.source)),
+                        edges.join(",")
+                    )
+                })
+                .collect();
+            println!(
+                "{{\"status\":\"ok\",\"command\":\"resolve\",\"packages\":[{}]}}",
+                entries.join(",")
+            );
+        }
+        OutputMode::Jsonl => {
+            for (name, pkg) in &resolution.packages {
+                emit_jsonl_event(
+                    "resolve_package",
+                    &format!(
+                        "\"name\":{},\"version\":{},\"source\":{}",
+                        json_string(name),
+                        json_string(&pkg.version.to_string()),
+                        json_string(describe_resolved_source(&pkg.source)),
+                    ),
+                );
+            }
+            emit_jsonl_event("resolve_complete", &format!("\"package_count\":{count}"));
+        }
     }
 }
 

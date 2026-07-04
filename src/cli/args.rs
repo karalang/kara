@@ -64,6 +64,7 @@ pub fn parse_args(args: &[String]) -> Command {
         "install" => parse_install_command(args),
         "vendor" => parse_vendor_command(args),
         "update" => parse_update_command(args),
+        "resolve" => parse_resolve_command(args),
         "explain" => parse_explain_command(args),
         "catalog" => parse_catalog_command(args),
         // Hidden plumbing for `--target-cpu` validation (phase-10;
@@ -909,6 +910,40 @@ fn parse_update_command(args: &[String]) -> Command {
     Command::Update {
         package,
         output,
+        no_proxy,
+    }
+}
+
+fn parse_resolve_command(args: &[String]) -> Command {
+    // `karac resolve [--output=json|jsonl] [--offline] [--no-proxy]` — no
+    // positionals (it resolves the current project). Read-only: prints the
+    // resolution graph without rewriting kara.lock.
+    let mut output = OutputMode::Text;
+    let mut offline = false;
+    let mut no_proxy = false;
+    for arg in args.iter().skip(2) {
+        if arg == "--output=json" {
+            output = OutputMode::Json;
+        } else if arg == "--output=jsonl" {
+            output = OutputMode::Jsonl;
+        } else if arg == "--offline" {
+            offline = true;
+        } else if arg == "--no-proxy" {
+            no_proxy = true;
+        } else if let Some(rest) = arg.strip_prefix("--output=") {
+            eprintln!("error: unknown output mode '{rest}'. Use json or jsonl.");
+            process::exit(1);
+        } else if arg.starts_with("--") {
+            eprintln!("error: unknown flag '{arg}' for `karac resolve`");
+            process::exit(1);
+        } else {
+            eprintln!("error: `karac resolve` takes no positional arguments (got '{arg}')");
+            process::exit(1);
+        }
+    }
+    Command::Resolve {
+        output,
+        offline,
         no_proxy,
     }
 }

@@ -189,6 +189,67 @@ fn build_fetches_and_resolves_a_registry_dependency() {
     let _ = std::fs::remove_dir_all(&cache);
 }
 
+/// `karac resolve` (registry-proxy follow-up (j)) drives the same fetch path
+/// as `build` — a registry dep resolves to a real `registry` source rather
+/// than the unsupported warning — but stays **read-only**: it prints the graph
+/// and does NOT write `kara.lock`.
+#[test]
+fn resolve_lists_a_fetched_registry_dep_read_only() {
+    let store = build_store("resolved_dep", "1.0.0");
+    let base = start_server(store);
+    let cache = unique("cache-resolve");
+
+    let proj = unique("proj-resolve");
+    write(
+        &proj.join("kara.toml"),
+        b"[package]\nname = \"app\"\n\n[dependencies]\nresolved_dep = \"1.0\"\n",
+    );
+    write(&proj.join("src/main.kara"), b"fn main() {}\n");
+
+    let out = karac()
+        .arg("resolve")
+        .arg("--output=json")
+        .env("KARAC_REGISTRY_PROXY", &base)
+        .env("KARAC_REGISTRY_CACHE_ROOT", &cache)
+        .current_dir(&proj)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    let line = stdout
+        .lines()
+        .find(|l| l.trim_start().starts_with('{'))
+        .unwrap_or_else(|| {
+            panic!("expected a JSON envelope on stdout;\nstdout={stdout}\nstderr={stderr}")
+        });
+    let v: serde_json::Value = serde_json::from_str(line.trim())
+        .unwrap_or_else(|e| panic!("stdout line is not valid JSON ({e});\nline={line}"));
+
+    assert_eq!(v["status"], "ok", "resolve should succeed;\n{v}");
+    assert_eq!(v["command"], "resolve", "envelope command;\n{v}");
+    let pkgs = v["packages"].as_array().unwrap();
+    let dep = pkgs
+        .iter()
+        .find(|p| p["name"] == "resolved_dep")
+        .unwrap_or_else(|| panic!("fetched registry dep missing from resolution;\n{v}"));
+    // It resolved to a registry source — i.e. it was fetched, not reported
+    // unsupported.
+    assert_eq!(
+        dep["source"], "registry",
+        "the dep should resolve to a registry source;\n{dep}"
+    );
+
+    // Read-only: resolve must not persist a lockfile.
+    assert!(
+        !proj.join("kara.lock").exists(),
+        "karac resolve must not write kara.lock (it is read-only)"
+    );
+
+    let _ = std::fs::remove_dir_all(&proj);
+    let _ = std::fs::remove_dir_all(&cache);
+}
+
 #[test]
 fn build_without_configured_proxy_keeps_unsupported_warning() {
     // The contract complement: with no `KARAC_REGISTRY_PROXY` (and the
