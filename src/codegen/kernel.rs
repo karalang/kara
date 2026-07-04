@@ -251,6 +251,18 @@ impl<'ctx> super::Codegen<'ctx> {
         if matches!(op, ReduceOp::Mean) {
             let f64_t = self.context.f64_type();
             let sum_f = self.to_float(total)?;
+            // Promote a narrow float accumulator (an `f32` tensor sums in `f32`)
+            // to f64 before the divide — otherwise `fdiv f32, f64` is a
+            // type-mismatch that fails module verification, and `mean` declares
+            // an f64 result regardless. An integer accumulator is already f64
+            // via `to_float`'s `sitofp`.
+            let sum_f = if sum_f.get_type() == self.context.f32_type() {
+                self.builder
+                    .build_float_ext(sum_f, f64_t, "kern.mean.sumf64")
+                    .unwrap()
+            } else {
+                sum_f
+            };
             let nf = self
                 .builder
                 .build_unsigned_int_to_float(access.len, f64_t, "kern.mean.nf")

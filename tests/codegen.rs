@@ -47242,7 +47242,7 @@ fn main() {
 
     #[test]
     fn test_e2e_tensor_from_narrow_element_width_stores_at_declared_width() {
-        // B-2026-07-03-34: `Tensor.from([...])` stored its leaves at the leaf
+        // B-2026-07-03-35: `Tensor.from([...])` stored its leaves at the leaf
         // literals' DEFAULT width (i64/f64) rather than the binding's declared
         // NARROW element width, so every reader — which strides at
         // `tensor_elem_size(info.elem)` — landed on the wrong bytes: SILENT
@@ -47650,16 +47650,84 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_tensor_narrow_element_storage_and_ops() {
+        // B-2026-07-03-35: `Tensor.from` / `Tensor.full` now store elements at
+        // the annotated width (a bare int literal is i64, a float literal f64,
+        // so an uncoerced store wrote 8 bytes into a narrow-strided slot). Every
+        // reader — indexing, `sum`/`min`/`max`/`mean`, `map`/`reshape`/`zip_with`
+        // — reads the right bytes. Covers i32 (indexing + reductions + map +
+        // reshape + zip), u32 (sum), f32 (indexing + sum + mean, incl. the mean
+        // f32→f64 divide fix), and an f64 tensor from INTEGER literals (sitofp).
+        // `run` == `build` == default auto-par.
+        let src = r#"
+fn main() {
+    let t: Tensor[i32, [2, 3]] = Tensor.from([[4, 2, 7], [1, 5, 3]]);
+    println(f"{t[0, 0]} {t[1, 2]} {t.sum()} {t.min()} {t.max()}");
+    let m: Tensor[i32, [2, 3]] = t.map(|x| x + 1);
+    let r: Tensor[i32, [6]] = t.reshape([6]);
+    let z: Tensor[i32, [2, 3]] = t.zip_with(t, |a, b| a + b);
+    println(f"{m[0, 0]} {r[5]} {z[1, 2]}");
+    let u: Tensor[u32, [3]] = Tensor.from([30, 10, 20]);
+    let a: Tensor[i32, [3]] = Tensor.full([3], 7);
+    println(f"{u.sum()} {a[0]} {a.sum()}");
+    let f: Tensor[f32, [3]] = Tensor.from([1.5, 2.5, 3.5]);
+    println(f"{f[0]} {f[2]} {f.sum()} {f.mean()}");
+    let d: Tensor[f64, [3]] = Tensor.from([1, 2, 3]);
+    println(f"{d[0]} {d.sum()}");
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        // t[0,0]=4 t[1,2]=3 sum=22 min=1 max=7; map+1 m[0,0]=5; reshape r[5]=3;
+        // zip z[1,2]=6; u.sum=60; full a[0]=7 a.sum=21; f[0]=1.5 f[2]=3.5
+        // f.sum=7.5 f.mean=2.5; d from ints [1,2,3] d[0]=1 d.sum=6.
+        assert_eq!(out, "4 3 22 1 7\n5 3 6\n60 7 21\n1.5 3.5 7.5 2.5\n1 6\n");
+    }
+
+    #[test]
+    fn test_e2e_tensor_sorted_argsort_narrow_widths() {
+        // B-2026-07-03-35 fixed → `Tensor.sorted`/`argsort` sort every numeric
+        // width via the widened 8-byte scratch sort (i8/i16/i32 sext, u8/u16/u32
+        // zext, f32 fpext), mirroring the Column narrow-widths path. Covers i32
+        // (with ties), u32, and f32 tensors. `run` == `build` == default
+        // auto-par (only u64 stays rejected).
+        let src = r#"
+fn main() {
+    let ti: Tensor[i32, [5]] = Tensor.from([40, 10, 30, 20, 10]);
+    let si: Vec[i32] = ti.sorted();
+    println(f"{si[0]} {si[1]} {si[2]} {si[3]} {si[4]}");
+    let ai: Vec[i64] = ti.argsort();
+    println(f"{ai[0]} {ai[1]} {ai[2]} {ai[3]} {ai[4]}");
+    let tu: Tensor[u32, [4]] = Tensor.from([40, 10, 30, 20]);
+    let su: Vec[u32] = tu.sorted();
+    println(f"{su[0]} {su[1]} {su[2]} {su[3]}");
+    let au: Vec[i64] = tu.argsort();
+    println(f"{au[0]} {au[1]} {au[2]} {au[3]}");
+    let tf: Tensor[f32, [4]] = Tensor.from([2.5, 0.5, 3.5, 1.5]);
+    let sf: Vec[f32] = tf.sorted();
+    println(f"{sf[0]} {sf[1]} {sf[2]} {sf[3]}");
+    let af: Vec[i64] = tf.argsort();
+    println(f"{af[0]} {af[1]} {af[2]} {af[3]}");
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        // i32 [40,10,30,20,10] sorted [10,10,20,30,40]; argsort stable [1,4,3,2,0].
+        // u32 [40,10,30,20] sorted [10,20,30,40]; argsort [1,3,2,0].
+        // f32 [2.5,0.5,3.5,1.5] sorted [0.5,1.5,2.5,3.5]; argsort [1,3,0,2].
+        assert_eq!(
+            out,
+            "10 10 20 30 40\n1 4 3 2 0\n10 20 30 40\n1 3 2 0\n0.5 1.5 2.5 3.5\n1 3 0 2\n"
+        );
+    }
+
+    #[test]
     fn test_e2e_sorted_narrow_width_rejected_loudly() {
-        // Columns now sort every numeric width (see the narrow-widths test);
-        // the two remaining loud rejections under `karac build` are:
-        //   * a **u64** column — the scratch sort compares integers as SIGNED,
-        //     misordering values ≥ 2^63, and there is no room to widen past 64
-        //     bits; and
-        //   * **any narrow / f32 tensor** — a pre-existing narrow-tensor-storage
-        //     bug (`Tensor.from` writes 8-byte values narrow readers misread)
-        //     makes the buffer garbage before the sort runs.
-        // Each works under `karac run`.
+        // Both `Column` and `Tensor` now sort every numeric width EXCEPT u64
+        // (the narrow-tensor-storage blocker B-2026-07-03-35 is fixed, so narrow
+        // int / f32 tensors sort too — see `test_e2e_tensor_sorted_argsort_
+        // narrow_widths`). The one remaining loud rejection on each surface is a
+        // **u64** element: the scratch sort compares integers as SIGNED, which
+        // misorders values ≥ 2^63, and there is no room to widen past 64 bits.
+        // u64 sort works under `karac run` (the interpreter is width-agnostic).
         let col_u64 = r#"
 fn main() {
     let c: Column[u64] = Column.from_vec([5, 9, 3, 1]);
@@ -47670,25 +47738,15 @@ fn main() {
         let err = ir_result(col_u64).expect_err("a u64 column sort must be rejected");
         assert!(err.contains("u64 element Columns"), "got: {err}");
 
-        let tensor_f32 = r#"
+        let tensor_u64 = r#"
 fn main() {
-    let t: Tensor[f32, [4]] = Tensor.from([4.0, 2.0, 7.0, 1.0]);
-    let s: Vec[f32] = t.sorted();
+    let t: Tensor[u64, [4]] = Tensor.from([4, 2, 7, 1]);
+    let s: Vec[u64] = t.sorted();
     println(f"{s[0]}");
 }
 "#;
-        let err = ir_result(tensor_f32).expect_err("a narrow-width tensor sort must be rejected");
-        assert!(err.contains("i64 and f64 element tensors"), "got: {err}");
-
-        let tensor_i32 = r#"
-fn main() {
-    let t: Tensor[i32, [4]] = Tensor.from([4, 2, 7, 1]);
-    let s: Vec[i32] = t.sorted();
-    println(f"{s[0]}");
-}
-"#;
-        let err = ir_result(tensor_i32).expect_err("a narrow-width tensor sort must be rejected");
-        assert!(err.contains("narrow-tensor-storage bug"), "got: {err}");
+        let err = ir_result(tensor_u64).expect_err("a u64 tensor sort must be rejected");
+        assert!(err.contains("u64 element Tensors"), "got: {err}");
     }
 
     #[test]

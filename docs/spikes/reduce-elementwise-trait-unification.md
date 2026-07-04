@@ -607,13 +607,10 @@ B-2026-07-02-10..13, see the ledger.
   `_narrow_width_rejected_loudly` (now u64-column + narrow/f32-tensor);
   interpreter `column_sorted_argsort_narrow_widths_reduction`; typechecker
   `test_column_sorted_narrow_width_result_types`; memory_sanitizer
-  `asan_column_sorted_argsort_narrow_widths_no_leak`. **`Tensor` stays
-  i64/f64-only** — a narrow-element tensor is unusable under `build` *before*
-  the sort runs: **B-2026-07-03-34**, a pre-existing narrow-tensor-storage bug
-  where `Tensor.from` writes 8-byte values that narrow-width readers misread
-  (`t[i]` and `t.sum()` already diverge under `build`; reproduces on plain
-  indexing, independent of the sort work). The widening helpers are ready for
-  tensors too — once the storage bug is fixed the same path lifts them.
+  `asan_column_sorted_argsort_narrow_widths_no_leak`. At the time, **`Tensor`
+  stayed i64/f64-only** — a narrow-element tensor was unusable under `build`
+  *before* the sort ran (**B-2026-07-03-35**, the narrow-tensor-storage bug);
+  **S6c-8 fixed that bug and lifted the tensor rejection**.
 - **S6c-7** ✅ **(landed 2026-07-03)** — `map` / `zip_with` on the
   **`ElementwiseMap` trait** surface (bound-generic dispatch): `fn
   f[C: ElementwiseMap[i64]](c: ref C) -> C { c.map(|x| x * 2) }` and the binary
@@ -646,13 +643,36 @@ B-2026-07-02-10..13, see the ledger.
   memory_sanitizer `asan_ewmap_trait_bound_map_zip_freed_no_leak`. **Residual:**
   `product` on `Reduce` (generic mul-identity seed); element-type-changing
   `map` (`Fn(T) -> U`, needs the associated-type constructor).
-- **S6c** — remaining: `ElementwiseOrd` user impls; the narrow-tensor-storage
-  fix (B-2026-07-03-34) to unblock `Tensor.sorted`/`argsort` (+ all narrow
-  tensor ops) beyond i64/f64 under `build`; u64-column sort (needs an unsigned
-  scratch compare); `product` on the `Reduce` trait (bound-generic — `fold`
-  S6c-5 / `map`/`zip_with` S6c-7 done; `product` needs a generic mul-identity
-  seed); blanket `Vec[T]` impls; user trait-impl methods over builtin
-  containers (probed: interp "type 'unknown'", codegen loud fall-through).
+- **S6c-8** ✅ **(landed 2026-07-03)** — fixed **B-2026-07-03-35**, the
+  narrow-tensor-storage bug, and **lifted the S6c-6 tensor sort restriction** so
+  `Tensor.sorted`/`argsort` sort every numeric width like `Column` (only u64
+  stays rejected). Root cause: `Tensor.from` inferred the storage element from
+  the first compiled leaf — a bare int literal is i64, a float literal f64 — so
+  a `Tensor[i32/f32, ...]` literal stored 8-byte values into a buffer every
+  reader strided at the annotated narrow width (`t[i]`, `t.sum()`, … read
+  garbage under `build`; correct under `run`). Fix: `compile_tensor_from` and
+  `Tensor.full` now COERCE each leaf / the fill to the destination binding's
+  annotated element (threaded via `pending_let_tensor_info`, the mechanism
+  `Tensor.zeros`/`full` already used for dims) — narrow int trunc, `f32`
+  fptrunc, and int→float `sitofp` via a shared `coerce_scalar_to_tensor_elem`
+  helper. Exposed and also fixed a latent `Tensor.mean` verification failure
+  (`fdiv f32, f64`): the mean fold now `fpext`s an f32 sum accumulator to f64
+  before the divide (mean is declared f64 regardless). With storage correct,
+  `compile_tensor_sort` reuses the S6c-6 widening helpers (`sort_widen_value` /
+  `sort_widen_data_buffer` / `sort_build_vec_from_keys`). `run` ==
+  `KARAC_AUTO_PAR=0` == `build` for i32/u32/f32 tensor storage + indexing +
+  reductions + map/reshape/zip + sorted/argsort, and an f64 tensor from integer
+  literals. Tests: codegen `test_e2e_tensor_narrow_element_storage_and_ops` +
+  `test_e2e_tensor_sorted_argsort_narrow_widths` + reworked
+  `_narrow_width_rejected_loudly` (u64 column + tensor); interpreter
+  `tensor_narrow_element_storage_and_sort_reduction`; memory_sanitizer
+  `asan_tensor_sorted_argsort_narrow_widths_no_leak`.
+- **S6c** — remaining: `ElementwiseOrd` user impls; u64 column/tensor sort
+  (needs an unsigned scratch compare); `product` on the `Reduce` trait
+  (bound-generic — `fold` S6c-5 / `map`/`zip_with` S6c-7 done; `product` needs a
+  generic mul-identity seed); blanket `Vec[T]` impls; user trait-impl methods
+  over builtin containers (probed: interp "type 'unknown'", codegen loud
+  fall-through).
 
 ---
 

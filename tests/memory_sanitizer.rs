@@ -19292,6 +19292,46 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_tensor_sorted_argsort_narrow_widths_no_leak() {
+        // B-2026-07-03-35 fixed: narrow-width `Tensor.sorted` mallocs a widened
+        // 8-byte key copy, sorts it, narrows back into a `Vec[T]`-width buffer,
+        // and frees the scratch; narrow `argsort` mallocs a widened key view and
+        // frees it after the sort. Plus the tensor itself (`Tensor.from`) is a
+        // malloc'd block freed at scope exit. This asserts no leak / double-free
+        // of any of those over a loop — i32, u32, and f32 tensors. `let`-bound +
+        // indexed idiom.
+        assert_clean_asan_run(
+            r#"
+fn inner() -> i64 {
+    let ti: Tensor[i32, [4]] = Tensor.from([40, 10, 30, 20]);
+    let si: Vec[i32] = ti.sorted();
+    let ai: Vec[i64] = ti.argsort();
+    let tu: Tensor[u32, [3]] = Tensor.from([30, 10, 20]);
+    let us: Vec[u32] = tu.sorted();
+    let ua: Vec[i64] = tu.argsort();
+    let tf: Tensor[f32, [4]] = Tensor.from([2.5, 0.5, 3.5, 1.5]);
+    let fs: Vec[f32] = tf.sorted();
+    let fa: Vec[i64] = tf.argsort();
+    si.len() + ai[0] + us.len() + ua[0] + fs.len() + fa[0]
+}
+fn main() {
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 {
+        acc = acc + inner();
+        i = i + 1;
+    }
+    println(f"{acc}");
+}
+"#,
+            // si.len()=4, ai[0]=1, us.len()=3, ua[0]=1, fs.len()=4, fa[0]=1 → 14;
+            // *20 = 280.
+            &["280"],
+            "asan_tensor_sorted_argsort_narrow_widths_no_leak",
+        );
+    }
+
     /// B-2026-07-03-30 (Vec-element drain) — a struct field `Vec[String]` (whose
     /// elements own heap the outer buffer-free misses) is DRAINED per element by
     /// the synthesized struct drop when the owning struct is PLAIN-dropped (a

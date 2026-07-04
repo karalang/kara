@@ -19528,6 +19528,33 @@ fn main() {
 }
 
 #[test]
+fn tensor_narrow_element_storage_and_sort_reduction() {
+    // The `run` surface for narrow-width tensor storage + ops (the native
+    // backend gained these once B-2026-07-03-35 was fixed; the interpreter is
+    // width-agnostic, so this locks the parity). i32 indexing + sum, an f32
+    // tensor from float literals, an f64 tensor from INTEGER literals, and
+    // narrow tensor `sorted`/`argsort`.
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let t: Tensor[i32, [4]] = Tensor.from([40, 10, 30, 20]);
+    println(f"{t[0]} {t[3]} {t.sum()}");
+    let f: Tensor[f32, [3]] = Tensor.from([1.5, 2.5, 3.5]);
+    println(f"{f[0]} {f.sum()} {f.mean()}");
+    let d: Tensor[f64, [3]] = Tensor.from([1, 2, 3]);
+    println(f"{d.sum()}");
+    let si = t.sorted();
+    let ai = t.argsort();
+    println(f"{si[0]} {si[3]} | {ai[0]} {ai[3]}");
+}
+"#,
+    );
+    // t [40,10,30,20] t[0]=40 t[3]=20 sum=100; f sum=7.5 mean=2.5; d sum=6;
+    // t sorted [10,20,30,40] si[0]=10 si[3]=40; argsort [1,3,2,0] ai[0]=1 ai[3]=0.
+    assert_eq!(out, "40 20 100\n1.5 7.5 2.5\n6\n10 40 | 1 0\n");
+}
+
+#[test]
 fn primitive_trait_impl_direct_dispatch_by_declared_width() {
     // B-2026-07-03-5: a user trait impl on a PRIMITIVE target dispatched for a
     // direct value-receiver call under `karac run`. The interpreter's runtime

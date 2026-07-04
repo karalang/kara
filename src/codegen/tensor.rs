@@ -48,7 +48,7 @@ use crate::ast::{
 use crate::reduce_kernel::ReduceOp;
 use crate::token::Span;
 
-use super::kernel::{ContainerAccess, MapDest, MapKernelOp, MapOther};
+use super::kernel::{ContainerAccess, MapDest, MapKernelOp, MapOther, SortKey};
 use super::state::{TensorVarInfo, VarSlot};
 
 /// True iff `te` names an unsigned integer primitive — drives the
@@ -388,7 +388,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     let val_arg = args
                         .get(1)
                         .ok_or_else(|| "Tensor.full: missing value argument".to_string())?;
-                    self.compile_expr(&val_arg.value)?
+                    // Coerce the fill to the annotated element BEFORE the store
+                    // loop — a bare `2.5` compiles to f64 and a bare `7` to i64,
+                    // so filling a narrow / f32 tensor would write 8 bytes into
+                    // an `elem`-strided slot (B-2026-07-03-35 class: `full([2],
+                    // 2.5)` over an f32 tensor read back 0.0). `ones` already
+                    // builds an `elem`-typed constant, so it needs no coercion.
+                    let raw = self.compile_expr(&val_arg.value)?;
+                    self.coerce_scalar_to_tensor_elem(raw, info.elem)
                 };
                 self.emit_tensor_fill_loop(data, info.elem, count, fill);
             }
@@ -438,7 +445,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // the stored width would be 8 bytes while every reader (`t[i]`, `t.sum()`,
         // map/fold/sorted, …) strides at `tensor_elem_size(info.elem)` — an
         // 8-byte-write / narrow-read mismatch that silently corrupts element reads
-        // (B-2026-07-03-34). Store at the declared width and coerce each leaf to
+        // (B-2026-07-03-35). Store at the declared width and coerce each leaf to
         // it. The rank guard keeps a stale pending (belonging to an unrelated
         // outer tensor binding) from hijacking the element type; a bare/
         // unannotated `Tensor.from` (no pending) falls back to the leaf width,
@@ -471,7 +478,10 @@ impl<'ctx> super::Codegen<'ctx> {
         for (i, v) in leaf_vals.into_iter().enumerate() {
             // Narrow (or widen) the leaf to the declared element width so the
             // store stride matches every reader's `tensor_elem_size(elem)`.
-            let v = self.coerce_scalar_to_type(v, elem);
+            // `coerce_scalar_to_tensor_elem` additionally handles int→float
+            // (`sitofp`) for an integer literal in a float tensor (`Tensor[f64]
+            // = Tensor.from([1, 2, 3])`), which `coerce_scalar_to_type` omits.
+            let v = self.coerce_scalar_to_tensor_elem(v, elem);
             let slot = unsafe {
                 self.builder
                     .build_gep(
@@ -3263,19 +3273,17 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// `sorted() -> Vec[T]` / `argsort() -> Vec[i64]` (ElementwiseOrd, S6c) over
     /// ALL elements in flat C-order (a tensor has no null concept), empty tensor
-    /// → an empty Vec. Reuses the dense `Stats.sort` / `Stats.argsort`
-    /// scratch-sort machinery directly on the C-order element buffer.
-    ///
-    /// **i64/f64 elements only** under the native backend. Unlike `Column`
-    /// (which stores narrow elements at native width, so the widened scratch
-    /// sort lifts it to every numeric type — see `compile_column_sorted`), a
-    /// narrow-element *tensor* is unusable under `karac build` before the sort
-    /// even runs: `Tensor.from` writes 8-byte values into a buffer readers
-    /// stride at the annotated narrow width, so `t[i]` / `t.sum()` already
-    /// misread (ledgered pre-existing narrow-tensor-storage bug). Widening the
-    /// sort would only sort garbage, so narrow ints / `f32` (and u64) are
-    /// rejected LOUDLY here — each works under `karac run`, and the storage fix
-    /// unblocks the widened path for tensors too.
+    /// → an empty Vec. Elements are widened into the shared 8-byte scratch sort
+    /// ([`sort_widen_value`](super::Codegen::sort_widen_value)): i64/f64 pass
+    /// through, `i8`/`i16`/`i32` sext, `u8`/`u16`/`u32` zext, `f32` fpext — so
+    /// every numeric width matches `karac run` (unblocked by the B-2026-07-03-35
+    /// narrow-tensor-storage fix; before it, narrow tensor buffers were garbage
+    /// under `build` before the sort even ran, and this path rejected them). The
+    /// widened tensor path mirrors `compile_column_sorted`: `sorted` sorts a
+    /// widened copy then narrows each key back to `elem`; `argsort` sorts a
+    /// `0..n` index buffer keyed into the (widened, for narrow elems) data. Only
+    /// **u64** is rejected loudly (the signed scratch compare misorders values ≥
+    /// 2^63) — see [`sort_key_is_int`](super::Codegen::sort_key_is_int).
     fn compile_tensor_sort(
         &mut self,
         method: &str,
@@ -3283,28 +3291,35 @@ impl<'ctx> super::Codegen<'ctx> {
         unsigned: bool,
         t_ptr: PointerValue<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let is_int = match elem {
-            BasicTypeEnum::IntType(it) if it.get_bit_width() == 64 && !unsigned => true,
-            BasicTypeEnum::FloatType(ft) if ft.get_bit_width() == 64 => false,
-            _ => {
-                return Err(format!(
-                    "Tensor.{method} under the native backend (`karac build`) \
-                     supports i64 and f64 element tensors today. Narrow element \
-                     types (i8/i16/i32, u8/u16/u32, f32) and u64 are blocked by a \
-                     pre-existing narrow-tensor-storage bug (`Tensor.from` writes \
-                     8-byte values that narrow-width readers misread — `t[i]` and \
-                     `t.sum()` already diverge under build); each works under \
-                     `karac run`."
-                ));
-            }
-        };
+        let is_int = self.sort_key_is_int(elem, unsigned, method, "Tensor")?;
         let rank = self.tensor_load_rank(t_ptr);
         let count = self.tensor_count_runtime(t_ptr, rank);
         let data = self.tensor_data_ptr_dyn(t_ptr, rank, "t.sort.data");
         if method == "argsort" {
-            self.stats_argsort(data, count, is_int)
+            // Wide elems key directly into the live data; narrow / f32 elems key
+            // into a widened 8-byte copy freed after the sort.
+            if self.sort_elem_is_wide(elem) {
+                self.stats_argsort(data, count, is_int)
+            } else {
+                let keys = self.sort_widen_data_buffer(data, count, elem, unsigned);
+                let vec = self.stats_argsort(keys, count, is_int)?;
+                self.builder
+                    .build_call(self.free_fn, &[keys.into()], "t.sort.keyfree")
+                    .unwrap();
+                Ok(vec)
+            }
         } else {
-            self.stats_sort(data, count, is_int)
+            // `sorted`: sort a widened copy of the data, then narrow each key
+            // back to `elem` in the result Vec (the wide case is an identity
+            // widen + steal — byte-identical to the old `stats_sort`).
+            let key_buf = self.sort_widen_data_buffer(data, count, elem, unsigned);
+            let sk = if is_int {
+                SortKey::IntValue
+            } else {
+                SortKey::Value
+            };
+            self.emit_sort_scratch(key_buf, count, &sk);
+            Ok(self.sort_build_vec_from_keys(key_buf, count, elem))
         }
     }
 
@@ -3645,6 +3660,29 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// Element size in bytes for the supported element types.
+    /// Coerce a compiled scalar to a tensor's annotated element type before it
+    /// is stored (`Tensor.from` leaves, `Tensor.full` fill). A bare integer
+    /// literal compiles to `i64` and a bare float literal to `f64`, so storing
+    /// it uncoerced into an `elem`-strided slot writes the wrong byte width —
+    /// B-2026-07-03-35 (narrow int / `f32` reads back garbage, an f64-bit
+    /// integer reads back reinterpreted). Handles the int→float (`sitofp`) case
+    /// [`coerce_scalar_to_type`] omits; all same-domain widths (narrow int
+    /// trunc/sext, `f32` fptrunc, float widen) go through that shared helper.
+    fn coerce_scalar_to_tensor_elem(
+        &self,
+        val: BasicValueEnum<'ctx>,
+        elem: BasicTypeEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        match (val, elem) {
+            (BasicValueEnum::IntValue(iv), BasicTypeEnum::FloatType(ft)) => self
+                .builder
+                .build_signed_int_to_float(iv, ft, "t.elem.i2f")
+                .unwrap()
+                .into(),
+            _ => self.coerce_scalar_to_type(val, elem),
+        }
+    }
+
     fn tensor_elem_size(&self, elem: BasicTypeEnum<'ctx>) -> Result<u64, String> {
         match elem {
             BasicTypeEnum::FloatType(ft) => {
