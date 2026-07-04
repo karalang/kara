@@ -6303,10 +6303,14 @@ fn main() {
         // over the tuple via a single-`Binding` param, a `map` BEFORE enumerate,
         // `enumerate().take` (index counted per enumerated output),
         // `skip().enumerate` (enumerate re-indexes from 0 after the skip), and
-        // `enumerate().filter` on a tuple field. POD element type only — a
-        // heap-bearing tuple element (`Vec[(i64, String)]`) is blocked on the
-        // pre-existing tuple-heap double-free (B-2026-07-04-3) and falls through
-        // to the loud dispatch-fail instead of miscompiling.
+        // `enumerate().filter` on a tuple field. HEAP element sources
+        // (`Vec[(i64, String)]`) work when enumerate is the TERMINAL adaptor
+        // (the tuple is pushed straight into the result — B-2026-07-04-3 fixed
+        // the tuple construction); a NON-terminal enumerate whose collected
+        // element is heap-bearing (`enumerate().map(|p| p.1)`,
+        // `enumerate().filter().collect()`) still falls through to the loud
+        // dispatch-fail (a downstream `let p = tuple` aliases the heap buffer —
+        // B-2026-07-04-4) rather than miscompiling.
         if let Some(out) = run_program(
             r#"
 fn main() {
@@ -6328,12 +6332,20 @@ fn main() {
     let ef: Vec[(i64, i64)] = s.iter().enumerate().filter(|p| p.1 > 20i64).collect();
     let f0 = ef[0];
     println(f"{ef.len()} {f0.0} {f0.1}");
+    let hw: Vec[String] = Vec["red".to_string(), "green".to_string(), "blue".to_string()];
+    let he: Vec[(i64, String)] = hw.iter().enumerate().collect();
+    let h0 = he[0];
+    let h2 = he[2];
+    println(f"{he.len()} {h0.0} {h0.1} {h2.0} {h2.1}");
+    let hf: Vec[(i64, String)] = hw.iter().filter(|s| s.len() > 3i64).enumerate().collect();
+    let hf0 = hf[0];
+    println(f"{hf.len()} {hf0.0} {hf0.1}");
 }
 "#,
         ) {
             assert_eq!(
                 out,
-                "4 0 10 3 40\n10 120 340\n11 44\n2 1 20\n3 0 20\n2 2 30\n"
+                "4 0 10 3 40\n10 120 340\n11 44\n2 1 20\n3 0 20\n2 2 30\n3 0 red 2 blue\n2 0 green\n"
             );
         }
     }

@@ -400,6 +400,65 @@ fn main() {
     }
 
     #[test]
+    fn asan_for_loop_var_into_tuple_push_no_double_free() {
+        // B-2026-07-04-3: an inline tuple `(i, x)` whose heap component `x` is a
+        // `for`-loop element variable, pushed into a Vec, double-freed the heap
+        // component (exit 133/134) — codegen iterates the Vec in place so `x`
+        // ALIASES the source buffer; the tuple then aliased it too, and both the
+        // source's scope-exit free and the pushed Vec's element drop released
+        // it. `compile_tuple` now `maybe_defensive_copy_param_arg`s each element
+        // (exactly as `v.push(x)` / struct-literal fields / call args do), so a
+        // retaining source (for-loop borrow, owned param) is deep-copied into
+        // the tuple. Exercises `.iter()` iteration, owned iteration, the heap
+        // component in either tuple slot, and an owned-param-into-tuple — reading
+        // an element each time to expose the UAF. `.clone()` and plain-local
+        // elements (already clean) are the control.
+        assert_clean_asan_run(
+            r#"
+fn wrap_param(s: String, k: i64) -> Vec[(i64, String)] {
+    let mut v: Vec[(i64, String)] = Vec.new();
+    v.push((k, s));
+    return v;
+}
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let w: Vec[String] = Vec[
+            "alpha-loop-element-payload-aaaaaaaaaaaaaaaaaaaa".to_string(),
+            "bravo-loop-element-payload-bbbbbbbbbbbbbbbbbbbb".to_string(),
+            "charlie-loop-element-payload-cccccccccccccccccc".to_string()
+        ];
+        let mut a: Vec[(i64, String)] = Vec.new();
+        let mut i: i64 = 0i64;
+        for x in w.iter() { a.push((i, x)); i = i + 1i64; }
+        let pa = a[2];
+        let mut b: Vec[(String, i64)] = Vec.new();
+        for y in w.iter() { b.push((y, 9i64)); }
+        let pb = b[0];
+        let owned: Vec[String] = Vec[
+            "delta-owned-element-payload-dddddddddddddddddddd".to_string(),
+            "echo-owned-element-payload-eeeeeeeeeeeeeeeeeeeee".to_string()
+        ];
+        let mut c: Vec[(i64, String)] = Vec.new();
+        for z in owned { c.push((0i64, z)); }
+        let pc = c[1];
+        let d: Vec[(i64, String)] = wrap_param("param-element-payload-ffffffffffffffffffff".to_string(), 5i64);
+        let pd = d[0];
+        println(f"{pa.0} {pa.1} {pb.0} {pb.1} {pc.0} {pc.1} {pd.0} {pd.1}");
+        round = round + 1i64;
+    }
+}
+"#,
+            [
+                "2 charlie-loop-element-payload-cccccccccccccccccc alpha-loop-element-payload-aaaaaaaaaaaaaaaaaaaa 9 0 echo-owned-element-payload-eeeeeeeeeeeeeeeeeeeee 5 param-element-payload-ffffffffffffffffffff",
+            ]
+            .repeat(40)
+            .as_slice(),
+            "asan_for_loop_var_into_tuple_push_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_heap_env_closure_freed_no_leak() {
         assert_clean_asan_run(
             r#"

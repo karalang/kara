@@ -56,6 +56,19 @@ impl<'ctx> super::Codegen<'ctx> {
         for elem_expr in elems {
             let v = self.compile_expr(elem_expr)?;
             self.suppress_fstr_acc_if_moved_out(elem_expr);
+            // (d) B-2026-07-04-3 — a heap element that is a RETAINING source (an
+            //     owned String/Vec param, or a `for`-loop element BORROW, which
+            //     codegen iterates in place so the element aliases the source
+            //     Vec's buffer) must be DEEP-COPIED into the tuple, exactly as
+            //     the direct-consume sites (`v.push(x)`, struct-literal fields,
+            //     call args) do via `maybe_defensive_copy_param_arg`. Without
+            //     this the tuple aliases the source buffer and BOTH the source's
+            //     scope-exit free and the tuple's owner (e.g. the pushed Vec's
+            //     element drop) release it — a double-free (`for x in w.iter() {
+            //     v.push((i, x)) }` over `Vec[String]` trapped, exit 133). No-op
+            //     for a fresh temp / plain owned local (not in the retaining
+            //     sets), whose move-out is handled by the suppression below.
+            let v = self.maybe_defensive_copy_param_arg(elem_expr, v);
             self.suppress_source_vec_cleanup_for_arg(elem_expr);
             // (c) #23 — a Map/Set element folded into the tuple transfers
             //     ownership of its handle to the tuple. Maps are caller-retains

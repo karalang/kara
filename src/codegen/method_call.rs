@@ -3953,17 +3953,22 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(None);
         }
 
-        // `enumerate` over a HEAP-bearing element (`Vec[(i64, String)]`, …) is
-        // blocked on a pre-existing tuple-heap ownership bug (B-2026-07-04-3): a
-        // `(idx, <heap>)` tuple built from a `for`-loop element and pushed into
-        // a `Vec` double-frees the heap component (the hand-written
-        // `for x in w.iter() { v.push((i, x)) }` traps identically). Until that
-        // is fixed, bail to the loud dispatch-fail for a heap-element
-        // `enumerate` rather than emit the same double-free. POD-element
-        // `enumerate` (`Vec[(i64, i64)]`) is unaffected. The output element type
-        // is the Vec's sole generic arg.
+        // `enumerate` producing a HEAP-bearing tuple is safe only when it is the
+        // TERMINAL adaptor — the `(idx, <heap>)` tuple is then pushed straight
+        // into the result Vec (a move; verified leak/double-free-clean, incl.
+        // pre-stages like `skip`/`filter`/`take` before enumerate). A stage
+        // AFTER enumerate binds `let p = <tuple-local>`, which bit-copies the
+        // tuple and ALIASES its heap buffer → the alias and the tuple-local both
+        // free it (garbage / crash). So bail (loud dispatch-fail) for a
+        // NON-terminal enumerate whose collected element is heap-bearing
+        // (B-2026-07-04-4). A POD collected element (`enumerate().map(|p| p.0)`
+        // → `Vec[i64]`) is unaffected — the tuple's heap component is never
+        // aliased out and its own drop frees it. The B-2026-07-04-3 tuple
+        // CONSTRUCTION double-free (the `(idx, x)` build itself) is fixed
+        // separately in `compile_tuple`.
         let has_enumerate = steps.iter().any(|s| matches!(s, IterAdaptor::Enumerate));
-        if has_enumerate {
+        let enumerate_is_terminal = matches!(steps.last(), Some(IterAdaptor::Enumerate));
+        if has_enumerate && !enumerate_is_terminal {
             let elem_te = match &vec_te.kind {
                 TypeKind::Path(p) => p.generic_args.as_ref().and_then(|ga| match ga.first() {
                     Some(GenericArg::Type(t)) => Some(t.clone()),
