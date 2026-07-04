@@ -614,12 +614,44 @@ B-2026-07-02-10..13, see the ledger.
   (`t[i]` and `t.sum()` already diverge under `build`; reproduces on plain
   indexing, independent of the sort work). The widening helpers are ready for
   tensors too — once the storage bug is fixed the same path lifts them.
+- **S6c-7** ✅ **(landed 2026-07-03)** — `map` / `zip_with` on the
+  **`ElementwiseMap` trait** surface (bound-generic dispatch): `fn
+  f[C: ElementwiseMap[i64]](c: ref C) -> C { c.map(|x| x * 2) }` and the binary
+  `combine(a, b)` now type-check and build, each returning `Self = C` (a fresh
+  same-shaped container). Two new `impl ElementwiseMap for Column`/`Tensor`
+  blocks (`#[compiler_builtin]` `map`/`zip_with` stubs) formalize what the
+  intercepts already do; the typechecker's `map`/`zip_with` intercepts are
+  extended to fire on a `Type::TypeParam` bounded by `ElementwiseMap[T]` (the
+  general `bound_element_for_trait` helper — `fold`'s `reduce_bound_element`
+  generalized — reads the element off the bound), returning `Self = C`.
+  **Unlike `fold`, this needed real codegen work** because `map`/`zip_with`
+  return `Self` (a HEAP container, not a POD scalar): a bound-generic fn's
+  RETURN type `C` fell through `llvm_type_for_name`'s `i64` default →
+  `declare_mono_function` mis-declared the mono's return type as `i64` while the
+  body returned a `ptr` ("Function return type does not match operand type of
+  return inst" — build-only; `run` was fine). Fix: `augment_subst_from_handle_
+  params` (mono.rs) binds a handle-backed-container type param (`C` bound to a
+  Column/Tensor arg) to `ptr` in the mono `type_subst`, so the return (and any
+  `let d: C` local) lowers to the pointer shape. Run AFTER `mangle_mono_name`
+  so the mono cache key is byte-identical (only body/return lowering sees the
+  ptr) — Column-vs-Tensor stays disambiguated by `mono_handle_param_infos` +
+  the handle mangle axis. The fresh container is returned (moved out) through
+  the generic boundary and owned/freed by the caller — a new drop shape,
+  ASAN-clean (no double-free of the return or the `ref` operands). `run` ==
+  `KARAC_AUTO_PAR=0` == `build` across map (Column + Tensor) + zip_with. Tests:
+  codegen e2e `test_e2e_ewmap_trait_bound_map_zip`; interpreter
+  `stdlib_ewmap_trait_bound_map_zip_column_and_tensor`; typechecker
+  `test_ewmap_trait_bound_map_and_zip_return_self` +
+  `_map_wrong_arity_rejected` + `test_map_not_granted_by_unrelated_bound`;
+  memory_sanitizer `asan_ewmap_trait_bound_map_zip_freed_no_leak`. **Residual:**
+  `product` on `Reduce` (generic mul-identity seed); element-type-changing
+  `map` (`Fn(T) -> U`, needs the associated-type constructor).
 - **S6c** — remaining: `ElementwiseOrd` user impls; the narrow-tensor-storage
   fix (B-2026-07-03-34) to unblock `Tensor.sorted`/`argsort` (+ all narrow
   tensor ops) beyond i64/f64 under `build`; u64-column sort (needs an unsigned
-  scratch compare); `map`/`zip_with`/`product` on the `ElementwiseMap`/`Reduce`
-  *traits* (bound-generic — `fold` done in S6c-5, mirror the intercept
-  extension); blanket `Vec[T]` impls; user trait-impl methods over builtin
+  scratch compare); `product` on the `Reduce` trait (bound-generic — `fold`
+  S6c-5 / `map`/`zip_with` S6c-7 done; `product` needs a generic mul-identity
+  seed); blanket `Vec[T]` impls; user trait-impl methods over builtin
   containers (probed: interp "type 'unknown'", codegen loud fall-through).
 
 ---

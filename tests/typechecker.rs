@@ -27403,6 +27403,68 @@ fn test_fold_not_granted_by_unrelated_bound() {
 }
 
 #[test]
+fn test_ewmap_trait_bound_map_and_zip_return_self() {
+    // S6c: `map` / `zip_with` on the `ElementwiseMap` trait surface. Inside
+    // `fn f[C: ElementwiseMap[i64]]`, both return `Self = C`, so the result
+    // supports the container surface (`.sum()`); the closure element type is
+    // pushed down from the bound (`i64`). Before this slice, the closure
+    // operands typed as `?T0` + "no method 'map'".
+    typecheck_ok(
+        "fn doubled[C: ElementwiseMap[i64]](c: ref C) -> i64 {\n\
+             let d: C = c.map(|x| x * 2i64);\n\
+             d.sum()\n\
+         }\n\
+         fn combined[C: ElementwiseMap[i64]](a: ref C, b: ref C) -> i64 {\n\
+             let z: C = a.zip_with(b, |x, y| x + y);\n\
+             z.sum()\n\
+         }\n\
+         fn main() {\n\
+             let p: Column[i64] = Column.from_vec([1i64, 2i64]);\n\
+             let q: Column[i64] = Column.from_vec([3i64, 4i64]);\n\
+             let _ = doubled(p);\n\
+             let _ = combined(p, q);\n\
+         }",
+    );
+}
+
+#[test]
+fn test_ewmap_trait_bound_map_wrong_arity_rejected() {
+    // The bound-generic `map` intercept enforces the same 1-arg arity, naming
+    // the trait (`ElementwiseMap`) rather than a concrete container.
+    let errors = typecheck_errors(
+        "fn bad[C: ElementwiseMap[i64]](c: ref C) -> C {\n\
+             c.map(|x| x, 5i64)\n\
+         }\n\
+         fn main() {}",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("ElementwiseMap.map expects 1 argument")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_map_not_granted_by_unrelated_bound() {
+    // `map`/`zip_with` are `ElementwiseMap` methods — a type parameter bounded
+    // by an unrelated trait must NOT be handed the intercept; it falls through
+    // to ordinary trait-method resolution ("no method 'map'").
+    let errors = typecheck_errors(
+        "trait Foo { fn bar(ref self) -> i64; }\n\
+         fn nope[C: Foo](c: ref C) -> i64 {\n\
+             let _ = c.map(|x| x);\n\
+             0i64\n\
+         }\n\
+         fn main() {}",
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("no method 'map'")),
+        "{errors:?}",
+    );
+}
+
+#[test]
 fn test_column_map_result_type_is_self() {
     // `Column[T].map(|x| ...)` returns `Column[T]` (same element type), so the
     // result supports the column reduction surface (`.sum()`).

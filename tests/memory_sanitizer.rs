@@ -19126,6 +19126,48 @@ fn main() {
     }
 
     #[test]
+    fn asan_ewmap_trait_bound_map_zip_freed_no_leak() {
+        // S6c: `map` / `zip_with` on the `ElementwiseMap` trait — the fresh
+        // result container is allocated INSIDE a bound-generic fn and RETURNED
+        // (`-> C`) to the caller. This is a new drop shape: the callee's
+        // scope-exit cleanup must NOT free the returned container (it's moved
+        // out on return), and the caller's `let`-binding must free it exactly
+        // once. Also asserts the `ref` operands (`c` / `a` / `b`) aren't
+        // double-freed across the generic boundary. Looped for LSan.
+        assert_clean_asan_run(
+            r#"
+fn doubled[C: ElementwiseMap[i64]](c: ref C) -> C {
+    c.map(|x| x * 2)
+}
+fn combine[C: ElementwiseMap[i64]](a: ref C, b: ref C) -> C {
+    a.zip_with(b, |x, y| x + y)
+}
+fn inner() -> i64 {
+    let col: Column[i64] = Column.from_vec([1, 2, 3, 4]);
+    let dc: Column[i64] = doubled(col);
+    let t: Tensor[i64, [4]] = Tensor.from([1, 2, 3, 4]);
+    let dt: Tensor[i64, [4]] = doubled(t);
+    let a: Column[i64] = Column.from_vec([1, 2, 3, 4]);
+    let b: Column[i64] = Column.from_vec([10, 20, 30, 40]);
+    let z: Column[i64] = combine(a, b);
+    dc.sum() + dt.sum() + z.sum()
+}
+fn main() {
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 {
+        acc = acc + inner();
+        i = i + 1;
+    }
+    println(f"{acc}");
+}
+"#,
+            &["3000"], // (20 + 20 + 110) * 20
+            "asan_ewmap_trait_bound_map_zip_freed_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_column_tensor_argmin_freed_no_leak() {
         // S6c: `Column.argmin`/`argmax` and `Tensor.argmin`/`argmax` return a
         // POD `Option[i64]` (no heap), but the receiver columns / tensors own

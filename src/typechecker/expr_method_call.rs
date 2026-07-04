@@ -181,24 +181,38 @@ impl<'a> super::TypeChecker<'a> {
             .collect()
     }
 
-    /// The element type `T` of a `Reduce[T]` bound carried by a generic type
-    /// parameter (`C` under `C: Reduce[i64]` → `i64`), or `None` if `C` has no
-    /// such bound. Lets the `fold` intercept type a BOUND-GENERIC receiver's
-    /// `.fold` (`fn f[C: Reduce[i64]](c: ref C) { c.fold(0, |a, x| a + x) }`):
-    /// the element `T` is the trait bound's argument, the same value
-    /// `trait_bound_arg_subs` binds for the trait-level `T` in the method
-    /// signature. Only `Reduce` — the trait that declares `fold` — is
-    /// consulted; the closure's second parameter type IS this element.
-    fn reduce_bound_element(&mut self, type_param_name: &str) -> Option<Type> {
+    /// The element type of a `Trait[T]` bound (named `trait_name`) carried by a
+    /// generic type parameter — `C` under `C: Reduce[i64]` → `i64`, or `C`
+    /// under `C: ElementwiseMap[i64]` → `i64` — or `None` if `C` has no such
+    /// bound. Lets the closure-primitive intercepts (`fold` on `Reduce`,
+    /// `map`/`zip_with` on `ElementwiseMap`) type a BOUND-GENERIC receiver: the
+    /// element is the trait bound's argument, the same value `trait_bound_arg_
+    /// subs` binds for the trait-level `T` in the method signature, and the
+    /// closure's element parameter IS this type.
+    fn bound_element_for_trait(&mut self, type_param_name: &str, trait_name: &str) -> Option<Type> {
         let bounds = self.enclosing_bounds.get(type_param_name)?.clone();
         for b in &bounds {
-            if b.path.last().map(String::as_str) == Some("Reduce") {
+            if b.path.last().map(String::as_str) == Some(trait_name) {
                 if let Some((_, elem)) = self.trait_bound_arg_subs(b).into_iter().next() {
                     return Some(elem);
                 }
             }
         }
         None
+    }
+
+    /// The `Type::TypeParam` name of a receiver expression's type, peeling one
+    /// `ref`/`mut ref`. Used by the closure-primitive intercepts to recognize a
+    /// bound-generic receiver (`c: ref C`) and consult its trait bound.
+    fn receiver_type_param_name(obj_ty: &Type) -> Option<String> {
+        match obj_ty {
+            Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                Type::TypeParam(p) => Some(p.clone()),
+                _ => None,
+            },
+            Type::TypeParam(p) => Some(p.clone()),
+            _ => None,
+        }
     }
 
     /// Attempt to dispatch `T.method(args)` where `T` is a generic type
@@ -2038,16 +2052,8 @@ impl<'a> super::TypeChecker<'a> {
             // the inline-closure kernel exactly as `sum`/`max` do. Interp
             // dispatches on the concrete `Column`/`Tensor` Value at runtime.
             if elem_and_kind.is_none() {
-                let param_name = match &obj_ty {
-                    Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
-                        Type::TypeParam(p) => Some(p.clone()),
-                        _ => None,
-                    },
-                    Type::TypeParam(p) => Some(p.clone()),
-                    _ => None,
-                };
-                if let Some(pname) = param_name {
-                    if let Some(elem) = self.reduce_bound_element(&pname) {
+                if let Some(pname) = Self::receiver_type_param_name(&obj_ty) {
+                    if let Some(elem) = self.bound_element_for_trait(&pname, "Reduce") {
                         elem_and_kind = Some((elem, "Reduce"));
                     }
                 }
@@ -2096,10 +2102,22 @@ impl<'a> super::TypeChecker<'a> {
                     _ => None,
                 }
             };
-            let recv = match &obj_ty {
+            let mut recv = match &obj_ty {
                 Type::Ref(inner) | Type::MutRef(inner) => map_receiver(inner),
                 other => map_receiver(other),
             };
+            // Bound-generic receiver (`c: ref C` where `C: ElementwiseMap[T]`):
+            // `map` returns `Self = C`, and the closure param `T` is the bound's
+            // element. Mono routes the receiver to the inline-closure kernel
+            // (which allocates a fresh `Self`) exactly as the concrete surface
+            // does; interp dispatches on the concrete Column/Tensor Value.
+            if recv.is_none() {
+                if let Some(pname) = Self::receiver_type_param_name(&obj_ty) {
+                    if let Some(elem) = self.bound_element_for_trait(&pname, "ElementwiseMap") {
+                        recv = Some((elem, Type::TypeParam(pname), "ElementwiseMap"));
+                    }
+                }
+            }
             if let Some((elem, self_ty, container)) = recv {
                 if args.len() != 1 {
                     self.type_error(
@@ -2145,10 +2163,22 @@ impl<'a> super::TypeChecker<'a> {
                     _ => None,
                 }
             };
-            let recv = match &obj_ty {
+            let mut recv = match &obj_ty {
                 Type::Ref(inner) | Type::MutRef(inner) => zip_receiver(inner),
                 other => zip_receiver(other),
             };
+            // Bound-generic receiver (`a: ref C` where `C: ElementwiseMap[T]`):
+            // `zip_with` returns `Self = C`; `other` must also be `C`, and the
+            // closure is `Fn(T, T) -> T` over the bound's element. Same mono
+            // routing as `map` (fresh `Self` allocation); interp dispatches on
+            // the concrete Column/Tensor Value.
+            if recv.is_none() {
+                if let Some(pname) = Self::receiver_type_param_name(&obj_ty) {
+                    if let Some(elem) = self.bound_element_for_trait(&pname, "ElementwiseMap") {
+                        recv = Some((elem, Type::TypeParam(pname), "ElementwiseMap"));
+                    }
+                }
+            }
             if let Some((elem, self_ty, container)) = recv {
                 if args.len() != 2 {
                     self.type_error(

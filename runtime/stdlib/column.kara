@@ -283,3 +283,21 @@ impl[T] Reduce[T] for Column[T] {
         loop {}
     }
 }
+
+// `ElementwiseMap[T]` surface-trait impl (S6c) — pure formalization, like the
+// `Reduce` block above: the method set mirrors the inherent `map`/`zip_with`
+// `#[compiler_builtin]`s, and a concrete-receiver call dispatches through the
+// same typechecker/interpreter/codegen intercepts (these bodies never run).
+// What it adds is bound-generic dispatch: `fn f[C: ElementwiseMap[i64]](c: ref
+// C) -> C { c.map(|x| x * 2) }` accepts a `Column[i64]` and a `Tensor[i64, S]`.
+impl[T] ElementwiseMap[T] for Column[T] {
+    #[compiler_builtin]
+    fn map(ref self, f: Fn(T) -> T) -> Self {
+        loop {}
+    }
+
+    #[compiler_builtin]
+    fn zip_with(ref self, other: ref Self, f: Fn(T, T) -> T) -> Self {
+        loop {}
+    }
+}

@@ -46972,6 +46972,42 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_ewmap_trait_bound_map_zip() {
+        // S6c: `map` / `zip_with` on the `ElementwiseMap` trait surface, through
+        // a bound-generic `fn f[C: ElementwiseMap[i64]]`. Both return `Self = C`
+        // (a fresh container) — the codegen enabler is `augment_subst_from_
+        // handle_params`: binding the handle type param `C` to `ptr` in the mono
+        // subst so the mono's RETURN type lowers to the container pointer, not
+        // the `i64` default (else "Function return type does not match operand
+        // type of return inst"). The mono handle param still registers as a
+        // Column/Tensor, so `c.map(...)` / `a.zip_with(b, ...)` reach the same
+        // inline-closure kernels the concrete surface uses. Covers map on both
+        // containers + zip_with on Column, result bound and reduced.
+        let src = r#"
+fn doubled[C: ElementwiseMap[i64]](c: ref C) -> C {
+    c.map(|x| x * 2)
+}
+fn combine[C: ElementwiseMap[i64]](a: ref C, b: ref C) -> C {
+    a.zip_with(b, |x, y| x + y)
+}
+fn main() {
+    let col: Column[i64] = Column.from_vec([1, 2, 3]);
+    let t: Tensor[i64, [3]] = Tensor.from([10, 20, 5]);
+    let a: Column[i64] = Column.from_vec([1, 2, 3]);
+    let b: Column[i64] = Column.from_vec([10, 20, 30]);
+    let dc: Column[i64] = doubled(col);
+    let dt: Tensor[i64, [3]] = doubled(t);
+    let z: Column[i64] = combine(a, b);
+    println(f"{dc.sum()} {dt.sum()}");
+    println(f"{z.sum()}");
+}
+"#;
+        // doubled col = [2,4,6] → 12; doubled t = [20,40,10] → 70; combine → [11,22,33] → 66.
+        let out = run_program(src).expect("program should compile and run");
+        assert_eq!(out, "12 70\n66\n");
+    }
+
+    #[test]
     fn test_e2e_builtin_column_tensor_range() {
         // The BAKED `Reduce[T]::range` DEFAULT method (`max - min`) on the
         // BUILTIN implementors `Column[T]` / `Tensor[T, S]`. These don't inherit

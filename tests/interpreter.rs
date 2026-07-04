@@ -19168,6 +19168,38 @@ fn main() {
 }
 
 #[test]
+fn stdlib_ewmap_trait_bound_map_zip_column_and_tensor() {
+    // S6c: `map` / `zip_with` on the `ElementwiseMap` trait surface — a
+    // `fn f[C: ElementwiseMap[i64]]` body may call `c.map(|x| ...)` /
+    // `a.zip_with(b, |x, y| ...)`, each returning `Self = C` (a fresh
+    // same-shaped container). Dispatched to the concrete implementor's kernel
+    // per instantiation (Column nulls preserved; Tensor dense). The result
+    // container is bound and reduced (`.sum()`) to observe it.
+    let out = run_no_errors(
+        r#"
+fn doubled[C: ElementwiseMap[i64]](c: ref C) -> C {
+    c.map(|x| x * 2)
+}
+fn combine[C: ElementwiseMap[i64]](a: ref C, b: ref C) -> C {
+    a.zip_with(b, |x, y| x + y)
+}
+fn main() {
+    let col: Column[i64] = Column.from_vec([1, 2, 3]);
+    let t: Tensor[i64, [3]] = Tensor.from([10, 20, 5]);
+    let a: Column[i64] = Column.from_vec([1, 2, 3]);
+    let b: Column[i64] = Column.from_vec([10, 20, 30]);
+    let dc: Column[i64] = doubled(col);
+    let dt: Tensor[i64, [3]] = doubled(t);
+    let z: Column[i64] = combine(a, b);
+    println(f"{dc.sum()} {dt.sum()}");
+    println(f"{z.sum()}");
+}
+"#,
+    );
+    assert_eq!(out, "12 70\n66\n");
+}
+
+#[test]
 fn builtin_column_tensor_range_default_method() {
     // The BAKED `Reduce[T]::range` DEFAULT (`max - min`) on the BUILTIN
     // `Column[T]` / `Tensor[T, S]` implementors. They don't inherit it via the

@@ -324,3 +324,19 @@ impl[T, ...S] Reduce[T] for Tensor[T, S] {
         loop {}
     }
 }
+
+// `ElementwiseMap[T]` surface-trait impl (S6c) — see the matching Column block:
+// pure formalization of the inherent `map`/`zip_with` so `Tensor[T, S]`
+// satisfies `ElementwiseMap[T]` bounds; concrete AND bound-generic dispatch
+// both route through the existing intercepts (the bodies below never run).
+impl[T, ...S] ElementwiseMap[T] for Tensor[T, S] {
+    #[compiler_builtin]
+    fn map(ref self, f: Fn(T) -> T) -> Self {
+        loop {}
+    }
+
+    #[compiler_builtin]
+    fn zip_with(ref self, other: ref Self, f: Fn(T, T) -> T) -> Self {
+        loop {}
+    }
+}

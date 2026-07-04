@@ -108,6 +108,56 @@ impl<'ctx> super::Codegen<'ctx> {
         out
     }
 
+    /// Bind a handle-backed-container type param (`C` under `c: ref C` where
+    /// the arg is a `Column`/`Tensor`) to its `ptr` LLVM shape in the mono
+    /// subst. `infer_type_args` can't recover this — the element is erased and
+    /// the arg value is a bare `ptr` — so a bare-type-param appearing in the
+    /// RETURN position (`fn f[C: ElementwiseMap[i64]](c: ref C) -> C`, i.e.
+    /// `map`/`zip_with` returning `Self`) or in a `let d: C` local would fall
+    /// through `llvm_type_for_name`'s `i64` default and mis-declare the mono's
+    /// return type ("Function return type does not match operand type of return
+    /// inst" — a `ret ptr` in an `i64`-returning fn). Column-vs-Tensor
+    /// discrimination stays in `mono_handle_param_infos`; the LLVM SHAPE is
+    /// `ptr` for both, so binding the shape here is unambiguous. `entry().
+    /// or_insert` so a genuine `infer_type_args` binding is never overwritten.
+    fn augment_subst_from_handle_params(
+        &self,
+        func: &Function,
+        args: &[CallArg],
+        subst: &mut HashMap<String, BasicTypeEnum<'ctx>>,
+    ) {
+        let Some(gp) = &func.generic_params else {
+            return;
+        };
+        let ptr_ty = self.context.ptr_type(AddressSpace::default()).into();
+        for (param, arg) in func.params.iter().zip(args.iter()) {
+            let peeled = match &param.ty.kind {
+                TypeKind::Ref(inner) | TypeKind::MutRef(inner) => inner.as_ref(),
+                _ => &param.ty,
+            };
+            let TypeKind::Path(path) = &peeled.kind else {
+                continue;
+            };
+            if path.segments.len() != 1 || path.generic_args.is_some() {
+                continue;
+            }
+            let name = &path.segments[0];
+            if !gp.params.iter().any(|p| !p.is_const && &p.name == name) {
+                continue;
+            }
+            let key = (arg.value.span.offset, arg.value.span.length);
+            if self.column_typed_exprs.contains_key(&key)
+                || self.tensor_typed_exprs.contains_key(&key)
+            {
+                // OVERWRITE, not `or_insert`: `infer_type_args` already bound
+                // this handle param to the `i64` default (a `Column`/`Tensor`
+                // arg is a bare `ptr` it can't resolve), and `ptr` is the one
+                // correct LLVM shape for a handle-backed container.
+                subst.insert(name.clone(), ptr_ty);
+            }
+        }
+    }
+
     /// Bind container-element type params from an identifier arg's
     /// registered element type (`vec_elem_types` / `slice_elem_types` /
     /// `set_elem_types` / `map_key_types` / `map_val_types`). Complements
@@ -483,6 +533,14 @@ impl<'ctx> super::Codegen<'ctx> {
             self.mono_handle_param_infos
                 .insert(mangled.clone(), handle_params);
         }
+        // Bind handle-backed-container type params (`C` bound to a Column/Tensor
+        // arg) to `ptr` so a bare-`C` RETURN (`map`/`zip_with` → `Self`) or a
+        // `let d: C` local lowers to the pointer shape, not the `i64` default
+        // (the "return type does not match operand type" verifier error). Done
+        // AFTER `mangle_mono_name` above so the mangled name is byte-identical
+        // to before — the injection changes only the `type_subst` the body /
+        // return lowering consults, never the mono cache key.
+        self.augment_subst_from_handle_params(&generic_fn, args, &mut subst);
 
         // Slice 8y: per-call-site decision on whether the caller
         // takes the state-machine intercept path or falls through to
