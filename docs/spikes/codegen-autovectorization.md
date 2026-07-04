@@ -1,114 +1,92 @@
-# Spike: codegen auto-vectorization (scalar-only loops vs rustc/clang SIMD)
+# Spike: codegen auto-vectorization (kata #59 gap) — RESOLVED: not vectorization
 
-**Status:** ⬜ **PROFILED 2026-07-04 — confirmed finding, not yet root-caused in karac source, no
-fix attempted.** On a tight numeric-loop workload karac emits **fully scalar** machine code
-(0 SIMD instructions) where `rustc -O` / `clang -O3` auto-vectorize the identical loops
-(thousands of NEON ops). Measured ~1.5× runtime gap that is stable across representation and
-allocation changes — a broad codegen lever if karac can be made to vectorize, not a
-kata-specific quirk. Next step is to inspect karac's LLVM pass pipeline / opt level (does it
-run the loop + SLP vectorizers at all?); the fix could be as small as a pass-manager/opt-level
-setting or as involved as reshaping the emitted IR. **Do not assume the mechanism — confirm it
-in `src/codegen.rs`'s optimization setup first.**
+**Status:** ✅ **RESOLVED 2026-07-04 — auto-vectorization RULED OUT.** The kata-#59 1.46× Rust gap
+is **not** a vectorization gap. Rigorous S0 refuted it: the loop that "didn't vectorize" is a
+weighted integer reduction (`s += a[i]·(i+1)`) that **no compiler vectorizes** — clang -O2, clang
+-O3, and rustc -O all emit 0 vector ops for it, same as karac. The original "karac 0 SIMD vs Rust
+2589 SIMD" reading was a **whole-binary confound** (Rust statically links a SIMD-heavy std; the
+2589 was mostly memcpy/format/panic machinery, not the kata loop). The real cause is Kāra's
+**default safety checks** — overflow-checked arithmetic + bounds-checked indexing — the exact
+tradeoff already resolved in [overflow-check-elision.md](overflow-check-elision.md): the lever is
+the `wrapping_*` / scoped opt-out, **not** a bigger prover or a vectorizer change. No codegen
+change is warranted from this spike.
 
-**Question this spike gates:** Kata [#59 Spiral Matrix II](../../../kara-katas/leetcode/1-100/59-spiral-matrix-ii/)
-runs 1.46× behind Rust on a nested-`Vec[Vec[i64]]` generate-and-checksum workload — heavier
-than the corpus norm (most compute katas sit at 1.0–1.1× of Rust). Is the gap something
-specific to that kata (nested indexing, allocation), or a general karac codegen limitation?
-And if general, is closing it a small pipeline fix or a deep IR-reshaping project?
+**Question this spike gated:** kata [#59 Spiral Matrix II](../../../kara-katas/leetcode/1-100/59-spiral-matrix-ii/)
+runs 1.46× behind Rust on a generate-and-checksum workload. First guess (in the kata README) was
+nested `Vec[Vec]` indexing; the first cut of *this* spike guessed auto-vectorization. Both were
+wrong. What is the gap actually?
 
 ## Method
 
-Decomposed the kata-59 workload (K=180k iters, each generates an n×n spiral matrix for
-rotating n=12..20 and folds a position-weighted checksum over every cell) by rewriting it to
-remove one suspected cost at a time, timing each on M5 Pro with `hyperfine --warmup 5`, and
-disassembling the hot loops with `otool -tvV`. All variants print the identical sink
-(1,100,752,800,000), so they are the same computation.
+Decomposed the workload by rewriting it to remove one suspected cost at a time (nested→flat,
+per-iter-alloc→reused-buffer, checked→wrapping, checked-index→`get_unchecked`), timing each with
+`hyperfine` on M5 Pro and disassembling hot loops with `otool -tvV`. Every variant prints the
+identical sink, so they are the same computation. Cross-checked the vectorization question against
+`clang -O2/-O3` and `rustc -O` on the *identical* kernel.
 
 ## Findings
 
-**The ~1.5× ratio is invariant to representation and allocation:**
+**1. The ratio is invariant to representation and allocation (~1.5× throughout).** Nested→flat is
+~2.2× on *both* sides; removing per-iter allocation drops both similarly. Neither moves the
+Kāra:Rust ratio. → not nesting, not allocation.
 
-| variant | Kāra | Rust | ratio |
-|---|---|---|---|
-| nested `Vec[Vec[i64]]` (`n+1` allocs/iter) | 114.0 ms | 78.2 ms | 1.46× |
-| flat `Vec[i64]`, index `i·n+j` (1 alloc/iter) | 51.3 ms | 33.7 ms | 1.52× |
-| flat, reused buffer (0 allocs in the loop) | 39.0 ms | 26.3 ms | 1.48× |
+**2. Vectorization is not the cause — nobody vectorizes the kata's loop.** The checksum is
+`s += g[i]·(i+1)`, a weighted integer reduction. Vector-op count of *that specific function*:
 
-Going nested → flat is ~2.2× on **both** sides (nesting is expensive for everyone — double
-indirection + `n` extra allocations), and removing per-iter allocation drops both by a similar
-absolute amount. Neither moves the **Kāra:Rust ratio**, which stays ~1.5×.
+| kernel | karac (`default<O2>`) | clang -O2 | clang -O3 | rustc -O |
+|---|---|---|---|---|
+| `s += a[i]` (add-reduction) | **14** | vec | vec | vec |
+| `s += a[i]·2` (constant-scaled) | **18** | vec | vec | vec |
+| `s += a[i]·(i+1)` (induction-weighted) | 0 | 0 | 0 | 0 |
+| `s += a[i]·b[i]` (dot product) | 0 | 0 | 0 | 0 |
 
-**The cause is auto-vectorization.** Disassembling the flat reused-buffer binaries:
+karac vectorizes exactly what LLVM vectorizes (simple and constant-scaled reductions) and, like
+every LLVM front-end, does **not** vectorize the induction-weighted / dual-varying multiply-reduce
+at -O2/-O3. So karac's vectorizer works fine; the kata loop simply isn't a vectorizable shape for
+anyone. The earlier "0 vs 2589" was a whole-binary count dominated by Rust std.
 
-- `otool -tvV rust_binary | grep -cE '\bq[0-9]+\b|\.2d|\.16b'` → **2589** vector instructions.
-- Same over the karac binary → **0**.
+**3. The gap is Kāra's default safety checks.** Isolating the pure checksum reduction with clean
+(wrapping, unchecked) arithmetic put karac at **1.13×** of Rust — the reduction codegen is near
+parity. Running the *full* reused-buffer workload with everything wrapping + unchecked reads:
 
-Rust emits NEON SIMD for the checksum reduction (`ldr q0, …` + vector multiply-add) and the
-fill; karac emits a purely scalar loop. The karac loop body also carries, per element, a
-bounds-check (`cmp x, #0x190` [=400, the buffer len] + `b.hs <trap>`) and an
-overflow-checked index multiply (`mul` + `cmp x, x, asr #63`) — both are per-element
-conditional traps, exactly the shape that blocks LLVM's vectorizer.
+| variant (flat, reused buffer, K=180k) | wall | vs Rust |
+|---|---|---|
+| kāra, **checked** (default) | 39.0 ms | 1.48× |
+| kāra, **wrapping + unchecked reads** | **27.4 ms** | **1.04× — parity** |
+| rust (release = wrapping, bounds mostly elided) | 26.3 ms | — |
 
-**But removing those checks individually did NOT enable vectorization:**
-
-- Running linear index (no `i·n` multiply, so no per-element overflow check): **0** vector ops,
-  40.7 ms — unchanged.
-- `unsafe { g.get_unchecked(idx) }` in the checksum (no bounds check on the read): **0** vector
-  ops, 41.2 ms — unchanged.
-
-So while the checks are *a* reason a naive vectorizer would bail, removing them one at a time
-doesn't flip karac to vectorized output. That points less at "one check blocks it" and more at
-**karac's LLVM pipeline not running (or not succeeding at) auto-vectorization on these loops at
-all** — the whole binary has zero vector instructions across four different variants. The fill
-loop additionally has a checked `v = v + 1` loop-carried increment (a trap-carrying recurrence)
-that would block the fill even if reads were clean, but that does not explain the checksum
-reduction staying scalar under `get_unchecked`.
-
-## What is NOT yet known (do this first)
-
-The mechanism is unconfirmed. Before any fix, inspect karac's codegen optimization setup in
-`src/codegen.rs` (the LLVM `PassManager` / `PassBuilderOptions` / target-machine opt level):
-
-1. **Does karac run the loop-vectorizer + SLP-vectorizer passes at all?** If AOT codegen builds
-   at a low opt level or a custom pass list that omits them, that alone explains 0 SIMD, and the
-   fix is a pipeline change (potentially a few lines) with corpus-wide payoff.
-2. **If the passes run, what makes them bail?** Candidates in priority order: the per-element
-   bounds-check traps (needs bounds-check elision to feed the vectorizer clean IR — related to
-   [overflow-check-elision.md](overflow-check-elision.md), which found LLVM already elides the
-   *provable* checks but did not look at the vectorization angle); the checked-arithmetic
-   loop-carried recurrence in fill loops; or reduction IR that isn't in a vectorizer-recognized
-   form. `-mllvm -pass-remarks-analysis=loop-vectorize` (or the inkwell equivalent) on a minimal
-   kernel would report exactly why it bails.
-3. **Target features.** Confirm the target machine is told the host supports NEON/the right
-   feature set — a missing `+neon`/CPU string can silently disable vectorization even with the
-   passes enabled.
+Removing the overflow checks (wrapping arithmetic) and the read bounds checks lands karac on Rust.
+Split roughly evenly between the fill loop's checks and the checksum's. That is the whole gap.
 
 ## Decision
 
-None yet — this spike records the finding and the investigation plan, not a verdict. The
-finding is strong (0 vs 2589 SIMD, ratio invariant across 5 variants) and the payoff is broad
-(any vectorizable numeric kernel in the corpus), so it is worth the pipeline inspection in step
-1 before deciding scope. If step 1 shows the vectorizer passes simply aren't in the AOT
-pipeline, this becomes a high-ROI slice; if they run and bail on the checked-IR shape, it
-converges with the overflow/bounds-check-elision work and is a larger project. Explicitly **not**
-assumed: that this is "just bounds checks" (removing them didn't help) or "just nested
-indexing" (the kata-59 README's original guess, refuted here).
+**No change from this spike.** The finding reduces to the already-decided
+[overflow-check-elision.md](overflow-check-elision.md) conclusion: karac is *safe by default*
+(traps on overflow, bounds-checks) and therefore trails *release*-Rust (unchecked arithmetic) by
+the cost of the checks — while matching *checked*-Rust. The lever, if the ~1.3–1.5× on
+check-dense integer kernels matters, is the existing `wrapping_{add,sub,mul}` opt-out (and a
+possible scoped `#[wrapping]` / `unchecked_index`), **not** a prover and **not** a vectorizer
+change — building an auto-vectorization pass would do nothing here, because the hot loop is
+unvectorizable for LLVM regardless of language.
 
-## Proposed slices (if greenlit after step-1 inspection)
+The kata #59 README has been corrected to state the safety-check cause (it carried the
+nested-indexing guess, then the vectorization guess — both now refuted in-repo).
 
-1. **S0 — pipeline audit.** Read `src/codegen.rs`'s opt setup; run a *minimal* known-vectorizable
-   kernel (`for i in 0..n { s += a[i] }` over a flat `Vec[i64]`) and check the emitted asm for
-   vector ops. Confirms whether the passes run. Cheap, decides everything downstream.
-2. **S1 (if passes absent) — enable loop + SLP vectorizers** in the AOT pass pipeline; A/B the
-   corpus's numeric katas (#54, #59, the stats/tensor kernels) for speedup + zero output/ASAN
-   regressions.
-3. **S1′ (if passes present but bail) — feed clean IR:** scope bounds-check elision *specifically
-   as a vectorization enabler* (narrower than a general prover — only needs the in-bounds proof
-   for counted loops over a known-length `Vec`), and re-measure.
+## Lesson
+
+Two wrong hypotheses (nested indexing → vectorization) died before the real, mundane cause
+(default safety checks). Two process notes for the next perf investigation:
+
+- **Never count vector ops over the whole binary** — statically-linked std/runtime dominates. Count
+  them in the *specific function* (`otool … | awk '/_fn:/{…}'`), and confirm against clang/rustc on
+  the *same* kernel before blaming the front-end.
+- **Decompose by removing one variable at a time** (representation, allocation, checks) and watch
+  the *ratio*, not the absolute time. The ratio staying flat across nested/flat/reused is what
+  killed the nesting and allocation stories; wrapping+unchecked reaching parity is what identified
+  the real one.
 
 ## Cross-references
 
-- Motivating measurement + full decomposition table: [kata #59 § Benchmarks](../../../kara-katas/leetcode/1-100/59-spiral-matrix-ii/README.md).
-- Related check-elision work (LLVM already elides *provable* overflow checks, but the
-  vectorization-blocking angle was not examined): [overflow-check-elision.md](overflow-check-elision.md).
-- Independence/`noalias` levers that also gate vectorization: [independence-noalias-ilp.md](independence-noalias-ilp.md).
+- Root cause + prior decision: [overflow-check-elision.md](overflow-check-elision.md).
+- Motivating measurement: [kata #59 § Benchmarks](../../../kara-katas/leetcode/1-100/59-spiral-matrix-ii/README.md).
+- `noalias`/independence levers (also gate vectorization where a loop *is* vectorizable): [independence-noalias-ilp.md](independence-noalias-ilp.md).
