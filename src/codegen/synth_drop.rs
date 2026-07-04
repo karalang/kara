@@ -841,6 +841,33 @@ impl<'ctx> super::Codegen<'ctx> {
     /// type identification uses `struct_field_type_names` (first path
     /// segment of each field's source TypeExpr), so a field typed
     /// `Vec[i64]` is detected by its first segment "Vec".
+    /// True iff a `Vec[elem]` FIELD's `elem` owns heap that the outer buffer
+    /// free misses AND `vec_elem_agg_drop_for_type_expr` does not already cover
+    /// it — i.e. a *direct* `String`/`str`, a `Map`/`Set`, or a nested
+    /// `Vec`/`VecDeque` element. For these the struct-drop field drain must call
+    /// `emit_drop_fn_for_type_expr` per element (the top-level `FreeVecBuffer`
+    /// drain has bespoke inline branches for exactly this set; the struct-field
+    /// drain reuses the recursive drop family instead). The set is EXACTLY the
+    /// element shapes `emit_vecstr_defensive_copy`'s element-deep mode can
+    /// duplicate, so the by-value-param entry-copy (`param_own.rs`) stays
+    /// symmetric with this deeper drop (copy-depth == drop-depth, the invariant
+    /// in `param_own.rs`'s module doc). A heap-bearing TUPLE element is
+    /// deliberately EXCLUDED — the entry-copy can't deepen it, so deepening its
+    /// drop alone would double-free a by-value-param-retained `Vec[(.., String)]`
+    /// field; that element stays a tracked outer-only remainder. Named user
+    /// struct/enum/shared/Option elements are NOT listed either —
+    /// `vec_elem_agg_drop_for_type_expr` already returns their precise (possibly
+    /// `None`, for a heapless one) drop. Scalars own no heap and stay `None`.
+    pub(super) fn elem_te_needs_direct_recursive_drain(elem_te: &TypeExpr) -> bool {
+        match &elem_te.kind {
+            TypeKind::Path(p) => matches!(
+                p.segments.first().map(String::as_str),
+                Some("String" | "str" | "Vec" | "VecDeque" | "Map" | "HashMap" | "Set" | "HashSet")
+            ),
+            _ => false,
+        }
+    }
+
     pub(super) fn emit_struct_drop_synthesis(
         &mut self,
         struct_name: &str,
@@ -925,7 +952,8 @@ impl<'ctx> super::Codegen<'ctx> {
             /// ptr (`emit_enum_drop_switch`). `Option`/`Result` are excluded
             /// (their inline payloads are handled by the let-binding inline-drop
             /// machinery, not struct drop) — their struct-field payload leak is
-            /// a separate, still-bounded remainder.
+            /// a separate, still-bounded remainder (B-2026-07-03-28 facet A,
+            /// blocked on the caller-retains param model; see the ledger).
             EnumField,
         }
         let mut kinds: Vec<FieldDrop> = field_kinds
@@ -1015,10 +1043,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // #15 — enum-field detection: a field the passes above left `None`
         // whose declared type name is a heap-bearing, non-shared user enum.
         // Name-based (an enum's LLVM layout — all-i64 words — is invisible to
-        // the type-driven nested-aggregate pass). `Option`/`Result` are
-        // skipped: their inline payloads are dropped by the let-binding
-        // inline-drop machinery, and routing them through the enum drop switch
-        // here would risk double-freeing that path.
+        // the type-driven nested-aggregate pass). `Option`/`Result` are skipped
+        // HERE (the enum drop switch is the wrong machinery for their inline
+        // overlay); they take the dedicated `OptionInline` pass below instead.
         for (idx, k) in kinds.iter_mut().enumerate() {
             if *k != FieldDrop::None {
                 continue;
@@ -1106,11 +1133,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     // element's String/enum payload (the Vec-element peer of
                     // the #15 / #18 / #21 struct-drop-ignores-heap-leaf family).
                     // `vec_elem_agg_drop_for_type_expr` returns the per-element
-                    // drop fn for a struct / enum / shared element (→ that
-                    // type's own `__karac_drop_*`); a `String` field (same
-                    // `{ptr,len,cap}` layout, no Vec element type) and a
-                    // `Vec[primitive]` element both resolve to `None`, leaving
-                    // the buffer-only free unchanged. Resolve it FIRST — the
+                    // drop fn for a struct / enum / shared / Option element (→
+                    // that type's own `__karac_drop_*`). It returns `None` for a
+                    // *direct* `String` / `Map` / `Set` element and for a
+                    // `Vec[collection]` element — those own heap the outer
+                    // buffer-free misses (each element's own char / bucket /
+                    // inner buffer), so a `Vec[String]` / `Vec[Map[..]]` /
+                    // `Vec[Vec[..]]` FIELD leaked every element's payload
+                    // (B-2026-07-03-28 facet: the struct-drop peer of the
+                    // top-level `FreeVecBuffer` inline vec-struct / Map / tuple
+                    // drain, which handles exactly these element shapes). Fall
+                    // back to the unifying `emit_drop_fn_for_type_expr`, which
+                    // frees a String's char buffer, a Map/Set's buckets, and a
+                    // nested Vec's inner buffer per element. Bare scalars stay
+                    // `None` (no drain loop). A bare `String` FIELD (not
+                    // `Vec[String]`) has no Vec element type — `vec_inner_type_expr`
+                    // returns `None` there — so its single char buffer is still
+                    // freed by the buffer-free alone. Resolve it FIRST — the
                     // sub-emitter may synthesize a fn and move the builder's
                     // insert block, so capture it before opening the cap-guard
                     // blocks below (same discipline as the nested-shared Vec
@@ -1122,8 +1161,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         .cloned()
                         .and_then(|fte| crate::codegen::helpers::vec_inner_type_expr(&fte))
                         .and_then(|elem_te| {
-                            self.vec_elem_agg_drop_for_type_expr(&elem_te)
-                                .map(|f| (f, elem_te))
+                            let f = self.vec_elem_agg_drop_for_type_expr(&elem_te).or_else(|| {
+                                if Self::elem_te_needs_direct_recursive_drain(&elem_te) {
+                                    Some(self.emit_drop_fn_for_type_expr(&elem_te))
+                                } else {
+                                    None
+                                }
+                            });
+                            f.map(|f| (f, elem_te))
                         });
                     // GEP the Vec struct field within the parent struct.
                     let field_ptr = self

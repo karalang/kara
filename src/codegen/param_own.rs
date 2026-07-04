@@ -368,12 +368,26 @@ impl<'ctx> super::Codegen<'ctx> {
             self.extract_vec_elem_type(fte)
         };
         if let Some(elem_ty) = elem_ty {
+            // B-2026-07-03-28 — copy-depth must equal drop-depth. The struct drop
+            // now DRAINS a `Vec[elem]` field's `String`/`Map`/`Set`/nested-`Vec`
+            // elements (`emit_struct_drop_synthesis`'s VecOrString arm via
+            // `elem_te_needs_direct_recursive_drain`), so this entry-copy must
+            // element-DEEP copy exactly those shapes — else the callee's copy
+            // would share the caller's element buffers and both drains would
+            // free them (the test-1 double-free). `emit_vecstr_defensive_copy`'s
+            // element-deep mode (`elem_te = Some`) duplicates each element's
+            // String / Map / Set / inner-Vec buffer; other element shapes stay
+            // outer-only (`None`), matching the drop's outer-only handling for
+            // them.
+            let deep_elem_te = crate::codegen::helpers::vec_inner_type_expr(fte)
+                .filter(Self::elem_te_needs_direct_recursive_drain);
             if let Ok(field_ptr) = self
                 .builder
                 .build_struct_gep(agg_ty, base_ptr, idx, "p14.f")
             {
                 if let Ok(val) = self.builder.build_load(vec_ty, field_ptr, "p14.v") {
-                    let copied = self.emit_vecstr_defensive_copy(val, elem_ty, None);
+                    let copied =
+                        self.emit_vecstr_defensive_copy(val, elem_ty, deep_elem_te.as_ref());
                     let _ = self.builder.build_store(field_ptr, copied);
                 }
             }

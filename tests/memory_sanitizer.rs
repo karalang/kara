@@ -1339,18 +1339,24 @@ fn main() {
     /// NOT use — leaks under LSan; that separate gap is pinned in
     /// `asan_option_plain_enum_heap_payload_undestructured_drop_leaks_pinned`.)
     ///
-    /// B-2026-07-03-28 (pinned, PORT-AFFECTING): currently LEAKS under LSan — a
-    /// struct that mixes a `Vec[T]` heap field with an `Option[String]` heap
-    /// field leaks one field's buffer on destructure. Minimal repro:
-    /// `struct A { path: Vec[String], sv: Option[String] }` built in a
-    /// `Vec[A]` and consumed via `let A { path, sv } = a` → 240 bytes / 6 allocs
-    /// leaked (each field type ALONE, and two `Option[String]` fields together,
-    /// are all LSan-clean — only the Vec+Option field mix leaks). `AttrNode` has
-    /// exactly this mix (`Vec[String]` path + `Vec[AttrArgNode]` args +
-    /// `Option[String]` string_value), so the self-hosted parser leaks under LSan
-    /// when it parses attribute-bearing source. `#[ignore]`d so the Linux-CI
-    /// `memory-sanitizer` gate stays green; un-ignore when the by-value-aggregate
-    /// mixed-heap-field drop is fixed. Run: `scripts/lsan-local.sh
+    /// B-2026-07-03-28 (pinned, PORT-AFFECTING): still LEAKS under LSan, but the
+    /// leak is now HALVED and of a single remaining class. Sub-fix 1 (the
+    /// `Vec`-element drain in `emit_struct_drop_synthesis`'s VecOrString arm,
+    /// paired with the element-deep by-value-param entry-copy in `param_own.rs`)
+    /// fixed the `Vec[String]` / `Vec[collection]` ELEMENT leak — the drop was
+    /// 1434 B / 36 allocs, now 474 B / 12 allocs. The residual 474 B is FACET A:
+    /// the `Option[String]` payloads (`AttrNode.string_value`, `AttrArgNode.name`)
+    /// dropped on a plain / consumed struct. `emit_struct_drop_synthesis`
+    /// deliberately excludes `Option` fields, and closing that is BLOCKED on the
+    /// caller-retains param model: a struct that owns an `Option` field is left
+    /// caller-retains by `param_own` (it can't deep-copy the type-erased Option
+    /// payload), so making struct-drop free the Option would double-free on the
+    /// consume path (caller frees it AND the callee's `match`/move-out frees the
+    /// leaf) — verified: a prototype produced exactly that double-free. Fixing it
+    /// needs `param_own` to entry-copy Option payloads (new machinery) so
+    /// Option-bearing structs become callee-owned. Tracked in the B-28 ledger.
+    /// `#[ignore]`d so the Linux-CI `memory-sanitizer` gate stays green;
+    /// un-ignore when Facet A lands. Run: `scripts/lsan-local.sh
     /// "asan_attr_node_list_drop_consume_and_plain -- --ignored"`.
     #[test]
     #[ignore]
@@ -18971,6 +18977,106 @@ fn main() {
 "#,
             &["680"], // (20 + 14) * 20
             "asan_column_tensor_map_freed_no_leak",
+        );
+    }
+
+    /// B-2026-07-03-30 (Vec-element drain) — a struct field `Vec[String]` (whose
+    /// elements own heap the outer buffer-free misses) is DRAINED per element by
+    /// the synthesized struct drop when the owning struct is PLAIN-dropped (a
+    /// `Vec[A]` element). Before the fix, `emit_struct_drop_synthesis`'s
+    /// VecOrString arm freed only the `{ptr,len,cap}` buffer, leaking every
+    /// element's char buffer (`vec_elem_agg_drop_for_type_expr` returned `None`
+    /// for a direct `String` element). Payloads >=40 bytes for LSan visibility.
+    #[test]
+    fn asan_struct_vec_string_field_plain_drop_drains_elements() {
+        assert_clean_asan_run(
+            r#"
+struct A { path: Vec[String] }
+fn main() {
+    let mut v: Vec[A] = Vec.new();
+    let mut i = 0;
+    while i < 6 {
+        let mut p: Vec[String] = Vec.new();
+        p.push("struct_vec_string_plaindrop_element_payload".to_string());
+        p.push("struct_vec_string_plaindrop_element_second_".to_string());
+        v.push(A { path: p });
+        i = i + 1;
+    }
+    println(v.len());
+}
+"#,
+            &["6"],
+            "struct_vec_string_field_plain_drop_drains_elements",
+        );
+    }
+
+    /// B-2026-07-03-30 (Vec-element drain) — destructure-consume peer of the plain-drop
+    /// test: `let A { path } = a` (with `a` a callee-owned by-value param that is
+    /// deep-copied at entry) then `for s in path` consumes the elements. The
+    /// entry-copy is element-DEEP for the drained `Vec[String]` field
+    /// (`param_own.rs`, restoring the copy-depth == drop-depth invariant), so the
+    /// callee's copy owns independent char buffers — no double-free against the
+    /// caller's retained original, no leak.
+    #[test]
+    fn asan_struct_vec_string_field_destructure_consume_clean() {
+        assert_clean_asan_run(
+            r#"
+struct A { path: Vec[String] }
+fn f(a: A) -> i64 {
+    let A { path } = a;
+    let mut t = 0;
+    for s in path { if s.len() >= 0 { t = t + 1; } }
+    t
+}
+fn build() -> Vec[A] {
+    let mut v: Vec[A] = Vec.new();
+    let mut i = 0;
+    while i < 6 {
+        let mut p: Vec[String] = Vec.new();
+        p.push("struct_vec_string_destructure_element_payld".to_string());
+        v.push(A { path: p });
+        i = i + 1;
+    }
+    v
+}
+fn main() {
+    let xs = build();
+    let mut t = 0;
+    for a in xs { t = t + f(a); }
+    println(t);
+}
+"#,
+            &["6"],
+            "struct_vec_string_field_destructure_consume_clean",
+        );
+    }
+
+    /// B-2026-07-03-30 (Vec-element drain) — a struct field `Vec[Map[i64, String]]`,
+    /// plain-dropped: each element Map's buckets (and their String values) drain
+    /// via the recursive drop family (`emit_drop_fn_for_type_expr`), which
+    /// `vec_elem_agg_drop_for_type_expr` alone did not reach for a direct Map
+    /// element.
+    #[test]
+    fn asan_struct_vec_map_field_plain_drop_drains_elements() {
+        assert_clean_asan_run(
+            r#"
+struct A { rows: Vec[Map[i64, String]] }
+fn main() {
+    let mut v: Vec[A] = Vec.new();
+    let mut i = 0;
+    while i < 6 {
+        let mut rows: Vec[Map[i64, String]] = Vec.new();
+        let mut m: Map[i64, String] = Map.new();
+        m.insert(1, "struct_vec_map_field_string_value_payload_x".to_string());
+        rows.push(m);
+        v.push(A { rows: rows });
+        i = i + 1;
+    }
+    println(v.len());
+}
+"#,
+            &["6"],
+            "struct_vec_map_field_plain_drop_drains_elements",
         );
     }
 }
