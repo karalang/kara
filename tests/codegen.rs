@@ -47988,8 +47988,11 @@ fn main() {
         // int / f32 tensors sort too — see `test_e2e_tensor_sorted_argsort_
         // narrow_widths`). The one remaining loud rejection on each surface is a
         // **u64** element: the scratch sort compares integers as SIGNED, which
-        // misorders values ≥ 2^63, and there is no room to widen past 64 bits.
-        // u64 sort works under `karac run` (the interpreter is width-agnostic).
+        // misorders values ≥ 2^63. Codegen could lift this with an unsigned
+        // compare, but `karac run` ALSO mis-sorts/mis-prints u64 ≥ 2^63 (the
+        // interpreter's `Value::Int` is signedness-blind), so `build` is kept
+        // rejecting to avoid a run/build divergence — both are blocked on an
+        // interpreter u64 model (bug-ledger B-2026-07-04-8).
         let col_u64 = r#"
 fn main() {
     let c: Column[u64] = Column.from_vec([5, 9, 3, 1]);

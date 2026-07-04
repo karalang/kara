@@ -667,8 +667,29 @@ B-2026-07-02-10..13, see the ledger.
   `_narrow_width_rejected_loudly` (u64 column + tensor); interpreter
   `tensor_narrow_element_storage_and_sort_reduction`; memory_sanitizer
   `asan_tensor_sorted_argsort_narrow_widths_no_leak`.
-- **S6c** — remaining: `ElementwiseOrd` user impls; u64 column/tensor sort
-  (needs an unsigned scratch compare); `product` on the `Reduce` trait
+- **S6c-9** ⛔ **(investigated, not shipped — blocked)** — attempted to lift the
+  **u64 column/tensor sort** rejection. The codegen half is trivially correct:
+  thread an `unsigned` flag through `SortKey::IntValue`/`IndexIntoInt` and pick
+  `UGT` vs `SGT` in the scratch comparator (the widen for a 64-bit elem is
+  already an identity copy). **But probing `karac run` first exposed a broad,
+  pre-existing interpreter gap** (now **B-2026-07-04-8**): the tree-walker's
+  `Value::Int(i64)` is signedness-blind, so u64 ≥ 2^63 is mis-**printed**
+  (`println` of 2^63 → `-9223372036854775808`), mis-**compared** (`hi > x`
+  signed), and mis-**sorted** (`value_compare` orders signed → high-bit values
+  sort to the front) under `run`. Shipping the correct codegen half alone would
+  make `build` disagree with `run` for u64 ≥ 2^63 — a silent parity divergence,
+  which the A/B-verify discipline forbids. So the codegen change was **reverted**
+  and `sort_key_is_int` keeps the loud u64 rejection; its message + docstring
+  and `test_e2e_sorted_narrow_width_rejected_loudly` were corrected (the old text
+  falsely claimed u64 sort "works under `karac run`"). Real fix = an interpreter
+  epic: give the tree-walker a genuine unsigned-int model (a `Value::UInt` variant
+  or a signedness tag on `Value::Int`) routed through `Display`/f-string,
+  `eval_binary`, `value_compare`, and min/max/sort. Note u64 ≥ 2^63 literals are
+  unreachable anyway (lexer rejects `> i64::MAX`), so the divergence only bites
+  deliberately shift-constructed high-bit values. Blocks u64 sort on BOTH surfaces.
+- **S6c** — remaining: `ElementwiseOrd` user impls; **u64 column/tensor sort**
+  (blocked on the interpreter u64 model — see S6c-9 / B-2026-07-04-8, NOT just an
+  unsigned scratch compare as previously thought); `product` on the `Reduce` trait
   (bound-generic — `fold` S6c-5 / `map`/`zip_with` S6c-7 done; `product` needs a
   generic mul-identity seed); blanket `Vec[T]` impls; user trait-impl methods
   over builtin containers (probed: interp "type 'unknown'", codegen loud

@@ -1330,8 +1330,11 @@ impl<'ctx> super::Codegen<'ctx> {
     /// all lossless into the 8-byte scratch slot, so the `karac build` result
     /// matches `karac run`. **u64** (unsigned 64-bit) is the sole rejection:
     /// the scratch sort compares integers as SIGNED (misordering values ≥
-    /// 2⁶³) and there is no room to widen past 64 bits — it stays a loud
-    /// follow-on (works under `karac run`). A non-numeric element is a
+    /// 2⁶³). Codegen could lift it with an unsigned `UGT` compare, but `karac
+    /// run` *also* mis-sorts and mis-prints u64 ≥ 2⁶³ (the interpreter's
+    /// `Value::Int` is signedness-blind), so enabling `build` alone would
+    /// diverge from `run`; both are blocked on an interpreter u64 model
+    /// (bug-ledger B-2026-07-04-8). A non-numeric element is a
     /// typechecker-caught impossibility here, rejected defensively.
     pub(super) fn sort_key_is_int(
         &self,
@@ -1344,8 +1347,14 @@ impl<'ctx> super::Codegen<'ctx> {
             BasicTypeEnum::IntType(it) if it.get_bit_width() == 64 && unsigned => Err(format!(
                 "{container}.{method} under the native backend (`karac build`) does \
                  not yet support u64 element {container}s — the scratch sort compares \
-                 integers as signed i64, which misorders values ≥ 2^63, and there is \
-                 no room to widen past 64 bits (it works under `karac run`)."
+                 integers as signed i64, which misorders values ≥ 2^63. The codegen \
+                 side is a one-line fix (an unsigned `UGT` scratch compare), but it is \
+                 gated on the interpreter: `karac run` mis-sorts AND mis-prints u64 ≥ \
+                 2^63 too (the tree-walker's `Value::Int` is signedness-blind — \
+                 `value_compare`, `Display`, and `eval_binary` all treat it as i64), \
+                 so enabling `build` alone would diverge from `run`. Both surfaces are \
+                 blocked on giving the interpreter a real u64 model — see \
+                 bug-ledger B-2026-07-04-8."
             )),
             BasicTypeEnum::IntType(_) => Ok(true),
             BasicTypeEnum::FloatType(_) => Ok(false),
