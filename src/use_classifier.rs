@@ -1024,12 +1024,32 @@ pub fn param_types_for_function(
 ) -> HashMap<String, Type> {
     let mut map = HashMap::new();
     if let Some(self_param) = &f.self_param {
-        // SelfParam::Ref / MutRef receivers are borrows — irrelevant for
-        // Copy classification (the borrow itself is Copy). For owned
-        // `self` we'd want the type, but the function doesn't carry the
-        // resolved Self type at this layer — leave it absent and let the
-        // span-based expr_types lookup answer.
-        let _ = self_param;
+        // A `ref self` / `mut ref self` receiver is a BORROW, and a borrowed
+        // receiver can never be *consumed* (you cannot move `self` out of a
+        // borrow — the language clones), so every use of `self` must classify
+        // as a Read, exactly like a `ref`/`mut ref` PARAM whose `param_types`
+        // entry makes it Copy. Record `self` as a `Ref` (Copy) so
+        // `classify_identifier` reads it. `MutRef` is deliberately non-Copy
+        // for a *param* (exclusive-borrow aliasing detection lives in the
+        // borrow checker), but for the receiver's MOVE analysis the mutable
+        // vs. immutable distinction is irrelevant — neither is movable — so
+        // both map to `Ref` here; the pointee is irrelevant to Copy-ness.
+        //
+        // Leaving `self` ABSENT (the prior behavior) made `classify_identifier`
+        // fall through to the span-keyed `expr_types`, which records `self` as
+        // the BARE Self type (`current_self_type`, non-Copy) → a spurious
+        // Consume. Benign until 5426bbd1 (projection-aware partial-move
+        // tracking) started recording `self.field` consumes, after which
+        // `match self.field { V(x) => .. }; self.method()` read as a
+        // self-consume-then-use and reddened the selfhost parser oracles
+        // (B-2026-07-03-26). Owned `self` is left absent so its genuine
+        // consume semantics stand.
+        match self_param {
+            SelfParam::Ref | SelfParam::MutRef => {
+                map.insert("self".to_string(), Type::Ref(Box::new(Type::Error)));
+            }
+            SelfParam::Owned => {}
+        }
     }
     for p in &f.params {
         if let PatternKind::Binding(name) = &p.pattern.kind {

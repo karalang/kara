@@ -1447,6 +1447,63 @@ fn test_match_on_copy_scrutinee_with_binding_is_noop() {
 }
 
 #[test]
+fn test_match_on_borrowed_self_field_does_not_consume_self() {
+    // B-2026-07-03-26: matching a non-Copy field (or indexed-element field)
+    // of a BORROWED `mut ref self` receiver must NOT be treated as consuming
+    // `self` — you cannot move out of a borrow (the language clones), so a
+    // subsequent whole-`self` use (`self.adv()`) is not a use-after-move.
+    // Regressed by 5426bbd1 (projection-aware partial-move tracking), which
+    // recorded `self.field` as a self-consume because `param_types` left the
+    // borrowed `self` absent and the fallback typed it as the bare (non-Copy)
+    // Self. This is the exact `match self.tokens[self.pos].token { .. };
+    // self.advance()` shape pervading the self-hosted parser, which reddened
+    // all three selfhost parser oracles on main.
+    ownership_ok(
+        "enum Tok { A(String), B }\n\
+         struct P { cur: Tok, toks: Vec[Tok], pos: i64 }\n\
+         impl P {\n\
+             fn adv(mut ref self) { self.pos = self.pos + 1; }\n\
+             fn direct(mut ref self) -> i64 {\n\
+                 let k = match self.cur { A(s) => 1, B => 2 };\n\
+                 self.adv();\n\
+                 k\n\
+             }\n\
+             fn indexed(mut ref self) -> i64 {\n\
+                 let k = match self.toks[self.pos] { A(s) => 1, B => 2 };\n\
+                 self.adv();\n\
+                 k\n\
+             }\n\
+         }\n\
+         fn main() {}",
+    );
+}
+
+#[test]
+fn test_match_on_owned_self_field_still_consumes() {
+    // The dual of the fix above: an OWNED `self` receiver CAN be consumed, so
+    // moving a field out of it twice is still a use-after-move (the fix is
+    // scoped to borrowed receivers — owned `self` semantics are preserved).
+    let errors = ownership_errors(
+        "struct S { name: String }\n\
+         fn take(s: String) -> String { s }\n\
+         impl S {\n\
+             fn consume_twice(self) -> String {\n\
+                 let a = take(self.name);\n\
+                 let b = take(self.name);\n\
+                 b\n\
+             }\n\
+         }\n\
+         fn main() {}",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == OwnershipErrorKind::UseAfterMove),
+        "expected UseAfterMove moving `self.name` twice out of owned self, got: {errors:?}"
+    );
+}
+
+#[test]
 fn test_match_at_binding_consumes_non_copy_scrutinee() {
     // `match opt { whole @ Some(_) => ... }` — the @-binding takes
     // ownership of the whole value, so the scrutinee is consumed.
