@@ -629,7 +629,43 @@ pub struct MatchExpr {
 // `where` refinements, distinct types, layout, extern/host, unions, module
 // bindings, imports, test cases.
 
-// `[pub] use a.b.c;`
+// ── Attributes + doc comments (slice 3d-i) ──
+//
+// Every top-level item may be preceded by `///` doc-comment lines and
+// `#[...]` / `@name` attributes. Mirrors the seed's `Attribute` / `AttrArg`
+// (`src/ast/types.rs`): a `path` (`["derive"]`, `["diagnostic",
+// "on_unimplemented"]`), positional / named `args`, and an optional
+// `string_value` for the `#[name = "str"]` form. The doc comment is the
+// newline-joined `///` bodies, stored as `Option[String]` on the carrying item
+// node (mirroring the seed's `doc_comment` field). Which items carry which:
+// `const` / `type` / `struct` / `enum` / `fn` / `trait` carry BOTH attributes
+// and doc; `impl` carries attributes only (no doc); `use` carries NEITHER —
+// exactly the seed's coverage. DEFERRED (kept out of the corpus): the
+// `#[unsafe(...)]` linker wrap, `#![...]` inner attributes, and positional args
+// whose value is a path/method expression (`#[with_provider(Clock,
+// FakeClock.new)]`) — the items oracle's compact expr renderer only covers
+// literal / identifier / unary / binary / tuple arg values.
+
+// One attribute argument: `name = value` / `name: value` (`name` = Some) or a
+// bare positional `value` (`name` = None). `value` is None for a bare `name`
+// with no `= value` (rare, but the seed admits it).
+pub struct AttrArgNode {
+    pub name: Option[String],
+    pub value: Option[Expr],
+    pub span: Span,
+}
+
+// One attribute: `#[PATH]`, `#[PATH(args)]`, `#[PATH = "str"]`, or `@name`. The
+// `@name` shorthand always yields a single-segment `path` with empty `args`.
+pub struct AttrNode {
+    pub path: Vec[String],
+    pub args: Vec[AttrArgNode],
+    pub string_value: Option[String],
+    pub span: Span,
+}
+
+// `[pub] use a.b.c;` — the seed's `UseDecl` carries no attributes or doc, so the
+// port's node stays meta-free too (attributes/doc before a `use` are dropped).
 pub struct UseDeclNode {
     pub is_pub: bool,
     pub segments: Vec[String],
@@ -642,6 +678,8 @@ pub struct ConstDeclNode {
     pub name: String,
     pub ty: TypeExpr,
     pub value: Expr,
+    pub attributes: Vec[AttrNode],
+    pub doc: Option[String],
     pub span: Span,
 }
 
@@ -670,6 +708,8 @@ pub struct TypeAliasNode {
     pub name: String,
     pub generics: Option[GenericParamsNode],
     pub ty: TypeExpr,
+    pub attributes: Vec[AttrNode],
+    pub doc: Option[String],
     pub span: Span,
 }
 
@@ -701,6 +741,8 @@ pub struct StructDefNode {
     pub name: String,
     pub generics: Option[GenericParamsNode],
     pub fields: Vec[StructFieldNode],
+    pub attributes: Vec[AttrNode],
+    pub doc: Option[String],
     pub span: Span,
 }
 
@@ -731,6 +773,8 @@ pub struct EnumDefNode {
     pub name: String,
     pub generics: Option[GenericParamsNode],
     pub variants: Vec[VariantNode],
+    pub attributes: Vec[AttrNode],
+    pub doc: Option[String],
     pub span: Span,
 }
 
@@ -760,6 +804,9 @@ pub struct FnParamNode {
     pub span: Span,
 }
 
+// `attributes` / `doc` are populated only for a TOP-LEVEL `fn` item; an impl
+// method reuses this node with empty attributes and no doc (per-method meta is a
+// later slice), so `render_fn_def_node`'s meta render is a no-op for methods.
 pub struct FnDefNode {
     pub is_pub: bool,
     pub name: String,
@@ -768,6 +815,8 @@ pub struct FnDefNode {
     pub params: Vec[FnParamNode],
     pub ret: Option[TypeExpr],
     pub body: Block,
+    pub attributes: Vec[AttrNode],
+    pub doc: Option[String],
     pub span: Span,
 }
 
@@ -797,6 +846,8 @@ pub struct TraitDefNode {
     pub name: String,
     pub generics: Option[GenericParamsNode],
     pub methods: Vec[TraitMethodNode],
+    pub attributes: Vec[AttrNode],
+    pub doc: Option[String],
     pub span: Span,
 }
 
@@ -808,11 +859,14 @@ pub struct TraitDefNode {
 // `impl[T, ...] TYPE { ... }` / `impl[T, ...] TRAIT for TYPE { ... }` — the
 // generics clause (when present) sits right after `impl`, before the trait /
 // target type, mirroring the seed's `parse_impl_block`.
+// `impl` carries attributes but NO doc comment (mirroring the seed's `ImplBlock`,
+// which has `attributes` but no `doc_comment` field).
 pub struct ImplBlockNode {
     pub generics: Option[GenericParamsNode],
     pub trait_ty: Option[TypeExpr],
     pub target_ty: TypeExpr,
     pub methods: Vec[FnDefNode],
+    pub attributes: Vec[AttrNode],
     pub span: Span,
 }
 

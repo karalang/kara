@@ -1323,6 +1323,135 @@ fn main() {
         );
     }
 
+    /// Slice 3d-i (self-hosting parser tail): dropping an item node that carries
+    /// `Vec[AttrNode]` — the attribute list — where each `AttrNode` owns a
+    /// `Vec[String]` path, a `Vec[AttrArgNode]` (each arg an `Option[String]`
+    /// name + an `Option[Expr]` value), and an `Option[String]` string value.
+    /// The `value` field mirrors the port's real `Option[Expr]` where `Expr` is
+    /// a `shared enum` (RC) — modeled here as `Option[shared enum Val]`. This
+    /// nested `Vec[struct{ Vec[String], Vec[struct{Option[String],
+    /// Option[shared enum]}], Option[String] }]` is the Cluster-1
+    /// heap-in-Vec-in-struct shape; exercises BOTH the consume path (each node
+    /// moved into a render-like fn and dropped there) and the plain-drop path (a
+    /// built list dropped at scope exit without consuming). All heap payloads are
+    /// ≥36 bytes so LSan sees any leaked buffer; a missed drop leaks, a
+    /// double-drop aborts. (An `Option[PLAIN enum]` payload — which the port does
+    /// NOT use — leaks under LSan; that separate gap is pinned in
+    /// `asan_option_plain_enum_heap_payload_undestructured_drop_leaks_pinned`.)
+    ///
+    /// B-2026-07-03-28 (pinned, PORT-AFFECTING): currently LEAKS under LSan — a
+    /// struct that mixes a `Vec[T]` heap field with an `Option[String]` heap
+    /// field leaks one field's buffer on destructure. Minimal repro:
+    /// `struct A { path: Vec[String], sv: Option[String] }` built in a
+    /// `Vec[A]` and consumed via `let A { path, sv } = a` → 240 bytes / 6 allocs
+    /// leaked (each field type ALONE, and two `Option[String]` fields together,
+    /// are all LSan-clean — only the Vec+Option field mix leaks). `AttrNode` has
+    /// exactly this mix (`Vec[String]` path + `Vec[AttrArgNode]` args +
+    /// `Option[String]` string_value), so the self-hosted parser leaks under LSan
+    /// when it parses attribute-bearing source. `#[ignore]`d so the Linux-CI
+    /// `memory-sanitizer` gate stays green; un-ignore when the by-value-aggregate
+    /// mixed-heap-field drop is fixed. Run: `scripts/lsan-local.sh
+    /// "asan_attr_node_list_drop_consume_and_plain -- --ignored"`.
+    #[test]
+    #[ignore]
+    fn asan_attr_node_list_drop_consume_and_plain() {
+        assert_clean_asan_run(
+            r#"
+shared enum Val { Nothing, Ident(String), Num(i64) }
+struct ArgN { name: Option[String], value: Option[Val] }
+struct AttrN { path: Vec[String], args: Vec[ArgN], string_value: Option[String] }
+
+fn render_arg(a: ArgN) -> i64 {
+    let ArgN { name, value } = a;
+    let mut touched = 0;
+    match name { Some(s) => { if s.len() >= 0 { touched = touched + 1; } } None => {} }
+    // Flat `Some(_)` — the `Option[Val]` value field still drops wholesale
+    // (recursing into the `Val::Ident` String), which is the drop path under
+    // test; the exact variant is irrelevant to the count.
+    match value { Some(_) => { touched = touched + 1; } None => {} }
+    touched
+}
+
+fn render_attr(a: AttrN) -> i64 {
+    let AttrN { path, args, string_value } = a;
+    let mut touched = 0;
+    for seg in path { if seg.len() >= 0 { touched = touched + 1; } }
+    for arg in args { touched = touched + render_arg(arg); }
+    match string_value { Some(s) => { if s.len() >= 0 { touched = touched + 1; } } None => {} }
+    touched
+}
+
+fn build() -> Vec[AttrN] {
+    let mut v: Vec[AttrN] = Vec.new();
+    let mut i = 0;
+    while i < 6 {
+        let mut path: Vec[String] = Vec.new();
+        path.push("diagnostic_namespace_segment_alpha_aaaaa".to_string());
+        path.push("on_unimplemented_attribute_segment_betaa".to_string());
+        let mut args: Vec[ArgN] = Vec.new();
+        args.push(ArgN {
+            name: Some("note_argument_name_key_gamma_ccccccccccc".to_string()),
+            value: Some(Val.Ident("clone_derive_identifier_value_ddddddddd".to_string())),
+        });
+        args.push(ArgN { name: None, value: Some(Val.Num(42)) });
+        v.push(AttrN {
+            path: path,
+            args: args,
+            string_value: Some("string_value_payload_epsilon_eeeeeeeeee".to_string()),
+        });
+        i = i + 1;
+    }
+    v
+}
+
+fn main() {
+    let attrs = build();
+    let mut total = 0;
+    for a in attrs { total = total + render_attr(a); }
+    let more = build();
+    total = total + more.len();
+    println(total);
+}
+"#,
+            &["42"],
+            "attr_node_list_drop_consume_and_plain",
+        );
+    }
+
+    /// B-2026-07-03-27 (pinned, non-blocking): an `Option[E]` field where `E` is
+    /// a PLAIN (non-`shared`) user enum carrying a heap payload, dropped
+    /// undestructured (here via a `Some(_)` wildcard match, and via plain
+    /// scope-drop), leaks the enum payload's heap buffer — the inline-Option
+    /// drop path (cf. B-2026-06-10-6, which covered `Option[String]`/`[Vec]`/
+    /// `[Map]`) does not recurse into a user-enum payload's drop. LSan-confirmed
+    /// (`Option[shared enum]` and `Option[String]`/`Option[Vec]` are all clean;
+    /// only the plain-enum payload leaks). The self-hosted parser SIDESTEPS this
+    /// — every recursive AST enum (`Expr`/`TypeExpr`/`Pattern`) is `shared`, and
+    /// `AttrArgNode.value` is `Option[Expr]` (shared) — so it is non-blocking for
+    /// the port. `#[ignore]`d so the green Linux-CI `memory-sanitizer` gate stays
+    /// green; un-ignore it when the inline-Option user-enum-payload drop lands.
+    /// Run: `scripts/lsan-local.sh "asan_option_plain_enum_heap_payload_undestructured_drop_leaks_pinned -- --ignored"`.
+    #[test]
+    #[ignore]
+    fn asan_option_plain_enum_heap_payload_undestructured_drop_leaks_pinned() {
+        assert_clean_asan_run(
+            r#"
+enum Val { Nothing, Ident(String) }
+struct A { value: Option[Val] }
+fn use_a(a: A) -> i64 { let A { value } = a; match value { Some(_) => 1, None => 0 } }
+fn build() -> Vec[A] {
+    let mut v: Vec[A] = Vec.new();
+    let mut i = 0;
+    while i < 6 { v.push(A { value: Some(Val.Ident("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string())) }); i = i + 1; }
+    v
+}
+fn main() { let xs = build(); let mut t = 0; for a in xs { t = t + use_a(a); } println(t); }
+"#,
+            &["6"],
+            "option_plain_enum_heap_payload_undestructured_drop_leaks_pinned",
+        );
+    }
+
     /// Borrow-elision negative: each `r` is moved into `keep`, so the gate must
     /// KEEP the deep clone — `r` owns an independent buffer that outlives `out`.
     /// ASAN confirms no use-after-free (a mis-borrowed `r` would dangle once

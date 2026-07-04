@@ -68,6 +68,8 @@ import ast.{
     MatchArm,
     MatchExpr,
     Item,
+    AttrArgNode,
+    AttrNode,
     UseDeclNode,
     ConstDeclNode,
     TypeAliasNode,
@@ -285,6 +287,232 @@ impl Parser {
             if ok {
                 self.advance();
             }
+        }
+    }
+
+    // ── Doc comments + attributes (slice 3d-i item preamble) ──
+
+    // Consume leading `///` doc-comment tokens and RETURN their newline-joined
+    // bodies (`None` when none precede the item). Mirrors the seed's
+    // `collect_leading_doc_comments`, but returns the joined text (threaded as a
+    // per-item local) instead of stashing it in a `pending_doc` field — the port
+    // avoids moving a heap `Option[String]` out of `mut ref self`. Each token is
+    // read exactly once (the slice-3a repeated-borrow-match hazard).
+    fn collect_leading_doc_comments(mut ref self) -> Option[String] {
+        let mut buf: Option[String] = None;
+        loop {
+            if self.pos >= self.tokens.len() {
+                break;
+            }
+            // Consuming read of the doc body (like `take_member_name`) — one
+            // read of this element, then `advance` past it.
+            let line = match self.tokens[self.pos].token {
+                DocComment(t) => t,
+                _ => break,
+            };
+            self.advance();
+            match buf {
+                Some(prev) => {
+                    let mut joined = prev;
+                    joined.push_str("\n");
+                    joined.push_str(line);
+                    buf = Some(joined);
+                }
+                None => {
+                    buf = Some(line);
+                }
+            }
+        }
+        buf
+    }
+
+    // The leading `#[...]` / `@name` attribute run. Mirrors the seed's
+    // `parse_attributes`. The `#[unsafe(...)]` wrap, `#![...]` inner attributes,
+    // and the seed's target-dup diagnostic are deferred (kept out of the corpus).
+    fn parse_attributes(mut ref self) -> Vec[AttrNode] {
+        let mut attrs: Vec[AttrNode] = Vec.new();
+        loop {
+            if self.pos >= self.tokens.len() {
+                break;
+            }
+            let kind = match self.tokens[self.pos].token {
+                Pound => 1,
+                At => 2,
+                _ => 0,
+            };
+            if kind == 0 {
+                break;
+            }
+            if kind == 2 {
+                let a = self.parse_at_attribute();
+                attrs.push(a);
+            } else {
+                let a = self.parse_attribute();
+                attrs.push(a);
+            }
+        }
+        attrs
+    }
+
+    // `@name` shorthand — a single-segment path, no args, no string value. Span
+    // runs from `@` through the name (the seed's `parse_at_attribute`).
+    fn parse_at_attribute(mut ref self) -> AttrNode {
+        let start = self.current_span();
+        self.advance(); // `@`
+        let name = self.take_member_name();
+        let mut path: Vec[String] = Vec.new();
+        path.push(name);
+        AttrNode {
+            path: path,
+            args: Vec.new(),
+            string_value: None,
+            span: self.span_from(start),
+        }
+    }
+
+    // `#[ PATH ("::" PATH)* [ = "str" | ( args ) ] ]`. Mirrors the seed's
+    // `parse_attribute` happy path (no `unsafe(...)` wrap / linker-attr
+    // diagnostics — deferred). `start` is at `#`, span through `]`.
+    fn parse_attribute(mut ref self) -> AttrNode {
+        let start = self.current_span();
+        self.advance(); // `#`
+        self.expect_lbracket(); // `[`
+        let mut path: Vec[String] = Vec.new();
+        let first = self.take_member_name();
+        path.push(first);
+        loop {
+            let is_cc = if self.pos < self.tokens.len() {
+                match self.tokens[self.pos].token {
+                    ColonColon => true,
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            if not is_cc {
+                break;
+            }
+            self.advance(); // `::`
+            let seg = self.take_member_name();
+            path.push(seg);
+        }
+        let mut args: Vec[AttrArgNode] = Vec.new();
+        let mut string_value: Option[String] = None;
+        let next = if self.pos < self.tokens.len() {
+            match self.tokens[self.pos].token {
+                Equal => 1,
+                LeftParen => 2,
+                _ => 0,
+            }
+        } else {
+            0
+        };
+        if next == 1 {
+            self.advance(); // `=`
+            if self.pos < self.tokens.len() {
+                // One consuming read of the string body, then advance.
+                match self.tokens[self.pos].token {
+                    StringLiteral(s) => {
+                        string_value = Some(s);
+                        self.advance();
+                    }
+                    _ => {}
+                }
+            }
+        } else if next == 2 {
+            self.advance(); // `(`
+            loop {
+                if self.pos >= self.tokens.len() {
+                    break;
+                }
+                let at_rparen = match self.tokens[self.pos].token {
+                    RightParen => true,
+                    _ => false,
+                };
+                if at_rparen {
+                    break;
+                }
+                let arg = self.parse_attr_arg();
+                args.push(arg);
+                let has_comma = if self.pos < self.tokens.len() {
+                    match self.tokens[self.pos].token {
+                        Comma => true,
+                        _ => false,
+                    }
+                } else {
+                    false
+                };
+                if has_comma {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            self.expect_rparen();
+        }
+        self.expect_rbracket(); // `]`
+        AttrNode {
+            path: path,
+            args: args,
+            string_value: string_value,
+            span: self.span_from(start),
+        }
+    }
+
+    // One attribute argument: `name: value` / `name = value` (named) or a bare
+    // `value` expression (positional) — the seed's `parse_attribute` arg loop.
+    // Named iff an identifier is immediately followed by `:` or `=`.
+    fn parse_attr_arg(mut ref self) -> AttrArgNode {
+        let start = self.current_span();
+        let is_named = self.is_named_attr_arg_head();
+        let mut name: Option[String] = None;
+        let mut value: Option[Expr] = None;
+        if is_named {
+            let nm = self.take_member_name();
+            name = Some(nm);
+            let sep = if self.pos < self.tokens.len() {
+                match self.tokens[self.pos].token {
+                    Colon => 1,
+                    Equal => 2,
+                    _ => 0,
+                }
+            } else {
+                0
+            };
+            if sep != 0 {
+                self.advance(); // `:` / `=`
+                value = Some(self.parse_expr_bp(0));
+            }
+        } else {
+            value = Some(self.parse_expr_bp(0));
+        }
+        AttrArgNode {
+            name: name,
+            value: value,
+            span: self.span_from(start),
+        }
+    }
+
+    // Two-token lookahead: an identifier head immediately followed by `:` / `=`
+    // is a NAMED arg; anything else starts a positional expression. Mirrors the
+    // seed's `is_named_attr_arg_head` (the `requires`/`ensures` name spellings
+    // are deferred — the corpus uses plain identifier arg names). The payload is
+    // matched with `_` so the read never moves the token's `String`.
+    fn is_named_attr_arg_head(ref self) -> bool {
+        if self.pos + 1 >= self.tokens.len() {
+            return false;
+        }
+        let is_name = match self.tokens[self.pos].token {
+            Identifier(_) => true,
+            _ => false,
+        };
+        if not is_name {
+            return false;
+        }
+        match self.tokens[self.pos + 1].token {
+            Colon => true,
+            Equal => true,
+            _ => false,
         }
     }
 
@@ -1946,8 +2174,13 @@ impl Parser {
     // unrecognized leads recover as `Item.ErrItem`.
 
     fn parse_item(mut ref self) -> Item {
-        // Visibility: `pub` only (private-by-default; the `private` keyword and
-        // attributes/doc-comments land with later increments).
+        // Preamble (slice 3d-i): leading `///` doc comments, then `#[...]` / `@`
+        // attributes, THEN visibility — mirroring the seed's `parse_item` order.
+        // `doc` / `attrs` are threaded into the carrying item parser (or dropped
+        // by an item that carries neither — `use`, or the error arm). Visibility
+        // is `pub` only; the `private` keyword lands with a later increment.
+        let doc = self.collect_leading_doc_comments();
+        let attrs = self.parse_attributes();
         let is_pub = if self.pos < self.tokens.len() {
             match self.tokens[self.pos].token {
                 Pub => true,
@@ -1963,18 +2196,19 @@ impl Parser {
             return Item.ErrItem(SpanNode { span: self.current_span() });
         }
         match self.tokens[self.pos].token {
+            // `use` carries neither attributes nor doc (seed parity) — both drop.
             Use => self.parse_use_decl(is_pub),
-            Const => self.parse_const_decl(is_pub),
-            Type => self.parse_type_alias_decl(is_pub),
-            Struct => self.parse_struct_def(is_pub, false, false),
-            Enum => self.parse_enum_def(is_pub, false, false),
-            Shared => self.parse_shared_or_par(is_pub, true, false),
-            Par => self.parse_shared_or_par(is_pub, false, true),
-            Fn => self.parse_fn_def(is_pub),
-            Trait => self.parse_trait_def(is_pub),
-            // `impl` carries no visibility — the seed's `Token::Impl` arm ignores
-            // a leading `pub`; an inherent/trait impl is governed by its members.
-            Impl => self.parse_impl_block(),
+            Const => self.parse_const_decl(is_pub, attrs, doc),
+            Type => self.parse_type_alias_decl(is_pub, attrs, doc),
+            Struct => self.parse_struct_def(is_pub, false, false, attrs, doc),
+            Enum => self.parse_enum_def(is_pub, false, false, attrs, doc),
+            Shared => self.parse_shared_or_par(is_pub, true, false, attrs, doc),
+            Par => self.parse_shared_or_par(is_pub, false, true, attrs, doc),
+            Fn => self.parse_fn_def(is_pub, attrs, doc),
+            Trait => self.parse_trait_def(is_pub, attrs, doc),
+            // `impl` carries no visibility (the seed's `Token::Impl` arm ignores a
+            // leading `pub`) and no doc comment — attributes only; `doc` drops.
+            Impl => self.parse_impl_block(attrs),
             _ => {
                 let start = self.current_span();
                 self.advance();
@@ -1987,14 +2221,14 @@ impl Parser {
     // `Token::Shared` / `Token::Par` dispatch arms: consume the modifier
     // keyword, then route to the struct / enum parser (whose `start` is captured
     // at its OWN keyword — the modifier does not shift the definition span).
-    fn parse_shared_or_par(mut ref self, is_pub: bool, is_shared: bool, is_par: bool) -> Item {
+    fn parse_shared_or_par(mut ref self, is_pub: bool, is_shared: bool, is_par: bool, attrs: Vec[AttrNode], doc: Option[String]) -> Item {
         self.advance(); // consume `shared` / `par`
         if self.pos >= self.tokens.len() {
             return Item.ErrItem(SpanNode { span: self.current_span() });
         }
         match self.tokens[self.pos].token {
-            Struct => self.parse_struct_def(is_pub, is_shared, is_par),
-            Enum => self.parse_enum_def(is_pub, is_shared, is_par),
+            Struct => self.parse_struct_def(is_pub, is_shared, is_par, attrs, doc),
+            Enum => self.parse_enum_def(is_pub, is_shared, is_par, attrs, doc),
             _ => {
                 let start = self.current_span();
                 self.advance();
@@ -2044,7 +2278,7 @@ impl Parser {
     }
 
     // `const NAME: TYPE = VALUE;`
-    fn parse_const_decl(mut ref self, is_pub: bool) -> Item {
+    fn parse_const_decl(mut ref self, is_pub: bool, attrs: Vec[AttrNode], doc: Option[String]) -> Item {
         let start = self.current_span();
         self.advance(); // `const`
         let name = self.take_member_name();
@@ -2058,6 +2292,8 @@ impl Parser {
             name: name,
             ty: ty,
             value: value,
+            attributes: attrs,
+            doc: doc,
             span: self.span_from(start),
         })
     }
@@ -2111,7 +2347,7 @@ impl Parser {
 
     // `type NAME[T, ...] = TYPE;` — 3c-i covered the no-generics form; 3c-v adds
     // the optional generics clause (`where` refinement still deferred).
-    fn parse_type_alias_decl(mut ref self, is_pub: bool) -> Item {
+    fn parse_type_alias_decl(mut ref self, is_pub: bool, attrs: Vec[AttrNode], doc: Option[String]) -> Item {
         let start = self.current_span();
         self.advance(); // `type`
         let name = self.take_member_name();
@@ -2124,13 +2360,15 @@ impl Parser {
             name: name,
             generics: generics,
             ty: ty,
+            attributes: attrs,
+            doc: doc,
             span: self.span_from(start),
         })
     }
 
     // `struct NAME[T, ...] { [pub] [mut] field: TYPE, ... }` — `start` at
     // `struct` (3c-ii; generics added in 3c-v, `where` still deferred).
-    fn parse_struct_def(mut ref self, is_pub: bool, is_shared: bool, is_par: bool) -> Item {
+    fn parse_struct_def(mut ref self, is_pub: bool, is_shared: bool, is_par: bool, attrs: Vec[AttrNode], doc: Option[String]) -> Item {
         let start = self.current_span();
         self.advance(); // `struct`
         let name = self.take_member_name();
@@ -2145,6 +2383,8 @@ impl Parser {
             name: name,
             generics: generics,
             fields: fields,
+            attributes: attrs,
+            doc: doc,
             span: self.span_from(start),
         })
     }
@@ -2202,7 +2442,7 @@ impl Parser {
 
     // `enum NAME[T, ...] { VARIANT, ... }` — `start` at `enum` (3c-ii; generics
     // added in 3c-v).
-    fn parse_enum_def(mut ref self, is_pub: bool, is_shared: bool, is_par: bool) -> Item {
+    fn parse_enum_def(mut ref self, is_pub: bool, is_shared: bool, is_par: bool, attrs: Vec[AttrNode], doc: Option[String]) -> Item {
         let start = self.current_span();
         self.advance(); // `enum`
         let name = self.take_member_name();
@@ -2232,6 +2472,8 @@ impl Parser {
             name: name,
             generics: generics,
             variants: variants,
+            attributes: attrs,
+            doc: doc,
             span: self.span_from(start),
         })
     }
@@ -2296,15 +2538,17 @@ impl Parser {
 
     // `fn NAME(self?, name: TYPE, ...) [-> R] { body }` — `start` at `fn`
     // (3c-iii; generics + effects/contracts/`where` deferred).
-    fn parse_fn_def(mut ref self, is_pub: bool) -> Item {
-        Item.Func(self.parse_fn_def_node(is_pub))
+    fn parse_fn_def(mut ref self, is_pub: bool, attrs: Vec[AttrNode], doc: Option[String]) -> Item {
+        Item.Func(self.parse_fn_def_node(is_pub, attrs, doc))
     }
 
     // The function node itself (no `Item` wrapper), shared by the free-function
     // path (`parse_fn_def`) and impl-method parsing (`parse_impl_block`). `start`
     // is captured at `fn` (after any `pub`), so the span matches the seed's
-    // `Function` span (which excludes the visibility keyword).
-    fn parse_fn_def_node(mut ref self, is_pub: bool) -> FnDefNode {
+    // `Function` span (which excludes the visibility keyword). A top-level fn
+    // passes its collected `attrs`/`doc`; an impl method passes empty/None
+    // (per-method meta is a later slice).
+    fn parse_fn_def_node(mut ref self, is_pub: bool, attrs: Vec[AttrNode], doc: Option[String]) -> FnDefNode {
         let start = self.current_span();
         self.advance(); // `fn`
         let name = self.take_member_name();
@@ -2335,6 +2579,8 @@ impl Parser {
             params: params,
             ret: ret,
             body: body,
+            attributes: attrs,
+            doc: doc,
             span: self.span_from(start),
         }
     }
@@ -2342,7 +2588,7 @@ impl Parser {
     // `trait NAME { method... }`. Methods are required signatures (`fn m(...);`)
     // or default bodies (`fn m(...) { ... }`); `parse_trait_method` returns the
     // optional-body node. `start` is captured at `trait` (after any `pub`).
-    fn parse_trait_def(mut ref self, is_pub: bool) -> Item {
+    fn parse_trait_def(mut ref self, is_pub: bool, attrs: Vec[AttrNode], doc: Option[String]) -> Item {
         let start = self.current_span();
         self.advance(); // `trait`
         let name = self.take_member_name();
@@ -2365,6 +2611,8 @@ impl Parser {
             name: name,
             generics: generics,
             methods: methods,
+            attributes: attrs,
+            doc: doc,
             span: self.span_from(start),
         })
     }
@@ -2422,7 +2670,7 @@ impl Parser {
     // `impl TYPE { ... }` (inherent) or `impl TRAIT for TYPE { ... }`. The first
     // parsed type is the trait when a `for` follows, otherwise the target. Each
     // body item is an optionally-`pub` free function (reusing `parse_fn_def_node`).
-    fn parse_impl_block(mut ref self) -> Item {
+    fn parse_impl_block(mut ref self, attrs: Vec[AttrNode]) -> Item {
         let start = self.current_span();
         self.advance(); // `impl`
         let generics = self.parse_optional_generics();
@@ -2463,7 +2711,8 @@ impl Parser {
             if m_pub {
                 self.advance();
             }
-            let m = self.parse_fn_def_node(m_pub);
+            // Impl methods carry no per-method meta this slice — empty/None.
+            let m = self.parse_fn_def_node(m_pub, Vec.new(), None);
             methods.push(m);
         }
         self.expect_rbrace();
@@ -2472,6 +2721,7 @@ impl Parser {
             trait_ty: trait_ty,
             target_ty: target_ty,
             methods: methods,
+            attributes: attrs,
             span: self.span_from(start),
         })
     }

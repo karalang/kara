@@ -16,17 +16,17 @@
 //! ## Coverage (through slice 3c-v)
 //!
 //! `use` / `const` / `type` alias (3c-i), struct + enum (3c-ii), free functions
-//! (3c-iii), `trait` + `impl` blocks (3c-iv), and bare `[T, U]` generic params
-//! across every item form (3c-v). Entirely out of scope for now (kept out of
-//! the corpus): trait bounds (`[T: Ord]`), variance / const / shape-variadic /
-//! effect generic params, supertraits, trait aliases, associated types,
-//! attributes, doc comments, `private`, effects/contracts, `where` refinements,
-//! `unsafe`/`comptime` markers, distinct types, layout, extern/host, unions,
-//! module bindings, imports, test cases.
+//! (3c-iii), `trait` + `impl` blocks (3c-iv), bare `[T, U]` generic params
+//! across every item form (3c-v), and attributes + doc comments (3d-i). Entirely
+//! out of scope for now (kept out of the corpus): trait bounds (`[T: Ord]`),
+//! variance / const / shape-variadic / effect generic params, supertraits,
+//! trait aliases, associated types, `private`, effects/contracts, `where`
+//! refinements, `unsafe`/`comptime` markers, distinct types, layout,
+//! extern/host, unions, module bindings, imports, test cases.
 
 use karac::ast::{
-    BinOp, Block, Expr, ExprKind, GenericArg, GenericParams, Item, Param, PatternKind, SelfParam,
-    Stmt, StmtKind, TypeExpr, TypeKind, UnaryOp,
+    AttrArg, Attribute, BinOp, Block, Expr, ExprKind, GenericArg, GenericParams, Item, Param,
+    PatternKind, SelfParam, Stmt, StmtKind, TypeExpr, TypeKind, UnaryOp,
 };
 use karac::token::{FloatSuffix, IntSuffix};
 use std::path::PathBuf;
@@ -147,6 +147,27 @@ const CORPUS: &[&str] = &[
     "impl[T] Holder[T] {}",
     "impl[T] Holder[T] { fn get(ref self) -> i64 { 0 } }",
     "impl[A, B] Show for Pair2[A, B] { fn show(ref self) -> String { greeting } }",
+    // Attributes + doc comments (slice 3d-i). Coverage: bare / multi-segment
+    // (`::`) paths, positional + named (`k = v` / `k: v`) args, `#[k = "str"]`
+    // string values, the `@name` shorthand, single- and multi-line `///` docs,
+    // multiple attributes on one item, and doc+attr together — across `const` /
+    // `type` / `struct` / `enum` / `fn` / `trait` / `impl`. Arg values stay
+    // literal/identifier-simple so the compact expr renderer suffices; `use`
+    // carries no meta (seed parity) and `impl` carries attributes only (no doc).
+    "#[derive(Clone, Debug)] struct P { x: i64 }",
+    "/// a point\npub struct Q { x: i64 }",
+    "#[repr(C)] struct Packed { a: i64 }",
+    "#[deprecated(note = \"old\")] const K: i64 = 1;",
+    "@no_rc struct R {}",
+    "#[cfg(test)] fn t() {}",
+    "#[inline] impl P { fn m(ref self) -> i64 { 0 } }",
+    "#[diagnostic::on_unimplemented = \"nope\"] trait T {}",
+    "/// line one\n/// line two\nfn documented() {}",
+    "#[a] #[b(1)] enum E { X }",
+    "#[key = \"val\"] type Al = i64;",
+    "/// doc first\n#[cold] fn cold_fn() {}",
+    "#[rc_budget(max: 5)] struct Budgeted { n: i64 }",
+    "/// exported\n#[derive(Clone)] pub enum Ev { Tick, Data(i64) }",
 ];
 
 // ── Rust-side canonical render (must match `ast_render.kara`) ──
@@ -583,10 +604,11 @@ fn render_rust_fn(f: &karac::ast::Function) -> String {
         "slice-3c fn corpus must not carry effects / contracts / where / unsafe / comptime"
     );
     let mut out = format!(
-        "(fn{} {}{}{}{} (params",
+        "(fn{} {}{}{}{}{} (params",
         vis(f.is_pub),
         f.name,
         span_item_off_len(f.span.offset, f.span.length),
+        render_rust_meta(&f.attributes, &f.doc_comment),
         render_rust_generics(&f.generic_params),
         render_self_mode(&f.self_param),
     );
@@ -658,6 +680,64 @@ fn render_rust_trait_path(p: &karac::ast::PathExpr) -> String {
     )
 }
 
+/// Attribute + doc-comment meta (slice 3d-i) — must match
+/// `ast_render.kara::{render_meta, render_attr, render_attr_arg}`. Emits the
+/// EMPTY string when there is no doc and no attributes, so a meta-free item
+/// renders byte-identically. Inserted right after the item head's span tag.
+fn render_rust_attr_arg(arg: &AttrArg) -> String {
+    let mut out = String::from("(arg");
+    if let Some(n) = &arg.name {
+        out.push_str(" name=");
+        out.push_str(n);
+    }
+    out.push_str(&span_item_off_len(arg.span.offset, arg.span.length));
+    if let Some(v) = &arg.value {
+        out.push(' ');
+        out.push_str(&render_rust_expr(v));
+    }
+    out.push(')');
+    out
+}
+
+fn render_rust_attr(a: &Attribute) -> String {
+    let mut out = String::from("(attr ");
+    out.push_str(&a.path.join("::"));
+    out.push_str(&span_item_off_len(a.span.offset, a.span.length));
+    if let Some(s) = &a.string_value {
+        out.push_str(" = \"");
+        out.push_str(&escape_for_render(s));
+        out.push('"');
+    }
+    if !a.args.is_empty() {
+        out.push_str(" (args");
+        for arg in &a.args {
+            out.push(' ');
+            out.push_str(&render_rust_attr_arg(arg));
+        }
+        out.push(')');
+    }
+    out.push(')');
+    out
+}
+
+fn render_rust_meta(attrs: &[Attribute], doc: &Option<String>) -> String {
+    if attrs.is_empty() && doc.is_none() {
+        return String::new();
+    }
+    let mut out = String::from(" (meta");
+    if let Some(d) = doc {
+        out.push_str(" (doc \"");
+        out.push_str(&escape_for_render(d));
+        out.push_str("\")");
+    }
+    for a in attrs {
+        out.push(' ');
+        out.push_str(&render_rust_attr(a));
+    }
+    out.push(')');
+    out
+}
+
 /// Item render — must match `ast_render.kara::render_item`.
 fn render_rust_item(item: &Item) -> String {
     match item {
@@ -671,30 +751,33 @@ fn render_rust_item(item: &Item) -> String {
         }
         Item::ConstDecl(c) => {
             format!(
-                "(const{} {}{} {} {})",
+                "(const{} {}{}{} {} {})",
                 vis(c.is_pub),
                 c.name,
                 span_item_off_len(c.span.offset, c.span.length),
+                render_rust_meta(&c.attributes, &c.doc_comment),
                 render_rust_type(&c.ty),
                 render_rust_expr(&c.value)
             )
         }
         Item::TypeAlias(t) => {
             format!(
-                "(typealias{} {}{}{} {})",
+                "(typealias{} {}{}{}{} {})",
                 vis(t.is_pub),
                 t.name,
                 span_item_off_len(t.span.offset, t.span.length),
+                render_rust_meta(&t.attributes, &t.doc_comment),
                 render_rust_generics(&t.generic_params),
                 render_rust_type(&t.ty)
             )
         }
         Item::StructDef(s) => {
             let mut out = format!(
-                "(struct{} {}{}{}",
+                "(struct{} {}{}{}{}",
                 type_mods(s.is_pub, s.is_shared, s.is_par),
                 s.name,
                 span_item_off_len(s.span.offset, s.span.length),
+                render_rust_meta(&s.attributes, &s.doc_comment),
                 render_rust_generics(&s.generic_params)
             );
             for f in &s.fields {
@@ -706,10 +789,11 @@ fn render_rust_item(item: &Item) -> String {
         }
         Item::EnumDef(e) => {
             let mut out = format!(
-                "(enum{} {}{}{}",
+                "(enum{} {}{}{}{}",
                 type_mods(e.is_pub, e.is_shared, e.is_par),
                 e.name,
                 span_item_off_len(e.span.offset, e.span.length),
+                render_rust_meta(&e.attributes, &e.doc_comment),
                 render_rust_generics(&e.generic_params)
             );
             for v in &e.variants {
@@ -729,10 +813,11 @@ fn render_rust_item(item: &Item) -> String {
                 "slice-3c-iv trait corpus must not carry supertraits / effects / where / private"
             );
             let mut out = format!(
-                "(trait{} {}{}{}",
+                "(trait{} {}{}{}{}",
                 vis(t.is_pub),
                 t.name,
                 span_item_off_len(t.span.offset, t.span.length),
+                render_rust_meta(&t.attributes, &t.doc_comment),
                 render_rust_generics(&t.generic_params)
             );
             for it in &t.items {
@@ -756,8 +841,10 @@ fn render_rust_item(item: &Item) -> String {
                 "slice-3c-iv impl corpus must not carry a where clause"
             );
             let mut out = format!(
-                "(impl{}{}",
+                "(impl{}{}{}",
                 span_item_off_len(b.span.offset, b.span.length),
+                // `impl` carries attributes only (no doc) — mirror the port.
+                render_rust_meta(&b.attributes, &None),
                 render_rust_generics(&b.generic_params)
             );
             if let Some(tp) = &b.trait_name {

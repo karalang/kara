@@ -46,6 +46,8 @@ import ast.{
     MatchArm,
     MatchExpr,
     Item,
+    AttrArgNode,
+    AttrNode,
     UseDeclNode,
     ConstDeclNode,
     TypeAliasNode,
@@ -1014,6 +1016,8 @@ fn render_fn_def_node(n: FnDefNode) -> String {
         params,
         ret,
         body,
+        attributes,
+        doc,
         span,
     } = n;
     let mut out = "(fn".to_string();
@@ -1021,6 +1025,9 @@ fn render_fn_def_node(n: FnDefNode) -> String {
     out.push_str(" ");
     out.push_str(name);
     out.push_str(span_str(span.offset, span.length));
+    // Meta is empty for an impl method (empty attrs / None doc), so method
+    // renders are byte-identical; a top-level fn renders its ` (meta ...)`.
+    out.push_str(render_meta(attributes, doc));
     out.push_str(render_generics(generics));
     out.push_str(render_self_mode(self_mode));
     out.push_str(" (params");
@@ -1086,6 +1093,99 @@ fn render_trait_method(m: TraitMethodNode) -> String {
     out
 }
 
+// ── Attribute + doc-comment meta (slice 3d-i) ──
+//
+// Rendered as a ` (meta ...)` segment inserted right after an item head's span
+// tag. Emits the EMPTY string when the item has no doc and no attributes, so
+// every meta-free item renders byte-identically to before this slice. Doc:
+// ` (doc "TEXT")`. Each attribute: `(attr PATH<span>[ = "STR"][ (args ARG...)])`
+// with PATH joined by `::`. Each arg: `(arg[ name=NAME]<span>[ VALUE])`.
+fn render_attr_arg(arg: AttrArgNode) -> String {
+    let AttrArgNode { name, value, span } = arg;
+    let mut out = "(arg".to_string();
+    match name {
+        Some(n) => {
+            out.push_str(" name=");
+            out.push_str(n);
+        }
+        None => {}
+    }
+    out.push_str(span_str(span.offset, span.length));
+    match value {
+        Some(v) => {
+            out.push_str(" ");
+            out.push_str(render_expr(v));
+        }
+        None => {}
+    }
+    out.push_str(")");
+    out
+}
+
+fn render_attr(a: AttrNode) -> String {
+    let AttrNode {
+        path,
+        args,
+        string_value,
+        span,
+    } = a;
+    let mut out = "(attr ".to_string();
+    let mut i = 0;
+    for seg in path {
+        if i > 0 {
+            out.push_str("::");
+        }
+        out.push_str(seg);
+        i = i + 1;
+    }
+    out.push_str(span_str(span.offset, span.length));
+    match string_value {
+        Some(s) => {
+            out.push_str(" = \"");
+            out.push_str(escape_for_render(s));
+            out.push_str("\"");
+        }
+        None => {}
+    }
+    if args.len() > 0 {
+        out.push_str(" (args");
+        for arg in args {
+            out.push_str(" ");
+            out.push_str(render_attr_arg(arg));
+        }
+        out.push_str(")");
+    }
+    out.push_str(")");
+    out
+}
+
+fn render_meta(attributes: Vec[AttrNode], doc: Option[String]) -> String {
+    let has_attrs = attributes.len() > 0;
+    // Match `doc` exactly once (owned move) — build its rendering up front.
+    let mut doc_part = "".to_string();
+    let mut has_doc = false;
+    match doc {
+        Some(d) => {
+            has_doc = true;
+            doc_part.push_str(" (doc \"");
+            doc_part.push_str(escape_for_render(d));
+            doc_part.push_str("\")");
+        }
+        None => {}
+    }
+    if not has_attrs and not has_doc {
+        return "".to_string();
+    }
+    let mut out = " (meta".to_string();
+    out.push_str(doc_part);
+    for a in attributes {
+        out.push_str(" ");
+        out.push_str(render_attr(a));
+    }
+    out.push_str(")");
+    out
+}
+
 pub fn render_item(item: Item) -> String {
     let mut out = "".to_string();
     match item {
@@ -1115,6 +1215,8 @@ pub fn render_item(item: Item) -> String {
                 name,
                 ty,
                 value,
+                attributes,
+                doc,
                 span,
             } = n;
             out.push_str("(const");
@@ -1122,6 +1224,7 @@ pub fn render_item(item: Item) -> String {
             out.push_str(" ");
             out.push_str(name);
             out.push_str(span_str(span.offset, span.length));
+            out.push_str(render_meta(attributes, doc));
             out.push_str(" ");
             out.push_str(render_type(ty));
             out.push_str(" ");
@@ -1134,6 +1237,8 @@ pub fn render_item(item: Item) -> String {
                 name,
                 generics,
                 ty,
+                attributes,
+                doc,
                 span,
             } = n;
             out.push_str("(typealias");
@@ -1141,6 +1246,7 @@ pub fn render_item(item: Item) -> String {
             out.push_str(" ");
             out.push_str(name);
             out.push_str(span_str(span.offset, span.length));
+            out.push_str(render_meta(attributes, doc));
             out.push_str(render_generics(generics));
             out.push_str(" ");
             out.push_str(render_type(ty));
@@ -1154,6 +1260,8 @@ pub fn render_item(item: Item) -> String {
                 name,
                 generics,
                 fields,
+                attributes,
+                doc,
                 span,
             } = n;
             out.push_str("(struct");
@@ -1161,6 +1269,7 @@ pub fn render_item(item: Item) -> String {
             out.push_str(" ");
             out.push_str(name);
             out.push_str(span_str(span.offset, span.length));
+            out.push_str(render_meta(attributes, doc));
             out.push_str(render_generics(generics));
             for f in fields {
                 out.push_str(" ");
@@ -1176,6 +1285,8 @@ pub fn render_item(item: Item) -> String {
                 name,
                 generics,
                 variants,
+                attributes,
+                doc,
                 span,
             } = n;
             out.push_str("(enum");
@@ -1183,6 +1294,7 @@ pub fn render_item(item: Item) -> String {
             out.push_str(" ");
             out.push_str(name);
             out.push_str(span_str(span.offset, span.length));
+            out.push_str(render_meta(attributes, doc));
             out.push_str(render_generics(generics));
             for v in variants {
                 out.push_str(" ");
@@ -1199,6 +1311,8 @@ pub fn render_item(item: Item) -> String {
                 name,
                 generics,
                 methods,
+                attributes,
+                doc,
                 span,
             } = n;
             out.push_str("(trait");
@@ -1206,6 +1320,7 @@ pub fn render_item(item: Item) -> String {
             out.push_str(" ");
             out.push_str(name);
             out.push_str(span_str(span.offset, span.length));
+            out.push_str(render_meta(attributes, doc));
             out.push_str(render_generics(generics));
             for m in methods {
                 out.push_str(" ");
@@ -1219,10 +1334,14 @@ pub fn render_item(item: Item) -> String {
                 trait_ty,
                 target_ty,
                 methods,
+                attributes,
                 span,
             } = n;
             out.push_str("(impl");
             out.push_str(span_str(span.offset, span.length));
+            // `impl` carries attributes only (no doc) — pass `None`.
+            let no_doc: Option[String] = None;
+            out.push_str(render_meta(attributes, no_doc));
             out.push_str(render_generics(generics));
             match trait_ty {
                 Some(t) => {
