@@ -47241,6 +47241,45 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_tensor_from_narrow_element_width_stores_at_declared_width() {
+        // B-2026-07-03-34: `Tensor.from([...])` stored its leaves at the leaf
+        // literals' DEFAULT width (i64/f64) rather than the binding's declared
+        // NARROW element width, so every reader — which strides at
+        // `tensor_elem_size(info.elem)` — landed on the wrong bytes: SILENT
+        // wrong output under `karac build` (`t[0..3]` read [40,0,10,0], sum 50),
+        // correct under `karac run`. The fix threads the declared element type
+        // via `pending_let_tensor_info` (like zeros/ones/full) and coerces each
+        // leaf to it. Covers i32/i16/u8/u32/f32 element reads + reductions,
+        // sign-extension of negatives on read-back, a 2-D narrow tensor, and
+        // the i64/f64 no-op widths (regression guard). run == build == auto-par.
+        let src = r#"
+fn main() {
+    let t: Tensor[i32, [4]] = Tensor.from([40, 10, 30, 20]);
+    println(f"{t[0]} {t[1]} {t[2]} {t[3]} {t.sum()}");
+    let n: Tensor[i16, [3]] = Tensor.from([-100, -200, 300]);
+    println(f"{n[0]} {n[1]} {n[2]} {n.sum()}");
+    let u: Tensor[u8, [4]] = Tensor.from([1, 2, 50, 3]);
+    println(f"{u[0]} {u[2]} {u[3]} {u.sum()}");
+    let w: Tensor[u32, [3]] = Tensor.from([10, 20, 30]);
+    println(f"{w[0]} {w[2]} {w.sum()}");
+    let f: Tensor[f32, [3]] = Tensor.from([1.5, 2.5, 3.0]);
+    println(f"{f[0]} {f[2]} {f.sum()}");
+    let m: Tensor[i32, [2, 2]] = Tensor.from([[1, 2], [3, 4]]);
+    println(f"{m[0, 0]} {m[0, 1]} {m[1, 0]} {m[1, 1]} {m.sum()}");
+    let bi: Tensor[i64, [3]] = Tensor.from([5, 6, 7]);
+    let bf: Tensor[f64, [2]] = Tensor.from([1.5, 2.5]);
+    println(f"{bi[1]} {bi.sum()} {bf[0]} {bf.sum()}");
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        assert_eq!(
+            out,
+            "40 10 30 20 100\n-100 -200 300 0\n1 50 3 56\n10 30 60\n\
+             1.5 3 7\n1 2 3 4 10\n6 18 1.5 4\n"
+        );
+    }
+
+    #[test]
     fn test_e2e_tensor_fold_rejects_noninline_and_heap_accumulator() {
         // Same first-cut boundaries as `Column.fold`, rejected LOUDLY (each
         // works under `karac run`): a closure-valued local and a heap /

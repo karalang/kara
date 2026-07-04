@@ -426,10 +426,27 @@ impl<'ctx> super::Codegen<'ctx> {
         for leaf in &leaves {
             leaf_vals.push(self.compile_expr(leaf)?);
         }
-        let elem = leaf_vals
+        let leaf_elem = leaf_vals
             .first()
             .map(|v| v.get_type())
             .ok_or_else(|| "Tensor.from: cannot determine element type".to_string())?;
+        // Prefer the DECLARED element type from the binding annotation (threaded
+        // via `pending_let_tensor_info`, the same mechanism zeros/ones/full use).
+        // The leaf literals compile at the default width (i64 for ints, f64 for
+        // floats) because there is no expected-type context at their compile
+        // site, so for a NARROW annotation (`Tensor[i32,…]` / `[f32,…]` / `[u8,…]`)
+        // the stored width would be 8 bytes while every reader (`t[i]`, `t.sum()`,
+        // map/fold/sorted, …) strides at `tensor_elem_size(info.elem)` — an
+        // 8-byte-write / narrow-read mismatch that silently corrupts element reads
+        // (B-2026-07-03-34). Store at the declared width and coerce each leaf to
+        // it. The rank guard keeps a stale pending (belonging to an unrelated
+        // outer tensor binding) from hijacking the element type; a bare/
+        // unannotated `Tensor.from` (no pending) falls back to the leaf width,
+        // which the reader-side var info infers identically.
+        let elem = match &self.pending_let_tensor_info {
+            Some(info) if info.dims.len() == rank => info.elem,
+            _ => leaf_elem,
+        };
         let elem_size = self.tensor_elem_size(elem)?;
 
         let total = i64_t.const_int(8 * (1 + rank as u64) + (count as u64) * elem_size, false);
@@ -452,6 +469,9 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let data = self.tensor_data_ptr(t_ptr, rank, "t.data");
         for (i, v) in leaf_vals.into_iter().enumerate() {
+            // Narrow (or widen) the leaf to the declared element width so the
+            // store stride matches every reader's `tensor_elem_size(elem)`.
+            let v = self.coerce_scalar_to_type(v, elem);
             let slot = unsafe {
                 self.builder
                     .build_gep(
