@@ -579,6 +579,24 @@ impl<'ctx> super::Codegen<'ctx> {
             );
         }
 
+        // Drop any bound whose captured base is a by-pointer fixed-size
+        // `[N x T]` array (B-2026-06-15-3): unlike a Vec, an array capture has
+        // NO `{ptr,len,cap}` header — its VarSlot points straight at the inline
+        // elements, so `emit_modulo_bce_preflight`'s `build_struct_gep(_, _, 1)`
+        // would read element[1] as the "length" and panic on that garbage
+        // (the auto-par `atab[k % m]` miscompile found by kata 60: for
+        // `btab = [1,2,3,4]`, element[1] = 2 < upper 4 → false preflight trap).
+        // An array's length is the compile-time constant N, so its per-iter
+        // `data[idx]` bounds check against static N is already emitted and
+        // correct — just don't hoist. Only Vec captures (a genuine runtime
+        // length in field 1) are eligible for the preflight + BCE elision.
+        out.retain(|b| {
+            !matches!(
+                self.variables.get(&b.vec_var).map(|s| s.ty),
+                Some(BasicTypeEnum::ArrayType(_))
+            )
+        });
+
         // Deterministic order — env-struct etc. already use sorted keys
         // for IR stability; bounds order doesn't affect correctness but
         // a stable order keeps IR-text-pinned tests reproducible.

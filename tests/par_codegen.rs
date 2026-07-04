@@ -2713,6 +2713,109 @@ fn main() {
         );
     }
 
+    /// Follow-on to B-2026-06-15-3 (the by-pointer array capture above): a
+    /// reduction body that indexes a captured fixed-size array by a modulo of
+    /// the loop var (`let idx = k % m; ... atab[idx]`) must NOT run the
+    /// modulo-BCE preflight against the array. That preflight is a Vec-only
+    /// optimization — it reads `{ptr,len,cap}` field 1 as the runtime length —
+    /// but a by-pointer array capture has no header, so `build_struct_gep(_, _,
+    /// 1)` reads element[1] as the "length" and can trap on that garbage.
+    /// Kata 60 hit it: `btab = [1,2,3,4]` → element[1] = 2 < upper 4 → the
+    /// preflight panicked `vec index out of bounds` under the default auto-par
+    /// build while the seq lane was fine. An array's length is a compile-time
+    /// constant N, so its per-iter `[N x T]` bounds check is already correct;
+    /// the recognizer must simply skip array captures. Pin: the worker holds
+    /// the correct per-iter array check (`getelementptr [4 x i64]`) and NO
+    /// Vec-header read of the array pointer / `vec index out of bounds` panic.
+    #[test]
+    fn test_reduce_captured_array_modulo_index_no_vec_bce_preflight() {
+        let src = r#"
+fn f(a: i64, b: i64) -> i64 { a * 100i64 + b }
+fn main() {
+    let m: i64 = 4i64;
+    let atab: Array[i64, 4] = [10i64, 20i64, 30i64, 40i64];
+    let btab: Array[i64, 4] = [1i64, 2i64, 3i64, 4i64];
+    let mut total: i64 = 0i64;
+    let mut k: i64 = 0i64;
+    while k < 100000i64 {
+        let idx = k % m;
+        total = total + f(atab[idx], btab[idx]);
+        k = k + 1i64;
+    }
+    println(total);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        let worker = ir
+            .split("define void @__karac_reduce_worker_")
+            .nth(1)
+            .and_then(|s| s.split("\n}").next())
+            .unwrap_or("");
+        assert!(
+            !worker.is_empty(),
+            "expected a synthesized reduce worker fn; IR:\n{ir}"
+        );
+        // No Vec-header preflight against the array capture, and no vec-OOB
+        // panic path — only the correct per-iter array GEP/bounds check.
+        assert!(
+            !worker.contains("bce.len"),
+            "reduce worker must NOT emit the modulo-BCE Vec-header preflight for \
+             a fixed-size array capture (reads element[1] as a bogus length). \
+             Worker IR:\n{worker}"
+        );
+        assert!(
+            !worker.contains("vec index out of bounds"),
+            "array capture must not route through the Vec index-OOB panic; \
+             the per-iter check is the static-N array check. Worker IR:\n{worker}"
+        );
+        assert!(
+            worker.contains("getelementptr [4 x i64]"),
+            "expected the correct per-iter [4 x i64] array GEP. Worker IR:\n{worker}"
+        );
+    }
+
+    /// End-to-end twin of the pin above: the captured-array modulo-index
+    /// reduction compiles, links, and runs under the default auto-par build
+    /// (which previously panicked `vec index out of bounds` at the preflight),
+    /// producing the correct sum. `atab` cycles 10,20,30,40 and `btab` cycles
+    /// 1,2,3,4 over k∈[0,100000): 25000 full cycles, per-cycle Σ f = Σ(a·100+b)
+    /// = (100·100 + 10) = 10010, so total = 25000 · 10010 = 250250000.
+    #[test]
+    fn test_e2e_reduction_captured_array_modulo_index_matches_serial() {
+        let src = r#"
+fn f(a: i64, b: i64) -> i64 { a * 100i64 + b }
+fn main() {
+    let m: i64 = 4i64;
+    let atab: Array[i64, 4] = [10i64, 20i64, 30i64, 40i64];
+    let btab: Array[i64, 4] = [1i64, 2i64, 3i64, 4i64];
+    let mut total: i64 = 0i64;
+    let mut k: i64 = 0i64;
+    while k < 100000i64 {
+        let idx = k % m;
+        total = total + f(atab[idx], btab[idx]);
+        k = k + 1i64;
+    }
+    println(total);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        assert_eq!(out.trim(), "250250000");
+    }
+
     /// Slice 3b end-to-end: compile + link + run a program with a
     /// recognized reduction loop and verify the output matches the
     /// serial Σ-formula. Pinning correctness against the parallel
