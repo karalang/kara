@@ -23,11 +23,14 @@
 //!
 //! Firing pattern (ALL must hold):
 //!   1. `let mut V = Vec.new()` / `String.new()` / `""` — fresh mutable binding.
-//!   2. A following `while IV < BOUND { … }` or `for I in LO..BOUND { … }` whose
-//!      body pushes to `V` exactly once, unconditionally, with no
-//!      break/continue/return (so push-count == trip-count).
-//!   3. `V` is not mentioned between the Let and the loop, nor anywhere in the
-//!      body except that one push.
+//!   2. A following `while IV < BOUND` / `while IV <= BOUND` / `for I in LO..BOUND`
+//!      loop whose body pushes to `V` exactly once, unconditionally, with no
+//!      break/continue/return (so push-count == trip-count). The `<=` form runs
+//!      one extra iteration, so it reserves `BOUND + 1`.
+//!   3. `V` is not mentioned between the Let and the loop. Inside the loop body
+//!      `V` may be *read* (e.g. `V[i - 1]` / `V.len()` in a cumulative fill) but
+//!      is pushed to exactly once — reads don't change the length, so the
+//!      trip-count reservation stays exact.
 //!   4. `BOUND` is fully analyzable, loop-invariant (none of its identifiers is
 //!      assigned or method-called in the body), does not reference `IV` or `V`,
 //!      and every identifier it names is in scope at the Let (i.e. not bound by
@@ -160,21 +163,51 @@ fn find_fill_bound(stmts: &[Stmt], let_idx: usize, v: &str) -> Option<Expr> {
     None
 }
 
-/// `while IV < BOUND { body }` — classify for the fill search.
+/// `while IV < BOUND { body }` or `while IV <= BOUND { body }` — classify for
+/// the fill search. The `<=` form runs one extra iteration, so its reservation
+/// is `BOUND + 1`; the raw `BOUND` is still what `fill_loop_ok` validates (so
+/// the giant-literal guard sees the literal, not a `+ 1` wrapper hiding it), and
+/// the `+ 1` only wraps the accepted bound. Over-reserving by `IV`'s start value
+/// is harmless — capacity is a hint, never an output-affecting quantity.
 fn analyze_while(condition: &Expr, body: &Block, v: &str, bound_between: &[String]) -> LoopVerdict {
-    if let ExprKind::Binary {
-        op: BinOp::Lt,
-        left,
-        right,
-    } = &condition.kind
-    {
-        if let ExprKind::Identifier(iv) = &left.kind {
-            if iv != v && fill_loop_ok(body, v, Some(iv), right, bound_between) {
-                return LoopVerdict::Presize(Box::new((**right).clone()));
+    if let ExprKind::Binary { op, left, right } = &condition.kind {
+        let inclusive = match op {
+            BinOp::Lt => Some(false),
+            BinOp::LtEq => Some(true),
+            _ => None,
+        };
+        if let Some(inclusive) = inclusive {
+            if let ExprKind::Identifier(iv) = &left.kind {
+                if iv != v && fill_loop_ok(body, v, Some(iv), right, bound_between) {
+                    let bound = if inclusive {
+                        plus_one(right)
+                    } else {
+                        (**right).clone()
+                    };
+                    return LoopVerdict::Presize(Box::new(bound));
+                }
             }
         }
     }
     loop_touches_v_verdict(Some(condition), body, v)
+}
+
+/// Build the expression `<e> + 1` (turns an inclusive `<=` bound into its
+/// trip count). Spans are inherited from `e` — synthesized nodes never surface
+/// in diagnostics, they only feed the `with_capacity` argument.
+fn plus_one(e: &Expr) -> Expr {
+    let span = e.span.clone();
+    Expr {
+        kind: ExprKind::Binary {
+            op: BinOp::Add,
+            left: Box::new(e.clone()),
+            right: Box::new(Expr {
+                kind: ExprKind::Integer(1, None),
+                span: span.clone(),
+            }),
+        },
+        span,
+    }
 }
 
 /// `for I in LO..BOUND { body }` (exclusive or inclusive). Bound is the range's
@@ -258,25 +291,34 @@ fn fill_loop_ok(
     true
 }
 
-/// `v` appears exactly once in `body`, as the receiver of a single top-level
-/// `push`/`push_str`/`push_back`, with no break/continue/return in the body.
+/// The body pushes to `v` exactly once, unconditionally, with no
+/// break/continue/return. Read-only mentions of `v` elsewhere in the body — e.g.
+/// `v.len()` or `v[i - 1]` in a cumulative fill `v.push(v[i - 1] + x)` — are
+/// allowed: a read never changes the length, so push-count still equals
+/// trip-count.
+///
+/// Correctness rests on the complete-or-bail ident analysis: `count_ident_in_
+/// block` returns `None` on any node it can't fully enumerate (nested `if`/loop
+/// bodies, or `v` moved into an un-walked position), so a body that survives it
+/// is straight-line — which makes the single top-level push the *only* push
+/// (i.e. unconditional). And pre-sizing is a pure capacity hint, so even an
+/// imperfect estimate from an allowed read can never change program output.
 fn body_fills_once(body: &Block, v: &str) -> bool {
     if block_has_early_exit(body) {
         return false;
     }
-    // Total identifier occurrences of `v` in the body must be exactly one, and
-    // that one must be a push receiver. Counting requires every expr be
-    // understood; an unanalyzable node bails (returns None → not == Some(1)).
-    if count_ident_in_block(body, v) != Some(1) {
+    // Fail closed on any body we cannot fully analyze (nested control flow, or
+    // `v` in an un-walked position) — guarantees the body is straight-line, so
+    // every push to `v` is a top-level statement counted below.
+    if count_ident_in_block(body, v).is_none() {
         return false;
     }
+    // Exactly one (necessarily top-level, hence unconditional) push to `v`.
     body.stmts
         .iter()
-        .filter_map(|s| match &s.kind {
-            StmtKind::Expr(e) => Some(e),
-            _ => None,
-        })
-        .any(|e| is_push_to(e, v))
+        .filter(|s| matches!(&s.kind, StmtKind::Expr(e) if is_push_to(e, v)))
+        .count()
+        == 1
 }
 
 fn is_push_to(e: &Expr, v: &str) -> bool {
@@ -678,5 +720,33 @@ mod tests {
     fn no_fire_on_nonempty_string() {
         let src = "fn f(n: i64) {\n  let mut s: String = \"seed\";\n  let mut i = 0i64;\n  while i < n {\n    s.push_str(\"x\");\n    i = i + 1i64;\n  }\n}\n";
         assert!(!fires_for(src, "s"));
+    }
+
+    #[test]
+    fn fires_on_counted_while_le() {
+        // Inclusive `<=` fill (`while d <= n`) — one iteration more than `<`;
+        // reserve BOUND + 1. This is the common counted-loop idiom the pass
+        // previously missed (measured 1.36x on the kata-60 factorial `digits`).
+        let src = "fn f(n: i64) {\n  let mut v: Vec[i64] = Vec.new();\n  let mut d = 1i64;\n  while d <= n {\n    v.push(d);\n    d = d + 1i64;\n  }\n}\n";
+        assert!(fires_for(src, "v"));
+    }
+
+    #[test]
+    fn fires_when_body_reads_v() {
+        // A cumulative fill reads `v` (here `v.len()`) alongside the single
+        // push. A read never changes the length, so push-count == trip-count —
+        // the pass must still pre-size. (The old `count == 1` rule rejected any
+        // read of `v`.)
+        let src = "fn f(n: i64) {\n  let mut v: Vec[i64] = Vec.new();\n  let mut i = 0i64;\n  while i < n {\n    v.push(v.len());\n    i = i + 1i64;\n  }\n}\n";
+        assert!(fires_for(src, "v"));
+    }
+
+    #[test]
+    fn no_fire_on_two_pushes_with_read() {
+        // A read of `v` does not license a second push: two pushes still means
+        // push-count != trip-count, so no pre-size (guards the read relaxation
+        // from over-firing).
+        let src = "fn f(n: i64) {\n  let mut v: Vec[i64] = Vec.new();\n  let mut i = 0i64;\n  while i < n {\n    v.push(v.len());\n    v.push(i);\n    i = i + 1i64;\n  }\n}\n";
+        assert!(!fires_for(src, "v"));
     }
 }
