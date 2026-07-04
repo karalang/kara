@@ -341,20 +341,28 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         use super::state::VarSlot;
         let key = (iterable.span.offset, iterable.span.length);
-        let te = if let Some(te) = self.owned_temp_drops.get(&key).cloned() {
-            te
-        } else if let Some(elem_te) = self.temp_recv_elem_types.get(&key).cloned() {
-            // `for x in make_vec().iter()` — the for-loop peeled `.iter()` and
-            // recursed on the fresh-temp receiver, whose span collides with the
-            // `.iter()` MethodCall. `expr_types` at that span holds `Iterator[T]`
-            // (it clobbered the receiver's `Vec[T]`), so `owned_temp_drops` has no
-            // entry. The fresh-temp gate recorded the *element* type span-keyed in
-            // `temp_recv_elem_types`; reconstruct `Vec[elem]` so the
-            // materialize-iterate-drop path runs (without it the body is silently
-            // skipped — output 0). The element-drop threading below
-            // (`var_elem_type_exprs` → agg/map drops) is identical to the
-            // read-method path, so heap elements are freed once at scope exit.
+        // `temp_recv_elem_types` is checked BEFORE `owned_temp_drops`. For a
+        // fresh-temp `.iter()`/`.into_iter()` peel it holds the receiver's
+        // ELEMENT type, recorded span-keyed by the typechecker — authoritative
+        // for the for-loop source and immune to the method-call-chain span
+        // collision that can pollute `owned_temp_drops` at the SAME key. When a
+        // fresh-temp `.iter()` feeds further adaptors before `collect`
+        // (`mk().iter().enumerate().collect()`), the base call, `.iter()`,
+        // `.enumerate()`, and `.collect()` all share the base callee's span, so
+        // `expr_types` — hence `owned_temp_drops` — at that key holds the
+        // OUTERMOST result (`Vec[(i64, T)]`) rather than the source `Vec[T]`.
+        // Reading/dropping the source buffer at that wider element stride
+        // corrupted the heap (B-2026-07-04-5: `pointer being freed was not
+        // allocated`). Preferring the element table reconstructs the correct
+        // `Vec[elem]`. For a non-peel Vec-value iterable (`t.iter_axis(n)`) the
+        // element table has no entry and `owned_temp_drops` (correct there) is
+        // used, so this reorder is a pure fix with no regression. The
+        // element-drop threading below is identical for both sources, so heap
+        // elements are freed once at scope exit.
+        let te = if let Some(elem_te) = self.temp_recv_elem_types.get(&key).cloned() {
             super::Codegen::vec_type_expr_from_element(&elem_te)
+        } else if let Some(te) = self.owned_temp_drops.get(&key).cloned() {
+            te
         } else {
             return Ok(None);
         };

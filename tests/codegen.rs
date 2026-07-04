@@ -6356,6 +6356,54 @@ fn main() {
         }
     }
 
+    /// B-2026-07-04-5: a collect-adaptor chain whose SOURCE is a fresh-temp
+    /// call result (`mk().iter()…`) — not a named local — mis-typed the
+    /// synthetic for-loop element. `mk().iter().enumerate().collect()` reduces
+    /// (in `try_compile_for_vec_value`) to iterating the materialized `mk()`
+    /// temp; the element type was resolved from `owned_temp_drops` at the
+    /// iterable span, but the whole method-call chain (`mk`, `mk()`,
+    /// `.iter()`, `.enumerate()`, `.collect()`) shares the base callee's span,
+    /// so that table held the OUTERMOST result `Vec[(i64, String)]` instead of
+    /// the source `Vec[String]`. The loop then read/dropped the `Vec[String]`
+    /// buffer at the wider `(i64, String)` element stride → `pointer being
+    /// freed was not allocated` (SIGABRT / SIGTRAP under -O2). The fix prefers
+    /// the collision-immune `temp_recv_elem_types` element table. Covers a
+    /// heap (`String`) terminal enumerate over a fresh-temp source (the double-
+    /// free shape — reads `.0`/`.1` and relies on the drop of both the temp
+    /// and the collected Vec), the `enumerate().map(|p| p.1)` transform, a POD
+    /// fresh-temp enumerate, and a plain `.map` over a fresh-temp source.
+    #[test]
+    fn e2e_iter_adaptor_collect_fresh_temp_source_codegen() {
+        if let Some(out) = run_program(
+            r#"
+fn mk() -> Vec[String] {
+    return Vec["redxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx".to_string(), "grnyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy".to_string()];
+}
+fn nums() -> Vec[i64] {
+    return Vec[10i64, 20i64, 30i64];
+}
+fn main() {
+    let he: Vec[(i64, String)] = mk().iter().enumerate().collect();
+    let e0 = he[0];
+    let e1 = he[1];
+    println(f"{he.len()} {e0.0} {e0.1} {e1.0} {e1.1}");
+    let hm: Vec[String] = mk().iter().enumerate().map(|p| p.1).collect();
+    println(f"{hm.len()} {hm[0]} {hm[1]}");
+    let hl: Vec[i64] = mk().iter().map(|s| s.len()).collect();
+    println(f"{hl[0]} {hl[1]}");
+    let pe: Vec[(i64, i64)] = nums().iter().enumerate().collect();
+    let p1 = pe[1];
+    println(f"{pe.len()} {p1.0} {p1.1}");
+}
+"#,
+        ) {
+            assert_eq!(
+                out,
+                "2 0 redxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 1 grnyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\n2 redxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx grnyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\n41 41\n3 1 20\n"
+            );
+        }
+    }
+
     #[test]
     fn e2e_chars_iterator_bound_to_variable_codegen() {
         // B-2026-06-18-5: `s.chars()` bound to a NAME (`let it = s.chars();`)

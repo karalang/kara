@@ -499,6 +499,51 @@ fn main() {
     }
 
     #[test]
+    fn asan_fresh_temp_source_enumerate_collect_no_double_free() {
+        // B-2026-07-04-5: a collect-adaptor chain whose SOURCE is a fresh-temp
+        // call result (`mk().iter()…`) rather than a named local. The for-loop
+        // over the materialized `mk()` temp resolved its element type from the
+        // span-colliding `owned_temp_drops` — which held the OUTERMOST result
+        // `Vec[(i64, String)]` instead of the source `Vec[String]` — and so read
+        // and dropped the `Vec[String]` buffer at the wider `(i64, String)`
+        // element stride, freeing garbage (`pointer being freed was not
+        // allocated`). The terminal heap enumerate (whole `(i64, String)` tuple
+        // pushed and later dropped alongside the freed `mk()` temp) is the
+        // double-free shape; `enumerate().map(|p| p.1)` and a plain `.map` over a
+        // fresh-temp source ride the same corrected element-type resolution.
+        // Reads `.0`/`.1` and an element each round to expose the free.
+        assert_clean_asan_run(
+            r#"
+fn mk() -> Vec[String] {
+    return Vec[
+        "fresh-temp-enum-payload-alpha-aaaaaaaaaaaaaaaa".to_string(),
+        "fresh-temp-enum-payload-bravo-bbbbbbbbbbbbbbbb".to_string()
+    ];
+}
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let he: Vec[(i64, String)] = mk().iter().enumerate().collect();
+        let e0: (i64, String) = he[0];
+        let e1: (i64, String) = he[1];
+        let hm: Vec[String] = mk().iter().enumerate().map(|p| p.1).collect();
+        let m1: String = hm[1];
+        let hl: Vec[i64] = mk().iter().map(|s| s.len()).collect();
+        println(f"{he.len()} {e0.0} {e0.1} {e1.0} {e1.1} {m1} {hl[0]}");
+        round = round + 1i64;
+    }
+}
+"#,
+            [
+                "2 0 fresh-temp-enum-payload-alpha-aaaaaaaaaaaaaaaa 1 fresh-temp-enum-payload-bravo-bbbbbbbbbbbbbbbb fresh-temp-enum-payload-bravo-bbbbbbbbbbbbbbbb 46",
+            ]
+            .repeat(40)
+            .as_slice(),
+            "asan_fresh_temp_source_enumerate_collect_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_heap_env_closure_freed_no_leak() {
         assert_clean_asan_run(
             r#"
