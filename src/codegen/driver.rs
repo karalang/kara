@@ -440,8 +440,15 @@ pub(super) fn link_executable_impl(
     // directly (ground truth), so it stays decoupled from codegen
     // internals. Any uncertainty falls back to the full archive, which is
     // always correct.
-    let prefer_min = !object_references_tls(obj_path);
-    let runtime_path = resolve_runtime_path(prefer_min)?;
+    // GPU dispatch (spike slice-0): a program that calls `gpu.dispatch`
+    // references `karac_runtime_gpu_*`, which lives only in the wgpu-backed
+    // `libkarac_runtime_gpu.a`. Auto-select that archive (a superset of the
+    // full archive) so `gpu.dispatch` links without a manual `KARAC_RUNTIME`;
+    // a non-GPU program never sees it. Computed once — also gates the macOS
+    // Metal-framework flags below.
+    let references_gpu = object_references_gpu(obj_path);
+    let prefer_min = !references_gpu && !object_references_tls(obj_path);
+    let runtime_path = resolve_runtime_path(prefer_min, references_gpu)?;
 
     // Windows uses a separate link path (MSVC toolchain): a `clang` driver
     // (not `cc`), the Windows system import libs the runtime archive
@@ -472,7 +479,7 @@ pub(super) fn link_executable_impl(
         // non-GPU binary links exactly as before. macOS-only: the native GPU
         // dogfood target is Metal (slice-0 is native-only; the Linux/Vulkan and
         // wasm/WebGPU link stories are later increments).
-        if cfg!(target_os = "macos") && object_references_gpu(obj_path) {
+        if cfg!(target_os = "macos") && references_gpu {
             for framework in ["Metal", "Foundation", "QuartzCore", "CoreGraphics"] {
                 cmd.args(["-framework", framework]);
             }
@@ -711,10 +718,20 @@ fn object_references_tls(obj_path: &str) -> bool {
 fn object_references_gpu(obj_path: &str) -> bool {
     match std::process::Command::new("nm").arg(obj_path).output() {
         Ok(o) if o.status.success() => {
-            String::from_utf8_lossy(&o.stdout).contains("karac_runtime_gpu_")
+            symbol_listing_references_gpu(&String::from_utf8_lossy(&o.stdout))
         }
         _ => false,
     }
+}
+
+/// Pure predicate over `nm`-style symbol-listing text: true iff any line names
+/// a `karac_runtime_gpu_*` symbol. Split from the `nm` shell-out so it is
+/// unit-testable without an object file (twin of
+/// [`symbol_listing_references_tls`]).
+fn symbol_listing_references_gpu(nm_output: &str) -> bool {
+    nm_output
+        .lines()
+        .any(|line| line.contains("karac_runtime_gpu_"))
 }
 
 /// Pure predicate over `nm`-style symbol-listing text: true iff any line
@@ -748,7 +765,7 @@ fn symbol_listing_references_tls(nm_output: &str) -> bool {
 /// undefined `_karac_runtime_test_bind_and_print_port` whenever a lean
 /// archive existed on disk. The min preference now applies only to the
 /// directory-search tiers (2 and 3), where no specific file was named.
-pub(super) fn resolve_runtime_path(prefer_min: bool) -> Result<String, String> {
+pub(super) fn resolve_runtime_path(prefer_min: bool, gpu: bool) -> Result<String, String> {
     // Windows (MSVC) names a `staticlib` crate `karac_runtime.lib`, not the
     // unix `libkarac_runtime.a`. The `KARAC_RUNTIME` override (tier 1) is
     // honored verbatim on either platform.
@@ -756,14 +773,25 @@ pub(super) fn resolve_runtime_path(prefer_min: bool) -> Result<String, String> {
     const FULL: &str = "karac_runtime.lib";
     #[cfg(windows)]
     const MIN: &str = "karac_runtime_min.lib";
+    #[cfg(windows)]
+    const GPU: &str = "karac_runtime_gpu.lib";
     #[cfg(not(windows))]
     const FULL: &str = "libkarac_runtime.a";
     #[cfg(not(windows))]
     const MIN: &str = "libkarac_runtime_min.a";
+    #[cfg(not(windows))]
+    const GPU: &str = "libkarac_runtime_gpu.a";
 
-    // Pick the preferred archive name within a directory: lean first when
-    // `prefer_min`, else the full archive.
+    // Pick the archive name within a directory. The GPU archive (a superset of
+    // the full archive, with the wgpu backend) is a distinct artifact — when a
+    // program references `karac_runtime_gpu_*` only that archive resolves the
+    // symbol, so `gpu` takes priority and never falls back to min/full.
+    // Otherwise: lean first when `prefer_min`, else the full archive.
     let pick = |dir: &std::path::Path| -> Option<String> {
+        if gpu {
+            let g = dir.join(GPU);
+            return g.exists().then(|| g.to_string_lossy().into_owned());
+        }
         if prefer_min {
             let m = dir.join(MIN);
             if m.exists() {
@@ -802,6 +830,19 @@ pub(super) fn resolve_runtime_path(prefer_min: bool) -> Result<String, String> {
         return Ok(found);
     }
 
+    if gpu {
+        return Err(
+            "this program calls `gpu.dispatch`, which needs the GPU runtime archive \
+             `libkarac_runtime_gpu.a` — not found. Build it with `cargo rustc -p karac-runtime \
+             --release --features gpu --crate-type staticlib` then `cp target/release/\
+             libkarac_runtime.a target/release/libkarac_runtime_gpu.a` (the `--features gpu` \
+             build reuses the canonical archive name; the rename keeps it distinct from the \
+             non-GPU archives). Or set KARAC_RUNTIME to an explicit gpu archive path. The GPU \
+             archive carries the heavy wgpu backend, so it is opt-in — only programs that \
+             dispatch to the GPU link it."
+                .to_string(),
+        );
+    }
     Err(
         "libkarac_runtime.a not found; set KARAC_RUNTIME or build the runtime crate (`cargo rustc -p karac-runtime --release --crate-type staticlib` — NOT plain `cargo build`, which co-emits the rlib and defeats the staticlib's dead-strip; see runtime/Cargo.toml). For the lean compute-only archive also build `--no-default-features --features net` and install it as `libkarac_runtime_min.a` alongside.".to_string(),
     )
@@ -1471,8 +1512,28 @@ pub(super) fn read_strip_error_trace_env() -> bool {
 mod tests {
     use super::{
         default_cpu_and_features, parse_cpu_names_from_help_listing,
-        parse_feature_names_from_help_listing, symbol_listing_references_tls,
+        parse_feature_names_from_help_listing, symbol_listing_references_gpu,
+        symbol_listing_references_tls,
     };
+
+    #[test]
+    fn gpu_symbol_reference_detected() {
+        // A `gpu.dispatch` program's object references the runtime GPU entry
+        // point → link the wgpu-backed `libkarac_runtime_gpu.a`.
+        let listing = "                 U _karac_runtime_gpu_f32_map\n\
+                       0000000000000000 T _main\n";
+        assert!(symbol_listing_references_gpu(listing));
+    }
+
+    #[test]
+    fn non_gpu_listing_not_detected() {
+        // A compute-only program references no GPU symbol → normal archive.
+        let listing = "                 U _malloc\n\
+                       0000000000000000 T _main\n\
+                       U _karac_runtime_channel_new\n";
+        assert!(!symbol_listing_references_gpu(listing));
+        assert!(!symbol_listing_references_gpu(""));
+    }
 
     #[test]
     fn cpu_help_listing_parse_extracts_names_and_stops_at_features() {
