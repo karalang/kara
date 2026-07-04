@@ -3953,31 +3953,53 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(None);
         }
 
-        // `enumerate` producing a HEAP-bearing tuple is safe only when it is the
-        // TERMINAL adaptor — the `(idx, <heap>)` tuple is then pushed straight
-        // into the result Vec (a move; verified leak/double-free-clean, incl.
-        // pre-stages like `skip`/`filter`/`take` before enumerate). A stage
-        // AFTER enumerate binds `let p = <tuple-local>`, which bit-copies the
-        // tuple and ALIASES its heap buffer → the alias and the tuple-local both
-        // free it (garbage / crash). So bail (loud dispatch-fail) for a
-        // NON-terminal enumerate whose collected element is heap-bearing
-        // (B-2026-07-04-4). A POD collected element (`enumerate().map(|p| p.0)`
-        // → `Vec[i64]`) is unaffected — the tuple's heap component is never
-        // aliased out and its own drop frees it. The B-2026-07-04-3 tuple
-        // CONSTRUCTION double-free (the `(idx, x)` build itself) is fixed
-        // separately in `compile_tuple`.
-        let has_enumerate = steps.iter().any(|s| matches!(s, IterAdaptor::Enumerate));
-        let enumerate_is_terminal = matches!(steps.last(), Some(IterAdaptor::Enumerate));
-        if has_enumerate && !enumerate_is_terminal {
-            let elem_te = match &vec_te.kind {
-                TypeKind::Path(p) => p.generic_args.as_ref().and_then(|ga| match ga.first() {
-                    Some(GenericArg::Type(t)) => Some(t.clone()),
-                    _ => None,
-                }),
-                _ => None,
-            };
-            if let Some(elem_te) = elem_te {
-                if self.type_expr_has_drop_heap(&elem_te) {
+        // A HEAP-bearing `enumerate` tuple `(idx, <heap>)` is sound only when the
+        // stages AFTER enumerate are one of two safe shapes:
+        //   (1) ALL non-param passthrough (`take`/`skip`/`step_by`, or none —
+        //       terminal): the whole tuple is pushed / passed by MOVE, never
+        //       bound; verified leak/double-free-clean.
+        //   (2) exactly ONE terminal `map` (`enumerate().map(|p| p.1)`): the
+        //       enumerate arm binds the tuple DIRECTLY to the map's param (single
+        //       owning binding, no aliasing copy — see the `Enumerate` build_body
+        //       arm), and `map` pushes a value TRANSFORMED from it — an
+        //       UNCONDITIONAL move of a fresh value.
+        // Everything else is gated (loud dispatch-fail, B-2026-07-04-4): a
+        // `filter`/`take_while`/`skip_while`/`inspect` after enumerate pushes the
+        // WHOLE tuple CONDITIONALLY (`if pred { push(p) }`), whose conditional
+        // heap move is not suppressed for a synthetic binding (double-free); a
+        // param stage reached only after a non-param stage, or a SECOND
+        // downstream stage, bit-copies (aliases) the heap tuple via `let p =
+        // <tuple-local>`. POD tuples are always fine (no heap to alias). The
+        // B-2026-07-04-3 tuple CONSTRUCTION double-free is fixed separately in
+        // `compile_tuple`.
+        if let Some(enum_idx) = steps
+            .iter()
+            .rposition(|s| matches!(s, IterAdaptor::Enumerate))
+        {
+            let after = &steps[enum_idx + 1..];
+            let all_nonparam = after.iter().all(|s| {
+                matches!(
+                    s,
+                    IterAdaptor::Take { .. }
+                        | IterAdaptor::Skip { .. }
+                        | IterAdaptor::StepBy { .. }
+                )
+            });
+            let single_terminal_map =
+                after.len() == 1 && matches!(after[0], IterAdaptor::Map { .. });
+            if !all_nonparam && !single_terminal_map {
+                let elem_heap = match &vec_te.kind {
+                    TypeKind::Path(p) => p
+                        .generic_args
+                        .as_ref()
+                        .and_then(|ga| match ga.first() {
+                            Some(GenericArg::Type(t)) => Some(t.clone()),
+                            _ => None,
+                        })
+                        .is_some_and(|te| self.type_expr_has_drop_heap(&te)),
+                    _ => false,
+                };
+                if elem_heap {
                     return Ok(None);
                 }
             }
@@ -3999,20 +4021,34 @@ impl<'ctx> super::Codegen<'ctx> {
         // self-binding is elided in `build_body`). A synthetic `__ice_N` is used
         // only when the chain has NO param-bearing stage at all (e.g.
         // `iter().skip(1).take(2).collect()`).
-        let elem_name = steps
-            .iter()
-            .find_map(|s| match s {
-                IterAdaptor::Map { param, .. }
-                | IterAdaptor::Filter { param, .. }
-                | IterAdaptor::TakeWhile { param, .. }
-                | IterAdaptor::SkipWhile { param, .. }
-                | IterAdaptor::Inspect { param, .. } => Some(param.clone()),
-                IterAdaptor::Take { .. }
-                | IterAdaptor::Skip { .. }
-                | IterAdaptor::StepBy { .. }
-                | IterAdaptor::Enumerate => None,
-            })
-            .unwrap_or_else(|| format!("__ice_{}", uid));
+        //
+        // The search STOPS at `enumerate` (a retyping stage): a param stage AFTER
+        // enumerate binds the `(idx, T)` TUPLE, not the source element, so its
+        // param must NOT name the loop var — and it also collides with the
+        // enumerate arm's look-ahead tuple binding (both would be that param).
+        // So a leading `enumerate` yields a synthetic loop var. `take`/`skip`/
+        // `step_by` don't retype, so a param stage past them still binds the
+        // source and is honored.
+        let elem_name = {
+            let mut found = None;
+            for s in &steps {
+                match s {
+                    IterAdaptor::Map { param, .. }
+                    | IterAdaptor::Filter { param, .. }
+                    | IterAdaptor::TakeWhile { param, .. }
+                    | IterAdaptor::SkipWhile { param, .. }
+                    | IterAdaptor::Inspect { param, .. } => {
+                        found = Some(param.clone());
+                        break;
+                    }
+                    IterAdaptor::Enumerate => break,
+                    IterAdaptor::Take { .. }
+                    | IterAdaptor::Skip { .. }
+                    | IterAdaptor::StepBy { .. } => continue,
+                }
+            }
+            found.unwrap_or_else(|| format!("__ice_{}", uid))
+        };
 
         let ident = |name: &str, sp: &crate::token::Span| Expr {
             kind: ExprKind::Identifier(name.to_string()),
@@ -4388,16 +4424,38 @@ impl<'ctx> super::Codegen<'ctx> {
                     out
                 }
                 IterAdaptor::Enumerate => {
-                    // `let __ietup_N_i = (__st_i, current); __st_i = __st_i + 1;
-                    //  <rest(__ietup_N_i)>` — pair the element with the CURRENT
-                    // index, then advance the counter. Matches the interpreter's
+                    // `let <tup> = (__st_i, current); __st_i = __st_i + 1;
+                    //  <rest(<tup>)>` — pair the element with the CURRENT index,
+                    // then advance the counter. Matches the interpreter's
                     // `Enumerate` step (iter_eval.rs): `item = (idx, item); idx +=
                     // 1`. Binding the tuple to a fresh local captures the
                     // pre-increment index and threads a plain identifier
-                    // downstream (a heap element moves into the tuple, whose owner
-                    // — the pushed Vec's element drop — frees it once; the tuple
-                    // literal's own move-suppression handles the source).
-                    let tup_name = format!("__ietup_{}_{}", uid, i);
+                    // downstream.
+                    //
+                    // The binding NAME is the downstream param when the next
+                    // stage is param-bearing (`map`/`filter`/…), so the heap
+                    // tuple has a SINGLE owning binding: with a distinct
+                    // `__ietup` the downstream `let p = __ietup` would bit-copy
+                    // (alias) the heap buffer and double-free (B-2026-07-04-4).
+                    // The downstream arm then sees `current == param` and elides
+                    // its own re-binding (the same `current_is_param` elision the
+                    // `map`/`filter` arms use). For a non-param next stage
+                    // (`take`/`skip`/`step_by`, or terminal) the whole tuple is
+                    // passed through / pushed by MOVE, so the synthetic
+                    // `__ietup` is fine. (A heap tuple that reaches a param stage
+                    // only AFTER a non-param stage, or a SECOND param stage, is
+                    // gated to the loud dispatch-fail by the caller — still
+                    // B-2026-07-04-4.)
+                    let downstream_param = steps.get(i + 1).and_then(|s| match s {
+                        IterAdaptor::Map { param, .. }
+                        | IterAdaptor::Filter { param, .. }
+                        | IterAdaptor::TakeWhile { param, .. }
+                        | IterAdaptor::SkipWhile { param, .. }
+                        | IterAdaptor::Inspect { param, .. } => Some(param.clone()),
+                        _ => None,
+                    });
+                    let tup_name =
+                        downstream_param.unwrap_or_else(|| format!("__ietup_{}_{}", uid, i));
                     let tuple = Expr {
                         kind: ExprKind::Tuple(vec![ident(&st_i, sp), current]),
                         span: sp.clone(),

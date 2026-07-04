@@ -6304,13 +6304,13 @@ fn main() {
         // `enumerate().take` (index counted per enumerated output),
         // `skip().enumerate` (enumerate re-indexes from 0 after the skip), and
         // `enumerate().filter` on a tuple field. HEAP element sources
-        // (`Vec[(i64, String)]`) work when enumerate is the TERMINAL adaptor
-        // (the tuple is pushed straight into the result — B-2026-07-04-3 fixed
-        // the tuple construction); a NON-terminal enumerate whose collected
-        // element is heap-bearing (`enumerate().map(|p| p.1)`,
-        // `enumerate().filter().collect()`) still falls through to the loud
-        // dispatch-fail (a downstream `let p = tuple` aliases the heap buffer —
-        // B-2026-07-04-4) rather than miscompiling.
+        // (`Vec[String]`): a TERMINAL enumerate (`Vec[(i64, String)]` pushed
+        // straight in — B-2026-07-04-3) works, and `enumerate().map(|p| …)` works
+        // (the tuple is bound DIRECTLY to the map's param — single owning binding
+        // — and `map` pushes a TRANSFORMED value — B-2026-07-04-4). A heap
+        // `enumerate` followed by `filter`/`take_while`/`skip_while` (a
+        // conditional WHOLE-tuple move) or a second downstream stage still falls
+        // through to the loud dispatch-fail rather than miscompiling.
         if let Some(out) = run_program(
             r#"
 fn main() {
@@ -6340,12 +6340,18 @@ fn main() {
     let hf: Vec[(i64, String)] = hw.iter().filter(|s| s.len() > 3i64).enumerate().collect();
     let hf0 = hf[0];
     println(f"{hf.len()} {hf0.0} {hf0.1}");
+    let hm: Vec[String] = hw.iter().enumerate().map(|p| p.1).collect();
+    println(f"{hm.len()} {hm[0]} {hm[2]}");
+    let hl: Vec[i64] = hw.iter().enumerate().map(|p| p.0 + p.1.len()).collect();
+    println(f"{hl[0]} {hl[1]} {hl[2]}");
+    let hs: Vec[String] = hw.iter().skip(1i64).enumerate().map(|p| p.1).collect();
+    println(f"{hs.len()} {hs[0]}");
 }
 "#,
         ) {
             assert_eq!(
                 out,
-                "4 0 10 3 40\n10 120 340\n11 44\n2 1 20\n3 0 20\n2 2 30\n3 0 red 2 blue\n2 0 green\n"
+                "4 0 10 3 40\n10 120 340\n11 44\n2 1 20\n3 0 20\n2 2 30\n3 0 red 2 blue\n2 0 green\n3 red blue\n3 6 6\n2 green\n"
             );
         }
     }

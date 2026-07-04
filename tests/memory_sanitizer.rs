@@ -459,6 +459,46 @@ fn main() {
     }
 
     #[test]
+    fn asan_heap_enumerate_map_collect_no_double_free() {
+        // B-2026-07-04-4: `<Vec[String]>.iter().enumerate().map(|p| …).collect()`
+        // — a heap `enumerate` whose `(i64, String)` tuple flows into a terminal
+        // `map`. The desugar binds the tuple DIRECTLY to the map's param (single
+        // owning binding, no aliasing `let p = __ietup` copy), and the source
+        // loop var gets a synthetic name so it can't collide with that param.
+        // The map pushes a value transformed from the tuple. Exercises the
+        // headline `map(|p| p.1)` (extract the heap component into `Vec[String]`),
+        // a POD-producing `map(|p| p.0 + p.1.len())`, and `skip().enumerate().map`
+        // — reading an element each round to expose any double-free/UAF.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let w: Vec[String] = Vec[
+            "alpha-enum-map-payload-aaaaaaaaaaaaaaaaaaaa".to_string(),
+            "bravo-enum-map-payload-bbbbbbbbbbbbbbbbbbbb".to_string(),
+            "charlie-enum-map-payload-cccccccccccccccccc".to_string()
+        ];
+        let a: Vec[String] = w.iter().enumerate().map(|p| p.1).collect();
+        let b: Vec[i64] = w.iter().enumerate().map(|p| p.0 + p.1.len()).collect();
+        let c: Vec[String] = w.iter().skip(1i64).enumerate().map(|p| p.1).collect();
+        let a2: String = a[2];
+        let c0: String = c[0];
+        println(f"{a.len()} {a2} {b[0]} {b[2]} {c.len()} {c0}");
+        round = round + 1i64;
+    }
+}
+"#,
+            [
+                "3 charlie-enum-map-payload-cccccccccccccccccc 43 45 2 bravo-enum-map-payload-bbbbbbbbbbbbbbbbbbbb",
+            ]
+            .repeat(40)
+            .as_slice(),
+            "asan_heap_enumerate_map_collect_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_heap_env_closure_freed_no_leak() {
         assert_clean_asan_run(
             r#"
