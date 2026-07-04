@@ -3823,6 +3823,10 @@ impl<'ctx> super::Codegen<'ctx> {
             TakeWhile { param: String, pred: Expr },
             SkipWhile { param: String, pred: Expr },
             Inspect { param: String, body: Expr },
+            // Element-retyping adaptor: `enumerate()` pairs each element with a
+            // running index, changing the element type `T` → `(i64, T)`. No
+            // argument.
+            Enumerate,
         }
         let mut steps: Vec<IterAdaptor> = Vec::new();
         let mut cur = collect_recv;
@@ -3833,16 +3837,15 @@ impl<'ctx> super::Codegen<'ctx> {
             ..
         } = &cur.kind
         {
-            if args.len() != 1 {
-                break;
-            }
             let step = match method.as_str() {
+                // Zero-argument adaptor.
+                "enumerate" if args.is_empty() => IterAdaptor::Enumerate,
                 // Closure-argument adaptors: the argument must be a
                 // single-`Binding`-param closure so we can inline its body with
                 // the param bound to the element. A named-fn / multi-param /
                 // destructuring argument returns `Ok(None)` (loud dispatch-fail
-                // — B-2026-07-03-29 sub-part 2, still open).
-                "map" | "filter" | "take_while" | "skip_while" | "inspect" => {
+                // — B-2026-07-04-2 sub-part 2, still open).
+                "map" | "filter" | "take_while" | "skip_while" | "inspect" if args.len() == 1 => {
                     let ExprKind::Closure { params, body, .. } = &args[0].value.kind else {
                         return Ok(None);
                     };
@@ -3865,7 +3868,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Count-argument adaptors: a single integer expression, bound
                 // once before the loop. A closure argument here is malformed for
                 // these methods — bail to the diagnostic.
-                "take" | "skip" | "step_by" => {
+                "take" | "skip" | "step_by" if args.len() == 1 => {
                     if matches!(&args[0].value.kind, ExprKind::Closure { .. }) {
                         return Ok(None);
                     }
@@ -3876,12 +3879,12 @@ impl<'ctx> super::Codegen<'ctx> {
                         _ => IterAdaptor::StepBy { count },
                     }
                 }
-                // Any other adaptor (`enumerate`, `zip`, `chain`, `flat_map`,
-                // `chunks`, `windows`, `scan`, `cycle`, …) is not yet lowered —
-                // stop peeling. Whatever remains becomes the `base_iterable`; if
-                // it is itself an unhandled iterator method call, the emitted
-                // `for … in <base>` loud-fails at codegen rather than
-                // miscompiling (B-2026-07-03-29 sub-part 1 residual).
+                // Any other adaptor (`zip`, `chain`, `flat_map`, `chunks`,
+                // `windows`, `scan`, `cycle`, …) is not yet lowered — stop
+                // peeling. Whatever remains becomes the `base_iterable`; if it is
+                // itself an unhandled iterator method call, the emitted `for … in
+                // <base>` loud-fails at codegen rather than miscompiling
+                // (B-2026-07-04-2 sub-part 1 residual).
                 _ => break,
             };
             steps.push(step);
@@ -3950,6 +3953,31 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(None);
         }
 
+        // `enumerate` over a HEAP-bearing element (`Vec[(i64, String)]`, …) is
+        // blocked on a pre-existing tuple-heap ownership bug (B-2026-07-04-3): a
+        // `(idx, <heap>)` tuple built from a `for`-loop element and pushed into
+        // a `Vec` double-frees the heap component (the hand-written
+        // `for x in w.iter() { v.push((i, x)) }` traps identically). Until that
+        // is fixed, bail to the loud dispatch-fail for a heap-element
+        // `enumerate` rather than emit the same double-free. POD-element
+        // `enumerate` (`Vec[(i64, i64)]`) is unaffected. The output element type
+        // is the Vec's sole generic arg.
+        let has_enumerate = steps.iter().any(|s| matches!(s, IterAdaptor::Enumerate));
+        if has_enumerate {
+            let elem_te = match &vec_te.kind {
+                TypeKind::Path(p) => p.generic_args.as_ref().and_then(|ga| match ga.first() {
+                    Some(GenericArg::Type(t)) => Some(t.clone()),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            if let Some(elem_te) = elem_te {
+                if self.type_expr_has_drop_heap(&elem_te) {
+                    return Ok(None);
+                }
+            }
+        }
+
         let uid = self.indexed_elem_counter;
         self.indexed_elem_counter += 1;
         let sp = call_span.clone();
@@ -3976,7 +4004,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 | IterAdaptor::Inspect { param, .. } => Some(param.clone()),
                 IterAdaptor::Take { .. }
                 | IterAdaptor::Skip { .. }
-                | IterAdaptor::StepBy { .. } => None,
+                | IterAdaptor::StepBy { .. }
+                | IterAdaptor::Enumerate => None,
             })
             .unwrap_or_else(|| format!("__ice_{}", uid));
 
@@ -4353,6 +4382,46 @@ impl<'ctx> super::Codegen<'ctx> {
                     out.extend(build_body(steps, i + 1, current, vec_name, uid, sp, ident));
                     out
                 }
+                IterAdaptor::Enumerate => {
+                    // `let __ietup_N_i = (__st_i, current); __st_i = __st_i + 1;
+                    //  <rest(__ietup_N_i)>` — pair the element with the CURRENT
+                    // index, then advance the counter. Matches the interpreter's
+                    // `Enumerate` step (iter_eval.rs): `item = (idx, item); idx +=
+                    // 1`. Binding the tuple to a fresh local captures the
+                    // pre-increment index and threads a plain identifier
+                    // downstream (a heap element moves into the tuple, whose owner
+                    // — the pushed Vec's element drop — frees it once; the tuple
+                    // literal's own move-suppression handles the source).
+                    let tup_name = format!("__ietup_{}_{}", uid, i);
+                    let tuple = Expr {
+                        kind: ExprKind::Tuple(vec![ident(&st_i, sp), current]),
+                        span: sp.clone(),
+                    };
+                    let let_tup = Stmt {
+                        kind: StmtKind::Let {
+                            is_mut: false,
+                            pattern: Pattern {
+                                kind: PatternKind::Binding(tup_name.clone()),
+                                span: sp.clone(),
+                            },
+                            ty: None,
+                            value: tuple,
+                        },
+                        span: sp.clone(),
+                    };
+                    let mut out = vec![let_tup];
+                    out.push(assign(&st_i, bin(BinOp::Add, ident(&st_i, sp), i64_lit(1))));
+                    out.extend(build_body(
+                        steps,
+                        i + 1,
+                        ident(&tup_name, sp),
+                        vec_name,
+                        uid,
+                        sp,
+                        ident,
+                    ));
+                    out
+                }
             }
         }
 
@@ -4451,6 +4520,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         true,
                         named_ty("bool", &sp),
                         bool_lit(true, &sp),
+                        &sp,
+                    ));
+                }
+                IterAdaptor::Enumerate => {
+                    // `let mut __st_N_i: i64 = 0;` — the running element index.
+                    state_stmts.push(let_stmt(
+                        &format!("__st_{}_{}", uid, i),
+                        true,
+                        named_ty("i64", &sp),
+                        i64_lit(0, &sp),
                         &sp,
                     ));
                 }

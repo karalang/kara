@@ -6293,6 +6293,52 @@ fn main() {
     }
 
     #[test]
+    fn e2e_iter_adaptor_collect_enumerate_codegen() {
+        // B-2026-07-04-2 sub-part 1: `<iter>.enumerate().collect()` — the
+        // element-retyping adaptor `T` → `(i64, T)`. Lowered like the other
+        // adaptors, threading a pre-loop index counter: at the `enumerate` stage
+        // the current element is wrapped `(idx, current)` and the counter
+        // advanced (matching the interpreter's `Enumerate` step). Exercises a
+        // terminal enumerate (tuple push + `.0`/`.1` read), `enumerate().map`
+        // over the tuple via a single-`Binding` param, a `map` BEFORE enumerate,
+        // `enumerate().take` (index counted per enumerated output),
+        // `skip().enumerate` (enumerate re-indexes from 0 after the skip), and
+        // `enumerate().filter` on a tuple field. POD element type only — a
+        // heap-bearing tuple element (`Vec[(i64, String)]`) is blocked on the
+        // pre-existing tuple-heap double-free (B-2026-07-04-3) and falls through
+        // to the loud dispatch-fail instead of miscompiling.
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    let s: Vec[i64] = Vec[10i64, 20i64, 30i64, 40i64];
+    let e: Vec[(i64, i64)] = s.iter().enumerate().collect();
+    let e0 = e[0];
+    let e3 = e[3];
+    println(f"{e.len()} {e0.0} {e0.1} {e3.0} {e3.1}");
+    let m: Vec[i64] = s.iter().enumerate().map(|p| p.0 * 100i64 + p.1).collect();
+    println(f"{m[0]} {m[1]} {m[3]}");
+    let me: Vec[i64] = s.iter().map(|x| x + 1i64).enumerate().map(|p| p.0 + p.1).collect();
+    println(f"{me[0]} {me[3]}");
+    let et: Vec[(i64, i64)] = s.iter().enumerate().take(2i64).collect();
+    let t1 = et[1];
+    println(f"{et.len()} {t1.0} {t1.1}");
+    let se: Vec[(i64, i64)] = s.iter().skip(1i64).enumerate().collect();
+    let se0 = se[0];
+    println(f"{se.len()} {se0.0} {se0.1}");
+    let ef: Vec[(i64, i64)] = s.iter().enumerate().filter(|p| p.1 > 20i64).collect();
+    let f0 = ef[0];
+    println(f"{ef.len()} {f0.0} {f0.1}");
+}
+"#,
+        ) {
+            assert_eq!(
+                out,
+                "4 0 10 3 40\n10 120 340\n11 44\n2 1 20\n3 0 20\n2 2 30\n"
+            );
+        }
+    }
+
+    #[test]
     fn e2e_chars_iterator_bound_to_variable_codegen() {
         // B-2026-06-18-5: `s.chars()` bound to a NAME (`let it = s.chars();`)
         // failed codegen ("Vec/String method 'chars' is not yet supported")
