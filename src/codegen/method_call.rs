@@ -236,6 +236,20 @@ impl<'ctx> super::Codegen<'ctx> {
             .cloned();
         self.emit_branch_cancel_check("mcall", callee_key.as_deref());
 
+        // `gpu.dispatch(kernel, buffer)` (spike slice-0c). The typechecker
+        // baked the kernel's WGSL into `gpu_dispatch_wgsl`; lower to a call to
+        // the runtime GPU dispatch symbol with the shader constant + the input
+        // buffer, wrapping the returned buffer as an owned `Vec[f32]`. Gated on
+        // `gpu` not being a real local (mirrors the `process.exit` guard) so a
+        // user binding named `gpu` is never hijacked.
+        if method == "dispatch" {
+            if let ExprKind::Identifier(name) = &object.kind {
+                if name == "gpu" && !self.variables.contains_key("gpu") {
+                    return self.compile_gpu_dispatch(args);
+                }
+            }
+        }
+
         // `<string>.chars()` as a STANDALONE value (e.g. `let it = s.chars()`).
         // Codegen has no first-class iterator value, so materialize the eager
         // `Vec[char]` snapshot — the faithful representation of a char-iterator
@@ -6839,6 +6853,119 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             other => Err(format!("unsupported Vector method '{other}' in codegen")),
         }
+    }
+
+    /// Lower `gpu.dispatch(kernel, buffer)` (spike slice-0c). The typechecker
+    /// already validated the slice-0 element-wise-map contract and baked the
+    /// kernel's WGSL into `gpu_dispatch_wgsl` (keyed on the kernel-arg span);
+    /// here we bake that shader as a constant, read the input `Vec[f32]`'s
+    /// `{data, len}`, call `karac_runtime_gpu_f32_map`, and wrap the returned
+    /// `malloc`'d buffer as an owned `Vec[f32]` of the same length. The result
+    /// buffer is exactly `n` f32s (element-wise maps preserve length), so
+    /// `len == cap == n` and the binding's own scope drop frees it.
+    fn compile_gpu_dispatch(&mut self, args: &[CallArg]) -> Result<BasicValueEnum<'ctx>, String> {
+        if args.len() != 2 {
+            return Err(format!(
+                "gpu.dispatch expects a kernel and a buffer, found {} argument(s)",
+                args.len()
+            ));
+        }
+
+        // WGSL baked by the typechecker, keyed on the kernel-argument span.
+        let key = (args[0].value.span.offset, args[0].value.span.length);
+        let wgsl = self.gpu_dispatch_wgsl.get(&key).cloned().ok_or_else(|| {
+            "internal error: no WGSL recorded for `gpu.dispatch` — the typechecker \
+             intercept must run before codegen"
+                .to_string()
+        })?;
+
+        // Bake the shader text as a global constant; pass (ptr, byte length).
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let wgsl_len = i64_t.const_int(wgsl.len() as u64, false);
+        let wgsl_ptr = self
+            .builder
+            .build_global_string_ptr(&wgsl, "gpu.wgsl")
+            .map_err(|e| format!("baking gpu.dispatch shader constant failed: {e}"))?
+            .as_pointer_value();
+
+        // Compile the input buffer and read {data ptr, len} via a spill +
+        // scalar `struct_gep` — NOT an aggregate `load` + `extractvalue`,
+        // which mis-lowers the pointer field to null under arm64-Linux ASan
+        // (see the identical note in `src/codegen/stats.rs`).
+        let buf_val = self.compile_expr(&args[1].value)?;
+        let sv = buf_val.into_struct_value();
+        let vec_ty = sv.get_type();
+        let spill = self.builder.build_alloca(vec_ty, "gpu.buf").unwrap();
+        self.builder.build_store(spill, sv).unwrap();
+        let data_field = self
+            .builder
+            .build_struct_gep(vec_ty, spill, 0, "gpu.data.p")
+            .unwrap();
+        let data = self
+            .builder
+            .build_load(ptr_ty, data_field, "gpu.data")
+            .unwrap()
+            .into_pointer_value();
+        let len_field = self
+            .builder
+            .build_struct_gep(vec_ty, spill, 1, "gpu.len.p")
+            .unwrap();
+        let n = self
+            .builder
+            .build_load(i64_t, len_field, "gpu.n")
+            .unwrap()
+            .into_int_value();
+
+        // Free a fresh owned-temp buffer argument (`gpu.dispatch(k, [..])` /
+        // a temporary), mirroring the Stats reduction paths. A named binding's
+        // own scope drop already covers it, so only fresh temps / collection
+        // literals are materialized; the helper self-guards on the Vec shape.
+        let is_fresh_temp = self.expr_yields_fresh_owned_temp(&args[1].value)
+            || matches!(
+                &args[1].value.kind,
+                ExprKind::PrefixCollectionLiteral { .. }
+            );
+        if is_fresh_temp && self.llvm_ty_is_vec_struct(buf_val.get_type()) {
+            self.materialize_owned_temp(
+                buf_val,
+                (args[1].value.span.offset, args[1].value.span.length),
+            );
+        }
+
+        // karac_runtime_gpu_f32_map(wgsl_ptr, wgsl_len, in_ptr, n) -> *f32.
+        let dispatch_fn = self.gpu_f32_map_fn();
+        let out_ptr = self
+            .builder
+            .build_call(
+                dispatch_fn,
+                &[wgsl_ptr.into(), wgsl_len.into(), data.into(), n.into()],
+                "gpu.out",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+
+        // Wrap the returned buffer as an owned `Vec[f32]` {ptr, len=n, cap=n}.
+        let result_ty = self.vec_struct_type();
+        let mut agg = result_ty.get_undef();
+        agg = self
+            .builder
+            .build_insert_value(agg, out_ptr, 0, "gpu.res.data")
+            .unwrap()
+            .into_struct_value();
+        agg = self
+            .builder
+            .build_insert_value(agg, n, 1, "gpu.res.len")
+            .unwrap()
+            .into_struct_value();
+        agg = self
+            .builder
+            .build_insert_value(agg, n, 2, "gpu.res.cap")
+            .unwrap()
+            .into_struct_value();
+        Ok(agg.into())
     }
 }
 

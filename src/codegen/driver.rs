@@ -465,6 +465,19 @@ pub(super) fn link_executable_impl(
             "-lpthread",
             "-ldl",
         ]);
+        // GPU dispatch (spike slice-0c): a program that calls `gpu.dispatch`
+        // references `karac_runtime_gpu_*`, whose wgpu Metal backend needs the
+        // macOS system frameworks (+ the objc runtime) the default compute link
+        // line omits. Add them ONLY when the symbol is referenced so every
+        // non-GPU binary links exactly as before. macOS-only: the native GPU
+        // dogfood target is Metal (slice-0 is native-only; the Linux/Vulkan and
+        // wasm/WebGPU link stories are later increments).
+        if cfg!(target_os = "macos") && object_references_gpu(obj_path) {
+            for framework in ["Metal", "Foundation", "QuartzCore", "CoreGraphics"] {
+                cmd.args(["-framework", framework]);
+            }
+            cmd.arg("-lobjc");
+        }
         // External native libraries from `kara.toml`'s `[link]` table
         // (`docs/spikes/self-hosting-llvm-c-ffi.md` § Linking). Search paths
         // (`-L`) precede the `-l` flags so the linker can resolve each lib
@@ -684,6 +697,23 @@ fn object_references_tls(obj_path: &str) -> bool {
         }
         // nm absent / failed: can't prove the program is TLS-free, so be safe.
         _ => true,
+    }
+}
+
+/// Scan `obj_path` for a reference to a `karac_runtime_gpu_*` symbol — i.e.
+/// the program calls `gpu.dispatch` (spike slice-0c). Such a binary links the
+/// wgpu-backed GPU runtime archive, whose Metal backend pulls in macOS system
+/// frameworks the default compute link line omits; the caller adds them only
+/// when this is true so non-GPU binaries are byte-for-byte unaffected.
+/// Conservative on `nm` failure: `false` (no GPU frameworks) — a genuinely
+/// GPU-using program then fails at link with a clear missing-symbol error
+/// rather than silently mislinking.
+fn object_references_gpu(obj_path: &str) -> bool {
+    match std::process::Command::new("nm").arg(obj_path).output() {
+        Ok(o) if o.status.success() => {
+            String::from_utf8_lossy(&o.stdout).contains("karac_runtime_gpu_")
+        }
+        _ => false,
     }
 }
 

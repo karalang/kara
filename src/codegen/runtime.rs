@@ -6404,6 +6404,27 @@ impl<'ctx> super::Codegen<'ctx> {
             .add_function("karac_runtime_f64_to_str", fn_ty, None)
     }
 
+    /// Lazily declare `karac_runtime_gpu_f32_map(wgsl_ptr: ptr, wgsl_len: i64,
+    /// in_ptr: ptr, n: i64) -> ptr` — the GPU dispatch entry point (spike
+    /// slice-0c, `runtime/src/gpu.rs`). Runs the baked WGSL shader over the
+    /// `n`-element `f32` input buffer and returns a fresh `malloc`'d output
+    /// buffer the owned `Vec[f32]` frees. Lives in the `gpu`-feature runtime
+    /// archive only (the linker resolves it via `KARAC_RUNTIME` pointed at
+    /// `libkarac_runtime_gpu.a`).
+    pub(super) fn gpu_f32_map_fn(&self) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("karac_runtime_gpu_f32_map") {
+            return f;
+        }
+        let i64_t = self.context.i64_type();
+        let ptr_t = self.context.ptr_type(AddressSpace::default());
+        let fn_ty = ptr_t.fn_type(
+            &[ptr_t.into(), i64_t.into(), ptr_t.into(), i64_t.into()],
+            false,
+        );
+        self.module
+            .add_function("karac_runtime_gpu_f32_map", fn_ty, None)
+    }
+
     /// Render `fv` (widened to `f64` first — varargs/ABI parity and the
     /// formatter takes a `double`) into a fresh stack buffer via
     /// `karac_runtime_f64_to_str`; returns `(buf_ptr, len_i64)` for the

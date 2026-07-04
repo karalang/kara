@@ -29961,3 +29961,76 @@ fn test_ref_container_param_element_mismatch_still_rejected() {
         errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
+
+// ── GPU dispatch typing (spike slice-0c / SL-2) ─────────────────
+// `gpu.dispatch(kernel, buffer)` is typed as the element-wise map it is:
+// a `#[gpu] fn(f32) -> f32` kernel over a `Vec[f32]` buffer, result `Vec[f32]`.
+// Rejections are focused `E_GPU_DISPATCH_*` diagnostics, not a fall-through
+// "no method on module gpu". See docs/spikes/gpu-wgsl-slice0.md.
+
+#[test]
+fn gpu_dispatch_valid_kernel_and_buffer_typechecks() {
+    typecheck_ok(
+        "#[gpu]\n\
+         fn double(x: f32) -> f32 { x * 2.0 }\n\
+         fn main() {\n\
+             let buf: Vec[f32] = [1.0, 2.0];\n\
+             let out = gpu.dispatch(double, buf);\n\
+         }",
+    );
+}
+
+#[test]
+fn gpu_dispatch_rejects_non_f32_buffer() {
+    let errs = typecheck_errors(
+        "#[gpu]\n\
+         fn double(x: f32) -> f32 { x * 2.0 }\n\
+         fn main() {\n\
+             let buf: Vec[i64] = [1, 2];\n\
+             let out = gpu.dispatch(double, buf);\n\
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("E_GPU_DISPATCH_BUFFER")),
+        "expected E_GPU_DISPATCH_BUFFER, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn gpu_dispatch_rejects_non_gpu_kernel() {
+    let errs = typecheck_errors(
+        "fn triple(x: f32) -> f32 { x * 3.0 }\n\
+         fn main() {\n\
+             let buf: Vec[f32] = [1.0];\n\
+             let out = gpu.dispatch(triple, buf);\n\
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("E_GPU_DISPATCH_KERNEL")),
+        "expected E_GPU_DISPATCH_KERNEL, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn gpu_dispatch_rejects_unsupported_kernel_body() {
+    // A kernel with a local binding is outside the slice-0 single-expression
+    // subset — the WGSL emitter rejects it, surfaced as E_GPU_DISPATCH_KERNEL.
+    let errs = typecheck_errors(
+        "#[gpu]\n\
+         fn weird(x: f32) -> f32 { let y = x * 2.0; y }\n\
+         fn main() {\n\
+             let buf: Vec[f32] = [1.0];\n\
+             let out = gpu.dispatch(weird, buf);\n\
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("E_GPU_DISPATCH_KERNEL")),
+        "expected E_GPU_DISPATCH_KERNEL, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}

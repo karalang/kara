@@ -2119,6 +2119,10 @@ pub(super) struct Codegen<'ctx> {
     /// `Stats.<fn>` call-span -> slice element `TypeExpr` (`i64` | `f64`),
     /// from `Program.stats_elem_types` (S5). Missing entry = `f64`.
     pub(crate) stats_elem_types: HashMap<(usize, usize), TypeExpr>,
+    /// `gpu.dispatch` kernel-arg span -> generated WGSL shader text, from
+    /// `Program.gpu_dispatch_wgsl` (spike slice-0c). `compile_method_call`
+    /// bakes the shader as a constant and calls `karac_runtime_gpu_f32_map`.
+    pub(crate) gpu_dispatch_wgsl: HashMap<(usize, usize), String>,
     /// `TaskHandle[T].join()` MethodCall span → result type `T`, from
     /// `Program.task_join_return_types`. The join arm of `compile_method_call`
     /// lowers `T` to its LLVM shape so the cross-task result transfer (and the
@@ -5390,6 +5394,7 @@ impl<'ctx> Codegen<'ctx> {
             temp_recv_mapset_types: HashMap::new(),
             channel_elem_types: HashMap::new(),
             stats_elem_types: HashMap::new(),
+            gpu_dispatch_wgsl: HashMap::new(),
             task_join_return_types: HashMap::new(),
             ref_return_inner_types: HashMap::new(),
             user_ref_method_names: std::collections::HashSet::new(),
@@ -6348,6 +6353,7 @@ impl<'ctx> Codegen<'ctx> {
         self.temp_recv_mapset_types = program.temp_recv_mapset_types.clone();
         self.channel_elem_types = program.channel_elem_types.clone();
         self.stats_elem_types = program.stats_elem_types.clone();
+        self.gpu_dispatch_wgsl = program.gpu_dispatch_wgsl.clone();
         self.task_join_return_types = program.task_join_return_types.clone();
         self.ref_return_inner_types = program.ref_return_inner_types.clone();
         // Bare names of user impl methods that return a borrow — gates the

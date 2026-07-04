@@ -19306,3 +19306,32 @@ fn generic_bound_user_type_dispatch_unregressed() {
         }";
     assert_eq!(run_no_errors(src), "100\n200\n");
 }
+
+// ── GPU dispatch (spike slice-0c) ───────────────────────────────
+// `karac run` has no GPU, so `gpu.dispatch(kernel, buffer)` runs the `#[gpu]`
+// kernel element-wise on the CPU — the same result the compiled Metal/wgpu
+// path computes (run == build parity). See docs/spikes/gpu-wgsl-slice0.md.
+
+#[test]
+fn test_gpu_dispatch_runs_kernel_elementwise_on_cpu() {
+    let src = "#[gpu]\n\
+               fn double(x: f32) -> f32 { x * 2.0 }\n\
+               fn main() {\n\
+                   let buf: Vec[f32] = [1.0, 2.0, 3.0, 4.0];\n\
+                   let out = gpu.dispatch(double, buf);\n\
+                   for v in out { println(f\"{v}\"); }\n\
+               }";
+    assert_eq!(run_no_errors(src), "2\n4\n6\n8\n");
+}
+
+#[test]
+fn test_gpu_dispatch_arithmetic_kernel() {
+    let src = "#[gpu]\n\
+               fn affine(x: f32) -> f32 { x * 3.0 + 1.0 }\n\
+               fn main() {\n\
+                   let buf: Vec[f32] = [0.0, 1.0, 2.0];\n\
+                   let out = gpu.dispatch(affine, buf);\n\
+                   for v in out { println(f\"{v}\"); }\n\
+               }";
+    assert_eq!(run_no_errors(src), "1\n4\n7\n");
+}
