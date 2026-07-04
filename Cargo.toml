@@ -160,6 +160,13 @@ wasi-preview1-component-adapter-provider = "45.0.1"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ureq = "2"
 rustyline = "18.0.0"
+# PubGrub version-solving algorithm for the dependency resolver
+# (`src/pubgrub_solve.rs`; phase-5 resolver follow-up (a)). Drives
+# version selection + conflict explanation over the fetched candidate
+# set. Native-only alongside the rest of the fs/net-touching dep
+# machinery (`dep_graph` / `dep_resolver` are `cfg(not(wasm32))`); the
+# browser playground never resolves dependencies.
+pubgrub = "0.4"
 # Segmented-stack growth for the tree-walk interpreter's call recursion
 # (`Interpreter::eval_body_growing`): ~8 Rust frames per Kāra call means
 # deep-but-conforming Kāra recursion exhausts any fixed thread stack —
