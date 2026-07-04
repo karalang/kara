@@ -27,10 +27,12 @@
 //!      loop whose body pushes to `V` exactly once, unconditionally, with no
 //!      break/continue/return (so push-count == trip-count). The `<=` form runs
 //!      one extra iteration, so it reserves `BOUND + 1`.
-//!   3. `V` is not mentioned between the Let and the loop. Inside the loop body
-//!      `V` may be *read* (e.g. `V[i - 1]` / `V.len()` in a cumulative fill) but
-//!      is pushed to exactly once — reads don't change the length, so the
-//!      trip-count reservation stays exact.
+//!   3. Between the Let and the loop, `V` may only be *seed-pushed* (e.g.
+//!      `fact.push(1)` / DP base cases); each such push adds 1 to the
+//!      reservation. Any other mention there (move, reassign, index-write)
+//!      bails. Inside the loop body `V` may be *read* (e.g. `V[i - 1]` /
+//!      `V.len()` in a cumulative fill) but is pushed to exactly once — reads
+//!      don't change the length, so the trip-count reservation stays exact.
 //!   4. `BOUND` is fully analyzable, loop-invariant (none of its identifiers is
 //!      assigned or method-called in the body), does not reference `IV` or `V`,
 //!      and every identifier it names is in scope at the Let (i.e. not bound by
@@ -126,6 +128,10 @@ enum LoopVerdict {
 /// unhandled use of `v` aborts.
 fn find_fill_bound(stmts: &[Stmt], let_idx: usize, v: &str) -> Option<Expr> {
     let mut bound_between: Vec<String> = Vec::new();
+    // Pre-loop seed pushes to `v` (e.g. `fact.push(1)` before the counted fill,
+    // or base cases seeding a DP table). Each adds one element on top of the
+    // loop's trip count, so they're folded into the reservation below.
+    let mut prelude_pushes: i64 = 0;
     for stmt in &stmts[let_idx + 1..] {
         let verdict = match &stmt.kind {
             StmtKind::Expr(e) => match &e.kind {
@@ -138,8 +144,15 @@ fn find_fill_bound(stmts: &[Stmt], let_idx: usize, v: &str) -> Option<Expr> {
                     body,
                     ..
                 } => analyze_for(pattern, iterable, body, v, &bound_between),
-                // A non-loop expression statement that touches `v` (a move into a
-                // call, an early read, …) — we don't understand `v`'s use; bail.
+                // A pre-loop seed push to `v` — count it rather than bail; the
+                // reservation is the loop trip count plus these seeds.
+                _ if is_push_to(e, v) => {
+                    prelude_pushes += 1;
+                    LoopVerdict::Skip
+                }
+                // Any OTHER non-loop statement that touches `v` (a move into a
+                // call, an index-write, a non-push method, …) — we don't
+                // understand `v`'s use; bail.
                 _ if mentions_ident(e, v) => LoopVerdict::Bail,
                 _ => LoopVerdict::Skip,
             },
@@ -155,7 +168,13 @@ fn find_fill_bound(stmts: &[Stmt], let_idx: usize, v: &str) -> Option<Expr> {
             }
         };
         match verdict {
-            LoopVerdict::Presize(bound) => return Some(*bound),
+            LoopVerdict::Presize(bound) => {
+                return Some(if prelude_pushes > 0 {
+                    add_const(&bound, prelude_pushes)
+                } else {
+                    *bound
+                });
+            }
             LoopVerdict::Bail => return None,
             LoopVerdict::Skip => {}
         }
@@ -180,7 +199,7 @@ fn analyze_while(condition: &Expr, body: &Block, v: &str, bound_between: &[Strin
             if let ExprKind::Identifier(iv) = &left.kind {
                 if iv != v && fill_loop_ok(body, v, Some(iv), right, bound_between) {
                     let bound = if inclusive {
-                        plus_one(right)
+                        add_const(right, 1)
                     } else {
                         (**right).clone()
                     };
@@ -192,17 +211,18 @@ fn analyze_while(condition: &Expr, body: &Block, v: &str, bound_between: &[Strin
     loop_touches_v_verdict(Some(condition), body, v)
 }
 
-/// Build the expression `<e> + 1` (turns an inclusive `<=` bound into its
-/// trip count). Spans are inherited from `e` — synthesized nodes never surface
-/// in diagnostics, they only feed the `with_capacity` argument.
-fn plus_one(e: &Expr) -> Expr {
+/// Build the expression `<e> + k` (`k >= 1`) — a larger reservation than the
+/// raw bound. An inclusive `<=` loop adds one iteration; each pre-loop seed
+/// push adds one element. Spans are inherited from `e` — synthesized nodes
+/// never surface in diagnostics, they only feed the `with_capacity` argument.
+fn add_const(e: &Expr, k: i64) -> Expr {
     let span = e.span.clone();
     Expr {
         kind: ExprKind::Binary {
             op: BinOp::Add,
             left: Box::new(e.clone()),
             right: Box::new(Expr {
-                kind: ExprKind::Integer(1, None),
+                kind: ExprKind::Integer(k, None),
                 span: span.clone(),
             }),
         },
@@ -747,6 +767,25 @@ mod tests {
         // push-count != trip-count, so no pre-size (guards the read relaxation
         // from over-firing).
         let src = "fn f(n: i64) {\n  let mut v: Vec[i64] = Vec.new();\n  let mut i = 0i64;\n  while i < n {\n    v.push(v.len());\n    v.push(i);\n    i = i + 1i64;\n  }\n}\n";
+        assert!(!fires_for(src, "v"));
+    }
+
+    #[test]
+    fn fires_on_seed_push_then_cumulative_le_fill() {
+        // The kata-60 factorial `fact` shape: a pre-loop seed push, then a
+        // cumulative `<=` fill that reads `fact[i-1]`. Combines all three
+        // relaxations (seed push + `<=` + read-in-body); reserves BOUND + 1
+        // (the `<=`) + 1 (the seed).
+        let src = "fn f(n: i64) {\n  let mut fact: Vec[i64] = Vec.new();\n  fact.push(1i64);\n  let mut i = 1i64;\n  while i <= n {\n    fact.push(fact[i - 1i64] * i);\n    i = i + 1i64;\n  }\n}\n";
+        assert!(fires_for(src, "fact"));
+    }
+
+    #[test]
+    fn no_fire_on_non_push_prelude_mention() {
+        // A pre-loop statement that mentions `v` other than by pushing (here `v`
+        // moved into a call) is not understood → bail. Guards the seed-push
+        // relaxation from swallowing moves/reassigns.
+        let src = "fn f(n: i64) {\n  let mut v: Vec[i64] = Vec.new();\n  sink(v);\n  let mut i = 0i64;\n  while i < n {\n    v.push(i);\n    i = i + 1i64;\n  }\n}\n";
         assert!(!fires_for(src, "v"));
     }
 }
