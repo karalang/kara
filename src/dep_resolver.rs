@@ -447,13 +447,44 @@ pub fn resolve_with_offline(
         }
     }
 
-    // Validate constraint chains: for each resolved package, intersect
-    // every declared version requirement against the candidate version.
-    // A path-dep's sentinel version (`0.0.0-path`) only matches `*` and
-    // `>=0.0.0` style constraints — if a parent declared a real semver
-    // pin like `>=1.0`, slice 4 surfaces a VersionConflict so the user
-    // hears about it. (When fetch ships, the candidate set widens; pubgrub
-    // crate integration will replace this hand-rolled intersection.)
+    // Validate constraint chains: for each resolved package, intersect every
+    // declared version requirement against the candidate version. A path-dep's
+    // sentinel version only matches `*` / `>=0.0.0` style constraints — a real
+    // pin like `>=1.0` on it surfaces a precise `VersionConflict` naming every
+    // violating parent edge.
+    //
+    // This per-package check is the conflict *detector*; with one candidate per
+    // package it is equivalent to a global solve and yields the exact
+    // constraint chain. Resolver follow-up (a) slice 3 folds it into pubgrub's
+    // global solve once the candidate set widens beyond one-per-package (all
+    // published versions + their per-version deps), at which point PubGrub's
+    // derivation tree becomes the conflict explanation.
+    if let Some(err) = first_version_conflict(&packages) {
+        return Err(err);
+    }
+
+    // pubgrub-backed version *selection* (resolver follow-up (a) slice 2). The
+    // engine picks each package's version from its candidate set; today, with a
+    // single candidate per package, this returns exactly the versions the walk
+    // pinned above, so it is behavior-preserving. The seam is the point: slice 3
+    // widens the candidate set here (enumerating published versions + their
+    // deps into the provider), and PubGrub's backtracking then picks a
+    // compatible assignment with no change to this call site or to
+    // `resolve`'s input/output types. Best-effort: a solver hiccup leaves the
+    // already-validated single-candidate versions in place.
+    select_versions_with_pubgrub(&mut packages, &root_name, &sentinel);
+
+    Ok(Resolution { packages })
+}
+
+/// The per-package version-conflict detector extracted from [`resolve_with_offline`].
+/// Returns the first (deterministic BTreeMap order) package whose pinned
+/// version violates one or more declared constraints, with the full chain of
+/// violating parent edges — or `None` when every package satisfies all its
+/// constraints.
+fn first_version_conflict(
+    packages: &BTreeMap<String, ResolvedPackage>,
+) -> Option<Box<ResolverError>> {
     for resolved in packages.values() {
         let mut violating = Vec::new();
         for edge in &resolved.declared_by {
@@ -466,15 +497,79 @@ pub fn resolve_with_offline(
             }
         }
         if !violating.is_empty() {
-            return Err(Box::new(ResolverError::VersionConflict {
+            return Some(Box::new(ResolverError::VersionConflict {
                 package: resolved.name.clone(),
                 candidate: resolved.version.clone(),
                 chain: violating,
             }));
         }
     }
+    None
+}
 
-    Ok(Resolution { packages })
+/// Run PubGrub over the resolved packages and adopt its selected versions
+/// (resolver follow-up (a) slice 2). Builds the forward dependency edges
+/// (inverting each package's `declared_by`) and a candidate registry from the
+/// pinned packages, then calls [`crate::pubgrub_solve::solve`]. On success it
+/// writes each dependency's selected version back into `packages`; the root
+/// keeps its sentinel. On any solver error it leaves `packages` unchanged — the
+/// per-package [`first_version_conflict`] check has already validated the
+/// single-candidate graph, so the pinned versions are sound.
+///
+/// With one candidate per package the selection is a fixed point (it returns
+/// the versions already pinned). It becomes load-bearing in slice 3, when the
+/// candidate registry carries every published version and PubGrub genuinely
+/// chooses + backtracks.
+fn select_versions_with_pubgrub(
+    packages: &mut BTreeMap<String, ResolvedPackage>,
+    root_name: &str,
+    root_version: &semver::Version,
+) {
+    use crate::pubgrub_solve::{solve, CandidateVersion, PackageCandidates};
+
+    // Forward edges: parent package name → [(dependency name, constraint)].
+    // `declared_by` is the reverse map (who required me); invert it. A path/git
+    // dep with no version constraint contributes `*`.
+    let mut deps_of: BTreeMap<String, Vec<(String, semver::VersionReq)>> = BTreeMap::new();
+    for pkg in packages.values() {
+        for edge in &pkg.declared_by {
+            let req = edge.req.clone().unwrap_or(semver::VersionReq::STAR);
+            deps_of
+                .entry(edge.parent.clone())
+                .or_default()
+                .push((pkg.name.clone(), req));
+        }
+    }
+
+    // One candidate (the pinned version) per non-root package, carrying its
+    // forward deps. Slice 3 replaces this with the full published candidate set.
+    let registry: BTreeMap<String, PackageCandidates> = packages
+        .values()
+        .filter(|p| p.name != root_name)
+        .map(|p| {
+            (
+                p.name.clone(),
+                PackageCandidates {
+                    versions: vec![CandidateVersion {
+                        version: p.version.clone(),
+                        deps: deps_of.get(&p.name).cloned().unwrap_or_default(),
+                    }],
+                },
+            )
+        })
+        .collect();
+    let root_deps = deps_of.get(root_name).cloned().unwrap_or_default();
+
+    if let Ok(selected) = solve(root_name, root_version, &root_deps, &registry) {
+        for (name, version) in selected {
+            if name == root_name {
+                continue;
+            }
+            if let Some(p) = packages.get_mut(&name) {
+                p.version = version;
+            }
+        }
+    }
 }
 
 fn resolve_path_dep_target(from_dir: &std::path::Path, path: &std::path::Path) -> PathBuf {
@@ -1072,6 +1167,52 @@ mod tests {
         assert_eq!(resolution.packages.len(), 4);
         let c_resolved = &resolution.packages["c_pkg"];
         assert_eq!(c_resolved.declared_by.len(), 2);
+    }
+
+    #[test]
+    fn pubgrub_selection_resolves_a_multi_level_graph() {
+        // Resolver follow-up (a) slice 2: resolution now flows through PubGrub's
+        // version selection (`select_versions_with_pubgrub`). Exercise the
+        // forward-edge inversion + selection over a non-trivial shape —
+        // root → a, root → b, a → c — and confirm every reachable package is
+        // present at its pinned version. With one candidate per package the
+        // selection is a fixed point, so this equals the walk's pins; the test
+        // locks that the PubGrub path returns a complete, uncorrupted
+        // resolution (slice 3 adds multi-candidate backtracking-through-resolve
+        // coverage once the candidate set widens).
+        let mut root = empty_manifest("root");
+        root.dependencies.insert("a".into(), path_dep("a"));
+        root.dependencies.insert("b".into(), path_dep("b"));
+        let mut a = empty_manifest("a_pkg");
+        a.dependencies.insert("c".into(), path_dep("c"));
+        let b = empty_manifest("b_pkg");
+        let c = empty_manifest("c_pkg");
+        let graph = build_dep_graph(
+            &PathBuf::from("/root"),
+            root,
+            &MemLoader {
+                manifests: BTreeMap::from([
+                    (PathBuf::from("/root/a"), a),
+                    (PathBuf::from("/root/b"), b),
+                    (PathBuf::from("/root/a/c"), c),
+                ]),
+            },
+        )
+        .expect("graph");
+        let resolution = resolve(&graph, &test_version()).expect("resolve");
+        // root + a_pkg + b_pkg + c_pkg.
+        assert_eq!(resolution.packages.len(), 4);
+        for name in ["root", "a_pkg", "b_pkg", "c_pkg"] {
+            let pkg = resolution
+                .packages
+                .get(name)
+                .unwrap_or_else(|| panic!("`{name}` missing from resolution"));
+            assert_eq!(
+                pkg.version.to_string(),
+                PATH_DEP_SENTINEL_VERSION,
+                "`{name}` should keep the path-dep sentinel through PubGrub selection",
+            );
+        }
     }
 
     #[test]
