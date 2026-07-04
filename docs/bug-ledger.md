@@ -89,11 +89,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **248 surfaced · 0 open · 247 fixed** (2026-05-20 → 2026-07-03). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **249 surfaced · 1 open · 247 fixed** (2026-05-20 → 2026-07-03). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-07-03-25 | 2026-07-03 | codegen | med | `.iter().map(f).collect()` into a `Vec` FAILS under `karac build` while working under `karac run` — a run/build divergence on a book-documented idiom (ch10-closures-and-iterators shows `iter.map(|n| n*2).collect()`). MINIMAL: `let d: Vec[i64] = s.iter().map(|x| x*2i64).collect();` prints 4 under run, but build errors `codegen failed: no handler for method 'collect' on non-identifier receiver (method dispatch fell through; this is a codegen bug)`. Codegen only handles `collect` on an IDENTIFIER receiver (already-materialized Vec → clone, method_call.rs:288) and on `chars().collect()` (method_call.rs:3451); a lazy adaptor chain whose collect-receiver is a `map`/`filter` MethodCall (not an identifier, not `chars`) falls through to the dispatch-fail error. Gap is general to any non-identifier/non-`chars` collect receiver (confirmed for `.iter().map(f).collect()`). Surfaced while probing the collection-capacity-presizing spike (narrow-A): `.map().collect()` is the highest-value pre-sizing target but doesn't compile at all under codegen, so the correctness fix (implement the adaptor-chain → Vec lowering) MUST precede any pre-sizing — closes spike S2, and the lowering should reserve the source length while materializing. from_slice already pre-sizes (measured 16.7ms/1M vs Vec.new()+push 74.8ms); this idiom is the open one. OPEN — no fix yet. | src/codegen/method_call.rs |
 
 ### Fixed (247)
 

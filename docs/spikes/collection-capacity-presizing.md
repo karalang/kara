@@ -1,13 +1,30 @@
 # Spike: automatic collection capacity pre-sizing
 
-**Status:** ⬜ **SCOPED 2026-07-03 — not started.** Decision framing only: the *narrow*
-version (size-hinted bulk construction — `collect`/map-to-`Vec`/comprehension/`from_iter`
-pre-sizes from a known source length) is the defensible long-term fix; the *general*
-version (static push-count inference over arbitrary loops) is **out of scope** — fragile,
-unpredictable, memory-hazardous on loose bounds, and Rust deliberately declined it. The
-hand-written-`push`-loop residual is served by documenting the existing `Vec.with_capacity`
-idiom in the book, not by a prover. No prototype built yet; this spike defines what to
-build and, more importantly, what not to.
+**Status:** ⬜ **SCOPED 2026-07-03 — not started. Narrow-A targets PROBED 2026-07-03; the
+highest-value one is blocked on a correctness bug, not a perf gap.** Decision framing: the
+*narrow* version (size-hinted bulk construction — `collect`/map-to-`Vec`/comprehension/
+`from_iter` pre-sizes from a known source length) is the defensible long-term fix; the
+*general* version (static push-count inference over arbitrary loops) is **out of scope** —
+fragile, unpredictable, memory-hazardous on loose bounds, and Rust deliberately declined it.
+The hand-written-`push`-loop residual is served by documenting the existing
+`Vec.with_capacity` idiom in the book, not by a prover.
+
+**Probe results (2026-07-03) — they reprioritize the slices below:**
+- **S1 (`from_slice`) is already done.** Measured: building a 16-elem `Vec[(i64,i64)]` K=1M
+  times via `Vec.from_slice` is **16.7 ms** — faster even than `with_capacity`+push
+  (22.8 ms), so codegen already single-allocs + bulk-copies. No pre-sizing win to capture.
+- **S2 (`.map().collect()`) does not compile under `karac build` at all** — it works in the
+  interpreter but codegen has no handler (`no handler for method 'collect' on non-identifier
+  receiver`; only identifier-Vec `.collect()`→clone and `chars().collect()` are lowered). A
+  **run/build divergence on a book-documented idiom** (ch10), tracked as
+  [`B-2026-07-03-25`](../bug-ledger.md). So S2 is **correctness-first**: implement the
+  adaptor-chain → `Vec` lowering (pre-sizing while materializing closes S2), and there is no
+  "before" perf number because the idiom errors out today.
+- Net: the top item is no longer "flip `new`→`with_capacity` and watch a number drop"; it is
+  "make `.map().collect()` compile, pre-sized." The visible outcome is a **fixed divergence
+  plus a new benchmark for that idiom**, not a delta on an existing working program.
+
+No prototype built yet; this spike defines what to build and, more importantly, what not to.
 
 **Question this spike gates:** A `Vec` built by `Vec.new()` + `push` grows by reallocation
 (cap 0 → 1 → 2 → 4 → 8 → …). On allocation-bound code with no other heavy per-call work,
@@ -128,15 +145,23 @@ manual-loop shape, the win stays a documented idiom, not a compiler guarantee.
 
 ## Proposed slices (if greenlit)
 
-1. **S1 — one reservation helper + `Vec.from_slice`/`from_iter(known_len)`.** Land the
-   capacity-reservation plumbing and wire the two constructors whose source length is exact.
-   Measure on a `from_slice`-heavy kata; verify byte-identical output + no leak/ASAN
-   regression. Lowest risk, proves the plumbing.
-2. **S2 — `map(..).collect()` size hint.** Exact-length source → reserve. This is the
-   highest-value, most-common shape.
-3. **S3 — `filter(..).collect()` + comprehensions.** Upper-bound reserve + one shrink-to-fit;
+1. **S1 — one reservation helper + `Vec.from_slice`/`from_iter(known_len)`.** ✅ **Already
+   done for `from_slice`** (probed 2026-07-03: 16.7 ms/1M, single alloc + bulk copy — no win
+   left). Keep only as the plumbing reference if `from_iter(known_len)` turns out not to
+   pre-size; otherwise skip.
+2. **S2 — `.map(..).collect()`: FIRST make it compile, THEN pre-size.** ⚠️ **Reprioritized —
+   correctness before perf.** This idiom does not codegen at all today
+   ([`B-2026-07-03-25`](../bug-ledger.md)): interp runs it, `karac build` errors
+   `no handler for method 'collect' on non-identifier receiver`. So the slice is (a) add the
+   codegen dispatcher arm that materializes a lazy adaptor chain into a `Vec`, then (b)
+   reserve the source length while materializing (the size hint rides on the new lowering for
+   free). Highest value — it closes a run/build divergence on a book-documented idiom, with
+   pre-sizing as a bonus. There is no before/after *number* here, because it errors today;
+   the deliverable is a fixed divergence + a new benchmark for the idiom.
+3. **S3 — `.filter(..).collect()` + comprehensions.** Upper-bound reserve + one shrink-to-fit;
    confirm no adversarial blowup (a `filter` that drops everything must not hold a giant
-   buffer — the shrink covers it).
+   buffer — the shrink covers it). Likely shares the S2 dispatcher gap — verify each
+   adaptor's collect lowering exists before assuming a pre-size is all that's needed.
 4. **B (do regardless, independent of S1–S3)** — document `Vec.with_capacity` +
    the "reserve when the bound is known" idiom in `ch09-collections.md`, with the kata-#57
    number as the motivating example.
