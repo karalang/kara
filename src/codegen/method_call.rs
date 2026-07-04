@@ -3811,6 +3811,18 @@ impl<'ctx> super::Codegen<'ctx> {
         enum IterAdaptor {
             Map { param: String, body: Expr },
             Filter { param: String, pred: Expr },
+            // Stateful passthrough adaptors — element type is unchanged, so they
+            // thread the current element straight through with a pre-loop state
+            // variable (a counter or a latch) gating the downstream stages.
+            // `Take`/`Skip`/`StepBy` carry an integer *count* expression (bound
+            // once before the loop); `TakeWhile`/`SkipWhile`/`Inspect` carry a
+            // single-`Binding`-param closure like `filter`/`map`.
+            Take { count: Expr },
+            Skip { count: Expr },
+            StepBy { count: Expr },
+            TakeWhile { param: String, pred: Expr },
+            SkipWhile { param: String, pred: Expr },
+            Inspect { param: String, body: Expr },
         }
         let mut steps: Vec<IterAdaptor> = Vec::new();
         let mut cur = collect_recv;
@@ -3821,31 +3833,58 @@ impl<'ctx> super::Codegen<'ctx> {
             ..
         } = &cur.kind
         {
-            if !(method == "map" || method == "filter") || args.len() != 1 {
+            if args.len() != 1 {
                 break;
             }
-            // The adaptor argument must be a single-`Binding`-param closure so
-            // we can inline its body with the param bound to the element.
-            let ExprKind::Closure { params, body, .. } = &args[0].value.kind else {
-                return Ok(None);
-            };
-            if params.len() != 1 {
-                return Ok(None);
-            }
-            let PatternKind::Binding(param) = &params[0].pattern.kind else {
-                return Ok(None);
-            };
-            steps.push(if method == "map" {
-                IterAdaptor::Map {
-                    param: param.clone(),
-                    body: (**body).clone(),
+            let step = match method.as_str() {
+                // Closure-argument adaptors: the argument must be a
+                // single-`Binding`-param closure so we can inline its body with
+                // the param bound to the element. A named-fn / multi-param /
+                // destructuring argument returns `Ok(None)` (loud dispatch-fail
+                // — B-2026-07-03-29 sub-part 2, still open).
+                "map" | "filter" | "take_while" | "skip_while" | "inspect" => {
+                    let ExprKind::Closure { params, body, .. } = &args[0].value.kind else {
+                        return Ok(None);
+                    };
+                    if params.len() != 1 {
+                        return Ok(None);
+                    }
+                    let PatternKind::Binding(param) = &params[0].pattern.kind else {
+                        return Ok(None);
+                    };
+                    let param = param.clone();
+                    let body = (**body).clone();
+                    match method.as_str() {
+                        "map" => IterAdaptor::Map { param, body },
+                        "filter" => IterAdaptor::Filter { param, pred: body },
+                        "take_while" => IterAdaptor::TakeWhile { param, pred: body },
+                        "skip_while" => IterAdaptor::SkipWhile { param, pred: body },
+                        _ => IterAdaptor::Inspect { param, body },
+                    }
                 }
-            } else {
-                IterAdaptor::Filter {
-                    param: param.clone(),
-                    pred: (**body).clone(),
+                // Count-argument adaptors: a single integer expression, bound
+                // once before the loop. A closure argument here is malformed for
+                // these methods — bail to the diagnostic.
+                "take" | "skip" | "step_by" => {
+                    if matches!(&args[0].value.kind, ExprKind::Closure { .. }) {
+                        return Ok(None);
+                    }
+                    let count = args[0].value.clone();
+                    match method.as_str() {
+                        "take" => IterAdaptor::Take { count },
+                        "skip" => IterAdaptor::Skip { count },
+                        _ => IterAdaptor::StepBy { count },
+                    }
                 }
-            });
+                // Any other adaptor (`enumerate`, `zip`, `chain`, `flat_map`,
+                // `chunks`, `windows`, `scan`, `cycle`, …) is not yet lowered —
+                // stop peeling. Whatever remains becomes the `base_iterable`; if
+                // it is itself an unhandled iterator method call, the emitted
+                // `for … in <base>` loud-fails at codegen rather than
+                // miscompiling (B-2026-07-03-29 sub-part 1 residual).
+                _ => break,
+            };
+            steps.push(step);
             cur = object;
         }
         if steps.is_empty() {
@@ -3915,15 +3954,31 @@ impl<'ctx> super::Codegen<'ctx> {
         self.indexed_elem_counter += 1;
         let sp = call_span.clone();
         let vec_name = format!("__icv_{}", uid);
-        // The base-most adaptor's closure param IS the for-loop variable, so the
-        // element inherits the source's element type from the for-loop's own
-        // binding registration (a synthetic `let param = <elem>` would lose it,
-        // breaking method dispatch on a heap element — e.g. `.map(|w| w.len())`
-        // over a `Vec[String]`). `build_body` elides the redundant self-binding
-        // for any stage whose incoming value already IS its param identifier.
-        let elem_name = match &steps[0] {
-            IterAdaptor::Map { param, .. } | IterAdaptor::Filter { param, .. } => param.clone(),
-        };
+        // The FIRST param-bearing adaptor's closure param IS the for-loop
+        // variable, so the element inherits the source's element type from the
+        // for-loop's own binding registration (a synthetic `let param = <elem>`
+        // would lose it, breaking method dispatch on a heap element — e.g.
+        // `.map(|w| w.len())` over a `Vec[String]`). Count-argument adaptors
+        // (`take`/`skip`/`step_by`) have no param, so they thread the loop var
+        // through unchanged; a *leading* one therefore does NOT force a
+        // synthetic name — the first downstream `map`/`filter`/… still gets the
+        // typed loop var directly (its `current` IS its param → the redundant
+        // self-binding is elided in `build_body`). A synthetic `__ice_N` is used
+        // only when the chain has NO param-bearing stage at all (e.g.
+        // `iter().skip(1).take(2).collect()`).
+        let elem_name = steps
+            .iter()
+            .find_map(|s| match s {
+                IterAdaptor::Map { param, .. }
+                | IterAdaptor::Filter { param, .. }
+                | IterAdaptor::TakeWhile { param, .. }
+                | IterAdaptor::SkipWhile { param, .. }
+                | IterAdaptor::Inspect { param, .. } => Some(param.clone()),
+                IterAdaptor::Take { .. }
+                | IterAdaptor::Skip { .. }
+                | IterAdaptor::StepBy { .. } => None,
+            })
+            .unwrap_or_else(|| format!("__ice_{}", uid));
 
         let ident = |name: &str, sp: &crate::token::Span| Expr {
             kind: ExprKind::Identifier(name.to_string()),
@@ -3991,6 +4046,107 @@ impl<'ctx> super::Codegen<'ctx> {
                     span: sp.clone(),
                 }];
             }
+            // AST builders shared by the stateful-adaptor arms below. `st_i` /
+            // `stn_i` are the per-stage counter / bound-count names emitted as
+            // pre-loop `let`s (see the state-declaration pass in the caller).
+            let st_i = format!("__st_{}_{}", uid, i);
+            let stn_i = format!("__stn_{}_{}", uid, i);
+            let i64_lit = |n: i64| Expr {
+                kind: ExprKind::Integer(n, Some(crate::token::IntSuffix::I64)),
+                span: sp.clone(),
+            };
+            let bool_lit_e = |b: bool, sp: &crate::token::Span| Expr {
+                kind: ExprKind::Bool(b),
+                span: sp.clone(),
+            };
+            // `break;` — stop the whole for-loop, mirroring the interpreter's
+            // `stop`/`drain_source` for an exhausted `take` or a tripped
+            // `take_while` (iter_eval.rs). The break sits at the adaptor's
+            // position in the chain, so upstream stages have already run for the
+            // element that trips it — exactly as under `karac run`.
+            let break_stmt = || Stmt {
+                kind: StmtKind::Expr(Expr {
+                    kind: ExprKind::Break {
+                        label: None,
+                        value: None,
+                    },
+                    span: sp.clone(),
+                }),
+                span: sp.clone(),
+            };
+            let bin = |op: BinOp, l: Expr, r: Expr| Expr {
+                kind: ExprKind::Binary {
+                    op,
+                    left: Box::new(l),
+                    right: Box::new(r),
+                },
+                span: sp.clone(),
+            };
+            // `<name> = <value>;`
+            let assign = |name: &str, value: Expr| Stmt {
+                kind: StmtKind::Assign {
+                    target: ident(name, sp),
+                    value,
+                },
+                span: sp.clone(),
+            };
+            // `if <cond> { <then> } [else { <els> }]` as an expr-statement.
+            let if_stmt = |cond: Expr, then: Vec<Stmt>, els: Option<Vec<Stmt>>| Stmt {
+                kind: StmtKind::Expr(Expr {
+                    kind: ExprKind::If {
+                        condition: Box::new(cond),
+                        then_block: Block {
+                            stmts: then,
+                            final_expr: None,
+                            span: sp.clone(),
+                        },
+                        else_branch: els.map(|e| {
+                            Box::new(Expr {
+                                kind: ExprKind::Block(Block {
+                                    stmts: e,
+                                    final_expr: None,
+                                    span: sp.clone(),
+                                }),
+                                span: sp.clone(),
+                            })
+                        }),
+                    },
+                    span: sp.clone(),
+                }),
+                span: sp.clone(),
+            };
+            // Bind a predicate/inspect closure param to `current` and yield the
+            // body, eliding the redundant self-binding when `current` already IS
+            // the param (mirrors the `filter`/`map` elision so the typed loop var
+            // is used directly). Returns the body expr with the param in scope.
+            let bind_param_expr = |param: &str, body: &Expr| -> Expr {
+                let current_is_param =
+                    matches!(&current.kind, ExprKind::Identifier(n) if n == param);
+                if current_is_param {
+                    body.clone()
+                } else {
+                    let bind = Stmt {
+                        kind: StmtKind::Let {
+                            is_mut: false,
+                            pattern: Pattern {
+                                kind: PatternKind::Binding(param.to_string()),
+                                span: sp.clone(),
+                            },
+                            ty: None,
+                            value: current.clone(),
+                        },
+                        span: sp.clone(),
+                    };
+                    Expr {
+                        kind: ExprKind::Block(Block {
+                            stmts: vec![bind],
+                            final_expr: Some(Box::new(body.clone())),
+                            span: sp.clone(),
+                        }),
+                        span: sp.clone(),
+                    }
+                }
+            };
             match &steps[i] {
                 IterAdaptor::Map { param, body } => {
                     // Compute the transformed value. When `current` already IS
@@ -4116,6 +4272,87 @@ impl<'ctx> super::Codegen<'ctx> {
                         span: sp.clone(),
                     }]
                 }
+                IterAdaptor::Take { .. } => {
+                    // `if __st_i >= __stn_i { break }  __st_i = __st_i + 1;
+                    //  <rest>` — yield the first `n` elements reaching this stage,
+                    // then `break` the loop. Matches the interpreter's `Take`
+                    // step (iter_eval.rs): once `remaining == 0` it sets `stop`
+                    // and drains the source, so the element that trips exhaustion
+                    // has already run every UPSTREAM stage (e.g. a preceding
+                    // `inspect`) but no downstream stage — identical here because
+                    // the break sits after the upstream stages and before the
+                    // rest.
+                    let cond = bin(BinOp::GtEq, ident(&st_i, sp), ident(&stn_i, sp));
+                    let mut out = vec![if_stmt(cond, vec![break_stmt()], None)];
+                    out.push(assign(&st_i, bin(BinOp::Add, ident(&st_i, sp), i64_lit(1))));
+                    out.extend(build_body(steps, i + 1, current, vec_name, uid, sp, ident));
+                    out
+                }
+                IterAdaptor::Skip { .. } => {
+                    // `if __st_i < __stn_i { __st_i = __st_i + 1 } else { <rest> }`
+                    // — swallow the first `n` elements reaching this stage, pass
+                    // the rest through.
+                    let cond = bin(BinOp::Lt, ident(&st_i, sp), ident(&stn_i, sp));
+                    let then = vec![assign(&st_i, bin(BinOp::Add, ident(&st_i, sp), i64_lit(1)))];
+                    let els = build_body(steps, i + 1, current, vec_name, uid, sp, ident);
+                    vec![if_stmt(cond, then, Some(els))]
+                }
+                IterAdaptor::StepBy { .. } => {
+                    // `if __st_i % __stn_i == 0 { <rest> } __st_i = __st_i + 1;` —
+                    // yield elements at positions 0, n, 2n, … (relative to this
+                    // stage's input) and advance the counter every element.
+                    let modulo = bin(BinOp::Mod, ident(&st_i, sp), ident(&stn_i, sp));
+                    let cond = bin(BinOp::Eq, modulo, i64_lit(0));
+                    let rest = build_body(steps, i + 1, current, vec_name, uid, sp, ident);
+                    vec![
+                        if_stmt(cond, rest, None),
+                        assign(&st_i, bin(BinOp::Add, ident(&st_i, sp), i64_lit(1))),
+                    ]
+                }
+                IterAdaptor::TakeWhile { param, pred } => {
+                    // `if <pred> { <rest> } else { break }` — yield while the
+                    // predicate holds; the first `false` breaks the loop. Matches
+                    // the interpreter's `TakeWhile` step (iter_eval.rs): the
+                    // predicate is evaluated on each element (after upstream
+                    // stages) including the first failing one, which then sets
+                    // `stop`/drains — so no later element is even pulled. The
+                    // `break` gives the same "predicate runs through the first
+                    // failure, then iteration stops" shape without a latch.
+                    let guard = bind_param_expr(param, pred);
+                    let rest = build_body(steps, i + 1, current, vec_name, uid, sp, ident);
+                    vec![if_stmt(guard, rest, Some(vec![break_stmt()]))]
+                }
+                IterAdaptor::SkipWhile { param, pred } => {
+                    // `if !(__st_i && <pred>) { __st_i = false; <rest> }` — while
+                    // still skipping (`__st_i` true) and the predicate holds, drop
+                    // the element; the first non-match latches `__st_i = false`
+                    // and passes it plus every subsequent element (the `&&`
+                    // short-circuits `<pred>` once skipping stops).
+                    let guard = bind_param_expr(param, pred);
+                    let and = bin(BinOp::And, ident(&st_i, sp), guard);
+                    let cond = Expr {
+                        kind: ExprKind::Unary {
+                            op: UnaryOp::Not,
+                            operand: Box::new(and),
+                        },
+                        span: sp.clone(),
+                    };
+                    let mut then = vec![assign(&st_i, bool_lit_e(false, sp))];
+                    then.extend(build_body(steps, i + 1, current, vec_name, uid, sp, ident));
+                    vec![if_stmt(cond, then, None)]
+                }
+                IterAdaptor::Inspect { param, body } => {
+                    // `{ let param = current; body };  <rest>` — run the closure
+                    // for its side effect (value discarded) and pass the element
+                    // through unchanged.
+                    let side_effect = bind_param_expr(param, body);
+                    let mut out = vec![Stmt {
+                        kind: StmtKind::Expr(side_effect),
+                        span: sp.clone(),
+                    }];
+                    out.extend(build_body(steps, i + 1, current, vec_name, uid, sp, ident));
+                    out
+                }
             }
         }
 
@@ -4151,10 +4388,88 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp.clone(),
         };
 
-        // `{ <let_vec>; <for_stmt>; __icv_N }`
+        // Pre-loop state declarations for the stateful adaptors (counters /
+        // latches, keyed by stage index so `build_body` can reference them by
+        // the same deterministic name). Emitted after `let_vec`, before the loop.
+        let named_ty = |name: &str, sp: &crate::token::Span| TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec![name.to_string()],
+                generic_args: None,
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let i64_lit = |n: i64, sp: &crate::token::Span| Expr {
+            kind: ExprKind::Integer(n, Some(crate::token::IntSuffix::I64)),
+            span: sp.clone(),
+        };
+        let bool_lit = |b: bool, sp: &crate::token::Span| Expr {
+            kind: ExprKind::Bool(b),
+            span: sp.clone(),
+        };
+        let let_stmt =
+            |name: &str, is_mut: bool, ty: TypeExpr, value: Expr, sp: &crate::token::Span| Stmt {
+                kind: StmtKind::Let {
+                    is_mut,
+                    pattern: Pattern {
+                        kind: PatternKind::Binding(name.to_string()),
+                        span: sp.clone(),
+                    },
+                    ty: Some(ty),
+                    value,
+                },
+                span: sp.clone(),
+            };
+        let mut state_stmts: Vec<Stmt> = Vec::new();
+        for (i, step) in steps.iter().enumerate() {
+            match step {
+                IterAdaptor::Take { count }
+                | IterAdaptor::Skip { count }
+                | IterAdaptor::StepBy { count } => {
+                    // `let __stn_N_i: i64 = <count>;` — bind the count once
+                    // (a non-trivial count expr must not be re-evaluated per
+                    // element) — and `let mut __st_N_i: i64 = 0;` — the counter.
+                    state_stmts.push(let_stmt(
+                        &format!("__stn_{}_{}", uid, i),
+                        false,
+                        named_ty("i64", &sp),
+                        count.clone(),
+                        &sp,
+                    ));
+                    state_stmts.push(let_stmt(
+                        &format!("__st_{}_{}", uid, i),
+                        true,
+                        named_ty("i64", &sp),
+                        i64_lit(0, &sp),
+                        &sp,
+                    ));
+                }
+                IterAdaptor::SkipWhile { .. } => {
+                    // `let mut __st_N_i: bool = true;` — the "skipping" latch.
+                    state_stmts.push(let_stmt(
+                        &format!("__st_{}_{}", uid, i),
+                        true,
+                        named_ty("bool", &sp),
+                        bool_lit(true, &sp),
+                        &sp,
+                    ));
+                }
+                // `TakeWhile` needs no state — it `break`s on the first failing
+                // predicate rather than latching (see its `build_body` arm).
+                IterAdaptor::Map { .. }
+                | IterAdaptor::Filter { .. }
+                | IterAdaptor::Inspect { .. }
+                | IterAdaptor::TakeWhile { .. } => {}
+            }
+        }
+
+        // `{ <let_vec>; <state_stmts…>; <for_stmt>; __icv_N }`
+        let mut block_stmts = vec![let_vec];
+        block_stmts.extend(state_stmts);
+        block_stmts.push(for_stmt);
         let block = Expr {
             kind: ExprKind::Block(Block {
-                stmts: vec![let_vec, for_stmt],
+                stmts: block_stmts,
                 final_expr: Some(Box::new(ident(&vec_name, &sp))),
                 span: sp.clone(),
             }),

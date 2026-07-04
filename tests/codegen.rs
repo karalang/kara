@@ -6241,6 +6241,58 @@ fn main() {
     }
 
     #[test]
+    fn e2e_iter_adaptor_collect_stateful_passthrough_codegen() {
+        // B-2026-07-03-29: `<iter>....collect()` under `karac build` rejected
+        // every adaptor beyond the `map`/`filter` subset landed in
+        // B-2026-07-03-25. This extends the desugar to the stateful
+        // element-type-preserving passthrough family — `take`, `skip`,
+        // `step_by`, `take_while`, `skip_while`, `inspect` — each lowered to its
+        // for-loop equivalent with a pre-loop state var (counter / bound count)
+        // and, for the short-circuiting `take`/`take_while`, an in-body `break`
+        // at the adaptor's position. The break sits AFTER the upstream stages,
+        // matching the interpreter's lazy step order (iter_eval.rs): upstream
+        // side effects (a preceding `inspect`) fire on the element that trips
+        // exhaustion too — hence `inspect(...).take(2)` prints `see1 see2 see3`
+        // on BOTH surfaces, not `see1 see2`. Exercises each adaptor, mixed
+        // chains (`skip().take().map()`, `filter().take()`), the interpreter-
+        // matching side-effect count, and a heap `Vec[String]` source whose
+        // element method (`.len()`) is called after a leading count adaptor
+        // (the loop var must inherit the source element type — see
+        // `elem_name`).
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    let s: Vec[i64] = Vec[1i64, 2i64, 3i64, 4i64, 5i64, 6i64];
+    let tk: Vec[i64] = s.iter().take(2i64).collect();
+    println(f"{tk.len()} {tk[0]} {tk[1]}");
+    let sk: Vec[i64] = s.iter().skip(4i64).collect();
+    println(f"{sk.len()} {sk[0]} {sk[1]}");
+    let sb: Vec[i64] = s.iter().step_by(2i64).collect();
+    println(f"{sb.len()} {sb[0]} {sb[1]} {sb[2]}");
+    let tw: Vec[i64] = s.iter().take_while(|x| x < 4i64).collect();
+    println(f"{tw.len()} {tw[0]} {tw[2]}");
+    let sw: Vec[i64] = s.iter().skip_while(|x| x < 4i64).collect();
+    println(f"{sw.len()} {sw[0]} {sw[2]}");
+    let mx: Vec[i64] = s.iter().skip(1i64).take(2i64).map(|n| n * 10i64).collect();
+    println(f"{mx.len()} {mx[0]} {mx[1]}");
+    let ft: Vec[i64] = s.iter().filter(|x| x > 1i64).take(2i64).collect();
+    println(f"{ft.len()} {ft[0]} {ft[1]}");
+    let insp: Vec[i64] = s.iter().inspect(|x| println(f"see{x}")).take(2i64).collect();
+    println(f"{insp.len()}");
+    let words: Vec[String] = Vec["apple".to_string(), "berry".to_string(), "fig".to_string(), "kiwi".to_string()];
+    let lens: Vec[i64] = words.iter().skip(1i64).map(|w| w.len()).collect();
+    println(f"{lens.len()} {lens[0]} {lens[2]}");
+}
+"#,
+        ) {
+            assert_eq!(
+                out,
+                "2 1 2\n2 5 6\n3 1 3 5\n3 1 3\n3 4 6\n2 20 30\n2 2 3\nsee1\nsee2\nsee3\n2\n3 5 4\n"
+            );
+        }
+    }
+
+    #[test]
     fn e2e_chars_iterator_bound_to_variable_codegen() {
         // B-2026-06-18-5: `s.chars()` bound to a NAME (`let it = s.chars();`)
         // failed codegen ("Vec/String method 'chars' is not yet supported")
