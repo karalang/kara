@@ -55,6 +55,16 @@ pub struct DepGraph {
     /// provider is configured — the resolver then reports registry deps as
     /// unsupported, preserving the pre-fetch behavior.
     pub registry_resolutions: BTreeMap<(PathBuf, String), RegistryResolution>,
+    /// For every registry package the walk fetched (once per package *name*),
+    /// its full **candidate set**: every selectable published version paired
+    /// with that version's own registry-dep requirements. This is the widened
+    /// input PubGrub's global solve draws from (resolver follow-up (a) slice
+    /// 3c) — independent of, and richer than, the single version the walk
+    /// currently selects into `registry_resolutions`. Empty for a package
+    /// whose provider can't enumerate (offline / a non-enumerating provider);
+    /// the solver then falls back to the single selected candidate. Empty
+    /// overall when no `RegistryProvider` is configured.
+    pub registry_candidates: BTreeMap<String, Vec<RegistryCandidate>>,
     /// For every `DependencySpec::Git` the walk actually cloned (only when a
     /// [`crate::git_fetch::GitProvider`] was supplied), the concrete
     /// resolution: keyed by `(declaring manifest dir, dep name)`, valued with
@@ -74,6 +84,21 @@ pub struct RegistryResolution {
     pub version: semver::Version,
     /// Original upstream source URL (from the catalog), for the lockfile.
     pub upstream_url: String,
+}
+
+/// One published version of a registry package plus its own registry-dep
+/// requirements — the per-version data PubGrub's global solve needs to
+/// backtrack (resolver follow-up (a) slice 3c). Recorded for every selectable
+/// published version of each fetched registry package, independent of which
+/// version the walk selects + recurses into.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegistryCandidate {
+    /// A selectable (non-yanked) published version.
+    pub version: semver::Version,
+    /// This version's `[dependencies]` **registry** requirements as
+    /// `(dep-name, constraint)` forward edges. Path/git deps of a published
+    /// package are outside the v1 version-solve domain and are not recorded.
+    pub deps: Vec<(String, semver::VersionReq)>,
 }
 
 /// One cloned-and-checked-out git dependency (see
@@ -425,6 +450,7 @@ pub fn build_dep_graph_with_options(
     let mut manifests = BTreeMap::new();
     let mut derived_deps = BTreeMap::new();
     let mut registry_resolutions = BTreeMap::new();
+    let mut registry_candidates = BTreeMap::new();
     let mut git_resolutions = BTreeMap::new();
 
     let mut visiting_stack: Vec<PathBuf> = Vec::new();
@@ -446,6 +472,7 @@ pub fn build_dep_graph_with_options(
         &mut manifests,
         &mut derived_deps,
         &mut registry_resolutions,
+        &mut registry_candidates,
         &mut git_resolutions,
         &mut visiting_stack,
         &mut visiting_set,
@@ -457,6 +484,7 @@ pub fn build_dep_graph_with_options(
         manifests,
         derived_deps,
         registry_resolutions,
+        registry_candidates,
         git_resolutions,
     })
 }
@@ -475,6 +503,7 @@ fn visit(
     manifests: &mut BTreeMap<PathBuf, Manifest>,
     derived_deps: &mut BTreeMap<PathBuf, BTreeMap<String, DependencySpec>>,
     registry_resolutions: &mut BTreeMap<(PathBuf, String), RegistryResolution>,
+    registry_candidates: &mut BTreeMap<String, Vec<RegistryCandidate>>,
     git_resolutions: &mut BTreeMap<(PathBuf, String), GitResolution>,
     visiting_stack: &mut Vec<PathBuf>,
     visiting_set: &mut HashSet<PathBuf>,
@@ -578,6 +607,7 @@ fn visit(
             manifests,
             derived_deps,
             registry_resolutions,
+            registry_candidates,
             git_resolutions,
             visiting_stack,
             visiting_set,
@@ -611,6 +641,19 @@ fn visit(
                     upstream_url: materialized.upstream_url.clone(),
                 },
             );
+
+            // Record this package's full candidate set (all published
+            // versions + their per-version registry deps) once per package
+            // *name* — the widened input for PubGrub's global solve (slice
+            // 3c). The candidate set is req-independent, so recording it once
+            // suffices no matter how many parents declare the package. This is
+            // pure data collection; the selected-version fetch/recurse above
+            // is unchanged, so the walk's shape (and today's resolution) is
+            // preserved.
+            if !registry_candidates.contains_key(dep_name) {
+                let candidates = record_registry_candidates(provider, loader, dep_name);
+                registry_candidates.insert(dep_name.clone(), candidates);
+            }
 
             // Same cycle / dedup discipline as path-deps, keyed by the
             // extracted source dir.
@@ -646,6 +689,7 @@ fn visit(
                 manifests,
                 derived_deps,
                 registry_resolutions,
+                registry_candidates,
                 git_resolutions,
                 visiting_stack,
                 visiting_set,
@@ -713,6 +757,7 @@ fn visit(
                 manifests,
                 derived_deps,
                 registry_resolutions,
+                registry_candidates,
                 git_resolutions,
                 visiting_stack,
                 visiting_set,
@@ -760,6 +805,54 @@ fn resolve_path_dep_dir(from_dir: &Path, path: &Path) -> PathBuf {
     } else {
         from_dir.join(path)
     }
+}
+
+/// Collect a registry package's full candidate set: every selectable
+/// published version (via [`RegistryProvider::available_versions`]) paired
+/// with that version's own registry-dep requirements (read from the version's
+/// materialized manifest via [`RegistryProvider::fetch_exact`]). The widened
+/// input for PubGrub's global solve (resolver follow-up (a) slice 3c).
+///
+/// **Best-effort.** This data is advisory for the solver — the selected
+/// version fetched + recursed by the caller owns build correctness — so a
+/// failure never propagates: a provider that can't enumerate yields an empty
+/// set (the solver falls back to the single selected candidate), and any
+/// individual version whose tarball/manifest can't be fetched or parsed is
+/// dropped rather than failing the build.
+///
+/// **Cost.** This eagerly materializes every published version's manifest, so
+/// a package with N releases incurs N fetches (cached by the production
+/// provider's tarball cache). Slice 3d / a later optimization can make this
+/// lazy by fetching a candidate's deps only when the solver actually
+/// considers it.
+fn record_registry_candidates(
+    provider: &dyn RegistryProvider,
+    loader: &dyn ManifestLoader,
+    name: &str,
+) -> Vec<RegistryCandidate> {
+    let Ok(versions) = provider.available_versions(name) else {
+        return Vec::new();
+    };
+    let mut candidates = Vec::new();
+    for version in versions {
+        let Ok(materialized) = provider.fetch_exact(name, &version) else {
+            continue;
+        };
+        let dir = canonicalize_or_self(&materialized.root_dir);
+        let Ok(manifest) = loader.load(&dir) else {
+            continue;
+        };
+        let deps = manifest
+            .dependencies
+            .iter()
+            .filter_map(|(dep_name, spec)| match spec {
+                DependencySpec::Registry { version: req } => Some((dep_name.clone(), req.clone())),
+                _ => None,
+            })
+            .collect();
+        candidates.push(RegistryCandidate { version, deps });
+    }
+    candidates
 }
 
 /// Canonicalize a directory path if the OS permits — otherwise fall back to
@@ -949,6 +1042,170 @@ mod tests {
             .get(&(PathBuf::from("/reg/http"), "log".to_string()))
             .expect("log resolution");
         assert_eq!(log_res.version, v("0.4.1"));
+
+        // Slice 3c: this provider only implements `fetch` (available_versions
+        // defaults to empty), so the candidate set is recorded-but-empty — the
+        // solver falls back to the single selected version.
+        assert_eq!(
+            graph.registry_candidates.get("http"),
+            Some(&Vec::new()),
+            "non-enumerating provider must record an empty candidate set"
+        );
+    }
+
+    /// In-memory `RegistryProvider` that also enumerates versions and fetches
+    /// exact ones — so the slice-3c candidate-set recording can be exercised.
+    /// `selected` is what range `fetch` returns; `exact` maps each published
+    /// version to its own extracted dir (keying `MemLoader`).
+    struct MultiVersionMockProvider {
+        versions: BTreeMap<String, Vec<semver::Version>>,
+        selected: BTreeMap<String, (PathBuf, semver::Version)>,
+        exact: BTreeMap<(String, semver::Version), PathBuf>,
+    }
+
+    impl RegistryProvider for MultiVersionMockProvider {
+        fn fetch(&self, name: &str, _req: &VersionReq) -> Result<MaterializedDep, String> {
+            self.selected
+                .get(name)
+                .map(|(dir, ver)| MaterializedDep {
+                    root_dir: dir.clone(),
+                    version: ver.clone(),
+                    upstream_url: format!("https://up/{name}"),
+                })
+                .ok_or_else(|| format!("no such package {name}"))
+        }
+
+        fn available_versions(&self, name: &str) -> Result<Vec<semver::Version>, String> {
+            Ok(self.versions.get(name).cloned().unwrap_or_default())
+        }
+
+        fn fetch_exact(
+            &self,
+            name: &str,
+            version: &semver::Version,
+        ) -> Result<MaterializedDep, String> {
+            self.exact
+                .get(&(name.to_string(), version.clone()))
+                .map(|dir| MaterializedDep {
+                    root_dir: dir.clone(),
+                    version: version.clone(),
+                    upstream_url: format!("https://up/{name}"),
+                })
+                .ok_or_else(|| format!("no {name}@{version}"))
+        }
+    }
+
+    #[test]
+    fn registry_candidate_set_recorded_with_per_version_deps() {
+        // `http` publishes three versions, each declaring a different `log`
+        // constraint. The walk selects 1.1.0 (highest `^1.0`) and recurses
+        // into it, but slice 3c also records the *full* candidate set — every
+        // version paired with that version's own registry deps — so PubGrub
+        // (slice 3d) can backtrack.
+        let mut root = empty_manifest("app");
+        root.dependencies.insert("http".into(), registry("^1.0"));
+
+        let mut http_10 = empty_manifest("http");
+        http_10.dependencies.insert("log".into(), registry("^0.3"));
+        let mut http_11 = empty_manifest("http");
+        http_11.dependencies.insert("log".into(), registry("^0.4"));
+        let mut http_20 = empty_manifest("http");
+        http_20.dependencies.insert("log".into(), registry("^0.5"));
+
+        let loader = MemLoader {
+            manifests: BTreeMap::from([
+                (PathBuf::from("/reg/http-1.0.0"), http_10),
+                (PathBuf::from("/reg/http-1.1.0"), http_11),
+                (PathBuf::from("/reg/http-2.0.0"), http_20),
+                (PathBuf::from("/reg/log"), empty_manifest("log")),
+            ]),
+        };
+        let provider = MultiVersionMockProvider {
+            versions: BTreeMap::from([
+                ("http".to_string(), vec![v("1.0.0"), v("1.1.0"), v("2.0.0")]),
+                ("log".to_string(), vec![v("0.4.1")]),
+            ]),
+            selected: BTreeMap::from([
+                (
+                    "http".to_string(),
+                    (PathBuf::from("/reg/http-1.1.0"), v("1.1.0")),
+                ),
+                ("log".to_string(), (PathBuf::from("/reg/log"), v("0.4.1"))),
+            ]),
+            exact: BTreeMap::from([
+                (
+                    ("http".to_string(), v("1.0.0")),
+                    PathBuf::from("/reg/http-1.0.0"),
+                ),
+                (
+                    ("http".to_string(), v("1.1.0")),
+                    PathBuf::from("/reg/http-1.1.0"),
+                ),
+                (
+                    ("http".to_string(), v("2.0.0")),
+                    PathBuf::from("/reg/http-2.0.0"),
+                ),
+                (("log".to_string(), v("0.4.1")), PathBuf::from("/reg/log")),
+            ]),
+        };
+
+        let graph = build_dep_graph_with_options(
+            &PathBuf::from("/app"),
+            root,
+            &loader,
+            DepGraphOptions {
+                offline_root: None,
+                include_dev_deps: false,
+                registry_provider: Some(&provider),
+                git_provider: None,
+            },
+        )
+        .expect("build");
+
+        // Selected-version behavior is unchanged: the walk still pinned 1.1.0.
+        let http_res = graph
+            .registry_resolutions
+            .get(&(PathBuf::from("/app"), "http".to_string()))
+            .expect("http resolution");
+        assert_eq!(http_res.version, v("1.1.0"));
+
+        // The widened candidate set: all three versions, each with its own
+        // `log` constraint.
+        let http_candidates = graph
+            .registry_candidates
+            .get("http")
+            .expect("http candidates");
+        let got: Vec<(semver::Version, Vec<(String, VersionReq)>)> = http_candidates
+            .iter()
+            .map(|c| (c.version.clone(), c.deps.clone()))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (
+                    v("1.0.0"),
+                    vec![("log".to_string(), VersionReq::parse("^0.3").unwrap())]
+                ),
+                (
+                    v("1.1.0"),
+                    vec![("log".to_string(), VersionReq::parse("^0.4").unwrap())]
+                ),
+                (
+                    v("2.0.0"),
+                    vec![("log".to_string(), VersionReq::parse("^0.5").unwrap())]
+                ),
+            ]
+        );
+
+        // The leaf `log` package's candidate set is recorded too (one version,
+        // no deps).
+        let log_candidates = graph
+            .registry_candidates
+            .get("log")
+            .expect("log candidates");
+        assert_eq!(log_candidates.len(), 1);
+        assert_eq!(log_candidates[0].version, v("0.4.1"));
+        assert!(log_candidates[0].deps.is_empty());
     }
 
     #[test]
@@ -962,6 +1219,8 @@ mod tests {
         // The dep is recorded but never fetched — no provider was given.
         assert!(graph.derived_deps[&PathBuf::from("/app")].contains_key("http"));
         assert!(graph.registry_resolutions.is_empty());
+        // No provider → no candidate set recorded either (slice 3c).
+        assert!(graph.registry_candidates.is_empty());
     }
 
     #[test]
