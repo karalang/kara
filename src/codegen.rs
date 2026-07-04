@@ -33,6 +33,7 @@ mod clone_drop;
 mod closures;
 mod collections;
 mod column;
+mod consume_class;
 mod control_flow;
 mod control_flow_bce;
 mod control_flow_for;
