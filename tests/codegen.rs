@@ -6205,6 +6205,42 @@ fn main() {
     }
 
     #[test]
+    fn e2e_iter_adaptor_map_filter_collect_to_vec_codegen() {
+        // B-2026-07-03-25: `<iter>.map(f)/.filter(p)....collect()` into a `Vec`
+        // failed codegen ("no handler for method 'collect' on non-identifier
+        // receiver") — codegen handled `collect` only on an identifier receiver
+        // and on `chars().collect()`, so a lazy `map`/`filter` adaptor chain
+        // (the book-documented idiom, ch10-closures-and-iterators) fell through.
+        // The fix desugars the chain to a `for` loop that pushes each
+        // surviving/transformed element onto a fresh Vec. Exercises: a single
+        // `map` (the headline idiom), a `filter`, a `filter().map()` chain, a
+        // type-changing `map` producing a heap `Vec[String]`, and a `map` over a
+        // heap `Vec[String]` source that calls a method on the element (`.len()`)
+        // — the case that requires the base-most param to inherit the loop var's
+        // element type.
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    let s: Vec[i64] = Vec[1i64, 2i64, 3i64, 4i64, 5i64];
+    let doubled: Vec[i64] = s.iter().map(|n| n * 2i64).collect();
+    println(f"{doubled[0]} {doubled[4]}");
+    let big: Vec[i64] = s.iter().filter(|x| x > 2i64).collect();
+    println(f"{big.len()} {big[0]}");
+    let chain: Vec[i64] = s.iter().filter(|x| x > 2i64).map(|y| y * 10i64).collect();
+    println(f"{chain.len()} {chain[0]} {chain[2]}");
+    let strs: Vec[String] = s.iter().map(|n| n.to_string()).collect();
+    println(f"{strs[0]}{strs[4]}");
+    let words: Vec[String] = Vec["apple".to_string(), "berry".to_string(), "fig".to_string()];
+    let lens: Vec[i64] = words.iter().map(|w| w.len()).collect();
+    println(f"{lens[0]} {lens[1]} {lens[2]}");
+}
+"#,
+        ) {
+            assert_eq!(out, "2 10\n3 3\n3 30 50\n15\n5 5 3\n");
+        }
+    }
+
+    #[test]
     fn e2e_chars_iterator_bound_to_variable_codegen() {
         // B-2026-06-18-5: `s.chars()` bound to a NAME (`let it = s.chars();`)
         // failed codegen ("Vec/String method 'chars' is not yet supported")

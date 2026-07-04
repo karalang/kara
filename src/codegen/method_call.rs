@@ -3454,6 +3454,25 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // `<iter>.map(f)/.filter(p)....collect()` → materialize a `Vec[U]`
+        // (B-2026-07-03-25). Codegen has no lazy iterator value, but a `map` /
+        // `filter` adaptor chain terminating in `collect` is equivalent to a
+        // `for` loop that pushes each surviving/transformed element onto a fresh
+        // `Vec`, and every construct that desugar needs — `for x in <src>`,
+        // closure-body inlining via `let <param> = <elem>`, `if <pred> { ... }`,
+        // `push`, block move-out — is already fully supported. `object` here is
+        // the `collect` receiver: the outermost `map`/`filter` MethodCall.
+        // Returns `Ok(None)` (falls through to the diagnostic) for any chain the
+        // desugar can't faithfully lower — a non-`map`/`filter` adaptor
+        // (`enumerate`, `zip`, …), a non-single-`Binding`-param closure, or a
+        // missing output element type — so unsupported shapes fail loudly rather
+        // than miscompile.
+        if method == "collect" && args.is_empty() {
+            if let Some(v) = self.try_compile_iter_adaptor_collect_to_vec(object, call_span)? {
+                return Ok(v);
+            }
+        }
+
         // General owned-temp tracking, slice 3b — element-type-aware read
         // methods (`get`/`first`/`last`/`get_unchecked`/`contains`) on a
         // FRESH-TEMP `Vec`/`VecDeque` receiver (`make_vec().get(0)`). Needs the
@@ -3742,6 +3761,407 @@ impl<'ctx> super::Codegen<'ctx> {
         };
 
         self.compile_expr(&block)
+    }
+
+    /// Lower `<iter>.map(f)/.filter(p)....collect()` into a materialized
+    /// `Vec[U]` by desugaring the adaptor chain to an equivalent `for` loop
+    /// that pushes each surviving/transformed element onto a fresh `Vec`
+    /// (B-2026-07-03-25). Every construct the desugar produces —
+    /// `for x in <src>`, closure-body inlining via `let <param> = <elem>`,
+    /// `if <pred> { … }`, `push`, block move-out — is already fully supported,
+    /// so no new low-level iterator/`collect` codegen is needed. `collect_recv`
+    /// is the outermost `map`/`filter` MethodCall (the `collect` receiver);
+    /// `call_span` is the whole `collect()` expression's span, whose
+    /// `owned_temp_drops` entry (populated for every `Vec`-typed expr) carries
+    /// the collected element type `U`.
+    ///
+    /// We synthesize, for a `.map(|a| ma)` chain over base `S`:
+    ///
+    /// ```text
+    /// { let mut __icv_N: Vec[U] = Vec.new();
+    ///   for __ice_N in S {
+    ///     let __icm_N_0 = { let a = __ice_N; ma };
+    ///     __icv_N.push(__icm_N_0);
+    ///   }
+    ///   __icv_N }
+    /// ```
+    ///
+    /// A `filter(|a| pa)` step becomes `if { let a = <cur>; pa } { <rest> }`
+    /// wrapping the downstream stages, so a rejected element is simply not
+    /// pushed. Each `map` materializes into a fresh `let` so the threaded
+    /// "current element" is always a simple identifier (no closure body is
+    /// re-evaluated).
+    ///
+    /// Returns `Ok(None)` — the caller falls through to the dispatch-fail
+    /// diagnostic — for any chain this can't faithfully lower: a non-`map`/
+    /// `filter` adaptor in the chain (`enumerate`, `zip`, `take`, …), a
+    /// `map`/`filter` argument that isn't a single-`Binding`-param closure, no
+    /// `map`/`filter` step at all (plain `.iter().collect()`), or a missing/
+    /// non-`Vec` recorded output type. Unsupported shapes therefore fail loudly
+    /// rather than miscompile.
+    fn try_compile_iter_adaptor_collect_to_vec(
+        &mut self,
+        collect_recv: &Expr,
+        call_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        // Walk the chain outer → inner, peeling `map`/`filter` adaptors until we
+        // reach the base iterable (`s.iter()`, a range, an array literal, …).
+        // `steps` is collected outermost-first, then reversed to application
+        // order (base → out).
+        enum IterAdaptor {
+            Map { param: String, body: Expr },
+            Filter { param: String, pred: Expr },
+        }
+        let mut steps: Vec<IterAdaptor> = Vec::new();
+        let mut cur = collect_recv;
+        while let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &cur.kind
+        {
+            if !(method == "map" || method == "filter") || args.len() != 1 {
+                break;
+            }
+            // The adaptor argument must be a single-`Binding`-param closure so
+            // we can inline its body with the param bound to the element.
+            let ExprKind::Closure { params, body, .. } = &args[0].value.kind else {
+                return Ok(None);
+            };
+            if params.len() != 1 {
+                return Ok(None);
+            }
+            let PatternKind::Binding(param) = &params[0].pattern.kind else {
+                return Ok(None);
+            };
+            steps.push(if method == "map" {
+                IterAdaptor::Map {
+                    param: param.clone(),
+                    body: (**body).clone(),
+                }
+            } else {
+                IterAdaptor::Filter {
+                    param: param.clone(),
+                    pred: (**body).clone(),
+                }
+            });
+            cur = object;
+        }
+        if steps.is_empty() {
+            // No `map`/`filter` in the chain — not our shape (plain
+            // `.iter().collect()`); leave it to the diagnostic.
+            return Ok(None);
+        }
+        steps.reverse();
+        let base_iterable = cur.clone();
+
+        // A *non-terminal* `map` whose body evaluates to an f-string must
+        // materialize into an intermediate `let` (so the threaded element stays
+        // a simple identifier), but `let x = f"…"` routes through the
+        // staged-f-string-accumulator path that double-frees once the value is
+        // also `push`ed. The terminal `map` dodges this by pushing directly, but
+        // a non-terminal one can't. Reject such a chain (loud dispatch-fail)
+        // rather than miscompile — a genuinely rare shape (an f-string feeding a
+        // further adaptor). `to_string()` / arithmetic bodies are unaffected.
+        fn body_tail_is_fstring(e: &Expr) -> bool {
+            match &e.kind {
+                ExprKind::InterpolatedStringLit(_) => true,
+                ExprKind::Block(b) => b.final_expr.as_deref().is_some_and(body_tail_is_fstring),
+                ExprKind::If {
+                    then_block,
+                    else_branch,
+                    ..
+                } => {
+                    then_block
+                        .final_expr
+                        .as_deref()
+                        .is_some_and(body_tail_is_fstring)
+                        || else_branch.as_deref().is_some_and(body_tail_is_fstring)
+                }
+                _ => false,
+            }
+        }
+        for (i, step) in steps.iter().enumerate() {
+            let is_terminal = i + 1 == steps.len();
+            if !is_terminal {
+                if let IterAdaptor::Map { body, .. } = step {
+                    if body_tail_is_fstring(body) {
+                        return Ok(None);
+                    }
+                }
+            }
+        }
+
+        // Output element type: `owned_temp_drops[collect_span]` = `Vec[U]`
+        // (the lowering pass records it for every `Vec`-typed expr). Reused
+        // verbatim as the accumulator's annotation so `push` lowers `U`.
+        let vec_te = match self
+            .owned_temp_drops
+            .get(&(call_span.offset, call_span.length))
+        {
+            Some(te) => te.clone(),
+            None => return Ok(None),
+        };
+        let is_vec = matches!(
+            &vec_te.kind,
+            TypeKind::Path(p) if p.segments.last().map(|s| s.as_str()) == Some("Vec")
+        );
+        if !is_vec {
+            return Ok(None);
+        }
+
+        let uid = self.indexed_elem_counter;
+        self.indexed_elem_counter += 1;
+        let sp = call_span.clone();
+        let vec_name = format!("__icv_{}", uid);
+        // The base-most adaptor's closure param IS the for-loop variable, so the
+        // element inherits the source's element type from the for-loop's own
+        // binding registration (a synthetic `let param = <elem>` would lose it,
+        // breaking method dispatch on a heap element — e.g. `.map(|w| w.len())`
+        // over a `Vec[String]`). `build_body` elides the redundant self-binding
+        // for any stage whose incoming value already IS its param identifier.
+        let elem_name = match &steps[0] {
+            IterAdaptor::Map { param, .. } | IterAdaptor::Filter { param, .. } => param.clone(),
+        };
+
+        let ident = |name: &str, sp: &crate::token::Span| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: sp.clone(),
+        };
+
+        // `let mut __icv_N: Vec[U] = Vec.new();`
+        let vec_new = Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Path {
+                        segments: vec!["Vec".to_string(), "new".to_string()],
+                        generic_args: None,
+                    },
+                    span: sp.clone(),
+                }),
+                args: vec![],
+            },
+            span: sp.clone(),
+        };
+        let let_vec = Stmt {
+            kind: StmtKind::Let {
+                is_mut: true,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(vec_name.clone()),
+                    span: sp.clone(),
+                },
+                ty: Some(vec_te),
+                value: vec_new,
+            },
+            span: sp.clone(),
+        };
+
+        // Build the for-loop body (base → out), threading the "current element"
+        // expression through each stage. Recursion keeps `filter`'s downstream
+        // stages nested inside its `if`.
+        fn build_body(
+            steps: &[IterAdaptor],
+            i: usize,
+            current: Expr,
+            vec_name: &str,
+            uid: u32,
+            sp: &crate::token::Span,
+            ident: &dyn Fn(&str, &crate::token::Span) -> Expr,
+        ) -> Vec<Stmt> {
+            if i == steps.len() {
+                // `__icv_N.push(<current>)`
+                let push_call = Expr {
+                    kind: ExprKind::MethodCall {
+                        object: Box::new(ident(vec_name, sp)),
+                        method: "push".to_string(),
+                        turbofish: None,
+                        args: vec![CallArg {
+                            label: None,
+                            mut_marker: false,
+                            value: current,
+                            span: sp.clone(),
+                        }],
+                        args_close_span: sp.clone(),
+                    },
+                    span: sp.clone(),
+                };
+                return vec![Stmt {
+                    kind: StmtKind::Expr(push_call),
+                    span: sp.clone(),
+                }];
+            }
+            match &steps[i] {
+                IterAdaptor::Map { param, body } => {
+                    // Compute the transformed value. When `current` already IS
+                    // `param` (the base-most stage, whose param is the for-loop
+                    // var), the `let param = param` is redundant *and* would strip
+                    // the loop var's element type; use the body directly against
+                    // the typed param instead.
+                    let current_is_param =
+                        matches!(&current.kind, ExprKind::Identifier(n) if n == param);
+                    let map_value = if current_is_param {
+                        body.clone()
+                    } else {
+                        let bind_param = Stmt {
+                            kind: StmtKind::Let {
+                                is_mut: false,
+                                pattern: Pattern {
+                                    kind: PatternKind::Binding(param.clone()),
+                                    span: sp.clone(),
+                                },
+                                ty: None,
+                                value: current,
+                            },
+                            span: sp.clone(),
+                        };
+                        Expr {
+                            kind: ExprKind::Block(Block {
+                                stmts: vec![bind_param],
+                                final_expr: Some(Box::new(body.clone())),
+                                span: sp.clone(),
+                            }),
+                            span: sp.clone(),
+                        }
+                    };
+                    // Terminal map: push the value directly rather than binding it
+                    // to an intermediate `let`. A `let __icm = f"…"` RHS routes
+                    // through the staged-f-string-accumulator path, which
+                    // double-frees the built String once it's also `push`ed
+                    // (B-2026-07-03-25 follow-on); `push(f"…")` is the supported,
+                    // leak-clean form (mirrors a hand-written `for … { v.push(f"…")
+                    // }`). The base-most param stays typed because `map_value`
+                    // references it directly. The caller pre-rejects a
+                    // *non-terminal* map with an f-string body (which would still
+                    // need the poisoned `let`).
+                    if i + 1 == steps.len() {
+                        return build_body(steps, i + 1, map_value, vec_name, uid, sp, ident);
+                    }
+                    // Non-terminal map: materialize into a fresh `let` so the
+                    // threaded "current" stays a simple identifier (no downstream
+                    // re-evaluation, and a subsequent `filter`'s `let param =
+                    // current` binds an identifier, never a heap temp).
+                    let synth = format!("__icm_{}_{}", uid, i);
+                    let let_synth = Stmt {
+                        kind: StmtKind::Let {
+                            is_mut: false,
+                            pattern: Pattern {
+                                kind: PatternKind::Binding(synth.clone()),
+                                span: sp.clone(),
+                            },
+                            ty: None,
+                            value: map_value,
+                        },
+                        span: sp.clone(),
+                    };
+                    let mut out = vec![let_synth];
+                    out.extend(build_body(
+                        steps,
+                        i + 1,
+                        ident(&synth, sp),
+                        vec_name,
+                        uid,
+                        sp,
+                        ident,
+                    ));
+                    out
+                }
+                IterAdaptor::Filter { param, pred } => {
+                    // `if { let <param> = <current>; <pred> } { <rest> }` — with
+                    // the same redundant-self-binding elision as `map`: when
+                    // `current` IS `param`, evaluate `pred` directly against the
+                    // typed loop var. The downstream `current` is unchanged (a
+                    // filter is identity on the element it lets through).
+                    let current_is_param =
+                        matches!(&current.kind, ExprKind::Identifier(n) if n == param);
+                    let guard = if current_is_param {
+                        pred.clone()
+                    } else {
+                        let bind_param = Stmt {
+                            kind: StmtKind::Let {
+                                is_mut: false,
+                                pattern: Pattern {
+                                    kind: PatternKind::Binding(param.clone()),
+                                    span: sp.clone(),
+                                },
+                                ty: None,
+                                value: current.clone(),
+                            },
+                            span: sp.clone(),
+                        };
+                        Expr {
+                            kind: ExprKind::Block(Block {
+                                stmts: vec![bind_param],
+                                final_expr: Some(Box::new(pred.clone())),
+                                span: sp.clone(),
+                            }),
+                            span: sp.clone(),
+                        }
+                    };
+                    let then_stmts = build_body(steps, i + 1, current, vec_name, uid, sp, ident);
+                    let if_expr = Expr {
+                        kind: ExprKind::If {
+                            condition: Box::new(guard),
+                            then_block: Block {
+                                stmts: then_stmts,
+                                final_expr: None,
+                                span: sp.clone(),
+                            },
+                            else_branch: None,
+                        },
+                        span: sp.clone(),
+                    };
+                    vec![Stmt {
+                        kind: StmtKind::Expr(if_expr),
+                        span: sp.clone(),
+                    }]
+                }
+            }
+        }
+
+        let for_body = build_body(
+            &steps,
+            0,
+            ident(&elem_name, &sp),
+            &vec_name,
+            uid,
+            &sp,
+            &ident,
+        );
+
+        // `for __ice_N in <base_iterable> { <for_body> }`
+        let for_stmt = Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::For {
+                    label: None,
+                    pattern: Pattern {
+                        kind: PatternKind::Binding(elem_name.clone()),
+                        span: sp.clone(),
+                    },
+                    iterable: Box::new(base_iterable),
+                    body: Block {
+                        stmts: for_body,
+                        final_expr: None,
+                        span: sp.clone(),
+                    },
+                    attributes: vec![],
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+
+        // `{ <let_vec>; <for_stmt>; __icv_N }`
+        let block = Expr {
+            kind: ExprKind::Block(Block {
+                stmts: vec![let_vec, for_stmt],
+                final_expr: Some(Box::new(ident(&vec_name, &sp))),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+
+        Ok(Some(self.compile_expr(&block)?))
     }
 
     /// Materialize a **non-identifier String** method receiver into a synthetic

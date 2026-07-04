@@ -2172,6 +2172,59 @@ fn main() {
         );
     }
 
+    // ── `<iter>.map/filter(...).collect()` adaptor chain → Vec (B-2026-07-03-25) ──
+    //
+    // The desugar builds a fresh Vec and pushes each transformed/surviving
+    // element. Two heap-ownership hazards it must get right, looped 1000× so
+    // Linux LSan catches a per-iter leak and local ASAN a double-free/UAF:
+    //   1. Heap OUTPUT: `.map(|n| n.to_string())` collects a `Vec[String]`; each
+    //      produced String is owned by the Vec and freed exactly once at scope
+    //      exit (payloads ≥36 bytes so LSan's short-String reachability blind
+    //      spot doesn't mask a leak — see the user's LSan memory).
+    //   2. Heap SOURCE, borrowed: `words.iter().map(|w| w.len())` reads each
+    //      `String` element of the source Vec without consuming it — the source
+    //      must remain fully owned and be freed once (a stray move would
+    //      double-free or leak). The source is re-read after the collect to
+    //      prove it survived. A `filter().map()` chain over the same heap source
+    //      exercises the multi-stage path.
+    #[test]
+    fn asan_iter_adaptor_collect_to_vec_heap_no_leak_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 1000 {
+        let src: Vec[i64] = Vec[1i64, 2i64, 3i64, 4i64];
+        // Heap OUTPUT — Vec[String], long payloads.
+        let strs: Vec[String] = src.iter().map(|n| f"iteration-payload-number-{n}-xyzzy").collect();
+        for s in strs { total = total + s.len(); }
+        // Heap SOURCE, borrowed — must survive the collect.
+        let words: Vec[String] = Vec[
+            "alpha-alpha-alpha-alpha-alpha-alpha".to_string(),
+            "beta-beta-beta-beta-beta-beta-beta-beta".to_string(),
+            "gamma-gamma-gamma-gamma-gamma-gamma-gamma".to_string()
+        ];
+        let lens: Vec[i64] = words.iter().map(|w| w.len()).collect();
+        total = total + lens[0] + lens[1] + lens[2];
+        // Multi-stage over the heap source.
+        let longs: Vec[i64] = words.iter().filter(|w| w.len() > 36i64).map(|w| w.len()).collect();
+        total = total + longs.len();
+        // Source still owned/usable after the collects.
+        total = total + words.len();
+        i = i + 1;
+    }
+    println(f"{total}");
+}
+"#,
+            // strs: 4 payloads/iter, each "iteration-payload-number-N-xyzzy" (32).
+            // words lens: 35 + 39 + 41 = 115. longs: 2 (39,41 > 36). words.len()=3.
+            // per iter = 128 + 115 + 2 + 3 = 248; ×1000 = 248000 (matches `karac run`).
+            &["248000"],
+            "iter_adaptor_collect_to_vec_heap",
+        );
+    }
+
     // ── `String.split` on a NON-identifier receiver — temp drop ownership ──
     //
     // `make_csv().split(',')` — a String method on a CALL-RESULT receiver. The
