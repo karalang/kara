@@ -202,6 +202,17 @@ impl[T] Column[T] {
         loop {}
     }
 
+    // Element-wise combine of two same-length columns through `f`, yielding a
+    // fresh Column (`ElementwiseMap`'s binary form). Result validity is the AND
+    // of the two operands' bitmaps (a null on either side → null result). Typed
+    // by the `zip_with` intercept in `src/typechecker/expr_method_call.rs`; the
+    // native path inlines the closure body (POD + inline-literal only). `other`
+    // is `ref` — the operand is READ, not consumed (so it may be reused after).
+    #[compiler_builtin]
+    fn zip_with(ref self, other: ref Column[T], f: Fn(T, T) -> T) -> Column[T] {
+        loop {}
+    }
+
     // **Sample** variance of the valid slots (Bessel `n-1`; the
     // pandas-Series / SQL-`stddev` default). Requires ≥ 2 valid values.
     #[compiler_builtin]

@@ -210,6 +210,16 @@ impl[T, ...S] Tensor[T, S] {
         loop {}
     }
 
+    // Element-wise combine of two SAME-SHAPE tensors (in C order) through `f`,
+    // yielding a fresh tensor (`ElementwiseMap`'s binary form). The shapes must
+    // match exactly (a runtime guard). Typed by the `zip_with` intercept; the
+    // native path inlines the closure body (POD + inline-literal only). `other`
+    // is `ref` — READ, not consumed (so it may be reused after).
+    #[compiler_builtin]
+    fn zip_with(ref self, other: ref Tensor[T, S], f: Fn(T, T) -> T) -> Tensor[T, S] {
+        loop {}
+    }
+
     // Average of every element as `f64` (integer tensors included).
     #[compiler_builtin]
     fn mean(ref self) -> f64 {

@@ -2084,6 +2084,58 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // `ElementwiseMap`'s binary form `zip_with(other: Self, f: Fn(T, T) ->
+        // T) -> Self` on the handle-backed containers (S6c) — element-wise
+        // combine of two same-shape containers through the closure, yielding a
+        // fresh `Self`. `other` must be the SAME container type; the closure is
+        // typed `Fn(T, T) -> T` (both params + result the receiver's element).
+        // Result is `Self`, which baked dispatch can't bind, so it's typed here
+        // like `map`.
+        if method == "zip_with" {
+            // (element `T`, the owned `Self` container type, display name).
+            let zip_receiver = |ty: &Type| -> Option<(Type, Type, &'static str)> {
+                match ty {
+                    Type::Named { name, args } if name == "Column" && args.len() == 1 => {
+                        Some((args[0].clone(), ty.clone(), "Column"))
+                    }
+                    Type::Named { name, args } if name == "Tensor" && !args.is_empty() => {
+                        Some((args[0].clone(), ty.clone(), "Tensor"))
+                    }
+                    _ => None,
+                }
+            };
+            let recv = match &obj_ty {
+                Type::Ref(inner) | Type::MutRef(inner) => zip_receiver(inner),
+                other => zip_receiver(other),
+            };
+            if let Some((elem, self_ty, container)) = recv {
+                if args.len() != 2 {
+                    self.type_error(
+                        format!(
+                            "{container}.zip_with expects 2 arguments (other, closure), got {}",
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Error;
+                }
+                // `other` must be the same container type (`ref Self`).
+                let other_ty = self.infer_expr(&args[0].value);
+                self.check_assignable(&self_ty, &other_ty, args[0].value.span.clone());
+                let f_ty = Type::Function {
+                    params: vec![elem.clone(), elem.clone()],
+                    return_type: Box::new(elem),
+                };
+                self.check_expr(&args[1].value, &f_ty);
+                self.record_expr_type(span, &self_ty);
+                return self_ty;
+            }
+        }
+
         // `ElementwiseOrd`'s ordering reductions `argmin` / `argmax` on the
         // handle-backed containers (S6c) — the index (into the full container,
         // Arrow position) of the FIRST minimum / maximum, or `None` on an

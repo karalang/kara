@@ -2749,8 +2749,9 @@ impl<'ctx> super::Codegen<'ctx> {
         let is_axis = matches!(method, "sum_axis" | "mean_axis");
         let is_fold = method == "fold";
         let is_map = method == "map";
+        let is_zip = method == "zip_with";
         let is_argord = matches!(method, "argmin" | "argmax");
-        if !is_full && !is_axis && !is_fold && !is_map && !is_argord {
+        if !is_full && !is_axis && !is_fold && !is_map && !is_zip && !is_argord {
             return Ok(None);
         }
         let ExprKind::Identifier(name) = &object.kind else {
@@ -2764,6 +2765,8 @@ impl<'ctx> super::Codegen<'ctx> {
             self.compile_tensor_fold(info.elem, info.elem_unsigned, t_ptr, args)?
         } else if is_map {
             self.compile_tensor_map(info.elem, info.elem_unsigned, t_ptr, args)?
+        } else if is_zip {
+            self.compile_tensor_zip_with(info.elem, info.elem_unsigned, t_ptr, args)?
         } else if is_argord {
             self.compile_tensor_argminmax(info.elem, info.elem_unsigned, t_ptr, method == "argmax")?
         } else if is_full {
@@ -3026,6 +3029,84 @@ impl<'ctx> super::Codegen<'ctx> {
         self.emit_elementwise_map(
             &lhs,
             &MapOther::Unary,
+            &MapKernelOp::Closure {
+                params,
+                body: body.as_ref(),
+            },
+            &dest,
+        )?;
+        Ok(res.into())
+    }
+
+    /// `zip_with(other, |a, b| body) -> Tensor` — element-wise combine of two
+    /// same-shape tensors (in C order) through the inline closure. The shapes
+    /// must match exactly (a runtime shape-equality guard, unless the parser
+    /// proved them statically equal — but for a method arg we don't have that
+    /// side-table, so always guard). Mirrors `compile_column_zip_with` minus
+    /// the validity bitmap (a tensor has no null concept). Only the
+    /// inline-literal closure form reaches here.
+    fn compile_tensor_zip_with(
+        &mut self,
+        elem: BasicTypeEnum<'ctx>,
+        unsigned: bool,
+        t_ptr: PointerValue<'ctx>,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if args.len() != 2 {
+            return Err(format!(
+                "Tensor.zip_with expects 2 arguments (other, closure), got {}",
+                args.len()
+            ));
+        }
+        let ExprKind::Closure { params, body, .. } = &args[1].value.kind else {
+            return Err(
+                "Tensor.zip_with expects an inline closure literal under `karac build`; a \
+                 closure-valued local / named fn is not yet supported by the native \
+                 backend (it works under `karac run`)."
+                    .to_string(),
+            );
+        };
+        if params.len() != 2 {
+            return Err(format!(
+                "Tensor.zip_with closure must take exactly 2 parameters (a, b), got {}",
+                params.len()
+            ));
+        }
+
+        // The second operand — another tensor (identifier or expression).
+        let other_ptr = self.compile_expr(&args[0].value)?.into_pointer_value();
+        self.emit_tensor_shape_eq_guard(t_ptr, other_ptr)?;
+
+        let elem_size = self.tensor_elem_size(elem)?;
+        let rank = self.tensor_load_rank(t_ptr);
+        let count = self.tensor_count_runtime(t_ptr, rank);
+        let l_data = self.tensor_data_ptr_dyn(t_ptr, rank, "t.zip.ld");
+        let r_data = self.tensor_data_ptr_dyn(other_ptr, rank, "t.zip.rd");
+        let (res, res_data) = self.tensor_alloc_runtime(rank, count, elem_size);
+        self.tensor_copy_header_dims(t_ptr, res, rank);
+
+        let lhs = ContainerAccess {
+            data: l_data,
+            len: count,
+            elem,
+            unsigned,
+            bitmap: None,
+        };
+        let other = MapOther::Access(ContainerAccess {
+            data: r_data,
+            len: count,
+            elem,
+            unsigned,
+            bitmap: None,
+        });
+        let dest = MapDest {
+            data: res_data,
+            elem,
+            bitmap: None,
+        };
+        self.emit_elementwise_map(
+            &lhs,
+            &other,
             &MapKernelOp::Closure {
                 params,
                 body: body.as_ref(),

@@ -19035,6 +19035,40 @@ fn main() {
     }
 
     #[test]
+    fn asan_column_tensor_zip_with_freed_no_leak() {
+        // S6c-2b: `Column.zip_with` / `Tensor.zip_with` each allocate a FRESH
+        // result container while READING (borrowing) both operands. This
+        // asserts: (1) the fresh result binds to a `let` and frees at scope
+        // exit (like the map / binop results); (2) the `other` operand — a
+        // `ref` arg — is NOT double-freed (it's a borrow, freed once as its own
+        // binding). Looped so any per-iteration leak accumulates for LSan.
+        assert_clean_asan_run(
+            r#"
+fn inner() -> i64 {
+    let a: Column[i64] = Column.from_vec([1, 2, 3, 4]);
+    let b: Column[i64] = Column.from_vec([10, 20, 30, 40]);
+    let c = a.zip_with(b, |x, y| x + y);
+    let t: Tensor[i64, [4]] = Tensor.from([1, 2, 3, 4]);
+    let u: Tensor[i64, [4]] = Tensor.from([2, 2, 2, 2]);
+    let v = t.zip_with(u, |x, y| x * y);
+    c.sum() + v.sum()
+}
+fn main() {
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 {
+        acc = acc + inner();
+        i = i + 1;
+    }
+    println(f"{acc}");
+}
+"#,
+            &["2600"], // (110 + 20) * 20
+            "asan_column_tensor_zip_with_freed_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_column_tensor_argmin_freed_no_leak() {
         // S6c: `Column.argmin`/`argmax` and `Tensor.argmin`/`argmax` return a
         // POD `Option[i64]` (no heap), but the receiver columns / tensors own

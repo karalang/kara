@@ -19292,6 +19292,44 @@ fn main() {
 }
 
 #[test]
+fn column_tensor_zip_with_reduction() {
+    // `zip_with(other, |a, b| ...)` — element-wise combine of two same-shape
+    // containers through the closure. Column propagates nulls (bitmap AND);
+    // Tensor requires an identical shape. Covers a Column add, Column null
+    // propagation, a Tensor multiply, and a 2-D Tensor.
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let a: Column[i64] = Column.from_vec([1, 2, 3, 4]);
+    let b: Column[i64] = Column.from_vec([10, 20, 30, 40]);
+    println(f"{a.zip_with(b, |x, y| x + y).sum()}");
+
+    let mut p: Column[i64] = Column.new();
+    p.push(1);
+    p.push_null();
+    p.push(3);
+    let mut q: Column[i64] = Column.new();
+    q.push(10);
+    q.push(20);
+    q.push_null();
+    let z = p.zip_with(q, |x, y| x + y);
+    println(f"{z.sum()} {z.valid_count()}");
+
+    let t1: Tensor[i64, [4]] = Tensor.from([1, 2, 3, 4]);
+    let t2: Tensor[i64, [4]] = Tensor.from([2, 2, 2, 2]);
+    println(f"{t1.zip_with(t2, |x, y| x * y).sum()}");
+
+    let m1: Tensor[i64, [2, 2]] = Tensor.from([[1, 2], [3, 4]]);
+    let m2: Tensor[i64, [2, 2]] = Tensor.from([[10, 20], [30, 40]]);
+    println(f"{m1.zip_with(m2, |x, y| x + y).sum()}");
+}
+"#,
+    );
+    // 110; null-prop: only slot0 (1+10=11), 1 valid; 2+4+6+8=20; 11+22+33+44=110.
+    assert_eq!(out, "110\n11 1\n20\n110\n");
+}
+
+#[test]
 fn column_tensor_argmin_argmax_reduction() {
     // `argmin()`/`argmax() -> Option[i64]` (ElementwiseOrd, S6c). Column reports
     // the ORIGINAL slot index over the valid slots (nulls skipped in the

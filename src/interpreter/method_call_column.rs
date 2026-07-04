@@ -383,6 +383,83 @@ impl<'a> super::Interpreter<'a> {
                     valid: Arc::new(RwLock::new(bits)),
                 })
             }
+            // `zip_with(other, |a, b| ...)` -> a fresh `Column` combining the
+            // two columns element-wise through the closure. Result validity is
+            // the AND of the two operands' bits (null propagation, like the
+            // element-wise binops); a null slot on either side is a null result
+            // and the closure is not called there. Same length required. Typed
+            // by the `zip_with` intercept (returns `Self`).
+            "zip_with" => {
+                if args.len() != 2 {
+                    return Some(self.record_runtime_error(
+                        format!(
+                            "Column.zip_with expects 2 arguments (other, closure), got {}",
+                            args.len()
+                        ),
+                        span,
+                    ));
+                }
+                let other = self.eval_expr_inner(&args[0].value);
+                if self.pending_cf.is_some() {
+                    return Some(Value::Unit);
+                }
+                let Value::Column {
+                    data: odata,
+                    valid: ovalid,
+                } = other
+                else {
+                    return Some(self.record_runtime_error(
+                        "Column.zip_with expects another Column as its first argument".to_string(),
+                        span,
+                    ));
+                };
+                let f = self.eval_expr_inner(&args[1].value);
+                if !matches!(f, Value::Function { .. }) {
+                    return Some(self.record_runtime_error(
+                        format!(
+                            "Column.zip_with expects a closure as its second argument; got {f}"
+                        ),
+                        span,
+                    ));
+                }
+                // Clone both operands' cells + bits up front (no lock held
+                // across the closure call — it re-enters the interpreter).
+                let lcells: Vec<Value> = data.read().unwrap().clone();
+                let lbits: Vec<bool> = valid.read().unwrap().clone();
+                let rcells: Vec<Value> = odata.read().unwrap().clone();
+                let rbits: Vec<bool> = ovalid.read().unwrap().clone();
+                if lcells.len() != rcells.len() {
+                    return Some(self.record_runtime_error(
+                        format!(
+                            "Column.zip_with length mismatch: {} vs {}",
+                            lcells.len(),
+                            rcells.len()
+                        ),
+                        span,
+                    ));
+                }
+                let mut out = Vec::with_capacity(lcells.len());
+                let mut obits = Vec::with_capacity(lcells.len());
+                for (i, a) in lcells.into_iter().enumerate() {
+                    if lbits[i] && rbits[i] {
+                        let combined =
+                            self.invoke_function_value(f.clone(), vec![a, rcells[i].clone()]);
+                        if self.pending_cf.is_some() {
+                            return Some(Value::Unit);
+                        }
+                        out.push(combined);
+                        obits.push(true);
+                    } else {
+                        // Null on either side → null result (placeholder value).
+                        out.push(Value::Unit);
+                        obits.push(false);
+                    }
+                }
+                Some(Value::Column {
+                    data: Arc::new(RwLock::new(out)),
+                    valid: Arc::new(RwLock::new(obits)),
+                })
+            }
             "corr" => Some(self.eval_column_corr(data, valid, args, span)),
             // `argmin` / `argmax` -> `Option[i64]` (ElementwiseOrd, S6c): the
             // ORIGINAL slot index (Arrow position) of the first minimum /

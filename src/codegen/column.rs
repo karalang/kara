@@ -1227,6 +1227,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 | "range"
                 | "fold"
                 | "map"
+                | "zip_with"
                 | "var"
                 | "std"
                 | "corr"
@@ -1375,6 +1376,12 @@ impl<'ctx> super::Codegen<'ctx> {
             // `map(|x| ...) -> Column[T]` — element-wise map over valid slots,
             // producing a fresh column (see `compile_column_map`).
             "map" => Ok(Some(self.compile_column_map(
+                control,
+                info.elem,
+                info.elem_unsigned,
+                args,
+            )?)),
+            "zip_with" => Ok(Some(self.compile_column_zip_with(
                 control,
                 info.elem,
                 info.elem_unsigned,
@@ -2630,6 +2637,119 @@ impl<'ctx> super::Codegen<'ctx> {
             },
             &dest,
         )?;
+        Ok(dst.into())
+    }
+
+    /// `zip_with(other, |a, b| body) -> Column` — element-wise combine of two
+    /// same-length columns through the inline closure. Result validity is the
+    /// AND of the two operands' bitmaps (null propagation, like the element-wise
+    /// binops); a null on either side yields a null result and the closure is
+    /// not called there. The closure body is INLINED (same strategy as `map` /
+    /// `fold`); only the inline-literal form reaches here.
+    fn compile_column_zip_with(
+        &mut self,
+        control: PointerValue<'ctx>,
+        elem: BasicTypeEnum<'ctx>,
+        unsigned: bool,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if args.len() != 2 {
+            return Err(format!(
+                "Column.zip_with expects 2 arguments (other, closure), got {}",
+                args.len()
+            ));
+        }
+        let ExprKind::Closure { params, body, .. } = &args[1].value.kind else {
+            return Err(
+                "Column.zip_with expects an inline closure literal under `karac build`; a \
+                 closure-valued local / named fn is not yet supported by the native \
+                 backend (it works under `karac run`)."
+                    .to_string(),
+            );
+        };
+        if params.len() != 2 {
+            return Err(format!(
+                "Column.zip_with closure must take exactly 2 parameters (a, b), got {}",
+                params.len()
+            ));
+        }
+        if self.column_elem_is_string(elem) {
+            return Err(
+                "Column[String].zip_with is not yet supported by the native \
+                        backend (`karac build`); it works under `karac run`."
+                    .to_string(),
+            );
+        }
+
+        // The second operand — another column (identifier or fresh temp).
+        let (other_ctrl, other_elem, _other_unsigned) = self.column_operand(&args[0].value)?;
+
+        let len = self
+            .column_load_field(control, 2, "col.zip.llen")
+            .into_int_value();
+        let rlen = self
+            .column_load_field(other_ctrl, 2, "col.zip.rlen")
+            .into_int_value();
+        let eq = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, len, rlen, "col.zip.leneq")
+            .unwrap();
+        self.emit_column_guard(eq, "Column.zip_with length mismatch")?;
+
+        let ldata = self
+            .column_load_field(control, 0, "col.zip.ldata")
+            .into_pointer_value();
+        let lbm = self
+            .column_load_field(control, 1, "col.zip.lbm")
+            .into_pointer_value();
+        let rdata = self
+            .column_load_field(other_ctrl, 0, "col.zip.rdata")
+            .into_pointer_value();
+        let rbm = self
+            .column_load_field(other_ctrl, 1, "col.zip.rbm")
+            .into_pointer_value();
+
+        let dst = self.column_alloc(elem, len, len)?;
+        let dst_data = self
+            .column_load_field(dst, 0, "col.zip.ddata")
+            .into_pointer_value();
+        let dst_bm = self
+            .column_load_field(dst, 1, "col.zip.dbm")
+            .into_pointer_value();
+
+        // Gated map: result bit = lv AND rv, per-element via the inlined closure
+        // in the valid branch only.
+        let lhs = ContainerAccess {
+            data: ldata,
+            len,
+            elem,
+            unsigned,
+            bitmap: Some(lbm),
+        };
+        let other = MapOther::Access(ContainerAccess {
+            data: rdata,
+            len,
+            elem: other_elem,
+            unsigned,
+            bitmap: Some(rbm),
+        });
+        let dest = MapDest {
+            data: dst_data,
+            elem,
+            bitmap: Some(dst_bm),
+        };
+        self.emit_elementwise_map(
+            &lhs,
+            &other,
+            &MapKernelOp::Closure {
+                params,
+                body: body.as_ref(),
+            },
+            &dest,
+        )?;
+        // Free the other operand if it was a fresh temporary (an identifier is a
+        // live owner — left alone).
+        self.column_free_if_fresh_temp(&args[0].value, other_ctrl);
         Ok(dst.into())
     }
 

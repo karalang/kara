@@ -27496,6 +27496,49 @@ fn test_tensor_fold_wrong_arity_rejected() {
 }
 
 #[test]
+fn test_column_zip_with_returns_self_and_checks_other() {
+    // `Column.zip_with(other, f) -> Self` (a Column[T]). The result is a
+    // Column, so `.sum()` on it types; the `other` arg must be the same
+    // container type.
+    typecheck_ok(
+        "fn main() {\n\
+             let a: Column[i64] = Column.from_vec([1i64, 2i64]);\n\
+             let b: Column[i64] = Column.from_vec([3i64, 4i64]);\n\
+             let v: Vec[i64] = [10i64, 20i64];\n\
+             let _ = v[a.zip_with(b, |x, y| x + y).sum()];\n\
+         }",
+    );
+    // `other` of a wrong type (not a Column[i64]) is rejected.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let a: Column[i64] = Column.from_vec([1i64, 2i64]);\n\
+             let _ = a.zip_with(7i64, |x, y| x + y);\n\
+         }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "expected a type error for a non-Column `other`"
+    );
+}
+
+#[test]
+fn test_tensor_zip_with_wrong_arity_rejected() {
+    // `zip_with` requires exactly two arguments (other, closure).
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let t: Tensor[i64, [3]] = Tensor.from([1i64, 2i64, 3i64]);\n\
+             let _ = t.zip_with(t);\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("Tensor.zip_with expects 2 arguments")),
+        "{errors:?}",
+    );
+}
+
+#[test]
 fn test_column_mean_on_non_numeric_rejected() {
     let errors = typecheck_errors(
         "fn main() {\n\

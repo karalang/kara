@@ -47240,6 +47240,116 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_column_zip_with() {
+        // `Column.zip_with(other, |a, b| ...)` — element-wise combine of two
+        // same-length columns through the inline closure, yielding a fresh
+        // Column. Result validity = AND of the two bitmaps (null propagation);
+        // the closure runs only where both are valid. The binary form of
+        // `MapKernelOp::Closure` (`MapOther::Access`). `run` == `build` ==
+        // default auto-par.
+        let src = r#"
+fn main() {
+    let a: Column[i64] = Column.from_vec([1, 2, 3, 4]);
+    let b: Column[i64] = Column.from_vec([10, 20, 30, 40]);
+    let s = a.zip_with(b, |x, y| x + y);
+    println(f"{s.sum()}");
+    let c: Column[i64] = Column.from_vec([5, 1, 8]);
+    let d: Column[i64] = Column.from_vec([2, 9, 3]);
+    let m = c.zip_with(d, |x, y| if x > y { x } else { y });
+    println(f"{m.sum()}");
+    let f1: Column[f64] = Column.from_vec([1.5, 2.5]);
+    let f2: Column[f64] = Column.from_vec([0.5, 0.5]);
+    let fz = f1.zip_with(f2, |x, y| x + y);
+    println(f"{fz.sum()}");
+    let k: i64 = 100;
+    let cz = a.zip_with(b, |x, y| x + y + k);
+    println(f"{cz.sum()}");
+}
+"#;
+        // 110; max=5+9+8=22; 2.0+3.0=5; 110+400=510.
+        let out = run_program(src).expect("program should compile and run");
+        assert_eq!(out, "110\n22\n5\n510\n");
+    }
+
+    #[test]
+    fn test_e2e_column_zip_with_propagates_nulls() {
+        // A null on EITHER side yields a null result (bitmap AND); the closure
+        // is not called there.
+        let src = r#"
+fn main() {
+    let mut a: Column[i64] = Column.new();
+    a.push(1);
+    a.push_null();
+    a.push(3);
+    let mut b: Column[i64] = Column.new();
+    b.push(10);
+    b.push(20);
+    b.push_null();
+    let z = a.zip_with(b, |x, y| x + y);
+    println(f"{z.sum()}");
+    println(f"{z.valid_count()}");
+}
+"#;
+        // Only slot 0 valid: 1+10 = 11; one valid slot.
+        let out = run_program(src).expect("program should compile and run");
+        assert_eq!(out, "11\n1\n");
+    }
+
+    #[test]
+    fn test_e2e_tensor_zip_with() {
+        // `Tensor.zip_with` — element-wise combine of two same-shape tensors
+        // (in C order); a runtime shape-equality guard. No bitmap (a tensor has
+        // no null concept). Covers 1-D, 2-D, and an f64 pair.
+        let src = r#"
+fn main() {
+    let t1: Tensor[i64, [4]] = Tensor.from([1, 2, 3, 4]);
+    let t2: Tensor[i64, [4]] = Tensor.from([2, 2, 2, 2]);
+    let z1 = t1.zip_with(t2, |x, y| x * y);
+    println(f"{z1.sum()}");
+    let m1: Tensor[i64, [2, 2]] = Tensor.from([[1, 2], [3, 4]]);
+    let m2: Tensor[i64, [2, 2]] = Tensor.from([[10, 20], [30, 40]]);
+    let z2 = m1.zip_with(m2, |x, y| x + y);
+    println(f"{z2.sum()}");
+    let f1: Tensor[f64, [3]] = Tensor.from([1.0, 2.0, 3.0]);
+    let f2: Tensor[f64, [3]] = Tensor.from([0.5, 0.5, 0.5]);
+    let z3 = f1.zip_with(f2, |x, y| x + y);
+    println(f"{z3.sum()}");
+}
+"#;
+        // 2+4+6+8=20; 11+22+33+44=110; 1.5+2.5+3.5=7.5.
+        let out = run_program(src).expect("program should compile and run");
+        assert_eq!(out, "20\n110\n7.5\n");
+    }
+
+    #[test]
+    fn test_e2e_zip_with_rejects_noninline() {
+        // Same inline-literal boundary as `map` / the folds, on both containers.
+        let col = r#"
+fn main() {
+    let a: Column[i64] = Column.from_vec([1, 2, 3]);
+    let b: Column[i64] = Column.from_vec([4, 5, 6]);
+    let g = |x: i64, y: i64| x + y;
+    let z = a.zip_with(b, g);
+    println(f"{z.sum()}");
+}
+"#;
+        let err = ir_result(col).expect_err("a non-inline closure must be rejected");
+        assert!(err.contains("inline closure literal"), "got: {err}");
+
+        let ten = r#"
+fn main() {
+    let a: Tensor[i64, [3]] = Tensor.from([1, 2, 3]);
+    let b: Tensor[i64, [3]] = Tensor.from([4, 5, 6]);
+    let g = |x: i64, y: i64| x + y;
+    let z = a.zip_with(b, g);
+    println(f"{z.sum()}");
+}
+"#;
+        let err = ir_result(ten).expect_err("a non-inline closure must be rejected");
+        assert!(err.contains("inline closure literal"), "got: {err}");
+    }
+
+    #[test]
     fn test_e2e_column_argmin_argmax() {
         // `Column.argmin()`/`argmax() -> Option[i64]` (ElementwiseOrd, S6c): the
         // ORIGINAL slot index of the first min/max over the valid slots; null

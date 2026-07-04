@@ -764,8 +764,65 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 result
             }
-            (MapKernelOp::Closure { .. }, _) => {
-                return Err("elementwise map: a closure map is unary".to_string())
+            (MapKernelOp::Closure { params, body }, MapOther::Access(acc)) => {
+                // The BINARY closure form (`zip_with(other, |a, b| ...)`): bind
+                // param 0 to this container's element and param 1 to the other
+                // container's element at the same index, then inline the body
+                // (captures resolve through the enclosing scope). Save/restore
+                // both shadowed outer bindings — same inline-body strategy as
+                // the unary `map` above.
+                let b = self.access_load(acc, iv);
+                let p0 = match &params[0].pattern.kind {
+                    PatternKind::Binding(n) => n.clone(),
+                    _ => "_zip_p0".to_string(),
+                };
+                let p1 = match &params[1].pattern.kind {
+                    PatternKind::Binding(n) => n.clone(),
+                    _ => "_zip_p1".to_string(),
+                };
+                let saved0 = self.variables.get(&p0).copied();
+                let saved1 = self.variables.get(&p1).copied();
+                let slot0 = self.create_entry_alloca(fn_val, &p0, lhs.elem);
+                self.builder.build_store(slot0, a).unwrap();
+                self.variables.insert(
+                    p0.clone(),
+                    VarSlot {
+                        ptr: slot0,
+                        ty: lhs.elem,
+                    },
+                );
+                let slot1 = self.create_entry_alloca(fn_val, &p1, acc.elem);
+                self.builder.build_store(slot1, b).unwrap();
+                self.variables.insert(
+                    p1.clone(),
+                    VarSlot {
+                        ptr: slot1,
+                        ty: acc.elem,
+                    },
+                );
+                let result = self.compile_expr(body)?;
+                match saved1 {
+                    Some(s) => {
+                        self.variables.insert(p1.clone(), s);
+                    }
+                    None => {
+                        self.variables.remove(&p1);
+                    }
+                }
+                match saved0 {
+                    Some(s) => {
+                        self.variables.insert(p0.clone(), s);
+                    }
+                    None => {
+                        self.variables.remove(&p0);
+                    }
+                }
+                result
+            }
+            (MapKernelOp::Closure { .. }, MapOther::Scalar { .. }) => {
+                return Err(
+                    "elementwise map: a closure map takes no broadcast scalar operand".to_string(),
+                )
             }
         };
         let r = self.coerce_scalar_to_type(r, dest.elem);

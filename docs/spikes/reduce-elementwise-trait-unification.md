@@ -482,9 +482,34 @@ B-2026-07-02-10..13, see the ledger.
     `tensor_map_reduction`; typechecker `test_column_map_result_type_is_self` /
     `test_tensor_map_result_type_is_self` (+ wrong-arity). **Residuals
     (follow-ons):** element-type-changing `map` (`Fn(T)->U`, needs the
-    associated-type constructor — §3.3 item 5); `zip_with`; the non-inline /
+    associated-type constructor — §3.3 item 5); the non-inline /
     heap-element native paths; and `map` on the `ElementwiseMap` *trait*
     (bound-generic dispatch).
+  - **S6c-2b (`Column.zip_with` / `Tensor.zip_with`)** ✅ **(landed
+    2026-07-03)** — `ElementwiseMap`'s BINARY form `zip_with(other: ref Self,
+    f: Fn(T, T) -> T) -> Self`: element-wise combine of two same-shape
+    containers through the closure. Extends the just-landed map kernel with a
+    `(MapKernelOp::Closure, MapOther::Access)` arm binding TWO closure params
+    (this element + the other container's element at the same index) — reusing
+    the gated-map loop, so Column ANDs the two validity bitmaps (a null on
+    either side → null result, closure not called there) and Tensor runs a
+    runtime shape-equality guard (no bitmap). Codegen `compile_column_zip_with`
+    (`column_operand` for the other operand + `column_alloc`) /
+    `compile_tensor_zip_with` (`compile_expr` + `emit_tensor_shape_eq_guard` +
+    `tensor_alloc_runtime`); same POD + inline-literal first cut (non-inline
+    closure / heap element rejected loudly). Declared in the inherent
+    Column/Tensor impls with `other: ref Self` — the `ref` makes the ownership
+    checker treat the operand as a BORROW (READ, not consumed), so an operand
+    may be reused after `zip_with` (without the decl the arg defaulted to a
+    consume → spurious use-after-move; `map`'s single-`self` shape never hit
+    it). Typechecker `zip_with` intercept checks `other` assignable to `Self`
+    and the closure `Fn(T,T)->T`; returns `Self`. A/B verified run ==
+    KARAC_AUTO_PAR=0 == build. Tests: codegen e2e
+    `test_e2e_{column,tensor}_zip_with`{`,_propagates_nulls`,`_rejects_noninline`};
+    interpreter `column_tensor_zip_with_reduction`; typechecker
+    `test_column_zip_with_returns_self_and_checks_other` +
+    `test_tensor_zip_with_wrong_arity_rejected`. **Residuals:** the non-inline /
+    heap-element native paths; `zip_with` on the *trait* (bound-generic).
 - **S6c-3** ✅ **(landed)** — `ElementwiseOrd` builtin method surfaces
   `argmin()` / `argmax()` on `Column[T]` and `Tensor[T, ...S]` → `Option[i64]`
   (regardless of `T`): the index of the **first** minimum / maximum, `None` on

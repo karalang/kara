@@ -423,6 +423,71 @@ impl<'a> super::Interpreter<'a> {
                     data: Arc::new(RwLock::new(out)),
                 })
             }
+            // `zip_with(other, |a, b| ...)` -> a fresh tensor of the same shape,
+            // combining the two tensors element-wise (in C order) through the
+            // closure. The shapes must match exactly (element-wise, NOT
+            // broadcasting). Mirrors `Column.zip_with`. Typed by the `zip_with`
+            // intercept (returns `Self`).
+            "zip_with" => {
+                if args.len() != 2 {
+                    return Some(self.record_runtime_error(
+                        format!(
+                            "Tensor.zip_with expects 2 arguments (other, closure), got {}",
+                            args.len()
+                        ),
+                        span,
+                    ));
+                }
+                let other = self.eval_expr_inner(&args[0].value);
+                if self.pending_cf.is_some() {
+                    return Some(Value::Unit);
+                }
+                let Value::Tensor {
+                    dims: odims,
+                    data: odata,
+                } = other
+                else {
+                    return Some(self.record_runtime_error(
+                        "Tensor.zip_with expects another Tensor as its first argument".to_string(),
+                        span,
+                    ));
+                };
+                if *dims.as_ref() != *odims.as_ref() {
+                    return Some(self.record_runtime_error(
+                        format!(
+                            "Tensor.zip_with shape mismatch: {:?} vs {:?}",
+                            dims.as_ref(),
+                            odims.as_ref()
+                        ),
+                        span,
+                    ));
+                }
+                let f = self.eval_expr_inner(&args[1].value);
+                if !matches!(f, Value::Function { .. }) {
+                    return Some(self.record_runtime_error(
+                        format!(
+                            "Tensor.zip_with expects a closure as its second argument; got {f}"
+                        ),
+                        span,
+                    ));
+                }
+                // Clone + release both read guards before invoking the closure.
+                let lelems = data.read().unwrap().clone();
+                let relems = odata.read().unwrap().clone();
+                let mut out = Vec::with_capacity(lelems.len());
+                for (i, a) in lelems.into_iter().enumerate() {
+                    let combined =
+                        self.invoke_function_value(f.clone(), vec![a, relems[i].clone()]);
+                    if self.pending_cf.is_some() {
+                        return Some(Value::Unit);
+                    }
+                    out.push(combined);
+                }
+                Some(Value::Tensor {
+                    dims: dims.clone(),
+                    data: Arc::new(RwLock::new(out)),
+                })
+            }
             // `argmin` / `argmax` -> `Option[i64]` (ElementwiseOrd, S6c): the
             // flat C-order index of the first minimum / maximum over ALL
             // elements (a tensor has no null concept). Empty tensor -> `None`
