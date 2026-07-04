@@ -2748,7 +2748,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let is_full = matches!(method, "sum" | "mean" | "prod" | "min" | "max" | "range");
         let is_axis = matches!(method, "sum_axis" | "mean_axis");
         let is_fold = method == "fold";
-        if !is_full && !is_axis && !is_fold {
+        let is_map = method == "map";
+        if !is_full && !is_axis && !is_fold && !is_map {
             return Ok(None);
         }
         let ExprKind::Identifier(name) = &object.kind else {
@@ -2760,6 +2761,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let t_ptr = self.tensor_ptr_for_var(name)?;
         let result = if is_fold {
             self.compile_tensor_fold(info.elem, info.elem_unsigned, t_ptr, args)?
+        } else if is_map {
+            self.compile_tensor_map(info.elem, info.elem_unsigned, t_ptr, args)?
         } else if is_full {
             self.compile_tensor_full_reduce(method, info.elem, info.elem_unsigned, t_ptr)?
         } else {
@@ -2960,6 +2963,73 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_load(acc_ty, acc_slot, "t.fold.result")
             .unwrap())
+    }
+
+    /// `map(|x| ...) -> Tensor[T, ...S]` — element-wise map producing a fresh
+    /// tensor of the same shape (S6c-2). Parity with `Column.map` minus the
+    /// validity gate: a tensor has no null concept, so EVERY C-order element is
+    /// mapped. Allocates a value-semantics result, copies the source header
+    /// dims, and inlines the closure body per element via the shared
+    /// `emit_elementwise_map` (dense). Same first-cut boundaries — inline
+    /// closure literal only; tensor elements are always numeric (no `String`
+    /// element to guard).
+    fn compile_tensor_map(
+        &mut self,
+        elem: BasicTypeEnum<'ctx>,
+        unsigned: bool,
+        t_ptr: PointerValue<'ctx>,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if args.len() != 1 {
+            return Err(format!(
+                "Tensor.map expects 1 argument (closure), got {}",
+                args.len()
+            ));
+        }
+        let ExprKind::Closure { params, body, .. } = &args[0].value.kind else {
+            return Err(
+                "Tensor.map expects an inline closure literal under `karac build`; a \
+                 closure-valued local / named fn is not yet supported by the native \
+                 backend (it works under `karac run`)."
+                    .to_string(),
+            );
+        };
+        if params.len() != 1 {
+            return Err(format!(
+                "Tensor.map closure must take exactly 1 parameter (elem), got {}",
+                params.len()
+            ));
+        }
+
+        let elem_size = self.tensor_elem_size(elem)?;
+        let rank = self.tensor_load_rank(t_ptr);
+        let count = self.tensor_count_runtime(t_ptr, rank);
+        let src_data = self.tensor_data_ptr_dyn(t_ptr, rank, "t.map.sd");
+        let (res, res_data) = self.tensor_alloc_runtime(rank, count, elem_size);
+        self.tensor_copy_header_dims(t_ptr, res, rank);
+
+        let lhs = ContainerAccess {
+            data: src_data,
+            len: count,
+            elem,
+            unsigned,
+            bitmap: None,
+        };
+        let dest = MapDest {
+            data: res_data,
+            elem,
+            bitmap: None,
+        };
+        self.emit_elementwise_map(
+            &lhs,
+            &MapOther::Unary,
+            &MapKernelOp::Closure {
+                params,
+                body: body.as_ref(),
+            },
+            &dest,
+        )?;
+        Ok(res.into())
     }
 
     /// Full reduce → scalar. `sum`/`prod` fold via `compile_binop_typed`

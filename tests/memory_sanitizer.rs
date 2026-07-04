@@ -18941,4 +18941,36 @@ fn main() {
             "generic_slice_elem_string_return_no_leak",
         );
     }
+
+    #[test]
+    fn asan_column_tensor_map_freed_no_leak() {
+        // S6c-2: `Column.map` / `Tensor.map` each allocate a FRESH result
+        // container (control + data buffer, plus a validity bitmap for the
+        // column). The result binds to a `let` and must be freed at scope exit
+        // via the same `track_column_var` / tensor cleanup the binop results
+        // use — this asserts no leak / double-free of the map-allocated
+        // buffers. Looped so a per-iteration leak accumulates for LSan.
+        assert_clean_asan_run(
+            r#"
+fn inner() -> i64 {
+    let c: Column[i64] = Column.from_vec([1, 2, 3, 4]);
+    let d = c.map(|x| x * 2);
+    let t: Tensor[i64, [4]] = Tensor.from([1, 2, 3, 4]);
+    let e = t.map(|x| x + 1);
+    d.sum() + e.sum()
+}
+fn main() {
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 {
+        acc = acc + inner();
+        i = i + 1;
+    }
+    println(f"{acc}");
+}
+"#,
+            &["680"], // (20 + 14) * 20
+            "asan_column_tensor_map_freed_no_leak",
+        );
+    }
 }

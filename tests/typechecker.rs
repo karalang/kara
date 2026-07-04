@@ -27345,6 +27345,36 @@ fn test_column_fold_wrong_arity_rejected() {
 }
 
 #[test]
+fn test_column_map_result_type_is_self() {
+    // `Column[T].map(|x| ...)` returns `Column[T]` (same element type), so the
+    // result supports the column reduction surface (`.sum()`).
+    typecheck_ok(
+        "fn main() {\n\
+             let c: Column[i64] = Column.from_vec([1i64, 2i64]);\n\
+             let d = c.map(|x| x * 2i64);\n\
+             let _ = d.sum();\n\
+         }",
+    );
+}
+
+#[test]
+fn test_column_map_wrong_arity_rejected() {
+    // `map` requires exactly one argument (the closure).
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let c: Column[i64] = Column.from_vec([1i64, 2i64]);\n\
+             let _ = c.map(|x| x, 5i64);\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("Column.map expects 1 argument")),
+        "{errors:?}",
+    );
+}
+
+#[test]
 fn test_tensor_fold_result_type_is_accumulator() {
     // `Tensor.fold[A](init, f)` returns `A` (inferred from `init`), the same
     // intercept that types `Column.fold`. An i64 accumulator is usable as an
@@ -27367,6 +27397,32 @@ fn test_tensor_fold_result_type_is_accumulator() {
         errors
             .iter()
             .any(|e| e.message.contains("index must be an integer")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_tensor_map_result_type_is_self() {
+    // `Tensor[T, ...S].map(|x| ...)` returns the same tensor type, so the
+    // result supports the tensor reduction surface (`.sum()`), and the wrong
+    // arity is rejected naming the container.
+    typecheck_ok(
+        "fn main() {\n\
+             let t: Tensor[i64, [3]] = Tensor.from([1i64, 2i64, 3i64]);\n\
+             let d = t.map(|x| x * 2i64);\n\
+             let _ = d.sum();\n\
+         }",
+    );
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let t: Tensor[i64, [3]] = Tensor.from([1i64, 2i64, 3i64]);\n\
+             let _ = t.map(|x| x, 5i64);\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("Tensor.map expects 1 argument")),
         "{errors:?}",
     );
 }

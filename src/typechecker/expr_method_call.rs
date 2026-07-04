@@ -2036,6 +2036,54 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // `Column[T]` / `Tensor[T, ...S]` `.map(|x| ...) -> Self` — the
+        // element-wise map surface (S6c-2, the `ElementwiseMap` trait's `map`).
+        // Same element type first cut (`Fn(T) -> T`), so the result is the
+        // receiver's own container type. Typed here (like `fold`) because the
+        // closure's parameter `T` is the receiver's element, which baked
+        // generic dispatch can't thread into the closure signature.
+        if method == "map" {
+            // (element `T`, the owned `Self` container type, display name).
+            let map_receiver = |ty: &Type| -> Option<(Type, Type, &'static str)> {
+                match ty {
+                    Type::Named { name, args } if name == "Column" && args.len() == 1 => {
+                        Some((args[0].clone(), ty.clone(), "Column"))
+                    }
+                    Type::Named { name, args } if name == "Tensor" && !args.is_empty() => {
+                        Some((args[0].clone(), ty.clone(), "Tensor"))
+                    }
+                    _ => None,
+                }
+            };
+            let recv = match &obj_ty {
+                Type::Ref(inner) | Type::MutRef(inner) => map_receiver(inner),
+                other => map_receiver(other),
+            };
+            if let Some((elem, self_ty, container)) = recv {
+                if args.len() != 1 {
+                    self.type_error(
+                        format!(
+                            "{container}.map expects 1 argument (closure), got {}",
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Error;
+                }
+                let f_ty = Type::Function {
+                    params: vec![elem.clone()],
+                    return_type: Box::new(elem),
+                };
+                self.check_expr(&args[0].value, &f_ty);
+                self.record_expr_type(span, &self_ty);
+                return self_ty;
+            }
+        }
+
         // Column[T] statistical reductions (phase-11 stats). All operate on
         // the valid (non-null) slots — SQL/pandas aggregate semantics.
         // `sum`/`min`/`max` -> T; `mean`/`var`/`std`/`median`/`quantile` ->

@@ -47065,6 +47065,81 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_column_map() {
+        // `Column.map(|x| ...) -> Column[T]` — element-wise map producing a
+        // fresh column. Covers i64 doubling, an f64 body, a captured outer
+        // variable, and param shadowing. `run` == `build` == default auto-par.
+        let src = r#"
+fn main() {
+    let c: Column[i64] = Column.from_vec([1, 2, 3, 4]);
+    let d = c.map(|x| x * 2);
+    println(f"{d.sum()}");
+    let cf: Column[f64] = Column.from_vec([1.5, 2.5, 4.0]);
+    let df = cf.map(|x| x + 0.5);
+    println(f"{df.sum()}");
+    let k: i64 = 100;
+    let e = c.map(|x| x + k);
+    println(f"{e.sum()}");
+    let x: i64 = 7;
+    let g = c.map(|x| x * x);
+    println(f"{g.sum()} {x}");
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        // sum([2,4,6,8])=20; sum([2.0,3.0,4.5])=9.5; sum([101,102,103,104])=410;
+        // sum([1,4,9,16])=30, outer x untouched = 7.
+        assert_eq!(out, "20\n9.5\n410\n30 7\n");
+    }
+
+    #[test]
+    fn test_e2e_column_map_preserves_nulls() {
+        // The result column carries the source validity bitmap: null slots pass
+        // through (not computed), the mapped values fill the valid slots.
+        let src = r#"
+fn main() {
+    let mut c: Column[i64] = Column.new();
+    c.push(10);
+    c.push_null();
+    c.push(20);
+    let d = c.map(|x| x * 2);
+    println(f"{d.sum()}");
+    println(f"{d.valid_count()}");
+    println(f"{d.len()}");
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        // 20+40 = 60 over the two valid slots; 2 valid; length 3 preserved.
+        assert_eq!(out, "60\n2\n3\n");
+    }
+
+    #[test]
+    fn test_e2e_column_map_rejects_noninline_and_string() {
+        // Same first-cut boundaries as `Column.fold` (each works under `karac
+        // run`): a closure-valued local and a heap-element column.
+        let non_inline = r#"
+fn main() {
+    let c: Column[i64] = Column.from_vec([1, 2, 3]);
+    let g = |x: i64| x * 2;
+    let d = c.map(g);
+    println(f"{d.sum()}");
+}
+"#;
+        let err = ir_result(non_inline).expect_err("a non-inline closure must be rejected");
+        assert!(err.contains("inline closure literal"), "got: {err}");
+
+        let string_elem = r#"
+fn main() {
+    let v: Vec[String] = ["a", "b"];
+    let c: Column[String] = Column.from_vec(v);
+    let d = c.map(|x| x);
+    println(f"{d.len()}");
+}
+"#;
+        let err = ir_result(string_elem).expect_err("a String-element map must be rejected");
+        assert!(err.contains("Column[String].map"), "got: {err}");
+    }
+
+    #[test]
     fn test_e2e_tensor_fold() {
         // `Tensor.fold[A](init, |acc, x| ...)` — the general left-fold, parity
         // with `Column.fold`. A tensor has no null concept, so EVERY element
@@ -47119,6 +47194,49 @@ fn main() {
 "#;
         let err = ir_result(heap_acc).expect_err("a heap accumulator must be rejected");
         assert!(err.contains("heap / aggregate accumulator"), "got: {err}");
+    }
+
+    #[test]
+    fn test_e2e_tensor_map() {
+        // `Tensor.map(|x| ...) -> Tensor[T, ...S]` — element-wise map producing
+        // a fresh tensor of the same shape (every C-order element, no null
+        // gate). Covers a 1-D map, a 2-D fold-over-all-cells result, and a
+        // captured outer variable. `run` == `build` == default auto-par.
+        let src = r#"
+fn main() {
+    let t: Tensor[i64, [4]] = Tensor.from([1, 2, 3, 4]);
+    let d = t.map(|x| x * 2);
+    println(f"{d.sum()}");
+    let m: Tensor[i64, [2, 3]] = Tensor.from([[1, 2, 3], [4, 5, 6]]);
+    let e = m.map(|x| x + 10);
+    println(f"{e.sum()}");
+    let tf: Tensor[f64, [3]] = Tensor.from([1.5, 2.5, 4.0]);
+    let df = tf.map(|x| x + 0.5);
+    println(f"{df.sum()}");
+    let k: i64 = 100;
+    let g = t.map(|x| x + k);
+    println(f"{g.sum()}");
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        // sum([2,4,6,8])=20; sum([11..16])=81; sum([2.0,3.0,4.5])=9.5;
+        // sum([101,102,103,104])=410.
+        assert_eq!(out, "20\n81\n9.5\n410\n");
+    }
+
+    #[test]
+    fn test_e2e_tensor_map_rejects_noninline() {
+        // Same inline-literal boundary as `Column.map` / the folds.
+        let non_inline = r#"
+fn main() {
+    let t: Tensor[i64, [3]] = Tensor.from([1, 2, 3]);
+    let g = |x: i64| x * 2;
+    let d = t.map(g);
+    println(f"{d.sum()}");
+}
+"#;
+        let err = ir_result(non_inline).expect_err("a non-inline closure must be rejected");
+        assert!(err.contains("inline closure literal"), "got: {err}");
     }
 
     #[test]

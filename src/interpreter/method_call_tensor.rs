@@ -385,6 +385,42 @@ impl<'a> super::Interpreter<'a> {
                 }
                 Some(acc)
             }
+            // Element-wise map over ALL elements (no null concept), producing a
+            // fresh tensor of the same shape. Mirrors `Column.map`. Typed by the
+            // `map` intercept (returns `Self`).
+            "map" => {
+                if args.len() != 1 {
+                    return Some(self.record_runtime_error(
+                        format!(
+                            "Tensor.map expects 1 argument (closure), got {}",
+                            args.len()
+                        ),
+                        span,
+                    ));
+                }
+                let f = self.eval_expr_inner(&args[0].value);
+                if !matches!(f, Value::Function { .. }) {
+                    return Some(self.record_runtime_error(
+                        format!("Tensor.map expects a closure as its argument; got {f}"),
+                        span,
+                    ));
+                }
+                // Clone + release the read guard before invoking the closure
+                // (it re-enters the interpreter — the guard is non-reentrant).
+                let elems = data.read().unwrap().clone();
+                let mut out = Vec::with_capacity(elems.len());
+                for x in elems {
+                    let mapped = self.invoke_function_value(f.clone(), vec![x]);
+                    if self.pending_cf.is_some() {
+                        return Some(Value::Unit);
+                    }
+                    out.push(mapped);
+                }
+                Some(Value::Tensor {
+                    dims: dims.clone(),
+                    data: Arc::new(RwLock::new(out)),
+                })
+            }
             "sum_axis" | "mean_axis" => {
                 Some(self.eval_tensor_axis_reduce(method, dims, data, args, span))
             }

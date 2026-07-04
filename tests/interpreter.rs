@@ -19209,6 +19209,36 @@ fn main() {
 }
 
 #[test]
+fn column_map_reduction() {
+    // `Column.map(|x| ...) -> Column[T]` — element-wise map producing a fresh
+    // column; null slots pass through (the parallel validity bitmap keeps them
+    // null). Covers a plain map, a captured outer variable, and null
+    // preservation (valid_count / len unchanged, sum over valid slots).
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let c: Column[i64] = Column.from_vec([1, 2, 3, 4]);
+    let d = c.map(|x| x * 2);
+    println(f"{d.sum()}");
+
+    let k: i64 = 100;
+    let e = c.map(|x| x + k);
+    println(f"{e.sum()}");
+
+    let mut n: Column[i64] = Column.new();
+    n.push(10);
+    n.push_null();
+    n.push(20);
+    let m = n.map(|x| x * 3);
+    println(f"{m.sum()} {m.valid_count()} {m.len()}");
+}
+"#,
+    );
+    // sum([2,4,6,8])=20; sum([101,102,103,104])=410; nulls: 30+60=90, 2 valid, len 3.
+    assert_eq!(out, "20\n410\n90 2 3\n");
+}
+
+#[test]
 fn tensor_fold_reduction() {
     // `Tensor.fold[A](init, |acc, x| ...)` — the general left-fold, parity with
     // `Column.fold`. Every element folds (a tensor has no null concept; a 2-D
@@ -19233,6 +19263,32 @@ fn main() {
 "#,
     );
     assert_eq!(out, "15\n120\n3\n21\n!!!!!\n");
+}
+
+#[test]
+fn tensor_map_reduction() {
+    // `Tensor.map(|x| ...) -> Tensor[T, ...S]` — element-wise map producing a
+    // fresh tensor of the same shape (parity with `Column.map`). Covers a 1-D
+    // map, a captured outer variable, and a 2-D map (all cells).
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let t: Tensor[i64, [4]] = Tensor.from([1, 2, 3, 4]);
+    let d = t.map(|x| x * 2);
+    println(f"{d.sum()}");
+
+    let k: i64 = 100;
+    let e = t.map(|x| x + k);
+    println(f"{e.sum()}");
+
+    let m: Tensor[i64, [2, 3]] = Tensor.from([[1, 2, 3], [4, 5, 6]]);
+    let g = m.map(|x| x + 10);
+    println(f"{g.sum()}");
+}
+"#,
+    );
+    // sum([2,4,6,8])=20; sum([101,102,103,104])=410; sum([11..16])=81.
+    assert_eq!(out, "20\n410\n81\n");
 }
 
 #[test]

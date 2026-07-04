@@ -45,8 +45,10 @@ use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicValueEnum, FloatValue, IntValue, PointerValue};
 use inkwell::{FloatPredicate, IntPredicate};
 
-use crate::ast::BinOp;
+use crate::ast::{BinOp, ClosureParam, Expr, PatternKind};
 use crate::reduce_kernel::ReduceOp;
+
+use super::state::VarSlot;
 
 /// How a reduction reads its elements. Element `i` is `data[i]` at LLVM type
 /// `elem` over `[0, len)`. The three surfaces differ only in `bitmap`:
@@ -98,6 +100,16 @@ pub(super) enum MapKernelOp<'a> {
     /// used a bare wrapping `ineg` (silent `i64::MIN` wrap) — both diverged
     /// from `karac run` at exactly those edges.
     Neg,
+    /// An inline closure `|x| <body>` (S6c-2, `Column.map` / `Tensor.map`):
+    /// the single parameter binds to the current element and the body is
+    /// compiled in place, its value written to the destination slot — the
+    /// same inline-body strategy as `Column.fold` (the native backend can't
+    /// thread a closure *value*). Only the inline-literal closure form reaches
+    /// here; a closure-valued local / named fn is rejected at the call site.
+    Closure {
+        params: &'a [ClosureParam],
+        body: &'a Expr,
+    },
 }
 
 /// Where an element-wise map writes (S3): the result buffer, its element
@@ -722,6 +734,39 @@ impl<'ctx> super::Codegen<'ctx> {
                 other_v => other_v,
             },
             (MapKernelOp::Neg, _) => return Err("elementwise map: neg is unary".to_string()),
+            (MapKernelOp::Closure { params, body }, MapOther::Unary) => {
+                // Bind the closure's single param to the current element, then
+                // compile the body in place (captures resolve through the
+                // enclosing scope). Save/restore any shadowed outer binding so
+                // the loop's own scope stays contained — mirrors `Column.fold`.
+                let pname = match &params[0].pattern.kind {
+                    PatternKind::Binding(n) => n.clone(),
+                    _ => "_map_p0".to_string(),
+                };
+                let saved = self.variables.get(&pname).copied();
+                let param_slot = self.create_entry_alloca(fn_val, &pname, lhs.elem);
+                self.builder.build_store(param_slot, a).unwrap();
+                self.variables.insert(
+                    pname.clone(),
+                    VarSlot {
+                        ptr: param_slot,
+                        ty: lhs.elem,
+                    },
+                );
+                let result = self.compile_expr(body)?;
+                match saved {
+                    Some(s) => {
+                        self.variables.insert(pname.clone(), s);
+                    }
+                    None => {
+                        self.variables.remove(&pname);
+                    }
+                }
+                result
+            }
+            (MapKernelOp::Closure { .. }, _) => {
+                return Err("elementwise map: a closure map is unary".to_string())
+            }
         };
         let r = self.coerce_scalar_to_type(r, dest.elem);
         let rp = unsafe {

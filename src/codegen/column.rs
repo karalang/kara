@@ -1226,6 +1226,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 | "max"
                 | "range"
                 | "fold"
+                | "map"
                 | "var"
                 | "std"
                 | "corr"
@@ -1364,6 +1365,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // Inlines the closure body over the valid slots (see
             // `compile_column_fold`).
             "fold" => Ok(Some(self.compile_column_fold(
+                control,
+                info.elem,
+                info.elem_unsigned,
+                args,
+            )?)),
+            // `map(|x| ...) -> Column[T]` — element-wise map over valid slots,
+            // producing a fresh column (see `compile_column_map`).
+            "map" => Ok(Some(self.compile_column_map(
                 control,
                 info.elem,
                 info.elem_unsigned,
@@ -2519,6 +2528,92 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_load(acc_ty, acc_slot, "col.fold.result")
             .unwrap())
+    }
+
+    /// `map(|x| ...) -> Column[T]` — the element-wise map surface (S6c-2).
+    /// Applies the inline closure to every valid slot, producing a fresh
+    /// `Column[T]` of the same length; null slots are preserved (the shared
+    /// gated map copies the source validity bitmap and skips computing them).
+    /// Same-element-type only (`Fn(T) -> T`); the first native cut is POD-only
+    /// and inline-literal-only, matching `Column.fold`. A heap element
+    /// (`Column[String]`) or a closure-valued local is rejected loudly (each
+    /// works under `karac run`), never a silent miscompile.
+    fn compile_column_map(
+        &mut self,
+        control: PointerValue<'ctx>,
+        elem: BasicTypeEnum<'ctx>,
+        unsigned: bool,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if args.len() != 1 {
+            return Err(format!(
+                "Column.map expects 1 argument (closure), got {}",
+                args.len()
+            ));
+        }
+        let ExprKind::Closure { params, body, .. } = &args[0].value.kind else {
+            return Err(
+                "Column.map expects an inline closure literal under `karac build`; a \
+                 closure-valued local / named fn is not yet supported by the native \
+                 backend (it works under `karac run`)."
+                    .to_string(),
+            );
+        };
+        if params.len() != 1 {
+            return Err(format!(
+                "Column.map closure must take exactly 1 parameter (elem), got {}",
+                params.len()
+            ));
+        }
+        if self.column_elem_is_string(elem) {
+            return Err("Column[String].map is not yet supported by the native \
+                        backend (`karac build`); it works under `karac run`."
+                .to_string());
+        }
+
+        let len = self
+            .column_load_field(control, 2, "col.map.len")
+            .into_int_value();
+        let src_data = self
+            .column_load_field(control, 0, "col.map.data")
+            .into_pointer_value();
+        let src_bm = self
+            .column_load_field(control, 1, "col.map.bm")
+            .into_pointer_value();
+
+        // Same element type (`Fn(T) -> T`), same length. The gated map copies
+        // the single operand's validity into the result bitmap, so nulls carry
+        // through without a bespoke bitmap memcpy.
+        let dst = self.column_alloc(elem, len, len)?;
+        let dst_data = self
+            .column_load_field(dst, 0, "col.map.ddata")
+            .into_pointer_value();
+        let dst_bm = self
+            .column_load_field(dst, 1, "col.map.dbm")
+            .into_pointer_value();
+
+        let lhs = ContainerAccess {
+            data: src_data,
+            len,
+            elem,
+            unsigned,
+            bitmap: Some(src_bm),
+        };
+        let dest = MapDest {
+            data: dst_data,
+            elem,
+            bitmap: Some(dst_bm),
+        };
+        self.emit_elementwise_map(
+            &lhs,
+            &MapOther::Unary,
+            &MapKernelOp::Closure {
+                params,
+                body: body.as_ref(),
+            },
+            &dest,
+        )?;
+        Ok(dst.into())
     }
 
     /// `min() -> T` / `max() -> T` — the smallest / largest valid slot,

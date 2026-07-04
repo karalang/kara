@@ -340,6 +340,48 @@ impl<'a> super::Interpreter<'a> {
                 }
                 Some(acc)
             }
+            // Element-wise map over the valid slots, producing a fresh column
+            // of the same length; null slots pass through unchanged (their
+            // value is a placeholder — the parallel `valid` bit keeps them
+            // null). Typed by the `map` intercept (returns `Self`).
+            "map" => {
+                if args.len() != 1 {
+                    return Some(self.record_runtime_error(
+                        format!(
+                            "Column.map expects 1 argument (closure), got {}",
+                            args.len()
+                        ),
+                        span,
+                    ));
+                }
+                let f = self.eval_expr_inner(&args[0].value);
+                if !matches!(f, Value::Function { .. }) {
+                    return Some(self.record_runtime_error(
+                        format!("Column.map expects a closure as its argument; got {f}"),
+                        span,
+                    ));
+                }
+                // Clone the cells up front so no lock is held across the
+                // closure call (which re-enters the interpreter).
+                let cells: Vec<Value> = data.read().unwrap().clone();
+                let bits: Vec<bool> = valid.read().unwrap().clone();
+                let mut out = Vec::with_capacity(cells.len());
+                for (i, x) in cells.into_iter().enumerate() {
+                    if bits[i] {
+                        let mapped = self.invoke_function_value(f.clone(), vec![x]);
+                        if self.pending_cf.is_some() {
+                            return Some(Value::Unit);
+                        }
+                        out.push(mapped);
+                    } else {
+                        out.push(x);
+                    }
+                }
+                Some(Value::Column {
+                    data: Arc::new(RwLock::new(out)),
+                    valid: Arc::new(RwLock::new(bits)),
+                })
+            }
             "corr" => Some(self.eval_column_corr(data, valid, args, span)),
             _ => None,
         }
