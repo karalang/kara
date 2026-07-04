@@ -322,6 +322,84 @@ mod memory_sanitizer_tests {
     // called multiple times.
 
     #[test]
+    fn asan_single_element_fstring_vec_return_no_double_free() {
+        // B-2026-07-04-1: a fn returning a SINGLE-element `Vec[String]` whose
+        // element is an f-string literal (`return Vec[f"…"]`) double-freed the
+        // element String under `karac build` (SIGTRAP / exit 133), while a
+        // two-element f-string Vec or a `.to_string()` element was clean. The
+        // f-string temp's owned-temp free must be suppressed when it is moved
+        // into the returned Vec literal.
+        assert_clean_asan_run(
+            r#"
+fn build(i: i64) -> Vec[String] {
+    return Vec[f"result-payload-element-number-{i}-aaaaaaaaaaaaaaaaaaaa"];
+}
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 50i64 {
+        let r: Vec[String] = build(i);
+        println(r[0]);
+        i = i + 1i64;
+    }
+}
+"#,
+            &[
+                "result-payload-element-number-0-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-1-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-2-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-3-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-4-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-5-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-6-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-7-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-8-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-9-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-10-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-11-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-12-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-13-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-14-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-15-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-16-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-17-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-18-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-19-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-20-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-21-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-22-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-23-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-24-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-25-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-26-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-27-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-28-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-29-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-30-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-31-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-32-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-33-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-34-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-35-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-36-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-37-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-38-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-39-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-40-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-41-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-42-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-43-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-44-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-45-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-46-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-47-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-48-aaaaaaaaaaaaaaaaaaaa",
+                "result-payload-element-number-49-aaaaaaaaaaaaaaaaaaaa",
+            ],
+            "asan_single_element_fstring_vec_return_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_heap_env_closure_freed_no_leak() {
         assert_clean_asan_run(
             r#"

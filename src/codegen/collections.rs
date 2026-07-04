@@ -605,17 +605,31 @@ impl<'ctx> super::Codegen<'ctx> {
         // `String.clone()` allocates — so the order matters; we
         // preserve source order.)
         let elem_hint = self.literal_pending_elem_hint();
-        let vals: Vec<BasicValueEnum<'ctx>> = items
-            .iter()
-            .map(|e| {
-                let v = self.compile_expr(e)?;
-                // B-2026-07-02-6 — see `literal_pending_elem_hint`.
-                Ok(match elem_hint {
-                    Some(h) => self.coerce_literal_elem_to_type(v, h),
-                    None => v,
-                })
-            })
-            .collect::<Result<_, String>>()?;
+        let mut vals: Vec<BasicValueEnum<'ctx>> = Vec::with_capacity(items.len());
+        for e in items {
+            let v = self.compile_expr(e)?;
+            // Move-aware element ownership (mirror `compile_tuple`): the Vec
+            // literal takes ownership of each element, so any INDEPENDENT
+            // scope-exit cleanup the element registered must be suppressed once
+            // its buffer is bit-copied into the Vec — otherwise that cleanup
+            // AND the Vec's owner both free the same pointer (heap-use-after-
+            // free on read / double-free at drop, B-2026-07-04-1). The
+            // `suppress_fstr_acc_if_moved_out` call must run right after
+            // `compile_expr(e)`, while `last_fstr_acc` still holds THIS
+            // element's f-string accumulator (the single slot is overwritten by
+            // the next element's compile). No-ops for fresh temps
+            // (`.to_string()` / `.clone()`) and POD elements.
+            self.suppress_fstr_acc_if_moved_out(e);
+            self.suppress_source_vec_cleanup_for_arg(e);
+            if let ExprKind::Identifier(name) = &e.kind {
+                self.suppress_map_cleanup_for_tail_identifier(name);
+            }
+            // B-2026-07-02-6 — see `literal_pending_elem_hint`.
+            vals.push(match elem_hint {
+                Some(h) => self.coerce_literal_elem_to_type(v, h),
+                None => v,
+            });
+        }
         let elem_ty = vals[0].get_type();
         let n_const = i64_t.const_int(items.len() as u64, false);
 
