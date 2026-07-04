@@ -1124,6 +1124,42 @@ fn main() {
         }
     }
 
+    /// B-2026-07-03-32: a `Column`-producing statement grouped into an
+    /// auto-par branch published its control-block pointer to the parent's
+    /// return slot and THEN ran its own `FreeColumn` at branch end, so the
+    /// parent read a dangling control block after the join — `c.len()`
+    /// returned `0` (correct `4` under sequential build / `karac run`) and
+    /// element access panicked out-of-bounds. A SILENT wrong-output
+    /// miscompile. This harness compiles WITH `concurrency_analyze`, so it
+    /// exercises the exact auto-par surface the default codegen E2E harness
+    /// (`None` concurrency) leaves dead. The fix transfers `FreeColumn` (and
+    /// its `DataFrame`/`Tensor` siblings) from branch to parent via
+    /// `SlotOwnership`, mirroring the Map/Struct/SoA handles. The `hd(av)`
+    /// read is the independent sibling statement that triggers the grouping.
+    #[test]
+    fn test_e2e_auto_par_column_producer_slot_not_freed_early() {
+        let out = run_program(
+            r#"
+fn hd(v: Vec[i64]) -> i64 { v[0] }
+fn main() {
+    let av: Vec[i64] = [4, 2, 7, 1];
+    println(hd(av));
+    let c: Column[i64] = Column.from_vec([5, 9, 3, 1]);
+    println(c.len());
+    let cv: Vec[i64] = c.iter_valid();
+    println(cv[3]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "4\n4\n1\n",
+                "auto-par Column producer must not free its slot-published \
+                 control block; a `0` len is the dangling-read miscompile; got {out:?}"
+            );
+        }
+    }
+
     /// B-2026-07-03-9 on the auto-par surface: a by-value generic `Slice[T]`
     /// param called with a Vec argument returns the correct value under
     /// auto-par too (this harness compiles WITH `concurrency_analyze`). The

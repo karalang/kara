@@ -1017,6 +1017,21 @@ pub(crate) enum SlotOwnership<'ctx> {
         /// still drops its String/Vec elements at the branch's scope exit.
         soa_drop_fn: Option<FunctionValue<'ctx>>,
     },
+    /// `FreeColumn` — the three-buffer Column control-block free (data /
+    /// null-bitmap / control) at parent scope exit. `string_elem` carries
+    /// the per-slot String-drain flag so a `Column[String]` transferred out
+    /// of a `par` branch still frees its element Strings. Without this
+    /// transfer, an auto-par branch that produced a `let c = Column.from_vec(…)`
+    /// (or `.iter_valid()` etc.) freed the column it had just published to the
+    /// parent's return slot → the parent read a dangling control block
+    /// (B-2026-07-03-32: `b.len()` == 0 / OOB after the join).
+    Column { string_elem: bool },
+    /// `FreeDataFrame` — the entries-loop + control-block free at parent
+    /// scope exit. Same publish-and-forget transfer as `Column`.
+    DataFrame,
+    /// `FreeTensor` — the null-guarded tensor control-block free at parent
+    /// scope exit. Same publish-and-forget transfer as `Column`.
+    Tensor,
 }
 
 #[derive(Clone)]

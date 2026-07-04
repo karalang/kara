@@ -523,6 +523,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 has_cold,
                 soa_drop_fn,
             },
+            SlotOwnership::Column { string_elem } => CleanupAction::FreeColumn {
+                column_alloca: parent_alloca,
+                string_elem,
+            },
+            SlotOwnership::DataFrame => CleanupAction::FreeDataFrame {
+                df_alloca: parent_alloca,
+            },
+            SlotOwnership::Tensor => CleanupAction::FreeTensor {
+                tensor_alloca: parent_alloca,
+            },
         };
         if let Some(frame) = self.scope_cleanup_actions.last_mut() {
             frame.push(action);
@@ -2128,6 +2138,30 @@ impl<'ctx> super::Codegen<'ctx> {
                                 has_cold: *has_cold,
                                 soa_drop_fn: *soa_drop_fn,
                             }),
+                            // Owned Column / DataFrame / Tensor handles: the
+                            // slot-write above published the control-block
+                            // pointer to the parent's return slot, so the
+                            // branch's own free (three-buffer FreeColumn /
+                            // entries-loop FreeDataFrame / null-guarded
+                            // FreeTensor) must NOT run — pre-fix it did, and
+                            // the parent's first use of the slot value read a
+                            // dangling control block (B-2026-07-03-32).
+                            CleanupAction::FreeColumn {
+                                column_alloca,
+                                string_elem,
+                            } if Some(*column_alloca) == local_ptr => Some(SlotOwnership::Column {
+                                string_elem: *string_elem,
+                            }),
+                            CleanupAction::FreeDataFrame { df_alloca }
+                                if Some(*df_alloca) == local_ptr =>
+                            {
+                                Some(SlotOwnership::DataFrame)
+                            }
+                            CleanupAction::FreeTensor { tensor_alloca }
+                                if Some(*tensor_alloca) == local_ptr =>
+                            {
+                                Some(SlotOwnership::Tensor)
+                            }
                             _ => None,
                         };
                         match transfer {

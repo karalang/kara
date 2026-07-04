@@ -13186,6 +13186,64 @@ fn main() {
         );
     }
 
+    /// B-2026-07-03-32: the Column-handle slot-publication UAF. Auto-par
+    /// groups the `print(hd(av))` read and the `let c = Column.from_vec(…)`
+    /// producer into sibling par branches. The producing branch writes the
+    /// column control-block pointer into the parent's return slot, then
+    /// pre-fix ALSO ran its queued `FreeColumn` at branch end — freeing the
+    /// three buffers (data / null-bitmap / control) it had just published.
+    /// The parent's `c.len()` after the join then read a dangling control
+    /// block: `0` under `karac build` (correct `4` under `karac run` and
+    /// `KARAC_AUTO_PAR=0`), or an out-of-bounds panic on the first element
+    /// access — a SILENT wrong-output miscompile, the worst class. The fix
+    /// transfers `FreeColumn` (and its `DataFrame`/`Tensor` siblings) from
+    /// the branch to the parent via `SlotOwnership`, exactly like the
+    /// Map/Struct/SoA handles already were. Threads the full pipeline
+    /// (ownership + concurrency) so auto-par actually fires — the default
+    /// `None, None` harness leaves the grouping dead. The 4-element i64
+    /// column is 32 data bytes + a bitmap + a control block; a double-free
+    /// on the published control block trips ASAN, a skipped parent free is a
+    /// LeakSanitizer report on Linux.
+    #[test]
+    fn asan_b32_auto_par_column_slot_published_handle_clean() {
+        let label = "auto_par_column_slot_published_handle";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan_with_full_pipeline(
+            r#"
+fn hd(v: Vec[i64]) -> i64 { v[0] }
+fn main() {
+    let av: Vec[i64] = [4, 2, 7, 1];
+    println(hd(av));
+    let c: Column[i64] = Column.from_vec([5, 9, 3, 1]);
+    println(c.len());
+    println(c.iter_valid()[3]);
+}
+"#,
+            label,
+        ) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}) — \
+             look for heap-use-after-free / double-free on the slot-published \
+             Column control block, or a LeakSanitizer report on a skipped \
+             parent free",
+            status.code()
+        );
+        // hd([4,2,7,1])=4; from_vec([5,9,3,1]).len()=4; iter_valid()[3]=1.
+        assert_eq!(
+            stdout.trim().lines().collect::<Vec<_>>(),
+            vec!["4", "4", "1"],
+            "[{label}] unexpected stdout — a `0` for len (or a panic) is the \
+             dangling-control-block miscompile this gate exists for"
+        );
+    }
+
     /// Tensor heap lifecycle (phase-11 codegen core slice): one malloc'd
     /// `[rank][dims][data]` block per tensor, freed once at scope exit
     /// via `FreeTensor`'s null-guard. Exercises every ownership-transfer
