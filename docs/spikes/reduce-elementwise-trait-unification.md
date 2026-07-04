@@ -591,12 +591,36 @@ B-2026-07-02-10..13, see the ledger.
   coverage suffices. **Residual:** `product` (a `Reduce` default `fold(1, |a,x|
   a*x)` — needs a generic multiplicative-identity seed) and `map`/`zip_with` on
   the `ElementwiseMap` trait (same intercept-extension recipe).
-- **S6c** — remaining: `ElementwiseOrd` user impls + `sorted`/`argsort` on
-  non-i64/f64 element widths under `build` (interp already handles all);
-  `map`/`zip_with`/`product` on the `ElementwiseMap`/`Reduce` *traits*
-  (bound-generic — `fold` done in S6c-5, mirror the intercept extension);
-  blanket `Vec[T]` impls; user trait-impl methods over builtin containers
-  (probed: interp "type 'unknown'", codegen loud fall-through).
+- **S6c-6** ✅ **(landed)** — `Column.sorted`/`argsort` on **every numeric
+  element width** under `build` (the S6c-4 first cut was i64/f64-only). Columns
+  store elements at native width, so a widened 8-byte scratch sort lifts the
+  whole surface: new kernel helpers `sort_key_is_int` / `sort_widen_value`
+  (i8/i16/i32 `sext`, u8/u16/u32 `zext`, f32 `fpext` into the i64/f64 key) /
+  `sort_narrow_value` + `sort_build_vec_from_keys` (narrows each sorted key
+  back into a `Vec[T]`-width buffer, freeing the 8-byte scratch) /
+  `sort_widen_data_buffer` (a widened full-length key view the narrow `argsort`
+  keys into via `IndexInto`, freed after the sort). `column_compact_valid` now
+  widens on the way in. **Only `u64` stays rejected** (the scratch compare is
+  signed, misordering values ≥ 2⁶³). `run` == `KARAC_AUTO_PAR=0` == `build` for
+  i32/u32/f32 columns (each with a null). Tests: codegen
+  `test_e2e_column_sorted_argsort_narrow_widths` + reworked
+  `_narrow_width_rejected_loudly` (now u64-column + narrow/f32-tensor);
+  interpreter `column_sorted_argsort_narrow_widths_reduction`; typechecker
+  `test_column_sorted_narrow_width_result_types`; memory_sanitizer
+  `asan_column_sorted_argsort_narrow_widths_no_leak`. **`Tensor` stays
+  i64/f64-only** — a narrow-element tensor is unusable under `build` *before*
+  the sort runs: **B-2026-07-03-34**, a pre-existing narrow-tensor-storage bug
+  where `Tensor.from` writes 8-byte values that narrow-width readers misread
+  (`t[i]` and `t.sum()` already diverge under `build`; reproduces on plain
+  indexing, independent of the sort work). The widening helpers are ready for
+  tensors too — once the storage bug is fixed the same path lifts them.
+- **S6c** — remaining: `ElementwiseOrd` user impls; the narrow-tensor-storage
+  fix (B-2026-07-03-34) to unblock `Tensor.sorted`/`argsort` (+ all narrow
+  tensor ops) beyond i64/f64 under `build`; u64-column sort (needs an unsigned
+  scratch compare); `map`/`zip_with`/`product` on the `ElementwiseMap`/`Reduce`
+  *traits* (bound-generic — `fold` done in S6c-5, mirror the intercept
+  extension); blanket `Vec[T]` impls; user trait-impl methods over builtin
+  containers (probed: interp "type 'unknown'", codegen loud fall-through).
 
 ---
 

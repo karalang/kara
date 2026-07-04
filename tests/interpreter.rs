@@ -19461,6 +19461,41 @@ fn main() {
 }
 
 #[test]
+fn column_sorted_argsort_narrow_widths_reduction() {
+    // The `run` surface for narrow-width `Column.sorted`/`argsort` (the native
+    // backend gained i32/u32/f32 support via a widened scratch sort; the
+    // interpreter has always been width-agnostic, so this locks the parity).
+    // i32, u32, and f32 columns, each with a null dropped by `sorted`.
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let mut ci: Column[i32] = Column.with_capacity(4);
+    ci.push(5); ci.push(1); ci.push_null(); ci.push(3);
+    let cs = ci.sorted();
+    let ca = ci.argsort();
+    println(f"{cs[0]} {cs[1]} {cs[2]} | {ca[0]} {ca[1]} {ca[2]}");
+    let cu: Column[u32] = Column.from_vec([30, 10, 20]);
+    let us = cu.sorted();
+    let ua = cu.argsort();
+    println(f"{us[0]} {us[1]} {us[2]} | {ua[0]} {ua[1]} {ua[2]}");
+    let mut cf: Column[f32] = Column.with_capacity(4);
+    cf.push(2.5); cf.push_null(); cf.push(1.5); cf.push(0.5);
+    let fs = cf.sorted();
+    let fa = cf.argsort();
+    println(f"{fs[0]} {fs[1]} {fs[2]} | {fa[0]} {fa[1]} {fa[2]}");
+}
+"#,
+    );
+    // i32 valid [5,1,3] sorted [1,3,5]; argsort original slots [1,3,0].
+    // u32 [30,10,20] sorted [10,20,30]; argsort [1,2,0].
+    // f32 valid [2.5,1.5,0.5] sorted [0.5,1.5,2.5]; argsort [3,2,0].
+    assert_eq!(
+        out,
+        "1 3 5 | 1 3 0\n10 20 30 | 1 2 0\n0.5 1.5 2.5 | 3 2 0\n"
+    );
+}
+
+#[test]
 fn primitive_trait_impl_direct_dispatch_by_declared_width() {
     // B-2026-07-03-5: a user trait impl on a PRIMITIVE target dispatched for a
     // direct value-receiver call under `karac run`. The interpreter's runtime

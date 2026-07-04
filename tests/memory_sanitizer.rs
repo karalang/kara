@@ -19174,8 +19174,9 @@ fn main() {
         // to a `let` and must be freed at scope exit via the standard `Vec`
         // cleanup — this asserts no leak / double-free of the sort-allocated
         // buffers over a loop. Results are `let`-bound then indexed (the
-        // `Stats.sort` idiom, sidestepping the pre-existing owned-temp-Vec-arg
-        // corruption B-2026-07-03-31).
+        // standard `Stats.sort` idiom; the auto-par slot-published Column/Tensor
+        // early-free that once corrupted fresh-temp-arg patterns is fixed —
+        // B-2026-07-03-32).
         assert_clean_asan_run(
             r#"
 fn inner() -> i64 {
@@ -19204,6 +19205,48 @@ fn main() {
             // cs[0]=1, ca[0]=5, ns[0]=5, na[0]=2, ts[0]=2, ta[0]=1 → 16; *20 = 320.
             &["320"],
             "asan_column_tensor_sorted_argsort_freed_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_column_sorted_argsort_narrow_widths_no_leak() {
+        // S6c follow-on: the NARROW-width `Column.sorted` path mallocs a separate
+        // `Vec[T]`-width buffer and frees the 8-byte scratch key buffer; the
+        // narrow `argsort` path mallocs a widened full-length key view and frees
+        // it after the sort. This asserts neither the narrow-back buffer, the
+        // widened key view, nor the result `Vec` leaks or double-frees over a
+        // loop — for i32, u32, and f32 columns (each with a null). `let`-bound +
+        // indexed idiom (the standard `Stats.sort` idiom).
+        assert_clean_asan_run(
+            r#"
+fn inner() -> i64 {
+    let mut ci: Column[i32] = Column.with_capacity(4);
+    ci.push(5); ci.push(1); ci.push_null(); ci.push(3);
+    let cs: Vec[i32] = ci.sorted();
+    let ca: Vec[i64] = ci.argsort();
+    let cu: Column[u32] = Column.from_vec([30, 10, 20]);
+    let us: Vec[u32] = cu.sorted();
+    let ua: Vec[i64] = cu.argsort();
+    let mut cf: Column[f32] = Column.with_capacity(4);
+    cf.push(2.5); cf.push_null(); cf.push(1.5); cf.push(0.5);
+    let fs: Vec[f32] = cf.sorted();
+    let fa: Vec[i64] = cf.argsort();
+    cs.len() + ca[0] + us.len() + ua[0] + fs.len() + fa[0]
+}
+fn main() {
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 {
+        acc = acc + inner();
+        i = i + 1;
+    }
+    println(f"{acc}");
+}
+"#,
+            // cs.len()=3, ca[0]=1, us.len()=3, ua[0]=1, fs.len()=3, fa[0]=3 → 14;
+            // *20 = 280.
+            &["280"],
+            "asan_column_sorted_argsort_narrow_widths_no_leak",
         );
     }
 

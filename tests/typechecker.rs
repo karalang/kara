@@ -27507,6 +27507,28 @@ fn test_column_tensor_sorted_argsort_result_types() {
 }
 
 #[test]
+fn test_column_sorted_narrow_width_result_types() {
+    // A narrow / f32 element column types the same as i64/f64:
+    // `Column[i32].sorted() -> Vec[i32]`, `Column[f32].sorted() -> Vec[f32]`,
+    // and `argsort() -> Vec[i64]` regardless of element width (the native
+    // backend now sorts these; the typechecker intercept was always
+    // width-generic).
+    typecheck_ok(
+        "fn main() {\n\
+             let c: Column[i32] = Column.from_vec([5i32, 1i32, 3i32]);\n\
+             let cs: Vec[i32] = c.sorted();\n\
+             let _e: i32 = cs[0];\n\
+             let ca: Vec[i64] = c.argsort();\n\
+             let v: Vec[i64] = [10i64, 20i64];\n\
+             let _ = v[ca[0]];\n\
+             let f: Column[f32] = Column.from_vec([2.5_f32, 1.5_f32]);\n\
+             let fs: Vec[f32] = f.sorted();\n\
+             let _g: f32 = fs[0];\n\
+         }",
+    );
+}
+
+#[test]
 fn test_column_sorted_wrong_arity_rejected() {
     // `sorted`/`argsort` take no arguments.
     let errors = typecheck_errors(

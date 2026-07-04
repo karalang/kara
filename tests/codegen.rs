@@ -47504,6 +47504,42 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_column_sorted_argsort_narrow_widths() {
+        // S6c follow-on: `Column.sorted`/`argsort` beyond i64/f64. Columns store
+        // elements at their native width, so the widened 8-byte scratch sort
+        // lifts every numeric type — `i8`/`i16`/`i32` sext, `u8`/`u16`/`u32`
+        // zext, `f32` fpext into the key, then `sorted` narrows the key back to
+        // `Vec[T]`. Covers i32 (with a null), u32, and f32 (with a null);
+        // `run` == `build` == default auto-par (only u64 stays rejected).
+        let src = r#"
+fn main() {
+    let mut ci: Column[i32] = Column.with_capacity(4);
+    ci.push(5); ci.push(1); ci.push_null(); ci.push(3);
+    let cs: Vec[i32] = ci.sorted();
+    println(f"{cs.len()} {cs[0]} {cs[1]} {cs[2]}");
+    let ca: Vec[i64] = ci.argsort();
+    println(f"{ca[0]} {ca[1]} {ca[2]}");
+    let cu: Column[u32] = Column.from_vec([30, 10, 20]);
+    let us: Vec[u32] = cu.sorted();
+    println(f"{us[0]} {us[1]} {us[2]}");
+    let ua: Vec[i64] = cu.argsort();
+    println(f"{ua[0]} {ua[1]} {ua[2]}");
+    let mut cf: Column[f32] = Column.with_capacity(4);
+    cf.push(2.5); cf.push_null(); cf.push(1.5); cf.push(0.5);
+    let fs: Vec[f32] = cf.sorted();
+    println(f"{fs[0]} {fs[1]} {fs[2]}");
+    let fa: Vec[i64] = cf.argsort();
+    println(f"{fa[0]} {fa[1]} {fa[2]}");
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        // i32 [5,1,null,3] valid sorted [1,3,5]; argsort original slots [1,3,0].
+        // u32 [30,10,20] sorted [10,20,30]; argsort [1,2,0].
+        // f32 [2.5,null,1.5,0.5] valid sorted [0.5,1.5,2.5]; argsort [3,2,0].
+        assert_eq!(out, "3 1 3 5\n1 3 0\n10 20 30\n1 2 0\n0.5 1.5 2.5\n3 2 0\n");
+    }
+
+    #[test]
     fn test_e2e_tensor_sorted_argsort() {
         // `Tensor.sorted() -> Vec[T]` / `argsort() -> Vec[i64]` (ElementwiseOrd,
         // S6c) over ALL elements in flat C-order (no null concept). Covers a
@@ -47540,19 +47576,24 @@ fn main() {
 
     #[test]
     fn test_e2e_sorted_narrow_width_rejected_loudly() {
-        // First cut: the native scratch sort moves 8-byte f64/i64 keys and
-        // compares int keys as signed, so a narrower / unsigned-64 / f32 element
-        // column or tensor is rejected LOUDLY under `karac build` (each works
-        // under `karac run`).
-        let col_i32 = r#"
+        // Columns now sort every numeric width (see the narrow-widths test);
+        // the two remaining loud rejections under `karac build` are:
+        //   * a **u64** column — the scratch sort compares integers as SIGNED,
+        //     misordering values ≥ 2^63, and there is no room to widen past 64
+        //     bits; and
+        //   * **any narrow / f32 tensor** — a pre-existing narrow-tensor-storage
+        //     bug (`Tensor.from` writes 8-byte values narrow readers misread)
+        //     makes the buffer garbage before the sort runs.
+        // Each works under `karac run`.
+        let col_u64 = r#"
 fn main() {
-    let c: Column[i32] = Column.from_vec([5, 9, 3, 1]);
-    let s: Vec[i32] = c.sorted();
+    let c: Column[u64] = Column.from_vec([5, 9, 3, 1]);
+    let s: Vec[u64] = c.sorted();
     println(f"{s[0]}");
 }
 "#;
-        let err = ir_result(col_i32).expect_err("a narrow-width column sort must be rejected");
-        assert!(err.contains("i64 and f64 element columns"), "got: {err}");
+        let err = ir_result(col_u64).expect_err("a u64 column sort must be rejected");
+        assert!(err.contains("u64 element Columns"), "got: {err}");
 
         let tensor_f32 = r#"
 fn main() {
@@ -47563,6 +47604,16 @@ fn main() {
 "#;
         let err = ir_result(tensor_f32).expect_err("a narrow-width tensor sort must be rejected");
         assert!(err.contains("i64 and f64 element tensors"), "got: {err}");
+
+        let tensor_i32 = r#"
+fn main() {
+    let t: Tensor[i32, [4]] = Tensor.from([4, 2, 7, 1]);
+    let s: Vec[i32] = t.sorted();
+    println(f"{s[0]}");
+}
+"#;
+        let err = ir_result(tensor_i32).expect_err("a narrow-width tensor sort must be rejected");
+        assert!(err.contains("narrow-tensor-storage bug"), "got: {err}");
     }
 
     #[test]

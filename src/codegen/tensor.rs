@@ -3242,12 +3242,20 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// `sorted() -> Vec[T]` / `argsort() -> Vec[i64]` (ElementwiseOrd, S6c) over
-    /// ALL elements in flat C-order (a tensor has no null concept). Reuses the
-    /// dense `Stats.sort` / `Stats.argsort` scratch-sort machinery directly on
-    /// the C-order element buffer (empty tensor → an empty Vec, the natural
-    /// zero-length result). Restricted to i64/f64 elements — the shared
-    /// scratch sort moves 8-byte f64/i64 keys and compares int keys as signed;
-    /// any other width is rejected LOUDLY (each works under `karac run`).
+    /// ALL elements in flat C-order (a tensor has no null concept), empty tensor
+    /// → an empty Vec. Reuses the dense `Stats.sort` / `Stats.argsort`
+    /// scratch-sort machinery directly on the C-order element buffer.
+    ///
+    /// **i64/f64 elements only** under the native backend. Unlike `Column`
+    /// (which stores narrow elements at native width, so the widened scratch
+    /// sort lifts it to every numeric type — see `compile_column_sorted`), a
+    /// narrow-element *tensor* is unusable under `karac build` before the sort
+    /// even runs: `Tensor.from` writes 8-byte values into a buffer readers
+    /// stride at the annotated narrow width, so `t[i]` / `t.sum()` already
+    /// misread (ledgered pre-existing narrow-tensor-storage bug). Widening the
+    /// sort would only sort garbage, so narrow ints / `f32` (and u64) are
+    /// rejected LOUDLY here — each works under `karac run`, and the storage fix
+    /// unblocks the widened path for tensors too.
     fn compile_tensor_sort(
         &mut self,
         method: &str,
@@ -3261,9 +3269,12 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => {
                 return Err(format!(
                     "Tensor.{method} under the native backend (`karac build`) \
-                     supports i64 and f64 element tensors today; narrower widths, \
-                     unsigned 64-bit, and f32 land in a follow-on slice (each works \
-                     under `karac run`)."
+                     supports i64 and f64 element tensors today. Narrow element \
+                     types (i8/i16/i32, u8/u16/u32, f32) and u64 are blocked by a \
+                     pre-existing narrow-tensor-storage bug (`Tensor.from` writes \
+                     8-byte values that narrow-width readers misread — `t[i]` and \
+                     `t.sum()` already diverge under build); each works under \
+                     `karac run`."
                 ));
             }
         };

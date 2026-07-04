@@ -1310,6 +1310,280 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(oe);
     }
 
+    /// Classify a scratch-sortable element for the *widened* sort path (S6c
+    /// follow-on: `sorted`/`argsort` beyond i64/f64). `Ok(true)` — an integer
+    /// key (sorted/compared at signed i64); `Ok(false)` — a float key (f64).
+    /// i64(signed)/f64 pass through directly; `i8`/`i16`/`i32` widen by
+    /// sign-extension, `u8`/`u16`/`u32` by zero-extension, `f32` by `fpext` —
+    /// all lossless into the 8-byte scratch slot, so the `karac build` result
+    /// matches `karac run`. **u64** (unsigned 64-bit) is the sole rejection:
+    /// the scratch sort compares integers as SIGNED (misordering values ≥
+    /// 2⁶³) and there is no room to widen past 64 bits — it stays a loud
+    /// follow-on (works under `karac run`). A non-numeric element is a
+    /// typechecker-caught impossibility here, rejected defensively.
+    pub(super) fn sort_key_is_int(
+        &self,
+        elem: BasicTypeEnum<'ctx>,
+        unsigned: bool,
+        method: &str,
+        container: &str,
+    ) -> Result<bool, String> {
+        match elem {
+            BasicTypeEnum::IntType(it) if it.get_bit_width() == 64 && unsigned => Err(format!(
+                "{container}.{method} under the native backend (`karac build`) does \
+                 not yet support u64 element {container}s — the scratch sort compares \
+                 integers as signed i64, which misorders values ≥ 2^63, and there is \
+                 no room to widen past 64 bits (it works under `karac run`)."
+            )),
+            BasicTypeEnum::IntType(_) => Ok(true),
+            BasicTypeEnum::FloatType(_) => Ok(false),
+            _ => Err(format!(
+                "{container}.{method} under the native backend (`karac build`) \
+                 requires a numeric element type."
+            )),
+        }
+    }
+
+    /// Widen a loaded element into its 8-byte scratch-sort key: signed ints
+    /// `sext` to i64, unsigned ints `zext` to i64, `f32` `fpext` to f64;
+    /// i64/f64 pass through unchanged. Inverse of [`sort_narrow_value`].
+    pub(super) fn sort_widen_value(
+        &self,
+        v: BasicValueEnum<'ctx>,
+        elem: BasicTypeEnum<'ctx>,
+        unsigned: bool,
+    ) -> BasicValueEnum<'ctx> {
+        let i64_t = self.context.i64_type();
+        let f64_t = self.context.f64_type();
+        match elem {
+            BasicTypeEnum::IntType(it) if it.get_bit_width() == 64 => v,
+            BasicTypeEnum::IntType(_) if unsigned => self
+                .builder
+                .build_int_z_extend(v.into_int_value(), i64_t, "sort.zext")
+                .unwrap()
+                .into(),
+            BasicTypeEnum::IntType(_) => self
+                .builder
+                .build_int_s_extend(v.into_int_value(), i64_t, "sort.sext")
+                .unwrap()
+                .into(),
+            BasicTypeEnum::FloatType(ft) if ft.get_bit_width() == 64 => v,
+            BasicTypeEnum::FloatType(_) => self
+                .builder
+                .build_float_ext(v.into_float_value(), f64_t, "sort.fpext")
+                .unwrap()
+                .into(),
+            _ => v,
+        }
+    }
+
+    /// Inverse of [`sort_widen_value`] for a `sorted() -> Vec[T]` result:
+    /// narrow an 8-byte sorted key back to the element width (`trunc` for
+    /// narrow ints, `fptrunc` for `f32`); i64/f64 pass through. The widen was
+    /// lossless, so the round-trip is exact.
+    fn sort_narrow_value(
+        &self,
+        v: BasicValueEnum<'ctx>,
+        elem: BasicTypeEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        match elem {
+            BasicTypeEnum::IntType(it) if it.get_bit_width() != 64 => self
+                .builder
+                .build_int_truncate(v.into_int_value(), it, "sort.trunc")
+                .unwrap()
+                .into(),
+            BasicTypeEnum::FloatType(ft) if ft.get_bit_width() != 64 => self
+                .builder
+                .build_float_trunc(v.into_float_value(), ft, "sort.fptrunc")
+                .unwrap()
+                .into(),
+            _ => v,
+        }
+    }
+
+    /// True when `elem` occupies a full 8-byte scratch slot with no widening
+    /// (`i64`/`f64`) — the sort operates on it in place; a narrow int / `f32`
+    /// is widened on the way in and narrowed on the way out.
+    pub(super) fn sort_elem_is_wide(&self, elem: BasicTypeEnum<'ctx>) -> bool {
+        matches!(elem, BasicTypeEnum::IntType(it) if it.get_bit_width() == 64)
+            || matches!(elem, BasicTypeEnum::FloatType(ft) if ft.get_bit_width() == 64)
+    }
+
+    /// Build a `sorted() -> Vec[T]` value from a **sorted** 8-byte key buffer
+    /// `buf8` of `k` keys. For an 8-byte element the buffer *is* the Vec
+    /// storage (stolen via [`stats_build_vec`]); for a narrow int / `f32` it
+    /// mallocs a fresh `k * sizeof(T)` buffer, narrows each key back to `elem`
+    /// ([`sort_narrow_value`]), frees `buf8`, and builds the Vec over the
+    /// narrow buffer. Either way the binding site owns and frees the storage
+    /// backing the returned Vec.
+    pub(super) fn sort_build_vec_from_keys(
+        &self,
+        buf8: PointerValue<'ctx>,
+        k: IntValue<'ctx>,
+        elem: BasicTypeEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        if self.sort_elem_is_wide(elem) {
+            return self.stats_build_vec(buf8, k);
+        }
+        let i64_t = self.context.i64_type();
+        let f64_t = self.context.f64_type();
+        let fn_val = self.current_fn.expect("sort narrow-back in function");
+        let key_t: BasicTypeEnum<'ctx> = if elem.is_int_type() {
+            i64_t.into()
+        } else {
+            f64_t.into()
+        };
+        let esize = match elem {
+            BasicTypeEnum::IntType(it) => (it.get_bit_width() / 8) as u64,
+            BasicTypeEnum::FloatType(ft) => (ft.get_bit_width() / 8) as u64,
+            _ => 8,
+        };
+        let nbytes = self
+            .builder
+            .build_int_mul(k, i64_t.const_int(esize, false), "sort.nb.bytes")
+            .unwrap();
+        let nbuf = self
+            .builder
+            .build_call(self.malloc_fn, &[nbytes.into()], "sort.nb.buf")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+
+        let j = self.builder.build_alloca(i64_t, "sort.nb.j").unwrap();
+        self.builder.build_store(j, i64_t.const_zero()).unwrap();
+        let head = self.context.append_basic_block(fn_val, "sort.nb.head");
+        let body = self.context.append_basic_block(fn_val, "sort.nb.body");
+        let exit = self.context.append_basic_block(fn_val, "sort.nb.exit");
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(head);
+        let jv = self
+            .builder
+            .build_load(i64_t, j, "sort.nb.jv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, jv, k, "sort.nb.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, body, exit)
+            .unwrap();
+
+        self.builder.position_at_end(body);
+        let src = unsafe {
+            self.builder
+                .build_gep(key_t, buf8, &[jv], "sort.nb.src")
+                .unwrap()
+        };
+        let keyv = self.builder.build_load(key_t, src, "sort.nb.key").unwrap();
+        let narrowed = self.sort_narrow_value(keyv, elem);
+        let dst = unsafe {
+            self.builder
+                .build_gep(elem, nbuf, &[jv], "sort.nb.dst")
+                .unwrap()
+        };
+        self.builder.build_store(dst, narrowed).unwrap();
+        self.builder
+            .build_store(
+                j,
+                self.builder
+                    .build_int_add(jv, i64_t.const_int(1, false), "sort.nb.j2")
+                    .unwrap(),
+            )
+            .unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(exit);
+        self.builder
+            .build_call(self.free_fn, &[buf8.into()], "sort.nb.free")
+            .unwrap();
+        self.stats_build_vec(nbuf, k)
+    }
+
+    /// Materialize an 8-byte-per-element *widened* copy of a contiguous `data`
+    /// buffer of `count` elements at `elem` — the key array an `argsort` over a
+    /// narrow int / `f32` container keys into (`IndexIntoInt`/`IndexInto`); the
+    /// caller frees it after the sort. Only needed when the element is NOT
+    /// already 8-byte ([`sort_elem_is_wide`]); the wide case keys directly into
+    /// the live data with no copy.
+    pub(super) fn sort_widen_data_buffer(
+        &self,
+        data: PointerValue<'ctx>,
+        count: IntValue<'ctx>,
+        elem: BasicTypeEnum<'ctx>,
+        unsigned: bool,
+    ) -> PointerValue<'ctx> {
+        let i64_t = self.context.i64_type();
+        let f64_t = self.context.f64_type();
+        let fn_val = self.current_fn.expect("sort widen-data in function");
+        let key_t: BasicTypeEnum<'ctx> = if elem.is_int_type() {
+            i64_t.into()
+        } else {
+            f64_t.into()
+        };
+        let nbytes = self
+            .builder
+            .build_int_mul(count, i64_t.const_int(8, false), "sort.wd.bytes")
+            .unwrap();
+        let wbuf = self
+            .builder
+            .build_call(self.malloc_fn, &[nbytes.into()], "sort.wd.buf")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+
+        let j = self.builder.build_alloca(i64_t, "sort.wd.j").unwrap();
+        self.builder.build_store(j, i64_t.const_zero()).unwrap();
+        let head = self.context.append_basic_block(fn_val, "sort.wd.head");
+        let body = self.context.append_basic_block(fn_val, "sort.wd.body");
+        let exit = self.context.append_basic_block(fn_val, "sort.wd.exit");
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(head);
+        let jv = self
+            .builder
+            .build_load(i64_t, j, "sort.wd.jv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, jv, count, "sort.wd.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, body, exit)
+            .unwrap();
+
+        self.builder.position_at_end(body);
+        let src = unsafe {
+            self.builder
+                .build_gep(elem, data, &[jv], "sort.wd.src")
+                .unwrap()
+        };
+        let raw = self.builder.build_load(elem, src, "sort.wd.raw").unwrap();
+        let widened = self.sort_widen_value(raw, elem, unsigned);
+        let dst = unsafe {
+            self.builder
+                .build_gep(key_t, wbuf, &[jv], "sort.wd.dst")
+                .unwrap()
+        };
+        self.builder.build_store(dst, widened).unwrap();
+        self.builder
+            .build_store(
+                j,
+                self.builder
+                    .build_int_add(jv, i64_t.const_int(1, false), "sort.wd.j2")
+                    .unwrap(),
+            )
+            .unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(exit);
+        wbuf
+    }
+
     /// The shared first-occurrence `argmin`/`argmax` over a **non-empty**
     /// dense access (S4) — the index of the first smallest/largest element.
     /// Tracks the best index, re-reading `data[best]` each iteration for the

@@ -2837,45 +2837,25 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(self.build_option_some_via_phis(&[best], some_bb, none_bb, "col.am"))
     }
 
-    /// Classify a column element for the shared 8-byte scratch-sort path
-    /// (`sorted`/`argsort`): `Ok(true)` for a signed `i64`, `Ok(false)` for
-    /// `f64`. The kernel scratch sort (`emit_sort_scratch`) moves 8-byte
-    /// f64/i64 elements and compares int keys as **signed** i64, so any other
-    /// width (`i8`/`i16`/`i32`/`f32`) or an unsigned 64-bit element is rejected
-    /// LOUDLY here — each works under `karac run` (the interpreter is
-    /// width-agnostic) and lands in a follow-on codegen slice.
-    fn column_sort_is_int(
-        &self,
-        elem: BasicTypeEnum<'ctx>,
-        unsigned: bool,
-    ) -> Result<bool, String> {
-        match elem {
-            BasicTypeEnum::IntType(it) if it.get_bit_width() == 64 && !unsigned => Ok(true),
-            BasicTypeEnum::FloatType(ft) if ft.get_bit_width() == 64 => Ok(false),
-            _ => Err(
-                "Column.sorted / argsort under the native backend (`karac build`) \
-                 supports i64 and f64 element columns today; narrower widths, \
-                 unsigned 64-bit, and f32 land in a follow-on slice (each works \
-                 under `karac run`)."
-                    .to_string(),
-            ),
-        }
-    }
-
     /// Compact the VALID slots of this column into a fresh malloc'd 8-byte
     /// buffer, preserving order. Returns `(buf, k)` where `k` is the valid
     /// count. When `as_index` is true, `buf[j]` receives the ORIGINAL slot
     /// index `i` (an i64, for `argsort`); otherwise it receives the element
-    /// value `data[i]` at `elem` (for `sorted`). The buffer is over-allocated
-    /// to `len` slots (the valid count isn't known until the scan finishes);
-    /// the returned Vec's `cap == k` and its free releases the whole block.
+    /// value `data[i]` **widened** into its 8-byte scratch-sort key
+    /// ([`sort_widen_value`](super::Codegen::sort_widen_value): i64/f64 direct,
+    /// narrow ints sext/zext, `f32` fpext — for `sorted`). The buffer is
+    /// over-allocated to `len` slots (the valid count isn't known until the
+    /// scan finishes); the returned Vec's `cap == k` and its free releases the
+    /// whole block.
     fn column_compact_valid(
         &mut self,
         control: PointerValue<'ctx>,
         elem: BasicTypeEnum<'ctx>,
+        unsigned: bool,
         as_index: bool,
     ) -> (PointerValue<'ctx>, IntValue<'ctx>) {
         let i64_t = self.context.i64_type();
+        let f64_t = self.context.f64_type();
         let fn_val = self.current_fn.expect("column compact in function");
         let len = self
             .column_load_field(control, 2, "col.cmp.len")
@@ -2886,9 +2866,15 @@ impl<'ctx> super::Codegen<'ctx> {
         let bitmap = self
             .column_load_field(control, 1, "col.cmp.bm")
             .into_pointer_value();
-        // Buffer slot type: i64 indices for argsort, the element type for sorted
-        // (both 8 bytes — the scratch-sort restriction).
-        let slot_t: BasicTypeEnum<'ctx> = if as_index { i64_t.into() } else { elem };
+        // Buffer slot type: i64 indices for argsort, else the 8-byte scratch key
+        // (i64 for int elems, f64 for float — the compacted values are widened
+        // into it, so every numeric width lands in the uniform 8-byte slot).
+        let key_t: BasicTypeEnum<'ctx> = if elem.is_int_type() {
+            i64_t.into()
+        } else {
+            f64_t.into()
+        };
+        let slot_t: BasicTypeEnum<'ctx> = if as_index { i64_t.into() } else { key_t };
         let nbytes = self
             .builder
             .build_int_mul(len, i64_t.const_int(8, false), "col.cmp.nb")
@@ -2956,7 +2942,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_gep(elem, data, &[iv], "col.cmp.src")
                     .unwrap()
             };
-            self.builder.build_load(elem, src, "col.cmp.x").unwrap()
+            let raw = self.builder.build_load(elem, src, "col.cmp.x").unwrap();
+            self.sort_widen_value(raw, elem, unsigned)
         };
         self.builder.build_store(dst, stored).unwrap();
         self.builder
@@ -2994,47 +2981,72 @@ impl<'ctx> super::Codegen<'ctx> {
     /// elements into a scratch buffer, sorts it in place via the shared
     /// [`emit_sort_scratch`](super::Codegen::emit_sort_scratch), and returns
     /// the owned Vec (the binding site frees it). Ties keep input order
-    /// (stable). i64/f64 elements only (see [`column_sort_is_int`]).
+    /// (stable). Every numeric width via the widened scratch sort (i64/f64
+    /// direct, narrow ints sext/zext, `f32` fpext); u64 rejected loudly (see
+    /// [`sort_key_is_int`](super::Codegen::sort_key_is_int)).
     fn compile_column_sorted(
         &mut self,
         control: PointerValue<'ctx>,
         elem: BasicTypeEnum<'ctx>,
         unsigned: bool,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let is_int = self.column_sort_is_int(elem, unsigned)?;
-        let (buf, k) = self.column_compact_valid(control, elem, false);
+        let is_int = self.sort_key_is_int(elem, unsigned, "sorted", "Column")?;
+        let (buf, k) = self.column_compact_valid(control, elem, unsigned, false);
         let key = if is_int {
             SortKey::IntValue
         } else {
             SortKey::Value
         };
         self.emit_sort_scratch(buf, k, &key);
-        Ok(self.stats_build_vec(buf, k))
+        // Narrow each sorted 8-byte key back to `elem` for the `Vec[T]` result
+        // (a no-op steal for i64/f64).
+        Ok(self.sort_build_vec_from_keys(buf, k, elem))
     }
 
     /// `argsort() -> Vec[i64]` (ElementwiseOrd, S6c): the ORIGINAL slot indices
     /// of the valid values, ordered so the values ascend (stable — ties keep
     /// ascending index order). Compacts the valid slots' indices into a scratch
     /// buffer, then insertion-sorts them keyed by `data[idx]` via the shared
-    /// scratch sort's `IndexInto` form. i64/f64 elements only.
+    /// scratch sort's `IndexInto` form (keyed into a widened data view for
+    /// narrow / `f32` elems). Every numeric width; u64 rejected loudly.
     fn compile_column_argsort(
         &mut self,
         control: PointerValue<'ctx>,
         elem: BasicTypeEnum<'ctx>,
         unsigned: bool,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let is_int = self.column_sort_is_int(elem, unsigned)?;
+        let is_int = self.sort_key_is_int(elem, unsigned, "argsort", "Column")?;
         let data = self
             .column_load_field(control, 0, "col.as.data")
             .into_pointer_value();
-        let (buf, k) = self.column_compact_valid(control, elem, true);
-        let key = if is_int {
-            SortKey::IndexIntoInt(data)
+        let (buf, k) = self.column_compact_valid(control, elem, unsigned, true);
+        // The index buffer holds ORIGINAL slot indices, so the key source must
+        // be full-length. Wide elems key into the live data; narrow / f32 elems
+        // key into a widened full-length 8-byte copy, freed after the sort.
+        if self.sort_elem_is_wide(elem) {
+            let key = if is_int {
+                SortKey::IndexIntoInt(data)
+            } else {
+                SortKey::IndexInto(data)
+            };
+            self.emit_sort_scratch(buf, k, &key);
+            Ok(self.stats_build_vec(buf, k))
         } else {
-            SortKey::IndexInto(data)
-        };
-        self.emit_sort_scratch(buf, k, &key);
-        Ok(self.stats_build_vec(buf, k))
+            let len = self
+                .column_load_field(control, 2, "col.as.len")
+                .into_int_value();
+            let wdata = self.sort_widen_data_buffer(data, len, elem, unsigned);
+            let key = if is_int {
+                SortKey::IndexIntoInt(wdata)
+            } else {
+                SortKey::IndexInto(wdata)
+            };
+            self.emit_sort_scratch(buf, k, &key);
+            self.builder
+                .build_call(self.free_fn, &[wdata.into()], "col.as.keyfree")
+                .unwrap();
+            Ok(self.stats_build_vec(buf, k))
+        }
     }
 
     /// Build the shared [`ContainerAccess`] for this column's data block +
