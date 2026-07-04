@@ -112,6 +112,40 @@ pub trait RegistryProvider {
     /// source tree on disk, and return where it landed. The `Err` string is
     /// wrapped into a [`DepGraphError::RegistryFetchFailed`] diagnostic.
     fn fetch(&self, name: &str, req: &semver::VersionReq) -> Result<MaterializedDep, String>;
+
+    /// The package's **selectable** (non-yanked) published versions, ascending
+    /// — the candidate set the version solver widens over (resolver follow-up
+    /// (a) slice 3). The production provider draws this from the registry
+    /// catalog; the `Err` string wraps into `RegistryFetchFailed`.
+    ///
+    /// The default returns an empty vec: a provider that *can't* enumerate
+    /// (an offline / vendor-only stand-in, or a test mock) simply offers no
+    /// widened set, and the walk falls back to the single [`fetch`](Self::fetch)
+    /// candidate. Empty is "no candidates to widen over", not an error — a
+    /// provider signals a genuine catalog failure via `Err`.
+    fn available_versions(&self, _name: &str) -> Result<Vec<semver::Version>, String> {
+        Ok(Vec::new())
+    }
+
+    /// Materialize the **exact** `version` of `name` on disk — no range
+    /// selection. The solver picks a concrete version from
+    /// [`available_versions`](Self::available_versions) and then materializes
+    /// precisely that one, so a fresh solve and a lockfile pin fetch identical
+    /// trees.
+    ///
+    /// The default expresses the pin as an `=X.Y.Z` range and delegates to
+    /// [`fetch`](Self::fetch); this is correct for any provider whose range
+    /// fetch honors an exact requirement. The production provider overrides it
+    /// to reach the tarball directly (and, unlike fresh range selection, to
+    /// resolve a version even after it was yanked — reproducing a pin must
+    /// succeed). The `Err` string wraps into `RegistryFetchFailed`.
+    fn fetch_exact(
+        &self,
+        name: &str,
+        version: &semver::Version,
+    ) -> Result<MaterializedDep, String> {
+        self.fetch(name, &crate::registry_proxy::exact_version_req(version))
+    }
 }
 
 #[derive(Debug)]

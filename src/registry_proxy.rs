@@ -890,8 +890,11 @@ pub fn fetch_registry_package_at(
 }
 
 /// Build the `=X.Y.Z` requirement naming exactly `version` — used to phrase an
-/// exact-fetch miss through the shared `NoMatchingVersion` diagnostic.
-fn exact_version_req(version: &semver::Version) -> semver::VersionReq {
+/// exact-fetch miss through the shared `NoMatchingVersion` diagnostic, and by
+/// the [`RegistryProvider`](crate::dep_graph::RegistryProvider) default
+/// `fetch_exact` to express an exact pin as a range for providers that only
+/// implement range fetch.
+pub(crate) fn exact_version_req(version: &semver::Version) -> semver::VersionReq {
     semver::VersionReq {
         comparators: vec![semver::Comparator {
             op: semver::Op::Exact,

@@ -14,7 +14,10 @@
 //! zip-slip guard a package manager must have.
 
 use crate::dep_graph::{MaterializedDep, RegistryProvider};
-use crate::registry_proxy::{fetch_registry_package, ProxyClient};
+use crate::registry_proxy::{
+    fetch_registry_package, fetch_registry_package_at, list_registry_versions, FetchedPackage,
+    ProxyClient,
+};
 use std::path::{Path, PathBuf};
 
 /// Failure extracting a fetched tarball.
@@ -110,11 +113,18 @@ impl<'a> ProxyRegistryProvider<'a> {
     }
 }
 
-impl RegistryProvider for ProxyRegistryProvider<'_> {
-    fn fetch(&self, name: &str, req: &semver::VersionReq) -> Result<MaterializedDep, String> {
-        let pkg = fetch_registry_package(self.client, name, req).map_err(|e| e.to_string())?;
-        // Extract under <cache_root>/<name>/<version>/src, mirroring the
-        // tarball's own layout.
+impl ProxyRegistryProvider<'_> {
+    /// Extract a fetched package into `<cache_root>/<name>/<version>/src`
+    /// (mirroring the tarball's own layout) and return the materialized dep.
+    /// Idempotent: an already-extracted tree with a `kara.toml` is reused.
+    /// Shared by [`fetch`](RegistryProvider::fetch) (range selection) and
+    /// [`fetch_exact`](RegistryProvider::fetch_exact) (pinned) — the only
+    /// difference between them is how `pkg` was chosen upstream.
+    fn extract_materialized(
+        &self,
+        name: &str,
+        pkg: FetchedPackage,
+    ) -> Result<MaterializedDep, String> {
         let extract_dir = self
             .cache_root
             .join(name)
@@ -137,6 +147,27 @@ impl RegistryProvider for ProxyRegistryProvider<'_> {
             version: pkg.version,
             upstream_url: pkg.upstream_url,
         })
+    }
+}
+
+impl RegistryProvider for ProxyRegistryProvider<'_> {
+    fn fetch(&self, name: &str, req: &semver::VersionReq) -> Result<MaterializedDep, String> {
+        let pkg = fetch_registry_package(self.client, name, req).map_err(|e| e.to_string())?;
+        self.extract_materialized(name, pkg)
+    }
+
+    fn available_versions(&self, name: &str) -> Result<Vec<semver::Version>, String> {
+        list_registry_versions(self.client, name).map_err(|e| e.to_string())
+    }
+
+    fn fetch_exact(
+        &self,
+        name: &str,
+        version: &semver::Version,
+    ) -> Result<MaterializedDep, String> {
+        let pkg =
+            fetch_registry_package_at(self.client, name, version).map_err(|e| e.to_string())?;
+        self.extract_materialized(name, pkg)
     }
 }
 
@@ -314,5 +345,143 @@ mod tests {
             .fetch("http", &semver::VersionReq::parse("^2.0").unwrap())
             .unwrap_err();
         assert!(err.contains("no version"), "unexpected error: {err}");
+    }
+
+    // ── candidate-set trait methods (resolver follow-up (a) slice 3b) ──
+
+    /// A multi-version mem client: a catalog listing every `versions` entry
+    /// (optionally marking some `yanked`), plus a per-version tarball whose
+    /// `kara.toml` records the version so a test can prove *which* one was
+    /// materialized.
+    fn make_multi_mem_client(package: &str, versions: &[&str], yanked: &[&str]) -> MemProxyClient {
+        let mut mem = MemProxyClient::new();
+        let vers: Vec<semver::Version> = versions.iter().map(|s| ver(s)).collect();
+        let yanks: Vec<semver::Version> = yanked.iter().map(|s| ver(s)).collect();
+        mem.insert_catalog_with_yanked(package, "https://up/pkg", vers.clone(), yanks);
+        for v in &vers {
+            let manifest = format!("[package]\nname = \"{package}\"\nversion = \"{v}\"\n");
+            let targz = make_targz(&[("kara.toml", manifest.as_bytes())]);
+            let content_hash = format!("blake3:{}", blake3::hash(&targz).to_hex());
+            mem.insert_package(FetchedPackage {
+                package: package.to_string(),
+                version: v.clone(),
+                upstream_url: String::new(),
+                mirror_url: "m".to_string(),
+                tarball_bytes: targz,
+                content_hash,
+            });
+        }
+        mem
+    }
+
+    #[test]
+    fn proxy_provider_available_versions_lists_selectable_ascending() {
+        // Catalog out of order with one yanked — the provider surfaces the
+        // selectable set, sorted, for the solver to widen over.
+        let mem = make_multi_mem_client("http", &["2.0.0", "1.0.0", "1.9.0", "1.2.0"], &["1.9.0"]);
+        let cache = temp_dir();
+        let provider = ProxyRegistryProvider::new(&mem, &cache);
+        let versions = provider.available_versions("http").expect("list");
+        assert_eq!(versions, vec![ver("1.0.0"), ver("1.2.0"), ver("2.0.0")]);
+    }
+
+    #[test]
+    fn proxy_provider_available_versions_unknown_package_errors() {
+        let mem = MemProxyClient::new();
+        let cache = temp_dir();
+        let provider = ProxyRegistryProvider::new(&mem, &cache);
+        let err = provider.available_versions("ghost").unwrap_err();
+        assert!(
+            err.contains("ghost") || err.contains("not found"),
+            "err: {err}"
+        );
+    }
+
+    #[test]
+    fn proxy_provider_fetch_exact_materializes_the_named_version() {
+        // Highest published is 2.0.0; the solver may have backtracked to 1.2.0.
+        // fetch_exact must materialize precisely 1.2.0, extracted + located.
+        let mem = make_multi_mem_client("http", &["1.0.0", "1.2.0", "2.0.0"], &[]);
+        let cache = temp_dir();
+        let provider = ProxyRegistryProvider::new(&mem, &cache);
+        let dep = provider
+            .fetch_exact("http", &ver("1.2.0"))
+            .expect("fetch_exact");
+        assert_eq!(dep.version, ver("1.2.0"));
+        assert_eq!(dep.upstream_url, "https://up/pkg");
+        let manifest = std::fs::read_to_string(dep.root_dir.join("kara.toml")).unwrap();
+        assert!(
+            manifest.contains("version = \"1.2.0\""),
+            "materialized the wrong version's tree: {manifest}"
+        );
+    }
+
+    #[test]
+    fn proxy_provider_fetch_exact_resolves_a_yanked_pin() {
+        // A yanked version is absent from available_versions but must still
+        // materialize by exact pin — reproducing a lock can't fail on yank.
+        let mem = make_multi_mem_client("http", &["1.0.0", "1.9.0"], &["1.9.0"]);
+        let cache = temp_dir();
+        let provider = ProxyRegistryProvider::new(&mem, &cache);
+        assert!(
+            !provider
+                .available_versions("http")
+                .unwrap()
+                .contains(&ver("1.9.0")),
+            "yanked version must not be in the selectable set"
+        );
+        let dep = provider
+            .fetch_exact("http", &ver("1.9.0"))
+            .expect("fetch yanked pin");
+        assert_eq!(dep.version, ver("1.9.0"));
+    }
+
+    #[test]
+    fn proxy_provider_fetch_exact_unpublished_version_errors() {
+        let mem = make_multi_mem_client("http", &["1.0.0", "1.2.0"], &[]);
+        let cache = temp_dir();
+        let provider = ProxyRegistryProvider::new(&mem, &cache);
+        let err = provider.fetch_exact("http", &ver("1.5.0")).unwrap_err();
+        assert!(err.contains("no version"), "unexpected error: {err}");
+    }
+
+    // ── trait defaults (a provider that only implements `fetch`) ──
+
+    /// A minimal provider implementing *only* `fetch` — it exercises the
+    /// default `available_versions` (empty) and default `fetch_exact`
+    /// (delegates to `fetch` via an `=X.Y.Z` range).
+    struct FetchOnlyProvider {
+        version: semver::Version,
+    }
+
+    impl RegistryProvider for FetchOnlyProvider {
+        fn fetch(&self, _name: &str, _req: &semver::VersionReq) -> Result<MaterializedDep, String> {
+            Ok(MaterializedDep {
+                root_dir: PathBuf::from("/x"),
+                version: self.version.clone(),
+                upstream_url: "u".to_string(),
+            })
+        }
+    }
+
+    #[test]
+    fn default_available_versions_is_empty() {
+        let p = FetchOnlyProvider {
+            version: ver("1.0.0"),
+        };
+        assert!(p.available_versions("anything").unwrap().is_empty());
+    }
+
+    #[test]
+    fn default_fetch_exact_delegates_to_fetch() {
+        // The default routes the exact pin through `fetch` as an `=X.Y.Z`
+        // range; this stub ignores the req and returns its canned dep, proving
+        // the delegation path is wired.
+        let p = FetchOnlyProvider {
+            version: ver("3.1.4"),
+        };
+        let dep = p.fetch_exact("anything", &ver("3.1.4")).expect("delegated");
+        assert_eq!(dep.version, ver("3.1.4"));
+        assert_eq!(dep.root_dir, PathBuf::from("/x"));
     }
 }
