@@ -1244,6 +1244,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.boxed_enum_payload_vars.clear();
         self.inline_result_payload_vars.clear();
         self.inline_option_map_payload_vars.clear();
+        self.inline_option_agg_payload_vars.clear();
         // Function-level scope-cleanup frame for owned locals (`Tensor` /
         // `Vec` / `String` / `Map` lets needing drop), mirroring
         // `compile_function`. The caller's frame stack was swapped out in

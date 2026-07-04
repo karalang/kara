@@ -1424,39 +1424,93 @@ fn main() {
         );
     }
 
-    /// B-2026-07-03-27 (pinned, non-blocking): an `Option[E]` field where `E` is
-    /// a PLAIN (non-`shared`) user enum carrying a heap payload, dropped
-    /// undestructured (here via a `Some(_)` wildcard match, and via plain
-    /// scope-drop), leaks the enum payload's heap buffer — the inline-Option
-    /// drop path (cf. B-2026-06-10-6, which covered `Option[String]`/`[Vec]`/
-    /// `[Map]`) does not recurse into a user-enum payload's drop. LSan-confirmed
-    /// (`Option[shared enum]` and `Option[String]`/`Option[Vec]` are all clean;
-    /// only the plain-enum payload leaks). The self-hosted parser SIDESTEPS this
-    /// — every recursive AST enum (`Expr`/`TypeExpr`/`Pattern`) is `shared`, and
-    /// `AttrArgNode.value` is `Option[Expr]` (shared) — so it is non-blocking for
-    /// the port. `#[ignore]`d so the green Linux-CI `memory-sanitizer` gate stays
-    /// green; un-ignore it when the inline-Option user-enum-payload drop lands.
-    /// Run: `scripts/lsan-local.sh "asan_option_plain_enum_heap_payload_undestructured_drop_leaks_pinned -- --ignored"`.
+    /// B-2026-07-03-27 (FIXED 009fd479-follow-on): an `Option[E]` field where `E`
+    /// is a PLAIN (non-`shared`) user enum carrying a heap payload, destructured
+    /// into a local and dropped, leaked the enum payload's heap buffer — the
+    /// inline-Option drop path (cf. B-2026-06-10-6, which covered
+    /// `Option[String]`/`[Vec]`/`[Map]`) did not recurse into a user-enum (or
+    /// struct) payload's drop, and the destructure leaf got no cleanup at all
+    /// (`destructure_field_needs_cleanup` excludes `Option`; struct drop skips
+    /// `Option` fields — B-2026-07-03-28). The fix registers a tag-guarded
+    /// `karac_drop_Option_<payload>` (`emit_option_drop_fn` — the same fn the
+    /// `Vec[Option[..]]` element path uses, handling the heap-BOXED wide payload)
+    /// on the leaf when the destructure OWNS the source, paired with a Some-arm
+    /// tag-zeroing suppressor so a `Some(v)` move-out doesn't double-free.
+    /// Exercises: (1) `Some(_)` wildcard match then drop; (2) `Some(v)` move-out
+    /// (the bound payload frees it once, source drop suppressed); (3) a
+    /// fresh-temp source destructure. Payloads are 40 bytes (LSan reachability).
+    /// B-2026-07-03-27 (FIXED): an `Option[E]` field where `E` is a PLAIN
+    /// (non-`shared`) user enum/struct carrying a heap payload, destructured into
+    /// a local and dropped UNDESTRUCTURED (a `Some(_)` wildcard match, or plain
+    /// scope-drop), leaked the payload's heap buffer. The inline-Option drop
+    /// (B-2026-06-10-6) covered only `Option[String]`/`[Vec]`/`[Map]`, and the
+    /// destructure leaf got no cleanup (`destructure_field_needs_cleanup` excludes
+    /// `Option`; struct drop skips `Option` fields — B-2026-07-03-28). The fix
+    /// registers a tag-guarded `karac_drop_Option_<payload>` (`emit_option_drop_fn`
+    /// — the same fn the `Vec[Option[..]]` element path uses, handling the
+    /// heap-BOXED wide enum payload) on the leaf when the destructure OWNS the
+    /// source. LSan-confirmed: without the fix this leaks 360 B / 10 allocs.
+    /// Covers a Vec-sourced (moved-in owned param) source and a fresh-temp source.
     #[test]
-    #[ignore]
-    fn asan_option_plain_enum_heap_payload_undestructured_drop_leaks_pinned() {
+    fn asan_b27_option_enum_undestructured_drop_no_leak() {
         assert_clean_asan_run(
             r#"
 enum Val { Nothing, Ident(String) }
 struct A { value: Option[Val] }
-fn use_a(a: A) -> i64 { let A { value } = a; match value { Some(_) => 1, None => 0 } }
+fn use_wild(a: A) -> i64 { let A { value } = a; match value { Some(_) => 1, None => 0 } }
+fn mk() -> A { A { value: Some(Val.Ident("kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk".to_string())) } }
 fn build() -> Vec[A] {
     let mut v: Vec[A] = Vec.new();
     let mut i = 0;
     while i < 6 { v.push(A { value: Some(Val.Ident("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string())) }); i = i + 1; }
     v
 }
+fn main() {
+    let mut t = 0;
+    let xs = build();                            // moved-in owned param source
+    for a in xs { t = t + use_wild(a); }
+    let mut i = 0;                               // fresh-temp source
+    while i < 6 { t = t + use_wild(mk()); i = i + 1; }
+    println(t);
+}
+"#,
+            &["12"],
+            "b27_option_enum_undestructured_drop",
+        );
+    }
+
+    /// Sibling of the enum case — an `Option[<user struct>]` field
+    /// (`Option[Inner]`, `Inner { s: String }`) destructured and dropped
+    /// undestructured. Same fix (`emit_option_drop_fn` recurses into the
+    /// struct's `__karac_drop_struct_Inner`). B-2026-07-03-27.
+    #[test]
+    fn asan_b27_option_struct_undestructured_drop_no_leak() {
+        assert_clean_asan_run(
+            r#"
+struct Inner { s: String }
+struct A { value: Option[Inner] }
+fn use_a(a: A) -> i64 { let A { value } = a; match value { Some(_) => 1, None => 0 } }
+fn build() -> Vec[A] {
+    let mut v: Vec[A] = Vec.new();
+    let mut i = 0;
+    while i < 6 { v.push(A { value: Some(Inner { s: "ssssssssssssssssssssssssssssssssssssssss".to_string() }) }); i = i + 1; }
+    v
+}
 fn main() { let xs = build(); let mut t = 0; for a in xs { t = t + use_a(a); } println(t); }
 "#,
             &["6"],
-            "option_plain_enum_heap_payload_undestructured_drop_leaks_pinned",
+            "b27_option_struct_undestructured_drop",
         );
     }
+
+    // NOTE: a `match value { Some(v) => … }` that binds the `Some` payload OUT of
+    // an `Option[<agg>]` destructure leaf is deliberately NOT covered here — it is
+    // the separate, pre-existing move-out leak tracked as B-2026-07-03-31 (the
+    // heap box holding a wide payload isn't freed when the payload is moved out).
+    // The Some-arm tag-zeroing suppressor added with this fix keeps that path
+    // free of DOUBLE-frees (verified: without it a boxed-payload move-out
+    // double-frees and SIGTRAPs); it is exercised indirectly by the many existing
+    // Option/enum match tests in this suite.
 
     /// Borrow-elision negative: each `r` is moved into `keep`, so the gate must
     /// KEEP the deep clone — `r` owns an independent buffer that outlives `out`.

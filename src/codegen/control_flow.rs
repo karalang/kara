@@ -111,6 +111,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.suppress_inline_option_payload_cleanup(value, pattern);
         self.suppress_inline_result_payload_cleanup(value, pattern);
         self.suppress_inline_option_map_payload_cleanup(value, pattern);
+        self.suppress_inline_option_agg_payload_cleanup(value, pattern);
         // Slice 3t: boxed-payload struct-destructure field suppression
         // (self-gated on `boxed_enum_payload_vars` membership — only a
         // binding OWNED here is registered, so borrow scrutinees no-op).
@@ -288,6 +289,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.suppress_inline_option_payload_cleanup(value, pattern);
         self.suppress_inline_result_payload_cleanup(value, pattern);
         self.suppress_inline_option_map_payload_cleanup(value, pattern);
+        self.suppress_inline_option_agg_payload_cleanup(value, pattern);
         // Slice 3t: boxed-payload struct-destructure field suppression
         // (self-gated on `boxed_enum_payload_vars` membership — only a
         // binding OWNED here is registered, so borrow scrutinees no-op).
@@ -407,6 +409,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.suppress_inline_option_payload_cleanup(value, pattern);
         self.suppress_inline_result_payload_cleanup(value, pattern);
         self.suppress_inline_option_map_payload_cleanup(value, pattern);
+        self.suppress_inline_option_agg_payload_cleanup(value, pattern);
         // Slice 3t: boxed-payload struct-destructure field suppression
         // (self-gated on `boxed_enum_payload_vars` membership — only a
         // binding OWNED here is registered, so borrow scrutinees no-op).

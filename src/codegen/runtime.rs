@@ -1889,6 +1889,23 @@ impl<'ctx> super::Codegen<'ctx> {
             && self.te_recursive_drop_fully_supported(payload_te)
     }
 
+    /// True iff `field_te` is `Option[P]` with `P` a non-shared user
+    /// struct/enum the recursive drop family fully frees — the shape
+    /// `track_inline_option_agg_payload_var` registers a leaf drop for
+    /// (B-2026-07-03-27). A pure `&self` gate for the destructure-leaf branch.
+    pub(super) fn option_field_agg_drop_ok(&self, field_te: &TypeExpr) -> bool {
+        let TypeKind::Path(p) = &field_te.kind else {
+            return false;
+        };
+        if p.segments.last().map(|s| s.as_str()) != Some("Option") {
+            return false;
+        }
+        matches!(
+            p.generic_args.as_ref().and_then(|a| a.first()),
+            Some(GenericArg::Type(payload)) if self.option_payload_struct_or_enum_drop_ok(payload)
+        )
+    }
+
     /// Synthesize (or fetch) `__karac_vec_elem_full_drop_<S>` — the per-element
     /// drop for a `Vec` whose element is a NON-shared user struct `S` that
     /// transitively owns `shared` fields (e.g. `Vec[CallArg]`, `CallArg`
@@ -3156,6 +3173,73 @@ impl<'ctx> super::Codegen<'ctx> {
             });
         }
         self.inline_option_payload_vars.insert(var_name.to_string());
+    }
+
+    /// Register a scope-exit drop of an `Option[P]` binding whose `Some`
+    /// payload `P` is a NON-shared user STRUCT or value ENUM the recursive
+    /// drop family fully frees (B-2026-07-03-27). The struct/enum sibling of
+    /// `track_inline_option_payload_var` (which only covers the inline
+    /// `String`/`Vec` `{ptr,len,cap}` overlay): `option_inline_payload_elem`
+    /// returns `None` for a struct/enum payload, so those `Option` locals —
+    /// e.g. a `let A { value } = a` destructure of `struct A { value:
+    /// Option[Val] }`, `Val` a heap enum — got no cleanup and leaked the
+    /// payload. Routes the slot through the payload-type-aware, tag-guarded
+    /// `karac_drop_Option_<payload>` (`emit_option_drop_fn`, the exact fn the
+    /// `Vec[Option[..]]` element path uses — it handles both the inline and the
+    /// heap-BOXED wide-payload cases). No-op when the payload isn't a
+    /// recursive-drop-supported struct/enum. Records the binding name so a
+    /// `match`/`if let` arm that binds the `Some` payload out can zero the
+    /// source tag and avoid a double-free
+    /// (`suppress_inline_option_agg_payload_cleanup`).
+    pub(super) fn track_inline_option_agg_payload_var(
+        &mut self,
+        var_name: &str,
+        option_slot: PointerValue<'ctx>,
+        option_te: &TypeExpr,
+    ) {
+        let TypeKind::Path(p) = &option_te.kind else {
+            return;
+        };
+        if p.segments.last().map(|s| s.as_str()) != Some("Option") {
+            return;
+        }
+        let Some(GenericArg::Type(payload)) = p.generic_args.as_ref().and_then(|a| a.first())
+        else {
+            return;
+        };
+        if !self.option_payload_struct_or_enum_drop_ok(payload) {
+            return;
+        }
+        let payload = payload.clone();
+        let Some(layout) = self.enum_layouts.get("Option") else {
+            return;
+        };
+        let option_ty = layout.llvm_type;
+        // Nested-block let: an untaken path leaves the tag `undef`, which could
+        // spuriously match `Some`; zero the slot in the entry block (mirrors
+        // `track_inline_option_payload_var`).
+        let is_nested = self
+            .current_fn
+            .and_then(|f| f.get_first_basic_block())
+            .zip(self.builder.get_insert_block())
+            .map(|(entry, cur)| entry != cur)
+            .unwrap_or(false);
+        if is_nested {
+            self.zero_init_option_slot_in_entry_block(option_slot, option_ty);
+        }
+        // Emit (or fetch) the tag-guarded `karac_drop_Option_<payload>` — may
+        // move the builder's insert block, so resolve it before queuing.
+        let Some(drop_fn) = self.emit_option_drop_fn(&payload) else {
+            return;
+        };
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(CleanupAction::EnumDrop {
+                enum_alloca: option_slot,
+                drop_fn,
+            });
+        }
+        self.inline_option_agg_payload_vars
+            .insert(var_name.to_string());
     }
 
     /// Free a discarded inline-heap `Option` temporary in statement position

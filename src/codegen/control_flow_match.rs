@@ -356,6 +356,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.suppress_inline_option_payload_cleanup(scrutinee, &arm.pattern);
                     self.suppress_inline_result_payload_cleanup(scrutinee, &arm.pattern);
                     self.suppress_inline_option_map_payload_cleanup(scrutinee, &arm.pattern);
+                    self.suppress_inline_option_agg_payload_cleanup(scrutinee, &arm.pattern);
                     // Slice 3t: struct-destructure of a BOXED payload — zero
                     // the consumed fields inside the box so the binding's
                     // BoxedEnumDrop inner walk frees only unbound fields.
@@ -3580,6 +3581,55 @@ impl<'ctx> super::Codegen<'ctx> {
         if let Ok(tag_ptr) =
             self.builder
                 .build_struct_gep(layout.llvm_type, slot.ptr, 0, "optmap.suppress.tag")
+        {
+            let _ = self
+                .builder
+                .build_store(tag_ptr, i64_t.const_int(none_tag, false));
+        }
+    }
+
+    /// `Option[<user struct/enum>]` sibling of
+    /// `suppress_inline_option_map_payload_cleanup` (B-2026-07-03-27). When a
+    /// `match`/`if let` arm binds the `Some` payload out of a binding whose
+    /// scope-exit `EnumDrop` runs `karac_drop_Option_<payload>` (tracked in
+    /// `inline_option_agg_payload_vars`), the bound payload's own cleanup
+    /// (`track_enum_var` / `track_struct_var` on the leaf) now frees it — so the
+    /// source drop must skip. Like the `Option[Map]` case the payload has no
+    /// `cap` word to zero, so overwrite the source tag with `None`: the
+    /// `emit_option_drop_fn` tag-guard then no-ops. The store lands in the
+    /// consuming arm body, so a non-consuming `Some(_)` / `None` arm leaves the
+    /// source drop armed.
+    pub(super) fn suppress_inline_option_agg_payload_cleanup(
+        &self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+    ) {
+        let ExprKind::Identifier(name) = &scrutinee.kind else {
+            return;
+        };
+        if !self.inline_option_agg_payload_vars.contains(name.as_str()) {
+            return;
+        }
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return;
+        };
+        if path.last().map(|s| s.as_str()) != Some("Some") {
+            return;
+        }
+        if !patterns.iter().any(pattern_consumes_field) {
+            return;
+        }
+        let Some(slot) = self.variables.get(name.as_str()) else {
+            return;
+        };
+        let Some(layout) = self.enum_layouts.get("Option") else {
+            return;
+        };
+        let i64_t = self.context.i64_type();
+        let none_tag = layout.tags.get("None").copied().unwrap_or(0);
+        if let Ok(tag_ptr) =
+            self.builder
+                .build_struct_gep(layout.llvm_type, slot.ptr, 0, "optagg.suppress.tag")
         {
             let _ = self
                 .builder

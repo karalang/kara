@@ -971,6 +971,18 @@ pub(super) struct Codegen<'ctx> {
     /// word to zero, unlike the Vec case) so the scope-exit free skips. See
     /// B-2026-06-10-6's `Option[Map]` follow-on.
     pub(crate) inline_option_map_payload_vars: std::collections::HashSet<String>,
+    /// `Option[<user struct/enum>]` sibling — names of `Option` bindings whose
+    /// `Some` payload is a NON-shared user struct/enum the recursive drop family
+    /// frees (inline in the payload words, or heap-boxed when wider). Registered
+    /// a `CleanupAction::EnumDrop` running `karac_drop_Option_<payload>` (the
+    /// same tag-guarded fn the `Vec[Option[..]]` element path uses) on the slot.
+    /// The generic `Option` drop switch is a no-op (type-erased) and the
+    /// String/Vec-overlay `FreeInlineOptionPayload` doesn't cover a struct/enum
+    /// payload, so a destructured-into-a-local `Option[Val]` leaked its payload
+    /// (B-2026-07-03-27). A `match`/`if let` arm binding the `Some` payload out
+    /// sets the source tag to `None` (like the `Option[Map]` case — no `cap`
+    /// word) so the scope-exit drop skips and the bound payload frees it once.
+    pub(crate) inline_option_agg_payload_vars: std::collections::HashSet<String>,
     /// Names of `Option`/`Result` bindings whose wide payload was heap-BOXED
     /// (`track_boxed_enum_var` registered a `CleanupAction::BoxedEnumDrop` —
     /// `Option[Block]` and other `Option[Wide]` / `Result[Wide,_]`). The
@@ -5260,6 +5272,7 @@ impl<'ctx> Codegen<'ctx> {
             inline_option_payload_vars: std::collections::HashSet::new(),
             inline_result_payload_vars: std::collections::HashSet::new(),
             inline_option_map_payload_vars: std::collections::HashSet::new(),
+            inline_option_agg_payload_vars: std::collections::HashSet::new(),
             boxed_enum_payload_vars: std::collections::HashSet::new(),
             refinement_bases: HashMap::new(),
             refinement_generic_params: HashMap::new(),

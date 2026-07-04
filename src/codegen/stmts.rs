@@ -5215,6 +5215,28 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.zero_struct_field_move_cap(src_ptr, &struct_name, fname);
                     }
                 }
+                // B-2026-07-03-27 — an `Option[<user struct/enum>]` field. The
+                // branches above don't cover it: `destructure_field_needs_cleanup`
+                // excludes `Option`, and `transferable` (Vec/String/struct) does
+                // too. Struct drop NEVER frees an `Option` field (excluded by
+                // design — B-2026-07-03-28, blocked), so when this destructure
+                // OWNS the source (a fresh temp, or a moved-in owned binding —
+                // NOT a `ref`/borrow, which still owns the payload elsewhere) the
+                // leaf must free the `Some` payload or it leaks. Independent of
+                // the branches above (whose `track_owned_destructure_field_cleanup`
+                // has no `Option` arm), so no double registration. Runs for both
+                // the fresh and callee-owned sources — the field's own `Option`
+                // drop is orthogonal to the source's `StructDrop` (which skips it).
+                if self.option_field_agg_drop_ok(&field_te) {
+                    let source_owned = fresh
+                        || matches!(&value.kind, ExprKind::Identifier(n)
+                            if !self.ref_params.contains_key(n.as_str()));
+                    if source_owned {
+                        if let Some(slot) = self.variables.get(&name).copied() {
+                            self.track_inline_option_agg_payload_var(&name, slot.ptr, &field_te);
+                        }
+                    }
+                }
             } else if fresh && self.destructure_field_needs_cleanup(&field_te) {
                 // Unbound heap field (`items: _` or dropped by `..`): no
                 // binding to free it, so stash a copy in a synthetic slot and

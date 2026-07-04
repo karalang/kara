@@ -74,6 +74,7 @@ pub(super) struct VarMetadataSnapshot<'ctx> {
     inline_option_payload_vars: bool,
     inline_result_payload_vars: bool,
     inline_option_map_payload_vars: bool,
+    inline_option_agg_payload_vars: bool,
     boxed_enum_payload_vars: bool,
     rc_fallback_heap_types: Option<StructType<'ctx>>,
 }
@@ -109,6 +110,7 @@ impl<'ctx> super::Codegen<'ctx> {
             inline_option_payload_vars: self.inline_option_payload_vars.remove(name),
             inline_result_payload_vars: self.inline_result_payload_vars.remove(name),
             inline_option_map_payload_vars: self.inline_option_map_payload_vars.remove(name),
+            inline_option_agg_payload_vars: self.inline_option_agg_payload_vars.remove(name),
             boxed_enum_payload_vars: self.boxed_enum_payload_vars.remove(name),
             rc_fallback_heap_types: self.rc_fallback_heap_types.remove(name),
         }
@@ -194,6 +196,9 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         if snap.inline_option_map_payload_vars {
             self.inline_option_map_payload_vars.insert(key.clone());
+        }
+        if snap.inline_option_agg_payload_vars {
+            self.inline_option_agg_payload_vars.insert(key.clone());
         }
         if snap.boxed_enum_payload_vars {
             self.boxed_enum_payload_vars.insert(key.clone());
