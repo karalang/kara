@@ -813,6 +813,96 @@ pub fn fetch_registry_package(
     Ok(pkg)
 }
 
+/// List a package's **selectable** published versions — every version in the
+/// catalog that has *not* been yanked — in ascending semver order.
+///
+/// This is the candidate catalog the version solver (resolver follow-up (a)
+/// slice 3) draws from: instead of eagerly picking the single highest match
+/// (`fetch_registry_package`), the solver needs the full set so it can
+/// backtrack to a lower version when the highest is incompatible with a
+/// sibling constraint. Yanked versions (registry-proxy follow-up (l)) are
+/// excluded — a *fresh* resolve never selects a withdrawn release — mirroring
+/// the filter in [`fetch_registry_package`].
+///
+/// The catalog is expected to arrive ascending, but this sorts defensively so
+/// the returned order is a hard guarantee callers can rely on. An empty
+/// (all-yanked, or genuinely empty) catalog yields an empty vec, not an error:
+/// "no selectable versions" is a fact for the caller to act on, not a fetch
+/// failure.
+pub fn list_registry_versions(
+    client: &dyn ProxyClient,
+    name: &str,
+) -> Result<Vec<semver::Version>, RegistryFetchError> {
+    let manifest = client
+        .fetch_catalog(name)
+        .map_err(RegistryFetchError::Proxy)?;
+    let mut selectable: Vec<semver::Version> = manifest
+        .versions
+        .into_iter()
+        .filter(|v| !manifest.yanked.contains(v))
+        .collect();
+    selectable.sort();
+    Ok(selectable)
+}
+
+/// Resolve one registry dependency at an **exact** version to a concrete
+/// [`FetchedPackage`]: fetch the catalog, confirm `version` is published, then
+/// fetch that version's tarball.
+///
+/// This is the exact-version sibling of [`fetch_registry_package`], which
+/// picks the highest match for a *range*. The solver (resolver follow-up (a)
+/// slice 3) picks a concrete version from [`list_registry_versions`] and then
+/// materializes precisely that one — no re-derivation from a range, so a lock
+/// pin and a fresh solve fetch byte-identical trees.
+///
+/// Unlike fresh range selection, an exact fetch is **not** filtered by the
+/// yanked set: a yanked version is still published and its tarball still
+/// resolves (see [`FetchedManifest::yanked`]). Reproducing an existing lock —
+/// or fetching a version the operator named deliberately — must succeed even
+/// after the release was withdrawn. Only the *fresh selection* surfaces
+/// (`list_registry_versions`, `fetch_registry_package`) hide yanked versions.
+///
+/// A version absent from the catalog surfaces as
+/// [`RegistryFetchError::NoMatchingVersion`] with an exact-pin requirement, so
+/// the diagnostic lists what the catalog *does* carry.
+pub fn fetch_registry_package_at(
+    client: &dyn ProxyClient,
+    name: &str,
+    version: &semver::Version,
+) -> Result<FetchedPackage, RegistryFetchError> {
+    let manifest = client
+        .fetch_catalog(name)
+        .map_err(RegistryFetchError::Proxy)?;
+    if !manifest.versions.contains(version) {
+        return Err(RegistryFetchError::NoMatchingVersion {
+            name: name.to_string(),
+            req: exact_version_req(version),
+            available: manifest.versions,
+        });
+    }
+    let mut pkg = client
+        .fetch_package(name, version)
+        .map_err(RegistryFetchError::Proxy)?;
+    if pkg.upstream_url.is_empty() {
+        pkg.upstream_url = manifest.upstream_url;
+    }
+    Ok(pkg)
+}
+
+/// Build the `=X.Y.Z` requirement naming exactly `version` — used to phrase an
+/// exact-fetch miss through the shared `NoMatchingVersion` diagnostic.
+fn exact_version_req(version: &semver::Version) -> semver::VersionReq {
+    semver::VersionReq {
+        comparators: vec![semver::Comparator {
+            op: semver::Op::Exact,
+            major: version.major,
+            minor: Some(version.minor),
+            patch: Some(version.patch),
+            pre: version.pre.clone(),
+        }],
+    }
+}
+
 /// `ureq`-backed proxy client. Performs real HTTPS GETs against the two
 /// registry-proxy endpoints (see `docs/registry-proxy-protocol.md`):
 ///
@@ -1824,6 +1914,118 @@ mod tests {
         mem.insert_catalog_with_yanked("http", "u", vec![v("1.0.0")], vec![v("1.0.0")]);
         let err = fetch_registry_package(&mem, "http", &req("^3")).unwrap_err();
         assert_eq!(err.code(), "E_REGISTRY_NO_MATCHING_VERSION");
+    }
+
+    // ── candidate-set primitives (resolver follow-up (a) slice 3) ──
+
+    #[test]
+    fn list_registry_versions_returns_all_selectable_ascending() {
+        // Catalog deliberately out of order; the listing must sort ascending so
+        // the version solver sees a hard ordering guarantee.
+        let mut mem = MemProxyClient::new();
+        mem.insert_catalog(
+            "http",
+            "u",
+            vec![v("2.0.0"), v("1.0.0"), v("1.9.0"), v("1.2.0")],
+        );
+        let versions = list_registry_versions(&mem, "http").expect("list");
+        assert_eq!(
+            versions,
+            vec![v("1.0.0"), v("1.2.0"), v("1.9.0"), v("2.0.0")]
+        );
+    }
+
+    #[test]
+    fn list_registry_versions_excludes_yanked() {
+        // A yanked release is published but must never appear in the fresh
+        // candidate set — the solver must not be able to pick it.
+        let mut mem = MemProxyClient::new();
+        mem.insert_catalog_with_yanked(
+            "http",
+            "u",
+            vec![v("1.0.0"), v("1.2.0"), v("1.9.0"), v("2.0.0")],
+            vec![v("1.9.0"), v("2.0.0")],
+        );
+        let versions = list_registry_versions(&mem, "http").expect("list");
+        assert_eq!(versions, vec![v("1.0.0"), v("1.2.0")]);
+    }
+
+    #[test]
+    fn list_registry_versions_all_yanked_is_empty_not_error() {
+        // "No selectable versions" is a fact the caller acts on, not a fetch
+        // failure — an all-yanked catalog yields an empty vec, not an Err.
+        let mut mem = MemProxyClient::new();
+        mem.insert_catalog_with_yanked(
+            "http",
+            "u",
+            vec![v("1.0.0"), v("2.0.0")],
+            vec![v("1.0.0"), v("2.0.0")],
+        );
+        let versions = list_registry_versions(&mem, "http").expect("list");
+        assert!(versions.is_empty());
+    }
+
+    #[test]
+    fn list_registry_versions_unknown_package_is_proxy_error() {
+        let mem = MemProxyClient::new();
+        let err = list_registry_versions(&mem, "ghost").unwrap_err();
+        assert_eq!(err.code(), "E_PROXY_PACKAGE_NOT_FOUND");
+    }
+
+    #[test]
+    fn fetch_at_materializes_the_named_version_not_the_highest() {
+        // Exact fetch must return precisely the requested version, even though
+        // a higher one is published — the solver may have backtracked to it.
+        let mut mem = MemProxyClient::new();
+        mem.insert_catalog(
+            "http",
+            "https://github.com/kara/http",
+            vec![v("1.0.0"), v("1.2.0"), v("1.9.0"), v("2.0.0")],
+        );
+        mem.insert_package(pkg_with_empty_upstream("1.2.0", b"tarball-1.2.0"));
+
+        let pkg = fetch_registry_package_at(&mem, "http", &v("1.2.0")).expect("fetch");
+        assert_eq!(pkg.version, v("1.2.0"));
+        assert_eq!(pkg.tarball_bytes, b"tarball-1.2.0");
+        // Upstream stitched from the catalog, same as the range fetch.
+        assert_eq!(pkg.upstream_url, "https://github.com/kara/http");
+    }
+
+    #[test]
+    fn fetch_at_resolves_a_yanked_version() {
+        // Reproducing a lock (or an operator-named pin) must succeed even after
+        // the release was withdrawn: exact fetch is NOT filtered by `yanked`.
+        let mut mem = MemProxyClient::new();
+        mem.insert_catalog_with_yanked("http", "u", vec![v("1.0.0"), v("1.9.0")], vec![v("1.9.0")]);
+        mem.insert_package(pkg_with_empty_upstream("1.9.0", b"tarball-1.9.0"));
+
+        let pkg = fetch_registry_package_at(&mem, "http", &v("1.9.0")).expect("fetch yanked");
+        assert_eq!(pkg.version, v("1.9.0"));
+        assert_eq!(pkg.tarball_bytes, b"tarball-1.9.0");
+    }
+
+    #[test]
+    fn fetch_at_unpublished_version_names_what_the_catalog_carries() {
+        let mut mem = MemProxyClient::new();
+        mem.insert_catalog("http", "u", vec![v("1.0.0"), v("1.2.0")]);
+        let err = fetch_registry_package_at(&mem, "http", &v("1.5.0")).unwrap_err();
+        assert_eq!(err.code(), "E_REGISTRY_NO_MATCHING_VERSION");
+        match &err {
+            RegistryFetchError::NoMatchingVersion { req, available, .. } => {
+                assert_eq!(available, &vec![v("1.0.0"), v("1.2.0")]);
+                // The synthesized requirement pins exactly the missing version.
+                assert!(req.matches(&v("1.5.0")));
+                assert!(!req.matches(&v("1.0.0")));
+            }
+            other => panic!("expected NoMatchingVersion, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fetch_at_unknown_package_is_proxy_error() {
+        let mem = MemProxyClient::new();
+        let err = fetch_registry_package_at(&mem, "ghost", &v("1.0.0")).unwrap_err();
+        assert_eq!(err.code(), "E_PROXY_PACKAGE_NOT_FOUND");
     }
 
     // ── catalog `yanked` parsing (registry-proxy follow-up (l)) ──
