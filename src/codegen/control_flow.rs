@@ -111,7 +111,12 @@ impl<'ctx> super::Codegen<'ctx> {
         self.suppress_inline_option_payload_cleanup(value, pattern);
         self.suppress_inline_result_payload_cleanup(value, pattern);
         self.suppress_inline_option_map_payload_cleanup(value, pattern);
-        self.suppress_inline_option_agg_payload_cleanup(value, pattern);
+        // B-2026-07-03-31: skip disarming the source payload drop when the
+        // then-block ONLY BORROWS the bound payload (not moved out) — the
+        // source must free it, else it leaks.
+        if !self.block_only_borrows_option_agg_payload(value, pattern, then_block) {
+            self.suppress_inline_option_agg_payload_cleanup(value, pattern);
+        }
         // Slice 3t: boxed-payload struct-destructure field suppression
         // (self-gated on `boxed_enum_payload_vars` membership — only a
         // binding OWNED here is registered, so borrow scrutinees no-op).
@@ -289,7 +294,12 @@ impl<'ctx> super::Codegen<'ctx> {
         self.suppress_inline_option_payload_cleanup(value, pattern);
         self.suppress_inline_result_payload_cleanup(value, pattern);
         self.suppress_inline_option_map_payload_cleanup(value, pattern);
-        self.suppress_inline_option_agg_payload_cleanup(value, pattern);
+        // B-2026-07-03-31: skip disarming the source payload drop when the
+        // loop body ONLY BORROWS the bound payload (not moved out) — the source
+        // must free it, else it leaks.
+        if !self.block_only_borrows_option_agg_payload(value, pattern, body) {
+            self.suppress_inline_option_agg_payload_cleanup(value, pattern);
+        }
         // Slice 3t: boxed-payload struct-destructure field suppression
         // (self-gated on `boxed_enum_payload_vars` membership — only a
         // binding OWNED here is registered, so borrow scrutinees no-op).

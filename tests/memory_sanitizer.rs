@@ -1724,14 +1724,55 @@ fn main() { let xs = build(); let mut t = 0; for a in xs { t = t + use_a(a); } p
         );
     }
 
-    // NOTE: a `match value { Some(v) => … }` that binds the `Some` payload OUT of
-    // an `Option[<agg>]` destructure leaf is deliberately NOT covered here — it is
-    // the separate, pre-existing move-out leak tracked as B-2026-07-03-31 (the
-    // heap box holding a wide payload isn't freed when the payload is moved out).
-    // The Some-arm tag-zeroing suppressor added with this fix keeps that path
-    // free of DOUBLE-frees (verified: without it a boxed-payload move-out
-    // double-frees and SIGTRAPs); it is exercised indirectly by the many existing
-    // Option/enum match tests in this suite.
+    /// B-2026-07-03-31 (FIXED, Phase 1 of the caller-retains model): binding the
+    /// `Some` payload out of an `Option[<agg>]` destructure leaf and using it
+    /// ONLY as a borrow — `Some(v) => ident_len(v)`, where `ident_len`
+    /// entry-copies its owned param — must NOT disarm the source payload drop,
+    /// or the payload's inner heap leaks. The consumption classifier
+    /// (`arm_only_borrows_option_agg_payload` /
+    /// `block_only_borrows_option_agg_payload`) now keeps the drop armed for
+    /// borrow-only arms across `match`, `if let`, and `while let`. Covers a
+    /// boxed payload (`Val::Ident(String)`, tag + String > 3 words) and an
+    /// inline payload (`Inner { s: String }`, 3 words). Consuming arms still
+    /// suppress (verified double-free-clean under ASAN by the many existing
+    /// Option/enum match tests + the consuming arm below). ≥36-byte payloads for
+    /// LSan reachability under the Linux gate.
+    #[test]
+    fn asan_b31_option_agg_payload_borrow_only_no_leak() {
+        assert_clean_asan_run(
+            r#"
+enum Val { Nothing, Ident(String) }
+struct A { value: Option[Val] }
+struct B { value: Option[Val] }
+fn ident_len(v: Val) -> i64 { match v { Val.Ident(s) => s.len(), Val.Nothing => 0 } }
+fn via_match(a: A) -> i64 { let A { value } = a; match value { Some(v) => ident_len(v), None => 0 } }
+fn via_iflet(a: A) -> i64 { let A { value } = a; if let Some(v) = value { ident_len(v) } else { 0 } }
+fn via_whilelet(a: A) -> i64 {
+    let A { value } = a;
+    let mut vv = value;
+    let mut acc = 0;
+    while let Some(v) = vv { acc = acc + ident_len(v); vv = val_none(); }
+    acc
+}
+fn val_none() -> Option[Val] { Option.None }
+fn build() -> Vec[A] {
+    let mut v: Vec[A] = Vec.new();
+    let mut i = 0;
+    while i < 6 { v.push(A { value: Some(Val.Ident("payload-borrow-only-aaaaaaaaaaaaaaaaaaaaaaaa".to_string())) }); i = i + 1; }
+    v
+}
+fn main() {
+    let mut t = 0;
+    for a in build() { t = t + via_match(a); }
+    for a in build() { t = t + via_iflet(a); }
+    for a in build() { t = t + via_whilelet(a); }
+    println(t);
+}
+"#,
+            &["792"],
+            "b31_option_agg_payload_borrow_only",
+        );
+    }
 
     /// Borrow-elision negative: each `r` is moved into `keep`, so the gate must
     /// KEEP the deep clone — `r` owns an independent buffer that outlives `out`.

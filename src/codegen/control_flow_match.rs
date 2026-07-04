@@ -356,7 +356,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.suppress_inline_option_payload_cleanup(scrutinee, &arm.pattern);
                     self.suppress_inline_result_payload_cleanup(scrutinee, &arm.pattern);
                     self.suppress_inline_option_map_payload_cleanup(scrutinee, &arm.pattern);
-                    self.suppress_inline_option_agg_payload_cleanup(scrutinee, &arm.pattern);
+                    // B-2026-07-03-31: skip disarming the source payload drop
+                    // when the arm ONLY BORROWS the bound payload (it is not
+                    // moved out) — the source must free it, else it leaks.
+                    if !self.arm_only_borrows_option_agg_payload(
+                        scrutinee,
+                        &arm.pattern,
+                        &arm.body,
+                        arm.guard.as_ref(),
+                    ) {
+                        self.suppress_inline_option_agg_payload_cleanup(scrutinee, &arm.pattern);
+                    }
                     // Slice 3t: struct-destructure of a BOXED payload — zero
                     // the consumed fields inside the box so the binding's
                     // BoxedEnumDrop inner walk frees only unbound fields.
@@ -3604,6 +3614,78 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `emit_option_drop_fn` tag-guard then no-ops. The store lands in the
     /// consuming arm body, so a non-consuming `Some(_)` / `None` arm leaves the
     /// source drop armed.
+    /// If disarming the source inline-`Option`-aggregate payload drop WOULD
+    /// apply for this scrutinee+pattern (every gate of
+    /// `suppress_inline_option_agg_payload_cleanup` passes), return the OWNING
+    /// binding names the `Some(_)` arm introduces; else `None`. Shared by the
+    /// consumption-gated callers below.
+    fn option_agg_payload_binds(&self, scrutinee: &Expr, pattern: &Pattern) -> Option<Vec<String>> {
+        let ExprKind::Identifier(name) = &scrutinee.kind else {
+            return None;
+        };
+        if !self.inline_option_agg_payload_vars.contains(name.as_str()) {
+            return None;
+        }
+        let PatternKind::TupleVariant { path, patterns } = &pattern.kind else {
+            return None;
+        };
+        if path.last().map(|s| s.as_str()) != Some("Some") {
+            return None;
+        }
+        if !patterns.iter().any(pattern_consumes_field) {
+            return None;
+        }
+        let mut binds: Vec<String> = Vec::new();
+        for pat in patterns {
+            collect_pattern_bindings(pat, &mut binds);
+        }
+        (!binds.is_empty()).then_some(binds)
+    }
+
+    /// Phase 1 (caller-retains model, B-2026-07-03-31): does an arm leave the
+    /// `Some(_)`-bound inline-`Option`-aggregate payload ONLY BORROWED — never
+    /// moved out / escaping? When true, the source retains ownership and its
+    /// payload drop must stay armed, so `suppress_inline_option_agg_payload_cleanup`
+    /// must NOT fire (else the payload's inner heap leaks — e.g.
+    /// `Some(v) => ident_len(v)`, where `ident_len` entry-copies its owned
+    /// param). Consults the consumption classifier over the arm body (and
+    /// guard). The classifier's conservative default is "consumed", so a wrong
+    /// answer only keeps the prior (suppress) behavior — never a double-free.
+    /// The `match` / if-let / while-let callers pass an analyzable body; the
+    /// let-else caller (whose bindings escape into the enclosing scope) keeps
+    /// the unconditional suppression.
+    pub(super) fn arm_only_borrows_option_agg_payload(
+        &self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        body: &Expr,
+        guard: Option<&Expr>,
+    ) -> bool {
+        let Some(binds) = self.option_agg_payload_binds(scrutinee, pattern) else {
+            return false;
+        };
+        binds.iter().all(|v| {
+            super::consume_class::binding_only_borrowed(v, body)
+                && guard.is_none_or(|g| super::consume_class::binding_only_borrowed(v, g))
+        })
+    }
+
+    /// Block-body sibling of [`Self::arm_only_borrows_option_agg_payload`] for
+    /// the if-let `then_block` / while-let `body` scopes.
+    pub(super) fn block_only_borrows_option_agg_payload(
+        &self,
+        scrutinee: &Expr,
+        pattern: &Pattern,
+        block: &crate::ast::Block,
+    ) -> bool {
+        let Some(binds) = self.option_agg_payload_binds(scrutinee, pattern) else {
+            return false;
+        };
+        binds
+            .iter()
+            .all(|v| super::consume_class::binding_only_borrowed_block(v, block))
+    }
+
     pub(super) fn suppress_inline_option_agg_payload_cleanup(
         &self,
         scrutinee: &Expr,
@@ -4171,5 +4253,46 @@ fn pattern_consumes_field(p: &crate::ast::Pattern) -> bool {
                 .unwrap_or(true) // shorthand `Field` means a binding by field name
         }),
         PatternKind::Or(pats) => pats.iter().any(pattern_consumes_field),
+    }
+}
+
+/// Collect the OWNING binding names a pattern introduces (the leaves that
+/// `pattern_consumes_field` counts). `ref name @ …` and its subtree borrow, so
+/// they introduce no owning binding and are skipped. Used by the caller-retains
+/// consumption gate to know which variables to check in an arm body.
+fn collect_pattern_bindings(p: &crate::ast::Pattern, out: &mut Vec<String>) {
+    match &p.kind {
+        PatternKind::Binding(n) => out.push(n.clone()),
+        PatternKind::AtBinding { by_ref: true, .. } => {}
+        PatternKind::AtBinding {
+            by_ref: false,
+            name,
+            pattern,
+        } => {
+            out.push(name.clone());
+            collect_pattern_bindings(pattern, out);
+        }
+        PatternKind::Tuple(pats) | PatternKind::TupleVariant { patterns: pats, .. } => {
+            for sp in pats {
+                collect_pattern_bindings(sp, out);
+            }
+        }
+        PatternKind::Struct { fields, .. } => {
+            for f in fields {
+                match &f.pattern {
+                    Some(sp) => collect_pattern_bindings(sp, out),
+                    None => out.push(f.name.clone()), // shorthand binds by field name
+                }
+            }
+        }
+        PatternKind::Or(pats) => {
+            for sp in pats {
+                collect_pattern_bindings(sp, out);
+            }
+        }
+        PatternKind::Wildcard
+        | PatternKind::Literal(_)
+        | PatternKind::RangePattern { .. }
+        | PatternKind::Slice { .. } => {}
     }
 }

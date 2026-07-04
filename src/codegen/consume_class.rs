@@ -20,14 +20,10 @@
 //! "only-borrowed" would drop a cleanup suppression and risk a DOUBLE-FREE,
 //! whereas a false "consumed" only keeps today's (at worst leaking) behavior.
 //!
-//! Phase 0 lands this INERT: it is unit-tested but not yet consulted by any
-//! suppressor. Phase 1 wires it into
+//! Phase 1 wires [`binding_only_borrowed`] into
 //! `suppress_inline_option_agg_payload_cleanup` (the B-31 site); Phase 2 reuses
-//! it for the shared-owning-struct rc-transfer decision (B-28).
-//!
-//! Phase 0 is INERT — nothing consults the predicate yet — so its public items
-//! are dead until Phase 1 wires them. The allow is removed when they are used.
-#![allow(dead_code)]
+//! `classify_binding_in_expr` for the shared-owning-struct rc-transfer decision
+//! (B-28).
 
 use crate::ast::{Expr, ExprKind, Stmt, StmtKind};
 
@@ -48,6 +44,20 @@ pub(crate) enum Consumption {
 /// confidently-borrow shapes.
 pub(crate) fn binding_only_borrowed(name: &str, e: &Expr) -> bool {
     classify_binding_in_expr(name, e) == Consumption::NonConsuming
+}
+
+/// Block sibling of [`binding_only_borrowed`], for the if-let `then_block` /
+/// while-let `body` scopes where the binding lives directly in a `Block` rather
+/// than a single arm expression. A block's value is its `final_expr`, so a
+/// `final_expr` that forwards `name` (the block result escapes) is a transfer,
+/// as is any consuming sink among its statements.
+pub(crate) fn binding_only_borrowed_block(name: &str, b: &crate::ast::Block) -> bool {
+    let consumed = b
+        .final_expr
+        .as_deref()
+        .is_some_and(|t| value_derived_from(name, t))
+        || block_has_sink(name, b);
+    !consumed
 }
 
 /// Classify how `name` is used across the whole of `e`. `Consumed` if ANY use
