@@ -196,6 +196,20 @@ impl[T, ...S] Tensor[T, S] {
         loop {}
     }
 
+    // General left-fold over every element (in C order): threads `init: A`
+    // through `f(acc, elem)`, returning the final accumulator — the reduction
+    // primitive the fixed kernels (`sum`/`prod`/`min`/`max`) specialize. A
+    // tensor has no null concept, so every element folds; an EMPTY tensor
+    // returns `init` (the fold identity — NO trap, unlike `sum`/`min`/`max`).
+    // Typed by an intercept in `src/typechecker/expr_method_call.rs` (binds
+    // `A` from `init`, element `T` from the receiver); `karac run` handles any
+    // `A`/`T`, and `karac build` inlines the closure body over a POD
+    // element/accumulator (heap `A`/`T` is a follow-on — see `Column.fold`).
+    #[compiler_builtin]
+    fn fold[A](ref self, init: A, f: Fn(A, T) -> A) -> A {
+        loop {}
+    }
+
     // Average of every element as `f64` (integer tensors included).
     #[compiler_builtin]
     fn mean(ref self) -> f64 {

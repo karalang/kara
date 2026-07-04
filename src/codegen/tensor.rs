@@ -42,12 +42,14 @@ use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicValueEnum, IntValue, PointerValue};
 use inkwell::{AddressSpace, IntPredicate};
 
-use crate::ast::{BinOp, CallArg, Expr, ExprKind, GenericArg, ShapeDim, TypeExpr, TypeKind};
+use crate::ast::{
+    BinOp, CallArg, Expr, ExprKind, GenericArg, PatternKind, ShapeDim, TypeExpr, TypeKind,
+};
 use crate::reduce_kernel::ReduceOp;
 use crate::token::Span;
 
 use super::kernel::{ContainerAccess, MapDest, MapKernelOp, MapOther};
-use super::state::TensorVarInfo;
+use super::state::{TensorVarInfo, VarSlot};
 
 /// True iff `te` names an unsigned integer primitive — drives the
 /// `is_unsigned` flag for per-element div/rem in the element-wise loop.
@@ -2745,7 +2747,8 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         let is_full = matches!(method, "sum" | "mean" | "prod" | "min" | "max" | "range");
         let is_axis = matches!(method, "sum_axis" | "mean_axis");
-        if !is_full && !is_axis {
+        let is_fold = method == "fold";
+        if !is_full && !is_axis && !is_fold {
             return Ok(None);
         }
         let ExprKind::Identifier(name) = &object.kind else {
@@ -2755,7 +2758,9 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(None);
         };
         let t_ptr = self.tensor_ptr_for_var(name)?;
-        let result = if is_full {
+        let result = if is_fold {
+            self.compile_tensor_fold(info.elem, info.elem_unsigned, t_ptr, args)?
+        } else if is_full {
             self.compile_tensor_full_reduce(method, info.elem, info.elem_unsigned, t_ptr)?
         } else {
             self.compile_tensor_axis_reduce(
@@ -2768,6 +2773,193 @@ impl<'ctx> super::Codegen<'ctx> {
             )?
         };
         Ok(Some(result))
+    }
+
+    /// `fold[A](init, |acc, elem| body) -> A` — the general left-fold
+    /// primitive (mirror of `compile_column_fold`, but a tensor has no
+    /// validity bitmap, so EVERY element folds and there is no per-slot gate).
+    /// Inlines the closure body into an in-place reduction loop over the C-order
+    /// element buffer, threading an `A`-typed accumulator; captures resolve
+    /// through the enclosing scope, and the two closure params (`acc`, `elem`)
+    /// bind as locals (shadowed outer bindings saved/restored). An EMPTY tensor
+    /// returns `init` unchanged — the loop simply doesn't run (the fold
+    /// identity, NO trap, unlike the fixed reductions).
+    ///
+    /// First cut is POD-only + inline-literal-only, exactly like `Column.fold`:
+    /// a closure-valued local / named fn or a heap / aggregate accumulator is
+    /// rejected LOUDLY (each works under `karac run`). Tensor elements are
+    /// always numeric (no `String` element to guard).
+    fn compile_tensor_fold(
+        &mut self,
+        elem: BasicTypeEnum<'ctx>,
+        _unsigned: bool,
+        t_ptr: PointerValue<'ctx>,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if args.len() != 2 {
+            return Err(format!(
+                "Tensor.fold expects 2 arguments (init, closure), got {}",
+                args.len()
+            ));
+        }
+        let ExprKind::Closure { params, body, .. } = &args[1].value.kind else {
+            return Err(
+                "Tensor.fold expects an inline closure literal as its second \
+                        argument under `karac build`; a closure-valued local / named \
+                        fn is not yet supported by the native backend (it works under \
+                        `karac run`)."
+                    .to_string(),
+            );
+        };
+        if params.len() != 2 {
+            return Err(format!(
+                "Tensor.fold closure must take exactly 2 parameters (acc, elem), got {}",
+                params.len()
+            ));
+        }
+
+        // Seed the accumulator; its LLVM type IS `A`. Heap / aggregate `A`
+        // (String / Vec struct / pointer) is rejected — no drop plumbing.
+        let init_val = self.compile_expr(&args[0].value)?;
+        let acc_ty = init_val.get_type();
+        if acc_ty.is_struct_type() || acc_ty.is_pointer_type() || acc_ty.is_array_type() {
+            return Err(
+                "Tensor.fold with a heap / aggregate accumulator is not yet \
+                        supported by the native backend (`karac build`); use a scalar \
+                        accumulator, or run it under `karac run`."
+                    .to_string(),
+            );
+        }
+
+        let fn_val = self.current_fn.unwrap();
+        let i64_t = self.context.i64_type();
+
+        let acc_slot = self.create_entry_alloca(fn_val, "t.fold.acc", acc_ty);
+        self.builder.build_store(acc_slot, init_val).unwrap();
+
+        // Element buffer + count (no bitmap — every element is valid).
+        let rank = self.tensor_load_rank(t_ptr);
+        let count = self.tensor_count_runtime(t_ptr, rank);
+        let data = self.tensor_data_ptr_dyn(t_ptr, rank, "t.fold.data");
+
+        // Loop scaffold:
+        //   head  → i < count ? apply : exit
+        //   apply → elem = data[i]; bind (acc, elem); acc = <closure>; → next
+        //   next  → i++ ; → head
+        //   exit  → ret acc
+        let head = self.context.append_basic_block(fn_val, "t.fold.head");
+        let apply_bb = self.context.append_basic_block(fn_val, "t.fold.apply");
+        let next_bb = self.context.append_basic_block(fn_val, "t.fold.next");
+        let exit_bb = self.context.append_basic_block(fn_val, "t.fold.exit");
+
+        let i_slot = self.create_entry_alloca(fn_val, "t.fold.i", i64_t.into());
+        self.builder
+            .build_store(i_slot, i64_t.const_zero())
+            .unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        // head: i < count ?
+        self.builder.position_at_end(head);
+        let i = self
+            .builder
+            .build_load(i64_t, i_slot, "t.fold.i.load")
+            .unwrap()
+            .into_int_value();
+        let in_range = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, count, "t.fold.ir")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(in_range, apply_bb, exit_bb)
+            .unwrap();
+
+        // apply: elem = data[i]; bind closure params; compile body; store acc.
+        self.builder.position_at_end(apply_bb);
+        let elem_addr = unsafe {
+            self.builder
+                .build_in_bounds_gep(elem, data, &[i], "t.fold.ep")
+                .unwrap()
+        };
+        let elem_val = self
+            .builder
+            .build_load(elem, elem_addr, "t.fold.ev")
+            .unwrap();
+        let acc_cur = self
+            .builder
+            .build_load(acc_ty, acc_slot, "t.fold.acc.cur")
+            .unwrap();
+
+        let pname = |i: usize| match &params[i].pattern.kind {
+            PatternKind::Binding(n) => n.clone(),
+            _ => format!("_t_fold_p{i}"),
+        };
+        let acc_name = pname(0);
+        let elem_name = pname(1);
+        let saved_acc = self.variables.get(&acc_name).copied();
+        let saved_elem = self.variables.get(&elem_name).copied();
+
+        let acc_param = self.create_entry_alloca(fn_val, &acc_name, acc_ty);
+        self.builder.build_store(acc_param, acc_cur).unwrap();
+        self.variables.insert(
+            acc_name.clone(),
+            VarSlot {
+                ptr: acc_param,
+                ty: acc_ty,
+            },
+        );
+        let elem_param = self.create_entry_alloca(fn_val, &elem_name, elem);
+        self.builder.build_store(elem_param, elem_val).unwrap();
+        self.variables.insert(
+            elem_name.clone(),
+            VarSlot {
+                ptr: elem_param,
+                ty: elem,
+            },
+        );
+
+        let new_acc = self.compile_expr(body)?;
+        let new_acc = self.coerce_scalar_to_type(new_acc, acc_ty);
+
+        match saved_elem {
+            Some(s) => {
+                self.variables.insert(elem_name.clone(), s);
+            }
+            None => {
+                self.variables.remove(&elem_name);
+            }
+        }
+        match saved_acc {
+            Some(s) => {
+                self.variables.insert(acc_name.clone(), s);
+            }
+            None => {
+                self.variables.remove(&acc_name);
+            }
+        }
+
+        self.builder.build_store(acc_slot, new_acc).unwrap();
+        self.builder.build_unconditional_branch(next_bb).unwrap();
+
+        // next: i++ ; loop.
+        self.builder.position_at_end(next_bb);
+        let i2 = self
+            .builder
+            .build_load(i64_t, i_slot, "t.fold.i.load2")
+            .unwrap()
+            .into_int_value();
+        let inc = self
+            .builder
+            .build_int_add(i2, i64_t.const_int(1, false), "t.fold.i.inc")
+            .unwrap();
+        self.builder.build_store(i_slot, inc).unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        // exit: the threaded accumulator.
+        self.builder.position_at_end(exit_bb);
+        Ok(self
+            .builder
+            .build_load(acc_ty, acc_slot, "t.fold.result")
+            .unwrap())
     }
 
     /// Full reduce → scalar. `sum`/`prod` fold via `compile_binop_typed`

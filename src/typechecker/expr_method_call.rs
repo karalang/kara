@@ -1985,31 +1985,37 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
-        // Column[T].fold[A](init: A, f: fn(A, T) -> A) -> A — the general
-        // left-fold primitive. `A` is inferred from `init` (concrete after
-        // `infer_expr`), so the closure params `(A, T)` and its return `A` are
-        // all concrete and `check_expr` drives closure-param pushdown (same
-        // shape as `Iterator.fold`). `T` is the receiver's element. Typed here
-        // because baked generic dispatch can't bind `A` from an argument nor
-        // thread the receiver's `T` into the closure signature.
+        // `Column[T]` / `Tensor[T, ...S]` `.fold[A](init: A, f: Fn(A, T) -> A)
+        // -> A` — the general left-fold primitive. `A` is inferred from `init`
+        // (concrete after `infer_expr`), so the closure params `(A, T)` and its
+        // return `A` are all concrete and `check_expr` drives closure-param
+        // pushdown (same shape as `Iterator.fold`). `T` is the receiver's
+        // element (`Column[T]` → the sole arg; `Tensor[T, ...S]` → the leading
+        // arg). Typed here because baked generic dispatch can't bind `A` from
+        // an argument nor thread the receiver's `T` into the closure signature.
         if method == "fold" {
-            let column_elem = match &obj_ty {
-                Type::Named { name, args } if name == "Column" && args.len() == 1 => {
-                    Some(args[0].clone())
-                }
-                Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+            // The element `T` and the container's display name, for either
+            // handle-backed reducer.
+            let fold_receiver = |ty: &Type| -> Option<(Type, &'static str)> {
+                match ty {
                     Type::Named { name, args } if name == "Column" && args.len() == 1 => {
-                        Some(args[0].clone())
+                        Some((args[0].clone(), "Column"))
+                    }
+                    Type::Named { name, args } if name == "Tensor" && !args.is_empty() => {
+                        Some((args[0].clone(), "Tensor"))
                     }
                     _ => None,
-                },
-                _ => None,
+                }
             };
-            if let Some(elem) = column_elem {
+            let elem_and_kind = match &obj_ty {
+                Type::Ref(inner) | Type::MutRef(inner) => fold_receiver(inner),
+                other => fold_receiver(other),
+            };
+            if let Some((elem, container)) = elem_and_kind {
                 if args.len() != 2 {
                     self.type_error(
                         format!(
-                            "Column.fold expects 2 arguments (init, closure), got {}",
+                            "{container}.fold expects 2 arguments (init, closure), got {}",
                             args.len()
                         ),
                         span.clone(),

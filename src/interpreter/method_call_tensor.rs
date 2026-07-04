@@ -350,6 +350,41 @@ impl<'a> super::Interpreter<'a> {
             "sum" | "mean" | "prod" | "min" | "max" | "range" => {
                 Some(self.eval_tensor_reduce(method, data, span))
             }
+            // General left-fold over ALL elements (a tensor has no null
+            // concept): thread `init` through `f(acc, elem)`. An empty tensor
+            // returns `init` unchanged — the fold identity, with no empty trap
+            // (unlike `sum`/`min`/`max`). Typed by the `fold` intercept in
+            // `src/typechecker/expr_method_call.rs`. Mirrors `Column.fold`.
+            "fold" => {
+                if args.len() != 2 {
+                    return Some(self.record_runtime_error(
+                        format!(
+                            "Tensor.fold expects 2 arguments (init, closure), got {}",
+                            args.len()
+                        ),
+                        span,
+                    ));
+                }
+                let mut acc = self.eval_expr_inner(&args[0].value);
+                let f = self.eval_expr_inner(&args[1].value);
+                if !matches!(f, Value::Function { .. }) {
+                    return Some(self.record_runtime_error(
+                        format!("Tensor.fold expects a closure as its second argument; got {f}"),
+                        span,
+                    ));
+                }
+                // Clone the elements and release the `RwLock` read guard BEFORE
+                // invoking the closure (it re-enters the interpreter — the
+                // guard is non-reentrant).
+                let elems = data.read().unwrap().clone();
+                for x in elems {
+                    acc = self.invoke_function_value(f.clone(), vec![acc, x]);
+                    if self.pending_cf.is_some() {
+                        return Some(Value::Unit);
+                    }
+                }
+                Some(acc)
+            }
             "sum_axis" | "mean_axis" => {
                 Some(self.eval_tensor_axis_reduce(method, dims, data, args, span))
             }

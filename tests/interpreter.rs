@@ -19209,6 +19209,33 @@ fn main() {
 }
 
 #[test]
+fn tensor_fold_reduction() {
+    // `Tensor.fold[A](init, |acc, x| ...)` — the general left-fold, parity with
+    // `Column.fold`. Every element folds (a tensor has no null concept; a 2-D
+    // tensor folds all cells in C order). Covers a numeric fold, a String
+    // accumulator (run-only — the interpreter is not restricted to POD `A`),
+    // and a 2-D fold.
+    let out = run_no_errors(
+        r#"
+fn main() {
+    let t: Tensor[i64, [5]] = Tensor.from([1, 2, 3, 4, 5]);
+    println(f"{t.fold(0, |a, x| a + x)}");
+    println(f"{t.fold(1, |a, x| a * x)}");
+    println(f"{t.fold(0, |a, x| if x > 2 { a + 1 } else { a })}");
+
+    let m: Tensor[i64, [2, 3]] = Tensor.from([[1, 2, 3], [4, 5, 6]]);
+    println(f"{m.fold(0, |a, x| a + x)}");
+
+    // String accumulator — the interpreter is not restricted to POD `A`.
+    let joined = t.fold("", |acc, x| acc + "!");
+    println(f"{joined}");
+}
+"#,
+    );
+    assert_eq!(out, "15\n120\n3\n21\n!!!!!\n");
+}
+
+#[test]
 fn primitive_trait_impl_direct_dispatch_by_declared_width() {
     // B-2026-07-03-5: a user trait impl on a PRIMITIVE target dispatched for a
     // direct value-receiver call under `karac run`. The interpreter's runtime

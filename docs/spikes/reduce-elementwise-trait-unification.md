@@ -438,9 +438,23 @@ B-2026-07-02-10..13, see the ledger.
     interpreter `column_fold_reduction`; typechecker
     `test_column_fold_result_type_is_accumulator` +
     `test_column_fold_wrong_arity_rejected`. **Residuals (follow-ons):**
-    `Tensor.fold` parity; the non-inline-closure + heap-`A`/heap-`T` native
-    paths; and `fold` on the `Reduce` *trait* (bound-generic dispatch — needs
-    the primitive declared trait-side + a matching `Tensor` impl).
+    the non-inline-closure + heap-`A`/heap-`T` native paths; and `fold` on the
+    `Reduce` *trait* (bound-generic dispatch — needs the primitive declared
+    trait-side + a matching `Tensor` impl).
+  - **S6c-1b (`Tensor.fold`)** ✅ **(landed 2026-07-03)** — parity with
+    `Column.fold`, completing the primitive across both handle-backed builtin
+    reducers. Same shape, with two divergences: a tensor has NO null concept,
+    so **every** element folds (a 2-D tensor folds all cells in C order — no
+    bitmap gate), and an empty tensor returns `init` (the loop just doesn't
+    run). The typechecker `fold` intercept is generalized to extract the
+    element from either `Column[T]` (sole arg) or `Tensor[T, ...S]` (leading
+    arg), error messages naming the container. Codegen `compile_tensor_fold`
+    mirrors `compile_column_fold` minus the validity gate; same POD-only +
+    inline-literal first-cut boundaries (loud reject). Tests: codegen e2e
+    `test_e2e_tensor_fold`{`,_rejects_noninline_and_heap_accumulator`};
+    interpreter `tensor_fold_reduction`; typechecker
+    `test_tensor_fold_result_type_is_accumulator` +
+    `test_tensor_fold_wrong_arity_rejected`.
 - **S6c** — `ElementwiseMap` / `ElementwiseOrd` builtin method surfaces +
   user impls; blanket `Vec[T]` impls; user trait-impl methods over builtin
   containers (probed: interp "type 'unknown'", codegen loud fall-through).

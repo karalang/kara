@@ -47029,6 +47029,63 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_tensor_fold() {
+        // `Tensor.fold[A](init, |acc, x| ...)` — the general left-fold, parity
+        // with `Column.fold`. A tensor has no null concept, so EVERY element
+        // folds (in C order — a 2-D tensor folds all cells); an empty tensor
+        // would return `init` (the loop doesn't run — the fold identity, no
+        // trap). Covers sum, product, predicate count, sum-of-squares, a 2-D
+        // fold-over-all-cells, an f64 accumulator, an outer-variable capture,
+        // and param shadowing. `run` == `build` == default auto-par.
+        let src = r#"
+fn main() {
+    let t: Tensor[i64, [5]] = Tensor.from([1, 2, 3, 4, 5]);
+    println(f"{t.fold(0, |a, x| a + x)}");
+    println(f"{t.fold(1, |a, x| a * x)}");
+    println(f"{t.fold(0, |a, x| if x > 2 { a + 1 } else { a })}");
+    println(f"{t.fold(0, |a, x| a + x * x)}");
+    let m: Tensor[i64, [2, 3]] = Tensor.from([[1, 2, 3], [4, 5, 6]]);
+    println(f"{m.fold(0, |a, x| a + x)}");
+    let tf: Tensor[f64, [3]] = Tensor.from([1.5, 2.5, 4.0]);
+    println(f"{tf.fold(0.0, |a, x| a + x)}");
+    let k: i64 = 10;
+    println(f"{t.fold(0, |a, x| a + x + k)}");
+    let a: i64 = 7;
+    let s = t.fold(0, |a, x| a + x);
+    println(f"{s} {a}");
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        assert_eq!(out, "15\n120\n3\n55\n21\n8\n65\n15 7\n");
+    }
+
+    #[test]
+    fn test_e2e_tensor_fold_rejects_noninline_and_heap_accumulator() {
+        // Same first-cut boundaries as `Column.fold`, rejected LOUDLY (each
+        // works under `karac run`): a closure-valued local and a heap /
+        // aggregate accumulator.
+        let non_inline = r#"
+fn main() {
+    let t: Tensor[i64, [3]] = Tensor.from([1, 2, 3]);
+    let g = |a: i64, x: i64| a + x;
+    println(f"{t.fold(0, g)}");
+}
+"#;
+        let err = ir_result(non_inline).expect_err("a non-inline closure must be rejected");
+        assert!(err.contains("inline closure literal"), "got: {err}");
+
+        let heap_acc = r#"
+fn main() {
+    let t: Tensor[i64, [3]] = Tensor.from([1, 2, 3]);
+    let s = t.fold("", |acc, x| acc + "!");
+    println(f"{s}");
+}
+"#;
+        let err = ir_result(heap_acc).expect_err("a heap accumulator must be rejected");
+        assert!(err.contains("heap / aggregate accumulator"), "got: {err}");
+    }
+
+    #[test]
     fn test_e2e_stdlib_reduce_default_method_inherited_by_user_impl() {
         // S6b-4 (B-2026-07-03-19): a user `impl Reduce[T] for MyType` inherits
         // the BAKED stdlib trait's DEFAULT method `range` (`max - min`) without

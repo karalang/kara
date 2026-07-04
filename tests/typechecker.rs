@@ -27345,6 +27345,50 @@ fn test_column_fold_wrong_arity_rejected() {
 }
 
 #[test]
+fn test_tensor_fold_result_type_is_accumulator() {
+    // `Tensor.fold[A](init, f)` returns `A` (inferred from `init`), the same
+    // intercept that types `Column.fold`. An i64 accumulator is usable as an
+    // array index; an f64 accumulator is not (the pin-via-index context).
+    typecheck_ok(
+        "fn main() {\n\
+             let t: Tensor[i64, [3]] = Tensor.from([1i64, 2i64, 3i64]);\n\
+             let v: Vec[i64] = [10i64, 20i64];\n\
+             let _ = v[t.fold(0i64, |a, x| a + x)];\n\
+         }",
+    );
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let t: Tensor[i64, [3]] = Tensor.from([1i64, 2i64, 3i64]);\n\
+             let v: Vec[i64] = [10i64, 20i64];\n\
+             let _ = v[t.fold(0.0, |a, x| a + 1.0)];\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("index must be an integer")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_tensor_fold_wrong_arity_rejected() {
+    // `fold` requires exactly two arguments; the error names the container.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let t: Tensor[i64, [3]] = Tensor.from([1i64, 2i64, 3i64]);\n\
+             let _ = t.fold(0i64);\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("Tensor.fold expects 2 arguments")),
+        "{errors:?}",
+    );
+}
+
+#[test]
 fn test_column_mean_on_non_numeric_rejected() {
     let errors = typecheck_errors(
         "fn main() {\n\
