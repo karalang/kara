@@ -27345,6 +27345,64 @@ fn test_column_fold_wrong_arity_rejected() {
 }
 
 #[test]
+fn test_reduce_trait_bound_fold_typechecks_and_binds_accumulator() {
+    // S6c: `fold` on the `Reduce` trait surface. Inside `fn f[C: Reduce[i64]]`,
+    // `c.fold(init, |a, x| ...)` type-checks: the element `T = i64` comes from
+    // the bound, `A` from `init`, and the closure params `(A, T)` are pushed
+    // down (before this slice they typed as `?T0` → "arithmetic operator
+    // requires numeric" + "no method 'fold'"). Pin-via-index proves the result
+    // binds to the accumulator `A = i64` (usable as an array index).
+    typecheck_ok(
+        "fn accumulate[C: Reduce[i64]](c: ref C, v: ref Vec[i64]) -> i64 {\n\
+             v[c.fold(0i64, |a, x| a + x)]\n\
+         }\n\
+         fn main() {\n\
+             let c: Column[i64] = Column.from_vec([1i64, 2i64]);\n\
+             let v: Vec[i64] = [10i64, 20i64];\n\
+             let _ = accumulate(c, v);\n\
+         }",
+    );
+}
+
+#[test]
+fn test_reduce_trait_bound_fold_wrong_arity_rejected() {
+    // The bound-generic `fold` intercept enforces the same 2-arg arity, naming
+    // the trait (`Reduce`) rather than a concrete container.
+    let errors = typecheck_errors(
+        "fn bad[C: Reduce[i64]](c: ref C) -> i64 {\n\
+             c.fold(0i64)\n\
+         }\n\
+         fn main() {}",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("Reduce.fold expects 2 arguments")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_fold_not_granted_by_unrelated_bound() {
+    // `fold` is a `Reduce` method — a type parameter bounded by an unrelated
+    // trait must NOT be handed the magic fold intercept; it falls through to
+    // ordinary trait-method resolution ("no method 'fold'").
+    let errors = typecheck_errors(
+        "trait Foo { fn bar(ref self) -> i64; }\n\
+         fn nope[C: Foo](c: ref C) -> i64 {\n\
+             c.fold(0i64, |a, x| a + x)\n\
+         }\n\
+         fn main() {}",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("no method 'fold'")),
+        "{errors:?}",
+    );
+}
+
+#[test]
 fn test_column_map_result_type_is_self() {
     // `Column[T].map(|x| ...)` returns `Column[T]` (same element type), so the
     // result supports the column reduction surface (`.sum()`).

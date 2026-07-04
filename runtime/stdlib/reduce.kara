@@ -38,6 +38,19 @@ trait Reduce[T] {
     // Arithmetic mean as `f64` (integer elements widen exactly).
     fn mean(ref self) -> f64;
 
+    // General left-fold over the (valid) elements: threads `init: A` through
+    // `f(acc, elem)` in order, returning the final accumulator. `sum` is
+    // `fold(0, |a, x| a + x)`; an empty/all-null receiver returns `init`
+    // unchanged (the fold identity — no empty trap, unlike `sum`/`min`/`max`).
+    // A method-level generic `A` (the accumulator, inferred from `init`),
+    // distinct from the element `T`. The handle-backed reducers satisfy it
+    // with a `#[compiler_builtin]` kernel (typechecker/interpreter/codegen
+    // intercepts route a concrete OR bound-generic receiver to the inline-
+    // closure fold loop — the body below never runs); a user implementor
+    // writes the fold by hand. S6c: the fold primitive on the trait surface,
+    // so `fn f[C: Reduce[i64]](c: ref C)` may call `c.fold(0, |a, x| a + x)`.
+    fn fold[A](ref self, init: A, f: Fn(A, T) -> A) -> A;
+
     // Spread between the largest and smallest element (`max - min`). The first
     // DEFAULT method on `Reduce` (S6b-4): any implementor that provides
     // `min`/`max` inherits it without writing a body — the desugar splice pass

@@ -46938,6 +46938,40 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_reduce_trait_bound_fold() {
+        // S6c: `fold` on the `Reduce` trait surface, dispatched through a
+        // bound-generic `fn f[C: Reduce[i64]]`. The typechecker intercept types
+        // the closure `(A, T)` from `init` + the bound's element; codegen needs
+        // NO new routing — the mono handle param registers as a Column/Tensor,
+        // so `c.fold(0, |a, x| a + x)` (an inline closure) reaches the same
+        // `compile_column_fold` / `compile_tensor_fold` inline-closure kernel
+        // the concrete surface uses. Covers a sum fold on both containers, a
+        // non-sum body (count > 2), and null-skipping (nulls dropped, in order).
+        let src = r#"
+fn accumulate[C: Reduce[i64]](c: ref C) -> i64 {
+    c.fold(0, |a, x| a + x)
+}
+fn count_gt2[C: Reduce[i64]](c: ref C) -> i64 {
+    c.fold(0, |a, x| if x > 2 { a + 1 } else { a })
+}
+fn main() {
+    let col: Column[i64] = Column.from_vec([3, 1, 4, 1, 5]);
+    let t: Tensor[i64, [3]] = Tensor.from([10, 20, 5]);
+    let mut nulled: Column[i64] = Column.new();
+    nulled.push(10);
+    nulled.push_null();
+    nulled.push(30);
+    println(f"{accumulate(col)} {accumulate(t)}");
+    println(f"{count_gt2(col)}");
+    println(f"{accumulate(nulled)}");
+}
+"#;
+        // col sum = 14, t sum = 35; count>2 over [3,1,4,1,5] = 3; nulled = 10+30.
+        let out = run_program(src).expect("program should compile and run");
+        assert_eq!(out, "14 35\n3\n40\n");
+    }
+
+    #[test]
     fn test_e2e_builtin_column_tensor_range() {
         // The BAKED `Reduce[T]::range` DEFAULT method (`max - min`) on the
         // BUILTIN implementors `Column[T]` / `Tensor[T, S]`. These don't inherit

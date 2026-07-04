@@ -558,11 +558,45 @@ B-2026-07-02-10..13, see the ledger.
   correct under `run`; reproduces on main with pure `iter_valid`). Not this
   slice's logic — open-ledgered + spun off; the shipped tests use the
   `let`-bound `Stats.sort` idiom that sidesteps it.
+- **S6c-5** ✅ **(landed 2026-07-03)** — `fold` on the **`Reduce` trait**
+  surface (bound-generic dispatch), the first Layer-2 payoff for the closure
+  primitives: `fn f[C: Reduce[i64]](c: ref C) { c.fold(0, |a, x| a + x) }` now
+  type-checks and builds, accepting a `Column[i64]` and a `Tensor[i64, S]`
+  alike. `fold[A]` is declared a **required** method on `trait Reduce[T]`
+  (`fn fold[A](ref self, init: A, f: Fn(A, T) -> A) -> A`, a method-level
+  generic `A` distinct from the element `T`) and satisfied by a
+  `#[compiler_builtin]` stub in each `impl Reduce for Column`/`Tensor`. The one
+  compiler change is in the typechecker: the concrete-receiver `fold` intercept
+  (`expr_method_call.rs`) is extended to ALSO fire when the receiver is a
+  `Type::TypeParam` bounded by `Reduce[T]` — a new `reduce_bound_element`
+  helper reads the element `T` off the trait bound (via `trait_bound_arg_subs`,
+  the same binding `sum`/`max` use), then the SAME proven logic runs: `A` from
+  `infer_expr(init)`, closure checked against `Fn(A, T) -> A` (param pushdown).
+  Before this, the closure operands typed as `?T0` ("arithmetic operator
+  requires numeric" + "no method 'fold'"). **Interpreter and codegen needed NO
+  change** — interp already dispatches `.fold` on the concrete `Column`/`Tensor`
+  runtime Value, and codegen's mono registers the handle param in
+  `column_var_infos`/`tensor_var_infos` (the S6a plumbing that already routes
+  `c.max()`), so a mono'd `c.fold(0, |a, x| a + x)` (inline closure) reaches the
+  existing `compile_column_fold`/`compile_tensor_fold` inline-closure kernel.
+  Null-skip + empty-returns-`init` semantics carry through unchanged; a
+  non-`Reduce` bound is correctly NOT handed the intercept (proper "no method
+  'fold'"). `run` == `KARAC_AUTO_PAR=0` == `build` across sum + non-sum
+  (count > 2) bodies, Column + Tensor, nulls, and empty. Tests: codegen e2e
+  `test_e2e_reduce_trait_bound_fold`; interpreter
+  `stdlib_reduce_trait_bound_fold_column_and_tensor`; typechecker
+  `test_reduce_trait_bound_fold_typechecks_and_binds_accumulator` +
+  `_wrong_arity_rejected` + `test_fold_not_granted_by_unrelated_bound`. No new
+  alloc/free path (borrowed receiver, POD result), so the concrete-fold LSan
+  coverage suffices. **Residual:** `product` (a `Reduce` default `fold(1, |a,x|
+  a*x)` — needs a generic multiplicative-identity seed) and `map`/`zip_with` on
+  the `ElementwiseMap` trait (same intercept-extension recipe).
 - **S6c** — remaining: `ElementwiseOrd` user impls + `sorted`/`argsort` on
   non-i64/f64 element widths under `build` (interp already handles all);
-  `ElementwiseMap` `zip_with`; blanket `Vec[T]` impls; user trait-impl methods
-  over builtin containers (probed: interp "type 'unknown'", codegen loud
-  fall-through).
+  `map`/`zip_with`/`product` on the `ElementwiseMap`/`Reduce` *traits*
+  (bound-generic — `fold` done in S6c-5, mirror the intercept extension);
+  blanket `Vec[T]` impls; user trait-impl methods over builtin containers
+  (probed: interp "type 'unknown'", codegen loud fall-through).
 
 ---
 

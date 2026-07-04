@@ -19134,6 +19134,40 @@ fn main() {
 }
 
 #[test]
+fn stdlib_reduce_trait_bound_fold_column_and_tensor() {
+    // S6c: `fold` on the `Reduce` trait surface — a `fn f[C: Reduce[i64]]`
+    // body may call `c.fold(init, |a, x| ...)`, dispatched to the concrete
+    // implementor's kernel per instantiation. The closure params `(A, T)` are
+    // typed from `init` + the bound's element (`Reduce[i64]` → `T = i64`).
+    // Covers a Column receiver (nulls skipped) and a Tensor receiver (dense),
+    // plus a non-sum fold body (count > 2) proving it's the general primitive
+    // and an empty column returning `init` unchanged (the fold identity).
+    let out = run_no_errors(
+        r#"
+fn accumulate[C: Reduce[i64]](c: ref C) -> i64 {
+    c.fold(0, |a, x| a + x)
+}
+fn count_gt2[C: Reduce[i64]](c: ref C) -> i64 {
+    c.fold(0, |a, x| if x > 2 { a + 1 } else { a })
+}
+fn main() {
+    let col: Column[i64] = Column.from_vec([3, 1, 4, 1, 5]);
+    let t: Tensor[i64, [3]] = Tensor.from([10, 20, 5]);
+    let mut nulled: Column[i64] = Column.new();
+    nulled.push(10);
+    nulled.push_null();
+    nulled.push(30);
+    let empty: Column[i64] = Column.new();
+    println(f"{accumulate(col)} {accumulate(t)}");
+    println(f"{count_gt2(col)}");
+    println(f"{accumulate(nulled)} {accumulate(empty)}");
+}
+"#,
+    );
+    assert_eq!(out, "14 35\n3\n40 0\n");
+}
+
+#[test]
 fn builtin_column_tensor_range_default_method() {
     // The BAKED `Reduce[T]::range` DEFAULT (`max - min`) on the BUILTIN
     // `Column[T]` / `Tensor[T, S]` implementors. They don't inherit it via the

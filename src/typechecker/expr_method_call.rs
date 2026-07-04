@@ -181,6 +181,26 @@ impl<'a> super::TypeChecker<'a> {
             .collect()
     }
 
+    /// The element type `T` of a `Reduce[T]` bound carried by a generic type
+    /// parameter (`C` under `C: Reduce[i64]` → `i64`), or `None` if `C` has no
+    /// such bound. Lets the `fold` intercept type a BOUND-GENERIC receiver's
+    /// `.fold` (`fn f[C: Reduce[i64]](c: ref C) { c.fold(0, |a, x| a + x) }`):
+    /// the element `T` is the trait bound's argument, the same value
+    /// `trait_bound_arg_subs` binds for the trait-level `T` in the method
+    /// signature. Only `Reduce` — the trait that declares `fold` — is
+    /// consulted; the closure's second parameter type IS this element.
+    fn reduce_bound_element(&mut self, type_param_name: &str) -> Option<Type> {
+        let bounds = self.enclosing_bounds.get(type_param_name)?.clone();
+        for b in &bounds {
+            if b.path.last().map(String::as_str) == Some("Reduce") {
+                if let Some((_, elem)) = self.trait_bound_arg_subs(b).into_iter().next() {
+                    return Some(elem);
+                }
+            }
+        }
+        None
+    }
+
     /// Attempt to dispatch `T.method(args)` where `T` is a generic type
     /// parameter (resolver records its bounds under the receiver's SymbolId).
     /// `callee_span` is the span of the `Path(["T", "method"])` expression
@@ -2007,10 +2027,31 @@ impl<'a> super::TypeChecker<'a> {
                     _ => None,
                 }
             };
-            let elem_and_kind = match &obj_ty {
+            let mut elem_and_kind = match &obj_ty {
                 Type::Ref(inner) | Type::MutRef(inner) => fold_receiver(inner),
                 other => fold_receiver(other),
             };
+            // Bound-generic receiver (`c: ref C` where `C: Reduce[T]`): the
+            // element is the trait bound's argument. Falls into the SAME
+            // A-from-init + closure-pushdown below, so `fold` on a `Reduce`-
+            // bounded generic type-checks (S6c); the mono'd receiver routes to
+            // the inline-closure kernel exactly as `sum`/`max` do. Interp
+            // dispatches on the concrete `Column`/`Tensor` Value at runtime.
+            if elem_and_kind.is_none() {
+                let param_name = match &obj_ty {
+                    Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                        Type::TypeParam(p) => Some(p.clone()),
+                        _ => None,
+                    },
+                    Type::TypeParam(p) => Some(p.clone()),
+                    _ => None,
+                };
+                if let Some(pname) = param_name {
+                    if let Some(elem) = self.reduce_bound_element(&pname) {
+                        elem_and_kind = Some((elem, "Reduce"));
+                    }
+                }
+            }
             if let Some((elem, container)) = elem_and_kind {
                 if args.len() != 2 {
                     self.type_error(

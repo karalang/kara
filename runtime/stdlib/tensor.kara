@@ -318,4 +318,9 @@ impl[T, ...S] Reduce[T] for Tensor[T, S] {
     fn mean(ref self) -> f64 {
         0.0
     }
+
+    #[compiler_builtin]
+    fn fold[A](ref self, init: A, f: Fn(A, T) -> A) -> A {
+        loop {}
+    }
 }
