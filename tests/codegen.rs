@@ -27549,6 +27549,104 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_bounds_elision_rolling_dp_length_pin_correct() {
+        // Rolling-DP length pin (bce_length_pin.rs, kata #62): `dp` is filled to
+        // exactly `cols` elements by a counted `while j < cols` from 0, then the
+        // inner scan `dp[c] = dp[c] + dp[c - 1]` runs under `while c < cols`.
+        // The guard bound `cols` is a plain variable, NOT `dp.len()`, so only the
+        // length pin lets the upper-half checks on `dp[c]` and `dp[c - 1]` elide.
+        // `unique_paths(3, 7) == 28` — the correct answer proves every rolling
+        // read/write landed on the right cell (a wrong elision would read past
+        // the buffer and corrupt the fold).
+        let out = run_program(
+            r#"
+fn unique_paths(m: i64, n: i64) -> i64 {
+    let mut rows = m;
+    let mut cols = n;
+    if cols > rows { let t = rows; rows = cols; cols = t; }
+    let mut dp: Vec[i64] = Vec.new();
+    let mut j = 0i64;
+    while j < cols { dp.push(1i64); j = j + 1i64; }
+    let mut i = 1i64;
+    while i < rows {
+        let mut c = 1i64;
+        while c < cols { dp[c] = dp[c] + dp[c - 1i64]; c = c + 1i64; }
+        i = i + 1i64;
+    }
+    dp[cols - 1i64]
+}
+fn main() { println(unique_paths(3i64, 7i64)); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "28");
+        }
+    }
+
+    #[test]
+    fn test_e2e_bounds_elision_length_pin_bound_reassigned_still_checks() {
+        // The length pin must NOT fire when the bound variable is reassigned
+        // after the fill: here `cols` grows past `dp.len()`, so a later
+        // `dp[c]` with `c < cols` is genuinely out of bounds. The whole-function
+        // invariance scan refuses the pin, the bounds check survives, and the
+        // program panics rather than reading past the buffer.
+        if let Some(c) = run_program_capturing(
+            r#"
+fn go(n: i64) -> i64 {
+    let mut cols = n;
+    let mut dp: Vec[i64] = Vec.new();
+    let mut j = 0i64;
+    while j < cols { dp.push(1i64); j = j + 1i64; }
+    cols = cols + 5i64;
+    let mut acc = 0i64;
+    let mut c = 0i64;
+    while c < cols { acc = acc + dp[c]; c = c + 1i64; }
+    acc
+}
+fn main() { println(go(4i64)); }
+"#,
+        ) {
+            assert!(
+                !c.status.success(),
+                "reassigned bound must keep the bounds check (panic), got stdout={:?}",
+                c.stdout
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_bounds_elision_length_pin_other_vec_still_checks() {
+        // The pin binds `cols` to `dp`, but the loop indexes a *different*,
+        // shorter Vec `short`. The `UpperBound { idx, vec }` fact names `dp`, so
+        // `short[c]`'s check does not match and stays live — `short[c]` panics
+        // at `c == 2`. Guards the vec-name matching in
+        // `index_bounds_already_proven`.
+        if let Some(c) = run_program_capturing(
+            r#"
+fn go(n: i64) -> i64 {
+    let mut dp: Vec[i64] = Vec.new();
+    let mut j = 0i64;
+    while j < n { dp.push(1i64); j = j + 1i64; }
+    let mut short: Vec[i64] = Vec.new();
+    short.push(1i64);
+    short.push(2i64);
+    let mut acc = 0i64;
+    let mut c = 0i64;
+    while c < n { acc = acc + short[c]; c = c + 1i64; }
+    acc
+}
+fn main() { println(go(6i64)); }
+"#,
+        ) {
+            assert!(
+                !c.status.success(),
+                "pin on dp must not elide short[c]'s check (panic), got stdout={:?}",
+                c.stdout
+            );
+        }
+    }
+
     // ── ? operator codegen ───────────────────────────────────────────────────
 
     #[test]

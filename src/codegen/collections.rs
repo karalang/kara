@@ -2720,35 +2720,116 @@ impl<'ctx> super::Codegen<'ctx> {
     /// dropped. `upper_proven` ⇒ `idx < vec_var.len()` known; the
     /// out-of-range half can be dropped.
     ///
-    /// Only fires for bare-identifier indices (`v[i]`, never `v[i + 1]`).
-    /// The kata's `chars[lo]` / `chars[hi]` shape passes; compound forms
-    /// fall through to the full runtime check. Tightening to handle
-    /// `v[i ± k]` for small known k is a follow-up; many real workloads
-    /// don't need it (e.g. iterator-driven loops use bare-identifier
-    /// indices), and the conservative default just means "no elision",
-    /// not "wrong".
+    /// Fires for a bare-identifier index (`v[i]`) and for a constant-offset
+    /// index `v[i ± k]` (`k` a non-negative integer literal). The kata's
+    /// `chars[lo]` / `chars[hi]` shape and the rolling-DP `dp[c]` / `dp[c - 1]`
+    /// shape both pass; any other index form (a computed / method-call index)
+    /// falls through to the full runtime check. The conservative default just
+    /// means "no elision", never "wrong".
+    ///
+    /// Offset reasoning, given `i` has a lower fact (`i >= 0`) and/or an upper
+    /// fact (`i < v.len()`):
+    ///   - `i - k` (offset ≤ 0): `i - k < i < len` ⇒ upper still proven, but
+    ///     `i - k` may be negative even when `i >= 0` ⇒ lower NOT proven (the
+    ///     surviving `< 0` check is left for LLVM to fold against the monotone
+    ///     `assume(i >= init)` the loop emits — see control_flow_bce.rs).
+    ///   - `i + k` (offset ≥ 0): `i + k >= 0` ⇒ lower still proven, but
+    ///     `i + k` may reach `len` even when `i < len` ⇒ upper NOT proven.
+    ///   - bare `i` (offset 0): both facts carry through unchanged.
     pub(super) fn index_bounds_already_proven(&self, index: &Expr, vec_var: &str) -> (bool, bool) {
-        let idx_name = match &index.kind {
-            ExprKind::Identifier(name) => name.as_str(),
-            _ => return (false, false),
+        let Some((idx_name, offset_sign)) = Self::index_var_and_offset_sign(index) else {
+            return (false, false);
         };
-        let mut lower = false;
-        let mut upper = false;
+        let mut has_lower = false;
+        let mut has_upper = false;
         for fact in &self.asserted_index_bounds {
             match fact {
                 AssertedIndexBound::LowerBound { idx_var } if idx_var == idx_name => {
-                    lower = true;
+                    has_lower = true;
                 }
                 AssertedIndexBound::UpperBound {
                     idx_var,
                     vec_var: bound_vec,
                 } if idx_var == idx_name && bound_vec == vec_var => {
-                    upper = true;
+                    has_upper = true;
                 }
                 _ => {}
             }
         }
+        let lower = has_lower && offset_sign >= 0;
+        let upper = has_upper && offset_sign <= 0;
         (lower, upper)
+    }
+
+    /// Decompose an index expression into `(idx_var, offset_sign)` where
+    /// `offset_sign` is `-1` for `idx_var - k`, `+1` for `idx_var + k`, and `0`
+    /// for a bare `idx_var` (or a `± 0`). `k` must be a non-negative integer
+    /// literal. Handles both the surface `Binary` form and the trait-method-
+    /// lowered `Call { Path([ty, "add"|"sub"]), .. }` form (mirror of
+    /// `control_flow_bce.rs`'s comparison/step matchers). `None` for any other
+    /// shape — a computed index, `k - idx`, `idx * k`, etc.
+    fn index_var_and_offset_sign(index: &Expr) -> Option<(&str, i8)> {
+        if let ExprKind::Identifier(name) = &index.kind {
+            return Some((name.as_str(), 0));
+        }
+        // `a <op> b` in surface Binary or trait-lowered Call form.
+        let (op_is_add, op_is_sub, a, b) = match &index.kind {
+            ExprKind::Binary {
+                op: BinOp::Add,
+                left,
+                right,
+            } => (true, false, left.as_ref(), right.as_ref()),
+            ExprKind::Binary {
+                op: BinOp::Sub,
+                left,
+                right,
+            } => (false, true, left.as_ref(), right.as_ref()),
+            ExprKind::Call { callee, args } if args.len() == 2 => {
+                let ExprKind::Path { segments, .. } = &callee.kind else {
+                    return None;
+                };
+                match (segments.len(), segments.last().map(String::as_str)) {
+                    (2, Some("add")) => (true, false, &args[0].value, &args[1].value),
+                    (2, Some("sub")) => (false, true, &args[0].value, &args[1].value),
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        };
+        // Free-standing extraction (not closures — the `&str` result must be
+        // lifetime-generic over `index`, which a closure can't express).
+        let a_id = match &a.kind {
+            ExprKind::Identifier(n) => Some(n.as_str()),
+            _ => None,
+        };
+        let b_id = match &b.kind {
+            ExprKind::Identifier(n) => Some(n.as_str()),
+            _ => None,
+        };
+        let a_k = match &a.kind {
+            ExprKind::Integer(k, _) if *k >= 0 => Some(*k),
+            _ => None,
+        };
+        let b_k = match &b.kind {
+            ExprKind::Integer(k, _) if *k >= 0 => Some(*k),
+            _ => None,
+        };
+        if op_is_sub {
+            // `idx - k` only (not `k - idx`).
+            let idx = a_id?;
+            let k = b_k?;
+            return Some((idx, if k == 0 { 0 } else { -1 }));
+        }
+        if op_is_add {
+            // `idx + k` or `k + idx` (commutative).
+            if let (Some(idx), Some(k)) = (a_id, b_k) {
+                return Some((idx, if k == 0 { 0 } else { 1 }));
+            }
+            if let (Some(k), Some(idx)) = (a_k, b_id) {
+                return Some((idx, if k == 0 { 0 } else { 1 }));
+            }
+        }
+        None
     }
 
     /// Emit the runtime bounds check for `vec_ptr[idx]`, dropping

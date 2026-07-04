@@ -218,7 +218,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 None
             }
-            ExprKind::Identifier(name) => self.len_alias.get(name.as_str()).cloned(),
+            // A local binding to `v.len()` (`let n = v.len()`) or a length pin
+            // (`v` filled to exactly `bound` elements by a counted loop — see
+            // bce_length_pin.rs) both resolve the guard RHS back to the Vec.
+            ExprKind::Identifier(name) => self
+                .len_alias
+                .get(name.as_str())
+                .or_else(|| self.vec_len_pin.get(name.as_str()))
+                .cloned(),
             _ => None,
         }
     }

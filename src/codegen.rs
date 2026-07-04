@@ -23,6 +23,7 @@ use crate::resolver::SpanKey;
 use crate::token::Span;
 
 mod assoc_call;
+mod bce_length_pin;
 mod borrow_elision;
 mod bounded_channel;
 mod cabi;
@@ -1662,6 +1663,19 @@ pub(super) struct Codegen<'ctx> {
     /// The stack discipline (push on body-entry, pop on body-exit) maps
     /// directly onto the source-level lexical scope of the guard.
     pub(crate) asserted_index_bounds: Vec<AssertedIndexBound>,
+    /// Vec-length pins for the current function (bce_length_pin.rs): each maps a
+    /// fill loop's condition `SpanKey` to the `(bound_var, vec_var)` fact that
+    /// the counted fill establishes (`vec_var.len() >= bound_var`, both invariant
+    /// from the fill loop onward). Populated at `compile_function`; a pin is
+    /// moved into `vec_len_pin` once its fill loop finishes emitting, so it goes
+    /// live exactly for the code lexically after the fill loop.
+    pub(crate) pending_vec_len_pins:
+        HashMap<crate::resolver::SpanKey, bce_length_pin::VecLengthPin>,
+    /// Active length pins: `bound_var → vec_var`. Consulted by
+    /// `resolve_len_origin` so a `while idx < bound_var` guard resolves
+    /// `bound_var` back to `vec_var` and asserts `idx < vec_var.len()` — the
+    /// rolling-DP `dp[c]`/`dp[c - 1]` bounds-check elision (kata #62).
+    pub(crate) vec_len_pin: HashMap<String, String>,
     /// Stack of `(lo, hi)` variable-name pairs from dominating strict
     /// `while lo < hi` guards (innermost last). When a `let mid = lo +
     /// (hi - lo) / 2` (or `(lo + hi) / 2`) binding is compiled under such
@@ -5358,6 +5372,8 @@ impl<'ctx> Codegen<'ctx> {
             sched_yield_fn,
             len_alias: HashMap::new(),
             asserted_index_bounds: Vec::new(),
+            pending_vec_len_pins: HashMap::new(),
+            vec_len_pin: HashMap::new(),
             binsearch_guard_stack: Vec::new(),
             binsearch_assume_emitted: false,
             vec_elem_types: HashMap::new(),

@@ -1273,6 +1273,17 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.loop_stack.pop();
         self.builder.position_at_end(exit_bb);
+        // Vec-length-pin activation (bce_length_pin.rs): this `while` may be a
+        // recognised counted fill whose completion establishes `vec.len() >=
+        // bound`. Now that its body has fully emitted, move the pin live so a
+        // later `while c < bound` guard resolves `bound` to `vec` and elides the
+        // upper-half bounds check on `vec[c]` / `vec[c - k]` (kata #62). The
+        // whole-function fail-closed analysis guarantees the fact stays true to
+        // end of function, so the pin needs no later invalidation.
+        let cond_key = crate::resolver::SpanKey::from_span(&condition.span);
+        if let Some(pin) = self.pending_vec_len_pins.remove(&cond_key) {
+            self.vec_len_pin.insert(pin.bound_var, pin.vec_var);
+        }
         Ok(self.context.i64_type().const_int(0, false).into())
     }
 

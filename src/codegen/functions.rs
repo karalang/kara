@@ -1200,6 +1200,14 @@ impl<'ctx> super::Codegen<'ctx> {
         self.vec_index_borrow_spans =
             crate::codegen::borrow_elision::compute_vec_index_borrow_spans(&func.body);
 
+        // Vec-length pins (bce_length_pin.rs): the rolling-DP bounds-check
+        // elision. Recompute per function (both maps are function-scoped);
+        // `vec_len_pin` starts empty and each pin activates when `compile_while`
+        // finishes emitting the matching fill loop (so it is live only after).
+        self.vec_len_pin.clear();
+        self.pending_vec_len_pins =
+            crate::codegen::bce_length_pin::compute_vec_length_pins(&func.body);
+
         // Slice 2 (auto-par codegen MVP): route the function body through
         // `compile_function_body`, which dispatches inferred parallel
         // groups to `karac_par_run` when a `ConcurrencyAnalysis` was
