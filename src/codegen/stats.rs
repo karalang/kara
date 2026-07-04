@@ -612,7 +612,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `sort` → a fresh ascending `Vec[f64]`. Mallocs a buffer, `memcpy`s the
     /// data in (the source slice is borrowed and unchanged), sorts in place,
     /// and returns the owned `{ptr, len, len}` Vec — the binding site frees it.
-    fn stats_sort(
+    pub(super) fn stats_sort(
         &self,
         data: PointerValue<'ctx>,
         len: IntValue<'ctx>,
@@ -646,7 +646,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// ascending (stable — strict `>` in the inner compare leaves equal keys in
     /// input order). Mallocs an i64 index buffer initialized to `0..n`, then
     /// insertion-sorts the indices keyed by `data[idx]`. Returns the owned Vec.
-    fn stats_argsort(
+    pub(super) fn stats_argsort(
         &self,
         data: PointerValue<'ctx>,
         len: IntValue<'ctx>,
@@ -718,7 +718,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Build an owned `Vec` value `{ buf, len, len }` (cap == len) from a
     /// malloc'd buffer. The let-binding's `Vec` cleanup frees `buf`.
-    fn stats_build_vec(
+    pub(super) fn stats_build_vec(
         &self,
         buf: PointerValue<'ctx>,
         len: IntValue<'ctx>,

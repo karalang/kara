@@ -506,6 +506,43 @@ impl<'a> super::Interpreter<'a> {
                     },
                 })
             }
+            // `sorted() -> Vec[T]` (ElementwiseOrd, S6c): the ascending-sorted
+            // VALID values (nulls dropped, so the result length is the valid
+            // count). Ties keep input order (stable). Typed by the ordering
+            // intercept (returns `Vec[T]`).
+            "sorted" => {
+                let cells = data.read().unwrap();
+                let bits = valid.read().unwrap();
+                let mut vals: Vec<Value> = cells
+                    .iter()
+                    .zip(bits.iter())
+                    .filter(|(_, &ok)| ok)
+                    .map(|(v, _)| v.clone())
+                    .collect();
+                vals.sort_by(value_compare);
+                Some(Value::Array(Arc::new(RwLock::new(vals))))
+            }
+            // `argsort() -> Vec[i64]` (ElementwiseOrd, S6c): the ORIGINAL slot
+            // indices of the valid values, ordered so the values ascend (stable
+            // — ties keep ascending index order). Nulls are excluded, so the
+            // result length is the valid count. Typed by the ordering intercept.
+            "argsort" => {
+                let cells = data.read().unwrap();
+                let bits = valid.read().unwrap();
+                let mut pairs: Vec<(usize, Value)> = cells
+                    .iter()
+                    .enumerate()
+                    .zip(bits.iter())
+                    .filter(|(_, &ok)| ok)
+                    .map(|((i, v), _)| (i, v.clone()))
+                    .collect();
+                pairs.sort_by(|a, b| value_compare(&a.1, &b.1));
+                let idxs: Vec<Value> = pairs
+                    .into_iter()
+                    .map(|(i, _)| Value::Int(i as i64))
+                    .collect();
+                Some(Value::Array(Arc::new(RwLock::new(idxs))))
+            }
             _ => None,
         }
     }

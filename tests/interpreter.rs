@@ -19378,6 +19378,55 @@ fn main() {
 }
 
 #[test]
+fn column_tensor_sorted_argsort_reduction() {
+    // `sorted() -> Vec[T]` / `argsort() -> Vec[i64]` (ElementwiseOrd, S6c).
+    // Column operates on the VALID slots (nulls dropped; argsort reports the
+    // ORIGINAL slot positions); Tensor over all elements in flat C-order. Ties
+    // are stable. The interpreter handles all element widths (unlike the
+    // i64/f64-only native first cut).
+    let out = run_no_errors(
+        r#"
+fn vshow(v: Vec[i64]) {
+    let mut s = "";
+    let mut i = 0;
+    while i < v.len() {
+        s = s + v[i].to_string() + ",";
+        i = i + 1;
+    }
+    println(s);
+}
+fn main() {
+    let c: Column[i64] = Column.from_vec([5, 9, 3, 3, 8, 1]);
+    let cs = c.sorted();
+    vshow(cs);
+    let ca = c.argsort();
+    vshow(ca);
+
+    let mut n: Column[i64] = Column.with_capacity(5);
+    n.push(10); n.push_null(); n.push(5); n.push_null(); n.push(20);
+    let ns = n.sorted();
+    vshow(ns);
+    let na = n.argsort();
+    vshow(na);
+
+    let t: Tensor[i64, [6]] = Tensor.from([4, 2, 7, 2, 9, 9]);
+    let ts = t.sorted();
+    vshow(ts);
+    let ta = t.argsort();
+    vshow(ta);
+}
+"#,
+    );
+    // c sorted [1,3,3,5,8,9]; argsort [5,2,3,0,4,1].
+    // n valid-only sorted [5,10,20]; argsort original slots [2,0,4].
+    // t sorted [2,2,4,7,9,9]; argsort [1,3,0,2,4,5].
+    assert_eq!(
+        out,
+        "1,3,3,5,8,9,\n5,2,3,0,4,1,\n5,10,20,\n2,0,4,\n2,2,4,7,9,9,\n1,3,0,2,4,5,\n"
+    );
+}
+
+#[test]
 fn primitive_trait_impl_direct_dispatch_by_declared_width() {
     // B-2026-07-03-5: a user trait impl on a PRIMITIVE target dispatched for a
     // direct value-receiver call under `karac run`. The interpreter's runtime

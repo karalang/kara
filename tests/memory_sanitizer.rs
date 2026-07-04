@@ -19110,6 +19110,46 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_column_tensor_sorted_argsort_freed_no_leak() {
+        // S6c: `Column.sorted`/`argsort` and `Tensor.sorted`/`argsort` each
+        // allocate a FRESH result `Vec` (a malloc'd buffer). Each result binds
+        // to a `let` and must be freed at scope exit via the standard `Vec`
+        // cleanup — this asserts no leak / double-free of the sort-allocated
+        // buffers over a loop. Results are `let`-bound then indexed (the
+        // `Stats.sort` idiom, sidestepping the pre-existing owned-temp-Vec-arg
+        // corruption B-2026-07-03-31).
+        assert_clean_asan_run(
+            r#"
+fn inner() -> i64 {
+    let c: Column[i64] = Column.from_vec([5, 9, 3, 3, 8, 1]);
+    let cs: Vec[i64] = c.sorted();
+    let ca: Vec[i64] = c.argsort();
+    let mut n: Column[i64] = Column.with_capacity(5);
+    n.push(10); n.push_null(); n.push(5); n.push_null(); n.push(20);
+    let ns: Vec[i64] = n.sorted();
+    let na: Vec[i64] = n.argsort();
+    let t: Tensor[i64, [6]] = Tensor.from([4, 2, 7, 2, 9, 9]);
+    let ts: Vec[i64] = t.sorted();
+    let ta: Vec[i64] = t.argsort();
+    cs[0] + ca[0] + ns[0] + na[0] + ts[0] + ta[0]
+}
+fn main() {
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 {
+        acc = acc + inner();
+        i = i + 1;
+    }
+    println(f"{acc}");
+}
+"#,
+            // cs[0]=1, ca[0]=5, ns[0]=5, na[0]=2, ts[0]=2, ta[0]=1 → 16; *20 = 320.
+            &["320"],
+            "asan_column_tensor_sorted_argsort_freed_no_leak",
+        );
+    }
+
     /// B-2026-07-03-30 (Vec-element drain) — a struct field `Vec[String]` (whose
     /// elements own heap the outer buffer-free misses) is DRAINED per element by
     /// the synthesized struct drop when the owning struct is PLAIN-dropped (a

@@ -528,9 +528,38 @@ B-2026-07-02-10..13, see the ledger.
   `test_column_tensor_argmin_argmax_result_type_is_option_i64` (+ wrong-arity /
   non-numeric); memory_sanitizer `asan_column_tensor_argmin_freed_no_leak`
   (owned-temp receiver free, LSan-clean).
-- **S6c** — remaining: `ElementwiseOrd` `sorted()` / `argsort()` (→ `Vec[T]` /
-  `Vec[i64]`, need an in-IR column/tensor sort — the `Stats.sort`/`argsort`
-  scratch-sort machinery, adapted to the validity-gated column) + user impls;
+- **S6c-4** ✅ **(landed)** — `ElementwiseOrd` `sorted()` → `Vec[T]` /
+  `argsort()` → `Vec[i64]` on `Column[T]` and `Tensor[T, ...S]`. `Column`
+  operates on the **valid** slots (nulls dropped, so the `sorted`/`argsort`
+  result length is the valid count; `argsort` reports the ORIGINAL slot
+  indices, `Series.argsort` semantics); `Tensor` over all elements in flat
+  C-order. Ties are **stable** (first occurrence / ascending index order — the
+  scratch sort's strict `>`). Codegen reuses the `Stats.sort`/`argsort`
+  scratch-sort machinery (`emit_sort_scratch` + `stats_build_vec`, now
+  `pub(super)`): `Tensor` calls `stats_sort`/`stats_argsort` on the dense
+  C-order buffer directly; `Column` adds a `column_compact_valid` that gathers
+  the valid values (or their original indices, for argsort) into a fresh
+  8-byte buffer, then sorts (`argsort` keys on `data[idx]` via `IndexInto`).
+  **First cut: i64/f64 elements under `build`** — the shared scratch sort
+  moves 8-byte f64/i64 keys and compares int keys as *signed*, so a narrower /
+  unsigned-64 / f32 element is rejected LOUDLY (each works under `karac run`;
+  the interpreter is width-agnostic). Results are typed by the extended
+  ordering intercept (`sorted` → `Vec[T]`, `argsort` → `Vec[i64]`). `run` ==
+  `KARAC_AUTO_PAR=0` == `build` across ties, nulls (valid-only + original-slot
+  argsort), f64, 2-D tensors, and the empty column. Tests: codegen
+  `test_e2e_{column,tensor}_sorted_argsort` + `_narrow_width_rejected_loudly`;
+  interpreter `column_tensor_sorted_argsort_reduction`; typechecker
+  `test_column_tensor_sorted_argsort_result_types` (+ wrong-arity);
+  memory_sanitizer `asan_column_tensor_sorted_argsort_freed_no_leak`.
+  **Surfaced a pre-existing codegen bug** — B-2026-07-03-31: a fresh `Vec`
+  temp returned by ANY builtin method (`iter_valid`/`sorted`/`Stats.sort`/…)
+  and passed BY VALUE directly as a function argument corrupts the heap when
+  the callee builds strings (silent wrong output / SIGBUS under `build`,
+  correct under `run`; reproduces on main with pure `iter_valid`). Not this
+  slice's logic — open-ledgered + spun off; the shipped tests use the
+  `let`-bound `Stats.sort` idiom that sidesteps it.
+- **S6c** — remaining: `ElementwiseOrd` user impls + `sorted`/`argsort` on
+  non-i64/f64 element widths under `build` (interp already handles all);
   `ElementwiseMap` `zip_with`; blanket `Vec[T]` impls; user trait-impl methods
   over builtin containers (probed: interp "type 'unknown'", codegen loud
   fall-through).

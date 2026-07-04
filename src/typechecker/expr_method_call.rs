@@ -2136,15 +2136,17 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
-        // `ElementwiseOrd`'s ordering reductions `argmin` / `argmax` on the
-        // handle-backed containers (S6c) — the index (into the full container,
-        // Arrow position) of the FIRST minimum / maximum, or `None` on an
-        // empty / all-null receiver. The result is `Option[i64]` regardless of
-        // the element type (like the free `Stats.argmin` form), so it can't be
-        // expressed in a baked signature that binds `T` from the receiver —
-        // typed here. Nulls are skipped in the comparison but the reported
-        // index is the original slot (`Series.idxmin` semantics).
-        if matches!(method, "argmin" | "argmax") {
+        // `ElementwiseOrd`'s ordering reductions on the handle-backed
+        // containers (S6c) — `argmin` / `argmax` → `Option[i64]` (the FIRST
+        // min/max index, `None` on empty/all-null), `sorted` → `Vec[T]`
+        // (ascending values), `argsort` → `Vec[i64]` (the indices that sort
+        // ascending, stable). The result mentions `T` (or is independent of
+        // it), so it can't be expressed in a baked signature that binds `T`
+        // from the receiver — typed here. For `Column` these operate on the
+        // valid slots (nulls skipped; `argmin`/`argsort` report ORIGINAL slot
+        // positions — `Series.idxmin` semantics); for `Tensor` over all
+        // elements in flat C-order.
+        if matches!(method, "argmin" | "argmax" | "sorted" | "argsort") {
             // (element `T`, display name) for a Column[T] / Tensor[T, ...S].
             let ord_receiver = |ty: &Type| -> Option<(Type, &'static str)> {
                 match ty {
@@ -2187,9 +2189,22 @@ impl<'a> super::TypeChecker<'a> {
                     );
                     return Type::Error;
                 }
-                let ret = Type::Named {
-                    name: "Option".to_string(),
-                    args: vec![Type::Int(IntSize::I64)],
+                let ret = match method {
+                    // The index of the first min/max, or None on empty/all-null.
+                    "argmin" | "argmax" => Type::Named {
+                        name: "Option".to_string(),
+                        args: vec![Type::Int(IntSize::I64)],
+                    },
+                    // Ascending-sorted values (nulls dropped for a Column).
+                    "sorted" => Type::Named {
+                        name: "Vec".to_string(),
+                        args: vec![elem.clone()],
+                    },
+                    // The indices that sort ascending (stable, original slots).
+                    _ => Type::Named {
+                        name: "Vec".to_string(),
+                        args: vec![Type::Int(IntSize::I64)],
+                    },
                 };
                 self.record_expr_type(span, &ret);
                 return ret;

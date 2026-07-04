@@ -2751,7 +2751,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let is_map = method == "map";
         let is_zip = method == "zip_with";
         let is_argord = matches!(method, "argmin" | "argmax");
-        if !is_full && !is_axis && !is_fold && !is_map && !is_zip && !is_argord {
+        let is_sort = matches!(method, "sorted" | "argsort");
+        if !is_full && !is_axis && !is_fold && !is_map && !is_zip && !is_argord && !is_sort {
             return Ok(None);
         }
         let ExprKind::Identifier(name) = &object.kind else {
@@ -2769,6 +2770,8 @@ impl<'ctx> super::Codegen<'ctx> {
             self.compile_tensor_zip_with(info.elem, info.elem_unsigned, t_ptr, args)?
         } else if is_argord {
             self.compile_tensor_argminmax(info.elem, info.elem_unsigned, t_ptr, method == "argmax")?
+        } else if is_sort {
+            self.compile_tensor_sort(method, info.elem, info.elem_unsigned, t_ptr)?
         } else if is_full {
             self.compile_tensor_full_reduce(method, info.elem, info.elem_unsigned, t_ptr)?
         } else {
@@ -3236,6 +3239,42 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(merge_bb);
         Ok(self.build_option_some_via_phis(&[best], some_end_bb, none_bb, "t.am"))
+    }
+
+    /// `sorted() -> Vec[T]` / `argsort() -> Vec[i64]` (ElementwiseOrd, S6c) over
+    /// ALL elements in flat C-order (a tensor has no null concept). Reuses the
+    /// dense `Stats.sort` / `Stats.argsort` scratch-sort machinery directly on
+    /// the C-order element buffer (empty tensor → an empty Vec, the natural
+    /// zero-length result). Restricted to i64/f64 elements — the shared
+    /// scratch sort moves 8-byte f64/i64 keys and compares int keys as signed;
+    /// any other width is rejected LOUDLY (each works under `karac run`).
+    fn compile_tensor_sort(
+        &mut self,
+        method: &str,
+        elem: BasicTypeEnum<'ctx>,
+        unsigned: bool,
+        t_ptr: PointerValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let is_int = match elem {
+            BasicTypeEnum::IntType(it) if it.get_bit_width() == 64 && !unsigned => true,
+            BasicTypeEnum::FloatType(ft) if ft.get_bit_width() == 64 => false,
+            _ => {
+                return Err(format!(
+                    "Tensor.{method} under the native backend (`karac build`) \
+                     supports i64 and f64 element tensors today; narrower widths, \
+                     unsigned 64-bit, and f32 land in a follow-on slice (each works \
+                     under `karac run`)."
+                ));
+            }
+        };
+        let rank = self.tensor_load_rank(t_ptr);
+        let count = self.tensor_count_runtime(t_ptr, rank);
+        let data = self.tensor_data_ptr_dyn(t_ptr, rank, "t.sort.data");
+        if method == "argsort" {
+            self.stats_argsort(data, count, is_int)
+        } else {
+            self.stats_sort(data, count, is_int)
+        }
     }
 
     /// `sum_axis(n)` / `mean_axis(n)` → a fresh rank-1-lower tensor (rank-1

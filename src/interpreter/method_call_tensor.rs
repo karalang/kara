@@ -527,6 +527,24 @@ impl<'a> super::Interpreter<'a> {
                     },
                 })
             }
+            // `sorted() -> Vec[T]` (ElementwiseOrd, S6c): the ascending-sorted
+            // values over ALL elements (a tensor has no null concept; a 2-D
+            // tensor flattens in C-order first). Ties keep C-order (stable).
+            "sorted" => {
+                let mut vals = data.read().unwrap().clone();
+                vals.sort_by(value_compare);
+                Some(Value::Array(Arc::new(RwLock::new(vals))))
+            }
+            // `argsort() -> Vec[i64]` (ElementwiseOrd, S6c): the flat C-order
+            // indices that sort all elements ascending (stable — ties keep
+            // ascending index order).
+            "argsort" => {
+                let elems = data.read().unwrap();
+                let mut idxs: Vec<usize> = (0..elems.len()).collect();
+                idxs.sort_by(|&a, &b| value_compare(&elems[a], &elems[b]));
+                let out: Vec<Value> = idxs.into_iter().map(|i| Value::Int(i as i64)).collect();
+                Some(Value::Array(Arc::new(RwLock::new(out))))
+            }
             "sum_axis" | "mean_axis" => {
                 Some(self.eval_tensor_axis_reduce(method, dims, data, args, span))
             }

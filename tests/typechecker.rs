@@ -27426,6 +27426,46 @@ fn test_column_argmin_non_numeric_element_rejected() {
 }
 
 #[test]
+fn test_column_tensor_sorted_argsort_result_types() {
+    // `Column[T].sorted()`/`Tensor[T,...].sorted()` return `Vec[T]`;
+    // `argsort()` returns `Vec[i64]` (ElementwiseOrd, S6c). `sorted[0]` keeps
+    // the element type `T` (an f64 element flows into an f64 context);
+    // `argsort[0]` is an i64 usable as an array index.
+    typecheck_ok(
+        "fn main() {\n\
+             let c: Column[f64] = Column.from_vec([1.5_f64, 2.5_f64]);\n\
+             let cs: Vec[f64] = c.sorted();\n\
+             let _f: f64 = cs[0];\n\
+             let idx: Vec[i64] = c.argsort();\n\
+             let v: Vec[i64] = [10i64, 20i64];\n\
+             let _ = v[idx[0]];\n\
+             let t: Tensor[i64, [2]] = Tensor.from([3i64, 1i64]);\n\
+             let ts: Vec[i64] = t.sorted();\n\
+             let _ = v[ts[0]];\n\
+             let ta: Vec[i64] = t.argsort();\n\
+             let _ = v[ta[0]];\n\
+         }",
+    );
+}
+
+#[test]
+fn test_column_sorted_wrong_arity_rejected() {
+    // `sorted`/`argsort` take no arguments.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let c: Column[i64] = Column.from_vec([1i64, 2i64]);\n\
+             let _ = c.sorted(3i64);\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("Column.sorted expects 0 arguments")),
+        "{errors:?}",
+    );
+}
+
+#[test]
 fn test_tensor_fold_result_type_is_accumulator() {
     // `Tensor.fold[A](init, f)` returns `A` (inferred from `init`), the same
     // intercept that types `Column.fold`. An i64 accumulator is usable as an

@@ -47428,6 +47428,110 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_column_sorted_argsort() {
+        // `Column.sorted() -> Vec[T]` / `argsort() -> Vec[i64]` (ElementwiseOrd,
+        // S6c) over the VALID slots. `sorted` drops nulls (result length is the
+        // valid count); `argsort` reports the ORIGINAL slot indices ordered so
+        // the values ascend (stable — ties keep ascending index order). i64 and
+        // f64 elements. Results are `let`-bound then indexed (the established
+        // `Stats.sort` idiom). `run` == `build` == default auto-par.
+        let src = r#"
+fn main() {
+    let c: Column[i64] = Column.from_vec([5, 9, 3, 3, 8, 1]);
+    let cs: Vec[i64] = c.sorted();
+    println(f"{cs[0]} {cs[1]} {cs[2]} {cs[3]} {cs[4]} {cs[5]}");
+    let ca: Vec[i64] = c.argsort();
+    println(f"{ca[0]} {ca[1]} {ca[2]} {ca[3]} {ca[4]} {ca[5]}");
+    let mut n: Column[i64] = Column.with_capacity(5);
+    n.push(10); n.push_null(); n.push(5); n.push_null(); n.push(20);
+    let ns: Vec[i64] = n.sorted();
+    println(f"{ns.len()} {ns[0]} {ns[1]} {ns[2]}");
+    let na: Vec[i64] = n.argsort();
+    println(f"{na.len()} {na[0]} {na[1]} {na[2]}");
+    let fc: Column[f64] = Column.from_vec([2.5, 1.5, 3.5, 1.5]);
+    let fs: Vec[f64] = fc.sorted();
+    println(f"{fs[0]} {fs[1]} {fs[2]} {fs[3]}");
+    let fa: Vec[i64] = fc.argsort();
+    println(f"{fa[0]} {fa[1]} {fa[2]} {fa[3]}");
+    let ec: Column[i64] = Column.with_capacity(0);
+    let es: Vec[i64] = ec.sorted();
+    println(f"{es.len()}");
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        // c sorted [1,3,3,5,8,9]; argsort [5,2,3,0,4,1].
+        // n [10,null,5,null,20] valid-only sorted [5,10,20]; argsort original
+        //   slots [2,0,4]. fc sorted [1.5,1.5,2.5,3.5]; argsort stable [1,3,0,2].
+        // empty column sorted -> length 0.
+        assert_eq!(
+            out,
+            "1 3 3 5 8 9\n5 2 3 0 4 1\n3 5 10 20\n3 2 0 4\n1.5 1.5 2.5 3.5\n1 3 0 2\n0\n"
+        );
+    }
+
+    #[test]
+    fn test_e2e_tensor_sorted_argsort() {
+        // `Tensor.sorted() -> Vec[T]` / `argsort() -> Vec[i64]` (ElementwiseOrd,
+        // S6c) over ALL elements in flat C-order (no null concept). Covers a
+        // 1-D i64 tensor with ties, a 2-D tensor (flattened first), and an f64
+        // tensor. `run` == `build` == default auto-par.
+        let src = r#"
+fn main() {
+    let t: Tensor[i64, [6]] = Tensor.from([4, 2, 7, 2, 9, 9]);
+    let ts: Vec[i64] = t.sorted();
+    println(f"{ts[0]} {ts[1]} {ts[2]} {ts[3]} {ts[4]} {ts[5]}");
+    let ta: Vec[i64] = t.argsort();
+    println(f"{ta[0]} {ta[1]} {ta[2]} {ta[3]} {ta[4]} {ta[5]}");
+    let m: Tensor[i64, [2, 3]] = Tensor.from([[3, 1, 4], [1, 5, 9]]);
+    let ms: Vec[i64] = m.sorted();
+    println(f"{ms[0]} {ms[1]} {ms[2]} {ms[3]} {ms[4]} {ms[5]}");
+    let ma: Vec[i64] = m.argsort();
+    println(f"{ma[0]} {ma[1]} {ma[2]} {ma[3]} {ma[4]} {ma[5]}");
+    let tf: Tensor[f64, [4]] = Tensor.from([2.5, 8.0, 1.0, 8.0]);
+    let fs: Vec[f64] = tf.sorted();
+    println(f"{fs[0]} {fs[1]} {fs[2]} {fs[3]}");
+    let fa: Vec[i64] = tf.argsort();
+    println(f"{fa[0]} {fa[1]} {fa[2]} {fa[3]}");
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        // t sorted [2,2,4,7,9,9]; argsort stable [1,3,0,2,4,5].
+        // m flat [3,1,4,1,5,9] sorted [1,1,3,4,5,9]; argsort [1,3,0,2,4,5].
+        // tf sorted [1.0,2.5,8.0,8.0]; argsort [2,0,1,3].
+        assert_eq!(
+            out,
+            "2 2 4 7 9 9\n1 3 0 2 4 5\n1 1 3 4 5 9\n1 3 0 2 4 5\n1 2.5 8 8\n2 0 1 3\n"
+        );
+    }
+
+    #[test]
+    fn test_e2e_sorted_narrow_width_rejected_loudly() {
+        // First cut: the native scratch sort moves 8-byte f64/i64 keys and
+        // compares int keys as signed, so a narrower / unsigned-64 / f32 element
+        // column or tensor is rejected LOUDLY under `karac build` (each works
+        // under `karac run`).
+        let col_i32 = r#"
+fn main() {
+    let c: Column[i32] = Column.from_vec([5, 9, 3, 1]);
+    let s: Vec[i32] = c.sorted();
+    println(f"{s[0]}");
+}
+"#;
+        let err = ir_result(col_i32).expect_err("a narrow-width column sort must be rejected");
+        assert!(err.contains("i64 and f64 element columns"), "got: {err}");
+
+        let tensor_f32 = r#"
+fn main() {
+    let t: Tensor[f32, [4]] = Tensor.from([4.0, 2.0, 7.0, 1.0]);
+    let s: Vec[f32] = t.sorted();
+    println(f"{s[0]}");
+}
+"#;
+        let err = ir_result(tensor_f32).expect_err("a narrow-width tensor sort must be rejected");
+        assert!(err.contains("i64 and f64 element tensors"), "got: {err}");
+    }
+
+    #[test]
     fn test_e2e_stdlib_reduce_default_method_inherited_by_user_impl() {
         // S6b-4 (B-2026-07-03-19): a user `impl Reduce[T] for MyType` inherits
         // the BAKED stdlib trait's DEFAULT method `range` (`max - min`) without

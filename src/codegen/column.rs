@@ -1235,6 +1235,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 | "quantile"
                 | "argmin"
                 | "argmax"
+                | "sorted"
+                | "argsort"
         ) {
             return Ok(None);
         }
@@ -1424,6 +1426,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 info.elem,
                 info.elem_unsigned,
                 true,
+            )?)),
+            // `sorted() -> Vec[T]` / `argsort() -> Vec[i64]` (ElementwiseOrd,
+            // S6c) over the valid slots (see `compile_column_sorted` /
+            // `compile_column_argsort`).
+            "sorted" => Ok(Some(self.compile_column_sorted(
+                control,
+                info.elem,
+                info.elem_unsigned,
+            )?)),
+            "argsort" => Ok(Some(self.compile_column_argsort(
+                control,
+                info.elem,
+                info.elem_unsigned,
             )?)),
             // `median()` ≡ `quantile(0.5)` under linear interpolation (the
             // mean of the two middle values for an even count, the middle
@@ -2820,6 +2835,206 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_unconditional_branch(merge_bb).unwrap();
         self.builder.position_at_end(merge_bb);
         Ok(self.build_option_some_via_phis(&[best], some_bb, none_bb, "col.am"))
+    }
+
+    /// Classify a column element for the shared 8-byte scratch-sort path
+    /// (`sorted`/`argsort`): `Ok(true)` for a signed `i64`, `Ok(false)` for
+    /// `f64`. The kernel scratch sort (`emit_sort_scratch`) moves 8-byte
+    /// f64/i64 elements and compares int keys as **signed** i64, so any other
+    /// width (`i8`/`i16`/`i32`/`f32`) or an unsigned 64-bit element is rejected
+    /// LOUDLY here — each works under `karac run` (the interpreter is
+    /// width-agnostic) and lands in a follow-on codegen slice.
+    fn column_sort_is_int(
+        &self,
+        elem: BasicTypeEnum<'ctx>,
+        unsigned: bool,
+    ) -> Result<bool, String> {
+        match elem {
+            BasicTypeEnum::IntType(it) if it.get_bit_width() == 64 && !unsigned => Ok(true),
+            BasicTypeEnum::FloatType(ft) if ft.get_bit_width() == 64 => Ok(false),
+            _ => Err(
+                "Column.sorted / argsort under the native backend (`karac build`) \
+                 supports i64 and f64 element columns today; narrower widths, \
+                 unsigned 64-bit, and f32 land in a follow-on slice (each works \
+                 under `karac run`)."
+                    .to_string(),
+            ),
+        }
+    }
+
+    /// Compact the VALID slots of this column into a fresh malloc'd 8-byte
+    /// buffer, preserving order. Returns `(buf, k)` where `k` is the valid
+    /// count. When `as_index` is true, `buf[j]` receives the ORIGINAL slot
+    /// index `i` (an i64, for `argsort`); otherwise it receives the element
+    /// value `data[i]` at `elem` (for `sorted`). The buffer is over-allocated
+    /// to `len` slots (the valid count isn't known until the scan finishes);
+    /// the returned Vec's `cap == k` and its free releases the whole block.
+    fn column_compact_valid(
+        &mut self,
+        control: PointerValue<'ctx>,
+        elem: BasicTypeEnum<'ctx>,
+        as_index: bool,
+    ) -> (PointerValue<'ctx>, IntValue<'ctx>) {
+        let i64_t = self.context.i64_type();
+        let fn_val = self.current_fn.expect("column compact in function");
+        let len = self
+            .column_load_field(control, 2, "col.cmp.len")
+            .into_int_value();
+        let data = self
+            .column_load_field(control, 0, "col.cmp.data")
+            .into_pointer_value();
+        let bitmap = self
+            .column_load_field(control, 1, "col.cmp.bm")
+            .into_pointer_value();
+        // Buffer slot type: i64 indices for argsort, the element type for sorted
+        // (both 8 bytes — the scratch-sort restriction).
+        let slot_t: BasicTypeEnum<'ctx> = if as_index { i64_t.into() } else { elem };
+        let nbytes = self
+            .builder
+            .build_int_mul(len, i64_t.const_int(8, false), "col.cmp.nb")
+            .unwrap();
+        let buf = self
+            .builder
+            .build_call(self.malloc_fn, &[nbytes.into()], "col.cmp.buf")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+
+        let i_slot = self.builder.build_alloca(i64_t, "col.cmp.i").unwrap();
+        let k_slot = self.builder.build_alloca(i64_t, "col.cmp.k").unwrap();
+        self.builder
+            .build_store(i_slot, i64_t.const_zero())
+            .unwrap();
+        self.builder
+            .build_store(k_slot, i64_t.const_zero())
+            .unwrap();
+
+        let head = self.context.append_basic_block(fn_val, "col.cmp.head");
+        let body = self.context.append_basic_block(fn_val, "col.cmp.body");
+        let copy = self.context.append_basic_block(fn_val, "col.cmp.copy");
+        let cont = self.context.append_basic_block(fn_val, "col.cmp.cont");
+        let exit = self.context.append_basic_block(fn_val, "col.cmp.exit");
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(head);
+        let iv = self
+            .builder
+            .build_load(i64_t, i_slot, "col.cmp.iv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, iv, len, "col.cmp.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, body, exit)
+            .unwrap();
+
+        self.builder.position_at_end(body);
+        let valid = self.column_load_valid_bit(bitmap, iv);
+        self.builder
+            .build_conditional_branch(valid, copy, cont)
+            .unwrap();
+
+        self.builder.position_at_end(copy);
+        let kv = self
+            .builder
+            .build_load(i64_t, k_slot, "col.cmp.kv")
+            .unwrap()
+            .into_int_value();
+        let dst = unsafe {
+            self.builder
+                .build_gep(slot_t, buf, &[kv], "col.cmp.dst")
+                .unwrap()
+        };
+        let stored: BasicValueEnum<'ctx> = if as_index {
+            iv.into()
+        } else {
+            let src = unsafe {
+                self.builder
+                    .build_gep(elem, data, &[iv], "col.cmp.src")
+                    .unwrap()
+            };
+            self.builder.build_load(elem, src, "col.cmp.x").unwrap()
+        };
+        self.builder.build_store(dst, stored).unwrap();
+        self.builder
+            .build_store(
+                k_slot,
+                self.builder
+                    .build_int_add(kv, i64_t.const_int(1, false), "col.cmp.k2")
+                    .unwrap(),
+            )
+            .unwrap();
+        self.builder.build_unconditional_branch(cont).unwrap();
+
+        self.builder.position_at_end(cont);
+        self.builder
+            .build_store(
+                i_slot,
+                self.builder
+                    .build_int_add(iv, i64_t.const_int(1, false), "col.cmp.i2")
+                    .unwrap(),
+            )
+            .unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(exit);
+        let k = self
+            .builder
+            .build_load(i64_t, k_slot, "col.cmp.kfinal")
+            .unwrap()
+            .into_int_value();
+        (buf, k)
+    }
+
+    /// `sorted() -> Vec[T]` (ElementwiseOrd, S6c): the ascending-sorted VALID
+    /// values (nulls dropped, so `len == valid_count`). Compacts the valid
+    /// elements into a scratch buffer, sorts it in place via the shared
+    /// [`emit_sort_scratch`](super::Codegen::emit_sort_scratch), and returns
+    /// the owned Vec (the binding site frees it). Ties keep input order
+    /// (stable). i64/f64 elements only (see [`column_sort_is_int`]).
+    fn compile_column_sorted(
+        &mut self,
+        control: PointerValue<'ctx>,
+        elem: BasicTypeEnum<'ctx>,
+        unsigned: bool,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let is_int = self.column_sort_is_int(elem, unsigned)?;
+        let (buf, k) = self.column_compact_valid(control, elem, false);
+        let key = if is_int {
+            SortKey::IntValue
+        } else {
+            SortKey::Value
+        };
+        self.emit_sort_scratch(buf, k, &key);
+        Ok(self.stats_build_vec(buf, k))
+    }
+
+    /// `argsort() -> Vec[i64]` (ElementwiseOrd, S6c): the ORIGINAL slot indices
+    /// of the valid values, ordered so the values ascend (stable — ties keep
+    /// ascending index order). Compacts the valid slots' indices into a scratch
+    /// buffer, then insertion-sorts them keyed by `data[idx]` via the shared
+    /// scratch sort's `IndexInto` form. i64/f64 elements only.
+    fn compile_column_argsort(
+        &mut self,
+        control: PointerValue<'ctx>,
+        elem: BasicTypeEnum<'ctx>,
+        unsigned: bool,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let is_int = self.column_sort_is_int(elem, unsigned)?;
+        let data = self
+            .column_load_field(control, 0, "col.as.data")
+            .into_pointer_value();
+        let (buf, k) = self.column_compact_valid(control, elem, true);
+        let key = if is_int {
+            SortKey::IndexIntoInt(data)
+        } else {
+            SortKey::IndexInto(data)
+        };
+        self.emit_sort_scratch(buf, k, &key);
+        Ok(self.stats_build_vec(buf, k))
     }
 
     /// Build the shared [`ContainerAccess`] for this column's data block +
