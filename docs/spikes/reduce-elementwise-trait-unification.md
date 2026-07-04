@@ -485,10 +485,30 @@ B-2026-07-02-10..13, see the ledger.
     associated-type constructor — §3.3 item 5); `zip_with`; the non-inline /
     heap-element native paths; and `map` on the `ElementwiseMap` *trait*
     (bound-generic dispatch).
-- **S6c** — remaining: `ElementwiseOrd` builtin method surfaces (`argmin` /
-  `argmax` / `sorted` / `argsort`) + user impls; `ElementwiseMap` `zip_with`;
-  blanket `Vec[T]` impls; user trait-impl methods over builtin containers
-  (probed: interp "type 'unknown'", codegen loud fall-through).
+- **S6c-3** ✅ **(landed)** — `ElementwiseOrd` builtin method surfaces
+  `argmin()` / `argmax()` on `Column[T]` and `Tensor[T, ...S]` → `Option[i64]`
+  (regardless of `T`): the index of the **first** minimum / maximum, `None` on
+  an empty / all-null receiver. Column reports the **original** slot index over
+  the valid slots (nulls skipped in the compare — `Series.idxmin` semantics);
+  Tensor the flat C-order index over all elements. Codegen adds a
+  validity-gated `emit_reduce_argminmax_gated` (`(seeded, best)` → the caller
+  wraps `Some`/`None` on `seeded`) — the gated sibling of the dense
+  `emit_reduce_argminmax` (reused as-is for Tensor) and `emit_reduce_minmax_gated`;
+  both wrap via the shared `build_option_some_via_phis`. Typed by an
+  `argmin`/`argmax` intercept (like `map`/`fold`) with 0-arg + numeric-element
+  diagnostics. `run` == `KARAC_AUTO_PAR=0` == `build` across ties (first
+  occurrence), f64 elements, null-skipping, all-null/empty `None`, and inline
+  `match` on the call result. Tests: codegen `test_e2e_{column,tensor}_argmin_argmax`;
+  interpreter `column_tensor_argmin_argmax_reduction`; typechecker
+  `test_column_tensor_argmin_argmax_result_type_is_option_i64` (+ wrong-arity /
+  non-numeric); memory_sanitizer `asan_column_tensor_argmin_freed_no_leak`
+  (owned-temp receiver free, LSan-clean).
+- **S6c** — remaining: `ElementwiseOrd` `sorted()` / `argsort()` (→ `Vec[T]` /
+  `Vec[i64]`, need an in-IR column/tensor sort — the `Stats.sort`/`argsort`
+  scratch-sort machinery, adapted to the validity-gated column) + user impls;
+  `ElementwiseMap` `zip_with`; blanket `Vec[T]` impls; user trait-impl methods
+  over builtin containers (probed: interp "type 'unknown'", codegen loud
+  fall-through).
 
 ---
 
