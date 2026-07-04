@@ -455,9 +455,40 @@ B-2026-07-02-10..13, see the ledger.
     interpreter `tensor_fold_reduction`; typechecker
     `test_tensor_fold_result_type_is_accumulator` +
     `test_tensor_fold_wrong_arity_rejected`.
-- **S6c** — `ElementwiseMap` / `ElementwiseOrd` builtin method surfaces +
-  user impls; blanket `Vec[T]` impls; user trait-impl methods over builtin
-  containers (probed: interp "type 'unknown'", codegen loud fall-through).
+  - **S6c-2 (`Column.map` / `Tensor.map`)** ✅ **(landed 2026-07-03)** — the
+    `ElementwiseMap` trait's `map(|x| ...) -> Self` closure surface on both
+    handle-backed containers, the element-wise-map sibling of the fold
+    primitive. **Shared kernel:** a `MapKernelOp::Closure { params, body }`
+    variant of `emit_elementwise_map` binds the single closure param to each
+    element and inlines the body at the compute point (save/restore shadowed
+    outer bindings, captures through the enclosing scope) — reusing the
+    existing loop + validity-bitmap + null-skip machinery, so `Column.map`
+    preserves nulls for free (the result carries the source validity bitmap).
+    Column codegen `compile_column_map` (`column_alloc` + gated map), Tensor
+    codegen `compile_tensor_map` (`tensor_alloc_runtime` + copy dims + dense
+    map); same POD-only + inline-literal first cut as fold (closure-valued
+    local / `Column[String]` rejected loudly, each works under `karac run`).
+    The typechecker `map` intercept types `Column[T]`/`Tensor[T,...S]`
+    `.map(Fn(T)->T)` → `Self` (same-element-type first cut), and because the
+    result IS `Self` the fresh container auto-registers as a column/tensor
+    binding — its `expr_types` entry flows into
+    `column_typed_exprs`/`tensor_typed_exprs` and the let-binding gets
+    scope-exit cleanup with no new plumbing (LSan-verified via
+    `asan_column_tensor_map_freed_no_leak`). Interpreter map is
+    type-agnostic (nulls preserved for Column). A/B verified run ==
+    KARAC_AUTO_PAR=0 == build. Tests: codegen e2e `test_e2e_column_map`
+    {`,_preserves_nulls`,`_rejects_noninline_and_string`} + `test_e2e_tensor_map`
+    {`,_rejects_noninline`}; interpreter `column_map_reduction` /
+    `tensor_map_reduction`; typechecker `test_column_map_result_type_is_self` /
+    `test_tensor_map_result_type_is_self` (+ wrong-arity). **Residuals
+    (follow-ons):** element-type-changing `map` (`Fn(T)->U`, needs the
+    associated-type constructor — §3.3 item 5); `zip_with`; the non-inline /
+    heap-element native paths; and `map` on the `ElementwiseMap` *trait*
+    (bound-generic dispatch).
+- **S6c** — remaining: `ElementwiseOrd` builtin method surfaces (`argmin` /
+  `argmax` / `sorted` / `argsort`) + user impls; `ElementwiseMap` `zip_with`;
+  blanket `Vec[T]` impls; user trait-impl methods over builtin containers
+  (probed: interp "type 'unknown'", codegen loud fall-through).
 
 ---
 
