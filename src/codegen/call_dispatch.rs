@@ -3319,7 +3319,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     let _ = self.builder.build_store(cap_ptr, zero);
                 }
-            } else if fname != "Option" && fname != "Result" {
+            } else if fname == "Option" {
+                // B-2026-07-03-28 Facet A — the whole struct is moved, so its
+                // Option field is now owned by the destination; zero the source
+                // tag so its struct-drop `OptionInline` skips it.
+                self.zero_option_field_tag_at(field_ptr);
+            } else if fname != "Result" {
                 if let Some(layout) = self.enum_layouts.get(fname).cloned() {
                     if !layout.is_shared {
                         self.zero_enum_payload_caps(field_ptr, &layout);
@@ -3410,7 +3415,13 @@ impl<'ctx> super::Codegen<'ctx> {
             {
                 let _ = self.builder.build_store(cap_ptr, zero);
             }
-        } else if fname != "Option" && fname != "Result" {
+        } else if fname == "Option" {
+            // B-2026-07-03-28 Facet A — a moved-out `Option[inline-heap]` field.
+            // Zero its tag to `None` so the owner's struct-drop `OptionInline`
+            // free (tag-guarded on `Some`) skips it; the destructure leaf now
+            // owns the payload. The Option peer of the Vec cap-zero above.
+            self.zero_option_field_tag_at(field_ptr);
+        } else if fname != "Result" {
             if let Some(layout) = self.enum_layouts.get(fname.as_str()).cloned() {
                 if !layout.is_shared {
                     self.zero_enum_payload_caps(field_ptr, &layout);
@@ -3419,6 +3430,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 && !self.shared_types.contains_key(fname.as_str())
             {
                 self.zero_struct_move_caps(field_ptr, &fname);
+            }
+        }
+    }
+
+    /// Zero the tag word (to `None`) of an inline `Option` value at `field_ptr`,
+    /// so a tag-guarded `OptionInline` struct-drop / inline-Option cleanup skips
+    /// it — the move-out neutralizer for a transferred `Option[heap]` field
+    /// (B-2026-07-03-28 Facet A). No-op if the `Option` layout is unregistered.
+    pub(super) fn zero_option_field_tag_at(&self, field_ptr: PointerValue<'ctx>) {
+        if let Some(layout) = self.enum_layouts.get("Option") {
+            let none_tag = layout.tags.get("None").copied().unwrap_or(0);
+            let option_ty = layout.llvm_type;
+            if let Ok(tag_ptr) =
+                self.builder
+                    .build_struct_gep(option_ty, field_ptr, 0, "opt.move.tag")
+            {
+                let _ = self
+                    .builder
+                    .build_store(tag_ptr, self.context.i64_type().const_int(none_tag, false));
             }
         }
     }

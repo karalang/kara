@@ -5202,6 +5202,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     // existing source-owns / RC / handle paths.
                     let transferable = self.extract_vec_elem_type(&field_te).is_some()
                         || self.is_string_type_expr(&field_te)
+                        // B-2026-07-03-28 Facet A — an `Option[inline-heap]` field
+                        // of a CALLEE-OWNED struct (the source has a registered
+                        // struct-drop, i.e. it is entry-copied): transfer its
+                        // payload to the leaf (track the leaf's inline-Option
+                        // cleanup) and zero the SOURCE tag so the source
+                        // struct-drop's `OptionInline` free skips it.
+                        || self.option_inline_payload_elem(&field_te).is_some()
                         || matches!(
                             &field_te.kind,
                             TypeKind::Path(p) if p.segments.last().is_some_and(|s|
@@ -5537,6 +5544,11 @@ impl<'ctx> super::Codegen<'ctx> {
             || self.is_string_type_expr(te)
             || self.extract_map_kv_types(te).is_some()
             || self.extract_set_elem_type(te).is_some()
+            // B-2026-07-03-28 Facet A — an `Option[inline-heap]` leaf owns its
+            // payload once destructured out of a callee-owned source (whose
+            // struct-drop `OptionInline` free is suppressed by the tag-zero at
+            // the move site). An unconsumed leaf must free the payload itself.
+            || self.option_inline_payload_elem(te).is_some()
         {
             return true;
         }
@@ -5610,6 +5622,16 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.is_string_type_expr(te) {
             let i8t = self.context.i8_type().into();
             self.track_vec_var(alloca, Some(i8t));
+            return;
+        }
+        // B-2026-07-03-28 Facet A — an `Option[inline-heap]` destructure leaf.
+        // Register it exactly like a simple `let sv: Option[String] = …` binding:
+        // a scope-exit `FreeInlineOptionPayload` (tag-guarded) plus membership in
+        // `inline_option_payload_vars`, so a later `match sv` / move of the leaf
+        // suppresses the free (no double-drop) and an unconsumed leaf frees the
+        // payload itself (no leak).
+        if self.option_inline_payload_elem(te).is_some() {
+            self.track_inline_option_payload_var(var_name, alloca, te);
             return;
         }
         if self.extract_map_kv_types(te).is_some() || self.extract_set_elem_type(te).is_some() {

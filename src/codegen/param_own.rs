@@ -49,19 +49,22 @@
 //!
 //! Any aggregate whose drop frees buffers this routine can't soundly duplicate
 //! is left untouched (returns `false`): Map/Set handles, HTTP side-table
-//! handles (`Response`/`RequestBuilder`), shared (RC) types, and `Option` /
-//! `Result` fields (type-erased payloads with no static `VecOrString` field
-//! kind, so `deep_copy_enum_heap_payload_in_place` can't duplicate them — and
-//! the struct drop deliberately ignores them, so there's no double-free to
-//! guard). A non-shared user-ENUM field IS now supported (#19, 2026-06-12): the
-//! struct drop frees its live-variant `VecOrString` payload (post-#15/#18) and
-//! `deep_copy_one_aggregate_field` duplicates exactly that via
-//! `deep_copy_enum_heap_payload_in_place`, keeping copy and drop symmetric.
+//! handles (`Response`/`RequestBuilder`), shared (RC) types, and `Result`
+//! fields plus the `Option` payloads this routine can't yet duplicate
+//! (boxed-wide, struct/enum-inline, plain-enum = B-27). A non-shared user-ENUM
+//! field IS supported (#19, 2026-06-12): the struct drop frees its live-variant
+//! `VecOrString` payload (post-#15/#18) and `deep_copy_one_aggregate_field`
+//! duplicates exactly that via `deep_copy_enum_heap_payload_in_place`, keeping
+//! copy and drop symmetric. An `Option[String]` / `Option[Vec[..]]` field (an
+//! inline `{ptr,len,cap}` payload) IS supported too (B-2026-07-03-28 Facet A,
+//! 2026-07-03): `deep_copy_option_inline_payload_in_place` duplicates the `Some`
+//! buffer type-aware off the field `TypeExpr`, symmetric with the struct drop's
+//! `OptionInline` free (which is gated on this very copy-supported predicate).
 //! Bailing on the rest preserves today's exact behavior for those shapes.
 
 use inkwell::types::{BasicTypeEnum, StructType};
 use inkwell::values::PointerValue;
-use inkwell::AddressSpace;
+use inkwell::{AddressSpace, IntPredicate};
 use std::collections::HashMap;
 
 use crate::ast::{Expr, ExprKind, TypeExpr, TypeKind};
@@ -294,13 +297,24 @@ impl<'ctx> super::Codegen<'ctx> {
                     | "BTreeMap" | "BTreeSet" => false,
                     // HTTP side-table handle structs (see emit_struct_drop_synthesis).
                     "Response" | "RequestBuilder" => false,
-                    // Type-erased Option/Result: their payloads carry no static
-                    // VecOrString field kind, so `deep_copy_enum_heap_payload_in_place`
-                    // can't duplicate them — and the struct drop deliberately does
-                    // NOT free them (#15 excludes Option/Result), so there's no
-                    // double-free to guard. Bail to status quo (their own inline
-                    // machinery owns the payload).
-                    "Option" | "Result" => false,
+                    // B-2026-07-03-28 Facet A — an `Option[String]`/`Option[Vec[..]]`
+                    // field with an inline `{ptr,len,cap}` payload IS copyable:
+                    // `deep_copy_option_inline_payload_in_place` duplicates the
+                    // `Some` buffer type-aware off the field TypeExpr, and the
+                    // struct drop's `OptionInline` arm (gated on this same
+                    // copy-supported predicate) frees it — copy == drop, so a
+                    // callee-owned copy and the caller's retained original own
+                    // independent buffers. Other `Option` payloads (boxed-wide,
+                    // struct/enum-inline, plain-enum = B-27) and every `Result`
+                    // stay caller-retains (this routine can't duplicate them, and
+                    // the drop correspondingly leaves them excluded).
+                    "Option" => Self::option_payload_te(fte)
+                        .map(|pt| {
+                            self.is_string_type_expr(&pt)
+                                || self.extract_vec_elem_type(&pt).is_some()
+                        })
+                        .unwrap_or(false),
+                    "Result" => false,
                     _ if is_primitive_type_name(head) => true,
                     _ if self.shared_types.contains_key(head) => false,
                     _ if self.struct_types.contains_key(head) => {
@@ -431,6 +445,22 @@ impl<'ctx> super::Codegen<'ctx> {
                         return;
                     }
                 }
+            }
+        }
+        // B-2026-07-03-28 Facet A — an `Option[String]`/`Option[Vec[..]]` field
+        // (inline `{ptr,len,cap}` payload): deep-copy the `Some` buffer in place
+        // so a callee-owned param owns it independently, symmetric with the
+        // struct drop's `OptionInline` free. `field_copy_supported` already
+        // vetted the payload class, so any Option reaching here is copyable.
+        if let TypeKind::Path(p) = &fte.kind {
+            if p.segments.last().map(|s| s.as_str()) == Some("Option") {
+                if let Ok(field_ptr) = self
+                    .builder
+                    .build_struct_gep(agg_ty, base_ptr, idx, "p14.of")
+                {
+                    self.deep_copy_option_inline_payload_in_place(field_ptr, fte);
+                }
+                return;
             }
         }
         // Tuple field → recurse into each element.
@@ -628,6 +658,141 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         self.builder.position_at_end(merge_bb);
+    }
+
+    /// B-2026-07-03-28 Facet A — deep-copy an `Option[String]` / `Option[Vec[..]]`
+    /// FIELD's inline `Some` payload in place, so a callee-owned by-value
+    /// aggregate param owns a buffer independent of the caller's retained
+    /// original. The type-erased `Option` layout carries no payload drop-kind, so
+    /// this is TYPE-AWARE off the field's `TypeExpr` (the copy peer of the
+    /// type-aware `emit_option_drop_fn`): tag-switch on `Some`, reconstruct the
+    /// inline `{ptr,len,cap}` from words 1..3, run `emit_vecstr_defensive_copy`
+    /// (element-DEEP for a `Vec[String]`/collection payload, matching the drop),
+    /// and write the fresh `{ptr,len,cap}` words back. `None`-tag runs nothing.
+    /// Only the inline-`{ptr,len,cap}` payload class is handled here (the same
+    /// class `option_inline_payload_elem` recognises); `field_copy_supported`'s
+    /// `Option` arm gates callers to exactly that, keeping copy == drop.
+    fn deep_copy_option_inline_payload_in_place(
+        &mut self,
+        field_ptr: PointerValue<'ctx>,
+        opt_te: &TypeExpr,
+    ) {
+        let Some(payload_te) = Self::option_payload_te(opt_te) else {
+            return;
+        };
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let vec_ty = self.vec_struct_type();
+        let fn_val = self.current_fn.unwrap();
+        let Some(layout) = self.enum_layouts.get("Option").cloned() else {
+            return;
+        };
+        let option_ty = layout.llvm_type;
+        let some_tag = layout.tags.get("Some").copied().unwrap_or(1);
+
+        // Element type + (for a Vec[collection] payload) the element-deep TypeExpr,
+        // mirroring the drained-Vec entry-copy so a `Vec[String]` payload's char
+        // buffers are copied too, matching `emit_option_drop_fn`'s deep free.
+        let (elem_ty, deep_elem_te): (BasicTypeEnum<'ctx>, Option<TypeExpr>) =
+            if self.is_string_type_expr(&payload_te) {
+                (self.context.i8_type().into(), None)
+            } else if let Some(et) = self.extract_vec_elem_type(&payload_te) {
+                let inner = crate::codegen::helpers::vec_inner_type_expr(&payload_te)
+                    .filter(Self::elem_te_needs_direct_recursive_drain);
+                (et, inner)
+            } else {
+                return;
+            };
+
+        let tag_ptr = self
+            .builder
+            .build_struct_gep(option_ty, field_ptr, 0, "p14o.tag.p")
+            .unwrap();
+        let tag = self
+            .builder
+            .build_load(i64_t, tag_ptr, "p14o.tag")
+            .unwrap()
+            .into_int_value();
+        let is_some = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                tag,
+                i64_t.const_int(some_tag, false),
+                "p14o.some",
+            )
+            .unwrap();
+        let some_bb = self.context.append_basic_block(fn_val, "p14o.some");
+        let merge_bb = self.context.append_basic_block(fn_val, "p14o.merge");
+        self.builder
+            .build_conditional_branch(is_some, some_bb, merge_bb)
+            .unwrap();
+
+        self.builder.position_at_end(some_bb);
+        // Words: data=idx1, len=idx2, cap=idx3.
+        let data_w = self.load_enum_word(option_ty, field_ptr, 1, "p14o.data");
+        let len_w = self.load_enum_word(option_ty, field_ptr, 2, "p14o.len");
+        let cap_w = self.load_enum_word(option_ty, field_ptr, 3, "p14o.cap");
+        let data_p = self
+            .builder
+            .build_int_to_ptr(data_w, ptr_ty, "p14o.data.p")
+            .unwrap();
+        let mut sv = vec_ty.get_undef();
+        sv = self
+            .builder
+            .build_insert_value(sv, data_p, 0, "p14o.sv.d")
+            .unwrap()
+            .into_struct_value();
+        sv = self
+            .builder
+            .build_insert_value(sv, len_w, 1, "p14o.sv.l")
+            .unwrap()
+            .into_struct_value();
+        sv = self
+            .builder
+            .build_insert_value(sv, cap_w, 2, "p14o.sv.c")
+            .unwrap()
+            .into_struct_value();
+        let copied = self
+            .emit_vecstr_defensive_copy(sv.into(), elem_ty, deep_elem_te.as_ref())
+            .into_struct_value();
+        let cd = self
+            .builder
+            .build_extract_value(copied, 0, "p14o.cd")
+            .unwrap()
+            .into_pointer_value();
+        let cl = self
+            .builder
+            .build_extract_value(copied, 1, "p14o.cl")
+            .unwrap();
+        let cc = self
+            .builder
+            .build_extract_value(copied, 2, "p14o.cc")
+            .unwrap();
+        let cd_w = self
+            .builder
+            .build_ptr_to_int(cd, i64_t, "p14o.cd.w")
+            .unwrap();
+        self.store_enum_word(option_ty, field_ptr, 1, cd_w.into());
+        self.store_enum_word(option_ty, field_ptr, 2, cl);
+        self.store_enum_word(option_ty, field_ptr, 3, cc);
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        self.builder.position_at_end(merge_bb);
+    }
+
+    /// The payload `TypeExpr` of an `Option[T]` type expr, else `None`.
+    pub(super) fn option_payload_te(opt_te: &TypeExpr) -> Option<TypeExpr> {
+        let TypeKind::Path(p) = &opt_te.kind else {
+            return None;
+        };
+        if p.segments.last().map(|s| s.as_str()) != Some("Option") {
+            return None;
+        }
+        match p.generic_args.as_ref()?.first()? {
+            crate::ast::GenericArg::Type(t) => Some(t.clone()),
+            _ => None,
+        }
     }
 
     /// #14 — at a struct-literal field init `S { f: obj.field }` whose value is

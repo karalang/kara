@@ -949,12 +949,27 @@ impl<'ctx> super::Codegen<'ctx> {
             /// returns false. Without this kind the live variant's String/Vec
             /// payload leaks at the owning struct's scope exit. Freed by
             /// invoking the enum's own `__karac_drop_<E>` switch on the field
-            /// ptr (`emit_enum_drop_switch`). `Option`/`Result` are excluded
-            /// (their inline payloads are handled by the let-binding inline-drop
-            /// machinery, not struct drop) — their struct-field payload leak is
-            /// a separate, still-bounded remainder (B-2026-07-03-28 facet A,
-            /// blocked on the caller-retains param model; see the ledger).
+            /// ptr (`emit_enum_drop_switch`). `Option`/`Result` take the
+            /// dedicated `OptionInline` path (Option only) below instead.
             EnumField,
+            /// B-2026-07-03-28 Facet A — a field typed `Option[String]` /
+            /// `Option[Vec[..]]` (inline `{ptr,len,cap}` payload). The
+            /// let-binding inline-drop machinery (`FreeInlineOptionPayload`)
+            /// frees such a payload only when the field is BOUND/MATCHED — a
+            /// whole-struct PLAIN drop (a `Vec[A]` element, a scope-exit drop of
+            /// an unconsumed value) has no binding, so the `Some` payload leaked.
+            /// Free it here, tag-guarded, via the field's own
+            /// `karac_drop_Option_<H>` (from `vec_elem_agg_drop_for_type_expr`,
+            /// stored in the parallel `option_drops` side-vec). Gated on
+            /// `aggregate_param_copy_supported_struct(struct)` = the SAME
+            /// predicate that makes the struct CALLEE-OWNED as a by-value param
+            /// (param_own entry-copies its Option payload). That gate is what
+            /// makes this safe: a copy-supported struct is never a caller-retains
+            /// shallow-shared instance, so freeing the Option here can't
+            /// double-free a payload the caller also owns. Every destructure /
+            /// consume site neutralizes the SOURCE tag (`zero_struct_field_move_cap`'s
+            /// Option arm) so a consumed leaf's own free isn't doubled here.
+            OptionInline,
         }
         let mut kinds: Vec<FieldDrop> = field_kinds
             .iter()
@@ -1064,6 +1079,55 @@ impl<'ctx> super::Codegen<'ctx> {
                         .any(|kinds| kinds.iter().any(|dk| *dk != EnumDropKind::None));
                 if heap_bearing {
                     *k = FieldDrop::EnumField;
+                }
+            }
+        }
+        // B-2026-07-03-28 Facet A — free `Option[String]`/`Option[Vec[..]]`
+        // fields, but ONLY when this struct is copy-supported (so it is
+        // CALLEE-OWNED as a by-value param, with its Option payload entry-copied
+        // by `param_own`). That gate is the soundness condition: a copy-supported
+        // struct is never a caller-retains shallow-shared instance, so freeing
+        // the Option here can't double-free a payload the caller also owns. Phase
+        // 1 collects candidate indices; phase 2 synthesizes each drop fn (needs
+        // `&mut self`, can't co-borrow `kinds`). The fn is stashed in
+        // `option_drops` (a local enum can't carry a `FunctionValue<'ctx>`).
+        let mut option_drops: Vec<Option<FunctionValue<'ctx>>> = vec![None; kinds.len()];
+        let struct_callee_owned =
+            self.aggregate_param_copy_supported_struct(struct_name, &mut Vec::new());
+        if struct_callee_owned {
+            let mut option_idxs: Vec<usize> = Vec::new();
+            for (idx, k) in kinds.iter().enumerate() {
+                if *k == FieldDrop::None
+                    && matches!(
+                        field_kinds.get(idx).and_then(|o| o.as_deref()),
+                        Some("Option")
+                    )
+                {
+                    option_idxs.push(idx);
+                }
+            }
+            for idx in option_idxs {
+                let Some(field_te) = self
+                    .struct_field_type_exprs
+                    .get(struct_name)
+                    .and_then(|v| v.get(idx))
+                    .cloned()
+                else {
+                    continue;
+                };
+                // Only the inline-`{ptr,len,cap}` payload class — the exact set
+                // `field_copy_supported` admits and `param_own` entry-copies.
+                let inline_copyable = Self::option_payload_te(&field_te)
+                    .map(|pt| {
+                        self.is_string_type_expr(&pt) || self.extract_vec_elem_type(&pt).is_some()
+                    })
+                    .unwrap_or(false);
+                if !inline_copyable {
+                    continue;
+                }
+                if let Some(f) = self.vec_elem_agg_drop_for_type_expr(&field_te) {
+                    option_drops[idx] = Some(f);
+                    kinds[idx] = FieldDrop::OptionInline;
                 }
             }
         }
@@ -1575,6 +1639,27 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let Some(enum_drop_fn) = self.emit_enum_drop_switch(&enum_name) {
                         self.builder
                             .build_call(enum_drop_fn, &[field_ptr.into()], "")
+                            .unwrap();
+                    }
+                }
+                FieldDrop::OptionInline => {
+                    // B-2026-07-03-28 Facet A — free the field's inline
+                    // `Option[String]`/`Option[Vec]` payload via its tag-guarded
+                    // `karac_drop_Option_<H>` (stashed at classification time). A
+                    // destructured/consumed field's source tag is zeroed at the
+                    // move site so the guard skips it here (no double-free).
+                    if let Some(opt_drop_fn) = option_drops[field_idx] {
+                        let field_ptr = self
+                            .builder
+                            .build_struct_gep(
+                                st,
+                                p_arg,
+                                field_idx as u32,
+                                &format!("drop.field{field_idx}.opt.p"),
+                            )
+                            .unwrap();
+                        self.builder
+                            .build_call(opt_drop_fn, &[field_ptr.into()], "")
                             .unwrap();
                     }
                 }

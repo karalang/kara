@@ -1340,23 +1340,22 @@ fn main() {
     /// `asan_option_plain_enum_heap_payload_undestructured_drop_leaks_pinned`.)
     ///
     /// B-2026-07-03-28 (pinned, PORT-AFFECTING): still LEAKS under LSan, but the
-    /// leak is now HALVED and of a single remaining class. Sub-fix 1 (the
-    /// `Vec`-element drain in `emit_struct_drop_synthesis`'s VecOrString arm,
-    /// paired with the element-deep by-value-param entry-copy in `param_own.rs`)
-    /// fixed the `Vec[String]` / `Vec[collection]` ELEMENT leak — the drop was
-    /// 1434 B / 36 allocs, now 474 B / 12 allocs. The residual 474 B is FACET A:
-    /// the `Option[String]` payloads (`AttrNode.string_value`, `AttrArgNode.name`)
-    /// dropped on a plain / consumed struct. `emit_struct_drop_synthesis`
-    /// deliberately excludes `Option` fields, and closing that is BLOCKED on the
-    /// caller-retains param model: a struct that owns an `Option` field is left
-    /// caller-retains by `param_own` (it can't deep-copy the type-erased Option
-    /// payload), so making struct-drop free the Option would double-free on the
-    /// consume path (caller frees it AND the callee's `match`/move-out frees the
-    /// leaf) — verified: a prototype produced exactly that double-free. Fixing it
-    /// needs `param_own` to entry-copy Option payloads (new machinery) so
-    /// Option-bearing structs become callee-owned. Tracked in the B-28 ledger.
-    /// `#[ignore]`d so the Linux-CI `memory-sanitizer` gate stays green;
-    /// un-ignore when Facet A lands. Run: `scripts/lsan-local.sh
+    /// leak is down to 240 B / 6 allocs from 1434 B / 36, in TWO landed steps and
+    /// one remaining class. (1) The Vec-element drain (B-2026-07-03-30) fixed the
+    /// `Vec[String]`/collection ELEMENT leak → 474 B / 12. (2) Facet A step 1 (the
+    /// direct-`Option`-field callee-ownership: `param_own` entry-copies an
+    /// `Option[String]`/`Option[Vec]` payload, and `emit_struct_drop_synthesis`
+    /// frees it via `OptionInline`, gated on the same copy-supported predicate,
+    /// with destructure/match/field-move-out source-tag neutralization) fixed
+    /// `AttrNode.string_value` → 240 B / 6. The RESIDUAL is the `AttrArgNode`
+    /// options nested inside `Vec[AttrArgNode]`: `name: Option[String]` and
+    /// `value: Option[Expr]` where `Expr` is `shared`. Closing it needs TWO more
+    /// pieces — (a) `Option[shared]` entry-copy (rc-inc) + drop (rc-dec) so
+    /// `AttrArgNode` becomes copy-supported, and (b) element-DEEP entry-copy of a
+    /// `Vec[struct]` field (so the deeper `AttrArgNode` element drop stays
+    /// symmetric with the copy). Tracked in the B-28 ledger. `#[ignore]`d so the
+    /// Linux-CI `memory-sanitizer` gate stays green; un-ignore when the residual
+    /// lands. Run: `scripts/lsan-local.sh
     /// "asan_attr_node_list_drop_consume_and_plain -- --ignored"`.
     #[test]
     #[ignore]
@@ -19247,6 +19246,131 @@ fn main() {
 "#,
             &["6"],
             "struct_vec_map_field_plain_drop_drains_elements",
+        );
+    }
+
+    /// B-2026-07-03-28 Facet A — plain-drop of a struct whose only heap is an
+    /// `Option[String]` field (a `Vec[A]` element). The struct is copy-supported,
+    /// so it is callee-owned and its synthesized struct drop frees the `Some`
+    /// payload (`OptionInline`); before the fix the payload leaked.
+    #[test]
+    fn asan_option_field_plain_drop_freed() {
+        assert_clean_asan_run(
+            r#"
+struct A { sv: Option[String] }
+fn main() {
+    let mut v: Vec[A] = Vec.new();
+    let mut i = 0;
+    while i < 6 { v.push(A { sv: Some("facet_a_plaindrop_option_string_payload_x".to_string()) }); i = i + 1; }
+    println(v.len());
+}
+"#,
+            &["6"],
+            "option_field_plain_drop_freed",
+        );
+    }
+
+    /// B-2026-07-03-28 Facet A — by-value param destructured, the `Option` leaf
+    /// matched+consumed. The param is entry-copied (independent `Option` payload),
+    /// the destructure zeros the source tag, and the `match` frees the leaf —
+    /// no double-free (the pre-fix prototype double-freed here), no leak.
+    #[test]
+    fn asan_option_field_destructure_match_consume_clean() {
+        assert_clean_asan_run(
+            r#"
+struct A { path: Vec[String], sv: Option[String] }
+fn f(a: A) -> i64 {
+    let A { path, sv } = a;
+    let mut t = 0;
+    for s in path { if s.len() >= 0 { t = t + 1; } }
+    match sv { Some(x) => { if x.len() >= 0 { t = t + 1; } } None => {} }
+    t
+}
+fn build() -> Vec[A] {
+    let mut v: Vec[A] = Vec.new();
+    let mut i = 0;
+    while i < 6 {
+        let mut p: Vec[String] = Vec.new();
+        p.push("facet_a_destructure_vec_payload_alpha_aaaa".to_string());
+        v.push(A { path: p, sv: Some("facet_a_destructure_option_payload_beta_bb".to_string()) });
+        i = i + 1;
+    }
+    v
+}
+fn main() {
+    let xs = build();
+    let mut t = 0;
+    for a in xs { t = t + f(a); }
+    println(t);
+}
+"#,
+            &["12"],
+            "option_field_destructure_match_consume",
+        );
+    }
+
+    /// B-2026-07-03-28 Facet A — destructured, the `Option` leaf never consumed:
+    /// its tracked inline-Option cleanup frees the payload at scope exit while the
+    /// source struct drop skips it (tag zeroed). No leak, no double-free.
+    #[test]
+    fn asan_option_field_destructure_unused_freed() {
+        assert_clean_asan_run(
+            r#"
+struct A { path: Vec[String], sv: Option[String] }
+fn f(a: A) -> i64 {
+    let A { path, sv } = a;
+    0
+}
+fn build() -> Vec[A] {
+    let mut v: Vec[A] = Vec.new();
+    let mut i = 0;
+    while i < 6 {
+        let mut p: Vec[String] = Vec.new();
+        p.push("facet_a_unused_vec_payload_gamma_cccccccccc".to_string());
+        v.push(A { path: p, sv: Some("facet_a_unused_option_payload_delta_dddddddd".to_string()) });
+        i = i + 1;
+    }
+    v
+}
+fn main() {
+    let xs = build();
+    let mut t = 0;
+    for a in xs { t = t + f(a); }
+    println(t);
+}
+"#,
+            &["0"],
+            "option_field_destructure_unused_freed",
+        );
+    }
+
+    /// B-2026-07-03-28 Facet A — `let x = a.sv` moves the `Option` field out of a
+    /// callee-owned struct; the field-access move-out zeros the source tag so the
+    /// struct drop skips it, and `x` owns the payload. No double-free, no leak.
+    #[test]
+    fn asan_option_field_moveout_clean() {
+        assert_clean_asan_run(
+            r#"
+struct A { keep: i64, sv: Option[String] }
+fn f(a: A) -> i64 {
+    let x = a.sv;
+    match x { Some(s) => { if s.len() >= 0 { 1 } else { 0 } } None => 0 }
+}
+fn build() -> Vec[A] {
+    let mut v: Vec[A] = Vec.new();
+    let mut i = 0;
+    while i < 6 { v.push(A { keep: i, sv: Some("facet_a_field_moveout_option_payload_eta_ee".to_string()) }); i = i + 1; }
+    v
+}
+fn main() {
+    let xs = build();
+    let mut t = 0;
+    for a in xs { t = t + f(a); }
+    println(t);
+}
+"#,
+            &["6"],
+            "option_field_moveout_clean",
         );
     }
 }

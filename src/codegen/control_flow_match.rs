@@ -2816,7 +2816,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     let _ = self.builder.build_store(cap_ptr, zero);
                 }
-            } else if fname != "Option" && fname != "Result" {
+            } else if fname == "Option" {
+                // B-2026-07-03-28 Facet A — a match-destructured `Option[heap]`
+                // field: the arm's own binding frees the payload, so zero the
+                // SOURCE tag and let the struct-drop `OptionInline` free skip it.
+                self.zero_option_field_tag_at(field_ptr);
+            } else if fname != "Result" {
                 if let Some(layout) = self.enum_layouts.get(fname).cloned() {
                     if !layout.is_shared {
                         self.zero_enum_payload_caps(field_ptr, &layout);
