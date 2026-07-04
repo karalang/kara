@@ -19292,6 +19292,54 @@ fn main() {
 }
 
 #[test]
+fn column_tensor_argmin_argmax_reduction() {
+    // `argmin()`/`argmax() -> Option[i64]` (ElementwiseOrd, S6c). Column reports
+    // the ORIGINAL slot index over the valid slots (nulls skipped in the
+    // compare); Tensor the flat C-order index over all elements. Ties keep the
+    // first occurrence; an empty/all-null column -> None.
+    let out = run_no_errors(
+        r#"
+fn show(o: Option[i64]) {
+    match o {
+        Some(i) => println(f"{i}"),
+        None => println("none"),
+    }
+}
+fn main() {
+    let c: Column[i64] = Column.from_vec([5, 9, 3, 3, 8, 1]);
+    show(c.argmin());
+    show(c.argmax());
+
+    let mut n: Column[i64] = Column.new();
+    n.push(10);
+    n.push_null();
+    n.push(5);
+    n.push_null();
+    n.push(20);
+    show(n.argmin());
+    show(n.argmax());
+
+    let mut allnull: Column[i64] = Column.with_capacity(2);
+    allnull.push_null();
+    allnull.push_null();
+    show(allnull.argmin());
+
+    let t: Tensor[i64, [6]] = Tensor.from([4, 2, 7, 2, 9, 9]);
+    show(t.argmin());
+    show(t.argmax());
+
+    let m: Tensor[i64, [2, 3]] = Tensor.from([[3, 1, 4], [1, 5, 9]]);
+    show(m.argmin());
+    show(m.argmax());
+}
+"#,
+    );
+    // c: min@5, max@1. n [10,null,5,null,20]: min@2, max@4. all-null: none.
+    // t: min@1, max@4. m flat [3,1,4,1,5,9]: min@1, max@5.
+    assert_eq!(out, "5\n1\n2\n4\nnone\n1\n4\n1\n5\n");
+}
+
+#[test]
 fn primitive_trait_impl_direct_dispatch_by_declared_width() {
     // B-2026-07-03-5: a user trait impl on a PRIMITIVE target dispatched for a
     // direct value-receiver call under `karac run`. The interpreter's runtime

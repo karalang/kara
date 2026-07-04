@@ -1364,4 +1364,121 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_int_value())
     }
+
+    /// The validity-gated sibling of [`emit_reduce_argminmax`] (S6c) — the
+    /// first-occurrence `argmin`/`argmax` over a `Column`'s valid slots, used
+    /// by the `ElementwiseOrd` surface. Null slots are skipped in the compare
+    /// but the tracked/returned index is the ORIGINAL slot (`Series.idxmin`
+    /// semantics). Returns `(seeded, best)`: `seeded` (an `i1`) is `false` iff
+    /// the column is empty / all-null — the caller wraps `best` in
+    /// `Some`/`None` on it. Like the dense form the strict `<`/`>` keeps the
+    /// first occurrence, and `data[best]` is re-read each iteration for the
+    /// compare (the pre-seed read of `data[0]` is a safe in-bounds placeholder
+    /// read whose result is masked by the `seeded` OR).
+    pub(super) fn emit_reduce_argminmax_gated(
+        &mut self,
+        access: &ContainerAccess<'ctx>,
+        bitmap: PointerValue<'ctx>,
+        is_max: bool,
+    ) -> Result<(IntValue<'ctx>, IntValue<'ctx>), String> {
+        let i64_t = self.context.i64_type();
+        let bool_t = self.context.bool_type();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "gated reduce argminmax outside function".to_string())?;
+
+        let idx = self.builder.build_alloca(i64_t, "kern.gam.i").unwrap();
+        let best = self.builder.build_alloca(i64_t, "kern.gam.best").unwrap();
+        let seeded = self
+            .builder
+            .build_alloca(bool_t, "kern.gam.seeded")
+            .unwrap();
+        self.builder.build_store(idx, i64_t.const_zero()).unwrap();
+        self.builder.build_store(best, i64_t.const_zero()).unwrap();
+        self.builder
+            .build_store(seeded, bool_t.const_zero())
+            .unwrap();
+
+        let head = self.context.append_basic_block(fn_val, "kern.gam.head");
+        let body = self.context.append_basic_block(fn_val, "kern.gam.body");
+        let upd = self.context.append_basic_block(fn_val, "kern.gam.upd");
+        let cont = self.context.append_basic_block(fn_val, "kern.gam.cont");
+        let exit = self.context.append_basic_block(fn_val, "kern.gam.exit");
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(head);
+        let iv = self
+            .builder
+            .build_load(i64_t, idx, "kern.gam.iv")
+            .unwrap()
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, iv, access.len, "kern.gam.more")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(more, body, exit)
+            .unwrap();
+
+        self.builder.position_at_end(body);
+        let valid = self.column_load_valid_bit(bitmap, iv);
+        self.builder
+            .build_conditional_branch(valid, upd, cont)
+            .unwrap();
+
+        self.builder.position_at_end(upd);
+        let x = self.access_load(access, iv);
+        let bestv = self
+            .builder
+            .build_load(i64_t, best, "kern.gam.bestv")
+            .unwrap()
+            .into_int_value();
+        let bx = self.access_load(access, bestv);
+        let s = self
+            .builder
+            .build_load(bool_t, seeded, "kern.gam.s")
+            .unwrap()
+            .into_int_value();
+        // `x ⋖ data[best]`; take unconditionally when not yet seeded.
+        let cmp_op = if is_max { BinOp::Gt } else { BinOp::Lt };
+        let cmp = self
+            .compile_binop_typed(&cmp_op, x, bx, access.unsigned)?
+            .into_int_value();
+        let not_seeded = self.builder.build_not(s, "kern.gam.ns").unwrap();
+        let take = self
+            .builder
+            .build_or(not_seeded, cmp, "kern.gam.take")
+            .unwrap();
+        let newbest = self
+            .builder
+            .build_select(take, iv, bestv, "kern.gam.newbest")
+            .unwrap()
+            .into_int_value();
+        self.builder.build_store(best, newbest).unwrap();
+        self.builder
+            .build_store(seeded, bool_t.const_int(1, false))
+            .unwrap();
+        self.builder.build_unconditional_branch(cont).unwrap();
+
+        self.builder.position_at_end(cont);
+        let next = self
+            .builder
+            .build_int_add(iv, i64_t.const_int(1, false), "kern.gam.next")
+            .unwrap();
+        self.builder.build_store(idx, next).unwrap();
+        self.builder.build_unconditional_branch(head).unwrap();
+
+        self.builder.position_at_end(exit);
+        let seeded_v = self
+            .builder
+            .build_load(bool_t, seeded, "kern.gam.sf")
+            .unwrap()
+            .into_int_value();
+        let best_v = self
+            .builder
+            .build_load(i64_t, best, "kern.gam.bf")
+            .unwrap()
+            .into_int_value();
+        Ok((seeded_v, best_v))
+    }
 }

@@ -47240,6 +47240,84 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_column_argmin_argmax() {
+        // `Column.argmin()`/`argmax() -> Option[i64]` (ElementwiseOrd, S6c): the
+        // ORIGINAL slot index of the first min/max over the valid slots; null
+        // slots skipped in the compare but the reported index is the original
+        // position (`Series.idxmin`). Covers ties (first occurrence wins), an
+        // f64 column, null-skipping, and the all-null/empty `None`. `run` ==
+        // `build` == default auto-par.
+        let src = r#"
+fn show(o: Option[i64]) {
+    match o {
+        Some(i) => println(f"{i}"),
+        None => println("none"),
+    }
+}
+fn main() {
+    let c: Column[i64] = Column.from_vec([5, 9, 3, 3, 8, 1]);
+    show(c.argmin());
+    show(c.argmax());
+    let fc: Column[f64] = Column.from_vec([2.5, 1.5, 3.5, 1.5]);
+    show(fc.argmin());
+    show(fc.argmax());
+    let mut n: Column[i64] = Column.new();
+    n.push(10);
+    n.push_null();
+    n.push(5);
+    n.push_null();
+    n.push(20);
+    show(n.argmin());
+    show(n.argmax());
+    let mut allnull: Column[i64] = Column.with_capacity(2);
+    allnull.push_null();
+    allnull.push_null();
+    show(allnull.argmin());
+    let empty: Column[i64] = Column.with_capacity(0);
+    show(empty.argmax());
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        // c: min value 1 at idx 5, max value 9 at idx 1.
+        // fc: min 1.5 first at idx 1, max 3.5 at idx 2.
+        // n [10,null,5,null,20]: min 5 at idx 2, max 20 at idx 4 (original slots).
+        // all-null and empty -> none.
+        assert_eq!(out, "5\n1\n1\n2\n2\n4\nnone\nnone\n");
+    }
+
+    #[test]
+    fn test_e2e_tensor_argmin_argmax() {
+        // `Tensor.argmin()`/`argmax() -> Option[i64]` (ElementwiseOrd, S6c): the
+        // flat C-order index of the first min/max over ALL elements (no null
+        // concept). Covers ties (first occurrence), a 2-D tensor (C-order flat
+        // index), and an f64 tensor. `run` == `build` == default auto-par.
+        let src = r#"
+fn show(o: Option[i64]) {
+    match o {
+        Some(i) => println(f"{i}"),
+        None => println("none"),
+    }
+}
+fn main() {
+    let t: Tensor[i64, [6]] = Tensor.from([4, 2, 7, 2, 9, 9]);
+    show(t.argmin());
+    show(t.argmax());
+    let m: Tensor[i64, [2, 3]] = Tensor.from([[3, 1, 4], [1, 5, 9]]);
+    show(m.argmin());
+    show(m.argmax());
+    let tf: Tensor[f64, [4]] = Tensor.from([2.5, 8.0, 1.0, 8.0]);
+    show(tf.argmin());
+    show(tf.argmax());
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        // t: min 2 first at idx 1, max 9 first at idx 4.
+        // m (flat [3,1,4,1,5,9]): min 1 first at flat idx 1, max 9 at flat idx 5.
+        // tf: min 1.0 at idx 2, max 8.0 first at idx 1.
+        assert_eq!(out, "1\n4\n1\n5\n2\n1\n");
+    }
+
+    #[test]
     fn test_e2e_stdlib_reduce_default_method_inherited_by_user_impl() {
         // S6b-4 (B-2026-07-03-19): a user `impl Reduce[T] for MyType` inherits
         // the BAKED stdlib trait's DEFAULT method `range` (`max - min`) without

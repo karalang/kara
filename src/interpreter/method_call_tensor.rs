@@ -29,6 +29,8 @@ use crate::token::Span;
 // bare element type — both shared with `Column` in `super::helpers`.
 use super::helpers::minmax_value_reduce;
 use super::helpers::value_as_f64 as value_to_f64;
+use super::helpers::value_compare;
+use crate::interpreter::value::EnumData;
 
 /// Element-fill class for `Tensor.zeros` / `Tensor.ones` — the only
 /// distinction the dynamically-typed interpreter's `Value` makes among
@@ -419,6 +421,45 @@ impl<'a> super::Interpreter<'a> {
                 Some(Value::Tensor {
                     dims: dims.clone(),
                     data: Arc::new(RwLock::new(out)),
+                })
+            }
+            // `argmin` / `argmax` -> `Option[i64]` (ElementwiseOrd, S6c): the
+            // flat C-order index of the first minimum / maximum over ALL
+            // elements (a tensor has no null concept). Empty tensor -> `None`
+            // (mirroring `Stats.argmin`, unlike the `min`/`max` empty trap).
+            // Typed by the `argmin`/`argmax` intercept (returns `Option[i64]`).
+            "argmin" | "argmax" => {
+                let elems = data.read().unwrap();
+                let want_max = method == "argmax";
+                let mut best: Option<(usize, &Value)> = None;
+                for (i, cell) in elems.iter().enumerate() {
+                    let take = match &best {
+                        None => true,
+                        Some((_, bv)) => {
+                            // Strict compare keeps the FIRST occurrence.
+                            let ord = value_compare(cell, bv);
+                            if want_max {
+                                ord == std::cmp::Ordering::Greater
+                            } else {
+                                ord == std::cmp::Ordering::Less
+                            }
+                        }
+                    };
+                    if take {
+                        best = Some((i, cell));
+                    }
+                }
+                Some(match best {
+                    Some((i, _)) => Value::EnumVariant {
+                        enum_name: "Option".to_string(),
+                        variant: "Some".to_string(),
+                        data: EnumData::Tuple(vec![Value::Int(i as i64)]),
+                    },
+                    None => Value::EnumVariant {
+                        enum_name: "Option".to_string(),
+                        variant: "None".to_string(),
+                        data: EnumData::Unit,
+                    },
                 })
             }
             "sum_axis" | "mean_axis" => {

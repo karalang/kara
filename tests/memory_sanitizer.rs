@@ -18980,6 +18980,48 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_column_tensor_argmin_freed_no_leak() {
+        // S6c: `Column.argmin`/`argmax` and `Tensor.argmin`/`argmax` return a
+        // POD `Option[i64]` (no heap), but the receiver columns / tensors own
+        // heap. This asserts the bound receivers free at scope exit AND that a
+        // FRESH `Column.from_vec(...).argmin()` temp receiver is freed by the
+        // owned-temp machinery (not leaked). Looped so a per-iteration leak
+        // accumulates for LSan.
+        assert_clean_asan_run(
+            r#"
+fn idx(o: Option[i64]) -> i64 {
+    match o {
+        Some(i) => i,
+        None => -1,
+    }
+}
+fn inner() -> i64 {
+    let c: Column[i64] = Column.from_vec([5, 9, 3, 3, 8, 1]);
+    let a = idx(c.argmin()) + idx(c.argmax());
+    let t: Tensor[i64, [6]] = Tensor.from([4, 2, 7, 2, 9, 9]);
+    let b = idx(t.argmin()) + idx(t.argmax());
+    // Fresh-temp receiver — must be freed by the owned-temp path.
+    let d = idx(Column.from_vec([2, 8, 1, 8]).argmax());
+    a + b + d
+}
+fn main() {
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 {
+        acc = acc + inner();
+        i = i + 1;
+    }
+    println(f"{acc}");
+}
+"#,
+            // c: 5+1=6; t: 1+4=5; d: argmax of [2,8,1,8] first 8 at idx 1 = 1.
+            // (6 + 5 + 1) * 20 = 240.
+            &["240"],
+            "asan_column_tensor_argmin_freed_no_leak",
+        );
+    }
+
     /// B-2026-07-03-30 (Vec-element drain) — a struct field `Vec[String]` (whose
     /// elements own heap the outer buffer-free misses) is DRAINED per element by
     /// the synthesized struct drop when the owning struct is PLAIN-dropped (a

@@ -2084,6 +2084,66 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // `ElementwiseOrd`'s ordering reductions `argmin` / `argmax` on the
+        // handle-backed containers (S6c) — the index (into the full container,
+        // Arrow position) of the FIRST minimum / maximum, or `None` on an
+        // empty / all-null receiver. The result is `Option[i64]` regardless of
+        // the element type (like the free `Stats.argmin` form), so it can't be
+        // expressed in a baked signature that binds `T` from the receiver —
+        // typed here. Nulls are skipped in the comparison but the reported
+        // index is the original slot (`Series.idxmin` semantics).
+        if matches!(method, "argmin" | "argmax") {
+            // (element `T`, display name) for a Column[T] / Tensor[T, ...S].
+            let ord_receiver = |ty: &Type| -> Option<(Type, &'static str)> {
+                match ty {
+                    Type::Named { name, args } if name == "Column" && args.len() == 1 => {
+                        Some((args[0].clone(), "Column"))
+                    }
+                    Type::Named { name, args } if name == "Tensor" && !args.is_empty() => {
+                        Some((args[0].clone(), "Tensor"))
+                    }
+                    _ => None,
+                }
+            };
+            let recv = match &obj_ty {
+                Type::Ref(inner) | Type::MutRef(inner) => ord_receiver(inner),
+                other => ord_receiver(other),
+            };
+            if let Some((elem, container)) = recv {
+                if !args.is_empty() {
+                    self.type_error(
+                        format!(
+                            "{container}.{method} expects 0 arguments, got {}",
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Error;
+                }
+                if !is_numeric(&elem) && !self.type_param_has_numeric_bound(&elem) {
+                    self.type_error(
+                        format!(
+                            "{container}.{method} requires a numeric element type, found '{}'",
+                            type_display(&elem)
+                        ),
+                        span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return Type::Error;
+                }
+                let ret = Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![Type::Int(IntSize::I64)],
+                };
+                self.record_expr_type(span, &ret);
+                return ret;
+            }
+        }
+
         // Column[T] statistical reductions (phase-11 stats). All operate on
         // the valid (non-null) slots — SQL/pandas aggregate semantics.
         // `sum`/`min`/`max` -> T; `mean`/`var`/`std`/`median`/`quantile` ->

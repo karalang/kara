@@ -1232,6 +1232,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 | "corr"
                 | "median"
                 | "quantile"
+                | "argmin"
+                | "argmax"
         ) {
             return Ok(None);
         }
@@ -1401,6 +1403,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     .ok_or_else(|| "Column.corr requires a Column argument".to_string())?;
                 Ok(Some(self.compile_column_corr(control, &arg.value)?))
             }
+            // `argmin`/`argmax` -> `Option[i64]` (ElementwiseOrd, S6c): the
+            // original-slot index of the first min/max over the valid slots,
+            // `None` on an empty/all-null column (see `compile_column_argminmax`).
+            "argmin" => Ok(Some(self.compile_column_argminmax(
+                control,
+                info.elem,
+                info.elem_unsigned,
+                false,
+            )?)),
+            "argmax" => Ok(Some(self.compile_column_argminmax(
+                control,
+                info.elem,
+                info.elem_unsigned,
+                true,
+            )?)),
             // `median()` ≡ `quantile(0.5)` under linear interpolation (the
             // mean of the two middle values for an even count, the middle
             // for odd) — both share one sorted-buffer path.
@@ -2647,6 +2664,42 @@ impl<'ctx> super::Codegen<'ctx> {
             bitmap: Some(bitmap),
         };
         self.emit_reduce_minmax(&access, !is_min)
+    }
+
+    /// `argmin() -> Option[i64]` / `argmax() -> Option[i64]` (ElementwiseOrd,
+    /// S6c): the ORIGINAL slot index (Arrow position) of the first minimum /
+    /// maximum over the valid slots, or `None` on an empty / all-null column
+    /// (unlike `min`/`max`, which trap). The gated scan
+    /// ([`emit_reduce_argminmax_gated`](super::Codegen::emit_reduce_argminmax_gated))
+    /// yields `(seeded, best)`; `seeded` selects the `Some`/`None` arm here.
+    fn compile_column_argminmax(
+        &mut self,
+        control: PointerValue<'ctx>,
+        elem: BasicTypeEnum<'ctx>,
+        unsigned: bool,
+        is_max: bool,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "Column.argmin/argmax outside function".to_string())?;
+        let access = self.column_access(control, elem, unsigned, "col.am");
+        let bitmap = access
+            .bitmap
+            .ok_or_else(|| "Column.argmin/argmax expects a validity bitmap".to_string())?;
+        let (seeded, best) = self.emit_reduce_argminmax_gated(&access, bitmap, is_max)?;
+        // `seeded ? Some(best) : None` via the shared Option-phi builder.
+        let some_bb = self.context.append_basic_block(fn_val, "col.am.some");
+        let none_bb = self.context.append_basic_block(fn_val, "col.am.none");
+        let merge_bb = self.context.append_basic_block(fn_val, "col.am.merge");
+        self.builder
+            .build_conditional_branch(seeded, some_bb, none_bb)
+            .unwrap();
+        self.builder.position_at_end(some_bb);
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        self.builder.position_at_end(none_bb);
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+        self.builder.position_at_end(merge_bb);
+        Ok(self.build_option_some_via_phis(&[best], some_bb, none_bb, "col.am"))
     }
 
     /// Build the shared [`ContainerAccess`] for this column's data block +

@@ -33,6 +33,7 @@ use crate::token::Span;
 // both are shared with `Tensor` in `super::helpers`.
 use super::helpers::minmax_value_reduce;
 use super::helpers::value_as_f64 as val_f64;
+use super::helpers::value_compare;
 
 /// Unwrap a scalar [`ReduceOutcome`] (the float-result reductions) into a
 /// `Value::Float`.
@@ -383,6 +384,51 @@ impl<'a> super::Interpreter<'a> {
                 })
             }
             "corr" => Some(self.eval_column_corr(data, valid, args, span)),
+            // `argmin` / `argmax` -> `Option[i64]` (ElementwiseOrd, S6c): the
+            // ORIGINAL slot index (Arrow position) of the first minimum /
+            // maximum over the valid slots; null slots are skipped in the
+            // comparison but never reported. Empty / all-null -> `None`
+            // (mirroring `Stats.argmin`, unlike the `min`/`max` empty trap).
+            // Typed by the `argmin`/`argmax` intercept (returns `Option[i64]`).
+            "argmin" | "argmax" => {
+                let cells = data.read().unwrap();
+                let bits = valid.read().unwrap();
+                let want_max = method == "argmax";
+                let mut best: Option<(usize, Value)> = None;
+                for (i, cell) in cells.iter().enumerate() {
+                    if !bits[i] {
+                        continue;
+                    }
+                    let take = match &best {
+                        None => true,
+                        Some((_, bv)) => {
+                            let ord = value_compare(cell, bv);
+                            // Strict compare keeps the FIRST occurrence: a later
+                            // equal value never displaces the incumbent.
+                            if want_max {
+                                ord == std::cmp::Ordering::Greater
+                            } else {
+                                ord == std::cmp::Ordering::Less
+                            }
+                        }
+                    };
+                    if take {
+                        best = Some((i, cell.clone()));
+                    }
+                }
+                Some(match best {
+                    Some((i, _)) => Value::EnumVariant {
+                        enum_name: "Option".to_string(),
+                        variant: "Some".to_string(),
+                        data: EnumData::Tuple(vec![Value::Int(i as i64)]),
+                    },
+                    None => Value::EnumVariant {
+                        enum_name: "Option".to_string(),
+                        variant: "None".to_string(),
+                        data: EnumData::Unit,
+                    },
+                })
+            }
             _ => None,
         }
     }

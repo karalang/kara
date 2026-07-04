@@ -2749,7 +2749,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let is_axis = matches!(method, "sum_axis" | "mean_axis");
         let is_fold = method == "fold";
         let is_map = method == "map";
-        if !is_full && !is_axis && !is_fold && !is_map {
+        let is_argord = matches!(method, "argmin" | "argmax");
+        if !is_full && !is_axis && !is_fold && !is_map && !is_argord {
             return Ok(None);
         }
         let ExprKind::Identifier(name) = &object.kind else {
@@ -2763,6 +2764,8 @@ impl<'ctx> super::Codegen<'ctx> {
             self.compile_tensor_fold(info.elem, info.elem_unsigned, t_ptr, args)?
         } else if is_map {
             self.compile_tensor_map(info.elem, info.elem_unsigned, t_ptr, args)?
+        } else if is_argord {
+            self.compile_tensor_argminmax(info.elem, info.elem_unsigned, t_ptr, method == "argmax")?
         } else if is_full {
             self.compile_tensor_full_reduce(method, info.elem, info.elem_unsigned, t_ptr)?
         } else {
@@ -3102,6 +3105,56 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_binop_typed(&BinOp::Sub, mx, mn, is_unsigned);
         }
         self.emit_reduce_minmax(&access, method == "max")
+    }
+
+    /// `argmin() -> Option[i64]` / `argmax() -> Option[i64]` (ElementwiseOrd,
+    /// S6c): the flat C-order index of the first minimum / maximum over ALL
+    /// elements (a tensor has no null concept), or `None` on an EMPTY tensor
+    /// (unlike `min`/`max`, which trap). Reuses the dense
+    /// [`emit_reduce_argminmax`](super::Codegen::emit_reduce_argminmax) on the
+    /// non-empty arm and wraps the index in `Option` via the shared phi builder.
+    fn compile_tensor_argminmax(
+        &mut self,
+        elem: BasicTypeEnum<'ctx>,
+        unsigned: bool,
+        t_ptr: PointerValue<'ctx>,
+        is_max: bool,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "Tensor.argmin/argmax outside function".to_string())?;
+        let rank = self.tensor_load_rank(t_ptr);
+        let count = self.tensor_count_runtime(t_ptr, rank);
+        let nonempty = self
+            .builder
+            .build_int_compare(IntPredicate::UGT, count, i64_t.const_zero(), "t.am.ne")
+            .unwrap();
+        let some_bb = self.context.append_basic_block(fn_val, "t.am.some");
+        let none_bb = self.context.append_basic_block(fn_val, "t.am.none");
+        let merge_bb = self.context.append_basic_block(fn_val, "t.am.merge");
+        self.builder
+            .build_conditional_branch(nonempty, some_bb, none_bb)
+            .unwrap();
+
+        self.builder.position_at_end(some_bb);
+        let data = self.tensor_data_ptr_dyn(t_ptr, rank, "t.am.data");
+        let access = ContainerAccess {
+            data,
+            len: count,
+            elem,
+            unsigned,
+            bitmap: None,
+        };
+        let best = self.emit_reduce_argminmax(&access, is_max)?;
+        let some_end_bb = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        self.builder.position_at_end(none_bb);
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        self.builder.position_at_end(merge_bb);
+        Ok(self.build_option_some_via_phis(&[best], some_end_bb, none_bb, "t.am"))
     }
 
     /// `sum_axis(n)` / `mean_axis(n)` → a fresh rank-1-lower tensor (rank-1

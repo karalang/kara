@@ -27375,6 +27375,57 @@ fn test_column_map_wrong_arity_rejected() {
 }
 
 #[test]
+fn test_column_tensor_argmin_argmax_result_type_is_option_i64() {
+    // `Column[T].argmin()`/`argmax()` and `Tensor[T,...].argmin()`/`argmax()`
+    // return `Option[i64]` regardless of the element type (ElementwiseOrd, S6c).
+    // The `i64` index pins as an array index inside `Some`.
+    typecheck_ok(
+        "fn main() {\n\
+             let c: Column[f64] = Column.from_vec([1.5_f64, 2.5_f64]);\n\
+             let v: Vec[i64] = [10i64, 20i64];\n\
+             match c.argmin() { Some(i) => { let _ = v[i]; }, None => {} }\n\
+             let t: Tensor[i64, [2]] = Tensor.from([3i64, 1i64]);\n\
+             match t.argmax() { Some(i) => { let _ = v[i]; }, None => {} }\n\
+         }",
+    );
+}
+
+#[test]
+fn test_column_argmin_wrong_arity_rejected() {
+    // `argmin`/`argmax` take no arguments.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let c: Column[i64] = Column.from_vec([1i64, 2i64]);\n\
+             let _ = c.argmin(3i64);\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("Column.argmin expects 0 arguments")),
+        "{errors:?}",
+    );
+}
+
+#[test]
+fn test_column_argmin_non_numeric_element_rejected() {
+    // The ordering reductions require a numeric element type.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let v: Vec[String] = [\"a\", \"b\"];\n\
+             let c: Column[String] = Column.from_vec(v);\n\
+             let _ = c.argmax();\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("Column.argmax requires a numeric element type")),
+        "{errors:?}",
+    );
+}
+
+#[test]
 fn test_tensor_fold_result_type_is_accumulator() {
     // `Tensor.fold[A](init, f)` returns `A` (inferred from `init`), the same
     // intercept that types `Column.fold`. An i64 accumulator is usable as an
