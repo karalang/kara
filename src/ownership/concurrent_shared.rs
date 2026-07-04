@@ -40,6 +40,14 @@
 //! - `spawn(...)` boundaries beyond a `par {}` block fall outside the
 //!   v1 detection — sibling follow-up.
 
+// The `karac fix`/`karac migrate` edit-builders in this module (everything
+// re-exported from `ownership.rs` and their private helpers) are reached only
+// through `crate::cli`, which is native-only. On the wasm32 playground build
+// that whole half is unreachable; only `check_concurrent_shared_struct` (the
+// diagnostic pass the playground runs) stays live. Allow the resulting dead
+// code on wasm32 without weakening the native dead-code gate.
+#![cfg_attr(target_arch = "wasm32", allow(dead_code))]
+
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::*;

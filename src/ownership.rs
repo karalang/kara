@@ -37,6 +37,13 @@ mod ref_return;
 // method-call classifier) when the full pipeline succeeded.
 pub use elision::{ElidedCluster, ElisionBlocked, ReturnedChain};
 
+// These edit-builders are consumed only by `cli::cmd_migrate` / `cmd_fix`,
+// and `crate::cli` is native-only (`#[cfg(not(target_arch = "wasm32"))]`),
+// so the re-export is native-only too. The `concurrent_shared` module itself
+// stays always-on — its `OwnershipChecker::check_concurrent_shared_struct`
+// runs in the playground's ownership check — but its whole migrate/fix half
+// is unreachable on wasm32; that dead code is allowed at the module head.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use concurrent_shared::{
     build_consumer_rewrite_edits_in_program, build_consumer_rewrite_edits_with_mut_fields,
     build_fix_diff_edits, build_fix_diff_edits_with_field_kinds, classify_field_wrap_kinds,

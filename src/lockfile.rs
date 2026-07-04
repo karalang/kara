@@ -45,6 +45,10 @@
 //!   never emits this field (no live fetch); v1.1.x writes it after a
 //!   successful proxy fetch.
 
+// Only used by the native-only `from_resolution` (whose `Resolution` input
+// comes from the wasm-gated `dep_resolver`); gate to match so the wasm32
+// playground build stays warning-clean.
+#[cfg(not(target_arch = "wasm32"))]
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 

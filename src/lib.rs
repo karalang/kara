@@ -84,6 +84,13 @@ pub mod raii_check;
 pub mod rc_fallback_queries;
 pub mod rc_predicate;
 pub mod reduce_kernel;
+// Registry tarball extraction is native-only: it reaches `flate2`/`tar`/
+// `std::fs` and builds on the wasm-gated `dep_graph` (`RegistryProvider`,
+// `MaterializedDep`) + `registry_proxy` fetch surface. Its only consumer is
+// the `karac` CLI (`crate::cli`, itself wasm-gated); the browser playground
+// never fetches packages. Keeping it always-on made the wasm32 build fail
+// with `unresolved import crate::dep_graph` (E0432).
+#[cfg(not(target_arch = "wasm32"))]
 pub mod registry_extract;
 pub mod registry_proxy;
 #[cfg(not(target_arch = "wasm32"))]
