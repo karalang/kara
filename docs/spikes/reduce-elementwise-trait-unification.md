@@ -687,11 +687,26 @@ B-2026-07-02-10..13, see the ledger.
   `eval_binary`, `value_compare`, and min/max/sort. Note u64 ≥ 2^63 literals are
   unreachable anyway (lexer rejects `> i64::MAX`), so the divergence only bites
   deliberately shift-constructed high-bit values. Blocks u64 sort on BOTH surfaces.
+- **S6c-10** 🔎 **(probed `product`, shipped a soundness fix instead)** — the
+  natural `product` default body is `self.fold(1, |a, x| a * x)`, but the seed
+  `1` is `i64` and there is no `T::one()` / `One` trait, so on a `Reduce[f64]`
+  implementor the body is an int×float mix. Probing that mix surfaced a general
+  **silent-miscompile soundness hole** (nothing to do with `product`): `let z =
+  y * x` with `y: i64`, `x: f64` PASSED `check`, ERRORED under `run`, and
+  SILENTLY MISCOMPILED under `build` — because `infer_binary`'s float branch used
+  the deliberately-permissive `types_compatible` (which treats `Int`/`Float` as
+  compatible). **Fixed** (`444e6cb0`, **B-2026-07-04-11**): the arm now rejects a
+  cross-domain int/float mix loudly, so all three surfaces agree. A second,
+  pre-existing divergence was ledgered (**B-2026-07-04-12**, open): `f64 + <int
+  literal>` (e.g. `a + 1`) works on check+build (Q4 literal promotion) but errors
+  under `run` (the interpreter doesn't honor the promoted literal type). `product`
+  itself stays blocked on a numeric-identity mechanism (a `One`/`Zero` trait or
+  fold-seed coercion — the latter is what B-2026-07-04-12 would need too).
 - **S6c** — remaining: `ElementwiseOrd` user impls; **u64 column/tensor sort**
   (blocked on the interpreter u64 model — see S6c-9 / B-2026-07-04-8, NOT just an
-  unsigned scratch compare as previously thought); `product` on the `Reduce` trait
-  (bound-generic — `fold` S6c-5 / `map`/`zip_with` S6c-7 done; `product` needs a
-  generic mul-identity seed); blanket `Vec[T]` impls; user trait-impl methods
+  unsigned scratch compare as previously thought); **`product` on the `Reduce`
+  trait** (blocked on a numeric mul-identity mechanism — see S6c-10; `fold` S6c-5
+  / `map`/`zip_with` S6c-7 done); blanket `Vec[T]` impls; user trait-impl methods
   over builtin containers (probed: interp "type 'unknown'", codegen loud
   fall-through).
 
