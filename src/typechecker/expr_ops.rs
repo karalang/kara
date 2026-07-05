@@ -1473,9 +1473,18 @@ impl<'a> super::TypeChecker<'a> {
                     // and the programmer writes `x as i64`. Q4 literal
                     // promotion above already unified any suffix-free literal
                     // operand, so a surviving mismatch is between two concrete
-                    // types. Floats keep the looser `types_compatible` check.
-                    let both_ints = matches!(left_ty, Type::Int(_) | Type::UInt(_))
-                        && matches!(right_ty, Type::Int(_) | Type::UInt(_));
+                    // types. Same-domain floats keep the looser
+                    // `types_compatible` check, but a cross-DOMAIN mix (one
+                    // integer operand, one float) is rejected: Kāra has no
+                    // implicit int→float promotion in arithmetic (the
+                    // interpreter errors on `Int * Float`, and codegen would
+                    // SILENTLY MISCOMPILE it — `types_compatible(Int, Float)`
+                    // is `true` for assignment/other contexts, so this arm
+                    // must guard the domain split itself). Cast explicitly with
+                    // `as` (B-2026-07-04-11).
+                    let left_is_int = matches!(left_ty, Type::Int(_) | Type::UInt(_));
+                    let right_is_int = matches!(right_ty, Type::Int(_) | Type::UInt(_));
+                    let both_ints = left_is_int && right_is_int;
                     if both_ints {
                         if left_ty != right_ty {
                             self.type_error(
@@ -1490,6 +1499,23 @@ impl<'a> super::TypeChecker<'a> {
                                 TypeErrorKind::TypeMismatch,
                             );
                         }
+                    } else if left_is_int != right_is_int {
+                        // Exactly one operand is an integer, the other a float.
+                        let int_side = if left_is_int { &left_ty } else { &right_ty };
+                        let float_side = if left_is_int { &right_ty } else { &left_ty };
+                        self.type_error(
+                            format!(
+                                "cannot mix integer and floating-point operands ('{}' and '{}') in \
+                                 arithmetic — there is no implicit promotion; cast explicitly with \
+                                 `as` (e.g. `{} as {}`)",
+                                type_display(&left_ty),
+                                type_display(&right_ty),
+                                type_display(int_side),
+                                type_display(float_side),
+                            ),
+                            right.span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
                     } else if !types_compatible(&left_ty, &right_ty) {
                         self.type_error(
                             format!(

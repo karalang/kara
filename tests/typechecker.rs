@@ -28647,6 +28647,57 @@ fn test_mixed_int_arithmetic_explicit_cast_accepted() {
 }
 
 #[test]
+fn test_mixed_int_float_arithmetic_rejected() {
+    // B-2026-07-04-11: Kāra has NO implicit int→float promotion in arithmetic
+    // (the interpreter errors on `Int * Float`; codegen would SILENTLY
+    // MISCOMPILE it — `types_compatible(Int, Float)` is `true` for other
+    // contexts, so `infer_binary`'s float branch must guard the domain split
+    // itself). Every cross-domain pair, each operator, either operand order.
+    for src in [
+        "fn main() { let a: i64 = 3; let b: f64 = 2.0; let _ = a * b; }",
+        "fn main() { let a: f64 = 2.0; let b: i64 = 3; let _ = a + b; }",
+        "fn main() { let a: i32 = 3; let b: f64 = 2.0; let _ = a - b; }",
+        "fn main() { let a: u8 = 3; let b: f32 = 2.0; let _ = a / b; }",
+        "fn main() { let a: f32 = 2.0; let b: u64 = 3; let _ = a * b; }",
+    ] {
+        let errors = typecheck_errors(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("integer and floating-point")),
+            "expected an int/float-mix diagnostic for: {src}\ngot: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn test_int_float_arithmetic_explicit_cast_accepted() {
+    // The escape hatch the diagnostic points at: cast the integer operand.
+    typecheck_ok(
+        "fn main() {
+             let a: i64 = 3; let b: f64 = 2.0;
+             let _ = (a as f64) * b;
+             let c: f32 = 1.5; let d: i32 = 4;
+             let _ = c + (d as f32);
+         }",
+    );
+}
+
+#[test]
+fn test_same_domain_float_arithmetic_still_accepted() {
+    // The fix only rejects the int/float DOMAIN split — same-type float
+    // arithmetic and float+unsuffixed-literal promotion keep working.
+    typecheck_ok(
+        "fn main() {
+             let a: f64 = 2.0; let b: f64 = 3.0; let _ = a * b;
+             let c: f32 = 1.5; let d: f32 = 2.5; let _ = c + d;
+             let e: f64 = 4.0; let _ = e + 1; let _ = 2 * e;
+         }",
+    );
+}
+
+#[test]
 fn enum_struct_variant_construction_typechecks() {
     // `Enum.Variant { field: value }` is routed to enum-variant inference
     // (not struct-literal inference, which would reject the variant name as
