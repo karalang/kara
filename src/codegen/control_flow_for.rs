@@ -831,6 +831,16 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.loop_stack.pop();
         self.builder.position_at_end(exit_bb);
+        // Vec-length-pin activation for the `for i in 0..BOUND { v.push(..) }`
+        // fill form (bce_length_pin.rs): the pin is keyed on the range END
+        // expression's span. Now that the loop is fully emitted, move it live so
+        // a later `while c < BOUND` guard elides `v[c]`'s upper bounds check.
+        if let Some(end_expr) = end.as_deref() {
+            let end_key = crate::resolver::SpanKey::from_span(&end_expr.span);
+            if let Some(pin) = self.pending_vec_len_pins.remove(&end_key) {
+                self.vec_len_pins.push((pin.bound, pin.vec_var));
+            }
+        }
         Ok(self.context.i64_type().const_int(0, false).into())
     }
 

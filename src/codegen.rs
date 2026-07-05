@@ -1664,18 +1664,22 @@ pub(super) struct Codegen<'ctx> {
     /// directly onto the source-level lexical scope of the guard.
     pub(crate) asserted_index_bounds: Vec<AssertedIndexBound>,
     /// Vec-length pins for the current function (bce_length_pin.rs): each maps a
-    /// fill loop's condition `SpanKey` to the `(bound_var, vec_var)` fact that
-    /// the counted fill establishes (`vec_var.len() >= bound_var`, both invariant
-    /// from the fill loop onward). Populated at `compile_function`; a pin is
-    /// moved into `vec_len_pin` once its fill loop finishes emitting, so it goes
-    /// live exactly for the code lexically after the fill loop.
+    /// fill loop's key `SpanKey` (the `while` condition, or the `for`-range end)
+    /// to the `(bound, vec_var)` fact that the counted fill establishes
+    /// (`vec_var.len() >= bound`, both invariant from the fill loop onward).
+    /// Populated at `compile_function`; a pin is moved into `vec_len_pins` once
+    /// its fill loop finishes emitting, so it goes live exactly for the code
+    /// lexically after the fill loop.
     pub(crate) pending_vec_len_pins:
         HashMap<crate::resolver::SpanKey, bce_length_pin::VecLengthPin>,
-    /// Active length pins: `bound_var → vec_var`. Consulted by
-    /// `resolve_len_origin` so a `while idx < bound_var` guard resolves
-    /// `bound_var` back to `vec_var` and asserts `idx < vec_var.len()` — the
-    /// rolling-DP `dp[c]`/`dp[c - 1]` bounds-check elision (kata #62).
-    pub(crate) vec_len_pin: HashMap<String, String>,
+    /// Active length pins: `(bound, vec_var)` pairs. `bound` is a normalised
+    /// pure-arithmetic `BoundTerm` (a bare var like `cols`, or `cols + 1`, …).
+    /// Consulted by `resolve_len_origin`: a `while idx < BOUND` guard whose RHS
+    /// normalises to a pinned `bound` resolves back to `vec_var` and asserts
+    /// `idx < vec_var.len()` — the rolling-DP `dp[c]` / `dp[c - 1]` bounds-check
+    /// elision (kata #62). A `Vec` (not a map) because the key is a `BoundTerm`
+    /// and there are only a handful of pins per function.
+    pub(crate) vec_len_pins: Vec<(bce_length_pin::BoundTerm, String)>,
     /// Stack of `(lo, hi)` variable-name pairs from dominating strict
     /// `while lo < hi` guards (innermost last). When a `let mid = lo +
     /// (hi - lo) / 2` (or `(lo + hi) / 2`) binding is compiled under such
@@ -5373,7 +5377,7 @@ impl<'ctx> Codegen<'ctx> {
             len_alias: HashMap::new(),
             asserted_index_bounds: Vec::new(),
             pending_vec_len_pins: HashMap::new(),
-            vec_len_pin: HashMap::new(),
+            vec_len_pins: Vec::new(),
             binsearch_guard_stack: Vec::new(),
             binsearch_assume_emitted: false,
             vec_elem_types: HashMap::new(),

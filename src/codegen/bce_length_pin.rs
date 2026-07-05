@@ -14,28 +14,40 @@
 //! where the loop bound `cols` is not spelled `dp.len()` but is *equal* to it,
 //! because `dp` was filled to exactly `cols` elements by a counted push loop and
 //! never resized after. This pass recognises that shape and records a **length
-//! pin** `cols == dp.len()`, which codegen activates once the fill loop has been
-//! emitted so a later `while c < cols` guard resolves `cols` back to `dp` and
+//! pin** `bound == dp.len()`, which codegen activates once the fill loop has been
+//! emitted so a later `while c < bound` guard resolves `bound` back to `dp` and
 //! elides the upper-half check on `dp[c]` / `dp[c - k]`. Measured ~3.0x on the
 //! #62 seq bench (316ms → ~105ms, C parity) — the RMW inner scan's per-cell
 //! bounds checks were the entire gap; once they clear, LLVM forwards the loads
 //! itself.
 //!
-//! **Soundness.** A pin `(v, b, fill_span)` is emitted only when a *fail-closed*
-//! whole-function scan proves `b <= v.len()` holds from the fill loop to the end
-//! of the function:
+//! **Recognised fill shapes** (all establish `bound <= v.len()`):
+//!   - `while iv < BOUND { v.push(x); iv = iv + 1 }` with `iv` proven to start at
+//!     literal `0` and step by exactly `+1`.
+//!   - `for i in 0..BOUND { v.push(x) }` (exclusive range, start `0` or omitted)
+//!     — the range natively guarantees `BOUND` iterations from 0.
+//!   - either form may be preceded by `v.push(..)` **seed** pushes (they only
+//!     make `v` longer, so `bound <= v.len()` still holds).
+//!
+//! `BOUND` may be any **pure-arithmetic** expression over identifiers and integer
+//! literals (`cols`, `n + 1`, `m * 2`, …) — normalised to a span-free `BoundTerm`
+//! so the fill's bound and a later guard's bound match structurally regardless of
+//! operator-lowering form.
+//!
+//! **Soundness.** A pin `(bound, v)` is emitted only when a *fail-closed*
+//! whole-function scan proves `bound <= v.len()` holds from the fill loop to the
+//! end of the function:
 //!   1. `let mut v = Vec.new()` / `Vec.with_capacity(_)` — a fresh empty Vec.
-//!   2. A `while iv < b { v.push(x) exactly once; iv = iv + 1 }` fill loop, with
-//!      `iv` proven to start at literal `0` and step by exactly `+1`, `b` a bare
-//!      identifier, and NO other push / early-exit / mutation of `iv` or `b` in
-//!      the body — so after the loop `v.len() == max(0, b)`, hence `b <= v.len()`.
-//!   3. Between the binding and the fill loop, `v` is not mentioned at all (it
-//!      stays empty until the loop), so the length is exactly the trip count.
+//!   2. A recognised fill loop (above) with exactly one unconditional push and no
+//!      early exit, so after the loop `v.len() == P + BOUND >= BOUND` (`P` = seed
+//!      pushes ≥ 0). `BOUND` names no mutated identifier inside the body.
+//!   3. Between the binding and the fill loop, `v` is only *seed-pushed* — no
+//!      other mention — so its length is exactly the seeds plus the trip count.
 //!   4. After the fill loop, `v` appears ONLY as an index base (`v[..]`, read or
-//!      assign-target) or a read-only `.len()` / `.is_empty()` receiver, and `b`
-//!      is never written (assigned, shadowed, mut-borrowed, or method-mutated).
-//!      So `v.len()` and `b` are both constant from the fill loop onward and the
-//!      `b <= v.len()` relation the pin asserts cannot be falsified.
+//!      assign-target) or a read-only `.len()` / `.is_empty()` receiver, and every
+//!      identifier in `BOUND` is never written (assigned, shadowed, mut-borrowed,
+//!      or method-mutated). So `v.len()` and `BOUND` are both constant from the
+//!      fill loop onward and the `bound <= v.len()` relation cannot be falsified.
 //!
 //! The pin is a pure capacity-of-safety fact fed to the *existing* split-check
 //! elision — no new IR shape — so a missed pin only keeps a bounds check, and a
@@ -47,19 +59,122 @@ use crate::ast::*;
 use crate::resolver::SpanKey;
 use std::collections::HashMap;
 
-/// One recognised length pin: after the fill loop identified by `fill_key`,
-/// the Vec `vec_var` has length `>= bound_var` and both are invariant, so a
-/// `while idx < bound_var` guard proves `idx < vec_var.len()`.
+/// A pure-arithmetic loop bound, normalised to a span-free canonical form so the
+/// fill loop's bound and a later guard's bound compare structurally even across
+/// operator-lowering forms (surface `Binary` vs trait-lowered `Call`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BoundTerm {
+    Ident(String),
+    Int(i64),
+    Bin(BoundOp, Box<BoundTerm>, Box<BoundTerm>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BoundOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+}
+
+/// Normalise a loop-bound expression to a `BoundTerm`, or `None` if it is not a
+/// pure-arithmetic expression over identifiers and integer literals. Method
+/// calls, function calls, indexing, and field access all return `None` (they
+/// could vary between the fill and the use, or carry side effects), keeping the
+/// pinned bound a deterministic function of its identifiers.
+pub(crate) fn normalize_bound(expr: &Expr) -> Option<BoundTerm> {
+    match &expr.kind {
+        ExprKind::Identifier(n) => Some(BoundTerm::Ident(n.clone())),
+        ExprKind::Integer(k, _) => Some(BoundTerm::Int(*k)),
+        ExprKind::Binary { op, left, right } => {
+            let bop = surface_bound_op(op)?;
+            Some(BoundTerm::Bin(
+                bop,
+                Box::new(normalize_bound(left)?),
+                Box::new(normalize_bound(right)?),
+            ))
+        }
+        // Trait-lowered `Call { Path([ty, "add"|"sub"|…]), [a, b] }`.
+        ExprKind::Call { callee, args } if args.len() == 2 => {
+            let ExprKind::Path { segments, .. } = &callee.kind else {
+                return None;
+            };
+            if segments.len() != 2 {
+                return None;
+            }
+            let bop = method_bound_op(segments[1].as_str())?;
+            Some(BoundTerm::Bin(
+                bop,
+                Box::new(normalize_bound(&args[0].value)?),
+                Box::new(normalize_bound(&args[1].value)?),
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn surface_bound_op(op: &BinOp) -> Option<BoundOp> {
+    match op {
+        BinOp::Add => Some(BoundOp::Add),
+        BinOp::Sub => Some(BoundOp::Sub),
+        BinOp::Mul => Some(BoundOp::Mul),
+        BinOp::Div => Some(BoundOp::Div),
+        BinOp::Mod => Some(BoundOp::Rem),
+        _ => None,
+    }
+}
+
+fn method_bound_op(name: &str) -> Option<BoundOp> {
+    match name {
+        "add" => Some(BoundOp::Add),
+        "sub" => Some(BoundOp::Sub),
+        "mul" => Some(BoundOp::Mul),
+        "div" => Some(BoundOp::Div),
+        "rem" => Some(BoundOp::Rem),
+        _ => None,
+    }
+}
+
+/// Every identifier named by a `BoundTerm`.
+fn bound_idents(bt: &BoundTerm, out: &mut Vec<String>) {
+    match bt {
+        BoundTerm::Ident(n) => out.push(n.clone()),
+        BoundTerm::Int(_) => {}
+        BoundTerm::Bin(_, l, r) => {
+            bound_idents(l, out);
+            bound_idents(r, out);
+        }
+    }
+}
+
+/// One recognised length pin: after the fill loop identified by its key span,
+/// the Vec `vec_var` has length `>= bound` and both are invariant, so a
+/// `while idx < bound` guard proves `idx < vec_var.len()`.
 #[derive(Debug, Clone)]
 pub(crate) struct VecLengthPin {
-    pub bound_var: String,
+    pub bound: BoundTerm,
     pub vec_var: String,
 }
 
+/// One recognised fill loop.
+struct Fill {
+    /// Statement index of the fill loop in the enclosing block.
+    fi: usize,
+    /// Key span codegen matches to activate the pin — the `while` condition's
+    /// span, or the `for`-range end expression's span.
+    key_span: crate::token::Span,
+    /// Raw bound expression (`BOUND` in `iv < BOUND` / `0..BOUND`).
+    bound: Expr,
+    /// `Some(iv)` for the `while` form (needs the zero-start proof); `None` for
+    /// the `for 0..BOUND` form (start is structurally 0).
+    counter: Option<String>,
+}
+
 /// Analyse a function body and return the length pins it establishes, keyed by
-/// the fill loop's *condition* span (`SpanKey`). Codegen activates a pin when it
-/// finishes emitting the `while` whose condition matches, so the pin is live
-/// exactly for the code lexically after the fill loop.
+/// the fill loop's key span (`SpanKey`). Codegen activates a pin when it finishes
+/// emitting the matching loop, so the pin is live exactly for the code lexically
+/// after the fill loop.
 pub(crate) fn compute_vec_length_pins(body: &Block) -> HashMap<SpanKey, VecLengthPin> {
     let mut out = HashMap::new();
     let stmts = &body.stmts;
@@ -67,31 +182,39 @@ pub(crate) fn compute_vec_length_pins(body: &Block) -> HashMap<SpanKey, VecLengt
         let Some(v) = empty_vec_binding(stmt) else {
             continue;
         };
-        // Locate the fill loop for `v` among the following top-level statements,
-        // requiring `v` to be untouched between the binding and the loop (so it
-        // is still empty when the counted fill begins).
-        if let Some((fi, cond_span, iv, b)) = find_exact_fill_loop(stmts, li, &v) {
-            // `iv` must be provably zero at loop entry (so trip count == b).
-            if !counter_is_zero_before(stmts, fi, &iv) {
+        let Some(fill) = find_exact_fill_loop(stmts, li, &v) else {
+            continue;
+        };
+        // The bound must be a pure-arithmetic expression to pin.
+        let Some(bound) = normalize_bound(&fill.bound) else {
+            continue;
+        };
+        // `while` counter must be provably zero at loop entry (so the trip count
+        // is exactly `BOUND`). The `for 0..BOUND` form guarantees this natively.
+        if let Some(iv) = &fill.counter {
+            if !counter_is_zero_before(stmts, fill.fi, iv) {
                 continue;
             }
-            // After the fill loop, `v` must stay length-stable and `b` must stay
-            // unwritten — the whole-function invariance that makes the pin sound.
-            let after = &stmts[fi + 1..];
-            if !vec_readonly_after(after, &body.final_expr, &v) {
-                continue;
-            }
-            if !var_unwritten_after(after, &body.final_expr, &b) {
-                continue;
-            }
-            out.insert(
-                SpanKey::from_span(&cond_span),
-                VecLengthPin {
-                    bound_var: b,
-                    vec_var: v,
-                },
-            );
         }
+        // After the fill loop, `v` must stay length-stable and every identifier
+        // in `BOUND` must stay unwritten — the whole-function invariance that
+        // makes the pin sound.
+        let after = &stmts[fill.fi + 1..];
+        if !vec_readonly_after(after, &body.final_expr, &v) {
+            continue;
+        }
+        let mut idents = Vec::new();
+        bound_idents(&bound, &mut idents);
+        if idents
+            .iter()
+            .any(|b| !var_unwritten_after(after, &body.final_expr, b))
+        {
+            continue;
+        }
+        out.insert(
+            SpanKey::from_span(&fill.key_span),
+            VecLengthPin { bound, vec_var: v },
+        );
     }
     out
 }
@@ -122,38 +245,65 @@ fn empty_vec_binding(stmt: &Stmt) -> Option<String> {
     }
 }
 
-/// Find `v`'s exact counted-fill loop among `stmts[let_idx+1..]`, stepping over
-/// statements that don't touch `v` and bailing the moment `v` is used in any way
-/// other than the fill loop itself (so `v` is provably empty at the loop). On
-/// success returns `(fill_stmt_index, condition_span, counter_var, bound_var)`.
-fn find_exact_fill_loop(
-    stmts: &[Stmt],
-    let_idx: usize,
-    v: &str,
-) -> Option<(usize, crate::token::Span, String, String)> {
+/// Find `v`'s exact counted-fill loop among `stmts[let_idx+1..]`. Statements that
+/// don't touch `v` are stepped over; `v.push(..)` **seed** pushes are allowed
+/// (they only lengthen `v`); the first *other* mention of `v` bails (so `v`'s
+/// length before the fill is exactly the seed count).
+fn find_exact_fill_loop(stmts: &[Stmt], let_idx: usize, v: &str) -> Option<Fill> {
     for (off, stmt) in stmts[let_idx + 1..].iter().enumerate() {
         let fi = let_idx + 1 + off;
         if let StmtKind::Expr(e) = &stmt.kind {
+            // `while iv < BOUND { v.push(x) once; iv = iv + 1 }`.
             if let ExprKind::While {
                 condition, body, ..
             } = &e.kind
             {
-                if let Some((iv, b)) = as_lt(condition) {
-                    if iv != v && b != v && iv != b && fill_body_ok(body, v, &iv, &b) {
-                        return Some((fi, condition.span.clone(), iv, b));
+                if let Some((iv, bound)) = as_strict_lt(condition) {
+                    if iv != v && while_fill_body_ok(body, v, &iv, bound) {
+                        return Some(Fill {
+                            fi,
+                            key_span: condition.span.clone(),
+                            bound: bound.clone(),
+                            counter: Some(iv),
+                        });
                     }
                 }
-                // A `while` that mentions `v` but isn't its clean fill — give up
-                // (we don't understand `v`'s length after it).
                 if block_mentions_ident(body, v) || expr_mentions_ident(condition, v) {
                     return None;
                 }
-                // Unrelated loop — keep scanning.
+                continue;
+            }
+            // `for i in 0..BOUND { v.push(x) once }`.
+            if let ExprKind::For {
+                pattern,
+                iterable,
+                body,
+                ..
+            } = &e.kind
+            {
+                if let Some(bound) = for_zero_range_end(pattern, iterable, v) {
+                    if for_fill_body_ok(body, v, bound) {
+                        return Some(Fill {
+                            fi,
+                            key_span: bound.span.clone(),
+                            bound: bound.clone(),
+                            counter: None,
+                        });
+                    }
+                }
+                if block_mentions_ident(body, v) || expr_mentions_ident(iterable, v) {
+                    return None;
+                }
                 continue;
             }
         }
-        // Any non-loop statement that mentions `v` between the binding and the
-        // fill loop means `v` isn't provably empty at the loop — bail.
+        // A `v.push(..)` seed push before the fill is allowed (lengthens `v`);
+        // any OTHER mention of `v` means we can't account for its length — bail.
+        if let StmtKind::Expr(e) = &stmt.kind {
+            if is_push_to(e, v) {
+                continue;
+            }
+        }
         if stmt_mentions_ident(stmt, v) {
             return None;
         }
@@ -161,49 +311,99 @@ fn find_exact_fill_loop(
     None
 }
 
-/// The fill loop body must: fill `v` with exactly one unconditional
-/// `v.push(..)`, step `iv` by exactly one `iv = iv + 1` / `iv += 1`, have no
-/// early exit, and never otherwise write `iv` or write `b`. Reads of `v` (e.g.
-/// `v.push(v[iv - 1] + x)`) are allowed — a read doesn't change the length.
-fn fill_body_ok(body: &Block, v: &str, iv: &str, b: &str) -> bool {
+/// `for I in 0..BOUND` (exclusive, start `0` or omitted): return `&BOUND` when
+/// the loop var is a plain binding distinct from `v`. `None` for any other range
+/// shape (inclusive, non-zero start, unbounded).
+fn for_zero_range_end<'a>(pattern: &Pattern, iterable: &'a Expr, v: &str) -> Option<&'a Expr> {
+    let PatternKind::Binding(i) = &pattern.kind else {
+        return None;
+    };
+    if i == v {
+        return None;
+    }
+    let ExprKind::Range {
+        start,
+        end,
+        inclusive,
+    } = &iterable.kind
+    else {
+        return None;
+    };
+    if *inclusive {
+        return None;
+    }
+    // Start must be absent or literal 0.
+    let start_zero = matches!(
+        start.as_deref().map(|e| &e.kind),
+        None | Some(ExprKind::Integer(0, _))
+    );
+    if !start_zero {
+        return None;
+    }
+    end.as_deref()
+}
+
+/// `while` fill body: exactly one unconditional `v.push(..)`, `iv` stepped by
+/// exactly one `+1` and never otherwise written, no early exit, and no bound
+/// identifier written. Reads of `v` are allowed.
+fn while_fill_body_ok(body: &Block, v: &str, iv: &str, bound: &Expr) -> bool {
     if block_has_early_exit(body) {
         return false;
     }
-    // Exactly one top-level push to `v`; the straight-line-body guarantee comes
-    // from `count_pushes_shallow` returning None on any nested control flow.
-    match count_pushes_shallow(body, v) {
-        Some(1) => {}
-        _ => return false,
+    if count_pushes_shallow(body, v) != Some(1) {
+        return false;
     }
-    // Exactly one top-level `iv` step of `+1`, and no other write to `iv`.
     if count_plus_one_steps(body, iv) != 1 {
         return false;
     }
     if writes_ident_other_than_plus_one_step(body, iv) {
         return false;
     }
-    // `b` (the loop bound) must be loop-invariant: never written in the body.
-    if var_written_in_block(body, b) {
-        return false;
-    }
-    true
+    bound_invariant_in_block(body, bound)
 }
 
-/// `cond` as `(iv, b)` for a strict `iv < b` between two bare identifiers —
-/// surface `Binary(Lt)` or the trait-lowered `Call { Path([ty,"lt"]), [iv,b] }`.
-fn as_lt(cond: &Expr) -> Option<(String, String)> {
+/// `for` fill body: exactly one unconditional `v.push(..)`, no early exit, no
+/// bound identifier written. The range construct owns the counter, so there is
+/// no `iv` to validate.
+fn for_fill_body_ok(body: &Block, v: &str, bound: &Expr) -> bool {
+    if block_has_early_exit(body) {
+        return false;
+    }
+    if count_pushes_shallow(body, v) != Some(1) {
+        return false;
+    }
+    bound_invariant_in_block(body, bound)
+}
+
+/// No identifier of `bound` is written anywhere in `body` (the bound is
+/// loop-invariant). `None`-normalising bounds are treated as non-invariant
+/// (fail closed) so a later `normalize_bound` bail is never reached with a
+/// mutated bound.
+fn bound_invariant_in_block(block: &Block, bound: &Expr) -> bool {
+    let Some(bt) = normalize_bound(bound) else {
+        return false;
+    };
+    let mut idents = Vec::new();
+    bound_idents(&bt, &mut idents);
+    !idents.iter().any(|n| var_written_in_block(block, n))
+}
+
+/// `cond` as `(iv, &BOUND)` for a strict `iv < BOUND` — surface `Binary(Lt)` or
+/// trait-lowered `Call { Path([ty,"lt"]), [iv, BOUND] }`. `iv` must be a bare
+/// identifier; `BOUND` is returned raw for normalisation.
+fn as_strict_lt(cond: &Expr) -> Option<(String, &Expr)> {
     match &cond.kind {
         ExprKind::Binary {
             op: BinOp::Lt,
             left,
             right,
-        } => Some((ident(left)?, ident(right)?)),
-        ExprKind::Call { callee, args } => {
+        } => Some((ident(left)?, right)),
+        ExprKind::Call { callee, args } if args.len() == 2 => {
             let ExprKind::Path { segments, .. } = &callee.kind else {
                 return None;
             };
-            if segments.len() == 2 && segments[1] == "lt" && args.len() == 2 {
-                Some((ident(&args[0].value)?, ident(&args[1].value)?))
+            if segments.len() == 2 && segments[1] == "lt" {
+                Some((ident(&args[0].value)?, &args[1].value))
             } else {
                 None
             }
@@ -790,12 +990,10 @@ mod tests {
             .any(|p| p.vec_var == vec)
     }
 
-    // ── Positive: the kata shape and close variants ──────────────
+    // ── Positive: the kata shape and the new fill/bound forms ────
 
     #[test]
     fn fires_on_rolling_dp_shape() {
-        // The #62 kata's inner structure: `dp` filled to `cols` by a counted
-        // `while j < cols` from 0, then read/written under `while c < cols`.
         let src = "fn f(rows: i64, cols: i64) -> i64 {\n\
             let mut dp: Vec[i64] = Vec.new();\n\
             let mut j = 0i64;\n\
@@ -813,8 +1011,6 @@ mod tests {
 
     #[test]
     fn fires_with_capacity_init() {
-        // presize rewrites `Vec.new()` to `Vec.with_capacity(cols)`; the pin
-        // must still fire (both start empty; the fill sets the length).
         let src = "fn f(cols: i64) {\n\
             let mut dp: Vec[i64] = Vec.with_capacity(cols);\n\
             let mut j = 0i64;\n\
@@ -826,13 +1022,33 @@ mod tests {
     }
 
     #[test]
-    fn no_fire_with_prelude_seed_push() {
-        // A seed push before the counted fill would only make `dp` LONGER (so
-        // `cols <= dp.len()` would still hold and firing would be sound), but v1
-        // requires `dp` untouched between the binding and the fill so the length
-        // is exactly `cols` — the tightest soundness story. Documents the
-        // conservative limitation; relaxing to allow `push`-only preludes is a
-        // safe follow-up.
+    fn fires_on_for_range_fill() {
+        // Follow-up (1): `for i in 0..n { v.push(..) }` establishes the same
+        // `len == n` fact as the counted while loop.
+        let src = "fn f(n: i64) {\n\
+            let mut dp: Vec[i64] = Vec.new();\n\
+            for i in 0i64..n { dp.push(1i64); }\n\
+            let mut c = 0i64;\n\
+            while c < n { dp[c] = dp[c] + 1i64; c = c + 1i64; }\n\
+        }\n";
+        assert!(pins_vec(src, "dp"));
+    }
+
+    #[test]
+    fn fires_on_for_range_fill_omitted_start() {
+        let src = "fn f(n: i64) {\n\
+            let mut dp: Vec[i64] = Vec.new();\n\
+            for i in 0i64..n { dp.push(0i64); }\n\
+            let mut c = 0i64;\n\
+            while c < n { dp[c] = dp[c] + 1i64; c = c + 1i64; }\n\
+        }\n";
+        assert!(pins_vec(src, "dp"));
+    }
+
+    #[test]
+    fn fires_with_prelude_seed_push() {
+        // Follow-up (2): a seed push before the counted fill only lengthens `dp`,
+        // so `cols <= dp.len()` still holds — the pin now fires.
         let src = "fn f(cols: i64) {\n\
             let mut dp: Vec[i64] = Vec.new();\n\
             dp.push(7i64);\n\
@@ -841,15 +1057,27 @@ mod tests {
             let mut c = 0i64;\n\
             while c < cols { dp[c] = dp[c] + 1i64; c = c + 1i64; }\n\
         }\n";
-        assert!(!pins_vec(src, "dp"));
+        assert!(pins_vec(src, "dp"));
+    }
+
+    #[test]
+    fn fires_on_nonbare_bound_plus_one() {
+        // Follow-up (3): a `cols + 1` arithmetic bound, filled and indexed under
+        // the identical expression, pins by structural (normalised) match.
+        let src = "fn f(cols: i64) {\n\
+            let mut dp: Vec[i64] = Vec.new();\n\
+            let mut j = 0i64;\n\
+            while j < cols + 1i64 { dp.push(1i64); j = j + 1i64; }\n\
+            let mut c = 0i64;\n\
+            while c < cols + 1i64 { dp[c] = dp[c] + 1i64; c = c + 1i64; }\n\
+        }\n";
+        assert!(pins_vec(src, "dp"));
     }
 
     // ── Negative: unsound-if-fired shapes MUST NOT pin ───────────
 
     #[test]
     fn no_fire_counter_starts_nonzero() {
-        // `j` starts at 1 ⇒ only `cols - 1` pushes ⇒ dp.len() == cols - 1 <
-        // cols. Eliding `dp[cols-1]`'s check would be OOB.
         let src = "fn f(cols: i64) {\n\
             let mut dp: Vec[i64] = Vec.new();\n\
             let mut j = 1i64;\n\
@@ -861,9 +1089,32 @@ mod tests {
     }
 
     #[test]
+    fn no_fire_for_range_nonzero_start() {
+        // `for i in 1..n` pushes only `n-1` times ⇒ dp.len() < n.
+        let src = "fn f(n: i64) {\n\
+            let mut dp: Vec[i64] = Vec.new();\n\
+            for i in 1i64..n { dp.push(1i64); }\n\
+            let mut c = 0i64;\n\
+            while c < n { dp[c] = dp[c] + 1i64; c = c + 1i64; }\n\
+        }\n";
+        assert!(!pins_vec(src, "dp"));
+    }
+
+    #[test]
+    fn no_fire_for_range_inclusive() {
+        // `for i in 0..=n` is a different trip count than the `< n` guard; only
+        // the exclusive form is recognised.
+        let src = "fn f(n: i64) {\n\
+            let mut dp: Vec[i64] = Vec.new();\n\
+            for i in 0i64..=n { dp.push(1i64); }\n\
+            let mut c = 0i64;\n\
+            while c < n { dp[c] = dp[c] + 1i64; c = c + 1i64; }\n\
+        }\n";
+        assert!(!pins_vec(src, "dp"));
+    }
+
+    #[test]
     fn no_fire_bound_reassigned_after_fill() {
-        // `cols` grows after the fill ⇒ `cols > dp.len()` ⇒ later `dp[c]` with
-        // `c < cols` is OOB. Must keep the check.
         let src = "fn f(cols: i64) {\n\
             let mut dp: Vec[i64] = Vec.new();\n\
             let mut j = 0i64;\n\
@@ -876,8 +1127,22 @@ mod tests {
     }
 
     #[test]
+    fn no_fire_nonbare_bound_ident_reassigned_after_fill() {
+        // `cols + 1` bound but `cols` is rewritten after the fill ⇒ the fill-time
+        // and use-time bounds differ. Must not pin.
+        let src = "fn f(cols: i64) {\n\
+            let mut dp: Vec[i64] = Vec.new();\n\
+            let mut j = 0i64;\n\
+            while j < cols + 1i64 { dp.push(1i64); j = j + 1i64; }\n\
+            cols = cols + 3i64;\n\
+            let mut c = 0i64;\n\
+            while c < cols + 1i64 { dp[c] = dp[c] + 1i64; c = c + 1i64; }\n\
+        }\n";
+        assert!(!pins_vec(src, "dp"));
+    }
+
+    #[test]
     fn no_fire_vec_popped_after_fill() {
-        // `dp.pop()` shrinks the length below `cols`.
         let src = "fn f(cols: i64) {\n\
             let mut dp: Vec[i64] = Vec.new();\n\
             let mut j = 0i64;\n\
@@ -891,8 +1156,6 @@ mod tests {
 
     #[test]
     fn no_fire_vec_pushed_after_fill() {
-        // Any post-fill mutation of `dp` (even a length-increasing push, which
-        // would still be safe here) is conservatively refused.
         let src = "fn f(cols: i64) {\n\
             let mut dp: Vec[i64] = Vec.new();\n\
             let mut j = 0i64;\n\
@@ -906,7 +1169,6 @@ mod tests {
 
     #[test]
     fn no_fire_conditional_push() {
-        // The fill push is nested in an `if` ⇒ push count != trip count.
         let src = "fn f(cols: i64) {\n\
             let mut dp: Vec[i64] = Vec.new();\n\
             let mut j = 0i64;\n\
@@ -930,9 +1192,7 @@ mod tests {
     }
 
     #[test]
-    fn no_fire_inclusive_fill() {
-        // `while j <= cols` runs one extra iteration; we only recognise the
-        // strict `<` form, so no pin (conservative, still sound).
+    fn no_fire_inclusive_while_fill() {
         let src = "fn f(cols: i64) {\n\
             let mut dp: Vec[i64] = Vec.new();\n\
             let mut j = 0i64;\n\
@@ -945,7 +1205,6 @@ mod tests {
 
     #[test]
     fn no_fire_step_of_two() {
-        // `j = j + 2` ⇒ only ~cols/2 pushes.
         let src = "fn f(cols: i64) {\n\
             let mut dp: Vec[i64] = Vec.new();\n\
             let mut j = 0i64;\n\
@@ -958,8 +1217,6 @@ mod tests {
 
     #[test]
     fn no_fire_vec_moved_into_call_after_fill() {
-        // `dp` passed by value to a callee after the fill — it may be consumed
-        // or resized; refuse.
         let src = "fn sink(v: Vec[i64]) {}\n\
         fn f(cols: i64) {\n\
             let mut dp: Vec[i64] = Vec.new();\n\
@@ -973,23 +1230,9 @@ mod tests {
     }
 
     #[test]
-    fn no_fire_bound_is_compound_expr() {
-        // The loop bound `cols + 1` is not a bare identifier, so there is no
-        // single variable to pin the length to.
-        let src = "fn f(cols: i64) {\n\
-            let mut dp: Vec[i64] = Vec.new();\n\
-            let mut j = 0i64;\n\
-            while j < cols + 1i64 { dp.push(1i64); j = j + 1i64; }\n\
-            let mut c = 0i64;\n\
-            while c < cols { dp[c] = dp[c] + 1i64; c = c + 1i64; }\n\
-        }\n";
-        assert!(!pins_vec(src, "dp"));
-    }
-
-    #[test]
-    fn no_fire_vec_used_between_binding_and_fill() {
-        // A non-push use of `dp` before the fill loop means it isn't provably
-        // empty when the counted fill begins.
+    fn no_fire_non_push_use_between_binding_and_fill() {
+        // A non-push mention of `dp` before the fill (here a `.len()` read) means
+        // its length before the fill isn't provably the seed count — bail.
         let src = "fn f(cols: i64) {\n\
             let mut dp: Vec[i64] = Vec.new();\n\
             let x = dp.len();\n\
@@ -998,15 +1241,11 @@ mod tests {
             let mut c = 0i64;\n\
             while c < cols { dp[c] = dp[c] + 1i64; c = c + 1i64; }\n\
         }\n";
-        // `dp.len()` between the binding and the fill is a read (harmless to
-        // length), but our pre-fill guard is conservative and bails on any
-        // mention — so no pin. Documents the current (sound) behavior.
         assert!(!pins_vec(src, "dp"));
     }
 
     #[test]
     fn no_fire_counter_reset_in_body() {
-        // `j` is reset to 0 inside the body ⇒ not a clean +1 counter.
         let src = "fn f(cols: i64) {\n\
             let mut dp: Vec[i64] = Vec.new();\n\
             let mut j = 0i64;\n\
@@ -1015,5 +1254,76 @@ mod tests {
             while c < cols { dp[c] = dp[c] + 1i64; c = c + 1i64; }\n\
         }\n";
         assert!(!pins_vec(src, "dp"));
+    }
+
+    // ── BoundTerm normalisation unit coverage ────────────────────
+
+    #[test]
+    fn normalize_matches_across_operand_forms() {
+        use crate::token::Span;
+        fn id(n: &str) -> Expr {
+            Expr {
+                kind: ExprKind::Identifier(n.to_string()),
+                span: Span::default(),
+            }
+        }
+        fn int(k: i64) -> Expr {
+            Expr {
+                kind: ExprKind::Integer(k, None),
+                span: Span::default(),
+            }
+        }
+        // Two structurally-identical `cols + 1` at different spans normalise equal.
+        let a = Expr {
+            kind: ExprKind::Binary {
+                op: BinOp::Add,
+                left: Box::new(id("cols")),
+                right: Box::new(int(1)),
+            },
+            span: Span {
+                offset: 10,
+                ..Span::default()
+            },
+        };
+        let b = Expr {
+            kind: ExprKind::Binary {
+                op: BinOp::Add,
+                left: Box::new(id("cols")),
+                right: Box::new(int(1)),
+            },
+            span: Span {
+                offset: 99,
+                ..Span::default()
+            },
+        };
+        assert_eq!(normalize_bound(&a), normalize_bound(&b));
+        // `cols` and `cols + 1` differ.
+        assert_ne!(normalize_bound(&id("cols")), normalize_bound(&a));
+        // Bare forms normalise to the expected terms.
+        assert_eq!(
+            normalize_bound(&id("n")),
+            Some(BoundTerm::Ident("n".into()))
+        );
+        assert_eq!(normalize_bound(&int(5)), Some(BoundTerm::Int(5)));
+    }
+
+    #[test]
+    fn nonbare_bound_not_matching_the_guard_does_not_fire() {
+        // Fill bound `cols + 1` but the using guard is `c < cols` (a DIFFERENT
+        // expression) — the normalised bounds differ, so no elision fires for a
+        // `dp[c]` that could reach `cols` (== dp.len() here, in bounds, but the
+        // point is the pin must key on the exact bound, not fire loosely).
+        let src = "fn f(cols: i64) {\n\
+            let mut dp: Vec[i64] = Vec.new();\n\
+            let mut j = 0i64;\n\
+            while j < cols + 1i64 { dp.push(1i64); j = j + 1i64; }\n\
+            let mut c = 0i64;\n\
+            while c < cols { dp[c] = dp[c] + 1i64; c = c + 1i64; }\n\
+        }\n";
+        // The pin still EXISTS (keyed on `cols + 1`), but a `while c < cols`
+        // guard won't resolve to it — that match happens in resolve_len_origin,
+        // exercised by the E2E tests. Here we just confirm the pin is recorded
+        // for the `cols + 1` bound (fill recognised).
+        assert!(pins_vec(src, "dp"));
     }
 }

@@ -1282,7 +1282,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // end of function, so the pin needs no later invalidation.
         let cond_key = crate::resolver::SpanKey::from_span(&condition.span);
         if let Some(pin) = self.pending_vec_len_pins.remove(&cond_key) {
-            self.vec_len_pin.insert(pin.bound_var, pin.vec_var);
+            self.vec_len_pins.push((pin.bound, pin.vec_var));
         }
         Ok(self.context.i64_type().const_int(0, false).into())
     }

@@ -27647,6 +27647,85 @@ fn main() { println(go(6i64)); }
         }
     }
 
+    #[test]
+    fn test_e2e_bounds_elision_length_pin_for_range_fill() {
+        // Follow-up (1): a `for i in 0..n { dp.push(..) }` fill establishes the
+        // same `dp.len() == n` pin, so the rolling scan under `while c < n`
+        // elides. `unique_paths`-style count for 3x7 → 28.
+        let out = run_program(
+            r#"
+fn build(rows: i64, cols: i64) -> i64 {
+    let mut dp: Vec[i64] = Vec.new();
+    for i in 0i64..cols { dp.push(1i64); }
+    let mut r = 1i64;
+    while r < rows {
+        let mut c = 1i64;
+        while c < cols { dp[c] = dp[c] + dp[c - 1i64]; c = c + 1i64; }
+        r = r + 1i64;
+    }
+    dp[cols - 1i64]
+}
+fn main() { println(build(7i64, 3i64)); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "28");
+        }
+    }
+
+    #[test]
+    fn test_e2e_bounds_elision_length_pin_nonbare_bound() {
+        // Follow-up (3): a `cols + 1` arithmetic bound, filled and indexed under
+        // the identical expression, pins by normalised structural match. 1-indexed
+        // rolling DP; dp has cols+1 cells, dp[cols] is the answer for 3x7 → 28.
+        let out = run_program(
+            r#"
+fn build(rows: i64, cols: i64) -> i64 {
+    let mut dp: Vec[i64] = Vec.new();
+    let mut j = 0i64;
+    while j < cols + 1i64 { dp.push(1i64); j = j + 1i64; }
+    let mut r = 1i64;
+    while r < rows {
+        let mut c = 1i64;
+        while c < cols + 1i64 { dp[c] = dp[c] + dp[c - 1i64]; c = c + 1i64; }
+        r = r + 1i64;
+    }
+    dp[cols]
+}
+fn main() { println(build(7i64, 2i64)); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "28");
+        }
+    }
+
+    #[test]
+    fn test_e2e_bounds_elision_length_pin_for_range_nonzero_start_still_checks() {
+        // Follow-up (1) negative: `for i in 1..n` pushes only n-1 elements, so
+        // `dp[c]` with `c < n` is out of bounds at `c == n-1`. The pin must NOT
+        // fire (non-zero start), the check survives, and the program panics.
+        if let Some(c) = run_program_capturing(
+            r#"
+fn go(n: i64) -> i64 {
+    let mut dp: Vec[i64] = Vec.new();
+    for i in 1i64..n { dp.push(1i64); }
+    let mut acc = 0i64;
+    let mut c = 0i64;
+    while c < n { acc = acc + dp[c]; c = c + 1i64; }
+    acc
+}
+fn main() { println(go(5i64)); }
+"#,
+        ) {
+            assert!(
+                !c.status.success(),
+                "for 1..n fill must keep the bounds check (panic), got stdout={:?}",
+                c.stdout
+            );
+        }
+    }
+
     // ── ? operator codegen ───────────────────────────────────────────────────
 
     #[test]

@@ -218,16 +218,30 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 None
             }
-            // A local binding to `v.len()` (`let n = v.len()`) or a length pin
-            // (`v` filled to exactly `bound` elements by a counted loop — see
-            // bce_length_pin.rs) both resolve the guard RHS back to the Vec.
-            ExprKind::Identifier(name) => self
-                .len_alias
-                .get(name.as_str())
-                .or_else(|| self.vec_len_pin.get(name.as_str()))
-                .cloned(),
-            _ => None,
+            // A local binding to `v.len()` (`let n = v.len()`) resolves the guard
+            // RHS back to the Vec.
+            ExprKind::Identifier(name) => {
+                if let Some(v) = self.len_alias.get(name.as_str()) {
+                    return Some(v.clone());
+                }
+                self.resolve_len_pin(expr)
+            }
+            // A length pin (`v` filled to exactly `bound` elements by a counted
+            // loop — see bce_length_pin.rs) can match an arithmetic bound like
+            // `cols + 1`, not just a bare identifier.
+            _ => self.resolve_len_pin(expr),
         }
+    }
+
+    /// Match `expr` against the active length pins by normalising it to a
+    /// span-free `BoundTerm` and comparing structurally. Returns the pinned Vec
+    /// whose length equals that bound, if any.
+    fn resolve_len_pin(&self, expr: &Expr) -> Option<String> {
+        let bt = super::bce_length_pin::normalize_bound(expr)?;
+        self.vec_len_pins
+            .iter()
+            .find(|(bound, _)| *bound == bt)
+            .map(|(_, vec)| vec.clone())
     }
 }
 
