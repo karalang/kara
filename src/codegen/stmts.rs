@@ -5242,6 +5242,18 @@ impl<'ctx> super::Codegen<'ctx> {
                         if let Some(slot) = self.variables.get(&name).copied() {
                             self.track_inline_option_agg_payload_var(&name, slot.ptr, &field_te);
                         }
+                        // B-2026-07-04-7 — the comment above ("Struct drop NEVER
+                        // frees an `Option` field") no longer holds: a copy-supported
+                        // struct with an `Option[<struct/enum>]` field now carries an
+                        // `OptionInline` struct-drop for it. When the destructure
+                        // source is CALLEE-OWNED (entry-copied, has its own
+                        // `StructDrop`), zero its tag so that drop skips the
+                        // moved-out payload — else it double-frees against this
+                        // leaf's own `Option` drop (B-27/B-31 exit-133). A fresh-temp
+                        // source has no lingering struct-drop, so nothing to disarm.
+                        if let Some(src_ptr) = callee_owned_src {
+                            self.zero_struct_field_move_cap(src_ptr, &struct_name, fname);
+                        }
                     }
                 }
             } else if fresh && self.destructure_field_needs_cleanup(&field_te) {

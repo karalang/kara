@@ -1115,14 +1115,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 else {
                     continue;
                 };
-                // Only the inline-`{ptr,len,cap}` payload class — the exact set
-                // `field_copy_supported` admits and `param_own` entry-copies.
-                let inline_copyable = Self::option_payload_te(&field_te)
+                // The payload classes `field_copy_supported` admits and
+                // `param_own` entry-copies: the inline-`{ptr,len,cap}` String/Vec
+                // overlay, PLUS (B-2026-07-04-7) a non-shared struct/enum payload
+                // (boxed or inline) — `param_own`'s
+                // `deep_copy_option_struct_enum_payload_in_place` duplicates it, so
+                // freeing it here can't double-free the caller's copy. `Option[shared]`
+                // is excluded (its drop is the combined struct rc-dec walker, not
+                // this `OptionInline` free).
+                let payload_droppable = Self::option_payload_te(&field_te)
                     .map(|pt| {
-                        self.is_string_type_expr(&pt) || self.extract_vec_elem_type(&pt).is_some()
+                        self.is_string_type_expr(&pt)
+                            || self.extract_vec_elem_type(&pt).is_some()
+                            || self.option_payload_struct_or_enum_drop_ok(&pt)
                     })
                     .unwrap_or(false);
-                if !inline_copyable {
+                if !payload_droppable {
                     continue;
                 }
                 if let Some(f) = self.vec_elem_agg_drop_for_type_expr(&field_te) {

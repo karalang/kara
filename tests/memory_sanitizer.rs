@@ -1920,7 +1920,6 @@ fn main() {
         );
     }
 
-
     /// B-2026-07-03-27 (FIXED 009fd479-follow-on): an `Option[E]` field where `E`
     /// is a PLAIN (non-`shared`) user enum carrying a heap payload, destructured
     /// into a local and dropped, leaked the enum payload's heap buffer — the
@@ -2047,6 +2046,56 @@ fn main() {
 "#,
             &["792"],
             "b31_option_agg_payload_borrow_only",
+        );
+    }
+
+    /// B-2026-07-04-7 (FIXED): a `struct A { value: Option[<non-shared enum/struct>] }`
+    /// field is now DROP-SUPPORTED. Before, `emit_struct_drop_synthesis(A)` emitted no
+    /// drop for the `Option[<heap enum>]` field (the `OptionInline` pass was gated to
+    /// String/Vec payloads), so `A` read as heapless and a `Vec[A]` teardown skipped the
+    /// element walk — the `Some` payload (String + boxed enum) leaked. The fix makes
+    /// `Option[<struct/enum>]` copy-supported (`field_copy_supported`'s Option arm +
+    /// `deep_copy_option_struct_enum_payload_in_place`, the box-aware copy peer of
+    /// `emit_option_drop_fn`) and broadens the `OptionInline` drop pass to that payload
+    /// class — copy == drop, so an entry-copied param and the caller's retained original
+    /// own independent heap. The destructure move-out (`let A { value } = a`) zeros the
+    /// callee-owned source's Option tag (`zero_struct_field_move_cap`) so the source
+    /// struct-drop skips the moved-out payload (else double-free vs the B-27 leaf drop).
+    /// Exercises: zero-escape build+drop, pass-by-value borrow, pass-by-value payload
+    /// move-out, destructure+wildcard (B-27 shape), destructure+move-out (B-31 shape),
+    /// and an index-alias move-out — all in `Vec[A]`-consuming loops. ≥36-byte payloads
+    /// for LSan reachability. (Payload len = 40, so `6 + 6 + 6*40 + 6 + 6*40 + 40 = 538`.)
+    #[test]
+    fn asan_b04_7_option_heap_enum_struct_field_drop_no_leak() {
+        assert_clean_asan_run(
+            r#"
+enum Val { Nothing, Ident(String), Num(i64) }
+struct A { value: Option[Val] }
+fn ident_len(v: Val) -> i64 { match v { Val.Ident(s) => s.len(), Val.Num(n) => n, Val.Nothing => 0 } }
+fn count(a: A) -> i64 { match a.value { Some(_) => 1, None => 0 } }
+fn get_len(a: A) -> i64 { match a.value { Some(v) => ident_len(v), None => 0 } }
+fn use_wild(a: A) -> i64 { let A { value } = a; match value { Some(_) => 1, None => 0 } }
+fn via_match(a: A) -> i64 { let A { value } = a; match value { Some(v) => ident_len(v), None => 0 } }
+fn build() -> Vec[A] {
+    let mut v: Vec[A] = Vec.new();
+    let mut i = 0;
+    while i < 6 { v.push(A { value: Some(Val.Ident("payload_b047_aaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string())) }); i = i + 1; }
+    v
+}
+fn main() {
+    let z: Vec[A] = build();
+    let mut t = z.len();
+    for a in build() { t = t + count(a); }
+    for a in build() { t = t + get_len(a); }
+    for a in build() { t = t + use_wild(a); }
+    for a in build() { t = t + via_match(a); }
+    let xs: Vec[A] = build();
+    t = t + get_len(xs[0]);
+    println(t);
+}
+"#,
+            &["538"],
+            "b04_7_option_heap_enum_struct_field_drop",
         );
     }
 

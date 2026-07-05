@@ -62,7 +62,7 @@
 //! `OptionInline` free (which is gated on this very copy-supported predicate).
 //! Bailing on the rest preserves today's exact behavior for those shapes.
 
-use inkwell::types::{BasicTypeEnum, StructType};
+use inkwell::types::{BasicType, BasicTypeEnum, StructType};
 use inkwell::values::PointerValue;
 use inkwell::{AddressSpace, IntPredicate};
 use std::collections::HashMap;
@@ -323,6 +323,18 @@ impl<'ctx> super::Codegen<'ctx> {
                             })
                             .unwrap_or(false)
                             || self.option_inner_shared_type_for_type_expr(fte).is_some()
+                            // B-2026-07-04-7 — an `Option[<non-shared struct/enum>]`
+                            // field is ALSO copyable: its `Some` payload is either
+                            // BOXED (wider than the 3-word inline area) or inline in
+                            // words 1..3, and `deep_copy_option_struct_enum_payload_in_place`
+                            // duplicates it (allocating a fresh box, deep-copying the
+                            // payload's heap) — the copy peer of `emit_option_drop_fn`'s
+                            // boxed/inline free (`option_payload_struct_or_enum_drop_ok`).
+                            // Symmetric copy == drop, so a callee-owned copy and the
+                            // caller's retained original own independent heap.
+                            || Self::option_payload_te(fte)
+                                .map(|pt| self.option_payload_struct_or_enum_copyable(&pt, stack))
+                                .unwrap_or(false)
                     }
                     "Result" => false,
                     _ if is_primitive_type_name(head) => true,
@@ -351,6 +363,41 @@ impl<'ctx> super::Codegen<'ctx> {
             // Array[T, N] of heap, fn-ptr types, etc. → conservative bail.
             _ => false,
         }
+    }
+
+    /// B-2026-07-04-7 — is an `Option[P]` payload `P` (a non-shared user
+    /// struct/enum) deep-COPYABLE, so `field_copy_supported`'s `Option` arm can
+    /// admit it (making the owning struct callee-owned and its `OptionInline`
+    /// drop safe)? The drop side (`emit_option_drop_fn`, gated on
+    /// `option_payload_struct_or_enum_drop_ok`) already frees such a payload; the
+    /// copy peer is `deep_copy_option_struct_enum_payload_in_place`, which for a
+    /// STRUCT recurses via `deep_copy_struct_heap_fields_in_place` (so require the
+    /// struct be recursively copy-supported — copy-depth == drop-depth) and for a
+    /// non-shared ENUM via `deep_copy_enum_heap_payload_in_place` (the SAME
+    /// machinery a DIRECT non-shared enum field already trusts in
+    /// `field_copy_supported`'s enum arm, so admit any non-shared enum here too).
+    fn option_payload_struct_or_enum_copyable(
+        &self,
+        payload_te: &TypeExpr,
+        stack: &mut Vec<String>,
+    ) -> bool {
+        if !self.option_payload_struct_or_enum_drop_ok(payload_te) {
+            return false;
+        }
+        let TypeKind::Path(p) = &payload_te.kind else {
+            return false;
+        };
+        let head = p.segments.first().map(String::as_str).unwrap_or("");
+        if self.shared_types.contains_key(head) {
+            return false;
+        }
+        if self.struct_types.contains_key(head) {
+            return self.aggregate_param_copy_supported_struct(head, stack);
+        }
+        self.enum_layouts
+            .get(head)
+            .map(|l| !l.is_shared)
+            .unwrap_or(false)
     }
 
     /// Deep-copy every Vec/String heap field of the struct value at `base_ptr`,
@@ -893,6 +940,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     .filter(Self::elem_te_needs_direct_recursive_drain);
                 (et, inner)
             } else {
+                // B-2026-07-04-7 — a non-shared struct/enum payload (BOXED when
+                // wider than the 3-word inline area, else inline in words 1..3),
+                // not the `{ptr,len,cap}` overlay this fn's buffer-copy path
+                // handles. Deep-copy it via the box-aware peer of
+                // `emit_option_drop_fn`'s boxed/inline payload free. Pass the OUTER
+                // `opt_te` (`Option[Val]`) — the helper re-extracts the payload
+                // itself; passing `payload_te` would make its `option_payload_te`
+                // return `None` and silently copy nothing (→ shared box → double-free).
+                self.deep_copy_option_struct_enum_payload_in_place(field_ptr, opt_te);
                 return;
             };
 
@@ -969,6 +1025,159 @@ impl<'ctx> super::Codegen<'ctx> {
         self.store_enum_word(option_ty, field_ptr, 2, cl);
         self.store_enum_word(option_ty, field_ptr, 3, cc);
         self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        self.builder.position_at_end(merge_bb);
+    }
+
+    /// B-2026-07-04-7 — deep-copy an `Option[<non-shared struct/enum>]` FIELD's
+    /// `Some` payload in place, so a callee-owned by-value aggregate param owns
+    /// heap independent of the caller's retained original. Unlike the
+    /// `{ptr,len,cap}` String/Vec overlay (`deep_copy_option_inline_payload_in_place`)
+    /// and the single-RC-pointer shared payload (`rc_inc_..._shared_...`), a
+    /// struct/enum payload is either BOXED — when its LLVM word count exceeds the
+    /// 3-word inline area, exactly the predicate `coerce_to_payload_words` boxes
+    /// on — with word 1 holding the box pointer, or INLINE overlaying words 1..3.
+    /// This is the copy peer of `emit_option_drop_fn`'s boxed/inline branch: on
+    /// `Some`, if boxed, `malloc` a fresh box, shallow-copy the payload value in,
+    /// then deep-copy its heap fields in place (`deep_copy_{struct,enum}_...`) and
+    /// store the new box pointer; if inline, deep-copy the payload's heap fields
+    /// in place over the Option's payload words. The deep-copy helpers duplicate
+    /// exactly the buffers the payload's own `__karac_drop_*` frees (copy ==
+    /// drop), so the callee copy and caller original own independent heap. `None`
+    /// runs nothing.
+    fn deep_copy_option_struct_enum_payload_in_place(
+        &mut self,
+        field_ptr: PointerValue<'ctx>,
+        opt_te: &TypeExpr,
+    ) {
+        let Some(payload_te) = Self::option_payload_te(opt_te) else {
+            return;
+        };
+        let payload_name = match &payload_te.kind {
+            TypeKind::Path(p) => p.segments.first().cloned(),
+            _ => None,
+        };
+        let Some(payload_name) = payload_name else {
+            return;
+        };
+        if self.shared_types.contains_key(&payload_name) {
+            return;
+        }
+        let is_struct = self.struct_types.contains_key(&payload_name);
+        let enum_layout = self
+            .enum_layouts
+            .get(&payload_name)
+            .filter(|l| !l.is_shared)
+            .cloned();
+        if !is_struct && enum_layout.is_none() {
+            return;
+        }
+
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let fn_val = self.current_fn.unwrap();
+        let Some(layout) = self.enum_layouts.get("Option").cloned() else {
+            return;
+        };
+        let option_ty = layout.llvm_type;
+        let some_tag = layout.tags.get("Some").copied().unwrap_or(1);
+
+        let tag_ptr = self
+            .builder
+            .build_struct_gep(option_ty, field_ptr, 0, "p14oe.tag.p")
+            .unwrap();
+        let tag = self
+            .builder
+            .build_load(i64_t, tag_ptr, "p14oe.tag")
+            .unwrap()
+            .into_int_value();
+        let is_some = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                tag,
+                i64_t.const_int(some_tag, false),
+                "p14oe.some",
+            )
+            .unwrap();
+        let some_bb = self.context.append_basic_block(fn_val, "p14oe.some");
+        let merge_bb = self.context.append_basic_block(fn_val, "p14oe.merge");
+        self.builder
+            .build_conditional_branch(is_some, some_bb, merge_bb)
+            .unwrap();
+
+        self.builder.position_at_end(some_bb);
+        let payload_llty = self.llvm_type_for_type_expr(&payload_te);
+        let payload_words = Self::llvm_type_word_count(payload_llty);
+        // Payload area starts at Option field index 1.
+        let payload_base = self
+            .builder
+            .build_struct_gep(option_ty, field_ptr, 1, "p14oe.pl")
+            .unwrap();
+        if payload_words > 3 {
+            // BOXED — word 1 holds the box pointer. Allocate a fresh box, copy
+            // the payload value in, deep-copy its heap in place, store the new
+            // pointer. Null-guarded (a Some tag with a null box can't occur, but
+            // mirror `emit_option_drop_fn`'s box null-guard for symmetry).
+            let old_w = self
+                .builder
+                .build_load(i64_t, payload_base, "p14oe.box.w0")
+                .unwrap()
+                .into_int_value();
+            let old_box = self
+                .builder
+                .build_int_to_ptr(old_w, ptr_ty, "p14oe.oldbox")
+                .unwrap();
+            let old_null = self
+                .builder
+                .build_is_null(old_box, "p14oe.oldbox.null")
+                .unwrap();
+            let copy_bb = self.context.append_basic_block(fn_val, "p14oe.box.copy");
+            self.builder
+                .build_conditional_branch(old_null, merge_bb, copy_bb)
+                .unwrap();
+            self.builder.position_at_end(copy_bb);
+            let raw_size = payload_llty.size_of().unwrap();
+            let size = if raw_size.get_type().get_bit_width() == 64 {
+                raw_size
+            } else {
+                self.builder
+                    .build_int_z_extend(raw_size, i64_t, "p14oe.sz64")
+                    .unwrap()
+            };
+            let new_box = self
+                .builder
+                .build_call(self.malloc_fn, &[size.into()], "p14oe.newbox")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+            let boxval = self
+                .builder
+                .build_load(payload_llty, old_box, "p14oe.boxval")
+                .unwrap();
+            self.builder.build_store(new_box, boxval).unwrap();
+            if let Some(el) = &enum_layout {
+                self.deep_copy_enum_heap_payload_in_place(&payload_name, new_box, el);
+            } else {
+                self.deep_copy_struct_heap_fields_in_place(new_box, &payload_name);
+            }
+            let new_w = self
+                .builder
+                .build_ptr_to_int(new_box, i64_t, "p14oe.newbox.w")
+                .unwrap();
+            self.builder.build_store(payload_base, new_w).unwrap();
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+        } else {
+            // INLINE — the payload overlays words 1..3 in place; deep-copy its
+            // heap fields directly (`payload_base` reinterprets as `payload_llty*`).
+            if let Some(el) = &enum_layout {
+                self.deep_copy_enum_heap_payload_in_place(&payload_name, payload_base, el);
+            } else {
+                self.deep_copy_struct_heap_fields_in_place(payload_base, &payload_name);
+            }
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+        }
 
         self.builder.position_at_end(merge_bb);
     }
