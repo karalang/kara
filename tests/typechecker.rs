@@ -17945,6 +17945,21 @@ fn parameterized_trait_bound_matching_accepted() {
 }
 
 #[test]
+fn reduce_trait_bound_prod_resolves() {
+    // S6c-11: `prod` is a required method on `Reduce[T]` (like `sum`), so a
+    // bound-generic `c.prod()` resolves and types as `T` (here `i64`) — no
+    // "no method 'prod' on type parameter 'C'" rejection.
+    typecheck_ok(
+        "fn totalprod[C: Reduce[i64]](c: ref C) -> i64 { c.prod() }\n\
+         fn main() {\n\
+         \x20   let ci: Column[i64] = Column.from_vec([2, 3, 4]);\n\
+         \x20   let ti: Tensor[i64, [3]] = Tensor.from([2, 3, 4]);\n\
+         \x20   println(f\"{totalprod(ci)} {totalprod(ti)}\");\n\
+         }",
+    );
+}
+
+#[test]
 fn method_self_return_type_resolves_to_impl_target() {
     // A method declared `-> Self` returns a value of the concrete impl
     // target (`W`), so the body's tail expression must check against the

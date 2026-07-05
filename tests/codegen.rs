@@ -47379,6 +47379,28 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_reduce_trait_bound_prod() {
+        // S6c-11: `prod` on the `Reduce` trait — a required method (like
+        // `sum`), so bound-generic `c.prod()` monomorphizes to the shared fold
+        // kernel on both `Column` and `Tensor`, i64 and f64. `run` == `build`.
+        let src = r#"
+fn totalprod[C: Reduce[i64]](c: ref C) -> i64 { c.prod() }
+fn fprod[C: Reduce[f64]](c: ref C) -> f64 { c.prod() }
+fn sumprod[C: Reduce[i64]](c: ref C) -> i64 { c.sum() + c.prod() }
+fn main() {
+    let ci: Column[i64] = Column.from_vec([2, 3, 4]);
+    let ti: Tensor[i64, [4]] = Tensor.from([1, 2, 3, 5]);
+    let cf: Column[f64] = Column.from_vec([1.5, 2.0, 4.0]);
+    println(f"{totalprod(ci)} {totalprod(ti)}");
+    println(f"{fprod(cf)}");
+    println(f"{sumprod(ci)}");
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        assert_eq!(out, "24 30\n12\n33\n");
+    }
+
+    #[test]
     fn test_e2e_reduce_trait_bound_fold() {
         // S6c: `fold` on the `Reduce` trait surface, dispatched through a
         // bound-generic `fn f[C: Reduce[i64]]`. The typechecker intercept types

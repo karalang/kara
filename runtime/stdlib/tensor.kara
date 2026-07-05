@@ -305,6 +305,11 @@ impl[T, ...S] Reduce[T] for Tensor[T, S] {
     }
 
     #[compiler_builtin]
+    fn prod(ref self) -> T {
+        loop {}
+    }
+
+    #[compiler_builtin]
     fn min(ref self) -> T {
         loop {}
     }

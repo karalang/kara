@@ -264,6 +264,11 @@ impl[T] Reduce[T] for Column[T] {
     }
 
     #[compiler_builtin]
+    fn prod(ref self) -> T {
+        loop {}
+    }
+
+    #[compiler_builtin]
     fn min(ref self) -> T {
         loop {}
     }

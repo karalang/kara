@@ -19186,6 +19186,32 @@ fn main() {
 }
 
 #[test]
+fn stdlib_reduce_trait_bound_prod_column_and_tensor() {
+    // S6c-11: `prod` on the `Reduce` trait surface — a `fn f[C: Reduce[T]]`
+    // body may call `c.prod()`, dispatched to the concrete `Column`/`Tensor`
+    // kernel exactly like `sum`/`min`/`max` (a required method, no default
+    // body — no `One`-trait mul-identity needed). Covers i64 + f64 elements and
+    // combination with `sum` in one bound-generic function.
+    let out = run_no_errors(
+        r#"
+fn totalprod[C: Reduce[i64]](c: ref C) -> i64 { c.prod() }
+fn fprod[C: Reduce[f64]](c: ref C) -> f64 { c.prod() }
+fn sumprod[C: Reduce[i64]](c: ref C) -> i64 { c.sum() + c.prod() }
+fn main() {
+    let ci: Column[i64] = Column.from_vec([2, 3, 4]);
+    let ti: Tensor[i64, [4]] = Tensor.from([1, 2, 3, 5]);
+    let cf: Column[f64] = Column.from_vec([1.5, 2.0, 4.0]);
+    println(f"{totalprod(ci)} {totalprod(ti)}");
+    println(f"{fprod(cf)}");
+    println(f"{sumprod(ci)}");
+}
+"#,
+    );
+    // ci: 2*3*4=24; ti: 1*2*3*5=30; cf: 1.5*2*4=12; sumprod: (2+3+4)+(2*3*4)=33.
+    assert_eq!(out, "24 30\n12\n33\n");
+}
+
+#[test]
 fn stdlib_reduce_trait_bound_fold_column_and_tensor() {
     // S6c: `fold` on the `Reduce` trait surface — a `fn f[C: Reduce[i64]]`
     // body may call `c.fold(init, |a, x| ...)`, dispatched to the concrete

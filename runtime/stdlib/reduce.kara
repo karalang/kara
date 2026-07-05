@@ -29,6 +29,14 @@ trait Reduce[T] {
     // Sum of the (valid) elements; overflow traps as for scalar `+`.
     fn sum(ref self) -> T;
 
+    // Product of the (valid) elements; overflow traps as for scalar `*`.
+    // Matches the inherent `prod` on `Column`/`Tensor` (S6c-11) — a required
+    // method (no default body), so bound-generic `fn f[C: Reduce[i64]](c: ref C)`
+    // may call `c.prod()` and it monomorphizes to the shared fold kernel exactly
+    // like `sum`. (A `product` DEFAULT body would need a `T`-typed multiplicative
+    // identity — no `One` trait yet — so `prod` stays required, matching `sum`.)
+    fn prod(ref self) -> T;
+
     // Smallest element. Traps on an empty (or all-null) input.
     fn min(ref self) -> T;
 

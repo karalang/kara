@@ -701,17 +701,31 @@ B-2026-07-02-10..13, see the ledger.
   `f64 + <int literal>` (e.g. `a + 1`) type-checked and built correctly (Q4
   literal promotion) but errored under `run` — the tree-walker now honors the
   promotion (`promote_int_literal_for_float_peer` at the three scalar-arith sites:
-  `dispatch_lowered_op`, `CompoundAssign`, `ExprKind::Binary`). `product` itself
-  stays blocked on a numeric-identity mechanism (a `One`/`Zero` trait, or extending
-  the same literal-promotion idea to a fold seed so `fold(1, |a,x| a*x)` seeds `1`
-  as `T`).
+  `dispatch_lowered_op`, `CompoundAssign`, `ExprKind::Binary`). A `product`
+  DEFAULT body still needs a numeric-identity mechanism (a `One`/`Zero` trait, or
+  extending the literal-promotion idea to a fold seed so `fold(1, |a,x| a*x)` seeds
+  `1` as `T`) — but see S6c-11 for the shipped, seed-free form.
+- **S6c-11** ✅ **(landed)** — exposed **`prod` on the `Reduce` trait** as a
+  REQUIRED method (`fn prod(ref self) -> T;`, mirroring `sum`/`min`/`max`), so
+  bound-generic `fn f[C: Reduce[T]](c: ref C) { c.prod() }` resolves and
+  monomorphizes to the existing Column/Tensor `prod` kernel exactly like `sum`.
+  Zero dispatch code needed — the generic trait-method resolver + mono handle
+  plumbing already route it; only the trait declaration (+ the two baked
+  `impl Reduce for Column`/`Tensor` `#[compiler_builtin]` stubs) were missing.
+  This sidesteps the `product`-default-body seed problem entirely (a required
+  method has no body, like `sum`). Named `prod` to match the inherent container
+  method (all other trait methods match their container names). `run` == `build`
+  == default auto-par over i64/f64 × Column/Tensor. Tests:
+  `reduce_trait_bound_prod_resolves` (typechecker),
+  `stdlib_reduce_trait_bound_prod_column_and_tensor` (interpreter),
+  `test_e2e_reduce_trait_bound_prod` (codegen).
 - **S6c** — remaining: `ElementwiseOrd` user impls; **u64 column/tensor sort**
   (blocked on the interpreter u64 model — see S6c-9 / B-2026-07-04-8, NOT just an
-  unsigned scratch compare as previously thought); **`product` on the `Reduce`
-  trait** (blocked on a numeric mul-identity mechanism — see S6c-10; `fold` S6c-5
-  / `map`/`zip_with` S6c-7 done); blanket `Vec[T]` impls; user trait-impl methods
-  over builtin containers (probed: interp "type 'unknown'", codegen loud
-  fall-through).
+  unsigned scratch compare as previously thought); a `product` DEFAULT body for
+  USER `Reduce` impls (needs the numeric-identity mechanism of S6c-10 — the
+  bound-generic `prod` on the builtin containers is DONE, S6c-11); blanket
+  `Vec[T]` impls; user trait-impl methods over builtin containers (probed: interp
+  "type 'unknown'", codegen loud fall-through).
 
 ---
 
