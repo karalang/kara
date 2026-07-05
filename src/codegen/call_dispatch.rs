@@ -1741,7 +1741,23 @@ impl<'ctx> super::Codegen<'ctx> {
                         // structs through the rc-dec walker). Symmetric: caller temp
                         // dec + callee copy dec == create + entry-copy inc.
                         || self.struct_owns_shared_field(&name, &mut Vec::new()));
-                if llvm_heap || src_heap_copyable {
+                // B-2026-07-04-9(b) — a struct with a DIRECT `shared` field
+                // (`DirH { value: Val }`) is NOT copy-supported (`field_copy_-
+                // supported` bails on a direct shared field), so `src_heap_-
+                // copyable` above stays off and, as an INLINE fresh-temp arg
+                // (`borrow_dir(DirH { value: Val.Ident(..) })`), it registered NO
+                // caller-temp drop — while the caller-retains param doesn't drop
+                // it either, so the box leaked. Such a struct is caller-retains
+                // (the callee never entry-copies a non-copy-supported struct), so
+                // the caller temp is its SOLE owner: register the combined drop
+                // (`track_struct_var` routes a shared-owning struct through the
+                // rc-dec walker — a pure rc-dec, no buffer copy needed). The
+                // `let`-bound sibling (`let d = DirH { .. }; f(d)`) is already
+                // covered by `track_struct_var` at its binding site.
+                let src_shared_owning = !llvm_heap
+                    && !src_heap_copyable
+                    && self.struct_owns_shared_field(&name, &mut Vec::new());
+                if llvm_heap || src_heap_copyable || src_shared_owning {
                     let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
                     self.builder.build_store(slot, val).unwrap();
                     self.track_struct_var(&name, slot);

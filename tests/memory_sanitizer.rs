@@ -1734,6 +1734,52 @@ fn main() {
         );
     }
 
+    /// B-2026-07-04-9(b) (FIXED): a struct with a DIRECT `shared` field
+    /// (`DirH { value: Val }`, `Val` a shared enum) passed as an INLINE
+    /// fresh-temp arg (`borrow_dir(DirH { value: Val.Ident(..) })`) leaked its
+    /// RC box. `DirH` is NOT copy-supported (`field_copy_supported` bails on a
+    /// direct shared field), so the fresh-temp struct-arg cleanup gate — which
+    /// required `aggregate_param_copy_supported_struct` — registered no
+    /// caller-temp drop, and the caller-retains param doesn't drop it either. A
+    /// LOCAL arg (`let d = DirH { .. }; f(d)`) was already covered by
+    /// `track_struct_var` at the binding site. Fixed by registering the combined
+    /// drop (`track_struct_var`, a pure rc-dec of the shared field — no buffer
+    /// copy) for any shared-owning fresh-temp struct, copy-supported or not;
+    /// such a struct is caller-retains, so the caller temp is its sole owner.
+    /// Payload ≥36 bytes so LSan sees the leaked box; a double rc-dec would abort
+    /// under ASAN. Exercises the fresh-temp direct-shared arg across a loop.
+    /// Run: `scripts/lsan-local.sh "b04_9b_direct_shared_freshtemp"`.
+    #[test]
+    fn asan_b04_9b_direct_shared_freshtemp_struct_arg_no_leak() {
+        assert_clean_asan_run(
+            r#"
+shared enum Val { Nothing, Ident(String), Num(i64) }
+struct DirH { value: Val }
+
+fn borrow_dir(h: DirH) -> i64 {
+    let mut r = 0;
+    match h.value { Val.Ident(_) => { r = 1; } _ => {} }
+    r
+}
+
+fn main() {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 5 {
+        // INLINE fresh-temp arg — the leaking shape (no `let` binding).
+        total = total + borrow_dir(DirH {
+            value: Val.Ident("b049b_direct_shared_freshtemp_payload_omega_ffff".to_string()),
+        });
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["5"],
+            "b04_9b_direct_shared_freshtemp",
+        );
+    }
+
     /// B-2026-07-03-27 (FIXED 009fd479-follow-on): an `Option[E]` field where `E`
     /// is a PLAIN (non-`shared`) user enum carrying a heap payload, destructured
     /// into a local and dropped, leaked the enum payload's heap buffer — the
