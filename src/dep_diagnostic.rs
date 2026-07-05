@@ -163,6 +163,18 @@ pub fn render_resolver_error(err: &ResolverError) -> Diagnostic {
                     .to_string(),
             ),
         },
+        ResolverError::UnsatisfiableGraph { report } => Diagnostic {
+            code: err.code(),
+            primary: "no compatible set of dependency versions exists".to_string(),
+            // One note per line of PubGrub's derivation-tree report — the
+            // "because A needs X and B needs Y…" chain that explains *why* the
+            // graph is unsatisfiable across versions.
+            notes: report.lines().map(str::to_string).collect(),
+            help: Some(
+                "relax one of the conflicting version constraints so the requirements overlap, or pin an intermediate package to a version both dependents accept"
+                    .to_string(),
+            ),
+        },
     }
 }
 

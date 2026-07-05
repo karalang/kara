@@ -146,6 +146,15 @@ pub enum ResolverError {
         kara_version_req: semver::VersionReq,
         active_version: semver::Version,
     },
+    /// PubGrub's global solve proved the *widened* candidate set (all
+    /// published versions + their per-version deps, resolver follow-up (a)
+    /// slice 3d) has no compatible assignment, and the per-package
+    /// [`first_version_conflict`] detector couldn't name the conflict on its
+    /// own (it only inspects each package's single selected version against
+    /// its direct constraints, so it misses cross-version / transitive
+    /// conflicts). `report` is PubGrub's rendered derivation-tree explanation.
+    /// Maps to `E_DEPENDENCY_UNSATISFIABLE`.
+    UnsatisfiableGraph { report: String },
 }
 
 /// One link in a version-conflict constraint chain: the parent manifest's
@@ -165,6 +174,7 @@ impl ResolverError {
             Self::VersionConflict { .. } => "E_DEPENDENCY_VERSION_CONFLICT",
             Self::SourceConflict { .. } => "E_DEPENDENCY_SOURCE_CONFLICT",
             Self::ToolchainTooOld { .. } => "E_TOOLCHAIN_TOO_OLD",
+            Self::UnsatisfiableGraph { .. } => "E_DEPENDENCY_UNSATISFIABLE",
         }
     }
 }
@@ -226,6 +236,10 @@ impl std::fmt::Display for ResolverError {
                 manifest_dir.display(),
                 kara_version_req,
                 active_version,
+            ),
+            Self::UnsatisfiableGraph { report } => write!(
+                f,
+                "dependency version solving found no compatible set of versions:\n{report}",
             ),
         }
     }
@@ -447,34 +461,64 @@ pub fn resolve_with_offline(
         }
     }
 
-    // Validate constraint chains: for each resolved package, intersect every
-    // declared version requirement against the candidate version. A path-dep's
-    // sentinel version only matches `*` / `>=0.0.0` style constraints — a real
-    // pin like `>=1.0` on it surfaces a precise `VersionConflict` naming every
-    // violating parent edge.
+    // Resolver follow-up (a) slice 3d: PubGrub's global solve is the authority
+    // for version *selection*, run over the **widened** candidate set the graph
+    // walk recorded (`graph.registry_candidates` — every published version of
+    // each registry package + that version's own per-version deps). This is
+    // where backtracking goes live: a diamond whose highest version is
+    // incompatible with a sibling's constraint now resolves to a compatible
+    // *lower* version instead of erroring.
     //
-    // This per-package check is the conflict *detector*; with one candidate per
-    // package it is equivalent to a global solve and yields the exact
-    // constraint chain. Resolver follow-up (a) slice 3 folds it into pubgrub's
-    // global solve once the candidate set widens beyond one-per-package (all
-    // published versions + their per-version deps), at which point PubGrub's
-    // derivation tree becomes the conflict explanation.
-    if let Some(err) = first_version_conflict(&packages) {
-        return Err(err);
+    // `first_version_conflict` (the precise per-package constraint-chain
+    // detector, slice 2) is folded in as the diagnostic authority *on failure*
+    // — it names the exact violating parents when the conflict is expressible
+    // per-package, and PubGrub's derivation-tree report covers the
+    // cross-version / transitive conflicts the single-candidate detector can't
+    // see. On success PubGrub's selection already satisfies every constraint,
+    // so the per-package check is redundant and skipped.
+    match select_versions_with_pubgrub(
+        &mut packages,
+        &root_name,
+        &sentinel,
+        &graph.registry_candidates,
+    ) {
+        PubgrubOutcome::Solved => Ok(Resolution { packages }),
+        PubgrubOutcome::NoSolution(report) => {
+            // Prefer the precise per-package chain; fall back to PubGrub's
+            // derivation report when the conflict only exists across versions.
+            if let Some(err) = first_version_conflict(&packages) {
+                Err(err)
+            } else {
+                Err(Box::new(ResolverError::UnsatisfiableGraph { report }))
+            }
+        }
+        PubgrubOutcome::Inconclusive => {
+            // The solver couldn't reach a verdict (should not happen with the
+            // in-memory provider, whose fetch is infallible). The classic
+            // per-package check is then the sole authority — exactly the
+            // pre-3d behavior.
+            if let Some(err) = first_version_conflict(&packages) {
+                Err(err)
+            } else {
+                Ok(Resolution { packages })
+            }
+        }
     }
+}
 
-    // pubgrub-backed version *selection* (resolver follow-up (a) slice 2). The
-    // engine picks each package's version from its candidate set; today, with a
-    // single candidate per package, this returns exactly the versions the walk
-    // pinned above, so it is behavior-preserving. The seam is the point: slice 3
-    // widens the candidate set here (enumerating published versions + their
-    // deps into the provider), and PubGrub's backtracking then picks a
-    // compatible assignment with no change to this call site or to
-    // `resolve`'s input/output types. Best-effort: a solver hiccup leaves the
-    // already-validated single-candidate versions in place.
-    select_versions_with_pubgrub(&mut packages, &root_name, &sentinel);
-
-    Ok(Resolution { packages })
+/// Outcome of the PubGrub version selection (resolver follow-up (a) slice 3d).
+enum PubgrubOutcome {
+    /// PubGrub found a compatible assignment; the selected versions have been
+    /// written back into `packages`.
+    Solved,
+    /// PubGrub proved the graph unsatisfiable. Carries its rendered
+    /// derivation-tree explanation, used only when the per-package
+    /// [`first_version_conflict`] detector can't name the conflict itself.
+    NoSolution(String),
+    /// PubGrub couldn't reach a verdict (an internal solver error unrelated to
+    /// the constraint set). The caller falls back to the classic per-package
+    /// check as the sole authority.
+    Inconclusive,
 }
 
 /// The per-package version-conflict detector extracted from [`resolve_with_offline`].
@@ -508,24 +552,36 @@ fn first_version_conflict(
 }
 
 /// Run PubGrub over the resolved packages and adopt its selected versions
-/// (resolver follow-up (a) slice 2). Builds the forward dependency edges
-/// (inverting each package's `declared_by`) and a candidate registry from the
-/// pinned packages, then calls [`crate::pubgrub_solve::solve`]. On success it
-/// writes each dependency's selected version back into `packages`; the root
-/// keeps its sentinel. On any solver error it leaves `packages` unchanged — the
-/// per-package [`first_version_conflict`] check has already validated the
-/// single-candidate graph, so the pinned versions are sound.
+/// (resolver follow-up (a) slices 2 + 3d). Builds the forward dependency edges
+/// (inverting each package's `declared_by`) and a candidate registry, then
+/// calls [`crate::pubgrub_solve::solve`]. On success it writes each
+/// dependency's selected version back into `packages` (the root keeps its
+/// sentinel) and returns [`PubgrubOutcome::Solved`]; on a proven conflict it
+/// leaves `packages` unchanged and returns [`PubgrubOutcome::NoSolution`] with
+/// PubGrub's derivation report; on a spurious solver error,
+/// [`PubgrubOutcome::Inconclusive`].
 ///
-/// With one candidate per package the selection is a fixed point (it returns
-/// the versions already pinned). It becomes load-bearing in slice 3, when the
-/// candidate registry carries every published version and PubGrub genuinely
-/// chooses + backtracks.
+/// **Candidate set (slice 3d).** For each registry package the walk recorded a
+/// widened candidate set in `registry_candidates` (every published version +
+/// that version's own registry deps), the registry carries *all* of them, so
+/// PubGrub genuinely chooses and backtracks. For a package with no recorded
+/// candidates — a path/git dep (sentinel version), or a registry package whose
+/// provider couldn't enumerate — it falls back to the single pinned version
+/// with the package's graph-derived forward deps, exactly the slice-2 shape.
+///
+/// **Limitation.** The walk only fetches the *selected* version's subtree, so a
+/// non-selected candidate whose transitive deps were never fetched appears to
+/// PubGrub as depending on an unknown (version-less) package and is avoided —
+/// backtracking is complete within the fetched candidate set but not beyond it.
+/// A fully lazy `DependencyProvider` (fetch-on-demand during the solve) is the
+/// future optimization that closes this.
 fn select_versions_with_pubgrub(
     packages: &mut BTreeMap<String, ResolvedPackage>,
     root_name: &str,
     root_version: &semver::Version,
-) {
-    use crate::pubgrub_solve::{solve, CandidateVersion, PackageCandidates};
+    registry_candidates: &BTreeMap<String, Vec<crate::dep_graph::RegistryCandidate>>,
+) -> PubgrubOutcome {
+    use crate::pubgrub_solve::{solve, CandidateVersion, PackageCandidates, SolveError};
 
     // Forward edges: parent package name → [(dependency name, constraint)].
     // `declared_by` is the reverse map (who required me); invert it. A path/git
@@ -541,34 +597,44 @@ fn select_versions_with_pubgrub(
         }
     }
 
-    // One candidate (the pinned version) per non-root package, carrying its
-    // forward deps. Slice 3 replaces this with the full published candidate set.
+    // The candidate registry: the widened published set where the walk recorded
+    // one, else a single pinned candidate with the package's graph-derived deps.
     let registry: BTreeMap<String, PackageCandidates> = packages
         .values()
         .filter(|p| p.name != root_name)
         .map(|p| {
-            (
-                p.name.clone(),
-                PackageCandidates {
-                    versions: vec![CandidateVersion {
-                        version: p.version.clone(),
-                        deps: deps_of.get(&p.name).cloned().unwrap_or_default(),
-                    }],
-                },
-            )
+            let versions = match registry_candidates.get(&p.name) {
+                Some(cands) if !cands.is_empty() => cands
+                    .iter()
+                    .map(|c| CandidateVersion {
+                        version: c.version.clone(),
+                        deps: c.deps.clone(),
+                    })
+                    .collect(),
+                _ => vec![CandidateVersion {
+                    version: p.version.clone(),
+                    deps: deps_of.get(&p.name).cloned().unwrap_or_default(),
+                }],
+            };
+            (p.name.clone(), PackageCandidates { versions })
         })
         .collect();
     let root_deps = deps_of.get(root_name).cloned().unwrap_or_default();
 
-    if let Ok(selected) = solve(root_name, root_version, &root_deps, &registry) {
-        for (name, version) in selected {
-            if name == root_name {
-                continue;
+    match solve(root_name, root_version, &root_deps, &registry) {
+        Ok(selected) => {
+            for (name, version) in selected {
+                if name == root_name {
+                    continue;
+                }
+                if let Some(p) = packages.get_mut(&name) {
+                    p.version = version;
+                }
             }
-            if let Some(p) = packages.get_mut(&name) {
-                p.version = version;
-            }
+            PubgrubOutcome::Solved
         }
+        Err(SolveError::NoSolution(report)) => PubgrubOutcome::NoSolution(report),
+        Err(SolveError::Internal(_)) => PubgrubOutcome::Inconclusive,
     }
 }
 
@@ -994,6 +1060,146 @@ mod tests {
         .expect("graph");
         let err = resolve(&graph, &test_version()).unwrap_err();
         assert_eq!(err.code(), "E_DEPENDENCY_VERSION_CONFLICT");
+    }
+
+    /// Multi-version registry mock (mirrors the `dep_graph` one) — enumerates
+    /// versions and fetches exact ones so `registry_candidates` gets populated,
+    /// which is what activates PubGrub backtracking (slice 3d).
+    struct MultiVersionMockProvider {
+        versions: BTreeMap<String, Vec<semver::Version>>,
+        selected: BTreeMap<String, (PathBuf, semver::Version)>,
+        exact: BTreeMap<(String, semver::Version), PathBuf>,
+    }
+
+    impl crate::dep_graph::RegistryProvider for MultiVersionMockProvider {
+        fn fetch(
+            &self,
+            name: &str,
+            _req: &VersionReq,
+        ) -> Result<crate::dep_graph::MaterializedDep, String> {
+            self.selected
+                .get(name)
+                .map(|(dir, ver)| crate::dep_graph::MaterializedDep {
+                    root_dir: dir.clone(),
+                    version: ver.clone(),
+                    upstream_url: format!("https://up/{name}"),
+                })
+                .ok_or_else(|| format!("no such package {name}"))
+        }
+        fn available_versions(&self, name: &str) -> Result<Vec<semver::Version>, String> {
+            Ok(self.versions.get(name).cloned().unwrap_or_default())
+        }
+        fn fetch_exact(
+            &self,
+            name: &str,
+            version: &semver::Version,
+        ) -> Result<crate::dep_graph::MaterializedDep, String> {
+            self.exact
+                .get(&(name.to_string(), version.clone()))
+                .map(|dir| crate::dep_graph::MaterializedDep {
+                    root_dir: dir.clone(),
+                    version: version.clone(),
+                    upstream_url: format!("https://up/{name}"),
+                })
+                .ok_or_else(|| format!("no {name}@{version}"))
+        }
+    }
+
+    fn ver(s: &str) -> semver::Version {
+        semver::Version::parse(s).unwrap()
+    }
+
+    #[test]
+    fn pubgrub_backtracks_to_lower_version_over_a_capped_sibling() {
+        // root wants `x ^1.0` (highest is 1.9.0) and `y ^1.0`; but `y` caps
+        // `x < 1.5`. The eager walk pins x@1.9.0 (its highest ^1.0 match) — so
+        // the pre-3d per-package check would reject 1.9.0 against y's `< 1.5`.
+        // With the widened candidate set, PubGrub backtracks to x@1.0.0, which
+        // satisfies both, and the resolve SUCCEEDS.
+        let mut root = empty_manifest("app");
+        root.dependencies.insert("x".into(), registry("^1.0"));
+        root.dependencies.insert("y".into(), registry("^1.0"));
+
+        let mut y_mf = empty_manifest("y");
+        y_mf.dependencies.insert("x".into(), registry("<1.5"));
+
+        let loader = MemLoader {
+            manifests: BTreeMap::from([
+                (PathBuf::from("/reg/x-1.9.0"), empty_manifest("x")),
+                (PathBuf::from("/reg/x-1.0.0"), empty_manifest("x")),
+                (PathBuf::from("/reg/y"), y_mf),
+            ]),
+        };
+        let provider = MultiVersionMockProvider {
+            versions: BTreeMap::from([
+                ("x".to_string(), vec![ver("1.0.0"), ver("1.9.0")]),
+                ("y".to_string(), vec![ver("1.0.0")]),
+            ]),
+            selected: BTreeMap::from([
+                (
+                    "x".to_string(),
+                    (PathBuf::from("/reg/x-1.9.0"), ver("1.9.0")),
+                ),
+                ("y".to_string(), (PathBuf::from("/reg/y"), ver("1.0.0"))),
+            ]),
+            exact: BTreeMap::from([
+                (
+                    ("x".to_string(), ver("1.0.0")),
+                    PathBuf::from("/reg/x-1.0.0"),
+                ),
+                (
+                    ("x".to_string(), ver("1.9.0")),
+                    PathBuf::from("/reg/x-1.9.0"),
+                ),
+                (("y".to_string(), ver("1.0.0")), PathBuf::from("/reg/y")),
+            ]),
+        };
+
+        let graph = crate::dep_graph::build_dep_graph_with_options(
+            &PathBuf::from("/app"),
+            root,
+            &loader,
+            crate::dep_graph::DepGraphOptions {
+                offline_root: None,
+                include_dev_deps: false,
+                registry_provider: Some(&provider),
+                git_provider: None,
+            },
+        )
+        .expect("graph");
+
+        let resolution =
+            resolve(&graph, &test_version()).expect("resolve should backtrack, not error");
+        assert_eq!(
+            resolution.packages.get("x").expect("x resolved").version,
+            ver("1.0.0"),
+            "PubGrub must backtrack x from 1.9.0 to 1.0.0 to satisfy y's `< 1.5` cap"
+        );
+        assert_eq!(
+            resolution.packages.get("y").expect("y resolved").version,
+            ver("1.0.0")
+        );
+    }
+
+    #[test]
+    fn unsatisfiable_graph_error_renders_derivation_report() {
+        // The fallback diagnostic for a cross-version conflict the per-package
+        // detector can't name: it carries PubGrub's derivation report verbatim.
+        let err = ResolverError::UnsatisfiableGraph {
+            report:
+                "because a 1.0.0 depends on b ^2.0\nand b has no version, version solving failed"
+                    .to_string(),
+        };
+        assert_eq!(err.code(), "E_DEPENDENCY_UNSATISFIABLE");
+        let shown = err.to_string();
+        assert!(shown.contains("no compatible set"));
+        assert!(shown.contains("because a 1.0.0 depends on b ^2.0"));
+
+        let diag = crate::dep_diagnostic::render_resolver_error(&err);
+        assert_eq!(diag.code, "E_DEPENDENCY_UNSATISFIABLE");
+        // Each line of the report becomes its own note.
+        assert_eq!(diag.notes.len(), 2);
+        assert!(diag.notes[0].contains("because a 1.0.0 depends on b ^2.0"));
     }
 
     #[test]
