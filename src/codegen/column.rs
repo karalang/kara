@@ -1201,10 +1201,16 @@ impl<'ctx> super::Codegen<'ctx> {
         args: &[CallArg],
         _span: &crate::token::Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-        let ExprKind::Identifier(name) = &object.kind else {
-            return Ok(None);
+        // S6c-12: accept a `self` receiver (`ExprKind::SelfValue`) too, so a
+        // user `impl Trait for Column[T]` body may call the builtin reductions
+        // on `self` — the self param is typed `ref Column[T]`, so its element
+        // info is registered under `"self"` in `column_var_infos`.
+        let name = match &object.kind {
+            ExprKind::Identifier(n) => n.as_str(),
+            ExprKind::SelfValue => "self",
+            _ => return Ok(None),
         };
-        let Some(info) = self.column_var_infos.get(name.as_str()).copied() else {
+        let Some(info) = self.column_var_infos.get(name).copied() else {
             return Ok(None);
         };
         if !matches!(

@@ -17960,6 +17960,28 @@ fn reduce_trait_bound_prod_resolves() {
 }
 
 #[test]
+fn user_trait_impl_over_column_resolves() {
+    // S6c-12: a user-defined `impl Trait for Column[i64]` whose body calls the
+    // builtin reductions on `self` type-checks. Before, `self` inside the impl
+    // body was erased to `Column[]`, so `self.sum()` missed the Column
+    // reduction intercept and stayed the abstract trait return `T`, making
+    // `self.sum() + self.sum()` fail "arithmetic operator requires numeric
+    // type, found 'T'". The concrete-container `self_type` fix keeps the
+    // `[i64]` element so `self.sum()` types as `i64`, and the top-level
+    // `c.doubled_sum()` resolves through the impl table.
+    typecheck_ok(
+        "trait Doubler[T] { fn doubled_sum(ref self) -> T; }\n\
+         impl Doubler[i64] for Column[i64] {\n\
+         \x20   fn doubled_sum(ref self) -> i64 { self.sum() + self.sum() }\n\
+         }\n\
+         fn main() {\n\
+         \x20   let c: Column[i64] = Column.from_vec([1, 2, 3]);\n\
+         \x20   println(f\"{c.doubled_sum()}\");\n\
+         }",
+    );
+}
+
+#[test]
 fn method_self_return_type_resolves_to_impl_target() {
     // A method declared `-> Self` returns a value of the concrete impl
     // target (`W`), so the body's tail expression must check against the

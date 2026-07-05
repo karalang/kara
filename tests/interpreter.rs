@@ -19212,6 +19212,37 @@ fn main() {
 }
 
 #[test]
+fn user_trait_impl_over_column_dispatches() {
+    // S6c-12: a user `impl Trait for Column[i64]` method calls the builtin
+    // reductions on `self` and is itself dispatched from a value receiver.
+    // Before, a Column receiver never reached `try_eval_impl_method` (gated to
+    // struct-shaped values) and `value_type_name` returned "unknown", so
+    // `c.doubled_sum()` errored "method not found on type 'unknown'". Covers a
+    // self-calls-another-user-method chain (`quad` → `twice`) and an f64 twin.
+    let out = run_no_errors(
+        r#"
+trait Combo[T] { fn twice(ref self) -> T; fn quad(ref self) -> T; }
+impl Combo[i64] for Column[i64] {
+    fn twice(ref self) -> i64 { self.sum() + self.sum() }
+    fn quad(ref self) -> i64 { self.twice() + self.twice() }
+}
+trait Spread[T] { fn spread(ref self) -> T; }
+impl Spread[f64] for Column[f64] {
+    fn spread(ref self) -> f64 { self.max() - self.min() }
+}
+fn main() {
+    let ci: Column[i64] = Column.from_vec([1, 2, 3, 4]);
+    let cf: Column[f64] = Column.from_vec([1.5, 4.0, 2.5]);
+    println(f"{ci.quad()}");
+    println(f"{cf.spread()}");
+}
+"#,
+    );
+    // quad = 4*sum = 4*10 = 40; spread = 4.0 - 1.5 = 2.5.
+    assert_eq!(out, "40\n2.5\n");
+}
+
+#[test]
 fn stdlib_reduce_trait_bound_fold_column_and_tensor() {
     // S6c: `fold` on the `Reduce` trait surface — a `fn f[C: Reduce[i64]]`
     // body may call `c.fold(init, |a, x| ...)`, dispatched to the concrete

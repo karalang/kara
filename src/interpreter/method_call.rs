@@ -1324,7 +1324,21 @@ impl<'a> super::Interpreter<'a> {
         // Interner, …) keep their native intercepts: those run above this
         // hop, and their `#[compiler_builtin]` methods are never
         // env-registered, so the lookup misses and falls through.
-        if matches!(&obj, Value::Struct { .. } | Value::SharedStruct(_)) {
+        // S6c-12: the handle-backed containers (Column/Tensor/DataFrame) also
+        // reach here for a USER method — their builtin intercepts above
+        // (`try_eval_column_method` / `try_eval_tensor_method` / …) return
+        // `None` for a name they don't own, so only a genuinely user-defined
+        // `impl Trait for Column[T]` method arrives, and builtin names still
+        // win (their intercept ran first). Registration keys it `Column.method`
+        // (last path segment), matching `value_type_name` above.
+        if matches!(
+            &obj,
+            Value::Struct { .. }
+                | Value::SharedStruct(_)
+                | Value::Column { .. }
+                | Value::Tensor { .. }
+                | Value::DataFrame { .. }
+        ) {
             if let Some(v) = self.try_eval_impl_method(object, method, args, span, &obj) {
                 return v;
             }

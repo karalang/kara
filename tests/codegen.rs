@@ -47480,6 +47480,38 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_user_trait_impl_over_column() {
+        // S6c-12: a user-defined `impl Trait for Column[i64]` (and f64) whose
+        // body calls the builtin reductions on `self`, plus another user
+        // method on `self` (`quad` → `twice`). Codegen declares the method as
+        // `Column.<m>`; the fix threads the concrete element args onto the
+        // synthesized `self` param so `self.sum()` (a `SelfValue` receiver)
+        // registers in `column_var_infos` and dispatches to the i64/f64 kernel.
+        // `run` == `build`.
+        let src = r#"
+trait Combo[T] { fn twice(ref self) -> T; fn quad(ref self) -> T; }
+impl Combo[i64] for Column[i64] {
+    fn twice(ref self) -> i64 { self.sum() + self.sum() }
+    fn quad(ref self) -> i64 { self.twice() + self.twice() }
+}
+trait Spread[T] { fn spread(ref self) -> T; fn scaled(ref self, k: T) -> T; }
+impl Spread[f64] for Column[f64] {
+    fn spread(ref self) -> f64 { self.max() - self.min() }
+    fn scaled(ref self, k: f64) -> f64 { self.sum() * k }
+}
+fn main() {
+    let ci: Column[i64] = Column.from_vec([1, 2, 3, 4]);
+    let cf: Column[f64] = Column.from_vec([1.5, 4.0, 2.5]);
+    println(f"{ci.quad()}");
+    println(f"{cf.spread()} {cf.scaled(2.0)}");
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        // quad = 4*sum = 40; spread = 4.0-1.5 = 2.5; scaled = 8.0*2 = 16.
+        assert_eq!(out, "40\n2.5 16\n");
+    }
+
+    #[test]
     fn test_e2e_reduce_trait_bound_fold() {
         // S6c: `fold` on the `Reduce` trait surface, dispatched through a
         // bound-generic `fn f[C: Reduce[i64]]`. The typechecker intercept types

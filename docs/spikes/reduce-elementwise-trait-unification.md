@@ -719,23 +719,46 @@ B-2026-07-02-10..13, see the ledger.
   `reduce_trait_bound_prod_resolves` (typechecker),
   `stdlib_reduce_trait_bound_prod_column_and_tensor` (interpreter),
   `test_e2e_reduce_trait_bound_prod` (codegen).
+- **S6c-12** ✅ **(landed — Slice 1 of the user-impl-over-container epic)** —
+  **user-defined trait impls over `Column[T]`** now work end-to-end (concrete
+  `impl Trait for Column[i64]`/`[f64]`, non-generic method, POD element). A user
+  writes their own trait + `impl` for a Column, calls the builtin reductions
+  (`sum`/`min`/`max`/`mean`/…) and arithmetic on `self`, and calls other user
+  methods on `self` — identical output on `run` == default-auto-par == `build`.
+  The fix was the SAME arg-drop on all three surfaces (element type erased when
+  typing/synthesizing `self` inside the impl body): (1) **typechecker**
+  (`items.rs check_impl_block`) keeps the concrete element args in `self_type`
+  for a Column/Tensor target so `self.sum()` hits the reduction intercept and
+  types as the element, not abstract `T` (scoped to fully-concrete Column/Tensor
+  — struct/enum/generic impls keep their empty-args shape); (2) **interpreter**
+  names Column/Tensor/DataFrame in `value_type_name` and lets a container
+  receiver reach `try_eval_impl_method` (builtin intercepts still run first, so
+  builtin names win); (3) **codegen** threads the concrete target args onto the
+  synthesized `self` param in `make_impl_method_function` so the container-param
+  registration populates `column_var_infos["self"]`, and `try_compile_column_method`
+  accepts a `SelfValue` receiver (not just `Identifier`). Most infra already
+  existed — the impl was already registered (all three surfaces) and codegen
+  already *declared* `Column.<m>`; only the element thread-through was missing.
+  Tests: `user_trait_impl_over_column_resolves` (typechecker),
+  `user_trait_impl_over_column_dispatches` (interpreter),
+  `test_e2e_user_trait_impl_over_column` (codegen). No ledger entry (feature,
+  not a miscompile). Remaining epic slices: Tensor parity (2), trait DEFAULT
+  methods + inherent impls (3), generic container impls (4), heap/String elem (5).
 - **S6c** — remaining: `ElementwiseOrd` user impls; **u64 column/tensor sort**
   (blocked on the interpreter u64 model — see S6c-9 / B-2026-07-04-8, NOT just an
   unsigned scratch compare as previously thought); a `product` DEFAULT body for
   USER `Reduce` impls (needs the numeric-identity mechanism of S6c-10 — the
   bound-generic `prod` on the builtin containers is DONE, S6c-11); blanket
-  `Vec[T]` impls; user trait-impl methods over builtin containers — a
-  **3-surface** gap (re-probed 2026-07-04): even a *concrete* `impl Doubler[i64]
-  for Column[i64] { fn m(ref self) -> i64 { self.sum() + self.sum() } }` is
-  rejected by the **typechecker** ("arithmetic operator requires numeric type,
-  found 'T'" — the impl body's `self.sum()` resolves to the builtin `Reduce`
-  impl's abstract return `T` instead of the concrete element `i64`, so `T + T`
-  is not admitted), in addition to the previously-noted interpreter ("method not
-  found on type 'unknown' — no interpreter dispatch arm") and codegen (loud
-  fall-through) gaps. So this needs (1) concretizing a builtin container's
-  `#[compiler_builtin]` method return type when resolved inside a user impl over
-  that container, then (2) interp + (3) codegen dispatch for user-defined methods
-  on handle-backed containers. Not a contained slice.
+  `Vec[T]` impls; user trait-impl methods over builtin containers — the
+  epic is now **in progress**: the concrete `impl Trait for Column[i64]`/`[f64]`
+  case (the 3-surface gap re-probed 2026-07-04) **landed as S6c-12 (Slice 1)**.
+  Remaining slices of that epic: **Tensor** parity (`impl Trait for Tensor[..]`,
+  Slice 2 — the codegen `self`-registration + `SelfValue`-receiver fix likely
+  needs the tensor twin of `try_compile_column_method`); user trait **DEFAULT**
+  methods over containers + **inherent** `impl Column[i64] { .. }` (Slice 3);
+  **generic** container impls `impl[T: Add] Trait for Column[T]` (Slice 4,
+  reuses `make_generic_impl_method_function` + S6a mono handle plumbing);
+  heap/**String** element + error-path polish (Slice 5).
 
 ---
 

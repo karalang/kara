@@ -468,7 +468,11 @@ pub(super) fn subst_type_params_in_type_expr(
     }
 }
 
-pub(super) fn make_impl_method_function(type_name: &str, method: &Function) -> Function {
+pub(super) fn make_impl_method_function(
+    type_name: &str,
+    method: &Function,
+    target_type: &TypeExpr,
+) -> Function {
     let mut f = method.clone();
     f.name = format!("{}.{}", type_name, method.name);
     // Resolve `Self` in the return type to the concrete target so the
@@ -478,10 +482,28 @@ pub(super) fn make_impl_method_function(type_name: &str, method: &Function) -> F
     }
     if let Some(self_kind) = method.self_param.as_ref() {
         let span = method.span.clone();
+        // S6c-12: for a CONCRETE handle-backed container target
+        // (`impl Trait for Column[i64]` / `Tensor[i64, [n]]`), keep the
+        // element args on `self` so the container-typed-param registration
+        // path populates `column_var_infos`/`tensor_var_infos["self"]` with
+        // the concrete element kind — otherwise `self.sum()` in the body has
+        // no element and can't pick the concrete kernel. Struct/enum targets
+        // keep the bare-name `self` they relied on (element inference runs off
+        // the receiver's instantiation elsewhere), so only Column/Tensor is
+        // threaded here. Mirrors `make_generic_impl_method_function`, which
+        // does the same via the full target expr for the generic case.
+        let self_generic_args = if type_name == "Column" || type_name == "Tensor" {
+            match &target_type.kind {
+                TypeKind::Path(p) => p.generic_args.clone(),
+                _ => None,
+            }
+        } else {
+            None
+        };
         let base = TypeExpr {
             kind: TypeKind::Path(PathExpr {
                 segments: vec![type_name.to_string()],
-                generic_args: None,
+                generic_args: self_generic_args,
                 span: span.clone(),
             }),
             span: span.clone(),

@@ -1677,6 +1677,13 @@ impl<'a> Interpreter<'a> {
             Value::TotalFloat64(_) => "F64".to_string(),
             Value::Atomic(_) => "Atomic".to_string(),
             Value::Set(_) => "Set".to_string(),
+            // S6c-12: name the handle-backed containers so a user-defined
+            // `impl Trait for Column[T]` / `Tensor[T,S]` method dispatches
+            // through `try_eval_impl_method` (keyed `Column.method`) instead
+            // of falling to the "type 'unknown'" no-dispatch-arm error.
+            Value::Column { .. } => "Column".to_string(),
+            Value::Tensor { .. } => "Tensor".to_string(),
+            Value::DataFrame { .. } => "DataFrame".to_string(),
             _ => "unknown".to_string(),
         }
     }

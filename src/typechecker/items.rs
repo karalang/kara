@@ -18,7 +18,9 @@ use super::const_eval::{
     apply_binary, apply_unary, const_value_type, infer_operand_target_ty, integer_to_const_value,
 };
 use super::inference::{find_unbound_const_param, find_unbound_type_param};
-use super::types::{type_display, IntSize, ScrutineeMode, Type, UIntSize, VariantTypeInfo};
+use super::types::{
+    type_display, type_is_fully_concrete, IntSize, ScrutineeMode, Type, UIntSize, VariantTypeInfo,
+};
 use super::{ConstEvalError, LocalTypeScope, TypeErrorKind};
 
 impl<'a> super::TypeChecker<'a> {
@@ -1877,18 +1879,31 @@ impl<'a> super::TypeChecker<'a> {
         // targets keep the by-name `Named { type_name }` shape they relied on
         // (lowering a generic target would fold in `target_args` and shift
         // existing behavior). B-2026-07-03-5.
+        //
+        // S6c-12: a CONCRETE handle-backed container target (`impl Trait for
+        // Column[i64]` / `Tensor[i64, [n]]`) is the one exception that KEEPS
+        // its element args. The Column/Tensor reduction intercepts in
+        // `infer_method_call` key on `args.len() == 1` to compute a builtin
+        // method's return type; with `self` erased to `Column[]` a body call
+        // like `self.sum()` misses the intercept and stays the abstract trait
+        // return `T`, so `self.sum() + self.sum()` errors "found 'T'". Scoped
+        // to fully-concrete Column/Tensor so user-struct/enum/generic impls
+        // (whose empty-args shape the comment above protects) are untouched.
         let self_type = {
             let lowered = self.lower_type_expr(&imp.target_type, &gp);
-            if matches!(
-                lowered,
-                Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char
-            ) {
-                lowered
-            } else {
-                Type::Named {
+            match &lowered {
+                Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char => lowered,
+                Type::Named { name, args }
+                    if (name == "Column" || name == "Tensor")
+                        && !args.is_empty()
+                        && args.iter().all(type_is_fully_concrete) =>
+                {
+                    lowered.clone()
+                }
+                _ => Type::Named {
                     name: type_name.clone(),
                     args: Vec::new(),
-                }
+                },
             }
         };
 

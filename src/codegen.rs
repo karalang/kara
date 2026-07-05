@@ -6613,7 +6613,11 @@ impl<'ctx> Codegen<'ctx> {
                                         if impl_is_generic {
                                             make_generic_impl_method_function(imp, method)
                                         } else {
-                                            make_impl_method_function(&type_name, method)
+                                            make_impl_method_function(
+                                                &type_name,
+                                                method,
+                                                &imp.target_type,
+                                            )
                                         }
                                     });
                                     continue;
@@ -6625,7 +6629,8 @@ impl<'ctx> Codegen<'ctx> {
                                 if !declared_impl_methods.insert(qualified) {
                                     continue;
                                 }
-                                let synth = make_impl_method_function(&type_name, method);
+                                let synth =
+                                    make_impl_method_function(&type_name, method, &imp.target_type);
                                 self.declare_function(&synth)?;
                             }
                         }
@@ -6807,7 +6812,8 @@ impl<'ctx> Codegen<'ctx> {
                                 if self.declare_only_fns.contains(&qualified) {
                                     continue;
                                 }
-                                let synth = make_impl_method_function(&type_name, method);
+                                let synth =
+                                    make_impl_method_function(&type_name, method, &imp.target_type);
                                 self.compile_function(&synth)?;
                             }
                         }
@@ -7050,7 +7056,8 @@ impl<'ctx> Codegen<'ctx> {
                                 if !declared.insert(qualified) {
                                     continue;
                                 }
-                                let synth = make_impl_method_function(&type_name, method);
+                                let synth =
+                                    make_impl_method_function(&type_name, method, &imp.target_type);
                                 self.declare_function(&synth)?;
                             }
                         }
@@ -7212,7 +7219,8 @@ impl<'ctx> Codegen<'ctx> {
                                 if self.declare_only_fns.contains(&qualified) {
                                     continue;
                                 }
-                                let synth = make_impl_method_function(&type_name, method);
+                                let synth =
+                                    make_impl_method_function(&type_name, method, &imp.target_type);
                                 self.compile_function(&synth)?;
                             }
                         }
