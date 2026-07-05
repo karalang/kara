@@ -542,6 +542,42 @@ fn main() {
     }
 
     #[test]
+    fn asan_b04_2_named_fn_map_collect_no_leak() {
+        // B-2026-07-04-2 sub-part 2: a NAMED-FUNCTION `map` arg over a heap
+        // source. The fix wraps `<fn>` in a synthetic body `<fn>(p)`, so each
+        // element flows through `tag`/`nlen` and is pushed. `tag(s) -> s` returns
+        // the String (entry-copied under caller-retains), `nlen(s) -> s.len()`
+        // reads it; `.iter()` borrows, so the source Vec survives. Loops 40× with
+        // >=45-byte payloads for LSan reachability; reads a mapped element each
+        // round to expose any double-free/UAF.
+        assert_clean_asan_run(
+            r#"
+fn tag(s: String) -> String { s }
+fn nlen(s: String) -> i64 { s.len() }
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let w: Vec[String] = Vec[
+            "named-fn-map-payload-alpha-aaaaaaaaaaaaaaaaaa".to_string(),
+            "named-fn-map-payload-bravo-bbbbbbbbbbbbbbbbbb".to_string(),
+            "named-fn-map-payload-charlie-cccccccccccccccc".to_string()
+        ];
+        let mapped: Vec[String] = w.iter().map(tag).collect();
+        let lens: Vec[i64] = w.iter().map(nlen).collect();
+        let m1: String = mapped[1i64];
+        println(f"{mapped.len()} {lens[0]} {lens[2]} {w.len()} {m1}");
+        round = round + 1i64;
+    }
+}
+"#,
+            ["3 45 45 3 named-fn-map-payload-bravo-bbbbbbbbbbbbbbbbbb"]
+                .repeat(40)
+                .as_slice(),
+            "asan_b04_2_named_fn_map_collect_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_fresh_temp_source_enumerate_collect_no_double_free() {
         // B-2026-07-04-5: a collect-adaptor chain whose SOURCE is a fresh-temp
         // call result (`mk().iter()…`) rather than a named local. The for-loop

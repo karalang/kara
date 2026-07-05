@@ -3840,23 +3840,55 @@ impl<'ctx> super::Codegen<'ctx> {
             let step = match method.as_str() {
                 // Zero-argument adaptor.
                 "enumerate" if args.is_empty() => IterAdaptor::Enumerate,
-                // Closure-argument adaptors: the argument must be a
-                // single-`Binding`-param closure so we can inline its body with
-                // the param bound to the element. A named-fn / multi-param /
-                // destructuring argument returns `Ok(None)` (loud dispatch-fail
-                // — B-2026-07-04-2 sub-part 2, still open).
+                // Closure-argument adaptors: the argument is either a
+                // single-`Binding`-param closure (inline its body with the param
+                // bound to the element) or a NAMED-FUNCTION reference
+                // (`.map(double)`, `.filter(is_big)`) — synthesize the wrapping
+                // body `<fn>(<param>)` so the lowering is identical to
+                // `.map(|x| double(x))` (B-2026-07-04-2 sub-part 2). A multi-param
+                // / destructuring closure still returns `Ok(None)` (loud
+                // dispatch-fail — the destructuring residual stays open).
                 "map" | "filter" | "take_while" | "skip_while" | "inspect" if args.len() == 1 => {
-                    let ExprKind::Closure { params, body, .. } = &args[0].value.kind else {
-                        return Ok(None);
+                    let (param, body) = match &args[0].value.kind {
+                        ExprKind::Closure { params, body, .. } => {
+                            if params.len() != 1 {
+                                return Ok(None);
+                            }
+                            let PatternKind::Binding(param) = &params[0].pattern.kind else {
+                                return Ok(None);
+                            };
+                            (param.clone(), (**body).clone())
+                        }
+                        // A named-function reference — a bare `Identifier`
+                        // (`double`) or a qualified `Path` (`math.sq`). Wrap it in
+                        // a fresh single param `p` whose body is `<fn>(p)`. The
+                        // synthetic param name is disambiguated by the current
+                        // chain depth so multiple named-fn stages don't collide
+                        // (the outer `uid` isn't allocated until after the peel).
+                        // A non-callable arg still lowers to `<arg>(p)`, which
+                        // loud-fails at codegen rather than miscompiling.
+                        ExprKind::Identifier(_) | ExprKind::Path { .. } => {
+                            let param =
+                                format!("__mfp_{}_{}", self.indexed_elem_counter, steps.len());
+                            let call = Expr {
+                                kind: ExprKind::Call {
+                                    callee: Box::new(args[0].value.clone()),
+                                    args: vec![CallArg {
+                                        label: None,
+                                        mut_marker: false,
+                                        value: Expr {
+                                            kind: ExprKind::Identifier(param.clone()),
+                                            span: args[0].value.span.clone(),
+                                        },
+                                        span: args[0].value.span.clone(),
+                                    }],
+                                },
+                                span: args[0].value.span.clone(),
+                            };
+                            (param, call)
+                        }
+                        _ => return Ok(None),
                     };
-                    if params.len() != 1 {
-                        return Ok(None);
-                    }
-                    let PatternKind::Binding(param) = &params[0].pattern.kind else {
-                        return Ok(None);
-                    };
-                    let param = param.clone();
-                    let body = (**body).clone();
                     match method.as_str() {
                         "map" => IterAdaptor::Map { param, body },
                         "filter" => IterAdaptor::Filter { param, pred: body },

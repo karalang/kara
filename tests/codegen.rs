@@ -6293,6 +6293,45 @@ fn main() {
     }
 
     #[test]
+    fn e2e_iter_adaptor_named_fn_map_filter_collect_codegen() {
+        // B-2026-07-04-2 sub-part 2: a NAMED-FUNCTION argument to
+        // `map`/`filter`/... in a `collect()` chain (`<src>.iter().map(double)`)
+        // fell through to the loud dispatch-fail under `karac build` (the
+        // pipeline accepted only single-`Binding` closures), though `karac run`
+        // handled it. The fix wraps the named fn in a synthetic body `<fn>(p)`,
+        // so it lowers exactly like `.map(|x| double(x))`. Exercises a POD `map`,
+        // a `filter`, a `filter().map()` chain, a type-changing `map` to a heap
+        // `Vec[String]`, and a named fn CONSUMING a heap element (`.map(nlen)`
+        // over `Vec[String]`) — the source survives (`.iter()` borrows, asserted
+        // via `words.len()`). Distinct synthetic param names per stage (`nf_two`)
+        // avoid collisions. A multi-param / destructuring closure still bails.
+        if let Some(out) = run_program(
+            r#"
+fn double(n: i64) -> i64 { n * 2i64 }
+fn big(n: i64) -> bool { n > 2i64 }
+fn label(n: i64) -> String { n.to_string() }
+fn nlen(s: String) -> i64 { s.len() }
+fn main() {
+    let v: Vec[i64] = Vec[1i64, 2i64, 3i64, 4i64];
+    let a: Vec[i64] = v.iter().map(double).collect();
+    println(f"{a.len()} {a[0]} {a[3]}");
+    let b: Vec[i64] = v.iter().filter(big).collect();
+    println(f"{b.len()} {b[0]} {b[1]}");
+    let c: Vec[i64] = v.iter().filter(big).map(double).collect();
+    println(f"{c.len()} {c[0]} {c[1]}");
+    let d: Vec[String] = v.iter().map(label).collect();
+    println(f"{d.len()} {d[0]}{d[3]}");
+    let words: Vec[String] = Vec["alpha".to_string(), "be".to_string(), "gamma".to_string()];
+    let e: Vec[i64] = words.iter().map(nlen).collect();
+    println(f"{e.len()} {e[0]} {e[1]} {e[2]} {words.len()}");
+}
+"#,
+        ) {
+            assert_eq!(out, "4 2 8\n2 3 4\n2 6 8\n4 14\n3 5 2 5 3\n");
+        }
+    }
+
+    #[test]
     fn e2e_iter_adaptor_identity_collect_to_vec_codegen() {
         // B-2026-07-04-2 sub-part 4: a PLAIN `<src>.iter().collect()` with NO
         // `map`/`filter`/... adaptor (an identity collect) fell through to the
