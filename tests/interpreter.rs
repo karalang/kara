@@ -19299,6 +19299,31 @@ fn main() {
 }
 
 #[test]
+fn user_generic_trait_impl_over_container_dispatches() {
+    // S6c-12 slice 4: a GENERIC container impl (`impl[T: Add] Trait[T] for
+    // Column[T]`/`Tensor`) with a required method, across two element monos.
+    // Locks in the base generic-container-impl feature under the interpreter.
+    let out = run_no_errors(
+        r#"
+trait Doubler[T: Add] { fn doubled_sum(ref self) -> T; }
+impl[T: Add] Doubler[T] for Column[T] {
+    fn doubled_sum(ref self) -> T { self.sum() + self.sum() }
+}
+impl[T: Add] Doubler[T] for Tensor[T, [3]] {
+    fn doubled_sum(ref self) -> T { self.sum() + self.sum() }
+}
+fn main() {
+    let ci: Column[i64] = Column.from_vec([1, 2, 3]);
+    let cf: Column[f64] = Column.from_vec([1.5, 2.5, 3.0]);
+    let ti: Tensor[i64, [3]] = Tensor.from([1, 2, 3]);
+    println(f"{ci.doubled_sum()} {cf.doubled_sum()} {ti.doubled_sum()}");
+}
+"#,
+    );
+    assert_eq!(out, "12 14 12\n");
+}
+
+#[test]
 fn stdlib_reduce_trait_bound_fold_column_and_tensor() {
     // S6c: `fold` on the `Reduce` trait surface — a `fn f[C: Reduce[i64]]`
     // body may call `c.fold(init, |a, x| ...)`, dispatched to the concrete

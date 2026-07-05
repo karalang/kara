@@ -47574,6 +47574,42 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_user_generic_trait_impl_over_container() {
+        // S6c-12 slice 4: a GENERIC container impl `impl[T: Add] Trait[T] for
+        // Column[T]` / `Tensor[T, S]` with an explicit (required) method. Routes
+        // through `make_generic_impl_method_function` (types `self` as the target
+        // expr) + the S6a mono handle plumbing. VERIFIED-WORKING SUBSET: a
+        // Column impl across two element monos (i64 + f64), and a Tensor impl at
+        // i64. `run` == `build`.
+        //
+        // Two residual edges of the generic-container-impl feature are ledgered,
+        // NOT asserted here:
+        //  - B-2026-07-04-15 (typecheck): a generic-container *default* method
+        //    mis-resolves on the 2nd element mono.
+        //  - B-2026-07-04-16 (codegen): a generic *Tensor* impl's `T + T`
+        //    operator lowers as an INTEGER add for a non-i64 (f64) mono under
+        //    `build` → "integer overflow" panic (Column is fine; run is fine).
+        let src = r#"
+trait Doubler[T: Add] { fn doubled_sum(ref self) -> T; }
+impl[T: Add] Doubler[T] for Column[T] {
+    fn doubled_sum(ref self) -> T { self.sum() + self.sum() }
+}
+impl[T: Add] Doubler[T] for Tensor[T, [3]] {
+    fn doubled_sum(ref self) -> T { self.sum() + self.sum() }
+}
+fn main() {
+    let ci: Column[i64] = Column.from_vec([1, 2, 3]);
+    let cf: Column[f64] = Column.from_vec([1.5, 2.5, 3.0]);
+    let ti: Tensor[i64, [3]] = Tensor.from([1, 2, 3]);
+    println(f"{ci.doubled_sum()} {cf.doubled_sum()} {ti.doubled_sum()}");
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        // Column sum(1,2,3)=6 → 12; sum(1.5,2.5,3.0)=7.0 → 14; Tensor i64 → 12.
+        assert_eq!(out, "12 14 12\n");
+    }
+
+    #[test]
     fn test_e2e_reduce_trait_bound_fold() {
         // S6c: `fold` on the `Reduce` trait surface, dispatched through a
         // bound-generic `fn f[C: Reduce[i64]]`. The typechecker intercept types

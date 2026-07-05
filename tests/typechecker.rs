@@ -18021,6 +18021,25 @@ fn user_trait_default_method_over_container_resolves() {
 }
 
 #[test]
+fn user_generic_trait_impl_over_column_resolves() {
+    // S6c-12 slice 4: a GENERIC container impl `impl[T: Add] Trait[T] for
+    // Column[T]` with a required method resolves across two element monos
+    // (i64 + f64) — the base generic-container-impl feature. (The default-method
+    // twin over ≥2 monos is the residual edge B-2026-07-04-15.)
+    typecheck_ok(
+        "trait Doubler[T: Add] { fn doubled_sum(ref self) -> T; }\n\
+         impl[T: Add] Doubler[T] for Column[T] {\n\
+         \x20   fn doubled_sum(ref self) -> T { self.sum() + self.sum() }\n\
+         }\n\
+         fn main() {\n\
+         \x20   let ci: Column[i64] = Column.from_vec([1, 2, 3]);\n\
+         \x20   let cf: Column[f64] = Column.from_vec([1.5, 2.5, 3.0]);\n\
+         \x20   println(f\"{ci.doubled_sum()} {cf.doubled_sum()}\");\n\
+         }",
+    );
+}
+
+#[test]
 fn method_self_return_type_resolves_to_impl_target() {
     // A method declared `-> Self` returns a value of the concrete impl
     // target (`W`), so the body's tail expression must check against the

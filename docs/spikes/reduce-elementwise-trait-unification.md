@@ -777,7 +777,27 @@ B-2026-07-02-10..13, see the ledger.
   tracked here, not forced. (`karac run` executes past the conflict warning, so
   it "works" under run only — a check/build-vs-run divergence by the run-executes-
   -past-errors design, not a soundness bug.)
-  Remaining epic slices: generic container impls (4), heap/String elem (5).
+  **Slice 4 ✅ (landed — base works, two edges ledgered) — generic container
+  impls.** `impl[T: Add] Trait[T] for Column[T]` / `Tensor[T, S]` routes through
+  the existing `make_generic_impl_method_function` (types `self` as the target
+  expr `Column[T]`) + the S6a mono handle plumbing — both already complete. The
+  BASE feature works and is locked in: a generic **Column** impl with a required
+  method compiles and runs correctly across TWO element monos (i64 + f64,
+  `run` == `build`), and a generic **Tensor** impl works at i64. Tests:
+  `user_generic_trait_impl_over_column_resolves` (typechecker),
+  `user_generic_trait_impl_over_container_dispatches` (interpreter),
+  `test_e2e_user_generic_trait_impl_over_container` (codegen). Probing this slice
+  surfaced **two residual edges**, both ledgered (not forced — subtler than a
+  slice each): **B-2026-07-04-15** (typecheck) — a generic-container *default*
+  method mis-resolves at the call site on the 2nd element mono ("no method on
+  type 'Column'"); container-specific (user structs fine), default-specific
+  (required methods fine), run works. **B-2026-07-04-16** (codegen, medium) — a
+  generic *Tensor* impl's `T + T` operator lowers as an INTEGER add for a
+  non-i64 (f64) mono under `build` → "integer overflow" panic (Column is fine;
+  run is fine); the Tensor mono doesn't thread the element into the operator the
+  way Column does (element-binding or Tensor[i64]/Tensor[f64] mangle-collision in
+  the generic-impl-method path). Both are follow-on fixes.
+  Remaining epic slices: heap/String elem (5); + the two ledgered edges above.
 - **S6c** — remaining: `ElementwiseOrd` user impls; **u64 column/tensor sort**
   (blocked on the interpreter u64 model — see S6c-9 / B-2026-07-04-8, NOT just an
   unsigned scratch compare as previously thought); a `product` DEFAULT body for
@@ -790,10 +810,11 @@ B-2026-07-02-10..13, see the ledger.
   as Slice 3** (they already worked — slice 3 is regression coverage). The
   **inherent** `impl Column[i64] { .. }` case is a separate impl-overlap wall
   (documented under S6c-12 Slice 3), needing method-granular overlap admission.
-  Remaining slices of that epic:
-  **generic** container impls `impl[T: Add] Trait for Column[T]` (Slice 4,
-  reuses `make_generic_impl_method_function` + S6a mono handle plumbing);
-  heap/**String** element + error-path polish (Slice 5).
+  **Generic** container impls **landed as Slice 4** (base works; two residual
+  edges ledgered B-2026-07-04-15 typecheck-default-multi-mono + B-2026-07-04-16
+  codegen-Tensor-non-i64-operator). Remaining slices of that epic:
+  heap/**String** element + error-path polish (Slice 5); plus the two ledgered
+  edges (B-15/B-16) as focused fixes.
 
 ---
 
