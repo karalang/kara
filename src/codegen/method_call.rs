@@ -3581,6 +3581,30 @@ impl<'ctx> super::Codegen<'ctx> {
                     .as_ref()
                     .map(|gp| gp.params.len())
                     .and_then(|n_params| {
+                        if n_params == 0 {
+                            return None;
+                        }
+                        // B-2026-07-04-16: a handle-backed container receiver
+                        // (`Column[T]` / `Tensor[T, S]`) binds the impl's leading
+                        // type param from its REGISTERED element type — the
+                        // annotation-derived `column_var_infos` / `tensor_var_infos`
+                        // entry — NOT from the span-recorded instantiation used
+                        // below. The recorded instantiation's element is the
+                        // constructor LITERAL's default: an `f32` tensor built as
+                        // `Tensor.from([1.0, …])` records `f64` there (the array
+                        // literal defaults to `f64`, while the binding's `f32`
+                        // annotation drives the actual narrow storage). Binding `T`
+                        // from that stale `f64` made `self.sum()` read the `f32`
+                        // buffer with an `f64` stride → silent garbage under
+                        // `build` for BOTH Column and Tensor. The registered
+                        // element is authoritative (it drives the real load
+                        // widths), so source `T` from it. The element is always the
+                        // container's leading type param, so a single-element
+                        // `explicit` prefix binds it and leaves any method-own
+                        // params to be inferred from the other args.
+                        if let Some(arg) = self.container_receiver_elem_arg(object) {
+                            return Some(vec![arg]);
+                        }
                         // Recover the receiver's concrete struct instantiation
                         // (`Box[f64]`). Identifier receivers (`b.get()`) and
                         // `self` receivers (a nested `self.hi()` inside another
@@ -3603,7 +3627,24 @@ impl<'ctx> super::Codegen<'ctx> {
                             return None;
                         };
                         let args = p.generic_args.as_ref()?;
-                        (args.len() <= n_params && !args.is_empty()).then(|| args.clone())
+                        // A `Tensor[T, [3]]` receiver's recorded instantiation
+                        // carries a SHAPE arg (`[3]`) alongside the element type
+                        // arg. A `Shape` arg is shape-kinded — it never binds a
+                        // type/const param, and the mono explicit loop already
+                        // skips it — but counting it here would inflate
+                        // `args.len()` past the `<= n_params` gate. Count only the
+                        // binding (`Type`/`Const`) args, and pass that filtered
+                        // list so a shape never mis-zips against a formal type
+                        // param. (Reached only for a fresh-temp container receiver
+                        // — an identifier / `self` container receiver already
+                        // returned above via the registered element.)
+                        let binding_args: Vec<GenericArg> = args
+                            .iter()
+                            .filter(|a| !matches!(a, GenericArg::Shape(_)))
+                            .cloned()
+                            .collect();
+                        (binding_args.len() <= n_params && !binding_args.is_empty())
+                            .then_some(binding_args)
                     });
                 return self.compile_generic_call(
                     &qualified,
@@ -3624,6 +3665,67 @@ impl<'ctx> super::Codegen<'ctx> {
              or mark the test `#[ignore]` if the method is genuinely deferred)",
             method, receiver_desc
         ))
+    }
+
+    /// For a handle-backed container receiver (`Column[T]` / `Tensor[T, S]`)
+    /// bound to a variable / `self`, build the `GenericArg` that binds the
+    /// impl's leading type param from the container's REGISTERED element type
+    /// (`column_var_infos` / `tensor_var_infos`, seeded from the binding's
+    /// annotation). This is the authoritative element — it drives the actual
+    /// load/store widths — unlike the span-recorded instantiation, whose
+    /// element is the constructor literal's default (`f64` for a narrow-`f32`
+    /// tensor). Used by the generic user-impl-method dispatch to bind `T`
+    /// (B-2026-07-04-16). Returns `None` for a non-container receiver or one
+    /// whose element isn't a primitive we can name.
+    fn container_receiver_elem_arg(&self, object: &Expr) -> Option<GenericArg> {
+        let name = match &object.kind {
+            ExprKind::Identifier(n) => n.as_str(),
+            ExprKind::SelfValue => "self",
+            _ => return None,
+        };
+        let (elem, unsigned) = if let Some(ti) = self.tensor_var_infos.get(name) {
+            (ti.elem, ti.elem_unsigned)
+        } else if let Some(ci) = self.column_var_infos.get(name) {
+            (ci.elem, ci.elem_unsigned)
+        } else {
+            return None;
+        };
+        let prim = self.primitive_type_name_for_llvm(elem, unsigned)?;
+        Some(GenericArg::Type(TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec![prim],
+                generic_args: None,
+                span: object.span.clone(),
+            }),
+            span: object.span.clone(),
+        }))
+    }
+
+    /// Kāra primitive type name for a numeric LLVM element type — `f32` / `f64`
+    /// / `i8`…`i64` / `u8`…`u64` / `bool`. `unsigned` disambiguates the int
+    /// width's signedness (the `IntType` alone can't). `None` for a
+    /// non-primitive LLVM type (e.g. an aggregate element). Companion to
+    /// [`Self::container_receiver_elem_arg`].
+    fn primitive_type_name_for_llvm(
+        &self,
+        ty: BasicTypeEnum<'ctx>,
+        unsigned: bool,
+    ) -> Option<String> {
+        if ty == self.context.f32_type().into() {
+            return Some("f32".to_string());
+        }
+        if ty == self.context.f64_type().into() {
+            return Some("f64".to_string());
+        }
+        if let BasicTypeEnum::IntType(it) = ty {
+            let w = it.get_bit_width();
+            if w == 1 {
+                return Some("bool".to_string());
+            }
+            let base = if unsigned { 'u' } else { 'i' };
+            return Some(format!("{base}{w}"));
+        }
+        None
     }
 
     /// Lower `<string>.chars().collect()` to the already-supported

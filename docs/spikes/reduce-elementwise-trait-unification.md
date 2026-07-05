@@ -787,17 +787,32 @@ B-2026-07-02-10..13, see the ledger.
   `user_generic_trait_impl_over_column_resolves` (typechecker),
   `user_generic_trait_impl_over_container_dispatches` (interpreter),
   `test_e2e_user_generic_trait_impl_over_container` (codegen). Probing this slice
-  surfaced **two residual edges**, both ledgered (not forced — subtler than a
-  slice each): **B-2026-07-04-15** (typecheck) — a generic-container *default*
-  method mis-resolves at the call site on the 2nd element mono ("no method on
-  type 'Column'"); container-specific (user structs fine), default-specific
-  (required methods fine), run works. **B-2026-07-04-16** (codegen, medium) — a
-  generic *Tensor* impl's `T + T` operator lowers as an INTEGER add for a
-  non-i64 (f64) mono under `build` → "integer overflow" panic (Column is fine;
-  run is fine); the Tensor mono doesn't thread the element into the operator the
-  way Column does (element-binding or Tensor[i64]/Tensor[f64] mangle-collision in
-  the generic-impl-method path). Both are follow-on fixes.
-  Remaining epic slices: heap/String elem (5); + the two ledgered edges above.
+  surfaced **two residual edges**: **B-2026-07-04-15** (typecheck, still open) —
+  a generic-container *default* method mis-resolves at the call site on the 2nd
+  element mono ("no method on type 'Column'"); container-specific (user structs
+  fine), default-specific (required methods fine), run works. **B-2026-07-04-16**
+  (codegen, medium) — **✅ FIXED (Slice 4a).**
+  **Slice 4a ✅ (landed) — B-2026-07-04-16, generic container impl operator
+  element-width.** A generic `impl[T: Add] Trait[T] for Tensor[T, [3]]` whose body
+  applies an operator to the element (`self.sum() + self.sum()`) miscompiled under
+  `build`. TWO coupled root causes in the generic-user-impl-method dispatch
+  (`compile_method_call`, method_call.rs), both in how the impl's leading type param
+  `T` is bound from the receiver: **(1)** a `Tensor[T, [3]]` receiver's recorded
+  instantiation carries a **Shape** arg (`[3]`) beside the element type arg, and
+  counting it tripped the `explicit`-binding `<= n_params` gate — so `T` was left
+  UNBOUND and defaulted to `i64`, making an `f64` Tensor's `T + T` lower as a checked
+  **integer** add → "integer overflow" (Column, a single-arg instantiation, was
+  unaffected — the container asymmetry). **(2)** Even once bound, `T` was sourced from
+  that span-recorded instantiation, whose element is the constructor **literal's
+  default** (`f64` for a narrow-`f32` tensor built from `[1.0, …]`) — so an `f32`
+  container silently read its buffer with an `f64` stride → **silent garbage** for
+  BOTH Column and Tensor. Fix: source `T` from the container's REGISTERED
+  (annotation-derived) element type (`column_var_infos` / `tensor_var_infos`, which
+  drive the real load widths) via a new `container_receiver_elem_arg` helper, and
+  exclude Shape args from the fresh-temp fallback's gate count. Verified run ==
+  autopar == build across f64/f32/i32/u32/u8 for both containers; test
+  `test_e2e_user_generic_trait_impl_over_tensor_operator_widths`.
+  Remaining epic slices: heap/String elem (5); + B-15 (typecheck default-multi-mono).
 - **S6c** — remaining: `ElementwiseOrd` user impls; **u64 column/tensor sort**
   (blocked on the interpreter u64 model — see S6c-9 / B-2026-07-04-8, NOT just an
   unsigned scratch compare as previously thought); a `product` DEFAULT body for
@@ -810,11 +825,12 @@ B-2026-07-02-10..13, see the ledger.
   as Slice 3** (they already worked — slice 3 is regression coverage). The
   **inherent** `impl Column[i64] { .. }` case is a separate impl-overlap wall
   (documented under S6c-12 Slice 3), needing method-granular overlap admission.
-  **Generic** container impls **landed as Slice 4** (base works; two residual
-  edges ledgered B-2026-07-04-15 typecheck-default-multi-mono + B-2026-07-04-16
-  codegen-Tensor-non-i64-operator). Remaining slices of that epic:
-  heap/**String** element + error-path polish (Slice 5); plus the two ledgered
-  edges (B-15/B-16) as focused fixes.
+  **Generic** container impls **landed as Slice 4** (base works), and the
+  generic-impl operator element-width miscompile **B-2026-07-04-16 landed FIXED as
+  Slice 4a** (Shape-arg gate + registered-element sourcing; covers f64/f32/narrow
+  ints on both containers). Remaining slices of that epic: heap/**String** element +
+  error-path polish (Slice 5); plus the still-open **B-2026-07-04-15**
+  (typecheck default-multi-mono) as a focused fix.
 
 ---
 

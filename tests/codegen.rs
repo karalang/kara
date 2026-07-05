@@ -47578,17 +47578,8 @@ fn main() {
         // S6c-12 slice 4: a GENERIC container impl `impl[T: Add] Trait[T] for
         // Column[T]` / `Tensor[T, S]` with an explicit (required) method. Routes
         // through `make_generic_impl_method_function` (types `self` as the target
-        // expr) + the S6a mono handle plumbing. VERIFIED-WORKING SUBSET: a
-        // Column impl across two element monos (i64 + f64), and a Tensor impl at
-        // i64. `run` == `build`.
-        //
-        // Two residual edges of the generic-container-impl feature are ledgered,
-        // NOT asserted here:
-        //  - B-2026-07-04-15 (typecheck): a generic-container *default* method
-        //    mis-resolves on the 2nd element mono.
-        //  - B-2026-07-04-16 (codegen): a generic *Tensor* impl's `T + T`
-        //    operator lowers as an INTEGER add for a non-i64 (f64) mono under
-        //    `build` → "integer overflow" panic (Column is fine; run is fine).
+        // expr) + the S6a mono handle plumbing. Column across two element monos
+        // (i64 + f64) and a Tensor at i64. `run` == `build`.
         let src = r#"
 trait Doubler[T: Add] { fn doubled_sum(ref self) -> T; }
 impl[T: Add] Doubler[T] for Column[T] {
@@ -47607,6 +47598,47 @@ fn main() {
         let out = run_program(src).expect("program should compile and run");
         // Column sum(1,2,3)=6 → 12; sum(1.5,2.5,3.0)=7.0 → 14; Tensor i64 → 12.
         assert_eq!(out, "12 14 12\n");
+    }
+
+    #[test]
+    fn test_e2e_user_generic_trait_impl_over_tensor_operator_widths() {
+        // B-2026-07-04-16: a generic `impl[T: Add] Trait[T] for Tensor[T, S]`
+        // (and the Column twin) whose body applies an operator to the element
+        // type (`self.sum() + self.sum()`). Two coupled codegen fixes:
+        //   1. The impl `T` was left UNBOUND for a Tensor receiver — the
+        //      receiver's recorded instantiation carries a SHAPE arg (`[3]`)
+        //      alongside the element, and counting it tripped the `explicit`
+        //      binding's `<= n_params` gate. `T` then defaulted to `i64`, so an
+        //      `f64` Tensor's `T + T` lowered as a CHECKED INTEGER add →
+        //      "integer overflow" under `build` (Column, a single-arg
+        //      instantiation, was unaffected).
+        //   2. Even bound, the impl `T` was sourced from the span-recorded
+        //      instantiation, whose element is the constructor LITERAL's default
+        //      (`f64` for a narrow-`f32` tensor built from `[1.0, …]`). Reading
+        //      the `f32` buffer with that `f64` stride produced SILENT GARBAGE
+        //      for both Column and Tensor. `T` is now sourced from the
+        //      container's registered (annotation-derived) element type.
+        // Exercises f64, f32, and a narrow unsigned int across BOTH containers.
+        let src = r#"
+trait Doubler[T: Add] { fn doubled_sum(ref self) -> T; }
+impl[T: Add] Doubler[T] for Tensor[T, [3]] {
+    fn doubled_sum(ref self) -> T { self.sum() + self.sum() }
+}
+impl[T: Add] Doubler[T] for Column[T] {
+    fn doubled_sum(ref self) -> T { self.sum() + self.sum() }
+}
+fn main() {
+    let tf: Tensor[f64, [3]] = Tensor.from([1.5, 2.5, 3.0]);
+    let ts: Tensor[f32, [3]] = Tensor.from([1.0, 2.0, 3.0]);
+    let tu: Tensor[u32, [3]] = Tensor.from([10u32, 20u32, 30u32]);
+    let cf: Column[f32] = Column.from_vec([1.0, 2.0, 3.0]);
+    println(f"{tf.doubled_sum()} {ts.doubled_sum()} {tu.doubled_sum()} {cf.doubled_sum()}");
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        // Tensor f64 sum=7.0 → 14; f32 sum=6.0 → 12; u32 sum=60 → 120;
+        // Column f32 sum=6.0 → 12.
+        assert_eq!(out, "14 12 120 12\n");
     }
 
     #[test]
