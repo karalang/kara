@@ -173,6 +173,55 @@ impl<'a> super::Interpreter<'a> {
         false
     }
 
+    /// Q4 literal promotion for the tree-walker (B-2026-07-04-12): when one
+    /// operand is a *direct, unsuffixed integer literal* (`ExprKind::Integer(_,
+    /// None)`) and the other evaluates to a `Float`, promote the literal's
+    /// `Value::Int` to `Value::Float` so the following `eval_binary` sees a
+    /// homogeneous float pair — matching the typechecker (which re-types the
+    /// literal to `f64`) and codegen (which lowers it as `1.0`). Only the
+    /// literal side is promoted, and only for the arithmetic / comparison /
+    /// equality ops the typechecker itself promotes; a non-literal `Int` operand
+    /// (a genuine int/float variable mix — a hard type error since
+    /// B-2026-07-04-11) is left untouched so it still errors under `run` rather
+    /// than being silently coerced. A float literal is never demoted to an int
+    /// (mirroring the typechecker's `can_promote` guard).
+    pub(crate) fn promote_int_literal_for_float_peer(
+        &self,
+        op: &BinOp,
+        left: &Expr,
+        right: &Expr,
+        l: Value,
+        r: Value,
+    ) -> (Value, Value) {
+        let is_promotable = matches!(
+            op,
+            BinOp::Add
+                | BinOp::Sub
+                | BinOp::Mul
+                | BinOp::Div
+                | BinOp::Mod
+                | BinOp::Lt
+                | BinOp::LtEq
+                | BinOp::Gt
+                | BinOp::GtEq
+                | BinOp::Eq
+                | BinOp::NotEq
+        );
+        if !is_promotable {
+            return (l, r);
+        }
+        let is_unsuffixed_int_lit = |e: &Expr| matches!(&e.kind, ExprKind::Integer(_, None));
+        match (&l, &r) {
+            (Value::Int(iv), Value::Float(_)) if is_unsuffixed_int_lit(left) => {
+                (Value::Float(*iv as f64), r)
+            }
+            (Value::Float(_), Value::Int(iv)) if is_unsuffixed_int_lit(right) => {
+                (l, Value::Float(*iv as f64))
+            }
+            _ => (l, r),
+        }
+    }
+
     pub(crate) fn eval_binary(
         &mut self,
         op: &BinOp,

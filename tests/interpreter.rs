@@ -603,6 +603,58 @@ fn test_float_arithmetic() {
 }
 
 #[test]
+fn test_float_int_literal_promotion() {
+    // B-2026-07-04-12: a float operand + an unsuffixed integer LITERAL — the
+    // typechecker promotes the `1` to `f64` (`a + 1` type-checks) and codegen
+    // lowers it as `1.0`, but the tree-walker used to evaluate the bare literal
+    // as `Value::Int` and error on the `(Float, Int)` pair. `run` must now match
+    // check + `build`: the literal promotes to float. Covers both operand
+    // orders, every arithmetic op, a comparison, an `f32` receiver, and a
+    // literal on the receiver side of a method arg.
+    assert_eq!(
+        run(r#"
+        fn main() {
+            let a: f64 = 2.0;
+            println(f"{a + 1} {1 + a} {a * 3} {a - 1} {a / 2}");
+            println(f"{a < 5} {a >= 2}");
+            let f: f32 = 1.5;
+            println(f"{f + 2}");
+        }
+    "#),
+        "3 3 6 1 1\ntrue true\n3.5\n"
+    );
+}
+
+#[test]
+fn test_int_arithmetic_literal_unaffected_by_float_promotion() {
+    // The promotion is gated on a FLOAT peer — a pure integer expression with a
+    // literal is untouched (stays i64, no accidental float widening).
+    assert_eq!(
+        run("fn main() { let n: i64 = 7; println(f\"{n + 1} {2 * n} {n / 2}\"); }"),
+        "8 14 3\n"
+    );
+}
+
+#[test]
+fn test_float_compound_assign_int_literal_promotion() {
+    // B-2026-07-04-12 also covers the CompoundAssign path (`x += 1` with
+    // `x: f64`), which evaluates its binop via a separate `eval_binary` call.
+    assert_eq!(
+        run(r#"
+        fn main() {
+            let mut a: f64 = 2.0;
+            a += 1;
+            a *= 2;
+            a -= 3;
+            a /= 2;
+            println(f"{a}");
+        }
+    "#),
+        "1.5\n"
+    );
+}
+
+#[test]
 fn test_boolean_logic() {
     assert_eq!(run("fn main() { println(true and false); }"), "false\n");
     assert_eq!(run("fn main() { println(true or false); }"), "true\n");

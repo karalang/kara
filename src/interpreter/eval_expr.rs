@@ -85,6 +85,19 @@ impl<'a> super::Interpreter<'a> {
                 if self.pending_cf.is_some() {
                     return r;
                 }
+                // Q4 literal promotion parity (B-2026-07-04-12): the typechecker
+                // re-types an unsuffixed integer literal to `f64` when its peer
+                // operand is a float (`a + 1` with `a: f64` type-checks and
+                // codegen lowers the `1` as `1.0`), but the tree-walker
+                // evaluates the bare literal as `Value::Int`, so without this
+                // the `(Float, Int)` pair falls through `eval_binary` to a hard
+                // "operator not defined for Int and Float" error under `karac
+                // run` only. Promote the *literal* side to match — gated on the
+                // AST shape (a direct unsuffixed `Integer`), exactly like the
+                // typechecker's Q4 rule, so a genuine int/float VARIABLE mix
+                // (now a hard type error, B-2026-07-04-11) still surfaces rather
+                // than being silently coerced.
+                let (l, r) = self.promote_int_literal_for_float_peer(op, left, right, l, r);
                 self.eval_binary(op, l, r, &expr.span)
             }
             ExprKind::Unary { op, operand } => {

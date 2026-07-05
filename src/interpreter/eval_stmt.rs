@@ -837,6 +837,11 @@ impl<'a> super::Interpreter<'a> {
                     CompoundOp::Shl => BinOp::Shl,
                     CompoundOp::Shr => BinOp::Shr,
                 };
+                // Q4 literal promotion (B-2026-07-04-12): `x += 1` with
+                // `x: f64` — the `1` promotes to `f64` under check + codegen, so
+                // the interpreter must too, or `run` errors on `(Float, Int)`.
+                let (current, rhs) =
+                    self.promote_int_literal_for_float_peer(&bin_op, target, value, current, rhs);
                 let result = self.eval_binary(&bin_op, current, rhs, &stmt.span);
                 // Route through `assign_to_place` so compound assignment works
                 // on field / index / nested targets (`o.count += 1`,
@@ -913,6 +918,19 @@ impl<'a> super::Interpreter<'a> {
             if args.len() == 2 {
                 let lhs = self.eval_expr_inner(&args[0].value);
                 let rhs = self.eval_expr_inner(&args[1].value);
+                // Q4 literal promotion (B-2026-07-04-12): the operator lowering
+                // rewrites `a + 1` into `<type>.add(a, 1)`, so scalar binops
+                // reach the interpreter HERE, not via the `ExprKind::Binary`
+                // arm. Apply the same int-literal→float promotion so `a + 1`
+                // with `a: f64` matches check + codegen (which lower the `1` as
+                // `1.0`) instead of erroring on a `(Float, Int)` pair.
+                let (lhs, rhs) = self.promote_int_literal_for_float_peer(
+                    &op,
+                    &args[0].value,
+                    &args[1].value,
+                    lhs,
+                    rhs,
+                );
                 return Some(self.eval_binary(&op, lhs, rhs, span));
             }
         }
