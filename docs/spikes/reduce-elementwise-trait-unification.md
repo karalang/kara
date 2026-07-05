@@ -697,11 +697,14 @@ B-2026-07-02-10..13, see the ledger.
   the deliberately-permissive `types_compatible` (which treats `Int`/`Float` as
   compatible). **Fixed** (`444e6cb0`, **B-2026-07-04-11**): the arm now rejects a
   cross-domain int/float mix loudly, so all three surfaces agree. A second,
-  pre-existing divergence was ledgered (**B-2026-07-04-12**, open): `f64 + <int
-  literal>` (e.g. `a + 1`) works on check+build (Q4 literal promotion) but errors
-  under `run` (the interpreter doesn't honor the promoted literal type). `product`
-  itself stays blocked on a numeric-identity mechanism (a `One`/`Zero` trait or
-  fold-seed coercion — the latter is what B-2026-07-04-12 would need too).
+  pre-existing divergence was also **fixed** (`b8e3d3ab`, **B-2026-07-04-12**):
+  `f64 + <int literal>` (e.g. `a + 1`) type-checked and built correctly (Q4
+  literal promotion) but errored under `run` — the tree-walker now honors the
+  promotion (`promote_int_literal_for_float_peer` at the three scalar-arith sites:
+  `dispatch_lowered_op`, `CompoundAssign`, `ExprKind::Binary`). `product` itself
+  stays blocked on a numeric-identity mechanism (a `One`/`Zero` trait, or extending
+  the same literal-promotion idea to a fold seed so `fold(1, |a,x| a*x)` seeds `1`
+  as `T`).
 - **S6c** — remaining: `ElementwiseOrd` user impls; **u64 column/tensor sort**
   (blocked on the interpreter u64 model — see S6c-9 / B-2026-07-04-8, NOT just an
   unsigned scratch compare as previously thought); **`product` on the `Reduce`
