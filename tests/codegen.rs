@@ -27726,6 +27726,106 @@ fn main() { println(go(5i64)); }
         }
     }
 
+    #[test]
+    fn test_e2e_bounds_elision_length_pin_nested_block_fill() {
+        // Nested-block fill: the DP buffer is built fresh inside an outer loop's
+        // body (per-iteration rebuild). The pin is recognised there and elides
+        // the inner scan; correctness proves every rolling read landed right.
+        // 3 iterations × unique_paths(3,7)=28 → 84.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut acc = 0i64;
+    let mut k = 0i64;
+    while k < 3i64 {
+        let mut dp: Vec[i64] = Vec.new();
+        let mut j = 0i64;
+        while j < 7i64 { dp.push(1i64); j = j + 1i64; }
+        let mut i = 1i64;
+        while i < 3i64 {
+            let mut c = 1i64;
+            while c < 7i64 { dp[c] = dp[c] + dp[c - 1i64]; c = c + 1i64; }
+            i = i + 1i64;
+        }
+        acc = acc + dp[6i64];
+        k = k + 1i64;
+    }
+    println(acc);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "84");
+        }
+    }
+
+    #[test]
+    fn test_e2e_bounds_elision_length_pin_nested_shadow_vec_still_checks() {
+        // Soundness: a top-level fill pins (n, dp); a nested block re-binds `dp`
+        // to an EMPTY Vec and index-reads it. The name-keyed pin must NOT apply
+        // to the shadow — the exactly-once / rebind gate refuses it and the
+        // empty-Vec read panics rather than reading out of bounds. (Regression
+        // for a shadowing hole in the shipped elision.)
+        if let Some(c) = run_program_capturing(
+            r#"
+fn go(n: i64) -> i64 {
+    let mut dp: Vec[i64] = Vec.new();
+    let mut j = 0i64;
+    while j < n { dp.push(1i64); j = j + 1i64; }
+    let mut acc = 0i64;
+    let mut once = 1i64;
+    while once > 0i64 {
+        let mut dp: Vec[i64] = Vec.new();
+        let mut d = 0i64;
+        while d < n { acc = acc + dp[d]; d = d + 1i64; }
+        once = 0i64;
+    }
+    acc
+}
+fn main() { println(go(5i64)); }
+"#,
+        ) {
+            assert!(
+                !c.status.success(),
+                "nested shadow of the pinned Vec must keep the check (panic), got stdout={:?}",
+                c.stdout
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_bounds_elision_length_pin_nested_shadow_bound_still_checks() {
+        // Soundness: a nested block re-binds the BOUND var `n` larger; `dp[c]`
+        // under `while c < n` would read past `dp.len()`. The pin must NOT fire
+        // (bound-ident rebind detected) — the program panics instead of silently
+        // reading garbage. (Regression for the silent-wrong-answer variant.)
+        if let Some(c) = run_program_capturing(
+            r#"
+fn go(n: i64) -> i64 {
+    let mut dp: Vec[i64] = Vec.new();
+    let mut j = 0i64;
+    while j < n { dp.push(1i64); j = j + 1i64; }
+    let mut acc = 0i64;
+    let mut once = 1i64;
+    while once > 0i64 {
+        let n = 20i64;
+        let mut c = 0i64;
+        while c < n { acc = acc + dp[c]; c = c + 1i64; }
+        once = 0i64;
+    }
+    acc
+}
+fn main() { println(go(3i64)); }
+"#,
+        ) {
+            assert!(
+                !c.status.success(),
+                "nested shadow of the bound var must keep the check (panic), got stdout={:?}",
+                c.stdout
+            );
+        }
+    }
+
     // ── ? operator codegen ───────────────────────────────────────────────────
 
     #[test]

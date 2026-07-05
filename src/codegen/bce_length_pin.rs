@@ -57,7 +57,7 @@
 
 use crate::ast::*;
 use crate::resolver::SpanKey;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// A pure-arithmetic loop bound, normalised to a span-free canonical form so the
 /// fill loop's bound and a later guard's bound compare structurally even across
@@ -177,11 +177,42 @@ struct Fill {
 /// after the fill loop.
 pub(crate) fn compute_vec_length_pins(body: &Block) -> HashMap<SpanKey, VecLengthPin> {
     let mut out = HashMap::new();
-    let stmts = &body.stmts;
+    // Whole-function binding counts. A pin is name-keyed on its Vec and stays
+    // active to end of function, so it is only sound when that Vec name is bound
+    // EXACTLY ONCE in the whole function — otherwise the pin could match a
+    // different, same-named Vec in a sibling / outer scope (which was never
+    // proven long enough) and elide a genuine OOB. This is what makes recursing
+    // into nested blocks below safe (a nested `let dp` fill whose name also
+    // appears at the outer level is bound twice → no pin).
+    let whole = region_bindings(&body.stmts, &body.final_expr);
+    // Recognise fills in the function body AND every nested block (per-iteration
+    // rebuilds `while k { let mut dp = …; fill; use }`, DP inside an `if` arm,
+    // …). Each block is analysed on its OWN statement list; a Vec's scope — and
+    // thus the invariance region — is the rest of its declaring block.
+    for_each_block(body, &mut |block| {
+        analyze_block_pins(block, &whole, &mut out)
+    });
+    out
+}
+
+/// Run the per-block fill recognition on ONE block's statement list (no
+/// recursion — `for_each_block` drives descent). Records a pin for every
+/// counted-fill Vec declared directly in `block` that passes all soundness
+/// gates.
+fn analyze_block_pins(
+    block: &Block,
+    whole: &RegionBindings,
+    out: &mut HashMap<SpanKey, VecLengthPin>,
+) {
+    let stmts = &block.stmts;
     for (li, stmt) in stmts.iter().enumerate() {
         let Some(v) = empty_vec_binding(stmt) else {
             continue;
         };
+        // The Vec name must be bound exactly once in the whole function.
+        if whole.rebound.get(&v) != Some(&1) {
+            continue;
+        }
         let Some(fill) = find_exact_fill_loop(stmts, li, &v) else {
             continue;
         };
@@ -197,17 +228,39 @@ pub(crate) fn compute_vec_length_pins(body: &Block) -> HashMap<SpanKey, VecLengt
             }
         }
         // After the fill loop, `v` must stay length-stable and every identifier
-        // in `BOUND` must stay unwritten — the whole-function invariance that
-        // makes the pin sound.
+        // in `BOUND` must stay unwritten — the invariance over `v`'s scope (the
+        // rest of THIS block) that makes the pin sound.
         let after = &stmts[fill.fi + 1..];
-        if !vec_readonly_after(after, &body.final_expr, &v) {
+        if !vec_readonly_after(after, &block.final_expr, &v) {
             continue;
         }
         let mut idents = Vec::new();
         bound_idents(&bound, &mut idents);
         if idents
             .iter()
-            .any(|b| !var_unwritten_after(after, &body.final_expr, b))
+            .any(|b| !var_unwritten_after(after, &block.final_expr, b))
+        {
+            continue;
+        }
+        // Shadow / nested-reassignment soundness (the scans above are pattern-
+        // blind in NESTED blocks — they only see statement VALUES, not `let`
+        // patterns or assignment targets buried in an inner block). Collect every
+        // name rebound-by-pattern or assigned anywhere in `v`'s after-fill scope:
+        //   - a rebind of `v` (`let v = <shorter Vec>` in an inner scope) would
+        //     make the name-keyed pin apply to a DIFFERENT, unproven Vec — an OOB
+        //     read on the shadow (also caught by the exactly-once gate, but kept
+        //     as defence in depth);
+        //   - a rebind OR reassignment of a bound identifier (`let n = 20` /
+        //     `n = 20` in an inner scope) changes the bound's value out from under
+        //     the fill, so the guard no longer implies `idx < v.len()`.
+        // Either is memory-unsafety; bail. (`v` as an assignment ROOT is fine —
+        // that's an index store `v[i] = x`, already vetted by `vec_readonly_after`
+        // — so `v` is checked against `rebound` only, not `assigned`.)
+        let region = region_bindings(after, &block.final_expr);
+        if region.is_rebound(&v)
+            || idents
+                .iter()
+                .any(|b| region.is_rebound(b) || region.assigned.contains(b))
         {
             continue;
         }
@@ -216,7 +269,6 @@ pub(crate) fn compute_vec_length_pins(body: &Block) -> HashMap<SpanKey, VecLengt
             VecLengthPin { bound, vec_var: v },
         );
     }
-    out
 }
 
 /// `let mut V = Vec.new()` / `Vec.with_capacity(_)` → `Some(V)`. Both start
@@ -658,6 +710,537 @@ fn call_arg_writes_bound(a: &CallArg, b: &str) -> bool {
         }
     }
     expr_writes_bound(&a.value, b)
+}
+
+// ── Region binding/assignment collector (shadow soundness) ──────────
+//
+// The read-only / unwritten scans above recurse into nested blocks through the
+// generic `expr_children_all`, which only sees statement VALUES — it is blind to
+// `let` patterns and assignment targets buried in an inner block. This collector
+// closes that gap: it walks a region (statements + all nested blocks/exprs) and
+// records every name bound by a pattern (`rebound`) and every assignment target
+// ROOT (`assigned`). Both walkers are EXHAUSTIVE over `StmtKind` / `ExprKind`
+// (no wildcard) so a new AST variant is a compile error rather than a silent
+// hole. Over-collection is safe — it only makes a pin bail.
+
+#[derive(Default)]
+struct RegionBindings {
+    /// name → number of pattern-binding sites in the region. Counts (not a set)
+    /// so a whole-function scan can enforce "the pinned Vec is bound exactly
+    /// once" (the guard against a name-keyed pin matching a same-named Vec in a
+    /// sibling / outer scope).
+    rebound: HashMap<String, usize>,
+    assigned: HashSet<String>,
+}
+
+impl RegionBindings {
+    fn bind(&mut self, name: String) {
+        *self.rebound.entry(name).or_insert(0) += 1;
+    }
+    fn is_rebound(&self, name: &str) -> bool {
+        self.rebound.contains_key(name)
+    }
+}
+
+fn region_bindings(stmts: &[Stmt], final_expr: &Option<Box<Expr>>) -> RegionBindings {
+    let mut rb = RegionBindings::default();
+    for s in stmts {
+        collect_stmt_bindings(s, &mut rb);
+    }
+    if let Some(e) = final_expr {
+        collect_expr_bindings(e, &mut rb);
+    }
+    rb
+}
+
+fn collect_block_bindings(b: &Block, rb: &mut RegionBindings) {
+    for s in &b.stmts {
+        collect_stmt_bindings(s, rb);
+    }
+    if let Some(e) = &b.final_expr {
+        collect_expr_bindings(e, rb);
+    }
+}
+
+fn collect_stmt_bindings(s: &Stmt, rb: &mut RegionBindings) {
+    match &s.kind {
+        StmtKind::Let { pattern, value, .. } => {
+            for n in pattern.binding_names() {
+                rb.bind(n);
+            }
+            collect_expr_bindings(value, rb);
+        }
+        StmtKind::LetElse {
+            pattern,
+            value,
+            else_block,
+            ..
+        } => {
+            for n in pattern.binding_names() {
+                rb.bind(n);
+            }
+            collect_expr_bindings(value, rb);
+            collect_block_bindings(else_block, rb);
+        }
+        StmtKind::LetUninit { name, .. } => {
+            rb.bind(name.clone());
+        }
+        StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+            if let Some(root) = place_root(target) {
+                rb.assigned.insert(root.to_string());
+            }
+            collect_expr_bindings(target, rb);
+            collect_expr_bindings(value, rb);
+        }
+        StmtKind::MultiAssign { targets, values } => {
+            for t in targets {
+                if let Some(root) = place_root(t) {
+                    rb.assigned.insert(root.to_string());
+                }
+                collect_expr_bindings(t, rb);
+            }
+            for v in values {
+                collect_expr_bindings(v, rb);
+            }
+        }
+        StmtKind::Expr(e) => collect_expr_bindings(e, rb),
+        StmtKind::Defer { body } => collect_block_bindings(body, rb),
+        StmtKind::ErrDefer { binding, body } => {
+            if let Some(b) = binding {
+                rb.bind(b.clone());
+            }
+            collect_block_bindings(body, rb);
+        }
+    }
+}
+
+/// EXHAUSTIVE over `ExprKind`. Collects patterns introduced by expression-level
+/// binders (`if let` / `while let` / `for` / `match` / closures) and recurses
+/// into every nested block via `collect_block_bindings` (so inner-block `let`s
+/// and assignments are seen) and every sub-expression.
+fn collect_expr_bindings(e: &Expr, rb: &mut RegionBindings) {
+    match &e.kind {
+        ExprKind::Integer(_, _)
+        | ExprKind::Float(_, _)
+        | ExprKind::CharLit(_)
+        | ExprKind::ByteLit(_)
+        | ExprKind::StringLit(_)
+        | ExprKind::MultiStringLit(_)
+        | ExprKind::CStringLit { .. }
+        | ExprKind::Bool(_)
+        | ExprKind::Identifier(_)
+        | ExprKind::Path { .. }
+        | ExprKind::SelfValue
+        | ExprKind::SelfType
+        | ExprKind::PipePlaceholder
+        | ExprKind::Continue { .. }
+        | ExprKind::OffsetOf { .. }
+        | ExprKind::Error => {}
+        ExprKind::InterpolatedStringLit(parts) => {
+            for p in parts {
+                if let ParsedInterpolationPart::Expr(inner) = p {
+                    collect_expr_bindings(inner, rb);
+                }
+            }
+        }
+        ExprKind::Binary { left, right, .. } => {
+            collect_expr_bindings(left, rb);
+            collect_expr_bindings(right, rb);
+        }
+        ExprKind::Unary { operand, .. } => collect_expr_bindings(operand, rb),
+        ExprKind::Question(inner) => collect_expr_bindings(inner, rb),
+        ExprKind::OptionalChain { object, args, .. } => {
+            collect_expr_bindings(object, rb);
+            if let Some(a) = args {
+                for arg in a {
+                    collect_expr_bindings(&arg.value, rb);
+                }
+            }
+        }
+        ExprKind::NilCoalesce { left, right } => {
+            collect_expr_bindings(left, rb);
+            collect_expr_bindings(right, rb);
+        }
+        ExprKind::Call { callee, args } => {
+            collect_expr_bindings(callee, rb);
+            for a in args {
+                collect_expr_bindings(&a.value, rb);
+            }
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            collect_expr_bindings(object, rb);
+            for a in args {
+                collect_expr_bindings(&a.value, rb);
+            }
+        }
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            collect_expr_bindings(object, rb)
+        }
+        ExprKind::Index { object, index } => {
+            collect_expr_bindings(object, rb);
+            collect_expr_bindings(index, rb);
+        }
+        ExprKind::Block(b) | ExprKind::Comptime(b) => collect_block_bindings(b, rb),
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            collect_expr_bindings(condition, rb);
+            collect_block_bindings(then_block, rb);
+            if let Some(e) = else_branch {
+                collect_expr_bindings(e, rb);
+            }
+        }
+        ExprKind::IfLet {
+            pattern,
+            value,
+            then_block,
+            else_branch,
+        } => {
+            for n in pattern.binding_names() {
+                rb.bind(n);
+            }
+            collect_expr_bindings(value, rb);
+            collect_block_bindings(then_block, rb);
+            if let Some(e) = else_branch {
+                collect_expr_bindings(e, rb);
+            }
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            collect_expr_bindings(scrutinee, rb);
+            for arm in arms {
+                for n in arm.pattern.binding_names() {
+                    rb.bind(n);
+                }
+                if let Some(g) = &arm.guard {
+                    collect_expr_bindings(g, rb);
+                }
+                collect_expr_bindings(&arm.body, rb);
+            }
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            collect_expr_bindings(condition, rb);
+            collect_block_bindings(body, rb);
+        }
+        ExprKind::WhileLet {
+            pattern,
+            value,
+            body,
+            ..
+        } => {
+            for n in pattern.binding_names() {
+                rb.bind(n);
+            }
+            collect_expr_bindings(value, rb);
+            collect_block_bindings(body, rb);
+        }
+        ExprKind::For {
+            pattern,
+            iterable,
+            body,
+            ..
+        } => {
+            for n in pattern.binding_names() {
+                rb.bind(n);
+            }
+            collect_expr_bindings(iterable, rb);
+            collect_block_bindings(body, rb);
+        }
+        ExprKind::Loop { body, .. } => collect_block_bindings(body, rb),
+        ExprKind::LabeledBlock { body, .. } => collect_block_bindings(body, rb),
+        ExprKind::Closure { params, body, .. } => {
+            for cp in params {
+                for n in cp.pattern.binding_names() {
+                    rb.bind(n);
+                }
+            }
+            collect_expr_bindings(body, rb);
+        }
+        ExprKind::Return(opt) => {
+            if let Some(inner) = opt {
+                collect_expr_bindings(inner, rb);
+            }
+        }
+        ExprKind::Break { value, .. } => {
+            if let Some(v) = value {
+                collect_expr_bindings(v, rb);
+            }
+        }
+        ExprKind::Tuple(exprs) | ExprKind::ArrayLiteral(exprs) => {
+            for x in exprs {
+                collect_expr_bindings(x, rb);
+            }
+        }
+        ExprKind::PrefixCollectionLiteral { items, .. } => {
+            for x in items {
+                collect_expr_bindings(x, rb);
+            }
+        }
+        ExprKind::RepeatLiteral { value, count, .. } => {
+            collect_expr_bindings(value, rb);
+            collect_expr_bindings(count, rb);
+        }
+        ExprKind::MapLiteral(pairs) => {
+            for (k, v) in pairs {
+                collect_expr_bindings(k, rb);
+                collect_expr_bindings(v, rb);
+            }
+        }
+        ExprKind::StructLiteral { fields, spread, .. } => {
+            for f in fields {
+                collect_expr_bindings(&f.value, rb);
+            }
+            if let Some(sp) = spread {
+                collect_expr_bindings(sp, rb);
+            }
+        }
+        ExprKind::Pipe { left, right } => {
+            collect_expr_bindings(left, rb);
+            collect_expr_bindings(right, rb);
+        }
+        ExprKind::Cast { expr, .. } => collect_expr_bindings(expr, rb),
+        ExprKind::Range { start, end, .. } => {
+            if let Some(s) = start {
+                collect_expr_bindings(s, rb);
+            }
+            if let Some(e) = end {
+                collect_expr_bindings(e, rb);
+            }
+        }
+        ExprKind::Unsafe(b) | ExprKind::Try(b) | ExprKind::Seq(b) | ExprKind::Par(b) => {
+            collect_block_bindings(b, rb)
+        }
+        ExprKind::Lock { body, .. } => collect_block_bindings(body, rb),
+        ExprKind::Providers { bindings, body } => {
+            for pb in bindings {
+                collect_expr_bindings(&pb.value, rb);
+            }
+            collect_block_bindings(body, rb);
+        }
+    }
+}
+
+// ── Block visitor (drives per-block fill recognition) ───────────────
+//
+// Invokes `f` on `block` and on every block nested inside it (loop / if /
+// match / closure / … bodies). EXHAUSTIVE over `StmtKind` / `ExprKind` so a new
+// AST variant is a compile error rather than an un-visited block.
+
+fn for_each_block<'a>(block: &'a Block, f: &mut impl FnMut(&'a Block)) {
+    f(block);
+    for s in &block.stmts {
+        for_each_block_in_stmt(s, f);
+    }
+    if let Some(e) = &block.final_expr {
+        for_each_block_in_expr(e, f);
+    }
+}
+
+fn for_each_block_in_stmt<'a>(s: &'a Stmt, f: &mut impl FnMut(&'a Block)) {
+    match &s.kind {
+        StmtKind::Let { value, .. } => for_each_block_in_expr(value, f),
+        StmtKind::LetElse {
+            value, else_block, ..
+        } => {
+            for_each_block_in_expr(value, f);
+            for_each_block(else_block, f);
+        }
+        StmtKind::LetUninit { .. } => {}
+        StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+            for_each_block_in_expr(target, f);
+            for_each_block_in_expr(value, f);
+        }
+        StmtKind::MultiAssign { targets, values } => {
+            for t in targets {
+                for_each_block_in_expr(t, f);
+            }
+            for v in values {
+                for_each_block_in_expr(v, f);
+            }
+        }
+        StmtKind::Expr(e) => for_each_block_in_expr(e, f),
+        StmtKind::Defer { body } => for_each_block(body, f),
+        StmtKind::ErrDefer { body, .. } => for_each_block(body, f),
+    }
+}
+
+fn for_each_block_in_expr<'a>(e: &'a Expr, f: &mut impl FnMut(&'a Block)) {
+    match &e.kind {
+        ExprKind::Integer(_, _)
+        | ExprKind::Float(_, _)
+        | ExprKind::CharLit(_)
+        | ExprKind::ByteLit(_)
+        | ExprKind::StringLit(_)
+        | ExprKind::MultiStringLit(_)
+        | ExprKind::CStringLit { .. }
+        | ExprKind::Bool(_)
+        | ExprKind::Identifier(_)
+        | ExprKind::Path { .. }
+        | ExprKind::SelfValue
+        | ExprKind::SelfType
+        | ExprKind::PipePlaceholder
+        | ExprKind::Continue { .. }
+        | ExprKind::OffsetOf { .. }
+        | ExprKind::Error => {}
+        ExprKind::InterpolatedStringLit(parts) => {
+            for p in parts {
+                if let ParsedInterpolationPart::Expr(inner) = p {
+                    for_each_block_in_expr(inner, f);
+                }
+            }
+        }
+        ExprKind::Binary { left, right, .. } => {
+            for_each_block_in_expr(left, f);
+            for_each_block_in_expr(right, f);
+        }
+        ExprKind::Unary { operand, .. } => for_each_block_in_expr(operand, f),
+        ExprKind::Question(inner) => for_each_block_in_expr(inner, f),
+        ExprKind::OptionalChain { object, args, .. } => {
+            for_each_block_in_expr(object, f);
+            if let Some(a) = args {
+                for arg in a {
+                    for_each_block_in_expr(&arg.value, f);
+                }
+            }
+        }
+        ExprKind::NilCoalesce { left, right } => {
+            for_each_block_in_expr(left, f);
+            for_each_block_in_expr(right, f);
+        }
+        ExprKind::Call { callee, args } => {
+            for_each_block_in_expr(callee, f);
+            for a in args {
+                for_each_block_in_expr(&a.value, f);
+            }
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            for_each_block_in_expr(object, f);
+            for a in args {
+                for_each_block_in_expr(&a.value, f);
+            }
+        }
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            for_each_block_in_expr(object, f)
+        }
+        ExprKind::Index { object, index } => {
+            for_each_block_in_expr(object, f);
+            for_each_block_in_expr(index, f);
+        }
+        ExprKind::Block(b) | ExprKind::Comptime(b) => for_each_block(b, f),
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            for_each_block_in_expr(condition, f);
+            for_each_block(then_block, f);
+            if let Some(e) = else_branch {
+                for_each_block_in_expr(e, f);
+            }
+        }
+        ExprKind::IfLet {
+            value,
+            then_block,
+            else_branch,
+            ..
+        } => {
+            for_each_block_in_expr(value, f);
+            for_each_block(then_block, f);
+            if let Some(e) = else_branch {
+                for_each_block_in_expr(e, f);
+            }
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            for_each_block_in_expr(scrutinee, f);
+            for arm in arms {
+                if let Some(g) = &arm.guard {
+                    for_each_block_in_expr(g, f);
+                }
+                for_each_block_in_expr(&arm.body, f);
+            }
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            for_each_block_in_expr(condition, f);
+            for_each_block(body, f);
+        }
+        ExprKind::WhileLet { value, body, .. } => {
+            for_each_block_in_expr(value, f);
+            for_each_block(body, f);
+        }
+        ExprKind::For { iterable, body, .. } => {
+            for_each_block_in_expr(iterable, f);
+            for_each_block(body, f);
+        }
+        ExprKind::Loop { body, .. } => for_each_block(body, f),
+        ExprKind::LabeledBlock { body, .. } => for_each_block(body, f),
+        ExprKind::Closure { body, .. } => for_each_block_in_expr(body, f),
+        ExprKind::Return(opt) => {
+            if let Some(inner) = opt {
+                for_each_block_in_expr(inner, f);
+            }
+        }
+        ExprKind::Break { value, .. } => {
+            if let Some(v) = value {
+                for_each_block_in_expr(v, f);
+            }
+        }
+        ExprKind::Tuple(exprs) | ExprKind::ArrayLiteral(exprs) => {
+            for x in exprs {
+                for_each_block_in_expr(x, f);
+            }
+        }
+        ExprKind::PrefixCollectionLiteral { items, .. } => {
+            for x in items {
+                for_each_block_in_expr(x, f);
+            }
+        }
+        ExprKind::RepeatLiteral { value, count, .. } => {
+            for_each_block_in_expr(value, f);
+            for_each_block_in_expr(count, f);
+        }
+        ExprKind::MapLiteral(pairs) => {
+            for (k, v) in pairs {
+                for_each_block_in_expr(k, f);
+                for_each_block_in_expr(v, f);
+            }
+        }
+        ExprKind::StructLiteral { fields, spread, .. } => {
+            for fld in fields {
+                for_each_block_in_expr(&fld.value, f);
+            }
+            if let Some(sp) = spread {
+                for_each_block_in_expr(sp, f);
+            }
+        }
+        ExprKind::Pipe { left, right } => {
+            for_each_block_in_expr(left, f);
+            for_each_block_in_expr(right, f);
+        }
+        ExprKind::Cast { expr, .. } => for_each_block_in_expr(expr, f),
+        ExprKind::Range { start, end, .. } => {
+            if let Some(s) = start {
+                for_each_block_in_expr(s, f);
+            }
+            if let Some(e) = end {
+                for_each_block_in_expr(e, f);
+            }
+        }
+        ExprKind::Unsafe(b) | ExprKind::Try(b) | ExprKind::Seq(b) | ExprKind::Par(b) => {
+            for_each_block(b, f)
+        }
+        ExprKind::Lock { body, .. } => for_each_block(body, f),
+        ExprKind::Providers { bindings, body } => {
+            for pb in bindings {
+                for_each_block_in_expr(&pb.value, f);
+            }
+            for_each_block(body, f);
+        }
+    }
 }
 
 // ── Generic AST helpers (whitelist / fail-closed) ───────────────────
@@ -1252,6 +1835,135 @@ mod tests {
             while j < cols { dp.push(1i64); j = 0i64; j = j + 1i64; }\n\
             let mut c = 0i64;\n\
             while c < cols { dp[c] = dp[c] + 1i64; c = c + 1i64; }\n\
+        }\n";
+        assert!(!pins_vec(src, "dp"));
+    }
+
+    // ── Shadow / nested-reassignment soundness (region_bindings) ──
+
+    #[test]
+    fn no_fire_nested_shadow_of_vec() {
+        // A nested block re-binds `dp` (to a shorter/empty Vec) and indexes it.
+        // The name-keyed pin must NOT fire, or the shadow `dp[d]` reads OOB.
+        let src = "fn f(n: i64) {\n\
+            let mut dp: Vec[i64] = Vec.new();\n\
+            let mut j = 0i64;\n\
+            while j < n { dp.push(1i64); j = j + 1i64; }\n\
+            let mut once = 1i64;\n\
+            while once > 0i64 {\n\
+              let mut dp: Vec[i64] = Vec.new();\n\
+              let mut d = 0i64;\n\
+              while d < n { let x = dp[d]; d = d + 1i64; }\n\
+              once = 0i64;\n\
+            }\n\
+        }\n";
+        assert!(!pins_vec(src, "dp"));
+    }
+
+    #[test]
+    fn no_fire_nested_shadow_of_bound_var() {
+        // A nested block re-binds the BOUND var `n` to a larger value; `dp[c]`
+        // under `while c < n` would then read past `dp.len()`. Must not pin.
+        let src = "fn f(n: i64) {\n\
+            let mut dp: Vec[i64] = Vec.new();\n\
+            let mut j = 0i64;\n\
+            while j < n { dp.push(1i64); j = j + 1i64; }\n\
+            let mut once = 1i64;\n\
+            while once > 0i64 {\n\
+              let n = 20i64;\n\
+              let mut c = 0i64;\n\
+              while c < n { let x = dp[c]; c = c + 1i64; }\n\
+              once = 0i64;\n\
+            }\n\
+        }\n";
+        assert!(!pins_vec(src, "dp"));
+    }
+
+    #[test]
+    fn no_fire_nested_reassign_of_bound_var() {
+        // A nested-block ASSIGNMENT (not rebind) of the bound var also changes
+        // its value out from under the fill.
+        let src = "fn f(m: i64) {\n\
+            let mut n = m;\n\
+            let mut dp: Vec[i64] = Vec.new();\n\
+            let mut j = 0i64;\n\
+            while j < n { dp.push(1i64); j = j + 1i64; }\n\
+            let mut once = 1i64;\n\
+            while once > 0i64 {\n\
+              n = 20i64;\n\
+              let mut c = 0i64;\n\
+              while c < n { let x = dp[c]; c = c + 1i64; }\n\
+              once = 0i64;\n\
+            }\n\
+        }\n";
+        assert!(!pins_vec(src, "dp"));
+    }
+
+    // ── Nested-block fill recognition ───────────────────────────
+
+    #[test]
+    fn fires_on_per_iteration_rebuild() {
+        // The DP buffer is built fresh inside an outer loop's body block — the
+        // common "rebuild each iteration" shape. `dp` is bound once (one AST
+        // site), so the pin is sound.
+        let src = "fn f(total: i64, n: i64) -> i64 {\n\
+            let mut acc = 0i64;\n\
+            let mut k = 0i64;\n\
+            while k < total {\n\
+              let mut dp: Vec[i64] = Vec.new();\n\
+              let mut j = 0i64;\n\
+              while j < n { dp.push(1i64); j = j + 1i64; }\n\
+              let mut c = 1i64;\n\
+              while c < n { dp[c] = dp[c] + dp[c - 1i64]; c = c + 1i64; }\n\
+              acc = acc + dp[n - 1i64];\n\
+              k = k + 1i64;\n\
+            }\n\
+            acc\n\
+        }\n";
+        assert!(pins_vec(src, "dp"));
+    }
+
+    #[test]
+    fn fires_on_fill_inside_if_block() {
+        let src = "fn f(n: i64, flag: bool) -> i64 {\n\
+            let mut acc = 0i64;\n\
+            if flag {\n\
+              let mut dp: Vec[i64] = Vec.new();\n\
+              let mut j = 0i64;\n\
+              while j < n { dp.push(1i64); j = j + 1i64; }\n\
+              let mut c = 0i64;\n\
+              while c < n { acc = acc + dp[c]; c = c + 1i64; }\n\
+            }\n\
+            acc\n\
+        }\n";
+        assert!(pins_vec(src, "dp"));
+    }
+
+    #[test]
+    fn no_fire_two_vecs_same_name_siblings() {
+        // Two sibling blocks each bind `dp` (two binding sites). A pin from the
+        // first would linger (kept to end of function) and wrongly match the
+        // second, shorter `dp`. The exactly-once gate refuses BOTH.
+        let src = "fn f(n: i64) -> i64 {\n\
+            let mut acc = 0i64;\n\
+            let mut a = 1i64;\n\
+            while a > 0i64 {\n\
+              let mut dp: Vec[i64] = Vec.new();\n\
+              let mut j = 0i64;\n\
+              while j < n { dp.push(1i64); j = j + 1i64; }\n\
+              let mut c = 0i64;\n\
+              while c < n { acc = acc + dp[c]; c = c + 1i64; }\n\
+              a = 0i64;\n\
+            }\n\
+            let mut b = 1i64;\n\
+            while b > 0i64 {\n\
+              let mut dp: Vec[i64] = Vec.new();\n\
+              dp.push(1i64);\n\
+              let mut c = 0i64;\n\
+              while c < n { acc = acc + dp[c]; c = c + 1i64; }\n\
+              b = 0i64;\n\
+            }\n\
+            acc\n\
         }\n";
         assert!(!pins_vec(src, "dp"));
     }
