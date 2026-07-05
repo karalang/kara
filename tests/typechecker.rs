@@ -17999,6 +17999,28 @@ fn user_trait_impl_over_tensor_resolves() {
 }
 
 #[test]
+fn user_trait_default_method_over_container_resolves() {
+    // S6c-12 slice 3: a user trait's DEFAULT method (spliced into the Column
+    // impl by `synthesize_trait_default_methods`) type-checks over a container
+    // target. `total_or` returns `total()` (no T-arith); `twice_total` needs
+    // the `T: Add` bound for `self.total() + self.total()`.
+    typecheck_ok(
+        "trait Stat[T: Add] {\n\
+         \x20   fn total(ref self) -> T;\n\
+         \x20   fn total_or(ref self, fallback: T) -> T { self.total() }\n\
+         \x20   fn twice_total(ref self) -> T { self.total() + self.total() }\n\
+         }\n\
+         impl Stat[i64] for Column[i64] {\n\
+         \x20   fn total(ref self) -> i64 { self.sum() }\n\
+         }\n\
+         fn main() {\n\
+         \x20   let c: Column[i64] = Column.from_vec([4, 5, 6]);\n\
+         \x20   println(f\"{c.total_or(0)} {c.twice_total()}\");\n\
+         }",
+    );
+}
+
+#[test]
 fn method_self_return_type_resolves_to_impl_target() {
     // A method declared `-> Self` returns a value of the concrete impl
     // target (`W`), so the body's tail expression must check against the

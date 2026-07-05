@@ -752,8 +752,32 @@ B-2026-07-02-10..13, see the ledger.
   max, self→user-method chains. Tests: `user_trait_impl_over_tensor_resolves`
   (typechecker), `user_trait_impl_over_tensor_dispatches` (interpreter),
   `test_e2e_user_trait_impl_over_tensor` (codegen).
-  Remaining epic slices: trait DEFAULT methods + inherent impls (3), generic
-  container impls (4), heap/String elem (5).
+  **Slice 3 ✅ (landed) — trait DEFAULT methods over containers (+ inherent-impl
+  wall documented).** Probing showed a user trait's DEFAULT method inherited by
+  a Column/Tensor impl ALREADY works on all three surfaces (`run` == `build`):
+  the desugar splice pass (`synthesize_trait_default_methods`) copies the default
+  body into the container impl, and slices 1/2's `self`-arg + `SelfValue`
+  machinery carry it. So slice 3 is pure regression coverage — a no-arith
+  default (`total_or`) and a `T: Add` arithmetic default (`twice_total`), Column
+  + Tensor. Tests: `user_trait_default_method_over_container_resolves`
+  (typechecker), `..._dispatches` (interpreter),
+  `test_e2e_user_trait_default_method_over_container` (codegen). (Note: my first
+  probe of this erroneously used an *unbounded* `T` with `self.total() +
+  self.total()` and saw "found 'T'" — that rejection is CORRECT; a default body
+  doing `T + T` genuinely needs `T: Add`. Not a bug.)
+  **Inherent `impl Column[i64] { .. }` (no trait) is a SEPARATE wall, NOT in this
+  epic.** It is rejected at check/build by "conflicting impl: another
+  `impl Column[i64]` already exists; v1 does not support generic-vs-specialized
+  impl overlap on the same trait + target" — the baked `impl[T] Reduce[T] for
+  Column[T]` occupies the `Column` inherent/impl slot, so a user inherent impl
+  overlaps at the impl/target granularity even when its method NAMES don't
+  collide. Supporting it needs **method-granular** overlap admission (let a user
+  add NEW method names to a builtin container without whole-impl conflict), which
+  touches deliberate v1 no-specialization semantics — a real, larger follow-on,
+  tracked here, not forced. (`karac run` executes past the conflict warning, so
+  it "works" under run only — a check/build-vs-run divergence by the run-executes-
+  -past-errors design, not a soundness bug.)
+  Remaining epic slices: generic container impls (4), heap/String elem (5).
 - **S6c** — remaining: `ElementwiseOrd` user impls; **u64 column/tensor sort**
   (blocked on the interpreter u64 model — see S6c-9 / B-2026-07-04-8, NOT just an
   unsigned scratch compare as previously thought); a `product` DEFAULT body for
@@ -762,8 +786,11 @@ B-2026-07-02-10..13, see the ledger.
   `Vec[T]` impls; user trait-impl methods over builtin containers — the
   epic is now **in progress**: the concrete `impl Trait for Column[i64]`/`[f64]`
   and `Tensor[..]` cases (the 3-surface gap re-probed 2026-07-04) **landed as
-  S6c-12 Slices 1 + 2**. Remaining slices of that epic: user trait **DEFAULT**
-  methods over containers + **inherent** `impl Column[i64] { .. }` (Slice 3);
+  S6c-12 Slices 1 + 2**, and trait **DEFAULT** methods over containers **landed
+  as Slice 3** (they already worked — slice 3 is regression coverage). The
+  **inherent** `impl Column[i64] { .. }` case is a separate impl-overlap wall
+  (documented under S6c-12 Slice 3), needing method-granular overlap admission.
+  Remaining slices of that epic:
   **generic** container impls `impl[T: Add] Trait for Column[T]` (Slice 4,
   reuses `make_generic_impl_method_function` + S6a mono handle plumbing);
   heap/**String** element + error-path polish (Slice 5).

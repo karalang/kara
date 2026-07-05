@@ -19270,6 +19270,35 @@ fn main() {
 }
 
 #[test]
+fn user_trait_default_method_over_container_dispatches() {
+    // S6c-12 slice 3: a user trait DEFAULT method inherited by a Column/Tensor
+    // impl dispatches under the interpreter. Locks in the coverage (the desugar
+    // splice pass + slice 1/2 dispatch already carry it).
+    let out = run_no_errors(
+        r#"
+trait Stat[T: Add] {
+    fn total(ref self) -> T;
+    fn total_or(ref self, fallback: T) -> T { self.total() }
+    fn twice_total(ref self) -> T { self.total() + self.total() }
+}
+impl Stat[i64] for Column[i64] {
+    fn total(ref self) -> i64 { self.sum() }
+}
+impl Stat[i64] for Tensor[i64, [3]] {
+    fn total(ref self) -> i64 { self.sum() }
+}
+fn main() {
+    let c: Column[i64] = Column.from_vec([4, 5, 6]);
+    let t: Tensor[i64, [3]] = Tensor.from([1, 2, 3]);
+    println(f"{c.total_or(0)} {c.twice_total()}");
+    println(f"{t.total_or(0)} {t.twice_total()}");
+}
+"#,
+    );
+    assert_eq!(out, "15 30\n6 12\n");
+}
+
+#[test]
 fn stdlib_reduce_trait_bound_fold_column_and_tensor() {
     // S6c: `fold` on the `Reduce` trait surface — a `fn f[C: Reduce[i64]]`
     // body may call `c.fold(init, |a, x| ...)`, dispatched to the concrete

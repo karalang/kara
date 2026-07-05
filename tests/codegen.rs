@@ -47541,6 +47541,39 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_user_trait_default_method_over_container() {
+        // S6c-12 slice 3: a user trait's DEFAULT method is inherited by a
+        // container impl and dispatches correctly — the desugar splice pass
+        // (`synthesize_trait_default_methods`) copies the default body into the
+        // `impl ... for Column`/`Tensor` block, and slices 1/2's `self`-arg +
+        // `SelfValue` machinery carry it. Covers a no-arith default (`total_or`,
+        // returns `total()`, ignores the fallback) and a `T: Add` arithmetic
+        // default (`twice_total`), on a Column and a Tensor. `run` == `build`.
+        let src = r#"
+trait Stat[T: Add] {
+    fn total(ref self) -> T;
+    fn total_or(ref self, fallback: T) -> T { self.total() }
+    fn twice_total(ref self) -> T { self.total() + self.total() }
+}
+impl Stat[i64] for Column[i64] {
+    fn total(ref self) -> i64 { self.sum() }
+}
+impl Stat[i64] for Tensor[i64, [3]] {
+    fn total(ref self) -> i64 { self.sum() }
+}
+fn main() {
+    let c: Column[i64] = Column.from_vec([4, 5, 6]);
+    let t: Tensor[i64, [3]] = Tensor.from([1, 2, 3]);
+    println(f"{c.total_or(0)} {c.twice_total()}");
+    println(f"{t.total_or(0)} {t.twice_total()}");
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        // c: total=15 → total_or=15, twice=30. t: total=6 → 6, 12.
+        assert_eq!(out, "15 30\n6 12\n");
+    }
+
+    #[test]
     fn test_e2e_reduce_trait_bound_fold() {
         // S6c: `fold` on the `Reduce` trait surface, dispatched through a
         // bound-generic `fn f[C: Reduce[i64]]`. The typechecker intercept types
