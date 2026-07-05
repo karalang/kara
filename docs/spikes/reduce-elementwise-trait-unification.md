@@ -724,8 +724,18 @@ B-2026-07-02-10..13, see the ledger.
   unsigned scratch compare as previously thought); a `product` DEFAULT body for
   USER `Reduce` impls (needs the numeric-identity mechanism of S6c-10 — the
   bound-generic `prod` on the builtin containers is DONE, S6c-11); blanket
-  `Vec[T]` impls; user trait-impl methods over builtin containers (probed: interp
-  "type 'unknown'", codegen loud fall-through).
+  `Vec[T]` impls; user trait-impl methods over builtin containers — a
+  **3-surface** gap (re-probed 2026-07-04): even a *concrete* `impl Doubler[i64]
+  for Column[i64] { fn m(ref self) -> i64 { self.sum() + self.sum() } }` is
+  rejected by the **typechecker** ("arithmetic operator requires numeric type,
+  found 'T'" — the impl body's `self.sum()` resolves to the builtin `Reduce`
+  impl's abstract return `T` instead of the concrete element `i64`, so `T + T`
+  is not admitted), in addition to the previously-noted interpreter ("method not
+  found on type 'unknown' — no interpreter dispatch arm") and codegen (loud
+  fall-through) gaps. So this needs (1) concretizing a builtin container's
+  `#[compiler_builtin]` method return type when resolved inside a user impl over
+  that container, then (2) interp + (3) codegen dispatch for user-defined methods
+  on handle-backed containers. Not a contained slice.
 
 ---
 
