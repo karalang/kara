@@ -2785,10 +2785,17 @@ impl<'ctx> super::Codegen<'ctx> {
         if !is_full && !is_axis && !is_fold && !is_map && !is_zip && !is_argord && !is_sort {
             return Ok(None);
         }
-        let ExprKind::Identifier(name) = &object.kind else {
-            return Ok(None);
+        // S6c-12 slice 2: accept a `self` receiver (`ExprKind::SelfValue`) too,
+        // so a user `impl Trait for Tensor[T, S]` body may call the builtin
+        // reductions on `self` — the self param is typed `ref Tensor[T, S]`, so
+        // its element/shape info is registered under `"self"` in
+        // `tensor_var_infos`. (Column twin: `try_compile_column_method`.)
+        let name = match &object.kind {
+            ExprKind::Identifier(n) => n.as_str(),
+            ExprKind::SelfValue => "self",
+            _ => return Ok(None),
         };
-        let Some(info) = self.tensor_var_infos.get(name.as_str()).cloned() else {
+        let Some(info) = self.tensor_var_infos.get(name).cloned() else {
             return Ok(None);
         };
         let t_ptr = self.tensor_ptr_for_var(name)?;

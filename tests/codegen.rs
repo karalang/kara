@@ -47512,6 +47512,35 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_user_trait_impl_over_tensor() {
+        // S6c-12 slice 2: the Tensor twin of `test_e2e_user_trait_impl_over_column`.
+        // The typechecker `self_type` fix and codegen `self`-arg threading already
+        // covered Tensor; the only codegen gap was `try_compile_tensor_reduce`
+        // rejecting a `SelfValue` receiver, so `self.sum()` in the body hit the
+        // "no handler ... on non-identifier receiver" fall-through. `run` == `build`.
+        let src = r#"
+trait Combo[T] { fn twice(ref self) -> T; fn quad(ref self) -> T; }
+impl Combo[i64] for Tensor[i64, [4]] {
+    fn twice(ref self) -> i64 { self.sum() + self.sum() }
+    fn quad(ref self) -> i64 { self.twice() + self.twice() }
+}
+trait Spread[T] { fn spread(ref self) -> T; }
+impl Spread[f64] for Tensor[f64, [3]] {
+    fn spread(ref self) -> f64 { self.max() - self.min() }
+}
+fn main() {
+    let ti: Tensor[i64, [4]] = Tensor.from([1, 2, 3, 4]);
+    let tf: Tensor[f64, [3]] = Tensor.from([1.5, 4.0, 2.5]);
+    println(f"{ti.quad()}");
+    println(f"{tf.spread()}");
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        // quad = 4*sum = 40; spread = 4.0-1.5 = 2.5.
+        assert_eq!(out, "40\n2.5\n");
+    }
+
+    #[test]
     fn test_e2e_reduce_trait_bound_fold() {
         // S6c: `fold` on the `Reduce` trait surface, dispatched through a
         // bound-generic `fn f[C: Reduce[i64]]`. The typechecker intercept types

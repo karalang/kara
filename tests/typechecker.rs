@@ -17982,6 +17982,23 @@ fn user_trait_impl_over_column_resolves() {
 }
 
 #[test]
+fn user_trait_impl_over_tensor_resolves() {
+    // S6c-12 slice 2: Tensor twin — the `self_type` fix keeps the `[i64]`
+    // element (and shape) on a concrete `Tensor` target so `self.sum()` types
+    // as `i64`, not the abstract trait return `T`.
+    typecheck_ok(
+        "trait Doubler[T] { fn doubled_sum(ref self) -> T; }\n\
+         impl Doubler[i64] for Tensor[i64, [3]] {\n\
+         \x20   fn doubled_sum(ref self) -> i64 { self.sum() + self.sum() }\n\
+         }\n\
+         fn main() {\n\
+         \x20   let t: Tensor[i64, [3]] = Tensor.from([1, 2, 3]);\n\
+         \x20   println(f\"{t.doubled_sum()}\");\n\
+         }",
+    );
+}
+
+#[test]
 fn method_self_return_type_resolves_to_impl_target() {
     // A method declared `-> Self` returns a value of the concrete impl
     // target (`W`), so the body's tail expression must check against the

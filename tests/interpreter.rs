@@ -19243,6 +19243,33 @@ fn main() {
 }
 
 #[test]
+fn user_trait_impl_over_tensor_dispatches() {
+    // S6c-12 slice 2: Tensor twin of `user_trait_impl_over_column_dispatches`.
+    // The interpreter already named Tensor in `value_type_name` and admitted a
+    // Tensor receiver to `try_eval_impl_method` in slice 1; this locks in parity.
+    let out = run_no_errors(
+        r#"
+trait Combo[T] { fn twice(ref self) -> T; fn quad(ref self) -> T; }
+impl Combo[i64] for Tensor[i64, [4]] {
+    fn twice(ref self) -> i64 { self.sum() + self.sum() }
+    fn quad(ref self) -> i64 { self.twice() + self.twice() }
+}
+trait Spread[T] { fn spread(ref self) -> T; }
+impl Spread[f64] for Tensor[f64, [3]] {
+    fn spread(ref self) -> f64 { self.max() - self.min() }
+}
+fn main() {
+    let ti: Tensor[i64, [4]] = Tensor.from([1, 2, 3, 4]);
+    let tf: Tensor[f64, [3]] = Tensor.from([1.5, 4.0, 2.5]);
+    println(f"{ti.quad()}");
+    println(f"{tf.spread()}");
+}
+"#,
+    );
+    assert_eq!(out, "40\n2.5\n");
+}
+
+#[test]
 fn stdlib_reduce_trait_bound_fold_column_and_tensor() {
     // S6c: `fold` on the `Reduce` trait surface — a `fn f[C: Reduce[i64]]`
     // body may call `c.fold(init, |a, x| ...)`, dispatched to the concrete

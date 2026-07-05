@@ -742,8 +742,18 @@ B-2026-07-02-10..13, see the ledger.
   Tests: `user_trait_impl_over_column_resolves` (typechecker),
   `user_trait_impl_over_column_dispatches` (interpreter),
   `test_e2e_user_trait_impl_over_column` (codegen). No ledger entry (feature,
-  not a miscompile). Remaining epic slices: Tensor parity (2), trait DEFAULT
-  methods + inherent impls (3), generic container impls (4), heap/String elem (5).
+  not a miscompile).
+  **Slice 2 ✅ (landed) — Tensor parity.** As predicted, the typechecker
+  `self_type` guard and the codegen `self`-arg threading already covered Tensor
+  (both name it alongside Column); the sole remaining gap was
+  `try_compile_tensor_reduce` rejecting a `SelfValue` receiver — the exact twin
+  of the Column `SelfValue` fix. One codegen edit (accept `self` in the tensor
+  reduce intercept). `run` == default-auto-par == `build` for i64/f64 × sum/min/
+  max, self→user-method chains. Tests: `user_trait_impl_over_tensor_resolves`
+  (typechecker), `user_trait_impl_over_tensor_dispatches` (interpreter),
+  `test_e2e_user_trait_impl_over_tensor` (codegen).
+  Remaining epic slices: trait DEFAULT methods + inherent impls (3), generic
+  container impls (4), heap/String elem (5).
 - **S6c** — remaining: `ElementwiseOrd` user impls; **u64 column/tensor sort**
   (blocked on the interpreter u64 model — see S6c-9 / B-2026-07-04-8, NOT just an
   unsigned scratch compare as previously thought); a `product` DEFAULT body for
@@ -751,10 +761,8 @@ B-2026-07-02-10..13, see the ledger.
   bound-generic `prod` on the builtin containers is DONE, S6c-11); blanket
   `Vec[T]` impls; user trait-impl methods over builtin containers — the
   epic is now **in progress**: the concrete `impl Trait for Column[i64]`/`[f64]`
-  case (the 3-surface gap re-probed 2026-07-04) **landed as S6c-12 (Slice 1)**.
-  Remaining slices of that epic: **Tensor** parity (`impl Trait for Tensor[..]`,
-  Slice 2 — the codegen `self`-registration + `SelfValue`-receiver fix likely
-  needs the tensor twin of `try_compile_column_method`); user trait **DEFAULT**
+  and `Tensor[..]` cases (the 3-surface gap re-probed 2026-07-04) **landed as
+  S6c-12 Slices 1 + 2**. Remaining slices of that epic: user trait **DEFAULT**
   methods over containers + **inherent** `impl Column[i64] { .. }` (Slice 3);
   **generic** container impls `impl[T: Add] Trait for Column[T]` (Slice 4,
   reuses `make_generic_impl_method_function` + S6a mono handle plumbing);
