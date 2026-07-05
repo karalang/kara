@@ -304,16 +304,26 @@ impl<'ctx> super::Codegen<'ctx> {
                     // struct drop's `OptionInline` arm (gated on this same
                     // copy-supported predicate) frees it — copy == drop, so a
                     // callee-owned copy and the caller's retained original own
-                    // independent buffers. Other `Option` payloads (boxed-wide,
+                    // independent buffers. An `Option[shared]` field is ALSO
+                    // copyable (B-2026-07-03-28 shared leg): its inline payload is
+                    // a single RC box pointer (word 1, ptrtoint), so the "copy" is
+                    // an rc-INC of the box when Some
+                    // (`deep_copy_option_inline_payload_in_place`'s shared branch),
+                    // symmetric with the Vec-element / destructure-leaf drop's
+                    // `Option[shared]` rc-DEC (`emit_nested_struct_shared_rc_decs_ex`
+                    // / `RcDecOption`). Other `Option` payloads (boxed-wide,
                     // struct/enum-inline, plain-enum = B-27) and every `Result`
                     // stay caller-retains (this routine can't duplicate them, and
                     // the drop correspondingly leaves them excluded).
-                    "Option" => Self::option_payload_te(fte)
-                        .map(|pt| {
-                            self.is_string_type_expr(&pt)
-                                || self.extract_vec_elem_type(&pt).is_some()
-                        })
-                        .unwrap_or(false),
+                    "Option" => {
+                        Self::option_payload_te(fte)
+                            .map(|pt| {
+                                self.is_string_type_expr(&pt)
+                                    || self.extract_vec_elem_type(&pt).is_some()
+                            })
+                            .unwrap_or(false)
+                            || self.option_inner_shared_type_for_type_expr(fte).is_some()
+                    }
                     "Result" => false,
                     _ if is_primitive_type_name(head) => true,
                     _ if self.shared_types.contains_key(head) => false,
@@ -677,6 +687,17 @@ impl<'ctx> super::Codegen<'ctx> {
         field_ptr: PointerValue<'ctx>,
         opt_te: &TypeExpr,
     ) {
+        // B-2026-07-03-28 shared leg — an `Option[shared]` payload is a single
+        // inline RC box pointer (word 1, ptrtoint), NOT an `{ptr,len,cap}`
+        // buffer. The caller-retains entry-copy of it is an rc-INC of the box
+        // when Some (so the callee's copy holds an independent ref), the exact
+        // peer of `emit_nested_struct_shared_rc_decs_ex`'s `Option[shared]`
+        // rc-DEC arm. Handle it before the String/Vec buffer-copy path (which
+        // would `return` early on a shared payload).
+        if let Some((_, inner_info)) = self.option_inner_shared_type_for_type_expr(opt_te) {
+            self.rc_inc_option_inline_shared_payload_in_place(field_ptr, inner_info.heap_type);
+            return;
+        }
         let Some(payload_te) = Self::option_payload_te(opt_te) else {
             return;
         };
@@ -776,6 +797,77 @@ impl<'ctx> super::Codegen<'ctx> {
         self.store_enum_word(option_ty, field_ptr, 1, cd_w.into());
         self.store_enum_word(option_ty, field_ptr, 2, cl);
         self.store_enum_word(option_ty, field_ptr, 3, cc);
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        self.builder.position_at_end(merge_bb);
+    }
+
+    /// B-2026-07-03-28 shared leg — rc-INC an `Option[shared]` FIELD's inline
+    /// box pointer (word 1, ptrtoint) when Some, so a callee-owned by-value
+    /// aggregate param holds an independent ref to the shared box. The exact
+    /// inc peer of `emit_nested_struct_shared_rc_decs_ex`'s `Option[shared]`
+    /// rc-dec arm (synth_drop.rs): read the Option tag, and on Some load word 1
+    /// as i64, `int_to_ptr`, null-guard, and `emit_refcount_inc_by_type` on the
+    /// recovered box. A `None` payload runs nothing. Symmetric copy == drop, so
+    /// the callee copy and the caller's retained original both own a ref that
+    /// each drop path (Vec-element / destructure-leaf) rc-decs exactly once.
+    fn rc_inc_option_inline_shared_payload_in_place(
+        &mut self,
+        field_ptr: PointerValue<'ctx>,
+        heap_type: StructType<'ctx>,
+    ) {
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let fn_val = self.current_fn.unwrap();
+        let Some(layout) = self.enum_layouts.get("Option").cloned() else {
+            return;
+        };
+        let option_ty = layout.llvm_type;
+        let some_tag = layout.tags.get("Some").copied().unwrap_or(1);
+
+        let tag_ptr = self
+            .builder
+            .build_struct_gep(option_ty, field_ptr, 0, "p14os.tag.p")
+            .unwrap();
+        let tag = self
+            .builder
+            .build_load(i64_t, tag_ptr, "p14os.tag")
+            .unwrap()
+            .into_int_value();
+        let is_some = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                tag,
+                i64_t.const_int(some_tag, false),
+                "p14os.some",
+            )
+            .unwrap();
+        let some_bb = self.context.append_basic_block(fn_val, "p14os.some");
+        let merge_bb = self.context.append_basic_block(fn_val, "p14os.merge");
+        self.builder
+            .build_conditional_branch(is_some, some_bb, merge_bb)
+            .unwrap();
+
+        self.builder.position_at_end(some_bb);
+        let w1 = self.load_enum_word(option_ty, field_ptr, 1, "p14os.w1");
+        let inner = self
+            .builder
+            .build_int_to_ptr(w1, ptr_ty, "p14os.inner")
+            .unwrap();
+        let inner_null = self
+            .builder
+            .build_is_null(inner, "p14os.inner.isnull")
+            .unwrap();
+        let inc_bb = self.context.append_basic_block(fn_val, "p14os.inc.do");
+        let skip_bb = self.context.append_basic_block(fn_val, "p14os.inc.skip");
+        self.builder
+            .build_conditional_branch(inner_null, skip_bb, inc_bb)
+            .unwrap();
+        self.builder.position_at_end(inc_bb);
+        self.emit_refcount_inc_by_type(heap_type, inner);
+        self.builder.build_unconditional_branch(skip_bb).unwrap();
+        self.builder.position_at_end(skip_bb);
         self.builder.build_unconditional_branch(merge_bb).unwrap();
 
         self.builder.position_at_end(merge_bb);

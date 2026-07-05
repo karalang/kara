@@ -3730,9 +3730,30 @@ impl<'ctx> super::Codegen<'ctx> {
         struct_name: &str,
         struct_alloca: PointerValue<'ctx>,
     ) {
-        let drop_fn = match self.emit_struct_drop_synthesis(struct_name) {
-            Some(f) => f,
-            None => return,
+        // B-2026-07-03-28 shared leg — a struct that transitively owns a
+        // `shared` / `Option[shared]` / `Vec[shared]` field needs the COMBINED
+        // drop (value-drop `__karac_drop_struct_<S>` PLUS the shared-field
+        // rc-dec walker `emit_nested_struct_shared_rc_decs`), not the value
+        // drop alone. The value drop SKIPS shared fields by design (they are
+        // RC-machinery, not buffer-owned), so without the walker a scope-exit
+        // drop of an owning struct local / callee-owned by-value param never
+        // rc-decs its shared children — the direct-shared-field local leak
+        // (s1/s3 probes) and the Option[shared] param leak that the
+        // caller-retains entry-copy's rc-INC would otherwise strand. The
+        // combined drop passes `owns_buffer_free=false` so it does NOT re-free
+        // the String/Vec buffers the value drop already freed (copy-depth ==
+        // drop-depth stays intact). Structs with no shared field keep the plain
+        // value drop — zero behavior change for them.
+        let drop_fn = if self.struct_owns_shared_field(struct_name, &mut Vec::new()) {
+            match self.emit_vec_elem_struct_with_shared_drop_fn(struct_name) {
+                Some(f) => f,
+                None => return,
+            }
+        } else {
+            match self.emit_struct_drop_synthesis(struct_name) {
+                Some(f) => f,
+                None => return,
+            }
         };
         if let Some(frame) = self.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::StructDrop {

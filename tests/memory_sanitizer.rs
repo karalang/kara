@@ -1561,26 +1561,33 @@ fn main() {
     /// NOT use — leaks under LSan; that separate gap is pinned in
     /// `asan_option_plain_enum_heap_payload_undestructured_drop_leaks_pinned`.)
     ///
-    /// B-2026-07-03-28 (pinned, PORT-AFFECTING): still LEAKS under LSan, but the
-    /// leak is down to 240 B / 6 allocs from 1434 B / 36, in TWO landed steps and
-    /// one remaining class. (1) The Vec-element drain (B-2026-07-03-30) fixed the
-    /// `Vec[String]`/collection ELEMENT leak → 474 B / 12. (2) Facet A step 1 (the
-    /// direct-`Option`-field callee-ownership: `param_own` entry-copies an
-    /// `Option[String]`/`Option[Vec]` payload, and `emit_struct_drop_synthesis`
-    /// frees it via `OptionInline`, gated on the same copy-supported predicate,
-    /// with destructure/match/field-move-out source-tag neutralization) fixed
-    /// `AttrNode.string_value` → 240 B / 6. The RESIDUAL is the `AttrArgNode`
-    /// options nested inside `Vec[AttrArgNode]`: `name: Option[String]` and
-    /// `value: Option[Expr]` where `Expr` is `shared`. Closing it needs TWO more
-    /// pieces — (a) `Option[shared]` entry-copy (rc-inc) + drop (rc-dec) so
-    /// `AttrArgNode` becomes copy-supported, and (b) element-DEEP entry-copy of a
-    /// `Vec[struct]` field (so the deeper `AttrArgNode` element drop stays
-    /// symmetric with the copy). Tracked in the B-28 ledger. `#[ignore]`d so the
-    /// Linux-CI `memory-sanitizer` gate stays green; un-ignore when the residual
-    /// lands. Run: `scripts/lsan-local.sh
-    /// "asan_attr_node_list_drop_consume_and_plain -- --ignored"`.
+    /// B-2026-07-03-28 (FIXED — Phase 2 of the caller-retains model): was 240 B /
+    /// 6 allocs (down from 1434 B / 36 in earlier steps). The residual was the
+    /// `AttrArgNode` (`ArgN`) options nested in `Vec[ArgN]`: `name: Option[String]`
+    /// leaked because `ArgN` was NOT copy-supported (its `value: Option[shared]`
+    /// field failed `field_copy_supported`), so the value drop's `OptionInline`
+    /// gate — keyed on `aggregate_param_copy_supported_struct` — stayed OFF and
+    /// `name`'s buffer was never freed. Closed by making `Option[shared]`
+    /// copy-supported (the shared leg): (1) `field_copy_supported` admits an
+    /// `Option[shared]` field; (2) `deep_copy_option_inline_payload_in_place`
+    /// rc-INCs the inline box (word 1) on entry-copy — symmetric with the
+    /// `emit_nested_struct_shared_rc_decs_ex` / `RcDecOption` rc-DEC on drop; and
+    /// (3) `track_struct_var` registers the COMBINED drop
+    /// (`emit_vec_elem_struct_with_shared_drop_fn` = value-drop PLUS the
+    /// shared-field rc-dec walker) for any struct owning shared fields, so a
+    /// scope-exit drop of an owning struct local / callee-owned by-value param
+    /// rc-decs its `shared` / `Option[shared]` children (the value drop alone
+    /// skips them). With `ArgN` copy-supported, `OptionInline` frees `name`, and
+    /// the shared box balances (inc == dec). The consume path (each node moved
+    /// into `render_*` and destructured) self-balances via the entry-copy +
+    /// destructure-leaf rc-dec; the plain-drop path (`more`, dropped at scope) is
+    /// fixed by the combined drop. NOTE: element-DEEP entry-copy of a `Vec[struct]`
+    /// FIELD (the "piece (b)" the original scope named) is NOT needed here — this
+    /// test consumes `args` via a for-loop; it is only needed for an
+    /// entry-copy-THEN-whole-drop of such a field, a separate PRE-EXISTING
+    /// double-free tracked as B-2026-07-04-9. Run: `scripts/lsan-local.sh
+    /// "asan_attr_node_list_drop_consume_and_plain"`.
     #[test]
-    #[ignore]
     fn asan_attr_node_list_drop_consume_and_plain() {
         assert_clean_asan_run(
             r#"
@@ -1642,6 +1649,88 @@ fn main() {
 "#,
             &["42"],
             "attr_node_list_drop_consume_and_plain",
+        );
+    }
+
+    /// B-2026-07-03-28 shared-leg focused coverage — a NON-shared struct whose
+    /// only heap is a `shared` / `Option[shared]` field must rc-dec that field on
+    /// EVERY owned-drop path, symmetric with the caller-retains entry-copy's
+    /// rc-inc. Before the fix, a plain struct LOCAL (`let h = Holder{..}`) and a
+    /// callee-owned by-value PARAM both dropped via `__karac_drop_struct_<S>`
+    /// alone, which SKIPS shared fields — so the box leaked (the direct-`shared`
+    /// case never rc-dec'd at all; the `Option[shared]` case leaked once
+    /// `field_copy_supported` admitted it and the entry-copy rc-INC'd with no
+    /// matching dec). Fixed by `track_struct_var` registering the COMBINED drop
+    /// (value-drop + `emit_nested_struct_shared_rc_decs`) for any shared-owning
+    /// struct, plus the fresh-temp-arg gate (`call_dispatch`) recognizing a
+    /// shared-owning struct (invisible to `type_expr_has_drop_heap`). Exercises
+    /// the owned-drop shapes for both a direct `shared` field and an
+    /// `Option[shared]` field: (1) plain local scope-drop; (2) by-value param
+    /// BORROWED then dropped (a fresh-temp arg for the copy-supported
+    /// `Option[shared]` struct, a local for the caller-retains direct-`shared`
+    /// one); (3) by-value param DESTRUCTURED (the destructure leaf rc-decs,
+    /// source neutralized — no double-free); (4) `Vec[Holder]` element
+    /// scope-drop. Payloads ≥36 bytes so LSan sees a leak; a double rc-dec would
+    /// abort under ASAN. (The direct-`shared` FRESH-TEMP arg and the
+    /// entry-copy-then-whole-drop of a `Vec[struct]` FIELD are separate
+    /// PRE-EXISTING residuals — B-2026-07-04-9 — deliberately not exercised.)
+    #[test]
+    fn asan_b28_option_shared_and_direct_shared_struct_drop_no_leak() {
+        assert_clean_asan_run(
+            r#"
+shared enum Val { Nothing, Ident(String), Num(i64) }
+struct OptH { value: Option[Val] }
+struct DirH { value: Val }
+
+fn borrow_opt(h: OptH) -> i64 {
+    let mut r = 0;
+    match h.value { Some(_) => { r = 1; } None => {} }
+    r
+}
+fn destr_opt(h: OptH) -> i64 {
+    let OptH { value } = h;
+    let mut r = 0;
+    match value { Some(_) => { r = 1; } None => {} }
+    r
+}
+fn borrow_dir(h: DirH) -> i64 {
+    let mut r = 0;
+    match h.value { Val.Ident(_) => { r = 1; } _ => {} }
+    r
+}
+
+fn main() {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 4 {
+        // (1) plain local scope-drop, both field shapes.
+        let a = OptH { value: Some(Val.Ident("option_shared_local_payload_alpha_aaaaaaaa".to_string())) };
+        match a.value { Some(_) => { total = total + 1; } None => {} }
+        let b = DirH { value: Val.Ident("direct_shared_local_payload_beta_bbbbbbbbbb".to_string()) };
+        match b.value { Val.Ident(_) => { total = total + 1; } _ => {} }
+        // (2) by-value param borrowed — fresh-temp for the copy-supported
+        // Option[shared] struct; a LOCAL for the caller-retains direct-shared one
+        // (a direct-shared fresh-temp arg is a separate pre-existing residual).
+        total = total + borrow_opt(OptH { value: Some(Val.Ident("byvalue_borrow_opt_payload_gamma_cccccccc".to_string())) });
+        let d = DirH { value: Val.Ident("byvalue_borrow_dir_payload_delta_dddddddd".to_string()) };
+        total = total + borrow_dir(d);
+        // (3) by-value param destructured.
+        total = total + destr_opt(OptH { value: Some(Val.Ident("byvalue_destr_opt_payload_epsilon_eeeeeee".to_string())) });
+        i = i + 1;
+    }
+    // (4) Vec[OptH] element scope-drop (built, len-read, dropped unconsumed).
+    let mut v: Vec[OptH] = Vec.new();
+    let mut j = 0;
+    while j < 4 {
+        v.push(OptH { value: Some(Val.Ident("vec_element_option_shared_payload_zeta_fff".to_string())) });
+        j = j + 1;
+    }
+    total = total + v.len();
+    println(total);
+}
+"#,
+            &["24"],
+            "b28_option_shared_and_direct_shared_struct_drop",
         );
     }
 

@@ -1724,10 +1724,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 let llvm_heap = self.aggregate_has_heap_field(agg_ty);
                 let src_heap_copyable = !llvm_heap
                     && self.aggregate_param_copy_supported_struct(&name, &mut Vec::new())
-                    && self
+                    && (self
                         .struct_field_type_exprs
                         .get(&name)
-                        .is_some_and(|ftes| ftes.iter().any(|f| self.type_expr_has_drop_heap(f)));
+                        .is_some_and(|ftes| ftes.iter().any(|f| self.type_expr_has_drop_heap(f)))
+                        // B-2026-07-03-28 shared leg — a copy-supported struct
+                        // whose only heap is a `shared` / `Option[shared]` field is
+                        // INVISIBLE to `type_expr_has_drop_heap` (it reports false
+                        // for RC leaves), so an inline fresh-temp arg
+                        // (`f(Holder { value: Some(shared) })`) registered NO
+                        // cleanup and leaked the box: the callee entry-copies
+                        // (rc-INC) but the caller temp's ref was never rc-dec'd.
+                        // The callee provably entry-copies a copy-supported struct,
+                        // so this caller temp is an independent ref — register its
+                        // combined drop (`track_struct_var` routes shared-owning
+                        // structs through the rc-dec walker). Symmetric: caller temp
+                        // dec + callee copy dec == create + entry-copy inc.
+                        || self.struct_owns_shared_field(&name, &mut Vec::new()));
                 if llvm_heap || src_heap_copyable {
                     let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
                     self.builder.build_store(slot, val).unwrap();
