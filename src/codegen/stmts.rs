@@ -5616,6 +5616,27 @@ impl<'ctx> super::Codegen<'ctx> {
         te: &TypeExpr,
     ) {
         if let Some(elem_ty) = self.extract_vec_elem_type(te) {
+            // B-2026-07-04-9(a) — a `Vec[<aggregate>]` leaf whose element owns
+            // heap the outer-buffer free can't reach (a struct/enum/Option
+            // element, e.g. `Vec[ArgN]`, `ArgN { name: Option[String] }`) must
+            // drain each element via its own `__karac_drop_*`
+            // (`vec_elem_agg_drop_for_type_expr`) — the SAME per-element drain the
+            // whole-struct drop (`emit_struct_drop_synthesis`'s VecOrString arm)
+            // and the for-loop iterable (`track_vec_of_aggs_var`) use. `track_vec_var`
+            // alone frees only the outer `{ptr,len,cap}` buffer plus DIRECT
+            // String/Vec element buffers, so when the entry-copy makes each
+            // element's inner heap INDEPENDENT (B-04-9(a) element-deep copy) this
+            // leaf strands those payloads (the consume-path leak that reverted two
+            // prior attempts). Symmetric with that deep copy: whatever the copy
+            // duplicates, this drain frees. Direct String/Vec/Map/Set elements
+            // return `None` here (their buffers are handled by `track_vec_var`
+            // below) — unchanged.
+            if let Some(agg_drop) = crate::codegen::helpers::vec_inner_type_expr(te)
+                .and_then(|elem_te| self.vec_elem_agg_drop_for_type_expr(&elem_te))
+            {
+                self.track_vec_of_aggs_var(alloca, elem_ty, agg_drop);
+                return;
+            }
             self.track_vec_var(alloca, Some(elem_ty));
             return;
         }

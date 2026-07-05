@@ -393,7 +393,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         if let Some(elem_ty) = elem_ty {
             // B-2026-07-03-28 — copy-depth must equal drop-depth. The struct drop
-            // now DRAINS a `Vec[elem]` field's `String`/`Map`/`Set`/nested-`Vec`
+            // DRAINS a `Vec[elem]` field's `String`/`Map`/`Set`/nested-`Vec`
             // elements (`emit_struct_drop_synthesis`'s VecOrString arm via
             // `elem_te_needs_direct_recursive_drain`), so this entry-copy must
             // element-DEEP copy exactly those shapes — else the callee's copy
@@ -403,7 +403,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // String / Map / Set / inner-Vec buffer; other element shapes stay
             // outer-only (`None`), matching the drop's outer-only handling for
             // them.
-            let deep_elem_te = crate::codegen::helpers::vec_inner_type_expr(fte)
+            let inner_te = crate::codegen::helpers::vec_inner_type_expr(fte);
+            let deep_elem_te = inner_te
+                .clone()
                 .filter(Self::elem_te_needs_direct_recursive_drain);
             if let Ok(field_ptr) = self
                 .builder
@@ -413,6 +415,24 @@ impl<'ctx> super::Codegen<'ctx> {
                     let copied =
                         self.emit_vecstr_defensive_copy(val, elem_ty, deep_elem_te.as_ref());
                     let _ = self.builder.build_store(field_ptr, copied);
+                }
+                // B-2026-07-04-9(a) — a `Vec[struct]` / `Vec[enum]` / `Vec[Option]`
+                // element whose per-element drop
+                // (`vec_elem_agg_drop_for_type_expr`) frees inner heap the OUTER
+                // `{ptr,len,cap}` copy above cannot reach (`type_expr_has_drop_heap`
+                // is FALSE for an all-`Option` struct like `ArgN`, so the
+                // `emit_vecstr_defensive_copy` agg branch — and `emit_clone_fn`,
+                // whose Option copy is shallow — both miss it). After the outer
+                // buffer is duplicated, deep-copy each copied element in place with
+                // the SAME machinery the entry-copy uses for a nested struct field
+                // (`deep_copy_struct_heap_fields_in_place` / enum / Option), which —
+                // unlike `emit_clone_fn` — duplicates `Option[String]` buffers and
+                // rc-INCs `Option[shared]` boxes, symmetric with the drop's
+                // per-element free / rc-dec. Without this the copied element buffers
+                // alias the source and both drains free them (double-free in
+                // `__karac_drop_struct_<Outer>`).
+                if let Some(elem_te) = inner_te.as_ref() {
+                    self.deep_copy_vec_aggregate_elements_in_place(agg_ty, base_ptr, idx, elem_te);
                 }
             }
             return;
@@ -488,6 +508,157 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         // Primitive / borrow / ignored kind → nothing to copy.
+    }
+
+    /// B-2026-07-04-9(a) — deep-copy each element of an already-outer-copied
+    /// `Vec[<aggregate>]` struct FIELD in place. The outer buffer copy above
+    /// duplicates the `{ptr,len,cap}` array, but each element is a shallow
+    /// bit-copy still aliasing the source's per-element heap; the struct drop
+    /// DRAINS those elements (`vec_elem_agg_drop_for_type_expr`), so without a
+    /// per-element deep copy the callee's whole-drop and the caller's retained
+    /// drop free the SAME element buffers (double-free in
+    /// `__karac_drop_struct_<Outer>`). This reuses the SAME field-copy machinery
+    /// the entry-copy uses for a nested aggregate field — a struct element via
+    /// `deep_copy_struct_heap_fields_in_place`, an enum element via
+    /// `deep_copy_enum_heap_payload_in_place`, an `Option` element via
+    /// `deep_copy_option_inline_payload_in_place` — which (unlike the
+    /// `emit_vecstr_defensive_copy` / `emit_clone_fn` agg path, shallow for
+    /// `Option`) duplicates `Option[String]` buffers and rc-INCs `Option[shared]`
+    /// boxes, symmetric with the per-element drop's free / rc-dec. Bare `shared`
+    /// elements (`Vec[shared]` — an 8-byte RC pointer slot) and no-heap elements
+    /// are skipped: the former's drop is a pure rc-dec needing a paired
+    /// per-element rc-inc (a distinct residual), the latter needs no copy.
+    fn deep_copy_vec_aggregate_elements_in_place(
+        &mut self,
+        agg_ty: StructType<'ctx>,
+        base_ptr: PointerValue<'ctx>,
+        idx: u32,
+        elem_te: &TypeExpr,
+    ) {
+        // Classify the element; bail unless it is a value-deep-copyable
+        // aggregate whose per-element drop frees inner heap.
+        enum ElemCopy {
+            Struct(String),
+            Enum(String),
+            Option,
+        }
+        let plan = match &elem_te.kind {
+            TypeKind::Path(p) => {
+                let name = p.segments.first().map(String::as_str).unwrap_or("");
+                if name == "Option" {
+                    // Only the inline `Some`-payload shapes the drop actually
+                    // frees (`vec_elem_agg_drop_for_type_expr`'s Option arm).
+                    let frees = Self::option_payload_te(elem_te)
+                        .map(|pt| {
+                            self.option_payload_inline_recursive_drop_ok(&pt)
+                                || self.option_payload_struct_or_enum_drop_ok(&pt)
+                        })
+                        .unwrap_or(false);
+                    frees.then_some(ElemCopy::Option)
+                } else if self.shared_heap_type_for_type_expr(elem_te).is_some() {
+                    // Bare `shared` element — rc-inc case, handled elsewhere.
+                    None
+                } else if self.struct_types.contains_key(name)
+                    && !self.shared_types.contains_key(name)
+                {
+                    Some(ElemCopy::Struct(name.to_string()))
+                } else if self
+                    .enum_layouts
+                    .get(name)
+                    .map(|l| !l.is_shared)
+                    .unwrap_or(false)
+                {
+                    Some(ElemCopy::Enum(name.to_string()))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        let Some(plan) = plan else {
+            return;
+        };
+
+        let fn_val = match self.current_fn {
+            Some(f) => f,
+            None => return,
+        };
+        let vec_ty = self.vec_struct_type();
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let elem_ty = self.llvm_type_for_type_expr(elem_te);
+
+        // Reload the (now outer-copied) Vec field's data ptr + len.
+        let Ok(field_ptr) = self
+            .builder
+            .build_struct_gep(agg_ty, base_ptr, idx, "p14a.f")
+        else {
+            return;
+        };
+        let (Ok(data_pp), Ok(len_pp)) = (
+            self.builder
+                .build_struct_gep(vec_ty, field_ptr, 0, "p14a.data.pp"),
+            self.builder
+                .build_struct_gep(vec_ty, field_ptr, 1, "p14a.len.pp"),
+        ) else {
+            return;
+        };
+        let data = self
+            .builder
+            .build_load(ptr_ty, data_pp, "p14a.data")
+            .unwrap()
+            .into_pointer_value();
+        let len = self
+            .builder
+            .build_load(i64_t, len_pp, "p14a.len")
+            .unwrap()
+            .into_int_value();
+
+        // Per-element loop `0..len` (empty Vec runs zero iterations).
+        let loop_bb = self.context.append_basic_block(fn_val, "p14a.loop");
+        let body_bb = self.context.append_basic_block(fn_val, "p14a.body");
+        let exit_bb = self.context.append_basic_block(fn_val, "p14a.exit");
+        let pre_bb = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(loop_bb).unwrap();
+
+        self.builder.position_at_end(loop_bb);
+        let idx_phi = self.builder.build_phi(i64_t, "p14a.i").unwrap();
+        idx_phi.add_incoming(&[(&i64_t.const_int(0, false), pre_bb)]);
+        let i = idx_phi.as_basic_value().into_int_value();
+        let in_range = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i, len, "p14a.cmp")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(in_range, body_bb, exit_bb)
+            .unwrap();
+
+        self.builder.position_at_end(body_bb);
+        let slot = unsafe {
+            self.builder
+                .build_gep(elem_ty, data, &[i], "p14a.slot")
+                .unwrap()
+        };
+        match &plan {
+            ElemCopy::Struct(name) => self.deep_copy_struct_heap_fields_in_place(slot, name),
+            ElemCopy::Enum(name) => {
+                if let Some(layout) = self.enum_layouts.get(name).cloned() {
+                    self.deep_copy_enum_heap_payload_in_place(name, slot, &layout);
+                }
+            }
+            ElemCopy::Option => self.deep_copy_option_inline_payload_in_place(slot, elem_te),
+        }
+        // A sub-copy may have appended blocks and moved the insert point —
+        // branch back from wherever we now are.
+        let body_end = self.builder.get_insert_block().unwrap();
+        let next = self
+            .builder
+            .build_int_add(i, i64_t.const_int(1, false), "p14a.next")
+            .unwrap();
+        self.builder.build_unconditional_branch(loop_bb).unwrap();
+        idx_phi.add_incoming(&[(&next, body_end)]);
+
+        self.builder.position_at_end(exit_bb);
     }
 
     /// Deep-copy (outer buffers only) the live variant's Vec/String payload of

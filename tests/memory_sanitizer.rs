@@ -1859,6 +1859,68 @@ fn main() {
         );
     }
 
+    /// B-2026-07-04-9(a): entry-copy-THEN-whole-drop of a `Vec[struct-with-heap]`
+    /// FIELD double-frees (exit 133 / ASAN). A struct `AttrN` with a
+    /// `Vec[ArgN]` field (`ArgN` owning `Option[String]`/`Option[shared]`) is
+    /// passed BY VALUE to `count(a)` — which is copy-supported, so `a` is
+    /// entry-copied — reads `a.args.len()`, and the copy is WHOLE-dropped at
+    /// return (no element-by-element consume). The prior entry-copy was a
+    /// SHALLOW bit-copy of the `Vec[ArgN]` field, so the callee's whole-drop and
+    /// the caller's for-loop element drop free the SAME element buffers. Distinct
+    /// from `asan_attr_node_list_drop_consume_and_plain`, which consumes the args
+    /// Vec element-by-element (self-balancing) — the two must BOTH stay clean:
+    /// the whole-drop path needs an element-DEEP entry-copy, and that copy must
+    /// NOT strand the consume path's source drain (the regression that reverted
+    /// two prior attempts). Payloads ≥36 B for LSan reachability. Run:
+    /// `scripts/lsan-local.sh "b04_9a_vec_struct_field_entrycopy_wholedrop"`.
+    #[test]
+    fn asan_b04_9a_vec_struct_field_entrycopy_wholedrop_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+shared enum Val { Nothing, Ident(String), Num(i64) }
+struct ArgN { name: Option[String], value: Option[Val] }
+struct AttrN { path: Vec[String], args: Vec[ArgN], string_value: Option[String] }
+
+// Entry-copy-THEN-whole-drop: `a` is entry-copied, `a.args.len()` read, then
+// the copy is WHOLE-dropped at return while the caller's for-loop element `a`
+// also drops. A shallow field bit-copy => the same element buffers freed twice.
+fn count(a: AttrN) -> i64 { a.args.len() }
+
+fn build() -> Vec[AttrN] {
+    let mut v: Vec[AttrN] = Vec.new();
+    let mut i = 0;
+    while i < 6 {
+        let mut args: Vec[ArgN] = Vec.new();
+        args.push(ArgN {
+            name: Some("note_argument_name_key_gamma_ccccccccccc".to_string()),
+            value: Some(Val.Ident("clone_derive_identifier_value_ddddddddd".to_string())),
+        });
+        args.push(ArgN { name: None, value: Some(Val.Num(42)) });
+        let mut path: Vec[String] = Vec.new();
+        path.push("diagnostic_namespace_segment_alpha_aaaaa".to_string());
+        v.push(AttrN {
+            path: path,
+            args: args,
+            string_value: Some("string_value_payload_epsilon_eeeeeeeeee".to_string()),
+        });
+        i = i + 1;
+    }
+    v
+}
+
+fn main() {
+    let items = build();
+    let mut total = 0;
+    for a in items { total = total + count(a); }
+    println(total);
+}
+"#,
+            &["12"],
+            "b04_9a_vec_struct_field_entrycopy_wholedrop",
+        );
+    }
+
+
     /// B-2026-07-03-27 (FIXED 009fd479-follow-on): an `Option[E]` field where `E`
     /// is a PLAIN (non-`shared`) user enum carrying a heap payload, destructured
     /// into a local and dropped, leaked the enum payload's heap buffer — the
