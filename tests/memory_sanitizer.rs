@@ -499,6 +499,91 @@ fn main() {
     }
 
     #[test]
+    fn asan_b04_4_heap_enumerate_conditional_tuple_collect_no_double_free() {
+        // B-2026-07-04-4: a HEAP `enumerate` whose `(i64, String)` tuple flows
+        // into a CONDITIONAL whole-tuple push — `filter`/`take_while`/
+        // `skip_while`/`inspect` after enumerate, plus a `filter().take()` two-
+        // stage chain. Each binds the tuple DIRECTLY to the (first) downstream
+        // param, so the heap tuple keeps a SINGLE owning binding and its
+        // conditional `if pred { push(p) }` is a clean move (no aliasing copy).
+        // Previously gated to the loud dispatch-fail; now lowered. Reads an
+        // element from every result each round to expose any double-free/UAF.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let w: Vec[String] = Vec[
+            "alpha-b044-payload-aaaaaaaaaaaaaaaaaaaa".to_string(),
+            "bravo-b044-payload-bbbbbbbbbbbbbbbbbbbb".to_string(),
+            "charlie-b044-payload-cccccccccccccccc".to_string(),
+            "delta-b044-payload-dddddddddddddddddddd".to_string()
+        ];
+        let f: Vec[(i64, String)] = w.iter().enumerate().filter(|p| p.0 > 0i64).collect();
+        let tw: Vec[(i64, String)] = w.iter().enumerate().take_while(|p| p.0 < 2i64).collect();
+        let sw: Vec[(i64, String)] = w.iter().enumerate().skip_while(|p| p.0 < 1i64).collect();
+        let ft: Vec[(i64, String)] = w.iter().enumerate().filter(|p| p.0 > 0i64).take(1i64).collect();
+        let ins: Vec[(i64, String)] = w.iter().enumerate().inspect(|p| p.0).collect();
+        let f0: (i64, String) = f[0];
+        let tw0: (i64, String) = tw[0];
+        let sw2: (i64, String) = sw[2];
+        let ft0: (i64, String) = ft[0];
+        let ins3: (i64, String) = ins[3];
+        println(f"{f.len()}:{f0.1} {tw.len()}:{tw0.1} {sw.len()}:{sw2.1} {ft.len()}:{ft0.1} {ins.len()}:{ins3.1}");
+        round = round + 1i64;
+    }
+}
+"#,
+            [
+                "3:bravo-b044-payload-bbbbbbbbbbbbbbbbbbbb 2:alpha-b044-payload-aaaaaaaaaaaaaaaaaaaa 3:delta-b044-payload-dddddddddddddddddddd 1:bravo-b044-payload-bbbbbbbbbbbbbbbbbbbb 4:delta-b044-payload-dddddddddddddddddddd",
+            ]
+            .repeat(40)
+            .as_slice(),
+            "asan_b04_4_heap_enumerate_conditional_tuple_collect_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_b04_4_heap_enumerate_downstream_map_collect_no_double_free() {
+        // B-2026-07-04-4 case D and siblings: a HEAP `enumerate` whose tuple
+        // reaches a `map(|p| p.1)` AFTER a passthrough stage (`take`/`skip`) or a
+        // `filter`. The `Enumerate` arm now searches PAST `take`/`skip`/`step_by`
+        // to bind the tuple directly to the map's param, so the map extracts the
+        // String field from the SINGLE owning binding — no `let p = __ietup`
+        // whole-tuple bit-copy (the previous double-free). Each collects a
+        // `Vec[String]`; reads an element each round.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let w: Vec[String] = Vec[
+            "alpha-b044-payload-aaaaaaaaaaaaaaaaaaaa".to_string(),
+            "bravo-b044-payload-bbbbbbbbbbbbbbbbbbbb".to_string(),
+            "charlie-b044-payload-cccccccccccccccc".to_string(),
+            "delta-b044-payload-dddddddddddddddddddd".to_string()
+        ];
+        let fm: Vec[String] = w.iter().enumerate().filter(|p| p.0 > 0i64).map(|p| p.1).collect();
+        let tm: Vec[String] = w.iter().enumerate().take(2i64).map(|p| p.1).collect();
+        let sm: Vec[String] = w.iter().enumerate().skip(1i64).map(|p| p.1).collect();
+        let fm2: String = fm[2];
+        let tm0: String = tm[0];
+        let sm2: String = sm[2];
+        println(f"{fm.len()}:{fm2} {tm.len()}:{tm0} {sm.len()}:{sm2}");
+        round = round + 1i64;
+    }
+}
+"#,
+            [
+                "3:delta-b044-payload-dddddddddddddddddddd 2:alpha-b044-payload-aaaaaaaaaaaaaaaaaaaa 3:delta-b044-payload-dddddddddddddddddddd",
+            ]
+            .repeat(40)
+            .as_slice(),
+            "asan_b04_4_heap_enumerate_downstream_map_collect_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_b04_2_identity_collect_no_leak() {
         // B-2026-07-04-2 sub-part 4: a PLAIN `<src>.iter().collect()` identity
         // collect (no map/filter/... adaptor). The fix injects a synthetic

@@ -6387,9 +6387,14 @@ fn main() {
         // straight in — B-2026-07-04-3) works, and `enumerate().map(|p| …)` works
         // (the tuple is bound DIRECTLY to the map's param — single owning binding
         // — and `map` pushes a TRANSFORMED value — B-2026-07-04-4). A heap
-        // `enumerate` followed by `filter`/`take_while`/`skip_while` (a
-        // conditional WHOLE-tuple move) or a second downstream stage still falls
-        // through to the loud dispatch-fail rather than miscompiling.
+        // `enumerate` followed by `filter`/`take_while` (a conditional WHOLE-
+        // tuple move) or a DOWNSTREAM `map` past a `take`/`filter` also works now
+        // (B-2026-07-04-4): the tuple binds directly to the first downstream
+        // param (searching past `take`/`skip`/`step_by`), keeping it a single
+        // owning binding -- no `let p = __ietup` whole-tuple bit-copy. (A
+        // residual whole-tuple copy -- a later param stage with a DIFFERENT name,
+        // or a non-terminal whole-tuple `map` -- still gates to the loud
+        // dispatch-fail rather than miscompiling.)
         if let Some(out) = run_program(
             r#"
 fn main() {
@@ -6425,12 +6430,22 @@ fn main() {
     println(f"{hl[0]} {hl[1]} {hl[2]}");
     let hs: Vec[String] = hw.iter().skip(1i64).enumerate().map(|p| p.1).collect();
     println(f"{hs.len()} {hs[0]}");
+    let hef: Vec[(i64, String)] = hw.iter().enumerate().filter(|p| p.0 > 0i64).collect();
+    let hef0 = hef[0];
+    println(f"{hef.len()} {hef0.0} {hef0.1}");
+    let hetw: Vec[(i64, String)] = hw.iter().enumerate().take_while(|p| p.0 < 2i64).collect();
+    let hetw1 = hetw[1];
+    println(f"{hetw.len()} {hetw1.0} {hetw1.1}");
+    let htm: Vec[String] = hw.iter().enumerate().take(2i64).map(|p| p.1).collect();
+    println(f"{htm.len()} {htm[0]} {htm[1]}");
+    let hfm: Vec[String] = hw.iter().enumerate().filter(|p| p.0 > 0i64).map(|p| p.1).collect();
+    println(f"{hfm.len()} {hfm[0]} {hfm[1]}");
 }
 "#,
         ) {
             assert_eq!(
                 out,
-                "4 0 10 3 40\n10 120 340\n11 44\n2 1 20\n3 0 20\n2 2 30\n3 0 red 2 blue\n2 0 green\n3 red blue\n3 6 6\n2 green\n"
+                "4 0 10 3 40\n10 120 340\n11 44\n2 1 20\n3 0 20\n2 2 30\n3 0 red 2 blue\n2 0 green\n3 red blue\n3 6 6\n2 green\n2 1 green\n2 1 green\n2 red green\n2 green blue\n"
             );
         }
     }
