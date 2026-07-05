@@ -499,6 +499,49 @@ fn main() {
     }
 
     #[test]
+    fn asan_b04_2_identity_collect_no_leak() {
+        // B-2026-07-04-2 sub-part 4: a PLAIN `<src>.iter().collect()` identity
+        // collect (no map/filter/... adaptor). The fix injects a synthetic
+        // identity `map(|x| x)`, cloning each element into a fresh Vec. A
+        // named-local source is BORROWED (survives, freed once at its own scope),
+        // and a FRESH-TEMP source (`mk().iter().collect()`) must free its heap
+        // after cloning. Loops 40× with >=36-byte payloads for LSan reachability;
+        // reads an element each round to expose any double-free/UAF.
+        assert_clean_asan_run(
+            r#"
+fn mk() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("identity-collect-freshtemp-alpha-aaaaaaaaaaaa".to_string());
+    v.push("identity-collect-freshtemp-bravo-bbbbbbbbbbbb".to_string());
+    v
+}
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let w: Vec[String] = Vec[
+            "identity-collect-local-alpha-aaaaaaaaaaaaaaaa".to_string(),
+            "identity-collect-local-bravo-bbbbbbbbbbbbbbbb".to_string(),
+            "identity-collect-local-charlie-cccccccccccccc".to_string()
+        ];
+        let a: Vec[String] = w.iter().collect();
+        let ft: Vec[String] = mk().iter().collect();
+        let a1: String = a[1i64];
+        let ft0: String = ft[0i64];
+        println(f"{a.len()} {w.len()} {a1} {ft.len()} {ft0}");
+        round = round + 1i64;
+    }
+}
+"#,
+            [
+                "3 3 identity-collect-local-bravo-bbbbbbbbbbbbbbbb 2 identity-collect-freshtemp-alpha-aaaaaaaaaaaa",
+            ]
+            .repeat(40)
+            .as_slice(),
+            "asan_b04_2_identity_collect_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_fresh_temp_source_enumerate_collect_no_double_free() {
         // B-2026-07-04-5: a collect-adaptor chain whose SOURCE is a fresh-temp
         // call result (`mk().iter()…`) rather than a named local. The for-loop

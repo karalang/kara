@@ -6293,6 +6293,46 @@ fn main() {
     }
 
     #[test]
+    fn e2e_iter_adaptor_identity_collect_to_vec_codegen() {
+        // B-2026-07-04-2 sub-part 4: a PLAIN `<src>.iter().collect()` with NO
+        // `map`/`filter`/... adaptor (an identity collect) fell through to the
+        // loud dispatch-fail under `karac build` ("no handler for method
+        // 'collect' on non-identifier receiver"). The fix injects a synthetic
+        // identity `map(|x| x)` when the adaptor chain is empty over an `.iter()`
+        // source, so the shared pipeline lowers it exactly like the verified
+        // `<src>.iter().map(|x| x).collect()` shape — a fresh Vec of element
+        // CLONES. `.iter()` borrows, so the source Vec SURVIVES (asserted via
+        // `a.len()`/`s.len()` after the collect), and the two Vecs own
+        // independent buffers. Exercises POD + heap elements over a named-local
+        // source AND a fresh-temp source (`build().iter()`, whose heap must be
+        // freed after cloning — leak-checked by the memory_sanitizer sibling
+        // `asan_b04_2_identity_collect_no_leak`).
+        if let Some(out) = run_program(
+            r#"
+fn build() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("alpha".to_string());
+    v.push("beta".to_string());
+    v.push("gamma".to_string());
+    v
+}
+fn main() {
+    let a: Vec[i64] = Vec[1i64, 2i64, 3i64, 4i64];
+    let b: Vec[i64] = a.iter().collect();
+    println(f"{b.len()} {a.len()} {b[0]} {b[3]}");
+    let s: Vec[String] = Vec["one".to_string(), "two".to_string()];
+    let t: Vec[String] = s.iter().collect();
+    println(f"{t.len()} {s.len()} {t[0]}{t[1]}");
+    let ft: Vec[String] = build().iter().collect();
+    println(f"{ft.len()} {ft[0]}");
+}
+"#,
+        ) {
+            assert_eq!(out, "4 4 1 4\n2 2 onetwo\n3 alpha\n");
+        }
+    }
+
+    #[test]
     fn e2e_iter_adaptor_collect_enumerate_codegen() {
         // B-2026-07-04-2 sub-part 1: `<iter>.enumerate().collect()` — the
         // element-retyping adaptor `T` → `(i64, T)`. Lowered like the other

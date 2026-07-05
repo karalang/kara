@@ -3891,9 +3891,33 @@ impl<'ctx> super::Codegen<'ctx> {
             cur = object;
         }
         if steps.is_empty() {
-            // No `map`/`filter` in the chain — not our shape (plain
-            // `.iter().collect()`); leave it to the diagnostic.
-            return Ok(None);
+            // Identity collect (`<src>.iter().collect()`) with no
+            // `map`/`filter`/... adaptor. Inject a synthetic identity
+            // `map(|x| x)` so the shared pipeline below lowers it exactly like
+            // the verified `<src>.iter().map(|x| x).collect()` shape — a fresh
+            // `Vec` of element CLONES (the source is borrowed via `.iter()`, so
+            // it survives; both own independent buffers, freed once each).
+            // B-2026-07-04-2 sub-part 4.
+            //
+            // Gated to a recognized iterator SOURCE — a no-arg `.iter()` method
+            // call. Any other empty-`steps` base (an unhandled adaptor peeled to
+            // the `_ => break` arm, a bare iterator variable, `.into_iter()`
+            // whose MOVE semantics this clone-shaped lowering would not honor, …)
+            // keeps bailing to the loud dispatch-fail, never a miscompile.
+            let is_iter_source = matches!(
+                &cur.kind,
+                ExprKind::MethodCall { method, args, .. }
+                    if args.is_empty() && method == "iter"
+            );
+            if !is_iter_source {
+                return Ok(None);
+            }
+            let param = format!("__idc_{}", self.indexed_elem_counter);
+            let body = Expr {
+                kind: ExprKind::Identifier(param.clone()),
+                span: call_span.clone(),
+            };
+            steps.push(IterAdaptor::Map { param, body });
         }
         steps.reverse();
         let base_iterable = cur.clone();
