@@ -1398,7 +1398,7 @@ impl<'a> super::TypeChecker<'a> {
     /// ` ; note: ...` clauses. Absent fields fall back to the default
     /// phrasing for that clause; an entirely absent payload reproduces
     /// the pre-slice-6 message verbatim.
-    fn render_unsatisfied_bound_message(
+    pub(super) fn render_unsatisfied_bound_message(
         &self,
         type_name: &str,
         trait_name: &str,
@@ -1479,6 +1479,26 @@ impl<'a> super::TypeChecker<'a> {
             out.push_str(trait_name);
             out.push_str("` is implemented by: ");
             out.push_str(&candidates.join(", "));
+        }
+        // Float primitives deliberately do NOT implement the total-order /
+        // total-equality / hashing traits — IEEE-754 NaN breaks reflexivity
+        // and antisymmetry (env_build.rs "Floats deliberately excluded"). The
+        // PascalCase `F32`/`F64` wrapper types (design.md § "total-order float
+        // types") provide a total order (NaN sorts last) and DO implement these.
+        // Without this note the built-in-impl list above ("… implemented by:
+        // F32, F64, …") actively misleads: an `f64` user reads `F64` and
+        // assumes their primitive qualifies. That exact confusion produced the
+        // B-2026-07-04-15 ledger misdiagnosis (a correct `T: Ord` rejection on
+        // `Column[f64]` was mis-read as a container/monomorphization bug).
+        if matches!(concrete_ty, Type::Float(_)) && matches!(trait_name, "Ord" | "Eq" | "Hash") {
+            let disp = type_display(concrete_ty);
+            let wrapper = if disp == "f32" { "F32" } else { "F64" };
+            out.push_str(&format!(
+                "; note: `{disp}` is not totally ordered (IEEE-754 NaN), so it does not \
+                 implement `{trait_name}` — use the total-order wrapper `{wrapper}` \
+                 (`{wrapper}.from(x)`) in `Ord`/`Eq`/`Hash` contexts, or drop the \
+                 `{trait_name}` bound if you only need arithmetic"
+            ));
         }
         out
     }

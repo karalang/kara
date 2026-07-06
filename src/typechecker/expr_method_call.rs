@@ -4108,6 +4108,46 @@ impl<'a> super::TypeChecker<'a> {
                 // A comptime-derived type (e.g. `#[derive(Message)]`) gains
                 // methods only after typecheck, so its method set is open here —
                 // suppress the not-found diagnostic for such types.
+                // Before the generic "no method" message: the method may
+                // genuinely EXIST on a matching impl that was FILTERED OUT of
+                // `find_methods_with_args` because the receiver's element type
+                // fails one of the impl's bounds (`impl[T: Ord] Trait for
+                // Column[T]` invoked on `Column[f64]` — f64 is deliberately not
+                // `Ord`). "no method 'span'" hides that; surface the failing
+                // bound instead (reusing the float-`Ord`/`Eq`/`Hash` → wrapper
+                // hint). This is the clarity B-2026-07-04-15 lacked — the
+                // rejection there was CORRECT-BY-DESIGN, but read as a
+                // container/monomorphization bug because the message named the
+                // wrong problem.
+                let bound_gate = self.env.impls.iter().find_map(|imp| {
+                    if imp.target_type != type_name
+                        || !imp.methods.contains_key(method)
+                        || !super::types::impl_args_match(&imp.target_args, &type_args)
+                    {
+                        return None;
+                    }
+                    self.env
+                        .first_unsatisfied_bound(imp, &type_args)
+                        .map(|(pn, b, cty)| (imp.trait_name.clone(), pn, b, cty))
+                });
+                if let Some((trait_of_impl, param_name, bound, concrete)) = bound_gate {
+                    let bound_trait = bound.path.last().cloned().unwrap_or_default();
+                    let detail = self.render_unsatisfied_bound_message(
+                        &param_name,
+                        &bound_trait,
+                        &concrete,
+                        &bound,
+                    );
+                    let via = trait_of_impl
+                        .map(|t| format!(" (via `impl {} for {}`)", t, type_name))
+                        .unwrap_or_default();
+                    let msg = format!(
+                        "method '{}' is not callable on this `{}`{}: {}",
+                        method, type_name, via, detail
+                    );
+                    self.type_error(msg, span.clone(), TypeErrorKind::NoMethodFound);
+                    return Type::Error;
+                }
                 if (is_user_defined || method_on_other_specialization)
                     && !self.type_has_comptime_derive(&type_name)
                 {

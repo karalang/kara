@@ -787,10 +787,21 @@ B-2026-07-02-10..13, see the ledger.
   `user_generic_trait_impl_over_column_resolves` (typechecker),
   `user_generic_trait_impl_over_container_dispatches` (interpreter),
   `test_e2e_user_generic_trait_impl_over_container` (codegen). Probing this slice
-  surfaced **two residual edges**: **B-2026-07-04-15** (typecheck, still open) —
-  a generic-container *default* method mis-resolves at the call site on the 2nd
-  element mono ("no method on type 'Column'"); container-specific (user structs
-  fine), default-specific (required methods fine), run works. **B-2026-07-04-16**
+  surfaced **two residual edges**: **B-2026-07-04-15** (typecheck) — **✅ RESOLVED
+  (Slice 4b): a MISDIAGNOSIS, correct-by-design.** It was *not* container-specific
+  nor 2nd-mono nor default-method-specific — the real cause is that the repro's
+  trait bound was `T: Ord + Sub` and **`f64` deliberately does not implement `Ord`**
+  (IEEE-754 NaN; only the `F32`/`F64` wrapper types do — env_build.rs, design.md
+  § total-order float types). So `Column[f64]` correctly fails the bound; `Column[i64]`
+  passes. `run` "works" only because `karac run` executes past typecheck errors.
+  The i64-vs-f64 asymmetry was mis-read as required-vs-default (the base slice-4
+  test used `T: Add`, which f64 *does* satisfy). Slice 4b fixed the real defect —
+  the DIAGNOSTIC: the impl was silently bound-filtered so the user saw "no method
+  'span', did you mean 'mean'" (naming the wrong problem). Now both the direct-bound
+  path and the container-method-resolution path surface the failing bound + a hint
+  pointing at the `F64` wrapper. Tests `test_float_ord_bound_hint_points_to_wrapper`,
+  `test_generic_container_impl_float_ord_bound_actionable_message`,
+  `test_generic_container_impl_no_ord_bound_ok`. **B-2026-07-04-16**
   (codegen, medium) — **✅ FIXED (Slice 4a).**
   **Slice 4a ✅ (landed) — B-2026-07-04-16, generic container impl operator
   element-width.** A generic `impl[T: Add] Trait[T] for Tensor[T, [3]]` whose body
@@ -812,7 +823,11 @@ B-2026-07-02-10..13, see the ledger.
   exclude Shape args from the fresh-temp fallback's gate count. Verified run ==
   autopar == build across f64/f32/i32/u32/u8 for both containers; test
   `test_e2e_user_generic_trait_impl_over_tensor_operator_widths`.
-  Remaining epic slices: heap/String elem (5); + B-15 (typecheck default-multi-mono).
+  **Slice 4b ✅ (landed) — B-2026-07-04-15 was a MISDIAGNOSIS (correct-by-design).**
+  `f64` deliberately isn't `Ord` (NaN); the repro's `T: Ord` bound legitimately
+  rejects `Column[f64]`. Fixed the DIAGNOSTIC only: the bound-filtered impl now
+  surfaces the failing bound + an `F64`-wrapper hint instead of "no method 'span'".
+  Remaining epic slice: heap/String elem (5).
 - **S6c** — remaining: `ElementwiseOrd` user impls; **u64 column/tensor sort**
   (blocked on the interpreter u64 model — see S6c-9 / B-2026-07-04-8, NOT just an
   unsigned scratch compare as previously thought); a `product` DEFAULT body for
@@ -828,9 +843,10 @@ B-2026-07-02-10..13, see the ledger.
   **Generic** container impls **landed as Slice 4** (base works), and the
   generic-impl operator element-width miscompile **B-2026-07-04-16 landed FIXED as
   Slice 4a** (Shape-arg gate + registered-element sourcing; covers f64/f32/narrow
-  ints on both containers). Remaining slices of that epic: heap/**String** element +
-  error-path polish (Slice 5); plus the still-open **B-2026-07-04-15**
-  (typecheck default-multi-mono) as a focused fix.
+  ints on both containers). **B-2026-07-04-15** was a **misdiagnosis** resolved as
+  **Slice 4b** (correct-by-design: `f64` isn't `Ord`; fixed the misleading
+  diagnostic to name the failing bound + point at the `F64` wrapper). Remaining
+  slice of that epic: heap/**String** element + error-path polish (Slice 5).
 
 ---
 

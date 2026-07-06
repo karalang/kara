@@ -5417,6 +5417,133 @@ fn test_distinct_ord_with_derive_ok() {
 }
 
 #[test]
+fn test_float_ord_bound_hint_points_to_wrapper() {
+    // A `T: Ord` bound instantiated with a float primitive fails — floats are
+    // deliberately NOT `Ord` (IEEE-754 NaN). The diagnostic must point the user
+    // at the total-order `F64` wrapper rather than leaving the misleading
+    // "implemented by: … F64 …" list to imply `f64` qualifies (the confusion
+    // behind the B-2026-07-04-15 ledger misdiagnosis).
+    let errors = typecheck_errors(
+        "fn biggest[T: Ord](a: T, b: T) -> T { if a > b { a } else { b } }
+         fn main() { let _ = biggest(2.5, 4.0); }",
+    );
+    let joined = errors
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join(" | ");
+    assert!(
+        joined.contains("does not implement `Ord`") && joined.contains("total-order wrapper `F64`"),
+        "expected a float-Ord hint pointing to the F64 wrapper, got: {joined}"
+    );
+}
+
+// Full front-end pipeline INCLUDING the desugar pass (`desugar_program`),
+// which splices trait DEFAULT method bodies into each impl. The bare
+// `typecheck_errors` / `typecheck_ok` helpers skip desugar, so a default
+// method never lands on the impl and the bound-gated resolution path under
+// test here is never exercised. Mirrors the real `karac check` pipeline.
+fn typecheck_errors_desugared(source: &str) -> Vec<TypeError> {
+    let mut parsed = parse(source);
+    assert!(parsed.errors.is_empty(), "Parse errors");
+    desugar_program(&mut parsed.program);
+    let resolved = resolve(&parsed.program);
+    assert!(resolved.errors.is_empty(), "Resolve errors");
+    let result = typecheck(&parsed.program, &resolved);
+    assert!(
+        !result.errors.is_empty(),
+        "Expected type errors but got none"
+    );
+    result.errors
+}
+
+fn typecheck_ok_desugared(source: &str) {
+    let mut parsed = parse(source);
+    assert!(parsed.errors.is_empty(), "Parse errors");
+    desugar_program(&mut parsed.program);
+    let resolved = resolve(&parsed.program);
+    assert!(resolved.errors.is_empty(), "Resolve errors");
+    let result = typecheck(&parsed.program, &resolved);
+    assert!(
+        result.errors.is_empty(),
+        "Type errors: {}",
+        result
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
+fn test_generic_container_impl_float_ord_bound_actionable_message() {
+    // B-2026-07-04-15 (RECLASSIFIED — correct-by-design, not a miscompile): a
+    // generic `impl[T: Ord + Sub] Trait[T] for Column[T]` used on `Column[f64]`
+    // is CORRECTLY rejected (f64 isn't `Ord`). The bug was purely diagnostic:
+    // the impl was silently filtered by bound-discharge and the user saw
+    // "no method 'span' on type 'Column'" — naming the wrong problem, which
+    // got mis-filed as a container/2nd-monomorphization resolution bug. The
+    // message must now surface the failing bound + the wrapper hint.
+    let errors = typecheck_errors_desugared(
+        "trait Range2[T: Ord + Sub] {
+             fn lo(ref self) -> T;
+             fn hi(ref self) -> T;
+             fn span(ref self) -> T { self.hi() - self.lo() }
+         }
+         impl[T: Ord + Sub] Range2[T] for Column[T] {
+             fn lo(ref self) -> T { self.min() }
+             fn hi(ref self) -> T { self.max() }
+         }
+         fn main() {
+             let cf: Column[f64] = Column.from_vec([2.5, 1.0, 4.0]);
+             let _ = cf.span();
+         }",
+    );
+    let joined = errors
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join(" | ");
+    assert!(
+        joined.contains("is not callable")
+            && joined.contains("trait bound `T: Ord` is not satisfied")
+            && joined.contains("total-order wrapper `F64`"),
+        "expected a bound-gated actionable message (not a bare 'no method'), got: {joined}"
+    );
+    assert!(
+        !joined.contains("did you mean 'mean'"),
+        "the misleading 'no method / did you mean' message should be replaced, got: {joined}"
+    );
+}
+
+#[test]
+fn test_generic_container_impl_no_ord_bound_ok() {
+    // The correct form of the B-15 repro: `span` only needs `Sub` (f64 DOES
+    // implement `Sub`); `lo`/`hi` call the builtin `Column.min`/`max`, which
+    // need no impl-level bound. Both `Column[i64]` and `Column[f64]` then
+    // resolve `span` — confirming the rejection above was solely the spurious
+    // `Ord` bound, not a container/monomorphization defect.
+    typecheck_ok_desugared(
+        "trait Range2[T: Sub] {
+             fn lo(ref self) -> T;
+             fn hi(ref self) -> T;
+             fn span(ref self) -> T { self.hi() - self.lo() }
+         }
+         impl[T: Sub] Range2[T] for Column[T] {
+             fn lo(ref self) -> T { self.min() }
+             fn hi(ref self) -> T { self.max() }
+         }
+         fn main() {
+             let ci: Column[i64] = Column.from_vec([4, 1, 9]);
+             let cf: Column[f64] = Column.from_vec([2.5, 1.0, 4.0]);
+             let _ = ci.span();
+             let _ = cf.span();
+         }",
+    );
+}
+
+#[test]
 fn test_distinct_hash_required_for_set_key() {
     let errors = typecheck_errors(
         "distinct type UserId = i64;

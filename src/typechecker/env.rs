@@ -734,6 +734,47 @@ impl TypeEnv {
         true
     }
 
+    /// Diagnostic companion to [`Self::impl_bounds_discharge`]: return the
+    /// first inline generic-param bound the impl declares that its
+    /// substituted concrete arg does NOT satisfy — `(param_name, bound,
+    /// concrete_arg)`. `None` when every inline bound holds (or the impl has
+    /// no generic params / no concrete args to check). Used only to turn a
+    /// bound-filtered method-resolution miss into an actionable "requires
+    /// `T: <bound>`, but `<concrete>` does not implement it" message (the
+    /// clarity B-2026-07-04-15 was missing) — the resolution decision itself
+    /// stays with the bool-returning `impl_bounds_discharge`. Mirrors that
+    /// method's permissive skips (missing arg / unresolved type variable) so
+    /// the two never disagree on which bounds are "checkable". Where-clause
+    /// predicates are out of scope for this hint — inline bounds cover the
+    /// common `impl[T: Bound] … for C[T]` shape.
+    pub(super) fn first_unsatisfied_bound(
+        &self,
+        imp: &ImplInfo,
+        target_args: &[Type],
+    ) -> Option<(String, TraitBound, Type)> {
+        let gp = imp.generic_params.as_ref()?;
+        let subs: std::collections::HashMap<&str, &Type> = gp
+            .params
+            .iter()
+            .zip(target_args.iter())
+            .map(|(p, a)| (p.name.as_str(), a))
+            .collect();
+        for param in &gp.params {
+            let Some(&subst_ty) = subs.get(param.name.as_str()) else {
+                continue;
+            };
+            if matches!(subst_ty, Type::TypeParam(_)) {
+                continue;
+            }
+            for bound in &param.bounds {
+                if !self.bound_satisfied(subst_ty, bound) {
+                    return Some((param.name.clone(), bound.clone(), subst_ty.clone()));
+                }
+            }
+        }
+        None
+    }
+
     /// Discharge `bound` against `ty`. The bound's last path segment names
     /// the trait. Walks the supertrait graph via [`Self::type_satisfies_trait`].
     fn bound_satisfied(&self, ty: &Type, bound: &TraitBound) -> bool {
