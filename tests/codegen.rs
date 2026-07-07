@@ -6798,6 +6798,34 @@ fn main() {
         }
     }
 
+    /// The `matrix[i][j]` nested-index clone gap (found via chunks/windows): a
+    /// `let x = m[i][j]` bind out of a `Vec[Vec[String]]` shallow-aliased the
+    /// innermost buffer -> double-free at the two scope exits. The clone helper
+    /// now peels one Vec layer per index level (`vec_index_elem_type_expr`), so
+    /// the binding owns an independent deep clone and the source survives. POD
+    /// nested elements are unaffected (trivially copyable). ASAN twin:
+    /// asan_nested_vec_index_bind_no_double_free.
+    #[test]
+    fn e2e_nested_vec_index_heap_bind_codegen() {
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    v.push("row-alpha".to_string());
+    v.push("row-bravo".to_string());
+    v.push("row-charlie".to_string());
+    let m: Vec[Vec[String]] = v.iter().chunks(2i64).collect();
+    let a: String = m[0i64][0i64];
+    let b: String = m[0i64][1i64];
+    let c: String = m[1i64][0i64];
+    println(f"{a} {b} {c} {m.len()} {v.len()}");
+}
+"#,
+        ) {
+            assert_eq!(out, "row-alpha row-bravo row-charlie 2 3\n");
+        }
+    }
+
     /// B-2026-07-04-2 sub-part 1 (chunks/windows): `<base>.iter().chunks(n)
     /// .collect()` groups the source into consecutive `Vec[E]` slices of length
     /// `n` (last chunk short); `.windows(n)` yields every overlapping length-`n`
@@ -6809,6 +6837,7 @@ fn main() {
     /// can't emit) and no in-place fill of a growing accumulator (which
     /// double-freed on realloc). The borrowed base survives; heap coverage is
     /// the ASAN twin `asan_b04_2_chunks_heap_collect_no_leak`.
+
     #[test]
     fn e2e_iter_adaptor_chunks_windows_collect_codegen() {
         if let Some(out) = run_program(

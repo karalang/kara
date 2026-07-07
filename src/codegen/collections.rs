@@ -1758,6 +1758,33 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Element `TypeExpr` produced by indexing `object` once, i.e. the type of
+    /// `object[k]`. Resolves the common heap-Vec shapes structurally (no
+    /// typechecker spans, so it works for codegen-synthesized index exprs too):
+    ///
+    ///   - `object` is a named `Vec[E]` binding → `E` (`var_elem_type_exprs`);
+    ///   - `object` is itself a plain (non-range) index whose value is a
+    ///     `Vec[E]` (`m[i]` over a `Vec[Vec[E]]`) → recurse to get `object`'s
+    ///     type, then peel one `Vec[..]` layer → `E`.
+    ///
+    /// Returns `None` for any other object shape (`self.field[i]`, a method
+    /// result, a non-Vec element), leaving the caller's prior behaviour.
+    fn vec_index_elem_type_expr(&self, object: &Expr) -> Option<TypeExpr> {
+        match &object.kind {
+            ExprKind::Identifier(name) => self.var_elem_type_exprs.get(name.as_str()).cloned(),
+            ExprKind::Index {
+                object: inner,
+                index,
+            } if !matches!(&index.kind, ExprKind::Range { .. }) => {
+                // Type of `object` == `inner[..]`'s element type; peel one more
+                // Vec layer to get `object[k]`'s element type.
+                let object_te = self.vec_index_elem_type_expr(inner)?;
+                vec_inner_type_expr(&object_te)
+            }
+            _ => None,
+        }
+    }
+
     pub(super) fn clone_owned_vec_index_element(
         &mut self,
         value: &Expr,
@@ -1783,13 +1810,16 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::MethodCall { object, method, .. } if method == "get_unchecked" => object,
             _ => return Ok(val),
         };
-        // Element TypeExpr of the indexed object. Named-Vec var only: `v[i]`,
-        // not `self.field[i]` / `matrix[i][j]` (those keep the prior behaviour;
-        // the named-binding case is the common — and reported — one).
-        let ExprKind::Identifier(name) = &object.kind else {
-            return Ok(val);
-        };
-        let Some(elem_te) = self.var_elem_type_exprs.get(name.as_str()).cloned() else {
+        // Element TypeExpr of the indexed object. A bare named-Vec var (`v[i]`)
+        // reads its element type directly; a NESTED index (`m[i][j]` over a
+        // `Vec[Vec[E]]`) peels one Vec layer per index level via
+        // `vec_index_elem_type_expr` (the object `m[i]` is itself a heap Vec
+        // whose element is `E`). Without the nested case, `let x = m[i][j]`
+        // shallow-aliased the innermost buffer and double-freed at the two
+        // scope exits (the `matrix[i][j]` gap — surfaced binding a
+        // `chunks()/windows()` result element). `self.field[i]` (FieldAccess
+        // object) still keeps the prior behaviour.
+        let Some(elem_te) = self.vec_index_elem_type_expr(object) else {
             return Ok(val);
         };
         if super::vec_method::is_trivially_copyable_te(&elem_te) {

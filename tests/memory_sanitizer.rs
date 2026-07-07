@@ -859,6 +859,44 @@ fn main() {
     }
 
     #[test]
+    fn asan_nested_vec_index_bind_no_double_free() {
+        // The `matrix[i][j]` clone gap: binding a nested heap element out of a
+        // `Vec[Vec[String]]` (`let x = m[i][j]`) shallow-aliased the innermost
+        // buffer, so both the binding's drop and the container's recursive drop
+        // freed it (double-free, exit 133). `clone_owned_vec_index_element` now
+        // peels one Vec layer per index level (`vec_index_elem_type_expr`) and
+        // deep-clones, so the binding owns an independent buffer and the source
+        // survives. Surfaced binding a `chunks()` result element. 40x >=40-byte
+        // payloads; the source matrix is re-read each round.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let mut v: Vec[String] = Vec[
+            "nested-idx-bind-alpha-aaaaaaaaaaaaaaaaaaaa".to_string(),
+            "nested-idx-bind-bravo-bbbbbbbbbbbbbbbbbbbb".to_string(),
+            "nested-idx-bind-charlie-cccccccccccccccccc".to_string(),
+            "nested-idx-bind-delta-dddddddddddddddddddd".to_string()
+        ];
+        let m: Vec[Vec[String]] = v.iter().chunks(2i64).collect();
+        let a: String = m[0i64][0i64];
+        let b: String = m[1i64][1i64];
+        println(f"{a} {b} {m.len()} {v.len()}");
+        round = round + 1i64;
+    }
+}
+"#,
+            [
+                "nested-idx-bind-alpha-aaaaaaaaaaaaaaaaaaaa nested-idx-bind-delta-dddddddddddddddddddd 2 4",
+            ]
+            .repeat(40)
+            .as_slice(),
+            "asan_nested_vec_index_bind_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_column_string_index_clone_out_no_leak() {
         // S6c-12 Slice 5: `Column[String]` indexing `c[i] -> Option[String]`
         // under `karac build` DEEP-CLONES the element so the returned Option
