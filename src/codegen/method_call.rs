@@ -4036,6 +4036,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                     return Ok(None);
                 }
+                // Adaptor-CARRYING side(s): `A.iter().map(f).zip(B.iter())
+                // .collect()`, `A.iter().zip(B.iter().filter(g)).collect()`, etc.
+                // Pre-collect each side to a typed temp, then reuse the identity
+                // zip on the two temps (B-2026-07-04-2 sub-part 1).
+                if let Some(v) = self.try_compile_zip_pipeline_collect(
+                    object.as_ref(),
+                    &args[0].value,
+                    call_span,
+                )? {
+                    return Ok(Some(v));
+                }
+                return Ok(None);
             }
             // B-2026-07-04-2 sub-part 1 (flat_map): `<outer>.flat_map(|p|
             // <inner>).collect()` maps each outer element to an inner iterable
@@ -5045,6 +5057,169 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp.clone(),
         };
 
+        Ok(Some(self.compile_expr(&block)?))
+    }
+
+    /// Lower `A.zip(B).collect()` where EITHER side carries its own adaptors
+    /// (`A.iter().map(f).zip(B.iter())`, `A.iter().zip(B.iter().filter(g))`, …)
+    /// by pre-collecting each side to a typed temp and reusing the identity zip
+    /// on the two temps (B-2026-07-04-2 sub-part 1). Emitted:
+    ///
+    /// ```text
+    /// { let __za: Vec[EA] = <A.collect()>;      // side A via full machinery
+    ///   let __zb: Vec[EB] = <B.collect()>;      // side B via full machinery
+    ///   __za.iter().zip(__zb.iter()).collect()  // identity zip on the temps
+    /// }
+    /// ```
+    ///
+    /// The two sub-`.collect()`s recurse through `compile_method_call`; an
+    /// unsupported adaptor on a side bails to the loud dispatch-fail via the
+    /// recursive compile. The result type `Vec[(EA, EB)]` is decomposed to type
+    /// each side's temp; the sub-collect result types are registered under
+    /// fresh synthetic spans (real source offsets are file-bounded, so a
+    /// `usize::MAX`-based offset never collides). Both temps are dropped at
+    /// block exit; the identity zip index-clones from them, so both original
+    /// sources survive and every buffer is owned once. Returns `Ok(None)` if the
+    /// result type isn't a recorded `Vec[(EA, EB)]`.
+    fn try_compile_zip_pipeline_collect(
+        &mut self,
+        side_a: &Expr,
+        side_b: &Expr,
+        call_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let vec_te = match self
+            .owned_temp_drops
+            .get(&(call_span.offset, call_span.length))
+        {
+            Some(te) => te.clone(),
+            None => return Ok(None),
+        };
+        // Result element must be a 2-tuple `(EA, EB)`.
+        let (ea, eb) = match &vec_te.kind {
+            TypeKind::Path(p) if p.segments.last().map(|s| s.as_str()) == Some("Vec") => {
+                match p.generic_args.as_ref().and_then(|ga| ga.first()) {
+                    Some(GenericArg::Type(t)) => match &t.kind {
+                        TypeKind::Tuple(elems) if elems.len() == 2 => {
+                            (elems[0].clone(), elems[1].clone())
+                        }
+                        _ => return Ok(None),
+                    },
+                    _ => return Ok(None),
+                }
+            }
+            _ => return Ok(None),
+        };
+
+        let uid = self.indexed_elem_counter;
+        self.indexed_elem_counter += 1;
+        let sp = call_span.clone();
+        let za = format!("__zpa_{}", uid);
+        let zb = format!("__zpb_{}", uid);
+
+        // `Vec[EA]` / `Vec[EB]` type exprs for the side temps.
+        let vec_of = |elem: &TypeExpr| TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec!["Vec".to_string()],
+                generic_args: Some(vec![GenericArg::Type(elem.clone())]),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        // Fresh synthetic spans for the two sub-collects; register their result
+        // types so the recursive collect lowering resolves them.
+        let span_a = crate::token::Span {
+            line: sp.line,
+            column: sp.column,
+            offset: usize::MAX - (uid as usize) * 2 - 1,
+            length: 1,
+        };
+        let span_b = crate::token::Span {
+            line: sp.line,
+            column: sp.column,
+            offset: usize::MAX - (uid as usize) * 2 - 2,
+            length: 1,
+        };
+        self.owned_temp_drops
+            .insert((span_a.offset, span_a.length), vec_of(&ea));
+        self.owned_temp_drops
+            .insert((span_b.offset, span_b.length), vec_of(&eb));
+
+        let ident = |name: &str| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: sp.clone(),
+        };
+        // `<side>.collect()` with the given (synthetic) span.
+        let collect_of = |side: &Expr, cspan: &crate::token::Span| Expr {
+            kind: ExprKind::MethodCall {
+                object: Box::new(side.clone()),
+                method: "collect".to_string(),
+                turbofish: None,
+                args: vec![],
+                args_close_span: cspan.clone(),
+            },
+            span: cspan.clone(),
+        };
+        let let_side =
+            |name: &str, elem: &TypeExpr, side: &Expr, cspan: &crate::token::Span| Stmt {
+                kind: StmtKind::Let {
+                    is_mut: false,
+                    pattern: Pattern {
+                        kind: PatternKind::Binding(name.to_string()),
+                        span: sp.clone(),
+                    },
+                    ty: Some(vec_of(elem)),
+                    value: collect_of(side, cspan),
+                },
+                span: sp.clone(),
+            };
+        // `<name>.iter()`
+        let iter_of = |name: &str| Expr {
+            kind: ExprKind::MethodCall {
+                object: Box::new(ident(name)),
+                method: "iter".to_string(),
+                turbofish: None,
+                args: vec![],
+                args_close_span: sp.clone(),
+            },
+            span: sp.clone(),
+        };
+        // `__za.iter().zip(__zb.iter()).collect()` — identity zip on the temps,
+        // typed by the ORIGINAL call span (`Vec[(EA, EB)]`).
+        let inner_zip_collect = Expr {
+            kind: ExprKind::MethodCall {
+                object: Box::new(Expr {
+                    kind: ExprKind::MethodCall {
+                        object: Box::new(iter_of(&za)),
+                        method: "zip".to_string(),
+                        turbofish: None,
+                        args: vec![CallArg {
+                            label: None,
+                            mut_marker: false,
+                            value: iter_of(&zb),
+                            span: sp.clone(),
+                        }],
+                        args_close_span: sp.clone(),
+                    },
+                    span: sp.clone(),
+                }),
+                method: "collect".to_string(),
+                turbofish: None,
+                args: vec![],
+                args_close_span: sp.clone(),
+            },
+            span: sp.clone(),
+        };
+        let block = Expr {
+            kind: ExprKind::Block(Block {
+                stmts: vec![
+                    let_side(&za, &ea, side_a, &span_a),
+                    let_side(&zb, &eb, side_b, &span_b),
+                ],
+                final_expr: Some(Box::new(inner_zip_collect)),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
         Ok(Some(self.compile_expr(&block)?))
     }
 

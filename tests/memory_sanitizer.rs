@@ -1022,6 +1022,43 @@ fn main() {
     }
 
     #[test]
+    fn asan_b04_2_zip_adaptor_side_heap_no_leak() {
+        // B-2026-07-04-2 sub-part 1 (zip adaptor-carrying side): a `zip` whose
+        // side carries its own adaptor (`a.iter().filter(g).zip(b.iter())
+        // .collect()`) pre-collects each side to a typed temp and reuses the
+        // identity zip. Both `Vec[String]` sources survive; each paired element
+        // is a clone owned once by the result; the two side temps are dropped at
+        // block exit. 30x >=40-byte payloads; both sources re-read.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 30i64 {
+        let mut a: Vec[String] = Vec[
+            "zip-adp-left-alpha-aaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            "zip-adp-left-bravo-bbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            "zip-adp-left-charlie-cccccccccccccccccccccc".to_string()
+        ];
+        let mut b: Vec[String] = Vec[
+            "zip-adp-right-xray-xxxxxxxxxxxxxxxxxxxxxxxx".to_string(),
+            "zip-adp-right-yankee-yyyyyyyyyyyyyyyyyyyyyy".to_string()
+        ];
+        let r: Vec[(String, String)] = a.iter().filter(|s| s.len() > 0i64).zip(b.iter()).collect();
+        println(f"{r.len()} {r[0i64].0} {r[1i64].1} {a.len()} {b.len()}");
+        round = round + 1i64;
+    }
+}
+"#,
+            [
+                "2 zip-adp-left-alpha-aaaaaaaaaaaaaaaaaaaaaaaa zip-adp-right-yankee-yyyyyyyyyyyyyyyyyyyyyy 3 2",
+            ]
+            .repeat(30)
+            .as_slice(),
+            "asan_b04_2_zip_adaptor_side_heap_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_column_string_index_clone_out_no_leak() {
         // S6c-12 Slice 5: `Column[String]` indexing `c[i] -> Option[String]`
         // under `karac build` DEEP-CLONES the element so the returned Option

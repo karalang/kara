@@ -6918,6 +6918,33 @@ fn main() {
         }
     }
 
+    /// B-2026-07-04-2 sub-part 1 (zip adaptor-carrying side): a `zip` whose side
+    /// carries its own adaptor (`a.iter().map(f).zip(b.iter())`, or the arg side
+    /// `a.iter().zip(b.iter().filter(g))`) pre-collects each side to a typed temp
+    /// and reuses the identity zip on the temps — it used to bail (only
+    /// iter+iter zips lowered). Both sources survive. ASAN twin:
+    /// asan_b04_2_zip_adaptor_side_heap_no_leak.
+    #[test]
+    fn e2e_iter_adaptor_zip_pipeline_collect_codegen() {
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    let a: Vec[i64] = Vec[1i64, 2i64, 3i64];
+    let b: Vec[i64] = Vec[10i64, 20i64];
+    // receiver side carries a map; min(3,2)=2 pairs
+    let r: Vec[(i64, i64)] = a.iter().map(|x| x * 2i64).zip(b.iter()).collect();
+    println(f"{r.len()} {r[0i64].0} {r[0i64].1} {r[1i64].0} {r[1i64].1} {a.len()} {b.len()}");
+    // arg side carries a filter
+    let s: Vec[(i64, i64)] = a.iter().zip(b.iter().filter(|y| y > 5i64)).collect();
+    println(f"{s.len()} {s[0i64].0} {s[0i64].1} {s[1i64].1}");
+}
+"#,
+        ) {
+            // r=[(2,10),(4,20)]; b.filter(>5)=[10,20], a=[1,2,3] -> s=[(1,10),(2,20)]
+            assert_eq!(out, "2 2 10 4 20 3 2\n2 1 10 20\n");
+        }
+    }
+
     #[test]
     fn e2e_iter_adaptor_flat_map_collect_codegen() {
         // B-2026-07-04-2 sub-part 1 (flat_map): `<outer>.flat_map(|v|
