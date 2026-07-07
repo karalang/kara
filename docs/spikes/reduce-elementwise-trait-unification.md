@@ -742,6 +742,25 @@ B-2026-07-02-10..13, see the ledger.
   `T::one()` static dispatch) is ever wanted for its OWN sake (generic numeric
   algorithms broadly, not just `product`), it should be scoped as an independent
   feature — at which point a `product` default falls out for free.
+- **S6c-16 🔎 (blanket `Vec[T]` impls — DESIGN PROVEN, one codegen crash blocks
+  integration; tracked B-2026-07-06-5).** A user `impl Reduce[i64] for Vec[i64]`
+  (Vec is a legal impl target) is the Vec analog of the S6c-12 user-impl-over-
+  container epic (Vec isn't handle-backed, so the user writes the reduction
+  loops by hand; there is no Vec kernel). The full 5-edit design was implemented
+  and VERIFIED working on typechecker (self-element preservation — the S6c-12
+  Slice-1 guard extended to Vec/VecDeque, suite green), interpreter (`Value::Array`
+  named "Vec" → `try_eval_impl_method`; direct AND bound-generic dispatch compute
+  correctly under `run`), and direct-call codegen (`v.sum()`/`v.prod()` with loop
+  bodies build+run correct on all 3 surfaces). REMAINING BLOCKER: when TWO
+  different loop-bodied user Vec methods are each reached via BOUND-GENERIC (mono)
+  dispatch — `fa[C: Reduce[i64]](c: ref C){c.sum()}` + `fb[..]{c.prod()}`, or one
+  mono calling both — the built binary SIGTRAPs at runtime (exit 133) though the
+  LLVM module VERIFIES and `karac run` is correct. One bound-generic loop method
+  works; two coexisting loop-method monos crash — a mono-instantiation collision
+  (B-2026-07-02-39 family) needing IR-level root-cause. The Vec code was NOT
+  integrated (won't ship a build-time SIGTRAP); the complete design + repro matrix
+  + the 5 exact edit sites are recorded in the ledger (B-2026-07-06-5) so a
+  follow-on slice can resume from the crash directly.
 - **S6c-12** ✅ **(landed — Slice 1 of the user-impl-over-container epic)** —
   **user-defined trait impls over `Column[T]`** now work end-to-end (concrete
   `impl Trait for Column[i64]`/`[f64]`, non-generic method, POD element). A user
@@ -949,13 +968,14 @@ B-2026-07-02-10..13, see the ledger.
   `test_e2e_bound_generic_dispatch_over_user_type` (codegen, all three receiver
   modes + Reduce). Full regression: codegen 2062, typechecker + interpreter
   green; fmt + clippy clean.
-- **S6c** — remaining: **u64 column/tensor sort** — the interpreter u64 model
-  blocker (S6c-9 / B-2026-07-04-8) is now **FIXED** (45eb926); what remains is only
-  the **codegen** leg (`Column[u64]`/`Tensor[u64]` `sorted`/`argsort`/`argmin`/
-  `argmax` still rejected loudly under `karac build`), tracked as **B-2026-07-07-2**
-  (in progress); ~~a `product` DEFAULT body for USER `Reduce` impls~~ **CLOSED as
+- **S6c** — remaining: ~~**u64 column/tensor sort**~~ **DONE** — the interpreter
+  u64 model blocker (S6c-9 / B-2026-07-04-8) is FIXED (45eb926) and the codegen
+  leg (`Column[u64]`/`Tensor[u64]` `sorted`/`argsort`/`argmin`/`argmax` under
+  `karac build`) landed FIXED too (B-2026-07-07-2, 7e5ef5ff); ~~a `product`
+  DEFAULT body for USER `Reduce` impls~~ **CLOSED as
   superseded by S6c-11 (won't-do), see S6c-15 below**; blanket
-  `Vec[T]` impls; user trait-impl methods over builtin containers — this
+  `Vec[T]` impls **DESIGNED + partially working, one codegen crash tracked as
+  B-2026-07-06-5, see S6c-16 below**; user trait-impl methods over builtin containers — this
   last item's epic is now **COMPLETE** (S6c-12, Slices 1–6): the concrete `impl Trait for Column[i64]`/`[f64]`
   and `Tensor[..]` cases (the 3-surface gap re-probed 2026-07-04) **landed as
   S6c-12 Slices 1 + 2**, and trait **DEFAULT** methods over containers **landed
