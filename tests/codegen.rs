@@ -6553,6 +6553,36 @@ fn main() {
     }
 
     #[test]
+    fn e2e_iter_adaptor_range_identity_collect_codegen() {
+        // B-2026-07-04-2 sub-part 4 (range half): a BOUNDED integer range
+        // collected with NO adaptor — `(a..b).collect()` / `(a..=b).collect()`
+        // — fell through to the loud dispatch-fail under `karac build`, though
+        // `karac run` handled it. The fix accepts a `Range { start: Some, end:
+        // Some }` as an identity-collect source (alongside `.iter()`): `for x in
+        // a..b` yields owned POD integers, so the synthetic `map(|x| x)` is a
+        // plain copy with no source to alias. Covers exclusive, inclusive,
+        // variable-bound, and empty ranges; an unbounded range is a typecheck
+        // error (no `collect`) and never reaches here.
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    let a: Vec[i64] = (0i64..5i64).collect();
+    println(f"{a.len()} {a[0]} {a[4]}");
+    let b: Vec[i64] = (1i64..=3i64).collect();
+    println(f"{b.len()} {b[0]} {b[2]}");
+    let n: i64 = 4i64;
+    let c: Vec[i64] = (0i64..n).collect();
+    println(f"{c.len()} {c[0]} {c[3]}");
+    let e: Vec[i64] = (5i64..5i64).collect();
+    println(f"{e.len()}");
+}
+"#,
+        ) {
+            assert_eq!(out, "5 0 4\n3 1 3\n4 0 3\n0\n");
+        }
+    }
+
+    #[test]
     fn e2e_iter_adaptor_collect_enumerate_codegen() {
         // B-2026-07-04-2 sub-part 1: `<iter>.enumerate().collect()` — the
         // element-retyping adaptor `T` → `(i64, T)`. Lowered like the other

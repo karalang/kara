@@ -4100,15 +4100,29 @@ impl<'ctx> super::Codegen<'ctx> {
             // it survives; both own independent buffers, freed once each).
             // B-2026-07-04-2 sub-part 4.
             //
-            // Gated to a recognized iterator SOURCE — a no-arg `.iter()` method
-            // call. Any other empty-`steps` base (an unhandled adaptor peeled to
-            // the `_ => break` arm, a bare iterator variable, `.into_iter()`
-            // whose MOVE semantics this clone-shaped lowering would not honor, …)
-            // keeps bailing to the loud dispatch-fail, never a miscompile.
+            // Gated to a recognized iterator SOURCE:
+            //   * a no-arg `.iter()` method call (element CLONES; the borrowed
+            //     source survives), or
+            //   * a BOUNDED integer range `a..b` / `a..=b` (`start` and `end`
+            //     both present) — `for x in a..b` yields owned POD integers, so
+            //     the identity `map(|x| x)` is a plain copy with no source to
+            //     alias (B-2026-07-04-2 sub-part 4, range half). An UNBOUNDED
+            //     range (`a..`, `..b`) is not collectable and bails.
+            // Any other empty-`steps` base (an unhandled adaptor peeled to the
+            // `_ => break` arm, a bare iterator variable, `.into_iter()` whose
+            // MOVE semantics this clone-shaped lowering would not honor, …) keeps
+            // bailing to the loud dispatch-fail, never a miscompile.
             let is_iter_source = matches!(
                 &cur.kind,
                 ExprKind::MethodCall { method, args, .. }
                     if args.is_empty() && method == "iter"
+            ) || matches!(
+                &cur.kind,
+                ExprKind::Range {
+                    start: Some(_),
+                    end: Some(_),
+                    ..
+                }
             );
             if !is_iter_source {
                 return Ok(None);
