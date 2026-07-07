@@ -6890,6 +6890,34 @@ fn main() {
         }
     }
 
+    /// B-2026-07-04-2 sub-part 1 (chain adaptor-carrying side): a `chain` whose
+    /// side carries its own adaptor (`a.iter().map(f).chain(b.iter())`, or the
+    /// arg side `a.chain(b.iter().filter(g))`) recursively collects each side
+    /// through the full pipeline and merges into a shared accumulator — it used
+    /// to bail to the loud dispatch-fail (only identity+identity chains lowered).
+    /// Both sources survive; an unsupported adaptor on a side still bails via the
+    /// recursive compile. ASAN twin: asan_b04_2_chain_adaptor_side_heap_no_leak.
+    #[test]
+    fn e2e_iter_adaptor_chain_pipeline_collect_codegen() {
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    let a: Vec[i64] = Vec[1i64, 2i64, 3i64];
+    let b: Vec[i64] = Vec[4i64, 5i64];
+    // receiver side carries a map
+    let r: Vec[i64] = a.iter().map(|x| x * 2i64).chain(b.iter()).collect();
+    println(f"{r.len()} {r[0i64]} {r[2i64]} {r[3i64]} {a.len()} {b.len()}");
+    // arg side carries a filter
+    let s: Vec[i64] = a.iter().chain(b.iter().filter(|y| y > 4i64)).collect();
+    println(f"{s.len()} {s[3i64]}");
+}
+"#,
+        ) {
+            // r = [2,4,6, 4,5]; s = [1,2,3, 5]
+            assert_eq!(out, "5 2 6 4 3 2\n4 5\n");
+        }
+    }
+
     #[test]
     fn e2e_iter_adaptor_flat_map_collect_codegen() {
         // B-2026-07-04-2 sub-part 1 (flat_map): `<outer>.flat_map(|v|

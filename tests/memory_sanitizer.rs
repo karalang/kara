@@ -986,6 +986,42 @@ fn main() {
     }
 
     #[test]
+    fn asan_b04_2_chain_adaptor_side_heap_no_leak() {
+        // B-2026-07-04-2 sub-part 1 (chain adaptor-carrying side): a `chain`
+        // whose side carries its own adaptor (`a.iter().filter(g).chain(b.iter())
+        // .collect()`) recursively collects each side and merges into a shared
+        // accumulator. Both `Vec[String]` sources survive (freed once) and each
+        // merged element is a clone owned once by the result. 30x >=40-byte
+        // payloads; both sources re-read.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 30i64 {
+        let mut a: Vec[String] = Vec[
+            "chain-adp-left-alpha-aaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            "chain-adp-left-bravo-bbbbbbbbbbbbbbbbbbbbbb".to_string()
+        ];
+        let mut b: Vec[String] = Vec[
+            "chain-adp-right-charlie-cccccccccccccccccccc".to_string(),
+            "chain-adp-right-delta-dddddddddddddddddddddd".to_string()
+        ];
+        let r: Vec[String] = a.iter().filter(|s| s.len() > 0i64).chain(b.iter()).collect();
+        println(f"{r.len()} {r[0i64]} {r[3i64]} {a.len()} {b.len()}");
+        round = round + 1i64;
+    }
+}
+"#,
+            [
+                "4 chain-adp-left-alpha-aaaaaaaaaaaaaaaaaaaaaa chain-adp-right-delta-dddddddddddddddddddddd 2 2",
+            ]
+            .repeat(30)
+            .as_slice(),
+            "asan_b04_2_chain_adaptor_side_heap_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_column_string_index_clone_out_no_leak() {
         // S6c-12 Slice 5: `Column[String]` indexing `c[i] -> Option[String]`
         // under `karac build` DEEP-CLONES the element so the returned Option

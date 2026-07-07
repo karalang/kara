@@ -3995,6 +3995,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                     return Ok(None);
                 }
+                // Adaptor-CARRYING side(s): `A.iter().map(f).chain(B).collect()`,
+                // `A.chain(B.iter().filter(g)).collect()`, etc. Recursively
+                // collect each side through the full pipeline and merge into a
+                // shared accumulator (B-2026-07-04-2 sub-part 1). Each side must
+                // itself be a collectable adaptor chain over an identity base;
+                // otherwise bail to the loud dispatch-fail.
+                if let Some(v) = self.try_compile_chain_pipeline_collect(src_a, src_b, call_span)? {
+                    return Ok(Some(v));
+                }
+                return Ok(None);
             }
             // B-2026-07-04-2 sub-part 1 (zip): `A.iter().zip(B.iter()).collect()`
             // pairs the two sources element-wise into a `Vec[(EA, EB)]`, stopping
@@ -5035,6 +5045,125 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp.clone(),
         };
 
+        Ok(Some(self.compile_expr(&block)?))
+    }
+
+    /// Lower `A.chain(B).collect()` where EITHER side carries its own adaptors
+    /// (`A.iter().map(f).chain(B).collect()`, `A.chain(B.iter().filter(g))`, …)
+    /// by recursively collecting each side through the full pipeline and merging
+    /// into a shared accumulator (B-2026-07-04-2 sub-part 1). Emitted:
+    ///
+    /// ```text
+    /// { let mut __chv: Vec[E] = <A.collect()>;      // side A via full machinery
+    ///   for __chy in <B.collect()> { __chv.push(__chy); }   // merge B (clones)
+    ///   __chv }
+    /// ```
+    ///
+    /// Each side's `.collect()` recurses through `compile_method_call` (identity
+    /// sources, map/filter/enumerate/…), so an unsupported adaptor on a side
+    /// bails to the loud dispatch-fail via the recursive compile — never a
+    /// miscompile. `B.collect()`'s fresh temp is iterated-and-dropped, its
+    /// elements cloned into `__chv`, so both sides' sources survive and every
+    /// buffer is owned once. Returns `Ok(None)` if the result type isn't a
+    /// recorded `Vec[E]`.
+    fn try_compile_chain_pipeline_collect(
+        &mut self,
+        src_a: &Expr,
+        src_b: &Expr,
+        call_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let vec_te = match self
+            .owned_temp_drops
+            .get(&(call_span.offset, call_span.length))
+        {
+            Some(te) => te.clone(),
+            None => return Ok(None),
+        };
+        if !matches!(
+            &vec_te.kind,
+            TypeKind::Path(p) if p.segments.last().map(|s| s.as_str()) == Some("Vec")
+        ) {
+            return Ok(None);
+        }
+        let uid = self.indexed_elem_counter;
+        self.indexed_elem_counter += 1;
+        let sp = call_span.clone();
+        let vec_name = format!("__chpv_{}", uid);
+        let loop_var = format!("__chpy_{}", uid);
+        let ident = |name: &str| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: sp.clone(),
+        };
+        // `<side>.collect()` — recurse through the full collect machinery.
+        let collect_of = |side: &Expr| Expr {
+            kind: ExprKind::MethodCall {
+                object: Box::new(side.clone()),
+                method: "collect".to_string(),
+                turbofish: None,
+                args: vec![],
+                args_close_span: sp.clone(),
+            },
+            span: sp.clone(),
+        };
+        // `let mut __chpv: Vec[E] = <A.collect()>;`
+        let let_vec = Stmt {
+            kind: StmtKind::Let {
+                is_mut: true,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(vec_name.clone()),
+                    span: sp.clone(),
+                },
+                ty: Some(vec_te),
+                value: collect_of(src_a),
+            },
+            span: sp.clone(),
+        };
+        // `for __chpy in <B.collect()> { __chpv.push(__chpy); }`
+        let merge_loop = Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::For {
+                    label: None,
+                    pattern: Pattern {
+                        kind: PatternKind::Binding(loop_var.clone()),
+                        span: sp.clone(),
+                    },
+                    iterable: Box::new(collect_of(src_b)),
+                    attributes: Vec::new(),
+                    body: Block {
+                        stmts: vec![Stmt {
+                            kind: StmtKind::Expr(Expr {
+                                kind: ExprKind::MethodCall {
+                                    object: Box::new(ident(&vec_name)),
+                                    method: "push".to_string(),
+                                    turbofish: None,
+                                    args: vec![CallArg {
+                                        label: None,
+                                        mut_marker: false,
+                                        value: ident(&loop_var),
+                                        span: sp.clone(),
+                                    }],
+                                    args_close_span: sp.clone(),
+                                },
+                                span: sp.clone(),
+                            }),
+                            span: sp.clone(),
+                        }],
+                        final_expr: None,
+                        span: sp.clone(),
+                    },
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let block = Expr {
+            kind: ExprKind::Block(Block {
+                stmts: vec![let_vec, merge_loop],
+                final_expr: Some(Box::new(ident(&vec_name))),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
         Ok(Some(self.compile_expr(&block)?))
     }
 
