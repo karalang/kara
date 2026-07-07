@@ -89,15 +89,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **286 surfaced · 0 open · 285 fixed** (2026-05-20 → 2026-07-07). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **288 surfaced · 0 open · 287 fixed** (2026-05-20 → 2026-07-07). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (0)
 
 _None — the ledger is fully drained._
 
-### Fixed (285)
+### Fixed (287)
 
-<details><summary>285 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>287 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -386,6 +386,8 @@ _None — the ledger is fully drained._
 | B-2026-07-07-1 | codegen | med | PRE-EXISTING sibling of B-2026-07-04-17 / B-2026-07-05-2, previously UNTRACKED: a `Vec[String]` / `Vec[Vec[T]]` for-loop element moved WHOLE into a l… | 81ad98c |
 | B-2026-07-07-2 | codegen | low | Follow-on to B-2026-07-04-8 (interpreter u64 model, fixed 45eb926): under `karac build`, `Column[u64]`/`Tensor[u64]` `sorted`/`argsort`/`argmin`/`arg… | 7e5ef5f |
 | B-2026-07-07-3 | resolver | low | E0107 UndefinedLabel `did you mean` suggestion is prose-only (not machine-applicable): as of B-2026-07-06-3 (830831f) a misspelled `break`/`continue`… | 911db54 |
+| B-2026-07-07-4 | codegen | high | Borrow-returning fn (`fn f(u: ref String) -> ref String { u }`, and the `ref Vec` analog) writes out of bounds and segfaults under -O2/LLJIT | fddfb9a |
+| B-2026-07-07-5 | codegen | high | Always-JIT execution lane produced EMPTY output for every non-trivial program on Linux/ELF | 199098e |
 
 </details>
 
