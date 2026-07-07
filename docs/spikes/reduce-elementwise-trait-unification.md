@@ -742,25 +742,36 @@ B-2026-07-02-10..13, see the ledger.
   `T::one()` static dispatch) is ever wanted for its OWN sake (generic numeric
   algorithms broadly, not just `product`), it should be scoped as an independent
   feature — at which point a `product` default falls out for free.
-- **S6c-16 🔎 (blanket `Vec[T]` impls — DESIGN PROVEN, one codegen crash blocks
-  integration; tracked B-2026-07-06-5).** A user `impl Reduce[i64] for Vec[i64]`
-  (Vec is a legal impl target) is the Vec analog of the S6c-12 user-impl-over-
-  container epic (Vec isn't handle-backed, so the user writes the reduction
-  loops by hand; there is no Vec kernel). The full 5-edit design was implemented
-  and VERIFIED working on typechecker (self-element preservation — the S6c-12
-  Slice-1 guard extended to Vec/VecDeque, suite green), interpreter (`Value::Array`
-  named "Vec" → `try_eval_impl_method`; direct AND bound-generic dispatch compute
-  correctly under `run`), and direct-call codegen (`v.sum()`/`v.prod()` with loop
-  bodies build+run correct on all 3 surfaces). REMAINING BLOCKER: when TWO
-  different loop-bodied user Vec methods are each reached via BOUND-GENERIC (mono)
-  dispatch — `fa[C: Reduce[i64]](c: ref C){c.sum()}` + `fb[..]{c.prod()}`, or one
-  mono calling both — the built binary SIGTRAPs at runtime (exit 133) though the
-  LLVM module VERIFIES and `karac run` is correct. One bound-generic loop method
-  works; two coexisting loop-method monos crash — a mono-instantiation collision
-  (B-2026-07-02-39 family) needing IR-level root-cause. The Vec code was NOT
-  integrated (won't ship a build-time SIGTRAP); the complete design + repro matrix
-  + the 5 exact edit sites are recorded in the ledger (B-2026-07-06-5) so a
-  follow-on slice can resume from the crash directly.
+- **S6c-16** ✅ **(landed 2026-07-07 — blanket `Vec[T]` impls; B-2026-07-06-5
+  fixed, `6321ee8`).** A user `impl Reduce[i64] for Vec[i64]` (Vec is a legal
+  impl target) is the Vec analog of the S6c-12 user-impl-over-container epic (Vec
+  isn't handle-backed, so the user writes the reduction loops by hand; there is
+  no Vec kernel). The 5-edit plumbing landed as designed — typechecker
+  (self-element preservation, the S6c-12 Slice-1 guard extended to Vec/VecDeque),
+  interpreter (`Value::Array` named "Vec" → `try_eval_impl_method`), codegen
+  helpers (thread Vec/VecDeque self-args), `compile_index` (key the Vec branch on
+  `container_recv`/SelfValue for `self[i]`), and `method_call` Vec dispatch
+  (fall through to the generic user-impl dispatch on the builtin no-arm `Err`
+  when a `Vec.<method>` user fn exists). But the reported "two-loop-method mono
+  SIGTRAP / mono symbol collision (B-2026-07-02-39 family)" was a **misdiagnosis**.
+  The real crash was a `for x in self` **double-free**: `self` is a `ref Vec`
+  receiver (`ExprKind::SelfValue`, not `Identifier`), so the for-loop iterable
+  dispatch fell through to the `_ =>` value path (`try_compile_for_vec_value`),
+  which materialize-iterates-**drops** the source — dropping the borrowed
+  receiver double-frees the caller-owned Vec buffer + per-element heap (one loop
+  method → `free(): double free`; two → heap-corruption SIGTRAP exit 133). A
+  named `ref Vec` param never hit this because it routes to the non-dropping
+  `compile_for_vec_var`. Fix: a `SelfValue` arm in the for-loop dispatch routes a
+  container `self` (String/Vec/Slice/Map/Set, registered under name "self") to
+  the same borrow-path iterators as a named Identifier. Now direct + two monos +
+  a single combined mono + heap-`Vec[String]` bodies all match `karac run`,
+  LSan-clean. **Correction to the earlier note:** the "builtin-reduction body"
+  shape (`self.sum()`/`self.prod()`) is NOT a supported pattern — even a plain
+  `v.sum()` method form loud-fails in codegen (only the free-fn `Stats.sum(v)`
+  form lowers), so the realistic blanket-Vec impl body is a hand-written loop.
+  Tests: `e2e_blanket_vec_impl_loop_body_mono_dispatch` +
+  `e2e_blanket_vec_string_impl_loop_body` (codegen),
+  `asan_b06_5_blanket_vec_string_impl_loop_no_leak` (memory_sanitizer).
 - **S6c-12** ✅ **(landed — Slice 1 of the user-impl-over-container epic)** —
   **user-defined trait impls over `Column[T]`** now work end-to-end (concrete
   `impl Trait for Column[i64]`/`[f64]`, non-generic method, POD element). A user
@@ -974,8 +985,8 @@ B-2026-07-02-10..13, see the ledger.
   `karac build`) landed FIXED too (B-2026-07-07-2, 7e5ef5ff); ~~a `product`
   DEFAULT body for USER `Reduce` impls~~ **CLOSED as
   superseded by S6c-11 (won't-do), see S6c-15 below**; blanket
-  `Vec[T]` impls **DESIGNED + partially working, one codegen crash tracked as
-  B-2026-07-06-5, see S6c-16 below**; user trait-impl methods over builtin containers — this
+  `Vec[T]` impls **DONE — B-2026-07-06-5 FIXED (6321ee8), see S6c-16 below**;
+  user trait-impl methods over builtin containers — this
   last item's epic is now **COMPLETE** (S6c-12, Slices 1–6): the concrete `impl Trait for Column[i64]`/`[f64]`
   and `Tensor[..]` cases (the 3-surface gap re-probed 2026-07-04) **landed as
   S6c-12 Slices 1 + 2**, and trait **DEFAULT** methods over containers **landed
