@@ -721,6 +721,27 @@ B-2026-07-02-10..13, see the ledger.
   `reduce_trait_bound_prod_resolves` (typechecker),
   `stdlib_reduce_trait_bound_prod_column_and_tensor` (interpreter),
   `test_e2e_reduce_trait_bound_prod` (codegen).
+- **S6c-15 ⏹ (CLOSED — won't-do, superseded by S6c-11).** The remaining-list
+  item "a `product` DEFAULT body for user `Reduce` impls" is deliberately NOT
+  implemented; it is superseded by the `prod` REQUIRED method (S6c-11). Rationale
+  (re-scoped 2026-07-06): a `product` default body `self.fold(<identity>, |a, x|
+  a * x)` needs a `T`-typed multiplicative identity — a literal `1` is `i64` and
+  won't unify with a generic `T` (and the int×float mix is now loudly rejected,
+  B-2026-07-04-11). Delivering it would require, all currently ABSENT: (1) a new
+  `One` stdlib trait (`fn one() -> Self`), (2) baked `One` impls for every numeric
+  primitive, (3) static-method-on-bound-type-param call dispatch (`T::one()`)
+  wired through typechecker + interpreter + codegen — none exists today (no
+  `One`/`Zero`/`Numeric` trait, no `T::one()` usage anywhere), and (4) tightening
+  `Reduce[T]` to `Reduce[T: One + Mul]`, which changes the trait's contract for
+  EVERY implementor (incl. the baked Column/Tensor) and every bound-generic
+  caller. That is a substantial standalone trait-system feature. Its ONLY user
+  benefit over the status quo is saving one method body — a user `impl Reduce for
+  MyType` already writes `sum`/`min`/`max`/`mean`/`fold`/`prod` by hand, and
+  `prod` is trivially `self.fold(<their identity>, |a, x| a * x)`. Disproportionate
+  gold-plating; closed. If a general numeric-identity capability (`One`/`Zero` +
+  `T::one()` static dispatch) is ever wanted for its OWN sake (generic numeric
+  algorithms broadly, not just `product`), it should be scoped as an independent
+  feature — at which point a `product` default falls out for free.
 - **S6c-12** ✅ **(landed — Slice 1 of the user-impl-over-container epic)** —
   **user-defined trait impls over `Column[T]`** now work end-to-end (concrete
   `impl Trait for Column[i64]`/`[f64]`, non-generic method, POD element). A user
@@ -932,9 +953,8 @@ B-2026-07-02-10..13, see the ledger.
   blocker (S6c-9 / B-2026-07-04-8) is now **FIXED** (45eb926); what remains is only
   the **codegen** leg (`Column[u64]`/`Tensor[u64]` `sorted`/`argsort`/`argmin`/
   `argmax` still rejected loudly under `karac build`), tracked as **B-2026-07-07-2**
-  (in progress); a `product` DEFAULT body for
-  USER `Reduce` impls (needs the numeric-identity mechanism of S6c-10 — the
-  bound-generic `prod` on the builtin containers is DONE, S6c-11); blanket
+  (in progress); ~~a `product` DEFAULT body for USER `Reduce` impls~~ **CLOSED as
+  superseded by S6c-11 (won't-do), see S6c-15 below**; blanket
   `Vec[T]` impls; user trait-impl methods over builtin containers — this
   last item's epic is now **COMPLETE** (S6c-12, Slices 1–6): the concrete `impl Trait for Column[i64]`/`[f64]`
   and `Tensor[..]` cases (the 3-surface gap re-probed 2026-07-04) **landed as
