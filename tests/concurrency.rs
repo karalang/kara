@@ -1419,7 +1419,10 @@ fn main() {{
     );
 
     // One span per statement, in ordinal order, carrying file + line/col.
-    let fname = file_path.display().to_string();
+    // The path lands in JSON, so backslashes are escaped on the wire (Windows
+    // temp paths like `C:\Users\...` serialize as `C:\\Users\\...`). Escape the
+    // expected path the same way — a no-op on `/`-separated platforms.
+    let fname = file_path.display().to_string().replace('\\', "\\\\");
     let expected = format!(
         "\"statement_spans\":[{{\"file\":\"{fname}\",\"line\":4,\"column\":5}},\
          {{\"file\":\"{fname}\",\"line\":5,\"column\":5}}]"
