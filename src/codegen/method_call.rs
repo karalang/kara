@@ -4180,21 +4180,26 @@ impl<'ctx> super::Codegen<'ctx> {
             // B-2026-07-04-2 sub-part 4.
             //
             // Gated to a recognized iterator SOURCE:
-            //   * a no-arg `.iter()` method call (element CLONES; the borrowed
-            //     source survives), or
+            //   * a no-arg `.iter()` or `.into_iter()` method call. Both CLONE
+            //     the element here (the source survives — the ownership checker
+            //     treats `<local>.into_iter().collect()` as non-consuming, so
+            //     `v.len()` stays valid after, exactly like `.iter()`; the
+            //     `for x in <src>.into_iter()` loop already lowers identically
+            //     to `.iter()`, control_flow_for.rs). So identity collect over
+            //     either is the same clone lowering — B-2026-07-04-2 sub-part 4,
+            //     into_iter half. or
             //   * a BOUNDED integer range `a..b` / `a..=b` (`start` and `end`
             //     both present) — `for x in a..b` yields owned POD integers, so
             //     the identity `map(|x| x)` is a plain copy with no source to
             //     alias (B-2026-07-04-2 sub-part 4, range half). An UNBOUNDED
             //     range (`a..`, `..b`) is not collectable and bails.
             // Any other empty-`steps` base (an unhandled adaptor peeled to the
-            // `_ => break` arm, a bare iterator variable, `.into_iter()` whose
-            // MOVE semantics this clone-shaped lowering would not honor, …) keeps
-            // bailing to the loud dispatch-fail, never a miscompile.
+            // `_ => break` arm, a bare iterator variable, …) keeps bailing to
+            // the loud dispatch-fail, never a miscompile.
             let is_iter_source = matches!(
                 &cur.kind,
                 ExprKind::MethodCall { method, args, .. }
-                    if args.is_empty() && method == "iter"
+                    if args.is_empty() && (method == "iter" || method == "into_iter")
             ) || matches!(
                 &cur.kind,
                 ExprKind::Range {

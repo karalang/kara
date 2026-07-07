@@ -627,6 +627,37 @@ fn main() {
     }
 
     #[test]
+    fn asan_b04_2_into_iter_identity_collect_no_leak() {
+        // B-2026-07-04-2 sub-part 4 (into_iter half): `<local>.into_iter()
+        // .collect()` lowers identically to `.iter().collect()` — the ownership
+        // checker treats it as NON-consuming (`w.len()` stays valid after), so
+        // it clones each element into a fresh Vec and the source survives. Same
+        // leak/double-free surface as the `.iter()` identity collect; asserts a
+        // heap source over 40× ≥44-byte payloads (LSan reachability).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let w: Vec[String] = Vec[
+            "into-iter-collect-alpha-aaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            "into-iter-collect-bravo-bbbbbbbbbbbbbbbbbbbbbb".to_string()
+        ];
+        let r: Vec[String] = w.into_iter().collect();
+        let r1: String = r[1i64];
+        println(f"{r.len()} {w.len()} {r1}");
+        round = round + 1i64;
+    }
+}
+"#,
+            ["2 2 into-iter-collect-bravo-bbbbbbbbbbbbbbbbbbbbbb"]
+                .repeat(40)
+                .as_slice(),
+            "asan_b04_2_into_iter_identity_collect_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_column_string_index_clone_out_no_leak() {
         // S6c-12 Slice 5: `Column[String]` indexing `c[i] -> Option[String]`
         // under `karac build` DEEP-CLONES the element so the returned Option

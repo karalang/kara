@@ -6583,6 +6583,32 @@ fn main() {
     }
 
     #[test]
+    fn e2e_iter_adaptor_into_iter_identity_collect_codegen() {
+        // B-2026-07-04-2 sub-part 4 (into_iter half): `<local>.into_iter()
+        // .collect()` with no adaptor fell through to the loud dispatch-fail
+        // under `karac build`, though `karac run` handled it. Kāra's
+        // `into_iter().collect()` is NON-consuming here (the ownership checker
+        // leaves the source valid, and `for x in <src>.into_iter()` already
+        // lowers like `.iter()`), so it collects a fresh Vec of element clones
+        // and the source SURVIVES (asserted via `v.len()`). Covers POD and heap;
+        // leak-checked by `asan_b04_2_into_iter_identity_collect_no_leak`.
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    let v: Vec[i64] = Vec[1i64, 2i64, 3i64];
+    let r: Vec[i64] = v.into_iter().collect();
+    println(f"{r.len()} {r[0]} {r[2]} {v.len()}");
+    let s: Vec[String] = Vec["aa".to_string(), "bb".to_string()];
+    let t: Vec[String] = s.into_iter().collect();
+    println(f"{t.len()} {t[0]}{t[1]} {s.len()}");
+}
+"#,
+        ) {
+            assert_eq!(out, "3 1 3 3\n2 aabb 2\n");
+        }
+    }
+
+    #[test]
     fn e2e_iter_adaptor_chain_identity_collect_codegen() {
         // B-2026-07-04-2 sub-part 1 (chain half): `A.chain(B).collect()` over two
         // plain identity sources (`.iter()` / bounded range) fell through to the
