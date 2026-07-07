@@ -766,6 +766,24 @@ impl<'a> Lowerer<'a> {
                 }
                 self.lower_block(body);
             }
+            // f-string interpolations — recurse into each interpolated
+            // expression so operators inside `f"{a / b}"` are lowered to their
+            // typed trait-method calls just like anywhere else. Without this the
+            // parts were treated as opaque leaves, so a `u64` op inside an
+            // f-string never reached the signedness-aware `u64.div`/`u64.gt`/…
+            // rewrite and codegen fell back to its always-signed raw-`Binary`
+            // path — a silent wrong result under `build` for unsigned-64 ops
+            // (`f"{hi / 2}"` printed the signed quotient). The interpreter was
+            // unaffected (it evaluates the raw `Binary` with a span-threaded
+            // unsigned hint), so this closes a `run`/`build` divergence.
+            // B-2026-07-04-8.
+            ExprKind::InterpolatedStringLit(parts) => {
+                for part in parts.iter_mut() {
+                    if let ParsedInterpolationPart::Expr(e) = part {
+                        self.lower_expr(e);
+                    }
+                }
+            }
             // Leaf nodes — nothing to recurse into.
             ExprKind::Integer(_, _)
             | ExprKind::Float(_, _)
@@ -773,7 +791,6 @@ impl<'a> Lowerer<'a> {
             | ExprKind::ByteLit(_)
             | ExprKind::StringLit(_)
             | ExprKind::MultiStringLit(_)
-            | ExprKind::InterpolatedStringLit(_)
             | ExprKind::CStringLit { .. }
             | ExprKind::Bool(_)
             | ExprKind::Identifier(_)

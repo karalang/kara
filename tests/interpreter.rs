@@ -5473,18 +5473,132 @@ fn test_interp_primitive_const_i64_min() {
 
 #[test]
 fn test_interp_primitive_const_u64_max() {
-    // u64::MAX as i64 wraps to -1 in the type-erased interpreter
-    // (Value::Int(i64) carries the bit pattern; signed display flips
-    // sign). Codegen emits the unsigned i64 — interpreter parity is
-    // bit-pattern, not signed-display.
+    // B-2026-07-04-8: the i64-carrier `Value::Int` still holds u64::MAX's bit
+    // pattern (all-ones == -1 signed), but the print sink now recovers the
+    // `u64` static type from the printed expression's span and renders the bits
+    // unsigned — matching codegen's unsigned display instead of the old `-1`.
     let output = run("fn main() { let x = u64.MAX; println(x); }");
-    assert_eq!(output, "-1\n");
+    assert_eq!(output, "18446744073709551615\n");
 }
 
 #[test]
 fn test_interp_primitive_const_usize_max() {
+    // usize is 64-bit here, so usize::MAX prints the same unsigned all-ones
+    // value as u64::MAX (B-2026-07-04-8).
     let output = run("fn main() { let x = usize.MAX; println(x); }");
-    assert_eq!(output, "-1\n");
+    assert_eq!(output, "18446744073709551615\n");
+}
+
+// ── u64 model (B-2026-07-04-8) ──────────────────────────────────────
+//
+// The tree-walk interpreter stores every integer width in the i64-carrier
+// `Value::Int`, so a `u64` / `usize` value ≥ 2⁶³ rides as a negative
+// two's-complement i64. These tests pin the span-threaded unsigned-64 model
+// that reinterprets the bits as `u64` at the operators that differ (compare /
+// div / rem / shr / the add overflow boundary), at the print sinks, and at the
+// sort / argsort / argmin / argmax paths — so `karac run` matches codegen's
+// unsigned lowering. Values ≥ 2⁶³ are shift-constructed (the lexer rejects
+// integer literals > i64::MAX).
+
+#[test]
+fn test_interp_u64_print_ge_2_63() {
+    // The core mis-print: 2⁶³ rode as i64::MIN and printed with a spurious
+    // minus sign. Now rendered unsigned from the printed expr's u64 span.
+    let output = run("fn main() { let hi: u64 = 1u64 << 63; println(f\"{hi}\"); }");
+    assert_eq!(output, "9223372036854775808\n");
+}
+
+#[test]
+fn test_interp_u64_comparison_is_unsigned() {
+    // hi = 2⁶³ (i64::MIN signed), mid = 2⁶². Signed `>` said false; unsigned
+    // says true. Operand signedness is recovered from the operand span since
+    // the comparison result types the expression as `bool`.
+    let output = run(
+        "fn main() { let hi: u64 = 1u64 << 63; let mid: u64 = 1u64 << 62; \
+         println(f\"{hi > mid}\"); }",
+    );
+    assert_eq!(output, "true\n");
+}
+
+#[test]
+fn test_interp_u64_div_rem_shr_unsigned() {
+    // Signed sdiv/srem/ashr would smear the high bit; unsigned udiv/urem/lshr.
+    let output = run("fn main() { let hi: u64 = 1u64 << 63; \
+         println(f\"{hi / 2u64}\"); println(f\"{hi % 7u64}\"); \
+         println(f\"{hi >> 1u64}\"); }");
+    // 2⁶³/2 = 2⁶², 2⁶³ % 7 = 1, 2⁶³ >> 1 (logical) = 2⁶².
+    assert_eq!(output, "4611686018427387904\n1\n4611686018427387904\n");
+}
+
+#[test]
+fn test_interp_u64_add_no_false_overflow_trap() {
+    // 2⁶³ + 5 overflows i64 (would false-trap under the signed `checked_add`
+    // arm) but fits u64 — codegen uses `uadd.with.overflow`, so the interpreter
+    // must not trap here either.
+    let output = run("fn main() { let big: u64 = (1u64 << 63) + 5u64; println(f\"{big}\"); }");
+    assert_eq!(output, "9223372036854775813\n");
+}
+
+#[test]
+fn test_interp_u64_compound_assign_unsigned() {
+    // `>>=` (logical), `/=` (unsigned), `%=` (unsigned) on a u64 target —
+    // signedness threaded from the assignment target's span.
+    let output = run("fn main() { \
+         let mut a: u64 = 1u64 << 63; a >>= 1u64; println(f\"{a}\"); \
+         let mut b: u64 = 1u64 << 63; b /= 4u64; println(f\"{b}\"); \
+         let mut c: u64 = 1u64 << 63; c %= 7u64; println(f\"{c}\"); }");
+    assert_eq!(output, "4611686018427387904\n2305843009213693952\n1\n");
+}
+
+#[test]
+fn test_interp_vec_u64_sort_is_unsigned() {
+    // A value ≥ 2⁶³ must sort after the positives, not first as a negative i64.
+    let output = run(
+        "fn main() { let mut xs: Vec[u64] = [1u64 << 63, 5u64, 1u64 << 62, 0u64]; \
+         xs.sort(); \
+         println(f\"{xs[0]}\"); println(f\"{xs[1]}\"); \
+         println(f\"{xs[2]}\"); println(f\"{xs[3]}\"); }",
+    );
+    assert_eq!(output, "0\n5\n4611686018427387904\n9223372036854775808\n");
+}
+
+#[test]
+fn test_interp_vec_u64_sorted_returns_unsigned_order() {
+    let output = run(
+        "fn main() { let xs: Vec[u64] = [1u64 << 63, 5u64, 1u64 << 62]; \
+         let s = xs.sorted(); \
+         println(f\"{s[0]}\"); println(f\"{s[1]}\"); println(f\"{s[2]}\"); }",
+    );
+    assert_eq!(output, "5\n4611686018427387904\n9223372036854775808\n");
+}
+
+#[test]
+fn test_interp_column_u64_sorted_and_argsort_unsigned() {
+    // The receiver's element signedness is recovered from the non-aliased
+    // close-paren leaf (`argsort`/`argmin`/`argmax` result-type is `Vec[i64]` /
+    // `Option[i64]`, which would otherwise clobber the receiver span).
+    let output = run(
+        "fn main() { let c: Column[u64] = Column.from_vec([1u64 << 63, 5u64, 1u64 << 62]); \
+         let s = c.sorted(); println(f\"{s[0]},{s[1]},{s[2]}\"); \
+         let a = c.argsort(); println(f\"{a[0]},{a[1]},{a[2]}\"); \
+         println(f\"{c.argmin()}\"); println(f\"{c.argmax()}\"); }",
+    );
+    // sorted ascending: 5, 2⁶², 2⁶³. argsort: idx 1 (5), 2 (2⁶²), 0 (2⁶³).
+    // argmin = first-min index (5 @ 1), argmax = first-max index (2⁶³ @ 0).
+    assert_eq!(
+        output,
+        "5,4611686018427387904,9223372036854775808\n1,2,0\nSome(1)\nSome(0)\n"
+    );
+}
+
+#[test]
+fn test_interp_tensor_u64_sorted_and_argsort_unsigned() {
+    let output = run(
+        "fn main() { let t: Tensor[u64, [3]] = Tensor.from([1u64 << 63, 5u64, 1u64 << 62]); \
+         let s = t.sorted(); println(f\"{s[0]},{s[1]},{s[2]}\"); \
+         let a = t.argsort(); println(f\"{a[0]},{a[1]},{a[2]}\"); }",
+    );
+    assert_eq!(output, "5,4611686018427387904,9223372036854775808\n1,2,0\n");
 }
 
 #[test]

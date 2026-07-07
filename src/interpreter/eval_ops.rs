@@ -228,9 +228,31 @@ impl<'a> super::Interpreter<'a> {
         left: Value,
         right: Value,
         span: &Span,
+        // Caller-supplied "operands are unsigned 64-bit" hint. Needed only
+        // for comparison operators, whose *result* type at `span` is `bool`
+        // — so `span_type_is_unsigned64(span)` can't recover the operand
+        // signedness the way it can for arithmetic (whose result type IS the
+        // u64 operand type). Arithmetic / shift callers pass `false` and let
+        // the span autodetect below do the work. B-2026-07-04-8.
+        unsigned_hint: bool,
     ) -> Value {
         let left_variant = left.variant_name();
         let right_variant = right.variant_name();
+        // Unsigned 64-bit model (B-2026-07-04-8): the tree-walker stores every
+        // integer width in the i64-carrier `Value::Int`, so a `u64` / `usize`
+        // value ≥ 2⁶³ rides as a negative two's-complement i64. When the static
+        // type says the operands are unsigned 64-bit, reinterpret the bits as
+        // `u64` for the operators that differ (compare / div / rem / shr, and
+        // the add/sub/mul overflow boundary) so `karac run` matches codegen's
+        // `u{div,rem}` / `ugt` / `lshr` / `uadd.with.overflow` lowering. u8..u32
+        // fit i64 non-negatively (signed == unsigned), so only 64-bit needs it.
+        if unsigned_hint || self.span_type_is_unsigned64(span) {
+            if let (Value::Int(a), Value::Int(b)) = (&left, &right) {
+                if let Some(v) = self.eval_binary_u64(op, *a, *b, span) {
+                    return v;
+                }
+            }
+        }
         match (op, left, right) {
             // Element-wise SIMD arithmetic on `Vector[T, N]` (design.md
             // § Portable SIMD, slice 1b). Recurse per lane pair so each lane
@@ -242,7 +264,7 @@ impl<'a> super::Interpreter<'a> {
                 let lanes: Vec<Value> = a
                     .into_iter()
                     .zip(b)
-                    .map(|(x, y)| self.eval_binary(op, x, y, span))
+                    .map(|(x, y)| self.eval_binary(op, x, y, span, false))
                     .collect();
                 Value::Vector(lanes)
             }
@@ -518,7 +540,7 @@ impl<'a> super::Interpreter<'a> {
         for slot in slots {
             match slot {
                 Some((l, r)) => {
-                    data.push(self.eval_binary(op, l, r, span));
+                    data.push(self.eval_binary(op, l, r, span, false));
                     if self.pending_cf.is_some() {
                         return None;
                     }
@@ -793,6 +815,102 @@ impl<'a> super::Interpreter<'a> {
             _ => return false,
         };
         v < lo || v > hi
+    }
+
+    /// True when the type recorded at `span` is an unsigned 64-bit integer
+    /// (`u64` / `usize`), either directly or as the element of a container
+    /// (`Vec` / `Array` / `Slice` / `Vector` / `Column` / `Tensor` /
+    /// `Set` / `SortedSet`). Backs the interpreter's span-threaded
+    /// unsigned-64 model (B-2026-07-04-8): the i64-carrier `Value::Int` is
+    /// reinterpreted as `u64` at the compare / div / rem / shr / arithmetic /
+    /// print / sort sinks when the static type says so. Widths u8..u32 fit i64
+    /// non-negatively (signed == unsigned there), so only 64-bit unsignedness
+    /// needs the reinterpretation. Empty / unknown spans yield `false` (the
+    /// i64 default), matching `narrow_oob` — so `karac run`, which populates
+    /// `expr_types` sparsely, degrades gracefully to signed behavior.
+    pub(crate) fn span_type_is_unsigned64(&self, span: &Span) -> bool {
+        let key = crate::resolver::SpanKey::from_span(span);
+        let Some(ty) = self.typecheck_result.expr_types.get(&key) else {
+            return false;
+        };
+        Self::type_is_unsigned64(ty)
+    }
+
+    /// The type-level predicate behind [`span_type_is_unsigned64`], peeling one
+    /// container layer so a `Vec[u64]` / `Column[u64]` / … element counts.
+    pub(crate) fn type_is_unsigned64(ty: &crate::typechecker::types::Type) -> bool {
+        use crate::typechecker::types::{Type, UIntSize};
+        fn is_u64(t: &Type) -> bool {
+            matches!(t, Type::UInt(UIntSize::U64) | Type::UInt(UIntSize::Usize))
+        }
+        match ty {
+            Type::Array { element, .. }
+            | Type::Vector { element, .. }
+            | Type::Slice { element, .. } => is_u64(element),
+            Type::Named { name, args }
+                if (name == "Vec"
+                    || name == "Column"
+                    || name == "Tensor"
+                    || name == "Set"
+                    || name == "SortedSet")
+                    && !args.is_empty() =>
+            {
+                is_u64(&args[0])
+            }
+            other => is_u64(other),
+        }
+    }
+
+    /// Evaluate the integer operators whose result differs between signed i64
+    /// and unsigned u64 semantics, reinterpreting the i64-carrier bits `a` / `b`
+    /// as `u64`. Returns `None` for operators that are bit-identical across
+    /// signedness (`==` `!=` `&` `|` `^` `<<`) so the caller falls through to
+    /// the shared signed arms. B-2026-07-04-8; mirrors codegen's unsigned
+    /// lowering (`u{div,rem}`, `ugt`/`uge`/`ult`/`ule`, `lshr`,
+    /// `uadd/usub/umul.with.overflow`).
+    fn eval_binary_u64(&mut self, op: &BinOp, a: i64, b: i64, span: &Span) -> Option<Value> {
+        let (ua, ub) = (a as u64, b as u64);
+        let v: u64 = match op {
+            // Overflow traps at the u64 boundary — codegen uses the
+            // `u{add,sub,mul}.with.overflow` intrinsics (emit_checked_int_arith,
+            // `is_unsigned = true`), so a sum ≥ 2⁶³ that overflows i64 but fits
+            // u64 must NOT false-trap (the signed arms' `checked_*` would).
+            BinOp::Add => match ua.checked_add(ub) {
+                Some(v) => v,
+                None => return Some(self.record_integer_overflow(span)),
+            },
+            BinOp::Sub => match ua.checked_sub(ub) {
+                Some(v) => v,
+                None => return Some(self.record_integer_overflow(span)),
+            },
+            BinOp::Mul => match ua.checked_mul(ub) {
+                Some(v) => v,
+                None => return Some(self.record_integer_overflow(span)),
+            },
+            BinOp::Div => {
+                if ub == 0 {
+                    return Some(self.record_runtime_error("division by zero", span));
+                }
+                ua / ub
+            }
+            BinOp::Mod => {
+                if ub == 0 {
+                    return Some(self.record_runtime_error("division by zero", span));
+                }
+                ua % ub
+            }
+            // Logical (zero-filling) right shift — codegen lowers u64 `>>` to
+            // `lshr`; the signed arm's `a >> b` is an arithmetic (sign-
+            // extending) shift and would smear the high bit. Shift amount `b`
+            // mirrors the signed arm's raw form.
+            BinOp::Shr => ua >> b,
+            BinOp::Lt => return Some(Value::Bool(ua < ub)),
+            BinOp::LtEq => return Some(Value::Bool(ua <= ub)),
+            BinOp::Gt => return Some(Value::Bool(ua > ub)),
+            BinOp::GtEq => return Some(Value::Bool(ua >= ub)),
+            _ => return None,
+        };
+        Some(Value::Int(v as i64))
     }
 
     fn record_integer_overflow(&mut self, span: &Span) -> Value {

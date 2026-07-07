@@ -4463,7 +4463,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 // comparator; their default ordering has no lowering yet, so
                 // error loudly rather than silently leaving the Vec unsorted.
                 let thunk = if elem_ty.is_int_type() {
-                    self.emit_default_sort_thunk(elem_ty)
+                    // Unsigned element widths compare unsigned so a high-bit-set
+                    // value doesn't sort to the front (B-2026-07-04-8) — matches
+                    // the interpreter's `Vec[uN].sort()`.
+                    let unsigned = matches!(
+                        self.vec_elem_type_name(var_name).as_deref(),
+                        Some("u8" | "u16" | "u32" | "u64" | "usize" | "uint")
+                    );
+                    self.emit_default_sort_thunk(elem_ty, unsigned)
                 } else if self.vec_elem_type_name(var_name).as_deref() == Some("String") {
                     self.emit_default_sort_thunk_string()
                 } else if let Some(cmp_fn) = self
@@ -5779,6 +5786,14 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn emit_default_sort_thunk(
         &mut self,
         elem_ty: BasicTypeEnum<'ctx>,
+        // Compare the loaded integer elements as unsigned (`ULT`/`UGT`) when the
+        // source element type is unsigned. Without this a `u8` value like 200
+        // read as a signed i8 (-56) — and any `u64` value ≥ 2⁶³ — sorts to the
+        // front, diverging from the interpreter's now-unsigned `Vec[uN].sort()`
+        // (B-2026-07-04-8). The narrow widths always mis-sorted values with the
+        // width's high bit set; u64 only started diverging once the interpreter
+        // gained its u64 model.
+        unsigned: bool,
     ) -> FunctionValue<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
@@ -5810,14 +5825,13 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(elem_ty, b_ptr, "b")
             .unwrap()
             .into_int_value();
-        let lt = self
-            .builder
-            .build_int_compare(inkwell::IntPredicate::SLT, a, b, "lt")
-            .unwrap();
-        let gt = self
-            .builder
-            .build_int_compare(inkwell::IntPredicate::SGT, a, b, "gt")
-            .unwrap();
+        let (lt_pred, gt_pred) = if unsigned {
+            (inkwell::IntPredicate::ULT, inkwell::IntPredicate::UGT)
+        } else {
+            (inkwell::IntPredicate::SLT, inkwell::IntPredicate::SGT)
+        };
+        let lt = self.builder.build_int_compare(lt_pred, a, b, "lt").unwrap();
+        let gt = self.builder.build_int_compare(gt_pred, a, b, "gt").unwrap();
         let zero = i64_t.const_zero();
         let neg_one = i64_t.const_int((-1i64) as u64, true);
         let pos_one = i64_t.const_int(1, false);

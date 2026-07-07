@@ -29,7 +29,7 @@ use crate::token::Span;
 // bare element type — both shared with `Column` in `super::helpers`.
 use super::helpers::minmax_value_reduce;
 use super::helpers::value_as_f64 as value_to_f64;
-use super::helpers::value_compare;
+use super::helpers::{value_compare, value_compare_u64};
 use crate::interpreter::value::EnumData;
 
 /// Element-fill class for `Tensor.zeros` / `Tensor.ones` — the only
@@ -335,10 +335,23 @@ impl<'a> super::Interpreter<'a> {
         obj: &Value,
         args: &[CallArg],
         span: &Span,
+        // Close-paren leaf span carrying the `Tensor[T, S]` ELEMENT type stashed
+        // by the typechecker for the ordering methods — the reliable, non-aliased
+        // channel to element signedness (B-2026-07-04-8; see the Column twin).
+        args_close_span: &Span,
     ) -> Option<Value> {
         let Value::Tensor { dims, data } = obj else {
             return None;
         };
+        // Unsigned-64 element order for the ordering methods below
+        // (B-2026-07-04-8): a `u64` / `usize` element ≥ 2⁶³ sorts by magnitude,
+        // after the positives instead of first as a negative i64.
+        let ord_cmp: fn(&Value, &Value) -> std::cmp::Ordering =
+            if self.span_type_is_unsigned64(args_close_span) {
+                value_compare_u64
+            } else {
+                value_compare
+            };
         match method {
             "shape" => Some(Value::Array(Arc::new(RwLock::new(
                 dims.iter().map(|&d| Value::Int(d)).collect(),
@@ -502,7 +515,7 @@ impl<'a> super::Interpreter<'a> {
                         None => true,
                         Some((_, bv)) => {
                             // Strict compare keeps the FIRST occurrence.
-                            let ord = value_compare(cell, bv);
+                            let ord = ord_cmp(cell, bv);
                             if want_max {
                                 ord == std::cmp::Ordering::Greater
                             } else {
@@ -532,7 +545,7 @@ impl<'a> super::Interpreter<'a> {
             // tensor flattens in C-order first). Ties keep C-order (stable).
             "sorted" => {
                 let mut vals = data.read().unwrap().clone();
-                vals.sort_by(value_compare);
+                vals.sort_by(ord_cmp);
                 Some(Value::Array(Arc::new(RwLock::new(vals))))
             }
             // `argsort() -> Vec[i64]` (ElementwiseOrd, S6c): the flat C-order
@@ -541,7 +554,7 @@ impl<'a> super::Interpreter<'a> {
             "argsort" => {
                 let elems = data.read().unwrap();
                 let mut idxs: Vec<usize> = (0..elems.len()).collect();
-                idxs.sort_by(|&a, &b| value_compare(&elems[a], &elems[b]));
+                idxs.sort_by(|&a, &b| ord_cmp(&elems[a], &elems[b]));
                 let out: Vec<Value> = idxs.into_iter().map(|i| Value::Int(i as i64)).collect();
                 Some(Value::Array(Arc::new(RwLock::new(out))))
             }
@@ -657,7 +670,13 @@ impl<'a> super::Interpreter<'a> {
                 fa += coord * eff_a[k];
                 fb += coord * eff_b[k];
             }
-            let r = self.eval_binary(&op, a[fa as usize].clone(), b[fb as usize].clone(), span);
+            let r = self.eval_binary(
+                &op,
+                a[fa as usize].clone(),
+                b[fb as usize].clone(),
+                span,
+                false,
+            );
             if self.pending_cf.is_some() {
                 return Value::Unit;
             }
@@ -706,7 +725,7 @@ impl<'a> super::Interpreter<'a> {
             "range" => {
                 let mx = minmax_value_reduce(false, elems.clone());
                 let mn = minmax_value_reduce(true, elems);
-                self.eval_binary(&BinOp::Sub, mx, mn, span)
+                self.eval_binary(&BinOp::Sub, mx, mn, span, false)
             }
             "mean" => {
                 let s = self.tensor_fold_reduce(&BinOp::Add, elems, span);
@@ -724,7 +743,7 @@ impl<'a> super::Interpreter<'a> {
         let mut it = elems.into_iter();
         let mut acc = it.next().expect("non-empty");
         for x in it {
-            acc = self.eval_binary(op, acc, x, span);
+            acc = self.eval_binary(op, acc, x, span, false);
             if self.pending_cf.is_some() {
                 return Value::Unit;
             }
@@ -800,7 +819,7 @@ impl<'a> super::Interpreter<'a> {
             let inner_idx = f % inner;
             let outer_idx = f / (inner * n_axis);
             let r = outer_idx * inner + inner_idx;
-            acc[r] = self.eval_binary(&BinOp::Add, acc[r].clone(), v.clone(), span);
+            acc[r] = self.eval_binary(&BinOp::Add, acc[r].clone(), v.clone(), span, false);
             if self.pending_cf.is_some() {
                 return Value::Unit;
             }

@@ -1207,6 +1207,20 @@ impl<'a> super::Interpreter<'a> {
                     return Value::String(s);
                 }
             }
+            // Unsigned-64 scalar (B-2026-07-04-8): the i64-carrier `Value::Int`
+            // holds a `u64` / `usize` value ≥ 2⁶³ as a negative two's-complement
+            // i64, which the signed `Display` would print with a spurious minus
+            // sign. Recover the receiver's static type from its span and render
+            // the bits as `u64` so `f"{hi}"` / `println(hi)` / `hi.to_string()`
+            // match codegen's unsigned print. Only the bare scalar is reachable
+            // this way — a whole `Vec[u64]` printed via `f"{xs}"` recurses into
+            // elements as span-less `Value::Int`, which stay signed (documented
+            // residual; the i64-carrier model can't recover per-element types).
+            if let Value::Int(n) = &obj {
+                if self.span_type_is_unsigned64(&object.span) {
+                    return Value::String(format!("{}", *n as u64));
+                }
+            }
             // All other Display-able values: render via the user-facing
             // renderer (declaration-order struct fields, recursing into
             // containers) so `.to_string()` matches `println` and codegen.
@@ -1221,7 +1235,7 @@ impl<'a> super::Interpreter<'a> {
         // claimed by `try_eval_iterator_method` (which `unreachable!`s on a
         // non-iterable `Value::Column` receiver). A non-Column receiver
         // returns `None` here and falls through unchanged.
-        if let Some(v) = self.try_eval_column_method(method, &obj, args, span) {
+        if let Some(v) = self.try_eval_column_method(method, &obj, args, span, args_close_span) {
             return v;
         }
         // DataFrame methods (`insert` / `column` / `column_names` / …) —
@@ -1241,7 +1255,7 @@ impl<'a> super::Interpreter<'a> {
         if let Some(v) = self.try_eval_process_method(method, &obj, args, span) {
             return v;
         }
-        if let Some(v) = self.try_eval_tensor_method(method, &obj, args, span) {
+        if let Some(v) = self.try_eval_tensor_method(method, &obj, args, span, args_close_span) {
             return v;
         }
         if let Some(v) = self.try_eval_pool_method(method, &obj, args, span) {
@@ -1344,8 +1358,14 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
-        if let Some(v) = self.try_eval_seq_method(method, object, clone_receiver(&obj), args, span)
-        {
+        if let Some(v) = self.try_eval_seq_method(
+            method,
+            object,
+            clone_receiver(&obj),
+            args,
+            span,
+            args_close_span,
+        ) {
             return v;
         }
 
@@ -1394,7 +1414,12 @@ impl<'a> super::Interpreter<'a> {
             if let Some(op) = bin_op {
                 if args.len() == 1 {
                     let rhs = self.eval_expr_inner(&args[0].value);
-                    return self.eval_binary(&op, obj.clone(), rhs, span);
+                    // `x.lt(y)` / `x.gt(y)` on `u64` / `usize` receivers: the call
+                    // result is `bool`, so recover operand signedness from the
+                    // receiver span. B-2026-07-04-8.
+                    let unsigned_hint = self.span_type_is_unsigned64(&object.span)
+                        || self.span_type_is_unsigned64(&args[0].value.span);
+                    return self.eval_binary(&op, obj.clone(), rhs, span, unsigned_hint);
                 }
             }
         }

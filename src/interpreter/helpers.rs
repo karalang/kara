@@ -17,6 +17,21 @@ use crate::token::Span;
 
 use super::{EnumData, Value};
 
+/// `value_compare` variant that orders `Value::Int` as **unsigned 64-bit** —
+/// reinterpreting the i64 carrier's bits as `u64`. Used by the sort / sorted /
+/// argsort / argmin / argmax paths when the element type is `u64` / `usize`, so
+/// a value ≥ 2⁶³ orders after the positives instead of sorting to the front as
+/// a negative two's-complement i64. Every non-`Int` shape delegates to
+/// `value_compare` (nested `u64` inside tuples/arrays is a documented residual —
+/// the i64-carrier model can't recover element types below the top level).
+/// B-2026-07-04-8.
+pub(super) fn value_compare_u64(a: &Value, b: &Value) -> std::cmp::Ordering {
+    match (a, b) {
+        (Value::Int(x), Value::Int(y)) => (*x as u64).cmp(&(*y as u64)),
+        _ => value_compare(a, b),
+    }
+}
+
 pub(super) fn value_compare(a: &Value, b: &Value) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     match (a, b) {

@@ -2422,6 +2422,47 @@ mod codegen_tests {
         );
     }
 
+    #[test]
+    fn test_ir_unsigned_op_inside_fstring_is_lowered() {
+        // B-2026-07-04-8: `ExprKind::InterpolatedStringLit` was a leaf in the
+        // lowering pass, so operators inside `f"{...}"` were never rewritten to
+        // their signedness-aware trait-method calls (`u64.div`, …). Codegen then
+        // fell back to its always-signed raw-`Binary` path, silently emitting a
+        // signed div/rem/shift/compare for a u64 op printed via an f-string —
+        // a `build`-only wrong result (`run` used a span-threaded unsigned hint).
+        // Lowering now recurses into interpolation parts, so the op is unsigned.
+        let ir = ir_for("fn f(a: u64, b: u64) -> String { f\"{a / b}\" }");
+        assert!(
+            ir.contains("udiv i64"),
+            "u64 `/` inside an f-string must emit udiv:\n{ir}"
+        );
+        assert!(
+            !ir.contains("sdiv i64"),
+            "u64 `/` inside an f-string must not emit signed div:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_u64_ops_and_sort_unsigned_match_run() {
+        // B-2026-07-04-8 parity: once the interpreter gained its u64 model,
+        // codegen had to agree on unsigned print / div inside f-strings (the
+        // lowering-recurse fix) and on `Vec[u64].sort()` order — a value ≥ 2⁶³
+        // sorts AFTER the positives, not first as a negative i64 (the unsigned
+        // default-sort thunk). Drives the whole chain end-to-end.
+        let src = "fn main() {\n\
+                   \x20   let hi: u64 = 1u64 << 63;\n\
+                   \x20   println(f\"{hi}\");\n\
+                   \x20   println(f\"{hi / 2u64}\");\n\
+                   \x20   let mut xs: Vec[u64] = [1u64 << 63, 5u64, 1u64 << 62, 0u64];\n\
+                   \x20   xs.sort();\n\
+                   \x20   println(f\"{xs[0]},{xs[3]}\");\n\
+                   }\n";
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some("9223372036854775808\n4611686018427387904\n0,9223372036854775808\n")
+        );
+    }
+
     // ── Variables and let bindings ───────────────────────────────
 
     #[test]

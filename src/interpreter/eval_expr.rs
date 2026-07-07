@@ -98,7 +98,15 @@ impl<'a> super::Interpreter<'a> {
                 // (now a hard type error, B-2026-07-04-11) still surfaces rather
                 // than being silently coerced.
                 let (l, r) = self.promote_int_literal_for_float_peer(op, left, right, l, r);
-                self.eval_binary(op, l, r, &expr.span)
+                // Comparison operators type the whole expression as `bool`, so
+                // `eval_binary`'s own-span autodetect can't recover u64 operand
+                // signedness — supply it from the operand spans instead
+                // (B-2026-07-04-8). Arithmetic / shift are result-typed u64 and
+                // autodetect on their own, but OR-ing the operand hint in is
+                // harmless and covers spans the result table missed.
+                let unsigned_hint = self.span_type_is_unsigned64(&left.span)
+                    || self.span_type_is_unsigned64(&right.span);
+                self.eval_binary(op, l, r, &expr.span, unsigned_hint)
             }
             ExprKind::Unary { op, operand } => {
                 let val = self.eval_expr_inner(operand);

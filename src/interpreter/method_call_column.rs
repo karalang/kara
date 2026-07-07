@@ -33,7 +33,7 @@ use crate::token::Span;
 // both are shared with `Tensor` in `super::helpers`.
 use super::helpers::minmax_value_reduce;
 use super::helpers::value_as_f64 as val_f64;
-use super::helpers::value_compare;
+use super::helpers::{value_compare, value_compare_u64};
 
 /// Unwrap a scalar [`ReduceOutcome`] (the float-result reductions) into a
 /// `Value::Float`.
@@ -151,10 +151,25 @@ impl<'a> super::Interpreter<'a> {
         obj: &Value,
         args: &[CallArg],
         span: &Span,
+        // Close-paren leaf span. The typechecker stashes the `Column[T]` ELEMENT
+        // type here for the ordering methods (B-2026-07-04-8) — the receiver's
+        // own span type is clobbered by the call's `Vec[i64]` / `Option[i64]`
+        // result, so this non-aliased leaf is the reliable channel to element
+        // signedness (same mechanism as `pow` / the bit intrinsics).
+        args_close_span: &Span,
     ) -> Option<Value> {
         let Value::Column { data, valid } = obj else {
             return None;
         };
+        // Unsigned-64 element order for the ordering methods below
+        // (B-2026-07-04-8): a `u64` / `usize` element sorts by magnitude, so a
+        // value ≥ 2⁶³ orders after the positives instead of first as a negative.
+        let ord_cmp: fn(&Value, &Value) -> std::cmp::Ordering =
+            if self.span_type_is_unsigned64(args_close_span) {
+                value_compare_u64
+            } else {
+                value_compare
+            };
         match method {
             "push" => {
                 let arg = args.first()?;
@@ -308,7 +323,7 @@ impl<'a> super::Interpreter<'a> {
                 if self.pending_cf.is_some() {
                     return Some(Value::Unit);
                 }
-                Some(self.eval_binary(&BinOp::Sub, mx, mn, span))
+                Some(self.eval_binary(&BinOp::Sub, mx, mn, span, false))
             }
             // General left-fold over the valid slots (nulls skipped, in
             // order): thread `init` through `f(acc, elem)`. An empty /
@@ -479,7 +494,7 @@ impl<'a> super::Interpreter<'a> {
                     let take = match &best {
                         None => true,
                         Some((_, bv)) => {
-                            let ord = value_compare(cell, bv);
+                            let ord = ord_cmp(cell, bv);
                             // Strict compare keeps the FIRST occurrence: a later
                             // equal value never displaces the incumbent.
                             if want_max {
@@ -519,7 +534,7 @@ impl<'a> super::Interpreter<'a> {
                     .filter(|(_, &ok)| ok)
                     .map(|(v, _)| v.clone())
                     .collect();
-                vals.sort_by(value_compare);
+                vals.sort_by(ord_cmp);
                 Some(Value::Array(Arc::new(RwLock::new(vals))))
             }
             // `argsort() -> Vec[i64]` (ElementwiseOrd, S6c): the ORIGINAL slot
@@ -536,7 +551,7 @@ impl<'a> super::Interpreter<'a> {
                     .filter(|(_, &ok)| ok)
                     .map(|((i, v), _)| (i, v.clone()))
                     .collect();
-                pairs.sort_by(|a, b| value_compare(&a.1, &b.1));
+                pairs.sort_by(|a, b| ord_cmp(&a.1, &b.1));
                 let idxs: Vec<Value> = pairs
                     .into_iter()
                     .map(|(i, _)| Value::Int(i as i64))
@@ -573,7 +588,7 @@ impl<'a> super::Interpreter<'a> {
             "sum" => {
                 let mut acc = vals[0].clone();
                 for x in vals.into_iter().skip(1) {
-                    acc = self.eval_binary(&BinOp::Add, acc, x, span);
+                    acc = self.eval_binary(&BinOp::Add, acc, x, span, false);
                     if self.pending_cf.is_some() {
                         return Value::Unit;
                     }
@@ -583,7 +598,7 @@ impl<'a> super::Interpreter<'a> {
             "prod" => {
                 let mut acc = vals[0].clone();
                 for x in vals.into_iter().skip(1) {
-                    acc = self.eval_binary(&BinOp::Mul, acc, x, span);
+                    acc = self.eval_binary(&BinOp::Mul, acc, x, span, false);
                     if self.pending_cf.is_some() {
                         return Value::Unit;
                     }

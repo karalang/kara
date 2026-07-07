@@ -1329,13 +1329,19 @@ impl<'ctx> super::Codegen<'ctx> {
     /// sign-extension, `u8`/`u16`/`u32` by zero-extension, `f32` by `fpext` —
     /// all lossless into the 8-byte scratch slot, so the `karac build` result
     /// matches `karac run`. **u64** (unsigned 64-bit) is the sole rejection:
-    /// the scratch sort compares integers as SIGNED (misordering values ≥
-    /// 2⁶³). Codegen could lift it with an unsigned `UGT` compare, but `karac
-    /// run` *also* mis-sorts and mis-prints u64 ≥ 2⁶³ (the interpreter's
-    /// `Value::Int` is signedness-blind), so enabling `build` alone would
-    /// diverge from `run`; both are blocked on an interpreter u64 model
-    /// (bug-ledger B-2026-07-04-8). A non-numeric element is a
-    /// typechecker-caught impossibility here, rejected defensively.
+    /// this shared scratch sort ([`emit_sort_scratch`]) compares integer keys as
+    /// SIGNED (`SGT`), misordering values ≥ 2⁶³. The interpreter now HAS a real
+    /// u64 model (bug-ledger B-2026-07-04-8, fixed), so `run` sorts these
+    /// Columns / Tensors correctly and the old "enabling `build` would diverge
+    /// from `run`" blocker is gone — but threading the unsigned `UGT` scratch
+    /// compare through [`SortKey`] (so `Column[u64]`/`Tensor[u64]`
+    /// `sorted`/`argsort` match) is a tracked follow-on: the kernel is shared
+    /// with the stats median/percentile path, so it wants its own reviewed slice
+    /// (bug-ledger B-2026-07-07-2). Until then a u64 element sort is rejected
+    /// LOUDLY rather than silently mis-sorted. The sibling `Vec[u64].sort()`
+    /// (its own default-order thunk, not this kernel) is already
+    /// unsigned-correct. A non-numeric element is a typechecker-caught
+    /// impossibility here, rejected defensively.
     pub(super) fn sort_key_is_int(
         &self,
         elem: BasicTypeEnum<'ctx>,
@@ -1346,15 +1352,14 @@ impl<'ctx> super::Codegen<'ctx> {
         match elem {
             BasicTypeEnum::IntType(it) if it.get_bit_width() == 64 && unsigned => Err(format!(
                 "{container}.{method} under the native backend (`karac build`) does \
-                 not yet support u64 element {container}s — the scratch sort compares \
-                 integers as signed i64, which misorders values ≥ 2^63. The codegen \
-                 side is a one-line fix (an unsigned `UGT` scratch compare), but it is \
-                 gated on the interpreter: `karac run` mis-sorts AND mis-prints u64 ≥ \
-                 2^63 too (the tree-walker's `Value::Int` is signedness-blind — \
-                 `value_compare`, `Display`, and `eval_binary` all treat it as i64), \
-                 so enabling `build` alone would diverge from `run`. Both surfaces are \
-                 blocked on giving the interpreter a real u64 model — see \
-                 bug-ledger B-2026-07-04-8."
+                 not yet support u64 element {container}s — the shared scratch sort \
+                 compares integer keys as signed i64, which misorders values ≥ 2^63. \
+                 The interpreter now has a real u64 model (`karac run` sorts these \
+                 correctly — bug-ledger B-2026-07-04-8, fixed), so this is no longer \
+                 gated on `run`; wiring the unsigned `UGT` scratch compare through \
+                 `SortKey` (the kernel is shared with the stats median/percentile \
+                 path) is a tracked follow-on — see bug-ledger B-2026-07-07-2. \
+                 `Vec[u64].sort()` is already unsigned-correct under `build`."
             )),
             BasicTypeEnum::IntType(_) => Ok(true),
             BasicTypeEnum::FloatType(_) => Ok(false),

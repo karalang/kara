@@ -2278,6 +2278,15 @@ impl<'a> super::TypeChecker<'a> {
                     },
                 };
                 self.record_expr_type(span, &ret);
+                // Stash the ELEMENT type at the non-aliased close-paren leaf so
+                // the interpreter can recover element signedness for the
+                // unsigned-64 sort order (B-2026-07-04-8). The result type
+                // (`Vec[i64]` / `Option[i64]` for argsort/argmin/argmax, or the
+                // `Vec[T]` that `record_expr_type(span, …)` just wrote) clobbers
+                // `expr_types[receiver.span]`, so a `u64` element is otherwise
+                // unrecoverable — the same receiver-span aliasing the `pow` /
+                // bit-intrinsic paths work around via `args_close_span`.
+                self.record_expr_type(args_close_span, &elem);
                 return ret;
             }
         }
@@ -3243,6 +3252,15 @@ impl<'a> super::TypeChecker<'a> {
         };
         if let Some(elem) = vec_elem_for_dispatch {
             if let Some(ty) = self.infer_vec_method(&elem, method, args, span) {
+                // Stash the element type at the non-aliased close-paren leaf so
+                // the interpreter recovers element signedness for the unsigned-64
+                // sort order (B-2026-07-04-8). `sort()` is typed `Unit` and
+                // `sorted()`'s `Vec[T]` result also clobbers the receiver span,
+                // so this leaf is the reliable channel to a `u64` element (same
+                // mechanism as the Column / Tensor ordering methods).
+                if matches!(method, "sort" | "sorted") {
+                    self.record_expr_type(args_close_span, &elem);
+                }
                 return ty;
             }
         }
