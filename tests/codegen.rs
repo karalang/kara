@@ -47699,6 +47699,38 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_inherent_impl_over_container_adds_methods() {
+        // S6c-12 final: user *inherent* impls (`impl Column[i64] { .. }`, no
+        // trait) that ADD new method names to a builtin container — admitted
+        // by method-granular overlap admission alongside the baked
+        // generic-on-name `impl[T] Column[T]`. Covers a Column with two
+        // DISJOINT inherent impls, a self-calls-another-inherent-method chain,
+        // and a Tensor. Once the typechecker admits the impl, codegen dispatch
+        // already works (disjoint names → no collision). `run` == `build`.
+        let src = r#"
+impl Column[i64] {
+    fn doubled_sum(ref self) -> i64 { self.sum() + self.sum() }
+    fn quad_sum(ref self) -> i64 { self.doubled_sum() + self.doubled_sum() }
+}
+impl Column[i64] {
+    fn spread(ref self) -> i64 { self.max() - self.min() }
+}
+impl Tensor[i64, [3]] {
+    fn twice_sum(ref self) -> i64 { self.sum() + self.sum() }
+}
+fn main() {
+    let c: Column[i64] = Column.from_vec([1, 2, 3, 4]);
+    let t: Tensor[i64, [3]] = Tensor.from([1, 2, 3]);
+    println(f"{c.doubled_sum()} {c.quad_sum()} {c.spread()}");
+    println(f"{t.twice_sum()}");
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        // sum=10 → doubled=20, quad=40; spread = 4-1 = 3. tensor sum=6 → 12.
+        assert_eq!(out, "20 40 3\n12\n");
+    }
+
+    #[test]
     fn test_e2e_user_generic_trait_impl_over_container() {
         // S6c-12 slice 4: a GENERIC container impl `impl[T: Add] Trait[T] for
         // Column[T]` / `Tensor[T, S]` with an explicit (required) method. Routes

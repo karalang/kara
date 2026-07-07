@@ -19351,6 +19351,37 @@ fn main() {
 }
 
 #[test]
+fn inherent_impl_over_container_adds_methods_dispatches() {
+    // S6c-12 final: user *inherent* impls (no trait) that ADD new method names
+    // to a builtin container dispatch correctly under `karac run`. Two disjoint
+    // inherent impls on `Column[i64]` plus a self-calls-another-inherent chain
+    // and a Tensor. The interpreter has no overlap check, so the only gate was
+    // the typechecker admitting the impl (method-granular overlap admission).
+    let out = run_no_errors(
+        r#"
+impl Column[i64] {
+    fn doubled_sum(ref self) -> i64 { self.sum() + self.sum() }
+    fn quad_sum(ref self) -> i64 { self.doubled_sum() + self.doubled_sum() }
+}
+impl Column[i64] {
+    fn spread(ref self) -> i64 { self.max() - self.min() }
+}
+impl Tensor[i64, [3]] {
+    fn twice_sum(ref self) -> i64 { self.sum() + self.sum() }
+}
+fn main() {
+    let c: Column[i64] = Column.from_vec([1, 2, 3, 4]);
+    let t: Tensor[i64, [3]] = Tensor.from([1, 2, 3]);
+    println(f"{c.doubled_sum()} {c.quad_sum()} {c.spread()}");
+    println(f"{t.twice_sum()}");
+}
+"#,
+    );
+    // sum=10 → doubled=20, quad=40; spread = 4-1 = 3. tensor sum=6 → 12.
+    assert_eq!(out, "20 40 3\n12\n");
+}
+
+#[test]
 fn stdlib_reduce_trait_bound_fold_column_and_tensor() {
     // S6c: `fold` on the `Reduce` trait surface — a `fn f[C: Reduce[i64]]`
     // body may call `c.fold(init, |a, x| ...)`, dispatched to the concrete

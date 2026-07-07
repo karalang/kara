@@ -765,18 +765,15 @@ B-2026-07-02-10..13, see the ledger.
   probe of this erroneously used an *unbounded* `T` with `self.total() +
   self.total()` and saw "found 'T'" — that rejection is CORRECT; a default body
   doing `T + T` genuinely needs `T: Add`. Not a bug.)
-  **Inherent `impl Column[i64] { .. }` (no trait) is a SEPARATE wall, NOT in this
-  epic.** It is rejected at check/build by "conflicting impl: another
-  `impl Column[i64]` already exists; v1 does not support generic-vs-specialized
-  impl overlap on the same trait + target" — the baked `impl[T] Reduce[T] for
-  Column[T]` occupies the `Column` inherent/impl slot, so a user inherent impl
-  overlaps at the impl/target granularity even when its method NAMES don't
-  collide. Supporting it needs **method-granular** overlap admission (let a user
-  add NEW method names to a builtin container without whole-impl conflict), which
-  touches deliberate v1 no-specialization semantics — a real, larger follow-on,
-  tracked here, not forced. (`karac run` executes past the conflict warning, so
-  it "works" under run only — a check/build-vs-run divergence by the run-executes-
-  -past-errors design, not a soundness bug.)
+  **Inherent `impl Column[i64] { .. }` (no trait) was a SEPARATE wall — now
+  RESOLVED as Slice 6 (see below).** At the time of Slice 3 it was rejected at
+  check/build by "conflicting impl: … v1 does not support generic-vs-specialized
+  impl overlap"; the real conflict is against the baked **inherent** `impl[T]
+  Column[T] { .. }` (`runtime/stdlib/column.kara:57`, `trait_name = None`,
+  `target_args = []`) — NOT the `Reduce` trait impl (a different `trait_name`
+  slot) — so the user's `impl Column[i64]` (None, `[i64]`) tripped the
+  generic-vs-specialized rule on the `(None, "Column")` slot even when its method
+  NAMES didn't collide. Slice 6 lifts it (method-granular admission).
   **Slice 4 ✅ (landed — base works, two edges ledgered) — generic container
   impls.** `impl[T: Add] Trait[T] for Column[T]` / `Tensor[T, S]` routes through
   the existing `make_generic_impl_method_function` (types `self` as the target
@@ -849,10 +846,37 @@ B-2026-07-02-10..13, see the ledger.
   UNRELATED gap surfaced — `Column.from_vec(<temporary Vec[String]>)` still errors
   loudly under build ("bind the Vec to a `let` first"); orthogonal to this slice
   (a from_vec ownership-transfer follow-on), worked around by let-binding in tests.
-  **The S6c-12 user-impl-over-container epic is now COMPLETE** (Slices 1–5 + the
-  4a/4b fixes); the only remaining container-impl item is the separate INHERENT-impl
-  overlap wall (Slice 3, needs method-granular overlap admission — a distinct
-  feature, not part of this epic).
+  **Slice 6 ✅ (landed) — inherent-impl overlap wall, method-granular admission.**
+  The last item: a user *inherent* `impl Column[i64] { fn new_method(..) }` (no
+  trait) was rejected wholesale by the v1 generic-vs-specialized overlap rule
+  against the baked generic-on-name inherent `impl[T] Column[T]`
+  (`runtime/stdlib/column.kara:57`) — even when its method NAMES don't collide.
+  The v1 rule exists to sidestep specialization soundness potholes (the same
+  method resolved two ways); a specialized inherent impl that only ADDS new
+  method names never defines any method twice, so it is NOT specialization and
+  is now admitted. Fix (typechecker-only): `impl_overlap_exists` →
+  `impl_overlap_conflict` (env_build.rs) takes the new impl's method map and
+  returns `Option<ImplOverlap>` — `None` (admit), `WholeImpl` (trait-impl
+  coherence, unchanged v1 rejection for `trait_name.is_some()`), or
+  `MethodRedefinition(names)` (an inherent impl redefining an existing method —
+  still rejected, now with a method-specific diagnostic). Method-granular
+  admission is scoped to inherent impls (a trait impl is a whole-trait
+  commitment; overlapping trait impls stay a coherence violation regardless of
+  method names). Once the typechecker admits the impl, run/build already
+  dispatch correctly — disjoint method names mean no last-write-wins collision,
+  so the interpreter/codegen surfaces needed NO change (they never had an
+  overlap check). Verified run == autopar == build for inherent Column + Tensor
+  impls adding methods (incl. a self-calls-another-inherent chain and two
+  disjoint inherent impls on the same concrete container); redefining a baked
+  method (`fn sum`) and two inherent impls sharing a method name both still
+  reject. Tests: `test_inherent_specialized_impl_adds_method_over_container` /
+  `_redefines_baked_method_rejected` / `test_two_disjoint_inherent_impls_over_container_admitted`
+  / `test_two_inherent_impls_same_method_rejected` / `_over_tensor` (typechecker),
+  `inherent_impl_over_container_adds_methods_dispatches` (interpreter),
+  `test_e2e_inherent_impl_over_container_adds_methods` (codegen).
+  **The S6c-12 user-impl-over-container epic is COMPLETE** (Slices 1–6 + the
+  4a/4b fixes) — nothing remains. The orthogonal `Column.from_vec(<temporary
+  Vec[String]>)` follow-on (B-2026-07-06-1) has also since been fixed.
 - **S6c** — remaining: `ElementwiseOrd` user impls; **u64 column/tensor sort**
   (blocked on the interpreter u64 model — see S6c-9 / B-2026-07-04-8, NOT just an
   unsigned scratch compare as previously thought); a `product` DEFAULT body for
@@ -862,9 +886,7 @@ B-2026-07-02-10..13, see the ledger.
   epic is now **in progress**: the concrete `impl Trait for Column[i64]`/`[f64]`
   and `Tensor[..]` cases (the 3-surface gap re-probed 2026-07-04) **landed as
   S6c-12 Slices 1 + 2**, and trait **DEFAULT** methods over containers **landed
-  as Slice 3** (they already worked — slice 3 is regression coverage). The
-  **inherent** `impl Column[i64] { .. }` case is a separate impl-overlap wall
-  (documented under S6c-12 Slice 3), needing method-granular overlap admission.
+  as Slice 3** (they already worked — slice 3 is regression coverage).
   **Generic** container impls **landed as Slice 4** (base works), and the
   generic-impl operator element-width miscompile **B-2026-07-04-16 landed FIXED as
   Slice 4a** (Shape-arg gate + registered-element sourcing; covers f64/f32/narrow
@@ -873,8 +895,11 @@ B-2026-07-02-10..13, see the ledger.
   diagnostic to name the failing bound + point at the `F64` wrapper). The
   heap/**String** element read-back landed as **Slice 5** (`Column[String]`
   `c[i] -> Option[String]` + `self[i]` in a user impl; clone-out, ASAN+LSan clean).
-  **The S6c-12 user-impl-over-container epic is COMPLETE** (Slices 1–5); only the
-  separate **inherent**-impl overlap wall remains as a distinct feature.
+  The **inherent** `impl Column[i64] { .. }` overlap wall **landed as Slice 6**
+  (method-granular overlap admission: an inherent specialized impl that only
+  ADDS new method names coexists with the baked generic-on-name `impl[T]
+  Column[T]`; redefining a baked method still rejects). **The S6c-12
+  user-impl-over-container epic is COMPLETE** (Slices 1–6) — nothing remains.
 
 ---
 

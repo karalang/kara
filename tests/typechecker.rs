@@ -15254,6 +15254,88 @@ fn test_alias_expanded_at_impl_registration() {
     );
 }
 
+#[test]
+fn test_inherent_specialized_impl_adds_method_over_container() {
+    // S6c-12 final: a user inherent `impl Column[i64] { fn .. }` that only
+    // ADDS a new method name is admitted to coexist with the baked
+    // generic-on-name `impl[T] Column[T] { .. }` (which provides sum/min/…).
+    // Method-granular overlap admission: no method is defined twice, so it is
+    // not specialization.
+    typecheck_ok(
+        "impl Column[i64] { fn doubled_sum(ref self) -> i64 { self.sum() + self.sum() } }\n\
+         fn main() {\n\
+             let c: Column[i64] = Column.from_vec([1, 2, 3]);\n\
+             print(c.doubled_sum());\n\
+         }",
+    );
+}
+
+#[test]
+fn test_inherent_specialized_redefines_baked_method_rejected() {
+    // Redefining a method the baked generic-on-name impl already provides
+    // (`sum`) IS specialization — still rejected, with a method-specific
+    // ConflictingImpl diagnostic naming the offending method.
+    let errors = typecheck_errors(
+        "impl Column[i64] { fn sum(ref self) -> i64 { 999 } }\n\
+         fn main() { let c: Column[i64] = Column.from_vec([1, 2, 3]); print(c.sum()); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::ConflictingImpl
+                && e.message.contains("`sum`")
+                && e.message.contains("redefines method")),
+        "expected method-specific ConflictingImpl naming `sum`, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_two_disjoint_inherent_impls_over_container_admitted() {
+    // Two user inherent impls on the same concrete container with DISJOINT
+    // method names coexist (natural multi-inherent-impl shape); each adds
+    // a distinct method.
+    typecheck_ok(
+        "impl Column[i64] { fn a(ref self) -> i64 { self.sum() } }\n\
+         impl Column[i64] { fn b(ref self) -> i64 { self.max() } }\n\
+         fn main() {\n\
+             let c: Column[i64] = Column.from_vec([1, 2, 3]);\n\
+             print(c.a());\n\
+             print(c.b());\n\
+         }",
+    );
+}
+
+#[test]
+fn test_two_inherent_impls_same_method_rejected() {
+    // Two inherent impls that both declare `a` collide — a method redefinition,
+    // rejected.
+    let errors = typecheck_errors(
+        "impl Column[i64] { fn a(ref self) -> i64 { self.sum() } }\n\
+         impl Column[i64] { fn a(ref self) -> i64 { self.max() } }\n\
+         fn main() { let c: Column[i64] = Column.from_vec([1, 2, 3]); print(c.a()); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::ConflictingImpl && e.message.contains("`a`")),
+        "expected ConflictingImpl naming `a`, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_inherent_specialized_impl_adds_method_over_tensor() {
+    // Tensor parity for the container inherent-impl admission.
+    typecheck_ok(
+        "impl Tensor[i64, [3]] { fn twice_sum(ref self) -> i64 { self.sum() + self.sum() } }\n\
+         fn main() {\n\
+             let t: Tensor[i64, [3]] = Tensor.from([1, 2, 3]);\n\
+             print(t.twice_sum());\n\
+         }",
+    );
+}
+
 // ── Compound-payload enum codegen — typechecker carve-out ──
 //
 // Slice CP (Phase 7.2 — 2026-05-09) rejects nested value-enum
