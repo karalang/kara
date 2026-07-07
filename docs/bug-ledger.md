@@ -89,11 +89,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **288 surfaced · 0 open · 287 fixed** (2026-05-20 → 2026-07-07). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **289 surfaced · 1 open · 287 fixed** (2026-05-20 → 2026-07-07). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-07-07-6 | 2026-07-07 | codegen | low | REPL cross-type rebind crashes the JIT runner on Linux (1 test: repl_jit_cross_type_rebind_uses_new_value). After `let x = 5` (i64) then `let x: String = "hello"; println(x)` in a later cell, the fresh runner subprocess dies with a signal (exit code None) instead of printing `hello`. The equivalent PLAIN program `fn main() { let x = 5; let x: String = "hello"; println(x); }` runs correctly under BOTH the interpreter and AOT (`karac build` prints `hello`, exit 0), so this is specific to the REPL cell codegen path (compile_to_ir_for_repl_cell + persistent-let replay of the shadowed i64 `x` alongside the new String `x` in one synthesized body) executed under the ~O2 LLJIT on Linux. Likely another optimizer-exposed UB in the same class as B-2026-07-07-4 (a stale i64 slot / scope-exit cleanup applied to the String rebind), or a REPL snapshot-replay codegen gap. Only surfaced once the JIT lane started running on Linux (B-2026-07-07-5); macOS repl_jit was green (platform-blind). NARROW: cross-type same-name rebind across REPL cells; the codegen E2E proof gate (2084/2084) and the `karac test` JIT batch (491/491) are unaffected. Repro: `cargo test --features lljit_prototype --test repl_jit repl_jit_cross_type_rebind_uses_new_value`. Belongs to Slice 5 (repl/test JIT-default) Linux hardening. Next step: emit the failing cell's IR and bisect llc -O0 vs -O2 to localise (the technique that cracked B-2026-07-07-4). | docs/spikes/lljit-productionization.md |
 
 ### Fixed (287)
 
