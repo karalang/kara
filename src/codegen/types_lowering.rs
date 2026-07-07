@@ -1317,13 +1317,31 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.for_loop_owned_agg_vars.insert(name.to_string());
                 return;
             }
-            // NOTE: a BARE user-enum element (`Vec[MyEnum]`) is out of scope for
-            // this slice — the defensive copy is wired only for the struct
-            // let-binding / struct-literal consume sites, so marking a bare enum
-            // would be a no-op. A struct field that is an enum / Option[enum] IS
-            // covered (the struct arm above deep-copies it via
-            // `deep_copy_one_aggregate_field`'s enum/Option arms). Bare-enum
-            // whole-move is tracked as a B-2026-07-04-17 residual.
+            // B-2026-07-05-2: a BARE non-shared user-ENUM element (`Vec[MyEnum]`),
+            // the residual B-2026-07-04-17 left open. Like the struct arm, the
+            // loop binding bit-copy-aliases the container slot whose live-variant
+            // heap the container's per-element drop frees, so a whole-move to a
+            // new owner (`let x = a`) must deep-copy. Marked in the same aggregate
+            // set; the enum let-binding site does the copy via
+            // `deep_copy_enum_heap_payload_in_place`, which duplicates EXACTLY the
+            // `VecOrString` + `NestedStruct` payloads `emit_enum_drop_switch`
+            // frees (copy-depth == drop-depth), so any non-shared enum with a
+            // heap-bearing variant is safe to mark. `Option`/`Result` are handled
+            // by the `armed` match below (their inline payloads go through
+            // `for_loop_borrow_vars`), so exclude them here.
+            if !matches!(head, "Option" | "Result") {
+                if let Some(layout) = self.enum_layouts.get(head) {
+                    let heap_bearing = !layout.is_shared
+                        && layout
+                            .field_drop_kinds
+                            .values()
+                            .any(|ks| ks.iter().any(|k| k.is_heap_bearing()));
+                    if heap_bearing {
+                        self.for_loop_owned_agg_vars.insert(name.to_string());
+                        return;
+                    }
+                }
+            }
             let arg = |i: usize| -> Option<&TypeExpr> {
                 match pp.generic_args.as_ref()?.get(i)? {
                     GenericArg::Type(t) => Some(t),

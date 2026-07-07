@@ -714,7 +714,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// case. The enum's payload words are stored as raw i64s (data = ptrtoint,
     /// then len, then cap), so the copy reconstructs a `{ptr,len,cap}` value,
     /// runs `emit_vecstr_defensive_copy`, and writes the copied words back.
-    fn deep_copy_enum_heap_payload_in_place(
+    pub(super) fn deep_copy_enum_heap_payload_in_place(
         &mut self,
         enum_name: &str,
         base_ptr: PointerValue<'ctx>,

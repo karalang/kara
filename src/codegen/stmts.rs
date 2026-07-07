@@ -2476,7 +2476,27 @@ impl<'ctx> super::Codegen<'ctx> {
                     &value.kind,
                     ExprKind::Identifier(n) if self.owned_vecstr_params.contains(n.as_str())
                 );
-                let val = if rhs_is_owned_param {
+                // B-2026-07-05-2 sibling (Vec/String leg): a `Vec[String]` /
+                // `Vec[Vec[T]]` for-loop element moved WHOLE into a local
+                // (`for s in words { let x = s }`). `s` aliases the container's
+                // element buffer; `maybe_defensive_copy_param_arg` gives `x` an
+                // independent copy (it already keys on `for_loop_borrow_vars`).
+                // The struct/enum legs are handled by the aggregate deep-copy
+                // hooks; this covers the Vec/String element type, which the
+                // B-2026-07-04-17 struct fix did not touch — only push/insert/
+                // entry consume sites were covered, not the plain whole-move
+                // let-bind. The move-suppression below is skipped for this shape
+                // (like the owned-param case): the loop element's slot must stay
+                // intact so the container — the single owner — frees the
+                // original exactly once.
+                let rhs_is_for_loop_borrow_vecstr = matches!(
+                    &value.kind,
+                    ExprKind::Identifier(n)
+                        if self.for_loop_borrow_vars.contains(n.as_str())
+                            && self.vec_elem_types.contains_key(n.as_str())
+                );
+                let rhs_retains_own_copy = rhs_is_owned_param || rhs_is_for_loop_borrow_vecstr;
+                let val = if rhs_retains_own_copy {
                     self.maybe_defensive_copy_param_arg(value, val)
                 } else {
                     val
@@ -3417,8 +3437,12 @@ impl<'ctx> super::Codegen<'ctx> {
                         // param — the binding received a deep copy above
                         // and the param header must stay intact for any
                         // later consume site (see the kata-23 comment at
-                        // the defensive-copy shim).
-                        if !rhs_is_owned_param {
+                        // the defensive-copy shim). Also skipped for a
+                        // Vec/String for-loop borrow element (B-2026-07-05-2
+                        // sibling): it got its own copy above, and the
+                        // container — not this local — is the single owner
+                        // that frees the aliased element buffer.
+                        if !rhs_retains_own_copy {
                             self.suppress_source_vec_cleanup_for_arg(value);
                         }
                         // Sibling case for `let t: String = f"…";` — the
@@ -3450,6 +3474,33 @@ impl<'ctx> super::Codegen<'ctx> {
                         if let Some(slot) = self.variables.get(var_name.as_str()) {
                             let alloca = slot.ptr;
                             self.track_enum_var(&name, alloca);
+                            // B-2026-07-05-2: a for-loop heap-ENUM element moved
+                            // WHOLE into a new owner (`for a in items { let x = a
+                            // }`). `a` bit-copy-aliases the container's
+                            // live-variant payload, so `x`'s freshly-tracked
+                            // `EnumDrop` and the container's per-element drain
+                            // would free the same buffer (double-free, exit 134).
+                            // Deep-copy the payload in place so `x` owns it
+                            // independently — the enum sibling of the struct
+                            // arm's `deep_copy_for_loop_agg_element_move`. Gated
+                            // to a bare for-loop-agg Identifier RHS and a
+                            // non-shared enum (shared enums are RC-tracked, no
+                            // value `EnumDrop` to race); a fresh
+                            // constructor/call RHS already owns a unique payload
+                            // and is left untouched.
+                            if let ExprKind::Identifier(src) = &value.kind {
+                                if self.for_loop_owned_agg_vars.contains(src.as_str()) {
+                                    if let Some(layout) =
+                                        self.enum_layouts.get(name.as_str()).cloned()
+                                    {
+                                        if !layout.is_shared {
+                                            self.deep_copy_enum_heap_payload_in_place(
+                                                &name, alloca, &layout,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
                         }
                         // #9: `let g = f` enum move — the aggregate is copied
                         // into `g`'s slot (both slots alias the same heap

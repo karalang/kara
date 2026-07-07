@@ -20362,4 +20362,82 @@ fn main() {
             "forloop_struct_element_clean_shapes_stay_clean",
         );
     }
+
+    #[test]
+    fn asan_forloop_bare_enum_element_whole_move_no_double_free() {
+        // B-2026-07-05-2: the residual B-2026-07-04-17 left open — a BARE
+        // `Vec[<user enum>]` element moved WHOLE to a new owner. `x` aliases the
+        // container's live-variant payload; without the enum-let-binding
+        // deep-copy, `x`'s EnumDrop and the container's per-element drain free
+        // the same `String` buffer (double-free). Repeated across a
+        // heap-payload variant and a scalar variant so both the copied and the
+        // no-op paths run.
+        assert_clean_asan_run(
+            r#"
+enum E { Tag(String), Num(i64) }
+fn build() -> Vec[E] {
+    let mut v: Vec[E] = Vec.new();
+    let mut i = 0;
+    while i < 6 {
+        if i % 2 == 0 {
+            v.push(E.Tag("bare_enum_variant_heap_payload_omicron_field".to_string()));
+        } else {
+            v.push(E.Num(i));
+        }
+        i = i + 1;
+    }
+    v
+}
+fn main() {
+    let items = build();
+    let mut n: i64 = 0;
+    for a in items {
+        let x = a;
+        match x {
+            E.Tag(s) => { n = n + s.len(); }
+            E.Num(k) => { n = n + k; }
+        }
+    }
+    println(n);
+}
+"#,
+            &["141"], // 3 * 44 (Tag payload len) + (1 + 3 + 5) Num
+            "forloop_bare_enum_element_whole_move_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_forloop_string_element_whole_move_let_no_double_free() {
+        // B-2026-07-05-2 sibling (Vec/String leg): `for s in words { let x = s }`
+        // — the Vec/String element type the struct fix did not touch. Only the
+        // push/insert/entry consume sites were covered; the plain whole-move
+        // let-bind aliased the container element and double-freed.
+        assert_clean_asan_run(
+            r#"
+fn build() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < 5 {
+        let mut s = String.new();
+        s.push_str("string_element_whole_move_heap_payload_pi_");
+        s.push_str(i.to_string());
+        v.push(s);
+        i = i + 1;
+    }
+    v
+}
+fn main() {
+    let words = build();
+    let mut n: i64 = 0;
+    for s in words {
+        let x = s;
+        n = n + x.len();
+    }
+    println(n);
+}
+"#,
+            &["215"], // 5 * 43 (each payload is 42 + 1 digit)
+            "forloop_string_element_whole_move_let_no_double_free",
+        );
+    }
 }
