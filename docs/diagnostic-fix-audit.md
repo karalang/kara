@@ -25,7 +25,7 @@ Each diagnostic variant is assigned exactly one bucket:
 | Source | Field | Applied? |
 |---|---|---|
 | Parser | `fix_edits` (span-keyed) | **yes** (~9642) |
-| Resolver | `.replacement` | yes (~9654) — but **the field is never populated**, so nothing flows |
+| Resolver | `.replacement` | **yes** (~9654) — did-you-mean family now populated (`76be2de` for E0100/E0104/import; `830831f` for E_MODULE_BINDING_NAMING const-rename, B-2026-07-06-3) |
 | Effect | `.replacement` | **yes** (~9661) — E0412 flows |
 | Ownership | `.replacement` | **yes** (~9668) — N0507 flows |
 | Ownership | `error_fix_diffs` / `fix_diff` | **yes** (~9680, `0f21b4b`) — flattened into the edit set alongside `.replacement`; was dropped, fixed under B-2026-07-06-4 |
@@ -41,6 +41,8 @@ Across **~133 distinct diagnostic variants**:
 | **B — could carry a fix (mechanical, info already in hand)** | **71** | **~53%** |
 | **C — needs a human (→ structured alternatives)** | **54** | **~41%** |
 
+> **Snapshot date 2026-07-06.** Since this count, the resolver did-you-mean family (E0100 / E0104 / import / E_MODULE_BINDING_NAMING) and the ownership `fix_diff` migration have been wired to real edits (B-2026-07-06-3 `830831f`, B-2026-07-06-4 `0f21b4b`) — roughly +5 A / −5 B against these totals. The per-family table below is kept current; this headline row is the original audit snapshot.
+
 - The flagship is **~6% real today**.
 - The **auto-fix ceiling is A+B ≈ 60%** — reachable with mechanical wiring, no new analysis.
 - The remaining **~41% (C)** is the *structured-alternatives* design, not auto-edits.
@@ -50,7 +52,7 @@ Per family (A / B / C):
 | Phase | A | B | C | Note |
 |---|---|---|---|---|
 | Parse | 1 | 0 | 0 | E0001 comma fix |
-| Resolver | **0** | 18 | 14 | did-you-mean computed, emitted as prose only |
+| Resolver | 5\* | 13 | 14 | \*did-you-mean family now machine-applicable: E0100 / E0104 / unknown-module / unknown-item (`76be2de`) + E_MODULE_BINDING_NAMING const-rename (`830831f`, B-2026-07-06-3). E0107 label suggestion is prose-only pending an AST label-span (B-2026-07-07-3) |
 | Typechecker | 3 | 42 | 19 | `fix_it` wired end-to-end |
 | Effect | 1 | 7 | 10 | E0412 is the lone A |
 | Ownership | 3\* | 4 | 11 | \*3 wired (N0507 + `ConcurrentShared`/`PlainStruct` `fix_diff`, `0f21b4b`) |
@@ -61,9 +63,9 @@ Per family (A / B / C):
 
 These are wiring gaps, not new features — the same latent-gap pattern already closed once for typecheck `fix_it`s. Tracked as ledger entries.
 
-### 1. Resolver did-you-mean → `.replacement`  (`B-2026-07-06-3`)
+### 1. Resolver did-you-mean → `.replacement`  (`B-2026-07-06-3`) — **FIXED**
 
-The resolver computes the exact correct name (`suggest_const_name`, fuzzy matches) and its error struct **has** a `.replacement` field — which is **never populated**. It emits the answer as human prose (`suggestion`) instead of a machine edit. `cmd_fix` already collects resolver `.replacement`, so populating it at the sites that already compute a *unique* candidate flips much of the 18 resolver-B rows to A for free.
+The resolver computes the exact correct name (`suggest_const_name`, fuzzy matches) and its error struct **has** a `.replacement` field. The E0100/E0104/import did-you-mean sites were wired in `76be2de`; the remaining `E_MODULE_BINDING_NAMING` const-rename was wired in `830831f` (adding a `name_span` to `ModuleBinding` so the edit anchors to the identifier alone). `karac fix` now applies `let myConfig` → `let MY_CONFIG`. **Residual:** E0107 UndefinedLabel gains a `did you mean` *suggestion* but not a machine edit — `Break`/`Continue` carry no label-token span, tracked as B-2026-07-07-3.
 
 ### 2. Ownership `fix_diff` applier  (`B-2026-07-06-4`) — **FIXED (`0f21b4b`)**
 
