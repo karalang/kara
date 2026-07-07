@@ -41,7 +41,7 @@ Across **~133 distinct diagnostic variants**:
 | **B — could carry a fix (mechanical, info already in hand)** | **71** | **~53%** |
 | **C — needs a human (→ structured alternatives)** | **54** | **~41%** |
 
-> **Snapshot date 2026-07-06.** Since this count, the resolver did-you-mean family (E0100 / E0104 / import / E_MODULE_BINDING_NAMING) and the ownership `fix_diff` migration have been wired to real edits (B-2026-07-06-3 `830831f`, B-2026-07-06-4 `0f21b4b`) — roughly +5 A / −5 B against these totals. The per-family table below is kept current; this headline row is the original audit snapshot.
+> **Snapshot date 2026-07-06.** Since this count, the resolver did-you-mean family (E0100 / E0104 / import / E_MODULE_BINDING_NAMING / E0107 label rename) and the ownership `fix_diff` migration have been wired to real edits (B-2026-07-06-3 `830831f`, B-2026-07-07-3 `911db54`, B-2026-07-06-4 `0f21b4b`) — roughly +6 A / −6 B against these totals. The per-family table below is kept current; this headline row is the original audit snapshot.
 
 - The flagship is **~6% real today**.
 - The **auto-fix ceiling is A+B ≈ 60%** — reachable with mechanical wiring, no new analysis.
@@ -52,7 +52,7 @@ Per family (A / B / C):
 | Phase | A | B | C | Note |
 |---|---|---|---|---|
 | Parse | 1 | 0 | 0 | E0001 comma fix |
-| Resolver | 5\* | 13 | 14 | \*did-you-mean family now machine-applicable: E0100 / E0104 / unknown-module / unknown-item (`76be2de`) + E_MODULE_BINDING_NAMING const-rename (`830831f`, B-2026-07-06-3). E0107 label suggestion is prose-only pending an AST label-span (B-2026-07-07-3) |
+| Resolver | 6\* | 12 | 14 | \*did-you-mean family now machine-applicable: E0100 / E0104 / unknown-module / unknown-item (`76be2de`) + E_MODULE_BINDING_NAMING const-rename (`830831f`, B-2026-07-06-3) + E0107 `continue`-label rename (`911db54`, B-2026-07-07-3) |
 | Typechecker | 3 | 42 | 19 | `fix_it` wired end-to-end |
 | Effect | 1 | 7 | 10 | E0412 is the lone A |
 | Ownership | 3\* | 4 | 11 | \*3 wired (N0507 + `ConcurrentShared`/`PlainStruct` `fix_diff`, `0f21b4b`) |
@@ -65,7 +65,7 @@ These are wiring gaps, not new features — the same latent-gap pattern already 
 
 ### 1. Resolver did-you-mean → `.replacement`  (`B-2026-07-06-3`) — **FIXED**
 
-The resolver computes the exact correct name (`suggest_const_name`, fuzzy matches) and its error struct **has** a `.replacement` field. The E0100/E0104/import did-you-mean sites were wired in `76be2de`; the remaining `E_MODULE_BINDING_NAMING` const-rename was wired in `830831f` (adding a `name_span` to `ModuleBinding` so the edit anchors to the identifier alone). `karac fix` now applies `let myConfig` → `let MY_CONFIG`. **Residual:** E0107 UndefinedLabel gains a `did you mean` *suggestion* but not a machine edit — `Break`/`Continue` carry no label-token span, tracked as B-2026-07-07-3.
+The resolver computes the exact correct name (`suggest_const_name`, fuzzy matches) and its error struct **has** a `.replacement` field. The E0100/E0104/import did-you-mean sites were wired in `76be2de`; the remaining `E_MODULE_BINDING_NAMING` const-rename was wired in `830831f` (adding a `name_span` to `ModuleBinding` so the edit anchors to the identifier alone). `karac fix` now applies `let myConfig` → `let MY_CONFIG`. E0107 UndefinedLabel was completed in `911db54` (B-2026-07-07-3) by adding a `label_span` to `ExprKind::Continue` — `karac fix` renames `continue otuer` → `continue outer`. (A misspelled `break` label never reaches E0107: it parses as a value expression and surfaces as E0100, already machine-applicable.) The whole E01xx/E0107 did-you-mean family is now machine-applicable.
 
 ### 2. Ownership `fix_diff` applier  (`B-2026-07-06-4`) — **FIXED (`0f21b4b`)**
 
@@ -104,7 +104,7 @@ Bucket key: **A✓** applied · **A⚠** emitted-not-applied · **B** mechanical
 | E0104 | UndefinedType | type name not found | B* | rename iff single fuzzy match |
 | E0105 | UndefinedVariant | variant not found | C | correct variant unknown |
 | E0106 | UndefinedField | field not found | C | rename/restructure/remove — ambiguous |
-| E0107 | UndefinedLabel | loop label not found | B* | rename iff single nearby label |
+| E0107 | UndefinedLabel | loop label not found | A | rename iff single nearby label (`911db54`) |
 | E0108 | OperatorTraitImplRestricted | operator-trait impl on non-stdlib type | C | move code — human |
 | E0109 | IntoTraitImplNotAllowed | impl Into instead of From | C | trait rename needs intent |
 | E0110 | ImplLevelEffectVarNotAllowed | effect var on impl generics | C | structural move to method |
