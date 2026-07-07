@@ -1,0 +1,15 @@
+enum Order { Pending, Shipped, Delivered, Cancelled }
+
+// A complete, exhaustive match — every variant handled.
+fn status_code(o: Order) -> i64 {
+    match o {
+        Pending => 1,
+        Shipped => 2,
+        Delivered => 3,
+        Cancelled => 4,
+    }
+}
+
+fn main() {
+    println(status_code(Pending));
+}

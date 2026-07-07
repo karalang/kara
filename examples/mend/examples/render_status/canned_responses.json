@@ -1,0 +1,8 @@
+{
+  "responses": [
+    {
+      "note": "LLM's first attempt — handles Pending/Shipped/Delivered and forgets the tail variant Cancelled, the single most common match omission. karac reports E0205 with a machine-applicable replacement inserting `Cancelled => todo()`; `karac fix` completes the match in one pass. Converges as clean-after-karac-fix.",
+      "kara_source": "enum Order { Pending, Shipped, Delivered, Cancelled }\n\nfn status_code(o: Order) -> i64 {\n    match o {\n        Pending => 1,\n        Shipped => 2,\n        Delivered => 3,\n    }\n}\n\nfn main() {\n    println(status_code(Pending));\n}\n"
+    }
+  ]
+}
