@@ -150,3 +150,10 @@ KARAC_DROPOBS_SILENCE=1 cargo run --features llvm --bin drop_fuzz -- --different
 Measured: 137/137 scheduled drops flagged over 22 programs with the knob on, 0
 with it off — proof the gate observes codegen's real drops rather than passing
 vacuously.
+
+The differential core lives in the lib (`src/drop_differential.rs`,
+`differential_check(src) -> DiffOutcome`), so beyond this corpus runner it also
+backs **`tests/drop_differential.rs`** — a standing CI gate (llvm tier) of 11
+canonical heap-core shapes asserting codegen covers the oracle's schedule. That
+test, not the fuzzer corpus, is the permanent regression net the structural
+half of Slice 4 will land behind.

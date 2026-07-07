@@ -34,6 +34,8 @@ pub mod diagnostic_class;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod doc;
 pub mod dominator;
+#[cfg(feature = "llvm")]
+pub mod drop_differential;
 pub mod edit_distance;
 pub mod effect_graph;
 pub mod effectchecker;
