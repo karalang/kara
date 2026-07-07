@@ -130,6 +130,20 @@ fn jit_e2e_while_loop_sum() {
 }
 
 #[test]
+fn jit_e2e_cross_type_shadow_rebind_prints_new_value() {
+    // A same-name different-type shadow in one body (`let x = 5` then
+    // `let x: String = ...`) lowers and runs correctly under the JIT — the
+    // new String binding shadows the i64 and `println(x)` prints it. This
+    // pins that the plain-codegen path is sound, isolating B-2026-07-07-6
+    // (the analogous *REPL cross-cell* rebind crashes the runner on Linux)
+    // to the REPL cell-codegen path (persistent-let replay + snapshot
+    // machinery), NOT the general shadow lowering.
+    let src = "fn main() {\n  let x = 5;\n  let x: String = \"hello\";\n  println(x);\n}";
+    let out = jit_run_program(src).expect("jit");
+    assert_eq!(out, "hello\n");
+}
+
+#[test]
 fn jit_e2e_vec_push_len() {
     let src = "fn main() {\n  let v: Vec[i64] = Vec.new();\n  v.push(1);\n  v.push(2);\n  v.push(3);\n  println(v.len() as i64);\n}";
     let out = jit_run_program(src).expect("jit");
