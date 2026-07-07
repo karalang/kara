@@ -782,6 +782,41 @@ fn main() {
     }
 
     #[test]
+    fn asan_b04_2_chain_identity_heap_collect_no_leak() {
+        // B-2026-07-04-2 sub-part 1 (chain half): `A.chain(B).collect()` over two
+        // heap `Vec[String]` sources. The fix emits `for x in A { acc.push x };
+        // for y in B { acc.push y }` — each `push` over a borrowed source CLONES,
+        // so both sources survive and the accumulator owns independent copies.
+        // Neither a leak (a source's buffer / an un-cloned element) nor a
+        // double-free (a shared heap element) may result. 40× with ≥45-byte
+        // payloads for LSan reachability; reads a collected element each round.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let a: Vec[String] = Vec[
+            "chain-collect-payload-alpha-aaaaaaaaaaaaaaaaaa".to_string(),
+            "chain-collect-payload-bravo-bbbbbbbbbbbbbbbbbb".to_string()
+        ];
+        let b: Vec[String] = Vec[
+            "chain-collect-payload-charlie-cccccccccccccccc".to_string()
+        ];
+        let r: Vec[String] = a.iter().chain(b.iter()).collect();
+        let r2: String = r[2i64];
+        println(f"{r.len()} {a.len()} {b.len()} {r2}");
+        round = round + 1i64;
+    }
+}
+"#,
+            ["3 2 1 chain-collect-payload-charlie-cccccccccccccccc"]
+                .repeat(40)
+                .as_slice(),
+            "asan_b04_2_chain_identity_heap_collect_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_fresh_temp_source_enumerate_collect_no_double_free() {
         // B-2026-07-04-5: a collect-adaptor chain whose SOURCE is a fresh-temp
         // call result (`mk().iter()…`) rather than a named local. The for-loop

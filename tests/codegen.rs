@@ -6583,6 +6583,37 @@ fn main() {
     }
 
     #[test]
+    fn e2e_iter_adaptor_chain_identity_collect_codegen() {
+        // B-2026-07-04-2 sub-part 1 (chain half): `A.chain(B).collect()` over two
+        // plain identity sources (`.iter()` / bounded range) fell through to the
+        // loud dispatch-fail under `karac build`, though `karac run` handled it.
+        // The fix emits the identity-collect loop once per source into a shared
+        // accumulator — the same clone semantics as a single identity collect,
+        // so both borrowed sources SURVIVE (asserted via `a.len()`/`b.len()`).
+        // Exercises POD, heap (`Vec[String]`), and a range+iter mix. A chain side
+        // carrying its OWN adaptor still bails (loud dispatch-fail, no
+        // miscompile).
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    let a: Vec[i64] = Vec[1i64, 2i64];
+    let b: Vec[i64] = Vec[3i64, 4i64, 5i64];
+    let r: Vec[i64] = a.iter().chain(b.iter()).collect();
+    println(f"{r.len()} {r[0]} {r[4]} {a.len()} {b.len()}");
+    let s: Vec[String] = Vec["aa".to_string(), "bb".to_string()];
+    let t: Vec[String] = Vec["cc".to_string()];
+    let u: Vec[String] = s.iter().chain(t.iter()).collect();
+    println(f"{u.len()} {u[0]}{u[2]} {s.len()} {t.len()}");
+    let c: Vec[i64] = (0i64..3i64).chain(b.iter()).collect();
+    println(f"{c.len()} {c[0]} {c[2]} {c[3]} {c[4]}");
+}
+"#,
+        ) {
+            assert_eq!(out, "5 1 5 2 3\n3 aacc 2 1\n6 0 2 3 4\n");
+        }
+    }
+
+    #[test]
     fn e2e_iter_adaptor_collect_enumerate_codegen() {
         // B-2026-07-04-2 sub-part 1: `<iter>.enumerate().collect()` — the
         // element-retyping adaptor `T` → `(i64, T)`. Lowered like the other

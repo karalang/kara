@@ -3930,6 +3930,54 @@ impl<'ctx> super::Codegen<'ctx> {
             // argument.
             Enumerate,
         }
+
+        // B-2026-07-04-2 sub-part 1 (chain): `A.chain(B).collect()` where A and
+        // B are each a plain identity SOURCE — a no-arg `.iter()` call or a
+        // bounded range — concatenates the two into one Vec. Emit the identity
+        // collect loop TWICE into a shared accumulator (`for x in A { acc.push
+        // x }; for y in B { acc.push y }`): the same clone semantics as a single
+        // identity collect (both borrowed sources survive), applied per source
+        // in sequence. This is the sequential, single-loop-per-source multi-
+        // source shape — cheap and safe. A side that carries its OWN adaptors
+        // (`a.iter().map(f).chain(…)`), a nested chain, or a non-identity source
+        // bails to the loud dispatch-fail (never a miscompile); those broaden
+        // the surface (per-side pipelines / shared accumulator refactor) and
+        // stay OPEN under sub-part 1.
+        if let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &collect_recv.kind
+        {
+            if method == "chain" && args.len() == 1 {
+                let is_identity_source = |e: &Expr| {
+                    matches!(
+                        &e.kind,
+                        ExprKind::MethodCall { method, args, .. }
+                            if args.is_empty() && method == "iter"
+                    ) || matches!(
+                        &e.kind,
+                        ExprKind::Range {
+                            start: Some(_),
+                            end: Some(_),
+                            ..
+                        }
+                    )
+                };
+                let src_a = object.as_ref();
+                let src_b = &args[0].value;
+                if is_identity_source(src_a) && is_identity_source(src_b) {
+                    if let Some(v) =
+                        self.try_compile_chain_identity_collect(src_a, src_b, call_span)?
+                    {
+                        return Ok(Some(v));
+                    }
+                    return Ok(None);
+                }
+            }
+        }
+
         let mut steps: Vec<IterAdaptor> = Vec::new();
         let mut cur = collect_recv;
         while let ExprKind::MethodCall {
@@ -4938,6 +4986,132 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp.clone(),
         };
 
+        Ok(Some(self.compile_expr(&block)?))
+    }
+
+    /// Lower `A.chain(B).collect()` for two plain identity SOURCES (`.iter()` /
+    /// bounded range) into a single Vec by emitting the identity-collect loop
+    /// once per source into a shared accumulator (B-2026-07-04-2 sub-part 1).
+    /// Returns `Ok(None)` if the result type isn't a recorded `Vec[T]` (the
+    /// caller then falls through to the loud dispatch-fail). The emitted block
+    /// is:
+    ///
+    /// ```text
+    /// { let mut __chv: Vec[T] = Vec.new();
+    ///   for __ch0 in <A> { __chv.push(__ch0); }
+    ///   for __ch1 in <B> { __chv.push(__ch1); }
+    ///   __chv }
+    /// ```
+    ///
+    /// Each `for x in <src>` over a borrowed source clones the element on
+    /// `push` (the exact single-source identity-collect semantics), so both
+    /// sources survive and the accumulator owns independent copies.
+    fn try_compile_chain_identity_collect(
+        &mut self,
+        src_a: &Expr,
+        src_b: &Expr,
+        call_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let vec_te = match self
+            .owned_temp_drops
+            .get(&(call_span.offset, call_span.length))
+        {
+            Some(te) => te.clone(),
+            None => return Ok(None),
+        };
+        if !matches!(
+            &vec_te.kind,
+            TypeKind::Path(p) if p.segments.last().map(|s| s.as_str()) == Some("Vec")
+        ) {
+            return Ok(None);
+        }
+
+        let uid = self.indexed_elem_counter;
+        self.indexed_elem_counter += 1;
+        let sp = call_span.clone();
+        let vec_name = format!("__chv_{}", uid);
+        let ident = |name: &str| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: sp.clone(),
+        };
+
+        // `let mut __chv: Vec[T] = Vec.new();`
+        let vec_new = Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Path {
+                        segments: vec!["Vec".to_string(), "new".to_string()],
+                        generic_args: None,
+                    },
+                    span: sp.clone(),
+                }),
+                args: vec![],
+            },
+            span: sp.clone(),
+        };
+        let let_vec = Stmt {
+            kind: StmtKind::Let {
+                is_mut: true,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(vec_name.clone()),
+                    span: sp.clone(),
+                },
+                ty: Some(vec_te),
+                value: vec_new,
+            },
+            span: sp.clone(),
+        };
+
+        // `for <loop_var> in <src> { __chv.push(<loop_var>); }`
+        let for_loop = |loop_var: &str, src: &Expr| Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::For {
+                    label: None,
+                    pattern: Pattern {
+                        kind: PatternKind::Binding(loop_var.to_string()),
+                        span: sp.clone(),
+                    },
+                    iterable: Box::new(src.clone()),
+                    attributes: Vec::new(),
+                    body: Block {
+                        stmts: vec![Stmt {
+                            kind: StmtKind::Expr(Expr {
+                                kind: ExprKind::MethodCall {
+                                    object: Box::new(ident(&vec_name)),
+                                    method: "push".to_string(),
+                                    turbofish: None,
+                                    args: vec![CallArg {
+                                        label: None,
+                                        mut_marker: false,
+                                        value: ident(loop_var),
+                                        span: sp.clone(),
+                                    }],
+                                    args_close_span: sp.clone(),
+                                },
+                                span: sp.clone(),
+                            }),
+                            span: sp.clone(),
+                        }],
+                        final_expr: None,
+                        span: sp.clone(),
+                    },
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+
+        let loop_a = for_loop(&format!("__ch0_{}", uid), src_a);
+        let loop_b = for_loop(&format!("__ch1_{}", uid), src_b);
+
+        let block = Expr {
+            kind: ExprKind::Block(Block {
+                stmts: vec![let_vec, loop_a, loop_b],
+                final_expr: Some(Box::new(ident(&vec_name))),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
         Ok(Some(self.compile_expr(&block)?))
     }
 
