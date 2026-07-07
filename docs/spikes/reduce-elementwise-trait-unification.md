@@ -928,9 +928,11 @@ B-2026-07-02-10..13, see the ledger.
   `test_e2e_bound_generic_dispatch_over_user_type` (codegen, all three receiver
   modes + Reduce). Full regression: codegen 2062, typechecker + interpreter
   green; fmt + clippy clean.
-- **S6c** — remaining: **u64 column/tensor sort**
-  (blocked on the interpreter u64 model — see S6c-9 / B-2026-07-04-8, NOT just an
-  unsigned scratch compare as previously thought); a `product` DEFAULT body for
+- **S6c** — remaining: **u64 column/tensor sort** — the interpreter u64 model
+  blocker (S6c-9 / B-2026-07-04-8) is now **FIXED** (45eb926); what remains is only
+  the **codegen** leg (`Column[u64]`/`Tensor[u64]` `sorted`/`argsort`/`argmin`/
+  `argmax` still rejected loudly under `karac build`), tracked as **B-2026-07-07-2**
+  (in progress); a `product` DEFAULT body for
   USER `Reduce` impls (needs the numeric-identity mechanism of S6c-10 — the
   bound-generic `prod` on the builtin containers is DONE, S6c-11); blanket
   `Vec[T]` impls; user trait-impl methods over builtin containers — this
