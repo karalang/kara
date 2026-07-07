@@ -64,6 +64,46 @@ examples/mend/runs/<timestamp>/
     └── outcome.txt               "clean-on-arrival" | "clean-after-karac-fix"
 ```
 
+## Scoring the runs
+
+`mend.py` produces one transcript per run; `mend_score.py` aggregates
+**all** of them into the measured numbers the AI-first pitch needs. It
+reads the transcripts only — never runs `karac` or an LLM.
+
+```sh
+python3 examples/mend/harness/mend_score.py            # score runs/, print report
+python3 examples/mend/harness/mend_score.py --json      # machine summary on stdout
+python3 examples/mend/harness/mend_score.py path/to/runs # score an alternate dir
+```
+
+It writes `results.jsonl` (one flat record per run) and `summary.json`
+into the runs directory (both gitignored), and prints a report:
+
+- **Outcome, split by who closed the loop.** The key distinction the
+  raw `outcome.txt` tag hides: `mend.py` writes `clean-on-arrival`
+  whenever a fresh LLM response checks clean, which at iteration 0 means
+  the LLM nailed it but at a later iteration means it *fixed the code
+  from the diagnostics it was fed*. The scorer separates these by the
+  iteration convergence happened at:
+  - `clean-on-arrival` — LLM correct first try (ergonomics, not the loop)
+  - `fixed-by-karac` — `karac fix` closed the build (**the wedge**)
+  - `fixed-by-llm` — LLM rewrote from a prose diagnostic (no human)
+  - `non-converged` — hit `--max-iterations`
+- **Headline rates** — machine-fix rate (the wedge), agent-resolved rate
+  (converged with no human, by fix *or* actionable diagnostic),
+  clean-on-arrival rate, non-converged rate.
+- **Fix mechanics** — diagnostics offering a `replacement`, fixes
+  applied, fixes resolved, fix precision (resolved / applied), and
+  whether any fix introduced a new error.
+- **Gap ledger** — every error code the LLM hit, ranked worst-covered
+  first, flagged by whether that code has *ever* carried a
+  machine-applicable fix. Codes with no coverage are the ranked backlog
+  for making the compiler more agent-fixable: give the diagnostic a
+  `replacement`, or make it precise enough to fix from prose.
+
+The gap ledger is the point: it turns each run batch into a to-do list
+for the compiler, not just a demo you watch.
+
 ## Adding a new example
 
 A example is a directory under `examples/mend/examples/<name>/`
