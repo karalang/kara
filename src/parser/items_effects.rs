@@ -121,7 +121,9 @@ impl super::Parser {
         if !self.is_effect_start() {
             return None;
         }
-        self.parse_effect_list(effect_vars)
+        // Signature-position effect clause: a `{`/`;`/end follows, so a comma
+        // between effect items is always a mistake — recovery on.
+        self.parse_effect_list(effect_vars, true)
     }
 
     fn is_effect_start(&self) -> bool {
@@ -139,7 +141,11 @@ impl super::Parser {
         )
     }
 
-    pub(crate) fn parse_effect_list(&mut self, effect_vars: &[String]) -> Option<EffectList> {
+    pub(crate) fn parse_effect_list(
+        &mut self,
+        effect_vars: &[String],
+        recover_stray_comma: bool,
+    ) -> Option<EffectList> {
         let start = self.current_span();
         let mut items = Vec::new();
 
@@ -167,6 +173,28 @@ impl super::Parser {
                     } else {
                         items.push(EffectItem::Group(name));
                     }
+                } else if recover_stray_comma && self.check(&Token::Comma) && !items.is_empty() {
+                    // Common LLM/porting habit: comma-separating effect items
+                    // (`with reads(A), reads(B)`). Kāra effect clauses are
+                    // space-separated; the stray comma otherwise surfaces as a
+                    // confusing "Expected LeftBrace, found Comma" at the caller.
+                    // Emit a focused, machine-applicable diagnostic and recover
+                    // by consuming the comma so the rest of the clause parses
+                    // (each stray comma gets its own delete edit).
+                    let comma_span = self.current_span();
+                    self.error_at(
+                        "effect items are space-separated, not comma-separated; remove the `,`",
+                        comma_span.clone(),
+                    );
+                    self.fix_edits.insert(
+                        crate::resolver::SpanKey::from_span(&comma_span),
+                        crate::resolver::TextEdit {
+                            offset: comma_span.offset,
+                            length: comma_span.length,
+                            replacement: String::new(),
+                        },
+                    );
+                    self.advance();
                 } else {
                     break;
                 }

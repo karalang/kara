@@ -41,6 +41,10 @@ impl std::fmt::Display for ParseError {
 pub struct ParseResult {
     pub program: Program,
     pub errors: Vec<ParseError>,
+    /// Span-keyed machine-applicable edits synthesized during parsing (e.g.
+    /// delete a stray comma in a comma-separated `with` clause). Consumed by
+    /// `collect_diagnostics` (JSON `replacement`) and `cmd_fix`.
+    pub fix_edits: std::collections::HashMap<crate::resolver::SpanKey, crate::resolver::TextEdit>,
 }
 
 /// Surrounding signature kind for parameter parsing — selects between the
@@ -123,6 +127,15 @@ pub struct Parser {
     /// around the `parse_param_pattern` call for comptime params; the binding
     /// case consults it instead of unconditionally requiring snake_case.
     pub(crate) allow_type_class_param_name: bool,
+    /// Machine-applicable fix edits synthesized during parsing, keyed by the
+    /// span of the diagnostic they resolve. Mirrors ownership.rs's
+    /// `error_fix_diffs` side-channel: rather than widen `ParseError` (built
+    /// at ~48 sites) with a `replacement` field, edits are hung here and
+    /// matched back to their diagnostic by span in `collect_diagnostics`
+    /// (JSON `replacement`) and `cmd_fix`. Currently populated only by the
+    /// comma-separated-effect-clause recovery in `parse_effect_list`.
+    pub(crate) fix_edits:
+        std::collections::HashMap<crate::resolver::SpanKey, crate::resolver::TextEdit>,
 }
 
 /// Reason an `impl Trait` type expression is rejected at the current
@@ -159,6 +172,7 @@ impl Parser {
             effect_var_stack: Vec::new(),
             impl_trait_block_stack: Vec::new(),
             allow_type_class_param_name: false,
+            fix_edits: std::collections::HashMap::new(),
         }
     }
 
@@ -219,6 +233,7 @@ impl Parser {
         ParseResult {
             program,
             errors: self.errors,
+            fix_edits: self.fix_edits,
         }
     }
 

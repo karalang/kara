@@ -11719,3 +11719,71 @@ fn comptime_without_brace_in_expr_position_errors() {
         "expected an `expected {{ after comptime` diagnostic; got: {errors:?}",
     );
 }
+
+// ── Comma-separated effect-clause recovery ──────────────────────────
+//
+// LLMs (and porters from comma-list languages) habitually write
+// `with reads(A), reads(B)`. Kāra effect clauses are space-separated, and
+// the stray comma otherwise surfaces as a confusing "Expected LeftBrace,
+// found Comma" at the caller. The parser emits a focused diagnostic and a
+// machine-applicable delete-the-comma edit, and recovers so the rest of the
+// clause still parses. See parser/items_effects.rs `parse_effect_list`.
+
+#[test]
+fn comma_separated_effect_clause_recovers_with_machine_fix() {
+    let src = "trait S { fn load(ref self) -> i64; }\n\
+               effect resource A: S;\n\
+               effect resource B: S;\n\
+               fn fa() -> i64 { A.load() }\n\
+               fn fb() -> i64 { B.load() }\n\
+               pub fn total() -> i64 with reads(A), reads(B) {\n\
+               fa() + fb()\n\
+               }";
+    let result = karac::parse(src);
+    assert_eq!(result.errors.len(), 1, "errors: {:?}", result.errors);
+    assert!(
+        result.errors[0].message.contains("space-separated"),
+        "unexpected message: {}",
+        result.errors[0].message
+    );
+    // One machine-applicable edit: delete the single comma byte.
+    assert_eq!(result.fix_edits.len(), 1);
+    let edit = result.fix_edits.values().next().unwrap();
+    assert_eq!(edit.length, 1);
+    assert_eq!(edit.replacement, "");
+    assert_eq!(
+        &src[edit.offset..edit.offset + edit.length],
+        ",",
+        "edit should target the stray comma"
+    );
+}
+
+#[test]
+fn comma_inside_verb_resource_list_is_not_a_stray_comma() {
+    // `reads(A, B)` — comma INSIDE a verb's resource list — is valid and must
+    // NOT trigger the stray-comma recovery.
+    let src = "trait S { fn load(ref self) -> i64; }\n\
+               effect resource A: S;\n\
+               effect resource B: S;\n\
+               fn fa() -> i64 { A.load() }\n\
+               fn fb() -> i64 { B.load() }\n\
+               pub fn total() -> i64 with reads(A, B) {\n\
+               fa() + fb()\n\
+               }";
+    let result = karac::parse(src);
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+    assert!(result.fix_edits.is_empty());
+}
+
+#[test]
+fn multiple_stray_effect_commas_each_get_an_edit() {
+    // Two stray commas → two independent delete edits, both applied in one
+    // `karac fix` pass.
+    let src = "effect resource A: S;\n\
+               effect resource B: S;\n\
+               effect resource C: S;\n\
+               trait S { fn load(ref self) -> i64; }\n\
+               pub fn f() with reads(A), reads(B), reads(C) { }";
+    let result = karac::parse(src);
+    assert_eq!(result.fix_edits.len(), 2, "errors: {:?}", result.errors);
+}

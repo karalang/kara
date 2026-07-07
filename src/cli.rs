@@ -2779,6 +2779,22 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
 
     for err in &pipeline.parsed.errors {
         id_counter += 1;
+        // Parse-phase machine-applicable fix (e.g. delete a stray comma in a
+        // comma-separated `with` clause), matched to this diagnostic by span.
+        // Same `"replacement":{offset,length,text}` shape the resolver emits,
+        // so `karac fix` and IDE quick-fix consumers read it uniformly.
+        let replacement_json = pipeline
+            .parsed
+            .fix_edits
+            .get(&crate::resolver::SpanKey::from_span(&err.span))
+            .map(|e| {
+                format!(
+                    "\"replacement\":{{\"offset\":{},\"length\":{},\"text\":{}}}",
+                    e.offset,
+                    e.length,
+                    json_string(&e.replacement),
+                )
+            });
         diags.add(DiagEntry {
             id: &format!("d{id_counter}"),
             severity: "error",
@@ -2789,7 +2805,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
             filename,
             span: &err.span,
             suggestion: None,
-            extra_json: None,
+            extra_json: replacement_json,
             lint_name: None,
             fix_it: None,
             class: None,
@@ -7153,6 +7169,7 @@ fn run_multi_file_codegen(
     let parsed = ParseResult {
         program: super_program,
         errors: Vec::new(),
+        fix_edits: std::collections::HashMap::new(),
     };
     let mut pipeline = Pipeline {
         filename: mf.name.clone(),
@@ -9601,43 +9618,52 @@ fn cmd_fmt(filename: &str) {
 fn cmd_fix(filename: &str, dry_run: bool) {
     let source = read_source(filename);
     let mut pipeline = Pipeline::new(filename, &source);
+    let mut edits: Vec<crate::resolver::TextEdit> = Vec::new();
     if pipeline.has_parse_errors() {
-        for err in &pipeline.parsed.errors {
-            eprintln!(
-                "error[parse]: {}:{}:{}: {}",
-                filename, err.span.line, err.span.column, err.message
+        // The file doesn't fully parse, but parsing may still have
+        // synthesized machine-applicable recovery edits (e.g. deleting a
+        // stray comma in a comma-separated `with` clause). Apply those —
+        // each pass unblocks the next re-check. Post-parse phases can't run
+        // on an unparseable file, so only parse edits are available here; if
+        // there are none, report the parse errors and exit as before.
+        edits.extend(pipeline.parsed.fix_edits.values().cloned());
+        if edits.is_empty() {
+            for err in &pipeline.parsed.errors {
+                eprintln!(
+                    "error[parse]: {}:{}:{}: {}",
+                    filename, err.span.line, err.span.column, err.message
+                );
+            }
+            process::exit(1);
+        }
+    } else {
+        pipeline.run_all_checks();
+        if let Some(ref r) = pipeline.resolved {
+            edits.extend(
+                r.errors
+                    .iter()
+                    .filter_map(|e| e.replacement.as_deref().cloned()),
             );
         }
-        process::exit(1);
-    }
-    pipeline.run_all_checks();
-
-    let mut edits: Vec<crate::resolver::TextEdit> = Vec::new();
-    if let Some(ref r) = pipeline.resolved {
-        edits.extend(
-            r.errors
-                .iter()
-                .filter_map(|e| e.replacement.as_deref().cloned()),
-        );
-    }
-    if let Some(ref ef) = pipeline.effects {
-        edits.extend(
-            ef.errors
-                .iter()
-                .filter_map(|e| e.replacement.as_deref().cloned()),
-        );
-    }
-    if let Some(ref o) = pipeline.ownership {
-        edits.extend(
-            o.errors
-                .iter()
-                .filter_map(|e| e.replacement.as_deref().cloned()),
-        );
-        edits.extend(
-            o.notes
-                .iter()
-                .filter_map(|e| e.replacement.as_deref().cloned()),
-        );
+        if let Some(ref ef) = pipeline.effects {
+            edits.extend(
+                ef.errors
+                    .iter()
+                    .filter_map(|e| e.replacement.as_deref().cloned()),
+            );
+        }
+        if let Some(ref o) = pipeline.ownership {
+            edits.extend(
+                o.errors
+                    .iter()
+                    .filter_map(|e| e.replacement.as_deref().cloned()),
+            );
+            edits.extend(
+                o.notes
+                    .iter()
+                    .filter_map(|e| e.replacement.as_deref().cloned()),
+            );
+        }
     }
 
     if edits.is_empty() {
