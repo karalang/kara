@@ -1,0 +1,8 @@
+{
+  "responses": [
+    {
+      "note": "LLM's first attempt — comma-separates the two effect clauses (`with reads(UserDB), reads(OrderDB)`), a universal list-comma habit carried over from every mainstream language. Kāra effect clauses are space-separated; the only defect is the stray comma, which karac reports with a machine-applicable delete-the-comma replacement that `karac fix` applies in one pass. Converges as clean-after-karac-fix.",
+      "kara_source": "trait Source {\n    fn load(ref self) -> i64;\n}\neffect resource UserDB: Source;\neffect resource OrderDB: Source;\n\nfn fetch_users() -> i64 { UserDB.load() }\nfn fetch_orders() -> i64 { OrderDB.load() }\n\npub fn total() -> i64 with reads(UserDB), reads(OrderDB) {\n    fetch_users() + fetch_orders()\n}\n\nfn main() {\n    println(total());\n}\n"
+    }
+  ]
+}

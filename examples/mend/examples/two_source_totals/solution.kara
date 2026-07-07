@@ -1,0 +1,17 @@
+trait Source {
+    fn load(ref self) -> i64;
+}
+effect resource UserDB: Source;
+effect resource OrderDB: Source;
+
+fn fetch_users() -> i64 { UserDB.load() }
+fn fetch_orders() -> i64 { OrderDB.load() }
+
+// Effect clauses are space-separated: `reads(UserDB) reads(OrderDB)`.
+pub fn total() -> i64 with reads(UserDB) reads(OrderDB) {
+    fetch_users() + fetch_orders()
+}
+
+fn main() {
+    println(total());
+}
