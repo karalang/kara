@@ -1399,11 +1399,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // GEPs produce wild pointers (first i64 loaded as data ptr,
         // second i64 as len → out-of-bounds garbage writes / hangs at
         // runtime). Fall through to the Array path below in that case.
-        if let ExprKind::Identifier(name) = &object.kind {
-            if self.vec_elem_types.contains_key(name.as_str()) {
+        // `self[i]` inside a user `impl Trait for Vec[i64]` body reaches here
+        // as `SelfValue`; edit-3 threading registers `self` in
+        // `vec_elem_types`, so key on `container_recv` (Identifier OR
+        // SelfValue) — the Vec twin of the Column/Tensor self-index arm above
+        // (S6c blanket-Vec).
+        if let Some(name) = container_recv {
+            if self.vec_elem_types.contains_key(name) {
                 let slot_is_array = self
                     .variables
-                    .get(name.as_str())
+                    .get(name)
                     .is_some_and(|s| matches!(s.ty, BasicTypeEnum::ArrayType(_)));
                 if !slot_is_array {
                     return self.compile_vec_index(name, index);

@@ -1684,6 +1684,11 @@ impl<'a> Interpreter<'a> {
             Value::Column { .. } => "Column".to_string(),
             Value::Tensor { .. } => "Tensor".to_string(),
             Value::DataFrame { .. } => "DataFrame".to_string(),
+            // S6c blanket-Vec: name the builtin Vec so a user-defined
+            // `impl Trait for Vec[i64]` method dispatches through
+            // `try_eval_impl_method` (keyed `Vec.method`) instead of the
+            // "type 'unknown'" no-dispatch-arm error.
+            Value::Array(_) => "Vec".to_string(),
             _ => "unknown".to_string(),
         }
     }

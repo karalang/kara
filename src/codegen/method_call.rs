@@ -2539,7 +2539,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Vec/String methods (owned or ref)
                 if self.vec_elem_types.contains_key(name.as_str()) {
                     let data_ptr = self.get_data_ptr(name).unwrap();
-                    return self.compile_vec_method(name, data_ptr, method, args);
+                    match self.compile_vec_method(name, data_ptr, method, args) {
+                        Ok(v) => return Ok(v),
+                        Err(e) => {
+                            // S6c blanket-Vec: `impl Trait for Vec[i64]` emits a
+                            // `Vec.<method>` fn. When the builtin dispatcher has
+                            // no arm for `method` but such a user impl fn exists,
+                            // fall through to the generic user-impl dispatch
+                            // (`inferred_receiver_type` → `Vec.method`, below) —
+                            // otherwise loud-fail with the builtin's error.
+                            let has_user_impl =
+                                self.module.get_function(&format!("Vec.{method}")).is_some()
+                                    || self
+                                        .module
+                                        .get_function(&format!("VecDeque.{method}"))
+                                        .is_some();
+                            if !has_user_impl {
+                                return Err(e);
+                            }
+                            // fall through to user-impl dispatch
+                        }
+                    }
                 }
                 // Slice[T] / mut Slice[T] read-only methods. For an OWNED
                 // slice the stack alloca holds the 2-field `{ptr, i64}` struct

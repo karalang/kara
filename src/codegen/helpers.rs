@@ -492,7 +492,11 @@ pub(super) fn make_impl_method_function(
         // the receiver's instantiation elsewhere), so only Column/Tensor is
         // threaded here. Mirrors `make_generic_impl_method_function`, which
         // does the same via the full target expr for the generic case.
-        let self_generic_args = if type_name == "Column" || type_name == "Tensor" {
+        let self_generic_args = if type_name == "Column"
+            || type_name == "Tensor"
+            || type_name == "Vec"
+            || type_name == "VecDeque"
+        {
             match &target_type.kind {
                 TypeKind::Path(p) => p.generic_args.clone(),
                 _ => None,

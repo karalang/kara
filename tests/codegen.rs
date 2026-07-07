@@ -3788,6 +3788,77 @@ fn main() {
         }
     }
 
+    /// B-2026-07-06-5 (blanket `impl Trait for Vec[i64]`): a user surface-trait
+    /// impl over the builtin `Vec` with LOOP bodies (`for x in self { … }`),
+    /// reached BOTH directly and through TWO bound-generic monomorphizations
+    /// (`callsum[C: Redu]` / `callprod[C: Redu]`). The two-loop-method mono case
+    /// previously SIGTRAPped (exit 133) — the reported "mono symbol collision"
+    /// was actually a `for x in self` double-free: `self` (a `ref Vec`
+    /// receiver, `SelfValue`) fell through the for-loop dispatch to the
+    /// value path, which materialize-iterate-DROPS the borrowed Vec. Now the
+    /// `SelfValue` arm routes to the non-dropping `compile_for_vec_var`, so
+    /// direct + both-mono + a single mono combining both methods all match
+    /// `karac run`.
+    #[test]
+    fn e2e_blanket_vec_impl_loop_body_mono_dispatch() {
+        if let Some(out) = run_program(
+            "trait Redu {\n\
+             \x20   fn tsum(ref self) -> i64;\n\
+             \x20   fn tprod(ref self) -> i64;\n\
+             }\n\
+             impl Redu for Vec[i64] {\n\
+             \x20   fn tsum(ref self) -> i64 { let mut a = 0; for x in self { a = a + x; } a }\n\
+             \x20   fn tprod(ref self) -> i64 { let mut a = 1; for x in self { a = a * x; } a }\n\
+             }\n\
+             fn callsum[C: Redu](c: ref C) -> i64 { c.tsum() }\n\
+             fn callprod[C: Redu](c: ref C) -> i64 { c.tprod() }\n\
+             fn both[C: Redu](c: ref C) -> i64 { c.tsum() + c.tprod() }\n\
+             fn main() {\n\
+             \x20   let mut v = Vec.new();\n\
+             \x20   v.push(1); v.push(2); v.push(3); v.push(4);\n\
+             \x20   println(f\"{v.tsum()}\");\n\
+             \x20   println(f\"{callsum(v)}\");\n\
+             \x20   println(f\"{callprod(v)}\");\n\
+             \x20   println(f\"{both(v)}\");\n\
+             }",
+        ) {
+            // sum=1+2+3+4=10, prod=24, both=34 — direct, two monos, combined mono.
+            assert_eq!(out, "10\n10\n24\n34\n");
+        }
+    }
+
+    /// B-2026-07-06-5 (heap-element facet): a blanket `impl Joiner for
+    /// Vec[String]` whose loop body concatenates the borrowed String elements
+    /// (`for s in self { out = out + s; }`). Exercises the SelfValue for-loop
+    /// borrow path with per-element HEAP data — the elements and the Vec buffer
+    /// must NOT be freed by the loop (the receiver is borrowed). Reached
+    /// directly and through a bound-generic mono. Leak/double-free coverage is
+    /// the ASAN twin in `tests/memory_sanitizer.rs`.
+    #[test]
+    fn e2e_blanket_vec_string_impl_loop_body() {
+        if let Some(out) = run_program(
+            "trait Joiner {\n\
+             \x20   fn concat(ref self) -> String;\n\
+             }\n\
+             impl Joiner for Vec[String] {\n\
+             \x20   fn concat(ref self) -> String {\n\
+             \x20       let mut out = String.new();\n\
+             \x20       for s in self { out = out + s; }\n\
+             \x20       out\n\
+             \x20   }\n\
+             }\n\
+             fn callit[C: Joiner](c: ref C) -> String { c.concat() }\n\
+             fn main() {\n\
+             \x20   let mut v = Vec.new();\n\
+             \x20   v.push(\"ab\"); v.push(\"cd\"); v.push(\"ef\");\n\
+             \x20   println(v.concat());\n\
+             \x20   println(callit(v));\n\
+             }",
+        ) {
+            assert_eq!(out, "abcdef\nabcdef\n");
+        }
+    }
+
     /// B-2026-07-03-11 (heap + default-method + `-> Self` facets): a default
     /// trait method calling another trait method dispatches through the bound
     /// on a String-carrying receiver; and a `-> Self`-returning method bound

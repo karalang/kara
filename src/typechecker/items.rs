@@ -1900,6 +1900,18 @@ impl<'a> super::TypeChecker<'a> {
                 {
                     lowered.clone()
                 }
+                // S6c blanket-Vec: `impl Trait for Vec[i64]` must keep its
+                // concrete element arg so `self` is `Vec[i64]` (not `Vec[]`)
+                // and `for x in self` types the element `i64` — otherwise the
+                // body's element stays the abstract trait param `T` and a
+                // `self.sum()`-style fold errors "cannot mix i64 and T".
+                Type::Named { name, args }
+                    if (name == "Vec" || name == "VecDeque")
+                        && !args.is_empty()
+                        && args.iter().all(type_is_fully_concrete) =>
+                {
+                    lowered.clone()
+                }
                 _ => Type::Named {
                     name: type_name.clone(),
                     args: Vec::new(),

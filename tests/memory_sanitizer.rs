@@ -658,6 +658,53 @@ fn main() {
     }
 
     #[test]
+    fn asan_b06_5_blanket_vec_string_impl_loop_no_leak() {
+        // B-2026-07-06-5 (blanket `impl Trait for Vec[String]`): the impl body
+        // iterates the borrowed receiver (`for s in self { out = out + s; }`).
+        // `self` is a `ref Vec[String]` (`SelfValue`) — the loop must NOT free
+        // the Vec buffer OR its per-element heap Strings (the caller still owns
+        // them). Before the SelfValue for-loop arm, `self` fell to the
+        // materialize-iterate-DROP value path and double-freed the borrowed
+        // heap. Drives the impl both directly (`v.concat()`) and through a
+        // bound-generic mono (`callit(v)`) over 40× ≥40-byte payloads for LSan
+        // reachability; the source `v` is re-read each round to expose UAF.
+        assert_clean_asan_run(
+            r#"
+trait Joiner {
+    fn concat(ref self) -> String;
+}
+impl Joiner for Vec[String] {
+    fn concat(ref self) -> String {
+        let mut out = String.new();
+        for s in self { out = out + s; }
+        out
+    }
+}
+fn callit[C: Joiner](c: ref C) -> String { c.concat() }
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let mut v: Vec[String] = Vec[
+            "blanket-vec-string-loop-alpha-aaaaaaaaaaaaaaaa".to_string(),
+            "blanket-vec-string-loop-bravo-bbbbbbbbbbbbbbbb".to_string()
+        ];
+        let direct: String = v.concat();
+        let mono: String = callit(v);
+        println(f"{direct} {mono} {v.len()}");
+        round = round + 1i64;
+    }
+}
+"#,
+            [
+                "blanket-vec-string-loop-alpha-aaaaaaaaaaaaaaaablanket-vec-string-loop-bravo-bbbbbbbbbbbbbbbb blanket-vec-string-loop-alpha-aaaaaaaaaaaaaaaablanket-vec-string-loop-bravo-bbbbbbbbbbbbbbbb 2",
+            ]
+            .repeat(40)
+            .as_slice(),
+            "asan_b06_5_blanket_vec_string_impl_loop_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_column_string_index_clone_out_no_leak() {
         // S6c-12 Slice 5: `Column[String]` indexing `c[i] -> Option[String]`
         // under `karac build` DEEP-CLONES the element so the returned Option

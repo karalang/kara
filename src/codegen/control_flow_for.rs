@@ -260,6 +260,34 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 Ok(self.context.i64_type().const_int(0, false).into())
             }
+            // `for x in self` inside a user `impl Trait for Vec[i64]` body.
+            // `self` is a container receiver registered under the name "self"
+            // (String/Vec/Slice/Map/Set tables), so route it to the SAME
+            // borrow-path iterators as a named Identifier — NOT the `_ =>`
+            // value path below, which materializes-iterates-DROPS the source.
+            // For a `ref self` receiver (the borrow the caller still owns)
+            // that drop is a double-free (free() double-free / SIGTRAP under
+            // two-method dispatch); for an owned `self` the param-drop
+            // machinery frees it at function exit, so the loop must not.
+            // S6c blanket-Vec.
+            ExprKind::SelfValue => {
+                if self.string_vars.contains("self") {
+                    return self.compile_for_string_chars(label, pattern, "self", body);
+                }
+                if self.vec_elem_types.contains_key("self") {
+                    return self.compile_for_vec_var(label, pattern, "self", body);
+                }
+                if self.slice_elem_types.contains_key("self") {
+                    return self.compile_for_slice_var(label, pattern, "self", body);
+                }
+                if self.map_key_types.contains_key("self") {
+                    return self.compile_for_map_var(label, pattern, "self", body);
+                }
+                if self.set_elem_types.contains_key("self") {
+                    return self.compile_for_set_var(label, pattern, "self", body);
+                }
+                Ok(self.context.i64_type().const_int(0, false).into())
+            }
             // Bare field receiver: `for x in obj.field { }` (no
             // `.iter()` peel-off). Same synth-identifier pattern as the
             // `.iter()` arm above — recover the field pointer, mint a
