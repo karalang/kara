@@ -7,7 +7,7 @@
 //! the stdlib bootstrap (`register_baked_stdlib`,
 //! `register_compiler_intrinsic_env`, `register_stdlib_impls`),
 //! and the per-item-kind `env_add_*` registrars plus the
-//! impl-coherence helpers (`impl_overlap_exists`, `register_builtin_impl`).
+//! impl-coherence helpers (`impl_overlap_conflict`, `register_builtin_impl`).
 //! Lives in a sibling `impl<'a> super::TypeChecker<'a>` block.
 
 use crate::ast::*;
@@ -25,6 +25,19 @@ use super::{
     extract_derived_traits, extract_must_use_message, find_item_visibility, has_display_snake_case,
     has_repr_c, normalize_bounds_into_where_clause, shared_struct_mut_field_names, TypeErrorKind,
 };
+
+/// Outcome of the impl-coherence overlap check (`impl_overlap_conflict`).
+enum ImplOverlap {
+    /// Whole-impl coherence conflict — kept as the v1 rejection: a trait impl
+    /// overlapping another trait impl on the same `(trait, target)` pair, or a
+    /// generic-vs-specialized trait-impl overlap. The user must pick one.
+    WholeImpl,
+    /// An inherent specialized impl (`impl Column[i64] { .. }`) redefines one
+    /// or more method names already provided by a coexisting inherent impl.
+    /// That is specialization — still rejected — but the diagnostic names the
+    /// offending methods. Disjoint-method inherent impls are admitted instead.
+    MethodRedefinition(Vec<String>),
+}
 
 impl<'a> super::TypeChecker<'a> {
     // ── Build Type Environment (Pass 1) ─────────────────────────
@@ -2108,32 +2121,67 @@ impl<'a> super::TypeChecker<'a> {
         // `phase-4-interpreter.md` § `impl Option[Ordering]` for the
         // locked design rationale (rejection over Rust-style
         // specialization).
-        if self.impl_overlap_exists(&trait_name, &type_name, &target_args) {
-            self.type_error(
-                format!(
-                    "conflicting impl: another `impl{} {}{}` already exists; v1 \
-                     does not support generic-vs-specialized impl overlap on the \
-                     same trait + target",
-                    trait_name
-                        .as_deref()
-                        .map(|t| format!(" {} for", t))
-                        .unwrap_or_default(),
-                    type_name,
-                    if target_args.is_empty() {
-                        String::new()
-                    } else {
-                        let rendered = target_args
+        match self.impl_overlap_conflict(&trait_name, &type_name, &target_args, &methods) {
+            None => {}
+            Some(ImplOverlap::MethodRedefinition(names)) => {
+                let rendered_args = if target_args.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        "[{}]",
+                        target_args
                             .iter()
                             .map(type_display)
                             .collect::<Vec<_>>()
-                            .join(", ");
-                        format!("[{}]", rendered)
-                    },
-                ),
-                imp.span.clone(),
-                TypeErrorKind::ConflictingImpl,
-            );
-            return;
+                            .join(", ")
+                    )
+                };
+                let joined = names
+                    .iter()
+                    .map(|n| format!("`{}`", n))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let plural = if names.len() == 1 { "" } else { "s" };
+                self.type_error(
+                    format!(
+                        "conflicting impl: `impl {}{}` redefines method{} {} already \
+                         provided by an existing `impl {}`; a specialized inherent impl \
+                         may only ADD new methods, not redefine or specialize an \
+                         existing one (v1 has no method specialization)",
+                        type_name, rendered_args, plural, joined, type_name,
+                    ),
+                    imp.span.clone(),
+                    TypeErrorKind::ConflictingImpl,
+                );
+                return;
+            }
+            Some(ImplOverlap::WholeImpl) => {
+                self.type_error(
+                    format!(
+                        "conflicting impl: another `impl{} {}{}` already exists; v1 \
+                         does not support generic-vs-specialized impl overlap on the \
+                         same trait + target",
+                        trait_name
+                            .as_deref()
+                            .map(|t| format!(" {} for", t))
+                            .unwrap_or_default(),
+                        type_name,
+                        if target_args.is_empty() {
+                            String::new()
+                        } else {
+                            let rendered = target_args
+                                .iter()
+                                .map(type_display)
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            format!("[{}]", rendered)
+                        },
+                    ),
+                    imp.span.clone(),
+                    TypeErrorKind::ConflictingImpl,
+                );
+                return;
+            }
         }
 
         self.env.add_impl(ImplInfo {
@@ -2149,35 +2197,68 @@ impl<'a> super::TypeChecker<'a> {
         });
     }
 
-    /// Theme-4 overlap detection. Returns `true` iff registering an impl
-    /// with `(trait_name, target_type, target_args)` would conflict with
-    /// an already-registered impl on the same `(trait_name, target_type)`
-    /// pair under the v1 rule: generic-on-name (`target_args.is_empty()`)
-    /// cannot coexist with any specialized variant, and two specialized
-    /// variants cannot vector-equal on `target_args`. Anything else
+    /// Theme-4 overlap detection. Returns `Some(..)` iff registering an impl
+    /// with `(trait_name, target_type, target_args, new_methods)` would
+    /// conflict with an already-registered impl on the same
+    /// `(trait_name, target_type)` pair under the v1 rule: generic-on-name
+    /// (`target_args.is_empty()`) cannot coexist with any specialized variant,
+    /// and two specialized variants cannot vector-equal on `target_args`.
+    /// Exception (S6c-12 final): an *inherent* specialized impl that only adds
+    /// new method names is admitted (`ImplOverlap::MethodRedefinition` names
+    /// the offending methods when it does redefine one). Anything else
     /// (different concrete instantiations, different traits) is fine.
-    fn impl_overlap_exists(
+    fn impl_overlap_conflict(
         &self,
         trait_name: &Option<String>,
         target_type: &str,
         target_args: &[Type],
-    ) -> bool {
+        new_methods: &HashMap<String, FunctionSig>,
+    ) -> Option<ImplOverlap> {
         for existing in &self.env.impls {
             if existing.trait_name != *trait_name || existing.target_type != target_type {
                 continue;
             }
             let existing_empty = existing.target_args.is_empty();
             let new_empty = target_args.is_empty();
-            if existing_empty != new_empty {
-                // generic-on-name + specialized — overlap
-                return true;
-            }
-            if !existing_empty && existing.target_args == target_args {
+            let overlaps = if existing_empty != new_empty {
+                // generic-on-name + specialized
+                true
+            } else {
                 // two specialized impls on the same concrete instantiation
-                return true;
+                !existing_empty && existing.target_args == target_args
+            };
+            if !overlaps {
+                continue;
             }
+            // Method-granular overlap admission (S6c-12 final): an *inherent*
+            // specialized impl (`impl Column[i64] { .. }`, `trait_name == None`)
+            // is admitted to coexist with a generic-on-name inherent impl
+            // (`impl[T] Column[T] { .. }`, e.g. the baked container methods) as
+            // long as it only ADDS new method names. Every method still has
+            // exactly one definition for a given concrete type, so this is not
+            // specialization — it sidesteps the soundness potholes the v1
+            // whole-impl rejection guards against (see design.md § generic-vs-
+            // specialized, phase-4-interpreter.md `impl Option[Ordering]`).
+            //
+            // A *trait* impl is a whole-trait commitment; two overlapping trait
+            // impls are a coherence violation regardless of method names, so the
+            // v1 rejection is kept unchanged for `trait_name.is_some()`.
+            if trait_name.is_none() {
+                let mut clashing: Vec<String> = new_methods
+                    .keys()
+                    .filter(|k| existing.methods.contains_key(*k))
+                    .cloned()
+                    .collect();
+                if clashing.is_empty() {
+                    // Adds only new method names — no method defined twice. Admit.
+                    continue;
+                }
+                clashing.sort();
+                return Some(ImplOverlap::MethodRedefinition(clashing));
+            }
+            return Some(ImplOverlap::WholeImpl);
         }
-        false
+        None
     }
 
     /// Register a built-in stdlib impl programmatically (no AST source).
