@@ -3956,10 +3956,77 @@ impl<'ctx> super::Codegen<'ctx> {
                             if params.len() != 1 {
                                 return Ok(None);
                             }
-                            let PatternKind::Binding(param) = &params[0].pattern.kind else {
-                                return Ok(None);
-                            };
-                            (param.clone(), (**body).clone())
+                            match &params[0].pattern.kind {
+                                PatternKind::Binding(param) => (param.clone(), (**body).clone()),
+                                // Tuple-destructuring param — e.g.
+                                // `enumerate().map(|(i, x)| …)` (B-2026-07-04-2
+                                // sub-part 2). Bind a fresh single param to the
+                                // element and desugar the destructuring into
+                                // leading `let`s in a block body:
+                                // `|__dp| { let i = __dp.0; let x = __dp.1; <body> }`.
+                                // This reuses the proven single-`Binding`
+                                // pipeline verbatim (the element is a tuple, so
+                                // `__dp.k` is an ordinary `TupleIndex`), and
+                                // normal block scoping handles any shadowing in
+                                // the body. Only all-`Binding`/`_` sub-patterns
+                                // are lowered; a nested/complex sub-pattern
+                                // (`|((a, b), c)|`, a literal, …) bails to the
+                                // loud dispatch-fail rather than miscompiling.
+                                PatternKind::Tuple(subs) => {
+                                    let dp = format!(
+                                        "__dp_{}_{}",
+                                        self.indexed_elem_counter,
+                                        steps.len()
+                                    );
+                                    let mut stmts = Vec::new();
+                                    for (k, sub) in subs.iter().enumerate() {
+                                        match &sub.kind {
+                                            PatternKind::Wildcard => {}
+                                            PatternKind::Binding(name) => {
+                                                stmts.push(Stmt {
+                                                    kind: StmtKind::Let {
+                                                        is_mut: false,
+                                                        pattern: Pattern {
+                                                            kind: PatternKind::Binding(
+                                                                name.clone(),
+                                                            ),
+                                                            span: sub.span.clone(),
+                                                        },
+                                                        ty: None,
+                                                        value: Expr {
+                                                            kind: ExprKind::TupleIndex {
+                                                                object: Box::new(Expr {
+                                                                    kind: ExprKind::Identifier(
+                                                                        dp.clone(),
+                                                                    ),
+                                                                    span: sub.span.clone(),
+                                                                }),
+                                                                index: k as u64,
+                                                            },
+                                                            span: sub.span.clone(),
+                                                        },
+                                                    },
+                                                    span: sub.span.clone(),
+                                                });
+                                            }
+                                            _ => return Ok(None),
+                                        }
+                                    }
+                                    let block = Block {
+                                        stmts,
+                                        final_expr: Some(Box::new((**body).clone())),
+                                        span: body.span.clone(),
+                                    };
+                                    (
+                                        dp,
+                                        Expr {
+                                            kind: ExprKind::Block(block),
+                                            span: body.span.clone(),
+                                        },
+                                    )
+                                }
+                                _ => return Ok(None),
+                            }
                         }
                         // A named-function reference — a bare `Identifier`
                         // (`double`) or a qualified `Path` (`math.sq`). Wrap it in

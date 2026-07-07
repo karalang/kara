@@ -6477,6 +6477,42 @@ fn main() {
     }
 
     #[test]
+    fn e2e_iter_adaptor_destructuring_closure_collect_codegen() {
+        // B-2026-07-04-2 sub-part 2 (the destructuring half): a `map`/`filter`
+        // closure with a TUPLE-destructuring param — `enumerate().map(|(i, x)|
+        // …)`, `pairs.iter().map(|(a, b)| …)` — fell through to the loud
+        // dispatch-fail under `karac build` (the pipeline accepted only a
+        // single-`Binding` param), though `karac run` handled it. The fix binds
+        // a fresh `__dp` to the element and desugars the destructuring into
+        // leading `let`s in a block body, reusing the single-binding pipeline.
+        // Exercises: POD enumerate map, a heap keep-element map (`|(i, s)| s`
+        // over `Vec[String]`, source survives), a `filter().map()` over the
+        // enumerate index, a wildcard sub-pattern, and a direct `Vec[(i64,i64)]`
+        // tuple source with no enumerate.
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    let v: Vec[i64] = Vec[10i64, 20i64, 30i64];
+    let a: Vec[i64] = v.iter().enumerate().map(|(i, x)| i + x).collect();
+    println(f"{a.len()} {a[0]} {a[1]} {a[2]}");
+    let words: Vec[String] = Vec["aa".to_string(), "bb".to_string(), "cc".to_string()];
+    let b: Vec[String] = words.iter().enumerate().map(|(i, s)| s).collect();
+    println(f"{b.len()} {b[0]}{b[2]} {words.len()}");
+    let c: Vec[i64] = v.iter().enumerate().filter(|(i, x)| i % 2i64 == 0i64).map(|(i, x)| x).collect();
+    println(f"{c.len()} {c[0]} {c[1]}");
+    let d: Vec[i64] = v.iter().enumerate().map(|(_, x)| x * 2i64).collect();
+    println(f"{d[0]} {d[2]}");
+    let pairs: Vec[(i64, i64)] = Vec[(1i64, 10i64), (2i64, 20i64)];
+    let e: Vec[i64] = pairs.iter().map(|(k, val)| k + val).collect();
+    println(f"{e[0]} {e[1]}");
+}
+"#,
+        ) {
+            assert_eq!(out, "3 10 21 32\n3 aacc 3\n2 10 30\n20 60\n11 22\n");
+        }
+    }
+
+    #[test]
     fn e2e_iter_adaptor_identity_collect_to_vec_codegen() {
         // B-2026-07-04-2 sub-part 4: a PLAIN `<src>.iter().collect()` with NO
         // `map`/`filter`/... adaptor (an identity collect) fell through to the

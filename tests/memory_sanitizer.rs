@@ -748,6 +748,40 @@ fn main() {
     }
 
     #[test]
+    fn asan_b04_2_destructuring_closure_heap_collect_no_leak() {
+        // B-2026-07-04-2 sub-part 2 (destructuring half): a tuple-destructuring
+        // `map` param over a HEAP element — `enumerate().map(|(i, s)| s)` over
+        // `Vec[String]`. The fix desugars it to `|__dp| { let i = __dp.0; let s =
+        // __dp.1; s }`: the index i64 is bound and dropped, the String field is
+        // MOVED out of the `(i64, String)` tuple and pushed. Neither a leak (the
+        // tuple's non-returned field) nor a double-free (the moved String) may
+        // result. `.iter()` borrows, so the source survives. 40× with ≥45-byte
+        // payloads for LSan reachability; reads a collected element each round.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let w: Vec[String] = Vec[
+            "destructure-map-payload-alpha-aaaaaaaaaaaaaaaa".to_string(),
+            "destructure-map-payload-bravo-bbbbbbbbbbbbbbbb".to_string(),
+            "destructure-map-payload-charlie-cccccccccccccc".to_string()
+        ];
+        let kept: Vec[String] = w.iter().enumerate().map(|(i, s)| s).collect();
+        let k1: String = kept[1i64];
+        println(f"{kept.len()} {w.len()} {k1}");
+        round = round + 1i64;
+    }
+}
+"#,
+            ["3 3 destructure-map-payload-bravo-bbbbbbbbbbbbbbbb"]
+                .repeat(40)
+                .as_slice(),
+            "asan_b04_2_destructuring_closure_heap_collect_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_fresh_temp_source_enumerate_collect_no_double_free() {
         // B-2026-07-04-5: a collect-adaptor chain whose SOURCE is a fresh-temp
         // call result (`mk().iter()…`) rather than a named local. The for-loop
