@@ -4149,6 +4149,45 @@ impl<'ctx> super::Codegen<'ctx> {
             ..
         } = &collect_recv.kind
         {
+            // B-2026-07-04-2 sub-part 1 (scan): `<src>.scan(init, |acc, x|
+            // <body -> Option[(A, U)]>).collect()` threads a running accumulator
+            // and collects each `Some` output, stopping on the first `None`.
+            // Lowered with `.is_none()` / `.unwrap()` (no Option pattern-match,
+            // which would be fragile in post-resolver synthetic AST).
+            if method == "scan" && args.len() == 2 {
+                if let ExprKind::Closure { params, body, .. } = &args[1].value.kind {
+                    if params.len() == 2 {
+                        if let (PatternKind::Binding(acc_p), PatternKind::Binding(x_p)) =
+                            (&params[0].pattern.kind, &params[1].pattern.kind)
+                        {
+                            let src_is_identity = matches!(&object.kind,
+                                ExprKind::MethodCall { method, args, .. }
+                                    if args.is_empty() && (method == "iter" || method == "into_iter"))
+                                || matches!(
+                                    &object.kind,
+                                    ExprKind::Range {
+                                        start: Some(_),
+                                        end: Some(_),
+                                        ..
+                                    }
+                                );
+                            if src_is_identity {
+                                if let Some(v) = self.try_compile_scan_collect(
+                                    object.as_ref(),
+                                    &args[0].value,
+                                    acc_p,
+                                    x_p,
+                                    body,
+                                    call_span,
+                                )? {
+                                    return Ok(Some(v));
+                                }
+                                return Ok(None);
+                            }
+                        }
+                    }
+                }
+            }
             if method == "chain" && args.len() == 1 {
                 let is_identity_source = |e: &Expr| {
                     matches!(
@@ -5794,6 +5833,182 @@ impl<'ctx> super::Codegen<'ctx> {
                     let_stmt(false, &nname, None, n.clone()),
                     let_stmt(true, &cname, None, i64_lit(0)),
                     while_loop,
+                ],
+                final_expr: Some(Box::new(ident(&vname))),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        Ok(Some(self.compile_expr(&block)?))
+    }
+
+    /// Lower `<src>.scan(init, |acc, x| <body → Option[(A, U)]>).collect()`
+    /// (B-2026-07-04-2 sub-part 1). Emitted:
+    ///
+    /// ```text
+    /// { let mut __scv: Vec[U] = Vec.new();
+    ///   let mut __sacc = <init>;
+    ///   for <x_p> in <src> {
+    ///     let <acc_p> = __sacc;
+    ///     let __sr = <body>;                 // Option[(A, U)]
+    ///     if __sr.is_none() { break; }
+    ///     let __st = __sr.unwrap();           // (A, U)
+    ///     __sacc = __st.0;                    // next accumulator
+    ///     __scv.push(__st.1);                 // output
+    ///   }
+    ///   __scv }
+    /// ```
+    ///
+    /// The x-param is the for-loop variable (so it inherits the source's element
+    /// type); the acc-param binds the running accumulator each iteration. `None`
+    /// stops the scan (mirroring the interpreter). Uses `.is_none()`/`.unwrap()`
+    /// rather than an `Option` pattern-match — a match's `None` arm parses as
+    /// `Binding("None")` which post-resolver synthetic AST would treat as a
+    /// catch-all. Returns `Ok(None)` if the result type isn't a recorded
+    /// `Vec[U]`.
+    #[allow(clippy::too_many_arguments)]
+    fn try_compile_scan_collect(
+        &mut self,
+        src: &Expr,
+        init: &Expr,
+        acc_p: &str,
+        x_p: &str,
+        body: &Expr,
+        call_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let vec_te = match self
+            .owned_temp_drops
+            .get(&(call_span.offset, call_span.length))
+        {
+            Some(te) => te.clone(),
+            None => return Ok(None),
+        };
+        if !matches!(
+            &vec_te.kind,
+            TypeKind::Path(p) if p.segments.last().map(|s| s.as_str()) == Some("Vec")
+        ) {
+            return Ok(None);
+        }
+        let uid = self.indexed_elem_counter;
+        self.indexed_elem_counter += 1;
+        let sp = call_span.clone();
+        let vname = format!("__scv_{}", uid);
+        let accname = format!("__sacc_{}", uid);
+        let tname = format!("__st_{}", uid);
+        let ident = |name: &str| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: sp.clone(),
+        };
+        let let_stmt = |is_mut: bool, name: &str, ty: Option<TypeExpr>, value: Expr| Stmt {
+            kind: StmtKind::Let {
+                is_mut,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(name.to_string()),
+                    span: sp.clone(),
+                },
+                ty,
+                value,
+            },
+            span: sp.clone(),
+        };
+        let assign = |name: &str, value: Expr| Stmt {
+            kind: StmtKind::Assign {
+                target: ident(name),
+                value,
+            },
+            span: sp.clone(),
+        };
+        // Extract the inner tuple of a direct `Some(<tuple>)` body. A body that
+        // conditionally returns `None` (or isn't a direct `Some(...)`) bails to
+        // the loud dispatch-fail — extracting the tuple sidesteps needing the
+        // `Option`'s type name (synthetic AST has no typechecker record for a
+        // fresh `let __sr = <body>`, so `.is_none()`/`.unwrap()` wouldn't
+        // dispatch). The common `|acc, x| Some((new, out))` shape is covered.
+        let callee_is_some = |callee: &Expr| -> bool {
+            match &callee.kind {
+                ExprKind::Identifier(n) => n == "Some",
+                ExprKind::Path { segments, .. } => {
+                    segments.last().map(|s| s.as_str()) == Some("Some")
+                }
+                _ => false,
+            }
+        };
+        let inner_tuple = match &body.kind {
+            ExprKind::Call { callee, args } if args.len() == 1 && callee_is_some(callee) => {
+                args[0].value.clone()
+            }
+            _ => return Ok(None),
+        };
+        let tuple_idx = |recv: Expr, idx: u64| Expr {
+            kind: ExprKind::TupleIndex {
+                object: Box::new(recv),
+                index: idx,
+            },
+            span: sp.clone(),
+        };
+        let push_out = Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::MethodCall {
+                    object: Box::new(ident(&vname)),
+                    method: "push".to_string(),
+                    turbofish: None,
+                    args: vec![CallArg {
+                        label: None,
+                        mut_marker: false,
+                        value: tuple_idx(ident(&tname), 1),
+                        span: sp.clone(),
+                    }],
+                    args_close_span: sp.clone(),
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let for_body = vec![
+            let_stmt(false, acc_p, None, ident(&accname)),
+            let_stmt(false, &tname, None, inner_tuple),
+            assign(&accname, tuple_idx(ident(&tname), 0)),
+            push_out,
+        ];
+        let for_loop = Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::For {
+                    label: None,
+                    pattern: Pattern {
+                        kind: PatternKind::Binding(x_p.to_string()),
+                        span: sp.clone(),
+                    },
+                    iterable: Box::new(src.clone()),
+                    attributes: Vec::new(),
+                    body: Block {
+                        stmts: for_body,
+                        final_expr: None,
+                        span: sp.clone(),
+                    },
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let vec_new = Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Path {
+                        segments: vec!["Vec".to_string(), "new".to_string()],
+                        generic_args: None,
+                    },
+                    span: sp.clone(),
+                }),
+                args: vec![],
+            },
+            span: sp.clone(),
+        };
+        let block = Expr {
+            kind: ExprKind::Block(Block {
+                stmts: vec![
+                    let_stmt(true, &vname, Some(vec_te), vec_new),
+                    let_stmt(true, &accname, None, init.clone()),
+                    for_loop,
                 ],
                 final_expr: Some(Box::new(ident(&vname))),
                 span: sp.clone(),

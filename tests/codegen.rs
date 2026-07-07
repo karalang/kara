@@ -7017,6 +7017,32 @@ fn main() {
         }
     }
 
+    /// B-2026-07-04-2 sub-part 1 (scan): `v.iter().scan(init, |acc, x|
+    /// Some((new_acc, output))).collect()` threads a running accumulator and
+    /// collects each output — it used to bail. Lowered by extracting the inner
+    /// tuple of the `Some(..)` body directly (no Option pattern-match / is_none
+    /// dispatch, which synthetic post-typecheck AST can't resolve); a
+    /// conditionally-`None` body bails. ASAN twin: asan_b04_2_scan_heap_no_leak.
+    #[test]
+    fn e2e_iter_adaptor_scan_collect_codegen() {
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    let v: Vec[i64] = Vec[1i64, 2i64, 3i64, 4i64];
+    // running sum
+    let r: Vec[i64] = v.iter().scan(0i64, |acc, x| Some((acc + x, acc + x))).collect();
+    println(f"{r.len()} {r[0i64]} {r[1i64]} {r[2i64]} {r[3i64]}");
+    // running product, output distinct from accumulator
+    let p: Vec[i64] = v.iter().scan(1i64, |acc, x| Some((acc * x, acc * x * 10i64))).collect();
+    println(f"{p.len()} {p[0i64]} {p[3i64]}");
+}
+"#,
+        ) {
+            // r = [1,3,6,10]; acc product = 1,2,6,24 -> p = [10,20,60,240]
+            assert_eq!(out, "4 1 3 6 10\n4 10 240\n");
+        }
+    }
+
     #[test]
     fn e2e_iter_adaptor_flat_map_collect_codegen() {
         // B-2026-07-04-2 sub-part 1 (flat_map): `<outer>.flat_map(|v|

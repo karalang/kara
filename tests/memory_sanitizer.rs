@@ -1150,6 +1150,32 @@ fn main() {
     }
 
     #[test]
+    fn asan_b04_2_scan_heap_no_leak() {
+        // B-2026-07-04-2 sub-part 1 (scan): `v.iter().scan(init, |acc, x|
+        // Some((new, out))).collect()` threads a running accumulator and
+        // collects each output. Here the output is a heap f-string. The pushed
+        // outputs are owned once by the result; the source survives. 40x heap
+        // payloads.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let v: Vec[i64] = Vec[1i64, 2i64, 3i64];
+        let r: Vec[String] = v.iter().scan(0i64, |acc, x| Some((acc + x, f"running-sum-payload-{acc}-plus-{x}"))).collect();
+        println(f"{r.len()} {r[0i64]} {r[2i64]} {v.len()}");
+        round = round + 1i64;
+    }
+}
+"#,
+            ["3 running-sum-payload-0-plus-1 running-sum-payload-3-plus-3 3"]
+                .repeat(40)
+                .as_slice(),
+            "asan_b04_2_scan_heap_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_column_string_index_clone_out_no_leak() {
         // S6c-12 Slice 5: `Column[String]` indexing `c[i] -> Option[String]`
         // under `karac build` DEEP-CLONES the element so the returned Option
