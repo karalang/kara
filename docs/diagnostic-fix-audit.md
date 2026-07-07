@@ -28,7 +28,7 @@ Each diagnostic variant is assigned exactly one bucket:
 | Resolver | `.replacement` | yes (~9654) — but **the field is never populated**, so nothing flows |
 | Effect | `.replacement` | **yes** (~9661) — E0412 flows |
 | Ownership | `.replacement` | **yes** (~9668) — N0507 flows |
-| Ownership | `error_fix_diffs` / `fix_diff` | **NO** — computed, emitted to JSON, **not collected by `cmd_fix`** |
+| Ownership | `error_fix_diffs` / `fix_diff` | **yes** (~9680, `0f21b4b`) — flattened into the edit set alongside `.replacement`; was dropped, fixed under B-2026-07-06-4 |
 | Typechecker | `fix_it` | **yes** (~9680) |
 
 ## The number
@@ -53,7 +53,7 @@ Per family (A / B / C):
 | Resolver | **0** | 18 | 14 | did-you-mean computed, emitted as prose only |
 | Typechecker | 3 | 42 | 19 | `fix_it` wired end-to-end |
 | Effect | 1 | 7 | 10 | E0412 is the lone A |
-| Ownership | 3\* | 4 | 11 | \*1 wired (N0507) + **2 emitted-but-dropped** |
+| Ownership | 3\* | 4 | 11 | \*3 wired (N0507 + `ConcurrentShared`/`PlainStruct` `fix_diff`, `0f21b4b`) |
 
 (One dead variant — ownership `N0503 RcFallbackNote`, defined but never emitted — is excluded from live counts.)
 
@@ -65,9 +65,9 @@ These are wiring gaps, not new features — the same latent-gap pattern already 
 
 The resolver computes the exact correct name (`suggest_const_name`, fuzzy matches) and its error struct **has** a `.replacement` field — which is **never populated**. It emits the answer as human prose (`suggestion`) instead of a machine edit. `cmd_fix` already collects resolver `.replacement`, so populating it at the sites that already compute a *unique* candidate flips much of the 18 resolver-B rows to A for free.
 
-### 2. Ownership `fix_diff` applier  (`B-2026-07-06-4`)
+### 2. Ownership `fix_diff` applier  (`B-2026-07-06-4`) — **FIXED (`0f21b4b`)**
 
-`ConcurrentSharedStruct` / `ConcurrentPlainStruct` compute a full multi-edit migration (`par struct` keyword + per-field `Mutex[T]` wraps), emit it to JSON as a `fix_diff` array — and `cmd_fix` collects only `.replacement`, so `karac fix` silently ignores it. Teaching `cmd_fix` to apply `fix_diff` arrays flips these 2 A⚠→A✓.
+`ConcurrentSharedStruct` / `ConcurrentPlainStruct` compute a full multi-edit migration (`par struct` keyword + per-field `Mutex[T]` wraps), emit it to JSON as a `fix_diff` array — and `cmd_fix` collected only `.replacement`, so `karac fix` silently ignored it. **Fixed:** `cmd_fix` now flattens `pipeline.ownership.error_fix_diffs` values into the edit set; the existing descending-offset sort + overlap dedup applies the envelope safely. Two end-to-end `tests/cli.rs` regressions drive real `karac fix` over the plain-struct (4 edits) and shared-struct (7 edits) cases. Flips these 2 A⚠→A✓.
 
 ## The B→A ladder (cheapest first)
 
