@@ -1104,6 +1104,10 @@ fn tree_len(t: Tree) -> i64 {
         shrink: bool,
         keep_going: bool,
         verbose: bool,
+        /// Run ONLY the ownership oracle (Slice 3 model self-check), skipping
+        /// the ASan/LSan compile+run entirely. Fast model coverage over many
+        /// programs — no runtime archives or `cc` needed.
+        oracle_only: bool,
     }
 
     fn parse_args() -> Config {
@@ -1114,6 +1118,7 @@ fn tree_len(t: Tree) -> i64 {
             shrink: true,
             keep_going: false,
             verbose: false,
+            oracle_only: false,
         };
         let mut args = std::env::args().skip(1);
         while let Some(a) = args.next() {
@@ -1138,6 +1143,7 @@ fn tree_len(t: Tree) -> i64 {
                 }
                 "--no-shrink" => cfg.shrink = false,
                 "--keep-going" => cfg.keep_going = true,
+                "--oracle-only" => cfg.oracle_only = true,
                 "--verbose" => cfg.verbose = true,
                 "-h" | "--help" => {
                     print_help();
@@ -1162,6 +1168,8 @@ fn tree_len(t: Tree) -> i64 {
              \x20 --out DIR      write shrunk repros + report.md here (default target/drop-fuzz)\n\
              \x20 --no-shrink    skip the shrinker\n\
              \x20 --keep-going   keep saving repros past the first of each signature\n\
+             \x20 --oracle-only  run ONLY the ownership oracle (Slice 3 model self-check);\n\
+             \x20                no compile/ASan — fast model coverage, no toolchain needed\n\
              \x20 --verbose      per-program progress\n"
         );
     }
@@ -1187,18 +1195,59 @@ fn tree_len(t: Tree) -> i64 {
         let mut runs = 0u64; // total (program, surface) executions that were valid
         let mut findings: Vec<Finding> = Vec::new();
         let mut seen_sigs: BTreeMap<String, u64> = BTreeMap::new();
+        // Slice 3 — ownership-oracle model self-check across the corpus.
+        let mut oracle_programs = 0u64;
+        let mut oracle_drops = 0u64;
+        let mut oracle_violations = 0u64;
 
         eprintln!(
-            "drop_fuzz: generating {} programs (seed base {}), out={}",
+            "drop_fuzz: generating {} programs (seed base {}), out={}{}",
             cfg.count,
             cfg.seed,
-            cfg.out.display()
+            cfg.out.display(),
+            if cfg.oracle_only {
+                " [oracle-only]"
+            } else {
+                ""
+            }
         );
 
         for k in 0..cfg.count {
             let seed = cfg.seed.wrapping_add(k);
             let src = Gen::new(seed).build_program();
             let mut any_valid = false;
+
+            // ── Ownership oracle (Slice 3): run the executable judgment on
+            //    every generated program. The generator only emits ownership-
+            //    clean programs, so the model MUST report zero invariant
+            //    violations — a violation means the model and the generator
+            //    disagree (an oracle bug or a checker gap), surfaced loudly.
+            {
+                let parsed = karac::parse(&src);
+                if parsed.errors.is_empty() {
+                    let res = karac::ownership_oracle::analyze(&parsed.program);
+                    oracle_programs += 1;
+                    oracle_drops += res.drop_count() as u64;
+                    for v in res.violations() {
+                        oracle_violations += 1;
+                        eprintln!(
+                            "  [ORACLE] seed={seed} {:?} on `{}`: {} (line {})",
+                            v.kind, v.place, v.message, v.span.line
+                        );
+                    }
+                }
+            }
+
+            if cfg.oracle_only {
+                if cfg.verbose && (k + 1) % 50 == 0 {
+                    eprintln!(
+                        "  .. {}/{} analyzed, {oracle_violations} oracle violation(s)",
+                        k + 1,
+                        cfg.count
+                    );
+                }
+                continue;
+            }
 
             for surface in [Surface::Seq, Surface::AutoPar] {
                 match runner.run(&src, surface) {
@@ -1247,17 +1296,32 @@ fn tree_len(t: Tree) -> i64 {
         }
 
         let elapsed = start.elapsed();
-        write_report(&cfg, &findings, &seen_sigs, valid, runs, cfg.count, elapsed);
+        let oracle = OracleStats {
+            programs: oracle_programs,
+            drops: oracle_drops,
+            violations: oracle_violations,
+        };
+        write_report(
+            &cfg, &findings, &seen_sigs, valid, runs, cfg.count, elapsed, &oracle,
+        );
         print_summary(
-            &findings, &seen_sigs, valid, runs, cfg.count, elapsed, &cfg.out,
+            &findings, &seen_sigs, valid, runs, cfg.count, elapsed, &cfg.out, &oracle,
         );
 
-        // Exit non-zero if any *memory-safety* signature fired, so the harness
-        // can gate on it. Plain `exit-N` runtime panics do not gate.
+        // Exit non-zero if any *memory-safety* signature fired OR the model
+        // self-check found an invariant violation, so the harness can gate.
+        // Plain `exit-N` runtime panics do not gate.
         let mem_findings = seen_sigs.keys().filter(|s| is_memory_signature(s)).count();
-        if mem_findings > 0 {
+        if mem_findings > 0 || oracle_violations > 0 {
             std::process::exit(1);
         }
+    }
+
+    /// Slice-3 ownership-oracle self-check stats across the corpus.
+    struct OracleStats {
+        programs: u64,
+        drops: u64,
+        violations: u64,
     }
 
     fn is_memory_signature(sig: &str) -> bool {
@@ -1293,6 +1357,7 @@ fn tree_len(t: Tree) -> i64 {
         runs: u64,
         total: u64,
         elapsed: Duration,
+        oracle: &OracleStats,
     ) {
         let mut md = String::new();
         md.push_str("# drop_fuzz report\n\n");
@@ -1304,6 +1369,15 @@ fn tree_len(t: Tree) -> i64 {
              - elapsed: {:.1}s\n\n",
             cfg.seed,
             elapsed.as_secs_f64()
+        ));
+
+        md.push_str(&format!(
+            "## Ownership-oracle self-check (Slice 3)\n\n\
+             The executable judgment ran on **{}** generated programs, scheduling \
+             **{}** drops, with **{}** invariant violation(s). The generator emits \
+             only ownership-clean programs, so a nonzero violation count means the \
+             model and the generator disagree (an oracle bug or a checker gap).\n\n",
+            oracle.programs, oracle.drops, oracle.violations
         ));
 
         let mem: u64 = seen_sigs
@@ -1377,6 +1451,7 @@ fn tree_len(t: Tree) -> i64 {
         total: u64,
         elapsed: Duration,
         out: &Path,
+        oracle: &OracleStats,
     ) {
         let mem: u64 = seen_sigs
             .iter()
@@ -1387,6 +1462,17 @@ fn tree_len(t: Tree) -> i64 {
         eprintln!("generated:  {total}");
         eprintln!("valid:      {valid} programs ({runs} valid executions)");
         eprintln!("elapsed:    {:.1}s", elapsed.as_secs_f64());
+        eprintln!(
+            "oracle:     {} programs, {} scheduled drops, {} invariant violation(s){}",
+            oracle.programs,
+            oracle.drops,
+            oracle.violations,
+            if oracle.violations == 0 {
+                " ✓"
+            } else {
+                " ⚠"
+            }
+        );
         eprintln!("signatures:");
         if seen_sigs.is_empty() {
             eprintln!("  (none — all clean)");

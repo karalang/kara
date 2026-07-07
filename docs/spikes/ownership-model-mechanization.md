@@ -1,6 +1,6 @@
 # Spike: Mechanize the ownership/drop model — stop the drop-soundness whack-a-mole
 
-**Status:** OPEN — **Slice 1 DELIVERED**, **Slice 2 DRAFTED** (2026-07-07); Slices 3–4 open. Independent of, and parallelizable with, the LLJIT productionization spike (different bug axis).
+**Status:** OPEN — **Slices 1–3 DELIVERED**, **Slice 2 judgment DRAFTED** (2026-07-07); Slice 4 open. Independent of, and parallelizable with, the LLJIT productionization spike (different bug axis).
 **Decision date:** 2026-07-06. **Owner call:** worth doing; start with the measurement slice (a fuzzer), *not* the proof.
 
 ---
@@ -86,7 +86,9 @@ Consolidate the scattered fragments into one ownership judgment as a doc. For ev
 
 Plus the transitions (move: Owned→Moved at source, Owned at dest; `&x`: Borrowed; **field-move-out *splits* an aggregate's obligation**; scope-exit drops every still-Owned place once) and the one invariant to hold: *at every point, free-obligations == Owned places; no place carries two obligations; no Moved place is read.* That invariant **is** freed-exactly-once + no-UAF. **Completeness test:** every bug in the slice-1 corpus must be a violation of a *stated* rule; if one isn't, the rules have a hole. (Sanity check the model reaches the right shapes — it must independently explain, e.g., the for-loop-element-escape and boxed-`Option` move-out bugs as one-line consequences.)
 
-**Slice 3 — make the rules executable (the oracle).**
+**Slice 3 — make the rules executable (the oracle). — DELIVERED 2026-07-07: [`src/ownership_oracle.rs`](../../src/ownership_oracle.rs) (+ `--oracle-only` in the fuzzer).**
+The judgment is now an executable standalone pass (no codegen/`inkwell` dependency): it computes per-place-per-point state (Owned/Borrowed/Moved/Dead), the **consumption classifier** (Escape vs NonConsuming), a per-function **drop schedule** (LIFO), and the **invariant violations**. Unit-tested (13 cases) against the rules and both required sanity shapes — the tests assert the model certifies the historic-bug source *valid* and schedules exactly the drops codegen got wrong (the reference). Wired into the fuzzer as a corpus-wide model self-check: **2000 generated programs, ~19.8k scheduled drops, 0 invariant violations** — model and generator agree. v1 covers the fuzzer's heap-core subset; the two §7 open edges (closure/cross-task captures, NLL shortening) are conservatively handled. **What remains for the "differential vs codegen" is Slice 4's observability hook** — comparing the oracle's schedule to codegen's actual emitted drops. Original slice text retained below.
+
 Implement the judgment as a standalone pass computing per-place-per-point ownership state. Now the fuzzer runs *differentially*: model says "drop here / this is Moved"; check codegen did the same. Divergences are the remaining bugs, now attributable to the *lowering* (not the model).
 
 **Slice 4 — codegen reads the oracle (the structural fix).**

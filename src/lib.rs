@@ -75,6 +75,7 @@ pub mod monomorphization;
 pub mod must_use_lint;
 pub mod numeric_conv;
 pub mod ownership;
+pub mod ownership_oracle;
 pub mod parser;
 pub mod prelude;
 pub mod provider_escape;
