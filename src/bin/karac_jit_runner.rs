@@ -136,6 +136,28 @@ fn oneshot_main(ir_path: &str) -> ExitCode {
 
     let rc: i32 = call_main(addr);
 
+    // Flush the JIT'd program's stdio before the process exits. The
+    // program's `println` lowers to libc `fwrite`/`printf` against the
+    // process-resolved `stdout` FILE*, which is fully buffered when
+    // stdout is a pipe (the norm under `Command::output` capture and
+    // `karac run … | …`). The repl and test-batch modes flush explicitly
+    // via `capture_via_redirect`; the one-shot path had been relying on
+    // libc's implicit at-exit flush instead. That implicit flush does
+    // NOT reliably run here on Linux/glibc — returning `ExitCode` from
+    // `main` unwinds through Rust's lang-start rather than a plain libc
+    // `exit()`, so the buffered bytes are dropped and every executed
+    // program appears to print nothing (empty stdout, correct exit code).
+    // macOS masked this. Flush libc's buffers (and Rust's, for symmetry)
+    // explicitly so `karac run` and the codegen/lljit E2E suites capture
+    // output on every platform. See `capture_via_redirect`'s matching
+    // `fflush(NULL)`.
+    unsafe {
+        libc::fflush(std::ptr::null_mut());
+    }
+    use std::io::Write;
+    let _ = std::io::stdout().lock().flush();
+    let _ = std::io::stderr().lock().flush();
+
     let code: u8 = if (0..=255).contains(&rc) {
         rc as u8
     } else {
