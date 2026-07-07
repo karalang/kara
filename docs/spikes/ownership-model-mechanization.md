@@ -1,6 +1,6 @@
 # Spike: Mechanize the ownership/drop model — stop the drop-soundness whack-a-mole
 
-**Status:** OPEN — **Slices 1–3 DELIVERED**, **Slice 2 judgment DRAFTED** (2026-07-07); Slice 4 open. Independent of, and parallelizable with, the LLJIT productionization spike (different bug axis).
+**Status:** OPEN — **Slices 1–3 DELIVERED**, **Slice 2 judgment DRAFTED**, **Slice 4 DOWN-PAYMENT DELIVERED** (the read-only oracle↔codegen differential; 2026-07-07); Slice 4's structural refactor (codegen *consuming* the oracle) open. Independent of, and parallelizable with, the LLJIT productionization spike (different bug axis).
 **Decision date:** 2026-07-06. **Owner call:** worth doing; start with the measurement slice (a fuzzer), *not* the proof.
 
 ---
@@ -91,7 +91,22 @@ The judgment is now an executable standalone pass (no codegen/`inkwell` dependen
 
 Implement the judgment as a standalone pass computing per-place-per-point ownership state. Now the fuzzer runs *differentially*: model says "drop here / this is Moved"; check codegen did the same. Divergences are the remaining bugs, now attributable to the *lowering* (not the model).
 
-**Slice 4 — codegen reads the oracle (the structural fix).**
+**Slice 4 — codegen reads the oracle (the structural fix). — DOWN-PAYMENT DELIVERED 2026-07-07: the read-only oracle↔codegen differential.**
+The bounded, zero-risk half of Slice 4 — the piece Slice 3 flagged as remaining ("differential vs codegen") — now exists:
+
+- **`src/codegen/drop_obs.rs`** — a thread-local, off-by-default recorder. Armed only by the differential harness (`begin`/`take`); the production `karac` / test / REPL path pays one relaxed `is_some` check per emitted cleanup and is otherwise untouched.
+- **The single-seam tap** in `codegen/runtime.rs`'s `emit_cleanup_action_at` — the *sole funnel* every actually-emitted drop passes through (all three drains — normal `drain_top_frame_with_emit`, function-exit `emit_scope_cleanup_from`, error-path `emit_scope_cleanup_for_error_path` — route through it). It records `(function, place)` for each compiler-internal heap drop. Place names are recovered by reverse-mapping the action's alloca through codegen's `variables` (name→slot) table, so Map/Set handles and pattern temporaries resolve to their real binding names, not the slot's LLVM name. **Purely observational** (`&self`, no IR mutation) — arming it cannot change emission.
+- **`drop_fuzz --differential`** — compiles each generated program in-process (`compile_to_ir`, seq surface) with the recorder armed and diffs the oracle's per-function drop schedule against codegen's emitted set. Reports a **missing drop** (oracle scheduled it, codegen emitted no cleanup → a leak) localized to `(function, place)`. Result over the corpus: **330 programs checked, 2199 scheduled drops, 0 divergences** (670 skipped as the §7 capture edge, below). `--explain S` prints one seed's per-function drop sets for triage.
+
+Three alignment rules make the differential sound — each pinned down by a false-positive it eliminated (792 → 392 → 111 → 0 divergences as they went in):
+  1. **Oracle on the *surface* tree** (before `lower`), matching the oracle's model + unit tests; otherwise `lower`'s desugared temporaries (`iv2`, `v5`) get scheduled but never match codegen.
+  2. **Local drops only, not parameters** — codegen frees a bare `String`/`Vec`/`Map` param **caller-side** (caller-retains), whereas the oracle models the owned param as callee-owned. Both free exactly once, across the call boundary; a per-callee compare would false-positive.
+  3. **Skip the §7 closure/cross-task capture edge** — the oracle walks a closure with Read role (conservative, never moves the captured parent), so it keeps a `spawn`/`par`-captured heap value Owned and schedules a drop codegen elides (the task frees it). Documented model-conservatism, not a codegen leak; those programs (68% of the corpus, from the `spawn`/`par` transforms) are excluded and **counted**, not silently dropped.
+
+Only the **missing-drop (leak)** direction is checked. The extra-drop (double-free) direction is *not* emit-time observable: codegen routinely neutralizes a moved-out value's drop with a runtime null/cap guard while keeping the cleanup action, so at emit time a guarded no-op is indistinguishable from a real free — the ASan/LSan run (Slice 1) stays the double-free authority. **Non-vacuity proof** (mirrors Slice 1's reverted fault-injection): with `KARAC_DROPOBS_SILENCE=1` the recorder no-ops and the differential reports the *entire* schedule as missing (137/137 over 22 programs); off, 0. Green-off + red-on proves the gate observes real drops, not vacuously.
+
+**What remains (the structural fix).** Refactor drop-insertion to *consume* the oracle's facts instead of re-deriving them locally — this is where "checker thinks it's moved, codegen still drops it" becomes **impossible by construction**. The differential is the safety net that refactor lands behind: it already proves the two agree today, so it will catch any drift the refactor introduces. Original slice text retained below.
+
 Refactor drop-insertion to consume the oracle's facts instead of re-deriving them locally. This is where "checker thinks it's moved, codegen still drops it" becomes **impossible by construction** — one computed set of facts, both surfaces consult it. Land behind the slice-1 fuzzer as the permanent gate.
 
 **Depth of mechanization is a slice-2/3 decision, not committed up front.** Lightweight (a written judgment + executable oracle + property-based fuzzing) captures most of the value without maintenance rot. A proof assistant (Coq/Lean, RustBelt-style) is the heavyweight option — highest assurance, highest maintenance (a proof that rots is worse than none). **Recommendation: do NOT reach for a proof assistant now** — the lightweight path is the right first target; revisit only if the core proves stable and the assurance is wanted.

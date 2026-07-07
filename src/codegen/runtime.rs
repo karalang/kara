@@ -4210,7 +4210,79 @@ impl<'ctx> super::Codegen<'ctx> {
             return;
         }
         let action_ref = &self.scope_cleanup_actions[frame_idx][action_idx];
+        self.record_drop_obs(action_ref, fn_val);
         self.emit_cleanup_action(action_ref, fn_val, vec_ty, ptr_ty, i64_t);
+    }
+
+    /// Read-only drop-observability tap (ownership-model-mechanization Slice 4
+    /// down-payment — see `src/codegen/drop_obs.rs`). Records the `(function,
+    /// place)` of each *compiler-internal* heap drop this funnel emits, so the
+    /// ownership oracle's drop schedule can be diffed against real lowering.
+    /// A hard no-op on the production path — `drop_obs::armed()` is only ever
+    /// `true` inside the differential harness, so neither the place-name
+    /// extraction nor the record runs during normal `karac` / test codegen.
+    ///
+    /// `place` is the binding name: every alloca-carrying variant's slot is
+    /// named after its binding by `create_entry_alloca`, so `get_name` recovers
+    /// it; name-carrying variants (`RcDec`, `FreeSharedElided`, …) supply it
+    /// directly. User `defer` / `errdefer` (drained here too) and the mutex
+    /// release carry no droppable place and are skipped. Codegen-internal
+    /// temporaries surface with their synthetic slot name (often empty); the
+    /// differential filters to the oracle's known place set, so they are not
+    /// counted as divergences.
+    fn record_drop_obs(&self, action: &CleanupAction<'ctx>, fn_val: FunctionValue<'ctx>) {
+        if !crate::codegen::drop_obs::armed() {
+            return;
+        }
+        // Recover the *source binding name* for an alloca-keyed action. The
+        // slot is usually named after the binding (`create_entry_alloca`), but
+        // some binding kinds (Map/Set handles, pattern temporaries) allocate a
+        // generically-named slot, so `get_name` alone would misattribute the
+        // drop. Reverse-map through `variables` (name → slot) first — that is
+        // the authoritative source binding name — and fall back to the alloca
+        // name only when the slot is not a live named binding.
+        let name_of = |p: PointerValue<'ctx>| -> String {
+            if let Some((n, _)) = self.variables.iter().find(|(_, vs)| vs.ptr == p) {
+                return n.clone();
+            }
+            p.get_name().to_str().unwrap_or("").to_string()
+        };
+        let place: Option<String> = match action {
+            CleanupAction::FreeVecBuffer { vec_alloca, .. } => Some(name_of(*vec_alloca)),
+            CleanupAction::StructDrop { struct_alloca, .. } => Some(name_of(*struct_alloca)),
+            CleanupAction::EnumDrop { enum_alloca, .. } => Some(name_of(*enum_alloca)),
+            CleanupAction::FreeMapHandle { map_alloca, .. } => Some(name_of(*map_alloca)),
+            CleanupAction::FreeTensor { tensor_alloca } => Some(name_of(*tensor_alloca)),
+            CleanupAction::FreeColumn { column_alloca, .. } => Some(name_of(*column_alloca)),
+            CleanupAction::FreeDataFrame { df_alloca } => Some(name_of(*df_alloca)),
+            CleanupAction::FreeSoaGroups { soa_alloca, .. } => Some(name_of(*soa_alloca)),
+            CleanupAction::FreeFileHandle { file_alloca } => Some(name_of(*file_alloca)),
+            CleanupAction::FreeClosureEnv { fat_alloca } => Some(name_of(*fat_alloca)),
+            CleanupAction::DropChannelEnd { chan_alloca, .. } => Some(name_of(*chan_alloca)),
+            CleanupAction::FreeInlineOptionPayload { option_slot, .. } => {
+                Some(name_of(*option_slot))
+            }
+            CleanupAction::FreeInlineResultPayload { result_slot, .. } => {
+                Some(name_of(*result_slot))
+            }
+            CleanupAction::FreeInlineOptionMapPayload { option_slot, .. } => {
+                Some(name_of(*option_slot))
+            }
+            CleanupAction::RcDec { name, .. }
+            | CleanupAction::RcDecOption { name, .. }
+            | CleanupAction::BoxedEnumDrop { name, .. }
+            | CleanupAction::FreeSharedElided { name, .. }
+            | CleanupAction::FreeClusterWalk { name, .. }
+            | CleanupAction::FreeClusterWalkOption { name, .. } => Some(name.clone()),
+            CleanupAction::UserDrop { binding_name, .. } => Some(binding_name.clone()),
+            CleanupAction::UserDefer(_)
+            | CleanupAction::UserErrDefer { .. }
+            | CleanupAction::ReleaseMutex { .. } => None,
+        };
+        if let Some(place) = place {
+            let fn_name = fn_val.get_name().to_str().unwrap_or("");
+            crate::codegen::drop_obs::record(fn_name, "heap", &place);
+        }
     }
 
     /// Per-action cleanup IR emitter. Extracted from `emit_scope_cleanup` so

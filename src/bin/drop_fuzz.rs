@@ -1108,6 +1108,15 @@ fn tree_len(t: Tree) -> i64 {
         /// the ASan/LSan compile+run entirely. Fast model coverage over many
         /// programs — no runtime archives or `cc` needed.
         oracle_only: bool,
+        /// Run the oracle↔codegen **differential** (Slice 4 down-payment):
+        /// compare the oracle's drop schedule against the drops codegen
+        /// actually emits (via the `codegen::drop_obs` recorder + in-process
+        /// `compile_to_ir`). Flags a *missing drop* — the oracle schedules a
+        /// drop codegen never emitted a cleanup action for → a real leak,
+        /// localized to `(function, place)`. Needs LLVM (the bin is
+        /// `--features llvm`) but NOT the runtime archives or `cc` — no linking
+        /// or execution happens. Mutually exclusive with the ASan run.
+        differential: bool,
     }
 
     fn parse_args() -> Config {
@@ -1119,6 +1128,7 @@ fn tree_len(t: Tree) -> i64 {
             keep_going: false,
             verbose: false,
             oracle_only: false,
+            differential: false,
         };
         let mut args = std::env::args().skip(1);
         while let Some(a) = args.next() {
@@ -1141,9 +1151,19 @@ fn tree_len(t: Tree) -> i64 {
                     println!("{src}");
                     std::process::exit(0);
                 }
+                "--explain" => {
+                    // Debug aid: per-function oracle-vs-codegen drop sets for
+                    // one seed (default `--seed`). Prints the local drop
+                    // schedule, codegen's emitted set, and any missing drops.
+                    let s = args.next().and_then(|x| x.parse().ok()).unwrap_or(cfg.seed);
+                    let src = Gen::new(s).build_program();
+                    differential_explain(s, &src);
+                    std::process::exit(0);
+                }
                 "--no-shrink" => cfg.shrink = false,
                 "--keep-going" => cfg.keep_going = true,
                 "--oracle-only" => cfg.oracle_only = true,
+                "--differential" => cfg.differential = true,
                 "--verbose" => cfg.verbose = true,
                 "-h" | "--help" => {
                     print_help();
@@ -1170,6 +1190,10 @@ fn tree_len(t: Tree) -> i64 {
              \x20 --keep-going   keep saving repros past the first of each signature\n\
              \x20 --oracle-only  run ONLY the ownership oracle (Slice 3 model self-check);\n\
              \x20                no compile/ASan — fast model coverage, no toolchain needed\n\
+             \x20 --differential run the oracle↔codegen differential (Slice 4 down-payment):\n\
+             \x20                oracle drop schedule vs codegen's emitted drops. Flags a\n\
+             \x20                missing drop (leak) localized to (function, place). Needs\n\
+             \x20                LLVM but no runtime archives / cc — no linking or execution\n\
              \x20 --verbose      per-program progress\n"
         );
     }
@@ -1183,6 +1207,10 @@ fn tree_len(t: Tree) -> i64 {
 
     pub fn run() {
         let cfg = parse_args();
+        if cfg.differential {
+            run_differential(&cfg);
+            return;
+        }
         std::fs::create_dir_all(&cfg.out).ok();
         // Transient object/exe scratch lives in the system temp dir, NOT under
         // `--out` — so a committed corpus directory stays clean (repros + report
@@ -1315,6 +1343,359 @@ fn tree_len(t: Tree) -> i64 {
         if mem_findings > 0 || oracle_violations > 0 {
             std::process::exit(1);
         }
+    }
+
+    // ───────────────── oracle↔codegen differential (Slice 4) ───────────────
+
+    /// One place where codegen's emitted drop set diverges from the oracle's
+    /// schedule. Currently only the **missing-drop** direction (leak risk): the
+    /// oracle schedules a drop for `place` in `function`, but codegen emitted no
+    /// cleanup action for it. The extra-drop (double-free) direction is not
+    /// checked here — codegen frequently neutralizes a moved-out value's drop by
+    /// a runtime null/cap guard while *keeping* the cleanup action, so at
+    /// emit-time a guarded no-op is indistinguishable from a real free; the
+    /// ASan/LSan run (the default mode) remains the double-free authority.
+    struct DiffFinding {
+        seed: u64,
+        function: String,
+        place: String,
+        src: String,
+    }
+
+    /// Per-program differential outcome.
+    struct DiffResult {
+        /// Distinct scheduled drop places checked against codegen.
+        drops_checked: u64,
+        /// Missing-drop divergences (oracle scheduled, codegen did not emit).
+        divergences: Vec<(String, String)>, // (function, place)
+    }
+
+    /// Compile one program in-process with the drop recorder armed, then diff
+    /// the oracle's per-function schedule against codegen's emitted drop set.
+    /// Returns `None` when the program is not a valid differential subject
+    /// (parse/type/ownership error, or codegen failure) — those are not counted.
+    ///
+    /// Two alignment rules make the comparison sound:
+    ///
+    ///  - **Oracle on the *surface* tree.** The oracle's model (and its Slice-3
+    ///    self-check + unit tests) is defined over source syntax; `lower`
+    ///    desugars for-loops / matches / method chains into temporaries with
+    ///    fresh names that the oracle would then schedule but codegen handles
+    ///    internally. So `analyze` runs *before* `lower`, keying the schedule on
+    ///    user source-binding names — the same names `create_entry_alloca` gives
+    ///    codegen's slots. (Codegen still runs on the lowered tree; its extra
+    ///    lowering-temp drops are simply outside the oracle's vocabulary and
+    ///    ignored.)
+    ///  - **Local drops only, not parameters.** The oracle models an owned heap
+    ///    *param* as callee-owned (it drops at the callee's exit); codegen frees
+    ///    a bare `String`/`Vec`/`Map` param **caller-side** (caller-retains
+    ///    convention — the callee emits no cleanup for it). Both free exactly
+    ///    once, just on different sides of the call, so a per-callee comparison
+    ///    would false-positive. Param places are excluded; the differential
+    ///    validates each function's *let-bound local* drop schedule, which is
+    ///    where codegen's local cleanup must match the model.
+    fn differential_check(src: &str) -> Option<DiffResult> {
+        use std::collections::{BTreeMap, BTreeSet, HashSet};
+
+        let mut parsed = karac::parse(src);
+        if !parsed.errors.is_empty() {
+            return None;
+        }
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        if !typed.errors.is_empty() {
+            return None;
+        }
+
+        // Oracle + per-function parameter names off the SURFACE tree.
+        let oracle = karac::ownership_oracle::analyze(&parsed.program);
+        let params = param_names_by_function(&parsed.program);
+
+        // Lower + ownership-check for codegen (codegen consumes the lowered tree).
+        karac::lower(&mut parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        if !ownership.errors.is_empty() {
+            // `karac check` would reject it — not a codegen question.
+            return None;
+        }
+
+        // Seq surface (concurrency = None) to match the oracle's sequential
+        // model. The recorder fires inside `compile_to_ir`'s cleanup drain; take
+        // unconditionally so the thread-local sink resets even on codegen error.
+        karac::codegen::drop_obs::begin();
+        let ir = karac::codegen::compile_to_ir(&parsed.program, Some(&ownership), None);
+        let recs = karac::codegen::drop_obs::take();
+        if ir.is_err() {
+            return None;
+        }
+
+        // Codegen's emitted drop set, per function → distinct places.
+        let mut cg: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+        for r in &recs {
+            cg.entry(r.function.as_str())
+                .or_default()
+                .insert(r.place.as_str());
+        }
+        let empty: HashSet<String> = HashSet::new();
+
+        let mut drops_checked = 0u64;
+        let mut divergences = Vec::new();
+        for f in &oracle.functions {
+            let cg_places = cg.get(f.function.as_str());
+            let fn_params = params.get(&f.function).unwrap_or(&empty);
+            // Distinct scheduled LOCAL places (dedup; params discharged caller-side).
+            let scheduled: BTreeSet<&str> = f
+                .drops
+                .iter()
+                .map(|d| d.place.as_str())
+                .filter(|p| !fn_params.contains(*p))
+                .collect();
+            for place in scheduled {
+                drops_checked += 1;
+                let emitted = cg_places.is_some_and(|s| s.contains(place));
+                if !emitted {
+                    divergences.push((f.function.clone(), place.to_string()));
+                }
+            }
+        }
+        Some(DiffResult {
+            drops_checked,
+            divergences,
+        })
+    }
+
+    /// Parameter names of every free function and impl method in the surface
+    /// tree, keyed by function name — so the differential can exclude
+    /// param-drop obligations (discharged caller-side, not at the callee).
+    fn param_names_by_function(
+        program: &karac::ast::Program,
+    ) -> std::collections::HashMap<String, std::collections::HashSet<String>> {
+        use karac::ast::{ImplItem, Item};
+        let mut out: std::collections::HashMap<String, std::collections::HashSet<String>> =
+            std::collections::HashMap::new();
+        let mut add = |name: &str, f: &karac::ast::Function| {
+            let ps = f
+                .params
+                .iter()
+                .filter_map(|p| p.name().map(|s| s.to_string()))
+                .collect();
+            out.insert(name.to_string(), ps);
+        };
+        for item in &program.items {
+            match item {
+                Item::Function(f) => add(&f.name, f),
+                Item::ImplBlock(b) => {
+                    for it in &b.items {
+                        if let ImplItem::Method(m) = it {
+                            add(&m.name, m);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// `--explain S` triage: print, per function, the oracle's local drop
+    /// schedule, codegen's emitted drop set, and the missing drops — the
+    /// per-seed detail behind a `--differential` divergence.
+    fn differential_explain(seed: u64, src: &str) {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let mut parsed = karac::parse(src);
+        if !parsed.errors.is_empty() {
+            eprintln!("seed {seed}: parse error");
+            return;
+        }
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        if !typed.errors.is_empty() {
+            eprintln!("seed {seed}: typecheck error");
+            return;
+        }
+        let oracle = karac::ownership_oracle::analyze(&parsed.program);
+        let params = param_names_by_function(&parsed.program);
+        karac::lower(&mut parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        if !ownership.errors.is_empty() {
+            eprintln!("seed {seed}: ownership error");
+            return;
+        }
+        karac::codegen::drop_obs::begin();
+        let _ = karac::codegen::compile_to_ir(&parsed.program, Some(&ownership), None);
+        let recs = karac::codegen::drop_obs::take();
+        let mut cg: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for r in &recs {
+            cg.entry(r.function.clone())
+                .or_default()
+                .insert(r.place.clone());
+        }
+        let empty = std::collections::HashSet::new();
+        println!("seed {seed}: per-function drop sets (locals only)\n");
+        for f in &oracle.functions {
+            let fn_params = params.get(&f.function).unwrap_or(&empty);
+            let scheduled: BTreeSet<&str> = f
+                .drops
+                .iter()
+                .map(|d| d.place.as_str())
+                .filter(|p| !fn_params.contains(*p))
+                .collect();
+            let emitted = cg.get(&f.function).cloned().unwrap_or_default();
+            let missing: Vec<&str> = scheduled
+                .iter()
+                .copied()
+                .filter(|p| !emitted.contains(*p))
+                .collect();
+            if scheduled.is_empty() && emitted.is_empty() {
+                continue;
+            }
+            println!("  fn {}", f.function);
+            println!("    oracle local drops : {scheduled:?}");
+            println!("    codegen emitted    : {emitted:?}");
+            println!("    MISSING            : {missing:?}");
+        }
+    }
+
+    /// `--differential` mode entry: run [`differential_check`] over the corpus,
+    /// report, and exit nonzero on any divergence (so it can gate).
+    fn run_differential(cfg: &Config) {
+        std::fs::create_dir_all(&cfg.out).ok();
+        let start = Instant::now();
+        let mut programs = 0u64;
+        let mut drops_checked = 0u64;
+        let mut skipped_capture = 0u64;
+        let mut findings: Vec<DiffFinding> = Vec::new();
+
+        eprintln!(
+            "drop_fuzz: differential over {} programs (seed base {}) — oracle drop schedule vs \
+             codegen emitted drops [seq surface]",
+            cfg.count, cfg.seed
+        );
+
+        for k in 0..cfg.count {
+            let seed = cfg.seed.wrapping_add(k);
+            let src = Gen::new(seed).build_program();
+            // §7 open edge: the oracle handles closure / cross-task captures
+            // *conservatively* (walks a closure with Read role, never moving the
+            // captured parent), so it keeps a spawn/par-captured heap value Owned
+            // and schedules a scope-exit drop — whereas codegen moves it into the
+            // task, which frees it. That is a documented model-conservatism edge,
+            // NOT a codegen leak, so it is out of the heap-core subset this
+            // differential gates. Skip such programs and count them (no silent
+            // capping — the count is reported).
+            if has_capture_construct(&src) {
+                skipped_capture += 1;
+                continue;
+            }
+            if let Some(res) = differential_check(&src) {
+                programs += 1;
+                drops_checked += res.drops_checked;
+                for (function, place) in res.divergences {
+                    eprintln!(
+                        "  [DIFF] seed={seed} fn={function} place=`{place}` — oracle schedules a \
+                         drop codegen emitted no cleanup for (leak risk)"
+                    );
+                    findings.push(DiffFinding {
+                        seed,
+                        function,
+                        place,
+                        src: src.clone(),
+                    });
+                }
+            }
+            if cfg.verbose && (k + 1) % 50 == 0 {
+                eprintln!(
+                    "  .. {}/{} checked, {} divergence(s)",
+                    k + 1,
+                    cfg.count,
+                    findings.len()
+                );
+            }
+        }
+
+        let elapsed = start.elapsed();
+        write_differential_report(
+            cfg,
+            programs,
+            drops_checked,
+            skipped_capture,
+            &findings,
+            elapsed,
+        );
+
+        eprintln!("\n── differential summary ──");
+        eprintln!("  programs checked : {programs}");
+        eprintln!("  drops checked    : {drops_checked}");
+        eprintln!("  skipped (§7 capture edge) : {skipped_capture}");
+        eprintln!("  divergences      : {}", findings.len());
+        eprintln!("  elapsed          : {:.1}s", elapsed.as_secs_f64());
+        if findings.is_empty() {
+            eprintln!(
+                "  ✓ on every function, codegen's emitted drop set covers the oracle's schedule."
+            );
+        } else {
+            eprintln!("  report: {}/differential.md", cfg.out.display());
+            std::process::exit(1);
+        }
+    }
+
+    /// Whether a generated program contains a closure / cross-task capture
+    /// construct (`par {}` or `pool.spawn(|| …)`) — the oracle's §7 open edge,
+    /// excluded from the differential's heap-core gate. The generator emits at
+    /// most one such construct per program (guarded by `used_par`).
+    fn has_capture_construct(src: &str) -> bool {
+        src.contains("par {") || src.contains(".spawn(")
+    }
+
+    fn write_differential_report(
+        cfg: &Config,
+        programs: u64,
+        drops_checked: u64,
+        skipped_capture: u64,
+        findings: &[DiffFinding],
+        elapsed: Duration,
+    ) {
+        let mut md = String::new();
+        md.push_str("# drop_fuzz — oracle↔codegen differential\n\n");
+        md.push_str(&format!(
+            "The ownership oracle's per-function drop schedule (`ownership_oracle::analyze`) \
+             checked against the drops codegen actually emits (recorded via \
+             `codegen::drop_obs`, seq surface). A divergence is a **missing drop**: the oracle \
+             schedules a drop codegen emitted no cleanup action for → a leak, localized to \
+             `(function, place)`.\n\n\
+             - programs checked: **{programs}**\n\
+             - scheduled drops checked: **{drops_checked}**\n\
+             - skipped (§7 closure/par capture edge): **{skipped_capture}**\n\
+             - divergences: **{}**\n\
+             - base seed: `{}`\n\
+             - elapsed: {:.1}s\n\n",
+            findings.len(),
+            cfg.seed,
+            elapsed.as_secs_f64()
+        ));
+        if findings.is_empty() {
+            md.push_str(
+                "_No divergences: codegen's emitted drop set covers the oracle's schedule on \
+                 every function of every checked program._\n",
+            );
+        } else {
+            md.push_str("## Divergences\n\n| seed | function | place |\n|---|---|---|\n");
+            for f in findings {
+                md.push_str(&format!(
+                    "| {} | `{}` | `{}` |\n",
+                    f.seed, f.function, f.place
+                ));
+            }
+            md.push_str("\n## Repros\n\n");
+            for f in findings {
+                md.push_str(&format!(
+                    "### seed {} — `{}` / `{}`\n\n```rust\n{}\n```\n\n",
+                    f.seed, f.function, f.place, f.src
+                ));
+            }
+        }
+        let _ = std::fs::write(cfg.out.join("differential.md"), md);
     }
 
     /// Slice-3 ownership-oracle self-check stats across the corpus.

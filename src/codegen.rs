@@ -45,6 +45,7 @@ mod dataframe;
 mod debug_info;
 mod declarations;
 mod driver;
+pub mod drop_obs;
 mod entry_chains;
 mod expr_ops;
 mod exprs;
