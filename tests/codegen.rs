@@ -47467,6 +47467,35 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_column_from_vec_temp_string_move() {
+        // B-2026-07-06-1: `Column.from_vec(<temporary Vec[String]>)` under
+        // `karac build` (formerly a loud "not yet supported" error) MOVES the
+        // source's String structs into the column and frees only the source's
+        // outer buffer — POD/String parity with the already-working i64 temp.
+        // Covers BOTH temp shapes — an inline array literal and a function-call
+        // result — with element read-back to confirm the moved heaps are intact.
+        // Matches `karac run`; memory-safety is covered by
+        // `asan_column_from_vec_temp_string_move_no_leak`.
+        let src = r#"
+fn mk() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("delta".to_string());
+    v.push("echo".to_string());
+    v
+}
+fn main() {
+    let c: Column[String] = Column.from_vec(["alpha".to_string(), "beta".to_string(), "gamma".to_string()]);
+    let d: Column[String] = Column.from_vec(mk());
+    println(f"{c.len()} {d.len()}");
+    println(f"{c[0].unwrap()} {c[2].unwrap()}");
+    println(f"{d[1].unwrap()}");
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        assert_eq!(out, "3 2\nalpha gamma\necho\n");
+    }
+
+    #[test]
     fn test_e2e_user_trait_bound_dispatch_column_and_tensor_monos() {
         // S6a probe p7: one bound-generic fn instantiated at BOTH
         // handle-backed builtins. Guards three fixes at once:

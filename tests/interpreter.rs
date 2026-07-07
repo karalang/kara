@@ -17890,6 +17890,33 @@ fn test_column_string_element_and_null() {
 }
 
 #[test]
+fn test_column_from_vec_temp_string_move_runs() {
+    // B-2026-07-06-1 run==build parity: `Column.from_vec(<temporary
+    // Vec[String]>)` — an inline array literal and a function-call result — is
+    // value-semantics-clean under `karac run`. The codegen fix moves the temp's
+    // String heaps into the column (the build surface was the loud-fail); this
+    // pins the RUN surface to the same output (build covered by
+    // `tests/codegen.rs::test_e2e_column_from_vec_temp_string_move` and the
+    // `asan_column_from_vec_temp_string_move_no_leak` memory test).
+    let out = run_no_errors(
+        "fn mk() -> Vec[String] {\n\
+             let mut v: Vec[String] = Vec.new();\n\
+             v.push(\"delta\".to_string());\n\
+             v.push(\"echo\".to_string());\n\
+             v\n\
+         }\n\
+         fn main() {\n\
+             let c: Column[String] = Column.from_vec([\"alpha\".to_string(), \"beta\".to_string(), \"gamma\".to_string()]);\n\
+             let d: Column[String] = Column.from_vec(mk());\n\
+             println(f\"{c.len()} {d.len()}\");\n\
+             println(f\"{c[0].unwrap()} {c[2].unwrap()}\");\n\
+             println(f\"{d[1].unwrap()}\");\n\
+         }",
+    );
+    assert_eq!(out, "3 2\nalpha gamma\necho\n");
+}
+
+#[test]
 fn test_column_index_out_of_bounds_traps() {
     // Out-of-range index is a runtime error, NOT None.
     let errors = runtime_errors(

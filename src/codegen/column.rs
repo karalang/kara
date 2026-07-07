@@ -918,21 +918,23 @@ impl<'ctx> super::Codegen<'ctx> {
             .column_load_field(control, 0, "col.fv.data")
             .into_pointer_value();
 
-        // `Column[String]`: a `memcpy` would share each source String's heap
-        // ptr (→ double-free), so deep-clone every element into the column
-        // (the column owns independent String heaps). Only an identifier
-        // source is supported here — its own scope drop frees the originals;
-        // a fresh-temp `Vec[String]` source needs ownership-transfer plumbing
-        // (a follow-on slice), so it errors loudly rather than leak.
-        if self.column_elem_is_string(elem) {
-            if !matches!(arg_expr.kind, ExprKind::Identifier(_)) {
-                return Err(
-                    "Column.from_vec(<temporary Vec[String]>) is not yet supported by the \
-                     native backend; bind the Vec to a `let` first (a follow-on codegen slice \
-                     adds the ownership transfer)"
-                        .to_string(),
-                );
-            }
+        // `Column[String]` from an IDENTIFIER (borrow) source: a bitwise
+        // `memcpy` would share each source String's heap ptr with the column
+        // (→ double-free when both drop), so deep-CLONE every element into the
+        // column — the source survives, its own scope drop frees the originals,
+        // and the column owns independent String heaps.
+        //
+        // A TEMP `Vec[String]` source (array literal, call result — anything
+        // that is not a `let` binding) is instead MOVED: it falls through to
+        // the generic `memcpy` path below, which copies the `{ptr,len,cap}`
+        // structs bitwise (transferring each String's heap to the column) and
+        // then frees the source's OUTER buffer ONLY — the elements are not
+        // drained, so the column becomes their sole owner. This mirrors the POD
+        // path exactly (the same `emit_free_if_cap_positive` outer-buffer free),
+        // which is why an i64 temp already worked; only the heap element needed
+        // the ownership transfer. No clone, no double-free, no leak.
+        // B-2026-07-06-1.
+        if self.column_elem_is_string(elem) && matches!(arg_expr.kind, ExprKind::Identifier(_)) {
             let str_st = self.vec_struct_type();
             let clone_fn = self.emit_string_clone_fn();
             let fn_val = self
@@ -1021,8 +1023,14 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_memset(bitmap, 1, i8_t.const_int(0xFF, false), bm_bytes)
             .map_err(|e| format!("Column.from_vec bitmap memset failed: {:?}", e))?;
 
-        // Free a temporary source Vec's buffer (nothing else owns it).
-        // An identifier source keeps its own scope cleanup.
+        // Free a temporary source Vec's OUTER buffer (nothing else owns it —
+        // builtin early-dispatch skips the owned-temp arg free, same as the
+        // POD case). For a String temp this completes the MOVE: the element
+        // `{ptr,len,cap}` structs were memcpy'd into the column above (which now
+        // owns each heap), and only the source's outer array buffer is freed —
+        // the elements are NOT drained. An identifier source never reaches here
+        // (the String clone path and the POD copy both keep the source's own
+        // scope cleanup).
         if !matches!(arg_expr.kind, ExprKind::Identifier(_)) {
             let cap = self
                 .builder

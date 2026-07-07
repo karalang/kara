@@ -668,6 +668,50 @@ fn main() {
     }
 
     #[test]
+    fn asan_column_from_vec_temp_string_move_no_leak() {
+        // B-2026-07-06-1: `Column.from_vec(<temporary Vec[String]>)` under
+        // `karac build` MOVES the source's String structs into the column
+        // (bitwise memcpy transfers each heap) and frees ONLY the source's
+        // OUTER buffer — the elements are not drained, so the column becomes
+        // their sole owner. No clone, no double-free, no leak — mirroring the
+        // POD-temp path. Covers BOTH temp shapes: an inline array literal and a
+        // function-call result. Loops 40x with >=36-byte payloads for LSan
+        // reachability; each round the columns' 5 moved strings + the 2
+        // index-clones (`a`/`e`) must all free exactly once (mac ASAN: no
+        // double-free/UAF; Linux LSan CI: no leak). Sibling of
+        // `asan_column_string_index_clone_out_no_leak` (a let-bound source).
+        assert_clean_asan_run(
+            r#"
+fn mk() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("from-vec-temp-call-delta-dddddddddddddddddddd".to_string());
+    v.push("from-vec-temp-call-echo-eeeeeeeeeeeeeeeeeeeeee".to_string());
+    v
+}
+fn main() {
+    let mut round: i64 = 0i64;
+    let mut total: i64 = 0i64;
+    while round < 40i64 {
+        let c: Column[String] = Column.from_vec([
+            "from-vec-temp-lit-alpha-aaaaaaaaaaaaaaaaaaaa".to_string(),
+            "from-vec-temp-lit-bravo-bbbbbbbbbbbbbbbbbbbb".to_string(),
+            "from-vec-temp-lit-charlie-cccccccccccccccccc".to_string()
+        ]);
+        let d: Column[String] = Column.from_vec(mk());
+        let a: String = c[0i64].unwrap();
+        let e: String = d[1i64].unwrap();
+        total = total + c.len() + d.len() + a.len() + e.len();
+        round = round + 1i64;
+    }
+    println(f"{total}");
+}
+"#,
+            &["3800"], // 40 * (3 + 2 + 44 + 46)
+            "asan_column_from_vec_temp_string_move_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_b04_2_named_fn_map_collect_no_leak() {
         // B-2026-07-04-2 sub-part 2: a NAMED-FUNCTION `map` arg over a heap
         // source. The fix wraps `<fn>` in a synthetic body `<fn>(p)`, so each
