@@ -1059,6 +1059,66 @@ fn main() {
     }
 
     #[test]
+    fn asan_b04_2_nonterminal_fstring_map_no_leak() {
+        // B-2026-07-04-2 sub-part 3 (non-terminal f-string map): `v.iter()
+        // .map(|x| f"..").filter(g).collect()` splits at the f-string map —
+        // collect the prefix (terminal f-string map -> Vec[String]) into a temp,
+        // then continue the filter over the temp. The f-string temp Vec and its
+        // Strings are owned once by the temp then cloned once into the result;
+        // no staged-accumulator double-free. 40x heap payloads; result elements
+        // read inline.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let v: Vec[i64] = Vec[1i64, 2i64, 3i64, 4i64];
+        let r: Vec[String] = v.iter().map(|x| f"payload-element-number-{x}-aaaaaaaaaaaaaaaaaaaa").filter(|s| s.len() > 0i64).collect();
+        println(f"{r.len()} {r[0i64]} {r[3i64]}");
+        round = round + 1i64;
+    }
+}
+"#,
+            [
+                "4 payload-element-number-1-aaaaaaaaaaaaaaaaaaaa payload-element-number-4-aaaaaaaaaaaaaaaaaaaa",
+            ]
+            .repeat(40)
+            .as_slice(),
+            "asan_b04_2_nonterminal_fstring_map_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_b04_2_flat_map_adaptor_outer_heap_no_leak() {
+        // B-2026-07-04-2 sub-part 1 (flat_map adaptor-carrying outer): an outer
+        // that carries its own adaptor (`a.iter().filter(g).flat_map(|p| p.iter())
+        // .collect()`) pre-collects the outer to a Vec[Vec[String]] temp, then
+        // reuses the identity flat_map. The temp is dropped at block exit; each
+        // flattened element clones into the result. 30x heap payloads.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 30i64 {
+        let a: Vec[Vec[String]] = Vec[
+            Vec["flat-outer-alpha-aaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                "flat-outer-bravo-bbbbbbbbbbbbbbbbbbbbbb".to_string()],
+            Vec["flat-outer-charlie-cccccccccccccccccccc".to_string()]
+        ];
+        let r: Vec[String] = a.iter().filter(|v| v.len() > 0i64).flat_map(|p| p.iter()).collect();
+        println(f"{r.len()} {r[0i64]} {r[2i64]}");
+        round = round + 1i64;
+    }
+}
+"#,
+            ["3 flat-outer-alpha-aaaaaaaaaaaaaaaaaaaaaa flat-outer-charlie-cccccccccccccccccccc"]
+                .repeat(30)
+                .as_slice(),
+            "asan_b04_2_flat_map_adaptor_outer_heap_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_column_string_index_clone_out_no_leak() {
         // S6c-12 Slice 5: `Column[String]` indexing `c[i] -> Option[String]`
         // under `karac build` DEEP-CLONES the element so the returned Option

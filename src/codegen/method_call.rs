@@ -3921,6 +3921,185 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `map`/`filter` step at all (plain `.iter().collect()`), or a missing/
     /// non-`Vec` recorded output type. Unsupported shapes therefore fail loudly
     /// rather than miscompile.
+    /// Split `<src>.map(|x| f"…").<rest>.collect()` at the OUTERMOST non-terminal
+    /// f-string map (B-2026-07-04-2 sub-part 3). Returns `Ok(None)` when the
+    /// chain has no non-terminal f-string map (the caller then peels normally).
+    /// Emitted when it does:
+    ///
+    /// ```text
+    /// { let __ft: Vec[String] = <prefix ending at the f-string map>.collect();
+    ///   <rest re-applied to __ft.iter()>.collect() }
+    /// ```
+    ///
+    /// The prefix's f-string map is now the LAST adaptor, so its `.collect()`
+    /// takes the leak-clean terminal `push(f"…")` path; the suffix continues
+    /// over a plain `Vec[String]` binding. The prefix collect result is always
+    /// `Vec[String]` (an f-string yields a `String`), registered under a fresh
+    /// `usize::MAX`-based synthetic span; the suffix collect keeps the original
+    /// call span (the final result type). Recurses for a nested f-string map in
+    /// the prefix.
+    fn try_split_nonterminal_fstring_map_collect(
+        &mut self,
+        collect_recv: &Expr,
+        call_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        fn body_tail_is_fstring(e: &Expr) -> bool {
+            match &e.kind {
+                ExprKind::InterpolatedStringLit(_) => true,
+                ExprKind::Block(b) => b.final_expr.as_deref().is_some_and(body_tail_is_fstring),
+                ExprKind::If {
+                    then_block,
+                    else_branch,
+                    ..
+                } => {
+                    then_block
+                        .final_expr
+                        .as_deref()
+                        .is_some_and(body_tail_is_fstring)
+                        || else_branch.as_deref().is_some_and(body_tail_is_fstring)
+                }
+                _ => false,
+            }
+        }
+        let is_fstring_map = |e: &Expr| -> bool {
+            matches!(&e.kind, ExprKind::MethodCall { method, args, .. }
+                if method == "map" && args.len() == 1
+                && matches!(&args[0].value.kind, ExprKind::Closure { params, body, .. }
+                    if params.len() == 1 && body_tail_is_fstring(body)))
+        };
+        // Walk outer → inner, recording the adaptors ABOVE the f-string map,
+        // until we reach the outermost f-string map (the split point).
+        let mut above: Vec<&Expr> = Vec::new();
+        let mut cur = collect_recv;
+        while !is_fstring_map(cur) {
+            match &cur.kind {
+                ExprKind::MethodCall { object, .. } => {
+                    above.push(cur);
+                    cur = object;
+                }
+                _ => return Ok(None), // no f-string map in the chain
+            }
+        }
+        // Terminal f-string map (nothing above it) already lowers via the normal
+        // `push(f"…")` path — no split needed.
+        if above.is_empty() {
+            return Ok(None);
+        }
+        let prefix = cur.clone(); // chain rooted AT the f-string map (inclusive)
+
+        let uid = self.indexed_elem_counter;
+        self.indexed_elem_counter += 1;
+        let sp = call_span.clone();
+        let ft_name = format!("__ft_{}", uid);
+        let ident = |name: &str| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: sp.clone(),
+        };
+        // `Vec[String]` for the prefix-collect temp.
+        let string_te = TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec!["String".to_string()],
+                generic_args: None,
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let vec_string_te = TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec!["Vec".to_string()],
+                generic_args: Some(vec![GenericArg::Type(string_te)]),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        // Synthetic span for the prefix `.collect()` result type (`Vec[String]`).
+        let prefix_span = crate::token::Span {
+            line: sp.line,
+            column: sp.column,
+            offset: usize::MAX - (uid as usize) - 1,
+            length: 1,
+        };
+        self.owned_temp_drops.insert(
+            (prefix_span.offset, prefix_span.length),
+            vec_string_te.clone(),
+        );
+        // `<prefix>.collect()` at the synthetic span.
+        let prefix_collect = Expr {
+            kind: ExprKind::MethodCall {
+                object: Box::new(prefix),
+                method: "collect".to_string(),
+                turbofish: None,
+                args: vec![],
+                args_close_span: prefix_span.clone(),
+            },
+            span: prefix_span.clone(),
+        };
+        let let_ft = Stmt {
+            kind: StmtKind::Let {
+                is_mut: false,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(ft_name.clone()),
+                    span: sp.clone(),
+                },
+                ty: Some(vec_string_te),
+                value: prefix_collect,
+            },
+            span: sp.clone(),
+        };
+        // Re-apply the ABOVE adaptors to `__ft.iter()` (innermost-above first),
+        // then `.collect()` at the ORIGINAL call span (the final result type).
+        let mut suffix = Expr {
+            kind: ExprKind::MethodCall {
+                object: Box::new(ident(&ft_name)),
+                method: "iter".to_string(),
+                turbofish: None,
+                args: vec![],
+                args_close_span: sp.clone(),
+            },
+            span: sp.clone(),
+        };
+        for call in above.iter().rev() {
+            if let ExprKind::MethodCall {
+                method,
+                args,
+                turbofish,
+                args_close_span,
+                ..
+            } = &call.kind
+            {
+                suffix = Expr {
+                    kind: ExprKind::MethodCall {
+                        object: Box::new(suffix),
+                        method: method.clone(),
+                        turbofish: turbofish.clone(),
+                        args: args.clone(),
+                        args_close_span: args_close_span.clone(),
+                    },
+                    span: sp.clone(),
+                };
+            }
+        }
+        let suffix_collect = Expr {
+            kind: ExprKind::MethodCall {
+                object: Box::new(suffix),
+                method: "collect".to_string(),
+                turbofish: None,
+                args: vec![],
+                args_close_span: sp.clone(),
+            },
+            span: sp.clone(),
+        };
+        let block = Expr {
+            kind: ExprKind::Block(Block {
+                stmts: vec![let_ft],
+                final_expr: Some(Box::new(suffix_collect)),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        Ok(Some(self.compile_expr(&block)?))
+    }
+
     fn try_compile_iter_adaptor_collect_to_vec(
         &mut self,
         collect_recv: &Expr,
@@ -4091,6 +4270,32 @@ impl<'ctx> super::Codegen<'ctx> {
                                 }
                                 return Ok(None);
                             }
+                            // Adaptor-CARRYING outer with an identity inner that
+                            // iterates the PARAM as a container (`param.iter()` /
+                            // `param.into_iter()`): pre-collect the outer to a
+                            // typed temp, then reuse the identity flat_map. The
+                            // outer element type is `Vec[E]` (= the flattened
+                            // result type), derivable only for this param-as-
+                            // container inner — a range inner (`|p| 0..p`) makes
+                            // the outer element a scalar, not derivable, so it
+                            // stays gated. B-2026-07-04-2 sub-part 1.
+                            let inner_iterates_param = matches!(&body.kind,
+                                ExprKind::MethodCall { object, method, args, .. }
+                                    if args.is_empty()
+                                        && (method == "iter" || method == "into_iter")
+                                        && matches!(&object.kind,
+                                            ExprKind::Identifier(n) if n == param));
+                            if !is_identity_source(object.as_ref()) && inner_iterates_param {
+                                if let Some(v) = self.try_compile_flat_map_pipeline_collect(
+                                    object.as_ref(),
+                                    param,
+                                    body,
+                                    call_span,
+                                )? {
+                                    return Ok(Some(v));
+                                }
+                                return Ok(None);
+                            }
                         }
                     }
                 }
@@ -4142,6 +4347,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
             }
+        }
+
+        // B-2026-07-04-2 sub-part 3 (non-terminal f-string map): a `map(|x|
+        // f"…")` that is NOT the last adaptor can't materialize into the
+        // intermediate `let __icm = f"…"` (it double-frees via the staged
+        // f-string accumulator, B-2026-07-03-25). Split the chain AT the
+        // outermost such map: collect the prefix (the f-string map is now
+        // TERMINAL → the supported `push(f"…")` shape) into a `Vec[String]`
+        // temp, then continue the remaining adaptors over `__ft.iter()`. Each
+        // split retires one non-terminal f-string map; a nested one inside the
+        // prefix recurses. No-op when there is no non-terminal f-string map.
+        if let Some(v) = self.try_split_nonterminal_fstring_map_collect(collect_recv, call_span)? {
+            return Ok(Some(v));
         }
 
         let mut steps: Vec<IterAdaptor> = Vec::new();
@@ -5588,6 +5806,156 @@ impl<'ctx> super::Codegen<'ctx> {
             kind: ExprKind::Block(Block {
                 stmts: vec![let_vec, outer_loop],
                 final_expr: Some(Box::new(ident(&vec_name))),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        Ok(Some(self.compile_expr(&block)?))
+    }
+
+    /// Lower `<outer>.flat_map(|param| param.iter()).collect()` where `<outer>`
+    /// carries its OWN adaptors (`A.iter().map(f).flat_map(|p| p.iter())`) by
+    /// pre-collecting the outer to a typed temp and reusing the identity
+    /// flat_map (B-2026-07-04-2 sub-part 1). Emitted:
+    ///
+    /// ```text
+    /// { let __fo: Vec[Vec[E]] = <outer.collect()>;          // Vec[EO], EO = Vec[E]
+    ///   __fo.iter().flat_map(|param| param.iter()).collect() }
+    /// ```
+    ///
+    /// Gated (by the caller) to an inner that iterates the param as a container
+    /// (`param.iter()` / `param.into_iter()`), so the outer element type is
+    /// `Vec[E]` — the flattened result type — and the temp is `Vec[Vec[E]]`,
+    /// registered under a fresh `usize::MAX`-based synthetic span. The
+    /// outer's `.collect()` recurses through the full pipeline (an unsupported
+    /// outer adaptor bails via the recursive compile). Returns `Ok(None)` if the
+    /// result type isn't a recorded `Vec[E]`.
+    fn try_compile_flat_map_pipeline_collect(
+        &mut self,
+        outer: &Expr,
+        param: &str,
+        inner: &Expr,
+        call_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let result_te = match self
+            .owned_temp_drops
+            .get(&(call_span.offset, call_span.length))
+        {
+            Some(te) => te.clone(),
+            None => return Ok(None),
+        };
+        if !matches!(
+            &result_te.kind,
+            TypeKind::Path(p) if p.segments.last().map(|s| s.as_str()) == Some("Vec")
+        ) {
+            return Ok(None);
+        }
+
+        let uid = self.indexed_elem_counter;
+        self.indexed_elem_counter += 1;
+        let sp = call_span.clone();
+        let fo_name = format!("__fo_{}", uid);
+        let ident = |name: &str| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: sp.clone(),
+        };
+        // The outer element type EO = Vec[E] = the flattened result type, so the
+        // pre-collected temp is `Vec[EO]` = `Vec[Vec[E]]`.
+        let temp_te = TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec!["Vec".to_string()],
+                generic_args: Some(vec![GenericArg::Type(result_te)]),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        // Synthetic span for the outer `.collect()` result type (`Vec[Vec[E]]`).
+        let outer_span = crate::token::Span {
+            line: sp.line,
+            column: sp.column,
+            offset: usize::MAX - (uid as usize) - 1,
+            length: 1,
+        };
+        self.owned_temp_drops
+            .insert((outer_span.offset, outer_span.length), temp_te.clone());
+        let outer_collect = Expr {
+            kind: ExprKind::MethodCall {
+                object: Box::new(outer.clone()),
+                method: "collect".to_string(),
+                turbofish: None,
+                args: vec![],
+                args_close_span: outer_span.clone(),
+            },
+            span: outer_span.clone(),
+        };
+        let let_fo = Stmt {
+            kind: StmtKind::Let {
+                is_mut: false,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(fo_name.clone()),
+                    span: sp.clone(),
+                },
+                ty: Some(temp_te),
+                value: outer_collect,
+            },
+            span: sp.clone(),
+        };
+        // `__fo.iter().flat_map(|param| <inner>).collect()` — identity outer +
+        // identity inner, typed by the ORIGINAL call span (`Vec[E]`).
+        let fo_iter = Expr {
+            kind: ExprKind::MethodCall {
+                object: Box::new(ident(&fo_name)),
+                method: "iter".to_string(),
+                turbofish: None,
+                args: vec![],
+                args_close_span: sp.clone(),
+            },
+            span: sp.clone(),
+        };
+        let closure = Expr {
+            kind: ExprKind::Closure {
+                params: vec![ClosureParam {
+                    pattern: Pattern {
+                        kind: PatternKind::Binding(param.to_string()),
+                        span: sp.clone(),
+                    },
+                    ty: None,
+                    span: sp.clone(),
+                }],
+                capture_mode: None,
+                prefix_span: None,
+                body: Box::new(inner.clone()),
+            },
+            span: sp.clone(),
+        };
+        let flat_map_collect = Expr {
+            kind: ExprKind::MethodCall {
+                object: Box::new(Expr {
+                    kind: ExprKind::MethodCall {
+                        object: Box::new(fo_iter),
+                        method: "flat_map".to_string(),
+                        turbofish: None,
+                        args: vec![CallArg {
+                            label: None,
+                            mut_marker: false,
+                            value: closure,
+                            span: sp.clone(),
+                        }],
+                        args_close_span: sp.clone(),
+                    },
+                    span: sp.clone(),
+                }),
+                method: "collect".to_string(),
+                turbofish: None,
+                args: vec![],
+                args_close_span: sp.clone(),
+            },
+            span: sp.clone(),
+        };
+        let block = Expr {
+            kind: ExprKind::Block(Block {
+                stmts: vec![let_fo],
+                final_expr: Some(Box::new(flat_map_collect)),
                 span: sp.clone(),
             }),
             span: sp.clone(),

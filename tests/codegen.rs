@@ -6945,6 +6945,54 @@ fn main() {
         }
     }
 
+    /// B-2026-07-04-2 sub-part 3 (non-terminal f-string map): a `map(|x| f"..")`
+    /// that is not the last adaptor (`v.iter().map(|x| f"..").filter(g).collect()`,
+    /// or `.map(|x| f"..").map(|s| s.len())`) splits at the f-string map —
+    /// collect the prefix (now a TERMINAL f-string map -> Vec[String]) into a
+    /// temp, then continue over the temp. Previously bailed (the intermediate
+    /// `let __icm = f".."` double-freed via the staged accumulator). ASAN twin:
+    /// asan_b04_2_nonterminal_fstring_map_no_leak.
+    #[test]
+    fn e2e_iter_adaptor_nonterminal_fstring_map_codegen() {
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    let v: Vec[i64] = Vec[1i64, 2i64, 3i64];
+    // f-string map then filter (identity downstream)
+    let a: Vec[String] = v.iter().map(|x| f"n{x}").filter(|s| s.len() > 0i64).collect();
+    println(f"{a.len()} {a[0i64]} {a[2i64]}");
+    // f-string map then element-type-changing map
+    let b: Vec[i64] = v.iter().map(|x| f"num-{x}").map(|s| s.len()).collect();
+    println(f"{b.len()} {b[0i64]} {b[2i64]}");
+}
+"#,
+        ) {
+            assert_eq!(out, "3 n1 n3\n3 5 5\n");
+        }
+    }
+
+    /// B-2026-07-04-2 sub-part 1 (flat_map adaptor-carrying outer): an outer that
+    /// carries its own adaptor (`a.iter().map(f).flat_map(|p| p.iter())`,
+    /// `a.iter().filter(g).flat_map(|p| p.iter())`) pre-collects the outer to a
+    /// Vec[Vec[E]] temp and reuses the identity flat_map — it used to bail (only
+    /// an identity outer lowered). Gated to an inner that iterates the param as a
+    /// container (so the outer element type is derivable). ASAN twin:
+    /// asan_b04_2_flat_map_adaptor_outer_heap_no_leak.
+    #[test]
+    fn e2e_iter_adaptor_flat_map_adaptor_outer_codegen() {
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    let a: Vec[Vec[i64]] = Vec[Vec[1i64, 2i64], Vec[3i64], Vec[4i64, 5i64]];
+    let r: Vec[i64] = a.iter().filter(|v| v.len() > 0i64).flat_map(|p| p.iter()).collect();
+    println(f"{r.len()} {r[0i64]} {r[2i64]} {r[4i64]}");
+}
+"#,
+        ) {
+            assert_eq!(out, "5 1 3 5\n");
+        }
+    }
+
     #[test]
     fn e2e_iter_adaptor_flat_map_collect_codegen() {
         // B-2026-07-04-2 sub-part 1 (flat_map): `<outer>.flat_map(|v|
