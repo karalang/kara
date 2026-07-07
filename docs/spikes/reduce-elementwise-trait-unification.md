@@ -896,12 +896,36 @@ B-2026-07-02-10..13, see the ledger.
   / `_user_impl_over_container_resolves` (typechecker),
   `elementwise_ord_trait_bound_and_user_impl_dispatches` (interpreter),
   `test_e2e_elementwise_ord_trait_bound_dispatch` (codegen). ONE general gap
-  surfaced + ledgered **B-2026-07-06-2** (open, med): bound-generic dispatch
-  over a USER-TYPE implementor fails under `karac build` (works under run) —
-  NOT `ElementwiseOrd`-specific, reproduces identically for `Reduce` and any
-  plain user trait; the container implementors work because the builtin
-  intercept fires in the mono body. So ElementwiseOrd reaches EXACT `Reduce`
-  parity, incl. that shared pre-existing limitation.
+  surfaced + ledgered **B-2026-07-06-2** (now **FIXED**, see S6c-14): bound-generic
+  dispatch over a USER-TYPE implementor failed under `karac build` (worked under
+  run) — NOT `ElementwiseOrd`-specific, reproduced identically for `Reduce` and
+  any plain user trait; the container implementors work because the builtin
+  intercept fires in the mono body.
+- **S6c-14 ✅ (landed) — B-2026-07-06-2 FIXED: bound-generic dispatch over a
+  user-type implementor under `karac build`.** `fn f[C: Trait[..]](c: ref C)
+  { c.m() }` monomorphized to a USER struct implementing the trait failed under
+  build ("no handler for method '<m>' on variable 'c'"), computing correctly
+  under run. Root cause: the mono param-type-name registration
+  (`mono.rs` `compile_mono_function`) only matched a bare `TypeKind::Path`
+  param, so a `ref C` (or `mut ref C`) receiver never recorded
+  `var_type_names["c"] = <concrete>` — `inferred_receiver_type(c)` returned
+  `None` inside the mono and the `<Type>.<m>` user-impl dispatch (method_call.rs
+  branch ~2917) was skipped, falling through to the codegen error. Containers
+  were unaffected: their `column_var_infos`/kernel intercept fires without
+  needing `var_type_names`, which is why the whole `Reduce`/`ElementwiseOrd`/
+  `ElementwiseMap` bound-generic surface worked for Column/Tensor but not for
+  user implementors (latent since S6a — every bound-generic test used a
+  container receiver). Fix: peel a leading `ref`/`mut ref` before the name
+  registration (one existing helper below it already peels the same way). The
+  receiver ABI (ptr-self for `ref self`, value for owned/shared, addr for
+  `mut ref`) is handled downstream and was already correct for a non-generic
+  `ref Wrap` param — recording the name is sufficient. Verified run == autopar ==
+  build for ref / owned / mut-ref receivers over a plain user trait AND the
+  `Reduce`/`ElementwiseOrd` surfaces over user structs. Tests:
+  `bound_generic_dispatch_over_user_type` (interpreter),
+  `test_e2e_bound_generic_dispatch_over_user_type` (codegen, all three receiver
+  modes + Reduce). Full regression: codegen 2062, typechecker + interpreter
+  green; fmt + clippy clean.
 - **S6c** — remaining: **u64 column/tensor sort**
   (blocked on the interpreter u64 model — see S6c-9 / B-2026-07-04-8, NOT just an
   unsigned scratch compare as previously thought); a `product` DEFAULT body for

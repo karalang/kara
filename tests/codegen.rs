@@ -47654,6 +47654,63 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_bound_generic_dispatch_over_user_type() {
+        // B-2026-07-06-2: a bound-generic `fn f[C: Trait](c: ref C) { c.m() }`
+        // whose type param monomorphizes to a USER struct implementing the
+        // trait failed under `karac build` ("no handler for method 'm' on
+        // variable 'c'") while `karac run` computed it. Root cause: the mono
+        // param-type-name registration only matched a bare `Path` param, so a
+        // `ref C` receiver never recorded `var_type_names["c"] = "Wrap"`, and
+        // `inferred_receiver_type` returned None inside the mono → the
+        // `Wrap.dbl` dispatch was skipped. Containers were unaffected (their
+        // kernel intercept fires without `var_type_names`). Fix peels a leading
+        // `ref`/`mut ref` before the name registration. Covers a plain user
+        // trait (ref, owned, and mut-ref receivers) plus the stdlib `Reduce`
+        // surface over a user implementor — all under `build`. `run` == `build`.
+        let src = r#"
+trait Doubler[T] { fn dbl(ref self) -> T; }
+struct Wrap { v: i64 }
+impl Doubler[i64] for Wrap { fn dbl(ref self) -> i64 { self.v + self.v } }
+
+trait Owned[T] { fn triple(self) -> T; }
+struct Own { v: i64 }
+impl Owned[i64] for Own { fn triple(self) -> i64 { self.v * 3 } }
+
+trait Bump { fn bump(mut ref self) -> i64; }
+struct Ctr { n: i64 }
+impl Bump for Ctr { fn bump(mut ref self) -> i64 { self.n = self.n + 1; self.n } }
+
+struct Pair { a: i64, b: i64 }
+impl Reduce[i64] for Pair {
+    fn sum(ref self) -> i64 { self.a + self.b }
+    fn prod(ref self) -> i64 { self.a * self.b }
+    fn min(ref self) -> i64 { if self.a < self.b { self.a } else { self.b } }
+    fn max(ref self) -> i64 { if self.a > self.b { self.a } else { self.b } }
+    fn mean(ref self) -> f64 { 0.0 }
+    fn fold[A](ref self, init: A, f: Fn(A, i64) -> A) -> A { f(f(init, self.a), self.b) }
+}
+
+fn dref[C: Doubler[i64]](c: ref C) -> i64 { c.dbl() }
+fn towned[C: Owned[i64]](c: C) -> i64 { c.triple() }
+fn twice[C: Bump](c: mut ref C) -> i64 { c.bump() + c.bump() }
+fn total[C: Reduce[i64]](c: ref C) -> i64 { c.sum() + c.max() }
+
+fn main() {
+    let w: Wrap = Wrap { v: 21 };
+    let mut ct: Ctr = Ctr { n: 0 };
+    let p: Pair = Pair { a: 3, b: 4 };
+    println(f"{dref(w)}");
+    println(f"{towned(Own { v: 5 })}");
+    println(f"{twice(mut ct)}");
+    println(f"{total(p)}");
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        // dbl(21)=42; triple(5)=15; bump twice 1+2=3; sum(7)+max(4)=11.
+        assert_eq!(out, "42\n15\n3\n11\n");
+    }
+
+    #[test]
     fn test_e2e_reduce_trait_bound_prod() {
         // S6c-11: `prod` on the `Reduce` trait — a required method (like
         // `sum`), so bound-generic `c.prod()` monomorphizes to the shared fold

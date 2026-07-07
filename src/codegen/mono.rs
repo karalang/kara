@@ -1368,14 +1368,29 @@ impl<'ctx> super::Codegen<'ctx> {
             // trait method called through the bound (`x.tag()`) dispatches to
             // `C.tag` via `inferred_receiver_type`. Non-generic Path params
             // (`x: C`) fall through to the declared segment unchanged.
-            if let TypeKind::Path(path) = &param.ty.kind {
-                if let Some(type_name) = path.segments.first() {
-                    let concrete = self
-                        .type_subst_names
-                        .get(type_name)
-                        .cloned()
-                        .unwrap_or_else(|| type_name.clone());
-                    self.var_type_names.insert(param_name.clone(), concrete);
+            // B-2026-07-06-2: peel a leading `ref`/`mut ref` first, so a
+            // `c: ref C` bound-generic receiver ALSO registers its concrete
+            // name. Without the peel, `TypeKind::Ref(..)` never matched the
+            // `Path` arm, so `inferred_receiver_type(c)` returned `None` inside
+            // the mono and `c.method()` on a USER-TYPE implementor fell through
+            // to the "no handler" codegen error (containers were unaffected —
+            // their `column_var_infos`/kernel intercept fires without needing
+            // `var_type_names`). The receiver ABI (ptr-self for `ref self`) is
+            // already handled downstream, so recording the name is sufficient.
+            {
+                let name_ty = match &param.ty.kind {
+                    TypeKind::Ref(inner) | TypeKind::MutRef(inner) => inner.as_ref(),
+                    _ => &param.ty,
+                };
+                if let TypeKind::Path(path) = &name_ty.kind {
+                    if let Some(type_name) = path.segments.first() {
+                        let concrete = self
+                            .type_subst_names
+                            .get(type_name)
+                            .cloned()
+                            .unwrap_or_else(|| type_name.clone());
+                        self.var_type_names.insert(param_name.clone(), concrete);
+                    }
                 }
             }
             // B-2026-07-03-23 layer 4: record the CONCRETE generic instantiation

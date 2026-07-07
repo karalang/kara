@@ -19806,6 +19806,56 @@ fn main() {
 }
 
 #[test]
+fn bound_generic_dispatch_over_user_type() {
+    // B-2026-07-06-2 (interpreter side / run==build parity): a bound-generic
+    // `fn f[C: Trait](c: ref C) { c.m() }` dispatched over a USER-struct
+    // implementor. The interpreter always handled this; the test locks the run
+    // side of the parity the codegen fix restores. Covers ref, owned, and
+    // mut-ref receivers plus the stdlib `Reduce` surface over a user type.
+    let out = run_no_errors(
+        r#"
+trait Doubler[T] { fn dbl(ref self) -> T; }
+struct Wrap { v: i64 }
+impl Doubler[i64] for Wrap { fn dbl(ref self) -> i64 { self.v + self.v } }
+
+trait Owned[T] { fn triple(self) -> T; }
+struct Own { v: i64 }
+impl Owned[i64] for Own { fn triple(self) -> i64 { self.v * 3 } }
+
+trait Bump { fn bump(mut ref self) -> i64; }
+struct Ctr { n: i64 }
+impl Bump for Ctr { fn bump(mut ref self) -> i64 { self.n = self.n + 1; self.n } }
+
+struct Pair { a: i64, b: i64 }
+impl Reduce[i64] for Pair {
+    fn sum(ref self) -> i64 { self.a + self.b }
+    fn prod(ref self) -> i64 { self.a * self.b }
+    fn min(ref self) -> i64 { if self.a < self.b { self.a } else { self.b } }
+    fn max(ref self) -> i64 { if self.a > self.b { self.a } else { self.b } }
+    fn mean(ref self) -> f64 { 0.0 }
+    fn fold[A](ref self, init: A, f: Fn(A, i64) -> A) -> A { f(f(init, self.a), self.b) }
+}
+
+fn dref[C: Doubler[i64]](c: ref C) -> i64 { c.dbl() }
+fn towned[C: Owned[i64]](c: C) -> i64 { c.triple() }
+fn twice[C: Bump](c: mut ref C) -> i64 { c.bump() + c.bump() }
+fn total[C: Reduce[i64]](c: ref C) -> i64 { c.sum() + c.max() }
+
+fn main() {
+    let w: Wrap = Wrap { v: 21 };
+    let mut ct: Ctr = Ctr { n: 0 };
+    let p: Pair = Pair { a: 3, b: 4 };
+    println(f"{dref(w)}");
+    println(f"{towned(Own { v: 5 })}");
+    println(f"{twice(mut ct)}");
+    println(f"{total(p)}");
+}
+"#,
+    );
+    assert_eq!(out, "42\n15\n3\n11\n");
+}
+
+#[test]
 fn elementwise_ord_trait_bound_and_user_impl_dispatches() {
     // S6c: with the baked `impl ElementwiseOrd for Column/Tensor`, a
     // bound-generic `fn f[C: ElementwiseOrd[i64]](c: ref C)` dispatches
