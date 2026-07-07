@@ -120,6 +120,8 @@ mod llvm_main {
         OptStr,     // Option[String]
         VecVecStr,  // Vec[Vec[String]]
         VecPayload, // Vec[Payload]
+        MapStr,     // Map[String, i64]
+        SetStr,     // Set[String]
     }
 
     // A live binding in the generated `main` body.
@@ -127,6 +129,9 @@ mod llvm_main {
     struct Var {
         name: String,
         ty: Ty,
+        /// Declared `let mut` — required for a `mut ref` call-site marker
+        /// (`grow(mut v)`) to typecheck.
+        mutable: bool,
     }
 
     // ───────────────────────── the generator ─────────────────────────────
@@ -177,7 +182,37 @@ mod llvm_main {
         }
 
         fn add_var(&mut self, name: String, ty: Ty) {
-            self.scope.push(Var { name, ty });
+            self.scope.push(Var {
+                name,
+                ty,
+                mutable: false,
+            });
+        }
+
+        /// Add a binding that was declared `let mut` (eligible for a `mut ref`
+        /// call-site marker).
+        fn add_var_mut(&mut self, name: String, ty: Ty) {
+            self.scope.push(Var {
+                name,
+                ty,
+                mutable: true,
+            });
+        }
+
+        /// A live binding of the given type that was declared `let mut`.
+        fn live_mut_of(&mut self, ty: Ty) -> Option<Var> {
+            let idxs: Vec<usize> = self
+                .scope
+                .iter()
+                .enumerate()
+                .filter(|(_, v)| v.ty == ty && v.mutable)
+                .map(|(i, _)| i)
+                .collect();
+            if idxs.is_empty() {
+                return None;
+            }
+            let pick = idxs[self.rng.below(idxs.len())];
+            Some(self.scope[pick].clone())
         }
 
         /// Remove a live binding by name (it was moved out).
@@ -228,6 +263,7 @@ mod llvm_main {
                 self.emit(format!(
                     "        let {n}: Vec[String] = Vec[{a}, {b}, {c}];"
                 ));
+                self.add_var(n, Ty::VecStr);
             } else {
                 self.emit(format!("        let mut {n}: Vec[String] = Vec.new();"));
                 let count = 2 + self.rng.below(2);
@@ -235,8 +271,8 @@ mod llvm_main {
                     let lit = self.str_literal();
                     self.emit(format!("        {n}.push({lit});"));
                 }
+                self.add_var_mut(n, Ty::VecStr);
             }
-            self.add_var(n, Ty::VecStr);
         }
 
         fn make_pair(&mut self) {
@@ -294,7 +330,7 @@ mod llvm_main {
             let d = self.str_literal();
             self.emit(format!("        {n}[0i64] = {c};"));
             self.emit(format!("        {n}[1i64] = {d};"));
-            self.add_var(n, Ty::VecStr);
+            self.add_var_mut(n, Ty::VecStr);
         }
 
         /// A nested Vec[Vec[String]] — either fresh inner literals or a live
@@ -347,6 +383,36 @@ mod llvm_main {
             self.add_var(n, Ty::VecPayload);
         }
 
+        /// A Map[String, i64] with owned String keys inserted — the key-
+        /// adoption class (the map must take ownership of each key exactly once;
+        /// the "Map/Set key no-adopt leak" bug lived here).
+        fn make_map(&mut self) {
+            let n = self.fresh("m");
+            self.emit(format!(
+                "        let mut {n}: Map[String, i64] = Map.new();"
+            ));
+            let count = 2 + self.rng.below(2);
+            for _ in 0..count {
+                let key = self.take(Ty::Str).unwrap_or_else(|| self.str_literal());
+                let val = self.i64_literal();
+                self.emit(format!("        {n}.insert({key}, {val});"));
+            }
+            self.add_var_mut(n, Ty::MapStr);
+        }
+
+        /// A Set[String] with owned String elements — the sibling key-adoption
+        /// class (`Set[T]` lowers to `Map[T, ()]`).
+        fn make_set(&mut self) {
+            let n = self.fresh("st");
+            self.emit(format!("        let mut {n}: Set[String] = Set.new();"));
+            let count = 2 + self.rng.below(2);
+            for _ in 0..count {
+                let key = self.take(Ty::Str).unwrap_or_else(|| self.str_literal());
+                self.emit(format!("        {n}.insert({key});"));
+            }
+            self.add_var_mut(n, Ty::SetStr);
+        }
+
         fn make_optstr(&mut self) {
             let n = self.fresh("o");
             if self.rng.chance(3, 4) {
@@ -369,7 +435,7 @@ mod llvm_main {
             let n = self.fresh("v");
             self.emit(format!("        let mut {n}: Vec[String] = Vec.new();"));
             self.emit(format!("        {n}.push({s});"));
-            self.add_var(n, Ty::VecStr);
+            self.add_var_mut(n, Ty::VecStr);
             true
         }
 
@@ -500,6 +566,30 @@ mod llvm_main {
             true
         }
 
+        /// Forward a live String to a `ref String` param (a borrow — source
+        /// stays live and is read again after). Exercises borrow-forwarding /
+        /// caller-retains-param: the callee must NOT free the borrowed source.
+        fn ref_peek_str(&mut self) -> bool {
+            let Some(v) = self.live_of(Ty::Str) else {
+                return false;
+            };
+            let s = v.name;
+            self.emit(format!("        acc = acc + peek({s});"));
+            true
+        }
+
+        /// Mutate a live `let mut` Vec[String] in place through a `mut ref`
+        /// param (`grow(mut v)` — the call-site `mut` marker is required). The
+        /// vec stays live; the pushed element must be freed once at its drop.
+        fn mut_grow_vec(&mut self) -> bool {
+            let Some(v) = self.live_mut_of(Ty::VecStr) else {
+                return false;
+            };
+            let vn = v.name;
+            self.emit(format!("        grow(mut {vn});"));
+            true
+        }
+
         /// Capture a live Vec[String] into 2-3 `spawn`ed tasks that each read
         /// it, joining their sums into `acc` — the cross-task shared-heap
         /// capture class (the Vec is referenced by multiple tasks, so codegen
@@ -585,6 +675,8 @@ mod llvm_main {
                             v.name
                         )
                     }
+                    Ty::MapStr => format!("        acc = acc + {}.len();", v.name),
+                    Ty::SetStr => format!("        acc = acc + {}.len();", v.name),
                 };
                 self.emit(line);
             }
@@ -611,7 +703,7 @@ mod llvm_main {
         }
 
         fn produce_one(&mut self) {
-            match self.rng.below(9) {
+            match self.rng.below(11) {
                 0 => self.make_str(),
                 1 => self.make_vecstr(),
                 2 => self.make_pair(),
@@ -620,6 +712,8 @@ mod llvm_main {
                 5 => self.make_indexed_vecstr(),
                 6 => self.make_nested_vec(),
                 7 => self.make_payload_vec(),
+                8 => self.make_map(),
+                9 => self.make_set(),
                 _ => self.make_tree(),
             }
         }
@@ -627,7 +721,7 @@ mod llvm_main {
         fn step_one(&mut self) {
             // Try transforms in a random order until one applies; if none does
             // (nothing live of the needed type), produce fresh material.
-            let mut order: [u8; 11] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+            let mut order: [u8; 13] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
             // Fisher-Yates on the fixed array.
             for i in (1..order.len()).rev() {
                 let j = self.rng.below(i + 1);
@@ -645,7 +739,9 @@ mod llvm_main {
                     7 => self.roundtrip_vecstr(),
                     8 => self.par_capture(),
                     9 => self.spawn_capture_vecstr(),
-                    _ => false, // slot 10: fall through to a producer
+                    10 => self.ref_peek_str(),
+                    11 => self.mut_grow_vec(),
+                    _ => false, // slot 12: fall through to a producer
                 };
                 if applied {
                     return;
@@ -667,6 +763,12 @@ fn take_str(s: String) -> i64 { return s.len(); }
 fn echo_vec(v: Vec[String]) -> Vec[String] { return v; }
 
 fn hold_len(h: Holder) -> i64 { return h.s.len(); }
+
+fn peek(s: ref String) -> i64 { return s.len(); }
+
+fn grow(v: mut ref Vec[String]) {
+    v.push("grow_appended_payload_kept_long_for_lsan_xx".to_string());
+}
 
 fn band(data: Vec[String], lo: i64) -> i64 {
     let mut acc: i64 = 0i64;
