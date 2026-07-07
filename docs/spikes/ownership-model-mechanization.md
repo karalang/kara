@@ -1,6 +1,6 @@
 # Spike: Mechanize the ownership/drop model — stop the drop-soundness whack-a-mole
 
-**Status:** OPEN — **Slice 1 DELIVERED** (2026-07-07); Slices 2–4 open. Independent of, and parallelizable with, the LLJIT productionization spike (different bug axis).
+**Status:** OPEN — **Slice 1 DELIVERED**, **Slice 2 DRAFTED** (2026-07-07); Slices 3–4 open. Independent of, and parallelizable with, the LLJIT productionization spike (different bug axis).
 **Decision date:** 2026-07-06. **Owner call:** worth doing; start with the measurement slice (a fuzzer), *not* the proof.
 
 ---
@@ -78,7 +78,9 @@ A harness that hunts the bugs katas find today, but exhaustively.
 - **Report:** a measured drop-bug rate + a bucketed corpus of minimal repros.
 - *Value even if the rest is never done:* a drop-bug hunter that outpaces katas. Touches no compiler code → zero risk.
 
-**Slice 2 — write the rules (the spec, informed by the corpus).**
+**Slice 2 — write the rules (the spec, informed by the corpus). — DRAFTED 2026-07-07: [`ownership-drop-judgment.md`](ownership-drop-judgment.md).**
+The consolidated judgment now exists as one doc: the place-state lattice (Owned/Borrowed/Moved/Dead), the single invariant (freed-exactly-once + no-UAF, stated over places), the transitions (creation, move, borrow, projection/obligation-split, drop-point, tier interaction), the load-bearing **consumption classifier** (`Escape` vs `NonConsuming`, lifted from `caller-retains-param-model.md`), and the design.md temporary-lifetime + drop-ordering rules folded in. The **completeness test passes**: all 39 class-tagged ledger bugs (+ the named untagged ones) are attributed to a stated-rule violation, and the two required sanity checks (for-loop-element-escape, boxed-`Option` move-out) fall out as one-line consequences. Known open edge: borrow-escape for closures is *stated* but not yet mechanized (entangled with the ownership-checker FP that also gates closures out of the Slice-1 fuzzer) — the first thing Slice 3 should add. Original slice text retained below for reference.
+
 Consolidate the scattered fragments into one ownership judgment as a doc. For every **place** (root local + path of field/index projections) at every program point, its state:
 - **Owned** — sole obligation to free.  **Borrowed** — aliases an owner, no obligation.  **Moved** — obligation transferred out; must not be read, must not be dropped.  **Dead** — uninit.
 
