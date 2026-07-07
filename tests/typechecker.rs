@@ -18219,6 +18219,62 @@ fn reduce_trait_bound_prod_resolves() {
 }
 
 #[test]
+fn elementwise_ord_trait_bound_resolves_over_containers() {
+    // S6c: with the baked `impl[T] ElementwiseOrd[T] for Column[T]` / Tensor,
+    // a bound-generic `fn f[C: ElementwiseOrd[i64]](c: ref C)` resolves the
+    // `argmin`/`argmax` (`-> Option[i64]`) and `sorted` (`-> Vec[T]`) methods —
+    // parity with the `Reduce` surface. Before the impls, `Column`/`Tensor`
+    // didn't satisfy the bound, so this errored "does not implement
+    // ElementwiseOrd".
+    typecheck_ok(
+        "fn lo[C: ElementwiseOrd[i64]](c: ref C) -> Option[i64] { c.argmin() }\n\
+         fn top[C: ElementwiseOrd[i64]](c: ref C) -> i64 { let s: Vec[i64] = c.sorted(); s[0] }\n\
+         fn main() {\n\
+         \x20   let ci: Column[i64] = Column.from_vec([3, 1, 2]);\n\
+         \x20   let ti: Tensor[i64, [3]] = Tensor.from([3, 1, 2]);\n\
+         \x20   println(f\"{lo(ci).unwrap()} {top(ci)} {lo(ti).unwrap()} {top(ti)}\");\n\
+         }",
+    );
+}
+
+#[test]
+fn elementwise_ord_user_type_impl_resolves() {
+    // S6c: a user type may implement `ElementwiseOrd` by hand and be dispatched
+    // through a bound-generic caller (the trait is user-visible, not just a
+    // Column/Tensor intercept).
+    typecheck_ok(
+        "struct Trio { a: i64, b: i64, c: i64 }\n\
+         impl ElementwiseOrd[i64] for Trio {\n\
+         \x20   fn argmin(ref self) -> Option[i64] { Some(0) }\n\
+         \x20   fn argmax(ref self) -> Option[i64] { Some(2) }\n\
+         \x20   fn sorted(ref self) -> Vec[i64] { [self.a, self.b, self.c] }\n\
+         \x20   fn argsort(ref self) -> Vec[i64] { [0, 1, 2] }\n\
+         }\n\
+         fn lo[C: ElementwiseOrd[i64]](c: ref C) -> Option[i64] { c.argmin() }\n\
+         fn main() {\n\
+         \x20   let tr: Trio = Trio { a: 5, b: 2, c: 8 };\n\
+         \x20   println(f\"{lo(tr).unwrap()}\");\n\
+         }",
+    );
+}
+
+#[test]
+fn elementwise_ord_user_impl_over_container_resolves() {
+    // S6c: a user trait impl over a container whose body calls the
+    // ElementwiseOrd methods on `self` (the S6c-12 machinery carries it).
+    typecheck_ok(
+        "trait Ranked { fn span(ref self) -> i64; }\n\
+         impl Ranked for Column[i64] {\n\
+         \x20   fn span(ref self) -> i64 { self.argmin().unwrap() + self.argmax().unwrap() }\n\
+         }\n\
+         fn main() {\n\
+         \x20   let c: Column[i64] = Column.from_vec([3, 1, 2]);\n\
+         \x20   println(f\"{c.span()}\");\n\
+         }",
+    );
+}
+
+#[test]
 fn user_trait_impl_over_column_resolves() {
     // S6c-12: a user-defined `impl Trait for Column[i64]` whose body calls the
     // builtin reductions on `self` type-checks. Before, `self` inside the impl

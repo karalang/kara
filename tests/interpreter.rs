@@ -19806,6 +19806,49 @@ fn main() {
 }
 
 #[test]
+fn elementwise_ord_trait_bound_and_user_impl_dispatches() {
+    // S6c: with the baked `impl ElementwiseOrd for Column/Tensor`, a
+    // bound-generic `fn f[C: ElementwiseOrd[i64]](c: ref C)` dispatches
+    // argmin/argmax/sorted to the concrete implementor's kernel (Column and
+    // Tensor), a USER TYPE that implements the trait by hand dispatches to its
+    // own body, and a user trait impl over a container calls the methods on
+    // `self`. All three implementor shapes under one bound-generic caller.
+    let out = run_no_errors(
+        r#"
+struct Trio { a: i64, b: i64, c: i64 }
+impl ElementwiseOrd[i64] for Trio {
+    fn argmin(ref self) -> Option[i64] {
+        if self.a <= self.b and self.a <= self.c { return Some(0); }
+        if self.b <= self.c { return Some(1); }
+        Some(2)
+    }
+    fn argmax(ref self) -> Option[i64] { Some(2) }
+    fn sorted(ref self) -> Vec[i64] { [self.a, self.b, self.c] }
+    fn argsort(ref self) -> Vec[i64] { [0, 1, 2] }
+}
+fn lo[C: ElementwiseOrd[i64]](c: ref C) -> i64 { c.argmin().unwrap() }
+fn top[C: ElementwiseOrd[i64]](c: ref C) -> i64 { let s: Vec[i64] = c.sorted(); s[0] }
+trait Ranked { fn span(ref self) -> i64; }
+impl Ranked for Column[i64] {
+    fn span(ref self) -> i64 { self.argmin().unwrap() + self.argmax().unwrap() }
+}
+fn main() {
+    let col: Column[i64] = Column.from_vec([3, 1, 2]);
+    let t: Tensor[i64, [3]] = Tensor.from([30, 10, 20]);
+    let tr: Trio = Trio { a: 5, b: 2, c: 8 };
+    println(f"{lo(col)} {top(col)}");
+    println(f"{lo(t)} {top(t)}");
+    println(f"{lo(tr)}");
+    println(f"{col.span()}");
+}
+"#,
+    );
+    // col [3,1,2]: argmin@1, sorted[0]=1. t [30,10,20]: argmin@1, sorted[0]=10.
+    // Trio a=5,b=2,c=8: argmin=1. col.span = argmin(1)+argmax(0) = 1.
+    assert_eq!(out, "1 1\n1 10\n1\n1\n");
+}
+
+#[test]
 fn column_tensor_sorted_argsort_reduction() {
     // `sorted() -> Vec[T]` / `argsort() -> Vec[i64]` (ElementwiseOrd, S6c).
     // Column operates on the VALID slots (nulls dropped; argsort reports the

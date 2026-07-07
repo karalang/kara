@@ -877,7 +877,32 @@ B-2026-07-02-10..13, see the ledger.
   **The S6c-12 user-impl-over-container epic is COMPLETE** (Slices 1–6 + the
   4a/4b fixes) — nothing remains. The orthogonal `Column.from_vec(<temporary
   Vec[String]>)` follow-on (B-2026-07-06-1) has also since been fixed.
-- **S6c** — remaining: `ElementwiseOrd` user impls; **u64 column/tensor sort**
+- **S6c-13 ✅ (landed) — `ElementwiseOrd` user impls.** Brought `ElementwiseOrd`
+  to full parity with `Reduce` for user code. Root gap: unlike `Reduce`,
+  `ElementwiseOrd` was DECLARATION-ONLY — no `impl … for Column/Tensor`, so
+  `Column`/`Tensor` did not satisfy an `ElementwiseOrd[i64]` bound and
+  bound-generic dispatch failed at bound-check ("`Column` does not implement
+  `ElementwiseOrd`"). Concrete `c.argmin()` already worked (hardcoded intercept).
+  Fix: add the baked `impl[T] ElementwiseOrd[T] for Column[T]` and
+  `impl[T, ...S] ElementwiseOrd[T] for Tensor[T, S]` with `#[compiler_builtin]`
+  placeholder bodies (`argmin`/`argmax`/`sorted`/`argsort`), mirroring the
+  `Reduce`/`ElementwiseMap` blocks exactly — the concrete intercepts still fire
+  first; the impl only makes the bound satisfiable + lets the mono route. Now
+  working on all three surfaces (run == autopar == build): bound-generic
+  `fn f[C: ElementwiseOrd[i64]](c: ref C) { c.argmin() }` over Column + Tensor,
+  a USER TYPE implementing the trait by hand (dispatched under run), and a user
+  trait impl over a container calling `self.argmin()`. Tests:
+  `elementwise_ord_trait_bound_resolves_over_containers` / `_user_type_impl_resolves`
+  / `_user_impl_over_container_resolves` (typechecker),
+  `elementwise_ord_trait_bound_and_user_impl_dispatches` (interpreter),
+  `test_e2e_elementwise_ord_trait_bound_dispatch` (codegen). ONE general gap
+  surfaced + ledgered **B-2026-07-06-2** (open, med): bound-generic dispatch
+  over a USER-TYPE implementor fails under `karac build` (works under run) —
+  NOT `ElementwiseOrd`-specific, reproduces identically for `Reduce` and any
+  plain user trait; the container implementors work because the builtin
+  intercept fires in the mono body. So ElementwiseOrd reaches EXACT `Reduce`
+  parity, incl. that shared pre-existing limitation.
+- **S6c** — remaining: **u64 column/tensor sort**
   (blocked on the interpreter u64 model — see S6c-9 / B-2026-07-04-8, NOT just an
   unsigned scratch compare as previously thought); a `product` DEFAULT body for
   USER `Reduce` impls (needs the numeric-identity mechanism of S6c-10 — the

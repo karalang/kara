@@ -345,3 +345,30 @@ impl[T, ...S] ElementwiseMap[T] for Tensor[T, S] {
         loop {}
     }
 }
+
+// `ElementwiseOrd[T]` surface-trait impl (S6c) — see the matching Column block:
+// pure formalization of the inherent argmin/argmax/sorted/argsort so
+// `Tensor[T, S]` satisfies `ElementwiseOrd[T]` bounds; concrete AND
+// bound-generic dispatch both route through the existing intercepts (the
+// bodies below never run).
+impl[T, ...S] ElementwiseOrd[T] for Tensor[T, S] {
+    #[compiler_builtin]
+    fn argmin(ref self) -> Option[i64] {
+        loop {}
+    }
+
+    #[compiler_builtin]
+    fn argmax(ref self) -> Option[i64] {
+        loop {}
+    }
+
+    #[compiler_builtin]
+    fn sorted(ref self) -> Vec[T] {
+        loop {}
+    }
+
+    #[compiler_builtin]
+    fn argsort(ref self) -> Vec[i64] {
+        loop {}
+    }
+}

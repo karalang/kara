@@ -306,3 +306,32 @@ impl[T] ElementwiseMap[T] for Column[T] {
         loop {}
     }
 }
+
+// `ElementwiseOrd[T]` surface-trait impl (S6c) — pure formalization, like the
+// `Reduce`/`ElementwiseMap` blocks above: the method set mirrors the inherent
+// argmin/argmax/sorted/argsort intercepts, and a concrete-receiver call
+// dispatches through the same typechecker/interpreter/codegen intercepts (the
+// bodies below never run). What it adds is bound-generic dispatch:
+// `fn f[C: ElementwiseOrd[i64]](c: ref C) -> Option[i64] { c.argmin() }`
+// accepts a `Column[i64]` and a `Tensor[i64, S]` alike.
+impl[T] ElementwiseOrd[T] for Column[T] {
+    #[compiler_builtin]
+    fn argmin(ref self) -> Option[i64] {
+        loop {}
+    }
+
+    #[compiler_builtin]
+    fn argmax(ref self) -> Option[i64] {
+        loop {}
+    }
+
+    #[compiler_builtin]
+    fn sorted(ref self) -> Vec[T] {
+        loop {}
+    }
+
+    #[compiler_builtin]
+    fn argsort(ref self) -> Vec[i64] {
+        loop {}
+    }
+}

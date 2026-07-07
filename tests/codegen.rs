@@ -47624,6 +47624,36 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_elementwise_ord_trait_bound_dispatch() {
+        // S6c: the baked `impl ElementwiseOrd for Column/Tensor` makes a
+        // bound-generic `fn f[C: ElementwiseOrd[i64]](c: ref C)` monomorphize
+        // argmin/argmax/sorted to the order-statistics kernel on both
+        // instantiations under `karac build` — parity with the Reduce bound
+        // dispatch. Also a user trait impl over a container calls the methods
+        // on `self`. `run` == `build`.
+        let src = r#"
+fn lo[C: ElementwiseOrd[i64]](c: ref C) -> i64 { c.argmin().unwrap() }
+fn hi[C: ElementwiseOrd[i64]](c: ref C) -> i64 { c.argmax().unwrap() }
+fn top[C: ElementwiseOrd[i64]](c: ref C) -> i64 { let s: Vec[i64] = c.sorted(); s[2] }
+trait Ranked { fn span(ref self) -> i64; }
+impl Ranked for Column[i64] {
+    fn span(ref self) -> i64 { self.argmin().unwrap() + self.argmax().unwrap() }
+}
+fn main() {
+    let c: Column[i64] = Column.from_vec([3, 1, 2]);
+    let t: Tensor[i64, [3]] = Tensor.from([30, 10, 20]);
+    println(f"{lo(c)} {hi(c)} {top(c)}");
+    println(f"{lo(t)} {hi(t)} {top(t)}");
+    println(f"{c.span()}");
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        // c [3,1,2]: argmin@1, argmax@0, sorted[2]=3. t [30,10,20]: 1, 0, 30.
+        // c.span = argmin(1) + argmax(0) = 1.
+        assert_eq!(out, "1 0 3\n1 0 30\n1\n");
+    }
+
+    #[test]
     fn test_e2e_reduce_trait_bound_prod() {
         // S6c-11: `prod` on the `Reduce` trait — a required method (like
         // `sum`), so bound-generic `c.prod()` monomorphizes to the shared fold
