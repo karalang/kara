@@ -104,6 +104,53 @@ into the runs directory (both gitignored), and prints a report:
 The gap ledger is the point: it turns each run batch into a to-do list
 for the compiler, not just a demo you watch.
 
+## Running & scoring the whole corpus
+
+`mend_batch.py` runs the loop over every example and scores the combined
+result in one command. It reuses `mend.run_loop` and `mend_score`
+directly, so batch numbers match a per-example run.
+
+```sh
+# dry-run every example that ships canned responses (deterministic, no API)
+python3 examples/mend/harness/mend_batch.py --dry-run
+
+# a specific subset
+python3 examples/mend/harness/mend_batch.py two_source_totals welcome_emails
+
+# live mode — a real LLM per task (needs an authenticated `claude` CLI)
+python3 examples/mend/harness/mend_batch.py
+```
+
+All transcripts land under `runs/batch_<timestamp>/<example>/` and the
+aggregate report prints at the end.
+
+### Curated demo vs. uncurated measurement
+
+**The dry-run (canned) numbers are a demonstration, not a measurement.**
+Canned responses are authored — the mistake is chosen — so a dry-run
+machine-fix rate only proves the *mechanism* works end to end (harness
+detection → `karac fix` → scorer). It says nothing about how often the
+compiler resolves what an LLM *actually* gets wrong.
+
+The real number requires **live mode over a corpus authored blind to the
+failures**: fresh model instances that never saw the compiler's
+diagnostics, writing Kāra from the task prompt alone. Only then is the
+machine-fix rate a statistic rather than a staged result. Live mode needs
+an authenticated `claude` (it 401s in headless/CI environments), so this
+measurement runs in a developer's environment, not automated CI.
+
+Practical recipe for the uncurated run:
+
+1. Add live-only examples (just a `task.md` — no `canned_responses.json`;
+   `solution.kara` optional as a compile-clean reference), each a natural
+   "write X" request across a different feature area, authored *without*
+   engineering a specific bug.
+2. `python3 examples/mend/harness/mend_batch.py` (live) over the corpus.
+3. Read the machine-fix rate and, more importantly, the **gap ledger** —
+   the ranked list of error codes LLMs hit that carry no machine fix.
+   Each is a backlog item: give that diagnostic a `replacement`, or make
+   it precise enough to fix from prose.
+
 ## Adding a new example
 
 A example is a directory under `examples/mend/examples/<name>/`
