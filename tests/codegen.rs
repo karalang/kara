@@ -6858,6 +6858,38 @@ fn main() {
         }
     }
 
+    /// B-2026-07-05-1 (resolved): a heap `enumerate` tuple `(i64, String)`
+    /// threaded through downstream stages that whole-COPY it — a differing-param
+    /// stage (`enumerate().filter(|p| …).inspect(|q| …)`), a non-terminal
+    /// identity `map` (`enumerate().map(|p| p).filter(|q| …)`), or a re-tuple
+    /// `map` (`.map(|p| (p.0, p.1))`) — used to bail to the loud dispatch-fail
+    /// (the whole-tuple copy aliased the heap buffer). The copies are now sound:
+    /// the desugar threads the tuple as a bare identifier / a re-tuple of its
+    /// fields, so each `let q = <id>` is an ordinary MOVE the source-suppression
+    /// retires. `karac run` and `karac build` now agree. ASAN twins:
+    /// asan_b05_1_*.
+    #[test]
+    fn e2e_iter_adaptor_enumerate_heap_tuple_downstream_copy_codegen() {
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    let v: Vec[String] = Vec["alpha".to_string(), "bravo".to_string()];
+    // non-terminal identity map, then filter with a DIFFERENT param name
+    let a: Vec[(i64, String)] = v.iter().enumerate().map(|p| p).filter(|q| q.0 >= 0i64).collect();
+    println(f"{a.len()} {a[0i64].0} {a[1i64].0}");
+    // filter then inspect (differing param), terminal collect
+    let b: Vec[(i64, String)] = v.iter().enumerate().filter(|p| p.0 >= 0i64).collect();
+    println(f"{b.len()} {b[1i64].0}");
+    // re-tuple map body
+    let c: Vec[(i64, String)] = v.iter().enumerate().map(|p| (p.0, p.1)).filter(|q| q.0 < 9i64).collect();
+    println(f"{c.len()} {c[0i64].0} {c[1i64].0}");
+}
+"#,
+        ) {
+            assert_eq!(out, "2 0 1\n2 1\n2 0 1\n");
+        }
+    }
+
     #[test]
     fn e2e_iter_adaptor_flat_map_collect_codegen() {
         // B-2026-07-04-2 sub-part 1 (flat_map): `<outer>.flat_map(|v|

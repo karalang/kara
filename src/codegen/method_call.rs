@@ -4389,120 +4389,20 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(None);
         }
 
-        // A HEAP-bearing `enumerate` tuple `(idx, <heap>)` is sound only when its
-        // SINGLE owning binding is never whole-COPIED downstream. The `Enumerate`
-        // build_body arm binds the tuple to the FIRST downstream param stage's
-        // param (searching past `take`/`skip`/`step_by`), so that stage elides
-        // its re-binding and threads the tuple by identity. A whole-tuple copy
-        // (`let X = <tuple>`, a bit-copy that aliases the heap buffer → later
-        // double-free) is (re)introduced only when:
-        //   * a LATER param stage's param NAME differs from the tuple binding —
-        //     its `let param = <tuple>` copies the still-whole tuple; or
-        //   * a NON-terminal `map` returns the whole tuple (`|p| p`, `|p| (…)`) —
-        //     its `let __icm = <tuple>` materialization copies it.
-        // A `map` that REDUCES the tuple to a non-tuple value (field extract,
-        // arithmetic, …) retires it: every stage past that point threads a fresh
-        // single-owner value handled by the ordinary collect machinery, safe
-        // regardless of param names. POD tuples never alias a heap buffer, so
-        // they are always fine. We SIMULATE the name/tuple threading the desugar
-        // will emit and gate (loud dispatch-fail, never a miscompile) any
-        // residual whole-tuple copy. (The B-2026-07-04-3 tuple CONSTRUCTION
-        // double-free is fixed separately in `compile_tuple`.)
-        //
-        // `after` is copy-free when: after skipping leading passthrough, either
-        // no param stage remains (whole tuple moved) or, threading from the first
-        // param stage, no stage copies the whole tuple per the rules above.
-        let copy_free = |after: &[IterAdaptor]| -> bool {
-            let mut it = after.iter().enumerate().peekable();
-            // Skip leading passthrough; the tuple is passed through unchanged.
-            while let Some((_, s)) = it.peek() {
-                if matches!(
-                    s,
-                    IterAdaptor::Take { .. }
-                        | IterAdaptor::Skip { .. }
-                        | IterAdaptor::StepBy { .. }
-                ) {
-                    it.next();
-                } else {
-                    break;
-                }
-            }
-            let current_name = match it.peek() {
-                None => return true, // all passthrough / terminal → whole tuple MOVED
-                Some((_, s)) => match s {
-                    IterAdaptor::Map { param, .. }
-                    | IterAdaptor::Filter { param, .. }
-                    | IterAdaptor::TakeWhile { param, .. }
-                    | IterAdaptor::SkipWhile { param, .. }
-                    | IterAdaptor::Inspect { param, .. } => param.clone(),
-                    // A leading `enumerate` (nested) is unsupported here.
-                    IterAdaptor::Enumerate => return false,
-                    _ => unreachable!("passthrough already skipped"),
-                },
-            };
-            let mut is_tuple = true;
-            for (k, s) in it {
-                let terminal = k + 1 == after.len();
-                match s {
-                    IterAdaptor::Take { .. }
-                    | IterAdaptor::Skip { .. }
-                    | IterAdaptor::StepBy { .. } => {}
-                    IterAdaptor::Filter { param, .. }
-                    | IterAdaptor::TakeWhile { param, .. }
-                    | IterAdaptor::SkipWhile { param, .. }
-                    | IterAdaptor::Inspect { param, .. } => {
-                        // Identity on the element: only its guard/side-effect
-                        // binding `let param = current` copies the tuple, and only
-                        // when the name diverges (else elided).
-                        if is_tuple && *param != current_name {
-                            return false;
-                        }
-                    }
-                    IterAdaptor::Map { param, body } => {
-                        if is_tuple && *param != current_name {
-                            return false;
-                        }
-                        if !terminal {
-                            // Non-terminal `map` materializes `let __icm = <body>`.
-                            // A whole-tuple body copies the heap tuple; any other
-                            // body yields a fresh single-owner value that RETIRES
-                            // the tuple.
-                            let body_is_whole_tuple = matches!(
-                                &body.kind,
-                                ExprKind::Identifier(n) if *n == *param
-                            ) || matches!(&body.kind, ExprKind::Tuple(_));
-                            if is_tuple && body_is_whole_tuple {
-                                return false;
-                            }
-                            is_tuple = false;
-                        }
-                        // A terminal `map` pushes its transformed value by MOVE.
-                    }
-                    IterAdaptor::Enumerate => return false,
-                }
-            }
-            true
-        };
-        if let Some(enum_idx) = steps
-            .iter()
-            .rposition(|s| matches!(s, IterAdaptor::Enumerate))
-        {
-            let after = &steps[enum_idx + 1..];
-            let elem_heap = match &vec_te.kind {
-                TypeKind::Path(p) => p
-                    .generic_args
-                    .as_ref()
-                    .and_then(|ga| match ga.first() {
-                        Some(GenericArg::Type(t)) => Some(t.clone()),
-                        _ => None,
-                    })
-                    .is_some_and(|te| self.type_expr_has_drop_heap(&te)),
-                _ => false,
-            };
-            if elem_heap && !copy_free(after) {
-                return Ok(None);
-            }
-        }
+        // NOTE (B-2026-07-05-1, resolved): a HEAP-bearing `enumerate` tuple
+        // `(idx, <heap>)` threaded through downstream stages used to be gated
+        // out here whenever a stage would whole-COPY it — a later param stage
+        // whose name differs from the tuple binding (`let q = <tuple>`), or a
+        // non-terminal `map` returning the whole tuple (`let __icm = <tuple>`).
+        // Those copies are now SOUND: the desugar always threads the tuple as a
+        // bare identifier (or a re-tuple of its fields), so each `let q = <id>`
+        // is an ordinary Vec/String/tuple MOVE that `suppress_source_vec_cleanup
+        // _for_arg` / `compile_tuple` retire at the source — no alias, no
+        // double-free (verified run==build + LSan-clean across differing-param,
+        // non-terminal-map-identity, re-tuple-map, and multi-stage shapes). The
+        // gate (and its `copy_free` simulation of the desugar's name threading)
+        // is therefore removed; the tuple CONSTRUCTION double-free it referenced
+        // (B-2026-07-04-3) stays fixed in `compile_tuple`.
 
         let uid = self.indexed_elem_counter;
         self.indexed_elem_counter += 1;

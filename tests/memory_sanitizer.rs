@@ -897,6 +897,95 @@ fn main() {
     }
 
     #[test]
+    fn asan_b05_1_nonterminal_map_tuple_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 30i64 {
+        let mut v: Vec[String] = Vec[
+            "b05-map-alpha-aaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            "b05-map-bravo-bbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()
+        ];
+        let r: Vec[(i64, String)] = v.iter().enumerate().map(|p| p).filter(|q| q.0 >= 0i64).collect();
+        println(f"{r.len()} {r[0i64].0} {v.len()}");
+        round = round + 1i64;
+    }
+}
+"#,
+            ["2 0 2"].repeat(30).as_slice(),
+            "asan_b05_1_nonterminal_map_tuple_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_b05_1_diff_param_name_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 30i64 {
+        let mut v: Vec[String] = Vec[
+            "b05-diff-alpha-aaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            "b05-diff-bravo-bbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()
+        ];
+        let r: Vec[(i64, String)] = v.iter().enumerate().filter(|p| p.0 >= 0i64).inspect(|q| print(q.0)).collect();
+        println(f"{r.len()} {r[1i64].0} {v.len()}");
+        round = round + 1i64;
+    }
+}
+"#,
+            ["012 1 2"].repeat(30).as_slice(),
+            "asan_b05_1_diff_param_name_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_b05_1_retuple_map_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 30i64 {
+        let mut v: Vec[String] = Vec[
+            "b05-retup-alpha-aaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            "b05-retup-bravo-bbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()
+        ];
+        let r: Vec[(i64, String)] = v.iter().enumerate().map(|p| (p.0, p.1)).filter(|q| q.0 >= 0i64).collect();
+        println(f"{r.len()} {r[0i64].0} {r[1i64].0} {v.len()}");
+        round = round + 1i64;
+    }
+}
+"#,
+            ["2 0 1 2"].repeat(30).as_slice(),
+            "asan_b05_1_retuple_map_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_b05_1_multistage_diff_params_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 30i64 {
+        let mut v: Vec[String] = Vec[
+            "b05-multi-alpha-aaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            "b05-multi-bravo-bbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            "b05-multi-charlie-cccccccccccccccccccccccc".to_string()
+        ];
+        let r: Vec[(i64, String)] = v.iter().enumerate().filter(|p| p.0 >= 0i64).filter(|q| q.0 < 5i64).collect();
+        println(f"{r.len()} {r[2i64].0} {v.len()}");
+        round = round + 1i64;
+    }
+}
+"#,
+            ["3 2 3"].repeat(30).as_slice(),
+            "asan_b05_1_multistage_diff_params_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_column_string_index_clone_out_no_leak() {
         // S6c-12 Slice 5: `Column[String]` indexing `c[i] -> Option[String]`
         // under `karac build` DEEP-CLONES the element so the returned Option
