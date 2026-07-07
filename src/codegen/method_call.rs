@@ -5384,15 +5384,29 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => return Ok(None),
         };
-        // POD-only: a heap-bearing paired tuple (`(String, i64)`, …) is NOT
-        // sound through this index lowering — `A[i]` reads the heap element into
-        // the pushed tuple in a way that leaks/aliases the source buffer (an
-        // ASAN/LSan failure), so gate it out and keep bailing to the loud
-        // dispatch-fail. A copy-free heap zip needs the per-element move/clone
-        // plumbing the enumerate path uses and stays OPEN under sub-part 1.
-        match elem_te {
-            Some(te) if !self.type_expr_has_drop_heap(&te) => {}
-            _ => return Ok(None),
+        // Heap-bearing paired tuples (`(String, String)`, `(String, i64)`, …)
+        // are sound now that the pushed tuple `(A[i], B[i])` deep-clones each
+        // named-Vec heap index-read (`compile_tuple` →
+        // `maybe_defensive_copy_param_arg` → `clone_owned_vec_index_element`),
+        // so the sources survive and the collect result owns independent
+        // buffers (B-2026-07-04-2 heap-zip leg). The clone fires ONLY for a
+        // named-Vec identifier base; a non-identifier base (e.g. a fresh-temp
+        // `foo().iter()`) whose element is heap would still alias, so require
+        // both bases to be clone-eligible named Vecs before admitting a heap
+        // element — otherwise keep bailing to the loud dispatch-fail (never a
+        // miscompile). A fully-POD tuple needs no clone and admits any base.
+        let elem_is_pod = match &elem_te {
+            Some(te) => !self.type_expr_has_drop_heap(te),
+            None => return Ok(None),
+        };
+        let base_is_named_vec = |cg: &Self, base: &Expr| {
+            matches!(&base.kind, ExprKind::Identifier(n)
+                if cg.var_elem_type_exprs.contains_key(n.as_str()))
+        };
+        let heap_bases_clone_eligible =
+            base_is_named_vec(self, base_a) && base_is_named_vec(self, base_b);
+        if !(elem_is_pod || heap_bases_clone_eligible) {
+            return Ok(None);
         }
 
         let uid = self.indexed_elem_counter;

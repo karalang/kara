@@ -705,6 +705,83 @@ fn main() {
     }
 
     #[test]
+    fn asan_b04_2_zip_heap_collect_no_leak() {
+        // B-2026-07-04-2 (heap-zip leg): `a.iter().zip(b.iter()).collect()` over
+        // two `Vec[String]` sources. The pushed tuple `(a[i], b[i])` deep-clones
+        // each named-Vec heap index-read, so the borrowed sources SURVIVE (freed
+        // once at their own scope) and the collect result owns independent
+        // buffers (freed once). Before the fix the index-read aliased the source
+        // buffer — both the result's element-drop and the source's scope-exit
+        // free released it (double-free). 40× ≥40-byte payloads for LSan
+        // reachability; re-reads a source and a result element each round.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let mut a: Vec[String] = Vec[
+            "zip-heap-collect-left-alpha-aaaaaaaaaaaaaaaa".to_string(),
+            "zip-heap-collect-left-bravo-bbbbbbbbbbbbbbbb".to_string()
+        ];
+        let mut b: Vec[String] = Vec[
+            "zip-heap-collect-right-charlie-cccccccccccc".to_string(),
+            "zip-heap-collect-right-delta-dddddddddddddd".to_string()
+        ];
+        let z: Vec[(String, String)] = a.iter().zip(b.iter()).collect();
+        let p: (String, String) = z[0i64];
+        println(f"{z.len()} {a.len()} {b.len()} {p.0} {p.1}");
+        round = round + 1i64;
+    }
+}
+"#,
+            [
+                "2 2 2 zip-heap-collect-left-alpha-aaaaaaaaaaaaaaaa zip-heap-collect-right-charlie-cccccccccccc",
+            ]
+            .repeat(40)
+            .as_slice(),
+            "asan_b04_2_zip_heap_collect_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_heap_vec_index_read_into_sinks_no_double_free() {
+        // General heap-index-read-into-owning-sink double-free (found fixing the
+        // heap-zip leg). Reading `v[i]` (heap String element) into a tuple
+        // literal, a `push`, and a struct field must deep-clone so the source
+        // `v` stays the sole owner of its originals and each sink owns an
+        // independent buffer. Before the fix each sink aliased the source buffer
+        // → double-free (exit 133). 40× ≥40-byte payloads; `v` re-read each
+        // round to expose UAF.
+        assert_clean_asan_run(
+            r#"
+struct Pair { x: String, y: String }
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let mut v: Vec[String] = Vec[
+            "index-sink-element-alpha-aaaaaaaaaaaaaaaaaaaa".to_string(),
+            "index-sink-element-bravo-bbbbbbbbbbbbbbbbbbbb".to_string(),
+            "index-sink-element-charlie-cccccccccccccccccc".to_string()
+        ];
+        let t: (String, String) = (v[0i64], v[2i64]);
+        let mut d: Vec[String] = Vec.new();
+        d.push(v[1i64]);
+        let p: Pair = Pair { x: v[0i64], y: v[1i64] };
+        println(f"{t.0} {t.1} {d[0i64]} {p.x} {p.y} {v.len()}");
+        round = round + 1i64;
+    }
+}
+"#,
+            [
+                "index-sink-element-alpha-aaaaaaaaaaaaaaaaaaaa index-sink-element-charlie-cccccccccccccccccc index-sink-element-bravo-bbbbbbbbbbbbbbbbbbbb index-sink-element-alpha-aaaaaaaaaaaaaaaaaaaa index-sink-element-bravo-bbbbbbbbbbbbbbbbbbbb 3",
+            ]
+            .repeat(40)
+            .as_slice(),
+            "asan_heap_vec_index_read_into_sinks_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_column_string_index_clone_out_no_leak() {
         // S6c-12 Slice 5: `Column[String]` indexing `c[i] -> Option[String]`
         // under `karac build` DEEP-CLONES the element so the returned Option

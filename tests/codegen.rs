@@ -6718,11 +6718,11 @@ fn main() {
         // build`, though `karac run` handled it. The fix emits an index loop
         // `while i < min { acc.push((A[i], B[i])); i += 1 }`; `A[i]`/`B[i]` copy,
         // so both POD sources SURVIVE (asserted via `a.len()`/`b.len()`).
-        // Exercises unequal lengths and a min-length cutoff. Scoped to POD tuple
-        // elements — a HEAP-bearing pair (`(String, i64)`) is not sound through
-        // this index lowering and still bails (loud dispatch-fail, no
-        // miscompile); a downstream adaptor after `zip` (`zip().map(…)`) bails
-        // too.
+        // Exercises unequal lengths and a min-length cutoff. Heap-bearing pairs
+        // are now supported too (see `e2e_iter_adaptor_zip_heap_collect_codegen`
+        // — the pushed tuple deep-clones each named-Vec heap index-read); a
+        // downstream adaptor after `zip` (`zip().map(…)`) still bails (loud
+        // dispatch-fail, no miscompile).
         if let Some(out) = run_program(
             r#"
 fn main() {
@@ -6738,6 +6738,63 @@ fn main() {
 "#,
         ) {
             assert_eq!(out, "2 1 10 2 20 3 2\n2 8 80\n");
+        }
+    }
+
+    /// B-2026-07-04-2 sub-part 1 (heap-zip leg): `A.iter().zip(B.iter())
+    /// .collect()` over `Vec[String]` sources → `Vec[(String, String)]`. The
+    /// pushed tuple `(A[i], B[i])` now deep-clones each named-Vec heap
+    /// index-read (`compile_tuple` → `maybe_defensive_copy_param_arg` →
+    /// `clone_owned_vec_index_element`), so the borrowed sources survive and the
+    /// result owns independent buffers — previously POD-gated because the raw
+    /// index-read aliased the source buffer (double-free). Leak/double-free
+    /// coverage is the ASAN twin `asan_b04_2_zip_heap_collect_no_leak`.
+    #[test]
+    fn e2e_iter_adaptor_zip_heap_collect_codegen() {
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    let a: Vec[String] = Vec["alpha".to_string(), "bravo".to_string(), "charlie".to_string()];
+    let b: Vec[String] = Vec["one".to_string(), "two".to_string()];
+    let z: Vec[(String, String)] = a.iter().zip(b.iter()).collect();
+    println(f"{z.len()} {z[0].0} {z[0].1} {z[1].0} {z[1].1} {a.len()} {b.len()}");
+}
+"#,
+        ) {
+            // min(3,2)=2 pairs; both sources survive (len 3 and 2).
+            assert_eq!(out, "2 alpha one bravo two 3 2\n");
+        }
+    }
+
+    /// General heap-index-read-into-owning-sink double-free (found while fixing
+    /// the heap-zip leg, B-2026-07-04-2): reading a heap element by index from a
+    /// named `Vec` (`v[i]`) and moving it into an OWNING sink — a tuple literal,
+    /// `push`, or a struct field — shallow-aliased the container's element
+    /// buffer, so both the container's element-drop and the sink's owner freed
+    /// it (double-free, exit 133). `let s = v[i]` already deep-cloned; this
+    /// closes the twin gap at the by-value consume sites via
+    /// `maybe_defensive_copy_param_arg` → `clone_owned_vec_index_element`. The
+    /// sources must survive (asserted via `.len()`), and the reads must be
+    /// correct.
+    #[test]
+    fn e2e_heap_vec_index_read_into_owning_sinks() {
+        if let Some(out) = run_program(
+            r#"
+struct Pair { x: String, y: String }
+fn main() {
+    let v: Vec[String] = Vec["aa".to_string(), "bb".to_string(), "cc".to_string()];
+    // tuple literal
+    let t: (String, String) = (v[0i64], v[2i64]);
+    // push into another Vec
+    let mut d: Vec[String] = Vec.new();
+    d.push(v[1i64]);
+    // struct field
+    let p: Pair = Pair { x: v[0i64], y: v[1i64] };
+    println(f"{t.0} {t.1} {d[0i64]} {p.x} {p.y} {v.len()}");
+}
+"#,
+        ) {
+            assert_eq!(out, "aa cc bb aa bb 3\n");
         }
     }
 

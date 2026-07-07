@@ -2816,6 +2816,24 @@ impl<'ctx> super::Codegen<'ctx> {
         arg_expr: &Expr,
         val: BasicValueEnum<'ctx>,
     ) -> BasicValueEnum<'ctx> {
+        // B-2026-07-04-2 / B-2026-07-05-1: a heap element read by index
+        // (`a[i]` where `a` is a named `Vec[String]`/`Vec[Vec[..]]`/…) and moved
+        // into an OWNING sink (tuple literal, `push`, struct field, map value,
+        // owned call arg, return) shallow-aliases the container's element
+        // buffer. `compile_vec_index` only loads the `{ptr,len,cap}` header, so
+        // both the container's element-drop AND the sink's owner free the same
+        // buffer — a double-free (`(a[i], b[i])` / `d.push(a[i])`, exit 133).
+        // The `let s = a[i]` binding path already deep-clones (via the same
+        // helper, stmts.rs), so this closes the twin gap at the by-value consume
+        // sites. `clone_owned_vec_index_element` is scoped to a named-Vec,
+        // non-range, non-trivially-copyable index and leaves the source intact,
+        // so the container's single drop and the sink's clone free distinct
+        // buffers. No-op for POD elements and non-index args.
+        if self.expr_is_heap_vec_index(arg_expr) {
+            return self
+                .clone_owned_vec_index_element(arg_expr, val)
+                .unwrap_or(val);
+        }
         let name = match &arg_expr.kind {
             ExprKind::Identifier(n) => n.clone(),
             _ => return val,
