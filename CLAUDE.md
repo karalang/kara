@@ -121,3 +121,9 @@ Key Kāra language concepts the compiler must implement:
 - Idiomatic Rust; follow `rustfmt` conventions.
 - Every compiler phase must emit structured diagnostics with source spans — never just panic.
 - Tests for every language construct. Use `tests/` for integration tests, unit tests inside each module for focused coverage.
+
+## Developing Kāra code (not the Rust compiler — the `.kara` you write)
+
+New Kāra — katas, examples, tests, dogfooding functions, self-hosting units — is developed and verified **through the Mend loop**, not hand-fixed: run `karac check --output=json`, apply `karac fix` for machine-applicable diagnostics as the primary fix path, feed the rest back, then verify the result against an **oracle** (expected output / test cases / a reference `solution.kara` / the self-host fixpoint). "It compiles" is not the bar. Each new artifact becomes a Mend task+oracle pair — format and granularity rule in [`examples/mend/TASK_FORMAT.md`](examples/mend/TASK_FORMAT.md). This continuously dogfoods the AI-first wedge (the flagship feature) and turns every diagnostic/fix gap into a backlog item: fix the compiler or open a `docs/bug-ledger.jsonl` entry, never route around it.
+
+**Honesty rule (applies to any AI or contributor).** The Mend machine-fix *rate* is a statistic **only** over fresh, blind LLM authorship (`examples/mend/harness/mend_batch.py`, live) — a model that never saw the diagnostics. Authoring by anyone who already knows the language is biased (they won't make the known mistakes) and counts as dogfooding + gap-finding, **never** as the rate. Do not quote a machine-fix rate from non-blind authoring. Live mode needs an authenticated `claude` CLI (401s headless), so the measurement is a periodic developer-environment run, not a CI gate.
