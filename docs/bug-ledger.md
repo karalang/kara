@@ -89,17 +89,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **289 surfaced · 1 open · 287 fixed** (2026-05-20 → 2026-07-07). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **289 surfaced · 0 open · 288 fixed** (2026-05-20 → 2026-07-07). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (0)
 
-| id | date | surface | sev | title | tracker |
-|---|---|---|---|---|---|
-| B-2026-07-07-6 | 2026-07-07 | codegen | low | REPL cross-type rebind crashes the JIT runner on Linux (1 test: repl_jit_cross_type_rebind_uses_new_value). After `let x = 5` (i64) then `let x: String = "hello"; println(x)` in a later cell, the fresh runner subprocess dies with a signal (exit code None) instead of printing `hello`. The equivalent PLAIN program `fn main() { let x = 5; let x: String = "hello"; println(x); }` runs correctly under the interpreter, AOT (`karac build` prints `hello`, exit 0), AND a plain in-process JIT compile (pinned by tests/lljit_e2e.rs::jit_e2e_cross_type_shadow_rebind_prints_new_value), so this is specific to the REPL cell codegen path (compile_to_ir_for_repl_cell + persistent-let replay of the shadowed i64 `x` alongside the new String `x` in one synthesized body) executed under the ~O2 LLJIT on Linux. Likely another optimizer-exposed UB in the same class as B-2026-07-07-4 (a stale i64 slot / scope-exit cleanup applied to the String rebind), or a REPL snapshot-replay codegen gap. Only surfaced once the JIT lane started running on Linux (B-2026-07-07-5); macOS repl_jit was green (platform-blind). NARROW: cross-type same-name rebind across REPL cells; the codegen E2E proof gate (2084/2084) and the `karac test` JIT batch (491/491) are unaffected. Repro: `cargo test --features lljit_prototype --test repl_jit repl_jit_cross_type_rebind_uses_new_value`. Belongs to Slice 5 (repl/test JIT-default) Linux hardening. Next step: emit the failing cell's IR and bisect llc -O0 vs -O2 to localise (the technique that cracked B-2026-07-07-4). | docs/spikes/lljit-productionization.md |
+_None — the ledger is fully drained._
 
-### Fixed (287)
+### Fixed (288)
 
-<details><summary>287 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>288 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -390,6 +388,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **289 surfaced 
 | B-2026-07-07-3 | resolver | low | E0107 UndefinedLabel `did you mean` suggestion is prose-only (not machine-applicable): as of B-2026-07-06-3 (830831f) a misspelled `break`/`continue`… | 911db54 |
 | B-2026-07-07-4 | codegen | high | Borrow-returning fn (`fn f(u: ref String) -> ref String { u }`, and the `ref Vec` analog) writes out of bounds and segfaults under -O2/LLJIT | fddfb9a |
 | B-2026-07-07-5 | codegen | high | Always-JIT execution lane produced EMPTY output for every non-trivial program on Linux/ELF | 199098e |
+| B-2026-07-07-6 | codegen | low | REPL cross-type rebind crashes the JIT runner on Linux (1 test: repl_jit_cross_type_rebind_uses_new_value) | 8ab9e79 |
 
 </details>
 
