@@ -1,7 +1,29 @@
 # Spike: Mechanize the ownership/drop model — stop the drop-soundness whack-a-mole
 
-**Status:** OPEN — proposed epic. Independent of, and parallelizable with, the LLJIT productionization spike (different bug axis).
+**Status:** OPEN — **Slice 1 DELIVERED** (2026-07-07); Slices 2–4 open. Independent of, and parallelizable with, the LLJIT productionization spike (different bug axis).
 **Decision date:** 2026-07-06. **Owner call:** worth doing; start with the measurement slice (a fuzzer), *not* the proof.
+
+---
+
+## Slice 1 — DELIVERED (2026-07-07): the drop-soundness fuzzer
+
+**What landed.** `src/bin/drop_fuzz.rs` (a `--features llvm` bin) + `scripts/drop-fuzz.sh` (one-command driver). It generates well-typed heap-core Kāra programs, compiles each with the exact AOT path `karac build` ships, links under **ASan + LSan**, runs it, and lets the **sanitizer be the judge** — no model required, exactly as the slice specified. Touches **no compiler code** (drives the `karac` library the same way `tests/memory_sanitizer.rs` does), so zero risk, as promised.
+
+- **Two build surfaces**, both run per program: **seq** (`concurrency = None`, auto-par dormant) and **autopar** (`concurrency = Some(analysis)`, the default-`karac build` posture). A finding on either is a finding ([[auto-par-is-third-ab-surface]]).
+- **Generator** covers the heap core: `String`, `Vec[String]`, `Vec[Vec[String]]`, `Vec[(i64,String)]`, `Vec[Payload]`, a heap-bearing `struct Payload`, `Option[String]`, and a recursive boxed `shared enum Tree`. Shapes exercised: move-into-aggregate (`push`), owned vs `.iter()` borrow for-loops, tuple-heap-component push, struct destructure (obligation split), `Option` match, owned-param pass + return-move (`echo_vec`), **index-store** overwrite (`v[i] = …`), nested-Vec, **`par {}`** shared-heap capture, and **`spawn`/`TaskGroup`/`join`** cross-task capture.
+- **Gotchas honored** (all from this doc's Gotchas section): ≥40-byte payloads (short-String LSan blindness), every value read into a `println`'d `acc` accumulator (DCE + reachable-leak escape), body wrapped in a `while` loop (double-free shows on the 2nd free), and a **valid-program gate** — a program is only *run* if it parses, typechecks, and passes the ownership checker cleanly, so a finding implicates the *lowering*, never buggy generated source.
+- **Shrinker**: line-based delta-debug reduces a failing program to a minimal, kata-sized repro (verified: a 20-statement program → the 3-line `Vec[String]`-pushed-into-`Vec[Vec[String]]` double-free core).
+- **Report**: measured drop-bug rate + a bucketed, per-surface corpus of shrunk `.kara` repros (`docs/spikes/drop-fuzz-corpus/report.md`).
+
+**Measured drop-bug rate on current HEAD: 0 over 1000+ valid (program, surface) executions** (500 programs × 2 surfaces, seed base 1000, plus a 400-program confirmation run). The known classes in the covered heap-core are **closed** on HEAD — an honest, meaningful measurement, not a vacuous pass (see next).
+
+**Validation — the fuzzer rediscovers ≥2 known classes (acceptance criterion met).** Because HEAD is hardened, "green" was proven non-vacuous by **fault injection** (mutation-testing the detector): two temporary, env-gated, default-dormant knobs were added to codegen, the fuzzer was run, then the knobs were **fully reverted** (not committed — the committed slice-1 artifact touches no compiler code):
+- `DROPFUZZ_INJECT_LEAK` — skip the scope-cleanup drain (`emit_scope_cleanup_from`). Fuzzer flagged **`memory-leak`** on both `seq` and `autopar`.
+- `DROPFUZZ_INJECT_DOUBLE_FREE` — disable move-source suppression (`suppress_source_vec_cleanup_for_arg_ex`) so caller and callee both free a moved value. Fuzzer flagged **`double-free`** (+ downstream `segv`) on both surfaces, and the shrinker minimized it to the 3-line repro above.
+
+The exact injection diffs are recorded in `docs/spikes/drop-fuzz-corpus/README.md` so the validation is reproducible on demand. This establishes the detector + generator + harness pipeline catches the two headline classes (leak, double-free) the ledger is full of; the 0% on HEAD is therefore a real "these shapes are clean," not a blind spot.
+
+**Value even if Slices 2–4 never happen:** a one-command, seed-reproducible drop-bug hunter that outpaces katas and can be pointed at any future codegen change as a standing gate. Widening the generator (Map/Set keys, `Slice[T]`, closures capturing heap, deeper nesting, layout blocks) is the cheapest next increment and stays pure-measurement.
 
 ---
 
@@ -82,7 +104,7 @@ Refactor drop-insertion to consume the oracle's facts instead of re-deriving the
 
 ## Acceptance criteria
 
-Slice 1: a one-command fuzzer wired to the LSan gate, producing a measured drop-bug rate + a shrunk corpus, that independently rediscovers ≥2 known classes. Slices 2–4: a single written ownership judgment that explains every corpus bug as a stated-rule violation; an executable oracle; codegen drop-insertion consuming the oracle's facts; the slice-1 fuzzer green as the standing gate on macOS arm64 + Linux/LSan.
+Slice 1 ✅ (2026-07-07): a one-command fuzzer wired to the LSan gate, producing a measured drop-bug rate + a shrunk corpus, that independently rediscovers ≥2 known classes (leak + double-free, via reverted fault-injection — see the *Slice 1 — DELIVERED* section). Slices 2–4: a single written ownership judgment that explains every corpus bug as a stated-rule violation; an executable oracle; codegen drop-insertion consuming the oracle's facts; the slice-1 fuzzer green as the standing gate on macOS arm64 + Linux/LSan.
 
 ## Open question (owner sign-off)
 

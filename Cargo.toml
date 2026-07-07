@@ -87,6 +87,17 @@ name = "karac_jit_runner"
 path = "src/bin/karac_jit_runner.rs"
 required-features = ["lljit_prototype"]
 
+# Drop-soundness fuzzer (ownership-model-mechanization spike, Slice 1). Drives
+# the AOT codegen path (`compile_to_object` + `link_executable_with_sanitizer`),
+# so it requires the `llvm` feature. Generates well-typed heap-core Kāra
+# programs, links each under ASan+LSan, and lets the sanitizer judge — measures
+# a drop-bug rate and emits a shrunk, bucketed repro corpus. See
+# `src/bin/drop_fuzz.rs` and `scripts/drop-fuzz.sh`.
+[[bin]]
+name = "drop_fuzz"
+path = "src/bin/drop_fuzz.rs"
+required-features = ["llvm"]
+
 [dependencies]
 inkwell = { version = "0.9", features = ["llvm18-1-prefer-dynamic"], optional = true }
 # Phase-7 L560 (Always-JIT via LLJIT): inkwell 0.9 does not expose ORC v2 /
