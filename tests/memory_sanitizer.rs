@@ -627,6 +627,47 @@ fn main() {
     }
 
     #[test]
+    fn asan_column_string_index_clone_out_no_leak() {
+        // S6c-12 Slice 5: `Column[String]` indexing `c[i] -> Option[String]`
+        // under `karac build` DEEP-CLONES the element so the returned Option
+        // owns an independent heap and the column keeps its copy. Exercises
+        // both a direct `c[i].unwrap()` and the `self[i]` form inside a user
+        // `impl … for Column[String]` (the Slice 5 headline). Loops 40× with
+        // >=36-byte payloads for LSan reachability; the per-round `a`/`b`
+        // clones AND the column's 3 owned strings must all free with no
+        // double-free / UAF (mac ASAN) and no leak (Linux LSan CI).
+        assert_clean_asan_run(
+            r#"
+trait Pick { fn at(ref self, i: i64) -> String; }
+impl Pick for Column[String] {
+    fn at(ref self, i: i64) -> String { self[i].unwrap() }
+}
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let v: Vec[String] = Vec[
+            "col-string-index-alpha-aaaaaaaaaaaaaaaaaaaa".to_string(),
+            "col-string-index-bravo-bbbbbbbbbbbbbbbbbbbb".to_string(),
+            "col-string-index-charlie-cccccccccccccccccc".to_string()
+        ];
+        let c: Column[String] = Column.from_vec(v);
+        let a: String = c[0i64].unwrap();
+        let b: String = c.at(2i64);
+        println(f"{c.len()} {a} {b}");
+        round = round + 1i64;
+    }
+}
+"#,
+            [
+                "3 col-string-index-alpha-aaaaaaaaaaaaaaaaaaaa col-string-index-charlie-cccccccccccccccccc",
+            ]
+            .repeat(40)
+            .as_slice(),
+            "asan_column_string_index_clone_out_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_b04_2_named_fn_map_collect_no_leak() {
         // B-2026-07-04-2 sub-part 2: a NAMED-FUNCTION `map` arg over a heap
         // source. The fix wraps `<fn>` in a synthetic body `<fn>(p)`, so each

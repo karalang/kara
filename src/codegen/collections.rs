@@ -1321,8 +1321,20 @@ impl<'ctx> super::Codegen<'ctx> {
         // tensor bindings are single-pointer slots and dispatch through
         // the `[rank][dims][data]` layout helpers in
         // `src/codegen/tensor.rs`.
-        if let ExprKind::Identifier(name) = &object.kind {
-            if let Some(info) = self.tensor_var_infos.get(name.as_str()).cloned() {
+        // Container receiver name: a plain binding (`c[i]`) or `self`
+        // (`self[i]` inside a user `impl … for Column[T]`/`Tensor[…]` body —
+        // Slice 1/2 registered `self` in `column_var_infos`/`tensor_var_infos`
+        // when the impl target is a container). Without the `self` arm,
+        // `self[i]` fell through to the "Index operator applied to non-array
+        // type" error under `build` (S6c-12 Slice 5).
+        let container_recv: Option<&str> = match &object.kind {
+            ExprKind::Identifier(name) => Some(name.as_str()),
+            ExprKind::SelfValue => Some("self"),
+            _ => None,
+        };
+
+        if let Some(name) = container_recv {
+            if let Some(info) = self.tensor_var_infos.get(name).cloned() {
                 let t_ptr = self.tensor_ptr_for_var(name)?;
                 return self.compile_tensor_index(t_ptr, &info, index);
             }
@@ -1333,8 +1345,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // to the `{data, null_bitmap, len, cap}` control block; a valid
         // slot yields `Some`, a SQL null yields `None`. See
         // `src/codegen/column.rs`.
-        if let ExprKind::Identifier(name) = &object.kind {
-            if let Some(info) = self.column_var_infos.get(name.as_str()).copied() {
+        if let Some(name) = container_recv {
+            if let Some(info) = self.column_var_infos.get(name).copied() {
                 let control = self.column_ptr_for_var(name)?;
                 return self.compile_column_index(control, &info, index);
             }

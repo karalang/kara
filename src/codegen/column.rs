@@ -4193,14 +4193,7 @@ impl<'ctx> super::Codegen<'ctx> {
         info: &ColumnVarInfo<'ctx>,
         index: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        if self.column_elem_is_string(info.elem) {
-            return Err(
-                "Column[String] indexing `c[i] -> Option[String]` is not yet supported by the \
-                 native backend (`karac build`); it works under `karac run` and lands in a \
-                 follow-on codegen slice. Use `iter_valid()` to read a String column for now."
-                    .to_string(),
-            );
-        }
+        let is_string = self.column_elem_is_string(info.elem);
         let fn_val = self
             .current_fn
             .ok_or_else(|| "Column index outside function".to_string())?;
@@ -4237,11 +4230,31 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_gep(info.elem, data, &[i], "col.idx.slot")
                 .unwrap()
         };
-        let loaded = self
-            .builder
-            .build_load(info.elem, slot, "col.idx.elem")
-            .unwrap();
-        let word = self.column_value_to_word(loaded);
+        // A `String` element is a `{ptr,len,cap}` vec-struct: DEEP-CLONE it so
+        // the returned `Option[String]` owns an independent heap and the column
+        // keeps its own copy (`c[i]` is a read, not a move — mirrors the
+        // clone-out `iter_valid` / `Map.get` do). The cloned 24-byte struct is
+        // then decomposed into the enum's 3 payload words (fits inline — the
+        // `Option` payload area is 3 words, so no boxing). A POD element loads
+        // straight to a single word. (Slice 5 — the heap-element read-back the
+        // former loud `Column[String] indexing … not yet supported` error
+        // pointed a follow-on codegen slice at.)
+        let some_payload_words = if is_string {
+            let str_ty = self.vec_struct_type();
+            let tmp = self.builder.build_alloca(str_ty, "col.idx.strtmp").unwrap();
+            let clone_fn = self.emit_string_clone_fn();
+            self.builder
+                .build_call(clone_fn, &[slot.into(), tmp.into()], "")
+                .unwrap();
+            let cloned = self.builder.build_load(str_ty, tmp, "col.idx.str").unwrap();
+            self.coerce_to_payload_words(cloned, 3)?
+        } else {
+            let loaded = self
+                .builder
+                .build_load(info.elem, slot, "col.idx.elem")
+                .unwrap();
+            vec![self.column_value_to_word(loaded)]
+        };
         let some_end_bb = self.builder.get_insert_block().unwrap();
         self.builder.build_unconditional_branch(merge_bb).unwrap();
 
@@ -4249,7 +4262,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_unconditional_branch(merge_bb).unwrap();
 
         self.builder.position_at_end(merge_bb);
-        Ok(self.build_option_some_via_phis(&[word], some_end_bb, none_bb, "col.idx"))
+        Ok(self.build_option_some_via_phis(&some_payload_words, some_end_bb, none_bb, "col.idx"))
     }
 
     // ── SQL three-valued-logic arithmetic / comparison ──────────

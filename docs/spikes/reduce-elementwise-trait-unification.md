@@ -827,7 +827,32 @@ B-2026-07-02-10..13, see the ledger.
   `f64` deliberately isn't `Ord` (NaN); the repro's `T: Ord` bound legitimately
   rejects `Column[f64]`. Fixed the DIAGNOSTIC only: the bound-filtered impl now
   surfaces the failing bound + an `F64`-wrapper hint instead of "no method 'span'".
-  Remaining epic slice: heap/String elem (5).
+  **Slice 5 ✅ (landed) — heap/String element read-back.** The Slice-1..4 work
+  handled POD (i64/f64/narrow) container elements; a heap element (`String`) could
+  be COUNTED (`self.len()`) but not READ. Root gap: `Column[String]` indexing
+  `c[i] -> Option[String]` under `karac build` was a loud "not yet supported" error
+  (worked under `run`). Fixed `compile_column_index` (column.rs) to deep-CLONE the
+  `{ptr,len,cap}` String element (via `emit_string_clone_fn`) so the returned
+  `Option[String]` owns an independent heap and the column keeps its copy (`c[i]` is
+  a read, not a move — mirrors `iter_valid`/`Map.get`); the cloned 24-byte struct
+  decomposes into the enum's 3 payload words (`coerce_to_payload_words`, fits inline
+  — `Option` area is 3 words). Second gap for the Slice-5 headline: `self[i]` inside
+  a user `impl … for Column[String]` — the index dispatch (collections.rs) keyed on
+  `Identifier` only, so a `SelfValue` index receiver fell to "Index operator applied
+  to non-array type" under build; added the `self` arm (the index twin of the Slice
+  1/2 method-call `SelfValue` fix), covering both Column and Tensor. Verified
+  run == autopar == build for direct `c[i].unwrap()`, `self[i]` in a user impl,
+  `match c[i]`, loop-read, and reuse-after-index; mac ASAN + Linux LSan clean (the
+  per-read clones and the column's owned strings all free — no double-free / leak).
+  Tests `test_e2e_column_string_index_and_user_impl` (codegen),
+  `asan_column_string_index_clone_out_no_leak` (memory_sanitizer). NOTE: a residual
+  UNRELATED gap surfaced — `Column.from_vec(<temporary Vec[String]>)` still errors
+  loudly under build ("bind the Vec to a `let` first"); orthogonal to this slice
+  (a from_vec ownership-transfer follow-on), worked around by let-binding in tests.
+  **The S6c-12 user-impl-over-container epic is now COMPLETE** (Slices 1–5 + the
+  4a/4b fixes); the only remaining container-impl item is the separate INHERENT-impl
+  overlap wall (Slice 3, needs method-granular overlap admission — a distinct
+  feature, not part of this epic).
 - **S6c** — remaining: `ElementwiseOrd` user impls; **u64 column/tensor sort**
   (blocked on the interpreter u64 model — see S6c-9 / B-2026-07-04-8, NOT just an
   unsigned scratch compare as previously thought); a `product` DEFAULT body for
@@ -845,8 +870,11 @@ B-2026-07-02-10..13, see the ledger.
   Slice 4a** (Shape-arg gate + registered-element sourcing; covers f64/f32/narrow
   ints on both containers). **B-2026-07-04-15** was a **misdiagnosis** resolved as
   **Slice 4b** (correct-by-design: `f64` isn't `Ord`; fixed the misleading
-  diagnostic to name the failing bound + point at the `F64` wrapper). Remaining
-  slice of that epic: heap/**String** element + error-path polish (Slice 5).
+  diagnostic to name the failing bound + point at the `F64` wrapper). The
+  heap/**String** element read-back landed as **Slice 5** (`Column[String]`
+  `c[i] -> Option[String]` + `self[i]` in a user impl; clone-out, ASAN+LSan clean).
+  **The S6c-12 user-impl-over-container epic is COMPLETE** (Slices 1–5); only the
+  separate **inherent**-impl overlap wall remains as a distinct feature.
 
 ---
 

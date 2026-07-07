@@ -47386,6 +47386,35 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_column_string_index_and_user_impl() {
+        // S6c-12 Slice 5: heap/String element read-back. `Column[String]`
+        // indexing `c[i] -> Option[String]` under `karac build` (formerly a
+        // loud "not yet supported" error) deep-clones the element so the
+        // returned Option owns an independent heap. Covers the direct `c[i]`
+        // form AND `self[i]` inside a user `impl … for Column[String]` (the
+        // Slice 5 headline — the SelfValue index receiver now routes to the
+        // column path). A null slot yields `None`.
+        let src = r#"
+trait Pick { fn at(ref self, i: i64) -> String; }
+impl Pick for Column[String] {
+    fn at(ref self, i: i64) -> String { self[i].unwrap() }
+}
+fn main() {
+    let v: Vec[String] = ["alpha", "beta", "gamma"];
+    let c: Column[String] = Column.from_vec(v);
+    println(f"{c[1].unwrap()}");
+    println(f"{c.at(0)} {c.at(2)}");
+    match c[2] {
+        Some(s) => { println(f"some {s}"); }
+        None => { println("none"); }
+    }
+}
+"#;
+        let out = run_program(src).expect("program should compile and run");
+        assert_eq!(out, "beta\nalpha gamma\nsome gamma\n");
+    }
+
+    #[test]
     fn test_e2e_user_trait_bound_dispatch_column_and_tensor_monos() {
         // S6a probe p7: one bound-generic fn instantiated at BOTH
         // handle-backed builtins. Guards three fixes at once:
