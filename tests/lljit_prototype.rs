@@ -11,6 +11,49 @@
 
 use karac::codegen::jit_run_main_lljit;
 
+// In-process JIT link scaffolding (Linux). `jit_run_main_lljit` runs the
+// JIT inside THIS test binary, so its process-symbol-search generator
+// resolves `karac_*` runtime FFI via `dlsym` against this executable —
+// which on ELF only sees symbols the binary links AND exports into
+// `.dynsym`. Two pieces make that work, mirroring `tests/codegen.rs`:
+//
+//   1. Force-link the runtime so its `karac_*` symbols are actually in
+//      the binary (the linker DCEs unreferenced archive members
+//      otherwise); `build.rs` then exports them via
+//      `--export-dynamic-symbol=karac_*`.
+//   2. Provide binary-level stand-ins for the Debugger-Contract globals
+//      (`KARAC_SPAWN_SITES*`) that the runtime references as externs the
+//      *program* normally defines. JITted user modules carry their own
+//      module-local defs; these only satisfy the test binary's own link.
+//
+// Without these the JIT fails to materialize `main`
+// (`Symbols not found: [karac_runtime_*]`) and every test returns empty
+// output — green on macOS (Mach-O `dlsym` needs no export flag) but red
+// on Linux. See docs/spikes/lljit-productionization.md.
+#[no_mangle]
+#[allow(non_upper_case_globals)]
+pub static KARAC_SPAWN_SITES_ENABLED: u8 = 0;
+
+#[no_mangle]
+#[allow(non_upper_case_globals)]
+pub static KARAC_SPAWN_SITES_LEN: u32 = 0;
+
+#[no_mangle]
+#[allow(non_upper_case_globals)]
+pub static KARAC_SPAWN_SITES: KaracSpawnSitesPad = KaracSpawnSitesPad([0; 4]);
+
+#[repr(C, align(8))]
+pub struct KaracSpawnSitesPad([u64; 4]);
+
+unsafe impl Sync for KaracSpawnSitesPad {}
+
+#[used]
+static _FORCE_LINK_CALL_SITE: fn() -> usize = force_link_karac_runtime;
+
+fn force_link_karac_runtime() -> usize {
+    karac_runtime::__preserve_no_mangle_symbols()
+}
+
 fn jit(src: &str) -> i32 {
     let mut parsed = karac::parse(src);
     assert!(

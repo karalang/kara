@@ -3577,13 +3577,31 @@ impl<'ctx> super::Codegen<'ctx> {
         // Vec / String binding: zero the source's `cap` so the source's
         // `FreeVecBuffer` cleanup's `cap > 0` guard skips. The consumer
         // now owns the buffer.
+        //
+        // Guarded to a slot that holds the Vec/String struct INLINE
+        // (`slot.ty == vec_ty`), exactly like the struct arm above. A
+        // `ref Vec`/`ref String` param's slot is an 8-byte POINTER into the
+        // caller's frame, not a 24-byte `{ptr,i64,i64}` — GEP-ing field 2
+        // (`cap`, offset 16) off it and storing 8 bytes writes past the
+        // alloca and corrupts the stack. That UB is invisible under `-O0`
+        // (frame slack absorbs the write) but the optimizer weaponizes it:
+        // a borrow-returning fn (`fn f(u: ref String) -> ref String { u }`)
+        // segfaults under `-O2`/LLJIT, surfacing as empty output on the JIT
+        // execution lane while the AOT oracle stayed green (B-2026-07-07-4).
+        // A borrow takes no ownership, so there is nothing to move-null.
         if self.vec_elem_types.contains_key(var_name) {
-            if let Ok(cap_ptr) = self
-                .builder
-                .build_struct_gep(vec_ty, slot.ptr, 2, "move.cap.p")
-            {
-                let zero = i64_t.const_int(0, false);
-                let _ = self.builder.build_store(cap_ptr, zero);
+            let holds_inline = matches!(
+                slot.ty,
+                inkwell::types::BasicTypeEnum::StructType(held) if held == vec_ty
+            );
+            if holds_inline {
+                if let Ok(cap_ptr) =
+                    self.builder
+                        .build_struct_gep(vec_ty, slot.ptr, 2, "move.cap.p")
+                {
+                    let zero = i64_t.const_int(0, false);
+                    let _ = self.builder.build_store(cap_ptr, zero);
+                }
             }
             return;
         }
