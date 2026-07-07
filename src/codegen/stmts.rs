@@ -6027,7 +6027,28 @@ impl<'ctx> super::Codegen<'ctx> {
             kind,
             super::SnapshotPrimKind::String | super::SnapshotPrimKind::Vec(_)
         ) {
-            self.zero_vec_alloca_cap(slot.ptr);
+            // Guard by the SLOT's actual LLVM type, not just `kind`. The
+            // `snapshot_capture` map is keyed by NAME, so a cross-type
+            // cross-cell rebind — `let x = 5` (replayed as an i64 binding)
+            // followed by `let x: String = …` in the same synthesized cell —
+            // makes `snapshot_capture["x"] == String` fire this branch for
+            // BOTH bindings, including the i64 one whose slot is an 8-byte
+            // `alloca i64`. `zero_vec_alloca_cap` GEPs field 2 (`cap`, offset
+            // 16) of a `{ptr,i64,i64}`, so on the i64 slot it stores 8 bytes
+            // 16 bytes past the alloca and corrupts the frame — tolerated
+            // under AOT (frame slack) but the tighter LLJIT frame puts a live
+            // pointer there and the cell crashes at PC=0 (B-2026-07-07-6).
+            // Only a slot that actually holds the `{ptr,i64,i64}` struct
+            // inline owns a `cap` to suppress; the i64 binding has nothing to
+            // free and is skipped (its spurious capture-store is harmless —
+            // the real String binding's capture overwrites the global).
+            let holds_vec_struct = matches!(
+                slot.ty,
+                inkwell::types::BasicTypeEnum::StructType(held) if held == self.vec_struct_type()
+            );
+            if holds_vec_struct {
+                self.zero_vec_alloca_cap(slot.ptr);
+            }
         }
         // Slice c-repl.B.5.3b/B.5.3c: no slot-suppression for Map or
         // Set. Unlike Vec/String which use a cap=0 sentinel in the
