@@ -882,8 +882,8 @@ B-2026-07-02-10..13, see the ledger.
   unsigned scratch compare as previously thought); a `product` DEFAULT body for
   USER `Reduce` impls (needs the numeric-identity mechanism of S6c-10 — the
   bound-generic `prod` on the builtin containers is DONE, S6c-11); blanket
-  `Vec[T]` impls; user trait-impl methods over builtin containers — the
-  epic is now **in progress**: the concrete `impl Trait for Column[i64]`/`[f64]`
+  `Vec[T]` impls; user trait-impl methods over builtin containers — this
+  last item's epic is now **COMPLETE** (S6c-12, Slices 1–6): the concrete `impl Trait for Column[i64]`/`[f64]`
   and `Tensor[..]` cases (the 3-surface gap re-probed 2026-07-04) **landed as
   S6c-12 Slices 1 + 2**, and trait **DEFAULT** methods over containers **landed
   as Slice 3** (they already worked — slice 3 is regression coverage).
