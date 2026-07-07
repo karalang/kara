@@ -9676,6 +9676,20 @@ fn cmd_fix(filename: &str, dry_run: bool) {
                     .iter()
                     .filter_map(|e| e.replacement.as_deref().cloned()),
             );
+            // Multi-edit `fix_diff` envelopes (B-2026-07-06-4). The
+            // `ConcurrentSharedStruct` / `ConcurrentPlainStruct`
+            // diagnostics carry a full machine-applicable migration
+            // (`par struct` keyword insert + per-mut-field `Mutex[T]`
+            // wraps) in `error_fix_diffs`, keyed by the diagnostic's
+            // primary span. `collect_diagnostics` already emits these as
+            // a top-level `"fix_diff":[...]` array to JSON, but until now
+            // `cmd_fix` collected only each error's single-edit
+            // `.replacement` — so `karac fix` applied nothing for these
+            // two even though the JSON advertised a fix. Flatten every
+            // envelope's edits in here; the descending-offset sort +
+            // overlap dedup below applies them safely alongside the
+            // single-edit replacements.
+            edits.extend(o.error_fix_diffs.values().flatten().cloned());
         }
         if let Some(ref t) = pipeline.typed {
             // Typecheck fix-its (e.g. E0205 missing-match-arm insertion, the

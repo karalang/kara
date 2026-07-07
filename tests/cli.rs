@@ -5568,6 +5568,106 @@ fn test_fix_applies_e0412_receiver_rewrite() {
 }
 
 #[test]
+fn test_fix_applies_concurrent_plain_struct_migration() {
+    // B-2026-07-06-4: `ConcurrentPlainStruct` computes a full multi-edit
+    // `fix_diff` migration (insert `par ` keyword + strip `mut ` + wrap
+    // the mut field in `Mutex[T]`) and `collect_diagnostics` emits it to
+    // JSON as `"fix_diff":[...]`. Before the fix, `cmd_fix` collected only
+    // each error's single-edit `.replacement` and applied NOTHING here
+    // even though the JSON advertised a fix. `karac fix` must now apply
+    // the whole envelope.
+    let path = fix_scratch_file(
+        "concurrent-plain",
+        "struct State { id: i64, mut count: i64 }\n\
+         fn use_a(s: State) { }\n\
+         fn use_b(s: State) { }\n\
+         fn main() {\n\
+             let s = State { id: 0, count: 0 };\n\
+             par {\n\
+                 use_a(s);\n\
+                 use_b(s);\n\
+             }\n\
+         }\n",
+    );
+    let out = karac_bin()
+        .args(["fix", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "fix failed: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // 1 `par ` insert + 1 `mut ` strip + 2 `Mutex[`/`]` wraps = 4 edits.
+    assert!(stdout.contains("applied 4 fix"), "stdout: {stdout}");
+    let rewritten = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        rewritten.contains("par struct State"),
+        "expected `par struct` migration, got: {rewritten}"
+    );
+    assert!(
+        rewritten.contains("count: Mutex[i64]"),
+        "expected mut field wrapped in Mutex, got: {rewritten}"
+    );
+    assert!(
+        !rewritten.contains("mut count"),
+        "`mut ` should have been stripped from the field, got: {rewritten}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn test_fix_applies_concurrent_shared_struct_migration() {
+    // B-2026-07-06-4, sibling kind: `ConcurrentSharedStruct` renames the
+    // `shared` keyword to `par` and wraps every mut field. Same dropped-
+    // envelope bug; verify all 7 edits (1 rename + 2 mut strips + 2 mut
+    // fields × 2 wraps) land through `karac fix`.
+    let path = fix_scratch_file(
+        "concurrent-shared",
+        "shared struct Counter { val: i64, mut count: i64, mut tag: i64 }\n\
+         fn use_a(c: Counter) { }\n\
+         fn use_b(c: Counter) { }\n\
+         fn main() {\n\
+             let c = Counter { val: 0, count: 0, tag: 0 };\n\
+             par {\n\
+                 use_a(c);\n\
+                 use_b(c);\n\
+             }\n\
+         }\n",
+    );
+    let out = karac_bin()
+        .args(["fix", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "fix failed: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("applied 7 fix"), "stdout: {stdout}");
+    let rewritten = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        rewritten.contains("par struct Counter"),
+        "expected `shared` → `par` rename, got: {rewritten}"
+    );
+    assert!(
+        rewritten.contains("count: Mutex[i64]") && rewritten.contains("tag: Mutex[i64]"),
+        "expected both mut fields wrapped in Mutex, got: {rewritten}"
+    );
+    assert!(
+        !rewritten.contains("shared struct"),
+        "`shared` keyword should be gone, got: {rewritten}"
+    );
+    assert!(
+        rewritten.contains("val: i64,"),
+        "immutable field `val` must stay untouched, got: {rewritten}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn test_json_e0412_carries_replacement_payload() {
     // The E0412 JSON diagnostic carries the machine-applicable
     // `replacement` payload (same shape as resolver/ownership fixes)
