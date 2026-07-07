@@ -6614,6 +6614,37 @@ fn main() {
     }
 
     #[test]
+    fn e2e_iter_adaptor_zip_identity_collect_codegen() {
+        // B-2026-07-04-2 sub-part 1 (zip half): `A.iter().zip(B.iter()).collect()`
+        // pairs the two sources element-wise into a `Vec[(EA, EB)]`, stopping at
+        // the shorter — it fell through to the loud dispatch-fail under `karac
+        // build`, though `karac run` handled it. The fix emits an index loop
+        // `while i < min { acc.push((A[i], B[i])); i += 1 }`; `A[i]`/`B[i]` copy,
+        // so both POD sources SURVIVE (asserted via `a.len()`/`b.len()`).
+        // Exercises unequal lengths and a min-length cutoff. Scoped to POD tuple
+        // elements — a HEAP-bearing pair (`(String, i64)`) is not sound through
+        // this index lowering and still bails (loud dispatch-fail, no
+        // miscompile); a downstream adaptor after `zip` (`zip().map(…)`) bails
+        // too.
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    let a: Vec[i64] = Vec[1i64, 2i64, 3i64];
+    let b: Vec[i64] = Vec[10i64, 20i64];
+    let r: Vec[(i64, i64)] = a.iter().zip(b.iter()).collect();
+    println(f"{r.len()} {r[0].0} {r[0].1} {r[1].0} {r[1].1} {a.len()} {b.len()}");
+    let c: Vec[i64] = Vec[7i64, 8i64];
+    let d: Vec[i64] = Vec[70i64, 80i64, 90i64];
+    let e: Vec[(i64, i64)] = c.iter().zip(d.iter()).collect();
+    println(f"{e.len()} {e[1].0} {e[1].1}");
+}
+"#,
+        ) {
+            assert_eq!(out, "2 1 10 2 20 3 2\n2 8 80\n");
+        }
+    }
+
+    #[test]
     fn e2e_iter_adaptor_collect_enumerate_codegen() {
         // B-2026-07-04-2 sub-part 1: `<iter>.enumerate().collect()` — the
         // element-retyping adaptor `T` → `(i64, T)`. Lowered like the other

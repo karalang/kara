@@ -3976,6 +3976,37 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Ok(None);
                 }
             }
+            // B-2026-07-04-2 sub-part 1 (zip): `A.iter().zip(B.iter()).collect()`
+            // pairs the two sources element-wise into a `Vec[(EA, EB)]`, stopping
+            // at the shorter (min length). Both sides must be a `<indexable>
+            // .iter()` so the emitted loop can index the underlying base
+            // (`base[i]`); the paired push `acc.push((A[i], B[i]))` clones each
+            // element (sources survive). Downstream adaptors after `zip`
+            // (`zip().map(…)`) and non-`.iter()` sources bail to the loud
+            // dispatch-fail — never a miscompile — and stay OPEN under sub-part 1.
+            if method == "zip" && args.len() == 1 {
+                let iter_base = |e: &Expr| -> Option<Expr> {
+                    match &e.kind {
+                        ExprKind::MethodCall {
+                            object,
+                            method,
+                            args,
+                            ..
+                        } if args.is_empty() && method == "iter" => Some((**object).clone()),
+                        _ => None,
+                    }
+                };
+                if let (Some(base_a), Some(base_b)) =
+                    (iter_base(object.as_ref()), iter_base(&args[0].value))
+                {
+                    if let Some(v) =
+                        self.try_compile_zip_identity_collect(&base_a, &base_b, call_span)?
+                    {
+                        return Ok(Some(v));
+                    }
+                    return Ok(None);
+                }
+            }
         }
 
         let mut steps: Vec<IterAdaptor> = Vec::new();
@@ -5107,6 +5138,195 @@ impl<'ctx> super::Codegen<'ctx> {
         let block = Expr {
             kind: ExprKind::Block(Block {
                 stmts: vec![let_vec, loop_a, loop_b],
+                final_expr: Some(Box::new(ident(&vec_name))),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        Ok(Some(self.compile_expr(&block)?))
+    }
+
+    /// Lower `A.iter().zip(B.iter()).collect()` into a `Vec[(EA, EB)]` by
+    /// pairing the two indexable bases element-wise up to the shorter length
+    /// (B-2026-07-04-2 sub-part 1). Returns `Ok(None)` if the result type isn't
+    /// a recorded `Vec[T]`. The emitted block is:
+    ///
+    /// ```text
+    /// { let mut __zv: Vec[(EA, EB)] = Vec.new();
+    ///   let __zna = A.len();  let __znb = B.len();
+    ///   let mut __zi = 0;
+    ///   while __zi < __zna && __zi < __znb {
+    ///     __zv.push((A[__zi], B[__zi]));
+    ///     __zi = __zi + 1;
+    ///   }
+    ///   __zv }
+    /// ```
+    ///
+    /// `A[i]` / `B[i]` clone the indexed element, so both borrowed sources
+    /// survive and the accumulator owns independent copies.
+    fn try_compile_zip_identity_collect(
+        &mut self,
+        base_a: &Expr,
+        base_b: &Expr,
+        call_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let vec_te = match self
+            .owned_temp_drops
+            .get(&(call_span.offset, call_span.length))
+        {
+            Some(te) => te.clone(),
+            None => return Ok(None),
+        };
+        let elem_te = match &vec_te.kind {
+            TypeKind::Path(p) if p.segments.last().map(|s| s.as_str()) == Some("Vec") => {
+                p.generic_args.as_ref().and_then(|ga| match ga.first() {
+                    Some(GenericArg::Type(t)) => Some(t.clone()),
+                    _ => None,
+                })
+            }
+            _ => return Ok(None),
+        };
+        // POD-only: a heap-bearing paired tuple (`(String, i64)`, …) is NOT
+        // sound through this index lowering — `A[i]` reads the heap element into
+        // the pushed tuple in a way that leaks/aliases the source buffer (an
+        // ASAN/LSan failure), so gate it out and keep bailing to the loud
+        // dispatch-fail. A copy-free heap zip needs the per-element move/clone
+        // plumbing the enumerate path uses and stays OPEN under sub-part 1.
+        match elem_te {
+            Some(te) if !self.type_expr_has_drop_heap(&te) => {}
+            _ => return Ok(None),
+        }
+
+        let uid = self.indexed_elem_counter;
+        self.indexed_elem_counter += 1;
+        let sp = call_span.clone();
+        let vec_name = format!("__zv_{}", uid);
+        let na_name = format!("__zna_{}", uid);
+        let nb_name = format!("__znb_{}", uid);
+        let i_name = format!("__zi_{}", uid);
+        let ident = |name: &str| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: sp.clone(),
+        };
+        let i64_lit = |n: i64| Expr {
+            kind: ExprKind::Integer(n, Some(crate::token::IntSuffix::I64)),
+            span: sp.clone(),
+        };
+        let bin = |op: BinOp, l: Expr, r: Expr| Expr {
+            kind: ExprKind::Binary {
+                op,
+                left: Box::new(l),
+                right: Box::new(r),
+            },
+            span: sp.clone(),
+        };
+        let let_stmt = |is_mut: bool, name: &str, ty: Option<TypeExpr>, value: Expr| Stmt {
+            kind: StmtKind::Let {
+                is_mut,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(name.to_string()),
+                    span: sp.clone(),
+                },
+                ty,
+                value,
+            },
+            span: sp.clone(),
+        };
+        // `<base>.len()`
+        let len_of = |base: &Expr| Expr {
+            kind: ExprKind::MethodCall {
+                object: Box::new(base.clone()),
+                method: "len".to_string(),
+                turbofish: None,
+                args: vec![],
+                args_close_span: sp.clone(),
+            },
+            span: sp.clone(),
+        };
+        // `<base>[<i>]`
+        let index_of = |base: &Expr| Expr {
+            kind: ExprKind::Index {
+                object: Box::new(base.clone()),
+                index: Box::new(ident(&i_name)),
+            },
+            span: sp.clone(),
+        };
+
+        let vec_new = Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Path {
+                        segments: vec!["Vec".to_string(), "new".to_string()],
+                        generic_args: None,
+                    },
+                    span: sp.clone(),
+                }),
+                args: vec![],
+            },
+            span: sp.clone(),
+        };
+
+        // Loop body: `__zv.push((A[__zi], B[__zi])); __zi = __zi + 1;`
+        let push_pair = Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::MethodCall {
+                    object: Box::new(ident(&vec_name)),
+                    method: "push".to_string(),
+                    turbofish: None,
+                    args: vec![CallArg {
+                        label: None,
+                        mut_marker: false,
+                        value: Expr {
+                            kind: ExprKind::Tuple(vec![index_of(base_a), index_of(base_b)]),
+                            span: sp.clone(),
+                        },
+                        span: sp.clone(),
+                    }],
+                    args_close_span: sp.clone(),
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let incr = Stmt {
+            kind: StmtKind::Assign {
+                target: ident(&i_name),
+                value: bin(BinOp::Add, ident(&i_name), i64_lit(1)),
+            },
+            span: sp.clone(),
+        };
+        // `while __zi < __zna && __zi < __znb { … }`
+        let while_cond = bin(
+            BinOp::And,
+            bin(BinOp::Lt, ident(&i_name), ident(&na_name)),
+            bin(BinOp::Lt, ident(&i_name), ident(&nb_name)),
+        );
+        let while_stmt = Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::While {
+                    label: None,
+                    condition: Box::new(while_cond),
+                    body: Block {
+                        stmts: vec![push_pair, incr],
+                        final_expr: None,
+                        span: sp.clone(),
+                    },
+                    attributes: Vec::new(),
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+
+        let block = Expr {
+            kind: ExprKind::Block(Block {
+                stmts: vec![
+                    let_stmt(true, &vec_name, Some(vec_te), vec_new),
+                    let_stmt(false, &na_name, None, len_of(base_a)),
+                    let_stmt(false, &nb_name, None, len_of(base_b)),
+                    let_stmt(true, &i_name, None, i64_lit(0)),
+                    while_stmt,
+                ],
                 final_expr: Some(Box::new(ident(&vec_name))),
                 span: sp.clone(),
             }),
