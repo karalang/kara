@@ -1336,7 +1336,15 @@ impl<'a> super::Resolver<'a> {
                 span: b.span.clone(),
                 kind: ResolveErrorKind::UndefinedName,
                 suggestion: Some(format!("rename to `{}`", suggestion)),
-                replacement: None,
+                // Machine-applicable rename (B-2026-07-06-3): the exact
+                // Const-cased candidate is already computed above, so wire
+                // it as a `.replacement` spanning the name identifier only
+                // (`b.name_span`, not the whole `let … = …;` statement).
+                replacement: Some(Box::new(crate::resolver::TextEdit {
+                    offset: b.name_span.offset,
+                    length: b.name_span.length,
+                    replacement: suggestion.clone(),
+                })),
                 stub_hint: None,
             });
             // Continue and still attempt registration under the

@@ -1976,6 +1976,11 @@ impl super::Parser {
         let start = self.current_span();
         self.expect(&Token::Let)?;
         let is_mut = self.eat(&Token::Mut);
+        // Capture the identifier's own span before `expect_identifier`
+        // advances past it — `current_span()` points at the peeked token.
+        // The resolver's Const-class naming fix (B-2026-07-06-3) needs the
+        // name-only span to emit a machine-applicable rename edit.
+        let name_span = self.current_span();
         let name = self.expect_identifier()?;
         // Slice 1 accepts the syntactic surface for downstream consumers.
         // The Const-class naming rule (all-caps with optional digits /
@@ -2002,6 +2007,7 @@ impl super::Parser {
             is_private,
             is_mut,
             name,
+            name_span,
             ty,
             value,
             deprecation,

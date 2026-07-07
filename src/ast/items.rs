@@ -1025,6 +1025,11 @@ pub struct ModuleBinding {
     pub is_private: bool,
     pub is_mut: bool,
     pub name: String,
+    /// Span of the `name` identifier token alone (not the whole `let … = …;`
+    /// statement, which is `span`). Lets the resolver's Const-class naming
+    /// diagnostic (`E_MODULE_BINDING_NAMING`) attach a machine-applicable
+    /// rename edit spanning exactly the identifier — B-2026-07-06-3.
+    pub name_span: Span,
     /// Optional `: TYPE` annotation. `None` when elided.
     pub ty: Option<TypeExpr>,
     pub value: Expr,

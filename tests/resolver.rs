@@ -4668,6 +4668,63 @@ fn test_module_binding_lowercase_name_rejected() {
 }
 
 #[test]
+fn test_module_binding_naming_carries_machine_replacement() {
+    // B-2026-07-06-3: the Const-class naming diagnostic computes the exact
+    // SCREAMING_SNAKE candidate — wire it as a machine-applicable
+    // `.replacement` spanning the name identifier only, so `karac fix` can
+    // apply it (previously emitted as prose in `suggestion` only).
+    let src = "let maxRetries: i32 = 3;";
+    let errors = resolve_errors(src);
+    let err = errors
+        .iter()
+        .find(|e| e.message.contains("E_MODULE_BINDING_NAMING"))
+        .expect("expected naming diagnostic");
+    let edit = err
+        .replacement
+        .as_ref()
+        .expect("naming diagnostic must carry a machine-applicable replacement");
+    assert_eq!(edit.replacement, "MAX_RETRIES");
+    // The edit must span exactly the `maxRetries` identifier, not the whole
+    // `let … = …;` statement — applying it in place yields the rename.
+    let applied = {
+        let mut s = src.to_string();
+        s.replace_range(edit.offset..edit.offset + edit.length, &edit.replacement);
+        s
+    };
+    assert_eq!(applied, "let MAX_RETRIES: i32 = 3;");
+}
+
+#[test]
+fn test_undefined_label_suggests_nearby_label() {
+    // B-2026-07-06-3: a misspelled `continue`/`break` label fuzzy-matches
+    // the loop labels in scope and reports a `did you mean` suggestion
+    // (prose — the label token carries no span, so no machine edit yet).
+    let errors = resolve_errors("fn main() { outer: loop { loop { continue otuer; } } }");
+    let err = errors
+        .iter()
+        .find(|e| e.kind == ResolveErrorKind::UndefinedLabel)
+        .expect("expected UndefinedLabel diagnostic");
+    assert_eq!(err.suggestion.as_deref(), Some("outer"));
+    assert!(
+        err.message.contains("did you mean `outer`?"),
+        "expected did-you-mean prose, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn test_undefined_label_no_suggestion_when_nothing_close() {
+    // No nearby label → no suggestion, no spurious `did you mean`.
+    let errors = resolve_errors("fn main() { loop { continue zzzzzzzz; } }");
+    let err = errors
+        .iter()
+        .find(|e| e.kind == ResolveErrorKind::UndefinedLabel)
+        .expect("expected UndefinedLabel diagnostic");
+    assert!(err.suggestion.is_none());
+    assert!(!err.message.contains("did you mean"));
+}
+
+#[test]
 fn test_duplicate_module_binding_rejected() {
     // Same-name module binding declared twice at module scope is
     // rejected with `E_DUPLICATE_MODULE_BINDING` per the tracker

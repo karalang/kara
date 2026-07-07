@@ -5668,6 +5668,30 @@ fn test_fix_applies_concurrent_shared_struct_migration() {
 }
 
 #[test]
+fn test_fix_applies_module_binding_const_rename() {
+    // B-2026-07-06-3: a module-level `let camelCase` violates the
+    // Const-class naming rule; the resolver computes the exact
+    // SCREAMING_SNAKE candidate and now carries it as a machine-applicable
+    // `.replacement` spanning the name identifier. `karac fix` applies the
+    // rename at the declaration site.
+    let path = fix_scratch_file("const-rename", "pub let myConfig: i64 = 5;\n");
+    let out = karac_bin()
+        .args(["fix", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "fix failed: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("applied 1 fix"), "stdout: {stdout}");
+    let rewritten = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(rewritten, "pub let MY_CONFIG: i64 = 5;\n");
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn test_json_e0412_carries_replacement_payload() {
     // The E0412 JSON diagnostic carries the machine-applicable
     // `replacement` payload (same shape as resolver/ownership fixes)

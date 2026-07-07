@@ -24,6 +24,21 @@ use crate::token::Span;
 use super::{ResolveError, ResolveErrorKind, ScopeKind, SymbolKind};
 
 impl<'a> super::Resolver<'a> {
+    /// Fuzzy-match a misspelled `break` / `continue` label against the
+    /// loop labels currently in scope, returning the nearest one for the
+    /// `undefined loop label` diagnostic's `did you mean` prose
+    /// (B-2026-07-06-3). Prose only: `Break`/`Continue` carry no
+    /// label-token span in the AST, so a machine-applicable `.replacement`
+    /// is deferred to the follow-on that threads that span through.
+    fn nearby_loop_label(&self, name: &str) -> Option<String> {
+        let candidates: Vec<&str> = self
+            .loop_labels
+            .iter()
+            .filter_map(|(l, _)| l.as_deref())
+            .collect();
+        crate::edit_distance::suggest_similar(name, &candidates)
+    }
+
     // ── Block & Statement resolution ────────────────────────────
 
     pub(crate) fn resolve_block(&mut self, block: &Block) {
@@ -252,11 +267,16 @@ impl<'a> super::Resolver<'a> {
                             });
                         }
                         None => {
+                            let suggestion = self.nearby_loop_label(name);
+                            let mut message = format!("undefined loop label `{}`", name);
+                            if let Some(ref s) = suggestion {
+                                message.push_str(&format!(", did you mean `{}`?", s));
+                            }
                             self.errors.push(ResolveError {
-                                message: format!("undefined loop label `{}`", name),
+                                message,
                                 span: expr.span.clone(),
                                 kind: ResolveErrorKind::UndefinedLabel,
-                                suggestion: None,
+                                suggestion,
                                 replacement: None,
                                 stub_hint: None,
                             });
@@ -272,11 +292,16 @@ impl<'a> super::Resolver<'a> {
                         .iter()
                         .any(|(l, _)| l.as_deref() == Some(name.as_str()))
                     {
+                        let suggestion = self.nearby_loop_label(name);
+                        let mut message = format!("undefined loop label `{}`", name);
+                        if let Some(ref s) = suggestion {
+                            message.push_str(&format!(", did you mean `{}`?", s));
+                        }
                         self.errors.push(ResolveError {
-                            message: format!("undefined loop label `{}`", name),
+                            message,
                             span: expr.span.clone(),
                             kind: ResolveErrorKind::UndefinedLabel,
-                            suggestion: None,
+                            suggestion,
                             replacement: None,
                             stub_hint: None,
                         });
@@ -574,11 +599,16 @@ impl<'a> super::Resolver<'a> {
                         .iter()
                         .any(|(l, _)| l.as_deref() == Some(name.as_str()))
                     {
+                        let suggestion = self.nearby_loop_label(name);
+                        let mut message = format!("undefined loop label `{}`", name);
+                        if let Some(ref s) = suggestion {
+                            message.push_str(&format!(", did you mean `{}`?", s));
+                        }
                         self.errors.push(ResolveError {
-                            message: format!("undefined loop label `{}`", name),
+                            message,
                             span: expr.span.clone(),
                             kind: ResolveErrorKind::UndefinedLabel,
-                            suggestion: None,
+                            suggestion,
                             replacement: None,
                             stub_hint: None,
                         });
