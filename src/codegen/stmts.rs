@@ -1478,11 +1478,18 @@ impl<'ctx> super::Codegen<'ctx> {
         value: &Expr,
         elem_ty: BasicTypeEnum<'ctx>,
     ) {
+        // Source is a field of a caller-retains by-value struct PARAM
+        // (`owned_struct_params`) OR of a heap `for`-loop struct/enum ELEMENT
+        // (`for_loop_owned_agg_vars`, B-2026-07-04-17) — both retain + free the
+        // field buffer at their own teardown (the param's struct-drop / the
+        // container's per-element drain), so a field moved into a fresh local
+        // must own an independent copy.
         let is_param_field = matches!(
             &value.kind,
             ExprKind::FieldAccess { object, .. }
                 if matches!(&object.kind, ExprKind::Identifier(p)
-                    if self.owned_struct_params.contains(p.as_str()))
+                    if self.owned_struct_params.contains(p.as_str())
+                        || self.for_loop_owned_agg_vars.contains(p.as_str()))
         );
         if !is_param_field {
             return;
@@ -1499,6 +1506,64 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             let copied = self.emit_vecstr_defensive_copy(cur, elem_ty, elem_te.as_ref());
             let _ = self.builder.build_store(slot_ptr, copied);
+        }
+    }
+
+    /// B-2026-07-04-17: deep-copy the field(s) of a just-bound aggregate at
+    /// `alloca` that alias a heap-owning `for`-loop struct ELEMENT
+    /// (`for_loop_owned_agg_vars`), so the new binding's struct-drop and the
+    /// container's per-element drain free independent heap. Two shapes:
+    ///  - `let x = a` (whole-element move): copy EVERY heap field of `x`.
+    ///  - `let w = A { .. f: a.g .. }`: copy ONLY the field(s) whose init reads
+    ///    heap OUT of the element — a sibling field from a fresh value keeps its
+    ///    sole owner (copying it would leak). Fields are matched by NAME to the
+    ///    declared (physical) order so the in-place field GEP is correct.
+    fn deep_copy_for_loop_agg_element_move(
+        &mut self,
+        value: &Expr,
+        alloca: PointerValue<'ctx>,
+        struct_name: &str,
+    ) {
+        match &value.kind {
+            ExprKind::Identifier(src) if self.for_loop_owned_agg_vars.contains(src.as_str()) => {
+                self.deep_copy_struct_heap_fields_in_place(alloca, struct_name);
+            }
+            ExprKind::StructLiteral { fields, .. } => {
+                let Some(&st) = self.struct_types.get(struct_name) else {
+                    return;
+                };
+                let Some(ftes) = self.struct_field_type_exprs.get(struct_name).cloned() else {
+                    return;
+                };
+                let names = self.struct_field_names.get(struct_name).cloned();
+                for field_init in fields {
+                    let from_elem = match &field_init.value.kind {
+                        ExprKind::FieldAccess { object, .. } => matches!(
+                            &object.kind,
+                            ExprKind::Identifier(a)
+                                if self.for_loop_owned_agg_vars.contains(a.as_str())
+                        ),
+                        ExprKind::Identifier(a) => {
+                            self.for_loop_owned_agg_vars.contains(a.as_str())
+                        }
+                        _ => false,
+                    };
+                    if !from_elem {
+                        continue;
+                    }
+                    let idx = match names
+                        .as_ref()
+                        .and_then(|ns| ns.iter().position(|n| n == &field_init.name))
+                    {
+                        Some(i) => i,
+                        None => continue,
+                    };
+                    if let Some(fte) = ftes.get(idx) {
+                        self.deep_copy_one_aggregate_field(alloca, st, idx as u32, fte);
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1817,6 +1882,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // defensive-copied at consume sites (leak via the
                     // source-suppress that pairs with the copy).
                     self.for_loop_borrow_vars.remove(var_name);
+                    self.for_loop_owned_agg_vars.remove(var_name);
                     // `let it = s.chars()` — codegen materializes the
                     // char-iterator as an eager `Vec[char]` snapshot (see the
                     // `chars()` intercept in `compile_method_call`), so register
@@ -3796,6 +3862,30 @@ impl<'ctx> super::Codegen<'ctx> {
                                 self.track_user_drop_var(&struct_name, var_name, alloca);
                             } else if self.struct_types.contains_key(&struct_name) {
                                 self.track_struct_var(&struct_name, alloca);
+                            }
+                            // B-2026-07-04-17: `x`'s heap aliases a heap-owning
+                            // for-loop struct ELEMENT the container's per-element
+                            // drop frees. Deep-copy the aliasing field(s) of `x`
+                            // in place so `x`'s struct-drop (just registered) and
+                            // the container's drain free independent buffers.
+                            // Two shapes:
+                            //   `let x = a`            → whole-struct move of the
+                            //                            element: copy every field.
+                            //   `let w = A { s: a.s }` → a fresh literal whose
+                            //                            field(s) move heap OUT of
+                            //                            the element: copy ONLY the
+                            //                            element-sourced fields (a
+                            //                            sibling field from a fresh
+                            //                            value must NOT be copied —
+                            //                            that would leak it).
+                            if self.struct_types.contains_key(&struct_name)
+                                && !self.shared_types.contains_key(&struct_name)
+                            {
+                                self.deep_copy_for_loop_agg_element_move(
+                                    value,
+                                    alloca,
+                                    &struct_name,
+                                );
                             }
                             // Store-in-struct slice (B-2026-06-22-2): a fresh
                             // heap-env closure stored in a struct field

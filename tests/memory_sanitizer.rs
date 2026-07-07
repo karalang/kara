@@ -20229,4 +20229,137 @@ fn main() {
             "option_field_moveout_clean",
         );
     }
+
+    #[test]
+    fn asan_forloop_struct_element_whole_move_no_double_free() {
+        // B-2026-07-04-17: iterating an owned `Vec[<heap struct>]` by value and
+        // MOVING the loop element whole into a NEW owner (`let x = a`) must not
+        // double-free at teardown — the element binding is a bit-copy alias of
+        // the container slot, so `x`'s scope drop and the container's per-element
+        // drain would free the same String buffer twice.
+        assert_clean_asan_run(
+            r#"
+struct A { s: String }
+fn build() -> Vec[A] {
+    let mut v: Vec[A] = Vec.new();
+    let mut i = 0;
+    while i < 6 { v.push(A { s: "forloop_element_whole_move_payload_theta_xx".to_string() }); i = i + 1; }
+    v
+}
+fn main() {
+    let items = build();
+    let mut n: i64 = 0;
+    for a in items {
+        let x = a;
+        n = n + x.s.len();
+    }
+    println(n);
+}
+"#,
+            &["258"], // 6 * len("forloop_element_whole_move_payload_theta_xx") = 6 * 43
+            "forloop_struct_element_whole_move_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_forloop_struct_element_field_move_no_double_free() {
+        // B-2026-07-04-17, the field-move form: moving a heap field OUT of a
+        // for-loop element into a fresh struct literal (`let w = A { s: a.s }`)
+        // must not double-free — same aliasing hazard as the whole-move.
+        assert_clean_asan_run(
+            r#"
+struct A { s: String }
+fn build() -> Vec[A] {
+    let mut v: Vec[A] = Vec.new();
+    let mut i = 0;
+    while i < 6 { v.push(A { s: "forloop_element_field_move_payload_iota_xx".to_string() }); i = i + 1; }
+    v
+}
+fn main() {
+    let items = build();
+    let mut n: i64 = 0;
+    for a in items {
+        let w = A { s: a.s };
+        n = n + w.s.len();
+    }
+    println(n);
+}
+"#,
+            &["252"], // 6 * len("forloop_element_field_move_payload_iota_xx") = 6 * 42
+            "forloop_struct_element_field_move_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_forloop_struct_element_nested_and_option_field_no_double_free() {
+        // B-2026-07-04-17 variants named in the ledger: a NESTED heap struct
+        // field and an `Option[String]` field. Moving such an element to a new
+        // owner deep-copies recursively (copy-depth == drop-depth), so neither
+        // the nested String nor the Option payload double-frees.
+        assert_clean_asan_run(
+            r#"
+struct Inner { s: String }
+struct Outer { inner: Inner, tag: Option[String] }
+fn build() -> Vec[Outer] {
+    let mut v: Vec[Outer] = Vec.new();
+    let mut i = 0;
+    while i < 5 {
+        v.push(Outer {
+            inner: Inner { s: "nested_inner_heap_payload_kappa_field_xx".to_string() },
+            tag: Some("outer_option_string_payload_lambda_field_yy".to_string()),
+        });
+        i = i + 1;
+    }
+    v
+}
+fn main() {
+    let items = build();
+    let mut n: i64 = 0;
+    for a in items {
+        let x = a;
+        n = n + x.inner.s.len();
+        match x.tag { Some(t) => { n = n + t.len(); } None => {} }
+    }
+    println(n);
+}
+"#,
+            &["420"], // 5 * (40 + 44)
+            "forloop_struct_element_nested_and_option_field_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_forloop_struct_element_clean_shapes_stay_clean() {
+        // Regression guard for the shapes that were already CLEAN (must stay
+        // clean, NOT over-copied into a leak): a for-loop DESTRUCTURE and a
+        // pass-by-value call (the callee entry-copies). Neither is a move into a
+        // new local owner, so the defensive copy must NOT fire.
+        assert_clean_asan_run(
+            r#"
+struct A { s: String }
+fn take(a: A) -> i64 { a.s.len() }
+fn build() -> Vec[A] {
+    let mut v: Vec[A] = Vec.new();
+    let mut i = 0;
+    while i < 4 { v.push(A { s: "clean_shape_regression_guard_payload_mu_zz".to_string() }); i = i + 1; }
+    v
+}
+fn main() {
+    let items = build();
+    let mut n: i64 = 0;
+    for a in items {
+        let A { s } = a;
+        n = n + s.len();
+    }
+    let more = build();
+    for a in more {
+        n = n + take(a);
+    }
+    println(n);
+}
+"#,
+            &["336"], // 4 * 42 (destructure) + 4 * 42 (pass-by-value)
+            "forloop_struct_element_clean_shapes_stay_clean",
+        );
+    }
 }

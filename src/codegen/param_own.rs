@@ -403,7 +403,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Deep-copy every Vec/String heap field of the struct value at `base_ptr`,
     /// recursing into nested structs/tuples. Mirrors
     /// `emit_struct_drop_synthesis`'s field walk.
-    fn deep_copy_struct_heap_fields_in_place(
+    pub(super) fn deep_copy_struct_heap_fields_in_place(
         &mut self,
         base_ptr: PointerValue<'ctx>,
         struct_name: &str,
@@ -422,7 +422,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Copy one aggregate field in place per its TypeExpr. String/Vec → outer
     /// buffer copy; nested struct → recurse; tuple → recurse per element;
     /// everything else (primitive, borrow, ignored kinds) → no-op.
-    fn deep_copy_one_aggregate_field(
+    pub(super) fn deep_copy_one_aggregate_field(
         &mut self,
         base_ptr: PointerValue<'ctx>,
         agg_ty: StructType<'ctx>,

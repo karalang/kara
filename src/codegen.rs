@@ -1761,6 +1761,20 @@ pub(super) struct Codegen<'ctx> {
     /// element types; removed when a later `let` rebinds the name (shadow); all
     /// cleared per-function alongside `owned_vecstr_params`.
     pub(crate) for_loop_borrow_vars: HashSet<String>,
+    /// Heap-owning **struct/enum** `for`-loop element bindings (B-2026-07-04-17).
+    /// Like `for_loop_borrow_vars` the binding is a bit-copy alias of the
+    /// container slot whose heap the container's per-element drop frees — but
+    /// structs/enums use the callee-*entry*-copy ownership model, NOT the
+    /// caller-side `maybe_defensive_copy_param_arg` copy Vec/String use (routing
+    /// them through that would double-copy at call-arg sites → leak). So this
+    /// set is consulted ONLY at LOCAL new-owner consume sites that have no
+    /// callee to entry-copy — a whole-struct move `let x = a` and a field/whole
+    /// move into a fresh struct literal (`A { s: a.s }`) — where the new owner's
+    /// slot is deep-copied in place so it and the container own independent
+    /// heap. Populated by `register_for_loop_bindings` (gated on recursive
+    /// copy-support); removed on shadow-rebind; cleared per-function alongside
+    /// `for_loop_borrow_vars`.
+    pub(crate) for_loop_owned_agg_vars: HashSet<String>,
     /// Owned (bare, non-ref) **struct** params with at least one heap
     /// (`Vec`/`String`) field. Same copy-model rationale as
     /// `owned_vecstr_params`, one level in: a by-value struct param is a
@@ -5389,6 +5403,7 @@ impl<'ctx> Codegen<'ctx> {
             entry_slot_ref_vars: HashMap::new(),
             owned_vecstr_params: HashSet::new(),
             for_loop_borrow_vars: HashSet::new(),
+            for_loop_owned_agg_vars: HashSet::new(),
             owned_struct_params: HashSet::new(),
             fn_param_ref: HashMap::new(),
             extern_link_names: HashMap::new(),

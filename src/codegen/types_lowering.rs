@@ -1301,6 +1301,29 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         if let TypeKind::Path(pp) = &elem_te.kind {
             let head = pp.segments.first().map(String::as_str).unwrap_or("");
+            // B-2026-07-04-17: a heap-owning STRUCT / ENUM element. The loop
+            // binding is a bit-copy alias of the container slot whose heap the
+            // container's per-element drop frees, so a LOCAL move to a new owner
+            // (`let x = a` / `A { s: a.s }`) must deep-copy. Marked in the
+            // aggregate set (not `for_loop_borrow_vars`) because struct/enum use
+            // the callee-entry-copy model — see the field's doc. Gated on
+            // recursive copy-support so the defensive copy is complete (copy-
+            // depth == drop-depth); a POD struct/enum needs no copy but the
+            // in-place deep-copy is a harmless no-op there.
+            if self.struct_types.contains_key(head)
+                && !self.shared_types.contains_key(head)
+                && self.aggregate_param_copy_supported_struct(head, &mut Vec::new())
+            {
+                self.for_loop_owned_agg_vars.insert(name.to_string());
+                return;
+            }
+            // NOTE: a BARE user-enum element (`Vec[MyEnum]`) is out of scope for
+            // this slice — the defensive copy is wired only for the struct
+            // let-binding / struct-literal consume sites, so marking a bare enum
+            // would be a no-op. A struct field that is an enum / Option[enum] IS
+            // covered (the struct arm above deep-copies it via
+            // `deep_copy_one_aggregate_field`'s enum/Option arms). Bare-enum
+            // whole-move is tracked as a B-2026-07-04-17 residual.
             let arg = |i: usize| -> Option<&TypeExpr> {
                 match pp.generic_args.as_ref()?.get(i)? {
                     GenericArg::Type(t) => Some(t),
