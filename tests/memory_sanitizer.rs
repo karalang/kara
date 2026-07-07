@@ -1119,6 +1119,37 @@ fn main() {
     }
 
     #[test]
+    fn asan_b04_2_cycle_take_heap_no_leak() {
+        // B-2026-07-04-2 sub-part 1 (cycle+take): `v.iter().cycle().take(n)
+        // .collect()` repeats the source until n elements. Each element is
+        // cloned on push (the source may be read multiple times), so the
+        // borrowed source survives and every clone is owned once. 40x heap
+        // payloads; source re-read each round.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let v: Vec[String] = Vec[
+            "cycle-take-alpha-aaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            "cycle-take-bravo-bbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()
+        ];
+        let r: Vec[String] = v.iter().cycle().take(5i64).collect();
+        println(f"{r.len()} {r[0i64]} {r[4i64]} {v.len()}");
+        round = round + 1i64;
+    }
+}
+"#,
+            [
+                "5 cycle-take-alpha-aaaaaaaaaaaaaaaaaaaaaaaaaa cycle-take-alpha-aaaaaaaaaaaaaaaaaaaaaaaaaa 2",
+            ]
+            .repeat(40)
+            .as_slice(),
+            "asan_b04_2_cycle_take_heap_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_column_string_index_clone_out_no_leak() {
         // S6c-12 Slice 5: `Column[String]` indexing `c[i] -> Option[String]`
         // under `karac build` DEEP-CLONES the element so the returned Option

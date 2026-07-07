@@ -4300,6 +4300,45 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
             }
+            // B-2026-07-04-2 sub-part 1 (cycle+take): `<src>.cycle().take(n)
+            // .collect()` repeats the source until `n` elements are collected.
+            // A BARE `cycle()` (no bounding `take`) is unbounded and never
+            // reaches this branch (it stays a loud dispatch-fail — a
+            // non-terminating collect is a semantic non-starter). Only the
+            // `cycle().take(n)` shape over an identity source lowers.
+            if method == "take" && args.len() == 1 {
+                if let ExprKind::MethodCall {
+                    object: cyc_recv,
+                    method: cyc_method,
+                    args: cyc_args,
+                    ..
+                } = &object.kind
+                {
+                    if cyc_method == "cycle" && cyc_args.is_empty() {
+                        let src_is_identity = matches!(&cyc_recv.kind,
+                            ExprKind::MethodCall { method, args, .. }
+                                if args.is_empty() && (method == "iter" || method == "into_iter"))
+                            || matches!(
+                                &cyc_recv.kind,
+                                ExprKind::Range {
+                                    start: Some(_),
+                                    end: Some(_),
+                                    ..
+                                }
+                            );
+                        if src_is_identity {
+                            if let Some(v) = self.try_compile_cycle_take_collect(
+                                cyc_recv,
+                                &args[0].value,
+                                call_span,
+                            )? {
+                                return Ok(Some(v));
+                            }
+                            return Ok(None);
+                        }
+                    }
+                }
+            }
             // B-2026-07-04-2 sub-part 1 (chunks/windows): `<base>.iter()
             // .chunks(n).collect()` groups the source into consecutive
             // `Vec[E]` slices of length `n` (last chunk short); `.windows(n)`
@@ -5553,6 +5592,210 @@ impl<'ctx> super::Codegen<'ctx> {
             kind: ExprKind::Block(Block {
                 stmts: vec![let_vec, merge_loop],
                 final_expr: Some(Box::new(ident(&vec_name))),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        Ok(Some(self.compile_expr(&block)?))
+    }
+
+    /// Lower `<src>.cycle().take(n).collect()` — repeat the identity source
+    /// until `n` elements are collected (B-2026-07-04-2 sub-part 1). Emitted:
+    ///
+    /// ```text
+    /// { let mut __cyv: Vec[E] = Vec.new();
+    ///   let __cyn = <n>;
+    ///   let mut __cyc = 0;
+    ///   while __cyc < __cyn {
+    ///     let __cystart = __cyc;
+    ///     for __cyx in <src> {
+    ///       if __cyc >= __cyn { break; }
+    ///       __cyv.push(__cyx);
+    ///       __cyc = __cyc + 1;
+    ///     }
+    ///     if __cyc == __cystart { break; }   // empty source → stop (no infinite loop)
+    ///   }
+    ///   __cyv }
+    /// ```
+    ///
+    /// Each `for __cyx in <src>` over the borrowed source clones on `push`, so
+    /// the source survives and the accumulator owns independent copies. The
+    /// empty-source guard prevents a non-terminating loop when `<src>` yields
+    /// nothing. Returns `Ok(None)` if the result type isn't a recorded `Vec[E]`.
+    fn try_compile_cycle_take_collect(
+        &mut self,
+        src: &Expr,
+        n: &Expr,
+        call_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let vec_te = match self
+            .owned_temp_drops
+            .get(&(call_span.offset, call_span.length))
+        {
+            Some(te) => te.clone(),
+            None => return Ok(None),
+        };
+        if !matches!(
+            &vec_te.kind,
+            TypeKind::Path(p) if p.segments.last().map(|s| s.as_str()) == Some("Vec")
+        ) {
+            return Ok(None);
+        }
+        let uid = self.indexed_elem_counter;
+        self.indexed_elem_counter += 1;
+        let sp = call_span.clone();
+        let vname = format!("__cyv_{}", uid);
+        let nname = format!("__cyn_{}", uid);
+        let cname = format!("__cyc_{}", uid);
+        let sname = format!("__cystart_{}", uid);
+        let xname = format!("__cyx_{}", uid);
+        let ident = |name: &str| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: sp.clone(),
+        };
+        let i64_lit = |v: i64| Expr {
+            kind: ExprKind::Integer(v, Some(crate::token::IntSuffix::I64)),
+            span: sp.clone(),
+        };
+        let bin = |op: BinOp, l: Expr, r: Expr| Expr {
+            kind: ExprKind::Binary {
+                op,
+                left: Box::new(l),
+                right: Box::new(r),
+            },
+            span: sp.clone(),
+        };
+        let let_stmt = |is_mut: bool, name: &str, ty: Option<TypeExpr>, value: Expr| Stmt {
+            kind: StmtKind::Let {
+                is_mut,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(name.to_string()),
+                    span: sp.clone(),
+                },
+                ty,
+                value,
+            },
+            span: sp.clone(),
+        };
+        let assign = |name: &str, value: Expr| Stmt {
+            kind: StmtKind::Assign {
+                target: ident(name),
+                value,
+            },
+            span: sp.clone(),
+        };
+        let break_stmt = || Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::Break {
+                    label: None,
+                    value: None,
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let if_break = |cond: Expr| Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::If {
+                    condition: Box::new(cond),
+                    then_block: Block {
+                        stmts: vec![break_stmt()],
+                        final_expr: None,
+                        span: sp.clone(),
+                    },
+                    else_branch: None,
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let vec_new = Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Path {
+                        segments: vec!["Vec".to_string(), "new".to_string()],
+                        generic_args: None,
+                    },
+                    span: sp.clone(),
+                }),
+                args: vec![],
+            },
+            span: sp.clone(),
+        };
+        // Inner for-loop body.
+        let for_body = vec![
+            if_break(bin(BinOp::GtEq, ident(&cname), ident(&nname))),
+            Stmt {
+                kind: StmtKind::Expr(Expr {
+                    kind: ExprKind::MethodCall {
+                        object: Box::new(ident(&vname)),
+                        method: "push".to_string(),
+                        turbofish: None,
+                        args: vec![CallArg {
+                            label: None,
+                            mut_marker: false,
+                            value: ident(&xname),
+                            span: sp.clone(),
+                        }],
+                        args_close_span: sp.clone(),
+                    },
+                    span: sp.clone(),
+                }),
+                span: sp.clone(),
+            },
+            assign(&cname, bin(BinOp::Add, ident(&cname), i64_lit(1))),
+        ];
+        let for_loop = Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::For {
+                    label: None,
+                    pattern: Pattern {
+                        kind: PatternKind::Binding(xname.clone()),
+                        span: sp.clone(),
+                    },
+                    iterable: Box::new(src.clone()),
+                    attributes: Vec::new(),
+                    body: Block {
+                        stmts: for_body,
+                        final_expr: None,
+                        span: sp.clone(),
+                    },
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        // Outer while body.
+        let while_body = vec![
+            let_stmt(false, &sname, None, ident(&cname)),
+            for_loop,
+            if_break(bin(BinOp::Eq, ident(&cname), ident(&sname))),
+        ];
+        let while_loop = Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::While {
+                    label: None,
+                    condition: Box::new(bin(BinOp::Lt, ident(&cname), ident(&nname))),
+                    body: Block {
+                        stmts: while_body,
+                        final_expr: None,
+                        span: sp.clone(),
+                    },
+                    attributes: Vec::new(),
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let block = Expr {
+            kind: ExprKind::Block(Block {
+                stmts: vec![
+                    let_stmt(true, &vname, Some(vec_te), vec_new),
+                    let_stmt(false, &nname, None, n.clone()),
+                    let_stmt(true, &cname, None, i64_lit(0)),
+                    while_loop,
+                ],
+                final_expr: Some(Box::new(ident(&vname))),
                 span: sp.clone(),
             }),
             span: sp.clone(),

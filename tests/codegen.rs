@@ -6993,6 +6993,30 @@ fn main() {
         }
     }
 
+    /// B-2026-07-04-2 sub-part 1 (cycle+take): `<src>.cycle().take(n).collect()`
+    /// repeats the identity source until `n` elements are collected — it used to
+    /// bail. Lowered as a repeat-until-`n` loop with an empty-source guard. A
+    /// BARE `cycle()` (no `take`) is unbounded and stays a loud dispatch-fail.
+    /// ASAN twin: asan_b04_2_cycle_take_heap_no_leak.
+    #[test]
+    fn e2e_iter_adaptor_cycle_take_collect_codegen() {
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    let v: Vec[i64] = Vec[1i64, 2i64];
+    let r: Vec[i64] = v.iter().cycle().take(5i64).collect();
+    println(f"{r.len()} {r[0i64]} {r[1i64]} {r[2i64]} {r[3i64]} {r[4i64]} {v.len()}");
+    // range source
+    let s: Vec[i64] = (0i64..3i64).cycle().take(7i64).collect();
+    println(f"{s.len()} {s[0i64]} {s[3i64]} {s[6i64]}");
+}
+"#,
+        ) {
+            // r=[1,2,1,2,1]; s=[0,1,2,0,1,2,0]
+            assert_eq!(out, "5 1 2 1 2 1 2\n7 0 0 0\n");
+        }
+    }
+
     #[test]
     fn e2e_iter_adaptor_flat_map_collect_codegen() {
         // B-2026-07-04-2 sub-part 1 (flat_map): `<outer>.flat_map(|v|
