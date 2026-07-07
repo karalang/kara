@@ -848,6 +848,39 @@ fn main() {
     }
 
     #[test]
+    fn asan_b04_2_flat_map_heap_collect_no_leak() {
+        // B-2026-07-04-2 sub-part 1 (flat_map): `<outer>.flat_map(|v|
+        // v.iter()).collect()` over a HEAP `Vec[Vec[String]]`. The nested-loop
+        // lowering `for v in outer { for x in v.iter() { acc.push(x) } }`
+        // iterates and clones on `push`, so the nested source survives and the
+        // flattened accumulator owns independent copies — no leak, no
+        // double-free. 40× with ≥44-byte payloads for LSan reachability; reads a
+        // flattened element each round.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let xs: Vec[Vec[String]] = Vec[
+            Vec["flat-map-payload-alpha-aaaaaaaaaaaaaaaaaaaa".to_string(),
+                "flat-map-payload-bravo-bbbbbbbbbbbbbbbbbbbb".to_string()],
+            Vec["flat-map-payload-charlie-cccccccccccccccccc".to_string()]
+        ];
+        let r: Vec[String] = xs.iter().flat_map(|v| v.iter()).collect();
+        let r2: String = r[2i64];
+        println(f"{r.len()} {xs.len()} {r2}");
+        round = round + 1i64;
+    }
+}
+"#,
+            ["3 2 flat-map-payload-charlie-cccccccccccccccccc"]
+                .repeat(40)
+                .as_slice(),
+            "asan_b04_2_flat_map_heap_collect_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_fresh_temp_source_enumerate_collect_no_double_free() {
         // B-2026-07-04-5: a collect-adaptor chain whose SOURCE is a fresh-temp
         // call result (`mk().iter()…`) rather than a named local. The for-loop

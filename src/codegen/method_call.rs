@@ -4007,6 +4007,52 @@ impl<'ctx> super::Codegen<'ctx> {
                     return Ok(None);
                 }
             }
+            // B-2026-07-04-2 sub-part 1 (flat_map): `<outer>.flat_map(|p|
+            // <inner>).collect()` maps each outer element to an inner iterable
+            // and flattens the results into one Vec. Lower to NESTED loops —
+            // `for p in <outer> { for x in <inner> { acc.push(x) } }` — reusing
+            // the closure param `p` as the outer loop var so the inner iterable
+            // `<inner>` (which references `p`) resolves. Iteration-based (not
+            // index-based), so `push` clones and it is heap-safe like the other
+            // identity collects. Scoped to an identity `<outer>` (`.iter()` /
+            // `.into_iter()` / bounded range) and an identity `<inner>` (the
+            // closure body is a `.iter()` / `.into_iter()` call or a bounded
+            // range); any richer shape (a mapped/filtered inner, a downstream
+            // adaptor after flat_map, a multi-param closure) bails to the loud
+            // dispatch-fail and stays OPEN under sub-part 1.
+            if method == "flat_map" && args.len() == 1 {
+                let is_identity_source = |e: &Expr| {
+                    matches!(
+                        &e.kind,
+                        ExprKind::MethodCall { method, args, .. }
+                            if args.is_empty() && (method == "iter" || method == "into_iter")
+                    ) || matches!(
+                        &e.kind,
+                        ExprKind::Range {
+                            start: Some(_),
+                            end: Some(_),
+                            ..
+                        }
+                    )
+                };
+                if let ExprKind::Closure { params, body, .. } = &args[0].value.kind {
+                    if params.len() == 1 {
+                        if let PatternKind::Binding(param) = &params[0].pattern.kind {
+                            if is_identity_source(object.as_ref()) && is_identity_source(body) {
+                                if let Some(v) = self.try_compile_flat_map_collect(
+                                    object.as_ref(),
+                                    param,
+                                    body,
+                                    call_span,
+                                )? {
+                                    return Ok(Some(v));
+                                }
+                                return Ok(None);
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         let mut steps: Vec<IterAdaptor> = Vec::new();
@@ -5143,6 +5189,133 @@ impl<'ctx> super::Codegen<'ctx> {
         let block = Expr {
             kind: ExprKind::Block(Block {
                 stmts: vec![let_vec, loop_a, loop_b],
+                final_expr: Some(Box::new(ident(&vec_name))),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        Ok(Some(self.compile_expr(&block)?))
+    }
+
+    /// Lower `<outer>.flat_map(|param| <inner>).collect()` into a flat Vec via
+    /// nested loops (B-2026-07-04-2 sub-part 1). Returns `Ok(None)` if the
+    /// result type isn't a recorded `Vec[T]`. The emitted block is:
+    ///
+    /// ```text
+    /// { let mut __fmv: Vec[T] = Vec.new();
+    ///   for <param> in <outer> {
+    ///     for __fm in <inner> { __fmv.push(__fm); }
+    ///   }
+    ///   __fmv }
+    /// ```
+    ///
+    /// The closure param IS the outer loop var, so the inner iterable `<inner>`
+    /// (the closure body, which references `param`) resolves. Iteration-based —
+    /// each `push` clones, so the source survives and the accumulator owns
+    /// independent copies (heap-safe, like the other identity collects).
+    fn try_compile_flat_map_collect(
+        &mut self,
+        outer: &Expr,
+        param: &str,
+        inner: &Expr,
+        call_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let vec_te = match self
+            .owned_temp_drops
+            .get(&(call_span.offset, call_span.length))
+        {
+            Some(te) => te.clone(),
+            None => return Ok(None),
+        };
+        if !matches!(
+            &vec_te.kind,
+            TypeKind::Path(p) if p.segments.last().map(|s| s.as_str()) == Some("Vec")
+        ) {
+            return Ok(None);
+        }
+
+        let uid = self.indexed_elem_counter;
+        self.indexed_elem_counter += 1;
+        let sp = call_span.clone();
+        let vec_name = format!("__fmv_{}", uid);
+        let inner_var = format!("__fm_{}", uid);
+        let ident = |name: &str| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: sp.clone(),
+        };
+        let for_loop = |var: &str, iterable: Expr, body: Vec<Stmt>| Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::For {
+                    label: None,
+                    pattern: Pattern {
+                        kind: PatternKind::Binding(var.to_string()),
+                        span: sp.clone(),
+                    },
+                    iterable: Box::new(iterable),
+                    attributes: Vec::new(),
+                    body: Block {
+                        stmts: body,
+                        final_expr: None,
+                        span: sp.clone(),
+                    },
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+
+        let vec_new = Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Path {
+                        segments: vec!["Vec".to_string(), "new".to_string()],
+                        generic_args: None,
+                    },
+                    span: sp.clone(),
+                }),
+                args: vec![],
+            },
+            span: sp.clone(),
+        };
+        let let_vec = Stmt {
+            kind: StmtKind::Let {
+                is_mut: true,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(vec_name.clone()),
+                    span: sp.clone(),
+                },
+                ty: Some(vec_te),
+                value: vec_new,
+            },
+            span: sp.clone(),
+        };
+
+        // Inner: `for __fm in <inner> { __fmv.push(__fm); }`
+        let push_inner = Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::MethodCall {
+                    object: Box::new(ident(&vec_name)),
+                    method: "push".to_string(),
+                    turbofish: None,
+                    args: vec![CallArg {
+                        label: None,
+                        mut_marker: false,
+                        value: ident(&inner_var),
+                        span: sp.clone(),
+                    }],
+                    args_close_span: sp.clone(),
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let inner_loop = for_loop(&inner_var, inner.clone(), vec![push_inner]);
+        // Outer: `for <param> in <outer> { <inner_loop> }`
+        let outer_loop = for_loop(param, outer.clone(), vec![inner_loop]);
+
+        let block = Expr {
+            kind: ExprKind::Block(Block {
+                stmts: vec![let_vec, outer_loop],
                 final_expr: Some(Box::new(ident(&vec_name))),
                 span: sp.clone(),
             }),

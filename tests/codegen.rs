@@ -6671,6 +6671,36 @@ fn main() {
     }
 
     #[test]
+    fn e2e_iter_adaptor_flat_map_collect_codegen() {
+        // B-2026-07-04-2 sub-part 1 (flat_map): `<outer>.flat_map(|v|
+        // v.iter()).collect()` fell through to the loud dispatch-fail under
+        // `karac build`, though `karac run` handled it. The fix lowers it to
+        // nested loops `for v in outer { for x in v.iter() { acc.push(x) } }` —
+        // iteration-based (not indexed), so `push` clones and the nested source
+        // SURVIVES (asserted via `xs.len()`). Heap-safe (`Vec[Vec[String]]`);
+        // leak-checked by `asan_b04_2_flat_map_heap_collect_no_leak`. A complex
+        // inner (`|v| v.iter().map(…)`) or a downstream adaptor after flat_map
+        // still bails.
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    let xs: Vec[Vec[i64]] = Vec[Vec[1i64, 2i64], Vec[3i64], Vec[4i64, 5i64]];
+    let r: Vec[i64] = xs.iter().flat_map(|v| v.iter()).collect();
+    println(f"{r.len()} {r[0]} {r[4]} {xs.len()}");
+    let ys: Vec[Vec[String]] = Vec[
+        Vec["aa".to_string(), "bb".to_string()],
+        Vec["cc".to_string()]
+    ];
+    let s: Vec[String] = ys.iter().flat_map(|v| v.iter()).collect();
+    println(f"{s.len()} {s[0]}{s[2]} {ys.len()}");
+}
+"#,
+        ) {
+            assert_eq!(out, "5 1 5 3\n3 aacc 2\n");
+        }
+    }
+
+    #[test]
     fn e2e_iter_adaptor_collect_enumerate_codegen() {
         // B-2026-07-04-2 sub-part 1: `<iter>.enumerate().collect()` — the
         // element-retyping adaptor `T` → `(i64, T)`. Lowered like the other
