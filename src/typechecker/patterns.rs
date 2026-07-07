@@ -1000,7 +1000,11 @@ impl<'a> super::TypeChecker<'a> {
                     && !self.current_fn_stdlib_origin
                     && !arms_contain_catchall(arms, &variant_names)
                 {
-                    let fix_it = non_exhaustive_match_fix_it(&span, arms);
+                    let fix_it = non_exhaustive_match_fix_it(
+                        &span,
+                        arms,
+                        "_ => panic(\"handle new variant\")",
+                    );
                     self.type_error_with_fix_it(
                         format!(
                             "error[E_NON_EXHAUSTIVE_CROSS_PACKAGE_MATCH]: \
@@ -1041,7 +1045,28 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     _ => format!("non-exhaustive match: pattern `{witness}` not covered"),
                 };
-                self.type_error(message, span, TypeErrorKind::NonExhaustiveMatch);
+                // For an enum scrutinee the witness renders as a valid arm
+                // pattern (`Cancelled`, `Failed(_)`, `Point { .. }`, …), so the
+                // missing arm can be synthesized as a machine-applicable fix.
+                // Bool / integer-range / other witnesses stay descriptive.
+                // `check_match_exhaustive` yields one witness at a time, so a
+                // match missing several variants is fixed one arm per pass.
+                let is_enum = matches!(
+                    scrutinee_type,
+                    Type::Named { name, .. } if self.env.enums.contains_key(name)
+                );
+                if is_enum {
+                    let arm = format!("{witness} => todo()");
+                    let fix_it = non_exhaustive_match_fix_it(&span, arms, &arm);
+                    self.type_error_with_fix_it(
+                        message,
+                        span,
+                        TypeErrorKind::NonExhaustiveMatch,
+                        fix_it,
+                    );
+                } else {
+                    self.type_error(message, span, TypeErrorKind::NonExhaustiveMatch);
+                }
             }
         }
     }
@@ -1787,23 +1812,28 @@ fn non_exhaustive_pattern_fix_it(
 /// arms, the insertion anchors just before the closing `}` of the
 /// match block and emits the bare arm with no leading comma.
 /// Insertion-only — never replaces existing source text.
-fn non_exhaustive_match_fix_it(match_span: &Span, arms: &[MatchArm]) -> crate::typechecker::FixIt {
+/// Build a machine-applicable fix-it that inserts `arm` (a full
+/// `pattern => body`, no trailing comma) into a non-exhaustive `match`.
+/// When the match has arms, the arm is inserted after the last one prefixed
+/// with `, ` (the last arm's span ends before any trailing comma, so this
+/// yields a well-formed comma-separated list); an empty match inserts just
+/// before the closing brace. The span is a zero-length insertion point.
+fn non_exhaustive_match_fix_it(
+    match_span: &Span,
+    arms: &[MatchArm],
+    arm: &str,
+) -> crate::typechecker::FixIt {
     let (offset, line, column, replacement) = if let Some(last) = arms.last() {
         let after_last = last.span.offset + last.span.length;
         (
             after_last,
             last.span.line,
             last.span.column,
-            ", _ => panic(\"handle new variant\")",
+            format!(", {arm}"),
         )
     } else {
         let brace = match_span.offset + match_span.length.saturating_sub(1);
-        (
-            brace,
-            match_span.line,
-            match_span.column,
-            "_ => panic(\"handle new variant\")",
-        )
+        (brace, match_span.line, match_span.column, arm.to_string())
     };
     crate::typechecker::FixIt {
         span: Span {
@@ -1812,6 +1842,6 @@ fn non_exhaustive_match_fix_it(match_span: &Span, arms: &[MatchArm]) -> crate::t
             offset,
             length: 0,
         },
-        replacement: replacement.to_string(),
+        replacement,
     }
 }

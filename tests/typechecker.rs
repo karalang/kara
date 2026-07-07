@@ -1118,6 +1118,56 @@ fn test_non_exhaustive_match() {
 }
 
 #[test]
+fn non_exhaustive_enum_match_carries_missing_arm_fix_it() {
+    // E0205 on an enum scrutinee synthesizes the missing arm as a
+    // machine-applicable insertion (`karac fix` inserts it). One witness at a
+    // time, so the fix names the first uncovered variant.
+    let errors = typecheck_errors(
+        "enum Status { Active, Paused, Cancelled }\n\
+         fn describe(s: Status) {\n\
+             match s {\n\
+                 Active => {},\n\
+                 Paused => {},\n\
+             }\n\
+         }",
+    );
+    let err = errors
+        .iter()
+        .find(|e| e.kind == TypeErrorKind::NonExhaustiveMatch)
+        .expect("missing Cancelled → E0205");
+    let fix = err
+        .fix_it
+        .as_ref()
+        .expect("enum non-exhaustive match must carry a machine-applicable arm fix-it");
+    // Zero-length span = pure insertion; the inserted arm names the variant.
+    assert_eq!(fix.span.length, 0, "fix-it must be an insertion");
+    assert!(
+        fix.replacement.contains("Cancelled") && fix.replacement.contains("=>"),
+        "fix should insert a `Cancelled => …` arm, got: {:?}",
+        fix.replacement
+    );
+}
+
+#[test]
+fn non_exhaustive_payload_variant_fix_it_uses_wildcard_pattern() {
+    // A variant with a payload renders as `Failed(_)` in the synthesized arm.
+    let errors = typecheck_errors(
+        "enum Outcome { Ok, Failed(i64) }\n\
+         fn g(o: Outcome) -> i64 { match o { Ok => 0 } }",
+    );
+    let fix = errors
+        .iter()
+        .find(|e| e.kind == TypeErrorKind::NonExhaustiveMatch)
+        .and_then(|e| e.fix_it.as_ref())
+        .expect("payload-variant non-exhaustive match must carry a fix-it");
+    assert!(
+        fix.replacement.contains("Failed(_)"),
+        "payload variant should render as `Failed(_)`, got: {:?}",
+        fix.replacement
+    );
+}
+
+#[test]
 fn test_wildcard_makes_exhaustive() {
     typecheck_ok(
         "enum Color { Red, Green, Blue }\n\

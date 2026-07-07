@@ -3048,6 +3048,19 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // FE-2 — a `#[gpu]` function uses a non-GPU-safe type.
                 crate::typechecker::TypeErrorKind::GpuNotSafe => "E0801",
             };
+            // Also surface a typecheck fix-it as the top-level
+            // `"replacement":{offset,length,text}` shape every other phase
+            // (resolver/parse/effect/ownership) uses, so `karac fix` and the
+            // Mend loop detect typecheck fixes uniformly. The nested
+            // `"fix_it"`/`"fixes"` forms below stay for IDE consumers.
+            let replacement_json = err.fix_it.as_ref().map(|f| {
+                format!(
+                    "\"replacement\":{{\"offset\":{},\"length\":{},\"text\":{}}}",
+                    f.span.offset,
+                    f.span.length,
+                    json_string(&f.replacement),
+                )
+            });
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),
                 severity: "error",
@@ -3058,7 +3071,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 filename,
                 span: &err.span,
                 suggestion: None,
-                extra_json: None,
+                extra_json: replacement_json,
                 lint_name: err.lint_name.as_deref(),
                 fix_it: err.fix_it.as_ref(),
                 class: Some(err.class.map(|c| c.as_str()).unwrap_or("OTHER")),
@@ -9663,6 +9676,18 @@ fn cmd_fix(filename: &str, dry_run: bool) {
                     .iter()
                     .filter_map(|e| e.replacement.as_deref().cloned()),
             );
+        }
+        if let Some(ref t) = pipeline.typed {
+            // Typecheck fix-its (e.g. E0205 missing-match-arm insertion, the
+            // `#[non_exhaustive]` cross-package wildcard) use FixIt{span,
+            // replacement}; convert to the TextEdit offset/length form.
+            edits.extend(t.errors.iter().filter_map(|e| {
+                e.fix_it.as_ref().map(|f| crate::resolver::TextEdit {
+                    offset: f.span.offset,
+                    length: f.span.length,
+                    replacement: f.replacement.clone(),
+                })
+            }));
         }
     }
 
