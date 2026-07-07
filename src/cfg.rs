@@ -1200,7 +1200,7 @@ impl<'a> CfgBuilder<'a> {
                 // from entry).
                 self.new_block()
             }
-            ExprKind::Continue { label } => {
+            ExprKind::Continue { label, .. } => {
                 if let Some(frame) = resolve_loop_frame(loops, label.as_deref()) {
                     let c = self.emit_unwind_chain(
                         frame.defer_depth,

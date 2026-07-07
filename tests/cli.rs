@@ -5692,6 +5692,35 @@ fn test_fix_applies_module_binding_const_rename() {
 }
 
 #[test]
+fn test_fix_applies_undefined_label_rename() {
+    // B-2026-07-07-3: a misspelled `continue <label>` fuzzy-matches an
+    // in-scope loop label; the resolver now anchors the rename on the label
+    // token (`label_span`), so `karac fix` corrects it and the program then
+    // compiles (the target loop exists).
+    let path = fix_scratch_file(
+        "label-rename",
+        "fn main() {\n    outer: loop {\n        loop {\n            continue otuer;\n        }\n    }\n}\n",
+    );
+    let out = karac_bin()
+        .args(["fix", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "fix failed: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("applied 1 fix"), "stdout: {stdout}");
+    let rewritten = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        rewritten.contains("continue outer;") && !rewritten.contains("otuer"),
+        "expected `otuer` → `outer`, got: {rewritten}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn test_json_e0412_carries_replacement_payload() {
     // The E0412 JSON diagnostic carries the machine-applicable
     // `replacement` payload (same shape as resolver/ownership fixes)

@@ -221,6 +221,13 @@ pub enum ExprKind {
     },
     Continue {
         label: Option<String>,
+        /// Span of the label identifier alone, when a label is present.
+        /// Lets the resolver anchor a machine-applicable rename edit on a
+        /// misspelled `continue <label>` (B-2026-07-07-3). `None` for a
+        /// bare `continue`. (`break <typo>` never reaches here — the parser
+        /// only treats a *known* label as a break label, so a misspelled
+        /// break target parses as a value expression and surfaces as E0100.)
+        label_span: Option<Span>,
     },
 
     // Composite literals

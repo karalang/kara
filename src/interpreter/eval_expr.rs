@@ -977,7 +977,7 @@ impl<'a> super::Interpreter<'a> {
             }
 
             // Continue
-            ExprKind::Continue { label } => self.set_cf(ControlFlow::Continue {
+            ExprKind::Continue { label, .. } => self.set_cf(ControlFlow::Continue {
                 label: label.clone(),
             }),
 

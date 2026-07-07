@@ -4696,10 +4696,12 @@ fn test_module_binding_naming_carries_machine_replacement() {
 
 #[test]
 fn test_undefined_label_suggests_nearby_label() {
-    // B-2026-07-06-3: a misspelled `continue`/`break` label fuzzy-matches
-    // the loop labels in scope and reports a `did you mean` suggestion
-    // (prose — the label token carries no span, so no machine edit yet).
-    let errors = resolve_errors("fn main() { outer: loop { loop { continue otuer; } } }");
+    // B-2026-07-06-3: a misspelled `continue` label fuzzy-matches the loop
+    // labels in scope and reports a `did you mean` suggestion.
+    // B-2026-07-07-3: that suggestion is now machine-applicable — the label
+    // identifier's span (`label_span`) anchors a `.replacement`.
+    let src = "fn main() { outer: loop { loop { continue otuer; } } }";
+    let errors = resolve_errors(src);
     let err = errors
         .iter()
         .find(|e| e.kind == ResolveErrorKind::UndefinedLabel)
@@ -4710,6 +4712,13 @@ fn test_undefined_label_suggests_nearby_label() {
         "expected did-you-mean prose, got: {}",
         err.message
     );
+    // The machine edit must span exactly the `otuer` label token.
+    let edit = err
+        .replacement
+        .as_ref()
+        .expect("label suggestion must carry a machine-applicable replacement");
+    assert_eq!(edit.replacement, "outer");
+    assert_eq!(&src[edit.offset..edit.offset + edit.length], "otuer");
 }
 
 #[test]

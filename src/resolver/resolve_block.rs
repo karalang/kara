@@ -239,7 +239,7 @@ impl<'a> super::Resolver<'a> {
             | ExprKind::Return(None)
             | ExprKind::Error => {}
 
-            ExprKind::Continue { label } => {
+            ExprKind::Continue { label, label_span } => {
                 if let Some(name) = label {
                     let entry = self
                         .loop_labels
@@ -272,12 +272,25 @@ impl<'a> super::Resolver<'a> {
                             if let Some(ref s) = suggestion {
                                 message.push_str(&format!(", did you mean `{}`?", s));
                             }
+                            // Machine-applicable rename (B-2026-07-07-3): anchor
+                            // the edit on the label identifier itself, captured
+                            // at parse in `label_span`. A `continue <label>`
+                            // always records the span, so on the suggestion
+                            // path this is `Some`.
+                            let replacement = match (suggestion.as_ref(), label_span.as_ref()) {
+                                (Some(s), Some(sp)) => Some(Box::new(crate::resolver::TextEdit {
+                                    offset: sp.offset,
+                                    length: sp.length,
+                                    replacement: s.clone(),
+                                })),
+                                _ => None,
+                            };
                             self.errors.push(ResolveError {
                                 message,
                                 span: expr.span.clone(),
                                 kind: ResolveErrorKind::UndefinedLabel,
                                 suggestion,
-                                replacement: None,
+                                replacement,
                                 stub_hint: None,
                             });
                         }

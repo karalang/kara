@@ -616,7 +616,7 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Break { label, value } => {
                 self.compile_break(label.as_deref(), value.as_deref())
             }
-            ExprKind::Continue { label } => self.compile_continue(label.as_deref()),
+            ExprKind::Continue { label, .. } => self.compile_continue(label.as_deref()),
             ExprKind::Closure { params, body, .. } => {
                 self.compile_closure(params, body, &expr.span)
             }

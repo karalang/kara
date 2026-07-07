@@ -6750,7 +6750,7 @@ fn test_continue_with_label() {
         if let StmtKind::Expr(expr) = &stmt.kind {
             if let ExprKind::Loop { body, .. } = &expr.kind {
                 if let StmtKind::Expr(inner) = &body.stmts[0].kind {
-                    if let ExprKind::Continue { label } = &inner.kind {
+                    if let ExprKind::Continue { label, .. } = &inner.kind {
                         assert_eq!(label.as_deref(), Some("outer"));
                     } else {
                         panic!("Expected Continue with label");

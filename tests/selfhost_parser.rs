@@ -625,7 +625,7 @@ fn render_rust_expr(e: &Expr) -> String {
             out.push(')');
             out
         }
-        ExprKind::Continue { label } => {
+        ExprKind::Continue { label, .. } => {
             let mut out = String::from("(continue");
             out.push_str(&render_rust_label(label));
             out.push_str(&sp);

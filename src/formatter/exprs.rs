@@ -357,7 +357,7 @@ impl super::Formatter {
                     self.format_expr(v);
                 }
             }
-            ExprKind::Continue { label } => {
+            ExprKind::Continue { label, .. } => {
                 self.write_str("continue");
                 if let Some(ref l) = label {
                     write!(self.output, " '{l}").unwrap();

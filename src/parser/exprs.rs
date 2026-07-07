@@ -800,10 +800,10 @@ impl super::Parser {
             Token::Continue => {
                 self.advance();
                 // continue label | continue
-                let label = self.parse_continue_label();
+                let (label, label_span) = self.parse_continue_label();
                 Some(Expr {
                     span: self.span_from(&start),
-                    kind: ExprKind::Continue { label },
+                    kind: ExprKind::Continue { label, label_span },
                 })
             }
 
@@ -1950,16 +1950,19 @@ impl super::Parser {
         (None, value)
     }
 
-    /// Parse continue label: `continue [label]`
-    fn parse_continue_label(&mut self) -> Option<String> {
+    /// Parse continue label: `continue [label]`. Returns the label name and
+    /// the span of its identifier token (for B-2026-07-07-3's machine-
+    /// applicable rename on a misspelled label).
+    fn parse_continue_label(&mut self) -> (Option<String>, Option<Span>) {
         if self.check(&Token::Semicolon) || self.check(&Token::RightBrace) {
-            return None;
+            return (None, None);
         }
         if let Token::Identifier { name, .. } = self.peek_token() {
+            let span = self.current_span();
             self.advance();
-            Some(name)
+            (Some(name), Some(span))
         } else {
-            None
+            (None, None)
         }
     }
 
