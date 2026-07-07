@@ -782,6 +782,83 @@ fn main() {
     }
 
     #[test]
+    fn asan_b04_2_chunks_heap_collect_no_leak() {
+        // B-2026-07-04-2 sub-part 1 (chunks heap leg): `v.iter().chunks(2)
+        // .collect()` over a `Vec[String]` -> `Vec[Vec[String]]`. Each chunk is
+        // built as a FRESH temp via an inline block tail-return
+        // (`acc.push({ let mut c = Vec.new(); ...; c })`), the `mk()`-fresh-temp
+        // pattern inlined — not a consume-then-reuse loop binding (which needs
+        // the ownership RC fallback the synthetic AST can't emit) nor an
+        // in-place fill of a growing accumulator (which double-freed on
+        // realloc). Each `base[j]` deep-clones (the heap-index-read fix), so
+        // `base` survives and every clone is owned once by the result. 40x
+        // >=40-byte payloads; re-reads `v` and reads nested chunk elements
+        // INLINE via the f-string (a `let x = cs[i][j]` double-index bind hits
+        // the separate documented `matrix[i][j]` clone gap, unrelated to
+        // chunks).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let mut v: Vec[String] = Vec[
+            "chunks-heap-collect-alpha-aaaaaaaaaaaaaaaaaa".to_string(),
+            "chunks-heap-collect-bravo-bbbbbbbbbbbbbbbbbb".to_string(),
+            "chunks-heap-collect-charlie-cccccccccccccccc".to_string(),
+            "chunks-heap-collect-delta-dddddddddddddddddd".to_string(),
+            "chunks-heap-collect-echo-eeeeeeeeeeeeeeeeeeee".to_string()
+        ];
+        let cs: Vec[Vec[String]] = v.iter().chunks(2i64).collect();
+        println(f"{cs.len()} {cs[0i64].len()} {cs[2i64].len()} {cs[0i64][0i64]} {cs[2i64][0i64]} {v.len()}");
+        round = round + 1i64;
+    }
+}
+"#,
+            [
+                "3 2 1 chunks-heap-collect-alpha-aaaaaaaaaaaaaaaaaa chunks-heap-collect-echo-eeeeeeeeeeeeeeeeeeee 5",
+            ]
+            .repeat(40)
+            .as_slice(),
+            "asan_b04_2_chunks_heap_collect_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_b04_2_windows_heap_collect_no_leak() {
+        // B-2026-07-04-2 sub-part 1 (windows heap leg): `v.iter().windows(2)
+        // .collect()` over a `Vec[String]` -> overlapping length-2 slices. Each
+        // element is cloned into MULTIPLE windows (`base[j]` deep-clones per
+        // read), so each window owns independent buffers and the borrowed `v`
+        // survives -- the overlap must not alias. Same fresh-temp block-return
+        // lowering as chunks (step=1, full-window cutoff). 40x >=40-byte
+        // payloads; inline nested reads.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut round: i64 = 0i64;
+    while round < 40i64 {
+        let mut v: Vec[String] = Vec[
+            "windows-heap-collect-alpha-aaaaaaaaaaaaaaaa".to_string(),
+            "windows-heap-collect-bravo-bbbbbbbbbbbbbbbb".to_string(),
+            "windows-heap-collect-charlie-cccccccccccccc".to_string(),
+            "windows-heap-collect-delta-dddddddddddddddd".to_string()
+        ];
+        let ws: Vec[Vec[String]] = v.iter().windows(2i64).collect();
+        println(f"{ws.len()} {ws[0i64].len()} {ws[0i64][0i64]} {ws[2i64][1i64]} {v.len()}");
+        round = round + 1i64;
+    }
+}
+"#,
+            [
+                "3 2 windows-heap-collect-alpha-aaaaaaaaaaaaaaaa windows-heap-collect-delta-dddddddddddddddd 4",
+            ]
+            .repeat(40)
+            .as_slice(),
+            "asan_b04_2_windows_heap_collect_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_column_string_index_clone_out_no_leak() {
         // S6c-12 Slice 5: `Column[String]` indexing `c[i] -> Option[String]`
         // under `karac build` DEEP-CLONES the element so the returned Option

@@ -4073,6 +4073,53 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
             }
+            // B-2026-07-04-2 sub-part 1 (chunks/windows): `<base>.iter()
+            // .chunks(n).collect()` groups the source into consecutive
+            // `Vec[E]` slices of length `n` (last chunk short); `.windows(n)`
+            // yields every overlapping length-`n` slice. Lowered with an
+            // IN-PLACE fill: push a fresh EMPTY sub-Vec into the accumulator,
+            // then `acc[idx].push(base[j])` fills it directly. This avoids the
+            // consume-then-reuse loop-local heap binding (`let chunk; …;
+            // acc.push(chunk)`) that the ownership checker would RC-fallback —
+            // machinery the synthetic AST (generated post-ownership) can't
+            // trigger, so that shape double-freed. The only moved binding is the
+            // EMPTY sub-Vec (cap=0, nothing to free); the heap elements clone
+            // straight into `acc[idx]` via `base[j]`. Gated to a named-Vec
+            // `.iter()` base and a positive integer-literal `n`; any other shape
+            // bails to the loud dispatch-fail (never a miscompile).
+            if (method == "chunks" || method == "windows") && args.len() == 1 {
+                let iter_base = |e: &Expr| -> Option<Expr> {
+                    match &e.kind {
+                        ExprKind::MethodCall {
+                            object,
+                            method,
+                            args,
+                            ..
+                        } if args.is_empty() && method == "iter" => Some((**object).clone()),
+                        _ => None,
+                    }
+                };
+                let n_lit = match &args[0].value.kind {
+                    ExprKind::Integer(n, _) if *n > 0 => Some(*n),
+                    _ => None,
+                };
+                if let (Some(base), Some(n)) = (iter_base(object.as_ref()), n_lit) {
+                    let base_is_named_vec = matches!(&base.kind, ExprKind::Identifier(nm)
+                        if self.var_elem_type_exprs.contains_key(nm.as_str()));
+                    if base_is_named_vec {
+                        let overlapping = method == "windows";
+                        if let Some(v) = self.try_compile_chunks_windows_collect(
+                            &base,
+                            n,
+                            overlapping,
+                            call_span,
+                        )? {
+                            return Ok(Some(v));
+                        }
+                        return Ok(None);
+                    }
+                }
+            }
         }
 
         let mut steps: Vec<IterAdaptor> = Vec::new();
@@ -5337,6 +5384,243 @@ impl<'ctx> super::Codegen<'ctx> {
             kind: ExprKind::Block(Block {
                 stmts: vec![let_vec, outer_loop],
                 final_expr: Some(Box::new(ident(&vec_name))),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        Ok(Some(self.compile_expr(&block)?))
+    }
+
+    /// Lower `<base>.iter().chunks(n).collect()` (`overlapping == false`) or
+    /// `.windows(n).collect()` (`overlapping == true`) into a `Vec[Vec[E]]`
+    /// with an IN-PLACE fill. `base` is a named `Vec[E]`; `n > 0`. Emitted:
+    ///
+    /// ```text
+    /// { let mut __ckv: Vec[Vec[E]] = Vec.new();
+    ///   let __ckn = base.len();
+    ///   let mut __cks = 0;
+    ///   while __cks < __ckn {                     // windows: while __cks + n <= __ckn
+    ///     let mut __cke0: Vec[E] = Vec.new();     // EMPTY (cap=0, safe to move)
+    ///     __ckv.push(__cke0);
+    ///     let __ckx = __ckv.len() - 1;
+    ///     let mut __ckj = __cks;
+    ///     let __cke = __cks + n;
+    ///     while __ckj < __cke and __ckj < __ckn {
+    ///       __ckv[__ckx].push(base[__ckj]);       // index-read deep-clones E, in place
+    ///       __ckj = __ckj + 1;
+    ///     }
+    ///     __cks = __cks + step;                    // chunks: n, windows: 1
+    ///   }
+    ///   __ckv }
+    /// ```
+    ///
+    /// The IN-PLACE fill is what makes this sound: the only moved binding is the
+    /// EMPTY `__cke0` (nothing heap to double-free), and each heap element is
+    /// cloned straight into `__ckv[__ckx]` — no consume-then-reuse loop-local
+    /// heap binding for the synthetic AST to mishandle (that shape needs the
+    /// ownership checker's RC fallback, which post-ownership codegen can't
+    /// emit). `base` survives intact. Returns `Ok(None)` if the result type
+    /// isn't a recorded `Vec[Vec[E]]`. B-2026-07-04-2 sub-part 1.
+    fn try_compile_chunks_windows_collect(
+        &mut self,
+        base: &Expr,
+        n: i64,
+        overlapping: bool,
+        call_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let outer_te = match self
+            .owned_temp_drops
+            .get(&(call_span.offset, call_span.length))
+        {
+            Some(te) => te.clone(),
+            None => return Ok(None),
+        };
+        // Outer must be `Vec[<inner>]`; inner is the per-chunk `Vec[E]`.
+        let inner_te = match &outer_te.kind {
+            TypeKind::Path(p) if p.segments.last().map(|s| s.as_str()) == Some("Vec") => {
+                match p.generic_args.as_ref().and_then(|ga| ga.first()) {
+                    Some(GenericArg::Type(t)) => t.clone(),
+                    _ => return Ok(None),
+                }
+            }
+            _ => return Ok(None),
+        };
+
+        let uid = self.indexed_elem_counter;
+        self.indexed_elem_counter += 1;
+        let sp = call_span.clone();
+        let outv = format!("__ckv_{}", uid);
+        let lenv = format!("__ckn_{}", uid);
+        let startv = format!("__cks_{}", uid);
+        let chunkv = format!("__ckc_{}", uid);
+        let jv = format!("__ckj_{}", uid);
+        let endv = format!("__cke_{}", uid);
+
+        let ident = |name: &str| Expr {
+            kind: ExprKind::Identifier(name.to_string()),
+            span: sp.clone(),
+        };
+        let i64_lit = |v: i64| Expr {
+            kind: ExprKind::Integer(v, Some(crate::token::IntSuffix::I64)),
+            span: sp.clone(),
+        };
+        let bin = |op: BinOp, l: Expr, r: Expr| Expr {
+            kind: ExprKind::Binary {
+                op,
+                left: Box::new(l),
+                right: Box::new(r),
+            },
+            span: sp.clone(),
+        };
+        let let_stmt = |is_mut: bool, name: &str, ty: Option<TypeExpr>, value: Expr| Stmt {
+            kind: StmtKind::Let {
+                is_mut,
+                pattern: Pattern {
+                    kind: PatternKind::Binding(name.to_string()),
+                    span: sp.clone(),
+                },
+                ty,
+                value,
+            },
+            span: sp.clone(),
+        };
+        let assign = |name: &str, value: Expr| Stmt {
+            kind: StmtKind::Assign {
+                target: ident(name),
+                value,
+            },
+            span: sp.clone(),
+        };
+        let vec_new = || Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Path {
+                        segments: vec!["Vec".to_string(), "new".to_string()],
+                        generic_args: None,
+                    },
+                    span: sp.clone(),
+                }),
+                args: vec![],
+            },
+            span: sp.clone(),
+        };
+        let len_of = |e: Expr| Expr {
+            kind: ExprKind::MethodCall {
+                object: Box::new(e),
+                method: "len".to_string(),
+                turbofish: None,
+                args: vec![],
+                args_close_span: sp.clone(),
+            },
+            span: sp.clone(),
+        };
+        // `<recv>.push(<val>)` where recv is an arbitrary place expression.
+        let push_to = |recv: Expr, val: Expr| Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::MethodCall {
+                    object: Box::new(recv),
+                    method: "push".to_string(),
+                    turbofish: None,
+                    args: vec![CallArg {
+                        label: None,
+                        mut_marker: false,
+                        value: val,
+                        span: sp.clone(),
+                    }],
+                    args_close_span: sp.clone(),
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        let while_stmt = |cond: Expr, body: Vec<Stmt>| Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::While {
+                    label: None,
+                    condition: Box::new(cond),
+                    body: Block {
+                        stmts: body,
+                        final_expr: None,
+                        span: sp.clone(),
+                    },
+                    attributes: Vec::new(),
+                },
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+
+        // Chunk builder: an inline BLOCK expr whose tail-return is a FRESH
+        // per-chunk Vec — `{ let mut __ckc = Vec.new(); <fill>; __ckc }`. This
+        // is the `mk()`-fresh-temp pattern inlined: the block value is a
+        // tail-returned fresh Vec consumed by `__ckv.push(…)`, NOT a
+        // consume-then-reuse loop-local binding (which would need the ownership
+        // RC fallback the synthetic AST can't emit) and NOT an in-place fill of
+        // a growing accumulator element (which double-freed on realloc). Each
+        // `base[__ckj]` deep-clones (the heap-index-read fix), so `base`
+        // survives and every clone is owned once by the result.
+        let base_index = Expr {
+            kind: ExprKind::Index {
+                object: Box::new(base.clone()),
+                index: Box::new(ident(&jv)),
+            },
+            span: sp.clone(),
+        };
+        let inner_body = vec![
+            push_to(ident(&chunkv), base_index),
+            assign(&jv, bin(BinOp::Add, ident(&jv), i64_lit(1))),
+        ];
+        let inner_cond = bin(
+            BinOp::And,
+            bin(BinOp::Lt, ident(&jv), ident(&endv)),
+            bin(BinOp::Lt, ident(&jv), ident(&lenv)),
+        );
+        let chunk_block = Expr {
+            kind: ExprKind::Block(Block {
+                stmts: vec![
+                    let_stmt(true, &chunkv, Some(inner_te.clone()), vec_new()),
+                    let_stmt(false, &jv, None, ident(&startv)),
+                    let_stmt(
+                        false,
+                        &endv,
+                        None,
+                        bin(BinOp::Add, ident(&startv), i64_lit(n)),
+                    ),
+                    while_stmt(inner_cond, inner_body),
+                ],
+                final_expr: Some(Box::new(ident(&chunkv))),
+                span: sp.clone(),
+            }),
+            span: sp.clone(),
+        };
+        // Outer-loop body: push the freshly-built chunk, advance the start.
+        let step = if overlapping { 1 } else { n };
+        let outer_body = vec![
+            push_to(ident(&outv), chunk_block),
+            assign(&startv, bin(BinOp::Add, ident(&startv), i64_lit(step))),
+        ];
+        // Outer condition: chunks stop when start >= len; windows need a FULL
+        // length-`n` window, so stop when start + n > len (i.e. start <= len-n).
+        let outer_cond = if overlapping {
+            bin(
+                BinOp::LtEq,
+                bin(BinOp::Add, ident(&startv), i64_lit(n)),
+                ident(&lenv),
+            )
+        } else {
+            bin(BinOp::Lt, ident(&startv), ident(&lenv))
+        };
+
+        let stmts = vec![
+            let_stmt(true, &outv, Some(outer_te.clone()), vec_new()),
+            let_stmt(false, &lenv, None, len_of(base.clone())),
+            let_stmt(true, &startv, None, i64_lit(0)),
+            while_stmt(outer_cond, outer_body),
+        ];
+        let block = Expr {
+            kind: ExprKind::Block(Block {
+                stmts,
+                final_expr: Some(Box::new(ident(&outv))),
                 span: sp.clone(),
             }),
             span: sp.clone(),

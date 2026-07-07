@@ -6798,6 +6798,37 @@ fn main() {
         }
     }
 
+    /// B-2026-07-04-2 sub-part 1 (chunks/windows): `<base>.iter().chunks(n)
+    /// .collect()` groups the source into consecutive `Vec[E]` slices of length
+    /// `n` (last chunk short); `.windows(n)` yields every overlapping length-`n`
+    /// slice. Both were gated to the loud dispatch-fail. The fix builds each
+    /// chunk as a FRESH temp via an inline block tail-return
+    /// (`acc.push({ let mut c = Vec.new(); ...; c })`) — the `mk()`-fresh-temp
+    /// pattern inlined — so there is no consume-then-reuse loop binding (which
+    /// would need the ownership RC fallback the post-ownership synthetic AST
+    /// can't emit) and no in-place fill of a growing accumulator (which
+    /// double-freed on realloc). The borrowed base survives; heap coverage is
+    /// the ASAN twin `asan_b04_2_chunks_heap_collect_no_leak`.
+    #[test]
+    fn e2e_iter_adaptor_chunks_windows_collect_codegen() {
+        if let Some(out) = run_program(
+            r#"
+fn main() {
+    let v: Vec[i64] = Vec[1i64, 2i64, 3i64, 4i64, 5i64];
+    let cs: Vec[Vec[i64]] = v.iter().chunks(2i64).collect();
+    // 3 chunks: [1,2] [3,4] [5]
+    println(f"{cs.len()} {cs[0i64].len()} {cs[0i64][0i64]} {cs[0i64][1i64]} {cs[2i64].len()} {cs[2i64][0i64]} {v.len()}");
+    let w: Vec[i64] = Vec[1i64, 2i64, 3i64, 4i64];
+    let ws: Vec[Vec[i64]] = w.iter().windows(2i64).collect();
+    // 3 windows: [1,2] [2,3] [3,4]
+    println(f"{ws.len()} {ws[0i64][0i64]} {ws[0i64][1i64]} {ws[2i64][0i64]} {ws[2i64][1i64]} {w.len()}");
+}
+"#,
+        ) {
+            assert_eq!(out, "3 2 1 2 1 5 5\n3 1 2 3 4 4\n");
+        }
+    }
+
     #[test]
     fn e2e_iter_adaptor_flat_map_collect_codegen() {
         // B-2026-07-04-2 sub-part 1 (flat_map): `<outer>.flat_map(|v|
