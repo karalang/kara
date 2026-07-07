@@ -20481,4 +20481,39 @@ fn main() {
             "forloop_string_element_whole_move_let_no_double_free",
         );
     }
+
+    #[test]
+    fn asan_forloop_enum_element_nested_struct_payload_no_double_free() {
+        // B-2026-07-05-2, the NestedStruct-payload variant: an enum whose live
+        // variant carries a heap-bearing struct inline (`Wrap(Inner)`). Exercises
+        // the `NestedStruct` arm of `deep_copy_enum_heap_payload_in_place` via the
+        // for-loop-element path — a distinct branch from the sibling
+        // `asan_forloop_bare_enum_element_whole_move_no_double_free`, which only
+        // covers a `VecOrString` payload. The deep-copy must recurse into the
+        // inline struct's own heap fields (copy-depth == drop-depth) so the inner
+        // String does not double-free on a whole-element move.
+        assert_clean_asan_run(
+            r#"
+struct Inner { s: String }
+enum Node { Leaf, Wrap(Inner) }
+fn build() -> Vec[Node] {
+    let mut v: Vec[Node] = Vec.new();
+    let mut i = 0;
+    while i < 5 { v.push(Node.Wrap(Inner { s: "forloop_enum_nested_struct_payload_iota_field_yy".to_string() })); i = i + 1; }
+    v
+}
+fn main() {
+    let items = build();
+    let mut n: i64 = 0;
+    for a in items {
+        let x = a;
+        match x { Node.Wrap(inner) => { n = n + inner.s.len(); } Node.Leaf => {} }
+    }
+    println(n);
+}
+"#,
+            &["240"], // 5 * len("forloop_enum_nested_struct_payload_iota_field_yy") = 5 * 48
+            "forloop_enum_element_nested_struct_payload_no_double_free",
+        );
+    }
 }

@@ -19884,3 +19884,53 @@ fn test_gpu_dispatch_i32_kernel_cpu() {
                }";
     assert_eq!(run_no_errors(src), "3\n6\n9\n");
 }
+
+// B-2026-07-05-2 run==build parity: moving a for-loop `Vec[<user enum>]` element
+// whole into a new owner (`let x = a`) is value-semantics-clean in the interp (no
+// aliasing double-free). The codegen fix (81ad98c4) makes the build surface match;
+// these pin the RUN surface to the same output (the ASAN cases in
+// `tests/memory_sanitizer.rs` cover the double-free, but neither the interp nor the
+// non-ASAN codegen surface was locked). Covers a `VecOrString` payload and a
+// `NestedStruct` payload.
+#[test]
+fn forloop_enum_element_whole_move_runs() {
+    let src = "enum Tok { Empty, Word(String) }\n\
+               fn build() -> Vec[Tok] {\n\
+                   let mut v: Vec[Tok] = Vec.new();\n\
+                   let mut i = 0;\n\
+                   while i < 6 { v.push(Tok.Word(\"forloop_enum_element_whole_move_payload_theta_xx\".to_string())); i = i + 1; }\n\
+                   v\n\
+               }\n\
+               fn main() {\n\
+                   let items = build();\n\
+                   let mut n: i64 = 0;\n\
+                   for a in items {\n\
+                       let x = a;\n\
+                       match x { Tok.Word(s) => { n = n + s.len(); } Tok.Empty => {} }\n\
+                   }\n\
+                   println(n);\n\
+               }";
+    assert_eq!(run(src), "288\n");
+}
+
+#[test]
+fn forloop_enum_element_nested_struct_payload_runs() {
+    let src = "struct Inner { s: String }\n\
+               enum Node { Leaf, Wrap(Inner) }\n\
+               fn build() -> Vec[Node] {\n\
+                   let mut v: Vec[Node] = Vec.new();\n\
+                   let mut i = 0;\n\
+                   while i < 5 { v.push(Node.Wrap(Inner { s: \"forloop_enum_nested_struct_payload_iota_field_yy\".to_string() })); i = i + 1; }\n\
+                   v\n\
+               }\n\
+               fn main() {\n\
+                   let items = build();\n\
+                   let mut n: i64 = 0;\n\
+                   for a in items {\n\
+                       let x = a;\n\
+                       match x { Node.Wrap(inner) => { n = n + inner.s.len(); } Node.Leaf => {} }\n\
+                   }\n\
+                   println(n);\n\
+               }";
+    assert_eq!(run(src), "240\n");
+}

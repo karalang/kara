@@ -3015,6 +3015,58 @@ fn main() {
         assert_eq!(run_program(src).as_deref(), Some("3\n4\n"));
     }
 
+    /// B-2026-07-05-2 (fix 81ad98c4): moving a for-loop `Vec[<user enum>]` element
+    /// whole into a new owner (`let x = a`) deep-copies the live variant's payload,
+    /// so the new binding's `EnumDrop` and the container's per-element drain free
+    /// independent heap. Build-side output must match `karac run` (288). The
+    /// `memory_sanitizer` ASAN cases cover the double-free; this pins the numeric
+    /// result on the plain codegen surface.
+    #[test]
+    fn for_loop_enum_element_whole_move_runs() {
+        let src = "enum Tok { Empty, Word(String) }\n\
+                   fn build() -> Vec[Tok] {\n\
+                   \x20   let mut v: Vec[Tok] = Vec.new();\n\
+                   \x20   let mut i = 0;\n\
+                   \x20   while i < 6 { v.push(Tok.Word(\"forloop_enum_element_whole_move_payload_theta_xx\".to_string())); i = i + 1; }\n\
+                   \x20   v\n\
+                   }\n\
+                   fn main() {\n\
+                   \x20   let items = build();\n\
+                   \x20   let mut n: i64 = 0;\n\
+                   \x20   for a in items {\n\
+                   \x20       let x = a;\n\
+                   \x20       match x { Tok.Word(s) => { n = n + s.len(); } Tok.Empty => {} }\n\
+                   \x20   }\n\
+                   \x20   println(n);\n\
+                   }\n";
+        assert_eq!(run_program(src).as_deref(), Some("288\n"));
+    }
+
+    /// B-2026-07-05-2, NestedStruct-payload variant: the deep-copy recurses into
+    /// the inline struct's own heap fields (copy-depth == drop-depth), matching
+    /// `karac run` (240).
+    #[test]
+    fn for_loop_enum_element_nested_struct_payload_runs() {
+        let src = "struct Inner { s: String }\n\
+                   enum Node { Leaf, Wrap(Inner) }\n\
+                   fn build() -> Vec[Node] {\n\
+                   \x20   let mut v: Vec[Node] = Vec.new();\n\
+                   \x20   let mut i = 0;\n\
+                   \x20   while i < 5 { v.push(Node.Wrap(Inner { s: \"forloop_enum_nested_struct_payload_iota_field_yy\".to_string() })); i = i + 1; }\n\
+                   \x20   v\n\
+                   }\n\
+                   fn main() {\n\
+                   \x20   let items = build();\n\
+                   \x20   let mut n: i64 = 0;\n\
+                   \x20   for a in items {\n\
+                   \x20       let x = a;\n\
+                   \x20       match x { Node.Wrap(inner) => { n = n + inner.s.len(); } Node.Leaf => {} }\n\
+                   \x20   }\n\
+                   \x20   println(n);\n\
+                   }\n";
+        assert_eq!(run_program(src).as_deref(), Some("240\n"));
+    }
+
     /// Reassign-and-use of the by-value loop local computes correctly on the
     /// build side too: `x = x * 2` scales the local, `total + x` reads it, so
     /// `(3*2)+(4*2) = 14` — matching `karac run`. (B-2026-06-30-6.)
