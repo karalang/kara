@@ -32,7 +32,8 @@
 //! `infer_stats_call` records the slice element (`i64` | `f64`) in
 //! `stats_elem_types`, and the `Stats.*` paths instantiate these same
 //! emitters at that element type — int folds/compares stay exact
-//! ([`SortKey::IntValue`]/[`SortKey::IndexIntoInt`] compare at signed i64),
+//! ([`SortKey::IntValue`]/[`SortKey::IndexIntoInt`] compare at exact i64 —
+//! signed `sgt`, or unsigned `ugt` when the key carries u64 bits),
 //! float statistics promote through `emit_sum_f64_and_count`.
 //!
 //! **Byte-identical.** The emitters here reduce to the exact instructions the
@@ -128,16 +129,25 @@ pub(super) enum SortKey<'ctx> {
     /// `DataFrame.describe` quartiles).
     Value,
     /// The buffer elements are `i64` sort keys compared at exact integer
-    /// precision (signed `>`) — the `Slice[i64]` value sort (S5); no lossy
-    /// float round-trip above 2⁵³.
-    IntValue,
+    /// precision — the `Slice[i64]` / `Column`/`Tensor` value sort (S5); no
+    /// lossy float round-trip above 2⁵³. `unsigned` selects the compare
+    /// predicate: signed `sgt` for i64, unsigned `ugt` for u64 (values ≥ 2^63
+    /// carry the high bit and must order above the positives) — B-2026-07-07-2.
+    /// For narrow unsigned widths the widen already `zext`s into a
+    /// non-negative i64, so `sgt`/`ugt` agree; only full-width u64 needs it.
+    IntValue { unsigned: bool },
     /// The buffer holds `i64` indices into this `f64` data pointer; an
     /// element's key is `data[idx]` (`Stats.argsort`). Stable — the strict
     /// `>` inner compare leaves equal keys in input order.
     IndexInto(PointerValue<'ctx>),
     /// The buffer holds `i64` indices into this `i64` data pointer; keys
-    /// compare at exact integer precision (the `Slice[i64]` argsort, S5).
-    IndexIntoInt(PointerValue<'ctx>),
+    /// compare at exact integer precision (the `Slice[i64]` / `Column`/`Tensor`
+    /// argsort, S5). `unsigned` picks `ugt` over `sgt` for u64 keys (see
+    /// [`SortKey::IntValue`]).
+    IndexIntoInt {
+        data: PointerValue<'ctx>,
+        unsigned: bool,
+    },
 }
 
 impl<'ctx> super::Codegen<'ctx> {
@@ -1128,13 +1138,15 @@ impl<'ctx> super::Codegen<'ctx> {
         // Value sort moves f64/i64 elements; argsort moves i64 indices.
         let elem_t: BasicTypeEnum<'ctx> = match key {
             SortKey::Value => f64_t.into(),
-            SortKey::IntValue | SortKey::IndexInto(_) | SortKey::IndexIntoInt(_) => i64_t.into(),
+            SortKey::IntValue { .. } | SortKey::IndexInto(_) | SortKey::IndexIntoInt { .. } => {
+                i64_t.into()
+            }
         };
         // The sort key of a loaded element (f64 for the float forms, i64 for
         // the exact-integer forms).
         let key_of = |el: BasicValueEnum<'ctx>, nm: &str| -> BasicValueEnum<'ctx> {
             match key {
-                SortKey::Value | SortKey::IntValue => el,
+                SortKey::Value | SortKey::IntValue { .. } => el,
                 SortKey::IndexInto(data) => {
                     let slot = unsafe {
                         self.builder
@@ -1143,7 +1155,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     };
                     self.builder.build_load(f64_t, slot, nm).unwrap()
                 }
-                SortKey::IndexIntoInt(data) => {
+                SortKey::IndexIntoInt { data, .. } => {
                     let slot = unsafe {
                         self.builder
                             .build_gep(i64_t, *data, &[el.into_int_value()], nm)
@@ -1154,7 +1166,8 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         };
         // Strict `key(a) > key(b)` — ordered `fcmp ogt` for float keys (NaN
-        // settles to the front), signed `icmp sgt` for exact-integer keys.
+        // settles to the front), `icmp sgt`/`ugt` for exact-integer keys
+        // (unsigned for u64, so values ≥ 2^63 order above the positives).
         let key_gt = |a: BasicValueEnum<'ctx>, b: BasicValueEnum<'ctx>| -> IntValue<'ctx> {
             match key {
                 SortKey::Value | SortKey::IndexInto(_) => self
@@ -1166,15 +1179,24 @@ impl<'ctx> super::Codegen<'ctx> {
                         "kern.is.gt",
                     )
                     .unwrap(),
-                SortKey::IntValue | SortKey::IndexIntoInt(_) => self
-                    .builder
-                    .build_int_compare(
-                        IntPredicate::SGT,
-                        a.into_int_value(),
-                        b.into_int_value(),
-                        "kern.is.gt",
-                    )
-                    .unwrap(),
+                SortKey::IntValue { unsigned } | SortKey::IndexIntoInt { unsigned, .. } => {
+                    // u64 keys carry the high bit as magnitude, not sign — an
+                    // unsigned `ugt` orders values ≥ 2^63 above the positives
+                    // (B-2026-07-07-2). i64 keeps signed `sgt`.
+                    let pred = if *unsigned {
+                        IntPredicate::UGT
+                    } else {
+                        IntPredicate::SGT
+                    };
+                    self.builder
+                        .build_int_compare(
+                            pred,
+                            a.into_int_value(),
+                            b.into_int_value(),
+                            "kern.is.gt",
+                        )
+                        .unwrap()
+                }
             }
         };
 
@@ -1345,22 +1367,16 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn sort_key_is_int(
         &self,
         elem: BasicTypeEnum<'ctx>,
-        unsigned: bool,
+        _unsigned: bool,
         method: &str,
         container: &str,
     ) -> Result<bool, String> {
+        // u64 (`_unsigned && width==64`) is no longer rejected: `SortKey`
+        // carries the signedness and `emit_sort_scratch` picks `ugt` over
+        // `sgt` for unsigned keys, so values ≥ 2^63 order correctly under
+        // `build` — matching the interpreter's u64 model (B-2026-07-07-2,
+        // follow-on to B-2026-07-04-8).
         match elem {
-            BasicTypeEnum::IntType(it) if it.get_bit_width() == 64 && unsigned => Err(format!(
-                "{container}.{method} under the native backend (`karac build`) does \
-                 not yet support u64 element {container}s — the shared scratch sort \
-                 compares integer keys as signed i64, which misorders values ≥ 2^63. \
-                 The interpreter now has a real u64 model (`karac run` sorts these \
-                 correctly — bug-ledger B-2026-07-04-8, fixed), so this is no longer \
-                 gated on `run`; wiring the unsigned `UGT` scratch compare through \
-                 `SortKey` (the kernel is shared with the stats median/percentile \
-                 path) is a tracked follow-on — see bug-ledger B-2026-07-07-2. \
-                 `Vec[u64].sort()` is already unsigned-correct under `build`."
-            )),
             BasicTypeEnum::IntType(_) => Ok(true),
             BasicTypeEnum::FloatType(_) => Ok(false),
             _ => Err(format!(

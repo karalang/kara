@@ -2463,6 +2463,58 @@ mod codegen_tests {
         );
     }
 
+    #[test]
+    fn test_e2e_u64_column_tensor_sort_unsigned_match_run() {
+        // B-2026-07-07-2 (follow-on to B-2026-07-04-8): `Column[u64]` /
+        // `Tensor[u64]` `sorted`/`argsort` under `karac build` used to
+        // loud-reject (the shared scratch sort keyed integers at signed
+        // `sgt`, misordering values ≥ 2⁶³). Now `SortKey` carries the
+        // signedness and `emit_sort_scratch` picks `ugt` for u64, so build
+        // matches the interpreter's u64 model exactly. The oracle is the
+        // `karac run` output pinned in tests/interpreter.rs
+        // (test_interp_column_u64_sorted_and_argsort_unsigned).
+        let src = "fn main() {\n\
+                   \x20   let c: Column[u64] = Column.from_vec([1u64 << 63, 5u64, 1u64 << 62]);\n\
+                   \x20   let s = c.sorted();\n\
+                   \x20   println(f\"{s[0]},{s[1]},{s[2]}\");\n\
+                   \x20   let a = c.argsort();\n\
+                   \x20   println(f\"{a[0]},{a[1]},{a[2]}\");\n\
+                   \x20   let t: Tensor[u64, [3]] = Tensor.from([1u64 << 63, 5u64, 1u64 << 62]);\n\
+                   \x20   let ts = t.sorted();\n\
+                   \x20   println(f\"{ts[0]},{ts[1]},{ts[2]}\");\n\
+                   \x20   let ta = t.argsort();\n\
+                   \x20   println(f\"{ta[0]},{ta[1]},{ta[2]}\");\n\
+                   }\n";
+        // sorted ascending: 5, 2⁶², 2⁶³; argsort: original indices 1, 2, 0.
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some(
+                "5,4611686018427387904,9223372036854775808\n\
+                 1,2,0\n\
+                 5,4611686018427387904,9223372036854775808\n\
+                 1,2,0\n"
+            )
+        );
+    }
+
+    #[test]
+    fn test_ir_u64_column_sorted_uses_unsigned_compare() {
+        // The scratch-sort compare for a u64 column must be `icmp ugt`, not
+        // `sgt` (B-2026-07-07-2). Guards against a silent regression to the
+        // signed key compare that would misorder values ≥ 2⁶³.
+        let ir = ir_for(
+            "fn main() {\n\
+             \x20   let c: Column[u64] = Column.from_vec([1u64 << 63, 5u64]);\n\
+             \x20   let s = c.sorted();\n\
+             \x20   println(f\"{s[0]}\");\n\
+             }\n",
+        );
+        assert!(
+            ir.contains("icmp ugt"),
+            "u64 column sort must key with unsigned compare:\n{ir}"
+        );
+    }
+
     // ── Variables and let bindings ───────────────────────────────
 
     #[test]
@@ -48574,7 +48626,8 @@ fn main() {
         // lifts every numeric type — `i8`/`i16`/`i32` sext, `u8`/`u16`/`u32`
         // zext, `f32` fpext into the key, then `sorted` narrows the key back to
         // `Vec[T]`. Covers i32 (with a null), u32, and f32 (with a null);
-        // `run` == `build` == default auto-par (only u64 stays rejected).
+        // `run` == `build` == default auto-par. (u64 also sorts now, via the
+        // unsigned scratch compare — B-2026-07-07-2.)
         let src = r#"
 fn main() {
     let mut ci: Column[i32] = Column.with_capacity(4);
@@ -48678,7 +48731,7 @@ fn main() {
         // width via the widened 8-byte scratch sort (i8/i16/i32 sext, u8/u16/u32
         // zext, f32 fpext), mirroring the Column narrow-widths path. Covers i32
         // (with ties), u32, and f32 tensors. `run` == `build` == default
-        // auto-par (only u64 stays rejected).
+        // auto-par. (u64 also sorts now — B-2026-07-07-2.)
         let src = r#"
 fn main() {
     let ti: Tensor[i32, [5]] = Tensor.from([40, 10, 30, 20, 10]);
@@ -48709,36 +48762,34 @@ fn main() {
     }
 
     #[test]
-    fn test_e2e_sorted_narrow_width_rejected_loudly() {
-        // Both `Column` and `Tensor` now sort every numeric width EXCEPT u64
-        // (the narrow-tensor-storage blocker B-2026-07-03-35 is fixed, so narrow
-        // int / f32 tensors sort too — see `test_e2e_tensor_sorted_argsort_
-        // narrow_widths`). The one remaining loud rejection on each surface is a
-        // **u64** element: the scratch sort compares integers as SIGNED, which
-        // misorders values ≥ 2^63. Codegen could lift this with an unsigned
-        // compare, but `karac run` ALSO mis-sorts/mis-prints u64 ≥ 2^63 (the
-        // interpreter's `Value::Int` is signedness-blind), so `build` is kept
-        // rejecting to avoid a run/build divergence — both are blocked on an
-        // interpreter u64 model (bug-ledger B-2026-07-04-8).
+    fn test_e2e_u64_sorted_now_supported() {
+        // Both `Column` and `Tensor` now sort every numeric width, u64
+        // INCLUDED: the scratch sort keys unsigned integers with `ugt`
+        // (B-2026-07-07-2, lifting the old loud rejection this test used to
+        // assert). u64 was previously blocked to avoid a run/build divergence
+        // while the interpreter had no u64 model; that model landed in
+        // B-2026-07-04-8, so build now matches run. (The ≥ 2^63 ordering that
+        // actually distinguishes signed from unsigned keys is exercised in
+        // `test_e2e_u64_column_tensor_sort_unsigned_match_run`.)
         let col_u64 = r#"
 fn main() {
     let c: Column[u64] = Column.from_vec([5, 9, 3, 1]);
     let s: Vec[u64] = c.sorted();
-    println(f"{s[0]}");
+    println(f"{s[0]},{s[3]}");
 }
 "#;
-        let err = ir_result(col_u64).expect_err("a u64 column sort must be rejected");
-        assert!(err.contains("u64 element Columns"), "got: {err}");
+        ir_result(col_u64).expect("a u64 column sort must now compile");
+        assert_eq!(run_program(col_u64).as_deref(), Some("1,9\n"));
 
         let tensor_u64 = r#"
 fn main() {
     let t: Tensor[u64, [4]] = Tensor.from([4, 2, 7, 1]);
     let s: Vec[u64] = t.sorted();
-    println(f"{s[0]}");
+    println(f"{s[0]},{s[3]}");
 }
 "#;
-        let err = ir_result(tensor_u64).expect_err("a u64 tensor sort must be rejected");
-        assert!(err.contains("u64 element Tensors"), "got: {err}");
+        ir_result(tensor_u64).expect("a u64 tensor sort must now compile");
+        assert_eq!(run_program(tensor_u64).as_deref(), Some("1,7\n"));
     }
 
     #[test]

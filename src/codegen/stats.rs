@@ -167,7 +167,7 @@ impl<'ctx> super::Codegen<'ctx> {
             "argmin" => self.stats_argminmax(data, len, false, is_int),
             "argmax" => self.stats_argminmax(data, len, true, is_int),
             "sort" => self.stats_sort(data, len, is_int)?,
-            "argsort" => self.stats_argsort(data, len, is_int)?,
+            "argsort" => self.stats_argsort(data, len, is_int, false)?,
             _ => unreachable!(),
         };
         Ok(Some(result))
@@ -350,8 +350,10 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_memcpy(buf, 8, data, 8, nbytes)
             .map_err(|e| format!("stats median memcpy failed: {e:?}"))?;
+        // Stats slices are i64/f64 only (the typechecker rejects u64), so the
+        // integer key is always signed.
         let sort_key = if is_int {
-            SortKey::IntValue
+            SortKey::IntValue { unsigned: false }
         } else {
             SortKey::Value
         };
@@ -498,7 +500,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_memcpy(buf, 8, data, 8, nbytes)
             .map_err(|e| format!("stats percentile memcpy failed: {e:?}"))?;
         let sort_key = if is_int {
-            SortKey::IntValue
+            SortKey::IntValue { unsigned: false }
         } else {
             SortKey::Value
         };
@@ -634,7 +636,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_memcpy(buf, 8, data, 8, nbytes)
             .map_err(|e| format!("stats sort memcpy failed: {e:?}"))?;
         let sort_key = if is_int {
-            SortKey::IntValue
+            SortKey::IntValue { unsigned: false }
         } else {
             SortKey::Value
         };
@@ -651,6 +653,7 @@ impl<'ctx> super::Codegen<'ctx> {
         data: PointerValue<'ctx>,
         len: IntValue<'ctx>,
         is_int: bool,
+        unsigned: bool,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let i64_t = self.context.i64_type();
         let fn_val = self.current_fn.expect("stats argsort in function");
@@ -708,7 +711,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // kernel scratch sort's `IndexInto` form (`IndexIntoInt` keys at
         // exact i64 for integer slices — S5).
         let sort_key = if is_int {
-            SortKey::IndexIntoInt(data)
+            SortKey::IndexIntoInt { data, unsigned }
         } else {
             SortKey::IndexInto(data)
         };

@@ -2996,8 +2996,8 @@ impl<'ctx> super::Codegen<'ctx> {
     /// [`emit_sort_scratch`](super::Codegen::emit_sort_scratch), and returns
     /// the owned Vec (the binding site frees it). Ties keep input order
     /// (stable). Every numeric width via the widened scratch sort (i64/f64
-    /// direct, narrow ints sext/zext, `f32` fpext); u64 rejected loudly (see
-    /// [`sort_key_is_int`](super::Codegen::sort_key_is_int)).
+    /// direct, narrow ints sext/zext, `f32` fpext); u64 keys ordered by the
+    /// unsigned `ugt` scratch compare (B-2026-07-07-2).
     fn compile_column_sorted(
         &mut self,
         control: PointerValue<'ctx>,
@@ -3007,7 +3007,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let is_int = self.sort_key_is_int(elem, unsigned, "sorted", "Column")?;
         let (buf, k) = self.column_compact_valid(control, elem, unsigned, false);
         let key = if is_int {
-            SortKey::IntValue
+            SortKey::IntValue { unsigned }
         } else {
             SortKey::Value
         };
@@ -3022,7 +3022,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// ascending index order). Compacts the valid slots' indices into a scratch
     /// buffer, then insertion-sorts them keyed by `data[idx]` via the shared
     /// scratch sort's `IndexInto` form (keyed into a widened data view for
-    /// narrow / `f32` elems). Every numeric width; u64 rejected loudly.
+    /// narrow / `f32` elems). Every numeric width; u64 via unsigned compare.
     fn compile_column_argsort(
         &mut self,
         control: PointerValue<'ctx>,
@@ -3039,7 +3039,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // key into a widened full-length 8-byte copy, freed after the sort.
         if self.sort_elem_is_wide(elem) {
             let key = if is_int {
-                SortKey::IndexIntoInt(data)
+                SortKey::IndexIntoInt { data, unsigned }
             } else {
                 SortKey::IndexInto(data)
             };
@@ -3050,8 +3050,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 .column_load_field(control, 2, "col.as.len")
                 .into_int_value();
             let wdata = self.sort_widen_data_buffer(data, len, elem, unsigned);
+            // The widened buffer is `zext`ed for unsigned narrow widths, so its
+            // keys are non-negative and `sgt`/`ugt` agree; pass `unsigned`
+            // through anyway for uniformity.
             let key = if is_int {
-                SortKey::IndexIntoInt(wdata)
+                SortKey::IndexIntoInt {
+                    data: wdata,
+                    unsigned,
+                }
             } else {
                 SortKey::IndexInto(wdata)
             };

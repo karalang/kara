@@ -600,11 +600,13 @@ B-2026-07-02-10..13, see the ledger.
   back into a `Vec[T]`-width buffer, freeing the 8-byte scratch) /
   `sort_widen_data_buffer` (a widened full-length key view the narrow `argsort`
   keys into via `IndexInto`, freed after the sort). `column_compact_valid` now
-  widens on the way in. **Only `u64` stays rejected** (the scratch compare is
-  signed, misordering values ≥ 2⁶³). `run` == `KARAC_AUTO_PAR=0` == `build` for
-  i32/u32/f32 columns (each with a null). Tests: codegen
-  `test_e2e_column_sorted_argsort_narrow_widths` + reworked
-  `_narrow_width_rejected_loudly` (now u64-column + narrow/f32-tensor);
+  widens on the way in. **`u64` now sorts too** (B-2026-07-07-2 threaded the
+  signedness through `SortKey` and picks `ugt` for u64 keys, so values ≥ 2⁶³
+  order correctly — the old loud rejection is lifted). `run` ==
+  `KARAC_AUTO_PAR=0` == `build` for i32/u32/f32/u64 columns. Tests: codegen
+  `test_e2e_column_sorted_argsort_narrow_widths` +
+  `test_e2e_u64_sorted_now_supported` (was `_narrow_width_rejected_loudly`) +
+  `test_e2e_u64_column_tensor_sort_unsigned_match_run`;
   interpreter `column_sorted_argsort_narrow_widths_reduction`; typechecker
   `test_column_sorted_narrow_width_result_types`; memory_sanitizer
   `asan_column_sorted_argsort_narrow_widths_no_leak`. At the time, **`Tensor`
@@ -663,8 +665,8 @@ B-2026-07-02-10..13, see the ledger.
   `KARAC_AUTO_PAR=0` == `build` for i32/u32/f32 tensor storage + indexing +
   reductions + map/reshape/zip + sorted/argsort, and an f64 tensor from integer
   literals. Tests: codegen `test_e2e_tensor_narrow_element_storage_and_ops` +
-  `test_e2e_tensor_sorted_argsort_narrow_widths` + reworked
-  `_narrow_width_rejected_loudly` (u64 column + tensor); interpreter
+  `test_e2e_tensor_sorted_argsort_narrow_widths` + `test_e2e_u64_sorted_now_supported`
+  (u64 column + tensor now sort; was `_narrow_width_rejected_loudly`); interpreter
   `tensor_narrow_element_storage_and_sort_reduction`; memory_sanitizer
   `asan_tensor_sorted_argsort_narrow_widths_no_leak`.
 - **S6c-9** ⛔ **(investigated, not shipped — blocked)** — attempted to lift the

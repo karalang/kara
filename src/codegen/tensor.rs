@@ -3288,9 +3288,10 @@ impl<'ctx> super::Codegen<'ctx> {
     /// under `build` before the sort even ran, and this path rejected them). The
     /// widened tensor path mirrors `compile_column_sorted`: `sorted` sorts a
     /// widened copy then narrows each key back to `elem`; `argsort` sorts a
-    /// `0..n` index buffer keyed into the (widened, for narrow elems) data. Only
-    /// **u64** is rejected loudly (the signed scratch compare misorders values ≥
-    /// 2^63) — see [`sort_key_is_int`](super::Codegen::sort_key_is_int).
+    /// `0..n` index buffer keyed into the (widened, for narrow elems) data.
+    /// **u64** keys via the unsigned `ugt` scratch compare so values ≥ 2^63
+    /// order correctly (B-2026-07-07-2) — see
+    /// [`sort_key_is_int`](super::Codegen::sort_key_is_int).
     fn compile_tensor_sort(
         &mut self,
         method: &str,
@@ -3306,10 +3307,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // Wide elems key directly into the live data; narrow / f32 elems key
             // into a widened 8-byte copy freed after the sort.
             if self.sort_elem_is_wide(elem) {
-                self.stats_argsort(data, count, is_int)
+                self.stats_argsort(data, count, is_int, unsigned)
             } else {
                 let keys = self.sort_widen_data_buffer(data, count, elem, unsigned);
-                let vec = self.stats_argsort(keys, count, is_int)?;
+                let vec = self.stats_argsort(keys, count, is_int, unsigned)?;
                 self.builder
                     .build_call(self.free_fn, &[keys.into()], "t.sort.keyfree")
                     .unwrap();
@@ -3321,7 +3322,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // widen + steal — byte-identical to the old `stats_sort`).
             let key_buf = self.sort_widen_data_buffer(data, count, elem, unsigned);
             let sk = if is_int {
-                SortKey::IntValue
+                SortKey::IntValue { unsigned }
             } else {
                 SortKey::Value
             };
