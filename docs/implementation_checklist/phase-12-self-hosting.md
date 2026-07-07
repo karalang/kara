@@ -1,5 +1,7 @@
 # Phase 12: Self-Hosting
 
+> ⏸ **PAUSED 2026-07-06 — do LLJIT productionization first.** Self-hosting is the largest Kāra codebase there will ever be; porting it while `karac run` (tree-walk) still diverges from `karac build` (LLVM) — **23% of all fixed bugs are run-vs-build splits** — pays that tax thousands of times over and risks the self-hosted compiler miscompiling itself in ways the tree-walk oracle masks. The roadmap already chose LLVM as the single execution backend (Core Strategy #2, locked 2026-05-05) but the flip never shipped. Finish it first, then resume here. **→ [`../spikes/lljit-productionization.md`](../spikes/lljit-productionization.md).**
+
 > **The v1 pivot.** Rewrite `karac` in Kāra. Executes AFTER the Phase 8 floor + Phase 9 (done) + Phase 10 (mostly done), and BEFORE Phase 11 — real order **`8 → 9 → 10 → 12 → 11`** (numeric order ≠ execution order). Design record + rationale in [`../roadmap.md` § Phase 12](../roadmap.md#phase-12-self-hosting); the *why* — self-hosting is the credibility proof for a solo/AI-built language — is the driver. This tracker holds the action items: pre-pivot blockers, port sequencing, the bootstrap procedure, and the triage of what self-hosting does / doesn't exercise.
 
 ## Strategy

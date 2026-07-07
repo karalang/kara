@@ -1,0 +1,61 @@
+# Spike: LLJIT productionization — collapse the `run`/`build` divergence tax
+
+**Status:** OPEN — active epic, self-hosting (Phase 12) paused behind it.
+**Decision date:** 2026-07-06. **Owner call:** pause self-hosting; productionize LLJIT to the default execution backend *first*, then move `karac run` onto it and strip run-leniency.
+
+---
+
+## Decision & rationale
+
+**Do this before Phase 12 self-hosting.** The single largest recurring bug class in this repo is `karac run` (tree-walk interpreter) diverging from `karac build` (AOT LLVM): **23% of all fixed bugs (67 / 284) are explicit run-vs-build splits**, and ~half the ledger touches the theme (value_compare missing arms, decl-order vs `karac_cmp`, numeric-coercion split, representation/lowering gaps). By `design.md` § Specification Layers these are **guaranteed-semantics** — "the program's meaning" — so maintaining two implementations of them is a spec-divergence generator, not a code smell.
+
+The roadmap already chose the cure (Core Strategy #2, locked 2026-05-05 / brainstorm v62): **LLVM is the single execution backend** — `karac repl`/`test` run on always-JIT LLJIT (same lowering as `build`, JIT'd lazily), tree-walk interpreter retained as dev/debug only. One lowering invoked two ways (AOT + JIT) collapses the divergence class *by construction*. This spike finishes that migration and extends it to `karac run`.
+
+**Why before self-hosting:** the self-hosted compiler is the largest Kāra codebase that will ever be written. Porting it while `run` and `build` still diverge pays the tax thousands more times and risks the self-hosted compiler miscompiling itself in ways the tree-walk oracle masks. Collapse the tax first.
+
+Related: [`docs/diagnostic-fix-audit.md`](../diagnostic-fix-audit.md) (the other flagship-hardening axis), bug-ledger run/build splits (`grep 'run-vs-build\|works under.*run' docs/bug-ledger.jsonl`).
+
+---
+
+## Corrected current state — the tracker was wrong
+
+`phase-7-codegen.md` L696 marked **"Always-JIT backend DONE 2026-06-03, JIT-default flip landed."** **That is false.** Ground truth (2026-07-06):
+
+- `Cargo.toml`: `default = []`; `lljit_prototype` is **off by default**, commented *"promoted to default + integrated into `karac repl`/`karac test` once W6 closes."*
+- Every JIT dispatch path in `src/repl.rs` is `#[cfg(feature = "lljit_prototype")]`; the `karac_jit_runner` bin has `required-features = ["lljit_prototype"]`; the REPL's own error text says *"ensure karac was installed with --features lljit_prototype."*
+- **Therefore, in the shipped/default `karac`, `repl` / `test` / `run` ALL run on the tree-walk interpreter.** The "flip to default" never happened. (Classic unreliable-`[x]` per the repo's checklist-scoping caution.)
+
+**What IS genuinely done** (real, green, but behind `--features lljit_prototype`): the engine, W1–W5. `src/codegen/lljit.rs::LLJITEngine` (~140 LOC over `llvm-sys::orc2`); `ResourceTracker` RAII; the process-symbol-search generator (`LLVMOrcCreateDynamicLibrarySearchGeneratorForProcess` — the fix for arm64-Mach-O; MCJIT is not viable on Apple Silicon, hangs at PC=0 on any external call); error/threading hardening (`OnceLock` native-target init, malformed-IR → `Err`). 15/15 `tests/lljit_prototype.rs` + 14/14 `tests/lljit_e2e.rs` green. Test harness `jit_run_program(src) -> Option<String>` mirrors the AOT `run_program`.
+
+**What is NOT done:** the default flip; full codegen-E2E-via-JIT parity; DWARF/coro on the JIT lane; four follow-ons; and `karac run` on the JIT at all (the original plan was repl/test only — `run` is added by this decision).
+
+---
+
+## Remaining scope — ordered slices (sequencing is load-bearing)
+
+Prerequisites (1–5) must land before the user-facing flip (6).
+
+1. **De-gate foundation.** Promote the `lljit_prototype` deps (`dep:llvm-sys`/`orc2`, `dep:karac-runtime`, `dep:libc`) into the default (or a shipped) feature set; build & ship `karac_jit_runner`; keep the runtime `karac_*` symbols force-linked so the JIT process-symbol generator resolves them. Handle LLVM link + binary-size impact.
+2. **Codegen-E2E-via-JIT parity (the proof gate).** Migrate the ~1,500 `tests/codegen.rs` E2E onto `jit_run_program`; triage & fix every JIT-vs-AOT divergence. "Full codegen E2E passes via JIT" is the criterion the W3 notes call *mechanical but large*.
+3. **DWARF + coro passes through `LLJITEngine`.** Route the Level-2 DWARF crash-location emission and the coroutine-transform pass through the JIT lane (the remaining "wrapping done" dependency per W5).
+4. **Close the four open follow-ons:** L626 ambient-method codegen, L632 unified provider dispatch, L640 harness flake, L642 REPL aggregate snapshots.
+5. **Flip `repl` + `test` to JIT-by-default.** Remove the `cfg(lljit_prototype)` gates in `cmd_repl` / `cmd_test`; keep a `--interp` escape hatch for compiler-internal/dev use.
+6. **`karac run` → JIT + strip leniency  ← the pickup point, gated on 1–5.** Route `cmd_run` through the JIT (same as `cmd_test`). Make the typecheck gate **strict**: remove the phase-10 run-leniency entirely — the `TypeErrorKind::is_run_fatal()` partition and the after-fatal-gate typecheck ordering both go away, so `run` rejects hard type errors like `build`/`check`. Net simplification.
+7. **Gates.** Full suite green via JIT on macOS arm64 **and** Linux; Linux/LSan leak gate; DWARF crash-diagnostics verified; publish the cold-start bench.
+
+---
+
+## Gotchas — do not rediscover these
+
+- **Per-module JITDylib collision (W2 finding).** Every karac module emits the same Debugger-Contract globals (`KARAC_SPAWN_SITES*`, `kara.string_table`, `karac_jit_template_manifest`); a single JD rejects the duplicates. For `run`/`test` each program is one module → one JD, fine. For REPL, use cell-shadowing via tracker-cycle (works today) or per-module JD isolation (needs `ExecutionSession::lookup`, below the LLJIT C API). Pinned by `lljit_w2_finding_same_jd_collides_on_runtime_globals`.
+- **Apple Silicon requires orc2/LLJIT, not MCJIT** — MCJIT hangs at PC=0 on any external (libc/runtime) call on arm64-Mach-O. Non-negotiable on the primary dev platform.
+- **The tree-walker STAYS — it's the `comptime` engine.** `src/comptime.rs` runs `crate::interpreter::Interpreter` over the typed AST for every `comptime { ... }` block, on every compile; comptime is a v1 differentiator. Demote it from `karac run`, do **not** delete it. Keep the interpreter test suite — its effectful/runtime-only paths (I/O, channels, `par`) lose `karac run` as their exerciser and would otherwise rot; the tests are the dev-tool guard. Expose `karac run --interp` for compiler-internal work.
+- **Leniency removal is a visible behavior change.** Programs that "ran" under lenient tree-walk (hard type error → `warning` → placeholder `0`/`""` → *silent wrong output, exit 0*) will now be rejected. That un-masking is the point — the leniency already caused a real incident (`B-2026-06-13-15`, the self-host lexer cast). Sweep `examples/`, `kara-katas`, and `examples/mend` for anything relying on it before flipping slice 6.
+
+## Acceptance criteria
+
+Default `karac run` / `repl` / `test` execute via the LLVM JIT lowering; `run == build` by construction; the full codegen E2E suite passes via the JIT path; the tree-walk interpreter is retained and green for `comptime` + `--interp`; leak + DWARF + cross-platform (macOS arm64 + Linux) gates pass; published REPL cold-start number.
+
+## Open re-sequencing question (needs owner confirm — not yet actioned)
+
+`roadmap.md` Core Strategy #5 sets execution order **8 → 9 → 10 → 12 (self-host) → 11**. This spike inserts LLJIT-productionization *before* Phase 12. If confirmed, update roadmap #5 and the Phase Dependency Graph accordingly. Flagged here; the roadmap edit is deliberately left for owner sign-off.
