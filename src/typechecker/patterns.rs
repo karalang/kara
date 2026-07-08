@@ -1341,6 +1341,22 @@ impl<'a> super::TypeChecker<'a> {
                 self.pattern_binding_types.insert(key, name.clone());
                 return;
             }
+            // B-2026-07-08-9: record `Option[T]` / `Result[T, E]` bindings the
+            // same way (full `TypeExpr` + surface name) so codegen can recover
+            // the concrete payload type for the Display path (`Some(<T>)`/`None`,
+            // `Ok`/`Err`) — Option/Result are generic built-ins whose variant
+            // defs carry only `T`, so without the concrete binding type codegen
+            // cannot render them (it did via the interpreter only). Dispatch
+            // side-table only; no interpreter/typecheck behaviour changes.
+            if (name == "Option" && args.len() == 1) || (name == "Result" && args.len() == 2) {
+                let key = SpanKey::from_span(&pattern.span);
+                self.pattern_binding_inner_types
+                    .insert(key, Self::type_to_type_expr(ty));
+                self.pattern_binding_inner_unresolved
+                    .insert(key, ty.clone());
+                self.pattern_binding_types.insert(key, name.clone());
+                return;
+            }
         }
         let (elem, name): (Option<&Type>, Option<&'static str>) = match ty {
             // `VecDeque[T]` shares `Vec[T]`'s `{ptr, len, cap}` codegen

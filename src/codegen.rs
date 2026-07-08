@@ -2813,6 +2813,17 @@ pub(super) struct Codegen<'ctx> {
     /// LLVM-type-only tracking can't distinguish `Vec[String]` from
     /// `Vec[Vec[T]]` (both store `vec_struct_type` as the element LLVM type).
     pub(crate) var_elem_type_exprs: HashMap<String, TypeExpr>,
+    /// B-2026-07-08-9: per-`Option[T]`-variable payload `TypeExpr`, so the
+    /// f-string / `println` Display path can synthesize a concrete
+    /// `Some(<T>)`/`None` renderer. Option/Result are generic built-ins whose
+    /// variant defs carry only the generic `T`; the concrete payload type is
+    /// recovered here (populated by `register_var_from_type_expr`) — the
+    /// missing plumbing that made Option/Result Display unsupported in codegen
+    /// while the interpreter rendered them. Keyed by variable name.
+    pub(crate) var_option_payload_te: HashMap<String, TypeExpr>,
+    /// B-2026-07-08-9 sibling: per-`Result[T, E]`-variable `(ok, err)` payload
+    /// `TypeExpr`s for the `Ok(<T>)`/`Err(<E>)` Display renderer.
+    pub(crate) var_result_payload_te: HashMap<String, (TypeExpr, TypeExpr)>,
     /// Per-Map-variable key-`TypeExpr` side-table (parallels
     /// `var_elem_type_exprs` for the key slot). Used by `compile_for_map_var`
     /// to register the per-iteration `k` binding when iterating with a tuple
@@ -5568,6 +5579,8 @@ impl<'ctx> Codegen<'ctx> {
             map_val_types: HashMap::new(),
             map_key_type_names: HashMap::new(),
             var_elem_type_exprs: HashMap::new(),
+            var_option_payload_te: HashMap::new(),
+            var_result_payload_te: HashMap::new(),
             map_key_type_exprs: HashMap::new(),
             set_elem_types: HashMap::new(),
             set_elem_type_names: HashMap::new(),

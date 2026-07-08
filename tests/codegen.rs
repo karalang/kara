@@ -2189,6 +2189,35 @@ mod codegen_tests {
     }
 
     #[test]
+    fn e2e_option_result_display_matches_interpreter() {
+        // B-2026-07-08-9: Option[T] / Result[T, E] had NO Display support under
+        // codegen (neither f-string nor println) while the interpreter rendered
+        // Some(x)/None/Ok/Err — a silent interp-vs-codegen divergence the LLJIT
+        // Slice-6c sweep surfaced (lru_cache). Guard the variable/place case for
+        // both display sites and both payload shapes (i64 + String).
+        if let Some(out) = run_program(
+            "fn get(k: i64) -> Option[i64] { if k == 1 { Some(10) } else { None } }\n\
+             fn main() {\n\
+                 let a = get(1);\n\
+                 let b = get(2);\n\
+                 println(f\"a={a} b={b}\");\n\
+                 println(a);\n\
+                 let s: Option[String] = Some(\"hi\");\n\
+                 println(f\"s={s}\");\n\
+                 let r: Result[i64, String] = Ok(7);\n\
+                 let e: Result[i64, String] = Err(\"boom\");\n\
+                 println(f\"r={r} e={e}\");\n\
+                 println(e);\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "a=Some(10) b=None\nSome(10)\ns=Some(hi)\nr=Ok(7) e=Err(boom)\nErr(boom)\n"
+            );
+        }
+    }
+
+    #[test]
     fn e2e_enumerate_loop_body_and_outer_mutations_execute() {
         // B-2026-07-08-5: `for (i, v) in xs.iter().enumerate()` fell through
         // `compile_for`'s dispatch to the silent skip-body arm, so the loop body

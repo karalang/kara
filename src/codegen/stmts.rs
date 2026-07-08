@@ -2062,6 +2062,23 @@ impl<'ctx> super::Codegen<'ctx> {
                                     self.register_var_from_type_expr(var_name, &coll_te);
                                     detected = true;
                                 }
+                            } else if surface == "Option" || surface == "Result" {
+                                // B-2026-07-08-9: capture the concrete payload
+                                // TypeExpr(s) for an Option/Result let binding
+                                // (annotated OR inferred) so the f-string /
+                                // println Display path can render Some(<T>)/None
+                                // (Ok/Err). The typechecker records the full
+                                // `Option[T]` / `Result[T,E]` at the binding
+                                // span; routing it through
+                                // `register_var_from_type_expr` hits the
+                                // Option/Result arm there which fills
+                                // `var_option_payload_te` / `var_result_payload_te`.
+                                if let Some(full_te) =
+                                    self.pattern_binding_inner_types.get(&key).cloned()
+                                {
+                                    self.register_var_from_type_expr(var_name, &full_te);
+                                    detected = true;
+                                }
                             }
                             // Mirror bind_pattern_values's `var_type_names`
                             // write so let-bound shared-struct handles

@@ -808,6 +808,41 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `Map[String, i64]` → `Map_String_i64`, and nested shapes compose.
     /// Tuples use the same `tuple_T1_T2_...` form `mangled_type_name`
     /// produces — the recursive shapes match.
+    /// B-2026-07-08-9: true iff `te` is a payload type the Option/Result Display
+    /// synthesizer can correctly render — a primitive or String that fits inline
+    /// in the enum's payload words and round-trips through
+    /// `rebuild_value_from_payload_words` (the 3-word reconstruction
+    /// `emit_enum_field_display` uses). Compound payloads (structs, tuples,
+    /// nested Option/Result, collections, boxed/wide types) return false so the
+    /// display path falls through to the generic error rather than emit invalid
+    /// IR from a mis-sized reconstruction (`Option[Wide]` boxes its payload as a
+    /// pointer, which the inline path would mis-read).
+    pub(super) fn is_inline_displayable_payload(te: &TypeExpr) -> bool {
+        if let TypeKind::Path(p) = &te.kind {
+            if let Some(seg) = p.segments.last() {
+                return matches!(
+                    seg.as_str(),
+                    "i8" | "i16"
+                        | "i32"
+                        | "i64"
+                        | "isize"
+                        | "u8"
+                        | "u16"
+                        | "u32"
+                        | "u64"
+                        | "usize"
+                        | "f32"
+                        | "f64"
+                        | "bool"
+                        | "char"
+                        | "String"
+                        | "str"
+                );
+            }
+        }
+        false
+    }
+
     pub(super) fn display_mangle_te(te: &TypeExpr) -> String {
         match &te.kind {
             TypeKind::Tuple(elems) if elems.is_empty() => "unit".to_string(),
@@ -1563,6 +1598,214 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
     }
 
+    /// B-2026-07-08-9: synthesize `void karac_display_Option_<T>(ptr val, ptr acc)`
+    /// for a CONCRETE payload type `payload_te`, appending `Some(<T display>)` /
+    /// `None` to the String accumulator `acc`. `Option` is a generic built-in,
+    /// so `emit_enum_display_fn` (which reads the generic `Some(T)` variant def)
+    /// can't render it — this bakes the concrete payload type in, recovering the
+    /// missing plumbing that left Option Display unsupported in codegen while the
+    /// interpreter rendered `Some(x)` / `None`. Cached per mangled payload type;
+    /// reuses `emit_enum_field_display` for the payload word extraction +
+    /// recursion. Matches the interpreter's `Some(x)` / `None` spelling.
+    pub(super) fn emit_option_display_te(&mut self, payload_te: &TypeExpr) -> FunctionValue<'ctx> {
+        let mangled = Self::display_mangle_te(payload_te);
+        let type_name = format!("Option_{mangled}");
+        if let Some(&f) = self.display_fn_cache.get(&type_name) {
+            return f;
+        }
+        let fn_name = format!("karac_display_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.display_fn_cache.insert(type_name, f);
+            return f;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let layout = self
+            .enum_layouts
+            .get("Option")
+            .expect("emit_option_display_te: Option layout seeded");
+        let llvm_ty = layout.llvm_type;
+        let some_tag = layout.tags.get("Some").copied().unwrap_or(1);
+        let some_offsets = layout
+            .field_word_offsets
+            .get("Some")
+            .cloned()
+            .unwrap_or_else(|| vec![(0, 3)]);
+
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let display_fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let display_fn = self
+            .module
+            .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
+        self.display_fn_cache.insert(type_name, display_fn);
+
+        let entry_bb = self.context.append_basic_block(display_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        self.current_fn = Some(display_fn);
+        let val_ptr = display_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let acc = display_fn.get_nth_param(1).unwrap().into_pointer_value();
+        let agg = self
+            .builder
+            .build_load(llvm_ty, val_ptr, "opt.agg")
+            .unwrap()
+            .into_struct_value();
+        let tag = self
+            .builder
+            .build_extract_value(agg, 0, "opt.tag")
+            .unwrap()
+            .into_int_value();
+
+        let some_bb = self.context.append_basic_block(display_fn, "opt.some");
+        let none_bb = self.context.append_basic_block(display_fn, "opt.none");
+        let exit_bb = self.context.append_basic_block(display_fn, "opt.exit");
+        let is_some = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                tag,
+                i64_t.const_int(some_tag, false),
+                "opt.is_some",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_some, some_bb, none_bb)
+            .unwrap();
+
+        // None
+        self.builder.position_at_end(none_bb);
+        self.disp_append_lit(acc, "None");
+        self.builder.build_unconditional_branch(exit_bb).unwrap();
+
+        // Some(<payload>) — an append may split the current block (buffer grow),
+        // so branch to exit from wherever we end up (mirrors emit_enum_display_fn).
+        self.builder.position_at_end(some_bb);
+        self.disp_append_lit(acc, "Some(");
+        self.emit_enum_field_display(agg, &some_offsets, 0, payload_te, acc, display_fn);
+        self.disp_append_lit(acc, ")");
+        self.builder.build_unconditional_branch(exit_bb).unwrap();
+
+        self.builder.position_at_end(exit_bb);
+        self.builder.build_return(None).unwrap();
+
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        display_fn
+    }
+
+    /// B-2026-07-08-9 sibling: `void karac_display_Result_<T>_<E>(ptr val, ptr acc)`
+    /// rendering `Ok(<T display>)` / `Err(<E display>)` for concrete `(ok, err)`
+    /// payload types. Same rationale + structure as `emit_option_display_te`.
+    /// (Payload extraction reuses `emit_enum_field_display`, which reconstructs
+    /// up to a 3-word payload — covers primitives and String; wider struct
+    /// payloads are a follow-on.)
+    pub(super) fn emit_result_display_te(
+        &mut self,
+        ok_te: &TypeExpr,
+        err_te: &TypeExpr,
+    ) -> FunctionValue<'ctx> {
+        let type_name = format!(
+            "Result_{}_{}",
+            Self::display_mangle_te(ok_te),
+            Self::display_mangle_te(err_te)
+        );
+        if let Some(&f) = self.display_fn_cache.get(&type_name) {
+            return f;
+        }
+        let fn_name = format!("karac_display_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.display_fn_cache.insert(type_name, f);
+            return f;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let layout = self
+            .enum_layouts
+            .get("Result")
+            .expect("emit_result_display_te: Result layout seeded");
+        let llvm_ty = layout.llvm_type;
+        let ok_tag = layout.tags.get("Ok").copied().unwrap_or(1);
+        let ok_offsets = layout
+            .field_word_offsets
+            .get("Ok")
+            .cloned()
+            .unwrap_or_else(|| vec![(0, 5)]);
+        let err_offsets = layout
+            .field_word_offsets
+            .get("Err")
+            .cloned()
+            .unwrap_or_else(|| vec![(0, 5)]);
+
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let display_fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let display_fn = self
+            .module
+            .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
+        self.display_fn_cache.insert(type_name, display_fn);
+
+        let entry_bb = self.context.append_basic_block(display_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        self.current_fn = Some(display_fn);
+        let val_ptr = display_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let acc = display_fn.get_nth_param(1).unwrap().into_pointer_value();
+        let agg = self
+            .builder
+            .build_load(llvm_ty, val_ptr, "res.agg")
+            .unwrap()
+            .into_struct_value();
+        let tag = self
+            .builder
+            .build_extract_value(agg, 0, "res.tag")
+            .unwrap()
+            .into_int_value();
+
+        let ok_bb = self.context.append_basic_block(display_fn, "res.ok");
+        let err_bb = self.context.append_basic_block(display_fn, "res.err");
+        let exit_bb = self.context.append_basic_block(display_fn, "res.exit");
+        let is_ok = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                tag,
+                i64_t.const_int(ok_tag, false),
+                "res.is_ok",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_ok, ok_bb, err_bb)
+            .unwrap();
+
+        self.builder.position_at_end(ok_bb);
+        self.disp_append_lit(acc, "Ok(");
+        self.emit_enum_field_display(agg, &ok_offsets, 0, ok_te, acc, display_fn);
+        self.disp_append_lit(acc, ")");
+        self.builder.build_unconditional_branch(exit_bb).unwrap();
+
+        self.builder.position_at_end(err_bb);
+        self.disp_append_lit(acc, "Err(");
+        self.emit_enum_field_display(agg, &err_offsets, 0, err_te, acc, display_fn);
+        self.disp_append_lit(acc, ")");
+        self.builder.build_unconditional_branch(exit_bb).unwrap();
+
+        self.builder.position_at_end(exit_bb);
+        self.builder.build_return(None).unwrap();
+
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        display_fn
+    }
+
     /// If `expr` statically denotes a value of a user enum that
     /// `emit_enum_display_fn` can render — any declared enum with a layout
     /// EXCEPT the bespoke-Display built-ins (`Option`/`Result` are generic +
@@ -1702,6 +1945,17 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.set_elem_type_exprs.contains_key(&name) {
             let elem_te = self.set_elem_type_exprs[&name].clone();
             let disp = self.emit_set_display_fn(&elem_te);
+            return Ok(Some(self.render_via_display_fn(disp, slot.ptr)));
+        }
+        // B-2026-07-08-9: Option[T] / Result[T, E] place-expr Display. The
+        // payload TypeExpr(s) were captured by `register_var_from_type_expr`;
+        // synthesize a concrete `Some(<T>)`/`None` (or `Ok`/`Err`) renderer.
+        if let Some(payload_te) = self.var_option_payload_te.get(&name).cloned() {
+            let disp = self.emit_option_display_te(&payload_te);
+            return Ok(Some(self.render_via_display_fn(disp, slot.ptr)));
+        }
+        if let Some((ok_te, err_te)) = self.var_result_payload_te.get(&name).cloned() {
+            let disp = self.emit_result_display_te(&ok_te, &err_te);
             return Ok(Some(self.render_via_display_fn(disp, slot.ptr)));
         }
         Ok(None)

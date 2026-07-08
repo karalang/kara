@@ -1267,6 +1267,29 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-07-08-9: split a `Result[T, E]` `TypeExpr` into its concrete
+    /// `(ok, err)` payload `TypeExpr`s. Sibling of `option_payload_te` for the
+    /// Display path. Returns `None` for a non-`Result` type or a `Result`
+    /// missing either generic arg.
+    pub(super) fn result_payload_tes(res_te: &TypeExpr) -> Option<(TypeExpr, TypeExpr)> {
+        let TypeKind::Path(p) = &res_te.kind else {
+            return None;
+        };
+        if p.segments.last().map(|s| s.as_str()) != Some("Result") {
+            return None;
+        }
+        let args = p.generic_args.as_ref()?;
+        let ok = match args.first()? {
+            crate::ast::GenericArg::Type(t) => t.clone(),
+            _ => return None,
+        };
+        let err = match args.get(1)? {
+            crate::ast::GenericArg::Type(t) => t.clone(),
+            _ => return None,
+        };
+        Some((ok, err))
+    }
+
     /// #14 — at a struct-literal field init `S { f: obj.field }` whose value is
     /// a heap FIELD moved out of a tracked struct binding `obj` (a callee-owned
     /// by-value aggregate param, or a local), cap-zero that field's buffer in

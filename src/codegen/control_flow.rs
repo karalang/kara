@@ -688,6 +688,32 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.emit_print_and_free_string(sval, nl);
                 return Ok(zero.into());
             }
+            // B-2026-07-08-9: Option[T] — synthesize a `Some(<T>)`/`None`
+            // renderer from the captured concrete payload type and print it,
+            // matching the interpreter (which codegen previously couldn't).
+            if let Some(payload_te) = self.var_option_payload_te.get(var_name).cloned() {
+                let slot = self
+                    .variables
+                    .get(var_name)
+                    .copied()
+                    .ok_or_else(|| format!("compile_print: '{var_name}' not bound"))?;
+                let display_fn = self.emit_option_display_te(&payload_te);
+                let (_acc, sval) = self.render_via_display_fn(display_fn, slot.ptr);
+                self.emit_print_and_free_string(sval, nl);
+                return Ok(zero.into());
+            }
+            // Result[T, E] sibling.
+            if let Some((ok_te, err_te)) = self.var_result_payload_te.get(var_name).cloned() {
+                let slot = self
+                    .variables
+                    .get(var_name)
+                    .copied()
+                    .ok_or_else(|| format!("compile_print: '{var_name}' not bound"))?;
+                let display_fn = self.emit_result_display_te(&ok_te, &err_te);
+                let (_acc, sval) = self.render_via_display_fn(display_fn, slot.ptr);
+                self.emit_print_and_free_string(sval, nl);
+                return Ok(zero.into());
+            }
         }
 
         // User `impl Display` (a compiled `<Type>.to_string`) wins over every

@@ -1200,6 +1200,41 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             return;
         }
+        // B-2026-07-08-9: capture the CONCRETE payload TypeExpr(s) of an
+        // `Option[T]` / `Result[T, E]` binding so the f-string / `println`
+        // Display path can synthesize a `Some(<T>)`/`None` (or `Ok`/`Err`)
+        // renderer. Option/Result are generic built-ins whose variant defs
+        // carry only the generic `T`; without this the Display path falls
+        // through to the generic struct-value error while the interpreter
+        // renders them. Recorded IN ADDITION to the type-name registration
+        // below (both dispatch paths coexist) — no early return.
+        if let TypeKind::Path(path) = &te.kind {
+            match path.segments.last().map(|s| s.as_str()) {
+                Some("Option") => {
+                    // Only register inline-representable payloads — the display
+                    // synthesizer reconstructs the payload from ≤3 words, which
+                    // is invalid for a boxed/wide payload (its word is a
+                    // pointer). Compound payloads fall through to the generic
+                    // display error, unchanged.
+                    if let Some(pte) = Self::option_payload_te(te) {
+                        if Self::is_inline_displayable_payload(&pte) {
+                            self.var_option_payload_te.insert(var_name.to_string(), pte);
+                        }
+                    }
+                }
+                Some("Result") => {
+                    if let Some((ok, err)) = Self::result_payload_tes(te) {
+                        if Self::is_inline_displayable_payload(&ok)
+                            && Self::is_inline_displayable_payload(&err)
+                        {
+                            self.var_result_payload_te
+                                .insert(var_name.to_string(), (ok, err));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
         // Bare user-type names (struct / shared struct / enum) — register
         // `var_type_names` so `field_index_for` / `shared_type_for_expr`
         // can resolve `.field` accesses on the binding. Without this, a
