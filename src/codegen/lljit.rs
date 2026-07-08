@@ -11,7 +11,7 @@
 
 #![cfg(all(feature = "llvm", feature = "lljit_prototype"))]
 
-use std::ffi::{c_char, CStr, CString};
+use std::ffi::{c_char, c_void, CStr, CString};
 use std::ptr;
 use std::sync::OnceLock;
 
@@ -19,10 +19,16 @@ use llvm_sys::core::{
     LLVMCreateMemoryBufferWithMemoryRange, LLVMDisposeMessage, LLVMSetDataLayout, LLVMSetTarget,
 };
 use llvm_sys::error::{LLVMDisposeErrorMessage, LLVMErrorRef, LLVMGetErrorMessage};
+use llvm_sys::execution_engine::LLVMCreateGDBRegistrationListener;
 use llvm_sys::ir_reader::LLVMParseIRInContext;
+use llvm_sys::orc2::ee::{
+    LLVMOrcCreateRTDyldObjectLinkingLayerWithSectionMemoryManager,
+    LLVMOrcRTDyldObjectLinkingLayerRegisterJITEventListener,
+};
 use llvm_sys::orc2::lljit::{
     LLVMOrcCreateLLJIT, LLVMOrcCreateLLJITBuilder, LLVMOrcDisposeLLJIT,
-    LLVMOrcLLJITAddLLVMIRModule, LLVMOrcLLJITAddLLVMIRModuleWithRT, LLVMOrcLLJITGetDataLayoutStr,
+    LLVMOrcLLJITAddLLVMIRModule, LLVMOrcLLJITAddLLVMIRModuleWithRT,
+    LLVMOrcLLJITBuilderSetObjectLinkingLayerCreator, LLVMOrcLLJITGetDataLayoutStr,
     LLVMOrcLLJITGetGlobalPrefix, LLVMOrcLLJITGetMainJITDylib, LLVMOrcLLJITGetTripleString,
     LLVMOrcLLJITLookup, LLVMOrcLLJITRef,
 };
@@ -30,9 +36,10 @@ use llvm_sys::orc2::LLVMOrcThreadSafeModuleRef;
 use llvm_sys::orc2::{
     LLVMOrcCreateDynamicLibrarySearchGeneratorForProcess, LLVMOrcCreateNewThreadSafeContext,
     LLVMOrcCreateNewThreadSafeModule, LLVMOrcDefinitionGeneratorRef,
-    LLVMOrcDisposeThreadSafeContext, LLVMOrcExecutorAddress, LLVMOrcJITDylibAddGenerator,
-    LLVMOrcJITDylibCreateResourceTracker, LLVMOrcReleaseResourceTracker, LLVMOrcResourceTrackerRef,
-    LLVMOrcResourceTrackerRemove, LLVMOrcThreadSafeContextGetContext, LLVMOrcThreadSafeContextRef,
+    LLVMOrcDisposeThreadSafeContext, LLVMOrcExecutionSessionRef, LLVMOrcExecutorAddress,
+    LLVMOrcJITDylibAddGenerator, LLVMOrcJITDylibCreateResourceTracker, LLVMOrcObjectLayerRef,
+    LLVMOrcReleaseResourceTracker, LLVMOrcResourceTrackerRef, LLVMOrcResourceTrackerRemove,
+    LLVMOrcThreadSafeContextGetContext, LLVMOrcThreadSafeContextRef,
 };
 use llvm_sys::prelude::{LLVMContextRef, LLVMModuleRef};
 use llvm_sys::target_machine::{
@@ -58,6 +65,44 @@ fn ensure_native_target_initialized() -> Result<(), String> {
         .map_err(|e| format!("init native target: {}", e))
     })
     .clone()
+}
+
+/// LLJIT object-linking-layer creator that builds an **RTDyld** layer and
+/// registers the process-wide **GDB JIT-registration listener** on it, so a
+/// `gdb`/`lldb` attached to the JIT process can symbolize JIT'd frames from the
+/// DWARF the module carries (crash-diagnostics Part 2 — the debugger *bonus*).
+///
+/// Why go through a creator callback instead of registering on
+/// `LLVMOrcLLJITGetObjLinkingLayer(jit)` after the fact: the C API's
+/// `LLVMOrcRTDyldObjectLinkingLayerRegisterJITEventListener` does an
+/// **unchecked `unwrap<RTDyldObjectLinkingLayer>`** on the layer pointer.
+/// If LLVM's LLJIT had defaulted this target to a JITLink object layer
+/// (`ObjectLinkingLayer`, which has no `registerJITEventListener`), calling it
+/// on that pointer is a type-confused cast → memory corruption. Constructing
+/// the RTDyld layer *ourselves* here makes the layer type known-good by
+/// construction, so the register call is always sound. The GDB listener is a
+/// process-wide singleton (`LLVMCreateGDBRegistrationListener` returns the same
+/// static every call), so one per engine is fine.
+///
+/// Best-effort: if either handle comes back null we return the layer without
+/// registering rather than abort — a missing debugger integration must never
+/// break JIT execution (the DWARF is still emitted + preserved regardless).
+extern "C" fn rtdyld_layer_with_gdb_listener(
+    _ctx: *mut c_void,
+    es: LLVMOrcExecutionSessionRef,
+    _triple: *const c_char,
+) -> LLVMOrcObjectLayerRef {
+    unsafe {
+        let layer = LLVMOrcCreateRTDyldObjectLinkingLayerWithSectionMemoryManager(es);
+        if layer.is_null() {
+            return layer;
+        }
+        let listener = LLVMCreateGDBRegistrationListener();
+        if !listener.is_null() {
+            LLVMOrcRTDyldObjectLinkingLayerRegisterJITEventListener(layer, listener);
+        }
+        layer
+    }
 }
 
 /// RAII wrapper around an LLJIT instance + its thread-safe context.
@@ -97,6 +142,18 @@ impl LLJITEngine {
             // `LLVMOrcCreateLLJIT` consumes the builder regardless of
             // success/failure — no manual dispose needed after this call.
             let builder = LLVMOrcCreateLLJITBuilder();
+            // Install our own RTDyld object-linking layer that registers the
+            // GDB JIT listener (crash-diagnostics Part 2 — the gdb/lldb bonus
+            // for DWARF-carrying modules). Setting a creator also pins the
+            // layer type to RTDyld, which is what makes the listener
+            // registration sound — see `rtdyld_layer_with_gdb_listener`. The
+            // builder passes the callback its own `ExecutionSession` at LLJIT
+            // construction time.
+            LLVMOrcLLJITBuilderSetObjectLinkingLayerCreator(
+                builder,
+                rtdyld_layer_with_gdb_listener,
+                ptr::null_mut(),
+            );
             let mut jit: LLVMOrcLLJITRef = ptr::null_mut();
             let err = LLVMOrcCreateLLJIT(&mut jit, builder);
             if !err.is_null() {

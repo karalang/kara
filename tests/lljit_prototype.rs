@@ -532,3 +532,78 @@ fn lljit_dwarf_debug_info_preserved_through_jit() {
         );
     }
 }
+
+// ── GDB JIT-registration listener (crash-diagnostics Part 2, the bonus) ──
+//
+// `LLJITEngine` installs an RTDyld object-linking layer with the GDB
+// JIT-registration listener attached, so a debugger can symbolize JIT'd
+// frames from the DWARF the module carries. LLVM's listener talks the GDB
+// JIT interface: it links each registered object into the process-global
+// `__jit_debug_descriptor` (a linked list of `jit_code_entry`) and pings
+// `__jit_debug_register_code` so an attached gdb re-reads the list. We assert
+// the mechanism is live by observing that installing a DWARF-carrying module
+// leaves `__jit_debug_descriptor.first_entry` non-null — i.e. the listener
+// actually registered an entry. Both symbols are exported by libLLVM
+// (`nm -D libLLVM-18.so` → `D __jit_debug_descriptor`, `T
+// __jit_debug_register_code`).
+
+#[repr(C)]
+struct JitCodeEntry {
+    next_entry: *const JitCodeEntry,
+    prev_entry: *const JitCodeEntry,
+    symfile_addr: *const u8,
+    symfile_size: u64,
+}
+
+#[repr(C)]
+struct JitDescriptor {
+    version: u32,
+    action_flag: u32,
+    relevant_entry: *const JitCodeEntry,
+    first_entry: *const JitCodeEntry,
+}
+
+extern "C" {
+    /// The GDB JIT interface's process-global registration descriptor,
+    /// provided by libLLVM. gdb sets a breakpoint on `__jit_debug_register_code`
+    /// and walks `first_entry` when hit.
+    static __jit_debug_descriptor: JitDescriptor;
+}
+
+/// Slice 3 bonus — the GDB JIT-registration listener is wired and fires.
+///
+/// Installing + materializing a DWARF-carrying module must leave the process
+/// GDB-JIT descriptor with at least one registered entry and the protocol
+/// version stamped. The descriptor is process-global (shared across every
+/// engine in the test binary), so this is a positive smoke test of the
+/// mechanism rather than a per-install delta — but this test always installs a
+/// DWARF module itself, so a non-null `first_entry` afterward is a guaranteed
+/// consequence of the listener working, not an accident of test ordering.
+#[test]
+fn lljit_gdb_registration_listener_registers_dwarf_module() {
+    let dwarf_ir = ir_with_dwarf("fn main() { print(7); }");
+    let engine = LLJITEngine::new().expect("engine");
+    engine.add_ir_module(&dwarf_ir).expect("add DWARF module");
+    // Force materialization so RTDyld emits + loads the object, which is what
+    // drives the notifyObjectLoaded → GDB-listener → descriptor registration.
+    let addr = engine.lookup_address("main").expect("lookup main");
+    type MainFn = unsafe extern "C" fn() -> i32;
+    let main_fn: MainFn = unsafe { std::mem::transmute(addr as usize) };
+    assert_eq!(unsafe { main_fn() }, 0);
+
+    let (version, first_entry) = unsafe {
+        (
+            __jit_debug_descriptor.version,
+            __jit_debug_descriptor.first_entry,
+        )
+    };
+    assert_eq!(
+        version, 1,
+        "GDB JIT interface protocol version should be 1 once the listener is active"
+    );
+    assert!(
+        !first_entry.is_null(),
+        "GDB JIT descriptor must carry a registered entry after a DWARF module \
+         is installed + materialized — the listener did not fire"
+    );
+}
