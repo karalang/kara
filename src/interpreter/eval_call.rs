@@ -1159,6 +1159,21 @@ impl<'a> super::Interpreter<'a> {
                 "sleep_ms" => {
                     return self.eval_builtin_sleep_ms(args, span);
                 }
+                "forget" => {
+                    // FFI ownership-handoff primitive (design.md §
+                    // Exported C ABI, Slice 4). Evaluate the argument to
+                    // consume it, then return unit. The argument's
+                    // scope-exit Drop is suppressed at the statement level
+                    // (`suppress_forget_stmt_user_drop` in eval_stmt) —
+                    // the tree-walk analogue of codegen's drop
+                    // suppression — so the destructor never fires. The
+                    // `#[compiler_builtin]` stub body is skipped by this
+                    // intercept (it would otherwise drop the owned param).
+                    if let Some(a) = args.first() {
+                        let _ = self.eval_expr_inner(&a.value);
+                    }
+                    return Value::Unit;
+                }
                 _ => {}
             }
         }

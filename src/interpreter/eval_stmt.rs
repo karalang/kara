@@ -131,6 +131,10 @@ impl<'a> super::Interpreter<'a> {
             // NLL placement / scope-exit ordering tests for plain
             // bindings stay unchanged.
             self.suppress_let_rebind_user_drop(stmt, &mut cleanup);
+            // Move-suppression for `forget(x);` — the FFI ownership-handoff
+            // primitive removes the source binding's Drop slot so the
+            // destructor never fires (Slice 4).
+            self.suppress_forget_stmt_user_drop(stmt, &mut cleanup);
             // After a successful let-binding, push a Drop slot for each
             // name the pattern introduced.
             push_drops_for_stmt(stmt, &mut cleanup);
@@ -710,6 +714,45 @@ impl<'a> super::Interpreter<'a> {
         let type_name = match self.env.get(&source_name) {
             Some(Value::Struct { name, .. }) => name.clone(),
             // Enum-Drop parity — see `suppress_tail_expr_user_drop`.
+            Some(Value::EnumVariant { enum_name, .. }) => enum_name.clone(),
+            _ => return,
+        };
+        if !self.program.drop_method_keys.contains_key(&type_name) {
+            return;
+        }
+        cleanup.retain(|action| match action {
+            CleanupAction::Drop { name } => name != &source_name,
+            _ => true,
+        });
+    }
+
+    /// Move-suppression for `forget(x);` statements (design.md § Exported
+    /// C ABI, Slice 4). `forget` consumes its argument and suppresses the
+    /// destructor; the tree-walk analogue is to remove the source
+    /// binding's `CleanupAction::Drop` so its user body never fires at
+    /// scope exit — the value is handed off (leaked from Kāra's view), the
+    /// FFI ownership-handoff contract. Sibling of
+    /// [`suppress_let_rebind_user_drop`]; runs after the statement
+    /// evaluates (the consume has happened). No-op unless the statement is
+    /// `forget(<ident>)` and the source's type has a user `impl Drop`.
+    fn suppress_forget_stmt_user_drop(&mut self, stmt: &Stmt, cleanup: &mut Vec<CleanupAction>) {
+        let call = match &stmt.kind {
+            StmtKind::Expr(e) => e,
+            _ => return,
+        };
+        let (callee, args) = match &call.kind {
+            ExprKind::Call { callee, args, .. } => (callee, args),
+            _ => return,
+        };
+        if !matches!(&callee.kind, ExprKind::Identifier(n) if n == "forget") {
+            return;
+        }
+        let source_name = match args.first().map(|a| &a.value.kind) {
+            Some(ExprKind::Identifier(n)) => n.clone(),
+            _ => return,
+        };
+        let type_name = match self.env.get(&source_name) {
+            Some(Value::Struct { name, .. }) => name.clone(),
             Some(Value::EnumVariant { enum_name, .. }) => enum_name.clone(),
             _ => return,
         };

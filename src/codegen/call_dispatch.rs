@@ -468,6 +468,34 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(self.context.i64_type().const_int(0, false).into());
         }
 
+        // `forget[T](value)` — the FFI ownership-handoff primitive
+        // (design.md § Exported C ABI, additive-interop Slice 4). Consume
+        // the argument and suppress every scope-exit drop of its root
+        // binding — the value's resources are handed off (deliberately
+        // leaked from Kāra's view), so nothing is freed here. Intercepted
+        // before the generic-fn path so the `#[compiler_builtin]` stub
+        // body (`{}`, which would drop its owned param) never lowers.
+        //
+        // Soundness: the stdlib decl's owned param makes the ownership
+        // checker + drop oracle treat `forget(v)` as a *consume*, so
+        // neither schedules a scope-exit drop for `v`; the suppression
+        // below matches that (belt-and-suspenders for the caller-side
+        // cleanup queues the arg loop would otherwise register). The
+        // value simply leaks — that IS the handoff.
+        if name == "forget" && args.len() == 1 {
+            if let ExprKind::Identifier(var_name) = &args[0].value.kind {
+                self.suppress_user_drop_for_var(var_name);
+                self.suppress_channel_drop_for_var(var_name);
+                self.suppress_vec_buffer_drop_for_var(var_name);
+            }
+            // Evaluate the argument for its side effects (it may be a
+            // temporary expression, not just a binding), then discard —
+            // no drop, no store. `forget` returns unit (the `i64 0`
+            // placeholder shared by all void builtins).
+            let _ = self.compile_expr(&args[0].value)?;
+            return Ok(self.context.i64_type().const_int(0, false).into());
+        }
+
         // Phase 6 line 218 slice 4: free `spawn(closure) -> TaskHandle[T]`
         // dispatch. Intercepted before the generic-fn path so the slice-1
         // stub body (`TaskHandle { task_id: 0 }`) never lowers. The

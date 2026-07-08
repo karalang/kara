@@ -25,3 +25,23 @@ pub fn size_of[T]() -> usize { 0 }
 
 #[compiler_builtin]
 pub fn align_of[T]() -> usize { 0 }
+
+// `forget[T](value)` — consume `value` and suppress its destructor
+// (design.md § Exported C ABI, additive-interop Slice 4; roadmap
+// `std.mem` § `forget`). The owned parameter makes every call a *move*
+// (the ownership checker and the drop oracle both consume it via the
+// callee's owned param mode), so no scope-exit drop is scheduled; codegen
+// intercepts the call (`compile_call`) to additionally suppress the
+// caller-side cleanup and emit nothing, so the value's resources are
+// handed off — deliberately leaked from Kāra's view. This is the FFI
+// handoff primitive: Kāra allocates, `forget`s, and hands a raw pointer
+// to C, which later returns it to a Kāra `free_*`/destructor export.
+//
+// Like Rust's `mem::forget`, this is *safe* — leaking memory is not
+// undefined behavior. The FFI-handoff danger (the C side must free what
+// it received) lives in the C contract, not in the `forget` call.
+//
+// The placeholder body is never lowered (the call site is intercepted;
+// `#[compiler_builtin]` skips body emission).
+#[compiler_builtin]
+pub fn forget[T](value: T) {}

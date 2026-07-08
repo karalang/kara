@@ -89,6 +89,42 @@ fn test_primitives_dont_move() {
 }
 
 #[test]
+fn test_forget_consumes_argument() {
+    // `forget(x)` (FFI ownership-handoff primitive, additive-interop
+    // Slice 4) has an owned param, so it MOVES its argument — using the
+    // binding after `forget` is a use-after-move error, exactly like
+    // passing it to any consuming function.
+    let errors = ownership_errors(
+        "struct G { id: i64 }\n\
+         impl Drop for G { fn drop(mut ref self) { } }\n\
+         fn main() {\n\
+             let g = G { id: 1 };\n\
+             forget(g);\n\
+             let _ = g.id;\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("moved")),
+        "use-after-forget must be a move error, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_forget_clean_program_ok() {
+    // A well-formed `forget` use — consume once, never touch again —
+    // passes ownership checking with no spurious diagnostics.
+    ownership_ok(
+        "struct G { id: i64 }\n\
+         impl Drop for G { fn drop(mut ref self) { } }\n\
+         fn main() {\n\
+             let g = G { id: 1 };\n\
+             forget(g);\n\
+         }",
+    );
+}
+
+#[test]
 fn test_string_moves() {
     // String is not Copy — using after move should error
     let errors = ownership_errors(

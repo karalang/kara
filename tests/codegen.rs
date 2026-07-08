@@ -3015,6 +3015,43 @@ fn main() {
         run_program_capturing(src).map(|c| c.stdout)
     }
 
+    /// `forget(x)` (FFI ownership-handoff primitive, additive-interop
+    /// Slice 4) consumes `x` and suppresses its destructor. A user-`Drop`
+    /// counter makes suppression observable at codegen: with `forget(b)`
+    /// only `a` drops (one "d"); the counterfactual without `forget` drops
+    /// both (two "d"). Proves codegen's drop-suppression intercept, not
+    /// just the interpreter path.
+    #[test]
+    fn forget_suppresses_destructor() {
+        let base = "struct G { id: i64 }\n\
+                    impl Drop for G { fn drop(mut ref self) { println(\"d\"); } }\n";
+        let with_forget = format!(
+            "{base}fn main() {{\n\
+             \x20 let a = G {{ id: 1 }};\n\
+             \x20 let b = G {{ id: 2 }};\n\
+             \x20 println(a.id); println(b.id);\n\
+             \x20 forget(b);\n\
+             \x20 println(\"end\");\n\
+             }}\n"
+        );
+        let without = format!(
+            "{base}fn main() {{\n\
+             \x20 let a = G {{ id: 1 }};\n\
+             \x20 let b = G {{ id: 2 }};\n\
+             \x20 println(a.id); println(b.id);\n\
+             \x20 println(\"end\");\n\
+             }}\n"
+        );
+        if let Some(out) = run_program(&with_forget) {
+            let drops = out.lines().filter(|l| *l == "d").count();
+            assert_eq!(drops, 1, "forget(b) must suppress b's drop; stdout:\n{out}");
+        }
+        if let Some(out) = run_program(&without) {
+            let drops = out.lines().filter(|l| *l == "d").count();
+            assert_eq!(drops, 2, "without forget both drop; stdout:\n{out}");
+        }
+    }
+
     /// Binding a row out of a BORROWED nested collection — `let row = m[i]`
     /// where `m: ref Vec[Vec[i64]]` — must dispatch `row.len()` / `row[j]` as
     /// the inner `Vec[i64]`. The integer-index inference used to peel `ref`

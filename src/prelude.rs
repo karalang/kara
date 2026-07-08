@@ -1393,6 +1393,15 @@ pub const PRELUDE_FUNCTIONS: &[&str] = &[
     // additive on top of the typechecker / codegen wiring.
     "size_of",
     "align_of",
+    // `forget[T](value)` — consume `value`, suppress its destructor
+    // (design.md § Exported C ABI, additive-interop Slice 4; roadmap
+    // `std.mem` § `forget`). Declared in `runtime/stdlib/intrinsics.kara`
+    // with an owned param so the ownership checker + drop oracle consume
+    // it (no scheduled drop); codegen intercepts the call
+    // (`compile_call`) to suppress the caller-side cleanup and emit
+    // nothing — the value is handed off (leaked from Kāra's view), the
+    // FFI ownership-handoff primitive.
+    "forget",
     // `std.time::sleep_ms(ms: i64) with suspends` — native async sleep,
     // the leaf `suspends` timer primitive (auto-par divergence slice
     // A2a-2.2). See `runtime/stdlib/time.kara`. Codegen intercepts the
