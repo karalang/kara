@@ -128,6 +128,17 @@ pub enum Command {
         /// battery. Exit code on timeout: 124, matching GNU
         /// `timeout(1)` so existing shell pipelines compose.
         timeout: Option<std::time::Duration>,
+        /// `--interp`: force the tree-walk interpreter instead of the default
+        /// LLJIT executor (LLJIT-productionization Slice 6c — the `karac run`
+        /// JIT-default flip, mirroring the Slice-5 repl/test flip). The
+        /// interpreter is retained as a dev/debug backend (design.md § Tree-walk
+        /// interpreter (dev / debug only)); this is the ergonomic equivalent of
+        /// `KARAC_RUN_JIT=0`. No-op on a non-`llvm` build (the interpreter is the
+        /// only executor there), and the interpreter is also used regardless for
+        /// the affordances the JIT one-shot doesn't provide — `--output=json`/
+        /// `jsonl` structured run envelopes and the `--timeout` cooperative
+        /// deadline.
+        interp: bool,
     },
     RunExample {
         name: String,
@@ -697,6 +708,7 @@ pub fn execute(cmd: Command) {
             no_manifest,
             lint_overrides,
             timeout,
+            interp,
         } => cmd_run(
             &file,
             output,
@@ -705,6 +717,7 @@ pub fn execute(cmd: Command) {
             no_manifest,
             lint_overrides,
             timeout,
+            interp,
         ),
         Command::RunExample {
             name,
@@ -4026,7 +4039,18 @@ fn cmd_run_example(
     // `karac run --example NAME` runs an example file out of the
     // examples/ directory; it has no `kara.toml`-style project root,
     // so manifest discovery is intentionally skipped.
-    cmd_run(&path, output, sequential, None, true, lint_overrides, None);
+    // `interp = false`: `run --example` uses the JIT-default backend too (6c),
+    // with the same `--interp`/`KARAC_RUN_JIT=0` escape hatches honored inside.
+    cmd_run(
+        &path,
+        output,
+        sequential,
+        None,
+        true,
+        lint_overrides,
+        None,
+        false,
+    );
 }
 
 fn list_available_examples() {
@@ -4258,6 +4282,7 @@ fn run_ir_via_jit_subprocess(ir: &str) -> i32 {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_run(
     filename: &str,
     output: OutputMode,
@@ -4266,6 +4291,7 @@ fn cmd_run(
     no_manifest: bool,
     lint_overrides: crate::lints::CliLintOverrides,
     timeout: Option<std::time::Duration>,
+    interp: bool,
 ) {
     // Mutual exclusion at the entry point — both flags together would
     // be ambiguous (which wins?). Reject early so the operator gets a
@@ -4765,21 +4791,32 @@ fn cmd_run(
         }
     }
 
-    // LLJIT Slice 6b (opt-in) — route `karac run` through the LLJIT engine
-    // instead of the tree-walk interpreter, so `run` executes the SAME codegen
-    // as `karac build` and the interpreter-vs-codegen divergence on type-clean
-    // programs (the epic's second divergence source, after 6a closed the
-    // acceptance divergence) is gone. Opt-in via `KARAC_RUN_JIT=1` for now — the
-    // interpreter stays the default until this de-risks, mirroring the Slice-1
-    // de-gate → Slice-5 flip pattern. Scoped to plain text output with no
-    // `--timeout`: the JSON/JSONL structured envelopes and the cooperative
-    // `--timeout` deadline are interpreter-only affordances the JIT subprocess
-    // doesn't provide, so those keep the interpreter. Compiled out on a
-    // non-`llvm` build (no JIT engine to route to).
+    // `--interp` / the JIT-default gate below only exist under `--features
+    // llvm`; a non-llvm build has no JIT engine and always uses the interpreter.
+    #[cfg(not(feature = "llvm"))]
+    let _ = interp;
+    // LLJIT Slice 6c (JIT-DEFAULT flip) — `karac run` executes the SAME codegen
+    // as `karac build` through the LLJIT engine, so the interpreter-vs-codegen
+    // divergence on type-clean programs (the epic's second divergence source,
+    // after 6a closed the acceptance divergence) is gone BY CONSTRUCTION: one
+    // lowering invoked two ways (AOT + JIT). This flips the Slice-6b opt-in
+    // (`KARAC_RUN_JIT=1`) to a JIT-default opt-OUT, mirroring the Slice-5
+    // repl/test flip — the JIT lane is exercised and green across the codegen
+    // suite (2098) and the full examples corpus (JIT==AOT byte-for-byte, 0
+    // divergences; see docs/spikes/lljit-productionization.md § 6c). The
+    // interpreter is retained as a dev/debug backend, reached via `--interp`
+    // (the `interp` param) or the `KARAC_RUN_JIT=0` env escape hatch. Consistent
+    // with Slice 5, a codegen-compile failure is a HARD error (no interp
+    // fallback) — codegen completeness is the gate, not something to paper over.
+    // Scoped to plain text output with no `--timeout`: the JSON/JSONL structured
+    // run envelopes and the cooperative `--timeout` deadline are interpreter-only
+    // affordances the JIT one-shot doesn't provide, so those keep the
+    // interpreter regardless. Compiled out on a non-`llvm` build (no JIT engine).
     #[cfg(feature = "llvm")]
     if output == OutputMode::Text
         && timeout.is_none()
-        && std::env::var("KARAC_RUN_JIT").as_deref() == Ok("1")
+        && !interp
+        && std::env::var("KARAC_RUN_JIT").as_deref() != Ok("0")
     {
         // Codegen consumes ownership + concurrency (the interpreter path skips
         // both); run them now so the emitted IR matches `karac build`'s.
@@ -4795,6 +4832,16 @@ fn cmd_run(
             Ok(ir) => process::exit(run_ir_via_jit_subprocess(&ir)),
             Err(e) => {
                 eprintln!("error: codegen failed: {e}");
+                // The JIT is the default backend (Slice 6c). A codegen gap the
+                // interpreter still covers is recoverable — point the user at
+                // the escape hatch so a not-yet-lowerable construct doesn't dead-
+                // end their run. (The tree-walk interpreter is the retained
+                // dev/debug backend.)
+                eprintln!(
+                    "  hint: this program uses a construct the codegen backend does not yet \
+                     support; re-run with `--interp` (or `KARAC_RUN_JIT=0`) to use the tree-walk \
+                     interpreter."
+                );
                 process::exit(1);
             }
         }

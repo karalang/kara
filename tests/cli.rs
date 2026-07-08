@@ -3394,14 +3394,23 @@ fn test_run_contract_violation_prints_message_and_exits_nonzero() {
         .output()
         .unwrap();
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        !out.status.success(),
-        "a contract violation must exit nonzero; stderr:\n{stderr}"
+    // `karac run` defaults to the JIT (Slice 6c), whose fault handler writes
+    // `panic at …: contract violated: …` to STDOUT (matching `karac build` — the
+    // AOT panic handler; the interpreter's `--interp` `runtime error:` form goes
+    // to stderr). Check the combined output so the assertion is stream- and
+    // backend-agnostic; both carry the fault message.
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
     );
     assert!(
-        stderr.contains("runtime error:") && stderr.contains("contract violated"),
-        "expected the fault message on stderr; got:\n{stderr}"
+        !out.status.success(),
+        "a contract violation must exit nonzero; output:\n{combined}"
+    );
+    assert!(
+        combined.contains("contract violated"),
+        "expected the fault message in the output; got:\n{combined}"
     );
 }
 
@@ -3416,14 +3425,21 @@ fn test_run_index_oob_prints_message_and_exits_nonzero() {
         .output()
         .unwrap();
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        !out.status.success(),
-        "OOB must exit nonzero; stderr:\n{stderr}"
+    // Slice 6c JIT-default: the JIT faults via `panic at …: vec index out of
+    // bounds` on STDOUT (matching `karac build`); `--interp` prints `runtime
+    // error: index N out of bounds …` on stderr. Check the combined output.
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
     );
     assert!(
-        stderr.contains("runtime error:"),
-        "expected a `runtime error:` line; got:\n{stderr}"
+        !out.status.success(),
+        "OOB must exit nonzero; output:\n{combined}"
+    );
+    assert!(
+        combined.contains("out of bounds"),
+        "expected an out-of-bounds fault in the output; got:\n{combined}"
     );
 }
 

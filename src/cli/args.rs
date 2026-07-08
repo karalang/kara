@@ -114,6 +114,7 @@ fn parse_run_command_from(args: &[String], file_idx: usize) -> Command {
     let mut no_manifest = false;
     let mut lint_overrides = crate::lints::CliLintOverrides::default();
     let mut timeout: Option<std::time::Duration> = None;
+    let mut interp = false;
     let mut i = file_idx;
     while i < args.len() {
         let arg = &args[i];
@@ -123,6 +124,10 @@ fn parse_run_command_from(args: &[String], file_idx: usize) -> Command {
             output = OutputMode::Jsonl;
         } else if arg == "--sequential" {
             sequential = true;
+        } else if arg == "--interp" {
+            // `--interp`: force the tree-walk interpreter over the default LLJIT
+            // executor (Slice 6c JIT-default flip). Ergonomic `KARAC_RUN_JIT=0`.
+            interp = true;
         } else if let Some(rest) = arg.strip_prefix("--timeout=") {
             timeout = Some(parse_timeout_arg(rest));
         } else if arg == "--timeout" {
@@ -187,6 +192,7 @@ fn parse_run_command_from(args: &[String], file_idx: usize) -> Command {
         no_manifest,
         lint_overrides,
         timeout,
+        interp,
     }
 }
 
