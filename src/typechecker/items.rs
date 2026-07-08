@@ -1482,6 +1482,22 @@ impl<'a> super::TypeChecker<'a> {
         }
         self.current_return_type = Some(return_type.clone());
 
+        // Return-position `impl Trait` single-witness pinning (design.md §
+        // `impl Trait`: "one concrete return per monomorphization"). Arm the
+        // per-function witness collector when the declared return is an
+        // existential; the end-of-body `check_impl_trait_single_witness`
+        // rejects a body that yields two or more distinct concrete witnesses.
+        // Saved/restored so a nested item (impl method, trait default body)
+        // doesn't leak its parent's collector.
+        let saved_impl_trait = self.current_return_impl_trait.take();
+        let saved_impl_trait_witnesses = std::mem::take(&mut self.return_impl_trait_witnesses);
+        self.current_return_impl_trait = match &return_type {
+            Type::Existential {
+                origin, trait_name, ..
+            } => Some((*origin, trait_name.clone())),
+            _ => None,
+        };
+
         // FE-2 — `GpuSafe` structural check. A `#[gpu]` function may use
         // only the GPU-compatible type subset; reject heap / RC types (and
         // aggregates containing them) in its parameter and return types.
@@ -1565,6 +1581,13 @@ impl<'a> super::TypeChecker<'a> {
         if f.is_gpu {
             self.check_gpu_safe_bindings(&f.body, &gp);
         }
+
+        // Reject a return-position `impl Trait` whose body yielded 2+ distinct
+        // concrete witnesses (must run while `current_return_impl_trait` is
+        // still armed, before the restore below).
+        self.check_impl_trait_single_witness();
+        self.current_return_impl_trait = saved_impl_trait;
+        self.return_impl_trait_witnesses = saved_impl_trait_witnesses;
 
         self.current_return_type = None;
         self.current_self_type = None;

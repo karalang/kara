@@ -18452,6 +18452,81 @@ fn impl_trait_slice3_caller_naming_witness_concrete_type_rejected() {
 }
 
 #[test]
+fn impl_trait_return_multiple_witnesses_rejected() {
+    // B-2026-07-08-1: a return-position `impl Trait` whose body yields TWO
+    // distinct concrete witnesses (`Fast` on one branch, `Slow` on the other)
+    // is ill-typed — design.md § `impl Trait` (Existential Types): "one
+    // concrete return per monomorphization". Before this fix the typechecker
+    // accepted it (each branch independently satisfies the trait bound); the
+    // interpreter ran it via dynamic dispatch while codegen could not lower it
+    // — a silent run-vs-build divergence. Now rejected at `check` with
+    // `E_IMPL_TRAIT_MULTIPLE_WITNESSES` naming both witnesses.
+    let errors = typecheck_desugared_errors(
+        "trait Rate { fn factor(ref self) -> i64; }\n\
+         struct Fast {}\n\
+         struct Slow {}\n\
+         impl Rate for Fast { fn factor(ref self) -> i64 { 10 } }\n\
+         impl Rate for Slow { fn factor(ref self) -> i64 { 1 } }\n\
+         fn pick(fast: bool) -> impl Rate { if fast { Fast {} } else { Slow {} } }\n\
+         fn main() { let r = pick(true); }",
+    );
+    let found = errors.iter().any(|e| {
+        e.message.contains("E_IMPL_TRAIT_MULTIPLE_WITNESSES")
+            && e.message.contains("Fast")
+            && e.message.contains("Slow")
+            && e.message.contains("impl Rate")
+    });
+    assert!(
+        found,
+        "expected E_IMPL_TRAIT_MULTIPLE_WITNESSES naming `Fast` and `Slow`; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn impl_trait_return_multiple_witnesses_via_explicit_returns_rejected() {
+    // Same rule, exercised through explicit `return` statements rather than an
+    // `if`-tail — the witness collector hooks the return-position assignability
+    // check, so both `return` forms and tail-expr branches are covered.
+    let errors = typecheck_desugared_errors(
+        "trait Rate { fn factor(ref self) -> i64; }\n\
+         struct Fast {}\n\
+         struct Slow {}\n\
+         impl Rate for Fast { fn factor(ref self) -> i64 { 10 } }\n\
+         impl Rate for Slow { fn factor(ref self) -> i64 { 1 } }\n\
+         fn pick(fast: bool) -> impl Rate {\n\
+             if fast { return Fast {}; }\n\
+             Slow {}\n\
+         }\n\
+         fn main() { let r = pick(true); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_IMPL_TRAIT_MULTIPLE_WITNESSES")),
+        "expected E_IMPL_TRAIT_MULTIPLE_WITNESSES across explicit returns; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn impl_trait_return_single_witness_across_branches_ok() {
+    // The rule is about DISTINCT witnesses, not multiple return points: a body
+    // whose every branch returns the SAME concrete type (`Fixed` on both arms)
+    // is a legitimate single-witness existential and must still typecheck.
+    // Guards against the collector over-firing on any function with >1 return.
+    typecheck_desugared_ok(
+        "trait Rate { fn factor(ref self) -> i64; }\n\
+         struct Fixed { f: i64 }\n\
+         impl Rate for Fixed { fn factor(ref self) -> i64 { self.f } }\n\
+         fn pick(fast: bool) -> impl Rate {\n\
+             if fast { Fixed { f: 10 } } else { Fixed { f: 1 } }\n\
+         }\n\
+         fn main() { let r = pick(true); }",
+    );
+}
+
+#[test]
 fn impl_trait_slice3_return_position_with_effect_clause_typechecks() {
     // `-> impl Tagged with reads(World)` — the parser carries the
     // existential's method-use effect ceiling (`with E'`) on the

@@ -55,6 +55,7 @@ use const_eval::{binop_glyph, const_value_type, format_const_value, unaryop_glyp
 pub use env::{EnumInfo, FunctionSig, ImplInfo, StructInfo, TraitInfo, TypeEnv, UnionInfo};
 #[cfg(test)]
 use inference::substitute_type_params;
+use types::type_is_fully_concrete;
 pub use types::{
     const_arg_display, type_display, type_to_concrete_or_param_name, ConstArg, ConstVarId, DimArg,
     FloatSize, IntSize, SubstValue, Type, TypeVarId, UIntSize, VariantTypeInfo,
@@ -1334,6 +1335,26 @@ pub struct TypeChecker<'a> {
     /// contexts don't leak across siblings.
     pub(super) borrow_context: Option<&'static str>,
     pub(super) current_return_type: Option<Type>,
+    /// Return-position `impl Trait` single-witness pinning. `Some((origin,
+    /// trait_name))` while checking a function whose declared return type is a
+    /// return-position existential, where `origin` is that existential's
+    /// `SpanKey`. Every concrete witness type that flows into the return
+    /// position (each branch of an `if`/`match` tail, each `return <expr>`) is
+    /// recorded into `return_impl_trait_witnesses` via `check_assignable`; at
+    /// the end of the body `check_impl_trait_single_witness` rejects the
+    /// function if two or more *distinct* concrete witnesses were seen. Per
+    /// design.md § `impl Trait` (Existential Types): a return-position
+    /// existential is "one concrete return per monomorphization" — a body that
+    /// yields `Fast` on one branch and `Slow` on another is ill-typed (it
+    /// would need `dyn Trait`, which is P1-deferred). Without this the
+    /// typechecker accepted such programs; the interpreter ran them via
+    /// dynamic dispatch while codegen could not lower them — a silent
+    /// run-vs-build divergence (B-2026-07-08-1). Saved/restored around each
+    /// function walk so nested items don't leak state.
+    pub(super) current_return_impl_trait: Option<(crate::resolver::SpanKey, String)>,
+    /// Concrete witness types (display name + span) collected for the current
+    /// function's return-position `impl Trait`. See `current_return_impl_trait`.
+    pub(super) return_impl_trait_witnesses: Vec<(String, Span)>,
     /// LB3 — per-label collector stack for labeled-block break-with-value
     /// LUB inference. Pushed at labeled-block entry; each `Break { label:
     /// Some(name), value: Some(e) }` site appends `infer_expr(e)` to the
@@ -1601,6 +1622,8 @@ impl<'a> TypeChecker<'a> {
             assigning_lhs: false,
             borrow_context: None,
             current_return_type: None,
+            current_return_impl_trait: None,
+            return_impl_trait_witnesses: Vec::new(),
             current_fn_is_gpu: false,
             break_value_types: Vec::new(),
             current_self_type: None,
@@ -3173,8 +3196,92 @@ impl<'a> TypeChecker<'a> {
         is_subtype(&super_resolved, &sub_resolved)
     }
 
+    /// Record a concrete witness type flowing into the current function's
+    /// return-position `impl Trait`. No-op unless (a) we're inside a function
+    /// whose declared return is a return-position existential, (b) `expected`
+    /// resolves to *that* existential (matched by `SpanKey` origin, so an
+    /// unrelated `impl Trait`-typed slot doesn't contribute), and (c) `found`
+    /// resolves to a concrete type (not another existential — an opaque
+    /// re-return or same-origin self-return — and not a typevar / error /
+    /// never sentinel). Feeds `check_impl_trait_single_witness`.
+    fn note_return_impl_trait_witness(&mut self, expected: &Type, found: &Type, span: &Span) {
+        // `SpanKey` is `Copy`; copy the origin out so the immutable borrow of
+        // `self` is released before the `&mut` witness push below.
+        let origin = match &self.current_return_impl_trait {
+            Some((o, _)) => *o,
+            None => return,
+        };
+        let exp = self.resolve_assoc_projections(expected);
+        let Type::Existential {
+            origin: exp_origin, ..
+        } = &exp
+        else {
+            return;
+        };
+        if *exp_origin != origin {
+            return;
+        }
+        let f = self.resolve_assoc_projections(found);
+        // Skip non-concrete or sentinel witnesses: another existential (opaque
+        // re-return), a diverging branch (`Never`), an error recovery, or a
+        // not-yet-concrete generic — none of these is a *distinct concrete*
+        // witness the single-witness rule should count, and counting them
+        // would produce false positives on legitimate generic / divergent
+        // bodies.
+        if matches!(f, Type::Existential { .. } | Type::Error | Type::Never) {
+            return;
+        }
+        if !type_is_fully_concrete(&f) {
+            return;
+        }
+        self.return_impl_trait_witnesses
+            .push((type_display(&f), span.clone()));
+    }
+
+    /// End-of-body check for a return-position `impl Trait`: reject the
+    /// function if two or more *distinct* concrete witness types flowed into
+    /// its return. Per design.md § `impl Trait` (Existential Types), a
+    /// return-position existential is "one concrete return per
+    /// monomorphization"; a body returning `Fast` on one branch and `Slow` on
+    /// another needs `dyn Trait` (P1-deferred), not `impl Trait`. Points the
+    /// diagnostic at the second distinct witness — the branch that introduced
+    /// the divergence. No-op unless `current_return_impl_trait` is set.
+    fn check_impl_trait_single_witness(&mut self) {
+        let Some((_, trait_name)) = self.current_return_impl_trait.clone() else {
+            return;
+        };
+        let mut distinct: Vec<(String, Span)> = Vec::new();
+        for (name, span) in &self.return_impl_trait_witnesses {
+            if !distinct.iter().any(|(n, _)| n == name) {
+                distinct.push((name.clone(), span.clone()));
+            }
+        }
+        if distinct.len() < 2 {
+            return;
+        }
+        let names: Vec<&str> = distinct.iter().map(|(n, _)| n.as_str()).collect();
+        let second_span = distinct[1].1.clone();
+        self.type_error(
+            format!(
+                "error[E_IMPL_TRAIT_MULTIPLE_WITNESSES]: return-position `impl {trait_name}` \
+                 must resolve to a single concrete type per monomorphization, but this function \
+                 returns multiple: {}. An `impl Trait` return is an existential with one concrete \
+                 witness; a runtime-varying return type needs `dyn {trait_name}` (deferred to a \
+                 later release). Make every branch return the same concrete type.",
+                names.join(", "),
+            ),
+            second_span,
+            TypeErrorKind::TypeMismatch,
+        );
+    }
+
     pub(super) fn check_assignable(&mut self, expected: &Type, found: &Type, span: Span) -> bool {
         if self.is_subtype_with_projections(expected, found) {
+            // Record a concrete witness flowing into the current function's
+            // return-position `impl Trait`, so the end-of-body single-witness
+            // check can reject a multi-witness existential. No-op unless
+            // `expected` IS that existential and `found` is concrete.
+            self.note_return_impl_trait_witness(expected, found, &span);
             return true;
         }
         if Self::is_once_into_fn_shape(expected, found) {
