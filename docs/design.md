@@ -79,6 +79,7 @@ The current truth. All committed design decisions in their final form.
 - [Secret Type (`Secret[T]`)](#secret-type-secrett)
 - [Unsafe Escape Hatch](#unsafe-escape-hatch)
 - [FFI](#ffi)
+- [Exported C ABI](#exported-c-abi)
 - [What Kāra Is Not](#what-kāra-is-not)
 - [Deferred Items](#deferred-items)
 - [What to Build First](#what-to-build-first)
@@ -12639,6 +12640,97 @@ fn open_file(path: ref String) -> Result[SafeFile, IoError] {
 **Cross-language / cross-version stability.** Because the layout is unknown, an opaque foreign type declaration is *layout-version-independent*: the C library can change `FILE`'s internal fields between releases without breaking Kāra binders that only use `*mut FILE`. This is the entire point of opaque handles in C APIs and the reason this form is worth carving out as a distinct kind from `struct`. A consumer that wants layout stability commits to it explicitly with `#[repr(C)] struct SomeKnownLayout { ... }`.
 
 **`extern_types` is opt-in to the opacity model.** When the C library *does* publish the layout — through a `.h` header that exposes the struct's fields — Kāra binders should declare the layout explicitly with a `#[repr(C)] struct` and gain the field-access surface. Opaque types are for the cases where the layout is intentionally hidden by the library author. Mixing the two on the same type (`#[repr(C)] struct FILE { ... }` *and* `extern "C" { type FILE; }`) is a coherence error, flagged at link time when the duplicate name is detected.
+
+---
+
+## Exported C ABI
+
+Everything above is the **consume** direction — Kāra calling foreign code. This section specifies the **produce** direction: building a Kāra program as a linkable library (`.a` / `.so` / `.dylib`) with a stable C surface that a foreign C, C++, or C-ABI-wrapped Rust program links against and calls into. It is the "*write the parallel data kernel in Kāra, keep everything else*" adoption path — Kāra as a component you add, not a rewrite you commit to. The design fork is settled here; the build-mode, header-emitter, and ownership-handoff mechanics are tracked as [`spikes/additive-interop-adoption.md`](spikes/additive-interop-adoption.md) Slices 2–5 under Phase 8.5.
+
+The governing constraint is **honesty about the ABI**: C is the only durable cross-language contract, so the exported surface is a C surface, and only the shapes C can name transparently cross transparently. Everything else crosses as an opaque handle owned by the Kāra runtime. This keeps the README from writing a check the ABI cannot cash ("call Rust crates cleanly" is un-cashable as written — Rust has no stable ABI; the achievable promise is "call C, and call Rust crates wrapped to expose a C ABI").
+
+### The exported surface — discovery
+
+The public C surface of a Kāra library is **every `pub extern "C" fn` definition carrying `#[unsafe(no_mangle)]`** — a function with a *body* (a definition, not an `unsafe extern { }` import), a C ABI, `pub` visibility, and a stable bare symbol name:
+
+```kara
+#[unsafe(no_mangle)]
+pub extern "C" fn saxpy(n: i64, a: f32, x: *const f32, y: *mut f32) with writes(Buffer) {
+    // hot parallel kernel — the reason C is calling into Kāra
+    ...
+}
+```
+
+Each of the three markers is load-bearing, and the discovery rule reuses machinery that already exists:
+
+- **`pub`** puts the function in the external API (the same `pub`-crosses-the-package-boundary tier that governs [effect stability](#effect-inference-and-boundaries)) and drives `Linkage::External` in codegen, so the symbol survives dead-code elimination — the same mechanism WASM entry-point discovery ([`crate::wasm_exports`](#entry-point-discovery)) relies on.
+- **`extern "C"`** selects the C calling convention. Note the asymmetry documented at [`#[unsafe(no_mangle)]` vs ABI](#unsafeno_mangle-vs-abi): `extern "C"` sets the *ABI* but Kāra still *mangles the symbol name* by default.
+- **`#[unsafe(no_mangle)]`** is therefore required to get the bare, stable C symbol a foreign `#include`r links against. It is not redundant with `extern "C"` — one controls ABI, the other controls the name. The `unsafe` wrap carries the standard no-mangle obligation (the author asserts the symbol name collides with no other symbol in the final binary).
+
+Discovery is **language-driven, not manifest-driven** — mirroring WASM, where the surface is the set of tagged `pub fn`s, not a list in `Kara.toml`. This keeps a single source of truth: the export set is visible at the definition site. The manifest `[lib]` table (below) carries *artifact metadata* (name, default kind), **not** an export list — there is no second place to keep in sync. `main` is never an export; a library artifact has no entry point.
+
+### Type mapping — what crosses, and how
+
+The honest v1 answer: **primitives, `#[repr(C)]` structs, and opaque handles cross transparently; everything else crosses as a Kāra-owned opaque pointer with accessor and destructor functions** — the boxing convention, not a transparent layout. An exported `pub extern "C" fn` may only name **boundary-legal** types in its signature; a non-boundary-legal type in an exported signature is rejected at typecheck with `error[E_EXPORT_TYPE_NOT_C_ABI]` naming the offending type and pointing at the handle convention.
+
+**Transparent set (crosses by value / by pointer, appears verbatim in the emitted header):**
+
+| Kāra type | C type | Notes |
+|---|---|---|
+| `i8`…`i64`, `u8`…`u64` | `int8_t`…`int64_t`, `uint8_t`…`uint64_t` | `<stdint.h>` fixed-width |
+| `f32`, `f64` | `float`, `double` | |
+| `bool` | `uint8_t` | `0`/`1`; C `_Bool` layout is not guaranteed portable across compilers |
+| `()` (unit return) | `void` | return position only |
+| `usize`, `isize` | `size_t`, `ptrdiff_t` | the FFI-only size types (§ Numeric Semantics — idiomatic Kāra uses `i64`; `usize` is FFI-only) |
+| `*const T`, `*mut T` | `const T*`, `T*` | `T` must itself be boundary-legal |
+| `#[repr(C)] struct S { … }` | `struct S { … }` | all fields boundary-legal; emitted into the header. **Only `#[repr(C)]`** — a default-layout `struct` has no stable layout and crosses as a handle |
+| declared opaque foreign type `Foo` | `Foo*` | already-`extern`-declared opaque handles pass through |
+
+**Opaque-handle set (crosses as `KaraHandle`-typed opaque pointer, never a transparent layout):** `Vec[T]`, `String`, default-layout `struct`, `enum`, `Option[T]`, `Result[T, E]`, `shared struct`/`shared enum`, and any RC-carrying aggregate. For each exported handle type the emitter produces a distinct opaque typedef (`typedef struct KaraVec_i32 KaraVec_i32;` — an incomplete type the C side only ever holds by pointer) plus the accessor/destructor exports the library author wrote. There is **no** transparent field access into these from C — the layout is not part of the ABI and is free to change between compiler versions, exactly as with C opaque handles ([Opaque Foreign Types](#opaque-foreign-types-extern-c--type-foo-), inverted).
+
+**Boxing convention.** An exported fn that returns a non-transparent value *boxes* it: the value is heap-allocated on the Kāra side (owned by the runtime), and an opaque pointer is returned. The C caller **must not `free()`** the pointer — the box may own RC children or heap sub-allocations whose drop glue only Kāra knows. It returns the value to Kāra for destruction through a destructor export (the `karac_free_*` / `Drop`-export path). Who-frees-what across this boundary — the `forget` primitive ([roadmap L516](roadmap.md), *suppress destructor; reserved for FFI handoff*) and the full move-out-of-the-Kāra-ownership-universe rule — is **deferred to Slice 4** and co-designed with the [ownership-mechanization spike](spikes/ownership-model-mechanization.md): the export boundary is a move *out* of Kāra's ownership universe, and specifying handoff independently of that spike's model would let the two specs diverge. This section fixes the *convention* (opaque + Kāra-owned destructor, never C `free`); the *mechanism* lands with `forget`.
+
+**`String` convenience (still opaque underneath).** Because "hand C a string" is common, an exported `String` handle additionally supports a borrowing accessor — `karac_string_bytes(handle, const uint8_t** out_ptr, size_t* out_len)` — that lends the UTF-8 bytes without transferring ownership; the bytes are valid until the handle is destroyed. This is accessor sugar over the opaque handle, not a transparent layout, and does not weaken the boxing convention.
+
+### The effect contract for an effect-blind caller
+
+A C caller has no effect system, but — unlike the consume direction's *trust-not-verify* rule — an **exported fn's effects are KNOWN**: they were checked against the fn's body. So the contract can state them precisely, and must not copy the extern-*import* default (`{blocks}`) onto exports. Three treatments:
+
+- **Documentation.** The emitted header annotates each prototype with its checked effect set as a doc comment (`/** @effects reads(Db), writes(Buffer), blocks */`). Informational for the C reader — C cannot enforce it — but it is a *precise* record, not a guess.
+- **`panics` — operational.** A C caller cannot catch a Kāra panic. This extends the existing export-boundary policing (`verify_extern_export_panics` / `ExternCUnwindRequiresPanics`, which already gates `extern "C-unwind"` *exports* on a `panics` body): a `pub extern "C" fn` (plain `"C"`, not `"C-unwind"`) whose body's effect set contains `panics` is rejected unless the boundary is declared abort-on-panic (a catch shim converting the panic to `abort()`) — otherwise a panic would unwind into C frames that have no Kāra landing pad. `extern "C-unwind"` exports opt the caller into unwinding per the existing rules.
+- **`suspends` — operational.** A C caller drives no Kāra scheduler, so an exported fn that `suspends` (network-boundary / async) cannot run on a bare foreign thread. At v1 the export boundary is **synchronous only**: a `pub extern "C" fn` whose effect set contains `suspends` is rejected with `error[E_EXPORT_SUSPENDS_UNSUPPORTED]`, pointing at the pattern of exposing a *blocking* wrapper that owns a runtime-scoped task internally. Async export across the C boundary is post-v1.
+
+### Runtime-init contract and self-containment
+
+A produced Kāra library is **not self-contained**: it references `libkarac_runtime.a` symbols (allocator, RC, channels, scheduler) exactly as an executable does. The artifact links only when the runtime archive is bundled alongside it — reusing the runtime-location logic in [`src/codegen/driver.rs`](#runtime-distribution), and verified against the acceptance bar that a consumer links **with no karac toolchain present**. The emitted header states the required link line (`-lfoo -lkarac_runtime -lpthread`).
+
+Because the runtime owns allocation and (optionally) a task pool, a C host initializes it once before the first call and shuts it down at teardown. The emitter always surfaces two idempotent lifecycle exports into the header:
+
+```c
+void karac_runtime_init(void);      /* idempotent; safe to call once at host startup */
+void karac_runtime_shutdown(void);  /* drains runtime-owned tasks; call at host teardown */
+```
+
+For a pure-compute kernel with no `par {}` / `spawn`, `init` is a no-op beyond arming the allocator, but it is still required so the alloc/RC surface is live before any exported call boxes a value.
+
+### Build mode and header emission (surface)
+
+Two new `karac build` modes route the exported surface through the existing native link path with external linkage:
+
+- `karac build --crate-type staticlib <file.kara>` → `.a`
+- `karac build --crate-type cdylib <file.kara>` → `.so` (Linux) / `.dylib` (macOS)
+
+The output artifact is written to an explicit `-o <path>` or, failing that, to `dist/` under the manifest `[lib] name` (or the source stem) — a library build must **not** clobber a stray executable in the working directory the way an ordinary `karac build` writes to CWD. On macOS a `cdylib` is emitted with `-install_name @rpath/lib<name>.dylib` so the consumer resolves it via rpath rather than an absolute build-machine path.
+
+Alongside the artifact, the compiler emits a C header (`lib<name>.h` by default; `--header <path>` / `--no-header` override) — the cbindgen analogue that makes the surface *ergonomic* rather than merely possible. The header contains, in order: an include guard, `#include <stdint.h>` / `<stddef.h>`, a `#ifdef __cplusplus extern "C" {` guard, the two runtime-lifecycle prototypes, the opaque handle typedefs, the `#[repr(C)]` struct definitions, and one `@effects`-annotated prototype per exported fn. An optional manifest table names the artifact:
+
+```toml
+[lib]
+name = "kernels"          # → libkernels.a / libkernels.so / libkernels.h
+crate-type = "staticlib"  # default kind when --crate-type is omitted
+```
+
+The `[lib]` table is the symmetric addition to the existing `[link]` table (which links *foreign* libraries *into* a Kāra build); `[lib]` describes the Kāra library *this* build *produces*. It carries only artifact metadata — never the export list, which stays language-driven per *discovery* above.
 
 ---
 

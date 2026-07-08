@@ -1,7 +1,13 @@
 # Spike: Additive interop — Kāra as a component you add, not a rewrite you commit to
 
-**Status:** OPEN — proposed epic (adoption-track, not a bug-class cure). The *consume* half already ships and is load-bearing; the real work is the *producer* half.
+**Status:** OPEN — Slices 0–1 landed (2026-07-08): framing settled + the export-ABI design fork written down + the graduating criterion met. Slices 2–5 (the code) are now `[ ]` tracker entries. The *consume* half already ships and is load-bearing; the remaining work is the *producer* half.
 **Decision date:** 2026-07-06. **Owner call:** worth doing, but scope honestly — the mechanism mostly exists, one claim in the pitch is physically un-cashable, and the genuine gap is the producer direction + a proof-point.
+
+**Progress (2026-07-08):**
+- **Slice 0 (framing) — DONE.** The two corrections (consume=done/produce=gap; Rust-via-C-shim) are recorded below and are now the do-not-rescope reference the Phase-8.5 entries cite.
+- **Slice 1 (export-ABI spec) — DONE.** Written as [`design.md § Exported C ABI`](../design.md#exported-c-abi): export surface = `pub extern "C" fn` + `#[unsafe(no_mangle)]` (language-driven discovery, mirroring WASM); type mapping = primitives + `#[repr(C)]` structs transparent, everything else a Kāra-owned opaque handle (boxing convention, `free()` forbidden); effect contract = producer-side effects are KNOWN (header states them), `panics` export policing extended from the existing `extern "C-unwind"` rule, `suspends` exports rejected (synchronous-only v1 boundary); plus the runtime-init contract and the not-self-contained caveat.
+- **Graduating criterion — MET.** Slices 2–5 filed as `[ ]` entries in [`roadmap.md` Phase 8.5 Track 2 → Tier 5](../roadmap.md#phase-85-v1-ship-readiness) (Library-artifact producer mode), each citing the consume-side L149/L379 `[x]` baseline as do-not-rescope.
+- **Remaining:** Slices 2 (build mode), 3 (header emitter), 4 (`forget` / ownership handoff — sequenced after ownership-mechanization slice 2), 5 (proof-point demo) — all code, all gated on the still-open v1-vs-v1.x owner question.
 
 ---
 
@@ -62,10 +68,10 @@ There is **no** native library-artifact build mode, **no** C-header emitter, and
 
 ## Ordered slices (design forks first — the shape is unsettled, so this is a spike, not a checklist)
 
-**Slice 0 — write the framing down (this doc's core; settle the two corrections).**
-Land the "consume = done, produce = gap, Rust-via-C-shim" framing as the shared understanding so no tracker entry gets filed as "build C/Rust interop" greenfield. Cite the L149/L379 `[x]` baseline. *Output: the corrections above become the reference the Phase-8.5 entries point at.* Zero code.
+**Slice 0 — write the framing down (this doc's core; settle the two corrections). ✅ DONE (2026-07-08).**
+Land the "consume = done, produce = gap, Rust-via-C-shim" framing as the shared understanding so no tracker entry gets filed as "build C/Rust interop" greenfield. Cite the L149/L379 `[x]` baseline. *Output: the corrections above become the reference the Phase-8.5 entries point at.* Zero code. *Landed: the corrections below are cited verbatim by the roadmap Tier-5 entries.*
 
-**Slice 1 — decide the export surface + type-mapping (design fork, no code).**
+**Slice 1 — decide the export surface + type-mapping (design fork, no code). ✅ DONE (2026-07-08) — [`design.md § Exported C ABI`](../design.md#exported-c-abi).**
 Answer the open questions *before* building:
 - **What is the public surface?** Every `pub extern "C" fn`? A manifest `[lib] exports = [...]`? A `#[export]` attribute? (WASM's `collect_wasm_exports` is the reference for how a surface is discovered.)
 - **How do Kāra types cross a C header?** The honest v1 answer is likely primitives + `#[repr(C)]` structs + opaque handles only — `Vec`/`String`/`enum`/`Option` map to opaque pointers with accessor functions, *not* a transparent layout. Decide the allowed set and the boxing convention.
