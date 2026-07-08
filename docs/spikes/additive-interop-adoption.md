@@ -113,4 +113,8 @@ Slice 0–1: the framing + a written export-ABI spec (`design.md § Exported C A
 
 ## Open question (owner sign-off)
 
-Two. (1) **Is the producer direction v1 or v1.x?** The consume side is v1 (self-hosting / TLS need it); the producer direction is the *adoption* lever, which may or may not be a launch requirement — if adoption proof-points aren't a v1 gate, Slices 2–5 are v1.x. (2) **Sequencing vs ownership mechanization** — Slice 4 (handoff) has a hard dependency on that spike's model; if both run, ownership's slice 2 comes first. Flagged; not actioned.
+**RESOLVED 2026-07-08 (owner).** (1) **Producer direction is v1** — it is the flagship adoption pitch ("add Kāra to your system"), the capability already exists and is proven, and the remaining polish is bounded. **v1 scope line, to keep the release-blocking set achievable and sound:**
+- **v1 (release-blocking):** the shipped core (native `.a`/`.so`/`.dylib` build mode, C-header emitter, producer-side effect policing, `forget`, the C-and-Rust proof-point) + the polish that makes it a supported guarantee — Windows library artifacts + 5-target CI matrix, project-mode `[lib]` table, the Rust-host `std`-collision smoothing, and the **low-risk Path-A round-trip** (raw-pointer instance methods `.offset`/`.read`/`.write`, `B-2026-07-08-4`), which completes allocate→use→free soundly with no per-type drop synthesis.
+- **v1.x (additive, non-blocking):** the **auto-boxing / auto-destructor sugar** (Path B). Its soundness gate is the CI-scale ASAN/LSan `drop_differential` corpus, so it must NOT gate the v1 release; it lands additively once that gate is stood up. Book chapter + book-snippet A/B verification also v1.x.
+
+(2) **Sequencing vs ownership mechanization** — Slice 4's `forget` shipped co-designed with that spike's (now-drafted) slice-2 drop model; the remaining round-trip work inherits the same co-design. Resolved.
