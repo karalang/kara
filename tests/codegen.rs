@@ -2245,6 +2245,66 @@ mod codegen_tests {
     }
 
     #[test]
+    fn e2e_map_field_constructed_in_associated_fn() {
+        // B-2026-07-08-12: a `Map`/`Set`-typed struct field initialized with
+        // `Map.new()` inside an associated constructor (`Cache.new()`) emitted
+        // invalid IR — `Map.new()` has no expr-level codegen handler (only the
+        // `let`-stmt path special-cases it), so it fell through to the `i64 0`
+        // default and built `insertvalue i64 0` into the pointer-typed field
+        // slot, aborting at module verification. Unmasked by the B-2026-07-08-9
+        // call-result Display fix (lru_cache). Derive the handle from the
+        // field's declared type instead. Exercise the full round-trip: build the
+        // struct via an associated fn, insert, read back through the field.
+        if let Some(out) = run_program(
+            "struct Cache { capacity: u64, index: Map[i64, u64] }\n\
+             impl Cache {\n\
+                 fn new(capacity: u64) -> Cache { Cache { capacity, index: Map.new() } }\n\
+                 fn put(mut ref self, k: i64, v: u64) { let _ = self.index.insert(k, v); }\n\
+                 fn count(ref self) -> u64 { self.index.len() }\n\
+             }\n\
+             fn main() {\n\
+                 let mut c = Cache.new(2);\n\
+                 c.put(5, 9);\n\
+                 c.put(7, 3);\n\
+                 println(c.count());\n\
+                 match c.index.get(5) {\n\
+                     Some(v) => { println(v); }\n\
+                     None => { println(-1); }\n\
+                 }\n\
+             }",
+        ) {
+            assert_eq!(out, "2\n9\n");
+        }
+    }
+
+    #[test]
+    fn e2e_shared_struct_map_field_constructed_in_associated_fn() {
+        // B-2026-07-08-12 shared-heap sibling: on the `shared struct` path the
+        // same `Map.new()`-in-constructor bug is SILENT — an opaque-pointer
+        // store of the `i64 0` default into the ptr-typed field slot passes
+        // verification (pointee types aren't checked) but leaves a null handle,
+        // so the program builds and then SEGFAULTS on first map use. Same fix
+        // (derive the handle from the field's declared type) applied to the
+        // shared branch; assert the round-trip works instead of crashing.
+        if let Some(out) = run_program(
+            "shared struct Cache { capacity: u64, index: Map[i64, u64] }\n\
+             impl Cache {\n\
+                 fn new(capacity: u64) -> Cache { Cache { capacity, index: Map.new() } }\n\
+                 fn put(mut ref self, k: i64, v: u64) { let _ = self.index.insert(k, v); }\n\
+                 fn count(ref self) -> u64 { self.index.len() }\n\
+             }\n\
+             fn main() {\n\
+                 let mut c = Cache.new(2);\n\
+                 c.put(5, 9);\n\
+                 c.put(7, 3);\n\
+                 println(c.count());\n\
+             }",
+        ) {
+            assert_eq!(out, "2\n");
+        }
+    }
+
+    #[test]
     fn e2e_enumerate_loop_body_and_outer_mutations_execute() {
         // B-2026-07-08-5: `for (i, v) in xs.iter().enumerate()` fell through
         // `compile_for`'s dispatch to the silent skip-body arm, so the loop body

@@ -1884,6 +1884,37 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.emit_rc_alloc(info.heap_type)
                 };
                 for (idx, field_init) in fields.iter().enumerate() {
+                    // `Map`/`Set`-typed field initialized with `Map.new()` /
+                    // `Set.new()` — derive the handle from the field's declared
+                    // type (see the non-shared branch below for the full
+                    // rationale, B-2026-07-08-12). On the shared heap path the
+                    // symptom is a SILENT null store (opaque-pointer stores don't
+                    // type-check the pointee), so the bug builds but segfaults on
+                    // first map use rather than failing verification.
+                    let is_map_set_new = self.is_map_new_call(&field_init.value)
+                        || self.is_set_new_call(&field_init.value);
+                    if is_map_set_new {
+                        let field_te = self
+                            .struct_field_type_exprs
+                            .get(name)
+                            .and_then(|tes| tes.get(idx))
+                            .cloned();
+                        if let Some(handle) =
+                            field_te.and_then(|te| self.build_map_new_handle_from_type_expr(&te))
+                        {
+                            let field_ptr = self
+                                .builder
+                                .build_struct_gep(
+                                    gep_ty,
+                                    ptr,
+                                    idx as u32 + base,
+                                    &format!("field_{}", field_init.name),
+                                )
+                                .unwrap();
+                            self.builder.build_store(field_ptr, handle).unwrap();
+                            continue;
+                        }
+                    }
                     let val = self.compile_expr(&field_init.value)?;
                     // Owned String/Vec PARAM captured into a field
                     // (`Node { name: s }` where `s: String` is a param):
@@ -2006,6 +2037,34 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap()
                         .into_struct_value();
                     continue;
+                }
+                // A `Map`/`Set`-typed field initialized with `Map.new()` /
+                // `Set.new()` inside a constructor (`Cache { index: Map.new() }`):
+                // `compile_expr` has NO expr-level Map.new() handler (it is
+                // special-cased only in the `let`-stmt path, keyed by the
+                // binding name for K/V), so it would fall through to the `i64 0`
+                // default and build an `insertvalue i64 0` into the pointer-typed
+                // field slot — invalid IR (B-2026-07-08-12). Derive the handle
+                // from the field's DECLARED type instead. The struct's generated
+                // Drop frees the handle, so no scope-exit action is needed here.
+                let is_map_set_new = self.is_map_new_call(&field_init.value)
+                    || self.is_set_new_call(&field_init.value);
+                if is_map_set_new {
+                    let field_te = self
+                        .struct_field_type_exprs
+                        .get(name)
+                        .and_then(|tes| tes.get(idx))
+                        .cloned();
+                    if let Some(handle) =
+                        field_te.and_then(|te| self.build_map_new_handle_from_type_expr(&te))
+                    {
+                        agg = self
+                            .builder
+                            .build_insert_value(agg, handle, idx as u32, "field")
+                            .unwrap()
+                            .into_struct_value();
+                        continue;
+                    }
                 }
                 let val = self.compile_expr(&field_init.value)?;
                 // Owned String/Vec PARAM captured into a field — deep-copy,

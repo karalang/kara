@@ -117,6 +117,91 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_pointer_value()
     }
 
+    /// Build a fresh `Map`/`Set` handle from a `Map[K, V]` / `Set[T]`
+    /// `TypeExpr` directly — no per-variable `map_key_types` registration
+    /// required. The name-keyed `build_map_new_handle` above serves `let`
+    /// bindings (which register K/V under the binding name); this serves
+    /// contexts where the K/V types come from a declared TYPE instead, e.g. a
+    /// `Map`-typed struct field initialized with `Map.new()` in a constructor
+    /// (`Cache { index: Map.new() }`). Without it, `Map.new()` in field position
+    /// falls through `compile_expr` to the `i64 0` default, which builds an
+    /// `insertvalue i64 0` into the pointer-typed field slot — invalid IR
+    /// (B-2026-07-08-12). Returns `None` if `te` is not a `Map`/`Set` path.
+    /// The caller owns the returned handle's lifetime (a struct field's handle
+    /// is freed by the struct's generated Drop, so no scope-exit action here).
+    pub(super) fn build_map_new_handle_from_type_expr(
+        &mut self,
+        te: &TypeExpr,
+    ) -> Option<PointerValue<'ctx>> {
+        let TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        let last = p.segments.last().map(|s| s.as_str())?;
+        let is_set = matches!(last, "Set" | "SortedSet");
+        let is_map = matches!(last, "Map" | "SortedMap");
+        if !is_set && !is_map {
+            return None;
+        }
+        let i64_t = self.context.i64_type();
+        let args = p.generic_args.as_ref();
+        let key_te = args.and_then(|a| a.first()).and_then(|g| match g {
+            crate::ast::GenericArg::Type(t) => Some(t.clone()),
+            _ => None,
+        });
+        let key_ty = key_te
+            .as_ref()
+            .map(|t| self.llvm_type_for_type_expr(t))
+            .unwrap_or(i64_t.into());
+        let key_size = key_ty
+            .size_of()
+            .unwrap_or_else(|| i64_t.const_int(8, false));
+        let val_size = if is_set {
+            i64_t.const_int(0, false)
+        } else {
+            let val_te = args.and_then(|a| a.get(1)).and_then(|g| match g {
+                crate::ast::GenericArg::Type(t) => Some(t.clone()),
+                _ => None,
+            });
+            let val_ty = val_te
+                .as_ref()
+                .map(|t| self.llvm_type_for_type_expr(t))
+                .unwrap_or(i64_t.into());
+            val_ty
+                .size_of()
+                .unwrap_or_else(|| i64_t.const_int(8, false))
+        };
+        let (hash_fn, eq_fn) = if let Some(kte) = key_te {
+            (
+                self.emit_hash_fn_for_type_expr(&kte),
+                self.emit_eq_fn_for_type_expr(&kte),
+            )
+        } else {
+            (
+                self.emit_hash_fn_for_type("i64", key_ty),
+                self.emit_eq_fn_for_type("i64", key_ty),
+            )
+        };
+        let hash_fn_ptr = hash_fn.as_global_value().as_pointer_value();
+        let eq_fn_ptr = eq_fn.as_global_value().as_pointer_value();
+        Some(
+            self.builder
+                .build_call(
+                    self.karac_map_new_fn,
+                    &[
+                        key_size.into(),
+                        val_size.into(),
+                        hash_fn_ptr.into(),
+                        eq_fn_ptr.into(),
+                    ],
+                    if is_set { "set.new.te" } else { "map.new.te" },
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value(),
+        )
+    }
+
     /// Emit `karac_map_new`, alloca a ptr slot to hold the opaque handle, and
     /// register a scope-exit `karac_map_free` cleanup action.
     /// Called from `compile_stmt` when the RHS is `Map.new()`.
