@@ -2469,12 +2469,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.builder.position_at_end(skip_bb);
                 }
                 SharedFieldKind::MapOrSet => {
-                    // Map/Set: conservative `karac_map_free_with_drop_vec`
-                    // with both flags set. The runtime helper no-ops
-                    // each side whose `cap == 0` / `_size == 0`, so
-                    // over-flagging is correctness-safe for
-                    // primitive-only maps. Mirrors
-                    // `emit_struct_drop_synthesis`'s Map/Set arm.
+                    // Map/Set: `karac_map_free_with_drop_vec` with per-side
+                    // `(drop_key, drop_val)` flags derived from the field's
+                    // declared `Map[K,V]` / `Set[T]` type (see `map_drop_flags`).
+                    // The old hardcoded `(1, 1)` assumed the runtime no-ops a
+                    // scalar side via a `cap == 0` guard — FALSE: for an occupied
+                    // `Map[i64, u64]` the runtime reads offset-16 of an 8-byte key
+                    // as a bogus `cap` and frees the key VALUE as a pointer,
+                    // corrupting the heap (B-2026-07-08-12 — the sibling of the
+                    // non-shared/tuple fixes at `emit_struct_drop_synthesis` /
+                    // `emit_tuple_elem_drops`; here the null map handle before
+                    // that bug's construction fix masked it, `karac_map_new` in a
+                    // shared-struct constructor unmasked it). Mirrors line 1475.
                     let field_ptr = self
                         .builder
                         .build_struct_gep(
@@ -2489,11 +2495,20 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_load(ptr_ty, field_ptr, &format!("rcdrop.map{field_idx}.handle"))
                         .unwrap()
                         .into_pointer_value();
-                    let one = i32_t.const_int(1, false);
+                    let (dk, dv) = self
+                        .struct_field_type_exprs
+                        .get(struct_name)
+                        .and_then(|v| v.get(field_idx))
+                        .map(|fte| self.map_drop_flags(fte))
+                        .unwrap_or((0, 0));
                     self.builder
                         .build_call(
                             self.karac_map_free_with_drop_vec_fn,
-                            &[handle.into(), one.into(), one.into()],
+                            &[
+                                handle.into(),
+                                i32_t.const_int(dk, false).into(),
+                                i32_t.const_int(dv, false).into(),
+                            ],
                             "",
                         )
                         .unwrap();
@@ -2857,11 +2872,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_int_to_ptr(w, ptr_ty, &format!("{label}.map.handle"))
                     .unwrap();
-                let one = self.context.i32_type().const_int(1, false);
+                // Per-side flags from the payload's `Map[K,V]` / `Set[T]` type,
+                // not the old hardcoded `(1, 1)` — a scalar-keyed map payload
+                // (`Map[i64, u64]`) would otherwise free the key VALUE as a
+                // pointer on drop (B-2026-07-08-12, shared-enum sibling of the
+                // struct/tuple fixes; `map_drop_flags` returns `(0, 0)` here).
+                let i32_t = self.context.i32_type();
+                let (dk, dv) = self.map_drop_flags(te);
                 self.builder
                     .build_call(
                         self.karac_map_free_with_drop_vec_fn,
-                        &[handle.into(), one.into(), one.into()],
+                        &[
+                            handle.into(),
+                            i32_t.const_int(dk, false).into(),
+                            i32_t.const_int(dv, false).into(),
+                        ],
                         "",
                     )
                     .unwrap();

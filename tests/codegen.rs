@@ -2367,6 +2367,36 @@ mod codegen_tests {
     }
 
     #[test]
+    fn e2e_shared_enum_map_payload_drops_without_freeing_scalar_keys() {
+        // B-2026-07-08-12 shared-enum sibling: the RC-drop for a `shared enum`
+        // with a `Map`/`Set` payload hardcoded `karac_map_free_with_drop_vec(_,
+        // 1, 1)`, so on drop the runtime read offset-16 of each 8-byte scalar
+        // key as a bogus `cap` and freed the key VALUE as a pointer — heap
+        // corruption on any populated `Map[i64, u64]` payload. AOT masked it
+        // (the OOB `cap` read happened to be <= 0 in the release heap layout);
+        // the JIT parity leg surfaced the crash on the struct sibling. Fixed by
+        // deriving the `(drop_key, drop_val)` flags from the payload type via
+        // `map_drop_flags` (scalar map -> (0, 0)), matching the struct/tuple
+        // arms. Construct + drop the enum (no move-out — that is a separate
+        // shared-enum match-binding double-free, filed as B-2026-07-08-22).
+        if let Some(out) = run_program(
+            "shared enum Store { Empty, Full(Map[i64, u64]) }\n\
+             fn build() -> Store {\n\
+                 let mut m = Map.new();\n\
+                 let _ = m.insert(5, 9);\n\
+                 let _ = m.insert(7, 3);\n\
+                 Store.Full(m)\n\
+             }\n\
+             fn main() {\n\
+                 let _s = build();\n\
+                 println(1);\n\
+             }",
+        ) {
+            assert_eq!(out, "1\n");
+        }
+    }
+
+    #[test]
     fn e2e_enumerate_loop_body_and_outer_mutations_execute() {
         // B-2026-07-08-5: `for (i, v) in xs.iter().enumerate()` fell through
         // `compile_for`'s dispatch to the silent skip-body arm, so the loop body
