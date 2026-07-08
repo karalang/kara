@@ -1321,6 +1321,32 @@ fn test_main_entry_rejects_non_display_error_type() {
 }
 
 #[test]
+fn test_unit_is_not_display_in_fstring() {
+    // B-2026-07-08-8 residual: interpolating a UNIT value in an f-string
+    // rendered `()` under the interpreter but `0` under codegen — a run-vs-build
+    // divergence. Unit is not Display (Rust has no `Display for ()` either), so
+    // it must be rejected at typecheck, closing the divergence at the source.
+    // The degenerate reachable form is `f"a{{}}b"`, where `{}` parses as an
+    // empty unit block; the explicit form is `f"{()}"`.
+    for src in [
+        "fn main() { let s = f\"x{()}y\"; }",
+        "fn main() { let s = f\"a{{}}b\"; }",
+    ] {
+        let errors = typecheck_errors(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("does not implement Display")),
+            "expected a Display rejection for unit interpolation in {src:?}, got: {errors:?}"
+        );
+    }
+    // A genuinely Display-able interpolation still typechecks, and the
+    // backslash brace-escape (`\\{` / `\\}`) renders literal braces (no interp).
+    typecheck_ok("fn main() { let n = 7; let s = f\"n={n}\"; }");
+    typecheck_ok("fn main() { let s = f\"a\\{\\}b\"; }");
+}
+
+#[test]
 fn test_main_return_contract_does_not_bind_non_entry_functions() {
     // A free function merely *named* differently, or a method named `main`,
     // is not the entry point and is unconstrained.

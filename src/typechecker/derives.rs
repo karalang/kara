@@ -312,8 +312,19 @@ impl<'a> super::TypeChecker<'a> {
             | Type::Float(_)
             | Type::Bool
             | Type::Char
-            | Type::Str
-            | Type::Unit => true,
+            | Type::Str => true,
+            // Unit is NOT Display — displaying `()` is meaningless (Rust has no
+            // `Display for ()` either). Treating it as Display let a unit-typed
+            // f-string interpolation (`f"{()}"`, or the degenerate `f"a{{}}b"`
+            // that parses `{}` as an empty unit block) slip past the
+            // interpolation Display check and then RENDER DIFFERENTLY per
+            // backend — the interpreter prints `()`, codegen prints `0` (the
+            // residual real bug behind B-2026-07-08-8). Rejecting it at
+            // typecheck closes that run-vs-build divergence at the source and
+            // turns the meaningless case into a clear "does not implement
+            // Display" error for every Display context (f-string, `println`,
+            // `to_string`).
+            Type::Unit => false,
             Type::Tuple(elems) => elems.iter().all(|e| self.type_supports_display(e)),
             Type::Array { element, .. } => self.type_supports_display(element),
             Type::Vector { element, .. } => self.type_supports_display(element),
