@@ -5576,11 +5576,22 @@ fn main() {
         // is set) routes to the cancel-exit BB, which now drains the
         // registered defer body.
         //
-        // 10_000 iterations is sized so branch 0 cannot possibly
-        // complete before branch 1 finishes and a mid-branch cancel-
-        // check fires — keeps the test independent of host timing
-        // while staying well under the cargo-test runner's per-test
-        // timeout.
+        // The loop bound is sized for DETERMINISM under parallel test load,
+        // not merely "big enough". The pool always has >= 2 workers
+        // (`resolve_pool_workers().max(2)`), so branch 1 (`fast_err`, one
+        // trivial `Err`) runs concurrently with branch 0 and sets the cancel
+        // flag after ~one scheduler quantum, while branch 0 needs ~one quantum
+        // PER ITERATION. A short loop (the old 10_000) let branch 0 sometimes
+        // finish all its iterations before branch 1's runnable thread got a
+        // CPU slice under heavy oversubscription — the pre-existing flake
+        // (B-2026-07-08-6 investigation). A 1M-iteration ceiling makes that
+        // impossible: fair scheduling cannot starve branch 1's runnable thread
+        // for the multi-second span branch 0 would need to run 1M println's, so
+        // branch 1 always sets the flag first and branch 0 cancels early
+        // (typically after a few hundred iterations). The ceiling is only ever
+        // REACHED if cancel is broken — the regression this test guards — so
+        // the normal (passing) run stays fast; only a genuine failure pays the
+        // full-loop cost.
         let out = run_program(
             r#"
 fn fast_err() -> Result[i64, i64] { Err(99_i64) }
@@ -5590,7 +5601,7 @@ fn main() {
         let _ = {
             defer { println("def-fired-on-cancel"); }
             let mut i = 0_i64;
-            while i < 10000_i64 {
+            while i < 1000000_i64 {
                 println(i);
                 i = i + 1_i64;
             }
@@ -5608,16 +5619,16 @@ fn main() {
                  got first 500 chars:\n{}",
                 &out[..out.len().min(500)],
             );
-            // Sanity-check: branch 0 did NOT run to completion. If it
-            // had, the cancel never fired and the defer drained via
-            // the normal-exit path (which would also have printed
-            // `9999` before the defer's `def-fired-on-cancel` line).
-            // Absence of `9999` proves the cancel-exit was the drain
-            // site.
+            // Sanity-check: branch 0 did NOT run to completion. If it had, the
+            // cancel never fired and the defer drained via the normal-exit path
+            // (which would also have printed the final `999999` before the
+            // defer's `def-fired-on-cancel` line). `999999` cannot appear as a
+            // substring of any smaller printed value (0..999999), so its absence
+            // uniquely proves the cancel-exit was the drain site.
             assert!(
-                !out.contains("9999"),
+                !out.contains("999999"),
                 "branch should have been cancelled before completing all iterations; \
-                 saw `9999` in output (last 200 chars):\n{}",
+                 saw `999999` in output (last 200 chars):\n{}",
                 &out[out.len().saturating_sub(200)..],
             );
         }
@@ -5636,6 +5647,15 @@ fn main() {
         // recognised as an error path — pre-slice-4 (when
         // `emit_branch_cancel_check` called `emit_scope_cleanup`),
         // the errdefer would have been silently swallowed.
+        // 1M-iteration ceiling for determinism under parallel test load — see
+        // the sibling `..._defer_fires_on_cooperative_cancel` for the full
+        // rationale (>= 2 workers → branch 1 sets the cancel flag after ~one
+        // quantum; the large loop guarantees branch 0 can't finish first, so it
+        // always exits via cancel). Here the errdefer is the discriminator on
+        // its own: the branch value is a normal `0_i64` exit, so `errdefer`
+        // (error-path only) fires IFF the cancel-exit path ran — no sentinel
+        // check needed. A short loop let branch 0 sometimes complete NORMALLY,
+        // where the errdefer correctly does NOT fire, flaking this assertion.
         let out = run_program(
             r#"
 fn fast_err() -> Result[i64, i64] { Err(99_i64) }
@@ -5645,7 +5665,7 @@ fn main() {
         let _ = {
             errdefer { println("err-fired-on-cancel"); }
             let mut i = 0_i64;
-            while i < 10000_i64 {
+            while i < 1000000_i64 {
                 println(i);
                 i = i + 1_i64;
             }
