@@ -519,7 +519,7 @@ Note: Core stdlib types (`Option`, `Result`, `Vec`, `String`, `Array[T, N]`) are
 - [ ] `Bytes` type — slice-into-shared-buffer with cheap clone; critical for parser internals, network-protocol code, request-handling perf without per-call allocation.
 
 ### `std.cmp`
-- [ ] `Ordering` enum (`Less`, `Equal`, `Greater`); `min`, `max`, `clamp` free functions.
+- [x] `Ordering` enum (`Less`, `Equal`, `Greater`); `min`, `max`, `clamp` free functions. `Ordering` (plus `is_lt`/`is_le`/`is_gt`/`is_ge`/`is_eq`) lives in `runtime/stdlib/ordering.kara`; `min[T: Ord]` / `max[T: Ord]` / `clamp[T: Ord]` are ordinary generic stdlib free functions in the same file — the first plain (non-intercepted) generic stdlib free fns to reach codegen, monomorphized on demand via a `generic_fns` seed. Ties return the first argument for both `min` and `max`. Works in the interpreter and compiled output (i64 / String / any `Ord` type).
 
 ### `std.hash`
 - [ ] `Hash` trait, `Hasher` interface, default hasher; `#[derive(Hash)]` codegen path (interpreter form already shipped).
