@@ -5825,6 +5825,29 @@ fn validate_wasm_threads_scope(
     }
 }
 
+/// After a `--crate-type staticlib` build, print a one-line note steering
+/// Rust hosts to the cdylib. The thick `.a` bundles the Kāra runtime — a Rust
+/// crate that carries `std` — so a Rust host static-linking it hits a cryptic
+/// consumer-side `duplicate symbol: rust_eh_personality` (+ other std symbols)
+/// with no pointer back to the fix. A `.so`/`.dylib`/`.dll` encapsulates those
+/// internal symbols, so the collision only exists for the static archive. C /
+/// C++ hosts have no `std` to clash with, so the note is scoped to Rust and
+/// printed on stderr (informational, doesn't pollute a `Built:`-parsing pipe).
+///
+/// Only the `--features llvm` build reaches a real library link (the non-llvm
+/// path stubs the codegen), so this is gated to match its call sites.
+#[cfg(feature = "llvm")]
+fn print_staticlib_rust_host_note(kind: NativeCrateType) {
+    if kind == NativeCrateType::StaticLib {
+        eprintln!(
+            "note: for a Rust host, link the cdylib (build with --crate-type cdylib), \
+             not this static archive — the bundled Kāra runtime's `std` symbols \
+             collide with the Rust host's `std` at static-link time. C/C++ hosts \
+             may link either."
+        );
+    }
+}
+
 // CLI dispatch helpers naturally land more flag-shaped arguments
 // than the clippy default; factoring them into a struct here would
 // just move the flag list rather than tighten it.
@@ -6233,6 +6256,7 @@ fn cmd_build(
                     println!("Built: {art_path}");
                 }
             }
+            print_staticlib_rust_host_note(crate_type);
             return;
         }
 
@@ -7721,6 +7745,7 @@ fn run_multi_file_codegen(
                 ),
             };
         }
+        print_staticlib_rust_host_note(crate_type);
         return BuildCodegenStatus::Built {
             exe_path: art_path,
             glue_path: None,

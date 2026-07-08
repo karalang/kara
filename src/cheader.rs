@@ -327,6 +327,14 @@ pub fn emit_c_header(program: &Program, lib_name: &str) -> String {
          *\n\
          * Link: cc your_host.c -l{lib_name} -lpthread -lm -ldl -o your_host\n\
          * (the static archive bundles the Kāra runtime; a cdylib pulls it in too).\n\
+         *\n\
+         * Rust hosts: link the cdylib (.so/.dylib/.dll), NOT the static\n\
+         * archive. The Kāra runtime is a Rust crate that bundles std, so the\n\
+         * .a carries std symbols (rust_eh_personality, allocator shims, ...)\n\
+         * that collide with the Rust host's own std at static-link time. A\n\
+         * shared library encapsulates those internal symbols; only the\n\
+         * exported entry points below are visible. C/C++ hosts have no std to\n\
+         * clash with and may link either artifact.\n\
          */\n"
     ));
     out.push_str(&format!("#ifndef {guard}\n#define {guard}\n\n"));

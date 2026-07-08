@@ -19842,9 +19842,29 @@ fn test_build_crate_type_staticlib_links_from_c_e2e() {
         return;
     }
 
+    // Rust-host std-collision smoothing: a staticlib build must print the
+    // "link the cdylib for a Rust host" note (the .a bundles the runtime's
+    // std, which collides with a Rust host's std at static-link time). The
+    // note is stderr-only so it never pollutes the `Built:` stdout stream.
+    assert!(
+        berr.contains("link the cdylib") && berr.contains("Rust host"),
+        "staticlib build should print the Rust-host cdylib note; stderr:\n{berr}"
+    );
+    let bout = String::from_utf8_lossy(&build.stdout);
+    assert!(
+        !bout.contains("link the cdylib"),
+        "the Rust-host note must be stderr-only, not on stdout; stdout:\n{bout}"
+    );
+
     // The emitted header must declare the exported surface + the struct +
     // the runtime lifecycle prototypes.
     let header_text = std::fs::read_to_string(&header).unwrap();
+    // The header must also carry the Rust-host caveat so it travels with the
+    // artifact for a dev who only reads the `.h`.
+    assert!(
+        header_text.contains("Rust hosts") && header_text.contains("rust_eh_personality"),
+        "header missing Rust-host std-collision caveat:\n{header_text}"
+    );
     assert!(
         header_text.contains("int32_t add(int32_t a, int32_t b);"),
         "header missing add proto:\n{header_text}"
