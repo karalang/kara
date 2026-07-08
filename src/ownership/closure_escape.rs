@@ -100,6 +100,27 @@ impl<'a> super::OwnershipChecker<'a> {
                 ) {
                     continue;
                 }
+                // B-2026-07-08-2 — skip if the captured binding is a
+                // self-contained Copy scalar (`i64`/`f64`/`bool`/`char`
+                // /…). A read-only capture of an owned scalar defaults
+                // to `Ref` mode, but a scalar has no heap payload and no
+                // pointer into the source's storage, so the closure can
+                // hold it BY VALUE — a bitwise copy living in the
+                // closure env — with no borrow of the source binding.
+                // There is therefore nothing to dangle when the closure
+                // escapes (`fn make(k: i64) -> Fn(i64) -> i64 { |x| x + k }`
+                // is sound). Only self-contained scalars qualify: fat
+                // borrows like immutable `Slice[T]` and raw pointers are
+                // `Copy` for move-checking yet still alias storage that
+                // can outlive-fault on escape, so they are NOT exempted
+                // here (they fall through to fire as before).
+                if self
+                    .binding_types
+                    .get(cap_name)
+                    .is_some_and(super::is_copy_type_basic)
+                {
+                    continue;
+                }
                 let mode_str = match mode {
                     OwnershipMode::Ref => "ref",
                     OwnershipMode::MutRef => "mut ref",

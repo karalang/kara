@@ -4929,6 +4929,61 @@ fn step7_owned_capture_clean_escape_does_not_fire() {
 }
 
 #[test]
+fn step7_scalar_ref_capture_escape_does_not_fire() {
+    // B-2026-07-08-2 — a closure that captures a Copy scalar (`i64`)
+    // and is returned must NOT fire E0508. A read-only capture of an
+    // owned scalar defaults to `Ref` mode, but a scalar has no heap
+    // payload: the closure holds it by value (a copy in the env), so
+    // there is no borrow of the source to dangle. `karac run` executes
+    // `make(1)(10) == 11` correctly; `check` must agree.
+    let parsed = parse(
+        "fn make(k: i64) -> Fn(i64) -> i64 {\n\
+             return |x| x + k;\n\
+         }",
+    );
+    let resolved = resolve(&parsed.program);
+    let typed = typecheck(&parsed.program, &resolved);
+    let result = ownershipcheck(&parsed.program, &typed);
+    let e0508s: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| matches!(e.kind, OwnershipErrorKind::RefCaptureEscapesScope))
+        .collect();
+    assert!(
+        e0508s.is_empty(),
+        "scalar (i64) ref capture escape should not fire E0508; got {:?}",
+        e0508s
+    );
+}
+
+#[test]
+fn step7_scalar_ref_capture_escape_variants_do_not_fire() {
+    // Companion to the i64 case: f64/bool/char scalar captures are
+    // equally self-contained and must not fire E0508 on escape, while
+    // a non-Copy struct capture in the same file still fires exactly
+    // once — proving the exemption is scalar-scoped, not a blanket
+    // suppression.
+    let errors = step7_e0508_errors(
+        "fn make_f(k: f64) -> Fn() -> f64 { return || k; }\n\
+         fn make_b(k: bool) -> Fn() -> bool { return || k; }\n\
+         fn make_c(k: char) -> Fn() -> char { return || k; }\n\
+         struct Config { value: i64 }\n\
+         fn make_s(cfg: Config) -> Fn() -> i64 { return || cfg.value; }",
+    );
+    assert_eq!(
+        errors.len(),
+        1,
+        "only the non-Copy struct capture should fire E0508; got {:?}",
+        errors
+    );
+    assert!(
+        errors[0].message.contains("capture of `cfg`"),
+        "the surviving error should be the struct capture; got {:?}",
+        errors[0].message
+    );
+}
+
+#[test]
 fn step7_local_use_does_not_fire() {
     // Closure stays local — invoked inside the function, not
     // returned. No escape, no error. Even though the capture is
