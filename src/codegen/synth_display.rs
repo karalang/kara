@@ -843,6 +843,58 @@ impl<'ctx> super::Codegen<'ctx> {
         false
     }
 
+    /// A field type that occupies exactly ONE payload word, so a struct made of
+    /// them reconstructs from the ≤3 sequential inline-payload words. Scalars
+    /// only — String/str are 3-word `{ptr,len,cap}` values and would overflow.
+    fn is_scalar_word_display_field(te: &TypeExpr) -> bool {
+        if let TypeKind::Path(p) = &te.kind {
+            if let Some(seg) = p.segments.last() {
+                return matches!(
+                    seg.as_str(),
+                    "i8" | "i16"
+                        | "i32"
+                        | "i64"
+                        | "isize"
+                        | "u8"
+                        | "u16"
+                        | "u32"
+                        | "u64"
+                        | "usize"
+                        | "f32"
+                        | "f64"
+                        | "bool"
+                        | "char"
+                );
+            }
+        }
+        false
+    }
+
+    /// Payload types whose Display codegen can reconstruct from the ≤3-word
+    /// inline enum-payload area and render: the `is_inline_displayable_payload`
+    /// set (primitives + String), PLUS a small user struct whose fields are all
+    /// SCALAR (one word each) and number ≤ 3 — `rebuild_value_from_payload_words`
+    /// reconstructs it field-by-field and `emit_struct_debug_display_fn` renders
+    /// it in debug format (B-2026-07-08-18, e.g. `Option[Point]`). A struct with
+    /// a String field (3 words) or > 3 fields overflows the inline area (the
+    /// payload is heap-BOXED), so it stays on the deferred path (a clean error,
+    /// not invalid IR).
+    pub(super) fn is_reconstructable_display_payload(&self, te: &TypeExpr) -> bool {
+        if Self::is_inline_displayable_payload(te) {
+            return true;
+        }
+        if let TypeKind::Path(p) = &te.kind {
+            if let Some(seg) = p.segments.last() {
+                if let Some(field_tes) = self.struct_field_type_exprs.get(seg) {
+                    return !field_tes.is_empty()
+                        && field_tes.len() <= 3
+                        && field_tes.iter().all(Self::is_scalar_word_display_field);
+                }
+            }
+        }
+        false
+    }
+
     pub(super) fn display_mangle_te(te: &TypeExpr) -> String {
         match &te.kind {
             TypeKind::Tuple(elems) if elems.is_empty() => "unit".to_string(),
@@ -935,6 +987,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(seg) = p.segments.last() {
                     if self.enum_layouts.contains_key(seg) {
                         return self.emit_enum_display_fn(seg);
+                    }
+                    // User struct nested in another type's Display (an enum
+                    // payload / collection element): debug/field format,
+                    // matching the interpreter (B-2026-07-08-18). Without this a
+                    // struct-typed field fell through to `emit_display_fn_for_type`
+                    // and panicked ("type_name … not yet supported").
+                    if self.struct_field_names.contains_key(seg) {
+                        return self.emit_struct_debug_display_fn(seg);
                     }
                 }
                 // Primitive (or unsupported path) — fall through to by-name.
@@ -1598,6 +1658,94 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
     }
 
+    /// B-2026-07-08-18: append-form DEBUG renderer for a user struct that
+    /// appears NESTED inside another type's Display — an enum payload
+    /// (Option/Result/user-enum) or a Vec/Map/Set element. Emits `TypeName {
+    /// field: <val>, … }`, recursing per field via
+    /// `emit_display_fn_for_type_expr` (so primitive / String / nested-struct
+    /// fields all render; String fields print UNQUOTED, matching the
+    /// interpreter and the `Vec[String]` path). This matches the INTERPRETER's
+    /// nested-struct rendering, which uses this debug/field format — NOT the
+    /// struct's own `Display` impl (that impl is only the top-level `println(p)`
+    /// spelling). Keeping codegen aligned with the interpreter here avoids
+    /// introducing a new run-vs-build divergence now that `karac run` is
+    /// JIT-default (Slice 6c). The struct value arrives by pointer; fields are
+    /// GEP'd in place. Cached under the struct's own display name — a bare
+    /// struct's Display goes through `compile_struct_display_string` (a distinct
+    /// inline-f-string path), so there is no collision.
+    pub(super) fn emit_struct_debug_display_fn(
+        &mut self,
+        struct_name: &str,
+    ) -> FunctionValue<'ctx> {
+        let type_name = struct_name.to_string();
+        if let Some(&f) = self.display_fn_cache.get(&type_name) {
+            return f;
+        }
+        let fn_name = format!("karac_display_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.display_fn_cache.insert(type_name, f);
+            return f;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let struct_ty = *self
+            .struct_types
+            .get(struct_name)
+            .expect("emit_struct_debug_display_fn: struct type registered");
+        let field_names = self
+            .struct_field_names
+            .get(struct_name)
+            .cloned()
+            .unwrap_or_default();
+        let field_tes = self
+            .struct_field_type_exprs
+            .get(struct_name)
+            .cloned()
+            .unwrap_or_default();
+
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let display_fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let display_fn = self
+            .module
+            .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
+        self.display_fn_cache.insert(type_name, display_fn);
+
+        let entry_bb = self.context.append_basic_block(display_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        self.current_fn = Some(display_fn);
+        let val_ptr = display_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let acc = display_fn.get_nth_param(1).unwrap().into_pointer_value();
+
+        self.disp_append_lit(acc, &format!("{struct_name} {{ "));
+        for (i, (fname, fte)) in field_names.iter().zip(field_tes.iter()).enumerate() {
+            if i > 0 {
+                self.disp_append_lit(acc, ", ");
+            }
+            self.disp_append_lit(acc, &format!("{fname}: "));
+            let field_ptr = self
+                .builder
+                .build_struct_gep(struct_ty, val_ptr, i as u32, "dbg.f")
+                .unwrap();
+            let field_disp = self.emit_display_fn_for_type_expr(fte);
+            self.builder
+                .build_call(field_disp, &[field_ptr.into(), acc.into()], "dbg.fd")
+                .unwrap();
+        }
+        self.disp_append_lit(acc, " }");
+        // Appends may split the current block (buffer grow) — return from
+        // wherever we end up (mirrors the enum/option renderers).
+        self.builder.build_return(None).unwrap();
+
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        display_fn
+    }
+
     /// B-2026-07-08-9: synthesize `void karac_display_Option_<T>(ptr val, ptr acc)`
     /// for a CONCRETE payload type `payload_te`, appending `Some(<T display>)` /
     /// `None` to the String accumulator `acc`. `Option` is a generic built-in,
@@ -1986,13 +2134,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // variable path does — the 4-i64 aggregate reload can't reconstruct a
         // boxed/wide-struct payload.
         let disp = if let Some(pte) = Self::option_payload_te(&full_te) {
-            if !Self::is_inline_displayable_payload(&pte) {
+            if !self.is_reconstructable_display_payload(&pte) {
                 return Ok(None);
             }
             self.emit_option_display_te(&pte)
         } else if let Some((ok_te, err_te)) = Self::result_payload_tes(&full_te) {
-            if !Self::is_inline_displayable_payload(&ok_te)
-                || !Self::is_inline_displayable_payload(&err_te)
+            if !self.is_reconstructable_display_payload(&ok_te)
+                || !self.is_reconstructable_display_payload(&err_te)
             {
                 return Ok(None);
             }

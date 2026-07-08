@@ -2307,6 +2307,41 @@ mod codegen_tests {
     }
 
     #[test]
+    fn e2e_compound_struct_payload_display_matches_interpreter() {
+        // B-2026-07-08-18: a struct payload nested in a container's Display
+        // (`Option[P]` / `Result[P,E]` / `Vec[P]` / a user enum) rendered a
+        // codegen error (or crash) while the interpreter rendered it in DEBUG
+        // format `P { field: val, … }` (NOT the struct's own Display impl — that
+        // is only the top-level `println(p)` spelling). Codegen now emits the
+        // same debug format for a small all-scalar-field struct (≤3 words,
+        // reconstructable from the inline enum-payload area), matching the
+        // interpreter now that `karac run` is JIT-default (Slice 6c). Bare
+        // `println(p)` still uses the Display impl — both backends agree.
+        if let Some(out) = run_program(
+            "struct P { x: i64, y: i64 }\n\
+             impl Display for P { fn to_string(ref self) -> String { f\"({self.x},{self.y})\" } }\n\
+             fn main() {\n\
+                 let p = P { x: 3, y: 4 };\n\
+                 println(p);\n\
+                 let o: Option[P] = Some(P { x: 3, y: 4 });\n\
+                 println(o);\n\
+                 let n: Option[P] = None;\n\
+                 println(n);\n\
+                 let r: Result[P, i64] = Ok(P { x: 1, y: 2 });\n\
+                 println(r);\n\
+                 let v = [P { x: 5, y: 6 }];\n\
+                 println(v);\n\
+                 println(f\"got {o}\");\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "(3,4)\nSome(P { x: 3, y: 4 })\nNone\nOk(P { x: 1, y: 2 })\n[P { x: 5, y: 6 }]\ngot Some(P { x: 3, y: 4 })\n"
+            );
+        }
+    }
+
+    #[test]
     fn e2e_map_field_constructed_in_associated_fn() {
         // B-2026-07-08-12: a `Map`/`Set`-typed struct field initialized with
         // `Map.new()` inside an associated constructor (`Cache.new()`) emitted

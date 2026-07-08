@@ -1217,15 +1217,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     // pointer). Compound payloads fall through to the generic
                     // display error, unchanged.
                     if let Some(pte) = Self::option_payload_te(te) {
-                        if Self::is_inline_displayable_payload(&pte) {
+                        if self.is_reconstructable_display_payload(&pte) {
                             self.var_option_payload_te.insert(var_name.to_string(), pte);
                         }
                     }
                 }
                 Some("Result") => {
                     if let Some((ok, err)) = Self::result_payload_tes(te) {
-                        if Self::is_inline_displayable_payload(&ok)
-                            && Self::is_inline_displayable_payload(&err)
+                        if self.is_reconstructable_display_payload(&ok)
+                            && self.is_reconstructable_display_payload(&err)
                         {
                             self.var_result_payload_te
                                 .insert(var_name.to_string(), (ok, err));
