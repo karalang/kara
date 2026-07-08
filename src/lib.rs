@@ -5,6 +5,7 @@ pub mod build_cache;
 pub mod call_graph;
 pub mod catalog;
 pub mod cfg;
+pub mod cheader;
 // CLI / REPL / multi-file driver surfaces are native-only — they reach
 // `std::fs`, `std::process`, `rustyline`, and `ureq`, none of which have
 // a wasm32 surface. The browser playground (tracker line 703) consumes

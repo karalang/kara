@@ -71,6 +71,29 @@ pub enum BindingsMode {
     None,
 }
 
+// ── Native crate type (producer-mode library artifacts) ─────────
+
+/// `--crate-type bin|staticlib|cdylib` — native artifact-kind selector
+/// for the *producer* half of additive interop (`design.md § Exported C
+/// ABI`; [`spikes/additive-interop-adoption.md`] Slice 2). `bin` (the
+/// default) builds an executable as always; `staticlib` / `cdylib` build
+/// a linkable library exposing the program's `pub extern "C" fn` surface
+/// with a C ABI, so a foreign C / Rust host can `#include` the emitted
+/// header and link the Kāra kernel in. Native targets only — a wasm
+/// build has its own export surface (`--bindings`), so the flag is
+/// rejected there rather than silently ignored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeCrateType {
+    /// Executable — the historical `karac build` behavior.
+    Bin,
+    /// `.a` static archive (thick: the runtime archive is bundled in, so
+    /// the consumer links with no karac toolchain present).
+    StaticLib,
+    /// `.so` (Linux) / `.dylib` (macOS) shared library (the runtime is
+    /// statically pulled in; on macOS the install-name is `@rpath`-based).
+    CDylib,
+}
+
 // ── Subcommands ─────────────────────────────────────────────────
 
 #[derive(Debug)]
@@ -256,6 +279,19 @@ pub enum Command {
         /// *checks*, not turning the optimizer on. Composes with the
         /// `KARAC_STRIP_CONTRACTS` env knob (OR): either strips.
         release: bool,
+        /// `--crate-type=bin|staticlib|cdylib` — native artifact kind
+        /// (`design.md § Exported C ABI`, additive-interop Slice 2).
+        /// Default [`NativeCrateType::Bin`]. `staticlib`/`cdylib` route
+        /// the `pub extern "C" fn` surface into a linkable library +
+        /// emitted `.h`; rejected on wasm targets (which use `--bindings`).
+        crate_type: NativeCrateType,
+        /// `-o <path>` / `--out <path>` — explicit output path for the
+        /// build artifact. For a library build (`--crate-type
+        /// staticlib/cdylib`) this names the `.a`/`.so`/`.dylib`; when
+        /// omitted the artifact defaults to `lib<stem>.<ext>` in CWD (a
+        /// distinct name from the `<stem>` executable, so a library build
+        /// never clobbers a stray binary — the producer-mode gotcha).
+        out_path: Option<String>,
         /// See [`Command::Run::lint_overrides`].
         lint_overrides: crate::lints::CliLintOverrides,
     },
@@ -700,6 +736,8 @@ pub fn execute(cmd: Command) {
             wasm_threads,
             monomorphization_budget,
             release,
+            crate_type,
+            out_path,
             lint_overrides,
         } => cmd_build(
             &file,
@@ -716,6 +754,8 @@ pub fn execute(cmd: Command) {
             wasm_threads,
             monomorphization_budget,
             release,
+            crate_type,
+            out_path.as_deref(),
             lint_overrides,
         ),
         Command::BuildProject {
@@ -3170,6 +3210,9 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 }
                 crate::effectchecker::EffectErrorKind::ExternCUnwindRequiresPanics => {
                     ("E0413", "error")
+                }
+                crate::effectchecker::EffectErrorKind::ExternExportSuspendsUnsupported => {
+                    ("E0414", "error")
                 }
                 crate::effectchecker::EffectErrorKind::GpuEffectViolation => ("E0802", "error"),
             };
@@ -5674,6 +5717,8 @@ fn cmd_build(
     wasm_threads: bool,
     monomorphization_budget: crate::monomorphization::MonomorphizationBudget,
     release: bool,
+    crate_type: NativeCrateType,
+    out_path: Option<&str>,
     lint_overrides: crate::lints::CliLintOverrides,
 ) {
     // Single-file mode runs no dep resolution and reaches no network surface,
@@ -5720,6 +5765,21 @@ fn cmd_build(
             })
         }));
         let is_wasm = build_target == "wasm_wasi" || build_target == "wasm_browser";
+        // Library-artifact producer mode (additive-interop Slice 2;
+        // design.md § Exported C ABI) is native-only. A wasm build already
+        // has its own producer surface — module exports selected by
+        // `--bindings` (`crate::wasm_exports`) — so a `--crate-type
+        // staticlib/cdylib` there is a category error, not a silent no-op.
+        // Reject before any pipeline work (the `--target-cpu` fail-fast
+        // posture).
+        if is_wasm && crate_type != NativeCrateType::Bin {
+            eprintln!(
+                "error: --crate-type staticlib/cdylib is a native-only producer mode; \
+                 for a wasm library surface use `--target={build_target}` with `--bindings` \
+                 (the module-export path). See design.md § Exported C ABI."
+            );
+            process::exit(1);
+        }
         // External native-library linking (`kara.toml` `[link]` table) —
         // native targets only (wasm-ld ignores it). Manifest-only, no
         // CLI/env tier; discovered by the same walk-up as the CPU/features
@@ -5943,6 +6003,84 @@ fn cmd_build(
             eprintln!("error: codegen failed: {e}");
             process::exit(1);
         }
+
+        // Library-artifact producer mode (additive-interop Slice 2 + 3;
+        // design.md § Exported C ABI). The emitted object carries the
+        // program's `pub extern "C" fn` surface with External linkage +
+        // bare C symbols; archive/link it into a `.a`/`.so`/`.dylib` and
+        // emit the companion C header, instead of linking an executable.
+        // Native-only (guaranteed: the wasm × crate-type combination was
+        // rejected above). Returns from `cmd_build` — the wasm/exe link
+        // tail below is `Bin`-only.
+        if crate_type != NativeCrateType::Bin {
+            // Export-boundary effect violations are FATAL for a library
+            // artifact — the exported C surface IS the deliverable, so
+            // unlike an executable (where native effect findings are
+            // non-fatal, the long-standing build/check asymmetry) a
+            // suspending export must stop the build rather than ship a
+            // library that misbehaves on a bare foreign thread. (The
+            // C-unwind-export case is already caught earlier at codegen.)
+            if let Some(effects) = pipeline.effects.as_ref() {
+                let export_errs: Vec<_> = effects
+                    .errors
+                    .iter()
+                    .filter(|e| e.kind == EffectErrorKind::ExternExportSuspendsUnsupported)
+                    .collect();
+                if !export_errs.is_empty() {
+                    for e in &export_errs {
+                        eprintln!(
+                            "error[E0414]: {}:{}:{}: {}",
+                            filename, e.span.line, e.span.column, e.message
+                        );
+                    }
+                    let _ = std::fs::remove_file(&obj_path);
+                    process::exit(1);
+                }
+            }
+            let lib_kind = match crate_type {
+                NativeCrateType::StaticLib => crate::codegen::NativeLibKind::StaticLib,
+                NativeCrateType::CDylib => crate::codegen::NativeLibKind::CDylib,
+                NativeCrateType::Bin => unreachable!(),
+            };
+            // Default artifact path: `lib<stem>.<ext>` in CWD — a name
+            // distinct from the `<stem>` executable, so a library build
+            // never clobbers a stray binary (the producer-mode gotcha).
+            // `-o <path>` overrides verbatim.
+            let default_name = format!("lib{exe_name}{}", lib_kind.artifact_extension());
+            let art_path = out_path.map(str::to_string).unwrap_or(default_name);
+            if let Err(e) =
+                crate::codegen::link_native_library(&obj_path, &art_path, lib_kind, exe_name)
+            {
+                eprintln!("error: link failed: {e}");
+                let _ = std::fs::remove_file(&obj_path);
+                process::exit(1);
+            }
+            let _ = std::fs::remove_file(&obj_path);
+            // Emit the companion C header next to the artifact (Slice 3):
+            // `<artifact-dir>/lib<stem>.h`. `--no-header` is a follow-up;
+            // at this slice the header always rides along.
+            let header_path = std::path::Path::new(&art_path)
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .map(|dir| dir.join(format!("lib{exe_name}.h")))
+                .unwrap_or_else(|| std::path::PathBuf::from(format!("lib{exe_name}.h")));
+            let header = crate::cheader::emit_c_header(&pipeline.parsed.program, exe_name);
+            match std::fs::write(&header_path, header) {
+                Ok(()) => {
+                    println!("Built: {art_path}");
+                    println!("Built: {}", header_path.display());
+                }
+                Err(e) => {
+                    eprintln!(
+                        "warning: library `{art_path}` built, but writing the C header to {} failed: {e}",
+                        header_path.display()
+                    );
+                    println!("Built: {art_path}");
+                }
+            }
+            return;
+        }
+
         // For embedded component bindings, wasm-ld's output is an
         // intermediate — link the C-ABI core module to a scratch path,
         // then lift it into the single component at `exe_path` below. The
@@ -6172,6 +6310,11 @@ fn cmd_build(
         // non-llvm fallback doesn't reach — accepted-but-inert, the
         // `--bindings` posture.
         let _ = wasm_threads;
+        // `--crate-type staticlib/cdylib` + `-o` drive the producer-mode
+        // library link path, which rides the llvm build — accepted-but-
+        // inert on the non-llvm check fallback.
+        let _ = crate_type;
+        let _ = out_path;
         eprintln!("note: karac build requires the llvm feature; falling back to type check");
         cmd_check(
             filename,

@@ -388,6 +388,8 @@ fn parse_build_command(args: &[String]) -> Command {
     let mut wasm_threads = false;
     let mut monomorphization_budget = crate::monomorphization::MonomorphizationBudget::default();
     let mut release = false;
+    let mut crate_type = crate::cli::NativeCrateType::Bin;
+    let mut out_path: Option<String> = None;
     let mut lint_overrides = crate::lints::CliLintOverrides::default();
     let mut i = 2usize;
     while i < args.len() {
@@ -515,6 +517,32 @@ fn parse_build_command(args: &[String]) -> Command {
             }
             bindings = Some(parse_bindings_value(&args[i + 1]));
             i += 1;
+        } else if let Some(rest) = arg.strip_prefix("--crate-type=") {
+            // `--crate-type=bin|staticlib|cdylib` — native artifact kind
+            // (additive-interop Slice 2; design.md § Exported C ABI).
+            crate_type = parse_crate_type_value(rest);
+        } else if arg == "--crate-type" {
+            // Space-separated form, mirroring `--target <triple>`.
+            if i + 1 >= args.len() {
+                eprintln!("error: --crate-type requires a value. Use bin, staticlib, or cdylib.");
+                process::exit(1);
+            }
+            crate_type = parse_crate_type_value(&args[i + 1]);
+            i += 1;
+        } else if arg == "-o" || arg == "--out" {
+            // Spaced form `-o <path>` / `--out <path>` (mirrors `cc -o`).
+            if i + 1 >= args.len() || args[i + 1].trim().is_empty() {
+                eprintln!("error: {arg} requires an output path value");
+                process::exit(1);
+            }
+            out_path = Some(args[i + 1].clone());
+            i += 1;
+        } else if let Some(rest) = arg.strip_prefix("--out=") {
+            if rest.trim().is_empty() {
+                eprintln!("error: --out requires a non-empty output path");
+                process::exit(1);
+            }
+            out_path = Some(rest.to_string());
         } else if let Some(rest) = arg.strip_prefix("--monomorphization-budget=") {
             // `--monomorphization-budget=warn:N,error:M` (single-file only,
             // v1.x). Reads the same instantiation table as `karac query
@@ -557,6 +585,8 @@ fn parse_build_command(args: &[String]) -> Command {
             wasm_threads,
             monomorphization_budget,
             release,
+            crate_type,
+            out_path,
             lint_overrides,
         },
         None => {
@@ -567,6 +597,25 @@ fn parse_build_command(args: &[String]) -> Command {
             if monomorphization_budget.is_enabled() {
                 eprintln!(
                     "error: --monomorphization-budget is only supported in single-file build (v1.x); project-mode support is a follow-up"
+                );
+                process::exit(1);
+            }
+            // Library-artifact producer mode (additive-interop Slice 2) is
+            // single-file only at this slice — a project `[lib]` table
+            // (manifest-driven export set + artifact name) is the natural
+            // project-mode home and is a follow-up. Reject loudly rather
+            // than silently build an executable the user did not ask for.
+            if crate_type != crate::cli::NativeCrateType::Bin {
+                eprintln!(
+                    "error: --crate-type staticlib/cdylib is only supported in single-file build at this slice; \
+                     project-mode library artifacts (a manifest `[lib]` table) are a follow-up. \
+                     Pass the source file explicitly: `karac build <file>.kara --crate-type ...`"
+                );
+                process::exit(1);
+            }
+            if out_path.is_some() {
+                eprintln!(
+                    "error: -o/--out is only supported in single-file build; project mode writes to `dist/`"
                 );
                 process::exit(1);
             }
@@ -591,6 +640,35 @@ fn parse_build_command(args: &[String]) -> Command {
                 wasm_threads,
                 release,
             }
+        }
+    }
+}
+
+/// Parse a `--crate-type` value (additive-interop Slice 2; design.md §
+/// Exported C ABI). Closed set — `bin` (default, executable),
+/// `staticlib` (`.a`), `cdylib` (`.so`/`.dylib`). `lib` / `rlib` /
+/// `dylib` (Rust's Kāra-less crate kinds) are intentionally absent — the
+/// only library shapes with a stable cross-language contract are the C
+/// ones. An unknown value is a hard error listing the set; `help` prints
+/// it and exits 0 (static set — resolves at parse time).
+fn parse_crate_type_value(value: &str) -> crate::cli::NativeCrateType {
+    use crate::cli::NativeCrateType;
+    match value.trim() {
+        "bin" => NativeCrateType::Bin,
+        "staticlib" => NativeCrateType::StaticLib,
+        "cdylib" => NativeCrateType::CDylib,
+        "help" => {
+            println!("Available --crate-type values:");
+            println!("  bin         executable (default)");
+            println!("  staticlib   C-ABI static library (.a) + emitted C header");
+            println!("  cdylib      C-ABI shared library (.so/.dylib) + emitted C header");
+            process::exit(0);
+        }
+        other => {
+            eprintln!(
+                "error: unknown --crate-type value '{other}'. Use bin, staticlib, or cdylib (or `help` to list them)."
+            );
+            process::exit(1);
         }
     }
 }

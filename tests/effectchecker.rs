@@ -4063,6 +4063,43 @@ fn test_receiver_recv_infers_suspends() {
 }
 
 #[test]
+fn test_extern_c_export_suspends_rejected() {
+    // Producer-mode export boundary (additive-interop Slice 3½; design.md
+    // § Exported C ABI): a `pub extern "C" fn` whose body suspends (here
+    // via `Receiver.recv()`) cannot be exported to C — the v1 boundary is
+    // synchronous-only. E0414 / ExternExportSuspendsUnsupported.
+    let errors = effectcheck_errors(
+        "pub extern \"C\" fn drain(r: Receiver[i64]) -> i64 {
+             r.recv()
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::ExternExportSuspendsUnsupported),
+        "Expected ExternExportSuspendsUnsupported for a suspending extern export, got: {:?}",
+        errors.iter().map(|e| &e.kind).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_extern_c_export_blocking_is_allowed() {
+    // `blocks` is fine at the C-export boundary — FFI calls run on real OS
+    // threads and a blocking export just occupies its caller's thread. Only
+    // `suspends` (which needs a Kāra scheduler to yield to) is rejected. A
+    // pure-compute exported fn must not trip the suspends rule.
+    let result = effectcheck_all("pub extern \"C\" fn add(a: i32, b: i32) -> i32 { a + b }");
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::ExternExportSuspendsUnsupported),
+        "a non-suspending extern export must not trip the suspends rule, got: {:?}",
+        result.errors.iter().map(|e| &e.kind).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn test_pub_fn_calling_vec_new_infers_allocates_but_needs_no_declaration() {
     // `allocates(Heap)` is the v1 SUBSTRATE effect (design.md § Effect
     // Substrate): inferred on any allocating function, but default-permitted

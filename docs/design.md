@@ -12653,21 +12653,19 @@ The governing constraint is **honesty about the ABI**: C is the only durable cro
 
 ### The exported surface — discovery
 
-The public C surface of a Kāra library is **every `pub extern "C" fn` definition carrying `#[unsafe(no_mangle)]`** — a function with a *body* (a definition, not an `unsafe extern { }` import), a C ABI, `pub` visibility, and a stable bare symbol name:
+The public C surface of a Kāra library is **every `pub extern "C" fn` definition** — a function with a *body* (a definition, not an `unsafe extern { }` import), a C ABI, and `pub` visibility:
 
 ```kara
-#[unsafe(no_mangle)]
 pub extern "C" fn saxpy(n: i64, a: f32, x: *const f32, y: *mut f32) with writes(Buffer) {
     // hot parallel kernel — the reason C is calling into Kāra
     ...
 }
 ```
 
-Each of the three markers is load-bearing, and the discovery rule reuses machinery that already exists:
+Both markers are load-bearing, and the discovery rule reuses machinery that already exists:
 
 - **`pub`** puts the function in the external API (the same `pub`-crosses-the-package-boundary tier that governs [effect stability](#effect-inference-and-boundaries)) and drives `Linkage::External` in codegen, so the symbol survives dead-code elimination — the same mechanism WASM entry-point discovery ([`crate::wasm_exports`](#entry-point-discovery)) relies on.
-- **`extern "C"`** selects the C calling convention. Note the asymmetry documented at [`#[unsafe(no_mangle)]` vs ABI](#unsafeno_mangle-vs-abi): `extern "C"` sets the *ABI* but Kāra still *mangles the symbol name* by default.
-- **`#[unsafe(no_mangle)]`** is therefore required to get the bare, stable C symbol a foreign `#include`r links against. It is not redundant with `extern "C"` — one controls ABI, the other controls the name. The `unsafe` wrap carries the standard no-mangle obligation (the author asserts the symbol name collides with no other symbol in the final binary).
+- **`extern "C"`** selects the C calling convention *and*, today, the C symbol name: Kāra does not yet name-mangle (`add_function` uses the bare source name), so a `pub extern "C" fn foo` is emitted as the bare symbol `foo`. **`#[unsafe(no_mangle)]` is the forward-compatible idiom** — it is not required today, but once name-mangling lands (design.md [`#[unsafe(no_mangle)]` vs ABI](#unsafeno_mangle-vs-abi)) it becomes the way to pin the bare C symbol, so library authors should write it. The emitter and codegen both key on `pub extern "C"`, independent of the attribute.
 
 Discovery is **language-driven, not manifest-driven** — mirroring WASM, where the surface is the set of tagged `pub fn`s, not a list in `Kara.toml`. This keeps a single source of truth: the export set is visible at the definition site. The manifest `[lib]` table (below) carries *artifact metadata* (name, default kind), **not** an export list — there is no second place to keep in sync. `main` is never an export; a library artifact has no entry point.
 
@@ -12714,6 +12712,8 @@ void karac_runtime_shutdown(void);  /* drains runtime-owned tasks; call at host 
 ```
 
 For a pure-compute kernel with no `par {}` / `spawn`, `init` is a no-op beyond arming the allocator, but it is still required so the alloc/RC surface is live before any exported call boxes a value.
+
+**A Rust host must link the `cdylib`, not the `staticlib`.** The runtime is itself a Rust crate that bundles `std`, so the thick `.a` carries std symbols (`rust_eh_personality`, allocator shims, the panic runtime). A *C* host has no `std` of its own and links the archive cleanly — but a *Rust* host's own `std` provides those same symbols, and static-linking both is a duplicate-symbol error. The `.so`/`.dylib` encapsulates the runtime's internal symbols (only the exported `pub extern "C"` surface + the lifecycle entries are dynamic), so a Rust host links it without collision. The rule: **C hosts, either artifact; Rust hosts, the shared library.** The worked demo — the same kernel linked into a C program *and* a Rust program — is [`examples/interop/`](../examples/interop/).
 
 ### Build mode and header emission (surface)
 

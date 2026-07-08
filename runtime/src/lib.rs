@@ -41,6 +41,7 @@ mod emutls;
 pub mod event_loop;
 mod fatal;
 mod file;
+mod lifecycle;
 // GPU compute spine — phase-10 GPU codegen spike slice-0a. Opt-in only.
 #[cfg(feature = "gpu")]
 mod gpu;
@@ -109,6 +110,13 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     // (`karac_alloc_fallible`) and the panicking collection methods
     // (`karac_alloc_or_panic`).
     keep!(alloc::karac_alloc_fallible, alloc::karac_alloc_or_panic,);
+    // Producer-mode runtime lifecycle (additive-interop Slice 2) —
+    // `karac_runtime_init` / `karac_runtime_shutdown`, the two entry
+    // points the emitted C header surfaces for library-artifact hosts.
+    keep!(
+        lifecycle::karac_runtime_init,
+        lifecycle::karac_runtime_shutdown,
+    );
     // Map runtime (`runtime/src/map.rs`).
     keep!(
         map::karac_map_new,

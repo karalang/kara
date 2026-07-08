@@ -1,0 +1,44 @@
+// Additive interop — a Kāra kernel built as a linkable C-ABI library.
+//
+// This is the *producer* half of the adoption story (design.md § Exported
+// C ABI): write the hot/parallel kernel in Kāra, build it as a `.a`/`.so`
+// with an emitted C header, and link it into an existing C or Rust program
+// that keeps everything else. Nothing here is a `main` — a library artifact
+// has no entry point.
+//
+// Build:
+//   karac build kernel.kara --crate-type staticlib   # → libkernel.a + libkernel.h
+//   karac build kernel.kara --crate-type cdylib       # → libkernel.so + libkernel.h
+//
+// The exported surface is every `pub extern "C" fn` (unmangled bare C
+// symbols). The type mapping is the honest v1 set: primitives and
+// `#[repr(C)]` structs cross transparently; anything else would cross as
+// an opaque handle.
+
+#[repr(C)]
+pub struct Stats { sum: f64, count: i64 }
+
+// Simple scalar export.
+pub extern "C" fn add(a: i32, b: i32) -> i32 { a + b }
+
+// A little real work — iterative Fibonacci.
+pub extern "C" fn fib(n: i64) -> i64 {
+    if n < 2 { return n; }
+    let mut a = 0;
+    let mut b = 1;
+    let mut i = 2;
+    while i <= n {
+        let c = a + b;
+        a = b;
+        b = c;
+        i = i + 1;
+    }
+    b
+}
+
+// A `#[repr(C)]` struct crosses the boundary by value — the emitted header
+// declares `struct Stats { double sum; int64_t count; }`.
+pub extern "C" fn stats_mean(s: Stats) -> f64 {
+    if s.count == 0 { return 0.0; }
+    s.sum / (s.count as f64)
+}

@@ -266,6 +266,16 @@ pub enum EffectErrorKind {
     /// design.md § Panic Semantics at the FFI Boundary, case 2
     /// (`E_EXTERN_C_UNWIND_REQUIRES_PANICS`).
     ExternCUnwindRequiresPanics,
+    /// Producer-mode export boundary (additive-interop Slice 3½;
+    /// design.md § Exported C ABI): a `pub extern "C"` / `"C-unwind"`
+    /// function definition — a body callable from C — whose effect set
+    /// contains `suspends`. A C caller drives no Kāra scheduler, so a
+    /// suspending export cannot run on a bare foreign thread; the v1
+    /// C-export boundary is synchronous-only. Fires regardless of the
+    /// `public_effects` policy, like the C-unwind rule — the boundary
+    /// constraint is about the ABI, not the annotation posture
+    /// (`E_EXPORT_SUSPENDS_UNSUPPORTED`).
+    ExternExportSuspendsUnsupported,
     /// FE-4 — a function reachable from a `#[gpu]` root performs an effect
     /// forbidden in the GPU subset: `panics` (incl. `todo()`/`unreachable()`),
     /// `allocates(Heap)`, channel `sends`/`receives`, or an I/O
@@ -996,6 +1006,7 @@ impl<'a> EffectChecker<'a> {
         self.check_contract_purity();
         self.verify_declarations();
         self.verify_extern_export_panics();
+        self.verify_extern_export_no_suspends();
         self.verify_pub_fn_no_synthetic_resource();
         self.verify_impl_trait_ceilings();
         self.verify_trait_default_bodies();

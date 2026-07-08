@@ -1,13 +1,17 @@
 # Spike: Additive interop — Kāra as a component you add, not a rewrite you commit to
 
-**Status:** OPEN — Slices 0–1 landed (2026-07-08): framing settled + the export-ABI design fork written down + the graduating criterion met. Slices 2–5 (the code) are now `[ ]` tracker entries. The *consume* half already ships and is load-bearing; the remaining work is the *producer* half.
+**Status:** OPEN — Slices 0–3, 3½, and 5 landed (2026-07-08): framing + export-ABI spec + native library build mode (`.a`/`.so`/`.dylib`) + C-header emitter + producer-side effect policing + a C-and-Rust proof-point demo all shipped. **Slice 4 (`forget` / ownership handoff) is the one remaining piece and is deliberately blocked** on the ownership-mechanization spike (its slice-2 model must land first). The *consume* half already shipped; the *producer* half is now real except for the ownership handoff.
 **Decision date:** 2026-07-06. **Owner call:** worth doing, but scope honestly — the mechanism mostly exists, one claim in the pitch is physically un-cashable, and the genuine gap is the producer direction + a proof-point.
 
 **Progress (2026-07-08):**
-- **Slice 0 (framing) — DONE.** The two corrections (consume=done/produce=gap; Rust-via-C-shim) are recorded below and are now the do-not-rescope reference the Phase-8.5 entries cite.
-- **Slice 1 (export-ABI spec) — DONE.** Written as [`design.md § Exported C ABI`](../design.md#exported-c-abi): export surface = `pub extern "C" fn` + `#[unsafe(no_mangle)]` (language-driven discovery, mirroring WASM); type mapping = primitives + `#[repr(C)]` structs transparent, everything else a Kāra-owned opaque handle (boxing convention, `free()` forbidden); effect contract = producer-side effects are KNOWN (header states them), `panics` export policing extended from the existing `extern "C-unwind"` rule, `suspends` exports rejected (synchronous-only v1 boundary); plus the runtime-init contract and the not-self-contained caveat.
-- **Graduating criterion — MET.** Slices 2–5 filed as `[ ]` entries in [`roadmap.md` Phase 8.5 Track 2 → Tier 5](../roadmap.md#phase-85-v1-ship-readiness) (Library-artifact producer mode), each citing the consume-side L149/L379 `[x]` baseline as do-not-rescope.
-- **Remaining:** Slices 2 (build mode), 3 (header emitter), 4 (`forget` / ownership handoff — sequenced after ownership-mechanization slice 2), 5 (proof-point demo) — all code, all gated on the still-open v1-vs-v1.x owner question.
+- **Slice 0 (framing) — DONE.** The two corrections (consume=done/produce=gap; Rust-via-C-shim) are recorded below and are the do-not-rescope reference the Phase-8.5 entries cite.
+- **Slice 1 (export-ABI spec) — DONE.** [`design.md § Exported C ABI`](../design.md#exported-c-abi): export surface = `pub extern "C" fn` (language-driven discovery, mirroring WASM; `#[unsafe(no_mangle)]` is the forward-compat idiom, not required today since Kāra doesn't yet mangle); type mapping = primitives + `#[repr(C)]` structs transparent, everything else a Kāra-owned opaque handle; effect contract = producer-side effects are KNOWN; runtime-init contract + not-self-contained caveat.
+- **Slice 2 (native library build mode) — DONE.** `karac build --crate-type staticlib` (→ thick `.a`, runtime bundled via `ar -M`/`libtool`) and `--cdylib` (→ `.so`/`.dylib`, `cc -shared`/`-dynamiclib`, runtime lifecycle forced in via `-u`, macOS `@rpath` install-name). `-o`/`--out` output path; default `lib<stem>.<ext>` so a lib build never clobbers a stray exe. `src/codegen/driver.rs::link_native_library`; CLI in `src/cli/args.rs` + `cmd_build`. Wasm × crate-type rejected. Runtime lifecycle no-ops added (`runtime/src/lifecycle.rs`).
+- **Slice 3 (C-header emitter) — DONE.** `src/cheader.rs` (plain data, non-llvm): include guard + `<stdint.h>`/`<stddef.h>` + `extern "C"` guard + `karac_runtime_init/shutdown` + `#[repr(C)]` struct defs (dependency-ordered) + one `@effects`-annotated prototype per export + `KaraHandle` opaque typedef when needed. 6 unit tests.
+- **Slice 3½ (producer effect contract) — DONE.** `suspends` exports rejected (E0414, `verify_extern_export_no_suspends` — sibling of the existing C-unwind rule; fatal for library builds); `panics` auto-abort + `extern "C-unwind"` rejection were already in codegen. 2 effect tests.
+- **Slice 5 (proof-point) — DONE.** [`examples/interop/`](../../examples/interop/): the same kernel linked into a C host (staticlib) *and* a Rust host (cdylib), with a working recipe. E2E test `test_build_crate_type_staticlib_links_from_c_e2e` in `tests/cli.rs` (C links the `.a` with no karac toolchain present). **Finding:** a Rust host must link the *cdylib*, not the staticlib — the runtime bundles `std`, so a `.a` collides on `rust_eh_personality` etc.; the `.so` encapsulates them. Documented in the spec + example.
+- **Slice 4 (`forget` / ownership handoff) — BLOCKED, not started.** Hard dependency on the ownership-mechanization spike's slice-2 model (the export boundary is a move *out* of Kāra's ownership universe). The spec fixes the *convention* (opaque + Kāra-owned destructor, C `free()` forbidden); the *mechanism* waits. This is the honest stopping point.
+- **Graduating criterion — MET + advanced.** Slices 2/3/3½/5 are `[x]` in [`roadmap.md` Phase 8.5 Track 2 → Tier 5](../roadmap.md#phase-85-v1-ship-readiness); Slice 4 stays `[ ]`.
 
 ---
 
@@ -79,17 +83,17 @@ Answer the open questions *before* building:
 
 *Output: a written export-ABI spec (`design.md § Exported C ABI`).*
 
-**Slice 2 — native library-artifact build mode (the core capability).**
-`karac build --crate-type staticlib` (→ `.a`) and `--cdylib` (→ `.so`/`.dylib`), routing the Slice-1 exported surface through the existing native link path with external linkage. Reuse the runtime-archive location logic already in `driver.rs`. This is the "produce a `.a`" half.
+**Slice 2 — native library-artifact build mode (the core capability). ✅ DONE (2026-07-08).**
+`karac build --crate-type staticlib` (→ `.a`) and `--cdylib` (→ `.so`/`.dylib`), routing the Slice-1 exported surface through the native link path with external linkage. Reuses `driver.rs` runtime-archive location logic. *Landed: `link_native_library` (thick archive via `ar -M`/`libtool`; shared lib via `cc -shared`/`-dynamiclib` with `@rpath` install-name + forced-in lifecycle symbols). CLI `--crate-type` / `-o`. Wasm × crate-type rejected.*
 
-**Slice 3 — C-header emitter (the "clean" in "cleanly").**
-Emit a `.h` for the exported surface (the cbindgen analogue) so a foreign caller `#include`s it instead of hand-transcribing signatures. Scoped to the Slice-1 type-mapping. This is what makes the producer direction *ergonomic* rather than merely *possible*.
+**Slice 3 — C-header emitter (the "clean" in "cleanly"). ✅ DONE (2026-07-08) — `src/cheader.rs`.**
+Emits a `.h` for the exported surface (the cbindgen analogue) so a foreign caller `#include`s it. Scoped to the Slice-1 type-mapping. *Landed: plain-data emitter (non-llvm), guard + includes + `extern "C"` wrapper + lifecycle protos + dependency-ordered `#[repr(C)]` structs + `@effects`-annotated prototypes + `KaraHandle` opaque typedef.*
 
-**Slice 4 — ownership handoff across the boundary (the soundness fork).**
-Build `forget` (roadmap L516) and specify who frees what: Kāra allocates a `Vec`/`String` and hands it to C — either C calls a Kāra-provided `karac_free_*`, or the value crosses as an opaque handle carrying a destructor export. **This is where this spike touches the ownership-mechanization spike** — the export boundary is a *move out of the Kāra ownership universe*, and that spike's model (its slice 2) must state the transition or the two specs will disagree. Sequence Slice 4 *after* ownership mechanization's slice 2 if both run.
+**Slice 4 — ownership handoff across the boundary (the soundness fork). ⛔ BLOCKED — not started.**
+Build `forget` (roadmap L516) and specify who frees what: Kāra allocates a `Vec`/`String` and hands it to C — either C calls a Kāra-provided `karac_free_*`, or the value crosses as an opaque handle carrying a destructor export. **This is where this spike touches the ownership-mechanization spike** — the export boundary is a *move out of the Kāra ownership universe*, and that spike's model (its slice 2) must state the transition or the two specs will disagree. Sequence Slice 4 *after* ownership mechanization's slice 2 if both run. *The spec fixes the convention (opaque + Kāra-owned destructor); the mechanism waits on the ownership spike — the honest stopping point.*
 
-**Slice 5 — the proof-point (the actual adoption story).**
-One real demo/kata: a hot parallel kernel written in Kāra, built as a `.a` + `.h`, linked into an existing C *and* Rust program that keeps everything else. This is the artifact the pitch is actually selling; without it the capability is unproven. Becomes a permanent A/B-verified example ([[book-snippets-ab-verify-like-katas]]).
+**Slice 5 — the proof-point (the actual adoption story). ✅ DONE (2026-07-08) — [`examples/interop/`](../../examples/interop/).**
+A hot kernel written in Kāra, built as a `.a` + `.h`, linked into an existing C *and* Rust program that keeps everything else. *Landed: the C host links the staticlib with no karac toolchain present (E2E test `test_build_crate_type_staticlib_links_from_c_e2e`); the Rust host links the cdylib. Finding: a Rust host must use the cdylib (the staticlib bundles `std` and collides on `rust_eh_personality`).* Book-snippet A/B verification ([[book-snippets-ab-verify-like-katas]]) is a follow-up.
 
 ---
 

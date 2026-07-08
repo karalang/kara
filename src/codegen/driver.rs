@@ -571,6 +571,212 @@ pub(super) fn link_executable_impl(
     }
 }
 
+// ── Producer-mode library artifacts (additive-interop Slice 2) ──────
+//
+// The dual of `link_executable_impl`: instead of linking the emitted
+// object into an executable, package it — with the runtime archive
+// bundled in — as a C-ABI library the emitted `pub extern "C" fn`
+// surface is callable through. See design.md § Exported C ABI and
+// spikes/additive-interop-adoption.md Slice 2.
+
+/// Kind of native library artifact a `--crate-type staticlib/cdylib`
+/// build emits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeLibKind {
+    /// `.a` static archive. Thick — the resolved runtime archive is
+    /// merged in, so the consumer links with no karac toolchain present
+    /// (`-l<name>` alone pulls the runtime symbols the exports reference).
+    StaticLib,
+    /// `.so` (Linux) / `.dylib` (macOS) shared library. The runtime is
+    /// statically pulled in and dead-stripped to what the exports use;
+    /// on macOS the install-name is `@rpath`-based so the consumer
+    /// resolves it by rpath rather than an absolute build-machine path.
+    CDylib,
+}
+
+impl NativeLibKind {
+    /// Filename extension for this artifact kind on the host platform,
+    /// including the leading dot. Static archives are `.a` everywhere;
+    /// a shared library is `.dylib` on macOS and `.so` elsewhere.
+    pub fn artifact_extension(&self) -> &'static str {
+        match self {
+            NativeLibKind::StaticLib => ".a",
+            NativeLibKind::CDylib => {
+                if cfg!(target_os = "macos") {
+                    ".dylib"
+                } else {
+                    ".so"
+                }
+            }
+        }
+    }
+}
+
+/// Package the emitted object into a native C-ABI library artifact at
+/// `out_path`. `lib_name` is the bare library stem (no `lib` prefix, no
+/// extension) — used for the macOS `-install_name`. The runtime archive
+/// is resolved with the same lean-vs-full logic as the executable path
+/// (`resolve_runtime_path`, keyed on whether the object references any
+/// TLS-only symbol) and bundled into the artifact so it is not left
+/// dangling a `libkarac_runtime` dependency on the consumer's link line.
+pub fn link_native_library(
+    obj_path: &str,
+    out_path: &str,
+    kind: NativeLibKind,
+    lib_name: &str,
+) -> Result<(), String> {
+    let references_gpu = object_references_gpu(obj_path);
+    let prefer_min = !references_gpu && !object_references_tls(obj_path);
+    let runtime_path = resolve_runtime_path(prefer_min, references_gpu)?;
+    match kind {
+        NativeLibKind::StaticLib => link_static_library(obj_path, out_path, &runtime_path),
+        NativeLibKind::CDylib => {
+            link_shared_library(obj_path, out_path, &runtime_path, lib_name, references_gpu)
+        }
+    }
+}
+
+/// Build a thick `.a`: the emitted object plus every member of the
+/// runtime archive, so the consumer needs only `-l<name>` (the runtime
+/// symbols the exports reference come along). macOS has `libtool
+/// -static` for exactly this; on Linux/BSD an `ar -M` MRI script does
+/// the archive merge (`ar` cannot merge archives on the command line —
+/// `addlib` in a script is the portable way). The output is removed
+/// first so a stale archive from a prior build is never appended to.
+fn link_static_library(obj_path: &str, out_path: &str, runtime_path: &str) -> Result<(), String> {
+    let _ = std::fs::remove_file(out_path);
+    if cfg!(target_os = "macos") {
+        let output = std::process::Command::new("libtool")
+            .args(["-static", "-o", out_path, obj_path, runtime_path])
+            .output()
+            .map_err(|e| format!("Failed to invoke libtool: {e}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "libtool failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        return Ok(());
+    }
+    // Linux / other unix: `ar -M` reads an MRI script from stdin.
+    use std::io::Write;
+    let script =
+        format!("create {out_path}\naddmod {obj_path}\naddlib {runtime_path}\nsave\nend\n");
+    let mut child = std::process::Command::new("ar")
+        .arg("-M")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to invoke ar: {e}"))?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| "ar: failed to open stdin".to_string())?
+        .write_all(script.as_bytes())
+        .map_err(|e| format!("ar: failed to write MRI script: {e}"))?;
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("ar: failed to wait: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "ar failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    // Index the merged archive so a consumer's linker resolves members in
+    // any order (`addlib` preserves members but the MRI `save` does not
+    // always regenerate the symbol table on every `ar` build).
+    let ranlib = std::process::Command::new("ranlib").arg(out_path).output();
+    if let Ok(o) = ranlib {
+        if !o.status.success() {
+            eprintln!(
+                "warning: `ranlib {out_path}` failed: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Link a `.so`/`.dylib`: `cc -shared` (Linux) / `cc -dynamiclib`
+/// (macOS) over the emitted object + the runtime archive, dead-stripping
+/// the runtime subgraph the exports don't reach (the exported
+/// `pub extern "C"` symbols are default-visibility, so they survive as
+/// GC roots and stay in the dynamic symbol table). On macOS the
+/// install-name is `@rpath/lib<name>.dylib` so the consumer resolves the
+/// library by rpath, not the absolute build-machine path (the
+/// producer-mode dylib gotcha).
+fn link_shared_library(
+    obj_path: &str,
+    out_path: &str,
+    runtime_path: &str,
+    lib_name: &str,
+    references_gpu: bool,
+) -> Result<(), String> {
+    let mut cmd = std::process::Command::new("cc");
+    if cfg!(target_os = "macos") {
+        cmd.arg("-dynamiclib");
+    } else {
+        cmd.arg("-shared");
+    }
+    cmd.args([
+        obj_path,
+        runtime_path,
+        "-o",
+        out_path,
+        "-lm",
+        "-lpthread",
+        "-ldl",
+    ]);
+    // The runtime lifecycle entry points (`karac_runtime_init` /
+    // `_shutdown`) live in the runtime archive and are NOT referenced by
+    // the emitted object (a kernel doesn't call them — the C host does),
+    // so `--gc-sections` would neither pull them from the archive nor
+    // export them. The C header always declares them, so force them in as
+    // undefined roots. GNU ld spells the flag `-u <name>`; ld64 (macOS)
+    // uses the underscore-prefixed C symbol.
+    for sym in ["karac_runtime_init", "karac_runtime_shutdown"] {
+        if cfg!(target_os = "macos") {
+            cmd.arg(format!("-Wl,-u,_{sym}"));
+        } else {
+            cmd.arg(format!("-Wl,-u,{sym}"));
+        }
+    }
+    if cfg!(target_os = "macos") {
+        cmd.args(["-install_name", &format!("@rpath/lib{lib_name}.dylib")]);
+        if references_gpu {
+            for framework in ["Metal", "Foundation", "QuartzCore", "CoreGraphics"] {
+                cmd.args(["-framework", framework]);
+            }
+            cmd.arg("-lobjc");
+        }
+    }
+    if let Some(link) = crate::target::native_link_config() {
+        for dir in &link.search_paths {
+            cmd.arg(format!("-L{dir}"));
+        }
+        for lib in &link.libs {
+            cmd.arg(format!("-l{lib}"));
+        }
+    }
+    if cfg!(target_os = "macos") {
+        cmd.arg("-Wl,-dead_strip");
+    } else if cfg!(target_os = "linux") {
+        cmd.arg("-Wl,--gc-sections");
+    }
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Failed to invoke linker: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Linker failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(())
+}
+
 /// Windows (MSVC) link path — the analog of the unix `cc` body in
 /// [`link_executable_impl`]. Uses `clang` as the linker driver (it auto-detects
 /// the installed VS toolchain, links the MSVC CRT, and resolves the

@@ -19724,3 +19724,135 @@ fn test_test_cross_module_import_executes() {
     let summary = lines.last().unwrap();
     assert!(summary.contains("\"passed\":1"), "got: {lines:?}");
 }
+
+/// Producer-mode library artifact (additive-interop Slice 2 + 3;
+/// design.md § Exported C ABI). Builds a Kāra kernel as a `--crate-type
+/// staticlib`, then compiles + links a plain C host against ONLY the
+/// emitted `.a` + `.h` — no karac toolchain on the C link line — and
+/// runs it. Proves the exported `pub extern "C" fn` surface is callable
+/// from C, the runtime is bundled into the archive (self-contained), and
+/// the header the emitter wrote matches the ABI.
+///
+/// Soft-skips (returns early) when the no-llvm fallback fires, the
+/// runtime archive can't be located, or `cc` is absent — so the test
+/// passes vacuously in those environments rather than failing on an
+/// unrelated cause (same discipline as the other `#[cfg(feature =
+/// "llvm")]` E2E tests in this file).
+#[cfg(feature = "llvm")]
+#[test]
+fn test_build_crate_type_staticlib_links_from_c_e2e() {
+    use std::io::Write;
+    let src = "#[repr(C)]\n\
+               pub struct Stats { sum: f64, count: i64 }\n\
+               pub extern \"C\" fn add(a: i32, b: i32) -> i32 { a + b }\n\
+               pub extern \"C\" fn stats_mean(s: Stats) -> f64 {\n\
+                   if s.count == 0 { return 0.0; }\n\
+                   s.sum / (s.count as f64)\n\
+               }\n";
+    let dir = std::env::temp_dir().join(format!("karac_staticlib_e2e_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    {
+        let mut f = std::fs::File::create(dir.join("kernel.kara")).unwrap();
+        f.write_all(src.as_bytes()).unwrap();
+    }
+
+    // Build the static library. Soft-skip on the no-llvm fallback or a
+    // link failure (missing runtime archive on a fresh checkout).
+    let build = karac_bin()
+        .current_dir(&dir)
+        .args(["build", "kernel.kara", "--crate-type", "staticlib"])
+        .output()
+        .unwrap();
+    let berr = String::from_utf8_lossy(&build.stderr);
+    let lib = dir.join("libkernel.a");
+    let header = dir.join("libkernel.h");
+    if berr.contains("requires the llvm feature")
+        || berr.contains("link failed")
+        || !lib.exists()
+        || !header.exists()
+    {
+        eprintln!("skip: test_build_crate_type_staticlib_links_from_c_e2e — build/link soft-skip");
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+
+    // The emitted header must declare the exported surface + the struct +
+    // the runtime lifecycle prototypes.
+    let header_text = std::fs::read_to_string(&header).unwrap();
+    assert!(
+        header_text.contains("int32_t add(int32_t a, int32_t b);"),
+        "header missing add proto:\n{header_text}"
+    );
+    assert!(
+        header_text.contains("struct Stats {"),
+        "header missing repr(C) struct:\n{header_text}"
+    );
+    assert!(
+        header_text.contains("void karac_runtime_init(void);"),
+        "header missing lifecycle proto:\n{header_text}"
+    );
+
+    // A plain C host that includes the header and calls in. No karac on
+    // the compile/link line — just `cc` + the emitted `.a`/`.h`.
+    let host_c = "#include <stdio.h>\n\
+                  #include \"libkernel.h\"\n\
+                  int main(void) {\n\
+                      karac_runtime_init();\n\
+                      struct Stats s = { .sum = 30.0, .count = 4 };\n\
+                      printf(\"%d %.2f\\n\", add(20, 22), stats_mean(s));\n\
+                      karac_runtime_shutdown();\n\
+                      return 0;\n\
+                  }\n";
+    {
+        let mut f = std::fs::File::create(dir.join("host.c")).unwrap();
+        f.write_all(host_c.as_bytes()).unwrap();
+    }
+
+    // `-l:libkernel.a` forces the static archive (a bare `-lkernel` would
+    // prefer a `.so` if one existed). If `cc` is unavailable, soft-skip.
+    let cc = std::process::Command::new("cc")
+        .current_dir(&dir)
+        .args([
+            "host.c",
+            "-L.",
+            "-l:libkernel.a",
+            "-lpthread",
+            "-lm",
+            "-ldl",
+            "-o",
+            "host",
+        ])
+        .output();
+    let cc = match cc {
+        Ok(o) => o,
+        Err(_) => {
+            eprintln!("skip: test_build_crate_type_staticlib_links_from_c_e2e — no `cc`");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+    };
+    assert!(
+        cc.status.success(),
+        "C host failed to link against the Kāra staticlib:\n{}",
+        String::from_utf8_lossy(&cc.stderr)
+    );
+
+    let run = common::output_with_hang_watchdog(
+        {
+            let mut c = std::process::Command::new(dir.join("host"));
+            c.current_dir(&dir);
+            c
+        },
+        std::time::Duration::from_secs(15),
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    if let Some(run) = run {
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout).trim(),
+            "42 7.50",
+            "C host produced wrong output calling the Kāra kernel"
+        );
+        assert_eq!(run.status.code(), Some(0));
+    }
+}

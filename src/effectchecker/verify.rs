@@ -401,6 +401,53 @@ impl<'a> super::EffectChecker<'a> {
         }
     }
 
+    /// Producer-mode export boundary (additive-interop Slice 3½;
+    /// design.md § Exported C ABI). A `pub extern "C"` / `"C-unwind"`
+    /// function definition whose *inferred* effect set contains
+    /// `suspends` cannot be exported to C at v1: a C caller drives no
+    /// Kāra scheduler, so a suspending body has no yield-to substrate on
+    /// a bare foreign thread. Sibling of [`verify_extern_export_panics`]
+    /// — scans the same `inferred_effects` table (the verified set, so
+    /// this catches `suspends` reached through a private helper too, not
+    /// just a declared `with suspends`).
+    pub(crate) fn verify_extern_export_no_suspends(&mut self) {
+        let mut offenders: Vec<(String, Span)> = Vec::new();
+        let names: Vec<String> = self.function_bodies.keys().cloned().collect();
+        for name in &names {
+            let func = match self.function_bodies.get(name) {
+                // Any C-ABI export definition (a body callable from C),
+                // `"C"` or `"C-unwind"` — the codegen export treatment is
+                // keyed on `abi.is_some()`, so the boundary rule is too.
+                Some(f) if f.abi.is_some() => f.clone(),
+                _ => continue,
+            };
+            let body_suspends = self.inferred_effects.get(name).is_some_and(|set| {
+                set.effects
+                    .iter()
+                    .any(|te| matches!(te.effect.verb, EffectVerbKind::Suspends))
+            });
+            if body_suspends {
+                offenders.push((name.clone(), func.span.clone()));
+            }
+        }
+
+        for (name, span) in offenders {
+            self.errors.push(EffectError {
+                message: format!(
+                    "exported `extern \"C\" fn '{name}'` suspends, but the v1 C-export boundary \
+                     is synchronous-only: a C caller drives no Kāra scheduler, so a suspending \
+                     export cannot yield on a bare foreign thread. Expose a *blocking* wrapper \
+                     that owns a runtime-scoped task internally, or keep the suspending work \
+                     behind a non-exported function. See design.md § Exported C ABI."
+                ),
+                span,
+                kind: EffectErrorKind::ExternExportSuspendsUnsupported,
+                subtype_trace: None,
+                replacement: None,
+            });
+        }
+    }
+
     /// True iff a `with` clause spells out the resourceless `panics`
     /// verb, directly or via a referenced effect group. Used by the
     /// C-unwind export rule; kept separate from the resource-oriented
