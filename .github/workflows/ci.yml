@@ -279,6 +279,22 @@ jobs:
       - name: Codegen E2E + interpreter + typechecker + self-host oracle
         run: cargo test --features llvm --lib --test codegen --test interpreter --test typechecker --test selfhost_lexer
 
+      # LLJIT-productionization Slice 1 follow-up: re-run the codegen E2E suite
+      # through the JIT execution lane (not just AOT). `KARAC_TEST_JIT=1` routes
+      # `tests/codegen.rs`'s runner to a `karac_jit_runner` subprocess (which
+      # cargo built above via `CARGO_BIN_EXE_karac_jit_runner`, feature-gated on
+      # `llvm`), so this leg exercises the in-process LLJIT engine + the ELF
+      # `.dynsym` runtime-symbol export end-to-end. Until Slice 1 folded the JIT
+      # into `llvm`, this lane had ZERO CI coverage — exactly what let the
+      # whole-lane Linux breakage (B-2026-07-07-5) sit undetected. The AOT step
+      # above is the oracle; this asserts run==build parity across all 2084
+      # cases. The same compiled test binary reruns (the env var is read at
+      # test-runtime), so this adds run time, not build time.
+      - name: Codegen E2E via LLJIT (run==build parity)
+        run: cargo test --features llvm --test codegen
+        env:
+          KARAC_TEST_JIT: "1"
+
   # Tier 2 of the CI test-coverage tiers (docs/spikes/ci-test-coverage.md): the
   # `--features llvm` memory-sanitizer suite — ASAN catches use-after-free /
   # double-free, and on Linux `-fsanitize=address` ALSO runs LeakSanitizer,

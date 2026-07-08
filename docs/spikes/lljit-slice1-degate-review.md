@@ -70,9 +70,10 @@ fold-into-`llvm` route was chosen per the spike's CI-visibility rationale.
 
 ## Not done in this draft (intentional — follow-ups)
 
-- **CI yaml:** optionally add an explicit `KARAC_TEST_JIT=1` codegen job so the
-  JIT *execution* lane (not just compile+clippy) runs in CI. The compile/clippy
-  coverage is automatic now; the execution job is a one-line addition.
+- **CI yaml:** ✅ DONE 2026-07-08 — the `codegen-e2e` job gained a
+  `Codegen E2E via LLJIT (run==build parity)` step that re-runs the codegen
+  suite with `KARAC_TEST_JIT=1`, so the JIT *execution* lane runs in CI (not
+  just compile+clippy). Asserts run==build parity across all 2084 cases.
 - **Doc sweep:** `CLAUDE.md` and several tracker docs still say
   `--features lljit_prototype` in build recipes. Those instructions become
   `--features llvm`. Left out to keep the diff focused on the mechanism.

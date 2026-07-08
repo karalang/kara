@@ -51,7 +51,14 @@ verifiable add — a runner that has LLVM does not need node, etc.
 2. Build the native runtime staticlib (lean→full) so the E2E binaries link
    instead of vacuously skipping.
 3. `cargo test --features llvm --lib --test codegen --test interpreter --test
-   typechecker --test selfhost_lexer`.
+   typechecker --test selfhost_lexer` (the AOT oracle).
+4. **Then a second `--test codegen` run with `KARAC_TEST_JIT=1`** (added
+   2026-07-08, LLJIT-productionization Slice 1 follow-up): routes the codegen
+   harness through the `karac_jit_runner` LLJIT subprocess so the JIT
+   *execution* lane runs in CI, asserting run==build parity across all 2084
+   cases. The same compiled test binary reruns (env read at test-runtime), so
+   it costs run time, not build time. This lane had zero CI coverage before
+   Slice 1 folded the JIT into the `llvm` feature.
 
 **Earned its keep on run 1.** Two Linux-surfaced failures, both genuinely
 informative and neither a real codegen defect:
