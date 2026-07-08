@@ -3332,6 +3332,46 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+        // Map / Set payload (`Full(Map[i64, u64])`): the enum RC drop frees the
+        // handle UNCONDITIONALLY via `karac_map_free_with_drop_vec` (no `cap > 0`
+        // guard, unlike Vec/String), and `Map`/`Set` are NOT classified in
+        // `EnumDropKind` (freed by field TYPE in `emit_shared_enum_field_drop`),
+        // so the loop above never suppresses them. When the arm moves such a
+        // payload out, zero the handle word in the box: the runtime free no-ops on
+        // a null handle, so the moved binding frees the map exactly once instead of
+        // the box's rc-drop double-freeing it (B-2026-07-08-22).
+        let field_tes: Vec<TypeExpr> = self
+            .enum_variant_field_type_exprs(enum_name)
+            .into_iter()
+            .find(|(_, name, _)| name == variant_name)
+            .map(|(_, _, tes)| tes)
+            .unwrap_or_default();
+        for &pos in &consumed_positions {
+            let is_map_or_set = field_tes.get(pos).is_some_and(|te| {
+                matches!(&te.kind, crate::ast::TypeKind::Path(p)
+                if matches!(
+                    p.segments.last().map(String::as_str),
+                    Some("Map") | Some("HashMap") | Some("Set") | Some("HashSet")
+                ))
+            });
+            if !is_map_or_set {
+                continue;
+            }
+            let (start_word, _num_words) = match offsets.get(pos) {
+                Some(o) => *o,
+                None => continue,
+            };
+            // The handle is the field's first (only) payload word.
+            let word_index = (start_word + 2) as u32;
+            if let Ok(word_ptr) = self.builder.build_struct_gep(
+                heap_type,
+                box_ptr,
+                word_index,
+                "match.sh.suppress.map.wp",
+            ) {
+                let _ = self.builder.build_store(word_ptr, zero);
+            }
+        }
     }
 
     /// B-2026-06-10-6 companion to

@@ -527,6 +527,47 @@ fn main() {
     }
 
     #[test]
+    fn asan_shared_enum_map_payload_move_out_no_double_free() {
+        // B-2026-07-08-22: a `shared enum` variant carrying an owning heap
+        // payload (`Full(Map[K,V])` / `Full(Set[T])`), matched with a binding that
+        // MOVES the payload out, double-freed it — once via the moved binding's
+        // scope-exit cleanup, once via the enum box's rc-drop (which frees the Map
+        // handle unconditionally). The match-arm move must zero the handle word in
+        // the box so the rc-drop's free no-ops on the null handle. Loops so a leak
+        // or double-free is observable; the `Empty`/`_`-arm drops exercise the
+        // no-move path (must still free exactly once — no leak).
+        assert_clean_asan_run(
+            r#"
+shared enum Store { Empty, Full(Map[i64, u64]) }
+fn build(k: i64) -> Store {
+    let mut m: Map[i64, u64] = Map.new();
+    let _ = m.insert(k, 9u64);
+    let _ = m.insert(k + 1i64, 10u64);
+    Store.Full(m)
+}
+fn drop_no_move(k: i64) -> i64 {
+    let x = build(k);
+    match x { Store.Full(_) => 99i64, Store.Empty => 0i64 }
+}
+fn main() {
+    let mut i: i64 = 0i64;
+    while i < 40i64 {
+        let s = build(i);
+        match s {
+            Store.Full(m) => { println(m.len()); }
+            Store.Empty => { println(0); }
+        }
+        let _ = drop_no_move(i);
+        i = i + 1i64;
+    }
+}
+"#,
+            &["2"; 40],
+            "asan_shared_enum_map_payload_move_out_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_for_loop_var_into_tuple_push_no_double_free() {
         // B-2026-07-04-3: an inline tuple `(i, x)` whose heap component `x` is a
         // `for`-loop element variable, pushed into a Vec, double-freed the heap
