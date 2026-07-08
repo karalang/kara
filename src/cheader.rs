@@ -19,7 +19,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ast::{
-    EffectItem, EffectList, EffectVerbKind, Function, Item, Program, StructDef, TypeExpr, TypeKind,
+    EffectItem, EffectList, EffectVerbKind, EnumDef, Function, Item, Program, StructDef, TypeExpr,
+    TypeKind,
 };
 
 /// True iff `func` is part of the exported C surface: a `pub extern "C"`
@@ -171,12 +172,14 @@ pub fn export_symbols(program: &Program) -> Vec<String> {
 }
 
 /// True iff `te` crosses the C boundary *transparently by value* — a
-/// primitive, a raw pointer, `()`, or a `#[repr(C)]` struct named in
-/// `repr_c`. These need no boxing; anything else is either boxable (returns
-/// only) or unsupported.
+/// primitive, a raw pointer, `()`, a `#[repr(C)]` struct named in `repr_c`,
+/// or an all-unit `#[repr(C)]` enum named in `repr_c_enums` (its value is the
+/// bare discriminant, an integer). These need no boxing; anything else is
+/// either boxable (returns only) or unsupported.
 fn is_transparent_boundary_type(
     te: &TypeExpr,
     repr_c: &std::collections::BTreeSet<String>,
+    repr_c_enums: &std::collections::BTreeSet<String>,
 ) -> bool {
     match &te.kind {
         TypeKind::Unit => true,
@@ -184,7 +187,7 @@ fn is_transparent_boundary_type(
         TypeKind::Pointer { .. } => true,
         TypeKind::Path(p) if p.segments.len() == 1 => {
             let n = &p.segments[0];
-            c_primitive(n).is_some() || repr_c.contains(n)
+            c_primitive(n).is_some() || repr_c.contains(n) || repr_c_enums.contains(n)
         }
         _ => false,
     }
@@ -227,6 +230,17 @@ pub fn validate_exports(program: &Program) -> Vec<(String, String)> {
             _ => None,
         })
         .collect();
+    // All-unit `#[repr(C)]` enums — cross transparently as a C integer
+    // (Slice 1). A `#[repr(C)]` enum with a data-carrying variant is NOT in
+    // this set and stays rejected (the tagged-union case is Slice 2).
+    let repr_c_enums: std::collections::BTreeSet<String> = program
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Item::EnumDef(e) if is_repr_c_all_unit_enum(e) => Some(e.name.clone()),
+            _ => None,
+        })
+        .collect();
     let mut errs = Vec::new();
     for it in &program.items {
         let Item::Function(f) = it else { continue };
@@ -235,12 +249,15 @@ pub fn validate_exports(program: &Program) -> Vec<(String, String)> {
         }
         // Return: transparent OR boxable.
         if let Some(rt) = &f.return_type {
-            if !is_transparent_boundary_type(rt, &repr_c) && boxed_return_of(f).is_none() {
+            if !is_transparent_boundary_type(rt, &repr_c, &repr_c_enums)
+                && boxed_return_of(f).is_none()
+            {
                 errs.push((
                     f.name.clone(),
                     format!(
                         "return type `{}` cannot cross the C ABI: it is neither transparent \
-                         (primitive / raw pointer / `#[repr(C)]` struct) nor an auto-boxable \
+                         (primitive / raw pointer / `#[repr(C)]` struct / all-unit `#[repr(C)]` \
+                         enum) nor an auto-boxable \
                          `Vec[scalar]` / `String` / `Vec[String]` / `Vec[Vec[scalar]]`.{}",
                         type_display(rt),
                         abi_fix_hint(
@@ -256,13 +273,13 @@ pub fn validate_exports(program: &Program) -> Vec<(String, String)> {
         }
         // Params: transparent only (no boxing on the caller-provided side).
         for p in &f.params {
-            if !is_transparent_boundary_type(&p.ty, &repr_c) {
+            if !is_transparent_boundary_type(&p.ty, &repr_c, &repr_c_enums) {
                 errs.push((
                     f.name.clone(),
                     format!(
                         "parameter `{}: {}` cannot cross the C ABI by value: only transparent \
-                         types (primitive / raw pointer / `#[repr(C)]` struct) may be exported \
-                         params.{}",
+                         types (primitive / raw pointer / `#[repr(C)]` struct / all-unit \
+                         `#[repr(C)]` enum) may be exported params.{}",
                         p.name().unwrap_or("_"),
                         type_display(&p.ty),
                         abi_fix_hint(
@@ -325,13 +342,15 @@ fn abi_fix_hint(
                         value. (repr(C) tagged-union enums are a planned follow-on.)"
                     .to_string();
             }
-            // A user-defined enum (or `Result`) — a tagged value with no C
-            // by-value form yet.
+            // A user-defined enum (or `Result`) — a tagged value. An all-unit
+            // `#[repr(C)]` enum already crosses as an integer (Slice 1); this
+            // hint fires for the data-carrying / non-repr(C) case.
             if n == "Result" || all_enums.contains(n) {
-                return " Enums have no by-value C representation yet: return a `#[repr(C)]` struct \
-                        carrying a status/tag field plus the payload, or an opaque handle and \
-                        accessor exports the C side calls. (repr(C) tagged-union enums are a \
-                        planned follow-on.)"
+                return " An all-unit enum crosses transparently once marked `#[repr(C)]` (its \
+                        value is the discriminant). A data-carrying enum has no by-value C form \
+                        yet: return a `#[repr(C)]` struct with a status/tag field plus the \
+                        payload, or an opaque handle and accessor exports. (repr(C) tagged-union \
+                        enums are a planned follow-on.)"
                     .to_string();
             }
             // An aggregate collection as a *param* — the C idiom is a pointer
@@ -379,16 +398,31 @@ pub fn emit_c_header(program: &Program, lib_name: &str) -> String {
         })
         .collect();
 
+    // Index of all-unit `#[repr(C)]` enums by name — the transparent
+    // integer-enum set (Slice 1). Data-carrying repr(C) enums are absent
+    // (rejected upstream), so they never reach the header.
+    let repr_c_enums: BTreeMap<&str, &EnumDef> = program
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Item::EnumDef(e) if is_repr_c_all_unit_enum(e) => Some((e.name.as_str(), e)),
+            _ => None,
+        })
+        .collect();
+
     // Walk every exported signature, mapping each type to C and recording
-    // which repr(C) structs and whether an opaque handle are referenced.
+    // which repr(C) structs / enums and whether an opaque handle are referenced.
     let mut needed_structs: BTreeSet<String> = BTreeSet::new();
+    let mut needed_enums: BTreeSet<String> = BTreeSet::new();
     let mut used_opaque = false;
     let mut protos: Vec<String> = Vec::with_capacity(exports.len());
     for f in &exports {
         protos.push(render_prototype(
             f,
             &repr_c_structs,
+            &repr_c_enums,
             &mut needed_structs,
+            &mut needed_enums,
             &mut used_opaque,
         ));
     }
@@ -483,21 +517,48 @@ pub fn emit_c_header(program: &Program, lib_name: &str) -> String {
     }
 
     // repr(C) struct definitions, dependency-ordered (a struct used
-    // by-value inside another must be defined first).
+    // by-value inside another must be defined first). Built into a string
+    // *before* the enum block is emitted: a struct field may reference an
+    // all-unit repr(C) enum, which registers it into `needed_enums` here so
+    // the typedef below covers the field-only case too.
+    let mut struct_body = String::new();
     if !needed_structs.is_empty() {
         let mut emitted: BTreeSet<String> = BTreeSet::new();
-        let mut body = String::new();
         for name in &needed_structs {
             emit_struct(
                 name,
                 &repr_c_structs,
+                &repr_c_enums,
                 &needed_structs,
                 &mut emitted,
-                &mut body,
+                &mut needed_enums,
+                &mut struct_body,
             );
         }
-        out.push_str(&body);
     }
+
+    // All-unit `#[repr(C)]` enum definitions (Slice 1). The value is the
+    // discriminant, so the type is `int64_t` (matching Kāra's i64 tag width —
+    // a bare C `enum` is `int`/4 B and would mismatch the by-value ABI) with
+    // the variant names as readable named constants. Emitted before the
+    // struct bodies so an enum-typed struct field resolves.
+    for name in &needed_enums {
+        if let Some(e) = repr_c_enums.get(name.as_str()) {
+            out.push_str(&format!(
+                "/* {name} — an all-unit `#[repr(C)]` K\u{101}ra enum; values are the \
+                 discriminants. */\ntypedef int64_t {name};\nenum {{"
+            ));
+            let consts: Vec<String> = e
+                .variants
+                .iter()
+                .enumerate()
+                .map(|(i, v)| format!(" {name}_{} = {i}", v.name))
+                .collect();
+            out.push_str(&consts.join(","));
+            out.push_str(" };\n\n");
+        }
+    }
+    out.push_str(&struct_body);
 
     for proto in &protos {
         out.push_str(proto);
@@ -515,7 +576,9 @@ pub fn emit_c_header(program: &Program, lib_name: &str) -> String {
 fn render_prototype(
     func: &Function,
     structs: &BTreeMap<&str, &StructDef>,
+    enums: &BTreeMap<&str, &EnumDef>,
     needed: &mut BTreeSet<String>,
+    needed_enums: &mut BTreeSet<String>,
     used_opaque: &mut bool,
 ) -> String {
     // C-ABI auto-boxed aggregate return (Slice 4 Path B): the export returns
@@ -526,13 +589,13 @@ fn render_prototype(
         (Some(b), _) => format!("{}*", boxed_struct_name(b)),
         (None, None) => "void".to_string(),
         (None, Some(ty)) if is_unit(ty) => "void".to_string(),
-        (None, Some(ty)) => c_type(ty, structs, needed, used_opaque),
+        (None, Some(ty)) => c_type(ty, structs, enums, needed, needed_enums, used_opaque),
     };
     let params: Vec<String> = func
         .params
         .iter()
         .map(|p| {
-            let cty = c_type(&p.ty, structs, needed, used_opaque);
+            let cty = c_type(&p.ty, structs, enums, needed, needed_enums, used_opaque);
             match p.name() {
                 Some(n) => format!("{cty} {n}"),
                 None => cty,
@@ -563,18 +626,21 @@ fn render_prototype(
 }
 
 /// Map a Kāra type expression to its C rendering, recording referenced
-/// repr(C) structs (into `needed`) and whether an opaque handle was used.
+/// repr(C) structs and all-unit repr(C) enums (into `needed` / `needed_enums`)
+/// and whether an opaque handle was used.
 fn c_type(
     ty: &TypeExpr,
     structs: &BTreeMap<&str, &StructDef>,
+    enums: &BTreeMap<&str, &EnumDef>,
     needed: &mut BTreeSet<String>,
+    needed_enums: &mut BTreeSet<String>,
     used_opaque: &mut bool,
 ) -> String {
     match &ty.kind {
         TypeKind::Unit => "void".to_string(),
         TypeKind::Tuple(elems) if elems.is_empty() => "void".to_string(),
         TypeKind::Pointer { is_mut, inner } => {
-            let base = c_type(inner, structs, needed, used_opaque);
+            let base = c_type(inner, structs, enums, needed, needed_enums, used_opaque);
             if *is_mut {
                 format!("{base}*")
             } else {
@@ -588,6 +654,10 @@ fn c_type(
             } else if structs.contains_key(name.as_str()) {
                 needed.insert(name.clone());
                 format!("struct {name}")
+            } else if enums.contains_key(name.as_str()) {
+                // All-unit `#[repr(C)]` enum → its `typedef int64_t <Name>`.
+                needed_enums.insert(name.clone());
+                name.clone()
             } else {
                 *used_opaque = true;
                 format!("KaraHandle /* {name} */")
@@ -630,8 +700,10 @@ fn c_primitive(name: &str) -> Option<&'static str> {
 fn emit_struct(
     name: &str,
     structs: &BTreeMap<&str, &StructDef>,
+    enums: &BTreeMap<&str, &EnumDef>,
     needed: &BTreeSet<String>,
     emitted: &mut BTreeSet<String>,
+    needed_enums: &mut BTreeSet<String>,
     body: &mut String,
 ) {
     if emitted.contains(name) {
@@ -646,7 +718,7 @@ fn emit_struct(
             if p.segments.len() == 1 {
                 let dep = &p.segments[0];
                 if structs.contains_key(dep.as_str()) && needed.contains(dep) {
-                    emit_struct(dep, structs, needed, emitted, body);
+                    emit_struct(dep, structs, enums, needed, emitted, needed_enums, body);
                 }
             }
         }
@@ -654,15 +726,20 @@ fn emit_struct(
     emitted.insert(name.to_string());
     body.push_str(&format!("struct {name} {{\n"));
     for field in &def.fields {
-        // Reuse the signature mapper; struct-emit-time opaque/needed
-        // recording is inert here (the header-level flags are already set
-        // from signature mapping), so route through throwaway sinks.
+        // Reuse the signature mapper; struct-emit-time opaque/needed-struct
+        // recording is inert here (those header-level flags are already set
+        // from signature mapping), so route through throwaway sinks — but a
+        // field of all-unit repr(C) enum type must register into the REAL
+        // `needed_enums` so its typedef is emitted even when no signature
+        // references it directly.
         let mut throwaway_needed = BTreeSet::new();
         let mut throwaway_opaque = false;
         let cty = c_type(
             &field.ty,
             structs,
+            enums,
             &mut throwaway_needed,
+            needed_enums,
             &mut throwaway_opaque,
         );
         body.push_str(&format!("    {cty} {};\n", field.name));
@@ -721,10 +798,10 @@ fn is_unit(ty: &TypeExpr) -> bool {
     matches!(&ty.kind, TypeKind::Unit) || matches!(&ty.kind, TypeKind::Tuple(e) if e.is_empty())
 }
 
-/// True iff a struct carries `#[repr(C)]`.
-fn is_repr_c(def: &StructDef) -> bool {
+/// True iff the attribute list carries `#[repr(C)]`.
+fn attrs_have_repr_c(attributes: &[crate::ast::Attribute]) -> bool {
     use crate::ast::ExprKind;
-    def.attributes.iter().any(|a| {
+    attributes.iter().any(|a| {
         a.is_bare("repr")
             && a.args.iter().any(|arg| {
                 if arg.name.is_some() {
@@ -739,6 +816,27 @@ fn is_repr_c(def: &StructDef) -> bool {
                 }
             })
     })
+}
+
+/// True iff a struct carries `#[repr(C)]`.
+fn is_repr_c(def: &StructDef) -> bool {
+    attrs_have_repr_c(&def.attributes)
+}
+
+/// True iff `e` is a `#[repr(C)]` enum whose every variant is a unit variant
+/// (no payload) — the only enum shape that crosses the C ABI transparently at
+/// v1 (see `spikes/repr-c-tagged-union-enums.md` Slice 1). Its value is the
+/// bare discriminant, so it maps to a C integer with named constants. A
+/// `#[repr(C)]` enum with any data-carrying variant is NOT this — it stays
+/// rejected (a real tagged union is Slice 2).
+fn is_repr_c_all_unit_enum(e: &EnumDef) -> bool {
+    attrs_have_repr_c(&e.attributes)
+        && !e.is_shared
+        && !e.is_par
+        && !e.variants.is_empty()
+        && e.variants
+            .iter()
+            .all(|v| matches!(v.kind, crate::ast::VariantKind::Unit))
 }
 
 /// A best-effort Kāra-surface rendering of a type expression for the
@@ -1002,14 +1100,21 @@ mod tests {
         let opt = hint_for("pub extern \"C\" fn m() -> Option[i64] { }", "m");
         assert!(opt.contains("`Option` has no by-value"), "Option: {opt}");
 
-        // Result / user enum return → tag-field / accessor guidance.
+        // Result / user enum return → all-unit repr(C) path + data-carrying
+        // tag-field / accessor guidance.
         let res = hint_for("pub extern \"C\" fn r() -> Result[i64, i64] { }", "r");
-        assert!(res.contains("Enums have no by-value"), "Result: {res}");
+        assert!(
+            res.contains("data-carrying enum has no by-value"),
+            "Result: {res}"
+        );
         let en = hint_for(
             "pub enum Color { Red, Green }\npub extern \"C\" fn c() -> Color { }",
             "c",
         );
-        assert!(en.contains("Enums have no by-value"), "enum: {en}");
+        assert!(
+            en.contains("crosses transparently once marked `#[repr(C)]`"),
+            "enum: {en}"
+        );
 
         // Vec/String as a PARAM → (ptr, len) idiom (not the return box hint).
         let vp = hint_for("pub extern \"C\" fn t(v: Vec[i64]) -> i64 { 0 }", "t");
@@ -1020,6 +1125,53 @@ mod tests {
         assert!(
             tup.contains("Tuples have no C representation"),
             "tuple: {tup}"
+        );
+    }
+
+    #[test]
+    fn all_unit_repr_c_enum_crosses_transparently() {
+        // A `#[repr(C)]` all-unit enum is accepted as return AND param, and
+        // the header emits `typedef int64_t <Name>` + named constants; the
+        // prototype uses the enum name (an int64_t alias) by value.
+        let src = "#[repr(C)]\npub enum Status { Ok, NotFound, Denied }\n\
+                   pub extern \"C\" fn lookup(s: Status) -> Status { s }";
+        let p = crate::parse(src);
+        assert!(
+            validate_exports(&p.program).is_empty(),
+            "all-unit repr(C) enum should be accepted: {:?}",
+            validate_exports(&p.program)
+        );
+        let h = emit_c_header(&p.program, "lib");
+        assert!(
+            h.contains("typedef int64_t Status;"),
+            "enum typedef missing:\n{h}"
+        );
+        assert!(
+            h.contains("Status_Ok = 0")
+                && h.contains("Status_NotFound = 1")
+                && h.contains("Status_Denied = 2"),
+            "enum constants missing:\n{h}"
+        );
+        assert!(
+            h.contains("Status lookup(Status s);"),
+            "prototype should use the enum name by value:\n{h}"
+        );
+        // No opaque handle for this surface.
+        assert!(!h.contains("KaraHandle"), "should not be opaque:\n{h}");
+    }
+
+    #[test]
+    fn data_carrying_repr_c_enum_still_rejected() {
+        // `#[repr(C)]` on a data-carrying enum is NOT transparent at v1 (the
+        // tagged-union case is Slice 2) — it stays an export error.
+        let src = "#[repr(C)]\npub enum Msg { Ping, Data(i64) }\n\
+                   pub extern \"C\" fn recv() -> Msg { Msg.Ping }";
+        let p = crate::parse(src);
+        assert!(
+            validate_exports(&p.program)
+                .iter()
+                .any(|(n, _)| n == "recv"),
+            "data-carrying repr(C) enum must still be rejected"
         );
     }
 

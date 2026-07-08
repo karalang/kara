@@ -20013,6 +20013,140 @@ fn test_build_crate_type_staticlib_links_from_c_e2e() {
     }
 }
 
+/// Producer-mode `#[repr(C)]` all-unit enum across the C ABI (spike
+/// `repr-c-tagged-union-enums.md` Slice 1). An all-unit `#[repr(C)]` enum
+/// crosses transparently as an `int64_t` (its value is the discriminant),
+/// both as a return and a param. The header emits a `typedef int64_t <Name>`
+/// plus named constants; a C host treats the enum type as the int64_t alias.
+/// This is the authoritative ABI check that a single-field `i64` struct enum
+/// value is register-identical to `int64_t` on the host target. Soft-skips
+/// on the no-llvm fallback / missing runtime / missing `cc`.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_build_repr_c_enum_roundtrip_from_c_e2e() {
+    use std::io::Write;
+    let src = "#[repr(C)]\npub enum Status { Ok, NotFound, Denied }\n\
+               pub extern \"C\" fn classify(code: i64) -> Status {\n\
+               \x20   if code == 0 { return Status.Ok; }\n\
+               \x20   if code == 404 { return Status.NotFound; }\n\
+               \x20   Status.Denied\n\
+               }\n\
+               pub extern \"C\" fn escalate(s: Status) -> Status {\n\
+               \x20   match s {\n\
+               \x20       Status.Ok => Status.Ok,\n\
+               \x20       Status.NotFound => Status.Denied,\n\
+               \x20       Status.Denied => Status.Denied,\n\
+               \x20   }\n\
+               }\n";
+    let dir = std::env::temp_dir().join(format!("karac_reprc_enum_e2e_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    {
+        let mut f = std::fs::File::create(dir.join("kernel.kara")).unwrap();
+        f.write_all(src.as_bytes()).unwrap();
+    }
+
+    let build = karac_bin()
+        .current_dir(&dir)
+        .args(["build", "kernel.kara", "--crate-type", "staticlib"])
+        .output()
+        .unwrap();
+    let berr = String::from_utf8_lossy(&build.stderr);
+    let lib = dir.join("libkernel.a");
+    let header = dir.join("libkernel.h");
+    if berr.contains("requires the llvm feature")
+        || berr.contains("link failed")
+        || !lib.exists()
+        || !header.exists()
+    {
+        eprintln!("skip: test_build_repr_c_enum_roundtrip_from_c_e2e — build/link soft-skip");
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+
+    // Header carries the int64_t typedef + named constants (not an opaque
+    // handle, not a bare C `enum`).
+    let header_text = std::fs::read_to_string(&header).unwrap();
+    assert!(
+        header_text.contains("typedef int64_t Status;"),
+        "header missing enum typedef:\n{header_text}"
+    );
+    assert!(
+        header_text.contains("Status_NotFound = 1"),
+        "header missing named constants:\n{header_text}"
+    );
+    assert!(
+        header_text.contains("Status classify(int64_t code);")
+            && header_text.contains("Status escalate(Status s);"),
+        "header missing by-value enum prototypes:\n{header_text}"
+    );
+
+    let host_c = "#include <stdio.h>\n\
+                  #include \"libkernel.h\"\n\
+                  int main(void) {\n\
+                      karac_runtime_init();\n\
+                      Status a = classify(0);\n\
+                      Status b = classify(404);\n\
+                      Status c = classify(500);\n\
+                      Status d = escalate(b);\n\
+                      printf(\"%lld %lld %lld %lld %d\\n\",\n\
+                             (long long)a, (long long)b, (long long)c, (long long)d,\n\
+                             b == Status_NotFound);\n\
+                      karac_runtime_shutdown();\n\
+                      return 0;\n\
+                  }\n";
+    {
+        let mut f = std::fs::File::create(dir.join("host.c")).unwrap();
+        f.write_all(host_c.as_bytes()).unwrap();
+    }
+
+    let cc = std::process::Command::new("cc")
+        .current_dir(&dir)
+        .args([
+            "host.c",
+            "-L.",
+            "-l:libkernel.a",
+            "-lpthread",
+            "-lm",
+            "-ldl",
+            "-o",
+            "host",
+        ])
+        .output();
+    let cc = match cc {
+        Ok(o) => o,
+        Err(_) => {
+            eprintln!("skip: test_build_repr_c_enum_roundtrip_from_c_e2e — no `cc`");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+    };
+    assert!(
+        cc.status.success(),
+        "C host failed to link against the repr(C)-enum Kāra staticlib:\n{}",
+        String::from_utf8_lossy(&cc.stderr)
+    );
+
+    let run = common::output_with_hang_watchdog(
+        {
+            let mut c = std::process::Command::new(dir.join("host"));
+            c.current_dir(&dir);
+            c
+        },
+        std::time::Duration::from_secs(15),
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    if let Some(run) = run {
+        // Ok=0, NotFound=1, Denied=2, escalate(NotFound)=Denied=2, b==NotFound=1.
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout).trim(),
+            "0 1 2 2 1",
+            "repr(C) enum crossed the C ABI with the wrong value(s)"
+        );
+        assert_eq!(run.status.code(), Some(0));
+    }
+}
+
 /// Producer-mode auto-boxing + auto-destructor (additive-interop Slice 4
 /// Path B). A `pub extern "C" fn -> Vec[i64]` is auto-boxed for the C ABI:
 /// the export returns an opaque `KaraVec_int64_t*` (heap box), the header
