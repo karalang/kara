@@ -448,6 +448,20 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             _ => None,
         })
         .collect();
+    // Fold in raw-pointer instance-method receiver pointees (additive-interop
+    // Slice 4 Path A). A MethodCall shares its receiver's span, so `.read` /
+    // `.write` results (`T` / unit) overwrote the receiver's `*T` entry in
+    // the `expr_types` sweep above; the typechecker recorded the receiver
+    // pointee in a dedicated table (the `vector_method_receivers` pattern),
+    // and folding it in here restores what codegen's `compile_pointer_
+    // instance_method` looks up by the (receiver == call) span. `.offset` /
+    // `.add` results ARE pointers with the same pointee, so overwriting is a
+    // no-op; `.read` / `.write` are the entries this recovers.
+    program.raw_pointer_pointee_types.extend(
+        tc.pointer_method_receiver_pointees
+            .iter()
+            .map(|(k, te)| ((k.0, k.1), te.clone())),
+    );
     // Surface the fully-instantiated `TypeExpr` of every *generic* `Named`
     // instantiation expression (`Option[String]`, `Result[i64, AllocError]`,
     // generic user enums). Codegen's heap-payload enum `==`

@@ -1360,6 +1360,31 @@ impl<'a> super::TypeChecker<'a> {
             return Type::Error;
         }
 
+        // Raw-pointer instance methods (design.md § raw pointers; additive-
+        // interop Slice 4 Path A). Record the receiver's pointee keyed by
+        // the call span BEFORE the method's result type overwrites the
+        // receiver's `*T` entry at the same (collided) span key — codegen
+        // needs the receiver pointee for the GEP/load/store, and `.read` /
+        // `.write` results (`T` / unit) are not pointers. Mirrors the
+        // `vector_method_receivers` fix for the same span collision.
+        if let Type::Pointer { inner, .. } = &obj_ty {
+            if matches!(
+                method,
+                "offset"
+                    | "add"
+                    | "read"
+                    | "read_unaligned"
+                    | "read_volatile"
+                    | "write"
+                    | "write_unaligned"
+                    | "write_volatile"
+            ) {
+                let pointee = Self::type_to_type_expr(inner);
+                self.pointer_method_receiver_pointees
+                    .insert(SpanKey::from_span(span), pointee);
+            }
+        }
+
         // Comptime `Type` reflection on a `Type`-typed *value* receiver — a
         // binding or `comptime T: Type` parameter holding a type value
         // (`let t = MyStruct; t.fields()`, or `T.fields()` inside a

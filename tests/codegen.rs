@@ -3052,6 +3052,30 @@ fn main() {
         }
     }
 
+    /// Raw-pointer instance methods (design.md § raw pointers; additive-
+    /// interop Slice 4 Path A, `B-2026-07-08-4`): `.offset` (element-scaled
+    /// arithmetic), `.write` (store), `.read` (load), including a chained
+    /// `p.offset(i).write(v)` / `p.offset(i).read()` receiver. Round-trips a
+    /// 3-element buffer allocated via FFI `malloc` and freed via `free`.
+    #[test]
+    fn raw_pointer_offset_read_write() {
+        let src =
+            "unsafe extern \"C\" { fn malloc(n: usize) -> *mut i64; fn free(p: *mut i64); }\n\
+                   fn main() {\n\
+                   \x20   let p: *mut i64 = unsafe { malloc(24) };\n\
+                   \x20   unsafe { p.write(10); }\n\
+                   \x20   let q: *mut i64 = unsafe { p.offset(1) };\n\
+                   \x20   unsafe { q.write(20); }\n\
+                   \x20   unsafe { p.offset(2).write(30); }\n\
+                   \x20   let s = unsafe { p.read() + p.offset(1).read() + p.offset(2).read() };\n\
+                   \x20   println(s);\n\
+                   \x20   unsafe { free(p); }\n\
+                   }\n";
+        if let Some(out) = run_program(src) {
+            assert_eq!(out.trim(), "60", "pointer offset/read/write round-trip");
+        }
+    }
+
     /// Binding a row out of a BORROWED nested collection — `let row = m[i]`
     /// where `m: ref Vec[Vec[i64]]` — must dispatch `row.len()` / `row[j]` as
     /// the inner `Vec[i64]`. The integer-index inference used to peel `ref`

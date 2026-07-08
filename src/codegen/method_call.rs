@@ -218,6 +218,104 @@ impl<'ctx> super::Codegen<'ctx> {
         (64, false)
     }
 
+    /// Raw-pointer instance methods on `*const T` / `*mut T` (design.md §
+    /// raw pointers; additive-interop Slice 4 Path A, `B-2026-07-08-4`).
+    /// Returns `Ok(Some(v))` when the call is a pointer method on a
+    /// raw-pointer receiver, `Ok(None)` to fall through to normal dispatch
+    /// (the receiver is not raw-pointer-typed — e.g. a user `Reader.read()`
+    /// or a builder `.write()`).
+    ///
+    /// - `.offset(i)` / `.add(i)` — element-scaled pointer arithmetic (GEP
+    ///   over the pointee type), returning a pointer.
+    /// - `.read()` / `.read_unaligned()` / `.read_volatile()` — load the
+    ///   pointee (unaligned sets align 1; volatile sets the volatile flag).
+    /// - `.write(v)` / `.write_unaligned(v)` / `.write_volatile(v)` — store
+    ///   `v` through the pointer, returning unit.
+    ///
+    /// The pointee `TypeExpr` is recovered from `raw_pointer_pointee_types`
+    /// (keyed by the receiver's span; the lowering pass records it for every
+    /// pointer-typed expression), so chained receivers
+    /// (`p.offset(i).write(v)`) resolve — the inner `.offset` recurses
+    /// through `compile_expr` → here and carries its own pointee entry. The
+    /// `unsafe { }` requirement is enforced by the typechecker; codegen just
+    /// lowers.
+    fn compile_pointer_instance_method(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        if !matches!(
+            method,
+            "offset"
+                | "add"
+                | "read"
+                | "read_unaligned"
+                | "read_volatile"
+                | "write"
+                | "write_unaligned"
+                | "write_volatile"
+        ) {
+            return Ok(None);
+        }
+        let Some(pointee_te) = self
+            .raw_pointer_pointee_types
+            .get(&(object.span.offset, object.span.length))
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let pointee_llvm = self.llvm_type_for_type_expr(&pointee_te);
+        let ptr_val = self.compile_expr(object)?.into_pointer_value();
+        match method {
+            "offset" | "add" => {
+                let idx = self.compile_expr(&args[0].value)?.into_int_value();
+                let ep = unsafe {
+                    self.builder
+                        .build_in_bounds_gep(pointee_llvm, ptr_val, &[idx], "ptr.offset")
+                        .map_err(|e| format!("ptr.{method}: {e:?}"))?
+                };
+                Ok(Some(ep.into()))
+            }
+            "read" | "read_unaligned" | "read_volatile" => {
+                let loaded = self
+                    .builder
+                    .build_load(pointee_llvm, ptr_val, "ptr.read")
+                    .map_err(|e| format!("ptr.{method}: {e:?}"))?;
+                let inst = loaded
+                    .as_instruction_value()
+                    .expect("build_load yields an instruction value");
+                if method == "read_unaligned" {
+                    inst.set_alignment(1)
+                        .map_err(|e| format!("ptr.read_unaligned align: {e:?}"))?;
+                } else if method == "read_volatile" {
+                    inst.set_volatile(true)
+                        .map_err(|e| format!("ptr.read_volatile: {e:?}"))?;
+                }
+                Ok(Some(loaded))
+            }
+            "write" | "write_unaligned" | "write_volatile" => {
+                let v = self.compile_expr(&args[0].value)?;
+                let store = self
+                    .builder
+                    .build_store(ptr_val, v)
+                    .map_err(|e| format!("ptr.{method}: {e:?}"))?;
+                if method == "write_unaligned" {
+                    store
+                        .set_alignment(1)
+                        .map_err(|e| format!("ptr.write_unaligned align: {e:?}"))?;
+                } else if method == "write_volatile" {
+                    store
+                        .set_volatile(true)
+                        .map_err(|e| format!("ptr.write_volatile: {e:?}"))?;
+                }
+                // Store methods return unit (the `i64 0` void placeholder).
+                Ok(Some(self.context.i64_type().const_int(0, false).into()))
+            }
+            _ => Ok(None),
+        }
+    }
+
     pub(super) fn compile_method_call(
         &mut self,
         object: &Expr,
@@ -248,6 +346,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     return self.compile_gpu_dispatch(args);
                 }
             }
+        }
+
+        // Raw-pointer instance methods (`*const T` / `*mut T`): `.offset` /
+        // `.add` (arithmetic), `.read` / `.write` (+ `_unaligned` /
+        // `_volatile` variants) — the inherent pointer surface from
+        // design.md § raw pointers (additive-interop Slice 4, Path A;
+        // B-2026-07-08-4). Gated on the receiver being raw-pointer-typed
+        // (via `raw_pointer_pointee_types`), so a same-named user method on
+        // a non-pointer receiver (`Reader.read()`, a builder `.write()`)
+        // falls through to normal dispatch. Handles chained receivers
+        // (`p.offset(i).write(v)`) — the inner `.offset` recurses here.
+        if let Some(v) = self.compile_pointer_instance_method(object, method, args)? {
+            return Ok(v);
         }
 
         // `<string>.chars()` as a STANDALONE value (e.g. `let it = s.chars()`).

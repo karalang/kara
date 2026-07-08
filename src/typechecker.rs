@@ -993,6 +993,16 @@ pub struct TypeCheckResult {
     /// they only arise pre-monomorphization and can't be classified per
     /// target).
     pub vector_method_receivers: HashMap<SpanKey, (Type, usize)>,
+    /// Raw-pointer instance-method receiver pointee `TypeExpr`, keyed by
+    /// the method-call span (additive-interop Slice 4 Path A). Because the
+    /// parser sets `MethodCall.span == receiver.span`, the method's *result*
+    /// type overwrites the receiver's `*T` entry in `expr_types` (`.read` →
+    /// `T`, `.write` → unit), so a post-hoc sweep would lose the pointee
+    /// codegen needs for GEP/load/store. Populated directly in
+    /// `infer_method_call`; lowering folds it into `raw_pointer_pointee_types`
+    /// so codegen's existing lookup resolves it. Same rationale as
+    /// [`TypeCheckResult::vector_method_receivers`].
+    pub pointer_method_receiver_pointees: HashMap<SpanKey, TypeExpr>,
     pub struct_info: HashMap<String, StructInfo>,
     pub enum_info: HashMap<String, EnumInfo>,
     /// FFI union declarations (`union NAME { ... }`). Mirrors
@@ -1315,6 +1325,9 @@ pub struct TypeChecker<'a> {
     /// See [`TypeCheckResult::vector_method_receivers`]. Populated at vector
     /// instance-method inference; moved into the result at the end.
     pub(super) vector_method_receivers: HashMap<SpanKey, (Type, usize)>,
+    /// See [`TypeCheckResult::pointer_method_receiver_pointees`]. Populated
+    /// at raw-pointer instance-method inference; moved into the result.
+    pub(super) pointer_method_receiver_pointees: HashMap<SpanKey, TypeExpr>,
     /// Lexical depth of enclosing `unsafe { ... }` blocks. Incremented
     /// on entry to `ExprKind::Unsafe`, decremented on exit. Read at the
     /// `E_UNION_READ_REQUIRES_UNSAFE` (line 549 slice 2a) field-read
@@ -1633,6 +1646,7 @@ impl<'a> TypeChecker<'a> {
             warnings: Vec::new(),
             expr_types: HashMap::new(),
             vector_method_receivers: HashMap::new(),
+            pointer_method_receiver_pointees: HashMap::new(),
             unsafe_depth: 0,
             comptime_depth: 0,
             assigning_lhs: false,
@@ -1822,6 +1836,7 @@ impl<'a> TypeChecker<'a> {
             warnings: self.warnings,
             expr_types: self.expr_types,
             vector_method_receivers: self.vector_method_receivers,
+            pointer_method_receiver_pointees: self.pointer_method_receiver_pointees,
             struct_info: self.env.structs,
             enum_info: self.env.enums,
             union_info: self.env.unions,
