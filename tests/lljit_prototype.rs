@@ -147,6 +147,20 @@ fn ir(src: &str) -> String {
     compile_to_ir(&parsed.program, None, None).expect("compile_to_ir")
 }
 
+/// Like [`ir`] but forces Level-2 DWARF debug info on (crash-diagnostics
+/// Part 2), so the emitted IR carries `!llvm.dbg.cu` / `DISubprogram` /
+/// per-instruction `!dbg` locations. Race-free (no `KARAC_DEBUG_INFO`
+/// env mutation) so it composes with the parallel test runner.
+fn ir_with_dwarf(src: &str) -> String {
+    let mut parsed = karac::parse(src);
+    assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+    let resolved = karac::resolve(&parsed.program);
+    let typed = karac::typecheck(&parsed.program, &resolved);
+    karac::lower(&mut parsed.program, &typed);
+    karac::codegen::compile_to_ir_with_debug_info(&parsed.program, None, None)
+        .expect("compile_to_ir_with_debug_info")
+}
+
 /// Rename `main` → `<new_name>` in an LLVM-IR text blob. The compiler
 /// only emits one `main` definition per program; for W2 multi-module
 /// tests we need each module to define its own externally-named entry
@@ -455,4 +469,66 @@ fn lljit_coro_split_runs_on_jit_path() {
         !handle.is_null(),
         "split coroutine ramp must return a non-null frame handle"
     );
+}
+
+/// Slice 3 — Level-2 DWARF debug info is **preserved through the JIT lane**.
+///
+/// The "wrapping done" criterion (phase-7-codegen.md L706) is "full codegen
+/// E2E passes via JIT path *with Level 2 DWARF preserved*". DWARF emission
+/// (`src/codegen/debug_info.rs`) is designed for the JIT lane in particular
+/// (ORC's GDB JIT interface registers the in-process frames), but nothing
+/// pinned that the metadata actually survives the JIT pipeline — the parsed
+/// module goes through a data-layout/triple restamp + the `coro-*` pass run
+/// (`run_coro_passes`) before LLJIT compiles it, either of which could drop
+/// or invalidate `!dbg` metadata (CoroSplit clones functions; a mis-scoped
+/// `DISubprogram` on a clone is a hard verifier error). This asserts, for a
+/// spread of representative shapes, that the DWARF-carrying IR both (a)
+/// genuinely carries the debug metadata (non-vacuity) and (b) still
+/// materializes + runs `main` cleanly through `LLJITEngine`.
+#[test]
+fn lljit_dwarf_debug_info_preserved_through_jit() {
+    // A spread across the codegen paths debug info attaches to: a bare
+    // main, an internal-fn call (two `DISubprogram`s), a loop (multiple
+    // `!dbg` line locations), and an external libc call via `print`.
+    let cases = [
+        "fn main() { let _x = 2 + 3; }",
+        "fn helper(x: i64) -> i64 { x + 1 }\nfn main() { let _y = helper(5); }",
+        "fn main() { let mut i: i64 = 0; while i < 10 { i = i + 1; } }",
+        "fn main() { print(42); }",
+    ];
+    for src in cases {
+        let dwarf_ir = ir_with_dwarf(src);
+        // (a) Non-vacuity: the IR really carries DWARF. Without these the
+        // test would pass on a debug-info-stripped module and prove nothing.
+        assert!(
+            dwarf_ir.contains("!llvm.dbg.cu"),
+            "expected a DWARF compile unit in the IR for {src:?}"
+        );
+        assert!(
+            dwarf_ir.contains("DISubprogram"),
+            "expected a per-function DISubprogram in the IR for {src:?}"
+        );
+        assert!(
+            dwarf_ir.contains("!DILocation"),
+            "expected per-instruction !dbg locations in the IR for {src:?}"
+        );
+        // (b) The DWARF-carrying module survives parse → restamp → coro
+        // passes → LLJIT compile and runs `main` to a clean exit. A dropped
+        // or mis-scoped `!dbg` would surface here as an `add_ir_module` /
+        // `lookup_address` `Err`, not a silent pass.
+        let engine = LLJITEngine::new().expect("engine");
+        engine
+            .add_ir_module(&dwarf_ir)
+            .unwrap_or_else(|e| panic!("add DWARF module for {src:?}: {e}"));
+        let addr = engine
+            .lookup_address("main")
+            .unwrap_or_else(|e| panic!("lookup main for {src:?}: {e}"));
+        type MainFn = unsafe extern "C" fn() -> i32;
+        let main_fn: MainFn = unsafe { std::mem::transmute(addr as usize) };
+        assert_eq!(
+            unsafe { main_fn() },
+            0,
+            "DWARF-compiled `main` must run to a clean exit for {src:?}"
+        );
+    }
 }
