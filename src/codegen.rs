@@ -1776,6 +1776,18 @@ pub(super) struct Codegen<'ctx> {
     /// copy-support); removed on shadow-rebind; cleared per-function alongside
     /// `for_loop_borrow_vars`.
     pub(crate) for_loop_owned_agg_vars: HashSet<String>,
+    /// LLJIT Slice 6c prerequisite (B-2026-07-08-5 fix): the index sub-pattern
+    /// of a `for (i, v) in xs.iter().enumerate()` loop, threaded from
+    /// `compile_for`'s `.enumerate()` arm into the underlying container loop
+    /// (`compile_for_{vec,slice,array}_var`). Those loops already carry the
+    /// storage index as their induction variable — which is exactly the
+    /// enumerate index — so they `take()` this and bind it to the loop's `cur`
+    /// alongside the element. `take()` (not clone) so a NESTED loop inside the
+    /// enumerate body doesn't inherit it. Before this, `.enumerate()` fell
+    /// through `compile_for`'s dispatch to the silent skip-body arm, so every
+    /// enumerate loop body was a no-op under codegen (outer mutations lost) —
+    /// interpreter-vs-codegen divergence, e.g. two_sum printing "No solution".
+    pub(crate) enumerate_index_pattern: Option<crate::ast::Pattern>,
     /// Owned (bare, non-ref) **struct** params with at least one heap
     /// (`Vec`/`String`) field. Same copy-model rationale as
     /// `owned_vecstr_params`, one level in: a by-value struct param is a
@@ -5405,6 +5417,7 @@ impl<'ctx> Codegen<'ctx> {
             owned_vecstr_params: HashSet::new(),
             for_loop_borrow_vars: HashSet::new(),
             for_loop_owned_agg_vars: HashSet::new(),
+            enumerate_index_pattern: None,
             owned_struct_params: HashSet::new(),
             fn_param_ref: HashMap::new(),
             extern_link_names: HashMap::new(),

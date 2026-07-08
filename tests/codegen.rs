@@ -2189,6 +2189,43 @@ mod codegen_tests {
     }
 
     #[test]
+    fn e2e_enumerate_loop_body_and_outer_mutations_execute() {
+        // B-2026-07-08-5: `for (i, v) in xs.iter().enumerate()` fell through
+        // `compile_for`'s dispatch to the silent skip-body arm, so the loop body
+        // never ran under codegen — every outer-variable mutation was lost
+        // (`sum` stayed 0) while the interpreter was correct. This was a
+        // silent-wrong-output divergence surfaced by LLJIT Slice 6b routing
+        // `karac run` onto codegen (two_sum printed "No solution"). Guard the
+        // full pattern: an accumulator mutated per element, the enumerate index
+        // used in the body, and the canonical get-then-insert-in-loop Map idiom.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let vals = [10, 20, 30];\n\
+                 let mut sum = 0i64;\n\
+                 for (i, v) in vals.iter().enumerate() { sum = sum + v + i; }\n\
+                 println(sum);\n\
+                 let nums = [2, 7, 11, 15];\n\
+                 let mut seen: Map[i64, i64] = Map.new();\n\
+                 let mut found = -1i64;\n\
+                 for (i, num) in nums.iter().enumerate() {\n\
+                     match seen.get(9 - num) {\n\
+                         Some(j) => { found = j; }\n\
+                         None => { let _ = seen.insert(num, i); }\n\
+                     }\n\
+                 }\n\
+                 println(found);\n\
+                 println(seen.len());\n\
+             }",
+        ) {
+            // sum = (10+0)+(20+1)+(30+2) = 63. found = 0: num=2 inserts (2->0),
+            // num=7 looks up 9-7=2 -> Some(0). Inserts: num=2 (miss 7), num=11
+            // (miss -2), num=15 (miss -6) = 3 keys; num=7 hit the Some arm and
+            // did not insert. So len = 3. (Matches interp and AOT.)
+            assert_eq!(out, "63\n0\n3\n");
+        }
+    }
+
+    #[test]
     fn ir_borrowed_string_slice_map_key_uses_borrow_externs() {
         // Regression guard that the allocation-free path actually fires: a
         // String-slice key in get/insert must lower to the non-allocating

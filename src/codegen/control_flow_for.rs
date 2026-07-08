@@ -22,6 +22,50 @@ use super::state::LoopFrame;
 impl<'ctx> super::Codegen<'ctx> {
     // ── For loop ─────────────────────────────────────────────────
 
+    /// `.enumerate()` support (B-2026-07-08-5): true when `object` (the receiver
+    /// of `.enumerate()`, typically `xs.iter()`) peels to a named Vec / Slice /
+    /// array variable — the receivers whose container loops carry a storage
+    /// index we can bind as the enumerate index. Conservative: anything else
+    /// (array literals, field/index receivers, map/set/string) returns false so
+    /// the `.enumerate()` arm falls through to the existing dispatch unchanged.
+    fn for_receiver_is_indexable(&self, object: &Expr) -> bool {
+        let inner = match &object.kind {
+            ExprKind::MethodCall {
+                object: o,
+                method,
+                args,
+                ..
+            } if args.is_empty() && (method == "iter" || method == "into_iter") => o.as_ref(),
+            _ => object,
+        };
+        if let ExprKind::Identifier(name) = &inner.kind {
+            let n = name.as_str();
+            if self.vec_elem_types.contains_key(n) || self.slice_elem_types.contains_key(n) {
+                return true;
+            }
+            if let Some(slot) = self.variables.get(n) {
+                if matches!(slot.ty, BasicTypeEnum::ArrayType(_)) {
+                    return true;
+                }
+            }
+            if matches!(self.ref_params.get(n), Some(BasicTypeEnum::ArrayType(_))) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Bind the pending `.enumerate()` index sub-pattern to the container loop's
+    /// current storage index `cur`, if an enumerate is active. `take()`s the
+    /// pattern so a nested loop inside the body doesn't re-bind it. Called by
+    /// each indexable container loop right after it binds the element.
+    fn bind_enumerate_index(&mut self, cur: IntValue<'ctx>) -> Result<(), String> {
+        if let Some(idx_pat) = self.enumerate_index_pattern.take() {
+            self.bind_pattern(&idx_pat, cur.into())?;
+        }
+        Ok(())
+    }
+
     /// Compile `for pattern in iterable { body }`.
     /// Currently supports ranges (`start..end`, `start..=end`) and array literals.
     pub(super) fn compile_for(
@@ -180,6 +224,31 @@ impl<'ctx> super::Codegen<'ctx> {
                         Some(step_expr),
                         body,
                     );
+                }
+            }
+            // `for (i, v) in xs.iter().enumerate()` (B-2026-07-08-5). The
+            // underlying `compile_for_{vec,slice,array}_var` loop already carries
+            // the storage index as its induction variable, which is exactly the
+            // enumerate index — so peel `.enumerate()`, stash the index
+            // sub-pattern in `self.enumerate_index_pattern`, and recurse on the
+            // inner receiver (`xs.iter()` → `xs`) with the ELEMENT sub-pattern.
+            // The container loop binds the element as usual and additionally
+            // binds the stashed index to its `cur`. Only 2-tuple patterns over an
+            // indexable receiver are handled here; anything else falls through to
+            // the dispatch below unchanged (no regression vs the prior skip). The
+            // save/restore protects the fall-through case; the container loop's
+            // `take()` protects nested loops in the body.
+            if args.is_empty() && method == "enumerate" {
+                if let PatternKind::Tuple(subs) = &pattern.kind {
+                    if subs.len() == 2 && self.for_receiver_is_indexable(object) {
+                        let idx_pat = subs[0].clone();
+                        let elem_pat = &subs[1];
+                        let saved = self.enumerate_index_pattern.take();
+                        self.enumerate_index_pattern = Some(idx_pat);
+                        let r = self.compile_for(label, elem_pat, object, body);
+                        self.enumerate_index_pattern = saved;
+                        return r;
+                    }
                 }
             }
         }
@@ -956,6 +1025,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.bind_pattern(pattern, elem_val)?;
         self.register_for_loop_bindings(pattern, var_name);
+        self.bind_enumerate_index(cur)?;
         self.compile_loop_body_with_cleanup(body, incr_bb)?;
 
         self.builder.position_at_end(incr_bb);
@@ -1061,6 +1131,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.bind_pattern(pattern, elem_val)?;
         self.register_for_loop_bindings(pattern, var_name);
+        self.bind_enumerate_index(cur)?;
         self.compile_loop_body_with_cleanup(body, incr_bb)?;
 
         // Increment
@@ -1718,6 +1789,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(elem_ty, elem_ptr, "for.elem")
             .unwrap();
         self.bind_pattern(pattern, elem_val)?;
+        self.bind_enumerate_index(cur)?;
         self.compile_loop_body_with_cleanup(body, incr_bb)?;
 
         // Increment
