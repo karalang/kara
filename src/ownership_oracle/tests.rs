@@ -338,3 +338,76 @@ fn main() {
     let drops = drops_in(&res, "main");
     assert!(drops.contains(&"m".to_string()) && drops.contains(&"st".to_string()));
 }
+
+// ─────────────────── conditional-move drop soundness ────────────────────
+
+#[test]
+fn conditional_move_keeps_source_drop_scheduled() {
+    // `if cond { v.push(s); }` moves `s` only on the then-path. On the else-path
+    // `s` survives and MUST be freed, so the model must keep `s` scheduled
+    // (branch-state merge: Owned unless Moved on ALL paths). Under-scheduling
+    // here would make a consuming codegen leak `s` when `!cond`.
+    let res = oracle(
+        r#"
+fn main() {
+    let s: String = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
+    let mut v: Vec[String] = Vec.new();
+    if v.len() == 0i64 { v.push(s); }
+    println(v.len());
+}
+"#,
+    );
+    assert!(res.is_clean(), "unexpected violations: {:?}", res.functions);
+    let drops = drops_in(&res, "main");
+    assert!(
+        drops.contains(&"s".to_string()),
+        "conditionally-moved `s` must stay scheduled (else-path survives); got {drops:?}"
+    );
+    assert!(drops.contains(&"v".to_string()), "v should drop; {drops:?}");
+}
+
+#[test]
+fn unconditional_move_both_branches_disarms_source() {
+    // Moved on BOTH paths → gone on every path → the model may elide `s`'s drop.
+    let res = oracle(
+        r#"
+fn main() {
+    let s: String = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
+    let mut v: Vec[String] = Vec.new();
+    if v.len() == 0i64 { v.push(s); } else { v.push(s); }
+    println(v.len());
+}
+"#,
+    );
+    assert!(res.is_clean(), "unexpected violations: {:?}", res.functions);
+    let drops = drops_in(&res, "main");
+    assert!(
+        !drops.contains(&"s".to_string()),
+        "`s` moved on both paths must NOT double-drop; {drops:?}"
+    );
+}
+
+#[test]
+fn match_move_in_one_arm_keeps_source_scheduled() {
+    // `s` moved in one arm only → survives the other arm → stays scheduled.
+    let res = oracle(
+        r#"
+fn main() {
+    let s: String = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
+    let mut v: Vec[String] = Vec.new();
+    let o: Option[i64] = Some(1i64);
+    match o {
+        Some(k) => { v.push(s); }
+        None => {}
+    }
+    println(v.len() + s.len());
+}
+"#,
+    );
+    assert!(res.is_clean(), "unexpected violations: {:?}", res.functions);
+    let drops = drops_in(&res, "main");
+    assert!(
+        drops.contains(&"s".to_string()),
+        "`s` moved in only one arm must stay scheduled; {drops:?}"
+    );
+}

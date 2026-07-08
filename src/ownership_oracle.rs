@@ -263,6 +263,23 @@ fn is_heap_builtin(name: &str) -> bool {
     )
 }
 
+/// Merge a place's state across two branches of a conditional. The only
+/// drop-safe way to elide a drop is agreement that the place is gone on every
+/// path, so `Moved`/`Borrowed`/`Dead` survive the merge only when both paths
+/// agree; any disagreement collapses to `Owned` (schedule the drop — a
+/// conditional over-schedule is corrected by codegen's runtime guard, whereas an
+/// under-schedule leaks). A binding's borrow-ness is fixed at introduction, so
+/// `Owned`/`Borrowed` never actually mix here; the `_ => Owned` arm is reached
+/// only by `Owned`/`Moved` disagreement — exactly the conditional-move case.
+fn merge_state(a: PlaceState, b: PlaceState) -> PlaceState {
+    match (a, b) {
+        (PlaceState::Moved, PlaceState::Moved) => PlaceState::Moved,
+        (PlaceState::Borrowed, PlaceState::Borrowed) => PlaceState::Borrowed,
+        (PlaceState::Dead, PlaceState::Dead) => PlaceState::Dead,
+        _ => PlaceState::Owned,
+    }
+}
+
 /// Scalar builtins that never own heap.
 fn is_pod_builtin(name: &str) -> bool {
     matches!(
@@ -500,6 +517,34 @@ impl Analyzer<'_> {
             {
                 self.by_name.insert(name, prev);
             }
+        }
+    }
+
+    /// Snapshot the states of the first `n` bindings — the *outer* bindings that
+    /// existed before a branch. Branch-local bindings (index ≥ `n`) are
+    /// discharged by their own scope pop and are never merged.
+    fn outer_states(&self, n: usize) -> Vec<PlaceState> {
+        self.bindings[..n].iter().map(|b| b.state).collect()
+    }
+
+    /// Restore outer binding states from a snapshot (used to reset before
+    /// analyzing a sibling branch from the same pre-branch state).
+    fn set_outer_states(&mut self, snap: &[PlaceState]) {
+        for (b, s) in self.bindings.iter_mut().zip(snap) {
+            b.state = *s;
+        }
+    }
+
+    /// Merge two post-branch outer-state snapshots into the live bindings. Drop
+    /// soundness for **conditional moves**: a place stays `Moved` (drop elided)
+    /// only if it is `Moved` on *both* paths; any disagreement — one path still
+    /// `Owned` — yields `Owned`, so the drop is scheduled and codegen's runtime
+    /// cap/null guard makes the over-scheduled conditional drop correct.
+    /// Under-scheduling would leak the not-moved path (the unsoundness this
+    /// method fixes: `if cond { v.push(s); }` must still free `s` when `!cond`).
+    fn merge_outer_states(&mut self, a: &[PlaceState], b: &[PlaceState]) {
+        for i in 0..a.len().min(b.len()) {
+            self.bindings[i].state = merge_state(a[i], b[i]);
         }
     }
 
@@ -830,18 +875,40 @@ impl Analyzer<'_> {
                 else_branch,
             } => {
                 self.analyze_expr(condition, Role::Read);
+                // Merge the two branches so a move on ONE path does not mark an
+                // outer binding Moved for the join (§ conditional-move drop
+                // soundness). The no-`else` path keeps the pre-branch state.
+                let n = self.bindings.len();
+                let pre = self.outer_states(n);
                 self.analyze_block(then_block, false);
+                let then_states = self.outer_states(n);
+                self.set_outer_states(&pre);
                 if let Some(e) = else_branch {
                     self.analyze_expr(e, role);
                 }
+                let else_states = self.outer_states(n);
+                self.merge_outer_states(&then_states, &else_states);
             }
             ExprKind::While {
                 condition, body, ..
             } => {
                 self.analyze_expr(condition, Role::Read);
+                // The body may run zero times, so merge its effect with the
+                // pre-loop state: a move inside the body never marks an outer
+                // binding Moved at the join.
+                let n = self.bindings.len();
+                let pre = self.outer_states(n);
                 self.analyze_block(body, false);
+                let body_states = self.outer_states(n);
+                self.merge_outer_states(&body_states, &pre);
             }
-            ExprKind::Loop { body, .. } => self.analyze_block(body, false),
+            ExprKind::Loop { body, .. } => {
+                let n = self.bindings.len();
+                let pre = self.outer_states(n);
+                self.analyze_block(body, false);
+                let body_states = self.outer_states(n);
+                self.merge_outer_states(&body_states, &pre);
+            }
             ExprKind::For {
                 pattern,
                 iterable,
@@ -857,13 +924,19 @@ impl Analyzer<'_> {
                 // Scrutinee borrowed for the pattern match (payload move-out is
                 // the §3.4 case; conservatively borrow here).
                 self.analyze_expr(value, Role::Read);
+                let n = self.bindings.len();
+                let pre = self.outer_states(n);
                 self.push_scope();
                 self.bind_match_pattern(pattern, /*scrutinee_owned=*/ false);
                 self.analyze_block(then_block, false);
                 self.pop_scope();
+                let then_states = self.outer_states(n);
+                self.set_outer_states(&pre);
                 if let Some(e) = else_branch {
                     self.analyze_expr(e, role);
                 }
+                let else_states = self.outer_states(n);
+                self.merge_outer_states(&then_states, &else_states);
             }
             ExprKind::WhileLet {
                 value,
@@ -934,6 +1007,12 @@ impl Analyzer<'_> {
         } else {
             self.analyze_expr(iterable, Role::Read);
         }
+        // Snapshot AFTER the iterable move (which is unconditional — owned
+        // iteration consumes `v` regardless of iteration count, so that move
+        // must survive) but before the body, whose moves of *other* outer
+        // bindings are conditional (zero-iteration path). Merge reverts those.
+        let n = self.bindings.len();
+        let pre = self.outer_states(n);
         self.push_scope();
         // Bind the loop variable.
         if let PatternKind::Binding(n) = &pattern.kind {
@@ -953,6 +1032,8 @@ impl Analyzer<'_> {
         }
         self.analyze_block(body, false);
         self.pop_scope();
+        let body_states = self.outer_states(n);
+        self.merge_outer_states(&body_states, &pre);
     }
 
     fn analyze_match(&mut self, scrutinee: &Expr, arms: &[MatchArm]) {
@@ -965,7 +1046,15 @@ impl Analyzer<'_> {
         } else {
             self.analyze_expr(scrutinee, Role::Read);
         }
+        // Arms are exclusive, exhaustive paths (the typechecker enforces
+        // exhaustiveness). Analyze each from the same pre-arm state and merge:
+        // an outer binding is Moved after the match only if Moved in EVERY arm.
+        // The scrutinee's own (unconditional) move is in `pre`, so it survives.
+        let n = self.bindings.len();
+        let pre = self.outer_states(n);
+        let mut arm_states: Vec<Vec<PlaceState>> = Vec::with_capacity(arms.len());
         for arm in arms {
+            self.set_outer_states(&pre);
             self.push_scope();
             self.bind_match_pattern(&arm.pattern, scrutinee_owned);
             if let Some(g) = &arm.guard {
@@ -973,6 +1062,16 @@ impl Analyzer<'_> {
             }
             self.analyze_expr(&arm.body, Role::Read);
             self.pop_scope();
+            arm_states.push(self.outer_states(n));
+        }
+        if let Some((first, rest)) = arm_states.split_first() {
+            let mut merged = first.clone();
+            for r in rest {
+                for i in 0..n {
+                    merged[i] = merge_state(merged[i], r[i]);
+                }
+            }
+            self.set_outer_states(&merged);
         }
     }
 
