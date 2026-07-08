@@ -217,6 +217,16 @@ pub fn validate_exports(program: &Program) -> Vec<(String, String)> {
             _ => None,
         })
         .collect();
+    // User-defined enums — lets the hint name the enum-specific path (no
+    // by-value C representation yet) instead of the generic fallback.
+    let all_enums: std::collections::BTreeSet<String> = program
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Item::EnumDef(e) => Some(e.name.clone()),
+            _ => None,
+        })
+        .collect();
     let mut errs = Vec::new();
     for it in &program.items {
         let Item::Function(f) = it else { continue };
@@ -233,7 +243,13 @@ pub fn validate_exports(program: &Program) -> Vec<(String, String)> {
                          (primitive / raw pointer / `#[repr(C)]` struct) nor an auto-boxable \
                          `Vec[scalar]` / `String` / `Vec[String]` / `Vec[Vec[scalar]]`.{}",
                         type_display(rt),
-                        abi_fix_hint(rt, &all_structs, &repr_c)
+                        abi_fix_hint(
+                            rt,
+                            BoundaryPosition::Return,
+                            &all_structs,
+                            &all_enums,
+                            &repr_c
+                        )
                     ),
                 ));
             }
@@ -249,7 +265,13 @@ pub fn validate_exports(program: &Program) -> Vec<(String, String)> {
                          params.{}",
                         p.name().unwrap_or("_"),
                         type_display(&p.ty),
-                        abi_fix_hint(&p.ty, &all_structs, &repr_c)
+                        abi_fix_hint(
+                            &p.ty,
+                            BoundaryPosition::Param,
+                            &all_structs,
+                            &all_enums,
+                            &repr_c
+                        )
                     ),
                 ));
             }
@@ -258,22 +280,74 @@ pub fn validate_exports(program: &Program) -> Vec<(String, String)> {
     errs
 }
 
-/// The actionable suffix for an `E_EXPORT_ABI` message. When the offending
-/// type is a user struct that merely lacks `#[repr(C)]`, point at the
-/// one-step fix; otherwise give the generic raw-pointer-box guidance.
+/// Which side of the boundary an offending type sits on — the fix differs
+/// (a return can box or use an out-param; a param wants the `(ptr, len)` C
+/// idiom).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BoundaryPosition {
+    Return,
+    Param,
+}
+
+/// The actionable suffix for an `E_EXPORT_ABI` message — category-specific so
+/// each rejected shape points at *its* real path across C, not a generic
+/// catch-all. Order matters: the most specific match wins.
 fn abi_fix_hint(
     te: &TypeExpr,
+    pos: BoundaryPosition,
     all_structs: &std::collections::BTreeSet<String>,
+    all_enums: &std::collections::BTreeSet<String>,
     repr_c: &std::collections::BTreeSet<String>,
 ) -> String {
+    // Tuples have no C name at all.
+    if let TypeKind::Tuple(elems) = &te.kind {
+        if !elems.is_empty() {
+            return " Tuples have no C representation — return a `#[repr(C)]` struct with named \
+                    fields instead (or split into scalar out-params)."
+                .to_string();
+        }
+    }
     if let TypeKind::Path(p) = &te.kind {
         if p.segments.len() == 1 {
             let n = &p.segments[0];
+            // A user struct that merely lacks `#[repr(C)]` — the one-step fix.
             if all_structs.contains(n) && !repr_c.contains(n) {
                 return format!(
                     " Add `#[repr(C)]` to `{n}` and it crosses transparently — the C header \
                      then declares the struct by value."
                 );
+            }
+            // `Option[T]` — the discriminated-optional case. NULL is the
+            // natural C sentinel for a pointer payload.
+            if n == "Option" {
+                return " `Option` has no by-value C representation: return a raw pointer whose \
+                        NULL means `None`, or a `#[repr(C)]` struct with a present-flag plus the \
+                        value. (repr(C) tagged-union enums are a planned follow-on.)"
+                    .to_string();
+            }
+            // A user-defined enum (or `Result`) — a tagged value with no C
+            // by-value form yet.
+            if n == "Result" || all_enums.contains(n) {
+                return " Enums have no by-value C representation yet: return a `#[repr(C)]` struct \
+                        carrying a status/tag field plus the payload, or an opaque handle and \
+                        accessor exports the C side calls. (repr(C) tagged-union enums are a \
+                        planned follow-on.)"
+                    .to_string();
+            }
+            // An aggregate collection as a *param* — the C idiom is a pointer
+            // and a length, not by-value (params never box).
+            if pos == BoundaryPosition::Param && (n == "Vec" || n == "String") {
+                return " Pass a raw pointer + length (the C `(ptr, len)` idiom) instead — \
+                        aggregates cross by value only as auto-boxed *returns*, never as params."
+                    .to_string();
+            }
+            // A `Vec` return past the boxable depth (one level of aggregate
+            // nesting): the shape is right but too deep.
+            if pos == BoundaryPosition::Return && n == "Vec" {
+                return " Returns auto-box up to one level of aggregate nesting (`Vec[String]`, \
+                        `Vec[Vec[scalar]]`); a deeper element type isn't boxed — flatten it, or \
+                        return a raw pointer to a Kāra-owned box."
+                    .to_string();
             }
         }
     }
@@ -909,6 +983,43 @@ mod tests {
         assert!(
             validate_exports(&ok.program).is_empty(),
             "clean surface flagged"
+        );
+    }
+
+    #[test]
+    fn reject_hints_are_category_specific() {
+        // Each rejected shape points at ITS real path, not the generic hint.
+        let hint_for = |src: &str, fname: &str| -> String {
+            let p = crate::parse(src);
+            validate_exports(&p.program)
+                .into_iter()
+                .find(|(n, _)| n == fname)
+                .map(|(_, r)| r)
+                .unwrap_or_default()
+        };
+
+        // Option return → NULL-pointer / present-flag guidance.
+        let opt = hint_for("pub extern \"C\" fn m() -> Option[i64] { }", "m");
+        assert!(opt.contains("`Option` has no by-value"), "Option: {opt}");
+
+        // Result / user enum return → tag-field / accessor guidance.
+        let res = hint_for("pub extern \"C\" fn r() -> Result[i64, i64] { }", "r");
+        assert!(res.contains("Enums have no by-value"), "Result: {res}");
+        let en = hint_for(
+            "pub enum Color { Red, Green }\npub extern \"C\" fn c() -> Color { }",
+            "c",
+        );
+        assert!(en.contains("Enums have no by-value"), "enum: {en}");
+
+        // Vec/String as a PARAM → (ptr, len) idiom (not the return box hint).
+        let vp = hint_for("pub extern \"C\" fn t(v: Vec[i64]) -> i64 { 0 }", "t");
+        assert!(vp.contains("`(ptr, len)` idiom"), "Vec param: {vp}");
+
+        // Tuple return → repr(C) struct with named fields.
+        let tup = hint_for("pub extern \"C\" fn p() -> (i64, i64) { }", "p");
+        assert!(
+            tup.contains("Tuples have no C representation"),
+            "tuple: {tup}"
         );
     }
 
