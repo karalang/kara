@@ -89,15 +89,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **289 surfaced · 0 open · 288 fixed** (2026-05-20 → 2026-07-07). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **290 surfaced · 0 open · 289 fixed** (2026-05-20 → 2026-07-08). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (0)
 
 _None — the ledger is fully drained._
 
-### Fixed (288)
+### Fixed (289)
 
-<details><summary>288 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>289 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -389,6 +389,7 @@ _None — the ledger is fully drained._
 | B-2026-07-07-4 | codegen | high | Borrow-returning fn (`fn f(u: ref String) -> ref String { u }`, and the `ref Vec` analog) writes out of bounds and segfaults under -O2/LLJIT | fddfb9a |
 | B-2026-07-07-5 | codegen | high | Always-JIT execution lane produced EMPTY output for every non-trivial program on Linux/ELF | 199098e |
 | B-2026-07-07-6 | codegen | low | REPL cross-type rebind crashes the JIT runner on Linux (1 test: repl_jit_cross_type_rebind_uses_new_value) | 8ab9e79 |
+| B-2026-07-08-1 | typechecker | medium | Typechecker accepted a return-position `impl Trait` with MULTIPLE distinct concrete witnesses — a run-vs-build divergence | def4648 |
 
 </details>
 
