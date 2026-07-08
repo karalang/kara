@@ -669,8 +669,16 @@ fn test_check_provider_escape_error_json() {
 
 #[test]
 fn test_run_rejects_provider_escape() {
-    // `karac run` must abort on escape errors — the spec's "cannot
-    // escape" rule breaks test isolation if we silently run.
+    // `karac run` must abort on escape errors — the spec's "cannot escape"
+    // rule breaks test isolation if we silently run. Post-Slice-6 (run-leniency
+    // stripped), run rejects the same set `check` rejects: this fixture's
+    // escape ALSO manifests as a type error (`expected '()', found 'Fn(...)'`
+    // — the closure returns a Clock-bound function), and `karac check` reports
+    // both. Run now aborts at the type gate with `error[typecheck]` before the
+    // provider_escape gate is reached; the essential property (run does NOT
+    // silently execute an escaping program) holds. The provider_escape-specific
+    // diagnostic stays covered by `test_check_provider_escape_error*` (which
+    // exercise `karac check`, where all diagnostics are collected together).
     let out = karac_bin()
         .args(["run", "tests/snapshots/provider_escape_error.kara"])
         .output()
@@ -678,8 +686,8 @@ fn test_run_rejects_provider_escape() {
     assert!(!out.status.success(), "expected non-zero exit");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("error[provider_escape]"),
-        "expected provider_escape error, got: {}",
+        stderr.contains("error[typecheck]") || stderr.contains("error[provider_escape]"),
+        "run must reject the escaping program with a hard error, got: {}",
         stderr
     );
 }
@@ -11262,18 +11270,19 @@ fn main() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-// ── Phase-10: `karac run` effect-violation leniency (warn + execute) ─
+// ── LLJIT Slice 6: `karac run` rejects effect violations (leniency stripped) ─
 
-/// The run-leniency decision (phase-10 tracker, 2026-06-06): `karac run`
-/// runs the effect checker but downgrades its findings to
-/// `warning[effect]` stderr lines — static-contract violations (types,
-/// effects) warn on the lenient script path; the program still executes
-/// and exits 0. `karac check` keeps rejecting the same program (the
-/// documented run/check asymmetry).
+/// Post-Slice-6, run-leniency is stripped: `karac run` rejects the same
+/// static-contract violations `karac check` / `karac build` reject. A hard
+/// effect error (E0400 here) now aborts the run with `error[effect]` on
+/// stderr instead of downgrading to `warning[effect]` and executing — the
+/// run/check *acceptance* asymmetry is gone. (Was
+/// `run_effect_violation_warns_and_executes` under the phase-10 leniency
+/// decision, 2026-06-06, superseded by the 2026-07-06 LLJIT decision.)
 #[test]
-fn run_effect_violation_warns_and_executes() {
+fn run_effect_violation_aborts() {
     let tmp = std::env::temp_dir().join(format!(
-        "karac-cli-run-effect-warn-{}-{}",
+        "karac-cli-run-effect-abort-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -11281,7 +11290,7 @@ fn run_effect_violation_warns_and_executes() {
             .unwrap_or(0),
     ));
     std::fs::create_dir_all(&tmp).unwrap();
-    let path = tmp.join("effwarn.kara");
+    let path = tmp.join("effabort.kara");
     let src = r#"
 effect resource Db;
 
@@ -11306,27 +11315,31 @@ fn main() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        out.status.success(),
-        "effect violations must not abort `karac run`; stdout={stdout} stderr={stderr}",
+        !out.status.success(),
+        "post-Slice-6, an effect violation must abort `karac run`; stdout={stdout} stderr={stderr}",
     );
     assert!(
-        stdout.contains("ran anyway"),
-        "program should execute past the effect violation: {stdout}",
+        !stdout.contains("ran anyway"),
+        "program must NOT execute past the rejected effect violation: {stdout}",
     );
     assert!(
-        stderr.contains("warning[effect]")
+        stderr.contains("error[effect]")
             && stderr.contains("public function 'api' performs effects [writes(Db)]"),
-        "the E0400 finding should surface as warning[effect] on stderr: {stderr}",
+        "the E0400 finding should surface as a hard error[effect] on stderr: {stderr}",
+    );
+    assert!(
+        !stderr.contains("warning[effect]"),
+        "the effect violation must NOT downgrade to warning[effect]: {stderr}",
     );
 
-    // The asymmetry half: `karac check` rejects the same program.
+    // Symmetry: `karac check` rejects the same program — run now agrees.
     let out = karac_bin()
         .args(["check", path.to_str().unwrap()])
         .output()
         .unwrap();
     assert!(
         !out.status.success(),
-        "`karac check` must keep rejecting the program `karac run` warns on",
+        "`karac check` must also reject the effect violation",
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
@@ -11336,9 +11349,10 @@ fn main() {
 /// `as` lowering, so the interpreter would substitute a placeholder and
 /// emit silently wrong output at exit 0 — the run-leniency footgun kata
 /// #67/#415 surfaced. `karac run` must abort with `error[typecheck]` (not
-/// downgrade to a warning), matching `karac check` / `karac build`. Pairs
-/// with `run_noncast_type_error_warns_and_executes` below, which pins that
-/// the partition stays narrow — soft type errors keep their leniency.
+/// downgrade to a warning), matching `karac check` / `karac build`. Since
+/// Slice 6 stripped run-leniency entirely, this abort is no longer special-
+/// cased — every type error aborts (see `run_soft_type_error_aborts`) — but
+/// the value-corrupting cast remains a load-bearing regression pin.
 #[test]
 fn run_value_corrupting_cast_aborts() {
     let tmp = std::env::temp_dir().join(format!(
@@ -11394,17 +11408,18 @@ fn run_value_corrupting_cast_aborts() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Guard that the run-fatal partition stays *narrow*: a genuinely soft
-/// type error (here a too-many-arguments arity mismatch) must keep the
-/// phase-10 leniency — downgrade to `warning[typecheck]` and execute to
-/// exit 0. Without this, a future widening of `TypeErrorKind::is_run_fatal`
-/// that swept in ordinary type errors would silently break the script
-/// path's fast-iteration ethos. The complement of
-/// `run_value_corrupting_cast_aborts`.
+/// Post-Slice-6: run-leniency stripped, so *every* type error is fatal for
+/// `karac run` — not just the narrow value-corrupting `is_run_fatal` set. A
+/// genuinely soft type error (here a too-many-arguments arity mismatch) now
+/// aborts the run with `error[typecheck]` instead of downgrading to
+/// `warning[typecheck]` and executing. This is the deliberate reversal of the
+/// phase-10 "soft type errors keep their leniency" partition — run now agrees
+/// with `check`/`build` on acceptance. (Was
+/// `run_noncast_type_error_warns_and_executes`.)
 #[test]
-fn run_noncast_type_error_warns_and_executes() {
+fn run_soft_type_error_aborts() {
     let tmp = std::env::temp_dir().join(format!(
-        "karac-cli-run-softtype-warn-{}-{}",
+        "karac-cli-run-softtype-abort-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -11423,16 +11438,20 @@ fn run_noncast_type_error_warns_and_executes() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        out.status.success(),
-        "a soft type error must NOT abort `karac run`; stdout={stdout} stderr={stderr}",
+        !out.status.success(),
+        "post-Slice-6, a soft type error must abort `karac run`; stdout={stdout} stderr={stderr}",
     );
     assert!(
-        stdout.contains("ran anyway"),
-        "program should execute past the soft type error: {stdout}",
+        !stdout.contains("ran anyway"),
+        "program must NOT execute past the rejected type error: {stdout}",
     );
     assert!(
-        stderr.contains("warning[typecheck]"),
-        "the arity mismatch should surface as warning[typecheck]: {stderr}",
+        stderr.contains("error[typecheck]"),
+        "the arity mismatch should surface as a hard error[typecheck]: {stderr}",
+    );
+    assert!(
+        !stderr.contains("warning[typecheck]"),
+        "the type error must NOT downgrade to warning[typecheck]: {stderr}",
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }

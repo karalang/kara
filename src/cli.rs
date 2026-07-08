@@ -4324,22 +4324,18 @@ fn cmd_run(
         }
     }
 
-    // Type-check (non-fatal for interpreter)
+    // Type-check. Post-Slice-6 (run-leniency stripped) any type error is
+    // fatal for `karac run`, gated below — matching `check`/`build`.
     pipeline.typecheck();
     pipeline.lower();
-    // Effect-check (non-fatal — phase-10 run-leniency decision,
-    // 2026-06-06). `karac run` is the lenient script path: violations
-    // of *static contracts* (typecheck, effects — including E0411
-    // target-gate findings) downgrade to warnings and the program
-    // still executes; only violations that break *execution-soundness/
-    // teardown guarantees* (provider escape, RAII-across-yield below) —
-    // plus the value-corrupting type errors gated immediately after this
-    // pass — abort. Running the pass here is also load-bearing for two
-    // consumers that read its outputs on this path: `raii_check`
-    // (keys off `Program.state_struct_layouts` / `yield_points`,
-    // populated by `Pipeline::effectcheck` — without this call the
-    // run-path RAII gate below was vacuously green) and the
-    // `missing_track_caller` lint (reads `pipeline.effects`).
+    // Effect-check. Post-Slice-6 hard effect errors are fatal for `karac run`
+    // (gated below), same as `check`/`build` — the phase-10 downgrade-to-
+    // `warning[effect]` leniency is gone. Running the pass here is still
+    // load-bearing for two consumers that read its outputs on this path:
+    // `raii_check` (keys off `Program.state_struct_layouts` / `yield_points`,
+    // populated by `Pipeline::effectcheck` — without this call the run-path
+    // RAII gate below was vacuously green) and the `missing_track_caller`
+    // lint (reads `pipeline.effects`). FFI lint *hints* stay advisory notes.
     pipeline.effectcheck();
 
     // Comptime fold failures are run-fatal even on the lenient script path.
@@ -4378,34 +4374,69 @@ fn cmd_run(
         process::exit(1);
     }
 
-    // Value-corrupting type errors are run-fatal even on the lenient
-    // script path. The run-leniency decision downgrades most static-contract
-    // violations to warnings and executes anyway — but an *invalid cast*
-    // the typechecker rejected (`TypeErrorKind::is_run_fatal`) has no
-    // defined `as` lowering, so the interpreter would substitute a
-    // placeholder (empty `String` / unchanged int) and emit silent wrong
-    // output at exit 0. `karac check` / `karac build` already reject these;
-    // this brings `run` into line for exactly that class while genuinely
-    // soft type errors (mismatch, arity, exhaustiveness) keep downgrading
-    // to the `warning[typecheck]` block below. Mirrors the provider_escape /
-    // RAII gates: an execution-soundness violation aborts rather than warns.
-    // (B-2026-06-13-15.)
-    if let Some(ref t) = pipeline.typed {
-        let run_fatal: Vec<&crate::typechecker::TypeError> =
-            t.errors.iter().filter(|e| e.kind.is_run_fatal()).collect();
-        if !run_fatal.is_empty() {
-            match output {
-                OutputMode::Text => {
-                    for err in &run_fatal {
+    // LLJIT Slice 6 — run-leniency STRIPPED. `karac run` now rejects the same
+    // static-contract violations `karac check` / `karac build` reject: ANY
+    // type error and any hard effect error (FfiLintHint notes excepted) abort
+    // the run instead of downgrading to `warning[...]` and executing. This
+    // collapses the run/build *acceptance* divergence that was the epic's
+    // headline tax — the phase-10 run-leniency decision (2026-06-06, "static
+    // contracts warn on the lenient script path") is superseded by the
+    // 2026-07-06 LLJIT-productionization owner decision (see
+    // docs/spikes/lljit-productionization.md § Slice 6). The blast radius was
+    // measured first (examples/ + kara-katas + examples/mend sweep, 0 breaks
+    // after fixes — docs/spikes/lljit-slice6-leniency-sweep.md), never stripped
+    // blind. `TypeErrorKind::is_run_fatal` is now vestigial for this path —
+    // the run gate no longer filters by it (every type error is fatal, so the
+    // old invalid-cast-only gate, B-2026-06-13-15, is subsumed). The classifier
+    // is kept as public API pinned by typechecker tests that document which
+    // kinds are value-corrupting; it no longer gates `karac run`. Execution-
+    // soundness gates (comptime above; provider escape, RAII below) and
+    // ownership keep their own handling.
+    // A run-fatal effect error is any hard finding EXCEPT the two advisory
+    // classes that stay lenient by design:
+    //   - `FfiLintHint`  — a `note[effect]` lint, never an error.
+    //   - `TargetGateViolation` (E0411) — a *target-availability* finding, not
+    //     a correctness bug. Running a `std.web` program on the `native`
+    //     target with its web resources stubbed is a deliberate cross-target
+    //     dev workflow (`karac run webby.kara` to exercise logic locally); it
+    //     stays a `warning[effect]` and executes. `build`/`check` treat it the
+    //     same on native, so this is not a run/build divergence — Slice 6
+    //     strips *correctness* leniency, not portability affordances.
+    let is_fatal_effect = |k: &EffectErrorKind| {
+        !matches!(
+            k,
+            EffectErrorKind::FfiLintHint | EffectErrorKind::TargetGateViolation
+        )
+    };
+    let has_type_errs = pipeline.has_type_errors();
+    let has_effect_errs = pipeline
+        .effects
+        .as_ref()
+        .is_some_and(|e| e.errors.iter().any(|er| is_fatal_effect(&er.kind)));
+    if has_type_errs || has_effect_errs {
+        match output {
+            OutputMode::Text => {
+                if let Some(ref t) = pipeline.typed {
+                    for err in &t.errors {
                         eprintln!(
                             "error[typecheck]: {}:{}:{}: {}",
                             filename, err.span.line, err.span.column, err.message
                         );
                     }
                 }
-                OutputMode::Json => emit_json_output(&pipeline),
-                OutputMode::Jsonl => {
-                    for err in &run_fatal {
+                if let Some(ref e) = pipeline.effects {
+                    for err in e.errors.iter().filter(|er| is_fatal_effect(&er.kind)) {
+                        eprintln!(
+                            "error[effect]: {}:{}:{}: {}",
+                            filename, err.span.line, err.span.column, err.message
+                        );
+                    }
+                }
+            }
+            OutputMode::Json => emit_json_output(&pipeline),
+            OutputMode::Jsonl => {
+                if let Some(ref t) = pipeline.typed {
+                    for err in &t.errors {
                         emit_jsonl_event(
                             "diagnostic",
                             &format!(
@@ -4416,36 +4447,43 @@ fn cmd_run(
                         );
                     }
                 }
+                if let Some(ref e) = pipeline.effects {
+                    for err in e.errors.iter().filter(|er| is_fatal_effect(&er.kind)) {
+                        emit_jsonl_event(
+                            "diagnostic",
+                            &format!(
+                                "\"severity\":\"error\",\"phase\":\"effect\",{},\"message\":{}",
+                                span_to_json(&err.span, filename),
+                                json_string(&err.message),
+                            ),
+                        );
+                    }
+                }
             }
-            process::exit(1);
         }
+        process::exit(1);
     }
 
     if output == OutputMode::Text {
-        // Print type warnings to stderr
-        if let Some(ref t) = pipeline.typed {
-            for err in &t.errors {
-                eprintln!(
-                    "warning[typecheck]: {}:{}:{}: {}",
-                    filename, err.span.line, err.span.column, err.message
-                );
-            }
-        }
-        // Print effect findings to stderr, mirroring the typecheck
-        // treatment: hard effect errors downgrade to `warning[effect]`
-        // on this path; FFI lint hints keep their `note[effect]`
-        // severity (same split as `print_text_diagnostics`).
+        // LLJIT Slice 6: with correctness leniency stripped, hard type + effect
+        // errors already aborted the run above. Two advisory effect classes
+        // survive on this path and stay warnings/notes (they don't gate
+        // execution): `TargetGateViolation` (E0411) — the cross-target
+        // "run std.web on native with stubbed resources" affordance — prints
+        // `warning[effect]`; FFI lint hints keep their `note[effect]` severity.
         if let Some(ref e) = pipeline.effects {
             for err in &e.errors {
-                let label = if err.kind == EffectErrorKind::FfiLintHint {
-                    "note[effect]"
-                } else {
-                    "warning[effect]"
-                };
-                eprintln!(
-                    "{label}: {}:{}:{}: {}",
-                    filename, err.span.line, err.span.column, err.message
-                );
+                match err.kind {
+                    EffectErrorKind::TargetGateViolation => eprintln!(
+                        "warning[effect]: {}:{}:{}: {}",
+                        filename, err.span.line, err.span.column, err.message
+                    ),
+                    EffectErrorKind::FfiLintHint => eprintln!(
+                        "note[effect]: {}:{}:{}: {}",
+                        filename, err.span.line, err.span.column, err.message
+                    ),
+                    _ => {}
+                }
             }
         }
         // Lint: undocumented_unsafe

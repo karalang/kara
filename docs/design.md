@@ -10139,14 +10139,47 @@ When a package declares multiple targets in its build configuration, `karac chec
 
 **Concrete spellings (decided 2026-06-06).** The declaration lives in the manifest as `[build] targets = ["native", "wasm_browser"]` — an array of v1 target names, distinct from `[build].target` (a rustc-style triple selecting the per-target manifest overlay for `karac build`). Unknown names and duplicates are hard manifest errors: a soft-warn posture would let a typo silently drop a target from a CI verification matrix, which is the failure the field exists to prevent. `karac check <file>` discovers the manifest by walking upward from the checked file's own directory (the same discovery rule as `karac run`). The explicit override is `karac check <file> --targets=<list|all>` (mutually exclusive with `--profiles=` — both are run-the-pipeline-N-times matrices, and no one has asked for their product). Each per-target pass re-parameterizes not just the provided-resource set but also `#[target(...)]` absence filtering and tombstone diagnostics, so each pass sees exactly what that target's build would see. Deduplication compares rendered diagnostics across targets: a finding identical on **every** target is reported once in an "all targets" group (text) / `shared_diagnostics` array (JSON) — it is a target-agnostic bug, not a target-specific one. JSONL output streams per-target between `target_start`/`target_complete` events and leaves dedup to the consumer, mirroring the `--profiles` stream shape. A single declared target is not a matrix but still runs under that target's resource set — a `wasm_browser`-only package is checked against `wasm_browser`, not the host default.
 
-#### `karac run` Leniency — Warn vs. Abort (decided 2026-06-06)
+#### `karac run` Leniency — STRIPPED (decided 2026-06-06, superseded 2026-07-08)
 
-`karac run` is the lenient script path, and its gate tiering is a deliberate decision, not an accident of which passes happen to execute:
+**Superseded by LLJIT-productionization Slice 6 (2026-07-08).** The run-leniency
+decision below made `karac run` accept type/effect-erroring programs (warn + run)
+that `check`/`build` reject — the single largest `run`/`build` *acceptance*
+divergence, and the tax the LLJIT-productionization epic exists to collapse
+([`docs/spikes/lljit-productionization.md`](spikes/lljit-productionization.md)).
+Slice 6 strips it: `karac run` now rejects the same **correctness** violations
+`check`/`build` reject. The blast radius was measured first — an `examples/` +
+`kara-katas` + `examples/mend` sweep (0 breaks after fixing 6 stale-annotation
+programs; [`spikes/lljit-slice6-leniency-sweep.md`](spikes/lljit-slice6-leniency-sweep.md))
+— never stripped blind. Current behavior:
 
-- **Static-contract violations warn and the program runs.** Typecheck errors and effect-checker findings — undeclared public effects (E0400), over-declarations, profile violations, *and* target-gate findings (E0411) — print as `warning[typecheck]` / `warning[effect]` lines on stderr (FFI hints keep `note[effect]`), and execution proceeds with exit 0. These contracts protect *consumers* of the code; the tree-walk interpreter doesn't need them to execute the script in front of it. (E0411 specifically: `run` always executes on native via the interpreter, so a target-foreign resource reachable from `main` just means a stub or runtime error — e.g. `std.web.net.fetch`'s honest stub — which is legitimate script-mode exploration.)
-- **Execution-soundness violations abort.** Provider-rooted resource escape (E0600) and RAII-across-yield (`E_RAII_ACROSS_YIELD`) break the language's test-isolation, teardown, and cancellation guarantees — running anyway would execute a program whose semantics the language doesn't stand behind. These exit 1 before the interpreter starts, same as `check`/`build`.
+- **Correctness violations abort** (NEW). Any typecheck error and any hard
+  effect-checker finding — undeclared public effects (E0400), over-declarations,
+  profile violations — exit 1 with `error[typecheck]` / `error[effect]` before
+  execution, exactly as `check`/`build` do. The old "static contracts warn and
+  the script runs anyway" tier is gone.
+- **Target-availability findings stay lenient** (unchanged). Target-gate
+  findings (E0411) remain `warning[effect]` and the program runs. This is a
+  *portability affordance*, not a masked correctness bug: `karac run` executes
+  on native, so a target-foreign resource reachable from `main` (e.g.
+  `std.web.net.fetch`'s honest stub) is legitimate cross-target exploration —
+  running a `std.web` program locally to exercise its logic. `build`/`check`
+  treat E0411 the same on native, so this is not a divergence. FFI hints keep
+  `note[effect]`.
+- **Execution-soundness violations abort** (unchanged). Provider-rooted resource
+  escape (E0600) and RAII-across-yield (`E_RAII_ACROSS_YIELD`) exit 1 before
+  execution, same as `check`/`build`.
 
-`karac check` and `karac build` remain the strict surfaces: every tier above is a hard error there (modulo `build`'s documented native-effects-non-fatal posture, which hardens to abort on WASM targets where the violation would otherwise resurface as a link error). The asymmetry is the same one every scripting-capable compiled language navigates — `run` answers "what does this script do?", `check` answers "is this code correct?".
+The interpreter is reachable via `karac run --interp`-class flags on `repl`/`test`
+(Slice 5); `run` itself moves onto the JIT in Slice 6's second leg. With leniency
+stripped, `run` answers "what does this **correct** script do?" — the "is this
+code correct?" gate is no longer skippable. Legacy note: the original tiering
+below is retained for history.
+
+- *(historical)* Static-contract violations warned and the program ran (exit 0);
+  the rationale was that those contracts protect *consumers* and the tree-walk
+  interpreter didn't need them to execute the script in front of it. That
+  fast-iteration ethos is superseded by the run/build-parity mandate — a script
+  that "runs" while `build` rejects it is the divergence tax, not a feature.
 
 #### CPU Baseline Targeting
 

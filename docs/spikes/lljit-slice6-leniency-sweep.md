@@ -1,10 +1,11 @@
-# Slice 6 (strip run-leniency) — blast-radius sweep
+# Slice 6 (strip run-leniency) — blast-radius sweep + strip
 
-**Status:** sweep partially complete — `examples/` + `examples/mend` done (0 real
-breaks after one fix); **`kara-katas` UNSWEPT** (separate repo, not in this
-container; adding it was denied in auto mode as unrequested scope creep). The
-leniency strip itself is **NOT done** — it is owner-gated and the spike's
-Gotchas require the `kara-katas` leg before stripping.
+**Status:** sweep COMPLETE across all three mandated corpora (`examples/` +
+`examples/mend` + `kara-katas`), 0 real breaks after fixes. **Correctness
+leniency STRIPPED (6a) — landed on `main` 2026-07-08.** `karac run` now rejects
+the same type/effect correctness violations `check`/`build` reject; target-gate
+(E0411) portability findings stay lenient. The second leg (**6b: route `karac
+run` → JIT**) is separate and tracked in the spike.
 
 ## What the strip would do
 
@@ -52,18 +53,38 @@ run `karac check --output=json` and `karac run`, then classify:
   [typecheck], `parallax/src/workload.kara` [typecheck], `plume/plume.kara`
   [effect]. (The `parallax` two are single-file timeouts on project modules.)
 
-## Blocker
+## Result (kara-katas, 269 files — swept after owner authorized the repo add)
 
-`kara-katas` — the third mandated corpus — is a **separate repo not present in
-this cloud container**. `list_repos` shows `karalang/kara-katas` is accessible,
-but `add_repo` was denied in auto mode (unrequested persistent integration).
-Until it is swept, stripping leniency is stripping partially-blind against it.
+| Class | Count |
+|---|---|
+| CHECK-CLEAN (unaffected) | 269 (after fixes) |
+| Real BREAKS (pre-fix) | 5 |
 
-## Recommendation
+The 5 breaks, all stale type annotations over already-correct logic (output
+byte-identical before/after fix), committed to `karalang/kara-katas` (`6eb1317`):
+- `Slice[u8]` vs `ref Vec[u8]`: three "recursive" variants declared helper
+  params `ref Vec[u8]` but `String.bytes()` yields `Slice[u8]` —
+  `67-add-binary/add_binary_recursive`, `171-excel-.../column_number_recursive`,
+  `415-add-strings/add_strings_recursive`. Fixed params → `Slice[u8]`.
+- uninferred `Vec<?T2>`: `133-clone-graph/{bfs,dfs}` did `a2.push(Vec.new())`
+  into `Vec[Vec[i64]]` (push-arg type doesn't flow into inline `Vec.new()`) →
+  switched to `row([])`, the file's empty-row idiom (empty-array literals DO get
+  expected-type inference).
 
-Do **not** strip leniency until `kara-katas` is swept. The `examples/` evidence
-is encouraging (only 1 real break, itself a stale annotation over correct code),
-but `kara-katas` is the larger, LLM-authored corpus most likely to lean on
-leniency. Next step is owner's call: authorize adding `kara-katas` to sweep it
-here, accept the `kara-katas` risk and strip on `examples/`-only evidence, or
-hold Slice 6 entirely.
+## Strip implemented (6a)
+
+With all three corpora clean, `cmd_run` (`src/cli.rs`) now aborts on any type
+error or hard effect error (E0411 target-gate + FFI hints excepted), mirroring
+`check`/`build` acceptance. Tests `run_effect_violation_aborts` /
+`run_soft_type_error_aborts` (inverted from the old warns-and-executes pair) pin
+it; `run_value_corrupting_cast_aborts` / `run_raii_across_yield_violation_aborts`
+still pass. design.md § "`karac run` Leniency" updated to reflect the strip.
+
+## Inference-gap note (not a blocker)
+
+Both the `two_sum`/`clone-graph` fixes worked around the same typechecker
+limitation: an inline `Map.new()` / `Vec.new()` doesn't receive its element type
+from a later `insert` or from a `push`-argument context (Rust infers these via
+bidirectional inference). This is a genuine inference gap, not a kata bug —
+annotating or using an expected-typed literal is the current workaround. Worth a
+future typechecker slice / bug-ledger entry.
