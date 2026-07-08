@@ -916,26 +916,32 @@ impl<'a> UseClassifier<'a> {
         self.callee_param_modes.get(&key)
     }
 
-    fn method_consumes_receiver(&self, method_call: &Expr) -> bool {
-        let key = match self
-            .tc
+    /// The resolved `"Type.method"` / `"Trait.method"` mode key for a method
+    /// call: prefers the concrete `method_callee_types`, falls back to
+    /// `method_typeparam_trait_key` for a single-bound generic-receiver call
+    /// (`a.cmp(b)` where `a: T`, `T: Ord`). Twin of the `borrow.rs`
+    /// `resolved_method_mode_key` — both the predicate pipeline (this file)
+    /// and the legacy `states` machine must resolve the same modes, else a
+    /// generic trait-method `ref Self` param is seen as a move here and the
+    /// UAM witness false-rejects a user generic body (B-2026-07-08-6).
+    fn resolved_method_mode_key(&self, method_call: &Expr) -> Option<&String> {
+        let span = SpanKey::from_span(&method_call.span);
+        self.tc
             .method_callee_types
-            .get(&SpanKey::from_span(&method_call.span))
-        {
-            Some(k) => k,
-            None => return false,
+            .get(&span)
+            .or_else(|| self.tc.method_typeparam_trait_key.get(&span))
+    }
+
+    fn method_consumes_receiver(&self, method_call: &Expr) -> bool {
+        let Some(key) = self.resolved_method_mode_key(method_call) else {
+            return false;
         };
         matches!(self.method_self_modes.get(key), Some(SelfParam::Owned))
     }
 
     fn method_receiver_is_mut_ref(&self, method_call: &Expr) -> bool {
-        let key = match self
-            .tc
-            .method_callee_types
-            .get(&SpanKey::from_span(&method_call.span))
-        {
-            Some(k) => k,
-            None => return false,
+        let Some(key) = self.resolved_method_mode_key(method_call) else {
+            return false;
         };
         matches!(self.method_self_modes.get(key), Some(SelfParam::MutRef))
     }
@@ -949,13 +955,8 @@ impl<'a> UseClassifier<'a> {
     /// without it a borrowed struct arg was treated as a container-store
     /// consume and the binding spuriously RC-promoted (B-2026-06-12-8).
     fn method_arg_is_borrow_position(&self, method_call: &Expr, arg_index: usize) -> bool {
-        let key = match self
-            .tc
-            .method_callee_types
-            .get(&SpanKey::from_span(&method_call.span))
-        {
-            Some(k) => k,
-            None => return false,
+        let Some(key) = self.resolved_method_mode_key(method_call) else {
+            return false;
         };
         self.method_param_modes
             .get(key)

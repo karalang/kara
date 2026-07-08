@@ -76,16 +76,27 @@ impl<'a> super::OwnershipChecker<'a> {
     /// matches the prior behavior. Without this, a `ref`/`mut ref` struct
     /// arg of a `mut ref self` method was classified as a consume and the
     /// borrowed binding spuriously RC-promoted (B-2026-06-12-8).
+    /// The resolved `"Type.method"` (or `"Trait.method"`) key for a method
+    /// call, used to look up its param/self modes. Prefers the concrete
+    /// `method_callee_types` key; falls back to `method_typeparam_trait_key`
+    /// (B-2026-07-08-6 secondary) so a generic trait-method call
+    /// (`a.cmp(b)` where `a: T`, `T: Ord`) resolves to the trait method's
+    /// declared modes — without which its `ref Self` param defaulted to a
+    /// move, false-rejecting a user generic `min`/`max`/`clamp` body.
+    pub(crate) fn resolved_method_mode_key(&self, method_call: &Expr) -> Option<&String> {
+        let span = SpanKey::from_span(&method_call.span);
+        self.typecheck_result
+            .method_callee_types
+            .get(&span)
+            .or_else(|| self.typecheck_result.method_typeparam_trait_key.get(&span))
+    }
+
     pub(crate) fn method_arg_is_borrow_position(
         &self,
         method_call: &Expr,
         arg_index: usize,
     ) -> bool {
-        let Some(key) = self
-            .typecheck_result
-            .method_callee_types
-            .get(&SpanKey::from_span(&method_call.span))
-        else {
+        let Some(key) = self.resolved_method_mode_key(method_call) else {
             return false;
         };
         self.method_param_modes
@@ -588,13 +599,8 @@ impl<'a> super::OwnershipChecker<'a> {
     /// default: if we can't prove the receiver is consumed, we assume it
     /// isn't.
     pub(crate) fn method_call_consumes_receiver(&self, method_call: &Expr) -> bool {
-        let key = match self
-            .typecheck_result
-            .method_callee_types
-            .get(&SpanKey::from_span(&method_call.span))
-        {
-            Some(k) => k,
-            None => return false,
+        let Some(key) = self.resolved_method_mode_key(method_call) else {
+            return false;
         };
         matches!(self.method_self_modes.get(key), Some(SelfParam::Owned))
     }
@@ -609,10 +615,7 @@ impl<'a> super::OwnershipChecker<'a> {
     /// silently miss for the most common case (`let _s = v.as_slice();
     /// v.push(99);`).
     pub(crate) fn method_self_borrow_kind(&self, method_call: &Expr) -> Option<BorrowKind> {
-        let key = self
-            .typecheck_result
-            .method_callee_types
-            .get(&SpanKey::from_span(&method_call.span))?;
+        let key = self.resolved_method_mode_key(method_call)?;
         if let Some(self_param) = self.method_self_modes.get(key) {
             return match self_param {
                 SelfParam::Owned => None,

@@ -1072,6 +1072,18 @@ pub struct TypeCheckResult {
     /// (the same `MethodCall.span == receiver.span` collision noted above).
     /// B-2026-07-03-24.
     pub method_typeparam_receiver: HashMap<SpanKey, String>,
+    /// MethodCall span → the resolved `"Trait.method"` key when the receiver
+    /// is a generic type parameter dispatched through a single trait bound
+    /// (`a.cmp(b)` where `a: T`, `T: Ord`). Distinct from `method_callee_types`
+    /// (which records a CONCRETE `Type.method` and is read by codegen/effects,
+    /// so it must NOT carry a trait key). The ownership checker falls back to
+    /// this so a `ref Self` trait-method PARAMETER is seen as a borrow, not a
+    /// move — without it a user generic `fn min[T: Ord](a, b) { match a.cmp(b)
+    /// { .. } }` was wrongly rejected with "value 'b' moved here" at the
+    /// `a.cmp(b)` call (concrete-receiver calls resolved via `method_callee_-
+    /// types` were fine). B-2026-07-08-6 secondary. Recorded only for the
+    /// single-candidate case; an ambiguous/zero-bound call is an error already.
+    pub method_typeparam_trait_key: HashMap<SpanKey, String>,
     /// Call-expression span → the callee's `Fn(..)` `TypeExpr`, for every
     /// `Call` whose callee is a closure VALUE produced by a non-identifier
     /// place expression (a struct field `(h.f)(x)`, a Vec/array index
@@ -1426,6 +1438,10 @@ pub struct TypeChecker<'a> {
     /// MethodCall span → receiver type-parameter name. See the matching field
     /// on `TypeCheckResult` for the full rationale (B-2026-07-03-24).
     pub(super) method_typeparam_receiver: HashMap<SpanKey, String>,
+    /// MethodCall span → resolved `"Trait.method"` key for a single-bound
+    /// generic-receiver dispatch. See the matching `TypeCheckResult` field
+    /// (B-2026-07-08-6 secondary — ownership arg-mode of a generic trait call).
+    pub(super) method_typeparam_trait_key: HashMap<SpanKey, String>,
     /// Call span → callee `Fn(..)` `TypeExpr` for a closure-VALUE call through
     /// a non-identifier callee. See the public copy on `TypeCheckResult` for
     /// the full rationale.
@@ -1665,6 +1681,7 @@ impl<'a> TypeChecker<'a> {
             display_snake_case_enums: HashSet::new(),
             method_callee_types: HashMap::new(),
             method_typeparam_receiver: HashMap::new(),
+            method_typeparam_trait_key: HashMap::new(),
             fn_value_callee_types: HashMap::new(),
             impl_trait_captures: HashMap::new(),
             method_unwrap_inner_types: HashMap::new(),
@@ -1849,6 +1866,7 @@ impl<'a> TypeChecker<'a> {
             display_snake_case_enums: self.display_snake_case_enums,
             method_callee_types: self.method_callee_types,
             method_typeparam_receiver: self.method_typeparam_receiver,
+            method_typeparam_trait_key: self.method_typeparam_trait_key,
             fn_value_callee_types: self.fn_value_callee_types,
             impl_trait_captures: self.impl_trait_captures,
             method_unwrap_inner_types: self.method_unwrap_inner_types,

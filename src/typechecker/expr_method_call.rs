@@ -288,6 +288,18 @@ impl<'a> super::TypeChecker<'a> {
             }
             1 => {
                 let (bound, trait_method) = candidates.into_iter().next().unwrap();
+                // B-2026-07-08-6 secondary — record the resolved `Trait.method`
+                // key so the ownership checker can see this generic trait-method
+                // call's PARAMETER modes (a `ref Self` param is a borrow, not a
+                // move). `method_callee_types` deliberately skips type-param
+                // receivers (it feeds codegen/effect dispatch, which must key on
+                // a concrete type), so this dedicated map carries the trait key.
+                if let Some(trait_name) = bound.path.last() {
+                    self.method_typeparam_trait_key.insert(
+                        SpanKey::from_span(span),
+                        format!("{}.{}", trait_name, method),
+                    );
+                }
                 // Bind the bound's generic args to the trait's declared
                 // params (`C: Reduce[i64]` → `T := i64`) so the method's
                 // signature substitutes trait-level `T`s, not just `Self`

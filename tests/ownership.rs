@@ -8541,3 +8541,43 @@ fn b26_with_provider_closure_ref_capture_no_escape_error() {
          }",
     );
 }
+
+#[test]
+fn generic_trait_method_ref_self_arg_is_borrow_not_move() {
+    // B-2026-07-08-6 secondary — a method call on a generic-type receiver
+    // dispatched through a single trait bound (`a.peek(b)` where `a: T`,
+    // `T: Peek`, and `peek(ref self, other: ref Self)`) BORROWS its `ref Self`
+    // argument, so reusing `b` afterwards is sound. The checker used to miss
+    // the trait method's param modes (a type-param receiver records no
+    // concrete `method_callee_types` key), defaulting the arg to a MOVE and
+    // false-rejecting with "value 'b' moved here, used again here". Now it
+    // falls back to the resolved `method_typeparam_trait_key` ("Peek.peek" ->
+    // [Ref]) so the arg is a borrow. This is the shape a user-written generic
+    // `min`/`max`/`clamp` (`match a.cmp(b) { Greater => b, _ => a }`) needs to
+    // pass `karac check`.
+    ownership_ok(
+        "struct Name { s: String }\n\
+         trait Peek { fn peek(ref self, other: ref Self) -> bool; }\n\
+         impl Peek for Name { fn peek(ref self, other: ref Name) -> bool { self.s == other.s } }\n\
+         fn gg[T: Peek](a: T, b: T) -> T { let x = a.peek(b); b }\n\
+         fn main() { let r = gg(Name { s: \"a\" }, Name { s: \"b\" }); println(r.s); }",
+    );
+}
+
+#[test]
+fn generic_ord_min_body_passes_ownership() {
+    // The concrete motivating case: a user generic `min[T: Ord]` whose body
+    // compares via the trait method `a.cmp(b)` (`cmp(ref self, other: ref
+    // Self)`) and returns one of the two owned params. `b` is borrowed by the
+    // `cmp` call, then conditionally moved out — sound, and now accepted
+    // (B-2026-07-08-6 secondary).
+    ownership_ok(
+        "struct Name { s: String }\n\
+         impl PartialEq for Name { fn eq(ref self, other: ref Name) -> bool { self.s == other.s } }\n\
+         impl Eq for Name {}\n\
+         impl PartialOrd for Name { fn partial_cmp(ref self, other: ref Name) -> Option[Ordering] { Some(self.s.cmp(other.s)) } }\n\
+         impl Ord for Name { fn cmp(ref self, other: ref Name) -> Ordering { self.s.cmp(other.s) } }\n\
+         fn umin[T: Ord](a: T, b: T) -> T { match a.cmp(b) { Greater => b, _ => a } }\n\
+         fn main() { let r = umin(Name { s: \"aaa\" }, Name { s: \"bbb\" }); println(r.s); }",
+    );
+}
