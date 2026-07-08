@@ -6043,6 +6043,25 @@ fn cmd_build(
             enforce_monomorphization_budget(&pipeline, &monomorphization_budget, output);
         }
 
+        // Library-artifact C-ABI honesty gate (additive-interop Slice 4):
+        // an exported signature whose return/params cross the boundary as
+        // neither a transparent-by-value type nor an auto-boxable
+        // `Vec`/`String` would emit a dishonest `KaraHandle` while codegen
+        // returns/expects a multi-register aggregate — a silent miscompile.
+        // Reject before codegen so the produced `.a`/`.so`/`.h` is always
+        // ABI-honest. Only fires for a library build (the export IS the C
+        // surface); an executable's `pub extern "C" fn` called only from
+        // Kāra keeps the internal ABI.
+        if crate_type != NativeCrateType::Bin {
+            let export_errs = crate::cheader::validate_exports(&pipeline.parsed.program);
+            if !export_errs.is_empty() {
+                for (fn_name, reason) in &export_errs {
+                    eprintln!("error[E_EXPORT_ABI]: exported `{fn_name}`: {reason}");
+                }
+                process::exit(1);
+            }
+        }
+
         // Phase-10: effect findings stay non-fatal for native builds (the
         // long-standing build/check asymmetry, documented at the `karac
         // run`-vs-effects tracker entry), but a target-gate violation

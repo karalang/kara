@@ -20036,3 +20036,102 @@ fn test_build_auto_boxed_vec_return_e2e() {
         assert_eq!(run.status.code(), Some(0));
     }
 }
+
+/// Producer-mode auto-boxing follow-on (Slice 4 Path B): a `Vec[String]`
+/// return nests transparently — `KaraVec_KaraString*` with each element a
+/// `KaraString {data,len,cap}` — and its auto-destructor recursively frees
+/// each element's buffer + the outer buffer. A C host reads the strings and
+/// frees via the destructor. Soft-skips like the other producer E2E tests.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_build_auto_boxed_vec_string_return_e2e() {
+    use std::io::Write;
+    let src = "pub extern \"C\" fn names() -> Vec[String] {\n\
+               \x20   let mut v: Vec[String] = Vec.new();\n\
+               \x20   v.push(\"alice\"); v.push(\"bob\"); v.push(\"carol\");\n\
+               \x20   v\n\
+               }\n";
+    let dir = std::env::temp_dir().join(format!("karac_pathb_vs_e2e_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    {
+        let mut f = std::fs::File::create(dir.join("k.kara")).unwrap();
+        f.write_all(src.as_bytes()).unwrap();
+    }
+    let build = karac_bin()
+        .current_dir(&dir)
+        .args(["build", "k.kara", "--crate-type", "staticlib"])
+        .output()
+        .unwrap();
+    let berr = String::from_utf8_lossy(&build.stderr);
+    let lib = dir.join("libk.a");
+    if berr.contains("requires the llvm feature") || berr.contains("link failed") || !lib.exists() {
+        eprintln!("skip: test_build_auto_boxed_vec_string_return_e2e — soft-skip");
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+    let header_text = std::fs::read_to_string(dir.join("libk.h")).unwrap();
+    assert!(
+        header_text.contains("} KaraVec_KaraString;"),
+        "nested typedef missing:\n{header_text}"
+    );
+    let host_c = "#include <stdio.h>\n\
+                  #include \"libk.h\"\n\
+                  int main(void) {\n\
+                      karac_runtime_init();\n\
+                      KaraVec_KaraString* v = names();\n\
+                      printf(\"%lld:\", (long long)v->len);\n\
+                      for (int64_t i = 0; i < v->len; i++)\n\
+                          printf(\"%.*s,\", (int)v->data[i].len, (char*)v->data[i].data);\n\
+                      printf(\"\\n\");\n\
+                      karac_free_names(v);\n\
+                      karac_runtime_shutdown();\n\
+                      return 0;\n\
+                  }\n";
+    {
+        let mut f = std::fs::File::create(dir.join("host.c")).unwrap();
+        f.write_all(host_c.as_bytes()).unwrap();
+    }
+    let cc = std::process::Command::new("cc")
+        .current_dir(&dir)
+        .args([
+            "host.c",
+            "-L.",
+            "-l:libk.a",
+            "-lpthread",
+            "-lm",
+            "-ldl",
+            "-o",
+            "host",
+        ])
+        .output();
+    let cc = match cc {
+        Ok(o) => o,
+        Err(_) => {
+            eprintln!("skip: test_build_auto_boxed_vec_string_return_e2e — no `cc`");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+    };
+    assert!(
+        cc.status.success(),
+        "C host failed to link:\n{}",
+        String::from_utf8_lossy(&cc.stderr)
+    );
+    let run = common::output_with_hang_watchdog(
+        {
+            let mut c = std::process::Command::new(dir.join("host"));
+            c.current_dir(&dir);
+            c
+        },
+        std::time::Duration::from_secs(15),
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    if let Some(run) = run {
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout).trim(),
+            "3:alice,bob,carol,"
+        );
+        assert_eq!(run.status.code(), Some(0));
+    }
+}

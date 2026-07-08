@@ -35,24 +35,45 @@ pub fn is_exported(func: &Function) -> bool {
 /// a `{data,len,cap}` value in registers, which doesn't match the SysV
 /// struct-return ABI — so the export heap-boxes the value and returns an
 /// opaque pointer to it; the C side reads the fields through the emitted
-/// struct and frees via `karac_free_<name>`. Scoped to `Vec[scalar]` and
-/// `String` (whole-buffer free is complete — no per-element drop).
+/// struct and frees via `karac_free_<name>`.
+///
+/// Covers `String`, `Vec[scalar]`, and — the Path-B follow-on — one level
+/// of aggregate nesting (`Vec[String]`, `Vec[Vec[scalar]]`), whose elements
+/// are themselves `{ptr,len,cap}` and need a per-element buffer drop before
+/// the outer buffer. Deeper nesting / `enum` / user-struct returns stay
+/// opaque-`KaraHandle`.
 pub enum BoxedReturn {
-    /// `Vec[E]` for scalar `E`; the field carries `E`'s C type (`int64_t`).
-    Vec(&'static str),
-    /// `String` — `{uint8_t* data; int64_t len; int64_t cap;}`.
-    Str,
+    /// `String` or `Vec[scalar]`: `{elem_c* data; int64_t len; int64_t cap;}`,
+    /// no per-element drop. `struct_name` = the C typedef, `elem_c` = the
+    /// `data` element C type (`uint8_t` / `int64_t`).
+    Flat {
+        struct_name: String,
+        elem_c: &'static str,
+    },
+    /// `Vec[String]` / `Vec[Vec[scalar]]`: each element is a `{ptr,len,cap}`
+    /// needing a per-element buffer drop. `elem_struct` is the element's C
+    /// typedef (`KaraString` / `KaraVec_int64_t`), `elem_elem_c` its own
+    /// `data` element type, `outer_name` the `Vec[...]` C typedef.
+    Nested {
+        outer_name: String,
+        elem_struct: String,
+        elem_elem_c: &'static str,
+    },
 }
 
 /// If `func` is an exported fn whose return needs C-ABI auto-boxing,
 /// classify it. `None` for a transparent return (primitive / `#[repr(C)]`
-/// struct / raw pointer / `()`), a non-scalar-element `Vec`, or any
-/// non-export.
+/// struct / raw pointer / `()`), a deeper-nested / `enum` / user aggregate
+/// (those stay opaque-`KaraHandle`), or any non-export.
 pub fn boxed_return_of(func: &Function) -> Option<BoxedReturn> {
     if !func.is_pub || func.abi.as_deref() != Some("C") {
         return None;
     }
-    let te = func.return_type.as_ref()?;
+    boxed_shape_of(func.return_type.as_ref()?)
+}
+
+/// Classify a return `TypeExpr` as a boxable shape (`None` if it isn't).
+fn boxed_shape_of(te: &TypeExpr) -> Option<BoxedReturn> {
     let TypeKind::Path(p) = &te.kind else {
         return None;
     };
@@ -60,42 +81,142 @@ pub fn boxed_return_of(func: &Function) -> Option<BoxedReturn> {
         return None;
     }
     match p.segments[0].as_str() {
-        "String" => Some(BoxedReturn::Str),
+        "String" => Some(BoxedReturn::Flat {
+            struct_name: "KaraString".to_string(),
+            elem_c: "uint8_t",
+        }),
         "Vec" => {
-            let args = p.generic_args.as_ref()?;
-            if args.len() != 1 {
-                return None;
+            let elem = vec_elem(p)?;
+            // Vec[scalar] → flat.
+            if let TypeKind::Path(ep) = &elem.kind {
+                if ep.segments.len() == 1 {
+                    if let Some(c) = c_primitive(&ep.segments[0]) {
+                        return Some(BoxedReturn::Flat {
+                            struct_name: format!("KaraVec_{c}"),
+                            elem_c: c,
+                        });
+                    }
+                }
             }
-            let crate::ast::GenericArg::Type(elem) = &args[0] else {
-                return None;
-            };
-            let TypeKind::Path(ep) = &elem.kind else {
-                return None;
-            };
-            if ep.segments.len() != 1 {
-                return None;
+            // Vec[String] / Vec[Vec[scalar]] → nested (element is an
+            // aggregate `{ptr,len,cap}`).
+            match boxed_shape_of(elem)? {
+                BoxedReturn::Flat {
+                    struct_name,
+                    elem_c,
+                } => Some(BoxedReturn::Nested {
+                    outer_name: format!("KaraVec_{struct_name}"),
+                    elem_struct: struct_name,
+                    elem_elem_c: elem_c,
+                }),
+                // Deeper than one nesting level — not boxable (opaque).
+                BoxedReturn::Nested { .. } => None,
             }
-            c_primitive(&ep.segments[0]).map(BoxedReturn::Vec)
         }
         _ => None,
     }
 }
 
-/// The element C type of a boxed-return struct's `data` field.
-fn boxed_elem_c_type(b: &BoxedReturn) -> &'static str {
-    match b {
-        BoxedReturn::Vec(elem) => elem,
-        BoxedReturn::Str => "uint8_t",
+/// The single `Type` generic arg of a `Vec[E]` path, else `None`.
+fn vec_elem(p: &crate::ast::PathExpr) -> Option<&TypeExpr> {
+    let args = p.generic_args.as_ref()?;
+    if args.len() != 1 {
+        return None;
+    }
+    match &args[0] {
+        crate::ast::GenericArg::Type(elem) => Some(elem),
+        _ => None,
     }
 }
 
-/// The C struct/typedef name for a boxed return (`KaraVec_int64_t`,
-/// `KaraString`).
+/// The outer C typedef name for a boxed return.
 fn boxed_struct_name(b: &BoxedReturn) -> String {
     match b {
-        BoxedReturn::Vec(elem) => format!("KaraVec_{elem}"),
-        BoxedReturn::Str => "KaraString".to_string(),
+        BoxedReturn::Flat { struct_name, .. } => struct_name.clone(),
+        BoxedReturn::Nested { outer_name, .. } => outer_name.clone(),
     }
+}
+
+/// True iff the boxed return's elements are themselves aggregates
+/// (`{ptr,len,cap}`) that need a per-element buffer drop in the destructor.
+pub fn boxed_return_elements_need_drop(func: &Function) -> bool {
+    matches!(boxed_return_of(func), Some(BoxedReturn::Nested { .. }))
+}
+
+/// True iff `te` crosses the C boundary *transparently by value* — a
+/// primitive, a raw pointer, `()`, or a `#[repr(C)]` struct named in
+/// `repr_c`. These need no boxing; anything else is either boxable (returns
+/// only) or unsupported.
+fn is_transparent_boundary_type(
+    te: &TypeExpr,
+    repr_c: &std::collections::BTreeSet<String>,
+) -> bool {
+    match &te.kind {
+        TypeKind::Unit => true,
+        TypeKind::Tuple(elems) if elems.is_empty() => true,
+        TypeKind::Pointer { .. } => true,
+        TypeKind::Path(p) if p.segments.len() == 1 => {
+            let n = &p.segments[0];
+            c_primitive(n).is_some() || repr_c.contains(n)
+        }
+        _ => false,
+    }
+}
+
+/// Validate every exported signature for C-ABI honesty (Slice 4). Returns
+/// `(fn_name, reason)` for each export whose return or a param crosses the
+/// boundary as neither a transparent-by-value type nor (for a return) a
+/// boxable `Vec`/`String` — those would otherwise emit a dishonest
+/// `KaraHandle` while codegen returns/expects a multi-register aggregate,
+/// a silent miscompile. A library build turns a non-empty result into a
+/// hard error.
+pub fn validate_exports(program: &Program) -> Vec<(String, String)> {
+    let repr_c: std::collections::BTreeSet<String> = program
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Item::StructDef(s) if is_repr_c(s) => Some(s.name.clone()),
+            _ => None,
+        })
+        .collect();
+    let mut errs = Vec::new();
+    for it in &program.items {
+        let Item::Function(f) = it else { continue };
+        if !is_exported(f) {
+            continue;
+        }
+        // Return: transparent OR boxable.
+        if let Some(rt) = &f.return_type {
+            if !is_transparent_boundary_type(rt, &repr_c) && boxed_return_of(f).is_none() {
+                errs.push((
+                    f.name.clone(),
+                    format!(
+                        "return type `{}` cannot cross the C ABI: it is neither transparent \
+                         (primitive / raw pointer / `#[repr(C)]` struct) nor an auto-boxable \
+                         `Vec[scalar]` / `String` / `Vec[String]` / `Vec[Vec[scalar]]`. Return a \
+                         `#[repr(C)]` struct or a raw pointer to a Kāra-owned box instead.",
+                        type_display(rt)
+                    ),
+                ));
+            }
+        }
+        // Params: transparent only (no boxing on the caller-provided side).
+        for p in &f.params {
+            if !is_transparent_boundary_type(&p.ty, &repr_c) {
+                errs.push((
+                    f.name.clone(),
+                    format!(
+                        "parameter `{}: {}` cannot cross the C ABI by value: only transparent \
+                         types (primitive / raw pointer / `#[repr(C)]` struct) may be exported \
+                         params. Take a raw pointer / opaque handle instead.",
+                        p.name().unwrap_or("_"),
+                        type_display(&p.ty)
+                    ),
+                ));
+            }
+        }
+    }
+    errs
 }
 
 /// Emit the C header text for `program`'s exported surface. `lib_name` is
@@ -171,13 +292,43 @@ pub fn emit_c_header(program: &Program, lib_name: &str) -> String {
     }
 
     // C-ABI auto-boxed return structs (Slice 4 Path B): the transparent
-    // `{data,len,cap}` view a boxed `Vec[scalar]` / `String` handle points
-    // at. The C caller reads these fields directly, then frees the handle
-    // via the matching `karac_free_*` export.
-    let mut boxed_defs: BTreeMap<String, &'static str> = BTreeMap::new();
+    // `{data,len,cap}` view a boxed `Vec[...]` / `String` handle points at.
+    // Nested returns (`Vec[String]`, `Vec[Vec[scalar]]`) need the element
+    // struct defined *before* the outer one — collect into an ordered map
+    // that places dependencies first.
+    let mut boxed_defs: Vec<(String, String)> = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let push_def = |name: String,
+                    elem_c: String,
+                    defs: &mut Vec<(String, String)>,
+                    seen: &mut BTreeSet<String>| {
+        if seen.insert(name.clone()) {
+            defs.push((name, elem_c));
+        }
+    };
     for f in &exports {
-        if let Some(b) = boxed_return_of(f) {
-            boxed_defs.insert(boxed_struct_name(&b), boxed_elem_c_type(&b));
+        match boxed_return_of(f) {
+            Some(BoxedReturn::Flat {
+                struct_name,
+                elem_c,
+            }) => {
+                push_def(struct_name, elem_c.to_string(), &mut boxed_defs, &mut seen);
+            }
+            Some(BoxedReturn::Nested {
+                outer_name,
+                elem_struct,
+                elem_elem_c,
+            }) => {
+                // Element struct first (dependency), then the outer.
+                push_def(
+                    elem_struct.clone(),
+                    elem_elem_c.to_string(),
+                    &mut boxed_defs,
+                    &mut seen,
+                );
+                push_def(outer_name, elem_struct, &mut boxed_defs, &mut seen);
+            }
+            None => {}
         }
     }
     for (name, elem) in &boxed_defs {
@@ -580,6 +731,90 @@ mod tests {
         assert!(
             h.contains("void karac_free_greet(KaraString* handle);"),
             "destructor missing:\n{h}"
+        );
+    }
+
+    fn exported_fn(src: &str) -> &'static crate::ast::Function {
+        // Leak the parsed program so we can hand a `&Function` to the
+        // boxed-return predicates from a test.
+        let parsed = Box::leak(Box::new(crate::parse(src)));
+        parsed
+            .program
+            .items
+            .iter()
+            .find_map(|it| match it {
+                crate::ast::Item::Function(f) if is_exported(f) => Some(f),
+                _ => None,
+            })
+            .expect("one exported fn")
+    }
+
+    #[test]
+    fn vec_string_return_nests_transparently() {
+        // Path-B follow-on: `Vec[String]` → nested `{KaraString* data; ...}`,
+        // element struct defined before the outer one.
+        let src = "pub extern \"C\" fn names() -> Vec[String] { }";
+        let h = header_for(src, "lib");
+        let ks = h.find("} KaraString;").expect("KaraString def");
+        let outer = h
+            .find("} KaraVec_KaraString;")
+            .expect("KaraVec_KaraString def");
+        assert!(ks < outer, "element struct must precede outer:\n{h}");
+        assert!(
+            h.contains(
+                "typedef struct { KaraString* data; int64_t len; int64_t cap; } KaraVec_KaraString;"
+            ),
+            "nested typedef missing:\n{h}"
+        );
+        assert!(
+            h.contains("KaraVec_KaraString* names(void);"),
+            "proto:\n{h}"
+        );
+        assert!(
+            h.contains("void karac_free_names(KaraVec_KaraString* handle);"),
+            "destructor:\n{h}"
+        );
+        assert!(boxed_return_elements_need_drop(exported_fn(src)));
+    }
+
+    #[test]
+    fn vec_vec_scalar_return_nests() {
+        let src = "pub extern \"C\" fn grid() -> Vec[Vec[i64]] { }";
+        let h = header_for(src, "lib");
+        assert!(
+            h.contains("KaraVec_int64_t* data;"),
+            "inner element pointer missing:\n{h}"
+        );
+        assert!(
+            h.contains("KaraVec_KaraVec_int64_t* grid(void);"),
+            "proto:\n{h}"
+        );
+    }
+
+    #[test]
+    fn non_boxable_return_and_param_are_flagged() {
+        // The C-ABI honesty gate: `Option` return + `Vec` param each yield an
+        // export error (else a dishonest `KaraHandle` would miscompile).
+        let opt = crate::parse("pub extern \"C\" fn m() -> Option[i64] { }");
+        assert!(
+            validate_exports(&opt.program).iter().any(|(n, _)| n == "m"),
+            "Option return not flagged"
+        );
+        let param = crate::parse("pub extern \"C\" fn t(v: Vec[i64]) -> i64 { 0 }");
+        assert!(
+            validate_exports(&param.program)
+                .iter()
+                .any(|(n, _)| n == "t"),
+            "Vec param not flagged"
+        );
+        // A clean transparent + boxable surface flags nothing.
+        let ok = crate::parse(
+            "pub extern \"C\" fn a(x: i32) -> i32 { x }\n\
+             pub extern \"C\" fn b() -> Vec[i64] { }",
+        );
+        assert!(
+            validate_exports(&ok.program).is_empty(),
+            "clean surface flagged"
         );
     }
 

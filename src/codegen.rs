@@ -7113,30 +7113,31 @@ impl<'ctx> Codegen<'ctx> {
     /// Emit a C-ABI auto-destructor for every boxed-return export
     /// (additive-interop Slice 4 Path B). See [`emit_one_export_destructor`].
     fn emit_export_destructors(&mut self, program: &Program) -> Result<(), String> {
-        let names: Vec<String> = program
+        let targets: Vec<(String, bool)> = program
             .items
             .iter()
             .filter_map(|it| match it {
-                Item::Function(f) if crate::cheader::boxed_return_of(f).is_some() => {
-                    Some(f.name.clone())
-                }
+                Item::Function(f) if crate::cheader::boxed_return_of(f).is_some() => Some((
+                    f.name.clone(),
+                    crate::cheader::boxed_return_elements_need_drop(f),
+                )),
                 _ => None,
             })
             .collect();
-        for name in names {
-            self.emit_one_export_destructor(&name);
+        for (name, elems_need_drop) in targets {
+            self.emit_one_export_destructor(&name, elems_need_drop);
         }
         Ok(())
     }
 
     /// `void karac_free_<fn>(handle)` — the auto-emitted destructor for a
     /// boxed-return export (Slice 4 Path B). The handle is the heap box
-    /// holding the returned `{data,len,cap}` value; free its owned buffer
-    /// (`emit_free_vec_buffer_if_owned`, the same whole-buffer free the
-    /// scope-exit path uses — complete for scalar `Vec` elements / `String`
-    /// bytes, no per-element drop) then free the box. Null-guarded:
-    /// `karac_free_<fn>(NULL)` is a no-op.
-    fn emit_one_export_destructor(&mut self, fn_name: &str) {
+    /// holding the returned `{data,len,cap}` value. When `elems_need_drop`
+    /// (a `Vec[String]` / `Vec[Vec[scalar]]` return, the Path-B follow-on),
+    /// first walk `data[0..len]` freeing each element's own `{ptr,len,cap}`
+    /// buffer; then free the outer buffer (`emit_free_vec_buffer_if_owned`)
+    /// and the box. Null-guarded: `karac_free_<fn>(NULL)` is a no-op.
+    fn emit_one_export_destructor(&mut self, fn_name: &str, elems_need_drop: bool) {
         use inkwell::module::Linkage;
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let void_ty = self.context.void_type();
@@ -7158,13 +7159,19 @@ impl<'ctx> Codegen<'ctx> {
         let ret_bb = self.context.append_basic_block(dtor, "ret");
         self.builder.position_at_end(entry);
         let handle = dtor.get_nth_param(0).unwrap().into_pointer_value();
-        // Null guard: skip both frees for a NULL handle.
+        // Null guard: skip all frees for a NULL handle.
         let is_null = self.builder.build_is_null(handle, "kfree.isnull").unwrap();
         self.builder
             .build_conditional_branch(is_null, ret_bb, free_bb)
             .unwrap();
 
         self.builder.position_at_end(free_bb);
+        // Nested return (`Vec[String]` / `Vec[Vec[scalar]]`): each element is
+        // a `{ptr,len,cap}` aggregate — free each element's buffer before the
+        // outer buffer, else the inner buffers leak.
+        if elems_need_drop {
+            self.emit_boxed_elems_drop_loop(handle);
+        }
         // The box points to a `{data,len,cap}` value; free its owned buffer.
         self.emit_free_vec_buffer_if_owned(handle);
         // Then free the box allocation itself.
@@ -7180,6 +7187,82 @@ impl<'ctx> Codegen<'ctx> {
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
+    }
+
+    /// Free the per-element `{ptr,len,cap}` buffers of a boxed nested Vec
+    /// (`Vec[String]` / `Vec[Vec[scalar]]`) — `for i in 0..len { free
+    /// data[i].buffer }`. `box_ptr` points to the outer `{data,len,cap}`;
+    /// `data` (field 0) is the element array, `len` (field 1) the count.
+    /// Each element is one `vec_struct_type` (24 B), so `data[i]` is a
+    /// pointer to that element's own `{ptr,len,cap}` — reuse
+    /// `emit_free_vec_buffer_if_owned` on it. Must run before the outer
+    /// buffer is freed. One nesting level (the boxable set stops there).
+    fn emit_boxed_elems_drop_loop(&mut self, box_ptr: PointerValue<'ctx>) {
+        let vec_ty = self.vec_struct_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let dtor = self.current_fn.unwrap();
+
+        let data_pp = self
+            .builder
+            .build_struct_gep(vec_ty, box_ptr, 0, "kfree.data.pp")
+            .unwrap();
+        let data = self
+            .builder
+            .build_load(ptr_ty, data_pp, "kfree.data")
+            .unwrap()
+            .into_pointer_value();
+        let len_pp = self
+            .builder
+            .build_struct_gep(vec_ty, box_ptr, 1, "kfree.len.pp")
+            .unwrap();
+        let len = self
+            .builder
+            .build_load(i64_t, len_pp, "kfree.len")
+            .unwrap()
+            .into_int_value();
+
+        let idx_slot = self.builder.build_alloca(i64_t, "kfree.i").unwrap();
+        self.builder
+            .build_store(idx_slot, i64_t.const_zero())
+            .unwrap();
+
+        let check_bb = self.context.append_basic_block(dtor, "kfree.loop.check");
+        let body_bb = self.context.append_basic_block(dtor, "kfree.loop.body");
+        let after_bb = self.context.append_basic_block(dtor, "kfree.loop.after");
+        self.builder.build_unconditional_branch(check_bb).unwrap();
+
+        self.builder.position_at_end(check_bb);
+        let i = self
+            .builder
+            .build_load(i64_t, idx_slot, "kfree.i.cur")
+            .unwrap()
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, i, len, "kfree.i.lt")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cond, body_bb, after_bb)
+            .unwrap();
+
+        self.builder.position_at_end(body_bb);
+        // `elem_ptr = &data[i]` (element stride = vec_struct_type size).
+        let elem_ptr = unsafe {
+            self.builder
+                .build_in_bounds_gep(vec_ty, data, &[i], "kfree.elem")
+                .unwrap()
+        };
+        // Free this element's own owned buffer.
+        self.emit_free_vec_buffer_if_owned(elem_ptr);
+        let next = self
+            .builder
+            .build_int_add(i, i64_t.const_int(1, false), "kfree.i.next")
+            .unwrap();
+        self.builder.build_store(idx_slot, next).unwrap();
+        self.builder.build_unconditional_branch(check_bb).unwrap();
+
+        self.builder.position_at_end(after_bb);
     }
 
     /// compute binary (B-2026-06-15-2). Idempotent; must run after all function
