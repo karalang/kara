@@ -378,10 +378,8 @@ impl Parser {
                 Some(name)
             }
             _ => {
-                self.error(&format!(
-                    "Expected identifier, found {:?}",
-                    self.peek_token()
-                ));
+                let msg = self.unexpected_ident_msg("identifier");
+                self.error(&msg);
                 None
             }
         }
@@ -502,6 +500,24 @@ impl Parser {
             message: message.to_string(),
             span,
         });
+    }
+
+    /// Build the "unexpected token" message for a position that expected an
+    /// identifier / pattern / expression. When the offending token is a reserved
+    /// keyword (`group`, `type`, `match`, …) the message names the keyword and
+    /// says it is reserved, instead of printing the token's internal Rust `Debug`
+    /// name — e.g. `let mut group = …` now reports `'group' is a reserved keyword
+    /// and cannot be used as an identifier` rather than `Expected pattern, found
+    /// Group` (B-2026-07-08-13). `expected` is the noun used in the non-keyword
+    /// fallback ("identifier" / "pattern" / "expression").
+    fn unexpected_ident_msg(&self, expected: &str) -> String {
+        let tok = self.peek_token();
+        match tok.keyword_spelling() {
+            Some(kw) => {
+                format!("'{kw}' is a reserved keyword and cannot be used as an identifier")
+            }
+            None => format!("Expected {expected}, found {tok:?}"),
+        }
     }
 
     /// Like [`error`], but anchors the diagnostic at an explicit `span`

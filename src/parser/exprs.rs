@@ -976,10 +976,8 @@ impl super::Parser {
             Token::Identifier { .. } => self.parse_identifier_expr(),
 
             _ => {
-                self.error(&format!(
-                    "Expected expression, found {:?}",
-                    self.peek_token()
-                ));
+                let msg = self.unexpected_ident_msg("expression");
+                self.error(&msg);
                 None
             }
         }

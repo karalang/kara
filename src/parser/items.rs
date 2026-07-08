@@ -1497,10 +1497,8 @@ impl super::Parser {
                 }
             }
             _ => {
-                self.error(&format!(
-                    "expected parameter pattern, found {:?}",
-                    self.peek_token()
-                ));
+                let msg = self.unexpected_ident_msg("parameter pattern");
+                self.error(&msg);
                 None
             }
         }

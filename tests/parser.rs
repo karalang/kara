@@ -1391,6 +1391,39 @@ fn test_try_block_no_longer_reserved_keyword_error() {
     parse_ok("fn main() { let _ = try { 0 }; }");
 }
 
+#[test]
+fn test_keyword_as_identifier_names_the_keyword() {
+    // B-2026-07-08-13: naming a binding / parameter / use-site after a reserved
+    // keyword must report the keyword by spelling, not the internal Debug token
+    // name ("Expected pattern, found Group"). Covers the four identifier-context
+    // error sites: let-pattern, parameter pattern, expression, and the generic
+    // expect_identifier path.
+    for src in [
+        "fn main() { let mut group = 0; }", // let pattern
+        "fn f(group: i64) -> i64 { 0 }",    // parameter pattern
+        "fn main() { let x = group; }",     // expression position
+    ] {
+        let (_prog, errors) = parse_with_errors(src);
+        assert!(!errors.is_empty(), "expected a parse error for: {src}");
+        assert!(
+            errors.iter().any(|e| e.message
+                == "'group' is a reserved keyword and cannot be used as an identifier"),
+            "message should name the reserved keyword; got {:?} for: {src}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+    // A different keyword (`match`) in parameter position, to confirm the
+    // spelling is recovered per-token, not hardcoded.
+    let (_p, errs) = parse_with_errors("fn f(match: i64) -> i64 { 0 }");
+    assert!(
+        errs.iter()
+            .any(|e| e.message
+                == "'match' is a reserved keyword and cannot be used as an identifier"),
+        "got {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
 // ── Marker traits ───────────────────────────────────────────────────
 //
 // `marker trait NAME;` per design.md § Marker Traits (v60 item 55).

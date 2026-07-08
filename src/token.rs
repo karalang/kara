@@ -278,3 +278,96 @@ pub enum Token {
     Error(String),
     EOF,
 }
+
+impl Token {
+    /// The source spelling of a reserved-keyword token, or `None` for any
+    /// non-keyword token (identifiers, literals, punctuation, `Error`, `EOF`).
+    ///
+    /// This is the inverse of the lexer's `text -> Token` keyword table
+    /// (`lexer.rs`, `let token = match text { … }`). It lets the parser turn a
+    /// cryptic "Expected pattern, found Group" (the token's Rust `Debug` name)
+    /// into an actionable "'group' is a reserved keyword and cannot be used as an
+    /// identifier" when a user names a binding/parameter after a keyword
+    /// (B-2026-07-08-13). Keep the arms in sync with the lexer table.
+    pub fn keyword_spelling(&self) -> Option<&'static str> {
+        let s = match self {
+            Token::Fn => "fn",
+            Token::Struct => "struct",
+            Token::Union => "union",
+            Token::Enum => "enum",
+            Token::Trait => "trait",
+            Token::Marker => "marker",
+            Token::Impl => "impl",
+            Token::Mod => "mod",
+            Token::Use => "use",
+            Token::Import => "import",
+            Token::Const => "const",
+            Token::Type => "type",
+            Token::Distinct => "distinct",
+            Token::Pub => "pub",
+            Token::Private => "private",
+            Token::If => "if",
+            Token::Else => "else",
+            Token::Match => "match",
+            Token::While => "while",
+            Token::For => "for",
+            Token::In => "in",
+            Token::Loop => "loop",
+            Token::Return => "return",
+            Token::Break => "break",
+            Token::Continue => "continue",
+            Token::Defer => "defer",
+            Token::ErrDefer => "errdefer",
+            Token::Try => "try",
+            Token::Asm => "asm",
+            Token::GlobalAsm => "global_asm",
+            Token::Let => "let",
+            Token::Mut => "mut",
+            Token::And => "and",
+            Token::Or => "or",
+            Token::Not => "not",
+            Token::Own => "own",
+            Token::Ref => "ref",
+            Token::Weak => "weak",
+            Token::Lock => "lock",
+            Token::Move => "move",
+            Token::Effect => "effect",
+            Token::Resource => "resource",
+            Token::Verb => "verb",
+            Token::Reads => "reads",
+            Token::Writes => "writes",
+            Token::Sends => "sends",
+            Token::Receives => "receives",
+            Token::Allocates => "allocates",
+            Token::Panics => "panics",
+            Token::Blocks => "blocks",
+            Token::Suspends => "suspends",
+            Token::With => "with",
+            Token::Transparent => "transparent",
+            Token::Stable => "stable",
+            Token::Seq => "seq",
+            Token::Par => "par",
+            Token::Yield => "yield",
+            Token::As => "as",
+            Token::Where => "where",
+            Token::Dyn => "dyn",
+            Token::Requires => "requires",
+            Token::Ensures => "ensures",
+            Token::Invariant => "invariant",
+            Token::Unsafe => "unsafe",
+            Token::Extern => "extern",
+            Token::Shared => "shared",
+            Token::Layout => "layout",
+            Token::Group => "group",
+            Token::Comptime => "comptime",
+            Token::True => "true",
+            Token::False => "false",
+            Token::Alias => "alias",
+            Token::Independent => "independent",
+            Token::SelfValue => "self",
+            Token::SelfType => "Self",
+            _ => return None,
+        };
+        Some(s)
+    }
+}
