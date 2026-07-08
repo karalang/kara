@@ -6194,9 +6194,18 @@ fn cmd_build(
             // `-o <path>` overrides verbatim.
             let default_name = format!("lib{exe_name}{}", lib_kind.artifact_extension());
             let art_path = out_path.map(str::to_string).unwrap_or(default_name);
-            if let Err(e) =
-                crate::codegen::link_native_library(&obj_path, &art_path, lib_kind, exe_name)
-            {
+            // Symbols the artifact must publish — needed for the Windows DLL
+            // `/EXPORT:` list (a no-op on unix, which exports every
+            // default-visibility symbol). AST-derived so it stays in lockstep
+            // with the emitted C header.
+            let export_syms = crate::cheader::export_symbols(&pipeline.parsed.program);
+            if let Err(e) = crate::codegen::link_native_library(
+                &obj_path,
+                &art_path,
+                lib_kind,
+                exe_name,
+                &export_syms,
+            ) {
                 eprintln!("error: link failed: {e}");
                 let _ = std::fs::remove_file(&obj_path);
                 process::exit(1);
@@ -7682,11 +7691,13 @@ fn run_multi_file_codegen(
         let art_path = out_path.map(std::path::PathBuf::from).unwrap_or_else(|| {
             dist.join(format!("lib{lib_name}{}", lib_kind.artifact_extension()))
         });
+        let export_syms = crate::cheader::export_symbols(&pipeline.parsed.program);
         if let Err(e) = crate::codegen::link_native_library(
             &obj_path.to_string_lossy(),
             &art_path.to_string_lossy(),
             lib_kind,
             lib_name,
+            &export_syms,
         ) {
             let _ = std::fs::remove_file(&obj_path);
             return BuildCodegenStatus::Failed {

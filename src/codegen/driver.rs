@@ -600,10 +600,19 @@ impl NativeLibKind {
     /// a shared library is `.dylib` on macOS and `.so` elsewhere.
     pub fn artifact_extension(&self) -> &'static str {
         match self {
-            NativeLibKind::StaticLib => ".a",
+            NativeLibKind::StaticLib => {
+                if cfg!(windows) {
+                    // MSVC static import/object archive.
+                    ".lib"
+                } else {
+                    ".a"
+                }
+            }
             NativeLibKind::CDylib => {
                 if cfg!(target_os = "macos") {
                     ".dylib"
+                } else if cfg!(windows) {
+                    ".dll"
                 } else {
                     ".so"
                 }
@@ -624,15 +633,21 @@ pub fn link_native_library(
     out_path: &str,
     kind: NativeLibKind,
     lib_name: &str,
+    export_symbols: &[String],
 ) -> Result<(), String> {
     let references_gpu = object_references_gpu(obj_path);
     let prefer_min = !references_gpu && !object_references_tls(obj_path);
     let runtime_path = resolve_runtime_path(prefer_min, references_gpu)?;
     match kind {
         NativeLibKind::StaticLib => link_static_library(obj_path, out_path, &runtime_path),
-        NativeLibKind::CDylib => {
-            link_shared_library(obj_path, out_path, &runtime_path, lib_name, references_gpu)
-        }
+        NativeLibKind::CDylib => link_shared_library(
+            obj_path,
+            out_path,
+            &runtime_path,
+            lib_name,
+            references_gpu,
+            export_symbols,
+        ),
     }
 }
 
@@ -645,6 +660,61 @@ pub fn link_native_library(
 /// first so a stale archive from a prior build is never appended to.
 fn link_static_library(obj_path: &str, out_path: &str, runtime_path: &str) -> Result<(), String> {
     let _ = std::fs::remove_file(out_path);
+    #[cfg(windows)]
+    {
+        // MSVC `.lib` merge. `llvm-ar` speaks the GNU `ar -M` MRI script
+        // (the `addlib` archive-merge verb `lib.exe` lacks), so the thick
+        // archive is built with the same script as the unix path — the
+        // consumer then links `<name>.lib` alone and the referenced runtime
+        // members come along. `llvm-ar` ships with the LLVM/clang toolchain
+        // this producer path already requires for the DLL link. No `ranlib`
+        // step: `llvm-ar` writes the archive symbol index on `save`.
+        use std::io::Write;
+        let script =
+            format!("create {out_path}\naddmod {obj_path}\naddlib {runtime_path}\nsave\nend\n");
+        let mut child = std::process::Command::new("llvm-ar")
+            .arg("-M")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| {
+                format!(
+                    "Failed to invoke llvm-ar: {e}. Install LLVM/clang and ensure it is on PATH."
+                )
+            })?;
+        child
+            .stdin
+            .take()
+            .ok_or_else(|| "llvm-ar: failed to open stdin".to_string())?
+            .write_all(script.as_bytes())
+            .map_err(|e| format!("llvm-ar: failed to write MRI script: {e}"))?;
+        let output = child
+            .wait_with_output()
+            .map_err(|e| format!("llvm-ar: failed to wait: {e}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "llvm-ar failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        return Ok(());
+    }
+    #[cfg(not(windows))]
+    {
+        link_static_library_unix(obj_path, out_path, runtime_path)
+    }
+}
+
+/// Unix (`libtool -static` on macOS / `ar -M` MRI on Linux/BSD) thick-archive
+/// merge. Split out so the Windows arm can no-op the unix body without a
+/// dead-code lint on the `libtool`/`ar` paths.
+#[cfg(not(windows))]
+fn link_static_library_unix(
+    obj_path: &str,
+    out_path: &str,
+    runtime_path: &str,
+) -> Result<(), String> {
     if cfg!(target_os = "macos") {
         let output = std::process::Command::new("libtool")
             .args(["-static", "-o", out_path, obj_path, runtime_path])
@@ -708,6 +778,36 @@ fn link_static_library(obj_path: &str, out_path: &str, runtime_path: &str) -> Re
 /// library by rpath, not the absolute build-machine path (the
 /// producer-mode dylib gotcha).
 fn link_shared_library(
+    obj_path: &str,
+    out_path: &str,
+    runtime_path: &str,
+    lib_name: &str,
+    references_gpu: bool,
+    export_symbols: &[String],
+) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let _ = references_gpu; // no Metal/GPU link story on Windows yet.
+        return link_shared_library_windows(
+            obj_path,
+            out_path,
+            lib_name,
+            runtime_path,
+            export_symbols,
+        );
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = export_symbols; // unix `.so`/`.dylib` export every default-visibility symbol.
+        link_shared_library_unix(obj_path, out_path, runtime_path, lib_name, references_gpu)
+    }
+}
+
+/// Unix (`cc -shared` / `-dynamiclib`) shared-object link. See
+/// [`link_shared_library`] for the runtime-lifecycle-root and macOS
+/// install-name rationale.
+#[cfg(not(windows))]
+fn link_shared_library_unix(
     obj_path: &str,
     out_path: &str,
     runtime_path: &str,
@@ -777,6 +877,93 @@ fn link_shared_library(
     Ok(())
 }
 
+/// System import libs the runtime archive references (from
+/// `cargo rustc -p karac-runtime --crate-type staticlib --print
+/// native-static-libs`): ws2_32 (sockets), bcrypt + advapi32 (ring / RNG),
+/// userenv, ntdll, dbghelp (backtrace), kernel32, winmm (high-res timer),
+/// legacy_stdio_definitions (the UCRT `printf` shim codegen references). Shared
+/// by the executable and shared-library Windows link paths; `clang` passes each
+/// to the linker as `<name>.lib`.
+#[cfg(windows)]
+const WINDOWS_SYSTEM_LIBS: &[&str] = &[
+    "ws2_32",
+    "bcrypt",
+    "advapi32",
+    "userenv",
+    "ntdll",
+    "dbghelp",
+    "kernel32",
+    "winmm",
+    "legacy_stdio_definitions",
+];
+
+/// Windows (MSVC) shared-library (`.dll`) link — the producer-mode analog of
+/// [`link_executable_windows`]. Uses `clang` as the linker driver (drives
+/// `lld-link`/`link.exe`, links the MSVC CRT, resolves the runtime archive's
+/// system-lib references) with `-shared`, and — the Windows-specific part —
+/// names every exported symbol on the link line.
+///
+/// Unix shared objects export every default-visibility symbol automatically,
+/// so the `.so`/`.dylib` path needs no export list. A Windows DLL is the
+/// opposite: it exports **nothing** unless each symbol is named
+/// (`link.exe`/`lld-link` have no "export all" for C symbols the way `ld`
+/// does), so each entry in `export_symbols` — the `pub extern "C" fn` names,
+/// their `karac_free_<name>` destructors, and the two runtime lifecycle
+/// entry points — is passed as `-Wl,/EXPORT:<name>`. `/EXPORT` doubles as the
+/// GC root the unix path gets from default visibility, so the referenced
+/// runtime subgraph survives `/OPT:REF` and the unreferenced rest is stripped.
+/// `/IMPLIB:<stem>.lib` emits the companion import library the consumer links
+/// against (the Windows analog of linking `-l<name>` for the `.so`).
+#[cfg(windows)]
+fn link_shared_library_windows(
+    obj_path: &str,
+    out_path: &str,
+    lib_name: &str,
+    runtime_path: &str,
+    export_symbols: &[String],
+) -> Result<(), String> {
+    let mut cmd = std::process::Command::new("clang");
+    cmd.arg("-shared");
+    cmd.args([obj_path, runtime_path, "-o", out_path]);
+    for lib in WINDOWS_SYSTEM_LIBS {
+        cmd.arg(format!("-l{lib}"));
+    }
+    // Name every exported symbol: a DLL publishes nothing implicitly.
+    for sym in export_symbols {
+        cmd.arg(format!("-Wl,/EXPORT:{sym}"));
+    }
+    // Companion import library next to the DLL, `<stem>.lib` — the artifact a
+    // consumer links against to bind the DLL's exports at load time.
+    let implib = std::path::Path::new(out_path)
+        .with_file_name(format!("{lib_name}.lib"))
+        .to_string_lossy()
+        .into_owned();
+    cmd.arg(format!("-Wl,/IMPLIB:{implib}"));
+    if let Some(link) = crate::target::native_link_config() {
+        for dir in &link.search_paths {
+            cmd.arg(format!("-L{dir}"));
+        }
+        for lib in &link.libs {
+            cmd.arg(format!("-l{lib}"));
+        }
+    }
+    // Dead-strip the unreferenced runtime subgraph (the `-dead_strip` /
+    // `--gc-sections` analog); the `/EXPORT`ed symbols are the GC roots.
+    cmd.arg("-Wl,/OPT:REF");
+    let output = cmd.output().map_err(|e| {
+        format!(
+            "Failed to invoke linker (clang): {e}. Install LLVM/clang and ensure it is on PATH."
+        )
+    })?;
+    if !output.status.success() {
+        return Err(format!(
+            "Linker (clang) failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(())
+}
+
 /// Windows (MSVC) link path — the analog of the unix `cc` body in
 /// [`link_executable_impl`]. Uses `clang` as the linker driver (it auto-detects
 /// the installed VS toolchain, links the MSVC CRT, and resolves the
@@ -799,36 +986,6 @@ fn link_executable_windows(
     runtime_path: &str,
     extra_cc_args: &[&str],
 ) -> Result<(), String> {
-    // System import libs the runtime archive references (from
-    // `cargo rustc -p karac-runtime --crate-type staticlib --print
-    // native-static-libs`): ws2_32 (sockets), bcrypt + advapi32 (ring / RNG),
-    // userenv, ntdll, dbghelp (backtrace), kernel32. `clang` passes these to
-    // the linker as `<name>.lib`. msvcrt is linked by the clang driver's
-    // default CRT selection (matches Rust's default `/MD` dynamic CRT, so the
-    // runtime archive's CRT references resolve consistently).
-    const WINDOWS_SYSTEM_LIBS: &[&str] = &[
-        "ws2_32",
-        "bcrypt",
-        "advapi32",
-        "userenv",
-        "ntdll",
-        "dbghelp",
-        "kernel32",
-        // `timeBeginPeriod` — the runtime's reactor init raises the system timer
-        // resolution to 1 ms on Windows (`event_loop.rs::ensure_high_res_timer`,
-        // killing the serial blocking-I/O path's ~15 ms timer-quantized latency
-        // floor; see docs/spikes/windows-iocp-scale-investigation.md Finding 2).
-        // The runtime's `#[link(name = "winmm")]` directive is what makes cargo's
-        // own test/build links resolve it; this AOT driver names system libs
-        // explicitly, so it must list winmm too.
-        "winmm",
-        // The classic stdio functions codegen references as symbols — `printf`
-        // (panic-site message printing) and friends — are header-inline-only in
-        // the MSVC UCRT, so the actual symbols come from this CRT shim lib
-        // (rustc links it automatically; the clang driver does not by default).
-        "legacy_stdio_definitions",
-    ];
-
     let mut cmd = std::process::Command::new("clang");
     for arg in extra_cc_args {
         cmd.arg(arg);

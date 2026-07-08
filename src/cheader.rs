@@ -143,6 +143,33 @@ pub fn boxed_return_elements_need_drop(func: &Function) -> bool {
     matches!(boxed_return_of(func), Some(BoxedReturn::Nested { .. }))
 }
 
+/// The full set of C symbol names an artifact must publish in its dynamic
+/// symbol table, in the order a `.def`/`/EXPORT:` list wants them. Unix
+/// shared objects export every default-visibility symbol automatically, so
+/// this is only *needed* on Windows — a DLL exports nothing unless each
+/// symbol is named (`link.exe` has no "export all" for C symbols the way
+/// `ld` does). It comprises: every `pub extern "C" fn` (bare source name);
+/// the auto-emitted `karac_free_<name>` destructor for each boxed-return
+/// export (Slice 4 Path B); and the two runtime lifecycle entry points the
+/// C header always declares. Kept here (plain-data, AST-derived) so the
+/// codegen link path and the header stay in lockstep on the same rule.
+pub fn export_symbols(program: &Program) -> Vec<String> {
+    let mut syms = Vec::new();
+    for it in &program.items {
+        if let Item::Function(f) = it {
+            if is_exported(f) {
+                syms.push(f.name.clone());
+                if boxed_return_of(f).is_some() {
+                    syms.push(format!("karac_free_{}", f.name));
+                }
+            }
+        }
+    }
+    syms.push("karac_runtime_init".to_string());
+    syms.push("karac_runtime_shutdown".to_string());
+    syms
+}
+
 /// True iff `te` crosses the C boundary *transparently by value* — a
 /// primitive, a raw pointer, `()`, or a `#[repr(C)]` struct named in
 /// `repr_c`. These need no boxing; anything else is either boxable (returns
@@ -766,6 +793,31 @@ mod tests {
             h.contains("void karac_free_greet(KaraString* handle);"),
             "destructor missing:\n{h}"
         );
+    }
+
+    #[test]
+    fn export_symbols_lists_fns_destructors_and_lifecycle() {
+        // A transparent export contributes only its bare name; a boxed-return
+        // export additionally contributes its `karac_free_<name>` destructor.
+        // The two runtime lifecycle entry points always trail.
+        let src = "pub extern \"C\" fn saxpy(n: i64) { }\n\
+                   pub extern \"C\" fn make() -> Vec[i64] { }\n\
+                   pub fn helper() -> i32 { 1 }";
+        let parsed = crate::parse(src);
+        let syms = export_symbols(&parsed.program);
+        assert_eq!(
+            syms,
+            vec![
+                "saxpy".to_string(),
+                "make".to_string(),
+                "karac_free_make".to_string(),
+                "karac_runtime_init".to_string(),
+                "karac_runtime_shutdown".to_string(),
+            ],
+            "unexpected export symbol set: {syms:?}"
+        );
+        // A non-exported (non-extern) fn never appears.
+        assert!(!syms.iter().any(|s| s == "helper"));
     }
 
     fn exported_fn(src: &str) -> &'static crate::ast::Function {
