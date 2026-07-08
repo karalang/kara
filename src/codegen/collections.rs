@@ -713,7 +713,24 @@ impl<'ctx> super::Codegen<'ctx> {
         val: BasicValueEnum<'ctx>,
         elem_te: Option<TypeExpr>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let elem_ty = val.get_type();
+        // Size the buffer and stride the fill by the DESTINATION element type, not
+        // the compiled value type. `Vec.filled`'s value argument compiles at its
+        // natural width — a bare integer literal is i64 — but a narrow element
+        // (`Vec[i32]` / `Vec[u8]` / `Vec[bool]` / f32 …) has a smaller stride.
+        // Sizing/storing at the i64 value width while every `v[i]` read GEPs at the
+        // element width mis-aligns every slot: `let v: Vec[i32] = Vec.filled(5, 7)`
+        // filled at 8-byte stride but read at 4-byte stride prints `070`, not `777`
+        // (B-2026-07-08-10, silent exit-0 wrong output). Recover the element type
+        // from `elem_te` (threaded from the binding); fall back to the value type
+        // only when no destination type is known.
+        let elem_ty = elem_te
+            .as_ref()
+            .map(|te| self.llvm_type_for_type_expr(te))
+            .unwrap_or_else(|| val.get_type());
+        // Narrow/extend a scalar value to the element width (truncate i64→i32,
+        // etc.). No-op for aggregate/pointer (heap) elements and already-matching
+        // widths. Mirrors the `push` store's `coerce_scalar_to_type` narrowing.
+        let val = self.coerce_scalar_to_type(val, elem_ty);
         let elem_size = elem_ty.size_of().unwrap();
         let i64_t = self.context.i64_type();
         let fn_val = self.current_fn.unwrap();

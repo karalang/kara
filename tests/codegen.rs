@@ -3163,6 +3163,32 @@ fn main() {
         }
     }
 
+    /// B-2026-07-08-10: `Vec.filled` / `Vec[v; n]` must size the buffer and stride
+    /// the fill by the ELEMENT type, not the compiled value width. A bare integer
+    /// literal compiles to i64; for a narrow element (`Vec[i32]`/`Vec[u8]`/…) the
+    /// old code filled at 8-byte stride while every read GEPed at the element
+    /// stride, mis-aligning every slot (interp `777` vs compiled `070` for
+    /// `Vec[i32].filled(5,7)`, silent exit-0 wrong output). Reads the
+    /// stride-sensitive MIDDLE slots so a stride mismatch is observable.
+    #[test]
+    fn vec_filled_narrow_element_stride() {
+        let src = "fn main() {\n\
+                   \x20   let a: Vec[i32] = Vec.filled(5, 7);\n\
+                   \x20   println(a[1] as i64); println(a[2] as i64); println(a[3] as i64);\n\
+                   \x20   let b: Vec[u8] = Vec.filled(4, 200);\n\
+                   \x20   println(b[1] as i64); println(b[3] as i64);\n\
+                   \x20   let c: Vec[i32] = [9; 4];\n\
+                   \x20   println(c[1] as i64); println(c[3] as i64);\n\
+                   }\n";
+        if let Some(out) = run_program(src) {
+            assert_eq!(
+                out.split_whitespace().collect::<Vec<_>>(),
+                ["7", "7", "7", "200", "200", "9", "9"],
+                "narrow-element fill must stride by the element width; stdout:\n{out}"
+            );
+        }
+    }
+
     /// Raw-pointer instance methods (design.md § raw pointers; additive-
     /// interop Slice 4 Path A, `B-2026-07-08-4`): `.offset` (element-scaled
     /// arithmetic), `.write` (store), `.read` (load), including a chained
