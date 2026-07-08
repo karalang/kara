@@ -32,6 +32,7 @@
 - [Data Layout](./ch15-data-layout.md)
 - [Testing](./ch16-testing.md)
 - [Server-Side Rendering](./ch17-ssr.md)
+- [Kāra as a Library: Additive Interop](./ch18-interop.md)
 
 # Appendices
 
