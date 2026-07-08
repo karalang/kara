@@ -344,6 +344,14 @@ pub enum Command {
         /// `KARAC_STRIP_CONTRACTS`. Threaded through `cmd_build_project` →
         /// `run_multi_file_codegen` → `compile_to_object_with_hot_swap`.
         release: bool,
+        /// `--crate-type=bin|staticlib|cdylib` — see `Build.crate_type`.
+        /// In project mode, overrides the manifest `[lib] crate-type`.
+        /// `Bin` here means "flag omitted"; `cmd_build_project` falls back
+        /// to the manifest's `[lib]` table to decide the artifact kind.
+        crate_type: NativeCrateType,
+        /// `-o <path>` — see `Build.out_path`. Names the library artifact
+        /// for a project library build; omitted → `dist/lib<name>.<ext>`.
+        out_path: Option<String>,
     },
     Query {
         kind: QueryKind,
@@ -769,6 +777,8 @@ pub fn execute(cmd: Command) {
             target_features,
             wasm_threads,
             release,
+            crate_type,
+            out_path,
         } => cmd_build_project(
             output,
             offline,
@@ -780,6 +790,8 @@ pub fn execute(cmd: Command) {
             target_features.as_deref(),
             wasm_threads,
             release,
+            crate_type,
+            out_path.as_deref(),
         ),
         Command::Query {
             kind,
@@ -6729,6 +6741,8 @@ fn cmd_build_project(
     target_features: Option<&str>,
     wasm_threads: bool,
     release: bool,
+    crate_type: NativeCrateType,
+    out_path: Option<&str>,
 ) {
     // Phase-10: v1 target names are classified the same way as in
     // single-file mode. A wasm name selects the project-mode WASM build:
@@ -6852,7 +6866,7 @@ fn cmd_build_project(
             .or_else(|| mf.release_target_features.clone()),
     );
     #[cfg(not(feature = "llvm"))]
-    let _ = (target_cpu, target_features);
+    let _ = (target_cpu, target_features, out_path);
 
     // External native-library linking (`[link]` table) — native targets
     // only (wasm-ld ignores it). Read from the project's own manifest
@@ -7045,6 +7059,28 @@ fn cmd_build_project(
     // mangling deferred to v2 — cross-module function-name collisions
     // surface as duplicate-symbol errors at the LLVM linker (clear failure,
     // ungainly diagnostic; structured detection is a follow-up).
+    // Resolve the effective library-artifact kind (additive-interop Slice 2,
+    // project-mode `[lib]`): a CLI `--crate-type staticlib/cdylib` wins; else
+    // the manifest `[lib] crate-type`; else an executable. A bare/omitted
+    // `bin` CLI flag reads as "unset" and falls to the manifest — a project
+    // with a `[lib]` table builds a library by default.
+    let effective_crate_type = if crate_type != NativeCrateType::Bin {
+        crate_type
+    } else {
+        match mf.lib_crate_type.as_deref() {
+            Some("staticlib") => NativeCrateType::StaticLib,
+            Some("cdylib") => NativeCrateType::CDylib,
+            _ => NativeCrateType::Bin,
+        }
+    };
+    // Library-artifact mode is native-only (single-file posture).
+    if is_wasm && effective_crate_type != NativeCrateType::Bin {
+        eprintln!(
+            "error: --crate-type staticlib/cdylib (or a `[lib]` table) is a native-only producer \
+             mode; for a wasm library surface use `--target={build_target}` with `--bindings`."
+        );
+        process::exit(1);
+    }
     let mut codegen_status: BuildCodegenStatus = BuildCodegenStatus::Skipped;
     if !cfg!(feature = "llvm") {
         // Mirror the single-file `cmd_build` no-llvm fallback (line ~2393).
@@ -7064,6 +7100,8 @@ fn cmd_build_project(
             effective_bindings,
             wasm_tools.as_ref(),
             wasm_threads,
+            effective_crate_type,
+            out_path,
         );
     }
 
@@ -7406,6 +7444,8 @@ fn run_multi_file_codegen(
     effective_bindings: Option<BindingsMode>,
     wasm_tools: Option<&crate::componentize::WasmTools>,
     wasm_threads: bool,
+    crate_type: NativeCrateType,
+    out_path: Option<&str>,
 ) -> BuildCodegenStatus {
     // 1. Topological emission order — dependencies before dependents.
     let order = module::emission_order(tree);
@@ -7546,6 +7586,25 @@ fn run_multi_file_codegen(
         };
     }
 
+    // Library-artifact C-ABI honesty gate (additive-interop Slice 2,
+    // project-mode `[lib]`): reject a non-transparent, non-boxable export
+    // return/param before codegen so the produced `.a`/`.so`/`.h` is always
+    // ABI-honest (single-file posture; see `cmd_build`).
+    if crate_type != NativeCrateType::Bin {
+        let export_errs = crate::cheader::validate_exports(&pipeline.parsed.program);
+        if !export_errs.is_empty() {
+            let message = export_errs
+                .iter()
+                .map(|(fn_name, reason)| format!("exported `{fn_name}`: {reason}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            return BuildCodegenStatus::Failed {
+                phase: "export-abi".to_string(),
+                message,
+            };
+        }
+    }
+
     // 4. Codegen — write to a temp object then link to the manifest's
     // `name` field as the binary basename in the project root. A wasm
     // build instead lands in the `dist/wasm/<pkg>.wasm` artifact layout
@@ -7598,6 +7657,67 @@ fn run_multi_file_codegen(
             message: format!("codegen failed: {e}"),
         };
     }
+
+    // Library-artifact producer mode (additive-interop Slice 2, project-
+    // mode `[lib]`): archive/link the emitted object into a `.a`/`.so`/
+    // `.dylib` under `dist/` and emit the companion `.h`, instead of an
+    // executable. Native-only (the wasm × library combination was rejected
+    // in `cmd_build_project`). Returns early — the wasm/exe link tail below
+    // is `Bin`-only.
+    if crate_type != NativeCrateType::Bin {
+        let lib_kind = match crate_type {
+            NativeCrateType::StaticLib => crate::codegen::NativeLibKind::StaticLib,
+            NativeCrateType::CDylib => crate::codegen::NativeLibKind::CDylib,
+            NativeCrateType::Bin => unreachable!(),
+        };
+        let lib_name = mf.lib_name.as_deref().unwrap_or(&mf.name);
+        let dist = project_root.join("dist");
+        if let Err(e) = std::fs::create_dir_all(&dist) {
+            let _ = std::fs::remove_file(&obj_path);
+            return BuildCodegenStatus::Failed {
+                phase: "link".to_string(),
+                message: format!("cannot create {}: {e}", dist.display()),
+            };
+        }
+        let art_path = out_path.map(std::path::PathBuf::from).unwrap_or_else(|| {
+            dist.join(format!("lib{lib_name}{}", lib_kind.artifact_extension()))
+        });
+        if let Err(e) = crate::codegen::link_native_library(
+            &obj_path.to_string_lossy(),
+            &art_path.to_string_lossy(),
+            lib_kind,
+            lib_name,
+        ) {
+            let _ = std::fs::remove_file(&obj_path);
+            return BuildCodegenStatus::Failed {
+                phase: "link".to_string(),
+                message: format!("link failed: {e}"),
+            };
+        }
+        let _ = std::fs::remove_file(&obj_path);
+        let header_path = art_path
+            .parent()
+            .map(|d| d.join(format!("lib{lib_name}.h")))
+            .unwrap_or_else(|| std::path::PathBuf::from(format!("lib{lib_name}.h")));
+        let header = crate::cheader::emit_c_header(&pipeline.parsed.program, lib_name);
+        if let Err(e) = std::fs::write(&header_path, header) {
+            return BuildCodegenStatus::Failed {
+                phase: "link".to_string(),
+                message: format!(
+                    "library `{}` built, but writing the C header to {} failed: {e}",
+                    art_path.display(),
+                    header_path.display()
+                ),
+            };
+        }
+        return BuildCodegenStatus::Built {
+            exe_path: art_path,
+            glue_path: None,
+            dts_path: None,
+            threads_wasm_path: None,
+        };
+    }
+
     // For embedded component bindings, wasm-ld's output is an
     // intermediate — link the C-ABI core module to a scratch path, then
     // lift it into the single component at `dist/wasm/<pkg>.wasm`. The
@@ -7776,6 +7896,8 @@ fn run_multi_file_codegen(
     _effective_bindings: Option<BindingsMode>,
     _wasm_tools: Option<&crate::componentize::WasmTools>,
     _wasm_threads: bool,
+    _crate_type: NativeCrateType,
+    _out_path: Option<&str>,
 ) -> BuildCodegenStatus {
     BuildCodegenStatus::NoLlvmFeature
 }

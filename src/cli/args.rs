@@ -600,34 +600,12 @@ fn parse_build_command(args: &[String]) -> Command {
                 );
                 process::exit(1);
             }
-            // Library-artifact producer mode (additive-interop Slice 2) is
-            // single-file only at this slice — a project `[lib]` table
-            // (manifest-driven export set + artifact name) is the natural
-            // project-mode home and is a follow-up. Reject loudly rather
-            // than silently build an executable the user did not ask for.
-            if crate_type != crate::cli::NativeCrateType::Bin {
-                eprintln!(
-                    "error: --crate-type staticlib/cdylib is only supported in single-file build at this slice; \
-                     project-mode library artifacts (a manifest `[lib]` table) are a follow-up. \
-                     Pass the source file explicitly: `karac build <file>.kara --crate-type ...`"
-                );
-                process::exit(1);
-            }
-            if out_path.is_some() {
-                eprintln!(
-                    "error: -o/--out is only supported in single-file build; project mode writes to `dist/`"
-                );
-                process::exit(1);
-            }
-            // `--release` strips contracts via codegen and is now wired
-            // through project mode as well (threaded to `run_multi_file_codegen`
-            // → `compile_to_object_with_hot_swap`), so it forwards rather than
-            // being rejected. Composes with `KARAC_STRIP_CONTRACTS` (OR).
-            //
-            // `bindings` threads through to the project-mode WASM build
-            // (`dist/wasm/<pkg>.*` artifact emission — phase-10); on a
-            // non-WASM project build it stays accepted-but-inert, the
-            // single-file posture.
+            // Library-artifact producer mode in project builds (additive-
+            // interop Slice 2, project-mode `[lib]`): `--crate-type` forwards
+            // and overrides the manifest `[lib] crate-type`; `-o` names the
+            // artifact (default: `dist/lib<name>.<ext>`). `--release` strips
+            // contracts (threaded to `run_multi_file_codegen`); `bindings`
+            // threads to the WASM build. All accepted-but-inert as noted.
             Command::BuildProject {
                 output,
                 offline,
@@ -639,6 +617,8 @@ fn parse_build_command(args: &[String]) -> Command {
                 target_features,
                 wasm_threads,
                 release,
+                crate_type,
+                out_path,
             }
         }
     }

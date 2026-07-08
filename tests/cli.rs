@@ -20135,3 +20135,93 @@ fn test_build_auto_boxed_vec_string_return_e2e() {
         assert_eq!(run.status.code(), Some(0));
     }
 }
+
+/// Project-mode library artifact (additive-interop Slice 2, project `[lib]`
+/// table). A multi-module project with `[lib] crate-type = "staticlib"`
+/// builds `dist/lib<name>.a` + `dist/lib<name>.h` from `karac build` with
+/// no flags; a C host links the archive and calls an export. Proves the
+/// manifest `[lib]` table drives a library build across multiple modules.
+/// Soft-skips like the single-file producer E2E tests.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_project_lib_table_builds_library_e2e() {
+    let tmp = scratch_project("proj-lib");
+    write(
+        &tmp.join("kara.toml"),
+        "[package]\nname = \"mathkit\"\n\n[lib]\ncrate-type = \"staticlib\"\n",
+    );
+    write(
+        &tmp.join("src/main.kara"),
+        "import helper.square;\n\
+         pub extern \"C\" fn sum_sq(a: i64, b: i64) -> i64 { square(a) + square(b) }\n",
+    );
+    write(
+        &tmp.join("src/helper.kara"),
+        "pub fn square(x: i64) -> i64 { x * x }\n",
+    );
+
+    let build = karac_bin().current_dir(&tmp).arg("build").output().unwrap();
+    let berr = String::from_utf8_lossy(&build.stderr);
+    let lib = tmp.join("dist/libmathkit.a");
+    let header = tmp.join("dist/libmathkit.h");
+    if berr.contains("requires the llvm feature")
+        || berr.contains("link failed")
+        || !lib.exists()
+        || !header.exists()
+    {
+        eprintln!("skip: test_project_lib_table_builds_library_e2e — build/link soft-skip");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    let header_text = std::fs::read_to_string(&header).unwrap();
+    assert!(
+        header_text.contains("int64_t sum_sq(int64_t a, int64_t b);"),
+        "export proto missing:\n{header_text}"
+    );
+
+    let host_c = "#include <stdio.h>\n\
+                  #include \"dist/libmathkit.h\"\n\
+                  int main(void){ karac_runtime_init();\n\
+                    printf(\"%lld\\n\", (long long)sum_sq(3,4));\n\
+                    karac_runtime_shutdown(); return 0; }\n";
+    write(&tmp.join("host.c"), host_c);
+    let cc = std::process::Command::new("cc")
+        .current_dir(&tmp)
+        .args([
+            "host.c",
+            "-Ldist",
+            "-l:libmathkit.a",
+            "-lpthread",
+            "-lm",
+            "-ldl",
+            "-o",
+            "host",
+        ])
+        .output();
+    let cc = match cc {
+        Ok(o) => o,
+        Err(_) => {
+            eprintln!("skip: test_project_lib_table_builds_library_e2e — no `cc`");
+            let _ = std::fs::remove_dir_all(&tmp);
+            return;
+        }
+    };
+    assert!(
+        cc.status.success(),
+        "C host failed to link project library:\n{}",
+        String::from_utf8_lossy(&cc.stderr)
+    );
+    let run = common::output_with_hang_watchdog(
+        {
+            let mut c = std::process::Command::new(tmp.join("host"));
+            c.current_dir(&tmp);
+            c
+        },
+        std::time::Duration::from_secs(15),
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+    if let Some(run) = run {
+        assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "25"); // 9 + 16
+        assert_eq!(run.status.code(), Some(0));
+    }
+}

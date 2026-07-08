@@ -448,6 +448,18 @@ pub struct Manifest {
     /// specific and therefore a build/manifest concern, not a source-level
     /// `extern` attribute. Empty when absent.
     pub link_search_paths: Vec<String>,
+    /// `[lib] name = "..."` — the produced library artifact's stem (no
+    /// `lib` prefix / extension), for a `--crate-type staticlib/cdylib`
+    /// project build (additive-interop Slice 2, project-mode `[lib]`).
+    /// `None` → the package `name` is used. Symmetric to `[link]`, which
+    /// links *foreign* libraries *into* the build; `[lib]` describes the
+    /// library *this* project *produces*.
+    pub lib_name: Option<String>,
+    /// `[lib] crate-type = "staticlib" | "cdylib"` — the default artifact
+    /// kind when `karac build` runs with no `--crate-type` flag. `None` →
+    /// an executable (the historical default). A CLI `--crate-type`
+    /// overrides this.
+    pub lib_crate_type: Option<String>,
     pub warnings: Vec<ManifestWarning>,
 }
 
@@ -898,6 +910,7 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
         parse_wasm_table(path, &table, &mut warnings)?;
     let profile_config = parse_profile_table(path, &table, profile, &mut warnings)?;
     let (link_libs, link_search_paths) = parse_link_table(path, &table, &mut warnings)?;
+    let (lib_name, lib_crate_type) = parse_lib_table(path, &table, &mut warnings)?;
 
     // Stable order across package-key + dependency warnings — same sort key
     // (message string) used as before, but now applied after the full
@@ -932,6 +945,8 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
         profile_config,
         link_libs,
         link_search_paths,
+        lib_name,
+        lib_crate_type,
         warnings,
     })
 }
@@ -1068,6 +1083,84 @@ fn parse_link_table(
         }
     }
     Ok((libs, search_paths))
+}
+
+/// Parse the `[lib]` table when present — the produced-library descriptor
+/// for a `--crate-type staticlib/cdylib` project build (additive-interop
+/// Slice 2, project-mode `[lib]`; design.md § Exported C ABI). Two keys:
+///
+/// - `name` — the artifact stem (`"kernels"` → `libkernels.a` / `.so` /
+///   `.h`). Absent → the package `name`.
+/// - `crate-type` — `"staticlib"` or `"cdylib"`, the default artifact kind
+///   when `karac build` runs with no `--crate-type` flag. A CLI flag wins.
+///
+/// Unknown keys soft-warn (reserved); a wrong-typed value or an unknown
+/// `crate-type` string hard-errors so a typo can't silently produce an
+/// executable. Absent table → `(None, None)`.
+fn parse_lib_table(
+    path: &Path,
+    table: &toml::Table,
+    warnings: &mut Vec<ManifestWarning>,
+) -> Result<(Option<String>, Option<String>), ManifestError> {
+    let Some(value) = table.get("lib") else {
+        return Ok((None, None));
+    };
+    let lib_table = value
+        .as_table()
+        .ok_or_else(|| ManifestError::InvalidFieldType {
+            path: path.to_path_buf(),
+            key: "lib".to_string(),
+            expected: "a table (e.g. `[lib]`)",
+        })?;
+    let mut name = None;
+    let mut crate_type = None;
+    for (key, val) in lib_table {
+        match key.as_str() {
+            "name" => {
+                let s = val
+                    .as_str()
+                    .ok_or_else(|| ManifestError::InvalidFieldType {
+                        path: path.to_path_buf(),
+                        key: "lib.name".to_string(),
+                        expected: "a string",
+                    })?;
+                if s.trim().is_empty() {
+                    return Err(ManifestError::InvalidFieldType {
+                        path: path.to_path_buf(),
+                        key: "lib.name".to_string(),
+                        expected: "a non-empty string",
+                    });
+                }
+                name = Some(s.to_string());
+            }
+            "crate-type" => {
+                let s = val
+                    .as_str()
+                    .ok_or_else(|| ManifestError::InvalidFieldType {
+                        path: path.to_path_buf(),
+                        key: "lib.crate-type".to_string(),
+                        expected: "a string (`staticlib` or `cdylib`)",
+                    })?;
+                match s {
+                    "staticlib" | "cdylib" => crate_type = Some(s.to_string()),
+                    _ => {
+                        return Err(ManifestError::InvalidFieldType {
+                            path: path.to_path_buf(),
+                            key: "lib.crate-type".to_string(),
+                            expected: "one of `staticlib` or `cdylib`",
+                        })
+                    }
+                }
+            }
+            other => warnings.push(ManifestWarning {
+                line: None,
+                message: format!(
+                    "unknown key `[lib].{other}` — ignored in v1 (reserved for a later release)"
+                ),
+            }),
+        }
+    }
+    Ok((name, crate_type))
 }
 
 /// Parse a `[link]`-table value that must be an array of non-empty strings.
@@ -4108,6 +4201,32 @@ search-paths = ["/opt/homebrew/opt/llvm@18/lib"]
         assert!(m.link_libs.is_empty());
         assert!(m.link_search_paths.is_empty());
         assert!(m.warnings.is_empty());
+    }
+
+    #[test]
+    fn lib_table_parses_name_and_crate_type() {
+        let src =
+            "[package]\nname = \"pkg\"\n\n[lib]\nname = \"kernels\"\ncrate-type = \"cdylib\"\n";
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.lib_name.as_deref(), Some("kernels"));
+        assert_eq!(m.lib_crate_type.as_deref(), Some("cdylib"));
+        assert!(m.warnings.is_empty());
+    }
+
+    #[test]
+    fn lib_table_absent_is_none() {
+        let m = parse_manifest(&p(), "[package]\nname = \"pkg\"\n").unwrap();
+        assert!(m.lib_name.is_none());
+        assert!(m.lib_crate_type.is_none());
+    }
+
+    #[test]
+    fn lib_table_rejects_unknown_crate_type() {
+        let src = "[package]\nname = \"pkg\"\n\n[lib]\ncrate-type = \"rlib\"\n";
+        assert!(
+            parse_manifest(&p(), src).is_err(),
+            "unknown crate-type must error"
+        );
     }
 
     #[test]

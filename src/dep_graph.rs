@@ -936,6 +936,8 @@ mod tests {
             profile_config: manifest::ProfileConfig::default(),
             link_libs: Vec::new(),
             link_search_paths: Vec::new(),
+            lib_name: None,
+            lib_crate_type: None,
             warnings: Vec::new(),
         }
     }
