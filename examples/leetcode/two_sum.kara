@@ -6,8 +6,8 @@
 //
 // Demonstrates: Map, pattern matching (Option), iterators, tuples
 
-fn two_sum(nums: ref Vec[i64], target: i64) -> Option[(u64, u64)] {
-    let mut seen = Map.new();  // value → index
+fn two_sum(nums: ref Vec[i64], target: i64) -> Option[(i64, i64)] {
+    let mut seen: Map[i64, i64] = Map.new();  // value → index
 
     for (i, num) in nums.iter().enumerate() {
         let complement = target - num;
