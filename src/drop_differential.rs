@@ -70,10 +70,15 @@ pub enum DiffOutcome {
     },
 }
 
-/// Whether a program contains a closure / cross-task capture construct
-/// (`par {}` or `pool.spawn(|| …)`) — the oracle's §7 open edge.
+/// Whether a program contains a capture construct the differential still skips.
+/// `spawn` closures are now modelled (the oracle demotes a spawn-captured heap
+/// binding to Borrowed — no scope drop, matching codegen's RC/join free — see
+/// `ownership_oracle`'s `Closure` handling), so they are checked. `par {}`
+/// blocks remain the open §7 edge: their captures interact with `shared struct`
+/// RC promotion the oracle does not yet model, so those programs are still
+/// skipped (and counted).
 pub fn has_capture_construct(src: &str) -> bool {
-    src.contains("par {") || src.contains(".spawn(")
+    src.contains("par {")
 }
 
 /// Compile `src` in-process with the drop recorder armed and diff the oracle's

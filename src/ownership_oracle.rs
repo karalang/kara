@@ -26,10 +26,16 @@
 //! fields, index/field-store, `return`), borrows (`ref`/`mut ref` params,
 //! `.iter()`, borrowing reads), user-fn owned-param calls (caller-retains =
 //! NonConsuming), destructure and match-payload move-out (the obligation
-//! split), and scope-exit drops. Two edges the judgment flags as open (§7) are
-//! deliberately conservative here: **closure/cross-task captures** are treated
-//! as borrows (never move the parent binding — matches the auto-promoted-shared
-//! reality and avoids false use-after-move on the multi-`spawn` shape), and
+//! split), scope-exit drops, and **conditional-move branch merge** (a place is
+//! drop-elidable only if `Moved` on every path of an `if`/`match`/loop; else it
+//! stays `Owned` and codegen's runtime guard makes the over-scheduled drop
+//! correct). **Spawn/closure captures** are modelled: a heap binding captured by
+//! a closure is demoted to `Borrowed` (escapes as an auto-promoted shared/RC
+//! reference — no scope-drop obligation, later reads / additional captures
+//! valid), which matches codegen freeing it via the RC/join rather than the
+//! binding's scope cleanup. Two §7 edges remain deliberately handled short of
+//! full precision: **`par {}`-block captures** interact with `shared struct` RC
+//! promotion not yet modelled here (the fuzzer differential skips those), and
 //! **NLL last-use shortening** is not modelled (drops land at the scope-exit
 //! ceiling, per the judgment's stated ceiling semantics). Constructs outside
 //! the subset are walked structurally for read/move effects but do not
@@ -277,6 +283,78 @@ fn merge_state(a: PlaceState, b: PlaceState) -> PlaceState {
         (PlaceState::Borrowed, PlaceState::Borrowed) => PlaceState::Borrowed,
         (PlaceState::Dead, PlaceState::Dead) => PlaceState::Dead,
         _ => PlaceState::Owned,
+    }
+}
+
+/// Collect the identifier names an expression references — used to find the
+/// outer bindings a closure body *captures*. Over-approximation is safe (a
+/// captured binding that is not a live outer heap owner is ignored downstream);
+/// under-approximation only costs coverage (a missed capture stays scheduled and
+/// re-surfaces as a differential divergence, never a silent unsound elision), so
+/// unhandled variants fall through the `_` arm rather than risk mis-modeling.
+fn collect_idents(expr: &Expr, out: &mut Vec<String>) {
+    match &expr.kind {
+        ExprKind::Identifier(n) => out.push(n.clone()),
+        ExprKind::Call { callee, args } => {
+            collect_idents(callee, out);
+            for a in args {
+                collect_idents(&a.value, out);
+            }
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            collect_idents(object, out);
+            for a in args {
+                collect_idents(&a.value, out);
+            }
+        }
+        ExprKind::Binary { left, right, .. } | ExprKind::NilCoalesce { left, right } => {
+            collect_idents(left, out);
+            collect_idents(right, out);
+        }
+        ExprKind::Unary { operand, .. } | ExprKind::Question(operand) => {
+            collect_idents(operand, out)
+        }
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            collect_idents(object, out)
+        }
+        ExprKind::Index { object, index } => {
+            collect_idents(object, out);
+            collect_idents(index, out);
+        }
+        ExprKind::Closure { body, .. } => collect_idents(body, out),
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            collect_idents(condition, out);
+            collect_block_idents(then_block, out);
+            if let Some(e) = else_branch {
+                collect_idents(e, out);
+            }
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            collect_idents(scrutinee, out);
+            for a in arms {
+                collect_idents(&a.body, out);
+            }
+        }
+        ExprKind::Block(b)
+        | ExprKind::Unsafe(b)
+        | ExprKind::Seq(b)
+        | ExprKind::Par(b)
+        | ExprKind::LabeledBlock { body: b, .. } => collect_block_idents(b, out),
+        _ => {}
+    }
+}
+
+fn collect_block_idents(block: &Block, out: &mut Vec<String>) {
+    for st in &block.stmts {
+        match &st.kind {
+            StmtKind::Expr(e) => collect_idents(e, out),
+            StmtKind::Let { value, .. } => collect_idents(value, out),
+            _ => {}
+        }
     }
 }
 
@@ -952,11 +1030,28 @@ impl Analyzer<'_> {
             }
             ExprKind::Match { scrutinee, arms } => self.analyze_match(scrutinee, arms),
 
-            // Closures: the §7 open edge. Walk the body with captures treated as
-            // borrows (Read) so a read-after-move is still caught, but a capture
-            // never moves the parent binding (matches auto-promoted-shared).
+            // Closures (spawn/par capture). Walk the body Read-role first so a
+            // read-after-move *inside* the closure is still caught, then demote
+            // every captured outer heap binding to Borrowed: escaping into a
+            // `spawn`/`par` closure auto-promotes the value to a shared/RC
+            // reference, so the enclosing scope no longer owns the free (the RC /
+            // task teardown does) — it must NOT be scheduled to drop, and later
+            // reads / additional captures are valid (no use-after-move). This is
+            // the drop-schedule half of the §7 capture edge; it makes the oracle
+            // agree with codegen (which RC-promotes and frees via the join, not
+            // the binding's scope cleanup) for the spawn shape.
             ExprKind::Closure { body, .. } => {
                 self.analyze_expr(body, Role::Read);
+                let mut captured = Vec::new();
+                collect_idents(body, &mut captured);
+                for name in captured {
+                    if let Some(&idx) = self.by_name.get(&name) {
+                        if self.bindings[idx].heap && self.bindings[idx].state == PlaceState::Owned
+                        {
+                            self.bindings[idx].state = PlaceState::Borrowed;
+                        }
+                    }
+                }
             }
 
             ExprKind::Pipe { left, right } => {

@@ -197,9 +197,11 @@ fn lowered_oracle_agrees_with_codegen() {
 }
 
 #[test]
-fn capture_program_is_flagged_as_edge() {
-    // A spawn/par capture is the §7 open edge — reported as CaptureEdge, not
-    // checked (and not a divergence).
+fn spawn_capture_is_checked_clean() {
+    // A `spawn`-captured heap Vec is now modelled: the oracle demotes it to
+    // Borrowed (escapes as a shared/RC ref — no scope drop), matching codegen's
+    // RC/join free. So the program is CHECKED (not skipped) with no divergence —
+    // `v` is neither scheduled by the oracle nor scope-dropped by codegen.
     let src = format!(
         "fn band(data: Vec[String]) -> i64 {{ let mut a: i64 = 0i64; \
          for e in data.iter() {{ a = a + e.len(); }} return a; }}\n\
@@ -208,6 +210,26 @@ fn capture_program_is_flagged_as_edge() {
          let mut hs: Vec[TaskHandle[i64]] = Vec.new(); \
          hs.push(pool.spawn(|| band(v))); \
          for h in hs {{ println(h.join()); }} }}"
+    );
+    match differential_check(&src) {
+        DiffOutcome::Checked { divergences, .. } => assert!(
+            divergences.is_empty(),
+            "spawn capture should be clean, got {divergences:?}"
+        ),
+        other => panic!("spawn capture should be Checked now, got {other:?}"),
+    }
+}
+
+#[test]
+fn par_block_is_still_the_capture_edge() {
+    // `par {}` captures interact with `shared struct` RC promotion the oracle
+    // does not yet model, so those programs remain the skipped §7 edge.
+    let src = format!(
+        "shared struct Holder {{ s: String }}\n\
+         fn hold_len(h: Holder) -> i64 {{ return h.s.len(); }}\n\
+         fn main() {{ let a: String = {S}; let b: String = {S}; \
+         let ha: Holder = Holder {{ s: a }}; let hb: Holder = Holder {{ s: b }}; \
+         par {{ hold_len(ha); hold_len(hb); }} }}"
     );
     assert_eq!(differential_check(&src), DiffOutcome::CaptureEdge);
 }

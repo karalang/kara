@@ -411,3 +411,37 @@ fn main() {
         "`s` moved in only one arm must stay scheduled; {drops:?}"
     );
 }
+
+#[test]
+fn spawn_captured_vec_is_not_scheduled_and_no_uam() {
+    // `v` captured by two spawn closures → shared/RC (Borrowed): it must NOT be
+    // scheduled to drop (the RC/join frees it, not the scope), and the second
+    // capture reading `v` must not be flagged use-after-move.
+    let res = oracle(
+        r#"
+fn band(data: Vec[String], lo: i64) -> i64 {
+    let mut acc: i64 = 0i64;
+    for e in data.iter() { acc = acc + e.len() + lo; }
+    return acc;
+}
+fn main() {
+    let v: Vec[String] = Vec["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()];
+    let mut pool: TaskGroup = TaskGroup.new();
+    let mut hs: Vec[TaskHandle[i64]] = Vec.new();
+    hs.push(pool.spawn(|| band(v, 0i64)));
+    hs.push(pool.spawn(|| band(v, 1i64)));
+    for h in hs { acc = acc + h.join(); }
+}
+"#,
+    );
+    assert!(
+        res.is_clean(),
+        "spawn double-capture must not flag UAM; got {:?}",
+        res.violations().collect::<Vec<_>>()
+    );
+    let drops = drops_in(&res, "main");
+    assert!(
+        !drops.contains(&"v".to_string()),
+        "spawn-captured `v` is RC-promoted — must NOT be scope-scheduled; {drops:?}"
+    );
+}
