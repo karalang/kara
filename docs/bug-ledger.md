@@ -89,11 +89,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 <!-- BUG-LEDGER:GENERATED:BEGIN -->
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **290 surfaced · 0 open · 289 fixed** (2026-05-20 → 2026-07-08). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **291 surfaced · 1 open · 289 fixed** (2026-05-20 → 2026-07-08). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (1)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-07-08-2 | 2026-07-08 | ownership | medium | Ownership-checker FALSE POSITIVE: a closure that captures a Copy scalar (e.g. `i64`) and is returned is rejected as an escaping `ref` capture, though the program is sound. Repro: `fn make(k: i64) -> Fn(i64) -> i64 { return |x| x + k; }` — `karac check` emits `error[ownership]: closure with `ref` capture of `k` escapes its scope by being returned — the borrow of `k` would outlive its source` (RefCaptureEscapesScope), yet `karac run` executes it correctly (`make(1)(10)` = 11, `make(2)(10)` = 12) because `k` is a trivially-copyable `i64`: the closure captures it BY VALUE (a copy lives in the closure env), so there is no borrow to dangle. ROOT CAUSE: the escape check in `src/ownership/closure_escape.rs` (the `for (cap_name, mode)` loop, ~L89–102 of `check_closure_ref_capture_escapes`) fires for ANY capture whose inferred mode is `Ref`/`MutRef` and whose source binding is not ITSELF a borrow (`Type::Ref`/`Type::MutRef`). A read-only capture of an owned `i64` defaults to `Ref` mode, and the check has no exemption for Copy/scalar capture sources — for which a by-ref default is semantically a by-value copy, incapable of outliving its source. FIX SKETCH: skip the escape error (or re-infer the capture as `Own`/copy) when the captured binding's type is a Copy scalar (i64/f64/bool/char/small enums with no heap payload); only heap-owning / borrow-backed captures can actually dangle. IMPACT: this is the `[[ownership-checker-open-false-positives]]` class the ownership-model-mechanization spike scopes out — it gates HEAP-ENV CLOSURES (`fn make(k) -> Fn(...)` stored in a `Vec[Fn]`) out of the Slice-1 drop-soundness fuzzer's valid-program generator, so those shapes are not exercised by the oracle↔codegen differential. Closing this FP re-admits heap-env closures to the generator (spike § Slice 1 “Deliberately excluded”) and lets the differential cover them. NOTE: `karac build`/`run` TOLERATE ownership errors by design (only `karac check` gates), so this FP blocks `check`-gated workflows, not execution. Distinct from the FIXED closure CODEGEN bugs B-2026-06-22-2/-4 (those were miscompiles; this is a static-checker over-rejection). | docs/spikes/ownership-model-mechanization.md |
 
 ### Fixed (289)
 
