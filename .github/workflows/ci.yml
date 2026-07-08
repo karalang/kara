@@ -78,7 +78,15 @@ jobs:
   # `#[cfg(windows)]` codegen linker driver (`src/codegen/driver.rs`) is
   # `--features llvm`-gated and stays uncovered until the broader "LLVM in CI"
   # decision puts LLVM 18 on the Windows runner (the documented yak-shave the
-  # spike defers — same reason the codegen E2E jobs are Linux-only).
+  # spike defers — same reason the codegen E2E jobs are Linux-only). That
+  # uncovered surface now also includes the producer-mode library link arms
+  # (`link_static_library` / `link_shared_library` Windows branches +
+  # `NativeLibKind::artifact_extension`, additive-interop Tier 5): `.lib`/`.dll`
+  # emission via `llvm-ar` / `clang -shared` with a `/EXPORT:`-per-symbol list.
+  # They mirror this file's proven `link_executable_windows` toolchain
+  # conventions; a Windows `codegen-lint` job (clippy `--features llvm` on
+  # windows-latest, mirroring the Linux `codegen-lint` below) is the intended
+  # first coverage step once LLVM 18 lands on the Windows runner.
   windows-lint:
     name: Windows clippy (cfg(windows) surface)
     runs-on: windows-latest
